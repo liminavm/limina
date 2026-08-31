@@ -1,0 +1,999 @@
+[2026-08-31T11:21:14.640562Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+[2026-08-31T11:21:14.651380Z INFO  krun_devices::virtio::gpu::device] virtio_gpu: holding DRIVER_OK for the staged snapshot replay
+[2026-08-31T11:21:16.455966Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=270 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456093Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=290 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456223Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=110679 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456234Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=130807 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456237Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=130822 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456241Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=130960 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456246Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=131028 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456249Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=131080 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456253Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=131129 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456257Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=131443 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456262Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=131458 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456265Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132055 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456269Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132062 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456274Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132344 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456278Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132351 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456281Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132548 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456284Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132555 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456288Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132752 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456291Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132759 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456295Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132957 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456298Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=132964 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456302Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133162 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456305Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133169 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456308Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133391 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456312Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133398 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456315Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133593 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456319Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133600 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456322Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133795 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456326Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133802 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456330Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=133997 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456334Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134004 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456337Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134200 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456341Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134207 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456344Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134403 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456350Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134410 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456353Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134605 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456357Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134612 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456361Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134807 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456364Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=134814 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456368Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135009 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456372Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135016 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456375Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135211 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456379Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135218 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456383Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135414 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456386Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135421 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456390Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135617 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456394Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135624 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456397Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135819 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456401Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=135826 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456404Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136022 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456408Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136029 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456412Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136224 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456415Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136231 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456419Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136426 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456422Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136433 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456426Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136629 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456430Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136636 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456434Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136832 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456438Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=136839 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456441Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137034 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456445Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137041 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456450Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137236 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456454Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137243 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456457Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137438 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456461Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137445 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456464Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137640 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456468Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137647 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456471Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137842 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456474Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=137849 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456477Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138044 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456481Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138051 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456484Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138246 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456487Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138253 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456491Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138448 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456494Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138455 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456497Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138650 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456501Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138657 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456504Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138852 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456508Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=138859 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456511Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=139054 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456514Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=139061 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456518Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=139283 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456521Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=139290 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456525Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=139525 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456529Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=139532 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456532Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=139800 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456536Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=139807 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456539Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=140075 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456543Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=140082 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456547Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=140351 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456551Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=140358 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456555Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=140601 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456558Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=140608 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456561Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=140851 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456565Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=140858 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456569Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=141101 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456573Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=141109 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456577Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=141433 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456581Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=141441 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456585Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=141743 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456591Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=141751 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456594Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=142074 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456598Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=142082 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456601Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=142405 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456605Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=142413 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456609Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=142736 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456612Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=142744 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456615Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=143042 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456619Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=143050 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456622Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=143348 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456626Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=143356 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456630Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=143594 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456633Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=143602 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456637Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=143840 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456641Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=143848 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456645Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=144086 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456648Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=144094 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456652Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=144279 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456656Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=144287 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456659Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=144472 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456663Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=144480 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456666Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=144857 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456669Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=144866 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456674Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=145632 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456677Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=145641 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456681Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=146372 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456685Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=146381 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456689Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=147111 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456693Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=147702 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456697Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=147703 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456701Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=147704 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456705Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148221 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456708Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148222 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456712Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148223 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456715Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148277 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456719Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148278 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456722Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148279 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456725Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148304 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456729Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148305 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456733Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148306 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456736Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148331 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456740Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148332 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456744Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148333 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456748Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148368 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456752Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148369 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456755Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148370 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456759Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148406 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456763Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148407 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456767Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=148408 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456780Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=150296 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456783Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=150637 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456787Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=151101 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456791Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=151110 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456795Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=155174 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456799Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=155189 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456804Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=155246 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456808Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=155261 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456811Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=155705 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456815Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=155720 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456818Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=155756 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456822Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=155771 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456828Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156102 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456831Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156114 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456835Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156127 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456838Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156142 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456842Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156156 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456845Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156242 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456849Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156262 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456852Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156287 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.456856Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156702 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457043Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156815 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457046Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156866 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457050Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156884 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457053Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156902 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457057Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156910 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457061Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156914 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457064Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=156939 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457117Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=157242 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457121Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=157246 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457124Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=157250 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457128Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=157330 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457131Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=157402 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457135Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=157486 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457955Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158031 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.457960Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158081 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458775Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158176 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458779Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158177 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458783Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158178 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458787Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158302 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458790Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158310 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458793Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158313 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458797Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=158995 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458801Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=159012 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458805Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=159016 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458808Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=159023 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458813Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=159027 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458817Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=159105 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.458820Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=159116 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:21:16.655714Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=1 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=0/0/0
+[2026-08-31T11:21:16.732717Z INFO  krun_devices::virtio::gpu::virtio_gpu] gpu restore: classic content restored (7 contexts, 0 failed), 0 scanout flips
+[2026-08-31T11:21:16.732727Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: replay complete with 198 dropped wire entries (stale references); drops by class [transient,create,recording,noted,free,pool-reset,ring-create,ring-destroy,ring-stream] = [0, 0, 0, 0, 0, 0, 198, 0, 0]
+[2026-08-31T11:21:16.732793Z INFO  krun_devices::virtio::gpu::worker] gpu worker: staged snapshot replay complete
+[2026-08-31T11:21:16.732802Z INFO  krun_devices::virtio::gpu::device] virtio_gpu: released DRIVER_OK after 2.081416s (replay complete)
+[2026-08-31T11:21:18Z INFO  limina::window] restore: first frame presented 5.8s after the window opened
+[2026-08-31T11:21:18.658868Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=2 submits=+14 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+19 fences_ret=+19 outstanding=0 journal=1174/1186/12
+[2026-08-31T11:21:20.668895Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=3 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1174/1189/15
+[2026-08-31T11:21:22.676805Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=4 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1174/1192/18
+[2026-08-31T11:21:24.686844Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=5 submits=+16 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+16 fences_ret=+16 outstanding=0 journal=1174/1196/22
+[2026-08-31T11:21:26.686920Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=6 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1174/1199/25
+[2026-08-31T11:21:28.687932Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=7 submits=+8 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+8 fences_ret=+8 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:30.697967Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=8 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:32.699774Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=9 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:34.699956Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=10 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:36.700937Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=11 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:38.710975Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=12 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:40.715103Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=13 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:42.719761Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=14 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:44.723777Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=15 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:46.732008Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=16 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:48.735280Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=17 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1201/27
+[2026-08-31T11:21:50.745315Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=18 submits=+4 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+4 fences_ret=+4 outstanding=0 journal=1174/1202/28
+[2026-08-31T11:21:52.755339Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=19 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1174/1205/31
+[2026-08-31T11:21:54.765376Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=20 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1174/1208/34
+[2026-08-31T11:21:56.773845Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=21 submits=+16 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+16 fences_ret=+16 outstanding=0 journal=1174/1212/38
+[2026-08-31T11:21:58.783872Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=22 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1174/1215/41
+[2026-08-31T11:22:00.790506Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=23 submits=+14 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+14 fences_ret=+14 outstanding=0 journal=1174/1219/45
+[2026-08-31T11:22:02.790584Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=24 submits=+8 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+8 fences_ret=+8 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:04.796202Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=25 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:06.803140Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=26 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:08.812215Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=27 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:10.822262Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=28 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:12.832312Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=29 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:14.842342Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=30 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:16.852365Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=31 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:18.861635Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=32 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:20.871699Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=33 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:22.881785Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=34 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:24.891662Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=35 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:26.901708Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=36 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:28.903400Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=37 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:30.906014Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=38 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:32.912615Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=39 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1174/1221/47
+[2026-08-31T11:22:34.916928Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=40 submits=+87 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+141 fences_ret=+141 outstanding=0 journal=1285/1405/120
+[2026-08-31T11:22:36.921974Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=41 submits=+18 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+86 fences_ret=+81 outstanding=5 [global#44918:2ms global#44919:1ms global#44920:1ms global#44921:1ms global#44922:1ms] journal=1441/1614/173
+[2026-08-31T11:22:38.923604Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=42 submits=+158 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+223 fences_ret=+228 outstanding=0 journal=1461/1849/388
+[2026-08-31T11:22:40.928668Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=43 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1422/1849/427
+[2026-08-31T11:22:42.933716Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=44 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1380/1849/469
+[2026-08-31T11:22:44.938244Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=45 submits=+80 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+105 fences_ret=+105 outstanding=0 journal=1383/1941/558
+[2026-08-31T11:22:46.938858Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=46 submits=+660 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+639 fences_ret=+639 outstanding=0 journal=1706/2497/791
+[2026-08-31T11:22:48.939522Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=47 submits=+390 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+346 fences_ret=+346 outstanding=0 journal=1655/2594/939
+[2026-08-31T11:22:50.940155Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=48 submits=+304 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+248 fences_ret=+248 outstanding=0 journal=1652/2642/990
+[2026-08-31T11:22:52.942615Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=49 submits=+152 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+135 fences_ret=+135 outstanding=0 journal=1657/2689/1032
+[2026-08-31T11:22:54.947738Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=50 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1657/2689/1032
+[2026-08-31T11:22:56.560090Z INFO  krun_vmm] snapshot written: 6 vCPUs, 126377-byte GIC, 2 RAM regions, 8194 MiB RAM -> 2230 MiB file (585 zero / 1462 lz4 / 2 raw frames) in 3.7s -> ~/Library/Application Support/Limina/VMs/Debian.liminavm/run/snapshot.bin
+[2026-08-31T11:22:56Z INFO  limina::supervisor] guest snapshotted (worker exit 126); VM suspended
+[2026-08-31T11:22:56Z INFO  limina::session] VM suspended; snapshot at ~/Library/Application Support/Limina/VMs/Debian.liminavm/run/snapshot.bin
+[2026-08-31T11:22:56Z INFO  limina::window] VM suspended; window parked (click to resume)
+[2026-08-31T11:23:03.418852Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+[2026-08-31T11:23:03.427482Z INFO  krun_devices::virtio::gpu::device] virtio_gpu: holding DRIVER_OK for the staged snapshot replay
+[2026-08-31T11:23:04.694232Z INFO  krun_devices::virtio::gpu::virtio_gpu] gpu restore: classic content restored (7 contexts, 0 failed), 0 scanout flips
+[2026-08-31T11:23:04.694259Z INFO  krun_devices::virtio::gpu::virtio_gpu] gpu restore: replay complete (session state re-created)
+[2026-08-31T11:23:04.694485Z INFO  krun_devices::virtio::gpu::worker] gpu worker: staged snapshot replay complete
+[2026-08-31T11:23:04.694495Z INFO  krun_devices::virtio::gpu::device] virtio_gpu: released DRIVER_OK after 1.267008334s (replay complete)
+[2026-08-31T11:23:04Z INFO  limina::window] resume: first frame presented 4.9s after the play click
+[2026-08-31T11:23:05.432167Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=1 submits=+18 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+55 fences_ret=+55 outstanding=0 journal=1659/1774/115
+[2026-08-31T11:23:07.434528Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=2 submits=+110 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+149 fences_ret=+149 outstanding=0 journal=1764/1936/172
+[2026-08-31T11:23:09.438040Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=3 submits=+389 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+359 fences_ret=+359 outstanding=0 journal=1791/2064/273
+[2026-08-31T11:23:11.439878Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=4 submits=+364 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+374 fences_ret=+374 outstanding=0 journal=1794/2331/537
+[2026-08-31T11:23:13.444904Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=5 submits=+276 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+228 fences_ret=+228 outstanding=0 journal=1788/2375/587
+[2026-08-31T11:23:15.448189Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=6 submits=+288 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+232 fences_ret=+232 outstanding=0 journal=1758/2420/662
+[2026-08-31T11:23:17.448355Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=7 submits=+300 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+244 fences_ret=+244 outstanding=0 journal=1650/2467/817
+[2026-08-31T11:23:19.448743Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=8 submits=+290 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+246 fences_ret=+246 outstanding=0 journal=1611/2528/917
+[2026-08-31T11:23:21.452063Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=9 submits=+308 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+252 fences_ret=+252 outstanding=0 journal=1611/2576/965
+[2026-08-31T11:23:23.457115Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=10 submits=+288 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+240 fences_ret=+240 outstanding=0 journal=1611/2624/1013
+[2026-08-31T11:23:25.460822Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=11 submits=+304 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+248 fences_ret=+248 outstanding=0 journal=1611/2673/1062
+[2026-08-31T11:23:27.465844Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=12 submits=+342 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+410 fences_ret=+410 outstanding=0 journal=1833/3111/1278
+[2026-08-31T11:23:29.466280Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=13 submits=+313 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+480 fences_ret=+480 outstanding=0 journal=2031/3816/1785
+[2026-08-31T11:23:31.467969Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=14 submits=+351 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+414 fences_ret=+411 outstanding=3 [global#50547:0ms global#50548:0ms global#50549:0ms] journal=2073/4244/2171
+[2026-08-31T11:23:33.473019Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=15 submits=+756 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+1402 fences_ret=+1404 outstanding=1 [global#51951:1ms] journal=2092/6464/4372
+[2026-08-31T11:23:35.478040Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=16 submits=+448 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+505 fences_ret=+506 outstanding=0 journal=2071/6841/4770
+[2026-08-31T11:23:37.483071Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=17 submits=+552 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+598 fences_ret=+598 outstanding=0 journal=2062/7239/5177
+[2026-08-31T11:23:39.487909Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=18 submits=+470 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+616 fences_ret=+616 outstanding=0 journal=2200/7942/5742
+[2026-08-31T11:23:41.492946Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=19 submits=+304 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+276 fences_ret=+276 outstanding=0 journal=2100/8058/5958
+[2026-08-31T11:23:43.495863Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=20 submits=+536 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+968 fences_ret=+968 outstanding=0 journal=2264/9637/7373
+[2026-08-31T11:23:45.500886Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=21 submits=+396 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+341 fences_ret=+341 outstanding=0 journal=2212/9712/7500
+[2026-08-31T11:23:46.399753Z WARN  krun_devices::virtio::gpu::journal] [GPUTRACE] gpu journal: 2741 live ops (recorded=11236 pruned=8495): ctxs=13 blobs=7 (8868 KiB) maps=6 attaches=946 scanouts=1 classic=884 backings=884
+[2026-08-31T11:23:46.399786Z WARN  krun_rutabaga_gfx::rutabaga_core] [GPUTRACE] rutabaga state: 13 contexts [2, 3, 4, 6, 7, 8, 10, 12, 13, 14, 15, 16, 17], 889 resources (ids [471, 473, 474, 475, 788, 789, 790, 791, 792, 794, 795, 796, 797, 799, 800, 801, 803, 805, 812, 814, 817, 819, 820, 822, 823, 824, 825, 826, 827, 828, 829, 830] …)
+[2026-08-31T11:23:47.501254Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=22 submits=+804 unknown_ctx=+0 unknown_res=+0 errs=+69 fences_req=+6751 fences_ret=+6751 outstanding=0 journal=2722/27787/25065
+[2026-08-31T11:23:49.502266Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=23 submits=+612 unknown_ctx=+0 unknown_res=+0 errs=+148 fences_req=+11841 fences_ret=+11841 outstanding=0 journal=2707/61632/58925
+[2026-08-31T11:23:51.507302Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=24 submits=+382 unknown_ctx=+0 unknown_res=+0 errs=+132 fences_req=+7588 fences_ret=+7588 outstanding=0 journal=2486/83382/80896
+[2026-08-31T11:23:53.507767Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=25 submits=+240 unknown_ctx=+0 unknown_res=+0 errs=+106 fences_req=+2860 fences_ret=+2857 outstanding=2 [global#84293:0ms global#84294:0ms] journal=2520/91417/88897
+[2026-08-31T11:23:55.511736Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=26 submits=+429 unknown_ctx=+0 unknown_res=+0 errs=+36 fences_req=+1489 fences_ret=+1492 outstanding=0 journal=2377/94818/92441
+[2026-08-31T11:23:57.515722Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=27 submits=+360 unknown_ctx=+0 unknown_res=+0 errs=+2 fences_req=+316 fences_ret=+316 outstanding=0 journal=2225/94914/92689
+[2026-08-31T11:23:59.518660Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=28 submits=+546 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+628 fences_ret=+628 outstanding=0 journal=2180/95394/93214
+[2026-08-31T11:24:01.519691Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=29 submits=+544 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+524 fences_ret=+524 outstanding=0 journal=2138/95589/93451
+[2026-08-31T11:24:03.524718Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=30 submits=+380 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+324 fences_ret=+324 outstanding=0 journal=2138/95651/93513
+[2026-08-31T11:24:05.525975Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=31 submits=+438 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+390 fences_ret=+388 outstanding=2 [global#87965:4ms global#87966:4ms] journal=2108/95727/93619
+[2026-08-31T11:24:07.528874Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=32 submits=+468 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+412 fences_ret=+414 outstanding=0 journal=2108/95806/93698
+[2026-08-31T11:24:09.533902Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=33 submits=+300 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+252 fences_ret=+252 outstanding=0 journal=2108/95856/93748
+[2026-08-31T11:24:11.537634Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=34 submits=+399 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+357 fences_ret=+357 outstanding=0 journal=2114/95964/93850
+[2026-08-31T11:24:13.540151Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=35 submits=+459 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+484 fences_ret=+475 outstanding=9 [global#89463:0ms global#89464:0ms global#89465:0ms global#89466:0ms global#89467:0ms global#89468:0ms global#89469:0ms global#89470:0ms …] journal=2264/96261/93997
+[2026-08-31T11:24:15.543542Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=36 submits=+317 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+371 fences_ret=+380 outstanding=0 journal=2399/96509/94110
+[2026-08-31T11:24:17.548615Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=37 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2357/96509/94152
+[2026-08-31T11:24:19.551479Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=38 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2318/96509/94191
+[2026-08-31T11:24:21.556508Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=39 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2318/96509/94191
+[2026-08-31T11:24:23.561535Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=40 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2318/96509/94191
+[2026-08-31T11:24:25.566564Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=41 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2318/96509/94191
+[2026-08-31T11:24:27.571137Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=42 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2318/96509/94191
+[2026-08-31T11:24:29.575382Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=43 submits=+1 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2126/96509/94383
+[2026-08-31T11:24:31.580436Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=44 submits=+22 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+91 fences_ret=+91 outstanding=0 journal=2222/96721/94499
+[2026-08-31T11:24:33.583316Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=45 submits=+55 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+61 fences_ret=+61 outstanding=0 journal=2158/96759/94601
+[2026-08-31T11:24:35.587229Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=46 submits=+238 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+455 fences_ret=+455 outstanding=0 journal=2632/97468/94836
+[2026-08-31T11:24:37.591279Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=47 submits=+146 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+185 fences_ret=+185 outstanding=0 journal=2506/97640/95134
+[2026-08-31T11:24:39.596307Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=48 submits=+164 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+277 fences_ret=+277 outstanding=0 journal=2496/98066/95570
+[2026-08-31T11:24:41.599016Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=49 submits=+221 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+426 fences_ret=+426 outstanding=0 journal=2824/98768/95944
+[2026-08-31T11:24:43.599206Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=50 submits=+110 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+291 fences_ret=+291 outstanding=0 journal=2673/99369/96696
+[2026-08-31T11:24:45.603173Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=51 submits=+126 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+218 fences_ret=+217 outstanding=0 journal=2622/99685/97063
+[2026-08-31T11:24:47.608204Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=52 submits=+358 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+385 fences_ret=+386 outstanding=0 journal=2535/99852/97317
+[2026-08-31T11:24:49.613235Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=53 submits=+208 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+230 fences_ret=+230 outstanding=0 journal=2346/99968/97622
+[2026-08-31T11:24:51.618140Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=54 submits=+160 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+166 fences_ret=+166 outstanding=0 journal=2325/100028/97703
+[2026-08-31T11:24:53.623205Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=55 submits=+8 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+25 fences_ret=+25 outstanding=0 journal=2277/100080/97803
+[2026-08-31T11:24:55.628265Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=56 submits=+1 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+1 fences_ret=+1 outstanding=0 journal=2263/100080/97817
+[2026-08-31T11:24:57.633306Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=57 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2254/100080/97826
+[2026-08-31T11:24:59.638341Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=58 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2251/100080/97829
+[2026-08-31T11:25:01.643370Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=59 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=2242/100081/97839
+[2026-08-31T11:25:03.648396Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=60 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2242/100081/97839
+[2026-08-31T11:25:05.653435Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=61 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2242/100081/97839
+[2026-08-31T11:25:07.658482Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=62 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2212/100081/97869
+[2026-08-31T11:25:09.660863Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=63 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2212/100081/97869
+[2026-08-31T11:25:11.665909Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=64 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2212/100081/97869
+[2026-08-31T11:25:13.667759Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=65 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2212/100081/97869
+[2026-08-31T11:25:15.669470Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=66 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2212/100081/97869
+[2026-08-31T11:25:17.674526Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=67 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100081/98097
+[2026-08-31T11:25:19.679602Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=68 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100081/98097
+[2026-08-31T11:25:21.684679Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=69 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100081/98097
+[2026-08-31T11:25:23.686169Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=70 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100081/98097
+[2026-08-31T11:25:25.686549Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=71 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100081/98097
+[2026-08-31T11:25:27.691612Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=72 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100081/98097
+[2026-08-31T11:25:29.694165Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=73 submits=+80 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+107 fences_ret=+107 outstanding=0 journal=2011/100181/98170
+[2026-08-31T11:25:31.697296Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=74 submits=+216 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+217 fences_ret=+217 outstanding=0 journal=1999/100239/98240
+[2026-08-31T11:25:33.702325Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=75 submits=+113 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+132 fences_ret=+132 outstanding=0 journal=2014/100324/98310
+[2026-08-31T11:25:35.704931Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=76 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1993/100324/98331
+[2026-08-31T11:25:37.708124Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=77 submits=+14 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+88 fences_ret=+88 outstanding=0 journal=2119/100550/98431
+[2026-08-31T11:25:39.712770Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=78 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2014/100550/98536
+[2026-08-31T11:25:41.717805Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=79 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2014/100550/98536
+[2026-08-31T11:25:43.718847Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=80 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100550/98566
+[2026-08-31T11:25:45.722621Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=81 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100550/98566
+[2026-08-31T11:25:47.727700Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=82 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1984/100550/98566
+[2026-08-31T11:25:49.731487Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=83 submits=+20 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+22 fences_ret=+22 outstanding=0 journal=1942/100561/98619
+[2026-08-31T11:25:51.734303Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=84 submits=+121 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+304 fences_ret=+304 outstanding=0 journal=2119/101135/99016
+[2026-08-31T11:25:53.736083Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=85 submits=+202 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+216 fences_ret=+216 outstanding=0 journal=2119/101227/99108
+[2026-08-31T11:25:55.738269Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=86 submits=+194 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+194 fences_ret=+194 outstanding=0 journal=2050/101277/99227
+[2026-08-31T11:25:57.743349Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=87 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1999/101280/99281
+[2026-08-31T11:25:59.747459Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=88 submits=+16 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+16 fences_ret=+16 outstanding=0 journal=1999/101284/99285
+[2026-08-31T11:26:01.752518Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=89 submits=+14 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+14 fences_ret=+14 outstanding=0 journal=1996/101288/99292
+[2026-08-31T11:26:03.757548Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=90 submits=+8 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+8 fences_ret=+8 outstanding=0 journal=1996/101290/99294
+[2026-08-31T11:26:05.762596Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=91 submits=+202 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+236 fences_ret=+236 outstanding=0 journal=2044/101446/99402
+[2026-08-31T11:26:07.766074Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=92 submits=+202 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+309 fences_ret=+309 outstanding=0 journal=2140/101821/99681
+[2026-08-31T11:26:09.771111Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=93 submits=+123 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+181 fences_ret=+181 outstanding=0 journal=2074/102031/99957
+[2026-08-31T11:26:11.773932Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=94 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=2038/102034/99996
+[2026-08-31T11:26:13.779012Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=95 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=2011/102037/100026
+[2026-08-31T11:26:15.780637Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=96 submits=+16 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+16 fences_ret=+16 outstanding=0 journal=2005/102041/100036
+[2026-08-31T11:26:17.785699Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=97 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=2005/102044/100039
+[2026-08-31T11:26:19.789843Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=98 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:21.790429Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=99 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:23.790929Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=100 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:25.796002Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=101 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:27.796548Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=102 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:29.801598Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=103 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:31.806625Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=104 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:33.810606Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=105 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:35.815635Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=106 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:37.820665Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=107 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:39.825692Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=108 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:41.830718Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=109 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:43.835745Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=110 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:45.840790Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=111 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:47.842427Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=112 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:49.846926Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=113 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:51.851970Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=114 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:53.854926Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=115 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:55.860182Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=116 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:57.864243Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=117 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:26:59.868164Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=118 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102047/100042
+[2026-08-31T11:27:01.873298Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=119 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:03.877038Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=120 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:05.882124Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=121 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:07.885944Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=122 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:09.887137Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=123 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:11.892174Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=124 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:13.897212Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=125 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:15.902336Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=126 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:17.907537Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=127 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:19.909218Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=128 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:21.913192Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=129 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:23.918109Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=130 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:25.918399Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=131 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:27.923600Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=132 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:29.925930Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=133 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:31.928242Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=134 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:33.935049Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=135 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:35.940239Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=136 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:37.942396Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=137 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:39.947433Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=138 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:41.952465Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=139 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:43.957540Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=140 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:45.959356Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=141 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=2005/102048/100043
+[2026-08-31T11:27:47.965101Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=142 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102048/100106
+[2026-08-31T11:27:49.966480Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=143 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102048/100106
+[2026-08-31T11:27:51.969519Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=144 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102048/100106
+[2026-08-31T11:27:53.975562Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=145 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102048/100106
+[2026-08-31T11:27:55.976348Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=146 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102048/100106
+[2026-08-31T11:27:57.976484Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=147 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102048/100106
+[2026-08-31T11:27:59.980412Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=148 submits=+1 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+1 fences_ret=+0 outstanding=0 journal=1942/102048/100106
+[2026-08-31T11:28:01.985451Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=149 submits=+1 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+1 fences_ret=+2 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:03.990516Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=150 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:05.995552Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=151 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:07.997415Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=152 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:09.999810Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=153 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:12.001351Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=154 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:14.006390Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=155 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:16.011446Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=156 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:18.013354Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=157 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:20.018393Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=158 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:22.023432Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=159 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:24.027189Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=160 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:26.032224Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=161 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:28.037272Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=162 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:30.042308Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=163 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:32.046722Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=164 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:34.051771Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=165 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:36.056831Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=166 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:38.060789Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=167 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:40.065862Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=168 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:42.068724Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=169 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:44.073784Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=170 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:46.078843Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=171 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:48.079289Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=172 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:50.084327Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=173 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:52.087694Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=174 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:54.089261Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=175 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:56.094345Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=176 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:28:58.095499Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=177 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102049/100107
+[2026-08-31T11:29:00.099463Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=178 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:02.104510Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=179 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:04.108535Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=180 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:06.111077Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=181 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:08.111241Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=182 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:10.111292Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=183 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:12.116325Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=184 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:14.120237Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=185 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:16.120648Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=186 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:18.123045Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=187 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:20.128413Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=188 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:22.131328Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=189 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:24.135744Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=190 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:26.139197Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=191 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:28.144091Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=192 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:30.149360Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=193 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:32.152948Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=194 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:34.157859Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=195 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:36.158328Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=196 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:38.164550Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=197 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:40.169751Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=198 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:42.170373Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=199 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:44.174911Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=200 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:46.180081Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=201 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:48.182822Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=202 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:50.187978Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=203 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:52.191527Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=204 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:54.196022Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=205 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:56.201357Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=206 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:29:58.207808Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=207 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102050/100108
+[2026-08-31T11:30:00.209003Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=208 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:02.212566Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=209 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:04.217680Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=210 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:06.220661Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=211 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:08.225793Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=212 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:10.231732Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=213 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:12.237563Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=214 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:14.242832Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=215 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:16.243682Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=216 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:18.246586Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=217 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:20.248886Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=218 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:22.253936Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=219 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:24.258978Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=220 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:26.260066Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=221 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:28.262843Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=222 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:30.264351Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=223 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:32.266856Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=224 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:34.270876Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=225 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:36.274845Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=226 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1942/102051/100109
+[2026-08-31T11:30:38.275931Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=227 submits=+6 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+7 fences_ret=+7 outstanding=0 journal=1941/102054/100113
+[2026-08-31T11:30:40.278436Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=228 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1941/102054/100113
+[2026-08-31T11:30:40.586212Z INFO  krun_vmm] snapshot written: 6 vCPUs, 126377-byte GIC, 2 RAM regions, 8194 MiB RAM -> 1893 MiB file (449 zero / 1599 lz4 / 1 raw frames) in 2.9s -> ~/Library/Application Support/Limina/VMs/Debian.liminavm/run/snapshot.bin
+[2026-08-31T11:30:40Z INFO  limina::supervisor] guest snapshotted (worker exit 126); VM suspended
+[2026-08-31T11:30:40Z INFO  limina::session] VM suspended; snapshot at ~/Library/Application Support/Limina/VMs/Debian.liminavm/run/snapshot.bin
+[2026-08-31T11:30:40Z INFO  limina::window] VM suspended; window parked (click to resume)
+[2026-08-31T11:33:37.167286Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+[2026-08-31T11:33:37.175809Z INFO  krun_devices::virtio::gpu::device] virtio_gpu: holding DRIVER_OK for the staged snapshot replay
+[2026-08-31T11:33:37.648622Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=255 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648627Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=256 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648630Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=257 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648634Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=258 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648637Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=259 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648640Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=260 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648643Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=261 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648647Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=262 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648650Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=263 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648653Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=264 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648657Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=265 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648660Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=266 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648665Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=267 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648668Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=268 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648672Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=269 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648675Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=270 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648679Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=271 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648682Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=272 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648686Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=273 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.648689Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=274 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.650419Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=292 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651072Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=117885 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651075Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=117893 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651079Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=117896 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651083Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118196 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651086Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118209 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651090Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118239 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651093Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118259 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651096Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118272 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651100Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118310 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651103Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118336 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651107Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118346 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651111Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118357 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651115Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118430 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651119Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118605 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651123Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=118608 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651126Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=119021 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651130Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=119048 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651134Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=119058 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651138Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=119835 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.651141Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: dropped LOAD-BEARING ring entry ctx=6 seq=119843 klass=6 cmd=1 ring=0x0 size=28
+[2026-08-31T11:33:37.965916Z INFO  krun_devices::virtio::gpu::virtio_gpu] gpu restore: classic content restored (8 contexts, 0 failed), 0 scanout flips
+[2026-08-31T11:33:37.965926Z WARN  krun_devices::virtio::gpu::virtio_gpu] gpu restore: replay complete with 41 dropped wire entries (stale references); drops by class [transient,create,recording,noted,free,pool-reset,ring-create,ring-destroy,ring-stream] = [0, 0, 0, 0, 0, 0, 41, 0, 0]
+[2026-08-31T11:33:37.965966Z INFO  krun_devices::virtio::gpu::worker] gpu worker: staged snapshot replay complete
+[2026-08-31T11:33:37.965974Z INFO  krun_devices::virtio::gpu::device] virtio_gpu: released DRIVER_OK after 790.162042ms (replay complete)
+[2026-08-31T11:33:38Z INFO  limina::window] resume: first frame presented 3.2s after the play click
+[2026-08-31T11:33:39.176786Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=1 submits=+204 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+224 fences_ret=+224 outstanding=0 journal=1918/2049/131
+[2026-08-31T11:33:41.181477Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=2 submits=+204 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+204 fences_ret=+204 outstanding=0 journal=1891/2100/209
+[2026-08-31T11:33:43.184905Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=3 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1882/2103/221
+[2026-08-31T11:33:45.186376Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=4 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1882/2106/224
+[2026-08-31T11:33:47.190187Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=5 submits=+16 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+16 fences_ret=+16 outstanding=0 journal=1882/2110/228
+[2026-08-31T11:33:49.195256Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=6 submits=+12 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+12 fences_ret=+12 outstanding=0 journal=1882/2113/231
+[2026-08-31T11:33:51.199538Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=7 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1882/2113/231
+[2026-08-31T11:33:53.201788Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=8 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1882/2113/231
+[2026-08-31T11:33:55.206838Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=9 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1882/2113/231
+[2026-08-31T11:33:57.211887Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=10 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1882/2113/231
+[2026-08-31T11:33:59.216917Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=11 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1882/2113/231
+[2026-08-31T11:34:01.221949Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=12 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:03.225935Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=13 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:05.230986Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=14 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:07.235748Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=15 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:09.240806Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=16 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:11.243818Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=17 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:13.247996Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=18 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:15.248250Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=19 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:17.252465Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=20 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:19.257514Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=21 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:21.261530Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=22 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:23.265196Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=23 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:25.265490Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=24 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:27.270557Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=25 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:29.275589Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=26 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:31.278251Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=27 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:33.283292Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=28 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:35.288321Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=29 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:37.291003Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=30 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:39.294594Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=31 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:41.297685Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=32 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:43.302734Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=33 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:45.307806Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=34 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:47.312859Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=35 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:49.317886Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=36 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:51.319368Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=37 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:53.324422Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=38 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:55.328747Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=39 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:57.333803Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=40 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:34:59.338856Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=41 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2114/235
+[2026-08-31T11:35:01.340016Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=42 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:03.345060Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=43 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:05.350125Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=44 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:07.355141Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=45 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:09.360201Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=46 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:11.365253Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=47 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:13.367522Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=48 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:15.372553Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=49 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:17.377620Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=50 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:19.382679Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=51 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:21.387729Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=52 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:23.390776Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=53 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:25.394759Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=54 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:27.399793Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=55 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:29.404868Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=56 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:31.405626Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=57 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:33.407853Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=58 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:35.410181Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=59 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:37.411136Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=60 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:39.416169Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=61 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:41.421241Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=62 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:43.425401Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=63 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:45.430579Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=64 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1879/2115/236
+[2026-08-31T11:35:47.435646Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=65 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2115/245
+[2026-08-31T11:35:49.440828Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=66 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2115/245
+[2026-08-31T11:35:51.443256Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=67 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2115/245
+[2026-08-31T11:35:53.448418Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=68 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2115/245
+[2026-08-31T11:35:55.469022Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=69 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2115/245
+[2026-08-31T11:35:57.474098Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=70 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2115/245
+[2026-08-31T11:35:59.479153Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=71 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2115/245
+[2026-08-31T11:36:01.481670Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=72 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:03.484365Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=73 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:05.487474Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=74 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:07.490246Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=75 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:09.491779Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=76 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:11.492579Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=77 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:13.497694Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=78 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:15.502888Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=79 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:17.506056Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=80 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:19.506961Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=81 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:21.511295Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=82 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:23.513919Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=83 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:25.518701Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=84 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:27.520270Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=85 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:29.525512Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=86 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:31.530335Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=87 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:33.533847Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=88 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:35.534680Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=89 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:37.539842Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=90 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:39.545056Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=91 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:41.550221Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=92 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:43.552909Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=93 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:45.557948Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=94 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:47.562984Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=95 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:49.568069Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=96 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:51.573211Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=97 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:53.573474Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=98 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:55.578730Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=99 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:57.581472Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=100 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:36:59.581702Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=101 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2116/246
+[2026-08-31T11:37:01.584606Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=102 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:03.589642Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=103 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:05.592674Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=104 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:07.597732Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=105 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:09.602767Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=106 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:11.607796Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=107 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:13.612829Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=108 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:15.617867Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=109 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:17.622902Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=110 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:19.624881Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=111 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:21.629913Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=112 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:23.634978Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=113 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:25.639957Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=114 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:27.645029Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=115 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:29.649534Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=116 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:31.654630Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=117 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:33.659715Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=118 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:35.664777Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=119 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:37.669517Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=120 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:39.670621Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=121 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:41.673992Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=122 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:43.678041Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=123 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:45.683074Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=124 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:47.688100Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=125 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:49.693185Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=126 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:51.698352Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=127 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:53.703649Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=128 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:55.708870Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=129 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:57.711831Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=130 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:37:59.716976Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=131 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2117/247
+[2026-08-31T11:38:01.722141Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=132 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:03.726622Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=133 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:05.731766Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=134 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:07.736968Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=135 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:09.742223Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=136 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:11.745747Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=137 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:13.749903Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=138 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:15.754944Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=139 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:17.760027Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=140 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:19.762048Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=141 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:21.767225Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=142 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:23.769364Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=143 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:25.774512Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=144 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:27.777169Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=145 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:29.779994Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=146 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:31.780656Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=147 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:33.785685Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=148 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:35.786157Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=149 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:37.791194Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=150 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:39.801246Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=151 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:41.811301Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=152 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:43.813309Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=153 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:45.818863Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=154 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:47.828908Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=155 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:49.829321Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=156 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:51.839271Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=157 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:53.841326Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=158 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:55.851374Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=159 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:57.860502Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=160 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:38:59.870550Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=161 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2118/248
+[2026-08-31T11:39:01.880611Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=162 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:03.888697Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=163 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:05.898752Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=164 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:07.901968Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=165 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:09.907673Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=166 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:11.917727Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=167 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:13.927758Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=168 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:15.936939Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=169 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:17.946164Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=170 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:19.946236Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=171 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:21.956300Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=172 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:23.961192Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=173 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:25.970143Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=174 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:27.980186Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=175 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:29.984513Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=176 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:31.994546Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=177 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:33.996890Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=178 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:36.006925Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=179 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:38.008498Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=180 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:40.015492Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=181 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:42.025536Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=182 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:44.031644Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=183 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:46.041705Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=184 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:48.051606Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=185 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:50.055324Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=186 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:52.063252Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=187 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:54.065343Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=188 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:56.067766Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=189 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:39:58.070770Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=190 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2119/249
+[2026-08-31T11:40:00.079747Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=191 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:02.082749Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=192 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:04.091437Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=193 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:06.097475Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=194 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:08.098841Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=195 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:10.109007Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=196 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:12.116401Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=197 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:14.126543Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=198 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:16.133283Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=199 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:18.143481Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=200 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:20.153645Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=201 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:22.161965Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=202 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:24.172061Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=203 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:26.174523Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=204 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:28.184621Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=205 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:30.194650Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=206 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:32.199275Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=207 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:34.200202Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=208 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:36.201201Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=209 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:38.201962Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=210 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:40.212032Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=211 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:42.222099Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=212 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:44.229737Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=213 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:46.237638Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=214 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:48.247665Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=215 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:50.247730Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=216 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:52.257758Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=217 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:54.258705Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=218 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:56.259881Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=219 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:40:58.262519Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=220 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2120/250
+[2026-08-31T11:41:00.272568Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=221 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:02.281576Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=222 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:04.285012Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=223 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:06.293065Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=224 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:08.297506Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=225 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:10.298293Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=226 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:12.298731Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=227 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:14.308931Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=228 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:16.311817Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=229 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:18.312845Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=230 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:20.315024Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=231 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:22.325285Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=232 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:24.328313Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=233 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:26.332757Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=234 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:28.342795Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=235 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:30.349057Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=236 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:32.358466Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=237 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:34.363061Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=238 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:36.366610Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=239 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:38.376674Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=240 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:40.377297Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=241 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:42.386102Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=242 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:44.396144Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=243 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:46.401565Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=244 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:48.403581Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=245 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:50.405660Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=246 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:52.406888Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=247 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:54.407850Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=248 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:56.417884Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=249 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:41:58.426156Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=250 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2121/251
+[2026-08-31T11:42:00.436186Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=251 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:02.445152Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=252 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:04.455229Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=253 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:06.457504Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=254 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:08.466755Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=255 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:10.471185Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=256 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:12.479759Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=257 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:14.480617Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=258 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:16.485024Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=259 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:18.495100Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=260 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:20.505694Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=261 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:22.514314Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=262 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:24.524734Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=263 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:26.528915Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=264 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:28.533612Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=265 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:30.543797Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=266 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:32.548666Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=267 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:34.555705Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=268 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:36.561656Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=269 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:38.571754Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=270 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:40.580055Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=271 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:42.583948Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=272 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:44.594136Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=273 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:46.595729Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=274 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:48.605763Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=275 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:50.615794Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=276 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:52.625519Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=277 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:54.631203Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=278 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:56.634031Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=279 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:42:58.637388Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=280 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2122/252
+[2026-08-31T11:43:00.642097Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=281 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:02.652168Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=282 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:04.662197Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=283 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:06.662472Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=284 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:08.663263Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=285 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:10.673325Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=286 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:12.679725Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=287 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:14.680308Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=288 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:16.686369Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=289 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:18.696445Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=290 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:20.699259Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=291 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:22.709466Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=292 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:24.712597Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=293 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:26.716663Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=294 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:28.726995Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=295 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:30.737202Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=296 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:32.740769Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=297 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:34.745014Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=298 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:36.747737Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=299 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:38.749592Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=300 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:40.754030Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=301 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:42.764257Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=302 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:44.765872Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=303 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:46.768216Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=304 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:48.778351Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=305 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:50.787912Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=306 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:52.798073Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=307 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:54.800736Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=308 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:56.806985Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=309 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:43:58.813673Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=310 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2123/253
+[2026-08-31T11:44:00.823781Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=311 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:02.833853Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=312 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:04.844019Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=313 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:06.846221Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=314 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:08.848100Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=315 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:10.850105Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=316 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:12.860348Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=317 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:14.865247Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=318 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:16.875365Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=319 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:18.880388Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=320 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:20.885563Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=321 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:22.890255Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=322 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:24.900283Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=323 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:26.910336Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=324 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:28.920388Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=325 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:30.921556Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=326 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:32.923745Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=327 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:34.931771Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=328 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:36.932663Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=329 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:38.942696Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=330 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:40.952738Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=331 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:42.961719Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=332 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:44.962871Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=333 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:46.972970Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=334 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:48.979806Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=335 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:50.989945Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=336 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:52.998118Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=337 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:55.000776Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=338 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:57.006471Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=339 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:44:59.008055Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=340 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2124/254
+[2026-08-31T11:45:01.011580Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=341 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:03.018927Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=342 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:05.034039Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=343 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:07.042468Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=344 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:09.052579Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=345 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:11.062772Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=346 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:13.068057Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=347 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:15.078150Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=348 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:17.083687Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=349 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:19.085448Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=350 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:21.086087Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=351 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:23.096215Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=352 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:25.100253Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=353 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:27.110215Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=354 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:29.120019Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=355 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:31.126075Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=356 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:33.136179Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=357 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:35.146311Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=358 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:37.156525Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=359 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:39.166734Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=360 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:41.168673Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=361 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:43.177415Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=362 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:45.179587Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=363 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:47.189641Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=364 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:49.199067Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=365 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:51.209372Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=366 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:53.212207Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=367 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:55.222277Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=368 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:57.228701Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=369 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:45:59.236534Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=370 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2125/255
+[2026-08-31T11:46:01.236613Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=371 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:03.237743Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=372 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:05.247786Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=373 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:07.248097Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=374 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:09.258177Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=375 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:11.258623Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=376 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:13.268651Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=377 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:15.274817Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=378 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:17.284846Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=379 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:19.294906Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=380 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:21.305607Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=381 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:23.307775Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=382 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:25.316342Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=383 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:27.326600Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=384 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:29.333545Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=385 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:31.343847Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=386 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:33.350043Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=387 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:35.357446Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=388 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:37.367893Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=389 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:39.369880Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=390 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:41.374227Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=391 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:43.375900Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=392 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:45.383279Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=393 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:47.392940Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=394 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:49.401477Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=395 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:51.411702Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=396 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:53.412158Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=397 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:55.413792Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=398 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:57.414481Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=399 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:46:59.420938Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=400 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2126/256
+[2026-08-31T11:47:01.428415Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=401 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:03.434474Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=402 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:05.438822Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=403 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:07.438957Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=404 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:09.445701Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=405 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:11.452477Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=406 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:13.462737Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=407 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:15.466963Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=408 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:17.468800Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=409 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:19.477593Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=410 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:21.481107Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=411 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:23.484941Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=412 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:25.490890Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=413 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:27.500761Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=414 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:29.510866Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=415 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:31.516159Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=416 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:33.521764Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=417 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:35.526820Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=418 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:37.531590Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=419 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:39.540591Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=420 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:41.550777Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=421 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:43.556672Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=422 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:45.566725Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=423 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:47.576902Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=424 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:49.584820Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=425 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:51.589498Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=426 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:53.599617Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=427 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:55.609802Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=428 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:57.617803Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=429 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:47:59.628223Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=430 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2127/257
+[2026-08-31T11:48:01.631144Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=431 submits=+2 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+2 fences_ret=+2 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:03.641338Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=432 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:05.641824Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=433 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:07.649970Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=434 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:09.657223Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=435 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:11.667217Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=436 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:13.677313Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=437 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:15.687390Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=438 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:17.697489Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=439 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:19.703027Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=440 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:21.704597Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=441 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:23.707244Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=442 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:25.711409Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=443 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:27.713814Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=444 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:29.723955Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=445 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:31.734136Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=446 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:33.737988Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=447 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:35.740092Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=448 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:37.750257Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=449 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:39.751173Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=450 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258
+[2026-08-31T11:48:41.752182Z WARN  krun_devices::virtio::gpu::trace] [GPUTRACE] tick=451 submits=+0 unknown_ctx=+0 unknown_res=+0 errs=+0 fences_req=+0 fences_ret=+0 outstanding=0 journal=1870/2128/258

@@ -108,6 +108,15 @@ deliver() {
   [ "$got_session" = "$WANT_SESSION" ] || { echo "!!! /usr/local/bin/limina-agent-session is ${got_session:-absent}, payload has $WANT_SESSION" >&2; ok=0; }
   [ "$ok" = 1 ] && echo "verified: both agent binaries match the payload"
 
+  # Return the blocks the install freed. An RPM upgrade writes the new files and unlinks the
+  # old ones, which frees them in the GUEST filesystem while the host image keeps every block
+  # it ever allocated — so each delivery leaves the golden a little slacker. That is not just
+  # size: `l2_qga_fstrim` asserts a fresh 2048 MiB write GROWS the host file by at least half
+  # that, and a slack image absorbs the write into already-allocated blocks instead. r17 pushed
+  # `enhanced.test.raw` under the line (grew 990 MiB, needs 1024) and the test failed on a
+  # correct tree — proven by the same test passing against the pre-delivery backup.
+  ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" 'sudo fstrim -av' 2>&1 | sed 's/^/   trim: /' || true
+
   ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" "rm -rf limina-guest-tools '$TARBALL'; sudo systemctl poweroff" || true
   wait "$boot" || true
   echo "=== done $img  $(date '+%F %T')"

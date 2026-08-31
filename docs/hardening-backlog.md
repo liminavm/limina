@@ -2041,7 +2041,72 @@ decode across 10 frames (framemd5), which is exactly why this stayed invisible:
 Still owed: send the virgl change upstream so the stock tier gets it, and check
 whether other VA-DMABUF consumers (GStreamer `vaapisink`, Chromium) hit the same wall.
 
-## AV1: the slice buffer can read as zeros when the host copies it
+**Scope of the impact: Firefox, not the tier.** The stock tier reaches VA-API through
+vanilla mesa — RPM Fusion's `mesa-va-drivers-freeworld` included (see
+`docs/design/h264-hevc-decode.md`) — which lacks this fix, and libva probes
+`/usr/lib64/dri-freeworld/` *ahead of* `/usr/lib64/dri/`, so the unpatched driver loads
+even where ours is installed. But only ffmpeg's exact-match tie-break lands on IYUV:
+**Chrome and GStreamer choose NV12 themselves and get hardware decode regardless**, which
+is why they are the stock-tier validation vehicles. Upstreaming is what would give
+stock-tier *Firefox* the hardware path.
+
+## Hardware decode does not survive suspend/resume: playback cycles a few stale frames
+
+Reported from dogfood. After a host suspend/resume, hitting play on a video Firefox had
+paused for the suspend plays "the same few frames back and forth". Nothing crashes, and
+**leaving it paused for a while heals it** — which is the most informative part of the
+report. Low priority precisely because that workaround exists.
+
+### What the restore path really does with video, and why that is not yet the answer
+
+The obvious suspect is a documented gap. `vrend_journal.h:33` classifies video codec objects
+as `VREND_JOURNAL_UNKNOWN` — *"durable-unknown (e.g. video): counted, not kept"* — and
+`vrend_journal.c:343` files them under `census.skipped++`, "counted so a guest using them is
+loud in the census instead of silently losing state at restore". So the host's video codec
+object is genuinely **not** recreated on restore while the guest still holds its handle.
+
+**But the evidence from the reported run does not support that being the mechanism.** Read
+from the supervisor log of the restored Debian VM that produced the symptom:
+
+- The worker was started with `--restore …/snapshot.bin.consumed`, so this is the real path.
+- GPU command errors are counted unconditionally and **each one warns**, and the first error
+  of any class also requests a one-shot renderer state dump (`gpu/trace.rs:14-18`). The log
+  carries **no `unknown_ctx`/`unknown_resource`/`gpu restore:` warnings at all** — only an
+  unrelated vsock-muxer error and a pointer-echo warning.
+- Guest `dmesg` shows no virtio_gpu error after either resume; the driver came back clean.
+
+If the guest were submitting decode work against a codec the host had dropped, those
+submissions would be rejected and would warn. They did not. So the journal gap is a **standing
+candidate, not the diagnosis** — and this is the entry's real point: do not start the fix by
+teaching the journal about video, because the cheapest available evidence already points away
+from it.
+
+The symptom's silence is itself the clue. "A few frames back and forth", no errors, heals on
+idle, matches the class this stack keeps producing: a **stale surface** rather than a failed
+command (see the AV1 note — a late picture is a silent stale surface, never a hang), which
+would also implicate the dmabuf/IOSurface import of the decoded planes rather than the codec
+object. That is a second untested theory and is recorded as such.
+
+### The experiment that would settle it
+
+The decisive channels are all off by default, which is why the reported run cannot answer the
+question. Repro with them on:
+
+- `RUST_LOG=warn,limina=info,krun_vmm=info,krun_devices=info` — keep the bare `warn`, or the
+  whole GPU device goes silent even at `error!`.
+- `LIMINA_GPU_TRACE=1` for the per-tick aggregate, and the renderer state dump whose
+  `[GPUTRACE]` census lines carry `census.skipped` — the number that confirms or kills the
+  journal theory outright. Note the census is `virgl_info`-level, so `info` is required.
+
+Then: play a hardware-decoded video, suspend, resume, hit play, and read whether the guest's
+submissions are being *rejected* (journal theory) or *accepted while the picture never
+changes* (import/surface theory).
+
+Whatever the cause, note the fix is not simply replaying the create. A decoder's *reference
+state* cannot be reconstructed from a create-replay — even a correctly recreated codec starts
+with an empty DPB mid-stream — so the honest repair may be to make the loss explicit and have
+the guest recreate and re-key, i.e. do deliberately and at once what an idle timeout currently
+does by accident. **Do this after H.264/HEVC**, since that work changes what a codec holds.
 
 `av1_decode_bitstream()` (`virgl_video_vt.c`) recorded two of sixty `superres`
 fixtures with the correct tile *size* but all-zero *contents* — the guest's slice

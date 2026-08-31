@@ -90,6 +90,15 @@ sed -i -E "/^%autochangelog/d" "$SPEC"
 sed -i -E "s/^Release:.*/Release:        ${LIMINA_REL}.limina%{?dist}/" "$SPEC"
 grep -nE "^Version:|^Release:|^Patch9|^%autosetup|^%setup" "$SPEC" | head
 
+# Enable H.264/HEVC DECODE. Fedora passes no -Dvideo-codecs at all, so the build takes meson's
+# `all_free` default, and mesa's VA frontend then refuses both codecs in vl_codec.c BEFORE the
+# driver is consulted — no host advertisement can reach a guest built that way. The value is
+# additive on purpose: meson's `all_free` branch does `_codecs += free_codecs`, so naming the two
+# decoders alongside it keeps every free codec and pulls in NO encoders. Decode runs on Apple's
+# VideoToolbox; nothing here ships a codec implementation. See docs/design/h264-hevc-decode.md.
+sed -i -E "s|^%meson \\\\$|%meson \\\\\n  -Dvideo-codecs=all_free,h264dec,h265dec \\\\|" "$SPEC"
+grep -n "video-codecs" "$SPEC" || { echo "ERROR: -Dvideo-codecs injection missed the %meson block" >&2; exit 1; }
+
 # PREP_ONLY=1: stop after proving %prep applies (Fedora patches + ours) — the fast
 # iteration loop for rebasing a patch onto a new distro base, without the builddep +
 # compile cost. --nodeps because %prep needs no BuildRequires.
