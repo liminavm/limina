@@ -653,7 +653,7 @@ impl PrimaryDisplay {
                 .is_none_or(|t| now.duration_since(t) >= self.capture_interval);
             if due {
                 self.last_capture.set(Some(now));
-                super::diag::capture_iosurface(surface, id, path);
+                super::diag::capture_iosurface_async(surface, id, path);
             }
         }
         // Targeted per-id sweep — look each requested global id up fresh (no cache) and
@@ -663,7 +663,11 @@ impl PrimaryDisplay {
             if let Some(base) = &self.capture_path {
                 for &cid in &self.capture_ids {
                     if let Some(s) = IOSurfaceLookup(cid) {
-                        super::diag::capture_iosurface(&s, cid, &format!("{base}.id{cid}.png"));
+                        super::diag::capture_iosurface_async(
+                            &s,
+                            cid,
+                            &format!("{base}.id{cid}.png"),
+                        );
                     } else {
                         log::info!("capture: IOSurfaceLookup({cid}) -> none (not alive)");
                     }
