@@ -65,6 +65,42 @@ refused (`DirectDmabufExternal … cannot produce texture-target 2D`), which is 
 to the mmap-and-copy uploader that crashes. Even with the size fixed, that fallback is a full
 frame copy per frame — the zero-copy import is the thing actually worth having.
 
+## Root cause, in the guest driver we own
+
+Two independent defects, both in guest mesa (`limina-guest`):
+
+**The size field is never filled.** `vlVaExportSurfaceHandle` sets
+`desc->objects[].size = whandle.size` (`frontends/va/surface.c`), and virgl's
+`virgl_drm_winsys_resource_get_handle` (`winsys/virgl/drm/virgl_drm_winsys.c`) sets
+`whandle->stride` and never `whandle->size` — zero occurrences in the function. So the
+descriptor reports 0. Cheap to fix and worth fixing, but it is not what crashes: GStreamer
+trusts the geometry, not this field.
+
+**The surfaces have no guest-visible storage to export.** Video buffer planes are allocated as
+ordinary virgl resources — `PIPE_BIND_CUSTOM, PIPE_USAGE_STAGING` in
+`drivers/virgl/virgl_video.c` — whose storage lives on the host. `drmPrimeHandleToFD` on such a
+resource's BO yields a stub with no real guest pages, which is exactly the fixed 4096 bytes,
+independent of resolution. A dmabuf export of a host-only resource cannot produce frame memory,
+because there is none in the guest to point at.
+
+That makes this architectural rather than a sizing bug. Zero-copy needs the decode targets
+allocated as host-mappable blob resources (`VIRTGPU_BLOB_MEM_HOST3D`, which the winsys already
+knows how to create for other paths) so the exported fd names real, mappable memory.
+
+## Two ways forward
+
+- **Stop advertising what we cannot back.** If the VA driver did not offer dmabuf export for
+  decode surfaces, GStreamer would negotiate system memory and Showtime would work today, at
+  one frame copy per frame. Small and targeted; it trades performance for correctness and
+  removes a crash.
+- **Allocate decode targets as mappable blobs.** The real fix, and the one that makes the
+  direct importers usable at all. Larger, and it spans guest mesa, virglrenderer and possibly
+  libkrun.
+
+Note the second defect on this path is not fixed by either on its own: glupload's direct
+importers are refused with `cannot produce texture-target 2D`, so even a correctly sized dmabuf
+would still fall back to a copy until that is addressed.
+
 ## Running it
 
 ```
