@@ -156,13 +156,29 @@ toggle-only registration leaves the widget's buttons dead.
 
 | remote command | guest key |
 |---|---|
-| `togglePlayPause`, `play`, `pause` | `KEY_PLAYPAUSE` (164) |
+| `togglePlayPause` | `KEY_PLAYPAUSE` (164), always |
+| `play` | `KEY_PLAYPAUSE`, only if we believe the guest is paused |
+| `pause` | `KEY_PLAYPAUSE`, only if we believe the guest is playing |
 | `nextTrackCommand` | `KEY_NEXTSONG` (163) |
 | `previousTrackCommand` | `KEY_PREVIOUSSONG` (165) |
 
-The guest only understands a toggle, so `play` and `pause` collapse onto it. A desync between
-macOS's idea of our state and the guest's is possible but self-correcting, because our published
-state is derived from the actual stream rather than from the commands we received.
+The guest only understands a *toggle*, so the discrete commands have to become one — and that
+makes them conditional. macOS sends a bare `pause` for things that are not a user pressing pause:
+headphones coming off, a call arriving. Forwarding it as a toggle *starts* a paused video, which
+is the opposite of what was asked. So the discrete commands are gated on a belief about what the
+guest is playing, and a command that asks for the state we are already in is swallowed —
+answering `Success`, since the command did reach the right player and a failure status would only
+invite macOS to route it elsewhere.
+
+**The belief, and its limits.** No component of ours runs in the guest, so playback state is
+inferred from the two things we can see: the audio stream starting and stopping, and the toggles
+we have sent ourselves. Both delivery paths feed it — the routed commands here, and the hard
+grab, which hands the media bucket straight to the guest without passing through the handlers
+(§7). It can still drift: a video paused by mouse click whose PipeWire stream keeps running is
+invisible to us. That is why `togglePlayPause` is the one unconditional arm — the physical key
+means "the other one" whatever we believe, so it is always both useful and the way back to a
+correct belief. Closing the gap properly wants a guest agent reporting playback state, which is
+the same lever §10 wants for MPRIS.
 
 Every other command (`changePlaybackPosition`, seek, skip, shuffle, repeat, like, rating, …) is
 explicitly `isEnabled = false`. That is the documented way to say "this player cannot do that";

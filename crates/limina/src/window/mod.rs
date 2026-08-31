@@ -2116,16 +2116,42 @@ pub fn run(
         primary_slot.clone(),
         pointer_slot.clone(),
     ));
+    // The VM's media session. The policy decides when we are a player and which routed commands
+    // are worth a key; the session performs both. Both live on the main thread — MediaPlayer
+    // wants it, the command handlers fire there, and the timer below drives them from there too.
+    let media_policy = std::rc::Rc::new(RefCell::new(media_policy::MediaPolicy::new()));
+    let media_session = std::rc::Rc::new(RefCell::new(media_session::MediaSession::new(
+        title.clone(),
+    )));
     // Deliver a media key macOS routed to us as if it had come off the keyboard: the guest's own
     // desktop already binds KEY_PLAYPAUSE and friends, so nothing guest-side is required. The
     // press and release are synthesized together — a remote command is an event, not a key state,
     // and there is no "release" for it to send later.
+    //
+    // The policy is asked first, and it does swallow commands: macOS sends a bare `pause` for
+    // things that are not a user asking for one (a headset coming off), and the guest understands
+    // only a *toggle*, so forwarding that unconditionally starts a paused video.
     {
         let sink_input = input_state.clone();
-        media_session::register_key_sink(std::rc::Rc::new(move |code: u16| {
-            sink_input.tap_aux_key(code, true);
-            sink_input.tap_aux_key(code, false);
-        }));
+        let sink_policy = media_policy.clone();
+        let sink_session = media_session.clone();
+        media_session::register_command_sink(std::rc::Rc::new(
+            move |cmd: media_policy::Command| {
+                let (code, playing) = {
+                    let mut policy = sink_policy.borrow_mut();
+                    (policy.remote_command(cmd), policy.playing())
+                };
+                match code {
+                    Some(code) => {
+                        log::info!("media: {cmd:?} -> key {code} to the guest");
+                        sink_input.tap_aux_key(code, true);
+                        sink_input.tap_aux_key(code, false);
+                    }
+                    None => log::info!("media: {cmd:?} swallowed; the guest is already there"),
+                }
+                sink_session.borrow_mut().set_playing(playing);
+            },
+        ));
     }
     let _capture_tap = capture_tap::install(
         conn.clone(),
@@ -2135,6 +2161,7 @@ pub fn run(
         view.clone(),
         edge_resistance,
         overlay_flag,
+        media_policy.clone(),
     );
 
     // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker
@@ -3004,11 +3031,6 @@ pub fn run(
     let timer_pointer_slot = pointer_slot.clone();
     let resume_clicked_at: Cell<std::time::Instant> = Cell::new(std::time::Instant::now());
     let resume_epoch_baseline: Cell<u64> = Cell::new(0);
-    // The VM's media session. The policy decides when we are a player; the session performs it.
-    // Both live on the main thread, driven from this timer, because MediaPlayer wants the main
-    // thread and the command handlers then fire there too.
-    let media_policy = RefCell::new(media_policy::MediaPolicy::new());
-    let media_session = RefCell::new(media_session::MediaSession::new(title.clone()));
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         // One-shot: the remembered fullscreen, taken on the first tick the window is actually on
         // screen. Not gated on the first frame — the guest is already sized for it, and waiting
@@ -3036,6 +3058,7 @@ pub fn run(
                 .filter_map(|(stream, event)| policy.stream_event(stream, event, now))
                 .collect();
             actions.extend(policy.tick(now));
+            let playing = policy.playing();
             drop(policy);
             for action in actions {
                 match action {
@@ -3043,6 +3066,10 @@ pub fn run(
                     media_policy::Action::Retire => media_session.borrow_mut().retire(),
                 }
             }
+            // The guest's own stream is the one thing that corrects a belief we cannot see
+            // otherwise, so the widget's button follows it too — a tile stuck on "pause" for a
+            // guest that stopped playing sends `pause` again when it is pressed.
+            media_session.borrow_mut().set_playing(playing);
         }
 
         let (exited, worker_suspended, show_id, frames, worker_epoch, resume_dead) = {

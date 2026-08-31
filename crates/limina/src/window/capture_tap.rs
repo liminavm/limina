@@ -24,7 +24,7 @@
 //! restart) and the first capture toggle without the tap raises the system Accessibility prompt
 //! ([`prompt_accessibility_once`]).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::os::fd::RawFd;
 use std::os::raw::c_void;
 use std::rc::Rc;
@@ -180,6 +180,11 @@ struct TapCtx {
     /// — `InputState` shares the same flag); this handle remains only for the `[GRAB]` trace's
     /// `overlaid` column.
     panel_fs: Arc<AtomicBool>,
+    /// The media session's policy. The hard grab hands the media bucket straight to the guest,
+    /// bypassing the remote-command handlers — so the play/pause it forwards has to be told to
+    /// the policy, or its belief about what the guest is playing goes stale and every routed
+    /// command after it is decided from the wrong state.
+    media: Rc<RefCell<super::media_policy::MediaPolicy>>,
 }
 
 /// What a Ctrl+Opt ungrab-chord fire does to each grab, given whether the pointer is captured
@@ -721,6 +726,10 @@ fn route_aux_event(ctx: &TapCtx, event: CGEventRef, mode: GrabMode) -> CGEventRe
     // exactly as for ordinary keys. Still consumed, or macOS would act on the repeats alone.
     if !aux.repeat {
         ctx.input.cancel_ungrab_chord();
+        // Count the press, not the release: one key press is one toggle in the guest.
+        if code == limina_input::constants::KEY_PLAYPAUSE && aux.down {
+            ctx.media.borrow_mut().guest_toggled();
+        }
         ctx.input.tap_aux_key(code, aux.down);
     }
     std::ptr::null_mut()
@@ -1319,6 +1328,7 @@ pub(crate) fn install(
     view: Retained<NSView>,
     edge_resistance: f64,
     panel_fs: Arc<AtomicBool>,
+    media: Rc<RefCell<super::media_policy::MediaPolicy>>,
 ) -> bool {
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
@@ -1334,6 +1344,7 @@ pub(crate) fn install(
         hold: crate::vmlib::schema::EdgeHold::from_toml(edge_resistance).seconds(),
         buttons: Cell::new(0),
         panel_fs,
+        media,
     }));
     if try_create(ctx) {
         log::info!("pointer capture: CGEventTap installed (session-level, consuming)");

@@ -24,6 +24,8 @@
 
 use std::time::{Duration, Instant};
 
+use limina_input::constants::{KEY_NEXTSONG, KEY_PLAYPAUSE, KEY_PREVIOUSSONG};
+
 /// virtio-snd playback is stream 0 in libkrun's device; stream 1 is mic capture, which says
 /// nothing about the VM being a player.
 const PLAYBACK_STREAM: u32 = 0;
@@ -69,6 +71,19 @@ pub(crate) enum Action {
     Retire,
 }
 
+/// A transport command macOS routed back at us, before it becomes a key.
+///
+/// The physical key arrives as `Toggle`; Control Center's buttons, and macOS's own automations
+/// (a headset coming off, a call starting), send the discrete `Play` and `Pause`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Command {
+    Play,
+    Pause,
+    Toggle,
+    Next,
+    Previous,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     /// Not registered. The media keys are macOS's business entirely.
@@ -85,6 +100,9 @@ enum State {
 pub(crate) struct MediaPolicy {
     state: State,
     hold: Duration,
+    /// What we believe the guest is doing. The guest cannot tell us, so this is inferred from
+    /// its audio stream and from the toggles we have sent it — see [`MediaPolicy::playing`].
+    playing: bool,
 }
 
 impl MediaPolicy {
@@ -96,12 +114,60 @@ impl MediaPolicy {
         MediaPolicy {
             state: State::Absent,
             hold,
+            playing: false,
         }
     }
 
     /// Whether the VM currently holds (or is still holding) the session.
     pub(crate) fn announced(&self) -> bool {
         !matches!(self.state, State::Absent)
+    }
+
+    /// What we believe the guest's playback state is.
+    ///
+    /// The guest never reports it — no component of ours runs in it — so this is a belief built
+    /// from the two things we do see: its audio stream starting and stopping, and the play/pause
+    /// toggles we have sent it ourselves. It can drift (a video paused by mouse click whose
+    /// audio stream keeps running is invisible to us), which is why [`Command::Toggle`] is
+    /// always delivered: the physical key remains the way out of a wrong belief.
+    pub(crate) fn playing(&self) -> bool {
+        self.playing
+    }
+
+    /// The evdev key one routed command should send the guest, or `None` to swallow it.
+    ///
+    /// The guest desktop understands only a *toggle*, so a discrete command has to be turned
+    /// into one — and a toggle delivered to a guest that is already in the requested state does
+    /// the opposite of what was asked. macOS sends a bare `pause` for things that are not a
+    /// user pressing pause at all (headphones coming off, a call arriving), so an unconditional
+    /// forward starts a paused video every time the user takes their headset off.
+    pub(crate) fn remote_command(&mut self, cmd: Command) -> Option<u16> {
+        match cmd {
+            Command::Next => Some(KEY_NEXTSONG),
+            Command::Previous => Some(KEY_PREVIOUSSONG),
+            // The one unconditional arm: the physical key means "the other one", whatever we
+            // believe, and it is what re-syncs a belief that has drifted.
+            Command::Toggle => {
+                self.playing = !self.playing;
+                Some(KEY_PLAYPAUSE)
+            }
+            Command::Play if !self.playing => {
+                self.playing = true;
+                Some(KEY_PLAYPAUSE)
+            }
+            Command::Pause if self.playing => {
+                self.playing = false;
+                Some(KEY_PLAYPAUSE)
+            }
+            Command::Play | Command::Pause => None,
+        }
+    }
+
+    /// A play/pause key reached the guest without passing through us — the hard grab forwards
+    /// the media bucket straight to the guest (`limina_input::auxkey`). The guest flipped, so
+    /// the belief has to flip too, or the next routed command is decided from a stale one.
+    pub(crate) fn guest_toggled(&mut self) {
+        self.playing = !self.playing;
     }
 
     /// A PCM transition from the guest.
@@ -115,6 +181,14 @@ impl MediaPolicy {
         // one the transport keys should reach.
         if stream_id != PLAYBACK_STREAM {
             return None;
+        }
+        // The stream is the only thing the guest tells us about its playback, so it corrects the
+        // belief wherever it speaks. `Prepare` deliberately does not: an opened stream is not a
+        // playing one, and PipeWire opens the sink long before anything comes out of it.
+        match event {
+            PcmEvent::Start => self.playing = true,
+            PcmEvent::Stop | PcmEvent::Release => self.playing = false,
+            PcmEvent::Prepare => {}
         }
         match (self.state, event) {
             // The guest started playing and we were not a player: take our turn.
@@ -288,6 +362,83 @@ mod tests {
         p.stream_event(0, PcmEvent::Start, now);
         p.stream_event(0, PcmEvent::Stop, now);
         assert_eq!(p.worker_gone(), Some(Action::Retire));
+    }
+
+    /// The bug the gating exists for: taking a headset off makes macOS send a bare `pause`,
+    /// and a `pause` forwarded as a toggle *starts* a paused video (dogfood 2026-08-31).
+    #[test]
+    fn a_pause_for_an_already_paused_guest_is_swallowed() {
+        let mut p = MediaPolicy::new();
+        p.stream_event(0, PcmEvent::Start, t0());
+        assert!(p.playing());
+        // The user pauses from the widget: one toggle to the guest.
+        assert_eq!(p.remote_command(Command::Pause), Some(KEY_PLAYPAUSE));
+        // Headset off. macOS pauses us again; the guest is already paused, so nothing goes.
+        assert_eq!(p.remote_command(Command::Pause), None);
+        assert!(!p.playing());
+        // And play still works from there.
+        assert_eq!(p.remote_command(Command::Play), Some(KEY_PLAYPAUSE));
+        assert!(p.playing());
+        // A second play is likewise a no-op.
+        assert_eq!(p.remote_command(Command::Play), None);
+    }
+
+    #[test]
+    fn the_physical_key_always_toggles() {
+        let mut p = MediaPolicy::new();
+        p.stream_event(0, PcmEvent::Start, t0());
+        // Unconditional in both directions: it is the only way to fix a belief that drifted
+        // (a guest paused by mouse click whose audio stream stayed open).
+        assert_eq!(p.remote_command(Command::Toggle), Some(KEY_PLAYPAUSE));
+        assert!(!p.playing());
+        assert_eq!(p.remote_command(Command::Toggle), Some(KEY_PLAYPAUSE));
+        assert!(p.playing());
+        // A hard grab sends the same key without asking us; the belief follows it anyway.
+        p.guest_toggled();
+        assert!(!p.playing());
+    }
+
+    #[test]
+    fn track_keys_are_never_gated() {
+        let mut p = MediaPolicy::new();
+        p.stream_event(0, PcmEvent::Start, t0());
+        p.remote_command(Command::Pause);
+        // Skipping a track is meaningful whatever we believe about play state, and it has no
+        // state of its own to get wrong.
+        assert_eq!(p.remote_command(Command::Next), Some(KEY_NEXTSONG));
+        assert_eq!(p.remote_command(Command::Previous), Some(KEY_PREVIOUSSONG));
+        assert!(!p.playing(), "a track key says nothing about playing");
+    }
+
+    #[test]
+    fn the_stream_corrects_the_belief() {
+        let mut p = MediaPolicy::with_hold(Duration::from_secs(5));
+        let now = t0();
+        p.stream_event(0, PcmEvent::Start, now);
+        // The guest was paused in its own UI and its stream went with it: we learn from that,
+        // so the pause macOS sends next is swallowed instead of restarting playback.
+        p.stream_event(0, PcmEvent::Stop, now);
+        assert!(!p.playing());
+        assert_eq!(p.remote_command(Command::Pause), None);
+        // The next track starts inside the hold: playing again, without a re-announce.
+        assert_eq!(
+            p.stream_event(0, PcmEvent::Start, now + Duration::from_secs(1)),
+            None
+        );
+        assert!(p.playing());
+        // A mere prepare is not playback, so it must not resurrect the belief.
+        p.stream_event(0, PcmEvent::Stop, now + Duration::from_secs(2));
+        p.stream_event(0, PcmEvent::Prepare, now + Duration::from_secs(2));
+        assert!(!p.playing());
+    }
+
+    #[test]
+    fn mic_capture_does_not_move_the_belief() {
+        let mut p = MediaPolicy::new();
+        let now = t0();
+        p.stream_event(0, PcmEvent::Start, now);
+        p.stream_event(1, PcmEvent::Stop, now);
+        assert!(p.playing(), "the mic stream is not the playback stream");
     }
 
     #[test]
