@@ -2286,3 +2286,30 @@ One operational lesson stands on its own: **confirm the VM has actually exited b
 another on the same disk.** limina's own read-write disk guard
   is what caught the second VM and refused it — that guard is the reason this cost a reboot
   rather than the image.
+
+## Zero-copy decode: give VA surfaces guest-mappable storage
+
+An exported VA decode surface's dmabuf is a one-page stub — 4096 bytes at every resolution
+from 320x240 to 4K — because virgl allocates decode targets as ordinary resources whose
+storage lives on the host. There is nothing in the guest for `drmPrimeHandleToFD` to point at.
+Measured, with the reproducer, in `spikes/va-dmabuf-size`; stock Fedora mesa reproduces it
+identically, so it is upstream virgl behaviour rather than anything in our tree.
+
+The immediate crash is fixed by refusing to export a dmabuf smaller than the image it
+describes, which pushes consumers onto system memory. That is correct and costs a frame copy
+per frame. **The fix worth having is to allocate decode targets as host-mappable blobs**
+(`VIRTGPU_BLOB_MEM_HOST3D`, which the virgl winsys already creates for other paths), so the
+exported fd names real memory and a consumer can import it directly.
+
+Two things to know before starting:
+
+- **A correctly sized dmabuf is necessary but not sufficient.** glupload refuses every direct
+  importer today — `DirectDmabufExternal … cannot produce texture-target 2D` — and falls back
+  to mmap-and-copy regardless. Sizing the buffer stops the crash; it does not deliver zero
+  copy. Both halves are needed before any of this is faster than the system-memory path we
+  now fall back to, so measure before assuming the blob work pays for itself.
+- **The refusal is load-bearing until then**, and removing it reintroduces a SIGBUS rather
+  than a slow path. Keep the spike as its regression test: it needs no codec and no decoding.
+
+Upstreaming the refusal is what eventually fixes the stock tier — we do not ship patched mesa
+there, so stock stays broken until Fedora carries it.
