@@ -204,9 +204,15 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
     suite — a false green nearly shipped that way on 2026-08-14. The verdict is the log's
     `Summary`/`FAILED` lines, which the script prints; a log with no Summary line is a failure,
     not a pass. The script also refuses to start while another run is live.
+  - **Cut the bundle *before* starting the suite**, whenever the change is one the user will want
+    to try (`cargo xtask bundle`). The run takes ~28 min and the user pokes at a real build while
+    waiting; building afterwards wastes that window, and building *during* is the trap below. Do
+    it as a matter of course, not only when a bundle was asked for.
   - **Never `cargo build` (or `git commit` — the pre-commit hook runs clippy) while the suite is
     running**; a concurrent build relinks the binaries under the running tests. Hold commits until
-    it finishes, or use `--no-verify` deliberately for a docs-only change.
+    it finishes, or use `--no-verify` deliberately for a docs-only change. (A `--release` bundle
+    build does not touch the debug binaries the suite drives, so it is survivable — but the lock
+    contention and the risk of getting the profile wrong make it not worth doing anyway.)
   - **Do not kill stray `limina-vmm` processes without confirming they are yours.** Other sessions
     run VMs on this host. Match on something unique to your own run (the disk path), and confirm
     with a full, untruncated `ps -o pid,lstart,command -p <pid>` *before* the kill — a truncated
