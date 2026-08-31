@@ -32,6 +32,8 @@ use std::time::{Duration, Instant};
 
 use limina_proto::MemPressure;
 
+use crate::vmlib::logrot::{rotate as rotate_trace, GENERATIONS as TRACE_GENERATIONS};
+
 /// `some` pressure (hundredths of a percent) at/above which we deflate fast (give memory back).
 const PRESSURE_HIGH: u32 = 1000; // 10.00%
 /// `some` pressure at/below which the guest counts as idle (eligible to inflate).
@@ -678,31 +680,6 @@ enum ScrubStep {
     ToHolding,
     ToDeflating,
     Done,
-}
-
-/// How many previous boots of decision trace to keep beside the live one.
-///
-/// This was one, and at that depth every field measurement is a race against the next
-/// deploy: a bundle push rotates the live trace to `.1` and destroys whatever was there,
-/// so the run you are still analysing dies the moment the fix for it ships. Both windows
-/// of the 2026-08-14 allowance-shortfall A/B were one deploy from gone when they were
-/// rescued (`spikes/hv-ledger-gap/postdeploy-2026-08-14/`). Five boots is still bounded —
-/// a long dogfood day is a few MB per boot — and deep enough that copying a window out is
-/// never urgent.
-const TRACE_GENERATIONS: u32 = 5;
-
-/// Shift `p` → `p.1` → … → `p.<generations>`, dropping the oldest.
-///
-/// Best-effort by design: a rename that fails costs history, never the trace itself, so
-/// every error is ignored and the caller still opens `p` fresh.
-fn rotate_trace(p: &Path, generations: u32) {
-    let generation = |n: u32| p.with_extension(format!("{n}.jsonl"));
-    for n in (1..generations).rev() {
-        let _ = std::fs::rename(generation(n), generation(n + 1));
-    }
-    if p.exists() {
-        let _ = std::fs::rename(p, generation(1));
-    }
 }
 
 impl BalloonPolicy {
@@ -3464,41 +3441,6 @@ mod tests {
         let allow = max / 16;
         let next = decide(&report_pages(300, avail, max), &i);
         assert_eq!(next, Decision::Shortfall(21 * GIB_PAGES - (allow - avail)));
-    }
-
-    /// A deploy must not destroy the run being analysed. Five VM starts of trace survive,
-    /// oldest dropped — at one generation (the original depth) the second boot after a
-    /// measurement already took the window with it, which nearly cost the 2026-08-14 A/D
-    /// baseline twice.
-    #[test]
-    fn five_boots_of_trace_survive_the_deploys_after_them() {
-        let dir = std::env::temp_dir().join(format!("balloon-rot-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let live = dir.join("balloon-trace.jsonl");
-
-        // Seven boots: each writes its own generation, then the next start rotates it back.
-        for boot in 0..7 {
-            rotate_trace(&live, TRACE_GENERATIONS);
-            std::fs::write(&live, format!("boot{boot}")).unwrap();
-        }
-
-        // Boot 6 is live; 5..=2 sit behind it, oldest-first, and boot 1 has aged out.
-        assert_eq!(std::fs::read_to_string(&live).unwrap(), "boot6");
-        for (n, boot) in (1..=4).zip((2..=5).rev()) {
-            let path = dir.join(format!("balloon-trace.{n}.jsonl"));
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                format!("boot{boot}"),
-                "generation .{n} should hold boot{boot}"
-            );
-        }
-        assert!(
-            !dir.join("balloon-trace.5.jsonl").exists()
-                || std::fs::read_to_string(dir.join("balloon-trace.5.jsonl")).unwrap() == "boot1",
-            "the oldest kept generation is boot1; anything older is dropped"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The trace line is consumed by the bench summarizer: keys and shapes are a contract.

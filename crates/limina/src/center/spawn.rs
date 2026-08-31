@@ -16,6 +16,7 @@
 //! reaper the first unenumerated failure is silent again, and without pre-flight the user
 //! clicks a button that was never going to work.
 
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -25,6 +26,7 @@ use std::os::unix::process::CommandExt;
 
 use crate::vmlib::{
     bundle::VmBundle,
+    logrot,
     preflight::{self, Depth},
     runtime,
 };
@@ -41,7 +43,8 @@ const LOG_TAIL_LINES: usize = 12;
 
 /// Spawn `limina start <bundle>` as a detached child. Its own process group so a
 /// terminal Ctrl-C on the center never reaches it; stdout/stderr to the bundle's
-/// `logs/supervisor.log` (truncated per run); a reaper thread waits it (children
+/// `logs/supervisor.log` (rotated per run, `logrot::GENERATIONS` deep — the boot worth
+/// reading is the one that just died); a reaper thread waits it (children
 /// are NEVER killed on drop — VMs outlive the center by design).
 ///
 /// Refuses before spawning when pre-flight finds a blocker, so "the disk is missing" is an
@@ -57,9 +60,7 @@ pub fn start_vm(bundle: &VmBundle, errors: &ErrorSink) -> Result<()> {
     let exe = std::env::current_exe().context("locating the limina binary")?;
     std::fs::create_dir_all(bundle.logs_dir())
         .with_context(|| format!("creating {}", bundle.logs_dir().display()))?;
-    let log_path = bundle.logs_dir().join("supervisor.log");
-    let log = std::fs::File::create(&log_path)
-        .with_context(|| format!("creating {}", log_path.display()))?;
+    let (log_path, log) = open_run_log(bundle)?;
     let child = Command::new(exe)
         .arg("start")
         .arg(&bundle.path)
@@ -90,6 +91,19 @@ pub fn start_vm(bundle: &VmBundle, errors: &ErrorSink) -> Result<()> {
         }
     });
     Ok(())
+}
+
+/// Open `logs/supervisor.log` for the run about to start, keeping the previous boots.
+///
+/// The boot worth reading is almost always the one that just died, and this used to truncate
+/// it: on 2026-08-31 a dogfood SIGSEGV was diagnosable only because the user saved a copy by
+/// hand before restarting. Called after pre-flight, so a refused start rotates nothing.
+fn open_run_log(bundle: &VmBundle) -> Result<(PathBuf, std::fs::File)> {
+    let path = bundle.logs_dir().join("supervisor.log");
+    logrot::rotate(&path, logrot::GENERATIONS);
+    let file =
+        std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+    Ok((path, file))
 }
 
 /// What to tell the user about a supervisor that died in its first seconds: the tail of its
@@ -184,6 +198,38 @@ mod tests {
             "from an earlier run\n"
         );
         assert!(!runtime::status(&bundle).is_running());
+
+        std::env::remove_var("LIMINA_VM_LIBRARY");
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    /// The crashed boot's log is the one worth reading, and opening the next run's used to
+    /// truncate it — on 2026-08-31 a dogfood SIGSEGV was diagnosable only because the user
+    /// saved a copy by hand before restarting.
+    #[test]
+    fn opening_a_run_log_keeps_the_previous_boot() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let lib = scratch_library("spawn-rotate");
+        std::env::set_var("LIMINA_VM_LIBRARY", &lib);
+        let bundle = create(&basic_opts("Rotate"), &lib).unwrap();
+        std::fs::create_dir_all(bundle.logs_dir()).unwrap();
+        std::fs::write(
+            bundle.logs_dir().join("supervisor.log"),
+            "the boot that crashed\n",
+        )
+        .unwrap();
+
+        let (path, _log) = open_run_log(&bundle).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "",
+            "the new run starts empty"
+        );
+        assert_eq!(
+            std::fs::read_to_string(bundle.logs_dir().join("supervisor.1.log")).unwrap(),
+            "the boot that crashed\n",
+            "the previous run must survive the start that follows it"
+        );
 
         std::env::remove_var("LIMINA_VM_LIBRARY");
         std::fs::remove_dir_all(&lib).ok();

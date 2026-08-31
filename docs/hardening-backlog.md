@@ -2319,3 +2319,39 @@ Two things to know before starting:
 
 Upstreaming the refusal is what eventually fixes the stock tier — we do not ship patched mesa
 there, so stock stays broken until Fedora carries it.
+
+## Instrument KosmicKrisp's per-encoder compute pool
+
+A dogfood VMM SIGSEGV (2026-08-31 14:44) died with a nil store inside AGX's own MTL4 compute
+data-buffer pool, reached from an ordinary guest GL texture upload:
+`vrend_renderer_transfer_write_iov` → zink `zink_copy_image_buffer` → KK
+`kk_CmdCopyBufferToImage2` → `mtl_copy_from_buffer_to_texture` → `AGX::…::prepareForEnqueue`.
+The faulting instruction stores through a pool-segment pointer AGX had just loaded as NULL,
+with the cursor (`0x10001F`) one step past a 1 MiB segment (`0x100000`).
+
+The mechanism is pinned; the **cause is open**, and allocation failure, a segment cap, and use
+of an encoder past its end all fit the evidence equally. There is no repro, and this is a first
+sighting, so the thing to build is not a theory but the oracle: a KK-side counter of dispatches
+and pool bytes per compute encoder, logged when either crosses a threshold. Then the next
+occurrence names which of the three it was, instead of costing another autopsy.
+
+Ruled out already, so don't re-derive: address space (3718 vm regions, IOAccelerator 1.2 G over
+301 — nothing like the 23.6k-region leak) and host memory (48 G host, 18.7 G resident VM, no
+jetsam).
+
+## The kernel logs a shared-event fault for every VM we run
+
+While a `limina-vmm` lives, the kernel emits
+`IOGPUFamily … IOGPUCommandQueue::schedule_shared_event: Failed to find shared event reference`
+continuously — thousands per minute under load — and it stops the instant our process exits.
+They are ours. It is not the cause of the crash above (a per-minute histogram shows it chronic
+from launch, across process instances, not a condition that arose beforehand), but scheduling
+waits on a shared event the kernel cannot resolve is a real defect on the KK semaphore path,
+and every one of them is a round trip the GPU submission did not need.
+
+## The GPU budget line is an ERROR, ten times a second
+
+`limina GPU budget: memory_budget ctx … clamped=1` prints at ERROR level from the virglrenderer
+fork on every `vkGetMemoryBudget` poll. On a dogfood day that is a 12 MB `supervisor.log` in 83
+minutes, in which every line that explains anything is buried. It is a routine per-poll
+observation, not an error: demote it to debug on the fork, or rate-limit it to changes.

@@ -21,6 +21,7 @@
 
 pub mod bundle;
 pub mod import;
+pub mod logrot;
 pub mod preflight;
 pub mod runtime;
 pub mod schema;
