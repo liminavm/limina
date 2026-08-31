@@ -36,6 +36,11 @@ difference in the frames that reference it.
 `write_global_motion_params()` is unverified. A clip that actually provokes warped
 motion is still owed.
 
+**Every fixture is SVT-AV1.** That is one encoder's idea of a GOP, and it is not the
+one the stack meets in a browser: a libaom stream stores shown frames inside a pyramid
+GOP, which no fixture does, and which the slot assignment gets wrong (below). Fixture
+coverage is a claim about syntax, not about the streams users play.
+
 ## Reference slots are ours to assign, and the assignment must be exact
 
 VA-API does not carry `refresh_frame_flags` — mesa writes a constant 1
@@ -63,6 +68,34 @@ maps**, never against our own slots and never per-slot. Surface ids are recycled
 we already hold and teaches nothing; that alone cost seven frames. A per-slot diff
 has the mirror-image flaw: it misses a frame landing in a slot whose contents were
 seen elsewhere. Pictures the guest stops listing are pruned for the same reason.
+
+## A shown frame is stored too, and then there is no free slot
+
+The slot assignment emits a shown frame immediately, into a slot nothing live occupies,
+rather than holding it for the next descriptor the way a hidden frame is held. When all
+eight slots are live there is no such slot, and the frame is emitted with
+`refresh_frame_flags = 0` — stored nowhere. Every later reference to it then resolves to
+whatever the slot still holds, usually the key frame.
+
+This is what a libaom pyramid GOP does and SVT-AV1's does not. Measured over 124 frames
+of a 720p YouTube stream against the six fixtures:
+
+| stream    | frames | shown *and* stored |
+|-----------|--------|--------------------|
+| youtube   | 124    | 64                 |
+| lowdelay  | 60     | 29                 |
+| baseline, filmgrain, tiles, superres, pan | 60 each | 0 |
+
+`lowdelay` stores shown frames but never fills eight slots, so it never reaches the
+case. The five pyramid fixtures fill eight slots but never store a shown frame. The
+combination — a pyramid GOP that also stores shown frames — is the one no fixture holds,
+and it is the common case in the wild.
+
+dav1d rejects the result at `dav1d_send_data` with `EINVAL` and logs
+`Error parsing frame header`, which reads like a syntax bug and is not one: the header
+parses field-for-field, and an independent parser (`fhparse.py`) accepts all of it. Only
+the *resolution* of the references is wrong, so `dpb-check.py resolve` is the diagnostic
+that shows it and a header diff is the one that hides it.
 
 ## The failure this produces is not where it happens
 
@@ -107,4 +140,10 @@ silently rather than merely spoiling a fixture.
   dav1d, matching pictures on `frame_offset`. `AV1_ORACLE_DUMP=<path>` writes the
   rebuilt stream out.
 - `coverage.c` — reports which syntax the fixtures exercise.
+- `sw-oracle.c` — drives the serializer into dav1d in the backend's own order and
+  reports the first unit dav1d refuses. Replays a capture directory offline, with no VM.
 - `LIMINA_AV1_SLOT_TRACE=1` traces slot assignment and unresolved references.
+- `LIMINA_AV1_DUMP=<path>` makes the worker append every reconstructed temporal unit,
+  in submission order, to one file. That file is a stream `fhparse.py` and
+  `dpb-check.py` read directly, which is what turns a live playback into the same
+  offline diff the fixtures get.
