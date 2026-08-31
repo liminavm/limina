@@ -80,9 +80,9 @@ The table covers the 58 audited commits; the 6 added since are listed under
 
 ### Post-audit commits (unaudited — added after the 2026-08-03 pass)
 
-The table's 58 rows are the audited series. Twenty-five commits have landed on the branch
-since, and none has been researched against upstream yet. Listed so the drift is visible
-rather than implied by a stale count:
+The table's 58 rows are the audited series. The commits below have landed on the branch since,
+and none has been researched against upstream yet. Listed so the drift is visible rather than
+implied by a stale count. (The H.264 VideoToolbox decode commits are not in this list yet.)
 
 | commit | subject | first guess at disposition |
 |---|---|---|
@@ -112,6 +112,7 @@ rather than implied by a stale count:
 | `86741d53` | vrend: drop the iovecs when the VMM's resource is destroyed | **carry, chained to `4c2a38f5`** — the dangling `res->iov` exists upstream too (`virgl_resource_destroy_func` never calls `detach_iov`), but nothing upstream reads it after the unref, so there is no bug to report and nothing to disclose. It became reachable only through our own guest-pixels refresh. Sending it alone would be a fix for a latent pointer with no failing case |
 | `e534ac72` | venus: size host-visible allocations for the blob the guest will make of them | **carry, but the underlying gap is upstream-shaped** — a guest turns host-visible memory into a virtio-gpu blob and the guest *kernel* `PAGE_ALIGN`s it to the guest's page size, so a 1280-byte `VkDeviceMemory` arrives back as a 4096-byte blob and the export refuses it (the guest then holds a dead resource id and the client dies — measured on stock Fedora 44 with `vkcube`). We pad to 64 KiB because the host cannot ask the guest its page size; the *right* upstream fix is for venus to learn the guest page size (or for the export to tolerate a page-aligned overshoot), not a fixed pad. `LIMINA_BLOB_SIZE_ALIGN` would need renaming either way |
 | `f68289d8` | macOS: composite a stock guest's Vulkan window from the bytes it blits | **carry, chained to `4c2a38f5`** — it is the same idea (a blob with no importable fd is sampled rather than declared untypeable) reaching a second source of bytes: an SHM carrier instead of guest iovecs. Neither half is upstream-shaped as written. Backing a stripped export's memory with its own carrier only makes sense on a host with no dmabuf *and* no working export, and the host-visible gate stands in for a `vkGetMemoryHostPointerPropertiesEXT` KK does not expose. What generalises is the observation, worth an upstream issue on its own: on the merged SHM-fd macOS model, a stock guest's WSI prime-blit staging buffer reaches the compositor with no way to read it, so krunkit composites Vulkan windows black today for the same reason we did. The durable fix is guest-side (virgl enumerating modifiers, so no staging buffer is allocated at all) — see `spikes/stock-venus-black-windows/` |
+| `ecf3d3b0` | virgl_resource: lock the resource table | **send-later, standalone** — the table is lock-free upstream because upstream only touches it from the entry-point thread, so there is no upstream bug to report; the lock becomes upstream-shaped only if the IOSurface-forget path (which is what put a second thread on it) goes up. `virgl_fence.c` already carries the same global-lock pattern in-tree, so the shape needs no argument |
 
 `034f7086` is the allocation-side half of the fd-less classic-resource attach: without it
 only `VIRGL_BIND_SCANOUT` resources got an IOSurface, so a Vulkan compositor could import
