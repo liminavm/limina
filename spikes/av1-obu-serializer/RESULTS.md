@@ -23,6 +23,7 @@ original clip:
 | superres* | 31                     | 29            |
 | pan       | 31                     | 29            |
 | lowdelay  | 60                     | 0             |
+| aompyramid| 36                     | 28            |
 
 \* the `superres` capture carries a local repair: two of its tile payloads were
 recorded as zeros (see *Known defect* below) and were restored from the clip.
@@ -36,10 +37,11 @@ difference in the frames that reference it.
 `write_global_motion_params()` is unverified. A clip that actually provokes warped
 motion is still owed.
 
-**Every fixture is SVT-AV1.** That is one encoder's idea of a GOP, and it is not the
-one the stack meets in a browser: a libaom stream stores shown frames inside a pyramid
-GOP, which no fixture does, and which the slot assignment gets wrong (below). Fixture
-coverage is a claim about syntax, not about the streams users play.
+**One encoder is not a GOP.** Six of the seven clips are SVT-AV1, and its pyramid never
+stores a shown frame; libaom's does, which is a different shape of DPB and the one
+browsers actually play. `aompyramid` exists because that difference was worth a fixture,
+not because libaom exercises different syntax. Coverage of the *syntax* says nothing
+about coverage of the *slot state* a stream drives the model through.
 
 ## Reference slots are ours to assign, and the assignment must be exact
 
@@ -69,33 +71,28 @@ we already hold and teaches nothing; that alone cost seven frames. A per-slot di
 has the mirror-image flaw: it misses a frame landing in a slot whose contents were
 seen elsewhere. Pictures the guest stops listing are pruned for the same reason.
 
-## A shown frame is stored too, and then there is no free slot
+## Holding is about the slots, not about whether a frame is shown
 
-The slot assignment emits a shown frame immediately, into a slot nothing live occupies,
-rather than holding it for the next descriptor the way a hidden frame is held. When all
-eight slots are live there is no such slot, and the frame is emitted with
-`refresh_frame_flags = 0` — stored nowhere. Every later reference to it then resolves to
-whatever the slot still holds, usually the key frame.
+A frame is held for one submission, and emitted once the next descriptor reveals the
+guest's choice, whenever every reference slot is live. While any slot is free the frame
+goes out at once into it. That condition is the whole rule: whether the frame is
+displayed does not enter into it.
 
-This is what a libaom pyramid GOP does and SVT-AV1's does not. Measured over 124 frames
-of a 720p YouTube stream against the six fixtures:
+It is tempting to hold only hidden frames, on the grounds that nothing waits on their
+pixels. That is a statement about delivery, not about the DPB, and the two are
+independent: whether the guest *stores* a frame has nothing to do with whether it
+*shows* it. A libaom pyramid GOP stores shown frames and fills eight slots, and emitting
+one with `refresh_frame_flags = 0` because no slot was free loses it -- every later
+reference resolves to whatever the slot still holds, usually the key frame. Over 124
+frames of a 720p YouTube stream, 64 are shown and stored; over `aompyramid`, 31 of 64.
+Every SVT-AV1 pyramid fixture has none.
 
-| stream    | frames | shown *and* stored |
-|-----------|--------|--------------------|
-| youtube   | 124    | 64                 |
-| lowdelay  | 60     | 29                 |
-| baseline, filmgrain, tiles, superres, pan | 60 each | 0 |
+The cost of holding a shown frame is that its picture reaches its target a submission
+late. The backend keeps `held_target` for exactly that, and nothing waits on delivery,
+so it is a frame of latency and not a stall.
 
-`lowdelay` stores shown frames but never fills eight slots, so it never reaches the
-case. The five pyramid fixtures fill eight slots but never store a shown frame. The
-combination — a pyramid GOP that also stores shown frames — is the one no fixture holds,
-and it is the common case in the wild.
-
-dav1d rejects the result at `dav1d_send_data` with `EINVAL` and logs
-`Error parsing frame header`, which reads like a syntax bug and is not one: the header
-parses field-for-field, and an independent parser (`fhparse.py`) accepts all of it. Only
-the *resolution* of the references is wrong, so `dpb-check.py resolve` is the diagnostic
-that shows it and a header diff is the one that hides it.
+`aompyramid` is the regression test: on the previous assignment its rebuilt stream does
+not decode at all.
 
 ## The failure this produces is not where it happens
 
@@ -134,7 +131,8 @@ silently rather than merely spoiling a fixture.
 
 ## Layout
 
-- `make-fixtures.sh` — encodes the six clips with SVT-AV1.
+- `make-fixtures.sh` — encodes the clips: six with SVT-AV1, and `aompyramid` with
+  `aomenc` (`brew install aom`), whose pyramid stores shown frames.
 - `capture/<clip>/frameNNNNN.{desc,tile}` — recorded by a `LIMINA_AV1_CAPTURE` run.
 - `oracle.c` — rebuilds the stream and double-decodes it against the clip with
   dav1d, matching pictures on `frame_offset`. `AV1_ORACLE_DUMP=<path>` writes the

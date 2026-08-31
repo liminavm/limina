@@ -393,8 +393,11 @@ int main(int argc, char **argv)
     if (decode_stream(original, original_size, &ref, "reference") < 0)
         return 1;
     if (decode_stream(stream, stream_len, &sub, "subject") < 0) {
-        fprintf(stderr, "\nthe rebuilt stream does not decode at all -- so the frame header "
-                "is malformed, not merely wrong.\n");
+        fprintf(stderr, "\nthe rebuilt stream does not decode at all. dav1d reports this as "
+                "EINVAL and\n'Error parsing frame header', but that does not mean the header "
+                "is malformed: a\nreference resolving to the wrong picture reads the same "
+                "way. Check the slots first --\n./dpb-check.py resolve <original.obu> "
+                "<rebuilt.obu> -- and only then the syntax.\n");
         return 1;
     }
 

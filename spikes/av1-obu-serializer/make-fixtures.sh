@@ -24,6 +24,22 @@ SRC="testsrc2=size=640x360:rate=$RATE:duration=$DUR"
 # A whole-frame pan, which is what makes an encoder reach for global motion.
 PAN="color=c=black:size=1280x720:rate=$RATE:duration=$DUR"
 
+# libaom, not SVT-AV1, and not through ffmpeg -- ours is built without libaom. Its pyramid
+# stores shown frames while filling all eight reference slots, which SVT-AV1's does not do
+# and which the slot assignment has to get right. aomenc reads a file, not a pipe: fed y4m on
+# stdin it writes a header and no frames, silently.
+aom() { # aom <name> <input-filter>
+    local name=$1 filt=$2
+    echo "==> $name (libaom)"
+    ffmpeg -hide_banner -loglevel error -f lavfi -i "$filt" -pix_fmt yuv420p \
+        -f yuv4mpegpipe -y "clips/$name.y4m"
+    aomenc --quiet --ivf --cpu-used=4 --end-usage=q --cq-level=40 --kf-max-dist=60 \
+        --lag-in-frames=19 --auto-alt-ref=1 -o "clips/$name.ivf" "clips/$name.y4m"
+    rm -f "clips/$name.y4m"
+    ffmpeg -hide_banner -loglevel error -i "clips/$name.ivf" -c:v copy -y "clips/$name.mp4"
+    ffmpeg -hide_banner -loglevel error -i "clips/$name.ivf" -c:v copy -f obu -y "clips/$name.obu"
+}
+
 enc() { # enc <name> <input-filter> [extra svtav1 params...]
     local name=$1 filt=$2; shift 2
     local params=""
@@ -42,6 +58,7 @@ enc superres    "$SRC"                                superres-mode=2
 enc lowdelay    "$SRC"                                pred-struct=1
 # A rigid pan over detailed content, the strongest inducement to global motion.
 enc pan         "${PAN},noise=alls=40:allf=t+u,crop=640:360:'min(t*60,640)':180"
+aom aompyramid  "$SRC"
 
 echo
 echo "clips:"
