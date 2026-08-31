@@ -1992,10 +1992,11 @@ states), SMCCC/`ARCH_FEATURES`, PPTT/topology, and whatever else a guest probes 
 `NOT_SUPPORTED` for. Each declined feature is a guest behaviour we inherit by default rather
 than choose.
 
-## Firefox never uses our VA-API video, because our surfaces are I420
+## A stock guest never uses our VA-API video, because virgl offers decode formats it cannot vouch for
 
-Diagnosed 2026-08-30 on the dev Mac (M1 Max) with a stock Debian guest, from
-Firefox's own `MOZ_LOG`:
+Fixed on the tier we build mesa for (guest mesa `0011`, `virgl_screen.c`); **a stock
+guest stays broken until the same change is upstream.** Diagnosed 2026-08-30 on the
+dev Mac (M1 Max) with a stock Debian guest, from Firefox's own `MOZ_LOG`:
 
 ```
 [RDD: MediaPDecoder #1] D/Dmabuf Unsupported VA-API surface format 808596553
@@ -2011,39 +2012,34 @@ which is why the guest burns CPU while our decoder sits unused.
 **It is codec-independent and is not an AV1 regression.** VP9 behaves identically —
 the rejection is on the surface format, before the codec matters. VP9 decode was
 only ever validated with ffmpeg and GStreamer, never with a browser, so nothing
-caught it. Firefox VA-API video has most likely never worked on this stack.
+caught it.
 
-**Why our surfaces are I420.** Verified against mesa's source:
+**Why I420 gets chosen.** ffmpeg is not guessing. `vaapi_decode_find_best_format`
+scores every advertised fourcc with `av_find_best_pix_fmt_of_2`, whose
+`get_pix_fmt_score` short-circuits on an exact match (`dst == src` returns `INT_MAX`;
+every other candidate is capped below it). The decoder's `sw_pix_fmt` for 8-bit 4:2:0
+AV1 and VP9 is `yuv420p`, and I420, YV12 and IYUV *all* map to `yuv420p` — so all
+three tie at `INT_MAX` and beat NV12, and the tie resolves to the later candidate.
+mesa advertises NV12, YV12, IYUV in that order, so the winner is IYUV. Real Intel and
+AMD drivers never reach this: their `is_video_format_supported` answers from real
+per-codec decode caps and offers NV12 only.
 
-- `vlVaExportSurfaceHandle` reports `PipeFormatToVaFourcc(surf->buffer->buffer_format)`,
-  so Firefox sees the decode target's real format.
-- `vlVaCreateSurfaces2` defaults `VA_RT_FORMAT_YUV420` to **NV12**, and uses another
-  format only when the caller passes an explicit `VASurfaceAttribPixelFormat`.
-- `vlVaQuerySurfaceAttributes` offers NV12, YV12 **and IYUV** for a decode config,
-  each gated only by `is_video_format_supported`, which virgl delegates to the
-  generic `vl_video_buffer_is_format_supported` — a check on whether the screen can
-  sample and render the component formats, ignoring profile and entrypoint entirely.
-  All three pass on our stack (measured: `hwupload` succeeds for nv12, yuv420p and
-  p010 alike).
-- So libavcodec picks I420 off that list — its `sw_pix_fmt` for AV1 and VP9 is
-  `yuv420p` — and asks for it explicitly. Real Intel and AMD drivers do not offer
-  I420 for decode configs, so on those ffmpeg is forced to NV12 and Firefox works.
+**The defect is virgl's.** `virgl_is_video_format_supported` receives profile and
+entrypoint and ignores both, delegating to the generic
+`vl_video_buffer_is_format_supported` — whose own comment is `/* we at least need to
+sample from it */`. It is a *sampling* check being used to answer a *decode-target*
+question, and it has nothing better to consult: the virgl protocol carries no
+per-codec decode-target format list, so the guest driver cannot ask the host what it
+can actually decode into. Withholding YV12 and IYUV for `PIPE_VIDEO_ENTRYPOINT_BITSTREAM`
+is the smallest correct answer and is what we carry; the durable fix is a wire query.
 
-Our backend handles I420 correctly, which is exactly why this stayed invisible:
-`ffmpeg -hwaccel vaapi` decodes 60/60 frames with 0 errors in the same guest.
+ffmpeg is behaving correctly, and Firefox is narrow but not wrong. Nor is I420
+*decode* broken on our stack — guest VA-API I420 output is bit-identical to software
+decode across 10 frames (framemd5), which is exactly why this stayed invisible:
+`ffmpeg -hwaccel vaapi` decodes cleanly in the same guest.
 
-**There is no host-side lever.** The format list is built from the generic screen
-check; suppressing I420 by making its component formats unsupported would take R8
-with it and break NV12 too. The fix belongs in mesa's virgl driver, whose
-`virgl_is_video_format_supported` already *receives* profile and entrypoint and
-ignores them: for a decode entrypoint it should offer NV12 (and P010), not every
-planar layout the screen happens to support.
-
-That splits along the two tiers, and needs a decision: patching our guest mesa fixes
-the enhanced tier immediately, but **a stock guest stays broken until the change is
-upstream**, which makes this an upstream-first candidate rather than a fork patch to
-sit on. Worth checking whether the same argument applies to any other consumer that
-imports VA surfaces as DMABUF (GStreamer's `vaapisink`, Chromium).
+Still owed: send the virgl change upstream so the stock tier gets it, and check
+whether other VA-DMABUF consumers (GStreamer `vaapisink`, Chromium) hit the same wall.
 
 ## AV1: the slice buffer can read as zeros when the host copies it
 
