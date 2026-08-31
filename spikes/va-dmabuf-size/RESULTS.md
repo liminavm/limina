@@ -45,6 +45,28 @@ resubmits frames whose reference pictures are gone. A decode-only run of the sam
 none of them. Worth remembering — they name a real VideoToolbox error and look exactly like a
 decoder bug.
 
+## Stock Fedora reproduces it byte for byte
+
+Fedora's own mesa `26.0.3-4.fc44`, on a 4 KiB-page stock guest with no limina guest components,
+gives the same answer at every resolution:
+
+```
+VA-API 1.23, driver: Mesa Gallium driver 26.0.3 for virgl
+surface 1920x1080 fourcc NV12: 2 object(s), 2 layer(s)
+  object 0: fd 6  declared size 0  ACTUAL dmabuf size 4096  modifier 0x0
+  object 1: fd 8  declared size 0  ACTUAL dmabuf size 4096  modifier 0x0
+  layer 0 plane 0: offset 0 pitch 1920  -> ends at 2073600
+```
+
+So this is upstream virgl behaviour, not a limina delta and not a consequence of 16 KiB pages.
+That cuts two ways: the fix is a legitimate upstream patch rather than a local workaround, and
+the stock tier can only receive it by way of upstreaming — nothing the host advertises gates
+the export. The VA frontend gates only on `mem_type`, flags and `interlaced`, and
+`drivers/virgl/virgl_video.c` consults no capability at all.
+
+(`mesa-va-drivers` is not a separate package on F44; `virtio_gpu_drv_video.so` ships in
+`mesa-dri-drivers`, so a stock guest has the VA driver without installing anything.)
+
 ## What the host and guest each report
 
 Guest kernel: `virtio_gpu_dequeue_ctrl_func *ERROR* response 0x1200 (command 0x207)` —
@@ -87,19 +109,27 @@ That makes this architectural rather than a sizing bug. Zero-copy needs the deco
 allocated as host-mappable blob resources (`VIRTGPU_BLOB_MEM_HOST3D`, which the winsys already
 knows how to create for other paths) so the exported fd names real, mappable memory.
 
-## Two ways forward
+## What was done, and what is still owed
 
-- **Stop advertising what we cannot back.** If the VA driver did not offer dmabuf export for
-  decode surfaces, GStreamer would negotiate system memory and Showtime would work today, at
-  one frame copy per frame. Small and targeted; it trades performance for correctness and
-  removes a crash.
-- **Allocate decode targets as mappable blobs.** The real fix, and the one that makes the
-  direct importers usable at all. Larger, and it spans guest mesa, virglrenderer and possibly
-  libkrun.
+**Refuse the export.** `virgl_resource_get_handle` now returns false for an FD export whose
+laid-out size exceeds the guest storage behind it — the same predicate
+`virgl_resource_from_handle` already uses to decide a resource needs staging, so it refuses
+exactly the resources mesa already knows hold no guest pixels. The caller then negotiates
+system memory: one frame copy per frame, and it works. `whandle->size` is filled in at the
+same time, so the descriptor's `size` stops reading as 0.
 
-Note the second defect on this path is not fixed by either on its own: glupload's direct
-importers are refused with `cannot produce texture-target 2D`, so even a correctly sized dmabuf
-would still fall back to a copy until that is addressed.
+**Still owed: allocate decode targets as host-mappable blobs.** That is the fix that buys
+zero-copy rather than a copy per frame, and it spans guest mesa, virglrenderer and possibly
+libkrun. Booked in `docs/hardening-backlog.md`.
+
+Two things are easy to lose between the two:
+
+- **A correctly sized dmabuf is necessary but not sufficient.** glupload's direct importers are
+  all refused with `cannot produce texture-target 2D`, so even a right-sized export would still
+  fall back to the copy uploader. Both halves are needed before the blob work is faster than
+  the system-memory path we now take.
+- **The refusal is load-bearing until then.** Removing it reintroduces a SIGBUS, not a slow
+  path. This spike is its regression test.
 
 ## Running it
 
