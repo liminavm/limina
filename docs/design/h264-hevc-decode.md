@@ -132,7 +132,24 @@ decoder needs, nothing a serializer needs. Missing, with its source:
 | `pic_width_in_mbs_minus1`, `pic_height_in_map_units_minus1` | the codec's width/height, rounded up: `(w + 15) / 16 - 1` |
 | `frame_cropping_*` | the remainder of that rounding, so VT emits the display size and not the padded one |
 | `gaps_in_frame_num_value_allowed_flag` | zero |
+| `max_num_ref_frames` | `desc->num_ref_frames` — **not** `sps.max_num_ref_frames`, see below |
+| `num_ref_idx_l0/l1_default_active_minus1` | `desc->num_ref_idx_l0/l1_active_minus1` — likewise |
 | VUI | omitted entirely; `vui_parameters_present_flag = 0` |
+
+**Some `virgl_h264_sps`/`_pps` fields are dead on the decode path.** mesa's VA frontend writes
+the live reference-management values into the *top level* of the picture descriptor and leaves
+the SPS/PPS members alone; only `picture_h264_enc.c` fills those. Reading them yields zeros,
+which produce a legal parameter set describing an empty DPB — accepted, then rejected several
+frames later with `kVTVideoDecoderBadDataErr`. Before serializing any field, check that the VA
+frontend actually assigns it.
+
+**The parameter sets are not constant across a stream.** `num_ref_idx_lX_active_minus1` is the
+*effective* per-slice count, so a slice overriding the PPS default changes the PPS we
+synthesize mid-GOP. That is legitimate, and the backend must absorb it without disturbing the
+decompression session: the session is keyed on frame shape, and the parameter-set bytes drive
+only the format description, which swaps into the live session through
+`VTDecompressionSessionCanAcceptFormatDescription` and rides on each sample buffer. Keying the
+session on the bytes instead destroys the reference picture buffer at the first override.
 
 Note the asymmetry worth remembering: **H.264 has no dimensions on the wire and HEVC does**
 (`pic_width_in_luma_samples` / `pic_height_in_luma_samples`, `virgl_video_hw.h:266-267`). The
@@ -203,3 +220,16 @@ decode subtly wrong — wrong size, wrong cropping, wrong reference behaviour �
 exactly like a driver bug several layers away. So: assert the synthesized sets against a
 reference parser (`ffmpeg -v trace`, or `h264bitstream`) as part of the test, not by eye, and
 do it before trusting any pixel comparison.
+
+And the sharper form the H.264 work taught: **a serializer spike verifies the bytes, never the
+plumbing that fills them.** `spikes/h264-ps-synth` was bit-exact on four streams throughout
+three faults, because it chose which struct member to read and could pick one the decode path
+never writes. Only a guest exercises the mapping from wire to field, and the reaction to a
+value that legitimately changes mid-stream. Treat a green serializer spike as a precondition
+for the in-guest comparison, not as evidence of anything on its own.
+
+**Status: H.264 is done.** Decoded in the guest against the software decoder, `framemd5` per
+frame, bit-exact on all four clips — x264 High with B-frames and weighted prediction,
+VideoToolbox-encoded 1080p, x264 Baseline (`pic_order_cnt_type` 2, CABAC off), and x264 Main
+cropped on both axes. Field-capable, interlaced, >8-bit, 4:2:2/4:4:4 and custom scaling
+matrices are refused outright rather than emitted wrongly. HEVC remains.
