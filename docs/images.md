@@ -54,7 +54,7 @@ guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-23. Al
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`*.raw`, `*.boot.raw`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.7-3.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.7-4.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.8-1` | 16 KiB | `26.1.6-1.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` | 16 KiB | `26.1.5-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` (stock) |
@@ -83,7 +83,19 @@ release's stock GNOME Shell (same `libmutter-NN` ABI).
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r16.tar.zst`** (r16, 2026-08-23: kernel
+**Current payload: `payload/limina-guest-tools-f44-r17.tar.zst`** (r17, 2026-08-31: kernel
+`limina-kernel-16k-7.1.8-4` unchanged, mesa `26.1.7-4.limina` — virgl no longer offers
+three-plane 4:2:0 (YV12/IYUV) as a decode target. ffmpeg picks a VA surface format by exact
+match against `sw_pix_fmt`, so I420 and YV12 both outscored NV12 and the last advertised won;
+Firefox refused the I420 surface and decoded in software, making hardware decode advertised,
+selected and silently unused. Measured in a stock F44 guest: ffmpeg picked `0x30323449` (IYUV)
+before and `0x3231564e` (NV12) after, and Firefox then imports NV12 zero-copy. **The base is
+held at 26.1.7 while Fedora's repos have moved to 26.1.8** — deliberate, so this differs from
+r16's mesa by our one patch and nothing else; the versionlock keeps it pinned. Applied with the
+real `install-enhanced.sh` to all three F44 enhanced images (`.bak-pre-r17.raw` CoW backups),
+both agent hashes verified. **Deploy host-first**: this mesa is what makes hardware decode
+actually engage, so a host without the plane-index fix (virglrenderer `2e0f1eff`) will read a
+plane index as a layer range and poison the render context. Previous: r16, 2026-08-23: kernel
 `limina-kernel-16k-7.1.8-4` and mesa `26.1.7-3.limina` — the guest half of the video-import fix.
 drm/virtio now records `blob_mem` on a PRIME-imported dmabuf and gives the dma-buf GEM funcs
 `.open`/`.close`; the virgl winsys reports the blob kind on its cache-hit path and planar YUV is
