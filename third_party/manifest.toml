@@ -73,7 +73,7 @@ base = "mesa-26.1.7"
 repo = "https://github.com/liminavm/virglrenderer.git"
 upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 branch = "limina"
-rev = "9140325b4975d31cb593b7d63066bc9b1f1877e0"
+rev = "7245e585ccfd4737434d94a65f498a241cb5da90"
 base = "f2945d3974256fefc731f0411c28b865680eebdc"
 
 [linux]
