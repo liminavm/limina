@@ -204,10 +204,13 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
     suite — a false green nearly shipped that way on 2026-08-14. The verdict is the log's
     `Summary`/`FAILED` lines, which the script prints; a log with no Summary line is a failure,
     not a pass. The script also refuses to start while another run is live.
-  - **Cut the bundle *before* starting the suite**, whenever the change is one the user will want
-    to try (`cargo xtask bundle`). The run takes ~28 min and the user pokes at a real build while
-    waiting; building afterwards wastes that window, and building *during* is the trap below. Do
-    it as a matter of course, not only when a bundle was asked for.
+  - **Bundle, then let the user poke, and only then start the suite.** Cut the bundle first
+    (`cargo xtask bundle`) whenever the change is one the user will want to try — do it as a matter
+    of course, not only when asked. Then wait for their hands-on verdict before starting the run:
+    poking finds what the suite cannot (it is the only oracle for how a real browser or desktop
+    behaves), and what it finds usually means another commit, which would invalidate the run
+    anyway. A suite started too early spends 28 minutes proving a tree we are about to change.
+    Bisecting a regression later is cheap; a wasted run is not.
   - **Never `cargo build` (or `git commit` — the pre-commit hook runs clippy) while the suite is
     running**; a concurrent build relinks the binaries under the running tests. Hold commits until
     it finishes, or use `--no-verify` deliberately for a docs-only change. (A `--release` bundle
