@@ -156,16 +156,52 @@ Note the asymmetry worth remembering: **H.264 has no dimensions on the wire and 
 H.264 path must therefore take its geometry from the codec object, and cropping is not
 optional — any width that is not a multiple of 16 decodes to the wrong visible size without it.
 
-### HEVC: the VPS has no source at all
+### HEVC: the VPS has no source, and neither do the reference picture sets
 
 `CMVideoFormatDescriptionCreateFromHEVCParameterSets` requires a VPS, and nothing on the wire
-describes one. It must be synthesized whole. This is less alarming than it sounds — the
-load-bearing content of a VPS is `profile_tier_level` plus
-`vps_max_dec_pic_buffering_minus1`, and the SPS-side equivalents are on the wire
-(`sps_max_dec_pic_buffering_minus1`). The tier/level itself is not, so it is derived from the
-profile the same way H.264's `profile_idc` is.
+describes one. That part is genuinely easy: the load-bearing content of a VPS is
+`profile_tier_level` plus the buffering values, and the SPS twins are on the wire
+(`sps_max_dec_pic_buffering_minus1`, `picture_hevc.c:78`).
 
-Write the VPS, SPS and PPS as one contiguous set, in that order, with ids 0/0/parsed.
+The hard part is `short_term_ref_pic_set()`. A slice header may index one of the sets declared
+in the SPS, and **those sets are absent from VA-API by design** — VA hands drivers *resolved*
+reference lists instead, which is why mesa's own slice parser skips the RPS rather than
+reading it (`picture_hevc.c:374-378`). `num_short_term_ref_pic_sets` is on the wire; the sets
+are not, and `CurrRpsIdx` is never assigned either, so no amount of bookkeeping recovers them.
+
+**What makes this tractable is that no encoder puts them to use.** Both x265 and VideoToolbox
+emit the set inline in every slice header, where it is self-contained and passes through
+untouched. So the SPS keeps the set *count* — all a slice header's index width depends on —
+and every set is an empty placeholder:
+
+```
+st_ref_pic_set(0)   = ue(0) ue(0)          2 bits
+st_ref_pic_set(i>0) = 0, ue(0) ue(0)       3 bits
+```
+
+The leading `0` for `i > 0` is `inter_ref_pic_set_prediction_flag`, present for every set but
+the first; omitting it desyncs the parse of the SPS itself. `spikes/hevc-vt-probe` measured
+that these bytes decode bit-exactly against a stream's real parameter sets on the hardware
+decoder.
+
+`virgl_h265_slice_inspect` enforces the premise, refusing a slice that indexes an SPS set or
+inline-predicts from one. **Neither is visible at codec-creation time** — RPS policy first
+appears in the first inter-predicted slice — so the refusal necessarily lands one frame into
+playback. That is not a defect to be "fixed" into a create-time check, which cannot exist.
+
+**The level is a constant, and generous.** It is not on the wire, and a level change is the one
+format-description delta a live decompression session refuses outright (`-12916`), so deriving
+it from the stream would turn a resolution change into a lost reference picture buffer.
+
+**Scaling lists are accepted when they are the defaults.** The backend emits
+`sps_scaling_list_data_present_flag = 0`, which selects the defaults — exact when the stream did
+the same, silently wrong when it carried custom lists. mesa delivers the *effective* lists
+either way, so the two are told apart by comparing against the defaults **as sorted
+multisets**: the scan order VA delivers them in is not established, and a multiset comparison
+does not depend on it. A blanket refusal here would have rejected every VideoToolbox-encoded
+stream, which enables the flag without carrying data.
+
+Write the VPS, SPS and PPS as one contiguous set, in that order, with ids 0/0/0.
 
 ### Sample buffers: Annex-B in, AVCC out
 
@@ -232,4 +268,12 @@ for the in-guest comparison, not as evidence of anything on its own.
 frame, bit-exact on all four clips — x264 High with B-frames and weighted prediction,
 VideoToolbox-encoded 1080p, x264 Baseline (`pic_order_cnt_type` 2, CABAC off), and x264 Main
 cropped on both axes. Field-capable, interlaced, >8-bit, 4:2:2/4:4:4 and custom scaling
-matrices are refused outright rather than emitted wrongly. HEVC remains.
+matrices are refused outright rather than emitted wrongly.
+
+**Status: HEVC Main is done.** Same verification, bit-exact on five clips: x265 at two sizes,
+VideoToolbox-encoded 1080p, and both encoders at odd sizes cropping on both axes. Every session
+reported hardware acceleration; no refusal fired and no decode failed. It passed end-to-end on
+the first attempt, where H.264 needed two wire-mapping fixes — the difference being that the VA
+frontend's assignment sites were audited *before* any code was written. Main 10, 4:2:2/4:4:4,
+separate colour planes, custom scaling lists, and streams whose slices index an SPS reference
+picture set are all refused.
