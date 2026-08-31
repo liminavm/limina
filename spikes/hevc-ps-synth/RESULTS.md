@@ -28,6 +28,8 @@ the entire VPS, `general_level_idc`, the `conf_win_*` offsets, and the contents 
 | `x265.265` 640×480 | x265 | `num_short_term_ref_pic_sets = 0`, no conformance window | 60 ✓ |
 | `x265-1080.265` 1920×1080 | x265 | a second size through the same shape | 60 ✓ |
 | `vt1080.265` 1920×1080 | **VideoToolbox** | **4 placeholder ref pic sets**, a **conformance window** (coded 1088 → displayed 1080), **default scaling lists**, an independent parameter-set writer | 60 ✓ |
+| `odd854.265` 854×482 | x265 | cropping on **both** axes (coded 856×488), 4 references, 4 B-frames | 60 ✓ |
+| `vtodd.265` 1278×718 | VideoToolbox | cropping on both axes **with** placeholder ref pic sets | 60 ✓ |
 
 The clips live in `../hevc-vt-probe/`, where they are also the probe's fixtures.
 
@@ -80,4 +82,23 @@ cc -O1 -Wall -Wextra -I shim -I <virgl>/src/vrend -I <virgl>/src -I <virgl>/src/
 ./verify.sh ../hevc-vt-probe/x265.265      640  480
 ./verify.sh ../hevc-vt-probe/x265-1080.265 1920 1080
 ./verify.sh ../hevc-vt-probe/vt1080.265    1920 1080
+./verify.sh ../hevc-vt-probe/odd854.265     854  482
+./verify.sh ../hevc-vt-probe/vtodd.265     1278  718
 ```
+
+## End-to-end verdict
+
+Decoded in the guest through VA-API against the software decoder, `framemd5` per frame:
+
+```
+x265       PASS - 60 frames, hardware == software, bit-exact
+x265-1080  PASS - 60 frames, bit-exact
+vt1080     PASS - 60 frames, bit-exact
+odd854     PASS - 60 frames, bit-exact
+vtodd      PASS - 60 frames, bit-exact
+```
+
+Every session reported `hardware accelerated: yes`; no refusal fired, no decode failed, and
+the synthesized sets stayed byte-identical for the life of each stream. Unlike H.264, whose
+PPS changes mid-GOP because its reference counts arrive per-slice, HEVC's
+`num_ref_idx_l*_default_active_minus1` really are the PPS defaults, so nothing churns.
