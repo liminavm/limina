@@ -1,0 +1,699 @@
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 1987 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 3987 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 5986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 7986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 9986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 11986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 13986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 15986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 17986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 19986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 21986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 23986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 25986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 27986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 29986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 31986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 33986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 722 retirements) | peak ops/cmdbuf=262
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1941 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=3
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 35986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 37986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 39986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 41986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 43986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 45986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 47986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 49986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 51986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 53986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 55986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 57986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 59986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 61986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 63986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 65986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 67986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 69986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 71986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 73986 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 75985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 1389 retirements) | peak ops/cmdbuf=262
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1941 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=3
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 77985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 79985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 81985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 83985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 85985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 87985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 89985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 91985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 93985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 95985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 97985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 99985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 101985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 103985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 105985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 107985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 109985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 111985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 113985 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 115984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 117984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 119984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 121984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 2056 retirements) | peak ops/cmdbuf=262
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1941 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=3
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 123984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 125984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 127984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 129984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 131984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 133984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 135984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 137984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 139984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 141984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 143984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 145984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 147984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 149984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 151984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 153984 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 155979 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 157979 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 159979 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 161979 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 163979 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 165979 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 2726 retirements) | peak ops/cmdbuf=262
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1941 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=3
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 167979 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 169968 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 171968 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=9 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 173966 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=9 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 175966 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=9 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 177966 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=9 retired=1 | size hiwater=4997 KiB (budget 4096 KiB, 179966 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=1 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=9 retired=1 | size hiwater=4997 KiB (budget 4096 KiB, 181966 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=1 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=10 retired=1 | size hiwater=4997 KiB (budget 4096 KiB, 183964 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=1 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=10 retired=1 | size hiwater=4997 KiB (budget 4096 KiB, 185964 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=1 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=10 retired=2 | size hiwater=4997 KiB (budget 4096 KiB, 187964 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=2 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=10 retired=3 | size hiwater=4997 KiB (budget 4096 KiB, 189964 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=3 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=10 retired=4 | size hiwater=4997 KiB (budget 4096 KiB, 191962 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=4 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=10 retired=4 | size hiwater=4997 KiB (budget 4096 KiB, 193962 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=4 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=10 retired=4 | size hiwater=4997 KiB (budget 4096 KiB, 195961 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=4 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=10 retired=4 | size hiwater=4997 KiB (budget 4096 KiB, 197961 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=4 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=11 retired=5 | size hiwater=4997 KiB (budget 4096 KiB, 199959 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=5 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=11 retired=5 | size hiwater=4997 KiB (budget 4096 KiB, 201959 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=5 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=11 retired=5 | size hiwater=4997 KiB (budget 4096 KiB, 203959 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=5 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=11 retired=5 | size hiwater=4997 KiB (budget 4096 KiB, 205959 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=5 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=6 | size hiwater=4997 KiB (budget 4096 KiB, 207957 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=6 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=6 | size hiwater=4997 KiB (budget 4096 KiB, 209957 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=6 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=6 | size hiwater=4997 KiB (budget 4096 KiB, 211957 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=6 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=6 | size hiwater=4997 KiB (budget 4096 KiB, 213957 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=6 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=13 peak=13 retired=7 | size hiwater=4997 KiB (budget 4096 KiB, 215955 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=7 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=13 peak=13 retired=7 | size hiwater=4997 KiB (budget 4096 KiB, 217955 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=7 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=8 | size hiwater=4997 KiB (budget 4096 KiB, 219955 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=8 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=8 | size hiwater=4997 KiB (budget 4096 KiB, 221955 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=8 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=10 | size hiwater=4997 KiB (budget 4096 KiB, 223954 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=10 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=10 | size hiwater=4997 KiB (budget 4096 KiB, 225954 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=10 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=10 | size hiwater=4997 KiB (budget 4096 KiB, 227954 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=10 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=10 | size hiwater=4997 KiB (budget 4096 KiB, 229954 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=10 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=10 | size hiwater=4997 KiB (budget 4096 KiB, 231953 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=10 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=11 | size hiwater=4997 KiB (budget 4096 KiB, 233953 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=11 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=12 | size hiwater=4997 KiB (budget 4096 KiB, 235953 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=12 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=13 | size hiwater=4997 KiB (budget 4096 KiB, 237953 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=13 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=13 | size hiwater=4997 KiB (budget 4096 KiB, 239951 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=13 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=13 | size hiwater=4997 KiB (budget 4096 KiB, 241951 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=13 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=14 | size hiwater=4997 KiB (budget 4096 KiB, 243951 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=14 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 3405 retirements) | peak ops/cmdbuf=384
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1941 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=3
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=15 | size hiwater=4997 KiB (budget 4096 KiB, 245951 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=15 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=15 | size hiwater=4997 KiB (budget 4096 KiB, 247939 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=15 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=15 | size hiwater=4997 KiB (budget 4096 KiB, 249938 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=15 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=16 | size hiwater=4997 KiB (budget 4096 KiB, 251938 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=16 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=16 | size hiwater=4997 KiB (budget 4096 KiB, 253937 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=16 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=16 | size hiwater=4997 KiB (budget 4096 KiB, 255937 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=16 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=13 peak=13 retired=16 | size hiwater=4997 KiB (budget 4096 KiB, 257935 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=16 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=17 | size hiwater=4997 KiB (budget 4096 KiB, 259935 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=17 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=18 | size hiwater=4997 KiB (budget 4096 KiB, 261935 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=18 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=19 | size hiwater=4997 KiB (budget 4096 KiB, 263935 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=19 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=19 | size hiwater=4997 KiB (budget 4096 KiB, 265933 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=19 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=19 | size hiwater=4997 KiB (budget 4096 KiB, 267933 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=19 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 269933 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 271933 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 273931 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 275931 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 277931 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 279931 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 281931 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 283930 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 285930 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=21 | size hiwater=4997 KiB (budget 4096 KiB, 287930 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=21 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=23 | size hiwater=4997 KiB (budget 4096 KiB, 289930 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=23 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=23 | size hiwater=4997 KiB (budget 4096 KiB, 291928 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=23 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=24 | size hiwater=4997 KiB (budget 4096 KiB, 293928 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=24 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=24 | size hiwater=4997 KiB (budget 4096 KiB, 295928 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=24 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=25 | size hiwater=4997 KiB (budget 4096 KiB, 297928 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=25 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=26 | size hiwater=4997 KiB (budget 4096 KiB, 299928 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=26 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=27 | size hiwater=4997 KiB (budget 4096 KiB, 301927 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=27 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=28 | size hiwater=4997 KiB (budget 4096 KiB, 303926 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=28 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=28 | size hiwater=4997 KiB (budget 4096 KiB, 305926 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=28 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=29 | size hiwater=4997 KiB (budget 4096 KiB, 307926 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=29 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=29 | size hiwater=4997 KiB (budget 4096 KiB, 309925 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=29 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=29 | size hiwater=4997 KiB (budget 4096 KiB, 311925 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=29 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=30 | size hiwater=4997 KiB (budget 4096 KiB, 313925 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=30 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=30 | size hiwater=4997 KiB (budget 4096 KiB, 315925 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=30 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=30 | size hiwater=4997 KiB (budget 4096 KiB, 317923 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=30 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=31 | size hiwater=4997 KiB (budget 4096 KiB, 319923 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=31 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=32 | size hiwater=4997 KiB (budget 4096 KiB, 321923 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=32 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=32 | size hiwater=4997 KiB (budget 4096 KiB, 323923 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=32 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=32 | size hiwater=4997 KiB (budget 4096 KiB, 325920 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=32 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=33 | size hiwater=4997 KiB (budget 4096 KiB, 327906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=33 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=34 | size hiwater=4997 KiB (budget 4096 KiB, 329906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=34 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=34 | size hiwater=4997 KiB (budget 4096 KiB, 331906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=34 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 4071 retirements) | peak ops/cmdbuf=384
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1941 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=3
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=34 | size hiwater=4997 KiB (budget 4096 KiB, 333906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=34 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=34 | size hiwater=4997 KiB (budget 4096 KiB, 335906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=34 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=34 | size hiwater=4997 KiB (budget 4096 KiB, 337906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=34 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=34 | size hiwater=4997 KiB (budget 4096 KiB, 339906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=34 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=35 | size hiwater=4997 KiB (budget 4096 KiB, 341906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=35 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=35 | size hiwater=4997 KiB (budget 4096 KiB, 343906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=35 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=35 | size hiwater=4997 KiB (budget 4096 KiB, 345906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=35 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=35 | size hiwater=4997 KiB (budget 4096 KiB, 347906 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=35 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=36 | size hiwater=4997 KiB (budget 4096 KiB, 349905 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=36 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=36 | size hiwater=4997 KiB (budget 4096 KiB, 351903 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=36 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=37 | size hiwater=4997 KiB (budget 4096 KiB, 353903 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=37 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=37 | size hiwater=4997 KiB (budget 4096 KiB, 355903 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=37 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=38 | size hiwater=4997 KiB (budget 4096 KiB, 357903 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=38 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=38 | size hiwater=4997 KiB (budget 4096 KiB, 359903 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=38 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=38 | size hiwater=4997 KiB (budget 4096 KiB, 361902 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=38 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=38 | size hiwater=4997 KiB (budget 4096 KiB, 363902 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=38 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=39 | size hiwater=4997 KiB (budget 4096 KiB, 365902 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=39 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=39 | size hiwater=4997 KiB (budget 4096 KiB, 367902 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=39 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=39 | size hiwater=4997 KiB (budget 4096 KiB, 369901 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=39 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=40 | size hiwater=4997 KiB (budget 4096 KiB, 371901 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=40 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=40 | size hiwater=4997 KiB (budget 4096 KiB, 373901 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=40 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=40 | size hiwater=4997 KiB (budget 4096 KiB, 375901 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=40 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=41 | size hiwater=4997 KiB (budget 4096 KiB, 377898 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=41 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=42 | size hiwater=4997 KiB (budget 4096 KiB, 379898 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=42 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=43 | size hiwater=4997 KiB (budget 4096 KiB, 381898 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=43 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=43 | size hiwater=4997 KiB (budget 4096 KiB, 383898 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=43 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=44 | size hiwater=4997 KiB (budget 4096 KiB, 385896 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=44 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=44 | size hiwater=4997 KiB (budget 4096 KiB, 387896 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=44 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=45 | size hiwater=4997 KiB (budget 4096 KiB, 389896 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=45 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=13 retired=45 | size hiwater=4997 KiB (budget 4096 KiB, 391896 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=45 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=13 retired=45 | size hiwater=4997 KiB (budget 4096 KiB, 393894 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=45 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=46 | size hiwater=4997 KiB (budget 4096 KiB, 395894 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=46 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=46 | size hiwater=4997 KiB (budget 4096 KiB, 397894 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=46 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 399893 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 401893 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 403891 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 405891 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 407891 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 409891 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 411879 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 413879 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=12 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 415879 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=13 peak=13 retired=47 | size hiwater=4997 KiB (budget 4096 KiB, 417878 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=47 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=13 peak=14 retired=48 | size hiwater=4997 KiB (budget 4096 KiB, 419877 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=48 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=13 peak=14 retired=48 | size hiwater=4997 KiB (budget 4096 KiB, 421877 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=48 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=14 retired=50 | size hiwater=4997 KiB (budget 4096 KiB, 423877 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=50 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=7 peak=7 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 4738 retirements) | peak ops/cmdbuf=384
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1941 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=3
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=14 retired=51 | size hiwater=4997 KiB (budget 4096 KiB, 425877 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=51 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=11 peak=14 retired=51 | size hiwater=4997 KiB (budget 4096 KiB, 427876 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=51 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=14 retired=52 | size hiwater=4997 KiB (budget 4096 KiB, 429876 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=52 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=14 retired=52 | size hiwater=4997 KiB (budget 4096 KiB, 431876 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=52 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=14 retired=52 | size hiwater=4997 KiB (budget 4096 KiB, 433876 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=52 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=14 retired=53 | size hiwater=4997 KiB (budget 4096 KiB, 435876 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=53 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=14 retired=54 | size hiwater=4997 KiB (budget 4096 KiB, 437874 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=54 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=9 peak=14 retired=55 | size hiwater=4997 KiB (budget 4096 KiB, 439874 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=55 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=14 retired=56 | size hiwater=4997 KiB (budget 4096 KiB, 441874 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=56 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=14 retired=57 | size hiwater=4997 KiB (budget 4096 KiB, 443873 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=57 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=14 retired=57 | size hiwater=4997 KiB (budget 4096 KiB, 445871 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=57 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=10 peak=14 retired=58 | size hiwater=4997 KiB (budget 4096 KiB, 447870 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=58 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=14 retired=60 | size hiwater=4997 KiB (budget 4096 KiB, 449870 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=60 use-after-destroy=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=14 retired=61 | size hiwater=4997 KiB (budget 4096 KiB, 451869 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=1285 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=1
+[LIMINA-ALLOC-POOL] periodic tombstones=61 use-after-destroy=0
