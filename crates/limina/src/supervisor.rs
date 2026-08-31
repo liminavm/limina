@@ -391,6 +391,23 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
             }
         }
     }
+    // KosmicKrisp's allocator-pool snapshot. The driver writes its current state to this path
+    // every few encoder closes, truncating each time, so a worker that dies leaves the pool's
+    // shape behind — the stderr report can be thousands of closes stale when a rare fault lands.
+    // Policy lives here rather than in the driver: managed VMs get it in their own logs dir, and
+    // an explicit LIMINA_KK_POOL_SNAPSHOT always wins.
+    if std::env::var_os("LIMINA_KK_POOL_SNAPSHOT").is_none() {
+        let logs = spec
+            .suspend_state_file
+            .as_deref()
+            .and_then(|st| st.parent())
+            .map(|bundle| bundle.join("logs"))
+            .filter(|logs| logs.is_dir());
+        if let Some(logs) = logs {
+            cmd.env("LIMINA_KK_POOL_SNAPSHOT", logs.join("kk-pool.txt"));
+        }
+    }
+
     {
         let mut fds = inherit_fds.to_vec();
         fds.push(spice_worker.as_raw_fd());
