@@ -165,6 +165,31 @@ Two things are easy to lose between the two:
 - **The refusal is load-bearing until then.** Removing it reintroduces a SIGBUS, not a slow
   path. This spike is its regression test.
 
+## Verdict, measured on the fix
+
+Guest mesa `26.1.8-5.limina` (the refusal + `whandle->size`), enhanced tier, seated GNOME:
+
+```
+va-probe 1920x1080   vaExportSurfaceHandle: invalid VASurfaceID   (was: two 4096-byte objects)
+va-probe 3840x2160   vaExportSurfaceHandle: invalid VASurfaceID
+
+vah265dec ! glupload ! glimagesink   60 buffers into the sink, 0 errors, rc 0
+vah264dec ! glupload ! glimagesink   60 buffers into the sink, 0 errors, rc 0
+```
+
+The caps prove the renegotiation rather than merely the absence of a crash: the decoder now
+outputs plain `video/x-raw` and glupload hands `video/x-raw(memory:GLMemory)` to the sink. The
+SIGBUS path is not being survived, it is not being taken.
+
+GNOME Videos plays the file correctly (human-verified), and the host worker log emits none of
+the `Illegal command buffer` / `Unknown 1282` / `CREATE_OBJECT: 22` storm that accompanied
+every previous Showtime session — those were downstream of the failing sink, as this spike
+predicted.
+
+The seated desktop came up unchanged on the swapped mesa, which is the empirical half of the
+scoping argument above; 21 VideoToolbox sessions across the run reported hardware
+acceleration and none reported software.
+
 ## Running it
 
 ```
