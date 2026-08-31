@@ -2262,3 +2262,30 @@ so Accessibility silently dies there (`limina-tcc-adhoc-accessibility`) — and 
 `target/Limina.app`" meant two different things depending on which command ran last, with nothing
 at the path to say which. `docs/design/m9-suspend-resume.md` records the same failure family
 reaching the dogfood Mac twice through a profile mixup.
+
+## `systemctl isolate multi-user.target` can wedge a venus-backed guest
+
+A seated GNOME guest refuses `poweroff` with an active block inhibitor, so isolating
+`multi-user.target` first is the documented way to shut one down. On 2026-08-31 that wedged a
+guest instantly and completely: the desktop clock froze at the moment the isolate ran, sshd
+stopped answering, the `poweroff` that followed never completed, and the VM only died to
+`SIGKILL`. The window kept presenting a stale frame, and pointer reports kept arriving with the
+guest's cursor pinned at one coordinate — so from the outside it looked like a live VM with a
+dead desktop.
+
+One occurrence, so the causation is not established, but the correlation is exact and the shape
+is familiar: tearing down a Vulkan compositor out from under a live venus context is the same
+hazard as cycling a connector across a restore (`docs/design/m9-suspend-resume.md`), which is
+already known to kill a Vulkan compositor while mutter survives it.
+
+Worth doing:
+
+- Establish whether the isolate is really the trigger, by repeating it on an idle venus guest
+  and on a software-2D one. If it reproduces on venus and not on software-2D, that is the answer.
+- If it holds, stop recommending the isolate unreservedly. The `limina-fedora-access` note
+  currently presents it as *the* workaround with no caveat. A guest agent shutdown request, or
+  stopping `gdm` before isolating, may avoid tearing the compositor down under load.
+- The operational lesson stands regardless, and cost the most time here: **confirm the VM has
+  actually exited before starting another on the same disk.** limina's own read-write disk guard
+  is what caught the second VM and refused it — that guard is the reason this cost a reboot
+  rather than the image.
