@@ -49,13 +49,13 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-23. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
+guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-31, and the dogfood row read off the running dev VM the same day. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`*.raw`, `*.boot.raw`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.7-4.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
-| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.8-1` | 16 KiB | `26.1.6-1.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-5.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-5.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` | 16 KiB | `26.1.5-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` (stock) |
 
@@ -83,7 +83,25 @@ release's stock GNOME Shell (same `libmutter-NN` ABI).
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r17.tar.zst`** (r17, 2026-08-30: kernel
+**Current payload: `payload/limina-guest-tools-f44-r18.tar.zst`** (r18, 2026-08-31: kernel
+`limina-kernel-16k-7.1.8-4` unchanged, mesa `26.1.8-5.limina` — virgl refuses to export a dmabuf
+smaller than the image it describes. A decode target's guest BO is a one-page stub (4096 bytes at
+every resolution, `alloc_size = 1`), so an exported fd named a page for a multi-megabyte surface
+and GStreamer's dmabuf uploader walked off it: GNOME Videos rendered black and a bare
+`vaXXXdec ! glimagesink` died with SIGBUS. Refusing makes the caller negotiate system memory —
+one frame copy per frame, and it works. Measured in `spikes/va-dmabuf-size`: both codecs now put
+60 buffers into `glimagesink` with zero errors and the decoder's caps are plain `video/x-raw`,
+which is what proves renegotiation rather than a survived mapping. **The refusal cannot reach
+anything but video**: `virgl_can_copy_transfer_from_host` excludes `VIRGL_BIND_SHARED`, so
+Wayland buffers, EGL images and mutter's scanout are sized from their own layout and are never
+short. **Stock Fedora mesa reproduces the bug byte for byte** (`26.0.3-4.fc44`, 4 KiB pages), so
+this is upstream virgl behaviour and the stock tier is fixed only by upstreaming. **The base moves
+26.1.7 → 26.1.8** here — Fedora's SRPM had moved and r18 takes it, unlike r17 which held the pin;
+all 12 patches applied clean and 21 VideoToolbox sessions reported hardware with none in software.
+Applied with the real `install-enhanced.sh` to all three F44 enhanced images
+(`.bak-pre-r18.raw` CoW backups), both agent hashes verified; the kernel short-circuited as
+already installed and the permanent default stayed `7.1.8-limina16k.4`, so no trial boot is owed.
+Previous: r17, 2026-08-30: kernel
 `limina-kernel-16k-7.1.8-4` unchanged, mesa `26.1.7-4.limina` — virgl no longer offers
 three-plane 4:2:0 (YV12/IYUV) as a decode target. ffmpeg picks a VA surface format by exact
 match against `sw_pix_fmt`, so I420 and YV12 both outscored NV12 and the last advertised won;
