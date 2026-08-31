@@ -89,15 +89,26 @@ int main(int argc, char **argv)
     d.pps.sps.offset_for_top_to_bottom_field   = get("sps_offset_for_top_to_bottom_field", 0);
     d.pps.sps.num_ref_frames_in_pic_order_cnt_cycle =
         get("sps_num_ref_frames_in_pic_order_cnt_cycle", 0);
-    d.pps.sps.max_num_ref_frames               = get("sps_max_num_ref_frames", 1);
     d.pps.sps.direct_8x8_inference_flag        = get("sps_direct_8x8_inference_flag", 1);
+    d.pps.sps.frame_mbs_only_flag              = get("sps_frame_mbs_only_flag", 1);
+
+    /*
+     * These three live at the TOP LEVEL of the picture descriptor, not in the SPS/PPS, and
+     * that distinction is the whole point. mesa's decode frontend never writes
+     * sps.max_num_ref_frames or pps.num_ref_idx_l*_default_active_minus1 -- only the
+     * encoder path does -- so a serializer reading those gets zeros and produces a stream
+     * VideoToolbox rejects with kVTVideoDecoderBadDataErr from the third frame on. The
+     * first version of this harness fed the SPS fields and therefore passed while the real
+     * guest path was broken. Model the wire, not the spec's layout.
+     */
+    d.num_ref_frames                = get("sps_max_num_ref_frames", 1);
+    d.num_ref_idx_l0_active_minus1  = get("pps_num_ref_idx_l0_default_active_minus1", 0);
+    d.num_ref_idx_l1_active_minus1  = get("pps_num_ref_idx_l1_default_active_minus1", 0);
 
     d.pps.entropy_coding_mode_flag             = get("pps_entropy_coding_mode_flag", 0);
     d.pps.bottom_field_pic_order_in_frame_present_flag =
         get("pps_bottom_field_pic_order_in_frame_present_flag", 0);
     d.pps.num_slice_groups_minus1              = get("pps_num_slice_groups_minus1", 0);
-    d.pps.num_ref_idx_l0_default_active_minus1 = get("pps_num_ref_idx_l0_default_active_minus1", 0);
-    d.pps.num_ref_idx_l1_default_active_minus1 = get("pps_num_ref_idx_l1_default_active_minus1", 0);
     d.pps.weighted_pred_flag                   = get("pps_weighted_pred_flag", 0);
     d.pps.weighted_bipred_idc                  = get("pps_weighted_bipred_idc", 0);
     d.pps.pic_init_qp_minus26                  = get("pps_pic_init_qp_minus26", 0);

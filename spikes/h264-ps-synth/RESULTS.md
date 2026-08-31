@@ -58,6 +58,47 @@ regressed when only the harness had changed. The limit is now loud (`exit(1)`), 
 it should have been from the start: a test fixture that silently discards its input can only
 ever produce false verdicts.
 
+## What the spike could not catch, and what did
+
+Both real bugs in the serializer survived a green matrix here, because a spike that feeds
+fields from `trace_headers` chooses which struct member to write and can pick the wrong one:
+
+- **The dead wire fields.** `sps.max_num_ref_frames` and
+  `pps.num_ref_idx_l*_default_active_minus1` are **never written on mesa's decode path** --
+  only `picture_h264_enc.c` sets them. The live values arrive at the top level of the picture
+  descriptor: `desc->num_ref_frames` (from the VA picture parameter buffer) and
+  `desc->num_ref_idx_l*_active_minus1` (from the slice parameter buffer). Reading the SPS/PPS
+  members got zeros, so the SPS declared a 0-frame DPB and the reference lists held one entry;
+  VideoToolbox answered `kVTVideoDecoderBadDataErr` (-12909) from the third frame on. `synth.c`
+  now feeds the descriptor fields, so the harness models the wire rather than the spec layout.
+- **The parameter sets are not constant.** `num_ref_idx_l*_active_minus1` is the *effective*
+  per-slice count, so a slice that overrides the PPS default changes the PPS we synthesize by
+  a byte mid-GOP. That is correct -- and it is invisible to a spike that synthesizes one set
+  per stream. It broke decoding anyway, in the backend: the decompression session was keyed on
+  the parameter-set bytes, so the change rebuilt the session and took the reference picture
+  buffer with it. Every frame after the first override referenced an empty DPB. Decoding
+  reported success and the pixels were wrong. The fix keys the session on frame shape alone and
+  lets the bytes drive only the format description, swapped into the live session through
+  `VTDecompressionSessionCanAcceptFormatDescription`.
+
+The rule both bugs teach: **a serializer spike verifies the bytes, never the plumbing that
+fills them.** Nothing here can pass or fail on which struct member mesa populates, or on how
+the backend reacts to a value legitimately changing. Only a guest can.
+
+## End-to-end verdict
+
+Decoded in the guest through VA-API against the software decoder, `framemd5` per frame:
+
+```
+ref     PASS - 60 frames, hardware == software, bit-exact
+vt1080  PASS - 30 frames, hardware == software, bit-exact
+base480 PASS - 30 frames, hardware == software, bit-exact
+main854 PASS - 30 frames, hardware == software, bit-exact
+```
+
+One decompression session per clip, 84 parameter-set changes absorbed without a rebuild, zero
+fallbacks to the session-rebuild path.
+
 ## What this does not cover
 
 - **Custom scaling matrices.** The serializer refuses them. The wire lists come from VA-API's
@@ -68,6 +109,11 @@ ever produce false verdicts.
 - **`pic_order_cnt_type == 1`**, which no encoder here emits by default. Types 0 and 2 are
   covered.
 - **HEVC**, which additionally needs a VPS synthesized from nothing.
+- **A multi-slice frame whose first slice overrides the reference counts and whose later
+  slices do not.** The PPS default we emit comes from the effective count of whichever slice
+  we parsed, which is then not the true default for the non-overriding ones. No stream here
+  does this; parsing `num_ref_idx_active_override_flag` out of the slice header is the fix if
+  one ever does.
 
 ## Reproducing
 
