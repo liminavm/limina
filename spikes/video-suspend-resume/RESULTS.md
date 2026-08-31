@@ -128,20 +128,43 @@ the cheapest theory that would have explained both the bouncing and the heal-on-
 That is two theories killed by measurement (the journal gap, then the clock), which is the
 point of this file — neither would have announced itself as wrong during a fix.
 
-### The A/B that should come next
+### The A/B: it IS the hardware decode path (measured)
 
-**Is the bounce even specific to hardware decode?** Nothing measured so far proves it is. Run
-the identical suspend/restore cycle with Chrome's VA-API decoder off
-(`--disable-features=VaapiVideoDecoder`, or the equivalent `chrome://flags` toggle) and the same
-clip:
+Same guest, same clip, same managed suspend/restore, Chrome relaunched with
+`--disable-accelerated-video-decode --disable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL`.
 
-- **Still bounces** ⇒ this is not the decode path at all, and the whole video framing is
-  misleading; look at the player's frame scheduling or the compositor across restore.
-- **Does not bounce** ⇒ the fault really is in the hardware path, and the VA surface pool is
-  the next thing to instrument.
+Both ends of the control were verified before the run, because "I passed the flag" is not
+evidence the flag took:
 
-Do this before instrumenting anything. It is one boot and one clip, and it partitions the
-search space in half — which is more than either of the two theories above achieved.
+- **Zero `drv_video` mappings** in Chrome's GPU process (`/proc/<gpu>/maps`) — the VA driver is
+  not loaded at all. The process still held 4 render-node fds, so GL compositing stayed
+  hardware-accelerated and the A/B isolates *decode* and nothing else.
+- **The renderer sat at ~64 % CPU** decoding 4K VP9 — which both proves playback was really
+  happening (so "VA not mapped" is not a timing artifact) and that it was software doing it.
+
+**Result: playback resumes normally. No bounce.**
+
+So the fault is in the hardware decode path, and the three exclusions now stand together: not
+the journal (no commands rejected), not the clock (no discontinuity), not the player's frame
+scheduling or the compositor (both identical in the software run, which is clean).
+
+### What that leaves, and how to test it
+
+The remaining candidate is the one the screencast already described: the VA decode-target
+surfaces. The signature to explain is *a bounded pool re-presented in alternating order*, which
+is what a **permuted guest-resource → host-surface mapping** looks like after replay — the
+decoder writes picture N, the compositor samples the surface that used to hold picture M, and
+as the pool rotates the visible order walks forwards and backwards over stale content.
+
+Note this is consistent with the restore log rather than contradicted by it: `gpu restore:
+classic content restored (7 contexts, 0 failed)` says every resource was re-created, not that
+each one still means what the guest thinks it means.
+
+The measurement that would settle it: log the guest-side pairing (decoded frame number →
+VA surface id → virtio-gpu resource id) and the host-side pairing (resource id → the picture
+actually written into it) across a restore, and compare. If the pairs diverge only after the
+restore, the fix is at replay; if they agree while the picture is still wrong, the fault is in
+what the guest hands the compositor.
 
 Note what would have been the wrong first move: instrumenting our decode backend. The host
 counters and the guest's own recording both say the host is serving what it is asked for.

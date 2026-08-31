@@ -2050,12 +2050,41 @@ even where ours is installed. But only ffmpeg's exact-match tie-break lands on I
 is why they are the stock-tier validation vehicles. Upstreaming is what would give
 stock-tier *Firefox* the hardware path.
 
+## `limina suspend` reports failure on a suspend that succeeded
+
+Reproduced twice while driving the video spike. The CLI blocks for its full 75 s timeout and
+then prints
+
+```
+Error: Debian did not suspend within 75s — the guest could not quiesce
+       (a virtiofs share or a guest ignoring the suspend button); it is still running
+```
+
+while the snapshot had in fact been written **4.5 s after the request** — and the worker had
+exited. Timings, both runs: requested 08:30:36 → `snapshot written` 08:30:40.586; requested
+09:03:05 → snapshot on disk at 09:03, CLI returned 09:04:21. In both cases `limina ls` then
+showed the VM correctly suspended and it resumed normally.
+
+So the snapshot path is fine; the CLI's *completion detection* is what is broken — it waits on
+a signal the successful path does not deliver. The message actively misleads (it names virtiofs
+and a stuck guest, and asserts "it is still running" when the worker is gone), which is how the
+first sighting was written off as a genuine quiesce failure. Cheap to fix and worth it: this is
+the CLI-driven suspend path that automation uses.
+
 ## Hardware decode does not survive suspend/resume: playback cycles a few stale frames
 
 Reported from dogfood. After a host suspend/resume, hitting play on a video Firefox had
 paused for the suspend plays "the same few frames back and forth". Nothing crashes, and
-**leaving it paused for a while heals it** — which is the most informative part of the
-report. Low priority precisely because that workaround exists.
+**leaving it paused for a while heals it**. Low priority precisely because that workaround
+exists.
+
+**Reproduced and narrowed under tracing — full measurements in
+`spikes/video-suspend-resume/RESULTS.md`.** In short: it is the hardware decode path (the same
+cycle with Chrome's VA-API decoder off plays back cleanly), the guest's own screencast shows a
+bounded pool of decoded pictures re-presented in *alternating* order, and the host rejects
+nothing across the restore. Three candidates are excluded by measurement — the vrend journal
+dropping video codec objects, guest clock discontinuity, and the player/compositor frame
+scheduling. What remains is the VA decode-target surfaces and their mapping across replay.
 
 ### What the restore path really does with video, and why that is not yet the answer
 
