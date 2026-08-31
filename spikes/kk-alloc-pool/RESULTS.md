@@ -46,8 +46,46 @@ suspect code on the compute class needs an allocator driven past 4 MiB.
 **Command buffers are small.** Peak 5 operations per render command buffer under glmark2, 384 at
 device teardown under the desktop, 1 for compute. Nothing resembling an unbounded encoder.
 
+## Wesnoth, played for ~25 minutes: the workload does not match
+
+`wesnoth-2026-08-31.txt` is the timestamped stream (402 reports). Wesnoth 1.19.24 (RPM) on the
+same seated synoik desktop, a human loading saved games — a save load is a bulk texture re-upload
+and is what ratchets the numbers.
+
+| class | live/peak | destroyed | size hiwater | retirements | peak ops/cmdbuf |
+|---|---|---|---|---|---|
+| render | 8 / **41** | **87** | 5317 KiB | 249236 | **5402** |
+| compute | 4 / 4 | 0 | 4485 KiB | 13496 | 584 |
+
+`use-after-destroy=0` throughout, across 87 destructions and a peak of 41 live render allocators.
+
+So the destroy path *is* heavily exercised by a real workload — it was not merely untested — and
+the detector stayed silent. That is evidence against use-after-destroy, not absence of evidence.
+
+**But this run does not reproduce the crashed workload's dominant traffic.** Comparing the KK
+counts block against the crashed dogfood run:
+
+| | dogfood (crashed) | this run |
+|---|---|---|
+| `unroll_geometry calls` | 426,335 (all triangle fans) | 1 |
+| `compute_during_pass` (pregfx) | 421,045 | 1 |
+| `render_pass_starts` | 3,061,393 | 142,394 |
+
+Normalised for the 21x difference in total work that is still four orders of magnitude, so it is
+not a scale artifact. The dogfood worker spent its time issuing compute *inside an open render
+pass* through the geometry-unroll path — the route `cs_get_compute` itself calls "the dangerous
+route", because pre_gfx work is submitted BEFORE the draws recorded earlier in the same pass, on a
+different command buffer and therefore a different allocator. This run essentially never takes it.
+
+Dogfood was also running Firefox Nightly, and its Wesnoth was the **flatpak** (its own bundled
+guest mesa) rather than the RPM used here. Either could be the source of the triangle fans.
+
 ## What the next vehicle has to do
 
-Drive the compute-class hiwater past the 4096 KiB budget with more than eight live compute
-allocators — i.e. sustained `glTexSubImage2D` from a dozen concurrent contexts, not one. Until
-those two numbers move, a run that does not crash has not tested the hypothesis.
+1. **Hit the midpass-unroll path.** Target the dogfood ratio of ~0.14 `unroll_geometry` calls per
+   render pass. Without it the vehicle is not running the code the crash ran.
+2. **Attribute the copies.** "The compute encoder is busy" is not evidence that
+   `kk_CmdCopyBufferToImage2` ran; the `copies: buf->img=…` line added afterwards answers that
+   directly, and any future claim about reaching the path should cite it.
+3. Drive the compute class past its floor of eight if the destroy path is to be tested there —
+   though on this evidence destruction is more likely a bystander than the cause.
