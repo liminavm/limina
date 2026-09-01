@@ -55,7 +55,7 @@ guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-31, an
 |---|---|---|---|---|---|
 | **F44 stock** (`*.raw`, `*.boot.raw`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-5.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-7.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-5.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` | 16 KiB | `26.1.5-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` (stock) |
@@ -102,7 +102,20 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r18.tar.zst`** (r18, 2026-08-31: kernel
+**Current payload: `payload/limina-guest-tools-f44-r19.tar.zst`** (r19, 2026-09-01: kernel
+`limina-kernel-16k-7.1.8-4` unchanged, mesa `26.1.8-7.limina` — a video decode target is now ONE
+composite resource named by its planar format with its plane resources chained behind it, instead
+of one unrelated resource per plane. Only a composite create names a planar format, which is what
+a host-side planar allocation keys off, so this is what lets the host back a whole frame with a
+single two-plane IOSurface and sample it without a re-read. Gated on the host advertising
+`VIRGL_CAP_V2_VIDEO_PLANAR_TARGET`, so a guest on an older host silently keeps the per-plane form.
+Measured on VP9 (`spikes/vt-vp9-decode/vp90-2-09-aq2.webm`, 107 frames): 12 composite targets,
+each one two-plane EGL-bound IOSurface, 214 plane writebacks all landing, nothing refused, and
+frame checksums identical to the software decoder. The delivered `-5` guest on the same host keeps
+the old shape and is checksum-identical too. Applied with the real `install-enhanced.sh` to all
+three F44 enhanced images (`.bak-pre-r19.raw` CoW backups), both agent hashes verified; the kernel
+short-circuited as already installed and the permanent default stayed `7.1.8-limina16k.4`, so no
+trial boot is owed. Previous: r18, 2026-08-31: kernel
 `limina-kernel-16k-7.1.8-4` unchanged, mesa `26.1.8-5.limina` — virgl refuses to export a dmabuf
 smaller than the image it describes. A decode target's guest BO is a one-page stub (4096 bytes at
 every resolution, `alloc_size = 1`), so an exported fd named a page for a multi-megabyte surface
