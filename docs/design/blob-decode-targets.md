@@ -350,6 +350,26 @@ to be explained by this, and should not be left to discover the restore path for
   importing the planes — gets whatever that texture last held. Per-plane import, which is what
   Firefox and every VA-API client do, does not go near it. Fill it on demand, or refuse the
   composite view on an IOSurface-backed target so the consumer takes the converting path.
+
+  This gap is real but it is **not** what empties a gst-va picture; see below.
+
+- **A context error latches, and every later decode is dropped without a word.**
+  `vrend_hw_switch_context` refuses a context with `in_error` set, and
+  `vrend_decode_ctx_submit_cmd` turns that refusal into a bare `EINVAL` before it decodes a
+  single command. The flag never clears on the submit path, so one early error — a
+  `create_sampler_view` naming a resource the context has not been given, which the gst-va
+  import path provokes — silently kills every video submission that context makes for the rest
+  of its life. Measured on the F44 enhanced image, mesa 26.1.8-8: a 30-frame `vavp9dec` run
+  produces 1329 `ComponentError(22)` submissions, 0 VideoToolbox deliveries and 0 IOSurface
+  writes, and hands back a luma plane of one distinct value. Firefox on the same boot decodes
+  normally — 600 IOSurface writes carrying real pixels — because its context is never poisoned.
+  The decoder reports success throughout; nothing in the host log names the cause, because the
+  rejection path has no log line at all.
+
+  So a black or flat-green hardware-decoded picture is two faults deep: the poisoned context
+  empties the surface, and whichever sampling path the consumer picks then decides which shade
+  of nothing it shows. Give the rejection a voice before anything else — a silent `EINVAL` on
+  every submit is what made this read as a sampling bug for a day.
 - **`glimagesink` poisons its virgl context** — a separate fault, on a different path, found
   alongside the above and not explained by it: 13 `CREATE_OBJECT` failures with EINVAL, after
   which 2652 consecutive `[SUBMIT3D]`s fail. It does not reproduce under `gldownload`.
