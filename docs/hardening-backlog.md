@@ -675,23 +675,20 @@ rects). Remaining:
   on a vsync-cadence timer — mirrors real hardware, but a #8 design change that must not reintroduce
   tearing), or (2) shave the present round-trip below one vsync (needs worker instrumentation to
   quantify it first). Revisit only if direct-KMS double-buffered fullscreen clients become a target.
-- **#28 coherency residue policy** — ✅ **CLOSED (2026-06-23): no action needed; keep venus feedback
-  disabled.** Re-framed after a design panel over-stated it. `VN_PERF=no_*_feedback` turns off venus's
-  host-visible *feedback* buffers (host writes fence/semaphore/event/query completion into a
-  guest-pollable buffer so waits resolve locally with no guest→host round-trip); off, sync rides the
-  virtio-gpu per-context ring fence our stack already retires. **We never want feedback on:** the
-  round-trip elimination it buys only matters for fine-grained-sync-heavy GPU **compute/ML** (krunkit's
-  domain), not a vsync-paced GNOME+WebGL desktop (a handful of syncs per 16 ms frame, blocked on the
-  frame fence anyway — the saving is invisible under 60 Hz). And enabling feedback would *exercise* the
-  #28 SLC-beyond-PoC host-visible-coherency fragility, i.e. trade robustness for perf we can't use.
-  Feedback-off (ring fence) is already tier-2 GREEN — more robust **and** sufficient. So nothing to fix,
-  productize, or spike. The earlier "productize or a fresh enhanced guest *hangs*" claim was an
-  unverified inference; the two-tier floor is already safe via venus's graceful llvmpipe degrade
-  (venus-init failure → software-2D, `VN_PERF` only read when venus actually renders = the enhanced
-  tier, which is our own baked image). Two of the panel's "real fix" candidates stay dead on physics
-  regardless (host-clean-to-PoC is a no-op — Shared `MTLBuffer` already host-coherent; HVF stage-2
-  attrs are not expressible — `hv_memory_flags_t` is permission-only, `hvf/src/lib.rs:289`). **Revisit
-  only if limina ever grows a venus-compute tier** (out of charter — it's a desktop VM).
+- **#28 host-visible coherency** — ✅ **FIXED 2026-07-03** (libkrun 0043 + virglrenderer 0023 +
+  the guest-kernel patch). Venus's host-visible *feedback* buffers — a completion value the
+  **GPU** writes (`vn_CmdCopyBuffer`/`vn_CmdFillBuffer`, `vn_feedback.c:505`) into memory the
+  guest CPU polls — work. `VN_PERF=no_fence_feedback` was the MoltenVK-era workaround for the
+  poll loop spinning on a stale read; it outlived its cause and was **retired from the shipped
+  guest env 2026-07-25**, worth 25–30% of wall clock on submits carrying real work. Feedback has
+  been on in every enhanced guest since.
+
+  **The 2026-06-07 measurement in `spikes/mtl-shm-coherency` is superseded and must not be cited
+  as current.** Its conclusion — that the guest CPU is outside the GPU's coherency domain, and
+  that this blocked putting gnome-shell on venus — described the pre-fix stack; gnome-shell has
+  run on zink→venus for months. It was cited as a live constraint twice on 2026-09-01 and
+  distorted a design both times before being caught.
+
 - **Cosmetics** — ✅ **mostly DONE 2026-06-23 (libkrun 0029/0030).** Verified on the seated venus
   tier: the desktop now boots with **zero** `virtio_gpu` dmesg errors (was: a `capset_id=2` GL-probe
   EINVAL + `0x1200` responses for `CTX_ATTACH/DETACH_RESOURCE` 0x202/0x203), venus rendering

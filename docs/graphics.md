@@ -426,7 +426,10 @@ Two independent gates, and only their intersection is reachable:
   back wrong (`docs/design/av1-decode.md`, `docs/radar/videotoolbox-av1-superres.md`).
 
 So VP9 (and MJPEG) everywhere, plus **AV1 everywhere** — accelerated from M3 on, in software
-below that. **Implemented today: VP9 profile 0 and AV1 main decode.**
+below that. **Implemented today: VP9 profile 0, AV1 main, H.264 (Baseline/Main/High) and
+HEVC Main** — the last two enhanced-tier or freeworld only, since the guest's `all_free`
+gate keeps them out of a stock driver whatever the host offers
+(`docs/design/h264-hevc-decode.md`).
 
 ### Traps this path is shaped around
 
@@ -487,18 +490,18 @@ twice over — a non-native download, and a scaled BGRA image with no codec in i
 second one has to *scale*: a same-format, same-size `scale_vaapi` is serviced as a blit, never
 reaches the compositor, and passes on a host where every real VPP draw renders black.
 
-### AV1: the next codec, and what it costs
+### AV1: what it cost
 
-Not implemented. AV1 is the only *other* codec a stock guest can ask for — the `all_free`
-gate above keeps H.264 and HEVC out of the guest driver regardless of the host — and the
-host half is already measured (`spikes/av1-vt-probe/`, M3-or-later only: no on M1 Max, yes
-on M4 Pro). VideoToolbox imposes no obstacle: it owns its DPB as it does for VP9, accepts a
+Implemented; `docs/design/av1-decode.md` is the plan of record. AV1 is the only *other* codec a
+stock guest can ask for — the `all_free` gate above keeps H.264 and HEVC out of the guest driver
+regardless of the host — and the host half was measured first
+(`spikes/av1-vt-probe/`, M3-or-later only: no on M1 Max, yes on M4 Pro). VideoToolbox imposes no obstacle: it owns its DPB as it does for VP9, accepts a
 repeated sequence header per temporal unit, and returns a picture for every frame including
 the no-show ones — **but only when each frame is wrapped in its own temporal delimiter**. In
 a stream's natural framing one picture comes back for a no-show/display pair, so a run that
 silently drops a third of the frames reads as a clean 1:1 pass; count in the right unit.
 
-The entire remaining cost is the frame header. virgl hands over tile entries plus a fully
+The whole cost was the frame header. virgl hands over tile entries plus a fully
 parsed `virgl_av1_picture_desc`, while VideoToolbox wants real OBUs, so the backend must
 re-serialize a conformant `OBU_FRAME_HEADER` — plus a sequence header for the `av1C` box,
 unlike VP9's six-scalar `vpcC`. There is no prior art: ffmpeg's own VideoToolbox AV1 hwaccel

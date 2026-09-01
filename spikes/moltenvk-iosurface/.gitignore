@@ -1,5 +1,0 @@
-probe
-vkr_alloc_test
-*.o
-*.dSYM/
-ifp2_probe
