@@ -169,15 +169,14 @@ importer work.
    dictate, and the copy that follows costs ~0.10 ms at 1080p. `spikes/vt-blob-decode-target/`.
 2. ✅ **Layout agreement.** IOSurface allocates the guest's pitches exactly, odd dimensions
    included. Same spike.
-3. ⬜ **Can an IOSurface's base address be mapped into a guest at all?** This one branches the
-   design, and nothing in the stack answers it: the venus precedent maps shm-backed
-   `vkMapMemory` pointers, and zero-copy scanout hands surfaces over by id and never maps them.
-   IOKit-owned pages may not survive `hv_vm_map` the way anonymous ones do, and the guest can
-   never take part in the `IOSurfaceLock` protocol. Map a real surface's base into a guest and
-   checksum what both sides see, at decode-target size. If it fails, the target's storage becomes
-   an ordinary host-visible blob and the copy lands there instead — the frame costs above are
-   unchanged, but phase 2's zero-copy present story is not. Needs the hypervisor entitlement and
-   a codesigned binary, which is why it is separate.
+3. ✅ **Can an IOSurface's base address be mapped into a guest at all?** Yes —
+   `spikes/hv-iosurface-map/`. `hv_vm_map` accepts IOKit-owned pages, the guest reads and
+   writes them coherently across the whole allocation, and the mapping survives the host
+   cycling `IOSurfaceLock` underneath it (which the guest can never take part in). Two
+   constraints fall out: only whole granules map, so size the surface to a granule multiple
+   rather than leaving a tail unmapped; and the GPU arm is untested — a Metal texture bound to
+   the same surface writing while the guest reads is what phase 2 needs, and is worth its own
+   check rather than an inference from #28.
 
 ## Verifying
 
