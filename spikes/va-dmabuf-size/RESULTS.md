@@ -199,3 +199,43 @@ gcc -O1 -Wall -o va-probe probe.c $(pkg-config --cflags --libs libva libva-drm)
 
 Needs no codec and no decoding: a plain `vaCreateSurfaces` plus `vaExportSurfaceHandle` asks
 the whole question, which is why it reproduces on any guest with the VA driver present.
+
+## The refusal costs Firefox its hardware decoder
+
+Refusing the export fixed every consumer that mmaps the fd, and broke the one that does not.
+Firefox's VA-API path is `GetVAAPISurfaceDescriptor()` → `vaExportSurfaceHandle`, and it has no
+system-memory renegotiation to fall back to the way GStreamer does. Measured on the r18 enhanced
+tier (guest mesa `26.1.8-5.limina`, firefox 154.0-5), a local VP9 clip with VA-API forced on:
+
+```
+FFmpegVideoDecoder, init, IsHardwareAccelerated=true
+Requesting pixel format VAAPI_VLD
+Frame decode takes 3.48 ms ... decoded 1 frames
+GetVAAPISurfaceDescriptor(): vaExportSurfaceHandle failed
+ProcessFlush() / FFmpegDataDecoder: shutdown
+Using preferred software codec vp9            <- and it never tries again
+```
+
+It hardware-decodes exactly **one** frame, cannot export it, tears the decoder down, and rebuilds
+as software for the rest of the session. The same sequence reproduces on YouTube with
+`media.av1.enabled=false` to force VP9: one `vaExportSurfaceHandle failed`, then
+`IsHardwareAccelerated=false` and `Requesting pixel format YUV420P`.
+
+**Why the stub worked for Firefox and not for GStreamer.** Firefox imports the fd as an EGL image
+— a GPU-side import that resolves to the host resource through the kernel — and never maps it on
+the CPU. The guest BO being one page is irrelevant to it; the pixels it samples are the host's.
+GStreamer's fallback uploader mmaps and copies, so the same fd is fatal there. The refusal cannot
+tell the two apart, because nothing in `virgl_resource_get_handle` knows what the caller will do
+with the fd.
+
+That reframes what the guard is for. `whandle->size` is now honest, so a consumer that validates
+the object size against the layout geometry can refuse on its own and renegotiate — which is
+what GStreamer's uploader is checking for. If honest sizing alone is enough to stop the SIGBUS,
+the refusal is the wrong half of the fix and the export should be allowed again; that is
+measurable and is the next thing to settle. Until it is settled, the trade is real in both
+directions: keeping the refusal costs Firefox hardware decode, dropping it restores the SIGBUS.
+
+**This is not what makes YouTube software-decode.** That clip negotiates `av01`, and there is no
+AV1 hardware decode on any tier yet, so it would be dav1d in the RDD process regardless. The two
+causes are independent and stack: the codec choice explains the observed CPU, and the refusal
+means forcing VP9 does not recover it either.
