@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Fri, 14 Aug 2026 22:35:19 -0300
-Subject: [PATCH 08/15] virgl: settle a CPU write into a shared resource before
+Subject: [PATCH 08/16] virgl: settle a CPU write into a shared resource before
  unmap returns
 
 Mapping a LINEAR bo through gbm is a direct mmap on real hardware: when unmap

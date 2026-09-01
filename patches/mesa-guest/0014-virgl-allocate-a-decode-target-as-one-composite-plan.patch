@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Tue, 1 Sep 2026 12:43:48 -0300
-Subject: [PATCH 14/15] virgl: allocate a decode target as one composite planar
+Subject: [PATCH 14/16] virgl: allocate a decode target as one composite planar
  resource
 
 The per-plane form allocates a resource per plane, so the host sees two or three

@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Tue, 1 Sep 2026 17:25:45 -0300
+Subject: [PATCH 16/16] virgl: the core releases a planar chain, not the driver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+virgl_resource_destroy released res->b.next as well as the resource itself,
+on the reasoning that whoever owns the head owns the planes hanging off it.
+The head's owner does — but the release is already done for us.
+pipe_resource_destroy() caches ->next before calling the driver hook and then
+drops that reference itself, so releasing it here dropped it twice: a plane
+was freed while a frontend still held a reference, and that frontend's own
+pipe_resource_reference() then read the refcount of a dead object.
+
+radeonsi builds the same chain with a bare assignment and its si_resource_destroy
+never touches ->next. Ours now matches.
+
+Measured 2026-09-01 on an F44 guest. Loading GStreamer's VA plugin, which creates
+a surface and exports it as a dmabuf to learn a format's modifier, aborted in
+glibc with "unaligned tcache chunk detected" and registered no elements at all,
+so every GStreamer pipeline in the guest silently fell back to software decode.
+Under valgrind: 906 invalid reads of size 4 at offset 0 of a freed 512-byte
+block -- a pipe_reference count -- from one context. On the guest built without
+the composite decode target the same probe is clean, 0 errors from 0 contexts,
+and 7 va* elements register.
+
+The abort surfaced far from the fault: glibc notices a corrupted freelist at the
+next calloc, which put the crash inside a later resource create and made it look
+like the plugin's own doing.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/gallium/drivers/virgl/virgl_resource.c | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/gallium/drivers/virgl/virgl_resource.c b/src/gallium/drivers/virgl/virgl_resource.c
+index bf452d534a0..020d5e765a7 100644
+--- a/src/gallium/drivers/virgl/virgl_resource.c
++++ b/src/gallium/drivers/virgl/virgl_resource.c
+@@ -1210,10 +1210,12 @@ void virgl_resource_destroy(struct pipe_screen *screen,
+       util_range_destroy(&res->valid_buffer_range);
+ 
+    /* limina: a planar target's remaining planes hang off the head, gallium's convention
+-    * for one allocation carrying several plane resources. Releasing the head releases
+-    * the rest by recursion; each element holds its own reference on the shared hw_res,
+-    * so teardown is symmetric whatever order the references are dropped in. */
+-   pipe_resource_reference(&res->b.next, NULL);
++    * for one allocation carrying several plane resources — and releasing them is the
++    * core's job, not ours. pipe_resource_destroy() caches ->next before it calls this
++    * hook and then drops that reference itself, so a driver that also releases ->next
++    * releases it twice: the plane is freed while a frontend still holds a reference,
++    * and the next pipe_resource_reference() on it reads a dead refcount. Free only our
++    * own object here, exactly as radeonsi's si_resource_destroy does. */
+ 
+    vs->vws->resource_reference(vs->vws, &res->hw_res, NULL);
+    virgl_resource_free_gbm_layout(res);
