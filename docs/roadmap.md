@@ -559,8 +559,7 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
    era.)
 4. **virtio-gpu flip-completion gap** — event-driven KMS clients hang; #8 gave mutter honest pacing
    but the generic gap remains.
-5. **#28 residue policy** — `VN_PERF=no_*_feedback` via agent vs a real fix.
-6. **Cosmetic / low-priority:** `num_capsets` hardcoded 5; the non-fatal `CTX_DETACH_RESOURCE`
+5. **Cosmetic / low-priority:** `num_capsets` hardcoded 5; the non-fatal `CTX_DETACH_RESOURCE`
    (0x203 → ERR_UNSPEC) dmesg line; KK GPU-side per-draw root re-fetch (only if GPU-bound workloads
    reappear); Firefox MSAA cosmetic thread.
 

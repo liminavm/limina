@@ -148,9 +148,15 @@ importer work.
    buffers of our layout and see whether VT honours them or silently uses its own pool.
 2. **Layout agreement.** Allocate at a guest-chosen `bytesPerRow` and confirm
    `IOSurfaceGetPropertyAlignment` accepts it at the sizes we care about — odd widths, 4K.
-3. **Bulk mapping sanity.** venus's blobs are small and hot; a decode target is multi-megabyte
-   and written whole. Cheap to confirm the mapping behaves the same at that size before
-   building on it.
+3. **Can an IOSurface's base address be mapped into a guest at all?** This one branches the
+   design, and nothing in the stack answers it today: the venus precedent maps shm-backed
+   `vkMapMemory` pointers, and zero-copy scanout hands surfaces over by id and never maps
+   them. IOKit-owned pages may not survive `hv_vm_map` the way anonymous ones do, and the
+   guest can never take part in the `IOSurfaceLock` protocol. Map a real surface's base into a
+   guest and checksum what both sides see — at decode-target size, since these are
+   multi-megabyte and written whole rather than small and hot. If it fails, phase 1 falls back
+   to an shm-backed blob plus a copy into the surface, and phase 2's zero-copy present story
+   changes with it.
 
 ## Verifying
 
@@ -174,5 +180,7 @@ to be explained by this, and should not be left to discover the restore path for
 
 - **The stock tier**, which runs vanilla mesa and keeps the one-page stub. The route there is
   upstreaming, not shipping our mesa to stock images.
-- **AV1.** Independent: YouTube negotiates `av01` with Firefox, and AV1 hardware decode needs
-  M3 or later regardless (`spikes/videotoolbox-caps`). See `docs/design/av1-decode.md`.
+- **A host with no AV1 silicon.** Pre-M3 hosts advertise no AV1 profile at all, on purpose, so
+  `av01` content decodes in the guest whatever happens here (`docs/design/av1-decode.md`). On an
+  M3-or-later host AV1 *is* offered, and this design is the only thing standing between Firefox
+  and it — that is the dogfood Mac's case, not an independent one.

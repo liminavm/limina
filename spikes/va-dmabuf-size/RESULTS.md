@@ -258,7 +258,24 @@ Which leaves three ways out, none of them free:
   that makes the exported fd genuinely name the frame. It ends the trade rather than picking a
   side of it.
 
-**This is not what makes YouTube software-decode.** That clip negotiates `av01`, and there is no
-AV1 hardware decode on any tier yet, so it would be dav1d in the RDD process regardless. The two
-causes are independent and stack: the codec choice explains the observed CPU, and the refusal
-means forcing VP9 does not recover it either.
+**This is the whole reason YouTube software-decodes on the dogfood Mac.** The first reading of
+this was wrong and is worth stating so it is not re-derived: the clip negotiates `av01`, and the
+local repro ran on a host with no AV1 silicon, which made a missing codec look like the cause.
+AV1 hardware decode is implemented and wired; whether it is *offered* is a property of the host
+chip, not of the guest tier. `virgl_video_vt.c` advertises `PIPE_VIDEO_PROFILE_AV1_MAIN` only when
+`vt_can_decode(kCMVideoCodecType_AV1)` is true, which needs an M3 or later; a host without it
+advertises nothing for AV1 on purpose, so the guest keeps its own better-tested dav1d rather than
+being routed onto a host software path for no gain.
+
+The dogfood Mac is an M4 Pro, and its guest does advertise AV1:
+
+```
+$ vainfo    # dogfood guest, mesa 26.1.8-5.limina (r18)
+#   driver: "Mesa Gallium driver 26.1.8 for virgl (zink ... (Apple M4 Pro (MESA_KOSMICKRISP)))"
+VAProfileAV1Profile0            : VAEntrypointVLD
+```
+
+So AV1 hardware decode is available to that Firefox, and the export refusal is the only thing
+standing between it and the GPU. Phase 1 of `docs/design/blob-decode-targets.md` recovers it
+directly. On a pre-M3 host the fallback to dav1d in the RDD process remains correct behaviour,
+and no amount of export work changes it.

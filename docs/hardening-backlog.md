@@ -683,11 +683,11 @@ rects). Remaining:
   guest env 2026-07-25**, worth 25–30% of wall clock on submits carrying real work. Feedback has
   been on in every enhanced guest since.
 
-  **The 2026-06-07 measurement in `spikes/mtl-shm-coherency` is superseded and must not be cited
-  as current.** Its conclusion — that the guest CPU is outside the GPU's coherency domain, and
-  that this blocked putting gnome-shell on venus — described the pre-fix stack; gnome-shell has
-  run on zink→venus for months. It was cited as a live constraint twice on 2026-09-01 and
-  distorted a design both times before being caught.
+  The MoltenVK-era spikes that concluded otherwise — that the guest CPU sits outside the GPU's
+  coherency domain, and that this blocked putting gnome-shell on venus — were **deleted**
+  2026-09-01 rather than annotated, having been cited as live constraints twice that day and
+  distorted a design both times. gnome-shell has run on zink→venus for months. Recover them from
+  history if a re-measurement is ever wanted; do not reinstate their conclusions.
 
 - **Cosmetics** — ✅ **mostly DONE 2026-06-23 (libkrun 0029/0030).** Verified on the seated venus
   tier: the desktop now boots with **zero** `virtio_gpu` dmesg errors (was: a `capset_id=2` GL-probe

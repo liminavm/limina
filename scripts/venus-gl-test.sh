@@ -24,11 +24,11 @@ SSH=(ssh -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null 
 "${SSH[@]}" true 2>/dev/null || { echo "guest not reachable on :$PORT — is run-venus-window.sh up?" >&2; exit 1; }
 
 # zink-on-Venus environment (Mesa loaders -> /opt/mesa-zink, Vulkan ICD -> guest virtio/venus).
-# VN_PERF=no_*_feedback forces Venus's sync onto the virtio-gpu per-context ring fence (which our
-# macOS eventfd shim retires, see virglrenderer src/virgl_util.c) instead of its host-visible
-# *feedback* buffers (semaphore/fence/event/query). The feedback buffers depend on the guest seeing
-# host GPU writes to a host-visible blob, which is not yet coherent on the 16 KiB hv_vm_map path —
-# without this, glFinish/vkWaitSemaphores hang. With it, GL apps render fully (glmark2 ~445).
+# VN_PERF=no_*_feedback forces Venus's sync onto the virtio-gpu per-context ring fence instead of
+# its host-visible *feedback* buffers. It is a LEGACY carry-over kept only so this script's numbers
+# stay comparable with its older runs: host-visible blob coherency (#28) was fixed 2026-07-03 and
+# the shipped stack stopped setting this on 2026-07-25, so a guest under this script is NOT
+# configured the way users run. Drop the line to measure the real thing.
 read -r -d '' ZINK_ENV <<'EOF' || true
 export LD_LIBRARY_PATH=/opt/mesa-zink/lib64
 export LIBGL_DRIVERS_PATH=/opt/mesa-zink/lib64/dri

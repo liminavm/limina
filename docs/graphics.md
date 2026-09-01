@@ -420,13 +420,15 @@ Two independent gates, and only their intersection is reachable:
   `mesa-va-drivers-freeworld`, or our own mesa RPM built `-Dvideo-codecs=all`, restores them.
 - **Host.** VideoToolbox on Apple silicon has no MPEG-2 path at all, and AV1 *hardware*
   decode needs an M3 or later. Measured matrix: `spikes/videotoolbox-caps/RESULTS.md`.
-- **Host, software.** AV1 does not stop at the silicon: the backend carries a dav1d decoder
-  and uses it where VideoToolbox cannot be relied on — on a host with no AV1 silicon at all,
-  and on any super-resolution stream, which AV1-capable silicon decodes correctly but hands
-  back wrong (`docs/design/av1-decode.md`, `docs/radar/videotoolbox-av1-superres.md`).
+- **Host, software.** The backend carries a dav1d decoder, but only as a repair for frames
+  AV1-capable silicon decodes correctly and then hands back wrong — super-resolution
+  (`docs/design/av1-decode.md`, `docs/radar/videotoolbox-av1-superres.md`). It is deliberately
+  *not* a decoder in its own right: a host with no AV1 silicon advertises no AV1 profile at
+  all, so the guest keeps decoding with its own dav1d, which is better tested than ours and
+  costs nothing to route through the host (`virgl_video_vt.c`, `fill_caps`).
 
-So VP9 (and MJPEG) everywhere, plus **AV1 everywhere** — accelerated from M3 on, in software
-below that. **Implemented today: VP9 profile 0, AV1 main, H.264 (Baseline/Main/High) and
+So VP9 (and MJPEG) everywhere, and **AV1 from M3 on** — below that the guest decodes it
+itself, unaccelerated, which is what it would have done anyway. **Implemented today: VP9 profile 0, AV1 main, H.264 (Baseline/Main/High) and
 HEVC Main** — the last two enhanced-tier or freeworld only, since the guest's `all_free`
 gate keeps them out of a stock driver whatever the host offers
 (`docs/design/h264-hevc-decode.md`).

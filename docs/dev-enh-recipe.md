@@ -113,7 +113,9 @@ divergences that remain candidate causes of the present failure.
 - Env via `~/.config/systemd/user/org.gnome.Shell@wayland.service.d/*.conf` (load-bearing) +
   `~/.config/environment.d/zink.conf`: `LD_LIBRARY_PATH`/`LIBGL_DRIVERS_PATH`/`__EGL_VENDOR_LIBRARY_DIRS`
   → `/opt/mesa-zink`, `MESA_LOADER_DRIVER_OVERRIDE=zink`, `GALLIUM_DRIVER=zink`,
-  `VK_DRIVER_FILES=…virtio_icd.aarch64.json`, `VN_PERF=no_semaphore_feedback,no_fence_feedback,no_event_feedback,no_query_feedback`,
+  `VK_DRIVER_FILES=…virtio_icd.aarch64.json` (do **not** add `VN_PERF=no_*_feedback` — #28
+  coherency was fixed 2026-07-03 and the shipped stack stopped setting it 2026-07-25; forcing it
+  on makes a dev guest diverge from what users run),
   `LD_PRELOAD=/home/claude/abrtcatch.so` (debug shim). No env forces scanout linear — vkr does.
 - gdm autologin `claude`, GNOME Wayland.
 - dev-enh is a **developer/debug image** (debug venus, LD_PRELOAD shim, leftover source trees).
