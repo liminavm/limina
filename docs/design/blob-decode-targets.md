@@ -214,8 +214,11 @@ resources — which is what the dmabuf importers do — is already asking for pl
 the host is already looking for an image to answer with. Phase 2's host work is to put one
 there: a plane-carrying import into `aux_plane_egl_image[1]`.
 
-That is also the mechanism behind the near-blank chroma. With no aux image the index is cleared
-to zero, so the chroma view samples the luma plane.
+This does not explain the near-blank chroma, and nothing yet does. That symptom would need
+plane-indexed views of one shared resource, and the decode path does not produce them on
+either upload branch — measured 2026-09-01, the raw uploader and `Dmabuf Passthrough` both
+put the same 107 `R8` + 107 `R8G8` per-plane resources on the wire and no indexed view at
+all. Whatever the near-blank is, it is not the cleared index.
 
 **Filling it re-arms a context poison, so the branch order must change with it.** A surviving
 index sets `needs_view`, and the `glTextureView` branch (`vrend_renderer.c:2874`) then computes
