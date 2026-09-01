@@ -344,6 +344,12 @@ to be explained by this, and should not be left to discover the restore path for
   submission. Phase 2's per-plane import is the real fix; dropping NV12 from the advertised
   list, so glupload falls back to the copy uploader it already uses successfully, is the
   standing companion patch if phase 2 lands and the pipeline is still flat.
+- **The composite RGBA view samples an empty texture on an IOSurface-backed target.**
+  `upload_mapped_plane` writes the picture into the IOSurface planes and returns before it
+  reaches `res->gl_id`, so a consumer that views the resource in its planar format — rather than
+  importing the planes — gets whatever that texture last held. Per-plane import, which is what
+  Firefox and every VA-API client do, does not go near it. Fill it on demand, or refuse the
+  composite view on an IOSurface-backed target so the consumer takes the converting path.
 - **`glimagesink` poisons its virgl context** — a separate fault, on a different path, found
   alongside the above and not explained by it: 13 `CREATE_OBJECT` failures with EINVAL, after
   which 2652 consecutive `[SUBMIT3D]`s fail. It does not reproduce under `gldownload`.

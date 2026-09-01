@@ -111,8 +111,10 @@ single two-plane IOSurface and sample it without a re-read. Gated on the host ad
 `VIRGL_CAP_V2_VIDEO_PLANAR_TARGET`, so a guest on an older host silently keeps the per-plane form.
 Measured on VP9 (`spikes/vt-vp9-decode/vp90-2-09-aq2.webm`, 107 frames): 12 composite targets,
 each one two-plane EGL-bound IOSurface, 214 plane writebacks all landing, nothing refused, and
-frame checksums identical to the software decoder. The delivered `-5` guest on the same host keeps
-the old shape and is checksum-identical too. Applied with the real `install-enhanced.sh` to all
+frame checksums identical to the software decoder — which covers the writeback into guest memory,
+not the IOSurface the screen samples: those are two copies of every frame, and a checksum reaches
+only the first. The delivered `-5` guest on the same host keeps the old shape and is
+checksum-identical too. Applied with the real `install-enhanced.sh` to all
 three F44 enhanced images (`.bak-pre-r19.raw` CoW backups), both agent hashes verified; the kernel
 short-circuited as already installed and the permanent default stayed `7.1.8-limina16k.4`, so no
 trial boot is owed. Previous: r18, 2026-08-31: kernel
