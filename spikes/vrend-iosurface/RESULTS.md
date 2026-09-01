@@ -98,3 +98,39 @@ leaked the image and pinned its VkImage/MTLTexture/IOSurface. Now guarded by
 
 **Open (carried from A1):** fence-accurate present (the completion barrier is
 `glFinish` — correct but unpaced).
+
+## Phase 3 — per-plane import (`planeimport-probe.c`, `./run-planeprobe.sh`)
+
+The same chain, carrying a plane index, so one biplanar surface can back the two
+textures an NV12 video decode target samples
+(`docs/design/blob-decode-targets.md` phase 2). `eglCreateImageKHR` grows
+`{PLANE, FOURCC}` attribs; `winsys_handle::plane` already existed; the index
+crosses zink→KK in `VkImportIOSurfacePlaneLIMINA`, because
+`VK_EXT_external_memory_metal` imports a bare handle with nowhere to name a
+plane, and reaches Metal's `newTextureWithDescriptor:iosurface:plane:` — which
+always took an index and was always passed `0`.
+
+**PASS:** a `'420f'` surface CPU-filled with a different pattern per plane,
+imported twice (luma R8, chroma GR88), both sampled in one shader into a BGRA
+output surface: 1024 texels, zero mismatches. The patterns differ per plane
+precisely so a chain that ignored the index and returned plane 0 would fail
+rather than coincide. The verdict reads the output surface's own bytes, not
+`glReadPixels` (#28).
+
+This is also the **host-CPU-write → host-GPU-sample-read coherency arm** that
+`spikes/hv-iosurface-map/RESULTS.md` books as untested — every byte compared
+was written by the CPU and read by the GPU. That is the direction a
+VideoToolbox decode target depends on.
+
+Two guards worth keeping:
+- **The attrib-less door must refuse a planar surface**, not import it as plane
+  0. A `'420f'` surface has no self-describing texture format, so with attribs
+  the surface's own fourcc is deliberately never consulted.
+- **IOSurface pixel formats and DRM fourccs pack in opposite byte orders**
+  (`'BGRA'` puts the first character high, `fourcc_code` puts it low). Building
+  one with the other's convention yields a code nothing recognises, and the
+  failure surfaces far from the mistake.
+
+Both runners had also silently lost EGL to `@rpath/libvulkan.1.dylib` since the
+2026-08-05 MTL4 rebase; they now carry the boot script's one-symlink
+`DYLD_LIBRARY_PATH` shim.
