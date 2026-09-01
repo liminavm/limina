@@ -2296,8 +2296,12 @@ Measured, with the reproducer, in `spikes/va-dmabuf-size`; stock Fedora mesa rep
 identically, so it is upstream virgl behaviour rather than anything in our tree.
 
 The immediate crash is fixed by refusing to export a dmabuf smaller than the image it
-describes, which pushes consumers onto system memory. That is correct and costs a frame copy
-per frame. **The fix worth having is to allocate decode targets as host-mappable blobs**
+describes, which pushes consumers onto system memory. That costs a frame copy per frame for
+consumers that renegotiate — and **costs Firefox its hardware decoder entirely**, because its
+VA path imports the fd on the GPU, never maps it, and has no fallback but software: it decodes
+one frame, fails `GetVAAPISurfaceDescriptor()`, and rebuilds as a software decoder for the rest
+of the session. The refusal is therefore a stopgap with a live regression attached, not a
+settled state, which is what raises the priority of the blob work below. **The fix worth having is to allocate decode targets as host-mappable blobs**
 (`VIRTGPU_BLOB_MEM_HOST3D`, which the virgl winsys already creates for other paths), so the
 exported fd names real memory and a consumer can import it directly.
 
