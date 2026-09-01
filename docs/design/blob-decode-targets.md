@@ -302,6 +302,20 @@ and equally not a leak.
 
 ## Verifying
 
+**Measured 2026-09-01** (VP9, `spikes/vt-vp9-decode/vp90-2-09-aq2.webm`, 352x240, 107 frames,
+ffmpeg VA-API on a stock-shaped guest): the composite shape reaches the host and lands on one
+planar surface. 12 decode targets created, each
+`PIPE_FORMAT_Y8_U8V8_420_UNORM` backed by a single two-plane EGL-bound IOSurface; 214 plane
+writebacks (107 x 2), plane 1 at offset 84480 = 352 x 240, all `-> write`; no create refused, no
+plane view refused, no frame skipped. Against the per-plane form this replaces
+107 x `R8_UNORM` + 107 x `R8G8_UNORM` unrelated textures and no surface at all.
+
+The success line is `virgl_info`, which libkrun maps to a Rust `info!` on `krun_rutabaga_gfx` —
+so it needs that target in `RUST_LOG`, not just `VIRGL_LOG_LEVEL=info`. Both refusal paths are
+`warn`/`error` and survive a `warn` filter, so a run showing neither success nor refusal is a
+muted log, not a silent failure.
+
+
 Two consumers, because they fail differently and neither failure is a crash:
 
 - **GStreamer (mmap path).** Frames checksummed against the software decoder, not merely
