@@ -170,16 +170,35 @@ storage, so sampling needs no re-read and scanout can take the surface by id. Th
 glupload's direct importers, which refuse everything today with `cannot produce texture-target
 2D` and fall back to the copy uploader however well-formed the buffer is.
 
-**Phase 2 costs four layers, and the reason is worth knowing before starting it.** vrend already
-adopts an IOSurface as GL texture storage — the shipping path that composites a venus client's
-window buffer (`vrend_renderer.c:15159`). But that import is whole-surface and 8888-only: every
-layer drops the plane index, right down to Metal, whose `newTextureWithDescriptor:iosurface:plane:`
-takes one and is passed a hardcoded `0`. An NV12 target needs a plane index and R8/RG88 formats
-threaded through `virgl_egl_image_from_iosurface` (`vrend_winsys_egl.c:852`), the attribute-less
-`EGL_IOSURFACE_LIMINA` target (`egl_dri2.c:2660`), `dri2_from_iosurface_limina` (`dri2.c:940`),
-zink's `resource_from_handle`, and KK's `mtl_new_texture_with_descriptor_iosurface`
-(`mtl_device.m:399`) — the last three on the host mesa `limina-kk` branch. Nothing works until
-the whole chain lands, which is precisely why it is not phase 1.
+**Phase 2's cost is a plane index that no layer carries.** Every mechanism it needs already
+ships. vrend adopts an IOSurface as a GL texture's storage in
+`vrend_resource_iosurface_init` (`vrend_renderer.c:9428`) for SCANOUT and SHARED resources;
+the VMM's `resource_map_blob` is context-agnostic, gated only on `map_ptr` succeeding, so a
+mappable vrend blob needs no VMM work; VideoToolbox already decodes into IOSurface-backed
+`CVPixelBuffer`s (`virgl_video_vt.c:857`). What is missing is that the existing import is
+whole-surface and 8888-only. An NV12 target needs a plane index and R8/RG88 formats through
+`virgl_egl_image_from_iosurface` (`vrend_winsys_egl.c:852`), the attribute-less
+`EGL_IOSURFACE_LIMINA` target (`egl_dri2.c:2660`), `dri2_from_iosurface_limina` (`dri2.c:925`,
+whose per-plane geometry comes from `IOSurfaceGet*OfPlane`), zink's `resource_from_handle`, and
+KK's `mtl_new_texture_with_descriptor_iosurface` (`mtl_device.m:379`), which passes a hardcoded
+`plane:0` to Metal.
+
+Of those, only the zink→KK step has no carrier: `winsys_handle::plane` already exists and the
+dmabuf path uses it, but zink conveys the surface to KK as a bare
+`VkImportMemoryMetalHandleInfoEXT::handle`, which has nowhere to put an index. Both halves are
+ours, so the index travels in a limina-private struct chained onto that import — an explicit
+index rather than letting KK infer the plane by matching the dedicated image's dimensions
+against the surface's, which happens to be unambiguous for 4:2:0 and would silently stop being
+so for any other subsampling.
+
+Nothing works until the whole chain lands, which is precisely why it is not phase 1.
+
+The guest half is smaller than the host half. `vl_video_buffer` already models one allocation
+with chained per-plane resources and sets `contiguous_planes`; gallium's VA frontend already
+exports that as one object with two layers (`va/surface.c:1453`), gated on
+`screen->resource_get_param`, which virgl installs. That path is inert today only because
+virgl's implementation answers `PIPE_RESOURCE_PARAM_MODIFIER` and returns false for
+`STRIDE` and `OFFSET` (`virgl_resource.c:942`).
 
 Phase 1 is the correctness win and it stands alone. Do not gate the Firefox recovery on either
 the plane work or the importer work.
@@ -226,6 +245,19 @@ to be explained by this, and should not be left to discover the restore path for
 
 ## What this does not fix
 
+- **glupload's `DirectDmabuf` path renders near-blank**, and phase 1 is what exposed it. The
+  guest's EGL advertises 63 importable dmabuf fourccs including NV12, so glupload builds ONE
+  EGLImage over the whole planar buffer via
+  `gst_egl_image_from_dmabuf_direct_target_with_dma_drm` and samples it as a single RGBA 2D
+  texture; the result carries 2–25 distinct luma values against 256 in the source. The claim was
+  always false — phase 1 only made the decoder export NV12, so something finally exercised it.
+  The host log is clean across the failure, so this is guest-side EGL, not a rejected
+  submission. Phase 2's per-plane import is the real fix; dropping NV12 from the advertised
+  list, so glupload falls back to the copy uploader it already uses successfully, is the
+  standing companion patch if phase 2 lands and the pipeline is still flat.
+- **`glimagesink` poisons its virgl context** — a separate fault, on a different path, found
+  alongside the above and not explained by it: 13 `CREATE_OBJECT` failures with EINVAL, after
+  which 2652 consecutive `[SUBMIT3D]`s fail. It does not reproduce under `gldownload`.
 - **The stock tier**, which runs vanilla mesa and keeps the one-page stub. The route there is
   upstreaming, not shipping our mesa to stock images.
 - **A host with no AV1 silicon.** Pre-M3 hosts advertise no AV1 profile at all, on purpose, so
