@@ -53,10 +53,6 @@ impl VmConfig {
             self.config_version,
             CONFIG_VERSION
         );
-        anyhow::ensure!(
-            !self.identity.name.is_empty(),
-            "vm.toml identity.name is empty"
-        );
         // A share is the one definition path not resolved against the bundle: it resolves
         // against the process working directory, so a relative one lets whoever can write a
         // directory the user might launch from choose what gets mounted into the guest.
@@ -76,8 +72,10 @@ impl VmConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Identity {
-    /// Mutable display label; the bundle directory name is derived from it at create.
-    pub name: String,
+    /// Optional mutable display label. An absent or empty value falls back to the bundle's
+    /// directory name without renaming the bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The durable key: allocated at create, never changes. Snapshots, network leases
     /// and helper grants key off this, not the name.
     pub uuid: String,
@@ -775,7 +773,7 @@ mod tests {
         VmConfig {
             config_version: CONFIG_VERSION,
             identity: Identity {
-                name: "Fedora".into(),
+                name: Some("Fedora".into()),
                 uuid: uuid_v4(),
                 created: rfc3339_utc_now(),
             },

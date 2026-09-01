@@ -13,7 +13,7 @@ use crate::vmlib::{bundle, preflight, runtime, schema};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmRow {
     pub bundle: bundle::VmBundle,
-    /// identity.name when the config loads; the directory name for broken bundles.
+    /// The optional identity override, falling back to the bundle directory name.
     pub name: String,
     pub running: bool,
     /// Supervisor pid when running (0 = unknown-but-running).
@@ -53,7 +53,7 @@ pub fn snapshot() -> Vec<VmRow> {
             };
             match b.load() {
                 Ok(cfg) => VmRow {
-                    name: cfg.identity.name.clone(),
+                    name: b.display_name(&cfg),
                     summary: summarize(&cfg),
                     disks: disks_line(&b, &cfg),
                     ssh: ssh_line(&b, &cfg, running),
