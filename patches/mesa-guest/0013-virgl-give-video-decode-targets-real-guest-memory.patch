@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Tue, 1 Sep 2026 09:32:39 -0300
+Subject: [PATCH 13/13] virgl: give video decode targets real guest memory
+
+A decode target's plane resource got the one-page staging stub, because
+copy-transfer-from-host applies to it like any other texture. That stub is
+why virgl_resource_get_handle has to refuse exporting these: the fd names
+4096 bytes while the descriptor reports the real geometry, and a consumer
+that trusts the descriptor and mmaps -- GStreamer's dmabuf uploader --
+walks off the first page into a SIGBUS. The refusal is correct, but it
+costs Firefox its VA-API decoder after a single frame.
+
+Opt these planes out of staging so they get metadata.total_size of real
+guest pages. The host writes each decoded frame into them
+(VIRGL_CAP_V2_VIDEO_GUEST_PLANES), the exported fd then names storage that
+genuinely holds the picture, and the refusal stops applying to it without
+being relaxed for anything else.
+
+Gated on the host advertising the writeback. Doing this against a host
+without it would allocate the memory and export an honest-looking fd naming
+a frame nothing ever wrote, which is worse than refusing and falling back
+to a path that works.
+
+The marker rides pipe_video_buffer::flags into each plane template, which
+is the only route from virgl_video_create_buffer to
+virgl_resource_create_front. It is built on PIPE_RESOURCE_FLAG_DRV_PRIV and
+pipe_to_virgl_flags forwards an allowlist, so it cannot reach the host.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/gallium/drivers/virgl/virgl_resource.c | 17 +++++++++++++++++
+ src/gallium/drivers/virgl/virgl_resource.h |  8 ++++++++
+ src/gallium/drivers/virgl/virgl_video.c    |  9 +++++++++
+ src/virtio/virtio-gpu/virgl_hw.h           |  4 ++++
+ 4 files changed, 38 insertions(+)
+
+diff --git a/src/gallium/drivers/virgl/virgl_resource.c b/src/gallium/drivers/virgl/virgl_resource.c
+index fe66c812c70..d31a1bea99a 100644
+--- a/src/gallium/drivers/virgl/virgl_resource.c
++++ b/src/gallium/drivers/virgl/virgl_resource.c
+@@ -756,6 +756,23 @@ static struct pipe_resource *virgl_resource_create_front(struct pipe_screen *scr
+    // This size is not passed to the host
+    res->use_staging = virgl_can_copy_transfer_from_host(vs, res, vbind);
+ 
++   /* limina: a video decode target's plane needs storage that actually holds the
++    * frame, not the one-page staging stub.
++    *
++    * The stub is why virgl_resource_get_handle has to refuse exporting these: an fd
++    * naming 4096 bytes for a multi-megabyte picture, with a descriptor that reports
++    * the real geometry, SIGBUSes any consumer that trusts it. Given real guest pages
++    * the host writes each decoded frame into them, the export describes storage that
++    * genuinely holds the picture, and the refusal stops applying on its own.
++    *
++    * Gated on the host actually doing that writeback. Against a host without the bit
++    * this would allocate the memory and export an honest-looking fd naming a frame
++    * nothing ever wrote -- worse than the refusal, which at least falls back to a
++    * path that works. */
++   if ((templ->flags & VIRGL_RESOURCE_FLAG_VIDEO_TARGET) &&
++       (vs->caps.caps.v2.capability_bits_v2 & VIRGL_CAP_V2_VIDEO_GUEST_PLANES))
++      res->use_staging = false;
++
+    if (res->use_staging)
+       alloc_size = 1;
+    else if (templ->bind & PIPE_BIND_SHARED)
+diff --git a/src/gallium/drivers/virgl/virgl_resource.h b/src/gallium/drivers/virgl/virgl_resource.h
+index 76dc5ee37d8..1d37e9eac4c 100644
+--- a/src/gallium/drivers/virgl/virgl_resource.h
++++ b/src/gallium/drivers/virgl/virgl_resource.h
+@@ -174,6 +174,14 @@ static inline unsigned pipe_to_virgl_bind(const struct virgl_screen *vs,
+    return outbind;
+ }
+ 
++/* limina: this resource is a plane of a video decode target.
++ *
++ * Guest-private, and deliberately built on PIPE_RESOURCE_FLAG_DRV_PRIV: it must never
++ * reach the host, and pipe_to_virgl_flags below forwards an allowlist, so it cannot.
++ * Its only job is to reach virgl_resource_create_front, which gives such a plane real
++ * guest memory instead of the one-page staging stub. */
++#define VIRGL_RESOURCE_FLAG_VIDEO_TARGET (PIPE_RESOURCE_FLAG_DRV_PRIV << 0)
++
+ static inline unsigned pipe_to_virgl_flags(const struct virgl_screen *vs,
+                                            unsigned pflags)
+ {
+diff --git a/src/gallium/drivers/virgl/virgl_video.c b/src/gallium/drivers/virgl/virgl_video.c
+index f3b6bd61001..c95e370e1c8 100644
+--- a/src/gallium/drivers/virgl/virgl_video.c
++++ b/src/gallium/drivers/virgl/virgl_video.c
+@@ -1244,11 +1244,20 @@ virgl_video_create_buffer(struct pipe_context *ctx,
+ {
+     struct virgl_context *vctx = virgl_context(ctx);
+     struct virgl_video_buffer *vbuf;
++    struct pipe_video_buffer local_tmpl;
+ 
+     vbuf = CALLOC_STRUCT(virgl_video_buffer);
+     if (!vbuf)
+         return NULL;
+ 
++    /* limina: mark the planes so they get real guest memory rather than the staging
++     * stub -- vl_video_buffer_template copies these flags into every plane's resource
++     * template, which is the only way to reach virgl_resource_create_front from here.
++     * The flag is driver-private and never reaches the host. */
++    local_tmpl = *tmpl;
++    local_tmpl.flags |= VIRGL_RESOURCE_FLAG_VIDEO_TARGET;
++    tmpl = &local_tmpl;
++
+     vbuf->buf = vl_video_buffer_create(ctx, tmpl);
+     if (!vbuf->buf) {
+         free(vbuf);
+diff --git a/src/virtio/virtio-gpu/virgl_hw.h b/src/virtio/virtio-gpu/virgl_hw.h
+index ec10bdd3447..3a5eda2be11 100644
+--- a/src/virtio/virtio-gpu/virgl_hw.h
++++ b/src/virtio/virtio-gpu/virgl_hw.h
+@@ -628,6 +628,10 @@ enum virgl_formats {
+ #define VIRGL_CAP_V2_MIRROR_CLAMP_TO_EDGE (1u << 16)
+ #define VIRGL_CAP_V2_MIRROR_CLAMP         (1u << 17)
+ #define VIRGL_CAP_V2_RESOURCE_LAYOUT      (1u << 18)
++/* limina: the host writes each decoded frame into the guest memory backing a video
++ * buffer's plane resources, so those planes are worth allocating for real instead of
++ * as one-page staging stubs -- and can then be exported honestly. */
++#define VIRGL_CAP_V2_VIDEO_GUEST_PLANES   (1u << 19)
+ 
+ /* virgl bind flags - these are compatible with mesa 10.5 gallium.
+  * but are fixed, no other should be passed to virgl either.
