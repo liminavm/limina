@@ -228,12 +228,35 @@ GStreamer's fallback uploader mmaps and copies, so the same fd is fatal there. T
 tell the two apart, because nothing in `virgl_resource_get_handle` knows what the caller will do
 with the fd.
 
-That reframes what the guard is for. `whandle->size` is now honest, so a consumer that validates
-the object size against the layout geometry can refuse on its own and renegotiate — which is
-what GStreamer's uploader is checking for. If honest sizing alone is enough to stop the SIGBUS,
-the refusal is the wrong half of the fix and the export should be allowed again; that is
-measurable and is the next thing to settle. Until it is settled, the trade is real in both
-directions: keeping the refusal costs Firefox hardware decode, dropping it restores the SIGBUS.
+**Honest sizing alone cannot replace the refusal.** It is tempting to hope that filling in
+`whandle->size` lets consumers refuse for themselves, but gst-va does not read that field for
+sizing at all (`gst-libs/gst/va/gstvaallocator.c`, `gst_va_dmabuf_allocator_setup_buffer_full`):
+
+```c
+/* prime descriptor reports the total size of the object, including regions
+ * which aren't part surface's space. Let's just grab the surface's size: */
+gsize size = _get_fd_size (fd);                 /* lseek(fd, 0, SEEK_END) */
+GstMemory *mem = gst_dmabuf_allocator_alloc_with_flags (allocator, fd, size, ...);
+
+if (desc.objects[i].size < size)
+   GST_WARNING_OBJECT (self, "driver bug: fd size ... is bigger than object descriptor size");
+```
+
+It sizes the `GstMemory` by `lseek` and consults `objects[].size` only to log. So the GstMemory
+was already correctly 4096 bytes before we touched anything — the overrun is a *downstream*
+consumer (glupload's `_gl_mem_create`) copying by video geometry while ignoring the size of the
+memory it was handed. That is a defect in the uploader, not something the descriptor can talk it
+out of.
+
+Which leaves three ways out, none of them free:
+
+- **Keep the refusal**, and the enhanced tier has no Firefox hardware decode until decode targets
+  are blob-backed. This is where r18 leaves us.
+- **Drop the refusal and fix glupload upstream** to honour the GstMemory size. Firefox recovers
+  immediately; every un-patched GStreamer keeps taking the SIGBUS in the meantime.
+- **Blob-backed decode targets** — booked in `docs/hardening-backlog.md`, and the only option
+  that makes the exported fd genuinely name the frame. It ends the trade rather than picking a
+  side of it.
 
 **This is not what makes YouTube software-decode.** That clip negotiates `av01`, and there is no
 AV1 hardware decode on any tier yet, so it would be dav1d in the RDD process regardless. The two
