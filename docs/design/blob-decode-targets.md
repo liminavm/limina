@@ -366,10 +366,19 @@ to be explained by this, and should not be left to discover the restore path for
   The decoder reports success throughout; nothing in the host log names the cause, because the
   rejection path has no log line at all.
 
-  So a black or flat-green hardware-decoded picture is two faults deep: the poisoned context
-  empties the surface, and whichever sampling path the consumer picks then decides which shade
-  of nothing it shows. Give the rejection a voice before anything else — a silent `EINVAL` on
-  every submit is what made this read as a sampling bug for a day.
+  Clearing the flag on the submit path is not the end of it. With the latch bypassed the
+  commands execute and the decode reaches VideoToolbox — `create_codec`, a session reporting
+  `hardware accelerated: yes`, ten `decode_bitstream`/`end_frame` pairs — and VT then refuses
+  the data itself: `status -12909` (`kVTVideoDecoderBadDataErr`) on all ten frames, `decode
+  produced no picture`, luma still one distinct value. Firefox decodes the same file on the
+  same boot, so the stream is fine and the difference is in what gst-va's VP9 submission
+  carries.
+
+  So an empty hardware-decoded picture here is at least three faults deep, and only the last
+  one is about pixels: the latch drops every submission, VT rejects the submissions that do get
+  through, and whichever sampling path the consumer picks then decides which shade of nothing
+  it shows. Give the rejection a voice before anything else — a silent `EINVAL` on every submit
+  is what made this read as a sampling bug for a day, and it hid the VT rejection behind it.
 - **`glimagesink` poisons its virgl context** — a separate fault, on a different path, found
   alongside the above and not explained by it: 13 `CREATE_OBJECT` failures with EINVAL, after
   which 2652 consecutive `[SUBMIT3D]`s fail. It does not reproduce under `gldownload`.
