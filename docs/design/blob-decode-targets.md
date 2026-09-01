@@ -130,6 +130,31 @@ Note this interacts with a trap already recorded in `docs/graphics.md` §4.5: **
 layout the guest allocated**, rather than converting. ffmpeg's VA-API path allocates I420 while
 asking for NV12 elsewhere, and VideoToolbox will produce either.
 
+## The composite shape, and why the parent is not planar
+
+A decode target reaches the host as **one resource named by its planar format, with a chain of
+plane resources over the same allocation** — the shape radeonsi builds for NV12. The per-plane
+form cannot work: only a composite create names a planar format, and that is what a host-side
+planar allocation keys off, so a host seeing separate R8 and R8G8 creates has nothing to
+allocate one surface from.
+
+**Every element of the chain carries its own component format, the parent included.** The wire
+format and the pipe format part ways deliberately: the create sends the planar format, while the
+parent's `pipe_resource` reports plane 0's component format. That divergence is the discriminator
+the host samples by — a plane index only reaches the host for planes 1 and 2, so plane 0 is
+recognised by its view naming `R8` where the resource is `NV12`. A parent left planar makes a
+luma view indistinguishable from a composite consumer asking for the converted RGBA, and the
+luma sampler silently reads RGBA. All elements must share one `hw_res`, which the SET_TYPE plane
+walk requires of anything that later re-enters through an import.
+
+**Nothing on the wire carries the plane layout**, and the channel that looks like it should is
+not one: SET_TYPE transmits `plane_strides`/`plane_offsets` only for untyped blobs arriving
+through `resource_create_from_handle`, and a composite target is created directly.
+`VIRGL_CAP_V2_RESOURCE_LAYOUT` is unrelated — it gates a query about a target handle. So both
+ends compute the same canonical layout instead: tight, in plane order, each plane's stride being
+its own width times its own block size. A divergence cannot corrupt silently — too large trips
+the writeback's extent check, too small is visible in the picture.
+
 ## Capability negotiation, and the order this ships in
 
 A guest that allocates blob decode targets against a host that cannot back them must fall back,
@@ -142,6 +167,10 @@ shippable and fixes the order:
 2. **Guest mesa second** — the enhanced tier lights up, via the usual chain: fork commit →
    `scripts/export-mesa-guest-patches.sh` → mesa RPM → `scripts/provision/deliver-payload.sh` →
    `docs/images.md`.
+
+Two capset bits, not one, because a host can do the guest-memory writeback without accepting the
+composite shape — which is exactly what shipped first. `VIDEO_GUEST_PLANES` buys real guest
+storage per plane and an honest export; `VIDEO_PLANAR_TARGET` buys the composite create.
 
 Never the reverse; a guest-enabling change ahead of its host fix is the mistake
 `limina-enh-delivery` records. It also keeps the capability granular, per `docs/graphics.md`
