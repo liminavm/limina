@@ -864,7 +864,11 @@ fn cmd_ls() -> Result<()> {
                 };
                 println!(
                     "{:<24} {:<18} {:>4}  {:<12} {:<6}",
-                    cfg.identity.name, status, cfg.hardware.cpus, mem, ssh
+                    bundle.display_name(&cfg),
+                    status,
+                    cfg.hardware.cpus,
+                    mem,
+                    ssh
                 );
             }
             Err(e) => {
@@ -1208,7 +1212,7 @@ fn cli_from_definition(
         notch: cfg.display.notch,
         edge_resistance: cfg.display.edge_resistance,
         no_soft_kbd_grab: false,
-        window_title: Some(cfg.identity.name.clone()),
+        window_title: Some(bundle.display_name(cfg)),
     })
 }
 
@@ -1566,7 +1570,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             moc::usb::serve(
                 moc_socket,
                 store.clone(),
-                fingerprint_vm_label(cli.suspend_state_file.as_deref()),
+                fingerprint_vm_label(cli.window_title.as_deref()),
             );
         }
     }
@@ -1978,16 +1982,11 @@ fn path_arg(p: &std::path::Path) -> Result<String> {
         .with_context(|| format!("path is not valid UTF-8: {p:?}"))
 }
 
-/// A human label for the fingerprint Touch ID sheet: the managed VM's bundle name (the parent dir
-/// of the state file, minus the `.liminavm` suffix), else a generic fallback. So a multi-VM user
-/// sees which VM asked for a fingerprint.
-fn fingerprint_vm_label(state_file: Option<&std::path::Path>) -> String {
-    state_file
-        .and_then(|s| s.parent())
-        .and_then(|dir| dir.file_name())
-        .and_then(|n| n.to_str())
-        .map(|n| n.strip_suffix(".liminavm").unwrap_or(n).to_string())
-        .filter(|n| !n.is_empty())
+/// A human label for the fingerprint Touch ID sheet. Managed starts pass the same effective
+/// display name used by the VM window; flat runs use a generic fallback.
+fn fingerprint_vm_label(window_title: Option<&str>) -> String {
+    window_title
+        .map(str::to_owned)
         .unwrap_or_else(|| "your VM".to_string())
 }
 
@@ -2753,7 +2752,7 @@ mod tests {
         let cfg = VmConfig {
             config_version: CONFIG_VERSION,
             identity: Identity {
-                name: "Fedora".into(),
+                name: Some("Workstation".into()),
                 uuid: "u".into(),
                 created: "t".into(),
             },
@@ -2864,7 +2863,11 @@ mod tests {
             "the FIDO authenticator is on by default; runtime still gates it on a Secure Enclave"
         );
         assert_eq!(cli.shutdown_grace_secs, 20, "flat default");
-        assert_eq!(cli.window_title.as_deref(), Some("Fedora"));
+        assert_eq!(cli.window_title.as_deref(), Some("Workstation"));
+        assert_eq!(
+            fingerprint_vm_label(cli.window_title.as_deref()),
+            "Workstation"
+        );
         assert_eq!(cli.display_resolution, DisplayResolution::Fixed(1600, 1000));
         assert_eq!(
             cli.window_state_file, None,
@@ -2884,7 +2887,7 @@ mod tests {
         let mut cfg = VmConfig {
             config_version: CONFIG_VERSION,
             identity: Identity {
-                name: "vm".into(),
+                name: None,
                 uuid: "u".into(),
                 created: "t".into(),
             },
@@ -2900,6 +2903,7 @@ mod tests {
         };
 
         let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
+        assert_eq!(cli.window_title.as_deref(), Some("vm"));
         assert_eq!(
             cli.display_resolution,
             DisplayResolution::Host,
@@ -2964,7 +2968,7 @@ mod tests {
         let cfg = VmConfig {
             config_version: CONFIG_VERSION,
             identity: Identity {
-                name: "vm".into(),
+                name: None,
                 uuid: "u".into(),
                 created: "t".into(),
             },

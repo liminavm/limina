@@ -71,7 +71,7 @@ Fedora.liminavm/
 config_version = 1
 
 [identity]
-name    = "Fedora"
+# name  = "Fedora Workstation" # optional display override; defaults to the bundle name
 uuid    = "3f2c1e9a-…"          # allocated at create, never changes; snapshot/networkd key
 created = "2026-07-01T12:00:00Z"
 
@@ -126,7 +126,8 @@ supervisor don't change — **the definition layer is pure supervisor-side polic
 
 ## 4. Identity, locking, concurrency
 
-- **UUID** is the durable key (name is a mutable label). `limina-networkd` (later) keys
+- **UUID** is the durable key (`identity.name` is an optional mutable display label; the bundle
+  directory name is the fallback and remains the CLI lookup key). `limina-networkd` (later) keys
   leases by UUID; snapshots record it; the privileged helper can scope grants by it.
 - **MAC** is allocated at create (locally-administered range, hash of UUID for
   reproducibility) and stored — this is the piece the networking design needs *first*.

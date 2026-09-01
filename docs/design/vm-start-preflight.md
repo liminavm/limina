@@ -75,7 +75,7 @@ Stat-only: cheap enough to run across the whole library on the center's 1 s refr
 
 | Check | Severity | Today |
 |---|---|---|
-| `config_version`, non-empty `identity.name` | Blocker | `schema::validate` |
+| supported `config_version` | Blocker | `schema::validate` |
 | each `[[disk]]`: exists · file-or-blockdev · readable · writable unless `ro` | Blocker | `main.rs:2157` |
 | each `[[cdrom]]`: same predicate | Blocker | `main.rs:2098` |
 | same image attached twice (canonicalized) across disks+cdroms | Blocker | `main.rs:2071-2078` |

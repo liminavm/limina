@@ -25,15 +25,24 @@ impl VmBundle {
         Self { path: path.into() }
     }
 
-    /// The VM's display-ish name: the bundle directory name minus `.liminavm`.
-    /// (The authoritative label is `identity.name` in vm.toml; this is the fallback
-    /// for bundles whose config can't be read.)
+    /// The bundle directory name minus `.liminavm`. This remains the name used to resolve a VM
+    /// from the CLI even when the definition carries a display-name override.
     pub fn dir_name(&self) -> String {
         self.path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("?")
             .to_string()
+    }
+
+    /// The name shown to people: a non-empty definition override, or the bundle directory name.
+    pub fn display_name(&self, cfg: &VmConfig) -> String {
+        cfg.identity
+            .name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.dir_name())
     }
 
     pub fn vm_toml(&self) -> PathBuf {
@@ -267,6 +276,24 @@ pub(crate) mod tests {
             !bundle.path.join("vm.toml.tmp").exists(),
             "tmp file cleaned"
         );
+
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    #[test]
+    fn display_name_prefers_the_override_and_falls_back_to_the_bundle() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let lib = scratch_library("display-name");
+        let bundle = create(&basic_opts("Fedora"), &lib).unwrap();
+
+        let mut cfg = bundle.load().unwrap();
+        assert_eq!(bundle.display_name(&cfg), "Fedora");
+
+        cfg.identity.name = Some("Workstation".into());
+        assert_eq!(bundle.display_name(&cfg), "Workstation");
+
+        cfg.identity.name = Some(String::new());
+        assert_eq!(bundle.display_name(&cfg), "Fedora");
 
         std::fs::remove_dir_all(&lib).ok();
     }

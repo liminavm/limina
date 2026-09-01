@@ -1019,7 +1019,8 @@ impl CenterController {
         });
     }
 
-    /// Configure…: vCPUs / memory / reclaim / pages / SSH port / display in a modal alert.
+    /// Configure…: display name / vCPUs / memory / reclaim / pages / SSH port / display in a
+    /// modal alert.
     /// Only reachable for stopped VMs (the row offers no Configure while running).
     /// Every row carries a “?” hover with its explanation instead of a wall of
     /// informative text; Display is a popup, with a resolution popup (the sizes
@@ -1045,7 +1046,21 @@ impl CenterController {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 302.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 332.0));
+        let name_field = labeled_field(
+            mtm,
+            &accessory,
+            302.0,
+            "Name:",
+            cfg.identity.name.as_deref().unwrap_or_default(),
+        );
+        name_field.setPlaceholderString(Some(&NSString::from_str(&row.bundle.dir_name())));
+        self.row_help(
+            &accessory,
+            302.0,
+            &name_field,
+            "Shown in the control center and the VM window. Leave empty to use the VM's name.",
+        );
         let cpus_field = labeled_field(
             mtm,
             &accessory,
@@ -1249,6 +1264,7 @@ impl CenterController {
 
         // Validate with the same parsers the CLI uses; reject without saving.
         let apply = || -> anyhow::Result<vmlib::schema::VmConfig> {
+            let name = name_field.stringValue().to_string().trim().to_string();
             let cpus: u8 = cpus_field.stringValue().to_string().trim().parse()?;
             anyhow::ensure!(cpus > 0, "vCPUs must be at least 1");
             let memory = vmlib::schema::Memory::parse(&mem_field.stringValue().to_string())?;
@@ -1265,6 +1281,7 @@ impl CenterController {
                     vmlib::schema::DisplayResolution::Fixed(w, h)
                 }
             };
+            cfg.identity.name = (!name.is_empty()).then_some(name);
             cfg.hardware.cpus = cpus;
             cfg.hardware.memory = memory;
             cfg.hardware.reclaim = reclaim_from_index(reclaim_popup.indexOfSelectedItem());

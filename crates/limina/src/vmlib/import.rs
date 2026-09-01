@@ -110,7 +110,7 @@ pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
         let cfg = VmConfig {
             config_version: CONFIG_VERSION,
             identity: Identity {
-                name: opts.name.clone(),
+                name: None,
                 uuid: uuid.clone(),
                 created: rfc3339_utc_now(),
             },
@@ -233,7 +233,12 @@ mod tests {
         assert!(bundle.disks_dir().is_dir());
         assert!(bundle.logs_dir().is_dir());
         let cfg = bundle.load().unwrap();
-        assert_eq!(cfg.identity.name, "plain");
+        assert_eq!(cfg.identity.name, None);
+        let text = std::fs::read_to_string(bundle.vm_toml()).unwrap();
+        assert!(
+            !text.lines().any(|line| line.starts_with("name =")),
+            "a new bundle must derive its display name instead of persisting an override: {text}"
+        );
         assert_eq!(cfg.networks.len(), 1, "net on by default");
         assert_eq!(cfg.networks[0].mac, mac_for_uuid(&cfg.identity.uuid));
         assert_eq!(cfg.networks[0].ssh_port, 0);
