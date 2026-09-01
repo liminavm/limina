@@ -40,10 +40,18 @@
 #define EGL_IOSURFACE_PLANE_LIMINA  0x3B9B
 #define EGL_IOSURFACE_FOURCC_LIMINA 0x3B9C
 
+/* Two conventions, deliberately not merged: a DRM fourcc packs its first
+ * character in the LOW byte, while an IOSurface pixel format is the plain
+ * multi-character constant ('BGRA'), which packs the first character HIGH.
+ * Building an IOSurface format with the DRM macro yields a code nothing
+ * recognises. */
 #define FOURCC(a, b, c, d) ((uint32_t)(a) | ((uint32_t)(b) << 8) | \
                             ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))
 #define DRM_FORMAT_R8   FOURCC('R', '8', ' ', ' ')
 #define DRM_FORMAT_GR88 FOURCC('G', 'R', '8', '8')
+
+#define IOSURFACE_FORMAT_NV12_FULL '420f'
+#define IOSURFACE_FORMAT_BGRA      'BGRA'
 
 #define W  64
 #define H  64
@@ -107,7 +115,7 @@ make_biplanar(void)
       NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
    dict_set_int(props, kIOSurfaceWidth, W);
    dict_set_int(props, kIOSurfaceHeight, H);
-   dict_set_int(props, kIOSurfacePixelFormat, (int32_t)FOURCC('4', '2', '0', 'f'));
+   dict_set_int(props, kIOSurfacePixelFormat, (int32_t)IOSURFACE_FORMAT_NV12_FULL);
    dict_set_int(props, kIOSurfaceAllocSize, total);
    CFDictionarySetValue(props, kIOSurfacePlaneInfo, arr);
 
@@ -127,7 +135,7 @@ make_bgra(int w, int h)
    dict_set_int(props, kIOSurfaceWidth, w);
    dict_set_int(props, kIOSurfaceHeight, h);
    dict_set_int(props, kIOSurfaceBytesPerElement, 4);
-   dict_set_int(props, kIOSurfacePixelFormat, (int32_t)FOURCC('B', 'G', 'R', 'A'));
+   dict_set_int(props, kIOSurfacePixelFormat, (int32_t)IOSURFACE_FORMAT_BGRA);
    IOSurfaceRef s = IOSurfaceCreate(props);
    CFRelease(props);
    return s;
