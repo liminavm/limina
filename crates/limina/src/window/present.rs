@@ -557,12 +557,12 @@ pub struct Shared {
     /// not ours to arrange; after it, each host panel can own a slot. Cleared on a reboot
     /// relaunch by [`mark_worker_running`], because the fresh worker starts in firmware again.
     pub(crate) guest_driver_ready: bool,
-    /// PCM lifecycle transitions the worker has reported and the main thread has not yet fed to
-    /// the media-session policy (`super::media_policy`). A queue rather than a latest-state flag
-    /// because the transitions themselves are the signal — a start and a stop inside one tick is
-    /// a track change, and collapsing it to "stopped" would retire a session that is still
-    /// playing.
-    pub(crate) audio_events: Vec<(u32, super::media_policy::PcmEvent)>,
+    /// What the worker has reported about the guest's audio streams and the main thread has not
+    /// yet fed to the media-session policy (`super::media_policy`) — PCM lifecycle transitions
+    /// and audibility edges alike. A queue rather than a latest-state flag because the
+    /// transitions themselves are the signal — a start and a stop inside one tick is a track
+    /// change, and collapsing it to "stopped" would retire a session that is still playing.
+    pub(crate) audio_events: Vec<(u32, super::media_policy::AudioEvent)>,
     /// A fresh worker was swapped in and nothing has been said to it yet: the device is back to
     /// how it boots, and everything the host believes it told the old one is a lie. Taken once
     /// by the window tick, which re-asserts the arrangement (`DisplayTable::reset_connectors_to_boot`)
@@ -706,11 +706,14 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                     }
                 }
                 Some("audio") => {
-                    // audio <stream> <prepare|start|stop|release> — the guest moved a virtio-snd
-                    // PCM stream. What it means for the VM's media session is main-thread policy;
-                    // the reader only queues it.
+                    // audio <stream> <prepare|start|stop|release|audible|silent> — the guest
+                    // moved a virtio-snd PCM stream, or what that stream carries changed. What
+                    // either means for the VM's media session is main-thread policy; the reader
+                    // only queues it.
                     let stream = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let event = parts.next().and_then(super::media_policy::PcmEvent::parse);
+                    let event = parts
+                        .next()
+                        .and_then(super::media_policy::AudioEvent::parse);
                     if let (Some(stream), Some(event)) = (stream, event) {
                         log::info!("window: <- {line}");
                         shared.lock().unwrap().audio_events.push((stream, event));

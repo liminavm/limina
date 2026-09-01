@@ -245,6 +245,8 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         if let Some(DisplaySink::Window { control_fd, .. }) = spec.display.as_ref().map(|d| &d.sink)
         {
             vmr.snd_state_cb = crate::audio_state::control_writer(*control_fd);
+            vmr.snd_audibility_cb = crate::audio_state::audibility_writer(*control_fd)
+                .map(|cb| (crate::audio_state::PAUSE_SILENCE, cb));
         }
     }
     // Emulated xHCI USB controller (opt-in, default off). A stock guest binds it via

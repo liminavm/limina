@@ -60,6 +60,41 @@ impl PcmEvent {
     }
 }
 
+/// What the guest's playback stream is *carrying*, as opposed to whether it is open.
+///
+/// A guest desktop that pauses a video keeps its PCM stream running and goes on submitting
+/// buffers of bit-exact digital silence for a few seconds before its audio server suspends the
+/// node — so the lifecycle events arrive seconds after the pause the user made. Audibility is
+/// the same fact, seconds earlier. Measured on a Fedora 44 guest 2026-09-01: ~3 s of zero-filled
+/// buffers, then no buffers, then `Stop` about 5 s after the click. Real content, by contrast,
+/// never went bit-exact silent for longer than 340 ms in 242 s of playback, and the quietest
+/// passages measured (peak 0.0026) still contained no zero-filled buffer at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Audibility {
+    Audible,
+    Silent,
+}
+
+/// Everything the worker reports about one of the guest's audio streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AudioEvent {
+    /// The guest moved the stream through its PCM lifecycle.
+    Lifecycle(PcmEvent),
+    /// What the stream is carrying changed.
+    Audibility(Audibility),
+}
+
+impl AudioEvent {
+    /// Parse the worker's wire word. Unknown words are ignored rather than guessed at.
+    pub(crate) fn parse(word: &str) -> Option<Self> {
+        match word {
+            "audible" => Some(AudioEvent::Audibility(Audibility::Audible)),
+            "silent" => Some(AudioEvent::Audibility(Audibility::Silent)),
+            other => PcmEvent::parse(other).map(AudioEvent::Lifecycle),
+        }
+    }
+}
+
 /// What the macOS side should do. Deliberately coarse: `Announce` is "wire the command handlers
 /// and publish the info dict as playing", `Retire` is "remove the targets, disable the commands
 /// and clear the dict". They are coarse because the measurements only ever moved the two halves
@@ -125,11 +160,12 @@ impl MediaPolicy {
 
     /// What we believe the guest's playback state is.
     ///
-    /// The guest never reports it — no component of ours runs in it — so this is a belief built
-    /// from the two things we do see: its audio stream starting and stopping, and the play/pause
-    /// toggles we have sent it ourselves. It can drift (a video paused by mouse click whose
-    /// audio stream keeps running is invisible to us), which is why [`Command::Toggle`] is
-    /// always delivered: the physical key remains the way out of a wrong belief.
+    /// The guest never reports it — no component of ours runs in it — so this is a belief, built
+    /// from three things we do see: whether its buffers carry sound or bit-exact silence
+    /// ([`Audibility`], the fast one), its stream starting and stopping, and the play/pause
+    /// toggles we have sent it ourselves. It can still drift — a video muted in the guest is
+    /// silent without being paused — which is why [`Command::Toggle`] is always delivered: the
+    /// physical key remains the way out of a wrong belief.
     pub(crate) fn playing(&self) -> bool {
         self.playing
     }
@@ -170,11 +206,11 @@ impl MediaPolicy {
         self.playing = !self.playing;
     }
 
-    /// A PCM transition from the guest.
+    /// Anything the guest's audio device reported.
     pub(crate) fn stream_event(
         &mut self,
         stream_id: u32,
-        event: PcmEvent,
+        event: AudioEvent,
         now: Instant,
     ) -> Option<Action> {
         // Mic capture says nothing about the VM being a player: a guest recording audio is not
@@ -182,9 +218,25 @@ impl MediaPolicy {
         if stream_id != PLAYBACK_STREAM {
             return None;
         }
-        // The stream is the only thing the guest tells us about its playback, so it corrects the
-        // belief wherever it speaks. `Prepare` deliberately does not: an opened stream is not a
-        // playing one, and PipeWire opens the sink long before anything comes out of it.
+        let event = match event {
+            AudioEvent::Lifecycle(event) => event,
+            // Audibility corrects the belief and nothing else. It must never move the session:
+            // holding it is about the guest owning the audio device, not about sound coming out
+            // of it this instant, and a retire-and-reannounce over a quiet moment would hand the
+            // keys to whatever else the Mac is playing.
+            AudioEvent::Audibility(Audibility::Audible) => {
+                self.playing = true;
+                return None;
+            }
+            AudioEvent::Audibility(Audibility::Silent) => {
+                self.playing = false;
+                return None;
+            }
+        };
+        // The lifecycle is the coarse witness, and the only one on a host with no audibility
+        // reporting, so it still corrects the belief wherever it speaks — audibility refines it
+        // within a buffer or two either way. `Prepare` deliberately says nothing: an opened
+        // stream is not a playing one, and PipeWire opens the sink long before sound comes out.
         match event {
             PcmEvent::Start => self.playing = true,
             PcmEvent::Stop | PcmEvent::Release => self.playing = false,
@@ -258,12 +310,18 @@ mod tests {
         let mut p = MediaPolicy::new();
         let now = t0();
         assert_eq!(
-            p.stream_event(0, PcmEvent::Start, now),
+            p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now),
             Some(Action::Announce)
         );
         // Re-announcing would re-claim the ranking from whoever the user is listening to now.
-        assert_eq!(p.stream_event(0, PcmEvent::Start, now), None);
-        assert_eq!(p.stream_event(0, PcmEvent::Prepare, now), None);
+        assert_eq!(
+            p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now),
+            None
+        );
+        assert_eq!(
+            p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Prepare), now),
+            None
+        );
     }
 
     #[test]
@@ -271,14 +329,20 @@ mod tests {
         let mut p = MediaPolicy::new();
         // PipeWire prepares the sink long before anything plays through it, and a guest that
         // merely holds the device open has nothing for a transport key to act on.
-        assert_eq!(p.stream_event(0, PcmEvent::Prepare, t0()), None);
+        assert_eq!(
+            p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Prepare), t0()),
+            None
+        );
         assert!(!p.announced());
     }
 
     #[test]
     fn mic_capture_is_not_playback() {
         let mut p = MediaPolicy::new();
-        assert_eq!(p.stream_event(1, PcmEvent::Start, t0()), None);
+        assert_eq!(
+            p.stream_event(1, AudioEvent::Lifecycle(PcmEvent::Start), t0()),
+            None
+        );
         assert!(!p.announced());
     }
 
@@ -287,8 +351,11 @@ mod tests {
         let hold = Duration::from_secs(5);
         let mut p = MediaPolicy::with_hold(hold);
         let now = t0();
-        p.stream_event(0, PcmEvent::Start, now);
-        assert_eq!(p.stream_event(0, PcmEvent::Stop, now), None);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        assert_eq!(
+            p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Stop), now),
+            None
+        );
         assert_eq!(
             p.tick(now + Duration::from_secs(4)),
             None,
@@ -304,12 +371,16 @@ mod tests {
     fn a_track_gap_keeps_the_session_without_reclaiming_it() {
         let mut p = MediaPolicy::with_hold(Duration::from_secs(5));
         let now = t0();
-        p.stream_event(0, PcmEvent::Start, now);
-        p.stream_event(0, PcmEvent::Stop, now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Stop), now);
         // The next track starts inside the hold: no Announce, because we never let go, and an
         // Announce here would jump the ranking on every track change.
         assert_eq!(
-            p.stream_event(0, PcmEvent::Start, now + Duration::from_secs(1)),
+            p.stream_event(
+                0,
+                AudioEvent::Lifecycle(PcmEvent::Start),
+                now + Duration::from_secs(1)
+            ),
             None
         );
         assert_eq!(
@@ -325,11 +396,15 @@ mod tests {
         let hold = Duration::from_secs(5);
         let mut p = MediaPolicy::with_hold(hold);
         let now = t0();
-        p.stream_event(0, PcmEvent::Start, now);
-        p.stream_event(0, PcmEvent::Stop, now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Stop), now);
         // PipeWire stops and then releases; that is one silence, not two.
         assert_eq!(
-            p.stream_event(0, PcmEvent::Release, now + Duration::from_secs(3)),
+            p.stream_event(
+                0,
+                AudioEvent::Lifecycle(PcmEvent::Release),
+                now + Duration::from_secs(3)
+            ),
             None
         );
         assert_eq!(p.tick(now + hold), Some(Action::Retire));
@@ -340,12 +415,12 @@ mod tests {
         let hold = Duration::from_secs(5);
         let mut p = MediaPolicy::with_hold(hold);
         let now = t0();
-        p.stream_event(0, PcmEvent::Start, now);
-        p.stream_event(0, PcmEvent::Stop, now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Stop), now);
         assert_eq!(p.tick(now + hold), Some(Action::Retire));
         let later = now + Duration::from_secs(3600);
         assert_eq!(
-            p.stream_event(0, PcmEvent::Start, later),
+            p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), later),
             Some(Action::Announce)
         );
     }
@@ -354,13 +429,13 @@ mod tests {
     fn a_lost_worker_retires_immediately_and_idempotently() {
         let now = t0();
         let mut p = MediaPolicy::new();
-        p.stream_event(0, PcmEvent::Start, now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
         assert_eq!(p.worker_gone(), Some(Action::Retire));
         assert_eq!(p.worker_gone(), None);
         // Including from the hold, where the guest is already gone but the clock is running.
         let mut p = MediaPolicy::new();
-        p.stream_event(0, PcmEvent::Start, now);
-        p.stream_event(0, PcmEvent::Stop, now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Stop), now);
         assert_eq!(p.worker_gone(), Some(Action::Retire));
     }
 
@@ -369,7 +444,7 @@ mod tests {
     #[test]
     fn a_pause_for_an_already_paused_guest_is_swallowed() {
         let mut p = MediaPolicy::new();
-        p.stream_event(0, PcmEvent::Start, t0());
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), t0());
         assert!(p.playing());
         // The user pauses from the widget: one toggle to the guest.
         assert_eq!(p.remote_command(Command::Pause), Some(KEY_PLAYPAUSE));
@@ -386,7 +461,7 @@ mod tests {
     #[test]
     fn the_physical_key_always_toggles() {
         let mut p = MediaPolicy::new();
-        p.stream_event(0, PcmEvent::Start, t0());
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), t0());
         // Unconditional in both directions: it is the only way to fix a belief that drifted
         // (a guest paused by mouse click whose audio stream stayed open).
         assert_eq!(p.remote_command(Command::Toggle), Some(KEY_PLAYPAUSE));
@@ -401,7 +476,7 @@ mod tests {
     #[test]
     fn track_keys_are_never_gated() {
         let mut p = MediaPolicy::new();
-        p.stream_event(0, PcmEvent::Start, t0());
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), t0());
         p.remote_command(Command::Pause);
         // Skipping a track is meaningful whatever we believe about play state, and it has no
         // state of its own to get wrong.
@@ -414,21 +489,33 @@ mod tests {
     fn the_stream_corrects_the_belief() {
         let mut p = MediaPolicy::with_hold(Duration::from_secs(5));
         let now = t0();
-        p.stream_event(0, PcmEvent::Start, now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
         // The guest was paused in its own UI and its stream went with it: we learn from that,
         // so the pause macOS sends next is swallowed instead of restarting playback.
-        p.stream_event(0, PcmEvent::Stop, now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Stop), now);
         assert!(!p.playing());
         assert_eq!(p.remote_command(Command::Pause), None);
         // The next track starts inside the hold: playing again, without a re-announce.
         assert_eq!(
-            p.stream_event(0, PcmEvent::Start, now + Duration::from_secs(1)),
+            p.stream_event(
+                0,
+                AudioEvent::Lifecycle(PcmEvent::Start),
+                now + Duration::from_secs(1)
+            ),
             None
         );
         assert!(p.playing());
         // A mere prepare is not playback, so it must not resurrect the belief.
-        p.stream_event(0, PcmEvent::Stop, now + Duration::from_secs(2));
-        p.stream_event(0, PcmEvent::Prepare, now + Duration::from_secs(2));
+        p.stream_event(
+            0,
+            AudioEvent::Lifecycle(PcmEvent::Stop),
+            now + Duration::from_secs(2),
+        );
+        p.stream_event(
+            0,
+            AudioEvent::Lifecycle(PcmEvent::Prepare),
+            now + Duration::from_secs(2),
+        );
         assert!(!p.playing());
     }
 
@@ -436,8 +523,8 @@ mod tests {
     fn mic_capture_does_not_move_the_belief() {
         let mut p = MediaPolicy::new();
         let now = t0();
-        p.stream_event(0, PcmEvent::Start, now);
-        p.stream_event(1, PcmEvent::Stop, now);
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        p.stream_event(1, AudioEvent::Lifecycle(PcmEvent::Stop), now);
         assert!(p.playing(), "the mic stream is not the playback stream");
     }
 
@@ -446,5 +533,88 @@ mod tests {
         assert_eq!(PcmEvent::parse("start"), Some(PcmEvent::Start));
         assert_eq!(PcmEvent::parse("release"), Some(PcmEvent::Release));
         assert_eq!(PcmEvent::parse("playing"), None);
+    }
+
+    #[test]
+    fn silence_pauses_the_belief_before_the_stream_stops() {
+        // The dogfood bug, 2026-09-01. The guest was playing, the user clicked pause, and took
+        // the headset off within the second. No lifecycle event had arrived yet — PipeWire keeps
+        // the node alive for ~5s — so we still believed the guest was playing, forwarded macOS's
+        // `Pause` as the only key the guest understands, and the toggle started the video.
+        // Audibility is the same news, ~500ms after the click instead of five seconds.
+        let now = t0();
+        let mut p = MediaPolicy::new();
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        p.stream_event(0, AudioEvent::Audibility(Audibility::Audible), now);
+        assert!(p.playing());
+
+        p.stream_event(0, AudioEvent::Audibility(Audibility::Silent), now);
+        assert!(!p.playing(), "silent buffers mean the guest paused");
+        assert_eq!(p.remote_command(Command::Pause), None);
+    }
+
+    #[test]
+    fn sound_coming_back_is_believed_at_once() {
+        let now = t0();
+        let mut p = MediaPolicy::new();
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        p.stream_event(0, AudioEvent::Audibility(Audibility::Silent), now);
+        assert!(!p.playing());
+        p.stream_event(0, AudioEvent::Audibility(Audibility::Audible), now);
+        assert!(p.playing());
+        // And now a pause is worth sending.
+        assert_eq!(p.remote_command(Command::Pause), Some(KEY_PLAYPAUSE));
+    }
+
+    #[test]
+    fn audibility_never_moves_the_session() {
+        // Holding the session is about the guest owning the device, not about whether sound is
+        // coming out of it right now. Retiring on a quiet moment would hand the keys away
+        // mid-album, and coming back is a re-claim.
+        let now = t0();
+        let mut p = MediaPolicy::new();
+        assert_eq!(
+            p.stream_event(0, AudioEvent::Audibility(Audibility::Audible), now),
+            None,
+            "audible alone must not announce"
+        );
+        assert!(!p.announced());
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        assert!(p.announced());
+        assert_eq!(
+            p.stream_event(0, AudioEvent::Audibility(Audibility::Silent), now),
+            None,
+            "silence must not retire"
+        );
+        assert!(p.announced());
+    }
+
+    #[test]
+    fn the_mic_stream_audibility_is_ignored() {
+        let now = t0();
+        let mut p = MediaPolicy::new();
+        p.stream_event(0, AudioEvent::Lifecycle(PcmEvent::Start), now);
+        p.stream_event(1, AudioEvent::Audibility(Audibility::Silent), now);
+        assert!(
+            p.playing(),
+            "the mic going quiet says nothing about playback"
+        );
+    }
+
+    #[test]
+    fn the_wire_words_parse() {
+        assert_eq!(
+            AudioEvent::parse("silent"),
+            Some(AudioEvent::Audibility(Audibility::Silent))
+        );
+        assert_eq!(
+            AudioEvent::parse("audible"),
+            Some(AudioEvent::Audibility(Audibility::Audible))
+        );
+        assert_eq!(
+            AudioEvent::parse("start"),
+            Some(AudioEvent::Lifecycle(PcmEvent::Start))
+        );
+        assert_eq!(AudioEvent::parse("playing"), None);
     }
 }

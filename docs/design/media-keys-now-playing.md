@@ -89,29 +89,49 @@ the guest. None of those ever enter the keyboard event stream, so no aux-key buc
 reach them however permissive it is made. They are only available to a registered media session,
 and they are the part of this that is genuinely new rather than better-arbitrated.
 
-## 3. The signal: the guest's PCM stream lifetime
+## 3. Two signals: the stream's lifetime, and what it carries
 
-"Is the VM a player right now" is answered by the virtio-snd PCM lifecycle for playback stream 0,
-which libkrun already handles explicitly — `VIRTIO_SND_R_PCM_START` / `STOP` / `RELEASE` at
-`third_party/libkrun/src/devices/src/virtio/snd/device.rs:306-320`. No sampling, no RMS
-thresholding, no heuristics: a discrete event to hang a callback on.
+**Whether the VM is a player** is answered by the virtio-snd PCM lifecycle for playback stream 0,
+which libkrun handles explicitly — `VIRTIO_SND_R_PCM_START` / `STOP` / `RELEASE` in
+`third_party/libkrun/src/devices/src/virtio/snd/device.rs`. A discrete event to hang a callback
+on. Be honest about what it means: **the guest's audio device is active**, not *music is playing*.
+PipeWire keeps a sink node open across a pause and only suspends it after an idle timeout, and a
+system beep opens it for a moment. So `STOP`/`RELEASE` mean *stop being a player* rather than
+"paused" — once the guest has let go of the device we genuinely have nothing to control. The
+retire side wants **hysteresis** (a few seconds' hold-off) so a track gap or an idle suspend does
+not hand the session away and make the user's next press miss the guest.
 
-Be honest about what that event means: **the guest's audio device is active**, not *music is
-playing*. PipeWire keeps a sink node open across a pause and only suspends it after an idle
-timeout, and a system beep opens it for a moment. So the state limina publishes is "the VM has
-audio open", mapped to `playbackState = .playing`, and `STOP`/`RELEASE` mean *stop being a
-player* rather than "paused" — once the guest has let go of the audio device we genuinely have
-nothing to control.
+**Whether the guest is playing right now** cannot come from that, and the gap is not academic —
+it is the whole of §6's conditional mapping. Measured on a Fedora 44 guest, 2026-09-01, pausing a
+YouTube video with the mouse:
 
-The retire side wants **hysteresis** (a few seconds' hold-off) so a track gap or a PipeWire idle
-suspend does not hand the session away and make the user's next press miss the guest.
+| after the click | what the host sees |
+|---|---|
+| 0 – 3 s | buffers still arriving at 96/s, every sample bit-exact zero |
+| ~3 s | buffers stop arriving at all |
+| ~5 s | `STOP` — the first thing the lifecycle says |
+
+Five seconds is far too late: a headset comes off within one, macOS routes a `pause`, and a belief
+still reading "playing" turns it into a toggle that *starts* the paused video. The first phase is
+the fix. **Silence is the fast signal, and it is exact, not a threshold**: in 242 s of real
+playback not one buffer was bit-exact zero except at a track change (8 buffers, 340 ms) and the
+sink's initial prefill — while the quietest audible passages measured (peak 0.0026 of full scale)
+still contained no zero-filled buffer at all. Encoded content carries dither; a pause carries
+nothing. So the detector is "N consecutive zero frames", not an RMS threshold, and **500 ms** is
+the chosen N — 1.5× the worst run content produced, a tenth of the lifecycle's latency.
+
+It is a *latency bridge, not a new ground truth*: silence flips the belief early, the lifecycle
+event confirms it moments later, and any single non-zero frame flips it back at once. Being wrong
+costs one swallowed `pause`.
 
 ## 4. The seam
 
 Mechanism in the fork, policy in limina, as everywhere else:
 
-- **libkrun** gains a stream-state callback on the snd device — the smallest possible upstreamable
-  addition, no policy.
+- **libkrun** gains two callbacks on the snd device — a stream-state one, and an audibility one
+  that reports the edges between sound and silence. Both are mechanism: the device counts zero
+  frames and reports the crossing, but *how long a silence is a pause* is the embedder's
+  threshold, passed in. The smallest upstreamable addition, no policy.
 - **The worker** forwards it to the supervisor as a line on the existing worker→supervisor control
   socketpair, alongside `surface` / `frame` / `scanoutgone` (parsed in
   `crates/limina/src/window/present.rs:645`, `spawn_reader`). One new verb, no new channel.
@@ -171,14 +191,17 @@ answering `Success`, since the command did reach the right player and a failure 
 invite macOS to route it elsewhere.
 
 **The belief, and its limits.** No component of ours runs in the guest, so playback state is
-inferred from the two things we can see: the audio stream starting and stopping, and the toggles
-we have sent ourselves. Both delivery paths feed it — the routed commands here, and the hard
-grab, which hands the media bucket straight to the guest without passing through the handlers
-(§7). It can still drift: a video paused by mouse click whose PipeWire stream keeps running is
-invisible to us. That is why `togglePlayPause` is the one unconditional arm — the physical key
-means "the other one" whatever we believe, so it is always both useful and the way back to a
-correct belief. Closing the gap properly wants a guest agent reporting playback state, which is
-the same lever §10 wants for MPRIS.
+inferred from three things we can see: whether the stream's buffers carry sound or bit-exact
+silence (§3, the fast one), the stream starting and stopping, and the toggles we have sent
+ourselves. Both delivery paths feed the last — the routed commands here, and the hard grab, which
+hands the media bucket straight to the guest without passing through the handlers (§7). It can
+still drift, because audibility answers "is sound coming out of the guest", not "is *that* player
+playing": a video muted in the guest reads as paused, and a paused video reads as playing while
+some other app makes noise, since PipeWire mixes everything into one stream before we see it.
+That is why `togglePlayPause` is the one unconditional arm — the physical key means "the other
+one" whatever we believe, so it is always both useful and the way back to a correct belief.
+Closing the gap properly wants a guest agent reporting per-player state, which is the same lever
+§10 wants for MPRIS.
 
 Every other command (`changePlaybackPosition`, seek, skip, shuffle, repeat, like, rating, …) is
 explicitly `isEnabled = false`. That is the documented way to say "this player cannot do that";
