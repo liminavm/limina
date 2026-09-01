@@ -193,12 +193,22 @@ so for any other subsampling.
 
 Nothing works until the whole chain lands, which is precisely why it is not phase 1.
 
-The guest half is smaller than the host half. `vl_video_buffer` already models one allocation
-with chained per-plane resources and sets `contiguous_planes`; gallium's VA frontend already
-exports that as one object with two layers (`va/surface.c:1453`), gated on
-`screen->resource_get_param`, which virgl installs. That path is inert today only because
-virgl's implementation answers `PIPE_RESOURCE_PARAM_MODIFIER` and returns false for
-`STRIDE` and `OFFSET` (`virgl_resource.c:942`).
+The guest half is smaller than the host half, and needs no new protocol concept. The one-object
+shape is `vl_video_buffer_create_as_resource` (`vl_video_buffer.c:517`): it calls
+`resource_create` once with the planar format, takes planes 1 and 2 from the chained
+`resources[0]->next`, and sets `contiguous_planes`. Gallium's VA frontend already exports that
+as one object with two layers (`va/surface.c:1453`), gated on `screen->resource_get_param`,
+which virgl installs. So the guest work is to route `virgl_video_create_buffer`
+(`virgl_video.c:1243`) through that constructor instead of `vl_video_buffer_create`, give
+virgl's `resource_create` the plane chaining a planar format implies, and answer
+`PIPE_RESOURCE_PARAM_STRIDE` and `_OFFSET` in `virgl_resource_get_param`, which today handles
+only `MODIFIER` (`virgl_resource.c:942`).
+
+That also settles how the host tells a decode target apart from anything else, without a new
+flag on the wire: it is a single `PIPE_RESOURCE_CREATE` carrying a planar format, arriving
+through the ordinary `vrend_renderer_pipe_resource_create` blob path. `vrend_resource_iosurface_init`
+already discriminates on format there — it returns early for anything that is not BGRA/RGBA —
+so a planar format is simply a case it does not handle yet.
 
 Phase 1 is the correctness win and it stands alone. Do not gate the Firefox recovery on either
 the plane work or the importer work.
