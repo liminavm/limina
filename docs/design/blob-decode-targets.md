@@ -38,26 +38,33 @@ virglrenderer 0023 + the guest-kernel patch); venus's host-visible feedback buff
 by the GPU via `vn_CmdCopyBuffer`/`vn_CmdFillBuffer` and polled by the guest CPU — have been
 enabled in every shipped enhanced guest since 2026-07-25.
 
-**The `fd_type` caveat does not apply here.** vrend cannot import a dmabuf on macOS and instead
-re-reads guest iovecs before each sampling batch (`docs/graphics.md` §3.2) — but that is the
-path for a `BLOB_MEM_GUEST` resource, whose pixels genuinely live in guest RAM. A decode target
-is host-allocated; the host already holds the memory and never reads guest pages for it.
-
 ## Shape
 
-One IOSurface per decode target, allocated host-side and mapped into the guest for the
-target's lifetime:
+One blob per decode target, replacing today's ordinary per-plane resources. **What backs that
+blob is a phase choice, and the protocol is the same either way** — which is what lets the
+cheap version ship first and the zero-copy version replace the storage underneath it.
 
 ```
 VideoToolbox  ->  its own CVPixelBuffer pool
                         |
-                        |  one host copy into the target's IOSurface  (see below)
+                        |  one host copy into the target's storage  (see below)
                         v
-        IOSurface  ==  the decode target's storage
+              the decode target's storage
              |                    |                         |
-     map_ptr -> guest BO    GPU binds it            iosurface_id
-     (mmap, dmabuf export)  (sampling, zero copy)   (scanout, zero copy)
+        guest BO            GPU samples it              scanout
+   (mmap, dmabuf export)                            (phase 2 only)
 ```
+
+**Phase 1 backs it with guest memory** (`BLOB_MEM_GUEST`). The host writes each decoded frame
+into the blob's pages through the iovecs it already holds, and host-side sampling reuses the
+path vrend already has for exactly this: re-read the guest's bytes into a GL texture before
+every batch that samples it (`vrend_renderer.c:15211`, `vrend_resource::guest_pixels`). That
+path exists *because* of video — it is how a software-decoded frame reaches the GPU at all
+today — so phase 1 adds no new sampling machinery, only a correctly-sized and honestly-described
+allocation.
+
+**Phase 2 backs it with an IOSurface instead**, which is what buys the zero copies: the GPU
+binds the surface as texture storage, and scanout takes it by `iosurface_id`.
 
 The guest side is `virgl_video_create_buffer` (`virgl_video.c:1242`), which today defers to
 `vl_video_buffer_create` and so gets ordinary per-plane resources. It allocates from a blob
@@ -99,7 +106,9 @@ Only bandwidth matters, so the guest picks whatever layout suits it.
 
 **The guest computes the layout; the host allocates to match, or refuses.** The guest must
 report offsets, pitches and sizes in the export descriptor and cannot report what it did not
-choose. Measured: IOSurface allocates *exactly* the requested per-plane `bytesPerRow` with no
+choose. In phase 1 that is trivially satisfied — the storage *is* guest memory, so there is no
+second allocator to disagree with. The rest of this section is the phase 2 contract, and it
+holds: IOSurface allocates *exactly* the requested per-plane `bytesPerRow` with no
 rounding in any case tested, odd widths and heights included, and the
 `IOSurfaceGetPropertyAlignment` values are advisory once explicit `kIOSurfacePlaneInfo` is
 supplied (128-byte rows reported, an 854-byte pitch accepted). The refusal path stays anyway, so
@@ -149,19 +158,31 @@ everything else.
 
 ## Phases
 
-**Phase 1 — correct, guest-visible frames.** Allocation, mapping, layout contract, capset bit,
-and the frame landing in the target's storage. At the end of it the export is honest,
-GStreamer's mmap path reads correct pixels instead of crashing, and **Firefox has its hardware
-decoder back** — it needs only that the export succeed and the EGL import resolve, both of
-which it had before the refusal existed.
+**Phase 1 — correct, guest-visible frames, on guest-memory storage.** Allocation, layout
+contract, capset bit, and the frame landing in the target's blob. Confined to virglrenderer and
+guest mesa. At the end of it the export is honest, GStreamer's mmap path reads correct pixels
+instead of crashing, and **Firefox has its hardware decoder back** — it needs only that the
+export succeed and the EGL import resolve, both of which it had before the refusal existed. The
+per-frame cost is what it is today: one host copy in, one re-read out.
 
-**Phase 2 — the remaining copies.** Bind the IOSurface as the GL texture's storage so host-side
-sampling needs no upload, and fix glupload's direct importers, which refuse everything today
-with `cannot produce texture-target 2D` and fall back to the copy uploader however well-formed
-the buffer is.
+**Phase 2 — the remaining copies.** Move the storage to an IOSurface bound as the GL texture's
+storage, so sampling needs no re-read and scanout can take the surface by id. Then fix
+glupload's direct importers, which refuse everything today with `cannot produce texture-target
+2D` and fall back to the copy uploader however well-formed the buffer is.
 
-Phase 1 is the correctness win and it stands alone. Do not gate the Firefox recovery on the
-importer work.
+**Phase 2 costs four layers, and the reason is worth knowing before starting it.** vrend already
+adopts an IOSurface as GL texture storage — the shipping path that composites a venus client's
+window buffer (`vrend_renderer.c:15159`). But that import is whole-surface and 8888-only: every
+layer drops the plane index, right down to Metal, whose `newTextureWithDescriptor:iosurface:plane:`
+takes one and is passed a hardcoded `0`. An NV12 target needs a plane index and R8/RG88 formats
+threaded through `virgl_egl_image_from_iosurface` (`vrend_winsys_egl.c:852`), the attribute-less
+`EGL_IOSURFACE_LIMINA` target (`egl_dri2.c:2660`), `dri2_from_iosurface_limina` (`dri2.c:940`),
+zink's `resource_from_handle`, and KK's `mtl_new_texture_with_descriptor_iosurface`
+(`mtl_device.m:399`) — the last three on the host mesa `limina-kk` branch. Nothing works until
+the whole chain lands, which is precisely why it is not phase 1.
+
+Phase 1 is the correctness win and it stands alone. Do not gate the Firefox recovery on either
+the plane work or the importer work.
 
 ## Spikes
 
