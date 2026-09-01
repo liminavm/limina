@@ -2428,8 +2428,16 @@ malloc(): unaligned tcache chunk detected
 so it finds our device and corrupts the heap while probing it, registering nothing. The
 registry then holds no VA elements and every GStreamer pipeline silently picks `avdec`.
 
-The VA driver itself is healthy — Firefox drives the same `renderD128` through libva and
-gets hardware VP9 — so the fault is in gst-va's probe or in what our driver answers it,
-not in decode. Which of the two is the open question; `gst-va` already has form here (it
-ignores the descriptor size field, `spikes/vt-vp9-decode/`). Measured 2026-09-01 on
-mesa `26.1.8-7.limina`. There is no `vainfo` on this image to cross-check with.
+The corruption was ours: `virgl_resource_destroy` released the planar chain the core
+already releases, so probing a planar format double-freed. Fixed in mesa
+`26.1.8-8.limina`, where the plugin loads clean and registers its seven elements.
+
+What that uncovered is a longer fault chain, and hardware decode through gst-va still
+produces nothing: a `create_sampler_view` on a resource the context was never given
+latches `in_error`, every later submission from that context is refused as a silent
+`EINVAL`, and with that latch bypassed VideoToolbox rejects the submissions that do run
+(`-12909`, `kVTVideoDecoderBadDataErr`, ten frames of ten). Firefox decodes the same clip
+on the same boot. So an app on this path gets an empty picture rather than a fallback,
+which is worse than the abort was — `avdec` at least drew. Full measurements and the
+next question in `docs/design/blob-decode-targets.md` §What this does not fix. Measured
+2026-09-01 on mesa `26.1.8-8.limina`.
