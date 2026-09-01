@@ -184,6 +184,13 @@ the whole chain lands, which is precisely why it is not phase 1.
 Phase 1 is the correctness win and it stands alone. Do not gate the Firefox recovery on either
 the plane work or the importer work.
 
+**Phase 1 costs guest RAM, by design.** Decode targets stop being one-page stubs and become
+their real size, and a decoder holds a whole DPB of them — a 16-deep 4K NV12 DPB is ~190 MB
+that used to be 16 pages. That is the price of an fd that names the picture it claims to, but
+it is large enough to look like a leak to someone bisecting guest footprint later, so it is
+written down here. Encode source buffers ride the same flag and grow the same way; harmless,
+and equally not a leak.
+
 ## Spikes
 
 1. ✅ **Can VideoToolbox decode into surfaces we supply?** No — but it honours a layout we
