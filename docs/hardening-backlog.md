@@ -358,8 +358,9 @@ through. Worth fixing as a class rather than one at a time. The shape of the fix
 every time: poll for the condition you actually mean, bounded by the deadline, instead of
 sampling once after a proxy for it.
 
-- **`l2_qemu_guest_agent::a_stock_guest_agent_corrects_a_skewed_clock` reads the supervisor
-  log for `qga: guest is ` immediately after waiting for the agent to answer.** But
+- **FIXED (`e6df676`) — kept as the clearest worked example of the class.**
+  `l2_qemu_guest_agent::a_stock_guest_agent_corrects_a_skewed_clock` read the supervisor
+  log for `qga: guest is ` immediately after waiting for the agent to answer. But
   `log_inventory` (`qga/client.rs:592`) is called *after* the "answered" line and makes three
   further guest round-trips — `guest-get-osinfo`, `guest-network-get-interfaces`,
   `guest-get-users` — before writing the line the test asserts on. Normally those are quick.
@@ -382,6 +383,31 @@ sampling once after a proxy for it.
   parallelism rather than a GPU fault; it prints no assertion, which is its own problem —
   a test that fails silently forces a re-run to learn anything. Worth giving it a verdict
   line before chasing the timing.
+- **`l2_synoik_restore_landmarks::synoik_desktop_survives_snapshot_restore` fails about half
+  the time, with a deterministic signature when it does.** 36/1000 landmarks moved against a 1%
+  budget; both observed failures produced byte-identical numbers — 36/1000, rows {0:17, 1:19},
+  colours 233 → 235. Noise does not reproduce exact cell counts, so the trigger is intermittent
+  while the effect is not. Everything else in the test's own report is clean: no content-loss
+  lines, no ring stalls, no allocations skipped at snapshot, process census identical either side.
+
+  Pixel forensics place it precisely. The pre/post diff is confined to rows 0–52, full width,
+  max channel delta 54; testing for vertical displacement gives dy=0 as the minimum, so the
+  content is in place and *rendered differently* rather than shifted. Amplified 6x the diff is a
+  smooth low-frequency glow across the top panel — the panel's translucent **blurred background**
+  restoring subtly different, with the clock and status icons appearing in the diff only because
+  their antialiasing blends against a changed backdrop (the clock reads the same time in both
+  frames). A restore-fidelity difference in whatever the blur samples, amplified across the band
+  by the blur itself. That is why it can trip a landmark test while being invisible to the eye:
+  the crops are indistinguishable by direct comparison. Frames:
+  `spikes/synoik-restore/panelblur-{pre,post,band}.png`.
+
+  **The tempting inference to avoid:** it was first seen failing on the run immediately after a
+  KK plane-index commit, having passed on the run before, which made that commit look like the
+  only variable. Re-running the test alone on the same build gives pass, pass, FAIL — so a single
+  pass on the earlier build proves nothing, and the two-run comparison cannot carry that weight.
+  Settling whether that commit is involved needs KK at `e2e8b7be406` vs `ca95eccbf3a` with N runs
+  per arm, not one run per arm. Book the flake regardless of cause: at ~50% it will keep
+  reddening suites and making "did my change break anything?" unanswerable.
 - **CapsLock/NumLock LED parity** — surface the statusq LED feedback (libkrun `worker.rs` no-op).
   Roadmap M8.
 
