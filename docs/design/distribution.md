@@ -1,6 +1,8 @@
-# Design — distribution, signing & updates  ·  PROPOSED
+# Design — distribution, signing & updates  ·  IN PROGRESS
 
-> **Status: PROPOSED (2026-07-01), nothing built beyond the ad-hoc-signed dev bundle.**
+> **Status: IN PROGRESS (2026-09-01).** The self-contained app/DMG builder and the rolling,
+> notarized development-release workflow exist. A stable release, clean-Mac acceptance run,
+> Homebrew cask, and updater have not shipped.
 > Fills the largest planned-nowhere area (GAPS §3.4, roadmap M11 "not yet scoped"): how a
 > user who is not us gets `limina.app`, trusts it, keeps it updated, and gets the enhanced
 > guest tools into their VMs. Decisions here are *directions*; each ships with its own
@@ -8,9 +10,10 @@
 
 ## 1. What exists today
 
-- `scripts/build-app.sh` assembles a self-contained `limina.app` (~245 MB): supervisor +
+- `scripts/build-app.sh` assembles a self-contained `Limina.app` plus `Limina.dmg`: supervisor +
   worker + the whole host venus/GL closure vendored into `Contents/Frameworks` at `@rpath`,
-  bundle-relative KK ICD, **ad-hoc signed**, quarantine stripped by hand on the dogfood Mac.
+  bundle-relative KK ICD, firmware, and `gvproxy`. Local builds use Apple Development (or an
+  explicit ad-hoc opt-in); published builds require Developer ID Application.
 - The worker carries `com.apple.security.hypervisor`; tests codesign it per-build.
 - Guest tools are an out-of-band tarball (`limina-guest-tools-<ver>.tar.zst`) built by
   `scripts/provision/f44/build-all.sh` and installed by `install-enhanced.sh` run manually
@@ -48,10 +51,42 @@ also what the in-app updater consumes.
     DYLD_ variables for hardened binaries — the bundle already avoids needing them
     (rpath + bundle-relative ICD, `venus_env.rs`), but this is the #1 thing to re-verify
     signed, since the dev bundle was only ever ad-hoc.
-- **Notarize** (`notarytool submit --wait`) and **staple** both the app and the DMG.
+- **Notarize** the outer distribution container (`notarytool submit --wait`), staple the DMG,
+  and assess it with Gatekeeper. Nested code is signed and verified inside-out before submission.
 - **CI:** a signing job on a self-hosted Apple-Silicon runner (the same one the L2 boot
-  tests need — one machine, two reasons to exist). Secrets: Developer ID cert + notary
-  API key. Ad-hoc signing stays the no-secrets dev/PR default.
+  tests need — one machine, two reasons to exist). The certificate and a `notarytool`
+  keychain profile live in that runner's login keychain; no signing material enters PR jobs.
+  Explicit ad-hoc signing stays available as a no-secrets local fallback.
+
+### Development channel
+
+`.github/workflows/development-release.yml` is manually dispatched and replaces the rolling
+`development` GitHub prerelease only after all of these succeed:
+
+1. fork checkouts match `third_party/manifest.toml` and have no tracked source changes;
+2. the KK/zink, epoxy, virglrenderer, and firmware outputs are refreshed;
+3. the full HVF boot suite passes;
+4. the release-profile app is signed with Developer ID, packaged, notarized, stapled, and
+   accepted by Gatekeeper.
+
+The release is rolling, but its DMG filename, plist metadata, checksum, commit link, and uploaded
+`release-inputs.txt` identify the exact build. A development release is an optimized Cargo release
+build, not a debug build.
+
+The workflow only accepts dispatches from `main`. The `development-release` GitHub environment
+should also restrict deployments to `main`, so a branch cannot use the persistent runner's signing
+identity. The dedicated runner needs the custom `limina-release` label and the native build
+environment from `docs/dev-onboarding.md`. Install the Developer ID Application certificate in the
+runner's unlocked login keychain, then create the default notary profile once:
+
+```sh
+xcrun notarytool store-credentials limina-notary \
+  --key /path/to/AuthKey_KEYID.p8 --key-id KEYID --issuer ISSUER_UUID
+```
+
+If the runner has multiple identities or uses another profile name, set the
+`LIMINA_SIGN_IDENTITY` (certificate SHA-1) and `LIMINA_NOTARY_KEYCHAIN_PROFILE` variables in the
+`development-release` GitHub environment.
 
 ## 4. Updates
 
@@ -92,13 +127,14 @@ network telemetry.
 
 ## 7. Build order (each step independently shippable)
 
-1. **Developer-ID sign + notarize the existing bundle** and boot a VM on a clean second
-   Mac with quarantine intact — flushes out every hardened-runtime/dyld assumption while
-   the surface is smallest. (Do this before more Frameworks content accretes.)
-2. DMG packaging + stapling; publish on a GitHub Release; Homebrew cask.
+1. **Validate the Developer-ID-signed/notarized development DMG on a clean second Mac with
+   quarantine intact** — flushes out every hardened-runtime/dyld assumption before calling the
+   channel stable.
+2. Promote the proven pipeline to versioned stable releases; add the Homebrew cask.
 3. Guest-tools manifest + `limina install-guest-tools` (closes two backlog items).
 4. Sparkle appcast wiring.
-5. CI signing job on the self-hosted runner (with the L2 lane).
+5. Add scheduled cadence after the dedicated runner has proven reliable; manual dispatch avoids
+   publishing stale host-native inputs during bring-up.
 
 ## 8. Open questions
 
