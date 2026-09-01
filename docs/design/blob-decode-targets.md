@@ -370,9 +370,16 @@ to be explained by this, and should not be left to discover the restore path for
   commands execute and the decode reaches VideoToolbox — `create_codec`, a session reporting
   `hardware accelerated: yes`, ten `decode_bitstream`/`end_frame` pairs — and VT then refuses
   the data itself: `status -12909` (`kVTVideoDecoderBadDataErr`) on all ten frames, `decode
-  produced no picture`, luma still one distinct value. Firefox decodes the same file on the
-  same boot, so the stream is fine and the difference is in what gst-va's VP9 submission
-  carries.
+  produced no picture`, luma still one distinct value.
+
+  The submission is not what differs. Traced where the host hands VideoToolbox the frame,
+  the browser and the GStreamer pipeline carry byte-identical bitstreams — equal FNV hashes
+  per frame, in the same order — with the same session parameters (`1920x1080 prof 0 depth 8
+  sub 1 target fmt 166 cv '420v'`, `hardware accelerated: yes`) against the same kind of
+  composite planar target. VideoToolbox accepts 300 of 300 from the browser and refuses 10 of
+  10 from the pipeline. So the difference lives in the codec object's state rather than its
+  input — the format description we build, or the session, per codec instance — and that is
+  where the next probe goes.
 
   So an empty hardware-decoded picture here is at least three faults deep, and only the last
   one is about pixels: the latch drops every submission, VT rejects the submissions that do get
