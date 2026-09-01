@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Sun, 30 Aug 2026 22:19:24 -0300
-Subject: [PATCH 11/13] virgl: do not offer three-plane 4:2:0 as a decode
+Subject: [PATCH 11/15] virgl: do not offer three-plane 4:2:0 as a decode
  target
 
 virgl_is_video_format_supported deferred wholesale to the generic helper, which answers a
