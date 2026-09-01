@@ -193,7 +193,30 @@ so for any other subsampling.
 
 Nothing works until the whole chain lands, which is precisely why it is not phase 1.
 
-The guest half is smaller than the host half, and needs no new protocol concept. The one-object
+**Sampling the second plane needs no guest change at all — both ends of that path already
+exist.** The host keeps a separate EGLImage per plane in `aux_plane_egl_image`
+(`vrend_renderer.h:106`), filled today only from a GBM bo (`vrend_renderer.c:9798`) and so
+always NULL on macOS. The guest already names the plane: `metadata.plane`
+(`virgl_resource.c:636`, set from the winsys handle on import at `:875`) is written as the
+sampler view's whole layer dword (`virgl_encode.c:1180`), arriving as `first_layer = N,
+last_layer = 0`. So a guest that imports a decode target's planes as separate component-format
+resources — which is what the dmabuf importers do — is already asking for plane N by index, and
+the host is already looking for an image to answer with. Phase 2's host work is to put one
+there: a plane-carrying import into `aux_plane_egl_image[1]`.
+
+That is also the mechanism behind the near-blank chroma. With no aux image the index is cleared
+to zero, so the chroma view samples the luma plane.
+
+**Filling it re-arms a context poison, so the branch order must change with it.** A surviving
+index sets `needs_view`, and the `glTextureView` branch (`vrend_renderer.c:2874`) then computes
+`num_layers = 0` and returns EINVAL — which puts the whole context in error for its lifetime.
+The aux bind (`:2977`) is an `else if` below it, reached in the GBM world only because that
+path strips `VREND_STORAGE_GL_IMMUTABLE` when `EXT_EGL_image_storage` is absent; on zink-on-KK
+it is present, so the bit survives and the view branch wins. The aux image must therefore be
+consulted *before* the texture-view branch, not only after it.
+
+The guest half of the *allocation* is smaller than the host half, and needs no new protocol
+concept. The one-object
 shape is `vl_video_buffer_create_as_resource` (`vl_video_buffer.c:517`): it calls
 `resource_create` once with the planar format, takes planes 1 and 2 from the chained
 `resources[0]->next`, and sets `contiguous_planes`. Gallium's VA frontend already exports that
