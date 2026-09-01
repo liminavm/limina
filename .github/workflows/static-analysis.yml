@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Marcelo Jorge Vieira
+
+name: Static analysis
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Actionlint and ShellCheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Install linters
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes shellcheck
+
+      - name: Lint GitHub Actions workflows
+        run: actionlint -color
+
+      - name: Check active shell scripts for errors
+        run: |
+          find .githooks scripts \
+            -type f \
+            -name '*.sh' \
+            ! -path 'scripts/archive/*' \
+            -print0 \
+            | xargs -0 shellcheck --severity=error -x
