@@ -1,0 +1,137 @@
+name: Development release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: development-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, notarize, and publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, macOS, ARM64, limina-release]
+    environment: development-release
+    timeout-minutes: 180
+
+    steps:
+      # The dedicated runner keeps the large, gitignored native build trees between runs.
+      # clean:false preserves those inputs; verify-release-inputs.sh rejects tracked drift.
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          clean: false
+
+      - name: Compute build metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$({
+            awk '
+              $0 == "[workspace.package]" { in_package = 1; next }
+              in_package && /^\[/ { exit }
+              in_package && $1 == "version" {
+                gsub(/"/, "", $3)
+                print $3
+                exit
+              }
+            ' Cargo.toml
+          })"
+          year="$(date -u +%Y)"
+          month="$(date -u +%m)"
+          day="$(date -u +%d)"
+          build_number="${year}.$((10#$month)).$((10#$day))"
+          stamp="$(date -u +%Y%m%d-%H%M%S)"
+          commit="$(git rev-parse HEAD)"
+          short_commit="$(git rev-parse --short=12 HEAD)"
+          asset="Limina-${version}-dev.${stamp}-${short_commit}-arm64.dmg"
+          {
+            echo "version=$version"
+            echo "build_number=$build_number"
+            echo "stamp=$stamp"
+            echo "commit=$commit"
+            echo "short_commit=$short_commit"
+            echo "asset=$asset"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Refresh pinned source trees
+        run: cargo xtask vendor
+
+      - name: Verify release inputs
+        run: |
+          set -euo pipefail
+          scripts/verify-release-inputs.sh | tee "$RUNNER_TEMP/limina-development-inputs.txt"
+
+      - name: Refresh native build outputs
+        run: |
+          set -euo pipefail
+          ninja -C /Volumes/mesa-cs/build-kk
+          spikes/virgl-zink-kk/build-mesa-zink-kk.sh
+          spikes/virgl-zink-kk/build-epoxy-egl.sh
+          scripts/build-virglrenderer.sh
+          scripts/build-krun-efi.sh
+
+      - name: Run the full HVF boot suite
+        run: scripts/run-suite.sh "$RUNNER_TEMP/limina-development-suite.log"
+
+      - name: Build signed app and DMG
+        env:
+          LIMINA_BUILD_CHANNEL: development
+          LIMINA_BUILD_COMMIT: ${{ steps.metadata.outputs.commit }}
+          LIMINA_BUILD_NUMBER: ${{ steps.metadata.outputs.build_number }}
+          LIMINA_REQUIRE_CLEAN: "1"
+          LIMINA_REQUIRE_DEVELOPER_ID: "1"
+          LIMINA_SIGN_IDENTITY: ${{ vars.LIMINA_SIGN_IDENTITY }}
+          LIMINA_VERSION: ${{ steps.metadata.outputs.version }}
+        run: cargo xtask app
+
+      - name: Notarize and assess DMG
+        env:
+          LIMINA_NOTARY_KEYCHAIN_PROFILE: ${{ vars.LIMINA_NOTARY_KEYCHAIN_PROFILE }}
+        run: scripts/notarize-dmg.sh
+
+      - name: Prepare release assets
+        env:
+          ASSET: ${{ steps.metadata.outputs.asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/release-assets
+          cp target/Limina.dmg "target/release-assets/$ASSET"
+          cp "$RUNNER_TEMP/limina-development-inputs.txt" target/release-assets/release-inputs.txt
+          cd target/release-assets
+          shasum -a 256 "$ASSET" > "$ASSET.sha256"
+
+      - name: Replace rolling development prerelease
+        env:
+          ASSET: ${{ steps.metadata.outputs.asset }}
+          COMMIT: ${{ steps.metadata.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          SHORT_COMMIT: ${{ steps.metadata.outputs.short_commit }}
+          STAMP: ${{ steps.metadata.outputs.stamp }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/limina-development-release.md"
+          {
+            echo "Automated development build from [\`$SHORT_COMMIT\`](https://github.com/$GITHUB_REPOSITORY/commit/$COMMIT)."
+            echo
+            echo "This is a prerelease for testing. It may contain regressions; keep VM and disk backups."
+            echo
+            echo "Build time (UTC): \`$STAMP\`"
+          } > "$notes"
+
+          gh release delete development --cleanup-tag --yes || true
+          gh release create development \
+            "target/release-assets/$ASSET" \
+            "target/release-assets/$ASSET.sha256" \
+            target/release-assets/release-inputs.txt \
+            --notes-file "$notes" \
+            --prerelease \
+            --target "$COMMIT" \
+            --title "Limina development build"

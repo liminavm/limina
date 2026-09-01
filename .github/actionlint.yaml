@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+self-hosted-runner:
+  labels:
+    - limina-release

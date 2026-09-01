@@ -30,6 +30,47 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 PROFILE="${1:-release}"
 
+# A development release is still an optimized product build; these values identify which
+# iteration it is. CFBundleShortVersionString must remain three numeric components, while
+# CFBundleVersion is the monotonically increasing build iteration. The channel and commit are
+# custom provenance keys, not overloaded into Apple's numeric version fields.
+WORKSPACE_VERSION="$(awk '
+  $0 == "[workspace.package]" { in_package = 1; next }
+  in_package && /^\[/ { exit }
+  in_package && $1 == "version" {
+    gsub(/"/, "", $3)
+    print $3
+    exit
+  }
+' Cargo.toml)"
+VERSION="${LIMINA_VERSION:-$WORKSPACE_VERSION}"
+BUILD_NUMBER="${LIMINA_BUILD_NUMBER:-$VERSION}"
+BUILD_CHANNEL="${LIMINA_BUILD_CHANNEL:-local}"
+BUILD_COMMIT="${LIMINA_BUILD_COMMIT:-$(git rev-parse HEAD)}"
+
+[[ "$VERSION" =~ ^[0-9]+([.][0-9]+){2}$ ]] || {
+  echo "invalid LIMINA_VERSION '$VERSION' (expected MAJOR.MINOR.PATCH)" >&2
+  exit 1
+}
+[[ "$BUILD_NUMBER" =~ ^[0-9]+([.][0-9]+){0,2}$ ]] || {
+  echo "invalid LIMINA_BUILD_NUMBER '$BUILD_NUMBER' (expected one to three integers)" >&2
+  exit 1
+}
+[[ "$BUILD_CHANNEL" =~ ^[a-z][a-z0-9-]*$ ]] || {
+  echo "invalid LIMINA_BUILD_CHANNEL '$BUILD_CHANNEL'" >&2
+  exit 1
+}
+[[ "$BUILD_COMMIT" =~ ^[0-9a-fA-F]{7,64}$ ]] || {
+  echo "invalid LIMINA_BUILD_COMMIT '$BUILD_COMMIT'" >&2
+  exit 1
+}
+if [ "${LIMINA_REQUIRE_CLEAN:-0}" = "1" ] &&
+   [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+  echo "refusing release build from a dirty limina worktree" >&2
+  git status --short >&2
+  exit 1
+fi
+
 APP="$ROOT/target/Limina.app"
 MACOS="$APP/Contents/MacOS"
 FW="$APP/Contents/Frameworks"
@@ -127,9 +168,18 @@ fi
 # a missing/unusable identity ABORTS the build — a warning that scrolls past has
 # already shipped an undeployable bundle once.
 SIGN_ID="${LIMINA_SIGN_IDENTITY:-}"
+SIGN_AUTHORITY=""
 if [ -z "$SIGN_ID" ]; then
-  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-             | sed -n 's/.*\([0-9A-F]\{40\}\) "Apple Development.*/\1/p' | head -1)"
+  # A Developer ID identity produces a Gatekeeper-distributable build and is therefore the
+  # first choice when both identity kinds are installed. Apple Development remains the local
+  # dogfood fallback; LIMINA_REQUIRE_DEVELOPER_ID=1 below forbids it for published artifacts.
+  identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  SIGN_ID="$(printf '%s\n' "$identities" \
+             | sed -n 's/.*\([0-9A-F]\{40\}\) "Developer ID Application.*/\1/p' | head -1)"
+  if [ -z "$SIGN_ID" ]; then
+    SIGN_ID="$(printf '%s\n' "$identities" \
+               | sed -n 's/.*\([0-9A-F]\{40\}\) "Apple Development.*/\1/p' | head -1)"
+  fi
 fi
 if [ -n "$SIGN_ID" ] && [ "$SIGN_ID" != "-" ]; then
   # Probe the identity before committing to it: keychain signing is context-dependent —
@@ -149,8 +199,21 @@ if [ -n "$SIGN_ID" ] && [ "$SIGN_ID" != "-" ]; then
     # the team-pinned DR, and computing it here avoids a chicken-and-egg re-sign of
     # the sealed bundle.
     TEAM="$(codesign -dvv "$PROBE" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+    SIGN_AUTHORITY="$(codesign -dvvv "$PROBE" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
   fi
   rm -f "$PROBE"
+fi
+
+if [ "${LIMINA_REQUIRE_DEVELOPER_ID:-0}" = "1" ]; then
+  case "$SIGN_AUTHORITY" in
+    "Developer ID Application:"*) ;;
+    *)
+      echo "==> ERROR: a published build requires a usable Developer ID Application identity." >&2
+      echo "    Resolved authority: ${SIGN_AUTHORITY:-<none>}" >&2
+      echo "    Set LIMINA_SIGN_IDENTITY to its SHA-1 fingerprint, or install/unlock it." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 # The team-pinned designated requirement, shared by the app AND the worker so both satisfy
@@ -372,11 +435,21 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Keep the plist template readable while making release metadata an explicit build input. Values
+# are syntax-checked above before being passed through PlistBuddy.
+PLIST_BUDDY=/usr/libexec/PlistBuddy
+"$PLIST_BUDDY" -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+"$PLIST_BUDDY" -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+"$PLIST_BUDDY" -c "Add :LiminaBuildChannel string $BUILD_CHANNEL" "$APP/Contents/Info.plist"
+"$PLIST_BUDDY" -c "Add :LiminaBuildCommit string $BUILD_COMMIT" "$APP/Contents/Info.plist"
+plutil -lint "$APP/Contents/Info.plist" >/dev/null
+echo "==> bundle version $VERSION ($BUILD_NUMBER, $BUILD_CHANNEL, ${BUILD_COMMIT:0:12})"
+
 # ---- codesign inside-out ----------------------------------------------------------
 # $SIGN_ID and $DR were resolved (and the identity probed) at the top of the script,
 # before the build — see "signing identity" up there for the TCC rationale.
 echo "==> codesigning as '$SIGN_ID' (dylibs → worker → supervisor → app)"
-find "$FW" -type f -name '*.dylib' -exec codesign -s "$SIGN_ID" ${TS[@]+"${TS[@]}"} --force {} \;
+find "$FW" -type f -name '*.dylib' -exec codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force {} \;
 # The worker (limina-vmm), not the app main, is the process that opens CoreAudio for `--mic`.
 # TCC records the mic grant under the responsible app (eti.noronha.limina) but validates the
 # ACCESSING binary against the grant's csreq (identifier "eti.noronha.limina" + team OU), so
