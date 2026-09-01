@@ -2356,3 +2356,26 @@ and every one of them is a round trip the GPU submission did not need.
 fork on every `vkGetMemoryBudget` poll. On a dogfood day that is a 12 MB `supervisor.log` in 83
 minutes, in which every line that explains anything is buried. It is a routine per-poll
 observation, not an error: demote it to debug on the fork, or rate-limit it to changes.
+
+## Every GStreamer app loses hardware decode: the VA plugin aborts enumerating the device
+
+`gst-inspect-1.0` registers no `va*` elements in the F44 enhanced guest, so Showtime,
+Totem and anything else on GStreamer decode in software — Showtime sits at ~70% CPU on a
+4K clip while Firefox, on the same guest and the same driver, decodes in hardware.
+
+The plugin is not missing. `gstreamer1-plugins-bad-free` ships
+`/usr/lib64/gstreamer-1.0/libgstva.so`, and loading it directly aborts:
+
+```
+va gstvadevice_linux.c:104:gst_va_device_find_devices: Found VA-API device: /dev/dri/renderD128
+malloc(): unaligned tcache chunk detected
+```
+
+so it finds our device and corrupts the heap while probing it, registering nothing. The
+registry then holds no VA elements and every GStreamer pipeline silently picks `avdec`.
+
+The VA driver itself is healthy — Firefox drives the same `renderD128` through libva and
+gets hardware VP9 — so the fault is in gst-va's probe or in what our driver answers it,
+not in decode. Which of the two is the open question; `gst-va` already has form here (it
+ignores the descriptor size field, `spikes/vt-vp9-decode/`). Measured 2026-09-01 on
+mesa `26.1.8-7.limina`. There is no `vainfo` on this image to cross-check with.
