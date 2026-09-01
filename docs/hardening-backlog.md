@@ -383,11 +383,20 @@ sampling once after a proxy for it.
   parallelism rather than a GPU fault; it prints no assertion, which is its own problem —
   a test that fails silently forces a re-run to learn anything. Worth giving it a verdict
   line before chasing the timing.
-- **`l2_synoik_restore_landmarks::synoik_desktop_survives_snapshot_restore` fails about half
-  the time, with a deterministic signature when it does.** 36/1000 landmarks moved against a 1%
-  budget; both observed failures produced byte-identical numbers — 36/1000, rows {0:17, 1:19},
-  colours 233 → 235. Noise does not reproduce exact cell counts, so the trigger is intermittent
-  while the effect is not. Everything else in the test's own report is clean: no content-loss
+- **`l2_synoik_restore_landmarks::synoik_desktop_survives_snapshot_restore` — MITIGATED
+  (`ce7ad78`), trigger never isolated.** 36/1000 landmarks moved against a 1% budget; both
+  observed failures produced byte-identical numbers — 36/1000, rows {0:17, 1:19}, colours
+  233 → 235. Noise does not reproduce exact cell counts, so the trigger is intermittent while
+  the effect is not.
+
+  **On the rate, because the first figure written here was wrong:** the observed standalone rate
+  is 1 failure in 3 runs, plus one failure under a full suite. An earlier "about half the time"
+  pooled those two populations and should not be quoted. A separate 14-run attempt to reproduce
+  it — 9 on an idle machine, 5 under a deliberately loaded one (host load average 24.75, a second
+  VM up with spinners inside) — produced **zero** band drift. At 1/3 that is ≈0.3%, so either the
+  rate is far below 1/3 on a sample of 3, or the trigger needs something neither session isolated.
+  Workload was identical across all runs (nautilus, gnome-text-editor, gnome-calculator, ff=14,
+  vkstill), so it is not a missing-app difference. Everything else in the test's own report is clean: no content-loss
   lines, no ring stalls, no allocations skipped at snapshot, process census identical either side.
 
   Pixel forensics place it precisely. The pre/post diff is confined to rows 0–52, full width,
@@ -406,8 +415,19 @@ sampling once after a proxy for it.
   only variable. Re-running the test alone on the same build gives pass, pass, FAIL — so a single
   pass on the earlier build proves nothing, and the two-run comparison cannot carry that weight.
   Settling whether that commit is involved needs KK at `e2e8b7be406` vs `ca95eccbf3a` with N runs
-  per arm, not one run per arm. Book the flake regardless of cause: at ~50% it will keep
-  reddening suites and making "did my change break anything?" unanswerable.
+  per arm, not one run per arm — and given a 14-run arm produced no failures at all, an arm large
+  enough to separate the two would be expensive.
+
+  **What shipped instead** (`ce7ad78`, on the user's call): the desktop body keeps the 1% budget,
+  and the panel band is judged on whether it is still a live panel — its own colour diversity must
+  survive, since excluding those cells without that check would let the panel vanish for free at
+  8% of the frame. The justification is that a restore which genuinely fails to draw does far more
+  damage than one band of soft glow, and the body budget, content-loss lines, ring-stall oracle and
+  whole-frame diversity all still see that at full sensitivity. **The mitigation has never been
+  observed engaging** — it is right by construction and unverified against a live failure, and the
+  14 passing runs are evidence the failure did not occur, not evidence the fix works. The
+  `post-restore:` line now prints the body/band split, so the next real failure will say
+  immediately which side moved.
 - **CapsLock/NumLock LED parity** — surface the statusq LED feedback (libkrun `worker.rs` no-op).
   Roadmap M8.
 
