@@ -66,34 +66,56 @@ line 1262.
 
 NV12 becomes **one object with two layers** at distinct offsets — what real drivers report and
 what `VADRMPRIMESurfaceDescriptor` is shaped for. Today's two-objects-of-4096 is an artefact of
-per-plane resources, not a format requirement.
+per-plane resources, not a format requirement. This is also what VideoToolbox already hands back:
+its output is IOSurface-backed even when the IOSurface properties are omitted entirely, and NV12
+arrives as one surface with two planes at distinct offsets.
 
-## The copy, and whether it is needed at all
+## The copy, measured
 
-VideoToolbox owns its output pool and hands back a different `CVPixelBuffer` per frame, while
-the guest's decode target is a fixed surface it maps once. Re-pointing a guest mapping every
-frame is neither cheap nor race-free, so by default something lands the frame in the target's
-own storage.
+**One copy per frame, and it is cheap enough not to shape anything else.** Settled by
+`spikes/vt-blob-decode-target/` (2026-09-01): ~0.10 ms at 1080p and ~0.42 ms at 4K, against
+16.7 ms of frame budget at 60 fps.
 
-That copy is **not new cost**: today the host already CPU-maps every decoded plane and uploads
-it with `glTexSubImage2D` (`upload_mapped_plane`, `vrend_video.c:156`), and the guest pays a
+VideoToolbox will not decode into a buffer we supply — no decode entry point accepts one, and
+the `frameOptions` dictionary added in macOS 15 admits only the two `ContentAnalyzer` keys. The
+alternative of mapping VideoToolbox's own pool into the guest is dead too: the pool is not a
+bounded set. It appears to recycle five surfaces only because the consumer releases each buffer
+immediately; hold them and 107 frames mint 107 distinct surfaces. A decode target is exactly the
+held case, since the guest keeps reference frames alive for its DPB. Ordering rules it out
+independently — VA-API names the render target in `vaBeginPicture` *before* the frame decodes,
+while VideoToolbox reveals its choice afterwards.
+
+That copy is **not new cost**: today the host already CPU-maps every decoded plane and uploads it
+with `glTexSubImage2D` (`upload_mapped_plane`, `vrend_video.c:156`), and the guest pays a
 host→guest transfer on top to get pixels into its own memory. One copy into memory the guest
-already maps is strictly less work than that, and the copy engine is a free choice — CPU
-`memcpy` or a Metal blit — because coherency constrains neither.
+already maps replaces both. The copy engine is a free choice — CPU `memcpy` or a Metal blit —
+because coherency constrains neither.
 
-It may also be avoidable outright: `VTDecompressionSessionCreate` takes
-`destinationImageBufferAttributes`, so a session may accept IOSurface-backed buffers we supply.
-If it does, there is no copy at all. That is the first spike, because it is the difference
-between one copy per frame and none, and it changes nothing else in the design.
+**Do not contort the layout to make pitches agree.** The row-by-row copy and the single
+whole-plane `memcpy` are indistinguishable at these sizes; which one wins reordered between runs.
+Only bandwidth matters, so the guest picks whatever layout suits it.
 
 ## Who dictates layout
 
 **The guest computes the layout; the host allocates to match, or refuses.** The guest must
 report offsets, pitches and sizes in the export descriptor and cannot report what it did not
-choose. IOSurface takes explicit per-plane `bytesPerRow` at creation, subject to
-`IOSurfaceGetPropertyAlignment`; where it cannot honour the guest's layout it fails the buffer
-creation and the guest falls back, rather than two ends proceeding with disagreeing pictures of
-one allocation.
+choose. Measured: IOSurface allocates *exactly* the requested per-plane `bytesPerRow` with no
+rounding in any case tested, odd widths and heights included, and the
+`IOSurfaceGetPropertyAlignment` values are advisory once explicit `kIOSurfacePlaneInfo` is
+supplied (128-byte rows reported, an 854-byte pitch accepted). The refusal path stays anyway, so
+a future case IOSurface will not honour fails the buffer creation and the guest falls back,
+rather than two ends proceeding with disagreeing pictures of one allocation.
+
+`destinationImageBufferAttributes` then holds VideoToolbox to the same layout — every row and
+plane alignment requested was applied exactly, on the hardware decoder, at no measurable cost.
+But **alignment is paid per row**: a 16384-byte row alignment took a 352x240 surface from 136 KiB
+to 5.8 MiB, and would take a 4K surface from ~12 MB to ~53 MB. Ask for what the layout needs,
+never for the host page size by reflex.
+
+One thing the arithmetic must get right on both ends: chroma needs `ceil(w/2)*2` bytes per row,
+so at an odd width it is *wider* than a luma pitch of exactly `w`. Size each plane in its own
+right; inheriting luma's pitch makes every odd width fail, and it fails looking like an IOSurface
+restriction.
 
 Note this interacts with a trap already recorded in `docs/graphics.md` §4.5: **decode into the
 layout the guest allocated**, rather than converting. ffmpeg's VA-API path allocates I420 while
@@ -143,20 +165,19 @@ importer work.
 
 ## Spikes
 
-1. **Can VideoToolbox decode into surfaces we supply?** Decides whether this copies per frame or
-   not at all. Create a session with `destinationImageBufferAttributes` naming IOSurface-backed
-   buffers of our layout and see whether VT honours them or silently uses its own pool.
-2. **Layout agreement.** Allocate at a guest-chosen `bytesPerRow` and confirm
-   `IOSurfaceGetPropertyAlignment` accepts it at the sizes we care about — odd widths, 4K.
-3. **Can an IOSurface's base address be mapped into a guest at all?** This one branches the
-   design, and nothing in the stack answers it today: the venus precedent maps shm-backed
-   `vkMapMemory` pointers, and zero-copy scanout hands surfaces over by id and never maps
-   them. IOKit-owned pages may not survive `hv_vm_map` the way anonymous ones do, and the
-   guest can never take part in the `IOSurfaceLock` protocol. Map a real surface's base into a
-   guest and checksum what both sides see — at decode-target size, since these are
-   multi-megabyte and written whole rather than small and hot. If it fails, phase 1 falls back
-   to an shm-backed blob plus a copy into the surface, and phase 2's zero-copy present story
-   changes with it.
+1. ✅ **Can VideoToolbox decode into surfaces we supply?** No — but it honours a layout we
+   dictate, and the copy that follows costs ~0.10 ms at 1080p. `spikes/vt-blob-decode-target/`.
+2. ✅ **Layout agreement.** IOSurface allocates the guest's pitches exactly, odd dimensions
+   included. Same spike.
+3. ⬜ **Can an IOSurface's base address be mapped into a guest at all?** This one branches the
+   design, and nothing in the stack answers it: the venus precedent maps shm-backed
+   `vkMapMemory` pointers, and zero-copy scanout hands surfaces over by id and never maps them.
+   IOKit-owned pages may not survive `hv_vm_map` the way anonymous ones do, and the guest can
+   never take part in the `IOSurfaceLock` protocol. Map a real surface's base into a guest and
+   checksum what both sides see, at decode-target size. If it fails, the target's storage becomes
+   an ordinary host-visible blob and the copy lands there instead — the frame costs above are
+   unchanged, but phase 2's zero-copy present story is not. Needs the hypervisor entitlement and
+   a codesigned binary, which is why it is separate.
 
 ## Verifying
 
