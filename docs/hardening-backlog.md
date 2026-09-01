@@ -396,7 +396,15 @@ sampling once after a proxy for it.
   VM up with spinners inside) — produced **zero** band drift. At 1/3 that is ≈0.3%, so either the
   rate is far below 1/3 on a sample of 3, or the trigger needs something neither session isolated.
   Workload was identical across all runs (nautilus, gnome-text-editor, gnome-calculator, ff=14,
-  vkstill), so it is not a missing-app difference. Everything else in the test's own report is clean: no content-loss
+  vkstill), so it is not a missing-app difference.
+
+  **What that negative result does and does not cover.** The load it was taken under was CPU
+  saturation — spinners in a second VM. The sessions that DID see the failure were cycling poke
+  VMs, running valgrind inside a guest, and rebuilding virglrenderer and mesa: more I/O and far
+  more VM lifecycle churn, a different shape of load entirely. So the honest claim is "did not
+  reproduce under synthetic CPU load", not "did not reproduce under load". VM lifecycle churn
+  during the restore is the untested axis, and it is the one a compositor-timing trigger would
+  most plausibly live on. Everything else in the test's own report is clean: no content-loss
   lines, no ring stalls, no allocations skipped at snapshot, process census identical either side.
 
   Pixel forensics place it precisely. The pre/post diff is confined to rows 0–52, full width,
