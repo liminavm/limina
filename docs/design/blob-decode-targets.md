@@ -193,6 +193,16 @@ so for any other subsampling.
 
 Nothing works until the whole chain lands, which is precisely why it is not phase 1.
 
+**The guest half comes first, because the host half is inert without it.** Measured
+2026-09-01, VP9 through `vavp9dec ! glupload` on the mesa -6 guest: the host sees *two*
+resources per decode target, `PIPE_FORMAT_R8_UNORM` at luma size and
+`PIPE_FORMAT_R8G8_UNORM` at chroma size — 107 of each across the clip, and not one
+planar-format resource. That is the lowered path, one `resource_create` per plane, and on it
+each plane is already its own resource with its own texture, so no host-side plane machinery
+is reachable: `vrend_resource_iosurface_init` is never called with a planar format at all.
+Routing the guest through `vl_video_buffer_create_as_resource` is therefore the prerequisite
+for the host work, not a follow-on to it.
+
 **Sampling the second plane needs no guest change at all — both ends of that path already
 exist.** The host keeps a separate EGLImage per plane in `aux_plane_egl_image`
 (`vrend_renderer.h:106`), filled today only from a GBM bo (`vrend_renderer.c:9798`) and so
