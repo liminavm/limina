@@ -203,6 +203,19 @@ fn a_stock_guest_agent_corrects_a_skewed_clock() {
     //
     // Log-only by design, so the log IS the surface: an incident report that cannot say what
     // the guest was is the thing this exists to prevent.
+    //
+    // Wait for the LAST of the probe's three lines before snapshotting. The oracle-3 wait above
+    // matches the first one ("...answered on..."), and the identity and inventory lines follow it
+    // as separate writes — a snapshot taken the instant the wait returns can land between them,
+    // which is exactly how this failed once with all three lines present in the panic message.
+    guest
+        .wait_for_supervisor_log("qga: guest filesystems: ", Duration::from_secs(30))
+        .unwrap_or_else(|e| {
+            panic!(
+                "no filesystem inventory — guest-get-fsinfo did not land ({e}); qga log lines: {}",
+                supervisor_qga_lines(&guest)
+            )
+        });
     let log = guest.supervisor_log();
     assert!(
         log.contains("qga: guest is "),
