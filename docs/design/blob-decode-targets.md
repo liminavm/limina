@@ -13,12 +13,21 @@ storage the guest can actually see.
 
 ## The constraint that shapes the whole design
 
-**The guest CPU is not in the Apple GPU's coherency domain.** `spikes/mtl-shm-coherency`
-measured it directly: the same physical shm pages read fresh from the host CPU and stale from
-the guest, across every cache attribute that is mechanically usable (CACHED reads stale;
-UNCACHED SIGBUSes on zink's unaligned reads; WC crashes). GPU writes do not snoop-invalidate
-the guest's cache lines, and there is no working invalidate — venus's `virtgpu_bo_invalidate`
-is a documented no-op, and `dc civac` SIGILLs at EL0.
+**GPU writes are not visible to a guest CPU read.** `spikes/mtl-shm-coherency` measured
+exactly that pairing: the same physical pages read fresh from the host CPU and stale from the
+guest, across every cache attribute that is mechanically usable (CACHED reads stale; UNCACHED
+SIGBUSes on zink's unaligned reads; WC crashes), with no working invalidate either — venus's
+`virtgpu_bo_invalidate` is a documented no-op and `dc civac` SIGILLs at EL0. It is an old
+measurement (2026-06-07, on the since-retired MoltenVK backend), but it has not been
+overturned: the #28 backlog closure keeps venus feedback disabled precisely to avoid the path,
+and `glReadPixels` is still called out as unreliable in the project guide.
+
+**Host CPU writes, by contrast, reach the guest — and we rely on it already.** venus's shmem is
+`VIRTGPU_BLOB_MEM_HOST3D` (`vn_renderer_virtgpu.c:1561`): host-allocated memory mapped into
+the guest, carrying the ring the host writes completions into and the guest polls. When that
+mapping is refused the ring never exists and venus is dead, which is exactly what
+`spikes/hv-ipa-granule` measured from both sides. So the pairing this design rests on is
+exercised every venus frame in production; the one that is unsafe is the one we are avoiding.
 
 So a decoded frame must reach guest-visible memory **by a host CPU write**, never by a GPU
 blit. That single fact settles what would otherwise be the design's open question:
@@ -26,7 +35,9 @@ blit. That single fact settles what would otherwise be the design's open questio
 - **The copy engine is `memcpy` from VideoToolbox's locked `CVPixelBuffer`.** Not a Metal
   blit, not a `glTexSubImage2D` into a shared texture. A GPU-written frame in guest-visible
   memory would be stale on arrival, and it would be stale *silently* — a plausible-looking
-  frame one decode behind, which is the failure this stack is worst at diagnosing.
+  frame one decode behind, which is the failure this stack is worst at diagnosing. The host CPU
+  *is* in the GPU's coherency domain (same spike, Finding 1), so it may read VT's output
+  freely; only the guest's view of GPU writes is unsafe.
 - **This is not a cost we are adding.** Today the host already CPU-maps every decoded plane and
   uploads it (`upload_mapped_plane`, `vrend_video.c:156`), and the guest then pays a
   host→guest transfer on top to get pixels into its own memory. Replacing both with one host
@@ -129,12 +140,12 @@ phase 1 stands alone. Do not gate the Firefox recovery on the importer work.
 
 ## Spikes, before any wiring
 
-1. **Host-CPU-write → guest-CPU-read coherency across a mapped blob.** The premise the whole
-   design rests on, and the one thing `spikes/mtl-shm-coherency` did *not* measure: it proved
-   GPU→guest is stale and host-CPU→GPU is fine, but never host-CPU→guest-CPU. Both are CPU
-   cores in one inner-shareable domain and it should hold — which is exactly the kind of
-   "should" this project has been burned by. Host writes a known pattern through the mapping,
-   guest mmaps the blob and checksums, repeatedly, with no synchronisation of any kind.
+1. **Host-CPU-write → guest-CPU-read across a mapped blob, at video sizes.** Not a gate — the
+   venus ring depends on this pairing every frame — so the question is not whether it works but
+   whether it still holds for a multi-megabyte mapping written in bulk rather than a ring
+   written in small records. Cheap to answer: host writes a known pattern through the mapping,
+   guest mmaps the blob and checksums, with no synchronisation of any kind. Worth doing early
+   because everything downstream assumes it.
 2. **Can an IOSurface's base address be mapped into the guest at all?** `get_map_ptr` returns a
    host VA and the macOS path maps host VAs, so this should reduce to reporting the right
    pointer — but if IOSurface memory cannot be mapped, phase 1 falls back to our own shm
@@ -144,9 +155,10 @@ phase 1 stands alone. Do not gate the Firefox recovery on the importer work.
    `IOSurfaceGetPropertyAlignment` accepts it at the sizes we care about, including odd widths
    and 4K.
 
-Spike 1 gates everything. If host-CPU→guest-CPU is not coherent either, there is no
-guest-visible decode target on this platform and the honest outcome is to keep the refusal and
-say so.
+Spike 2 is the one that branches the design. If IOSurface memory cannot be mapped into the
+guest, phase 1 falls back to a plain host allocation and phase 2 loses its zero-copy story,
+because the frame the guest maps and the frame the host samples would stop being one
+allocation.
 
 ## Verifying
 
