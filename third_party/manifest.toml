@@ -53,7 +53,7 @@ rev = "16e9602270e5890ab8fee83bf6f9a438049dabea"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
-rev = "0f849fc34d4ffc2667abd65ecff46bec43507b64"
+rev = "78d7ac6602b3ddb64bc59691cc0c36d06daa69af"
 base = "418f2963a15"
 
 # The GUEST venus Mesa (task #11 — same liminavm/mesa repo, its own branch). NOT vendored by
@@ -73,7 +73,7 @@ base = "mesa-26.1.7"
 repo = "https://github.com/liminavm/virglrenderer.git"
 upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
 branch = "limina"
-rev = "b6722ad7e484fb3b5c91e2d6b0d40717edcf71ad"
+rev = "ede7bb19d175d6601a395c296766955616a9e2ca"
 base = "f2945d3974256fefc731f0411c28b865680eebdc"
 
 [linux]
