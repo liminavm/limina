@@ -72,6 +72,12 @@ deliver() {
     fi
   fi
 
+  # Start from an empty worker log. wait-guest-ssh reads the LAST `guest SSH forward ready`
+  # line in it, and the boot vehicle truncates the log only once it is well under way -- so a
+  # line left by the previous delivery of this same image names a port that some OTHER VM may
+  # be answering on right now. That is the wrong-VM trap: the r21 run installed into a poke
+  # clone that happened to hold the stale port while the real guest sat untouched.
+  rm -f "$log"
   LIMINA_DISK="$img" LIMINA_BOOT_LOG="$log" spikes/venus-draw-probe/boot-enhanced-efi-kk.sh \
     >"$LOGDIR/limina-deliver-$name-$REV.boot.log" 2>&1 &
   boot=$!
@@ -94,7 +100,7 @@ deliver() {
     echo "installer ok (log $ilog)"
   else
     echo "!!! installer FAILED (log $ilog); tail:" >&2; tail -15 "$ilog" >&2
-    ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" 'sudo systemctl poweroff' || true
+    ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" 'sudo systemctl poweroff -i' || true
     wait "$boot" || true
     return 1
   fi
@@ -117,7 +123,11 @@ deliver() {
   # correct tree — proven by the same test passing against the pre-delivery backup.
   ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" 'sudo fstrim -av' 2>&1 | sed 's/^/   trim: /' || true
 
-  ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" "rm -rf limina-guest-tools '$TARBALL'; sudo systemctl poweroff" || true
+  # The autologin desktop holds a logind block inhibitor (gnome-session, or a screen lock), and a
+  # plain `systemctl poweroff` is refused with `Operation denied due to active block inhibitor`
+  # -- after which the `wait` below never returns and the run hangs with the guest still up.
+  # `-i` ignores inhibitors; there is nothing in this guest worth preserving past the install.
+  ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1" "rm -rf limina-guest-tools '$TARBALL'; sudo systemctl poweroff -i" || true
   wait "$boot" || true
   echo "=== done $img  $(date '+%F %T')"
   [ "$ok" = 1 ]
