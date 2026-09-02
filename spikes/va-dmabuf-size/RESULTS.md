@@ -109,7 +109,7 @@ That makes this architectural rather than a sizing bug. Zero-copy needs the deco
 allocated as host-mappable blob resources (`VIRTGPU_BLOB_MEM_HOST3D`, which the winsys already
 knows how to create for other paths) so the exported fd names real, mappable memory.
 
-## Why the stub is one page, and why only video can hit it
+## Why the stub is one page
 
 `virgl_resource_create_front` picks the guest BO size three ways
 (`drivers/virgl/virgl_resource.c`):
@@ -125,47 +125,51 @@ else
    alloc_size = res->metadata.total_size;
 ```
 
-The 4096 is `alloc_size = 1` rounded up to a page. And `virgl_can_copy_transfer_from_host`
-begins `... && !(bind & VIRGL_BIND_SHARED)`, so **a resource created for sharing can never
-take that branch**. It takes the middle one, whose size is the layout recomputed at a stride
-aligned *up* to 256 — never smaller than `metadata.total_size`, which is what the export guard
-compares against.
+The 4096 is `alloc_size = 1` rounded up to a page. `virgl_can_copy_transfer_from_host` begins
+`... && !(bind & VIRGL_BIND_SHARED)`, so a resource created for sharing never takes that branch:
+Wayland client buffers, EGL images and mutter's scanout buffers are sized from their own layout
+(`virgl_resource_shared_tex_size`'s comment: *"Size of a shared buffer is validated by WSI. WSI
+retrieves BO size from resource's dmabuf with lseek()."*).
 
-That bounds the guard exactly: it can only fire on a resource created *without*
-`PIPE_BIND_SHARED` that something exports as an fd anyway. Video decode targets are precisely
-that case — `drivers/virgl/virgl_video.c` allocates them unshared and
-`vlVaExportSurfaceHandle` exports them regardless. Wayland client buffers, EGL images and
-mutter's scanout buffers all carry `PIPE_BIND_SHARED` and are provably untouched.
-
-`virgl_resource_shared_tex_size`'s own comment says why that middle branch exists: *"Size of a
-shared buffer is validated by WSI. WSI retrieves BO size from resource's dmabuf with
-lseek()."* mesa already enforces this invariant for every buffer it knows will be shared. The
-guard is the same invariant, applied on the one path that exports a buffer mesa never expected
-to be shared.
+**Every other texture is a stub, and exporting one is normal.** With copy-transfer in both
+directions every non-shared texture stages, and `eglExportDMABUFImageMESA` on a GL texture is an
+everyday operation — GTK4's `gdk_texture_download` exports the rendered texture and re-imports
+it. That is sound: the fd names the host resource, a GPU-side re-import resolves to the same
+host storage, and `virgl_resource_from_handle` marks the import staged precisely because the
+guest storage is smaller than the layout. The one consumer that cannot cope is one that
+**mmaps** the fd and trusts the geometry, and the one path that does so is the VA-API surface
+descriptor's. Nothing in `virgl_resource_get_handle` can tell the two apart, which is why a
+refusal at the export is the wrong tool (below).
 
 ## What was done, and what is still owed
 
-**Refuse the export.** `virgl_resource_get_handle` now returns false for an FD export whose
-laid-out size exceeds the guest storage behind it — the same predicate
-`virgl_resource_from_handle` already uses to decide a resource needs staging, so it refuses
-exactly the resources mesa already knows hold no guest pixels. The caller then negotiates
-system memory: one frame copy per frame, and it works. `whandle->size` is filled in at the
-same time, so the descriptor's `size` stops reading as 0.
+**Decode targets get real guest memory.** `virgl_resource_create_front` opts a resource carrying
+`VIRGL_RESOURCE_FLAG_VIDEO_TARGET` out of staging when the host advertises
+`VIRGL_CAP_V2_VIDEO_GUEST_PLANES`, and the host writes each decoded frame into that memory
+(`writeback_plane_to_guest`, vrend_video.c). The exported fd then names storage that genuinely
+holds the picture, `whandle->size` reports it, and a consumer that mmaps reads the frame. Our
+virglrenderer advertises the bit whenever it offers a decoder at all, so on every supported
+host no decode target is a stub.
 
-**Still owed: allocate decode targets as host-mappable blobs.** That is the fix that buys
-zero-copy rather than a copy per frame, and it spans guest mesa, virglrenderer and possibly
-libkrun. Booked in `docs/hardening-backlog.md`.
+**There is no export refusal.** One shipped (mesa `26.1.8-5` through `-9`: `virgl_resource_get_handle`
+returned false for an FD export whose laid-out size exceeded the guest storage) and was removed.
+Its predicate is true of every staged texture, not just decode targets, so it failed every
+`eglExportDMABUFImageMESA` on the tier; GTK4 then consumed an uninitialized fd, and setting a
+user avatar in GNOME Settings wrote 496 KB of noise (RMSE 0.774 against the source with our
+libgallium, 0 with vanilla, everything else equal). A refusal also cannot tell an mmap consumer
+from a re-importing one — it cost Firefox its hardware decoder (below) while it was in. The
+EGL layer now returns `EGL_FALSE` when a driver cannot export an fd
+(`dri2_export_dma_buf_image_mesa`), so a driver that legitimately refuses fails cleanly instead
+of leaving the caller's fd array untouched.
 
-Two things are easy to lose between the two:
+**Still owed: zero-copy.** The writeback is a copy per frame into guest memory; a decode target
+that is a host-mappable blob would make the exported fd name the host's own storage. Booked in
+`docs/hardening-backlog.md` and `docs/design/blob-decode-targets.md`. A correctly sized dmabuf
+is necessary but not sufficient for that: glupload's direct importers are refused with
+`cannot produce texture-target 2D`, so a right-sized export still goes through the copy
+uploader until that half is done too.
 
-- **A correctly sized dmabuf is necessary but not sufficient.** glupload's direct importers are
-  all refused with `cannot produce texture-target 2D`, so even a right-sized export would still
-  fall back to the copy uploader. Both halves are needed before the blob work is faster than
-  the system-memory path we now take.
-- **The refusal is load-bearing until then.** Removing it reintroduces a SIGBUS, not a slow
-  path. This spike is its regression test.
-
-## Verdict, measured on the fix
+## Measured on the refusal, mesa 26.1.8-5
 
 Guest mesa `26.1.8-5.limina` (the refusal + `whandle->size`), enhanced tier, seated GNOME:
 
@@ -200,9 +204,9 @@ gcc -O1 -Wall -o va-probe probe.c $(pkg-config --cflags --libs libva libva-drm)
 Needs no codec and no decoding: a plain `vaCreateSurfaces` plus `vaExportSurfaceHandle` asks
 the whole question, which is why it reproduces on any guest with the VA driver present.
 
-## The refusal costs Firefox its hardware decoder
+## Why one fd cannot serve both consumers
 
-Refusing the export fixed every consumer that mmaps the fd, and broke the one that does not.
+Refusing the export fixed every consumer that mmaps the fd and broke the one that does not.
 Firefox's VA-API path is `GetVAAPISurfaceDescriptor()` → `vaExportSurfaceHandle`, and it has no
 system-memory renegotiation to fall back to the way GStreamer does. Measured on the r18 enhanced
 tier (guest mesa `26.1.8-5.limina`, firefox 154.0-5), a local VP9 clip with VA-API forced on:
@@ -216,21 +220,18 @@ ProcessFlush() / FFmpegDataDecoder: shutdown
 Using preferred software codec vp9            <- and it never tries again
 ```
 
-It hardware-decodes exactly **one** frame, cannot export it, tears the decoder down, and rebuilds
-as software for the rest of the session. The same sequence reproduces on YouTube with
-`media.av1.enabled=false` to force VP9: one `vaExportSurfaceHandle failed`, then
-`IsHardwareAccelerated=false` and `Requesting pixel format YUV420P`.
+It hardware-decoded exactly **one** frame, could not export it, tore the decoder down, and
+rebuilt as software for the rest of the session. The same sequence reproduced on YouTube with
+`media.av1.enabled=false` to force VP9.
 
 **Why the stub worked for Firefox and not for GStreamer.** Firefox imports the fd as an EGL image
 — a GPU-side import that resolves to the host resource through the kernel — and never maps it on
 the CPU. The guest BO being one page is irrelevant to it; the pixels it samples are the host's.
-GStreamer's fallback uploader mmaps and copies, so the same fd is fatal there. The refusal cannot
-tell the two apart, because nothing in `virgl_resource_get_handle` knows what the caller will do
-with the fd.
+GStreamer's fallback uploader mmaps and copies, so the same fd is fatal there.
 
-**Honest sizing alone cannot replace the refusal.** It is tempting to hope that filling in
-`whandle->size` lets consumers refuse for themselves, but gst-va does not read that field for
-sizing at all (`gst-libs/gst/va/gstvaallocator.c`, `gst_va_dmabuf_allocator_setup_buffer_full`):
+**Honest sizing alone does not protect the mmap consumer either.** gst-va does not read
+`objects[].size` for sizing (`gst-libs/gst/va/gstvaallocator.c`,
+`gst_va_dmabuf_allocator_setup_buffer_full`):
 
 ```c
 /* prime descriptor reports the total size of the object, including regions
@@ -242,40 +243,16 @@ if (desc.objects[i].size < size)
    GST_WARNING_OBJECT (self, "driver bug: fd size ... is bigger than object descriptor size");
 ```
 
-It sizes the `GstMemory` by `lseek` and consults `objects[].size` only to log. So the GstMemory
-was already correctly 4096 bytes before we touched anything — the overrun is a *downstream*
-consumer (glupload's `_gl_mem_create`) copying by video geometry while ignoring the size of the
-memory it was handed. That is a defect in the uploader, not something the descriptor can talk it
-out of.
+It sizes the `GstMemory` by `lseek` and consults `objects[].size` only to log, so the
+`GstMemory` was already correctly 4096 bytes; the overrun is glupload's `_gl_mem_create`
+copying by video geometry while ignoring the size of the memory it was handed. The only answer
+that serves both consumers is storage that actually holds the frame, which is what real guest
+memory for decode targets provides.
 
-Which leaves three ways out, none of them free:
-
-- **Keep the refusal**, and the enhanced tier has no Firefox hardware decode until decode targets
-  are blob-backed. This is where r18 leaves us.
-- **Drop the refusal and fix glupload upstream** to honour the GstMemory size. Firefox recovers
-  immediately; every un-patched GStreamer keeps taking the SIGBUS in the meantime.
-- **Blob-backed decode targets** — booked in `docs/hardening-backlog.md`, and the only option
-  that makes the exported fd genuinely name the frame. It ends the trade rather than picking a
-  side of it.
-
-**This is the whole reason YouTube software-decodes on the dogfood Mac.** The first reading of
-this was wrong and is worth stating so it is not re-derived: the clip negotiates `av01`, and the
-local repro ran on a host with no AV1 silicon, which made a missing codec look like the cause.
-AV1 hardware decode is implemented and wired; whether it is *offered* is a property of the host
-chip, not of the guest tier. `virgl_video_vt.c` advertises `PIPE_VIDEO_PROFILE_AV1_MAIN` only when
-`vt_can_decode(kCMVideoCodecType_AV1)` is true, which needs an M3 or later; a host without it
-advertises nothing for AV1 on purpose, so the guest keeps its own better-tested dav1d rather than
-being routed onto a host software path for no gain.
-
-The dogfood Mac is an M4 Pro, and its guest does advertise AV1:
-
-```
-$ vainfo    # dogfood guest, mesa 26.1.8-5.limina (r18)
-#   driver: "Mesa Gallium driver 26.1.8 for virgl (zink ... (Apple M4 Pro (MESA_KOSMICKRISP)))"
-VAProfileAV1Profile0            : VAEntrypointVLD
-```
-
-So AV1 hardware decode is available to that Firefox, and the export refusal is the only thing
-standing between it and the GPU. Phase 1 of `docs/design/blob-decode-targets.md` recovers it
-directly. On a pre-M3 host the fallback to dav1d in the RDD process remains correct behaviour,
-and no amount of export work changes it.
+**AV1 is offered by the host chip, not the guest tier.** `virgl_video_vt.c` advertises
+`PIPE_VIDEO_PROFILE_AV1_MAIN` only when `vt_can_decode(kCMVideoCodecType_AV1)` is true, which
+needs an M3 or later; a host without it advertises nothing for AV1 on purpose, so the guest
+keeps its own better-tested dav1d rather than being routed onto a host software path for no
+gain. The dogfood Mac is an M4 Pro and its guest does advertise `VAProfileAV1Profile0 :
+VAEntrypointVLD`; on a pre-M3 host the fallback to dav1d in the RDD process remains correct
+behaviour.
