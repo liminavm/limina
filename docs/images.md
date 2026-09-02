@@ -49,14 +49,14 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified by the r22 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-02, and the dogfood row read off the running dev VM the same day. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
+guest with `rpm -q`. Last verified by the r23 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-02, and the dogfood row by `rpm -V` on the dev VM the same day after its mesa-only delivery. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`*.raw`, `*.boot.raw`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-9.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
-| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-9.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-10.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-10.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` | 16 KiB | `26.1.5-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` (stock) |
 
@@ -64,8 +64,8 @@ Two facts the table cannot show:
 
 - **The guest agents are not RPMs and so are not in the table.** All three F44 enhanced images
   carry **`limina-agent` 0.5.0** and `limina-agent-session`, installed to `/usr/local/bin` with
-  their units (payload **r22**, delivered 2026-09-02; r22 is a host-side repack of r21 with only
-  the agent swapped — every kernel and mesa RPM is byte-identical). 0.5.0 is the release that added
+  their units (payload **r23**, delivered 2026-09-02; its agent binaries are byte-identical to
+  r22's, which introduced them). 0.5.0 is the release that added
   the `vcpu` capability, so it is the floor for dynamic vCPU offlining on the enhanced tier; check
   it in a guest with `limina-agent --version`, which is also the fastest way to tell a stale image
   from a fresh one.
@@ -110,7 +110,25 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r19.tar.zst`** (r19, 2026-09-01: kernel
+**Current payload: `payload/limina-guest-tools-f44-r23.tar.zst`** (r23, 2026-09-02: kernel
+`limina-kernel-16k-7.1.8-4` unchanged, agents unchanged, mesa `26.1.8-10.limina` — virgl no longer
+refuses to export a dmabuf whose guest storage is smaller than its layout, and Mesa's EGL layer
+returns `EGL_FALSE` when a driver cannot export an fd instead of leaving the caller's fd array
+untouched. The refusal (in since `-5`) fired for every staged texture, not just decode targets,
+so every `eglExportDMABUFImageMESA` on the tier failed and GTK4's `gdk_texture_download`
+consumed an uninitialized fd: setting a user avatar in GNOME Settings wrote noise. Decode
+targets have real guest memory on every host that offers a decoder, so the refusal guarded
+nothing. Measured on a clone of the delivered `enhanced.test`: GTK's gl, gl-through-gl and vulkan
+renderers all read back at RMSE 0 against the source (`spikes/egl-dmabuf-export/`). Built as a
+repack of r22 in the `reset-enh.raw` build guest against the koji-pinned `mesa-26.1.8-1.fc44`
+SRPM, all 19 patches at fuzz 0. Applied with the real `install-enhanced.sh` to all three F44
+enhanced images (`.bak-pre-r23.raw` CoW backups), both agent hashes verified; the kernel
+short-circuited as already installed and the permanent default stayed `7.1.8-limina16k.4`, so no
+trial boot is owed. The dogfood guest took the mesa half by hand the same day (installer steps 2
+and 3b, its debuginfo brought to the same NEVRA). Previous: r22 (2026-09-02, host-side repack of
+r21 with `limina-agent` 0.5.0), r21 (mesa `26.1.8-9.limina`, the composite decode target taken
+only for a format the host can sample), r20 (mesa `26.1.8-8.limina`, the core releases a planar
+chain, not the driver). Previous: r19, 2026-09-01: kernel
 `limina-kernel-16k-7.1.8-4` unchanged, mesa `26.1.8-7.limina` — a video decode target is now ONE
 composite resource named by its planar format with its plane resources chained behind it, instead
 of one unrelated resource per plane. Only a composite create names a planar format, which is what
