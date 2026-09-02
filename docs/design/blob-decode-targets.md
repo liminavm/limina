@@ -386,18 +386,22 @@ to be explained by this, and should not be left to discover the restore path for
   track the allocations, with M the scanout ring; `LIMINA_SURF_REFTRACE=N` prints the retain
   count around each plane image's teardown when it does not. Measured: 15,009 of 15,014
   deallocated over 200 runs, worker steady at 23 IOSurface mappings.
-- **One keyframe in ~100 reaches the decoder with a zero head.** VideoToolbox rightly refuses
-  it (`-12909`) and every frame behind it fails for want of a reference, so that run shows
-  nothing. The head is zero at page granularity, not the whole buffer: one capture had 1595
-  nonzero bytes in the first 4096 behind an all-zero start. Ruled out by measurement: the
-  bitstream content or session (a good run hashes identically to the browser's), a short or
-  unbacked read (the full length comes from attached iovecs), a staging copy (the guest maps
-  the buffer directly and reads its own write back correctly), a visibility race (the same
-  iovecs re-read 2 ms later are still zero), iovec fragmentation, handle reuse. Rate measured
-  2026-09-01/02 on the enhanced guest: 7 of 650 gst-va runs, idle and under CPU load alike. Next
-  probe: which guest pages the buffer's `ATTACH_BACKING` named, against the pages the guest's
-  mapping wrote — the zero region is the first page, which is where a stale translation would
-  show.
+- **A keyframe in ~100 reached the decoder zeroed, wholly or from an arbitrary offset on** —
+  VideoToolbox refused it (`-12909`) and every frame behind it failed for want of a reference,
+  so that run showed nothing. Cause, host-side: the bitstream buffer is a `PIPE_BIND_CUSTOM`
+  resource, which vrend backs with a zero-filled host shadow (`res->ptr`), and
+  `vrend_pipe_resource_attach_iov` wrote that shadow into the guest backing on every
+  `ATTACH_BACKING`. The guest kernel queues `RESOURCE_CREATE` + `ATTACH_BACKING` and returns to
+  userspace without waiting, so mesa's `memcpy` of the bitstream races the host's attach: when
+  the copy came first, the attach zeroed it behind the guest's back (whole buffer, or from
+  wherever the copy had reached when the shadow write overtook it). Fixed in virglrenderer:
+  the shadow is written back on attach only once it holds content the backing does not (a
+  detach copied the backing into it, or a transfer wrote it while unattached — `ptr_valid`).
+  Upstream `main` carries the same unconditional write-back. Measured after the fix: 0 of 300
+  runs, and 0 of 60 with the arm-time write-watch that made the race fire 30-50% of the time
+  before. The general rule: **the host must never write into guest backing at attach time
+  unless it is restoring content the guest cannot have** — a guest that has the handle may
+  already be writing through its mapping.
 - **The GStreamer registry outlives the fix.** The pre-`-8` abort left `libgstva.so`
   blacklisted in `~/.cache/gstreamer-1.0/registry.*.bin`, and the registry re-validates a plugin
   only when the plugin file itself changes, not its dependencies — so after the mesa upgrade

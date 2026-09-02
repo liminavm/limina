@@ -2421,9 +2421,18 @@ F44 enhanced guest as of virglrenderer `283c9461` + limina-kk `78d7ac6602b` + gu
   planar resource's own RGBA texture, which the IOSurface-backed decode target never filled.
   Now filled on the GPU when, and only when, a composite view exists (virglrenderer
   `283c9461`; `docs/design/blob-decode-targets.md` §What this does not fix).
-- **Still open — one keyframe in ~100 arrives with a zero first page**, so that run shows
-  nothing (`-12909`). 7 of 650 runs measured 2026-09-01/02; page-granular, not whole-buffer.
-  Same design-doc section.
+- **Closed — one keyframe in ~100 arrived zeroed** (`-12909`, the run shows nothing): vrend wrote
+  a `PIPE_BIND_CUSTOM` resource's zero-filled host shadow into the guest backing at every
+  `ATTACH_BACKING`, and the guest does not wait for that command before writing its mapping, so a
+  bitstream copied before the attach was processed was erased under it — whole or from an
+  arbitrary offset. The shadow is now written back only when it holds content the backing lacks
+  (virglrenderer `ptr_valid`; upstream `main` has the same unconditional write-back). 0 of 300
+  after, and 0 of 60 under the write-watch that forced the race 30-50% of the time before. Same
+  design-doc section; the hypervisor-side dead end is `spikes/hv-stage2-write-loss/RESULTS.md`,
+  which also records an unexplained probe-only hazard: `hv_vm_protect` on a page a vCPU is
+  mid-`memcpy` into lost the store immediately preceding the change in 5 of 5 such landings, and
+  the standalone reproduction (2904 fills) never does. Nothing shipped protects live guest pages;
+  measure with a real guest before anything ever does.
 - **Closed — the VA plugin's abort** (`malloc(): unaligned tcache chunk detected`): a
   double release of the planar chain, fixed in mesa `26.1.8-8.limina`.
 - **Closed — the poisoned context.** gst-va creates a 64×64 surface of every fourcc at

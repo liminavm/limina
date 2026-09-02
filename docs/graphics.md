@@ -484,6 +484,16 @@ gate keeps them out of a stock driver whatever the host offers
   calls `virgl_resource_dirty()` on a decode target, unlike every other host-writes-here path in
   that driver. Still present in mesa main (checked 2026-08-30) and worth upstreaming, but
   patching it changes nothing observable — measured both ways against an unpatched control.
+- **The host must never write into guest backing at `ATTACH_BACKING` unless it is restoring content
+  the guest cannot have.** The guest kernel queues `RESOURCE_CREATE` + `ATTACH_BACKING` and returns
+  the handle to userspace without waiting, so the guest may already be writing through its mapping
+  while the host processes the attach. vrend's `PIPE_BIND_CUSTOM` resources (the bitstream buffers)
+  carry a zero-filled host shadow, and upstream's attach copies that shadow out unconditionally —
+  which erased about one keyframe in a hundred under the copy that had just filled it (whole buffer or
+  from an arbitrary offset, then `-12909`). Our fork writes the shadow back only once it holds content
+  the backing lacks (`ptr_valid`: set by a detach or by a transfer into an unattached resource). The
+  hypervisor-side dead end, and a probe-only hazard found on the way, are in
+  `spikes/hv-stage2-write-loss/RESULTS.md`.
 
 Verification: `cargo nextest run -p limina-test -E 'test(stock_guest_hardware_decodes_vp9)'`.
 VP9 is a normatively exact codec, so the test asserts the hardware decode is **byte-identical**
