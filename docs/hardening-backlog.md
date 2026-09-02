@@ -2411,33 +2411,37 @@ fork on every `vkGetMemoryBudget` poll. On a dogfood day that is a 12 MB `superv
 minutes, in which every line that explains anything is buried. It is a routine per-poll
 observation, not an error: demote it to debug on the fork, or rate-limit it to changes.
 
-## Every GStreamer app loses hardware decode: the VA plugin aborts enumerating the device
+## GStreamer apps and hardware decode: a black picture is what is left
 
-`gst-inspect-1.0` registers no `va*` elements in the F44 enhanced guest, so Showtime,
-Totem and anything else on GStreamer decode in software — Showtime sits at ~70% CPU on a
-4K clip while Firefox, on the same guest and the same driver, decodes in hardware.
+`Showtime`, Totem and anything else on GStreamer decode in hardware on the F44 enhanced
+guest as of virglrenderer `ede7bb19` + limina-kk `78d7ac6602b` + guest mesa `547d0179e58`,
+but draw a black picture. What stands between them and a frame, and what no longer does:
 
-The plugin is not missing. `gstreamer1-plugins-bad-free` ships
-`/usr/lib64/gstreamer-1.0/libgstva.so`, and loading it directly aborts:
+- **Still open — the composite-view sampling gap.** glupload's `DirectDmabuf` path builds one
+  EGLImage over the whole NV12 buffer and samples the resource's own texture, which the
+  IOSurface-backed decode target never fills. Host decodes every frame (11% guest CPU), the
+  window's luma is one distinct value. `docs/design/blob-decode-targets.md` §What this does
+  not fix has the two candidate fixes.
+- **Still open — one keyframe in ~100 arrives with a zero first page**, so that run shows
+  nothing (`-12909`). 6 of 600 runs measured 2026-09-01; page-granular, not whole-buffer.
+  Same design-doc section.
+- **Closed — the VA plugin's abort** (`malloc(): unaligned tcache chunk detected`): a
+  double release of the planar chain, fixed in mesa `26.1.8-8.limina`.
+- **Closed — the poisoned context.** gst-va creates a 64×64 surface of every fourcc at
+  registration; the guest asked for the composite shape for formats the host could not back,
+  the refusal was invisible to it, and the host's context error latch then dropped every
+  submission the process made. 0 of 50 decodes produced a picture. The capset is now the
+  contract on both sides (host `b6722ad7`, guest `547d0179e58`): 50 of 50.
+- **Closed — every planar IOSurface leaked**, ~90 per gst-va process, until `IOSurfaceCreate`
+  refused at ~16.4k live surfaces and every later hardware decode poisoned its context. Two
+  independent holders (vrend never destroyed the plane EGLImages of a resource with no base
+  image; zink filed the plane-1 import as an aux plane and skipped `DestroyImage`). Fixed in
+  virglrenderer `ede7bb19` and limina-kk `78d7ac6602b`; 15,009 of 15,014 deallocated over 200
+  runs. Oracle: `LIMINA_GPU_MEM_BUDGET_CENSUS`.
 
-```
-va gstvadevice_linux.c:104:gst_va_device_find_devices: Found VA-API device: /dev/dri/renderD128
-malloc(): unaligned tcache chunk detected
-```
-
-so it finds our device and corrupts the heap while probing it, registering nothing. The
-registry then holds no VA elements and every GStreamer pipeline silently picks `avdec`.
-
-The corruption was ours: `virgl_resource_destroy` released the planar chain the core
-already releases, so probing a planar format double-freed. Fixed in mesa
-`26.1.8-8.limina`, where the plugin loads clean and registers its seven elements.
-
-What that uncovered is a longer fault chain, and hardware decode through gst-va still
-produces nothing: a `create_sampler_view` on a resource the context was never given
-latches `in_error`, every later submission from that context is refused as a silent
-`EINVAL`, and with that latch bypassed VideoToolbox rejects the submissions that do run
-(`-12909`, `kVTVideoDecoderBadDataErr`, ten frames of ten). Firefox decodes the same clip
-on the same boot. So an app on this path gets an empty picture rather than a fallback,
-which is worse than the abort was — `avdec` at least drew. Full measurements and the
-next question in `docs/design/blob-decode-targets.md` §What this does not fix. Measured
-2026-09-01 on mesa `26.1.8-8.limina`.
+**Delivery owes two things.** A guest mesa RPM carrying `547d0179e58` (the enhanced image is
+still on `-8`), and clearing the user's GStreamer registry: the pre-`-8` abort left
+`libgstva.so` blacklisted in `~/.cache/gstreamer-1.0/registry.*.bin`, and the registry only
+re-validates a plugin when the plugin file changes, so after the mesa upgrade every GStreamer
+app still reports `no element "vavp9dec"` until that file is removed. A fresh enhanced image
+ships with the blacklist in place.

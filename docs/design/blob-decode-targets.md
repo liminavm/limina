@@ -172,6 +172,13 @@ Two capset bits, not one, because a host can do the guest-memory writeback witho
 composite shape — which is exactly what shipped first. `VIDEO_GUEST_PLANES` buys real guest
 storage per plane and an honest export; `VIDEO_PLANAR_TARGET` buys the composite create.
 
+The bit is necessary, not sufficient: `VIDEO_PLANAR_TARGET` says the host takes the composite
+shape at all, and the **sampler bitmask says for which planar formats**. The guest must decide
+from those before creating, because a refused create never reaches it — the kernel has already
+handed out the handle, and the first thing anyone sees is a poisoned context (§What this does
+not fix). So the host advertises a planar format as samplable only when
+`vrend_planar_target_backable` accepts it, and the guest asks for the composite shape only then.
+
 Never the reverse; a guest-enabling change ahead of its host fix is the mistake
 `limina-enh-delivery` records. It also keeps the capability granular, per `docs/graphics.md`
 §3.4 — a partially upgraded guest gets the old path for video and keeps everything else.
@@ -348,62 +355,54 @@ to be explained by this, and should not be left to discover the restore path for
   `upload_mapped_plane` writes the picture into the IOSurface planes and returns before it
   reaches `res->gl_id`, so a consumer that views the resource in its planar format — rather than
   importing the planes — gets whatever that texture last held. Per-plane import, which is what
-  Firefox and every VA-API client do, does not go near it. Fill it on demand, or refuse the
-  composite view on an IOSurface-backed target so the consumer takes the converting path.
-
-  This gap is real but it is **not** what empties a gst-va picture; see below.
-
-- **A context error latches, and every later decode is dropped without a word.**
-  `vrend_hw_switch_context` refuses a context with `in_error` set, and
-  `vrend_decode_ctx_submit_cmd` turns that refusal into a bare `EINVAL` before it decodes a
-  single command. The flag never clears on the submit path, so one early error — a
-  `create_sampler_view` naming a resource the context has not been given, which the gst-va
-  import path provokes — silently kills every video submission that context makes for the rest
-  of its life. Measured on the F44 enhanced image, mesa 26.1.8-8: a 30-frame `vavp9dec` run
-  produces 1329 `ComponentError(22)` submissions, 0 VideoToolbox deliveries and 0 IOSurface
-  writes, and hands back a luma plane of one distinct value. Firefox on the same boot decodes
-  normally — 600 IOSurface writes carrying real pixels — because its context is never poisoned.
-  The decoder reports success throughout; nothing in the host log names the cause, because the
-  rejection path has no log line at all.
-
-  Clearing the flag on the submit path is not the end of it. With the latch bypassed the
-  commands execute and the decode reaches VideoToolbox — `create_codec`, a session reporting
-  `hardware accelerated: yes`, ten `decode_bitstream`/`end_frame` pairs — and VT then refuses
-  the data itself: `status -12909` (`kVTVideoDecoderBadDataErr`) on all ten frames, `decode
-  produced no picture`, luma still one distinct value.
-
-  VideoToolbox is right to refuse it: **the bitstream the host reads is all zeros**, and it is
-  the keyframe, so every later frame in that run fails behind it for want of a reference. The
-  failure is intermittent — 2 to 4 empty runs in 20, moving with host load — which is why a
-  handful of consecutive failures once read as "gst-va never decodes". It decodes fine the rest
-  of the time.
-
-  What the emptiness is *not*, each ruled out by measurement rather than reasoning:
-
-  - Not the bitstream content or the session. When a run succeeds, its frames hash identically
-    to the browser's, against the same session parameters, the same `vp09` format description
-    and the same kind of composite planar target.
-  - Not a short or unbacked read. The read returns the full 70037 bytes from attached iovecs.
-  - Not a staging copy. The guest maps the buffer directly (`copy_src` NULL) and its own
-    read-back of what it wrote is correct (`82 49 83 42`, the VP9 keyframe marker).
-  - Not a visibility race. Re-reading the *same* iovecs 2 ms later still yields zeros.
-  - Not fragmentation. Empty reads happen at 97, 104, 162, 208 and 254 iovecs, and runs at 97
-    and 254 also succeed.
-  - Not handle reuse: each empty handle appears exactly once.
-  - Never partial. The whole buffer is zero, every time — which is not the shape a bad
-    scatter-gather translation would leave.
-
-  So the guest writes the frame into its mapping and the host reads a wholly different,
-  untouched region for the same handle. The next probe is on the mapping itself: what guest
-  pages the buffer's `ATTACH_BACKING` actually named, against the pages the guest's own mapping
-  touches.
-
-  So an empty hardware-decoded picture here is three faults deep, and only the last one is
-  about pixels: an empty bitstream reaches the decoder, the latch then drops every submission
-  the poisoned context makes afterwards, and whichever sampling path the consumer picks decides
-  which shade of nothing it shows. Give the rejections a voice before anything else — a silent
-  `EINVAL` on every submit, and a read that reports a size it took from the descriptor rather
-  than the bytes it got, are between them what made this read as a sampling bug for a day.
+  Firefox and every VA-API client do, does not go near it. glupload's `DirectDmabuf` path is such
+  a consumer, so **Showtime shows a black picture while the host decodes every frame** (hardware
+  decode confirmed on the host, 11% CPU in the guest, window luma one distinct value). This is
+  the one fault left between a GStreamer app and a picture. Fill the texture on demand, or refuse
+  the composite view on an IOSurface-backed target so the consumer takes the converting path.
+- **A refused composite create is invisible to the guest, so the capset is the contract.** The
+  kernel hands out the handle before the host is asked; a create the host refuses leaves the
+  guest attaching backing and building sampler views on a resource that does not exist, the host
+  reports `Illegal resource`, the context's error flag latches, and every later submission from
+  that process — the decode included — is dropped. gst-va provokes this at plugin registration,
+  creating a 64×64 surface of every fourcc it knows to learn each one's derived layout. So the
+  guest takes the composite shape only for a multi-plane format the host's sampler bitmask lists,
+  and the host lists only what its planar IOSurface backing can take (NV12, NV21). The refusal in
+  `vrend_resource_alloc_texture` stays as a loud last line for a broken contract, not as a
+  negotiation. Measured on the F44 enhanced guest: 0 of 50 gst-va decodes produced a picture
+  before, 50 of 50 after; the stock guest, which never consults the bit for a planar format,
+  decoded 50 of 50 throughout.
+- **Every planar surface must die with its resource, and two things kept them alive.** Each
+  planar IOSurface is held by our handle, the registry, and one Metal texture per plane
+  (KosmicKrisp adopts the imported texture with one retain per image plane). The per-plane
+  EGLImages were destroyed only when the resource also had a base image, which a planar target
+  never has; and zink filed the plane-1 import as an aux plane — its test is "plane index at or
+  past the plane count of the handle's format", and our import passes the plane's own
+  single-plane format — so it skipped `DestroyImage` and the plane's texture retain never came
+  off. Either alone holds every decode target and every 64×64 probe forever: ~90 surfaces per
+  gst-va process, `IOSurfaceCreate` refusing at ~16.4k live, and from then on every hardware
+  decode poisoning its context. Both fixed (virglrenderer `ede7bb19`, limina-kk `78d7ac6602b`).
+  The oracle is `LIMINA_GPU_MEM_BUDGET_CENSUS=<secs>`: `DEALLOC iosurface N (alive M)` must
+  track the allocations, with M the scanout ring; `LIMINA_SURF_REFTRACE=N` prints the retain
+  count around each plane image's teardown when it does not. Measured: 15,009 of 15,014
+  deallocated over 200 runs, worker steady at 23 IOSurface mappings.
+- **One keyframe in ~100 reaches the decoder with a zero head.** VideoToolbox rightly refuses
+  it (`-12909`) and every frame behind it fails for want of a reference, so that run shows
+  nothing. The head is zero at page granularity, not the whole buffer: one capture had 1595
+  nonzero bytes in the first 4096 behind an all-zero start. Ruled out by measurement: the
+  bitstream content or session (a good run hashes identically to the browser's), a short or
+  unbacked read (the full length comes from attached iovecs), a staging copy (the guest maps
+  the buffer directly and reads its own write back correctly), a visibility race (the same
+  iovecs re-read 2 ms later are still zero), iovec fragmentation, handle reuse. Rate measured
+  2026-09-01 on the enhanced guest: 6 of 600 gst-va runs, idle and under CPU load alike. Next
+  probe: which guest pages the buffer's `ATTACH_BACKING` named, against the pages the guest's
+  mapping wrote — the zero region is the first page, which is where a stale translation would
+  show.
+- **The GStreamer registry outlives the fix.** The pre-`-8` abort left `libgstva.so`
+  blacklisted in `~/.cache/gstreamer-1.0/registry.*.bin`, and the registry re-validates a plugin
+  only when the plugin file itself changes, not its dependencies — so after the mesa upgrade
+  every GStreamer app still reports `no element "vavp9dec"` until that cache is removed. A fresh
+  enhanced image ships with the blacklist already in place. Delivery has to clear it.
 - **`glimagesink` poisons its virgl context** — a separate fault, on a different path, found
   alongside the above and not explained by it: 13 `CREATE_OBJECT` failures with EINVAL, after
   which 2652 consecutive `[SUBMIT3D]`s fail. It does not reproduce under `gldownload`.
