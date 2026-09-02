@@ -49,14 +49,14 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified in a booted F44 enhanced guest 2026-08-31, and the dogfood row read off the running dev VM the same day. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
+guest with `rpm -q`. Last verified by the r21 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-02, and the dogfood row read off the running dev VM the same day. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`*.raw`, `*.boot.raw`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-7.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
-| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-5.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-9.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-9.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 | **F43 stock** (`vanilla`, `accessible`, `stock.test`) | `6.17.1-300.fc43` | 4 KiB | `25.2.4-2.fc43` | `49.1-1.fc43` | `49.1` |
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` | 16 KiB | `26.1.5-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` (stock) |
 

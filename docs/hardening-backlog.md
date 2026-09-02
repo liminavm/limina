@@ -2439,9 +2439,8 @@ F44 enhanced guest as of virglrenderer `283c9461` + limina-kk `78d7ac6602b` + gu
   runs, and 17 live surfaces steady through 50 more with the composite fill in place. Oracle:
   `LIMINA_GPU_MEM_BUDGET_CENSUS`.
 
-**Delivery owes two things.** A guest mesa RPM carrying `547d0179e58` (the enhanced image is
-still on `-8`), and clearing the user's GStreamer registry: the pre-`-8` abort left
-`libgstva.so` blacklisted in `~/.cache/gstreamer-1.0/registry.*.bin`, and the registry only
-re-validates a plugin when the plugin file changes, so after the mesa upgrade every GStreamer
-app still reports `no element "vavp9dec"` until that file is removed. A fresh enhanced image
-ships with the blacklist in place.
+**Delivered as payload r21** (guest mesa `26.1.8-9.limina`, carrying `547d0179e58`) to the three
+F44 enhanced images and the dogfood guest. The installer now drops every user's
+`~/.cache/gstreamer-1.0/registry.*.bin` after the mesa step: GStreamer re-validates a cached
+plugin only when the plugin file changes, so a `libgstva.so` blacklisted by the pre-`-8` abort
+would otherwise survive the upgrade and keep every GStreamer app at `no element "vavp9dec"`.
