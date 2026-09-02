@@ -29,9 +29,16 @@ dropped" and stopped; Chrome healed only when it tore its decoder down.
 
 Fixed in virglrenderer `2c5f6e9c` (journal the creates; a fresh codec drops inter frames until
 the next keyframe; a create that produced nothing returns EINVAL; lookup misses logged
-rate-limited). Same cycle afterwards: the codec is re-created during replay, one inter frame is
-dropped, the next keyframe re-seeds it, 670 decodes / 669 pictures in the next seconds, the
-player keeps playing with the picture advancing.
+rate-limited). Same cycle afterwards: the codec is re-created during replay, the next keyframe
+re-seeds it, 670 decodes / 669 pictures in the next seconds, the player keeps playing with the
+picture advancing.
+
+The drop itself was still visible: with the codec back but dropping, the player presents its
+pool of untouched targets in pool order until the keyframe (81–134 dropped frames in the
+dogfood clips, 3–5 s of the same bounce, then the picture advances). The backend now freezes
+the window on one picture: the first dropped frame's target is copied into every later one
+(`copy_picture`). In the L2 vehicle (`l2_video_vaapi_restore`, 25 fps, keyframe per second)
+the 18 dropped frames showed 7 distinct pictures before and one after.
 
 ## What the measurements rule out, and the one they misled
 

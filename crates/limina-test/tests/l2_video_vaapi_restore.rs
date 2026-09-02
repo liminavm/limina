@@ -34,6 +34,12 @@
 //! 3. **The host never decoded into nothing.** The backend logs a rate-limited line when a
 //!    per-frame command names a codec or buffer it does not have; after the restore there
 //!    must be none.
+//! 4. **The resync window is one still picture.** Between the restore and the keyframe the
+//!    guest is handed targets no decode has written, and a player presents its pool of
+//!    stale pictures in pool order — the visible bounce. The backend replicates the first
+//!    such target into every later one, so the frames that differ from the software decoder
+//!    form one contiguous run, as long as the dropped-frame count the backend logs (plus at
+//!    most the frame cut in half by the snapshot), holding exactly one picture.
 //!
 //! Vehicle: the stock F44 autologin baseline on the coexist GPU with the zink-on-KK host-GL
 //! worker env, the same as `l2_video_vaapi`. SKIPs cleanly without LIMINA_HVF_TESTS, the
@@ -51,6 +57,7 @@ const CLIP_WEBM: &str = "/tmp/limina-vp9-restore.webm";
 const HW_OUT: &str = "/tmp/limina-vp9-restore-hw.i420";
 const SW_OUT: &str = "/tmp/limina-vp9-restore-sw.i420";
 const HW_LOG: &str = "/tmp/limina-vp9-restore-hw.log";
+const FRAMES_DIR: &str = "/tmp/limina-vp9-restore-frames";
 
 const WIDTH: u64 = 320;
 const HEIGHT: u64 = 240;
@@ -312,6 +319,12 @@ fn hardware_decode_in_flight_survives_restore() {
                  echo \"hw_tail_distinct_luma=$(tail -c {tail_bytes} {HW_OUT} \
                      | head -c {} | od -An -tu1 -v | tr ' ' '\\n' | grep -v '^$' \
                      | sort -u | wc -l)\"; \
+                 rm -rf {FRAMES_DIR}; mkdir -p {FRAMES_DIR}; \
+                 split -b {FRAME_BYTES} -d -a 3 {HW_OUT} {FRAMES_DIR}/hw_; \
+                 split -b {FRAME_BYTES} -d -a 3 {SW_OUT} {FRAMES_DIR}/sw_; \
+                 echo \"hw_frames=$(md5sum {FRAMES_DIR}/hw_* | cut -d' ' -f1 | tr '\\n' ' ')\"; \
+                 echo \"sw_frames=$(md5sum {FRAMES_DIR}/sw_* | cut -d' ' -f1 | tr '\\n' ' ')\"; \
+                 rm -rf {FRAMES_DIR}; \
                  echo \"gst_log=$(tr '\\n' ' ' < {HW_LOG})\"",
                 WIDTH * HEIGHT
             ),
@@ -378,8 +391,50 @@ fn hardware_decode_in_flight_survives_restore() {
          wrong pictures.\n{report}"
     );
 
+    // ORACLE 4 — the resync window is one still picture. The frames that differ from the
+    // software decoder are exactly the ones no decode wrote: one contiguous run, as long as
+    // the backend's dropped count (plus at most the frame the snapshot cut in half, which
+    // reaches the restored codec with no bitstream), and every frame in it is the same
+    // picture. Several pictures inside the run is the bounce.
+    let dropped: usize = slog
+        .lines()
+        .filter_map(|l| l.split("after dropping ").nth(1))
+        .filter_map(|rest| rest.split_whitespace().next()?.parse().ok())
+        .next_back()
+        .unwrap_or(0);
+    let (hw_field, sw_field) = (field(&report, "hw_frames"), field(&report, "sw_frames"));
+    let hw_frames: Vec<&str> = hw_field.split_whitespace().collect();
+    let sw_frames: Vec<&str> = sw_field.split_whitespace().collect();
+    assert_eq!(
+        (hw_frames.len(), sw_frames.len()),
+        (FRAMES as usize, FRAMES as usize),
+        "per-frame checksums are incomplete.\n{report}"
+    );
+    let stale: Vec<usize> = (0..hw_frames.len())
+        .filter(|&i| hw_frames[i] != sw_frames[i])
+        .collect();
+    let contiguous = stale.windows(2).all(|w| w[1] == w[0] + 1);
+    let mut pictures: Vec<&str> = stale.iter().map(|&i| hw_frames[i]).collect();
+    pictures.sort_unstable();
+    pictures.dedup();
+    assert!(
+        contiguous && stale.len() >= dropped && stale.len() <= dropped + 1,
+        "the frames differing from the software decoder are {stale:?}; expected one contiguous \
+         run of {dropped} (+1 for the frame the snapshot cut), the frames the re-created codec \
+         dropped while awaiting a keyframe.\n{report}"
+    );
+    assert!(
+        pictures.len() <= 1,
+        "the {} frames the codec dropped while awaiting a keyframe show {} distinct pictures — \
+         the guest's pool of stale targets is being presented in pool order (the bounce) \
+         instead of one frozen picture.\n{report}",
+        stale.len(),
+        pictures.len()
+    );
+
     eprintln!(
         "hardware decode carried across the restore: {FRAMES} frames, last {TAIL_FRAMES} \
-         bit-exact against the software decoder"
+         bit-exact against the software decoder, {} stale frame(s) shown as one still picture",
+        stale.len()
     );
 }

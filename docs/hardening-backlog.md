@@ -2149,6 +2149,28 @@ Two rules this earned:
 - **A re-created decoder must resynchronise, not resume.** Replaying the create restores the
   object, not its reference pictures; feeding the next inter frame produces a picture that looks
   decoded and is not. Drop until a keyframe, and say so in the log.
+- **A dropped frame's target must not be left to the player.** The target of a frame the host
+  did not decode holds whatever it held before, and a player presents its pool of such targets
+  in pool order — pictures from before the restore, back and forth, for the whole resync
+  window (81–134 frames at 30 fps in the dogfood clips, 3–5 s). The backend freezes instead:
+  the first dropped frame's target is the picture, and `copy_picture` (a new
+  `virgl_video_callbacks` entry, implemented by `vrend_video.c` for GL planes, composite
+  IOSurface planes and the guest's own plane storage) replicates it into every later dropped
+  target until the keyframe. The frozen picture is one pool-depth old, and a target the guest
+  never wrote would freeze on green — accepted for the window's length. Guarded by oracle 4 of
+  `l2_video_vaapi_restore.rs` (one contiguous run of stale frames, one picture).
+
+## Open — resync without a freeze: replay the bitstream since the last keyframe
+
+The freeze above is the honest floor; the seamless version is to give the restored codec its
+reference pictures back. The VideoToolbox backend already keeps the unit log since the last
+keyframe (`replay_append`/`replay_reset`, capped at 64 MB) for its session rebuilds, so the
+material exists on the host at snapshot time. What is owed: export that log through the
+virglrenderer snapshot payload (a versioned per-codec record next to the journal), carry it
+through libkrun's snapshot round-trip, and on restore feed it to the re-created codec with
+delivery suppressed before the guest's next frame arrives. Then the first post-restore inter
+frame decodes correctly and the gate never engages. Cost is bounded by one keyframe interval
+of bitstream per live codec; the AV1 serializer's held-frame state has to travel with it.
 
 Still open from the same runs: Chrome's classic context drops 30–79 `CREATE_OBJECT` sampler views
 at every replay (`Illegal resource 2122xx`/`3608xx`, contiguous ids) — stale views on resources
