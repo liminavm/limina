@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Tue, 1 Sep 2026 21:57:50 -0300
+Subject: [PATCH 17/17] virgl: take the composite decode-target shape only for
+ a format the host can sample
+
+The composite create was gated on VIDEO_PLANAR_TARGET alone and relied on falling
+back to per-plane buffers when the host refused it. The host's refusal is invisible
+here: the kernel has already handed out the handle, so the driver attaches backing
+and builds sampler views on a resource the host never made, the host reports an
+illegal resource and puts the context in error for the rest of its life, and every
+later submission -- the decode included -- is dropped silently. gst-va provokes this
+during plugin registration, creating a 64x64 surface of every fourcc it knows to
+learn each one's derived layout, so every GStreamer VA client on the enhanced tier
+decoded nothing.
+
+Ask the caps instead of trying: take the composite shape only for a multi-plane
+format the host's sampler bitmask lists, which is the lookup is_format_supported
+already does for a planar layout, and let everything else -- single-plane formats
+included, which would otherwise go out under their own name instead of as R8 --
+take the per-plane form the host has always accepted.
+
+Measured on F44 enhanced (26.1.8-8 base): 0 of 50 gst-va decodes produced a picture
+before, 49 of 50 after, the one failure being an unrelated all-zero bitstream.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/gallium/drivers/virgl/virgl_video.c | 21 +++++++++++++++++----
+ 1 file changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/src/gallium/drivers/virgl/virgl_video.c b/src/gallium/drivers/virgl/virgl_video.c
+index f366f912bcf..6af1e1113a6 100644
+--- a/src/gallium/drivers/virgl/virgl_video.c
++++ b/src/gallium/drivers/virgl/virgl_video.c
+@@ -1265,15 +1265,28 @@ virgl_video_create_buffer(struct pipe_context *ctx,
+      * frame with one surface; only the composite create names a planar format, which
+      * is what a host-side planar allocation keys off.
+      *
+-     * Falling back rather than failing is the rule for this whole feature, so a refused
+-     * composite create retries as per-plane rather than losing the buffer: a guest that
+-     * cannot get composite targets still decodes, just through the copy path.
++     * The decision has to be made here, from the caps, and not by trying: a create the
++     * host refuses is invisible to the guest. The kernel has already handed out the
++     * handle, so the driver goes on to attach backing and build sampler views on a
++     * resource the host never made, and the host answers with "Illegal resource" and
++     * puts the context in error for the rest of its life -- every later submission,
++     * the decode included, is dropped without a word. gst-va provokes exactly that
++     * during plugin registration, when it creates a 64x64 surface of every fourcc it
++     * knows to learn the layout each one derives to. So the composite shape is taken
++     * only for a format the host's sampler bitmask lists, which is the same lookup
++     * virgl_is_format_supported does for a planar layout; today that is NV12 alone.
++     * Everything else, single-plane formats included (Y800 would otherwise go out under
++     * its own name rather than as R8), takes the per-plane form the host has always
++     * accepted, and decodes through the copy path.
+      *
+      * Interlaced is excluded outright. Its template is a 2D_ARRAY, and a planar create
+      * has to chain plane resources over one allocation -- a shape neither the guest
+      * layout nor the host's plane addressing takes for an array target. */
+     if ((vs->caps.caps.v2.capability_bits_v2 & VIRGL_CAP_V2_VIDEO_PLANAR_TARGET) &&
+-        !tmpl->interlaced)
++        !tmpl->interlaced &&
++        util_format_get_num_planes(tmpl->buffer_format) > 1 &&
++        vs->base.is_format_supported(&vs->base, tmpl->buffer_format, PIPE_TEXTURE_2D,
++                                     0, 0, PIPE_BIND_SAMPLER_VIEW))
+         vbuf->buf = vl_video_buffer_create_as_resource(ctx, tmpl, NULL, 0);
+     if (!vbuf->buf)
+         vbuf->buf = vl_video_buffer_create(ctx, tmpl);

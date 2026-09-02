@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Tue, 1 Sep 2026 17:25:45 -0300
-Subject: [PATCH 16/16] virgl: the core releases a planar chain, not the driver
+Subject: [PATCH 16/17] virgl: the core releases a planar chain, not the driver
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

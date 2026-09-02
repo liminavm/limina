@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Thu, 13 Aug 2026 13:22:27 -0300
-Subject: [PATCH 06/16] venus: allocate dma-buf import memory synchronously
+Subject: [PATCH 06/17] venus: allocate dma-buf import memory synchronously
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

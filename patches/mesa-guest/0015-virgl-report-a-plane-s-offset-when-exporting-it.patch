@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Tue, 1 Sep 2026 12:48:46 -0300
-Subject: [PATCH 15/16] virgl: report a plane's offset when exporting it
+Subject: [PATCH 15/17] virgl: report a plane's offset when exporting it
 
 The winsys fills the handle and stride from the BO and has no notion of where a
 plane sits inside it, so an exported chroma plane of a composite target described

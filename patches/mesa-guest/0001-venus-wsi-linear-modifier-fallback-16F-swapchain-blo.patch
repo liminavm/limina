@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 5 Aug 2026 18:53:49 -0300
-Subject: [PATCH 01/16] venus/wsi: linear-modifier fallback + 16F swapchain
+Subject: [PATCH 01/17] venus/wsi: linear-modifier fallback + 16F swapchain
  block for virtio-gpu presents
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Tue, 1 Sep 2026 09:32:39 -0300
-Subject: [PATCH 13/16] virgl: give video decode targets real guest memory
+Subject: [PATCH 13/17] virgl: give video decode targets real guest memory
 
 A decode target's plane resource got the one-page staging stub, because
 copy-transfer-from-host applies to it like any other texture. That stub is
