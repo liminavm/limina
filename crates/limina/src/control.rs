@@ -141,6 +141,11 @@ struct Inner {
     /// `--cpu-reclaim` asked for one (and the VM has vCPUs to spare) — and `None` is what
     /// withholds the `vcpu` capability, so a guest whose host has no policy never reports.
     vcpu_policy: Option<crate::vcpu_policy::VcpuPolicy>,
+    /// The host policy the guest's currently selected power profile asks for. Level-triggered:
+    /// the guest sends its whole profile, never a delta, so this is simply overwritten and a
+    /// reconnect or restore resynchronises for free. `Balanced` until a guest says otherwise,
+    /// which is exactly today's defaults.
+    power_policy: Mutex<crate::power_profile::PowerPolicy>,
     /// The guest's last-reported online vCPU count, and when it said so — from EITHER tier (the
     /// enhanced agent's `CpuPressure` or a QGA `guest-get-vcpus` poll). The only statement about
     /// online state anyone trusts (nothing acks a target), so it is what
@@ -190,6 +195,7 @@ impl ControlPlane {
         let inner = Arc::new(Inner {
             peers: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
+            power_policy: Mutex::new(crate::power_profile::PowerProfile::default().policy()),
             clipboard: Arc::new(crate::clipboard::Clipboard::new()),
             vdagent: Mutex::new(None),
             qga: Mutex::new(None),
@@ -543,6 +549,47 @@ impl ControlPlane {
 }
 
 impl Inner {
+    /// Apply the host policy a guest-selected power profile asks for.
+    ///
+    /// Idempotent, because the guest reports level-triggered: the same profile arriving twice
+    /// (a reconnect, a restore, a re-announce) must not disturb anything. That is also why
+    /// nothing here is expressed as a delta.
+    fn apply_power_profile(
+        &self,
+        profile: crate::power_profile::PowerProfile,
+    ) -> Option<limina_proto::CpuTarget> {
+        let want = profile.policy();
+        {
+            let mut held = self.power_policy.lock().unwrap();
+            if *held == want {
+                return None;
+            }
+            log::info!(
+                "power: guest selected {} (little {:?}, rt band {}, reclaim {:?})",
+                profile.as_str(),
+                want.little,
+                if want.rt_band { "on" } else { "off" },
+                want.cpu_reclaim
+            );
+            *held = want;
+        }
+
+        // vCPU reclaim is ours to apply directly. A floor that ROSE means the machine must come
+        // back now — a VM shrunk under power-saver and switched back to balanced must not wait
+        // for the next pressure report to notice.
+        let grow = self
+            .vcpu_policy
+            .as_ref()
+            .filter(|policy| policy.set_reclaim(want.cpu_reclaim))
+            .map(|policy| policy.max_target());
+
+        // `little` and `rt_band` live in the worker: a QoS override needs the vCPU thread's
+        // pthread_t, which only its own process has. They are held above for the worker channel
+        // to read; until that lands the profile still moves reclaim, and `balanced` — what a
+        // guest reports unless its user says otherwise — asks for today's defaults anyway.
+        grow
+    }
+
     /// Send a clipboard message to every clipboard-capable peer, dropping any whose
     /// send fails (dead connection).
     fn broadcast_clipboard(&self, msg: &Message) {
@@ -1044,6 +1091,16 @@ fn serve_loop(
                     }
                 }
             }
+            // The guest desktop's power profile. The guest needs no limina components to have
+            // one — on a stock Fedora guest `tuned-ppd` owns `net.hadess.PowerProfiles` — so the
+            // agent only reports which is active and the host decides what it means. Nothing is
+            // ever sent back: this is the user's choice, not a negotiation.
+            Ok((_, Message::PowerProfile(p))) => {
+                let profile = crate::power_profile::PowerProfile::from_wire(p.profile);
+                if let Some(target) = inner.apply_power_profile(profile) {
+                    reply(&Message::CpuTarget(target), CHANNEL_CONTROL)?;
+                }
+            }
             // M15: the guest's own monitor arrangement, which the host cannot infer — an
             // absolute pointer is spread across the guest's whole desktop, so mapping into it
             // needs to know what order the compositor put the monitors in.
@@ -1197,6 +1254,68 @@ mod tests {
             .iter()
             .any(|c| c == "vcpu"));
         assert!(welcome_caps(false, false, true).iter().any(|c| c == "vcpu"));
+    }
+
+    /// End-to-end over the socket: selecting `power-saver` in the guest desktop tightens the
+    /// host's reclaim floor, and going back to `balanced` both restores it and grows the machine
+    /// at once rather than waiting for the next pressure report.
+    ///
+    /// A VM started with reclaim *off* is used deliberately — that is the default, and the whole
+    /// reason a policy is now constructed even for `Disabled`: the `vcpu` capability is
+    /// negotiated once at WELCOME, so a VM that could not reclaim at boot must still be able to
+    /// when its user asks.
+    #[test]
+    fn the_guests_power_profile_moves_the_reclaim_floor() {
+        let path = std::env::temp_dir().join(format!(
+            "limina-ctl-power-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let policy =
+            crate::vcpu_policy::VcpuPolicy::new(10, crate::vcpu_policy::CpuReclaim::Disabled);
+        let plane = ControlPlane::start(&path, None, policy, None, false).unwrap();
+        let mut agent = UnixStream::connect(&path).unwrap();
+        write_message(
+            &mut agent,
+            CHANNEL_CONTROL,
+            &Message::Hello(Hello {
+                agent: "test-agent/0".into(),
+                caps: vec!["vcpu".into()],
+                pagesize: 16384,
+            }),
+        )
+        .unwrap();
+        let (_, _welcome) = read_message(&mut agent).unwrap();
+
+        let floor = || plane.inner.vcpu_policy.as_ref().unwrap().floor();
+        assert_eq!(floor(), 10, "a disabled policy floors at the whole machine");
+
+        // power-saver tightens, and asks for no grow — nothing has been given up yet.
+        write_message(
+            &mut agent,
+            CHANNEL_CONTROL,
+            &Message::PowerProfile(limina_proto::PowerProfileMsg { profile: 0 }),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while floor() == 10 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(floor(), 2, "power-saver should squeeze toward two");
+
+        // ...and going back restores the whole machine, with a CpuTarget on the way out so the
+        // guest re-onlines immediately.
+        write_message(
+            &mut agent,
+            CHANNEL_CONTROL,
+            &Message::PowerProfile(limina_proto::PowerProfileMsg { profile: 1 }),
+        )
+        .unwrap();
+        match read_message(&mut agent).unwrap() {
+            (_, Message::CpuTarget(t)) => assert_eq!(t.online, 10),
+            other => panic!("expected a CpuTarget grow, got {other:?}"),
+        }
+        assert_eq!(floor(), 10);
     }
 
     /// End-to-end over the socket: a guest short of CPUs gets a `CpuTarget` back on the same

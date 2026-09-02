@@ -88,6 +88,8 @@ pub mod msg_type {
     pub const CPU_PRESSURE: u8 = 10;
     /// Host → guest desired online-vCPU count (dynamic vCPU offlining).
     pub const CPU_TARGET: u8 = 11;
+    /// Guest → host: which power profile the guest's desktop has selected.
+    pub const POWER_PROFILE: u8 = 12;
     pub const CLIP_OFFER: u8 = 16;
     pub const CLIP_REQUEST: u8 = 17;
     pub const CLIP_DATA: u8 = 18;
@@ -440,6 +442,24 @@ pub struct CpuTarget {
     pub online: u32,
 }
 
+/// Guest → host: the power profile the guest's desktop currently has selected.
+///
+/// **Level-triggered, not edge**: the agent sends the current profile on connect and on every
+/// change, never a delta. A reconnect, a reboot and a snapshot restore therefore resynchronise
+/// for free, with no replay and no handshake.
+///
+/// The guest needs no limina components to *have* a profile — on a stock Fedora guest
+/// `tuned-ppd` owns `net.hadess.PowerProfiles` — so all the agent does is report which one is
+/// active. The host decides what it means; see `docs/design/power-profiles.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct PowerProfileMsg {
+    /// 0 = power-saver, 1 = balanced, 2 = performance. Anything else means balanced: the
+    /// vocabulary belongs to the guest's daemon and may grow, and an unrecognised value must
+    /// leave the host on its default rather than on a stale policy.
+    #[n(0)]
+    pub profile: u8,
+}
+
 /// Host → guest: the host's authoritative wallclock. The guest kernel's CLOCK_REALTIME is
 /// CNTVCT-anchored and CNTVCT freezes while the host sleeps (mach_absolute_time), so a host
 /// nap lags the running guest's clock by the nap's length — and a snapshot restore lags it
@@ -536,6 +556,7 @@ pub enum Message {
     MemPressure(MemPressure),
     CpuPressure(CpuPressure),
     CpuTarget(CpuTarget),
+    PowerProfile(PowerProfileMsg),
     DisplayLayout(DisplayLayout),
     TimeSync(TimeSync),
     Shutdown(Shutdown),
@@ -562,6 +583,7 @@ impl Message {
             Message::MemPressure(_) => msg_type::MEM_PRESSURE,
             Message::CpuPressure(_) => msg_type::CPU_PRESSURE,
             Message::CpuTarget(_) => msg_type::CPU_TARGET,
+            Message::PowerProfile(_) => msg_type::POWER_PROFILE,
             Message::DisplayLayout(_) => msg_type::DISPLAY_LAYOUT,
             Message::TimeSync(_) => msg_type::TIME_SYNC,
             Message::Shutdown(_) => msg_type::SHUTDOWN,
@@ -595,6 +617,7 @@ impl Message {
             Message::MemPressure(m) => cbor(m),
             Message::CpuPressure(m) => cbor(m),
             Message::CpuTarget(m) => cbor(m),
+            Message::PowerProfile(m) => cbor(m),
             Message::DisplayLayout(m) => cbor(m),
             Message::TimeSync(m) => cbor(m),
             Message::Shutdown(m) => cbor(m),
@@ -619,6 +642,7 @@ impl Message {
             msg_type::MEM_PRESSURE => Message::MemPressure(cbor(&payload)?),
             msg_type::CPU_PRESSURE => Message::CpuPressure(cbor(&payload)?),
             msg_type::CPU_TARGET => Message::CpuTarget(cbor(&payload)?),
+            msg_type::POWER_PROFILE => Message::PowerProfile(cbor(&payload)?),
             msg_type::TIME_SYNC => Message::TimeSync(cbor(&payload)?),
             msg_type::SHUTDOWN => Message::Shutdown(cbor(&payload)?),
             msg_type::SHUTDOWN_ACK => Message::ShutdownAck,
@@ -796,6 +820,12 @@ mod tests {
         let ct = CpuTarget { online: 2 };
         let (_, decoded) = round_trip(Message::CpuTarget(ct));
         assert_eq!(decoded, Message::CpuTarget(ct));
+
+        for profile in [0u8, 1, 2, 200] {
+            let pp = PowerProfileMsg { profile };
+            let (_, decoded) = round_trip(Message::PowerProfile(pp));
+            assert_eq!(decoded, Message::PowerProfile(pp));
+        }
     }
 
     #[test]

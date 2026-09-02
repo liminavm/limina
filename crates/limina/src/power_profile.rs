@@ -15,17 +15,6 @@
 //! This module is the mapping, kept pure and separate from the plumbing so the policy can be
 //! tested without a VM.
 
-// The plumbing that consumes this — the wire message, the agent's D-Bus watcher, and the
-// application of each field — lands separately. `expect` rather than `allow` so that the first
-// consumer makes this attribute itself an error, and it cannot outlive its reason.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the profile plumbing lands with the control-plane change"
-    )
-)]
-
 use crate::vcpu_policy::CpuReclaim;
 
 /// The three profiles `org.freedesktop.UPower.PowerProfiles` defines. Ordered from cheapest to
@@ -47,6 +36,13 @@ impl PowerProfile {
     /// an unrecognised profile must not leave the host holding a stale policy.
     ///
     /// [`Balanced`]: PowerProfile::Balanced
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the agent's D-Bus watcher, which is what reads and sends a profile, lands next"
+        )
+    )]
     pub fn parse(s: &str) -> PowerProfile {
         match s {
             "power-saver" => PowerProfile::PowerSaver,
@@ -66,6 +62,13 @@ impl PowerProfile {
 
     /// The wire encoding. Explicit rather than `as u8` so reordering the enum cannot silently
     /// change the protocol.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the agent's D-Bus watcher, which is what reads and sends a profile, lands next"
+        )
+    )]
     pub fn to_wire(self) -> u8 {
         match self {
             PowerProfile::PowerSaver => 0,
@@ -119,9 +122,11 @@ pub struct PowerPolicy {
     /// a reservation is exactly what a user asking to save power is not asking for.
     pub rt_band: bool,
     /// How eagerly idle vCPUs are offlined.
+    ///
+    /// Balloon giveback is deliberately *not* here. The balloon has its own policy with its own
+    /// pressure signal, and two controllers writing one knob is how the oscillation classes in
+    /// `limina-balloon-oscillation` were born.
     pub cpu_reclaim: CpuReclaim,
-    /// Whether the balloon gives memory back to the host more eagerly than its default.
-    pub eager_giveback: bool,
 }
 
 impl PowerProfile {
@@ -135,19 +140,16 @@ impl PowerProfile {
                 little: LittleBacking::Confined,
                 rt_band: false,
                 cpu_reclaim: CpuReclaim::Moderate,
-                eager_giveback: true,
             },
             PowerProfile::Balanced => PowerPolicy {
                 little: LittleBacking::Confined,
                 rt_band: true,
                 cpu_reclaim: CpuReclaim::Disabled,
-                eager_giveback: false,
             },
             PowerProfile::Performance => PowerPolicy {
                 little: LittleBacking::Promoted,
                 rt_band: true,
                 cpu_reclaim: CpuReclaim::Disabled,
-                eager_giveback: false,
             },
         }
     }
@@ -164,7 +166,6 @@ mod tests {
         let p = PowerProfile::Balanced.policy();
         assert_eq!(p.cpu_reclaim, CpuReclaim::Disabled);
         assert!(p.rt_band);
-        assert!(!p.eager_giveback);
     }
 
     /// A profile arriving from the guest is a string owned by someone else's daemon. An
@@ -218,13 +219,11 @@ mod tests {
     fn power_saver_is_the_only_profile_that_concedes() {
         let ps = PowerProfile::PowerSaver.policy();
         assert!(!ps.rt_band);
-        assert!(ps.eager_giveback);
         assert_ne!(ps.cpu_reclaim, CpuReclaim::Disabled);
 
         for p in [PowerProfile::Balanced, PowerProfile::Performance] {
             let q = p.policy();
             assert!(q.rt_band, "{p:?}");
-            assert!(!q.eager_giveback, "{p:?}");
             assert_eq!(q.cpu_reclaim, CpuReclaim::Disabled, "{p:?}");
         }
     }

@@ -34,6 +34,7 @@
 //! When in doubt this policy is wrong in the cheap direction.
 
 use limina_proto::{CpuPressure, CpuTarget};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -158,8 +159,10 @@ struct State {
 pub struct VcpuPolicy {
     /// The VM's boot vCPU count: the maximum, and what a grow always jumps to.
     max: u32,
-    /// The fewest vCPUs to leave online (derived from the reclaim mode at construction).
-    floor: u32,
+    /// The fewest vCPUs to leave online, derived from the current reclaim mode. Settable at
+    /// runtime ([`VcpuPolicy::set_reclaim`]) because the guest's power profile chooses it:
+    /// `power-saver` tightens the floor, and leaving it is what restores the whole machine.
+    floor: AtomicU32,
     /// How long the shrink condition must hold before each step ([`shrink_dwell`]).
     dwell: Duration,
     /// The `limina-vmm` worker's pid, once it has been spawned. Set by the supervisor via
@@ -170,25 +173,27 @@ pub struct VcpuPolicy {
 }
 
 impl VcpuPolicy {
-    /// Build a policy for a VM that booted `max` vCPUs. Returns `None` for
-    /// [`CpuReclaim::Disabled`] and for any VM whose floor cannot be below its maximum — a
-    /// 1-vCPU VM, or a mode whose floor rounds up to the whole machine. Those have nothing to
-    /// give back, and a policy that can never act should not exist (the control plane keys the
-    /// `vcpu` capability off `Some`, so the guest is never even asked to report).
+    /// Build a policy for a VM that booted `max` vCPUs. `None` only for a 1-vCPU VM, which has
+    /// nothing to give back at all — cpu0 can never go offline.
+    ///
+    /// A policy is created even for a mode that cannot currently act, including
+    /// [`CpuReclaim::Disabled`] (whose floor is `max`, so the shrink guard never passes). That
+    /// is deliberate: the control plane keys the `vcpu` capability off `Some`, the capability is
+    /// negotiated once at WELCOME, and the guest's power profile can raise or lower the floor
+    /// later. A VM that started with reclaim off must still be *able* to reclaim when its user
+    /// selects `power-saver`, and it can only do that if the guest was asked to report from the
+    /// start.
     pub fn new(max: u8, mode: CpuReclaim) -> Option<VcpuPolicy> {
         let max = u32::from(max);
-        if mode == CpuReclaim::Disabled || max < 2 {
+        if max < 2 {
             return None;
         }
         let floor = mode.floor(max);
-        if floor >= max {
-            return None;
-        }
         let dwell = shrink_dwell();
         log::info!("dynamic vCPUs: {floor}..{max} online (reclaim {mode:?}, dwell {dwell:?})");
         Some(VcpuPolicy {
             max,
-            floor,
+            floor: AtomicU32::new(floor),
             dwell,
             worker_pid: Mutex::new(None),
             state: Mutex::new(State {
@@ -196,6 +201,28 @@ impl VcpuPolicy {
                 last_host: None,
             }),
         })
+    }
+
+    /// The fewest vCPUs this policy will currently leave online.
+    pub fn floor(&self) -> u32 {
+        self.floor.load(Ordering::Relaxed)
+    }
+
+    /// Change the reclaim mode at runtime, as the guest's power profile selects one.
+    ///
+    /// Returns `true` when the floor *rose*, which is the caller's cue to grow now rather than
+    /// wait: a VM shrunk under `power-saver` and then switched back to `balanced` must get its
+    /// vCPUs back immediately, not on the next pressure report.
+    pub fn set_reclaim(&self, mode: CpuReclaim) -> bool {
+        let want = mode.floor(self.max);
+        let previous = self.floor.swap(want, Ordering::Relaxed);
+        if want != previous {
+            log::info!(
+                "dynamic vCPUs: reclaim {mode:?}, floor {previous} -> {want} (max {})",
+                self.max
+            );
+        }
+        want > previous
     }
 
     /// Start reading the worker's CPU time as a second, tier-independent signal.
@@ -306,7 +333,7 @@ impl VcpuPolicy {
         }
 
         // SHRINK — one step, and only after the condition has held for the whole dwell.
-        if online <= self.floor {
+        if online <= self.floor() {
             st.calm_since = None;
             return None;
         }
@@ -506,16 +533,50 @@ mod tests {
         assert_eq!(p.decide(&idle(0), t0 + DEFAULT_SHRINK_DWELL * 10), None);
     }
 
-    /// Nothing to give back means no policy at all, so the `vcpu` capability is never offered
-    /// and the guest never spends a byte reporting.
+    /// Only a 1-vCPU VM has nothing to give back. Every other VM gets a policy even when its
+    /// mode cannot currently act, because the `vcpu` capability is negotiated once at WELCOME
+    /// and the guest's power profile may ask for reclaim later.
     #[test]
-    fn a_policy_that_could_never_act_is_not_created() {
-        assert!(VcpuPolicy::new(10, CpuReclaim::Disabled).is_none());
+    fn every_vm_that_could_ever_act_gets_a_policy() {
         assert!(VcpuPolicy::new(1, CpuReclaim::Aggressive).is_none());
-        // Light on a 2-vCPU VM floors at 1, which is below max — that one CAN act.
-        assert!(VcpuPolicy::new(2, CpuReclaim::Light).is_some());
-        // ...but Moderate on the same VM floors at 2, which is the whole machine.
-        assert!(VcpuPolicy::new(2, CpuReclaim::Moderate).is_none());
+        assert!(VcpuPolicy::new(10, CpuReclaim::Disabled).is_some());
+        assert!(VcpuPolicy::new(2, CpuReclaim::Moderate).is_some());
+    }
+
+    /// A disabled policy exists but never acts: its floor is the whole machine, so the shrink
+    /// guard never passes however long the guest stays idle.
+    #[test]
+    fn a_disabled_policy_never_shrinks() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Disabled).expect("policy");
+        assert_eq!(p.floor(), 10);
+        let t0 = Instant::now();
+        for step in 0..40 {
+            let at = t0 + DEFAULT_SHRINK_DWELL * step;
+            assert_eq!(p.decide(&idle(10), at), None, "shrank at step {step}");
+        }
+    }
+
+    /// The power profile moves the floor, and says when the caller must grow at once: a VM
+    /// shrunk under power-saver and switched back must not wait for the next report.
+    #[test]
+    fn set_reclaim_moves_the_floor_and_reports_a_rise() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Disabled).expect("policy");
+        assert_eq!(p.floor(), 10);
+
+        // Tightening never asks the caller to grow.
+        assert!(!p.set_reclaim(CpuReclaim::Moderate));
+        assert_eq!(p.floor(), 2);
+        assert!(!p.set_reclaim(CpuReclaim::Aggressive));
+        assert_eq!(p.floor(), 1);
+
+        // Loosening does, and returning to Disabled restores the whole machine.
+        assert!(p.set_reclaim(CpuReclaim::Light));
+        assert_eq!(p.floor(), 5);
+        assert!(p.set_reclaim(CpuReclaim::Disabled));
+        assert_eq!(p.floor(), 10);
+
+        // Setting the same mode twice is not a rise, so it cannot cause a spurious grow.
+        assert!(!p.set_reclaim(CpuReclaim::Disabled));
     }
 
     /// The host signal exists to be FAST: it grows on the reading alone, without waiting for the

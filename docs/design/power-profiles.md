@@ -37,19 +37,32 @@ requests, and no host code acts on the number. The guest has no cpuidle driver e
 So the profile is a **statement of user intent that we should relay**, with the backing in host
 policy — and the levers already exist, built for EAS packing:
 
-| profile | little vCPUs | RT scheduling band | CPU reclaim | balloon giveback |
-|---|---|---|---|---|
-| `power-saver` | on (`QOS_CLASS_BACKGROUND`) | off | on | eager |
-| `balanced` | off | `rt+dyn` (default) | off | default |
-| `performance` | off | `rt+dyn` | off | default |
+| profile | little vCPUs | RT scheduling band | CPU reclaim |
+|---|---|---|---|
+| `power-saver` | `QOS_CLASS_BACKGROUND` | off | `Moderate` |
+| `balanced` | `QOS_CLASS_BACKGROUND` | `rt+dyn` (default) | off |
+| `performance` | promoted (`QOS_CLASS_UTILITY`) | `rt+dyn` | off |
 
 `balanced` is today's defaults exactly, so a guest whose user never touches the toggle behaves as
-it does now.
+it does now. Little vCPUs are on in `balanced` too — the asymmetry is the machine's normal shape,
+not a power-saving mode — and only `performance` gives it up.
+
+**A profile can never add or remove little vCPUs.** Capacity comes from `capacity-dmips-mhz` in
+the device tree and `cpu_capacity` is `DEVICE_ATTR_RO` (`drivers/base/topology.c:229`), so the
+split is fixed for the life of the VM. `performance` therefore promotes their host QoS instead,
+and accepts that the guest still derates those CPUs and will under-load them — misfit migration
+pulls big tasks off them and the load balancer weights them at their advertised capacity. That
+unused headroom is the price of a topology that cannot be rebuilt at runtime, paid in the mode
+that is latency-led anyway.
+
+Balloon giveback is deliberately **not** in the table. The balloon has its own policy driven by
+its own pressure signal, and two controllers writing one knob is how the oscillation classes in
+`limina-balloon-oscillation` were born.
 
 The relay is `limina-agent` watching the `ActiveProfile` property on the existing D-Bus name and
-sending it over the vsock control plane. No kernel work, no patched daemon, and the same code
-path works whether the provider is `tuned-ppd` or `power-profiles-daemon`, since only the D-Bus
-interface is involved.
+sending it over the vsock control plane as `POWER_PROFILE`. No kernel work, no patched daemon,
+and the same code path works whether the provider is `tuned-ppd` or `power-profiles-daemon`,
+since only the D-Bus interface is involved.
 
 Two properties the policy must hold, both learned from ballooning:
 
@@ -57,6 +70,17 @@ Two properties the policy must hold, both learned from ballooning:
   scheduling band is exactly when the present path can lose its core.
 - **Level-triggered, not edge.** Send the current profile, never a delta, so reconnect, reboot
   and snapshot restore resynchronise for free.
+
+### 2.1 Why every VM now carries a vCPU policy
+
+`VcpuPolicy::new()` used to return `None` for `CpuReclaim::Disabled`, and the control plane keys
+the `vcpu` capability off that `Some`. Since capabilities are negotiated once at WELCOME, a VM
+started with reclaim off would never be asked to report CPU pressure, and `power-saver` would
+turn reclaim on to no effect — silently.
+
+So a policy is now built for every VM with more than one vCPU, with `Disabled` meaning "floor
+equals max", which the shrink guard (`online <= floor`) never passes. The cost is that every VM's
+guest reports CPU pressure periodically, whether or not it will ever reclaim.
 
 ## 3. `performance` disables EAS, and that is correct
 
@@ -112,7 +136,20 @@ The lesson that generalises: **check which daemon actually owns the D-Bus name o
 distro before designing against an upstream project's driver model.** The whole PPD driver
 analysis was answering a question about a daemon this guest does not run.
 
-## 7. Open
+## 7. What is built
+
+The wire message (`POWER_PROFILE`, level-triggered), the profile-to-policy mapping
+(`crates/limina/src/power_profile.rs`), and the control plane applying **CPU reclaim** —
+including growing the machine back at once when the floor rises, rather than waiting for the next
+pressure report.
+
+Not yet built: the agent's D-Bus watcher (so nothing sends the message yet), and the worker half.
+`little` and `rt_band` need a QoS override on the vCPU thread's `pthread_t`, which only the
+worker's own process holds, so they need a supervisor→worker channel. Until that lands a profile
+still moves reclaim, and `balanced` — what a guest reports unless its user says otherwise — asks
+for today's defaults anyway.
+
+## 8. Open
 
 - The `balanced-battery` switch is expected but unverified — it needs the host actually on
   battery, which a test cannot arrange.

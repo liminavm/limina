@@ -338,6 +338,9 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             Ok((_, Message::Heartbeat(_)))
             | Ok((_, Message::MemPressure(_)))
             | Ok((_, Message::CpuPressure(_)))
+            // Our own report coming back: the profile is the guest's to state and the host's
+            // to act on, and the host never answers it.
+            | Ok((_, Message::PowerProfile(_)))
             // The arrangement is the SESSION helper's to report — it needs a compositor
             // connection, which this system daemon has none of.
             | Ok((_, Message::DisplayLayout(_)))
