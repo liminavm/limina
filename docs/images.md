@@ -151,10 +151,8 @@ and GStreamer's dmabuf uploader walked off it: GNOME Videos rendered black and a
 `vaXXXdec ! glimagesink` died with SIGBUS. Refusing makes the caller negotiate system memory —
 one frame copy per frame, and it works. Measured in `spikes/va-dmabuf-size`: both codecs now put
 60 buffers into `glimagesink` with zero errors and the decoder's caps are plain `video/x-raw`,
-which is what proves renegotiation rather than a survived mapping. **The refusal cannot reach
-anything but video**: `virgl_can_copy_transfer_from_host` excludes `VIRGL_BIND_SHARED`, so
-Wayland buffers, EGL images and mutter's scanout are sized from their own layout and are never
-short. **Stock Fedora mesa reproduces the bug byte for byte** (`26.0.3-4.fc44`, 4 KiB pages), so
+which is what proves renegotiation rather than a survived mapping. (The refusal also fired on
+every staged GL texture and was removed in r23.) **Stock Fedora mesa reproduces the bug byte for byte** (`26.0.3-4.fc44`, 4 KiB pages), so
 this is upstream virgl behaviour and the stock tier is fixed only by upstreaming. **The base moves
 26.1.7 → 26.1.8** here — Fedora's SRPM had moved and r18 takes it, unlike r17 which held the pin;
 all 12 patches applied clean and 21 VideoToolbox sessions reported hardware with none in software.
