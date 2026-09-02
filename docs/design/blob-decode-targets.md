@@ -334,10 +334,12 @@ Two consumers, because they fail differently and neither failure is a crash:
   that reports `IsHardwareAccelerated=true` and then falls back, so a single-frame check would
   pass against the very bug it is meant to catch.
 
-Plus the `l2_video_vaapi` extension and one suspend/resume cycle mid-playback: a mapped video
-blob must survive replay, and should ride the machinery the m9 restore arc already has for
-IOSurface-backed venus memory. The parked suspend/resume hardware-decode bounce is a candidate
-to be explained by this, and should not be left to discover the restore path for us.
+Plus `l2_video_vaapi_restore`: a hardware decode in flight across a managed suspend/restore.
+The codec and its video buffers are journaled and re-created at replay, and the re-created codec
+drops inter frames until the stream's next keyframe, so the oracle compares the *tail* of the
+hardware output against the software decoder and requires zero "decoding into nothing" lines
+after the restore. The decode targets themselves are ordinary journaled blob resources and need
+nothing more.
 
 ## What this does not fix
 

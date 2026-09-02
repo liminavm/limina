@@ -494,6 +494,11 @@ gate keeps them out of a stock driver whatever the host offers
   the backing lacks (`ptr_valid`: set by a detach or by a transfer into an unattached resource). The
   hypervisor-side dead end, and a probe-only hazard found on the way, are in
   `spikes/hv-stage2-write-loss/RESULTS.md`.
+- **The GPU error counters are blind to video.** `[GPUTRACE] errs`/`unknown_res` count what the
+  submit returns, and the video command handlers return 0 whatever the codec/buffer lookup finds.
+  A guest decoding into a codec the host lost (the snapshot-restore case before virglrenderer
+  `2c5f6e9c`) shows zero errors and stale or green frames; the witness is the backend's own
+  "decoding into nothing" log line. Never exclude a video theory on the counters.
 
 Verification: `cargo nextest run -p limina-test -E 'test(stock_guest_hardware_decodes_vp9)'`.
 VP9 is a normatively exact codec, so the test asserts the hardware decode is **byte-identical**

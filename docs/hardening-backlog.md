@@ -2122,88 +2122,38 @@ and a stuck guest, and asserts "it is still running" when the worker is gone), w
 first sighting was written off as a genuine quiesce failure. Cheap to fix and worth it: this is
 the CLI-driven suspend path that automation uses.
 
-## Hardware decode does not survive suspend/resume: playback cycles a few stale frames
+## Closed — hardware decode did not survive suspend/resume (stale frames, green frames)
 
-Reported from dogfood. After a host suspend/resume, hitting play on a video Firefox had
-paused for the suspend plays "the same few frames back and forth". Nothing crashes, and
-**leaving it paused for a while heals it**. Low priority precisely because that workaround
-exists.
+After a managed suspend/restore a hardware-decoded video played "the same few frames back and
+forth"; GStreamer players (Showtime) also showed solid green frames and never recovered, Chrome
+recovered once it tore its decoder down. **Cause: the classic re-creation journal did not retain
+`CREATE_VIDEO_CODEC` / `CREATE_VIDEO_BUFFER`** (filed as "durable-unknown, counted not kept"), so
+the restored context had no codec and no decode targets while the guest kept its handles. The
+guest never learns: `vrend_decode_{begin_frame,decode_bitstream,end_frame}` discard the
+`vrend_video_*` return and report success, so every decode after the restore decoded into
+nothing and the player recycled its surface pool — stale pictures in pool order, never-written
+NV12 surfaces as green. Fixed in virglrenderer `2c5f6e9c`: the creates are journaled (keyed by
+handle, tombstoned by their destroys), a fresh codec drops inter frames until the stream's next
+keyframe (VideoToolbox does not fail on an empty reference set, it renders wrong pixels), a
+create that produced nothing returns EINVAL so a failed replay is not re-journaled, and a lookup
+miss is logged rate-limited. Guarded by the fork's `tests/test_virgl_journal.c` and
+`crates/limina-test/tests/l2_video_vaapi_restore.rs`.
 
-**Reproduced and narrowed under tracing — full measurements in
-`spikes/video-suspend-resume/RESULTS.md`.** In short: it is the hardware decode path (the same
-cycle with Chrome's VA-API decoder off plays back cleanly), the guest's own screencast shows a
-bounded pool of decoded pictures re-presented in *alternating* order, and the host rejects
-nothing across the restore. Three candidates are excluded by measurement — the vrend journal
-dropping video codec objects, guest clock discontinuity, and the player/compositor frame
-scheduling. What remains is the VA decode-target surfaces and their mapping across replay.
+Two rules this earned:
 
-### What the restore path really does with video, and why that is not yet the answer
+- **The GPU error counters are blind to video.** `unknown_ctx`/`unknown_res`/`errs` count what
+  `virgl_renderer_submit_cmd` returns, and the video handlers return 0 whatever the lookup finds.
+  "Zero errors after the restore" excluded the journal theory once (`spikes/video-suspend-resume/`)
+  and was wrong; the witness is the backend's own log line ("decoding into nothing"), which needs
+  nothing above `warn`.
+- **A re-created decoder must resynchronise, not resume.** Replaying the create restores the
+  object, not its reference pictures; feeding the next inter frame produces a picture that looks
+  decoded and is not. Drop until a keyframe, and say so in the log.
 
-The obvious suspect is a documented gap. `vrend_journal.h:33` classifies video codec objects
-as `VREND_JOURNAL_UNKNOWN` — *"durable-unknown (e.g. video): counted, not kept"* — and
-`vrend_journal.c:343` files them under `census.skipped++`, "counted so a guest using them is
-loud in the census instead of silently losing state at restore". So the host's video codec
-object is genuinely **not** recreated on restore while the guest still holds its handle.
-
-**But the evidence from the reported run does not support that being the mechanism.** Read
-from the supervisor log of the restored Debian VM that produced the symptom:
-
-- The worker was started with `--restore …/snapshot.bin.consumed`, so this is the real path.
-- GPU command errors are counted unconditionally and **each one warns**, and the first error
-  of any class also requests a one-shot renderer state dump (`gpu/trace.rs:14-18`). The log
-  carries **no `unknown_ctx`/`unknown_resource`/`gpu restore:` warnings at all** — only an
-  unrelated vsock-muxer error and a pointer-echo warning.
-- Guest `dmesg` shows no virtio_gpu error after either resume; the driver came back clean.
-
-If the guest were submitting decode work against a codec the host had dropped, those
-submissions would be rejected and would warn. They did not. So the journal gap is a **standing
-candidate, not the diagnosis** — and this is the entry's real point: do not start the fix by
-teaching the journal about video, because the cheapest available evidence already points away
-from it.
-
-The symptom's silence is itself the clue. "A few frames back and forth", no errors, heals on
-idle, matches the class this stack keeps producing: a **stale surface** rather than a failed
-command (see the AV1 note — a late picture is a silent stale surface, never a hang), which
-would also implicate the dmabuf/IOSurface import of the decoded planes rather than the codec
-object. That is a second untested theory and is recorded as such.
-
-### The experiment that would settle it
-
-The decisive channels are all off by default, which is why the reported run cannot answer the
-question. Repro with them on:
-
-- `RUST_LOG=warn,limina=info,krun_vmm=info,krun_devices=info` — keep the bare `warn`, or the
-  whole GPU device goes silent even at `error!`.
-- `LIMINA_GPU_TRACE=1` for the per-tick aggregate, and the renderer state dump whose
-  `[GPUTRACE]` census lines carry `census.skipped` — the number that confirms or kills the
-  journal theory outright. Note the census is `virgl_info`-level, so `info` is required.
-
-Then: play a hardware-decoded video, suspend, resume, hit play, and read whether the guest's
-submissions are being *rejected* (journal theory) or *accepted while the picture never
-changes* (import/surface theory).
-
-Whatever the cause, note the fix is not simply replaying the create. A decoder's *reference
-state* cannot be reconstructed from a create-replay — even a correctly recreated codec starts
-with an empty DPB mid-stream — so the honest repair may be to make the loss explicit and have
-the guest recreate and re-key, i.e. do deliberately and at once what an idle timeout currently
-does by accident. **Do this after H.264/HEVC**, since that work changes what a codec holds.
-
-`av1_decode_bitstream()` (`virgl_video_vt.c`) recorded two of sixty `superres`
-fixtures with the correct tile *size* but all-zero *contents* — the guest's slice
-data was not visible to the host at the moment it was read. Intermittent: 2 of 360
-captured frames, and only in that one clip.
-
-It matters well beyond the fixtures. The capture path reads `buffers[i]` exactly as
-the real decode path will, so the same window corrupts a frame handed to
-VideoToolbox — silently, since a zeroed tile payload is still a structurally valid
-bitstream. It also mimics a serializer defect closely enough to cost real time: the
-stream fails to decode while every frame header is provably correct, which is the
-same signature as a lost reference slot (see `spikes/av1-obu-serializer/RESULTS.md`).
-Restoring the two payloads from the clip makes `superres` decode bit-exact, which is
-what rules the serializer out.
-
-Must be resolved before the AV1 decode path is wired up. Worth checking whether the
-VP9 path, which takes the same buffers by the same route, has the same window.
+Still open from the same runs: Chrome's classic context drops 30–79 `CREATE_OBJECT` sampler views
+at every replay (`Illegal resource 2122xx`/`3608xx`, contiguous ids) — stale views on resources
+the guest had already destroyed, or decode targets that did not come back; not yet distinguished.
+Chrome recovers either way, so this is a warning-spam and audit item, not a symptom.
 
 ## AV1: VideoToolbox does not return super-resolution frames
 
