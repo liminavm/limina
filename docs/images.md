@@ -49,7 +49,7 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified by the r21 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-02, and the dogfood row read off the running dev VM the same day. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
+guest with `rpm -q`. Last verified by the r22 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-02, and the dogfood row read off the running dev VM the same day. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
@@ -61,6 +61,14 @@ guest with `rpm -q`. Last verified by the r21 installer's own `rpm -q` in each b
 | **F43 enhanced** (`enhanced`, `enhanced.test`) | `limina-kernel-16k-6.12.0` | 16 KiB | `26.1.5-1.limina.fc43` | `49.6-1.limina.fc43` | `49.1` (stock) |
 
 Two facts the table cannot show:
+
+- **The guest agents are not RPMs and so are not in the table.** All three F44 enhanced images
+  carry **`limina-agent` 0.5.0** and `limina-agent-session`, installed to `/usr/local/bin` with
+  their units (payload **r22**, delivered 2026-09-02; r22 is a host-side repack of r21 with only
+  the agent swapped — every kernel and mesa RPM is byte-identical). 0.5.0 is the release that added
+  the `vcpu` capability, so it is the floor for dynamic vCPU offlining on the enhanced tier; check
+  it in a guest with `limina-agent --version`, which is also the fastest way to tell a stale image
+  from a fresh one.
 
 - **The limina kernel branch carries two drm/virtio commits**, both upstream-now candidates:
   per-scanout rects exposed as suggested connector offsets (the guest half of the arrangement

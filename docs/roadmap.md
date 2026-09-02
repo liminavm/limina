@@ -754,63 +754,96 @@ drop back toward 2G as pages are madvised back to macOS.
 - Re-touch latency/cost of MADV_FREE_REUSE on deflate for an interactive desktop.
 - PSI watermark/hysteresis tuning to avoid balloon thrash (build/browser/IDE workloads).
 
-### Dynamic vCPU hotplug — the CPU sibling of ballooning (planned)
+### Dynamic vCPU offlining — the CPU sibling of ballooning
 
-**Status: mechanism half SHIPPED (robustness, task #40, libkrun 0094). Dynamic policy DROPPED
-(task #35, 2026-07-22) — the go/no-go gate below failed.** The same `min..max` philosophy as
-ballooning, on the CPU axis: dynamically offline idle guest vCPUs to shrink the worker's in-kernel
-IPI/timer host-wakeup budget, and re-online them under load. A boot-time A/B against the OLD 18.6k
-baseline measured 6→2 vCPUs cutting host wakeups ~3k/s (IPI −67%, timer −56%) at flat throughput
-on the GPU-bound blobs workload.
+**Status: ✅ SHIPPED — mechanism (task #40) and policy (task #35), on BOTH tiers.** The same
+`min..max` philosophy as ballooning, on the CPU axis: offline guest vCPUs that are online but idle,
+and bring them back under load. Default **off** (`--cpu-reclaim disabled`); opt in per VM.
 
-**GATE RESULT (2026-07-22) — #35 DROPPED.** Re-ran the 6-vs-2 A/B on the CURRENT shipped stack
-(virgl 0043 + mesa 0017), clean-fullscreen blobs, same method (`spikes/wakeup-probe/RESULTS.md`):
-6-vCPU ~8.1k/s → 2-vCPU ~7.3k/s = **only −800/s host wakeups**, below the 1k/s drop bar set in the
-caveat. The guest half still moved a lot (IPI1 −75%, arch_timer −35%) — the mechanism works — but
-the round-2 fixes made the HOST budget dominated by the ~5.9k/s vkr_ring poll-sleeps, which are
-INVARIANT to vCPU count, so the vCPU slice is now a small absolute number. Throughput was already
-fine and idle vCPUs are near-free under NO_HZ (~130/s floor). Building the full
-signal→policy→mechanism→hysteresis machinery (with real oscillation risk) for <800/s of
-nanosleep-class wakeups is not worth it. **Only the #40 robustness fix was worth keeping** (a stock
-guest offlining a vCPU no longer wedges the VMM — a two-tier-guarantee fix, shipped). Re-run this
-gate ONLY if the post-M13 vkr doorbell-handshake lands and cuts the poll-sleep floor (which would
-make the vCPU slice a larger relative fraction again).
+**Why it pays.** A vCPU that is online but only lightly busy still costs the host a per-vCPU timer
+exit at roughly the guest's tick rate, each a full VM exit. Measured 2026-09-02 on a 10-vCPU guest
+running eight threads waking at 1 kHz, work held identical across arms (iteration counts within
+0.06%):
 
-**The two halves (mechanism in libkrun, policy in limina):**
-1. **Mechanism — libkrun CPU-hotplug (task #40, a robustness fix worth shipping on its own).** A
-   guest that offlines a vCPU today (`echo 0 > /sys/devices/system/cpu/cpuN/online`) **wedges the
-   whole VMM** — a two-tier stock-guest-guarantee violation. Root cause (de-risk probe
-   `vcpu-offline-probe.sh` + opus review, 2026-07-21): libkrun's PSCI
-   (`hvf/src/lib.rs handle_psci_request`) models CPU_ON but **not CPU_OFF (0x8400_0002) or
-   AFFINITY_INFO (0xc400_0004)** — both return `NOT_SUPPORTED`, so the dying vCPU busy-spins
-   (probe saw the worker hit ~546% CPU) and the reaper polls AFFINITY_INFO forever; re-online is
-   also broken (the secondary boot channel `boot_receiver.recv()` is one-shot, consumed at boot).
-   Fix (SHIPPED, libkrun 0094): model CPU_OFF → park the vCPU thread cleanly (reuse the M9
-   `handle_pause` park machinery, zero host CPU/wakeups); model AFFINITY_INFO (OFF for a parked
-   vCPU, ON otherwise); make CPU_ON re-deliverable at runtime (durable per-vCPU control channel;
-   PC/X0 reset on the owning thread since HVF register access is thread-bound); IRQ/vtimer
-   re-affinity on re-online. Guarded by `tests/l2_vcpu_hotplug.rs`.
-   **Known limitation → task #41 (DEFERRED, kept tracked):** the guest-visible online state lives
-   in `VcpuList` and is NOT in the M9 snapshot, so a snapshot taken while a vCPU is offline restores
-   it as online (guest-kernel/host bookkeeping diverges; a later re-online times out gracefully — no
-   wedge). Also CPU_ON has no ALREADY_ON idempotency guard. Deferred 2026-07-22: with #35 dropped the
-   trigger is manual-only + graceful, not worth the M9 snapshot-format-change risk now; revisit if
-   vCPU offlining resurfaces or during an M9 hardening pass.
-2. **Policy — limina-agent (task #35, DROPPED 2026-07-22).** The design would have been:
-   agent-driven offline/online under a runnable-task-pressure signal (PSI `cpu`/loadavg/`nr_running`)
-   with hysteresis + interactivity guardrails (never offline cpu0; step one at a time; fast re-online
-   on a load spike; cooldown to avoid oscillation — the balloon-thrash lessons apply directly), host
-   config exposing the range (`--cpus MIN..MAX` / `vm.toml [hardware]`), booting MAX, handing the
-   range to the agent — mirroring `--memory MIN..MAX`. The full codebase map for this (guest sensor →
-   host `VcpuPolicy` mirroring `BalloonPolicy` → cap-gated host→guest control message → agent sysfs
-   write; offline/online is entirely guest-driven so it must route through the agent) was captured
-   before the gate failed; if the gate is ever re-passed, that shape is the plan. Not built.
+| online | worker vCPU CPU-sec / 60 s | arch_timer/s | IPI1/s |
+|--------|---------------------------|--------------|--------|
+| 10     | 26.61, 27.06              | ~14,400      | 90–110 |
+| 4      | 21.77                     | ~10,100      | ~1,180 |
 
-**Cost/benefit caveat — SATISFIED, verdict DROP (2026-07-22):** the ~3k/s was measured against the
-OLD ~18.6k baseline; the round-2 fixes (libkrun 0091 EVENT_IDX + virgl 0041/0043 ring relax) attacked
-the GPU/IO wake chain that *drives* the guest ttwu IPIs. Remeasured on the current stack (see the GATE
-RESULT above): the vCPU host-wakeup slice is **~800/s at the 6→2 extreme, below the 1k/s bar → the
-dynamic feature is a DROP; only the #40 robustness fix was kept.** Authoritative perf context:
+−19% of the worker's vCPU CPU time, ≈8.5% of a core, for the same work. The mechanism is **timer
+exits, not IPIs**: offlining *raised* IPI1 tenfold while total CPU fell. The policy therefore gates
+on runnable tasks; no IPI or wakeup count appears in it.
+
+Two regimes it deliberately does not chase, because measurement says there is nothing there: a
+**truly idle** 10-vCPU guest already costs ~1.8% of a core under NO_HZ, and a **saturated** one
+needs every vCPU. The win is the guest in between — the desktop sitting between builds. Note that
+guest `/proc/stat` cannot see any of this: it is tick-sampled, so it rounds a partly-busy CPU up to
+a whole tick and reads a 10-vCPU guest as busier than a 4-vCPU one doing identical work.
+
+**An earlier gate measured a different question and failed.** On 2026-07-22 the 6-vs-2 A/B on
+*host wakeups/s* under a GPU-bound blobs workload found only −800/s, under the 1k/s bar, because
+the wakeup budget was dominated by `vkr_ring` poll-sleeps that are invariant to vCPU count
+(`spikes/wakeup-probe/RESULTS.md`). That measurement stands. Host **CPU time** in the
+many-short-wakeups regime is a different axis, and it is where the cost lives.
+
+**1. Mechanism — libkrun CPU-hotplug (task #40).** A guest offlining a vCPU used to wedge the whole
+VMM: libkrun's PSCI modelled CPU_ON but not CPU_OFF (0x8400_0002) or AFFINITY_INFO (0xc400_0004),
+so the dying vCPU busy-spun (~546% worker CPU) and the reaper polled forever; re-online was broken
+too (the secondary boot channel was one-shot). Fixed in libkrun 0094: CPU_OFF parks the vCPU thread
+via the M9 pause machinery (zero host CPU), AFFINITY_INFO answers OFF for a parked vCPU, CPU_ON is
+re-deliverable at runtime over a durable per-vCPU channel (PC/X0 reset on the owning thread, since
+HVF register access is thread-bound), with IRQ/vtimer re-affinity on re-online. Guarded by
+`tests/l2_vcpu_hotplug.rs`. This was worth shipping on its own as a two-tier-guarantee fix.
+
+**2. Policy — `crates/limina/src/vcpu_policy.rs` (task #35).** Pure and clock-injected: `(report,
+now) → target`. It keeps no belief about its own past — every decision derives from the online count
+the guest just reported — so a failed write, a guest that onlined a CPU itself, or a diverged
+restore all self-correct on the next sample. Deliberately **asymmetric**: shrink one CPU at a time
+behind a 20s dwell (`LIMINA_VCPU_DWELL_SECS` overrides, for tests); grow straight to max with no
+dwell. A vCPU returned late is a stall the user feels; one given up late costs a few percent of a
+core nobody sees.
+
+Config mirrors `--memory`/`--reclaim`: `--cpus` is the maximum and what the VM boots;
+`--cpu-reclaim disabled|light|moderate|aggressive` (and `vm.toml [hardware] cpu_reclaim`) sets how
+far below it the guest may be asked to go — floors of max, ⌈max/2⌉, 2, and 1 respectively.
+
+**Both tiers act, which is the point.** Offlining a CPU is Linux taking itself apart, so the guest
+must do it; the host only asks. Two guest-side implementations, same host policy:
+
+- **Enhanced** — `limina-agent` ≥ 0.5.0 advertises the `vcpu` capability, pushes `CpuPressure`
+  (nr_running, loadavg, PSI cpu, online/present) on its ~1s tick, and writes sysfs on `CpuTarget`.
+- **Stock** — the stock `qemu-guest-agent`, polled: `guest-get-load` is the sensor,
+  `guest-get-vcpus`/`guest-set-vcpus` the actuator (`crates/limina/src/qga/vcpu.rs`). It stands
+  down whenever limina-agent is reporting, so a guest with both is driven by the better signal and
+  never by two writers. `guest-get-vcpus` reports `can-offline` per processor, so the guest names
+  its own candidates rather than the host inferring "never cpu0".
+
+Measured 2026-09-02 (F44, qemu-guest-agent 10.2.2, SELinux **Enforcing**, limina-agent disabled):
+the stock path shrank 4→3→2 and recovered to 4 under load. **`virt_qemu_ga_t` does not block
+`guest-set-vcpus`** — measured, not reasoned; see the M12.5 note on why that distinction is
+load-bearing here.
+
+The tiers differ in **grow latency**, and honestly so: the enhanced agent grows on the next sample
+(~1s) off `nr_running`, while the stock tier has only loadavg — a 1-minute average — and took ~45s
+to notice a burst. Shrink is unaffected (it wants a sustained lull anyway). Closing that gap is the
+open item below.
+
+**Snapshot interaction (task #41) is mitigated, not fixed.** The guest-visible online set lives in
+libkrun's `VcpuList` and is **not** in the M9 snapshot, so a snapshot taken while a vCPU is offline
+restores it as online and the two sides' bookkeeping diverges. An automatic policy makes that the
+*common* case, since it offlines exactly when the VM is idle and idle is when it gets suspended.
+Rather than change the snapshot format, the supervisor re-onlines every vCPU inside the suspend
+bracket (both tiers) and waits, bounded, for confirmation before relaying SIGTSTP — so a snapshot
+never contains an offline vCPU. Advisory in both directions: no policy costs the bracket nothing,
+and an unconfirmed restore still gets its snapshot. **#41 proper stays deferred** (the format change
+and a CPU_ON ALREADY_ON idempotency guard); revisit in an M9 hardening pass. Guarded by
+`tests/l2_vcpu_policy.rs`, which suspends through the *supervisor* — the harness's other seam
+signals the worker and would skip the mitigation entirely.
+
+**Open:** close the stock tier's grow latency, either with `guest-get-cpustats` (two samples give
+real per-CPU utilization; the last M12.5 verb still lacking a consumer) or host-side from the vCPU
+threads' own CPU time — which would need no guest cooperation at all and would serve every tier,
+including a guest with no agent whatsoever. Authoritative perf context:
 `docs/perf/overhead-inventory.md`.
 
 ---
@@ -1695,13 +1728,24 @@ from *delivered intact*.
 
 ### What is left, and what it waits for
 
-**Telemetry** (`guest-get-diskstats`/`-cpustats`/`-load`) and **hotplug ack**
-(`guest-get/set-vcpus`, the memory-block commands) are the remaining verbs, and both are **deferred
-until they have a consumer**: a surface that shows guest-side load, and CPU/memory hotplug actually
-landing. Implemented before that they are log noise, and a telemetry cadence with nothing reading it
-is a cost the stock tier pays for nothing.
+`guest-get-load` and `guest-get/set-vcpus` **got their consumer and shipped** (2026-09-02): dynamic
+vCPU offlining landed, and routing it through this port is what lets a guest with no limina
+components take part at all — see "Dynamic vCPU offlining" under M6. `guest-get-load` is the stock
+tier's sensor, `guest-set-vcpus` its actuator, and `crates/limina/src/qga/vcpu.rs` plans the writes
+from the `can-offline` flag the guest itself reports.
 
-Nineteen of the guest's forty-three commands are in use. The rest have no consumer by choice —
+That work also settled the domain question for these verbs: on F44 with SELinux **Enforcing**,
+`virt_qemu_ga_t` **does** permit `guest-set-vcpus` (measured end to end, 4→3→2 and back). Worth
+stating explicitly because the general rule below cuts the other way — an enabled RPC never proves
+the agent will be *allowed* to finish, so each verb has to be measured rather than argued.
+
+Still without a consumer: **`guest-get-diskstats`/`-cpustats`** and the **memory-block** commands.
+`guest-get-cpustats` now has a candidate one, though — two samples give real per-CPU utilization,
+which would close the stock tier's ~45s grow latency (loadavg is a 1-minute average, so it cannot
+see a burst quickly). Implemented before they are read they are log noise, and a telemetry cadence
+with nothing consuming it is a cost the stock tier pays for nothing.
+
+Twenty-two of the guest's forty-three commands are in use. The rest have no consumer by choice —
 `guest-file-read`/`-seek`/`-flush`, `guest-get-disks`, `guest-get-timezone`, the ssh-key read/remove
 pair, and `guest-suspend-*` (the bracket owns suspend). `guest-fsfreeze-*` is closed with a measured
 reason above, not skipped.
