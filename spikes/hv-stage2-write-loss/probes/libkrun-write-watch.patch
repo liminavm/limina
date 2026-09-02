@@ -1,0 +1,320 @@
+diff --git a/src/devices/src/virtio/gpu/virtio_gpu.rs b/src/devices/src/virtio/gpu/virtio_gpu.rs
+index a97dc5a..8126814 100644
+--- a/src/devices/src/virtio/gpu/virtio_gpu.rs
++++ b/src/devices/src/virtio/gpu/virtio_gpu.rs
+@@ -2127,6 +2127,8 @@ impl VirtioGpu {
+ 
+     /// Releases guest kernel reference on the resource.
+     pub fn unref_resource(&mut self, resource_id: u32) -> VirtioGpuResult {
++        #[cfg(target_os = "macos")]
++        hvf::write_watch::disarm(resource_id);
+         // A backend that handed this surface to another process has no other way to learn it is
+         // finished with, and on macOS the storage bills to the task that created it, so the
+         // holder feels no pressure of its own to let go.
+@@ -3246,6 +3248,49 @@ impl VirtioGpu {
+                 rutabaga_iovecs.first().map(|v| (v.base as usize, v.len))
+             );
+         }
++        // F1 probe (LIMINA_BS_WATCH): stage-2 write-protect the backing of resources of the
++        // given total size and log every guest writer (see hvf::write_watch).
++        #[cfg(target_os = "macos")]
++        if let Some(want) = hvf::write_watch::size_filter() {
++            let total: usize = vecs.iter().map(|v| v.1).sum();
++            if total as u64 == want {
++                // Only the head of the buffer: the keyframe under study is 70037 bytes, and
++                // watching all 4 MiB traps every writer to the freed pages afterwards.
++                let mut budget: usize = 128 * 1024;
++                let touch = std::env::var_os("LIMINA_BS_WATCH_TOUCH").is_some();
++                let mut touched: u64 = 0;
++                for &(addr, len) in &vecs {
++                    if budget == 0 {
++                        break;
++                    }
++                    let l = len.min(budget);
++                    if touch {
++                        // Host-side read of every page before the stage-2 change: does a page the
++                        // host pmap has seen survive the remap where a guest-only page does not?
++                        if let Ok(slice) = mem.get_slice(addr, l) {
++                            let base = slice.ptr_guard().as_ptr();
++                            let mut off = 0usize;
++                            while off < l {
++                                // SAFETY: `slice` covers [0, l) of live guest RAM.
++                                touched = touched
++                                    .wrapping_add(unsafe { std::ptr::read_volatile(base.add(off)) } as u64);
++                                off += 16384;
++                            }
++                        }
++                    }
++                    hvf::write_watch::arm(resource_id, addr.0, l as u64);
++                    budget -= l;
++                }
++                if touch {
++                    log::warn!("[BSWATCH] touched res {resource_id}: byte sum {touched}");
++                }
++                log::warn!(
++                    "[BSWATCH] armed res {resource_id}: {} runs, {total} bytes, first gpa {:#x}",
++                    vecs.len(),
++                    vecs.first().map(|v| v.0 .0).unwrap_or(0)
++                );
++            }
++        }
+         // limina software 2D: keep the backing host pointers; don't involve rutabaga.
+         if let Some(sw) = self.sw2d.get_mut(&resource_id) {
+             sw.backing = rutabaga_iovecs;
+diff --git a/src/hvf/src/lib.rs b/src/hvf/src/lib.rs
+index 9718d7c..bd6a23e 100644
+--- a/src/hvf/src/lib.rs
++++ b/src/hvf/src/lib.rs
+@@ -9,6 +9,7 @@
+ #[allow(deref_nullptr)]
+ pub mod bindings;
+ pub mod released_ram;
++pub mod write_watch;
+ 
+ #[macro_use]
+ extern crate log;
+@@ -1435,6 +1436,16 @@ impl HvfVcpu<'_> {
+                     }
+                 }
+ 
++                // F1 probe (LIMINA_BS_WATCH): a write to a watched, write-protected guest page.
++                // Logged, page re-opened, instruction retried.
++                if write_watch::active() {
++                    let pc = self.read_reg(hv_reg_t_HV_REG_PC).unwrap_or(0);
++                    let cpsr = self.read_reg(hv_reg_t_HV_REG_CPSR).unwrap_or(0);
++                    if write_watch::on_fault(pa, pc, cpsr, syndrome) {
++                        return Ok(VcpuExit::StageTwoHealed);
++                    }
++                }
++
+                 self.pending_advance_pc = true;
+ 
+                 if iswrite {
+diff --git a/src/hvf/src/write_watch.rs b/src/hvf/src/write_watch.rs
+new file mode 100644
+index 0000000..400fd7e
+--- /dev/null
++++ b/src/hvf/src/write_watch.rs
+@@ -0,0 +1,222 @@
++// Copyright 2026 The libkrun Authors
++// SPDX-License-Identifier: Apache-2.0
++
++//! F1 probe (`LIMINA_BS_WATCH`): stage-2 write-protect the guest pages backing selected
++//! resources and log every vCPU writer (PC, EL, syndrome). A writer is let through by making
++//! its page writable again and retrying the instruction; a re-arm thread turns disarmed pages
++//! back to read-only shortly after, so later writers to the same page are caught too. Ranges
++//! expire after a few seconds so freed guest pages do not stay trapped forever.
++//!
++//! Only vCPU writes go through stage 2: a host-userspace writer (virgl, a device) leaves no
++//! trace here, which is itself the discriminating outcome.
++
++use std::collections::BTreeMap;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{Mutex, OnceLock};
++use std::time::{Duration, Instant};
++
++use crate::bindings::*;
++use crate::host_page_size;
++
++const RANGE_TTL: Duration = Duration::from_secs(3);
++const REARM_AFTER: Duration = Duration::from_micros(50);
++const REARM_TICK: Duration = Duration::from_micros(50);
++
++struct Range {
++    len: u64,
++    armed_at: Instant,
++    res: u32,
++}
++
++struct PageLog {
++    last_pc: u64,
++    count: u32,
++}
++
++#[derive(Default)]
++struct Watch {
++    /// gpa -> range (page-aligned, disjoint enough for our purpose).
++    ranges: BTreeMap<u64, Range>,
++    /// Pages temporarily writable after a trapped write: page gpa -> when.
++    disarmed: BTreeMap<u64, Instant>,
++    /// Dedupe: page gpa -> last logged pc + repeat count.
++    log: BTreeMap<u64, PageLog>,
++}
++
++static ACTIVE: AtomicBool = AtomicBool::new(false);
++static WATCH: OnceLock<Mutex<Watch>> = OnceLock::new();
++static THREAD: OnceLock<()> = OnceLock::new();
++
++fn watch() -> &'static Mutex<Watch> {
++    WATCH.get_or_init(|| Mutex::new(Watch::default()))
++}
++
++/// `LIMINA_BS_WATCH=<total backing bytes>` (a bare `1` means 4161536, the bitstream buffer).
++pub fn size_filter() -> Option<u64> {
++    static F: OnceLock<Option<u64>> = OnceLock::new();
++    *F.get_or_init(|| {
++        let v = std::env::var("LIMINA_BS_WATCH").ok()?;
++        match v.parse::<u64>() {
++            Ok(1) => Some(4161536),
++            Ok(n) if n > 1 => Some(n),
++            _ => None,
++        }
++    })
++}
++
++#[inline]
++pub fn active() -> bool {
++    ACTIVE.load(Ordering::Relaxed)
++}
++
++fn protect(gpa: u64, len: u64, writable: bool) -> bool {
++    let flags = if writable {
++        HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC
++    } else {
++        HV_MEMORY_READ | HV_MEMORY_EXEC
++    };
++    let ret = unsafe { hv_vm_protect(gpa, len as usize, flags as hv_memory_flags_t) };
++    if ret != HV_SUCCESS {
++        log::warn!("[BSWATCH] hv_vm_protect(gpa={gpa:#x}, len={len:#x}, w={writable}) failed: {ret:#x}");
++        return false;
++    }
++    true
++}
++
++fn rearm_loop() {
++    let ps = host_page_size();
++    loop {
++        std::thread::sleep(REARM_TICK);
++        let mut w = watch().lock().unwrap();
++        let now = Instant::now();
++        // Expire old ranges: make every page of theirs writable again.
++        let expired: Vec<u64> = w
++            .ranges
++            .iter()
++            .filter(|(_, r)| now.duration_since(r.armed_at) > RANGE_TTL)
++            .map(|(&g, _)| g)
++            .collect();
++        for g in expired {
++            if let Some(r) = w.ranges.remove(&g) {
++                protect(g, r.len, true);
++                let mut p = g;
++                while p < g + r.len {
++                    w.disarmed.remove(&p);
++                    w.log.remove(&p);
++                    p += ps;
++                }
++            }
++        }
++        // Re-arm pages a trapped writer disarmed a moment ago.
++        let due: Vec<u64> = w
++            .disarmed
++            .iter()
++            .filter(|&(_, t)| now.duration_since(*t) >= REARM_AFTER)
++            .map(|(&p, _)| p)
++            .collect();
++        for p in due {
++            w.disarmed.remove(&p);
++            if range_of(&w, p).is_some() {
++                protect(p, ps, false);
++            }
++        }
++        if w.ranges.is_empty() {
++            ACTIVE.store(false, Ordering::Relaxed);
++        }
++    }
++}
++
++fn range_of(w: &Watch, page: u64) -> Option<u64> {
++    let (&g, r) = w.ranges.range(..=page).next_back()?;
++    (page < g + r.len).then_some(g)
++}
++
++/// Write-protect `[gpa, gpa+len)` (rounded inward to host pages) on behalf of resource `res`.
++pub fn arm(res: u32, gpa: u64, len: u64) {
++    let ps = host_page_size();
++    let start = (gpa + ps - 1) & !(ps - 1);
++    let end = (gpa + len) & !(ps - 1);
++    if end <= start {
++        return;
++    }
++    THREAD.get_or_init(|| {
++        std::thread::Builder::new()
++            .name("bs-watch".into())
++            .spawn(rearm_loop)
++            .expect("spawn bs-watch");
++    });
++    let mut w = watch().lock().unwrap();
++    if protect(start, end - start, false) {
++        w.ranges.insert(
++            start,
++            Range {
++                len: end - start,
++                armed_at: Instant::now(),
++                res,
++            },
++        );
++        ACTIVE.store(true, Ordering::Relaxed);
++    }
++}
++
++/// The guest unref'd resource `res`: stop watching its ranges now, before the guest frees and
++/// reallocates the pages (which would otherwise trap every writer for the rest of the TTL).
++pub fn disarm(res: u32) {
++    if !active() {
++        return;
++    }
++    let ps = host_page_size();
++    let mut w = watch().lock().unwrap();
++    let gone: Vec<u64> = w
++        .ranges
++        .iter()
++        .filter(|(_, r)| r.res == res)
++        .map(|(&g, _)| g)
++        .collect();
++    for g in gone {
++        if let Some(r) = w.ranges.remove(&g) {
++            protect(g, r.len, true);
++            let mut p = g;
++            while p < g + r.len {
++                w.disarmed.remove(&p);
++                w.log.remove(&p);
++                p += ps;
++            }
++        }
++    }
++    if w.ranges.is_empty() {
++        ACTIVE.store(false, Ordering::Relaxed);
++    }
++}
++
++/// A data abort at `pa`. Returns true when the fault was on a watched page: the page has been
++/// made writable and the vCPU must retry the instruction without advancing the PC.
++pub fn on_fault(pa: u64, pc: u64, cpsr: u64, syndrome: u64) -> bool {
++    let ps = host_page_size();
++    let page = pa & !(ps - 1);
++    let mut w = watch().lock().unwrap();
++    let Some(g) = range_of(&w, page) else {
++        return false;
++    };
++    let res = w.ranges.get(&g).map(|r| r.res).unwrap_or(0);
++    protect(page, ps, true);
++    w.disarmed.insert(page, Instant::now());
++    let el = (cpsr >> 2) & 3;
++    let iswrite = (syndrome >> 6) & 1;
++    let cm = (syndrome >> 8) & 1;
++    let xfsc = syndrome & 0x3f;
++    let e = w.log.entry(page).or_insert(PageLog { last_pc: 0, count: 0 });
++    if e.last_pc != pc {
++        log::warn!(
++            "[BSWATCH] res={res} pa={pa:#x} off={:#x} pc={pc:#x} el={el} wnr={iswrite} cm={cm} xfsc={xfsc:#x} (prev pc {:#x} x{})",
++            pa - g,
++            e.last_pc,
++            e.count
++        );
++        e.last_pc = pc;
++        e.count = 1;
++    } else {
++        e.count += 1;
++    }
++    true
++}

@@ -1,0 +1,289 @@
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 95bfeff1..0969200b 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -11460,6 +11460,8 @@ static int vrend_renderer_transfer_internal(struct vrend_context *ctx,
+    return 0;
+ }
+ 
++static bool limina_bsxfer_on(void);
++
+ int vrend_renderer_transfer_iov(struct vrend_context *ctx,
+                                 uint32_t dst_handle,
+                                 const struct vrend_transfer_info *info,
+@@ -11501,6 +11503,10 @@ int vrend_renderer_transfer_iov(struct vrend_context *ctx,
+                            (uint32_t)info->box->x, (uint32_t)info->box->y,
+                            (uint32_t)info->box->width, (uint32_t)info->box->height,
+                            info->stride, info->offset);
++   if (limina_bsxfer_on() && (res->base.bind & VIRGL_BIND_CUSTOM) && info->box)
++      virgl_warn("[BSXFER] ctx=%d res=%u dir=%s off=%d len=%d iovs=%d\n", ctx->ctx_id, dst_handle,
++                 transfer_mode == VIRGL_TRANSFER_TO_HOST ? "to_host" : "from_host",
++                 info->box->x, info->box->width, res->num_iovs);
+ 
+    return vrend_renderer_transfer_internal(ctx, res, info,
+                                            transfer_mode);
+@@ -11820,6 +11826,9 @@ int vrend_renderer_copy_transfer3d(struct vrend_context *ctx,
+                            (uint32_t)info->box->x, (uint32_t)info->box->y,
+                            (uint32_t)info->box->width, (uint32_t)info->box->height,
+                            info->stride, info->offset);
++   if (limina_bsxfer_on() && (dst_res->base.bind & VIRGL_BIND_CUSTOM) && info->box)
++      virgl_warn("[BSXFER] ctx=%d res=%u dir=copy_to_host src_iov=%p off=%d len=%d\n", ctx->ctx_id,
++                 dst_handle, (const void *)src_res->iov, info->box->x, info->box->width);
+ 
+    /* limina: these two rejections share one error code and one message, and they say different
+     * things -- the box does not fit the DESTINATION, versus the SOURCE iov is too small for it.
+@@ -14860,6 +14869,54 @@ struct vrend_resource *vrend_renderer_ctx_res_lookup(struct vrend_context *ctx,
+    return vrend_ctx_resource_lookup(ctx->res_hash, res_handle);
+ }
+ 
++struct owning_hva_walk {
++   const uint8_t *hva;
++   uint32_t owner;
++   int iov_idx;
++   size_t iov_off;
++};
++
++static enum pipe_error owning_hva_cb(void *key, void *value, void *data)
++{
++   struct owning_hva_walk *w = data;
++   struct vrend_resource *res = value;
++   if (w->owner)
++      return PIPE_OK;
++   for (uint32_t k = 0; k < res->num_iovs; k++) {
++      const uint8_t *b = res->iov[k].iov_base;
++      if (w->hva >= b && w->hva < b + res->iov[k].iov_len) {
++         w->owner = (uint32_t)(uintptr_t)key;
++         w->iov_idx = (int)k;
++         w->iov_off = (size_t)(w->hva - b);
++         break;
++      }
++   }
++   return PIPE_OK;
++}
++
++uint32_t vrend_renderer_ctx_res_owning_hva(struct vrend_context *ctx, const void *hva,
++                                           int *iov_idx, size_t *iov_off)
++{
++   struct owning_hva_walk w = { .hva = hva, .iov_idx = -1 };
++   util_hash_table_foreach(ctx->res_hash, owning_hva_cb, &w);
++   if (iov_idx)
++      *iov_idx = w.iov_idx;
++   if (iov_off)
++      *iov_off = w.iov_off;
++   return w.owner;
++}
++
++/* limina F1 probe (LIMINA_BSXFER): every transfer touching a PIPE_BIND_CUSTOM buffer -- the video
++ * bitstream/desc staging buffers are the only ones -- with its direction, so a bitstream that
++ * arrives zero can be checked against what the guest said it did with that handle. */
++static bool limina_bsxfer_on(void)
++{
++   static int on = -1;
++   if (on < 0)
++      on = getenv("LIMINA_BSXFER") != NULL;
++   return on;
++}
++
+ void vrend_context_set_debug_flags(struct vrend_context *ctx, const char *flagstring)
+ {
+    if (vrend_debug_can_override()) {
+diff --git a/src/vrend/vrend_renderer.h b/src/vrend/vrend_renderer.h
+index c2db0943..039c6ca3 100644
+--- a/src/vrend/vrend_renderer.h
++++ b/src/vrend/vrend_renderer.h
+@@ -571,6 +571,9 @@ void vrend_check_texture_multisample(struct vrend_format_table *table,
+ 
+ struct vrend_resource *vrend_renderer_ctx_res_lookup(struct vrend_context *ctx,
+                                                      int res_handle);
++/* limina probe: the resource in this context whose guest iov backing contains `hva` (0 = none). */
++uint32_t vrend_renderer_ctx_res_owning_hva(struct vrend_context *ctx, const void *hva,
++                                           int *iov_idx, size_t *iov_off);
+ 
+ void vrend_renderer_resource_destroy(struct vrend_resource *res);
+ 
+diff --git a/src/vrend/vrend_video.c b/src/vrend/vrend_video.c
+index e67825be..209c2f8e 100644
+--- a/src/vrend/vrend_video.c
++++ b/src/vrend/vrend_video.c
+@@ -67,6 +67,13 @@
+ 
+ 
+ #include <time.h>
++#ifdef __APPLE__
++#include <mach/mach.h>
++#include <mach/mach_vm.h>
++#include <sys/mman.h>
++#include <string.h>
++#include <unistd.h>
++#endif
+ 
+ #include "util/u_format.h"
+ 
+@@ -1001,6 +1008,134 @@ static void modify_picture_desc(struct vrend_video_codec *cdc,
+     }
+ }
+ 
++
++/* limina F1 probe (LIMINA_BS_SCAN): a bitstream buffer read all-zero from its guest pages, so
++ * find out where the guest's bytes actually are. Dumps the resource's iovecs (as merged runs),
++ * then scans every RESIDENT page of the worker's large mappings -- guest RAM -- for the frame's
++ * first bytes (LIMINA_BS_MAGIC, hex; default = the VP9 keyframe head of the test clip) and names
++ * the context resource whose iov owns each hit. A hit inside another resource means the guest
++ * wrote a different bo (or the host attached the wrong pages to this one); no hit at all means
++ * the write never reached guest RAM. Resident-only, so an untouched 8 GiB guest costs nothing. */
++static void limina_bs_scan(struct vrend_video_context *vctx, uint32_t handle,
++                           struct vrend_resource *res, uint32_t size)
++{
++#ifdef __APPLE__
++   const char *hex = getenv("LIMINA_BS_MAGIC");
++   uint8_t magic[32];
++   size_t mlen = 0;
++   if (!hex || !*hex)
++      hex = "82498342";
++   for (; mlen < sizeof(magic) && hex[2 * mlen] && hex[2 * mlen + 1]; mlen++) {
++      unsigned v;
++      char b[3] = { hex[2 * mlen], hex[2 * mlen + 1], 0 };
++      if (sscanf(b, "%x", &v) != 1)
++         break;
++      magic[mlen] = (uint8_t)v;
++   }
++   if (mlen < 4)
++      return;
++
++   size_t total = 0;
++   for (uint32_t k = 0; k < res->num_iovs; k++)
++      total += res->iov[k].iov_len;
++   virgl_warn("[BSSCAN] handle=%u size=%u iovs=%d backing=%zu bind=0x%x width0=%u magic=%s\n",
++              handle, size, res->num_iovs, total, res->base.bind, res->base.width0, hex);
++   {
++      const uint8_t *run_base = NULL;
++      size_t run_len = 0;
++      uint32_t run_first = 0;
++      for (uint32_t k = 0; k < res->num_iovs; k++) {
++         const uint8_t *b = res->iov[k].iov_base;
++         if (run_base && b == run_base + run_len) {
++            run_len += res->iov[k].iov_len;
++            continue;
++         }
++         if (run_base)
++            virgl_warn("[BSSCAN]   run hva=%p len=%zu iov %u..%u\n", (const void *)run_base,
++                       run_len, run_first, k - 1);
++         run_base = b;
++         run_len = res->iov[k].iov_len;
++         run_first = k;
++      }
++      if (run_base)
++         virgl_warn("[BSSCAN]   run hva=%p len=%zu iov %u..%u\n", (const void *)run_base,
++                    run_len, run_first, res->num_iovs - 1);
++   }
++
++   struct timespec t0, t1;
++   clock_gettime(CLOCK_MONOTONIC, &t0);
++   mach_vm_address_t addr = 0x1000;
++   size_t scanned = 0, regions = 0, pagesz = (size_t)getpagesize();
++   int hits = 0;
++   for (;;) {
++      mach_vm_size_t rsize = 0;
++      vm_region_basic_info_data_64_t info;
++      mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
++      mach_port_t obj = MACH_PORT_NULL;
++      kern_return_t kr = mach_vm_region(mach_task_self(), &addr, &rsize, VM_REGION_BASIC_INFO_64,
++                                       (vm_region_info_t)&info, &cnt, &obj);
++      if (kr != KERN_SUCCESS)
++         break;
++      if (obj != MACH_PORT_NULL)
++         mach_port_deallocate(mach_task_self(), obj);
++      if ((info.protection & VM_PROT_READ) && rsize >= ((mach_vm_size_t)64 << 20)) {
++         size_t npages = (size_t)(rsize / pagesz);
++         char *vec = malloc(npages);
++         regions++;
++         if (vec && mincore((void *)(uintptr_t)addr, (size_t)rsize, vec) == 0) {
++            size_t p = 0;
++            while (p < npages) {
++               while (p < npages && !(vec[p] & MINCORE_INCORE))
++                  p++;
++               size_t q = p;
++               while (q < npages && (vec[q] & MINCORE_INCORE))
++                  q++;
++               if (q > p) {
++                  const uint8_t *cur = (const uint8_t *)(uintptr_t)addr + p * pagesz;
++                  size_t len = (q - p) * pagesz;
++                  scanned += len;
++                  while (len >= mlen) {
++                     const uint8_t *h = memmem(cur, len, magic, mlen);
++                     if (!h)
++                        break;
++                     if (hits < 32) {
++                        int idx = -1, mine = -1;
++                        size_t off = 0;
++                        uint32_t owner = vrend_renderer_ctx_res_owning_hva(vctx->ctx, h, &idx, &off);
++                        for (uint32_t k = 0; k < res->num_iovs; k++) {
++                           const uint8_t *b = res->iov[k].iov_base;
++                           if (h >= b && h < b + res->iov[k].iov_len)
++                              mine = (int)k;
++                        }
++                        virgl_warn("[BSSCAN] hit hva=%p pageoff=0x%zx owner_res=%u owner_iov=%d "
++                                   "owner_off=%zu this_res_iov=%d\n", (const void *)h,
++                                   (size_t)((uintptr_t)h & (pagesz - 1)), owner, idx, off, mine);
++                     }
++                     hits++;
++                     size_t adv = (size_t)(h - cur) + 1;
++                     cur += adv;
++                     len -= adv;
++                  }
++               }
++               p = q;
++            }
++         } else {
++            virgl_warn("[BSSCAN]   region %p+%llu: mincore failed\n", (void *)(uintptr_t)addr,
++                       (unsigned long long)rsize);
++         }
++         free(vec);
++      }
++      addr += rsize;
++   }
++   clock_gettime(CLOCK_MONOTONIC, &t1);
++   virgl_warn("[BSSCAN] done regions=%zu resident_scanned=%zu MiB hits=%d in %ld ms\n", regions,
++              scanned >> 20, hits,
++              (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000));
++#else
++   (void)vctx; (void)handle; (void)res; (void)size;
++#endif
++}
++
+ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+                                  uint32_t cdc_handle,
+                                  uint32_t tgt_handle,
+@@ -1075,6 +1210,32 @@ int vrend_video_decode_bitstream(struct vrend_video_context *ctx,
+                                           res->ptr, buffer_sizes[i]);
+                     virgl_warn("%s: bs res %d was zero; after 2ms re-read: %02x %02x %02x %02x\n",
+                                __func__, buffer_handles[i], p8[0], p8[1], p8[2], p8[3]);
++#if defined(__APPLE__) && defined(__aarch64__)
++                    /* Is the zero in DRAM, or a stale line in THIS core's cache hierarchy?
++                     * Clean+invalidate every line of the guest pages, then read again. */
++                    {
++                        size_t left = buffer_sizes[i];
++                        for (int j = 0; j < res->num_iovs && left; j++) {
++                            uintptr_t a = (uintptr_t)res->iov[j].iov_base;
++                            size_t l = res->iov[j].iov_len < left ? res->iov[j].iov_len : left;
++                            for (uintptr_t q = a & ~(uintptr_t)63; q < a + l; q += 64)
++                                __asm__ volatile("dc civac, %0" : : "r"(q) : "memory");
++                            left -= l;
++                        }
++                        __asm__ volatile("dsb sy" : : : "memory");
++                        vrend_read_from_iovec(res->iov, res->num_iovs, 0, res->ptr, buffer_sizes[i]);
++                        size_t nz2 = 0;
++                        for (size_t k = 0; k < buffer_sizes[i]; k++) nz2 += p8[k] != 0;
++                        virgl_warn("%s: bs res %d after dc civac re-read: nonzero=%zu/%u head %02x %02x %02x %02x\n",
++                                   __func__, buffer_handles[i], nz2, buffer_sizes[i], p8[0], p8[1], p8[2], p8[3]);
++                    }
++#endif
++                    if (getenv("LIMINA_BS_SCAN"))
++                        limina_bs_scan(ctx, buffer_handles[i], res, buffer_sizes[i]);
++                } else if (getenv("LIMINA_BS_SCAN") && getenv("LIMINA_BS_SCAN")[0] == '2' &&
++                           buffer_sizes[i] >= 65536) {
++                    /* positive control: where a keyframe that DID arrive lives in guest RAM */
++                    limina_bs_scan(ctx, buffer_handles[i], res, buffer_sizes[i]);
+                 }
+             }
+         }
