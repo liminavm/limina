@@ -141,8 +141,8 @@ fn an_idle_guest_sheds_vcpus_and_a_busy_one_gets_them_back() {
     // condition — no dwell, so this is a question of one report interval plus the sysfs writes.
     guest
         .ssh_exec_timeout(
-            "for i in 1 2 3 4; do (nohup timeout 240 sh -c 'while :; do :; done' \
-             >/dev/null 2>&1 &) ; done; echo SPAWNED",
+            "rm -f /tmp/spin.pids; for i in 1 2 3 4; do nohup timeout 240 sh -c \
+             'while :; do :; done' >/dev/null 2>&1 & echo $! >> /tmp/spin.pids; done; echo SPAWNED",
             STEP,
         )
         .expect("spawning the load");
@@ -158,8 +158,15 @@ fn an_idle_guest_sheds_vcpus_and_a_busy_one_gets_them_back() {
     eprintln!("busy guest recovered every vCPU: nproc -> {n}");
 
     // A re-onlined vCPU must actually RUN work, not merely appear in the mask.
+    //
+    // Kill the load by recorded pid, NOT with `pkill -f <the spin command>`: that pattern also
+    // matches the cmdline of the ssh invocation carrying it, so pkill kills its own shell and ssh
+    // comes back 255. (Measured — it failed exactly that way first time.)
     guest
-        .ssh_exec_timeout("pkill -f 'while :; do :; done' || true", STEP)
+        .ssh_exec_timeout(
+            "kill $(cat /tmp/spin.pids) 2>/dev/null; rm -f /tmp/spin.pids; echo STOPPED",
+            STEP,
+        )
         .expect("stopping the load");
     let out = guest
         .ssh_exec_timeout(
