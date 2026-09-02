@@ -259,6 +259,20 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = vcpu_policy::CpuReclaim::Disabled)]
     cpu_reclaim: vcpu_policy::CpuReclaim,
 
+    /// Expose the virtual cpufreq controller (`qemu,virtual-cpufreq`) to the guest — forwarded to
+    /// the worker. OFF by default. It does not make anything run faster: it gives the guest
+    /// cpufreq policies and a frequency-invariance source, which are two of the preconditions for
+    /// Energy Aware Scheduling. Linux binds it with its own in-tree driver (a module in stock
+    /// Fedora), so a guest needs no limina components for it.
+    #[arg(long)]
+    cpufreq: bool,
+
+    /// How many vCPUs to make "little": slower on paper (`capacity-dmips-mhz`), in their own
+    /// perf domain, and backed by a vCPU thread at a macOS QoS class that lands it on an
+    /// efficiency core. The last N vCPUs; CPU0 never is. Requires `--cpufreq`. Default 0.
+    #[arg(long, default_value_t = 0)]
+    little_vcpus: u32,
+
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
     /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
@@ -1128,6 +1142,9 @@ fn cli_from_definition(
         share,
         cpus: ov.cpus.unwrap_or(cfg.hardware.cpus),
         cpu_reclaim: ov.cpu_reclaim.unwrap_or(cfg.hardware.cpu_reclaim),
+        // Not in vm.toml yet: this is still an experiment driven from the CLI.
+        cpufreq: false,
+        little_vcpus: 0,
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1507,6 +1524,15 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     }
     if cli.mic {
         args.push("--mic".into());
+    }
+    // The virtual cpufreq controller (off by default). Carries no interrupt, so its position
+    // among the forwarded flags is free.
+    if cli.cpufreq {
+        args.push("--cpufreq".into());
+        if cli.little_vcpus > 0 {
+            args.push("--little-vcpus".into());
+            args.push(cli.little_vcpus.to_string());
+        }
     }
     // The emulated USB controller (on by default). Push --usb to the worker once; the FIDO and
     // fingerprint gadgets below cold-plug onto it additively. `fingerprint` already implies `usb`.

@@ -252,6 +252,13 @@ pub struct VmSpec {
     /// default-off; a stock guest binds it with its own xhci-plat driver (no guest
     /// components). The controller is a stub data path today (Stage A bring-up).
     pub usb: bool,
+    /// Expose the virtual cpufreq controller (`qemu,virtual-cpufreq`). See the worker's
+    /// `--cpufreq` flag: it is a scheduling-signal channel, not a performance control.
+    pub cpufreq: bool,
+
+    /// How many of the vCPUs are "little" (the last N). See the worker's `--little-vcpus`.
+    /// Ignored unless `cpufreq` is on.
+    pub little_vcpus: u32,
     /// UNIX-socket path for the stock-tier FIDO USB gadget (M14 Stage C). When set (and
     /// `usb` is true) the worker cold-plugs a HID report-pipe gadget with the FIDO identity
     /// and bridges its CTAPHID frames to the supervisor's authenticator over this socket.

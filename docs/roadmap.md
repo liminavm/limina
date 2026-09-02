@@ -840,11 +840,47 @@ and a CPU_ON ALREADY_ON idempotency guard); revisit in an M9 hardening pass. Gua
 `tests/l2_vcpu_policy.rs`, which suspends through the *supervisor* — the harness's other seam
 signals the worker and would skip the mitigation entirely.
 
-**Open:** close the stock tier's grow latency, either with `guest-get-cpustats` (two samples give
-real per-CPU utilization; the last M12.5 verb still lacking a consumer) or host-side from the vCPU
-threads' own CPU time — which would need no guest cooperation at all and would serve every tier,
-including a guest with no agent whatsoever. Authoritative perf context:
-`docs/perf/overhead-inventory.md`.
+The stock tier's grow latency is closed **host-side**, from the worker's own CPU time
+(`proc_pid_rusage`), so it needs no guest cooperation and serves every tier — including a guest
+with no agent at all. Authoritative perf context: `docs/perf/overhead-inventory.md`.
+
+#### Parking cores without hiding them — EAS instead of hotplug
+
+Offlining works, but it lies to the guest about how many CPUs exist: `nproc` returns the shrunk
+count, so a build started while shrunk runs with 2 jobs on a machine that could give it 10. The
+knob is therefore **default-off**, and the direction is to make the *scheduler* consolidate
+instead of taking CPUs away.
+
+Not by parking cores in a deeper C-state: the guest has none. `cpuidle current_driver` is `none`,
+so WFI is the floor and an idle vCPU already costs nothing. The saving is **consolidation** — any
+CPU with a runnable task pays a 1000 Hz tick, so the win is having fewer CPUs with work on them,
+not slower ones.
+
+Linux already has that mechanism: **Energy Aware Scheduling** packs onto the cheapest CPUs that
+fit, and every CPU stays online and counted. Its preconditions are asymmetric capacities, no SMT,
+frequency invariance, a cpufreq policy per domain under schedutil, and an energy model per perf
+domain. Shipped so far, all host-side and visible to a **stock** guest:
+
+- **`--cpufreq`** — a `qemu,virtual-cpufreq` MMIO device (in-tree driver `virt-cpufreq`, a module
+  in stock Fedora). Gives cpufreq policies and frequency invariance. Nothing on the host acts on
+  a requested frequency; the point is the scheduler-visible topology.
+- **`--little-vcpus N`** — the last N vCPUs are advertised slower (`capacity-dmips-mhz`) in their
+  own perf domain, and their host threads run at `QOS_CLASS_BACKGROUND` so macOS confines them to
+  the efficiency cores. **Only background produces asymmetry at all** — utility measured 1.0x,
+  background 3.75x — and the advertised capacity (273) is derived from that measurement rather
+  than from the hardware ratio, because EAS decides what fits from exactly that number.
+
+Two traps worth keeping: the capacities reach the kernel **only** through `/cpus/cpu-map`
+(`parse_dt_topology()` returns early without it and the properties are read by nobody), and every
+CPU in one perf domain must report the same capacity or `em_dev_register_perf_domain()` refuses
+the domain — so the capacity split and the domain split are one split.
+
+**Open — the energy model.** It is the only remaining gate; the kernel says so itself, with
+`sched_debug` on: `pd_init: no EM found for CPU0`. `em_dev_register_perf_domain()` is
+`EXPORT_SYMBOL_GPL`, so the plan is a **DKMS module** registering a synthetic EM rather than a
+kernel-fork patch — that way EAS lands on a stock Fedora kernel and stays an upgrade rather than
+an entry fee. `em_rebuild_sched_domains()` is *not* exported, so the module cannot enable EAS by
+itself; `echo 1 > /proc/sys/kernel/sched_energy_aware` triggers the rebuild from userspace.
 
 ---
 

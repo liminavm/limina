@@ -252,6 +252,8 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // Emulated xHCI USB controller (opt-in, default off). A stock guest binds it via
     // its own xhci-plat driver and enumerates any cold-plugged device models.
     vmr.usb = spec.usb;
+    vmr.cpufreq = spec.cpufreq;
+    vmr.little_vcpus = spec.little_vcpus;
     // Test hook (not a user feature): with --usb, LIMINA_USB_MOCK selects a cold-plugged
     // mock gadget so a stock guest enumerates a device. `enum` (or the legacy `1`) is the
     // vendor-specific enumeration-only mock; `hid` is the full-speed HID echo gadget that
@@ -1115,6 +1117,8 @@ mod tests {
             snd: false,
             mic: false,
             usb: false,
+            cpufreq: false,
+            little_vcpus: 0,
             fido_socket: None,
             moc_socket: None,
             free_page_reporting: false,

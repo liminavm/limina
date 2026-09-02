@@ -223,6 +223,22 @@ struct Cli {
     #[arg(long)]
     usb: bool,
 
+    /// Expose the virtual cpufreq controller (`qemu,virtual-cpufreq`) to the guest. Opt-in and
+    /// OFF by default. It changes nothing about how fast anything runs: it gives the guest
+    /// cpufreq policies and a frequency-invariance source, which are two of the preconditions
+    /// for Energy Aware Scheduling. Linux binds it with its own in-tree driver (a module in
+    /// stock Fedora), so no guest components are needed.
+    #[arg(long)]
+    cpufreq: bool,
+
+    /// How many vCPUs are "little": advertised to the guest with a lower `capacity-dmips-mhz`
+    /// and their own perf domain, and run on the host at a macOS QoS class that lands them on
+    /// an efficiency core. The last N vCPUs are the little ones; CPU0 never is. Requires
+    /// `--cpufreq` — an asymmetry the guest cannot see a frequency for is not one the
+    /// scheduler will act on. Default 0: a uniform machine.
+    #[arg(long, default_value_t = 0)]
+    little_vcpus: u32,
+
     /// UNIX-socket path the worker binds for the stock-tier FIDO USB gadget (M14 Stage C).
     /// The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
     /// CTAPHID frames over this socket to the supervisor's authenticator (SEP/Touch ID lives
@@ -685,6 +701,8 @@ fn main() -> Result<()> {
         snd: !cli.no_snd,
         mic: cli.mic,
         usb: cli.usb,
+        cpufreq: cli.cpufreq,
+        little_vcpus: cli.little_vcpus,
         fido_socket: cli.fido_socket,
         moc_socket: cli.moc_socket,
         free_page_reporting: cli.balloon_free_page_reporting,
