@@ -369,6 +369,16 @@ for p in $(rpm -qa 'mesa-*' --qf '%{NAME}\n' | sort -u); do
 done
 echo "   mesa installed + (re-)versionlocked"
 rpm -q mesa-vulkan-drivers --qf '   venus ICD pkg: %{NVRA}\n' 2>/dev/null || true
+# GStreamer caches its plugin scan per user and re-validates an entry only when the plugin file
+# itself changes. A VA plugin that crashed at scan under an older mesa stays blacklisted in that
+# cache across a mesa upgrade, so every GStreamer app keeps reporting `no element "vavp9dec"`
+# with a fixed driver installed. The cache is a plain rebuildable file: drop it, and the next
+# GStreamer start rescans against the mesa just installed.
+for home in /home/* /root; do
+  [ -d "$home/.cache/gstreamer-1.0" ] || continue
+  rm -f "$home/.cache/gstreamer-1.0"/registry.*.bin
+done
+echo "   GStreamer plugin registries dropped (rescanned against this mesa at next use)"
 
 ### 3. clipboard@limina gnome-shell extension -> REMOVED (retired 2026-08-15, #37 step 4) ###
 # The extension was the GNOME tier of our own clipboard bridge. Stock spice-vdagent
