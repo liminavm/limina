@@ -47,3 +47,4 @@ pub mod client;
 pub mod codec;
 pub mod policy;
 pub mod trim;
+pub mod vcpu;

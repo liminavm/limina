@@ -2556,6 +2556,27 @@ impl Guest {
         Ok(())
     }
 
+    /// Trigger the suspend bracket the way a USER does: `SIGTSTP` to the **supervisor**, which is
+    /// exactly what `limina suspend` sends (`vmlib::runtime`) and what the window's Suspend item
+    /// ends up doing. [`Guest::suspend_bracket`] signals the worker directly, which is the right
+    /// seam for testing the worker's own bracket but SKIPS everything the supervisor does first —
+    /// including bringing dynamically-offlined vCPUs back before the snapshot (task #41). A test
+    /// of supervisor-side pre-snapshot work has to come in through here.
+    pub fn suspend_via_supervisor(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.snapshot_path.is_some(),
+            "no snapshot file configured (use GuestConfig::with_snapshot)"
+        );
+        let rc = unsafe { libc::kill(self.pid, libc::SIGTSTP) };
+        anyhow::ensure!(
+            rc == 0,
+            "kill(supervisor={}, SIGTSTP) failed: {}",
+            self.pid,
+            std::io::Error::last_os_error()
+        );
+        Ok(())
+    }
+
     /// Path to the VM snapshot file (inside the scratch dir), if [`GuestConfig::with_snapshot`]
     /// was set. Exists only after a [`Guest::snapshot`] has been taken.
     pub fn snapshot_path(&self) -> Option<&Path> {

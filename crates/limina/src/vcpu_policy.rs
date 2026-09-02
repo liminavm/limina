@@ -86,7 +86,18 @@ impl CpuReclaim {
 /// The shrink condition must hold continuously for this long before the first CPU goes, and
 /// again between steps. Long enough that a lull between two compiler invocations does not start
 /// dismantling the machine.
-const SHRINK_DWELL: Duration = Duration::from_secs(20);
+const DEFAULT_SHRINK_DWELL: Duration = Duration::from_secs(20);
+
+/// The dwell in force, honouring `LIMINA_VCPU_DWELL_SECS`. The override exists for the L2 test,
+/// which would otherwise spend minutes per shrink step waiting out a production dwell (and the
+/// guest's boot loadavg on top of it); it is read once per policy, not per decision.
+fn shrink_dwell() -> Duration {
+    std::env::var("LIMINA_VCPU_DWELL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_SHRINK_DWELL)
+}
 
 /// One decision's inputs and outcome, for the debug trace.
 struct State {
@@ -102,6 +113,8 @@ pub struct VcpuPolicy {
     max: u32,
     /// The fewest vCPUs to leave online (derived from the reclaim mode at construction).
     floor: u32,
+    /// How long the shrink condition must hold before each step ([`shrink_dwell`]).
+    dwell: Duration,
     state: Mutex<State>,
 }
 
@@ -120,10 +133,12 @@ impl VcpuPolicy {
         if floor >= max {
             return None;
         }
-        log::info!("dynamic vCPUs: {floor}..{max} online (reclaim {mode:?})");
+        let dwell = shrink_dwell();
+        log::info!("dynamic vCPUs: {floor}..{max} online (reclaim {mode:?}, dwell {dwell:?})");
         Some(VcpuPolicy {
             max,
             floor,
+            dwell,
             state: Mutex::new(State { calm_since: None }),
         })
     }
@@ -194,16 +209,17 @@ impl VcpuPolicy {
             return None;
         }
         let since = *st.calm_since.get_or_insert(now);
-        if now.duration_since(since) < SHRINK_DWELL {
+        if now.duration_since(since) < self.dwell {
             return None;
         }
         // Re-arm the dwell so the next step costs another full one.
         st.calm_since = None;
         log::info!(
-            "dynamic vCPUs: {online} online, {} runnable (load1 {:.2}) for {SHRINK_DWELL:?} → \
+            "dynamic vCPUs: {online} online, {} runnable (load1 {:.2}) for {:?} → \
              asking for {smaller}",
             p.nr_running,
             f64::from(p.loadavg1_x100) / 100.0,
+            self.dwell,
         );
         Some(CpuTarget { online: smaller })
     }
@@ -248,14 +264,14 @@ mod tests {
         let t0 = Instant::now();
         assert_eq!(p.decide(&idle(10), t0), None);
         assert_eq!(
-            p.decide(&idle(10), t0 + SHRINK_DWELL),
+            p.decide(&idle(10), t0 + DEFAULT_SHRINK_DWELL),
             Some(CpuTarget { online: 9 })
         );
         // The guest complies; the next step costs another full dwell, not one more sample.
-        let t1 = t0 + SHRINK_DWELL;
+        let t1 = t0 + DEFAULT_SHRINK_DWELL;
         assert_eq!(p.decide(&idle(9), t1), None);
         assert_eq!(
-            p.decide(&idle(9), t1 + SHRINK_DWELL),
+            p.decide(&idle(9), t1 + DEFAULT_SHRINK_DWELL),
             Some(CpuTarget { online: 8 })
         );
     }
@@ -277,7 +293,7 @@ mod tests {
                     assert!(t.online >= floor, "{mode:?} asked for {} CPUs", t.online);
                     online = t.online;
                 }
-                now += SHRINK_DWELL;
+                now += DEFAULT_SHRINK_DWELL;
             }
             assert_eq!(online, floor, "{mode:?} settled at the wrong floor");
         }
@@ -307,14 +323,17 @@ mod tests {
         assert_eq!(p.decide(&busy(10, 10), t0 + Duration::from_secs(19)), None);
         // The dwell restarts at the first calm sample AFTER the spike, not at t0. Had it
         // survived the spike, this would shrink here.
-        let rearmed = t0 + SHRINK_DWELL;
+        let rearmed = t0 + DEFAULT_SHRINK_DWELL;
         assert_eq!(p.decide(&idle(10), rearmed), None);
         assert_eq!(
-            p.decide(&idle(10), rearmed + SHRINK_DWELL - Duration::from_millis(1)),
+            p.decide(
+                &idle(10),
+                rearmed + DEFAULT_SHRINK_DWELL - Duration::from_millis(1)
+            ),
             None
         );
         assert_eq!(
-            p.decide(&idle(10), rearmed + SHRINK_DWELL),
+            p.decide(&idle(10), rearmed + DEFAULT_SHRINK_DWELL),
             Some(CpuTarget { online: 9 })
         );
     }
@@ -345,15 +364,15 @@ mod tests {
         // Shrink to 9...
         p.decide(&idle(10), t0);
         assert_eq!(
-            p.decide(&idle(10), t0 + SHRINK_DWELL),
+            p.decide(&idle(10), t0 + DEFAULT_SHRINK_DWELL),
             Some(CpuTarget { online: 9 })
         );
         // ...then the guest reports 10 again (restore, or a manual online). One more dwell of
         // calm and we simply shrink from 10 again, rather than insisting on the stale 9.
-        let t1 = t0 + SHRINK_DWELL;
+        let t1 = t0 + DEFAULT_SHRINK_DWELL;
         assert_eq!(p.decide(&idle(10), t1), None);
         assert_eq!(
-            p.decide(&idle(10), t1 + SHRINK_DWELL),
+            p.decide(&idle(10), t1 + DEFAULT_SHRINK_DWELL),
             Some(CpuTarget { online: 9 })
         );
     }
@@ -365,7 +384,7 @@ mod tests {
         let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
         let t0 = Instant::now();
         assert_eq!(p.decide(&idle(0), t0), None);
-        assert_eq!(p.decide(&idle(0), t0 + SHRINK_DWELL * 10), None);
+        assert_eq!(p.decide(&idle(0), t0 + DEFAULT_SHRINK_DWELL * 10), None);
     }
 
     /// Nothing to give back means no policy at all, so the `vcpu` capability is never offered

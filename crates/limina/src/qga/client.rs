@@ -379,6 +379,75 @@ impl Qga {
     }
 }
 
+/// One guest logical processor, as `guest-get-vcpus` reports it.
+///
+/// `can_offline` is the guest kernel's own answer, and it is the field that makes this verb worth
+/// more than the count the enhanced agent sends: cpu0 reports `can-offline: false` on Linux, so
+/// the guest tells us directly which CPUs are even candidates rather than us assuming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Vcpu {
+    pub logical_id: u32,
+    pub online: bool,
+    pub can_offline: bool,
+}
+
+impl Qga {
+    /// `guest-get-vcpus` — the guest's logical processors and which are online.
+    pub fn get_vcpus(&self) -> Result<Vec<Vcpu>> {
+        let ret = self.call("guest-get-vcpus", None, FAST)?;
+        let arr = ret
+            .as_array()
+            .ok_or_else(|| anyhow!("guest-get-vcpus returned {ret}, not an array"))?;
+        Ok(arr
+            .iter()
+            .filter_map(|v| {
+                Some(Vcpu {
+                    logical_id: v.get("logical-id").and_then(Value::as_u64)? as u32,
+                    online: v.get("online").and_then(Value::as_bool).unwrap_or(false),
+                    // Absent means "the guest did not say"; treat that as NOT a candidate. Being
+                    // wrong the other way asks a guest to offline a CPU it cannot, and on an
+                    // SELinux-confined agent the refusal is indistinguishable from a denial.
+                    can_offline: v
+                        .get("can-offline")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                })
+            })
+            .collect())
+    }
+
+    /// `guest-set-vcpus` — ask the guest to online/offline the listed processors. Returns how many
+    /// the guest says it actually changed, which is the only honest confirmation: the agent
+    /// reports a partial success as a smaller number rather than an error.
+    pub fn set_vcpus(&self, want: &[(u32, bool)]) -> Result<i64> {
+        let vcpus: Vec<Value> = want
+            .iter()
+            .map(|(id, online)| json!({ "logical-id": id, "online": online }))
+            .collect();
+        let ret = self.call("guest-set-vcpus", Some(json!({ "vcpus": vcpus })), FAST)?;
+        ret.as_i64()
+            .ok_or_else(|| anyhow!("guest-set-vcpus returned {ret}, not a count"))
+    }
+
+    /// `guest-get-load` — the guest's own 1/5/15-minute load averages, in hundredths (`avg*100`).
+    ///
+    /// This is the stock tier's whole sensor. It is coarser than what the enhanced agent sends
+    /// (no `nr_running`, no PSI), but it is the smoothed figure the shrink decision leans on
+    /// anyway, so the policy needs no special case for a guest that can only offer this.
+    pub fn load(&self) -> Result<(u32, u32, u32)> {
+        let ret = self.call("guest-get-load", None, FAST)?;
+        let at = |k: &str| {
+            ret.get(k)
+                .and_then(Value::as_f64)
+                .map(|f| (f * 100.0).round() as u32)
+                .unwrap_or(0)
+        };
+        // Field names verified against a real guest's qemu-ga 10.2.2 binary (its compiled-in QAPI
+        // strings), not from memory — an earlier guess at `load1min` was simply wrong.
+        Ok((at("load1m"), at("load5m"), at("load15m")))
+    }
+}
+
 /// What one [`Qga::run`] did. `exitcode` is `None` when the process was killed by a signal.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExecOutcome {

@@ -141,10 +141,21 @@ struct Inner {
     /// `--cpu-reclaim` asked for one (and the VM has vCPUs to spare) — and `None` is what
     /// withholds the `vcpu` capability, so a guest whose host has no policy never reports.
     vcpu_policy: Option<crate::vcpu_policy::VcpuPolicy>,
-    /// The guest's last-reported online vCPU count, and when it said so. The only statement
-    /// about online state either side trusts (the guest never acks a target), so it is what
+    /// The guest's last-reported online vCPU count, and when it said so — from EITHER tier (the
+    /// enhanced agent's `CpuPressure` or a QGA `guest-get-vcpus` poll). The only statement about
+    /// online state anyone trusts (nothing acks a target), so it is what
     /// [`ControlPlane::restore_all_vcpus`] waits on.
     guest_vcpus_online: Mutex<Option<(Instant, u32)>>,
+    /// When the ENHANCED agent last sent a `CpuPressure`. Kept apart from the reading above
+    /// because it answers a different question: not "how many are online" but "is limina-agent
+    /// driving this?". While it is fresh the QGA poller stands down — the agent's signal is
+    /// richer and pushed rather than polled, so a guest that has one should not also be polled.
+    agent_cpu_report_at: Mutex<Option<Instant>>,
+    /// Consecutive QGA vCPU failures. Fedora leaves every RPC enabled and gates the agent in
+    /// SELinux instead (`virt_qemu_ga_t`), so a `guest-set-vcpus` that is refused looks like a
+    /// normal error reply — and would otherwise be retried every tick forever. After
+    /// [`QGA_VCPU_GIVE_UP`] in a row we stop asking this guest.
+    qga_vcpu_failures: AtomicU64,
     /// M14 virtual FIDO authenticator: the per-VM passkey store, shared by every peer.
     /// `None` when this host has no Secure Enclave — then the `fido` capability is never
     /// advertised and a guest presents no authenticator (stock-degrade rule).
@@ -186,6 +197,8 @@ impl ControlPlane {
             balloon_policy,
             vcpu_policy,
             guest_vcpus_online: Mutex::new(None),
+            agent_cpu_report_at: Mutex::new(None),
+            qga_vcpu_failures: AtomicU64::new(0),
             fido_store,
             usb_fido_gadget,
         });
@@ -286,6 +299,9 @@ impl ControlPlane {
                     if let Some(every) = trim_interval {
                         tsync_inner.qga_trim_tick(every);
                     }
+                    // The stock tier's dynamic-vCPU loop. No-op unless a policy is configured
+                    // AND no limina-agent is reporting — see `qga_vcpu_tick`.
+                    tsync_inner.qga_vcpu_tick();
                     last_awake = std::time::SystemTime::now();
                 }
             })
@@ -347,7 +363,10 @@ impl ControlPlane {
             .send_to_capable("vcpu", &Message::CpuTarget(target), CHANNEL_CONTROL)
             .is_empty()
         {
-            return true; // no guest listening; nothing of ours is offline
+            // No enhanced agent. The stock tier may still have offlined vCPUs through QGA, and it
+            // is driven by a poll rather than a push — so ask it directly rather than waiting for
+            // a report nothing is going to send.
+            return self.restore_all_vcpus_via_qga(target.online);
         }
         log::info!(
             "suspend: asking the guest for all {} vCPUs before the snapshot (#41)",
@@ -455,6 +474,62 @@ impl ControlPlane {
         *self.inner.vdagent.lock().unwrap() = Some(agent);
         Ok(())
     }
+
+    /// The stock tier's half of [`ControlPlane::restore_all_vcpus`]: bring every guest vCPU back
+    /// through `guest-set-vcpus` and confirm with a re-read.
+    ///
+    /// Returns true when there was nothing to do or the guest confirms every vCPU online. A guest
+    /// we cannot reach, or one whose agent refuses the write, returns false — and the caller
+    /// snapshots anyway, because a snapshot must never be held hostage to a vCPU count.
+    fn restore_all_vcpus_via_qga(&self, want_online: u32) -> bool {
+        let Some(qga) = self
+            .inner
+            .qga
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.client.clone())
+        else {
+            return true; // no stock agent either; nothing of ours can be offline
+        };
+        if !qga.ready() {
+            return true;
+        }
+        let Ok(vcpus) = qga.get_vcpus() else {
+            return true; // never read the state, so we never offlined anything through it
+        };
+        let plan = crate::qga::vcpu::plan(&vcpus, want_online);
+        if plan.is_empty() {
+            return true;
+        }
+        log::info!(
+            "suspend: asking the stock guest agent for all {want_online} vCPUs before the \
+             snapshot (#41)"
+        );
+        if let Err(e) = qga.set_vcpus(&plan) {
+            log::warn!(
+                "suspend: guest-set-vcpus failed ({e:#}); snapshotting anyway (a restore may see \
+                 a diverged online count — #41)"
+            );
+            return false;
+        }
+        // Believe the re-read, not the call: the agent reports a partial success as a count.
+        match qga.get_vcpus() {
+            Ok(after) => {
+                let online = after.iter().filter(|v| v.online).count() as u32;
+                if online >= want_online {
+                    *self.inner.guest_vcpus_online.lock().unwrap() = Some((Instant::now(), online));
+                    return true;
+                }
+                log::warn!(
+                    "suspend: the stock guest came back with {online} of {want_online} vCPUs \
+                     online; snapshotting anyway (#41)"
+                );
+                false
+            }
+            Err(_) => false,
+        }
+    }
 }
 
 impl Inner {
@@ -556,6 +631,111 @@ impl Inner {
             });
         if let Err(e) = spawned {
             log::warn!("qga: could not spawn the bootstrap thread: {e}");
+        }
+    }
+
+    /// One tick of the stock tier's dynamic-vCPU loop, over the stock `qemu-guest-agent`.
+    ///
+    /// This is what lets a guest with NO limina components take part: `guest-get-load` is the
+    /// sensor, `guest-get-vcpus`/`guest-set-vcpus` the actuator, and the host policy in between is
+    /// the very same [`crate::vcpu_policy::VcpuPolicy`] the enhanced tier drives. Per the two-tier
+    /// rule, the enhanced agent makes this better — a richer signal, pushed rather than polled —
+    /// but is not a precondition for having it.
+    ///
+    /// The signal is coarser: QGA offers no `nr_running` and no PSI, so the synthesized report
+    /// carries loadavg alone. The policy needs no special case for that, because loadavg is
+    /// already the strict half of its shrink gate; a missing `nr_running` reads as 0, which
+    /// simply lets the load term decide.
+    fn qga_vcpu_tick(&self) {
+        let Some(policy) = &self.vcpu_policy else {
+            return;
+        };
+        // The enhanced agent owns this whenever it is present and talking.
+        if let Some(at) = *self.agent_cpu_report_at.lock().unwrap() {
+            if at.elapsed() < AGENT_CPU_FRESH {
+                return;
+            }
+        }
+        if self.qga_vcpu_failures.load(Ordering::Relaxed) >= QGA_VCPU_GIVE_UP {
+            return;
+        }
+        let Some(qga) = self.qga.lock().unwrap().as_ref().map(|s| s.client.clone()) else {
+            return;
+        };
+        if !qga.ready() {
+            return;
+        }
+        let caps = qga.caps();
+        if !caps.has("guest-get-vcpus") || !caps.has("guest-get-load") {
+            // An older qemu-ga simply cannot play. Say so once, then stop looking.
+            if self
+                .qga_vcpu_failures
+                .fetch_add(QGA_VCPU_GIVE_UP, Ordering::Relaxed)
+                == 0
+            {
+                log::info!(
+                    "qga: this guest agent has no guest-get-load/guest-get-vcpus; the stock tier \
+                     keeps every vCPU online"
+                );
+            }
+            return;
+        }
+
+        let (vcpus, load1, load5) = match (qga.get_vcpus(), qga.load()) {
+            (Ok(v), Ok((l1, l5, _))) => (v, l1, l5),
+            (Err(e), _) | (_, Err(e)) => {
+                let n = self.qga_vcpu_failures.fetch_add(1, Ordering::Relaxed) + 1;
+                log::debug!("qga: could not read the guest's vCPU state ({e:#})");
+                if n >= QGA_VCPU_GIVE_UP {
+                    log::info!(
+                        "qga: giving up on stock-tier vCPU offlining for this guest after {n} \
+                         failures; every vCPU stays online"
+                    );
+                }
+                return;
+            }
+        };
+        let online = vcpus.iter().filter(|v| v.online).count() as u32;
+        if online == 0 {
+            return; // an empty or nonsense reading is not a reading
+        }
+        *self.guest_vcpus_online.lock().unwrap() = Some((Instant::now(), online));
+        let report = limina_proto::CpuPressure {
+            nr_running: 0,
+            loadavg1_x100: load1,
+            loadavg5_x100: load5,
+            online,
+            present: vcpus.len() as u32,
+            ..Default::default()
+        };
+        let Some(target) = policy.on_pressure(&report) else {
+            self.qga_vcpu_failures.store(0, Ordering::Relaxed);
+            return;
+        };
+        let plan = crate::qga::vcpu::plan(&vcpus, target.online);
+        if plan.is_empty() {
+            return;
+        }
+        match qga.set_vcpus(&plan) {
+            Ok(changed) => {
+                self.qga_vcpu_failures.store(0, Ordering::Relaxed);
+                log::info!(
+                    "qga: asked the stock guest for {} online vCPU(s); it changed {changed}",
+                    target.online
+                );
+            }
+            Err(e) => {
+                let n = self.qga_vcpu_failures.fetch_add(1, Ordering::Relaxed) + 1;
+                log::warn!("qga: guest-set-vcpus failed ({e:#})");
+                if n >= QGA_VCPU_GIVE_UP {
+                    log::warn!(
+                        "qga: stock-tier vCPU offlining gave up after {n} refusals. On an \
+                         SELinux-Enforcing Fedora guest the likeliest reason is the \
+                         virt_qemu_ga_t domain, not the command being absent — an enabled RPC \
+                         only means the agent will attempt it."
+                    );
+                }
+            }
         }
     }
 
@@ -845,7 +1025,9 @@ fn serve_loop(
             // guest is the only side that can act on it, and it never acks — its next report IS
             // the ack, which is why a dropped or refused target simply retries.
             Ok((_, Message::CpuPressure(p))) => {
-                *inner.guest_vcpus_online.lock().unwrap() = Some((Instant::now(), p.online));
+                let now = Instant::now();
+                *inner.guest_vcpus_online.lock().unwrap() = Some((now, p.online));
+                *inner.agent_cpu_report_at.lock().unwrap() = Some(now);
                 if let Some(policy) = &inner.vcpu_policy {
                     if let Some(target) = policy.on_pressure(&p) {
                         reply(&Message::CpuTarget(target), CHANNEL_CONTROL)?;
@@ -911,6 +1093,15 @@ fn welcome_caps(has_fido_store: bool, usb_fido_gadget: bool, dynamic_vcpus: bool
     }
     caps
 }
+
+/// How recently the enhanced agent must have reported for the QGA poller to stand down. Agents
+/// report on their ~1s heartbeat tick, so this is several missed beats.
+const AGENT_CPU_FRESH: Duration = Duration::from_secs(5);
+
+/// Consecutive QGA vCPU failures before we stop asking this guest. Fedora's `virt_qemu_ga_t`
+/// domain is the real gate on what the stock agent may do, and a domain denial is not something
+/// retrying fixes.
+const QGA_VCPU_GIVE_UP: u64 = 3;
 
 /// The host's authoritative wallclock as a [`Message::TimeSync`] frame.
 fn time_sync_now() -> Message {
