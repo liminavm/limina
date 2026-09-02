@@ -1045,19 +1045,38 @@ impl CenterController {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 272.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 302.0));
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            242.0,
+            272.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
         self.row_help(
             &accessory,
-            242.0,
+            272.0,
             &cpus_field,
             "How many virtual CPUs the guest sees.",
+        );
+        let cpu_reclaim_popup = labeled_popup(
+            mtm,
+            &accessory,
+            242.0,
+            "CPU reclaim:",
+            &CPU_RECLAIM_CHOICES,
+            cpu_reclaim_index(cfg.hardware.cpu_reclaim),
+        );
+        self.row_help(
+            &accessory,
+            242.0,
+            &cpu_reclaim_popup,
+            "Whether idle virtual CPUs are handed back to the Mac while the guest has \
+             nothing to run, and taken up again as soon as it has work. Off keeps every \
+             vCPU running, and is the safe choice: while CPUs are handed back the guest \
+             reports fewer of them, so a build started at that moment can size itself to \
+             the smaller number and stay there for its whole run. Light gives back at most \
+             half of them; Moderate goes down to two; Aggressive to one.",
         );
         let mem_field = labeled_field(mtm, &accessory, 212.0, "Memory:", &mem_now);
         self.row_help(
@@ -1249,6 +1268,8 @@ impl CenterController {
             cfg.hardware.cpus = cpus;
             cfg.hardware.memory = memory;
             cfg.hardware.reclaim = reclaim_from_index(reclaim_popup.indexOfSelectedItem());
+            cfg.hardware.cpu_reclaim =
+                cpu_reclaim_from_index(cpu_reclaim_popup.indexOfSelectedItem());
             cfg.hardware.ipa_granule = granule_from_index(granule_popup.indexOfSelectedItem());
             cfg.display.resolution = resolution;
             cfg.display.notch = notch_from_index(notch_popup.indexOfSelectedItem());
@@ -1360,6 +1381,32 @@ fn reclaim_from_index(index: isize) -> ReclaimMode {
         1 => ReclaimMode::Light,
         3 => ReclaimMode::Aggressive,
         _ => ReclaimMode::Moderate,
+    }
+}
+
+/// Popup titles for the vCPU reclaim mode, in a fixed order the index helpers share. "Off"
+/// rather than "Disabled" because this one defaults to it, and a default reads better as a
+/// plain state than as something deliberately switched off.
+const CPU_RECLAIM_CHOICES: [&str; 4] = ["Off", "Light", "Moderate", "Aggressive"];
+
+fn cpu_reclaim_index(mode: crate::vcpu_policy::CpuReclaim) -> isize {
+    use crate::vcpu_policy::CpuReclaim as M;
+    match mode {
+        M::Disabled => 0,
+        M::Light => 1,
+        M::Moderate => 2,
+        M::Aggressive => 3,
+    }
+}
+
+fn cpu_reclaim_from_index(index: isize) -> crate::vcpu_policy::CpuReclaim {
+    use crate::vcpu_policy::CpuReclaim as M;
+    match index {
+        1 => M::Light,
+        2 => M::Moderate,
+        3 => M::Aggressive,
+        // Anything unexpected lands on the default, which for vCPUs is off.
+        _ => M::Disabled,
     }
 }
 

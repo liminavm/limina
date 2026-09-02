@@ -236,12 +236,20 @@ pub(crate) mod tests {
 
         let mut cfg = bundle.load().unwrap();
         cfg.hardware.cpus = 7;
+        cfg.hardware.cpu_reclaim = crate::vcpu_policy::CpuReclaim::Moderate;
         cfg.networks[0].ssh_port = 2299;
         cfg.power.on_host_sleep = crate::vmlib::schema::OnHostSleep::Ignore;
         bundle.save(&cfg).unwrap();
 
         let back = bundle.load().unwrap();
         assert_eq!(back.hardware.cpus, 7);
+        // A setting the Control Center offers but that does not survive a save is worse than
+        // no setting at all: the sheet would show the old value back with no explanation.
+        assert_eq!(
+            back.hardware.cpu_reclaim,
+            crate::vcpu_policy::CpuReclaim::Moderate,
+            "[hardware] cpu_reclaim must round-trip"
+        );
         assert_eq!(back.networks[0].ssh_port, 2299);
         assert_eq!(
             back.power.on_host_sleep,
