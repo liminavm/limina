@@ -338,6 +338,16 @@ impl ControlPlane {
         Ok(ControlPlane { inner })
     }
 
+    /// Tell the vCPU policy which process to read CPU time from — the worker, once spawned.
+    ///
+    /// The control plane is built before the worker exists, so the pid arrives afterwards. No-op
+    /// without a policy.
+    pub fn watch_worker(&self, pid: libc::pid_t) {
+        if let Some(policy) = &self.inner.vcpu_policy {
+            policy.watch_worker(pid);
+        }
+    }
+
     /// Ask the guest to bring every vCPU back online, and wait (briefly) until it says it did.
     ///
     /// The suspend bracket calls this before snapshotting. Task #41: the guest-visible online

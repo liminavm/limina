@@ -525,6 +525,11 @@ pub fn monitor(
     control: Option<&crate::control::ControlPlane>,
 ) -> Result<i32> {
     let pid = child.id() as libc::pid_t;
+    // The vCPU policy's host-side load signal is this process's CPU time; it can only start
+    // reading once the worker exists.
+    if let Some(c) = control {
+        c.watch_worker(pid);
+    }
     let mut shutdown_at: Option<Instant> = None;
     let mut sigterm_sent = false;
     let mut qga_asked = false;

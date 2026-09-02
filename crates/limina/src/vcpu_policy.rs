@@ -99,11 +99,58 @@ fn shrink_dwell() -> Duration {
         .unwrap_or(DEFAULT_SHRINK_DWELL)
 }
 
+/// How much CPU the worker process has burned in total, and when we looked.
+///
+/// This is the **tier-independent** sensor: the host can see how hard its own vCPU threads are
+/// working without asking the guest anything at all, so it responds on the sampling interval
+/// rather than on whatever the guest is willing and able to report. It is what closes the stock
+/// tier's grow latency — `guest-get-load` is a 1-minute average, so a burst took ~45s to show up
+/// there, while this sees it on the next tick.
+#[derive(Debug, Clone, Copy)]
+struct HostCpu {
+    at: Instant,
+    cpu: Duration,
+}
+
+/// Total CPU (user + system) the process has consumed, via `proc_pid_rusage`.
+///
+/// Works on another process we own with no privileges and no entitlement — the same call
+/// `limina-test` already uses to read the worker's `phys_footprint`. `None` when the process is
+/// gone or the call fails, which the policy treats as "no host signal" rather than as idle.
+fn process_cpu_time(pid: libc::pid_t) -> Option<Duration> {
+    // SAFETY: zeroed POD; proc_pid_rusage fills it. The buffer arg is `rusage_info_t` (a void*
+    // alias), so the concrete struct is cast to it, exactly as elsewhere in the tree.
+    let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::proc_pid_rusage(
+            pid,
+            libc::RUSAGE_INFO_V2,
+            &mut info as *mut libc::rusage_info_v2 as *mut libc::rusage_info_t,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    Some(Duration::from_nanos(
+        info.ri_user_time.saturating_add(info.ri_system_time),
+    ))
+}
+
+/// The shortest interval between two host CPU readings that yields a usable rate. Shorter than
+/// this and the quantisation of the counters dominates.
+const HOST_CPU_MIN_INTERVAL: Duration = Duration::from_millis(900);
+
+/// How close to saturating its online vCPUs the guest must be before the host signal alone calls
+/// for a grow, in hundredths of a core. A quarter of a core of slack left.
+const GROW_WITHIN_X100: u32 = 25;
+
 /// One decision's inputs and outcome, for the debug trace.
 struct State {
     /// When the shrink condition started holding continuously. Cleared by any sample that
     /// fails it and by every issued target, so a grow re-arms the full dwell.
     calm_since: Option<Instant>,
+    /// The previous host CPU reading, for the rate between ticks.
+    last_host: Option<HostCpu>,
 }
 
 /// The supervisor-side policy object. Held by the control plane, which feeds it every guest
@@ -115,6 +162,10 @@ pub struct VcpuPolicy {
     floor: u32,
     /// How long the shrink condition must hold before each step ([`shrink_dwell`]).
     dwell: Duration,
+    /// The `limina-vmm` worker's pid, once it has been spawned. Set by the supervisor via
+    /// [`VcpuPolicy::watch_worker`]; `None` before that (and in unit tests), which simply means
+    /// the host signal is unavailable and the guest's own report decides alone.
+    worker_pid: Mutex<Option<libc::pid_t>>,
     state: Mutex<State>,
 }
 
@@ -139,8 +190,22 @@ impl VcpuPolicy {
             max,
             floor,
             dwell,
-            state: Mutex::new(State { calm_since: None }),
+            worker_pid: Mutex::new(None),
+            state: Mutex::new(State {
+                calm_since: None,
+                last_host: None,
+            }),
         })
+    }
+
+    /// Start reading the worker's CPU time as a second, tier-independent signal.
+    ///
+    /// Called once the worker exists (the supervisor knows the pid; the control plane is built
+    /// before the spawn). Until this lands the policy simply has no host signal and decides on the
+    /// guest's report alone — which is also what unit tests do.
+    pub fn watch_worker(&self, pid: libc::pid_t) {
+        *self.worker_pid.lock().unwrap() = Some(pid);
+        log::debug!("dynamic vCPUs: watching worker {pid} CPU time as a host-side load signal");
     }
 
     /// The target that undoes all shrinking. Used by the suspend bracket: task #41 leaves the
@@ -153,7 +218,31 @@ impl VcpuPolicy {
 
     /// Feed one guest report; returns the target to send, or `None` to leave the guest alone.
     pub fn on_pressure(&self, p: &CpuPressure) -> Option<CpuTarget> {
-        self.decide(p, Instant::now())
+        let now = Instant::now();
+        let host = self.sample_host(now);
+        self.decide_with(p, host, now)
+    }
+
+    /// Read the worker's CPU time and turn two readings into a rate: hundredths of a core burned
+    /// since the last sample. `None` until there are two readings far enough apart to divide.
+    fn sample_host(&self, now: Instant) -> Option<u32> {
+        let pid = (*self.worker_pid.lock().unwrap())?;
+        let cpu = process_cpu_time(pid)?;
+        let mut st = self.state.lock().unwrap();
+        let prev = st.last_host;
+        // A counter that went backwards means a different process wears the pid now; start over.
+        if prev.is_none_or(|p| cpu < p.cpu) {
+            st.last_host = Some(HostCpu { at: now, cpu });
+            return None;
+        }
+        let prev = prev?;
+        let wall = now.duration_since(prev.at);
+        if wall < HOST_CPU_MIN_INTERVAL {
+            return None;
+        }
+        st.last_host = Some(HostCpu { at: now, cpu });
+        let busy = cpu.saturating_sub(prev.cpu);
+        Some((busy.as_secs_f64() / wall.as_secs_f64() * 100.0).round() as u32)
     }
 
     /// The pure decision, with the clock injected.
@@ -162,7 +251,28 @@ impl VcpuPolicy {
     /// last asked for, so the policy has no belief to get out of date: a failed sysfs write, a
     /// guest that onlined a CPU itself, or a restore that diverged the two all correct themselves
     /// on the next sample.
+    /// The guest-only decision, for tests and for callers with no host reading.
+    #[cfg(test)]
     pub fn decide(&self, p: &CpuPressure, now: Instant) -> Option<CpuTarget> {
+        self.decide_with(p, None, now)
+    }
+
+    /// The decision. `host_busy_x100` is hundredths of a core the worker burned since the last
+    /// sample, or `None` when there is no host reading yet.
+    ///
+    /// The host signal is used **asymmetrically**, like everything else here. It can trigger a
+    /// grow on its own, because it is the fast one — it sees a burst on the next tick where the
+    /// stock tier's loadavg needs ~45s. It can only *veto* a shrink, never cause one, because it
+    /// measures the whole worker process rather than the vCPU threads alone: device threads
+    /// (GPU, IO) are counted in, so a busy reading may not be the guest wanting CPU at all. That
+    /// asymmetry makes the imprecision harmless — it can keep vCPUs online that were not needed,
+    /// which costs a little CPU, and it can never take away vCPUs that were.
+    fn decide_with(
+        &self,
+        p: &CpuPressure,
+        host_busy_x100: Option<u32>,
+        now: Instant,
+    ) -> Option<CpuTarget> {
         let mut st = self.state.lock().unwrap();
         // A guest that reported no online count told us nothing (unreadable sysfs, an agent
         // predating the field). Never act on an absent reading.
@@ -175,13 +285,19 @@ impl VcpuPolicy {
         // GROW — immediate, coarse, no dwell and no cooldown. More runnable tasks than CPUs, or
         // a 1-minute load that already fills the machine, means the guest is short *now*; hand
         // back everything rather than climbing one step per dwell while it waits.
-        if p.nr_running > online || p.loadavg1_x100 >= online * 100 {
+        // The host term: the worker is burning nearly as much CPU as the guest has vCPUs, so the
+        // guest is saturating what it has whatever its own report says (or has not said yet).
+        let host_saturated =
+            host_busy_x100.is_some_and(|busy| busy + GROW_WITHIN_X100 >= online * 100);
+        if p.nr_running > online || p.loadavg1_x100 >= online * 100 || host_saturated {
             st.calm_since = None;
             if online < self.max {
                 log::info!(
-                    "dynamic vCPUs: {online} online but {} runnable (load1 {:.2}) → asking for {}",
+                    "dynamic vCPUs: {online} online but {} runnable (load1 {:.2}, host {:.2} \
+                     cores) → asking for {}",
                     p.nr_running,
                     f64::from(p.loadavg1_x100) / 100.0,
+                    host_busy_x100.map_or(f64::NAN, |b| f64::from(b) / 100.0),
                     self.max
                 );
                 return Some(CpuTarget { online: self.max });
@@ -204,7 +320,10 @@ impl VcpuPolicy {
         // step self-guarding: going down to a single CPU needs a 1-minute load of 0.00, which
         // only a guest that has been doing nothing for a minute can show.
         let fits = p.nr_running <= smaller && p.loadavg1_x100 <= smaller.saturating_sub(1) * 100;
-        if !fits {
+        // The host veto: never shrink while the worker is burning more CPU than the smaller set
+        // would have. Only ever blocks a shrink (see `decide_with`).
+        let host_allows = host_busy_x100.is_none_or(|busy| busy + 100 <= smaller * 100);
+        if !fits || !host_allows {
             st.calm_since = None;
             return None;
         }
@@ -397,6 +516,79 @@ mod tests {
         assert!(VcpuPolicy::new(2, CpuReclaim::Light).is_some());
         // ...but Moderate on the same VM floors at 2, which is the whole machine.
         assert!(VcpuPolicy::new(2, CpuReclaim::Moderate).is_none());
+    }
+
+    /// The host signal exists to be FAST: it grows on the reading alone, without waiting for the
+    /// guest to notice. This is what closes the stock tier's ~45s grow latency, where loadavg —
+    /// a 1-minute average — is the only thing the guest can offer.
+    #[test]
+    fn a_saturated_worker_grows_before_the_guest_has_noticed() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        // The guest still reports itself calm: loadavg has not caught up yet.
+        let quiet = idle(2);
+        assert_eq!(
+            p.decide_with(&quiet, None, Instant::now()),
+            None,
+            "with no host reading this sample says nothing"
+        );
+        // 1.8 cores burned against 2 online: saturated.
+        assert_eq!(
+            p.decide_with(&quiet, Some(180), Instant::now()),
+            Some(CpuTarget { online: 10 })
+        );
+    }
+
+    /// ...but it may only ever VETO a shrink, never cause one, because it measures the whole
+    /// worker process — device threads included — so a busy reading is not proof the guest wants
+    /// CPU. Wrong in the cheap direction: it can keep vCPUs that were not needed, never take away
+    /// vCPUs that were.
+    #[test]
+    fn a_busy_worker_blocks_a_shrink_the_guest_report_would_allow() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let t0 = Instant::now();
+        // The guest looks idle, but the worker is burning 9.5 cores (say, heavy GPU work) — more
+        // than the 9 a shrink would leave, so there is no headroom to give away.
+        assert_eq!(p.decide_with(&idle(10), Some(950), t0), None);
+        assert_eq!(
+            p.decide_with(&idle(10), Some(950), t0 + DEFAULT_SHRINK_DWELL),
+            None,
+            "a busy worker must veto the shrink however long the guest has looked calm"
+        );
+        // The host quietens; only now does the dwell start, and it must run in full.
+        let t1 = t0 + DEFAULT_SHRINK_DWELL;
+        assert_eq!(p.decide_with(&idle(10), Some(10), t1), None);
+        assert_eq!(
+            p.decide_with(&idle(10), Some(10), t1 + DEFAULT_SHRINK_DWELL),
+            Some(CpuTarget { online: 9 })
+        );
+    }
+
+    /// The veto is about HEADROOM, not about the worker being busy at all. A worker burning 8
+    /// cores on a 10-vCPU guest still leaves room to drop to 9, so that shrink proceeds — being
+    /// stricter would mean a GPU-heavy VM could never give a single vCPU back.
+    #[test]
+    fn the_host_veto_only_bites_when_the_smaller_set_would_not_fit() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let t0 = Instant::now();
+        assert_eq!(p.decide_with(&idle(10), Some(800), t0), None);
+        assert_eq!(
+            p.decide_with(&idle(10), Some(800), t0 + DEFAULT_SHRINK_DWELL),
+            Some(CpuTarget { online: 9 }),
+            "8 cores of work fits in 9 CPUs with room to spare"
+        );
+    }
+
+    /// No host reading must leave behaviour exactly as it was — a VM whose worker we cannot read
+    /// is not a VM that should start behaving differently.
+    #[test]
+    fn absent_host_readings_change_nothing() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let t0 = Instant::now();
+        assert_eq!(p.decide_with(&idle(10), None, t0), None);
+        assert_eq!(
+            p.decide_with(&idle(10), None, t0 + DEFAULT_SHRINK_DWELL),
+            Some(CpuTarget { online: 9 })
+        );
     }
 
     /// The suspend bracket's escape hatch (see [`VcpuPolicy::max_target`]).
