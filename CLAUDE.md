@@ -1,4 +1,9 @@
-# limina — project guide for Claude
+# limina — project guide
+
+This is the project guide for everyone working in this tree, human or coding agent
+(`AGENTS.md` is the same file). It cites only files in this repository. Conventions that
+are specific to one agent harness live outside it: Claude Code's are in
+`docs/claude-code.md`.
 
 ## What this is
 
@@ -62,7 +67,7 @@ right tool — not treat upstream as immutable:
   `gitlab.freedesktop.org/virgl/virglrenderer`), pinned by `third_party/manifest.toml`. **The branch
   IS the delta — there is no `patches/virglrenderer/` any more**, and `scripts/apply-virgl-patches.sh`
   is gone. Built from source into `third_party/virgl-prefix` (the worker links it; see
-  `limina-virgl-link-trap`). It's the host renderer for **both** accelerated tiers — venus
+  the link-trap bullet under *Working conventions* and `docs/graphics.md` §2). It's the host renderer for **both** accelerated tiers — venus
   (Vulkan→KosmicKrisp) and vrend (GL via zink-on-KK) — and carries our whole macOS/venus enablement,
   zero-copy IOSurface scanout, the snapshot/restore journal, and vrend/vkr fixes. To change it:
   commit on the fork's `limina` branch, push, update the manifest rev. The branch is **rewritten** as
@@ -194,7 +199,8 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
   real boot tests against HVF (`limina` → `limina-vmm` → guest). A plain `cargo test`
   deliberately **skips** the HVF tests (no codesign / sandbox) — green there means
   almost nothing for boot behavior, so always run the full suite before
-  declaring something works. It needs `dangerouslyDisableSandbox` (hits `hv_vm_*`).
+  declaring something works. It touches `hv_vm_*`, so it runs only outside any tool sandbox
+  (`docs/claude-code.md`) and with a codesigned worker.
   - **It takes ~28 min. THE one way to run or wait on it is `scripts/run-suite.sh`** — run
     `scripts/run-suite.sh <log>` as a *backgrounded task* (its completion IS the suite's, with
     the suite's real exit code, and it ends by printing the verdict lines), or attach to a run
@@ -354,10 +360,10 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   Rust 1.88. **16 KiB host pages.** Homebrew already has the whole VM stack
   (libkrun, krunkit, libkrunfw, virglrenderer, molten-vk, vulkan-loader, gvproxy,
   libusb, qemu, cmake/meson/ninja).
-- **The Bash tool is sandboxed with no network and can't write outside the repo.**
-  Pass `dangerouslyDisableSandbox: true` for `git`/network/spike builds. Anything
-  touching `hv_vm_*` must be codesigned with `com.apple.security.hypervisor` (see
-  `spikes/balloon-madvise/hv.entitlements`).
+- Anything touching `hv_vm_*` must be codesigned with `com.apple.security.hypervisor` (see
+  `spikes/balloon-madvise/hv.entitlements`). Agent harnesses that sandbox shell commands
+  (no network, no writes outside the repo) must lift the sandbox for `git`, network, spike
+  builds, and every HVF run; how to do that in Claude Code is in `docs/claude-code.md`.
 - The big disk images (`*.raw`, `*.raw.xz`) and `third_party/` are gitignored.
 - **DEFAULT way to boot/validate an image (windowed venus desktop): EFI + venus.**
   **`cargo xtask run --disk <enhanced.raw>`** is the one-command form — it builds+signs the worker,
@@ -405,15 +411,15 @@ cleverness but from refusing to trust anything we hadn't directly observed.
     tests wire this in) or are debugging kernel/early-boot itself — NOT for normal image validation, and
     not "because venus needs it" (EFI+venus works). Don't reach for it by habit.
   - **FRINGE — `--gpu-software-2d`**: ONLY when software-2D is the explicit subject (the capture oracle
-    / a GPU-less host), per the coexist-default rule in `limina-tier2-venus`. Never a workaround to
+    / a GPU-less host), per the coexist-by-default rule (`docs/graphics.md` §2). Never a workaround to
     "avoid" venus — coexist venus works.
   Driving the window: osascript UI scripting works for
   key+modifier combos (e.g. Cmd-Ctrl-F), but synthetic *lone-modifier* keystrokes may not reach the
-  guest — the human is the oracle for those (see `limina-window-control`). **When you need the
-  user to act or perceive (interact with the window, eyeball the screen, plug in hardware, run a
-  host command), request it via the AskUserQuestion tool, not in prose** — they may not be watching
-  the streaming text and will miss a buried request (see `ask-tool-for-user-actions`). For a
-  *time-sensitive* test (e.g. catching the ~5s GRUB countdown in a windowed boot), ask **before**
+  guest — the human is the oracle for those. **When you need the user to act or perceive (interact
+  with the window, eyeball the screen, plug in hardware, run a host command), make it an explicit,
+  blocking question, not a line of prose** — they may not be watching the streaming text and will
+  miss a buried request (each harness has its own way to ask; Claude Code's is in
+  `docs/claude-code.md`). For a *time-sensitive* test (e.g. catching the ~5s GRUB countdown in a windowed boot), ask **before**
   launching the run, not after — so they're positioned and reading the instruction when the brief
   window arrives.
 - **Run a VM with networking + SSH:** `limina --net` spawns a supervised gvproxy user-mode NAT (no
@@ -428,5 +434,6 @@ cleverness but from refusing to trust anything we hadn't directly observed.
   its banner is the readiness oracle for all of them, the script blocks until that actually
   happens and prints the port (nonzero + log tail on timeout). Never hand-roll a
   grep/sleep-until loop over the logs — that re-invents this script badly (it has been done and
-  called out; don't repeat it). Full recipe + creds in the
-  `limina-fedora-access` memory; design in `limina-m3-networking` / `crates/limina/src/gateway.rs`.
+  called out; don't repeat it). Full recipe + the test images' credentials: `docs/images.md`
+  §SSH access; design in `docs/research/07-networking.md`, `docs/design/multi-vm-networking.md`
+  and `crates/limina/src/gateway.rs`.

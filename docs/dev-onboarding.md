@@ -48,8 +48,8 @@ cargo xtask sign           # just re-codesign the worker (after a plain `cargo b
   `build`/`sign` codesign it (`crates/limina-vmm/sign.sh`).
 - **The worker MUST link our `third_party/virgl-prefix` virglrenderer, not Homebrew's** —
   a wrong link silently degrades venus to software-2D and reads like a guest bug.
-  `build` runs `check-virgl-link.sh` and fails loudly if it's wrong (see the
-  `limina-virgl-link-trap` note).
+  `build` runs `check-virgl-link.sh` and fails loudly if it's wrong (see
+  `docs/graphics.md` §2).
 
 ## 3. Run it
 
@@ -72,7 +72,7 @@ KosmicKrisp, windowed, with user-mode NAT. It tests the image exactly as it real
   habit — EFI+venus is the default. See `CLAUDE.md`.
 - Networking: read the auto-allocated SSH port from the worker log
   (`guest SSH forward ready: ssh -p N …`) — don't assume 2222. Creds + recipe:
-  the `limina-fedora-access` memory.
+  `docs/images.md` §SSH access.
 - **Verify venus in the seated GNOME session, not over ssh:** `vulkaninfo` in the desktop
   shows `Virtio-GPU Venus`; over a non-login ssh shell it enumerates nothing (a false
   negative — the venus ICD is selected via `/etc/environment.d`).
