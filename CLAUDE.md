@@ -1,7 +1,7 @@
 # limina — project guide
 
-This is the project guide for everyone working in this tree, human or coding agent
-(`AGENTS.md` is the same file). It cites only files in this repository. Conventions that
+This is the project guide for everyone working in this tree, human or coding agent.
+It cites only files in this repository. Conventions that
 are specific to one agent harness live outside it: Claude Code's are in
 `docs/claude-code.md`.
 

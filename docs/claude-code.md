@@ -1,7 +1,7 @@
 # Claude Code in this repository
 
-`CLAUDE.md` (also reachable as `AGENTS.md`) is the project guide for every human and every
-coding agent, and it cites only files in the repository. This file holds what is specific to
+`CLAUDE.md` is the project guide for every human and every coding agent, and it cites only
+files in the repository. This file holds what is specific to
 the Claude Code harness: its sandbox, its tools, and where its per-project memory lives. Other
 harnesses need their own equivalent of each item below; nothing here changes what the
 project guide asks for.
