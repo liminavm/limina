@@ -58,6 +58,11 @@ const MAX_RAPID_REBOOTS: u32 = 5;
 /// by now the guest could not quiesce; the supervisor gives up and the VM keeps running.
 pub(crate) const SUSPEND_BRACKET_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How long the suspend bracket waits for the guest to confirm every vCPU is back online before
+/// snapshotting anyway. A handful of sysfs writes at ~1 report/s, so this is generous; it is
+/// bounded at all only because the snapshot must never be held hostage to a vCPU count.
+const VCPU_RESTORE_BEFORE_SNAPSHOT: Duration = Duration::from_secs(5);
+
 /// Decides whether a worker exit should relaunch the VM (a guest reboot) or end it, capping
 /// runaway boot loops. Shared by the headless [`run`] loop and the windowed relaunch loop so
 /// the reboot policy lives in one place.
@@ -539,6 +544,14 @@ pub fn monitor(
         // keeps running — never exiting 126 — so we bound the wait and, on timeout, give up and let
         // the VM keep running, clearing the request so a later suspend can retry.
         if SUSPEND.load(Ordering::SeqCst) && suspend_at.is_none() && shutdown_at.is_none() {
+            // Undo any dynamic vCPU offlining FIRST, so the snapshot about to be taken holds a
+            // fully-online machine (task #41 — the guest-visible online set is not in the
+            // snapshot format, so a snapshot taken while a vCPU is offline restores it as online
+            // and the two sides' bookkeeping disagrees). Bounded and advisory: an unconfirmed
+            // restore still gets its snapshot.
+            if let Some(c) = control {
+                c.restore_all_vcpus(VCPU_RESTORE_BEFORE_SNAPSHOT);
+            }
             log::info!("suspend requested → running the suspend bracket (SIGTSTP → worker)");
             unsafe {
                 libc::kill(pid, libc::SIGTSTP);

@@ -84,6 +84,10 @@ pub mod msg_type {
     pub const TIME_SYNC: u8 = 8;
     /// Guest → host monitor arrangement (M15 multi-display pointer mapping).
     pub const DISPLAY_LAYOUT: u8 = 9;
+    /// Guest → host runnable-task pressure (dynamic vCPU offlining).
+    pub const CPU_PRESSURE: u8 = 10;
+    /// Host → guest desired online-vCPU count (dynamic vCPU offlining).
+    pub const CPU_TARGET: u8 = 11;
     pub const CLIP_OFFER: u8 = 16;
     pub const CLIP_REQUEST: u8 = 17;
     pub const CLIP_DATA: u8 = 18;
@@ -247,6 +251,195 @@ impl MemPressure {
     }
 }
 
+/// Guest → host runnable-task report for the dynamic vCPU policy (the CPU sibling of
+/// [`MemPressure`]). Sent on the same idle tick as the memory report, but only when the host's
+/// WELCOME advertised `vcpu` — a host with no dynamic range configured never asks, and the guest
+/// then costs exactly what it costs today.
+///
+/// Every field is a raw observable. All interpretation is the host's ([`crate`] carries no
+/// policy), so the thresholds can change without a guest redeploy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
+pub struct CpuPressure {
+    /// `/proc/stat` `procs_running`: tasks in R state right now. The primary v1 signal —
+    /// unlike loadavg it has no decay, so a spike shows up on the very next sample.
+    #[n(0)]
+    pub nr_running: u32,
+    /// `/proc/loadavg` 1- and 5-minute averages, in hundredths (`avg*100`). Smoothing for the
+    /// shrink side, which must not act on a momentary lull.
+    #[n(1)]
+    pub loadavg1_x100: u32,
+    #[n(2)]
+    pub loadavg5_x100: u32,
+    /// PSI `some` CPU pressure over the 10s/60s windows, hundredths of a percent. Carried but
+    /// **unused in v1**: it says tasks waited for CPU, which is what an over-shrunk guest looks
+    /// like, so it is the natural second-generation signal. 0 when `/proc/pressure/cpu` is
+    /// unavailable (kernel `psi=0`).
+    #[n(3)]
+    pub some_avg10: u32,
+    #[n(4)]
+    pub some_avg60: u32,
+    /// How many CPUs are online **right now**, from `/sys/devices/system/cpu/online`. This is
+    /// ground truth, not what the host last asked for: a sysfs write can fail, a guest can
+    /// online a CPU itself, and a snapshot restore can diverge the two. The policy re-derives
+    /// from this every sample, so any disagreement self-corrects on the next tick.
+    #[n(5)]
+    pub online: u32,
+    /// How many CPUs exist at all (`/sys/devices/system/cpu/present`), i.e. the boot vCPU count.
+    #[n(6)]
+    pub present: u32,
+}
+
+impl CpuPressure {
+    /// Parse a snapshot from the raw `/proc/pressure/cpu`, `/proc/loadavg`, `/proc/stat`,
+    /// and the `online`/`present` cpu-list files (the guest agent reads them; this is the
+    /// pure, host-testable parser). Tolerant of every field being missing — an unreadable
+    /// file yields 0, which the host reads as "no signal" rather than as a real zero.
+    pub fn from_proc(
+        pressure: &str,
+        loadavg: &str,
+        stat: &str,
+        online: &str,
+        present: &str,
+    ) -> CpuPressure {
+        // A PSI line: "some avg10=1.23 avg60=4.56 avg300=0.00 total=12345"; value is a percent.
+        fn avg(line: &str, key: &str) -> u32 {
+            line.split_whitespace()
+                .find_map(|tok| tok.strip_prefix(key)?.strip_prefix('='))
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|f| (f * 100.0).round() as u32)
+                .unwrap_or(0)
+        }
+        let some = pressure
+            .lines()
+            .find(|l| l.starts_with("some"))
+            .unwrap_or("");
+        // "/proc/loadavg": "0.52 0.31 0.24 1/512 1234"
+        let mut load = loadavg.split_whitespace();
+        let load_at = |it: &mut std::str::SplitWhitespace| {
+            it.next()
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|f| (f * 100.0).round() as u32)
+                .unwrap_or(0)
+        };
+        let loadavg1_x100 = load_at(&mut load);
+        let loadavg5_x100 = load_at(&mut load);
+        // "/proc/stat": a "procs_running N" line among many.
+        let nr_running = stat
+            .lines()
+            .find_map(|l| l.strip_prefix("procs_running "))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        CpuPressure {
+            nr_running,
+            loadavg1_x100,
+            loadavg5_x100,
+            some_avg10: avg(some, "avg10"),
+            some_avg60: avg(some, "avg60"),
+            online: count_cpu_list(online),
+            present: count_cpu_list(present),
+        }
+    }
+}
+
+/// Parse a kernel cpu-list string (`"0-9"`, `"0,2-3"`, `"0"`) into sorted CPU ids. Unparseable
+/// fragments are skipped rather than failing the whole read: a consumer that gets an empty list
+/// treats it as "no reading" and does nothing, which is the right answer for a guest whose sysfs
+/// we could not make sense of.
+pub fn parse_cpu_list(s: &str) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for part in s.trim().split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('-') {
+            Some((a, b)) => {
+                if let (Ok(a), Ok(b)) = (a.trim().parse::<u32>(), b.trim().parse::<u32>()) {
+                    if b >= a {
+                        ids.extend(a..=b);
+                    }
+                }
+            }
+            None => {
+                if let Ok(id) = part.parse::<u32>() {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// Count the CPUs in a kernel cpu-list string. 0 means "no reading".
+pub fn count_cpu_list(s: &str) -> u32 {
+    parse_cpu_list(s).len() as u32
+}
+
+/// Work out which `/sys/devices/system/cpu/cpuN/online` writes take the guest from its current
+/// online set to `target` CPUs online: `(cpu_id, online)` pairs, in the order to apply them.
+///
+/// Lives here rather than in the agent for the same reason [`MemPressure::from_proc`] does — the
+/// agent only ever builds for the guest, so anything of its logic that wants a test has to be in
+/// a crate the host can compile. This is the *guest's* half of the decision (the host asks for a
+/// count and says nothing about which CPUs); it is separate from the host policy on purpose,
+/// because only the guest knows which CPUs it may touch.
+///
+/// Rules, in order of importance:
+/// - **cpu0 is never offlined.** Linux will refuse it on most configurations anyway, and a guest
+///   that lost cpu0 could not be recovered by anything this side can send.
+/// - Offline the **highest**-numbered CPUs first and re-online the **lowest**-numbered ones
+///   first, so the online set stays a low, dense prefix instead of drifting into holes.
+/// - Only CPUs the guest reports as `present` are ever onlined.
+/// - A target at or beyond what the guest has is not an error; it just yields no writes, or
+///   whatever writes bring every present CPU back.
+pub fn plan_cpu_transitions(online: &str, present: &str, target: u32) -> Vec<(u32, bool)> {
+    let online = parse_cpu_list(online);
+    let present = parse_cpu_list(present);
+    // No reading of the current state means no safe write to make.
+    if online.is_empty() {
+        return Vec::new();
+    }
+    let target = target.max(1) as usize;
+    let mut plan = Vec::new();
+    if online.len() > target {
+        // Shrink: highest-numbered first, cpu0 last standing and never taken.
+        for &id in online.iter().rev() {
+            if online.len() - plan.len() <= target {
+                break;
+            }
+            if id == 0 {
+                continue;
+            }
+            plan.push((id, false));
+        }
+    } else if online.len() < target {
+        // Grow: lowest-numbered offline-but-present first.
+        for &id in &present {
+            if online.len() + plan.len() >= target {
+                break;
+            }
+            if !online.contains(&id) {
+                plan.push((id, true));
+            }
+        }
+    }
+    plan
+}
+
+/// Host → guest: how many vCPUs the host wants online.
+///
+/// Advisory, and deliberately a *count* rather than a set: which CPUs get offlined is the
+/// guest's business (it alone knows cpu0 must stay, and it alone can do the sysfs write).
+/// The guest never acks — it just reports its real `online` in the next [`CpuPressure`],
+/// which is the only statement about online state either side trusts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct CpuTarget {
+    #[n(0)]
+    pub online: u32,
+}
+
 /// Host → guest: the host's authoritative wallclock. The guest kernel's CLOCK_REALTIME is
 /// CNTVCT-anchored and CNTVCT freezes while the host sleeps (mach_absolute_time), so a host
 /// nap lags the running guest's clock by the nap's length — and a snapshot restore lags it
@@ -341,6 +534,8 @@ pub enum Message {
     Welcome(Welcome),
     Heartbeat(Heartbeat),
     MemPressure(MemPressure),
+    CpuPressure(CpuPressure),
+    CpuTarget(CpuTarget),
     DisplayLayout(DisplayLayout),
     TimeSync(TimeSync),
     Shutdown(Shutdown),
@@ -365,6 +560,8 @@ impl Message {
             Message::Welcome(_) => msg_type::WELCOME,
             Message::Heartbeat(_) => msg_type::HEARTBEAT,
             Message::MemPressure(_) => msg_type::MEM_PRESSURE,
+            Message::CpuPressure(_) => msg_type::CPU_PRESSURE,
+            Message::CpuTarget(_) => msg_type::CPU_TARGET,
             Message::DisplayLayout(_) => msg_type::DISPLAY_LAYOUT,
             Message::TimeSync(_) => msg_type::TIME_SYNC,
             Message::Shutdown(_) => msg_type::SHUTDOWN,
@@ -396,6 +593,8 @@ impl Message {
             Message::Welcome(m) => cbor(m),
             Message::Heartbeat(m) => cbor(m),
             Message::MemPressure(m) => cbor(m),
+            Message::CpuPressure(m) => cbor(m),
+            Message::CpuTarget(m) => cbor(m),
             Message::DisplayLayout(m) => cbor(m),
             Message::TimeSync(m) => cbor(m),
             Message::Shutdown(m) => cbor(m),
@@ -418,6 +617,8 @@ impl Message {
             msg_type::WELCOME => Message::Welcome(cbor(&payload)?),
             msg_type::HEARTBEAT => Message::Heartbeat(cbor(&payload)?),
             msg_type::MEM_PRESSURE => Message::MemPressure(cbor(&payload)?),
+            msg_type::CPU_PRESSURE => Message::CpuPressure(cbor(&payload)?),
+            msg_type::CPU_TARGET => Message::CpuTarget(cbor(&payload)?),
             msg_type::TIME_SYNC => Message::TimeSync(cbor(&payload)?),
             msg_type::SHUTDOWN => Message::Shutdown(cbor(&payload)?),
             msg_type::SHUTDOWN_ACK => Message::ShutdownAck,
@@ -579,6 +780,121 @@ mod tests {
 
     /// Old-agent compat: a payload encoded WITHOUT the `#[cbor(default)]` tail fields
     /// (`mem_free_kib`, `io_full_*`) must decode into the grown struct with those fields 0.
+    #[test]
+    fn cpu_pressure_and_target_round_trip() {
+        let cp = CpuPressure {
+            nr_running: 3,
+            loadavg1_x100: 152,
+            loadavg5_x100: 31,
+            some_avg10: 1234,
+            some_avg60: 56,
+            online: 4,
+            present: 10,
+        };
+        let (_, decoded) = round_trip(Message::CpuPressure(cp));
+        assert_eq!(decoded, Message::CpuPressure(cp));
+        let ct = CpuTarget { online: 2 };
+        let (_, decoded) = round_trip(Message::CpuTarget(ct));
+        assert_eq!(decoded, Message::CpuTarget(ct));
+    }
+
+    #[test]
+    fn cpu_pressure_parses_the_proc_files() {
+        let pressure = "some avg10=1.23 avg60=4.56 avg300=0.00 total=999\n";
+        let loadavg = "0.52 0.31 0.24 1/512 1234\n";
+        let stat = "cpu  1 2 3\nprocs_running 7\nprocs_blocked 0\n";
+        let cp = CpuPressure::from_proc(pressure, loadavg, stat, "0-3\n", "0-9\n");
+        assert_eq!(cp.nr_running, 7);
+        assert_eq!(cp.loadavg1_x100, 52);
+        assert_eq!(cp.loadavg5_x100, 31);
+        assert_eq!(cp.some_avg10, 123);
+        assert_eq!(cp.some_avg60, 456);
+        assert_eq!(cp.online, 4);
+        assert_eq!(cp.present, 10);
+    }
+
+    /// Every file unreadable (a guest with `psi=0`, no procfs entry, whatever) must parse to
+    /// all-zero rather than panic: the host reads 0 as "no signal" and leaves the vCPU count
+    /// alone, which is the stock-degrade floor.
+    #[test]
+    fn cpu_pressure_tolerates_empty_inputs() {
+        assert_eq!(
+            CpuPressure::from_proc("", "", "", "", ""),
+            CpuPressure::default()
+        );
+    }
+
+    /// The plan never touches cpu0, works from the top down, and stops exactly on target.
+    #[test]
+    fn shrinking_takes_the_highest_cpus_and_never_cpu0() {
+        assert_eq!(
+            plan_cpu_transitions("0-9", "0-9", 4),
+            vec![
+                (9, false),
+                (8, false),
+                (7, false),
+                (6, false),
+                (5, false),
+                (4, false)
+            ]
+        );
+        assert_eq!(plan_cpu_transitions("0-3", "0-9", 3), vec![(3, false)]);
+        // Down to a single CPU: cpu0 is the one that survives.
+        assert_eq!(
+            plan_cpu_transitions("0-2", "0-2", 1),
+            vec![(2, false), (1, false)]
+        );
+        // ...and it can never be asked for less than that, however low the target.
+        assert_eq!(
+            plan_cpu_transitions("0-1", "0-1", 0),
+            vec![(1, false)],
+            "a target of 0 must still leave cpu0 online"
+        );
+    }
+
+    /// Growing packs the online set back into a low, dense prefix rather than leaving holes.
+    #[test]
+    fn growing_refills_the_lowest_offline_cpus() {
+        assert_eq!(
+            plan_cpu_transitions("0,1", "0-9", 4),
+            vec![(2, true), (3, true)]
+        );
+        // A set with a hole in it fills the hole before reaching past it.
+        assert_eq!(plan_cpu_transitions("0,3", "0-9", 3), vec![(1, true)]);
+        // Only present CPUs are candidates — a target beyond the machine is capped by reality.
+        assert_eq!(
+            plan_cpu_transitions("0", "0-1", 8),
+            vec![(1, true)],
+            "the guest has no third CPU to offer"
+        );
+    }
+
+    #[test]
+    fn a_plan_that_changes_nothing_is_empty() {
+        assert!(plan_cpu_transitions("0-3", "0-9", 4).is_empty());
+        // An unreadable `online` is not "zero CPUs online" — it is no reading, so no writes.
+        assert!(plan_cpu_transitions("", "0-9", 2).is_empty());
+        assert!(plan_cpu_transitions("garbage", "0-9", 2).is_empty());
+    }
+
+    #[test]
+    fn cpu_lists_parse_to_sorted_ids() {
+        assert_eq!(parse_cpu_list("0,3-5,1"), vec![0, 1, 3, 4, 5]);
+        assert_eq!(parse_cpu_list("2,2,2"), vec![2]);
+    }
+
+    #[test]
+    fn cpu_lists_count_ranges_singletons_and_mixtures() {
+        assert_eq!(count_cpu_list("0-9"), 10);
+        assert_eq!(count_cpu_list("0"), 1);
+        assert_eq!(count_cpu_list("0,2-3,7"), 4);
+        assert_eq!(count_cpu_list(" 0-1 , 4 \n"), 3);
+        // Garbage and empties count nothing rather than panicking.
+        assert_eq!(count_cpu_list(""), 0);
+        assert_eq!(count_cpu_list("x-y"), 0);
+        assert_eq!(count_cpu_list("5-1"), 0);
+    }
+
     /// `OldMemPressure` is a byte-exact twin of the struct as shipped before the fields grew.
     #[test]
     fn mem_pressure_decodes_old_agent_payload() {

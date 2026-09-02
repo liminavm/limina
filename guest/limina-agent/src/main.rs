@@ -25,8 +25,8 @@ use std::os::fd::FromRawFd;
 use std::time::Duration;
 
 use limina_proto::{
-    read_message, write_message, FidoReport, Heartbeat, Hello, MemPressure, Message,
-    CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT,
+    read_message, write_message, CpuPressure, CpuTarget, FidoReport, Heartbeat, Hello, MemPressure,
+    Message, CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT,
 };
 
 mod fido;
@@ -226,6 +226,7 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
                 "heartbeat".to_string(),
                 "shutdown".to_string(),
                 "mempressure".to_string(),
+                "vcpu".to_string(),
                 "timesync".to_string(),
                 "fido".to_string(),
             ],
@@ -239,6 +240,10 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
     // bridge on disconnect destroys the guest-visible device, so no app can talk to
     // an authenticator that has no host behind it.
     let mut fido_bridge: Option<fido::FidoBridge> = None;
+
+    // Report our runnable-task load only once the host says it runs a vCPU policy. A host with no
+    // dynamic range never asks, and then this costs a guest exactly nothing — no sample, no frame.
+    let mut report_cpu = false;
 
     let mut seq: u64 = 0;
     loop {
@@ -258,6 +263,15 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             // timer can never tear a frame). The host's PSI autoballoon policy consumes it.
             if let Some(mp) = read_mem_pressure() {
                 write_message(stream, CHANNEL_CONTROL, &Message::MemPressure(mp))?;
+            }
+            // ...and the CPU sibling of it, whenever the host asked for one. This is also the
+            // only ack a `CpuTarget` ever gets: it carries the online count we ACTUALLY have,
+            // so a write that failed or a CPU the guest brought back itself corrects the host
+            // on the next tick rather than leaving the two sides believing different things.
+            if report_cpu {
+                if let Some(cp) = read_cpu_pressure() {
+                    write_message(stream, CHANNEL_CONTROL, &Message::CpuPressure(cp))?;
+                }
             }
             continue;
         }
@@ -289,6 +303,7 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
             }
             Ok((_, Message::TimeSync(ts))) => apply_time_sync(ts.unix_ns),
             Ok((_, Message::Welcome(w))) => {
+                report_cpu = w.caps.iter().any(|c| c == "vcpu");
                 if w.caps.iter().any(|c| c == "fido") && fido_bridge.is_none() {
                     match fido::FidoBridge::create() {
                         Ok(b) => {
@@ -312,11 +327,17 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
                     }
                 }
             }
+            // How many vCPUs the host wants online. Advisory: we pick which ones (cpu0 never
+            // goes), we do not ack, and we never let a refused write stop the loop — a guest
+            // that cannot offline a CPU just keeps running with the CPUs it has, which is the
+            // documented degraded floor.
+            Ok((_, Message::CpuTarget(t))) => apply_cpu_target(t),
             Ok((_, Message::Unknown { msg_type, .. })) => {
                 write_message(stream, CHANNEL_CONTROL, &Message::unsupported(msg_type))?;
             }
             Ok((_, Message::Heartbeat(_)))
             | Ok((_, Message::MemPressure(_)))
+            | Ok((_, Message::CpuPressure(_)))
             // The arrangement is the SESSION helper's to report — it needs a compositor
             // connection, which this system daemon has none of.
             | Ok((_, Message::DisplayLayout(_)))
@@ -386,6 +407,54 @@ fn read_mem_pressure() -> Option<MemPressure> {
     let pressure = std::fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
     let io_pressure = std::fs::read_to_string("/proc/pressure/io").unwrap_or_default();
     Some(MemPressure::from_proc(&pressure, &io_pressure, &meminfo))
+}
+
+/// Where the kernel exposes the online/present CPU sets and the per-CPU online switch. A
+/// constant so the tests of the pure half (`limina_proto::plan_cpu_transitions`) and this
+/// executor cannot drift apart on the path.
+const CPU_SYSFS: &str = "/sys/devices/system/cpu";
+
+/// Read a one-shot runnable-task snapshot for the host's dynamic vCPU policy. Every input is
+/// optional — PSI is 0 without `/proc/pressure/cpu`, and an unreadable `online` yields 0, which
+/// the host reads as "no signal" and never acts on. Returns `None` only when the CPU sysfs is
+/// missing entirely, since without it there is nothing the host could ask us to do.
+/// The parsing lives in `limina_proto::CpuPressure::from_proc` (host-testable).
+fn read_cpu_pressure() -> Option<CpuPressure> {
+    let online = std::fs::read_to_string(format!("{CPU_SYSFS}/online")).ok()?;
+    let present = std::fs::read_to_string(format!("{CPU_SYSFS}/present")).unwrap_or_default();
+    let stat = std::fs::read_to_string("/proc/stat").unwrap_or_default();
+    let loadavg = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+    let pressure = std::fs::read_to_string("/proc/pressure/cpu").unwrap_or_default();
+    Some(CpuPressure::from_proc(
+        &pressure, &loadavg, &stat, &online, &present,
+    ))
+}
+
+/// Bring the guest's online CPU count to what the host asked for.
+///
+/// Only the guest can do this — offlining a CPU is Linux taking itself apart, and the host's
+/// PSCI `CPU_OFF` handler is downstream of the guest's decision, not a way to force it. The
+/// choice of *which* CPUs is ours too ([`limina_proto::plan_cpu_transitions`]; cpu0 never goes).
+///
+/// Failures are logged and shrugged off. A kernel that refuses the write, a CPU pinned by an
+/// irq affinity, a sysfs that is not there at all: none of it is worth dropping the control
+/// connection over, and the next report tells the host the truth about what we managed.
+fn apply_cpu_target(t: CpuTarget) {
+    let Ok(online) = std::fs::read_to_string(format!("{CPU_SYSFS}/online")) else {
+        return;
+    };
+    let present = std::fs::read_to_string(format!("{CPU_SYSFS}/present")).unwrap_or_default();
+    for (cpu, up) in limina_proto::plan_cpu_transitions(&online, &present, t.online) {
+        let path = format!("{CPU_SYSFS}/cpu{cpu}/online");
+        let want = if up { "1" } else { "0" };
+        match std::fs::write(&path, want) {
+            Ok(()) => eprintln!(
+                "limina-agent: cpu{cpu} -> {}",
+                if up { "online" } else { "offline" }
+            ),
+            Err(e) => eprintln!("limina-agent: cpu{cpu} {want} failed ({e})"),
+        }
+    }
 }
 
 /// `poll(2)` the socket (and, when present, the uhid fd) for readability, up to

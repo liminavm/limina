@@ -137,6 +137,14 @@ struct Inner {
     /// M6 PSI autoballoon policy, driven by guest `MemPressure` reports. `None` unless `--memory`
     /// configured a dynamic range.
     balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
+    /// Dynamic vCPU policy, driven by guest `CpuPressure` reports. `None` unless
+    /// `--cpu-reclaim` asked for one (and the VM has vCPUs to spare) — and `None` is what
+    /// withholds the `vcpu` capability, so a guest whose host has no policy never reports.
+    vcpu_policy: Option<crate::vcpu_policy::VcpuPolicy>,
+    /// The guest's last-reported online vCPU count, and when it said so. The only statement
+    /// about online state either side trusts (the guest never acks a target), so it is what
+    /// [`ControlPlane::restore_all_vcpus`] waits on.
+    guest_vcpus_online: Mutex<Option<(Instant, u32)>>,
     /// M14 virtual FIDO authenticator: the per-VM passkey store, shared by every peer.
     /// `None` when this host has no Secure Enclave — then the `fido` capability is never
     /// advertised and a guest presents no authenticator (stock-degrade rule).
@@ -159,6 +167,7 @@ impl ControlPlane {
     pub fn start(
         socket_path: &Path,
         balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
+        vcpu_policy: Option<crate::vcpu_policy::VcpuPolicy>,
         fido_store: Option<Arc<crate::fido::store::FidoStore>>,
         usb_fido_gadget: bool,
     ) -> Result<ControlPlane> {
@@ -175,6 +184,8 @@ impl ControlPlane {
             qga: Mutex::new(None),
             guest_io_full_avg10: Mutex::new(None),
             balloon_policy,
+            vcpu_policy,
+            guest_vcpus_online: Mutex::new(None),
             fido_store,
             usb_fido_gadget,
         });
@@ -309,6 +320,55 @@ impl ControlPlane {
             })
             .context("spawning the liveness monitor thread")?;
         Ok(ControlPlane { inner })
+    }
+
+    /// Ask the guest to bring every vCPU back online, and wait (briefly) until it says it did.
+    ///
+    /// The suspend bracket calls this before snapshotting. Task #41: the guest-visible online
+    /// state lives in libkrun's `VcpuList` and is NOT in the M9 snapshot, so a snapshot taken
+    /// while a vCPU is offline restores it as online and the guest kernel's bookkeeping diverges
+    /// from the host's. Rather than change the snapshot format for it, we make sure a snapshot
+    /// never contains an offline vCPU in the first place — which also costs nothing on the
+    /// overwhelmingly common path, since a VM idle enough to be suspended is exactly the one the
+    /// policy has been shrinking.
+    ///
+    /// Returns whether the guest confirmed. `false` is not a failure to act on: the bracket
+    /// proceeds either way (a snapshot the user asked for must not be held hostage to a vCPU
+    /// count), and a divergent restore is graceful — a later re-online times out rather than
+    /// wedging, and the policy re-derives from the guest's own report on the next tick.
+    pub fn restore_all_vcpus(&self, wait: Duration) -> bool {
+        let Some(policy) = &self.inner.vcpu_policy else {
+            return true; // no policy, so nothing was ever offlined by us
+        };
+        let target = policy.max_target();
+        let asked = Instant::now();
+        if self
+            .inner
+            .send_to_capable("vcpu", &Message::CpuTarget(target), CHANNEL_CONTROL)
+            .is_empty()
+        {
+            return true; // no guest listening; nothing of ours is offline
+        }
+        log::info!(
+            "suspend: asking the guest for all {} vCPUs before the snapshot (#41)",
+            target.online
+        );
+        let deadline = Instant::now() + wait;
+        while Instant::now() < deadline {
+            // Only a report made AFTER we asked can confirm the ask.
+            if let Some((at, online)) = *self.inner.guest_vcpus_online.lock().unwrap() {
+                if at > asked && online >= target.online {
+                    return true;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        log::warn!(
+            "suspend: the guest did not confirm all {} vCPUs online within {wait:?}; \
+             snapshotting anyway (a restore may see a diverged online count — #41)",
+            target.online
+        );
+        false
     }
 
     /// Ask the guest to power off, via every connected `shutdown`-capable agent (the
@@ -666,7 +726,11 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         &mut stream,
         CHANNEL_CONTROL,
         &Message::Welcome(Welcome {
-            caps: welcome_caps(inner.fido_store.is_some(), inner.usb_fido_gadget),
+            caps: welcome_caps(
+                inner.fido_store.is_some(),
+                inner.usb_fido_gadget,
+                inner.vcpu_policy.is_some(),
+            ),
         }),
     )?;
 
@@ -776,6 +840,18 @@ fn serve_loop(
                     policy.on_pressure(&p);
                 }
             }
+            // The CPU sibling of the report above: how many tasks the guest has runnable and how
+            // many vCPUs it actually has online. The policy answers with a count to aim for; the
+            // guest is the only side that can act on it, and it never acks — its next report IS
+            // the ack, which is why a dropped or refused target simply retries.
+            Ok((_, Message::CpuPressure(p))) => {
+                *inner.guest_vcpus_online.lock().unwrap() = Some((Instant::now(), p.online));
+                if let Some(policy) = &inner.vcpu_policy {
+                    if let Some(target) = policy.on_pressure(&p) {
+                        reply(&Message::CpuTarget(target), CHANNEL_CONTROL)?;
+                    }
+                }
+            }
             // M15: the guest's own monitor arrangement, which the host cannot infer — an
             // absolute pointer is spread across the guest's whole desktop, so mapping into it
             // needs to know what order the compositor put the monitors in.
@@ -796,7 +872,8 @@ fn serve_loop(
                 reply(&Message::unsupported(msg_type), CHANNEL_CONTROL)?;
             }
             // HELLO twice / host-only messages from a guest: ignore rather than die.
-            Ok((_, Message::Hello(_)))
+            Ok((_, Message::CpuTarget(_)))
+            | Ok((_, Message::Hello(_)))
             | Ok((_, Message::Welcome(_)))
             | Ok((_, Message::Shutdown(_)))
             | Ok((_, Message::TimeSync(_))) => {}
@@ -821,10 +898,16 @@ fn serve_loop(
 /// hang a gadget on and it is the only way to keep passkeys — which is precisely why `--no-fido`
 /// is a separate flag from `--no-usb` (see `Cli::fido_enabled`). Withholding the cap is also the
 /// whole fix: agents already gate the device on it, so no guest-side change is needed.
-fn welcome_caps(has_fido_store: bool, usb_fido_gadget: bool) -> Vec<String> {
+fn welcome_caps(has_fido_store: bool, usb_fido_gadget: bool, dynamic_vcpus: bool) -> Vec<String> {
     let mut caps = vec!["shutdown".to_string(), "clipboard".to_string()];
     if has_fido_store && !usb_fido_gadget {
         caps.push("fido".to_string());
+    }
+    // The guest samples and reports its runnable-task load only while this is offered, so a VM
+    // with no dynamic range costs exactly what it costs today — no extra frame per second, and
+    // no chance of a CPU going offline on a host that never asked.
+    if dynamic_vcpus {
+        caps.push("vcpu".to_string());
     }
     caps
 }
@@ -884,17 +967,109 @@ mod tests {
     #[test]
     fn the_usb_gadget_and_the_agent_never_both_serve_fido() {
         assert!(
-            !welcome_caps(true, true).iter().any(|c| c == "fido"),
+            !welcome_caps(true, true, false).iter().any(|c| c == "fido"),
             "the gadget is serving; the agent must not raise a second authenticator"
         );
         // No gadget (--no-usb): uhid is the only way to keep passkeys, so it is offered.
-        assert!(welcome_caps(true, false).iter().any(|c| c == "fido"));
+        assert!(welcome_caps(true, false, false).iter().any(|c| c == "fido"));
         // No store (no Secure Enclave, or --no-fido): no authenticator either way.
-        assert!(!welcome_caps(false, false).iter().any(|c| c == "fido"));
-        assert!(!welcome_caps(false, true).iter().any(|c| c == "fido"));
+        assert!(!welcome_caps(false, false, false)
+            .iter()
+            .any(|c| c == "fido"));
+        assert!(!welcome_caps(false, true, false).iter().any(|c| c == "fido"));
         // The rest of the handshake is unaffected.
-        assert!(welcome_caps(true, true).iter().any(|c| c == "clipboard"));
-        assert!(welcome_caps(true, true).iter().any(|c| c == "shutdown"));
+        assert!(welcome_caps(true, true, false)
+            .iter()
+            .any(|c| c == "clipboard"));
+        assert!(welcome_caps(true, true, false)
+            .iter()
+            .any(|c| c == "shutdown"));
+    }
+
+    /// The `vcpu` capability is the whole opt-in: a guest is only asked to sample and report its
+    /// runnable-task load while the host actually runs a policy. A VM with no dynamic range must
+    /// cost exactly what it costs today — no extra frame per second, and no way for a CPU to go
+    /// offline on a host that never asked for it.
+    #[test]
+    fn the_vcpu_capability_is_only_offered_when_a_policy_exists() {
+        assert!(!welcome_caps(false, false, false)
+            .iter()
+            .any(|c| c == "vcpu"));
+        assert!(welcome_caps(false, false, true).iter().any(|c| c == "vcpu"));
+    }
+
+    /// End-to-end over the socket: a guest short of CPUs gets a `CpuTarget` back on the same
+    /// connection. Uses the GROW path deliberately — it is the one with no dwell, so the test
+    /// needs no clock control, and it is also the path whose latency a user would feel.
+    #[test]
+    fn a_guest_short_of_cpus_is_answered_with_a_target() {
+        let path = std::env::temp_dir().join(format!(
+            "limina-ctl-vcpu-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let policy =
+            crate::vcpu_policy::VcpuPolicy::new(10, crate::vcpu_policy::CpuReclaim::Moderate);
+        let _plane = ControlPlane::start(&path, None, policy, None, false).unwrap();
+        let mut agent = UnixStream::connect(&path).unwrap();
+        write_message(
+            &mut agent,
+            CHANNEL_CONTROL,
+            &Message::Hello(Hello {
+                agent: "test-agent/0".into(),
+                caps: vec!["vcpu".into()],
+                pagesize: 16384,
+            }),
+        )
+        .unwrap();
+        let (_, welcome) = read_message(&mut agent).unwrap();
+        match welcome {
+            Message::Welcome(w) => assert!(w.caps.iter().any(|c| c == "vcpu")),
+            other => panic!("expected WELCOME, got {other:?}"),
+        }
+
+        // Two CPUs online, eight tasks wanting to run.
+        write_message(
+            &mut agent,
+            CHANNEL_CONTROL,
+            &Message::CpuPressure(limina_proto::CpuPressure {
+                nr_running: 8,
+                loadavg1_x100: 800,
+                online: 2,
+                present: 10,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        agent
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (_, msg) = read_message(&mut agent).unwrap();
+        assert_eq!(
+            msg,
+            Message::CpuTarget(limina_proto::CpuTarget { online: 10 }),
+            "a guest with more runnable tasks than CPUs must get the whole machine back"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The #41 mitigation must never be able to hold up a snapshot. With no policy (or no guest)
+    /// there is nothing of ours offline, so the bracket proceeds immediately.
+    #[test]
+    fn restoring_vcpus_before_a_snapshot_is_a_no_op_without_a_policy() {
+        let path = std::env::temp_dir().join(format!(
+            "limina-ctl-novcpu-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let plane = ControlPlane::start(&path, None, None, None, false).unwrap();
+        let started = Instant::now();
+        assert!(plane.restore_all_vcpus(Duration::from_secs(30)));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "no policy must not cost the suspend bracket any wait at all"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     /// A shutdown-capable agent that never drains its socket must not stall
@@ -907,7 +1082,7 @@ mod tests {
         std::env::set_var("LIMINA_CONTROL_WRITE_TIMEOUT_MS", "200");
         let path =
             std::env::temp_dir().join(format!("limina-ctl-test-{}.sock", std::process::id()));
-        let plane = ControlPlane::start(&path, None, None, false).unwrap();
+        let plane = ControlPlane::start(&path, None, None, None, false).unwrap();
         // HELLO, then never read again: the socket buffers fill and stay full.
         let wedged = connect_agent(&path, &["shutdown"]);
 

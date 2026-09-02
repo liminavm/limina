@@ -92,6 +92,11 @@ pub struct Hardware {
     /// How hard the balloon reclaims idle guest memory: disabled / light / moderate
     /// (default) / aggressive. See `--reclaim`.
     pub reclaim: crate::balloon_policy::ReclaimMode,
+    /// How hard idle guest vCPUs are offlined: disabled (default) / light / moderate /
+    /// aggressive. `cpus` above is the maximum and what the VM boots; this says how far below it
+    /// the guest may be asked to go while it has nothing to run. See `--cpu-reclaim`.
+    #[serde(default)]
+    pub cpu_reclaim: crate::vcpu_policy::CpuReclaim,
     /// The maximum; managed VMs always boot dynamic with a [`DYNAMIC_MIN_MIB`] floor.
     pub memory: Memory,
     /// Mirror the host battery into the guest (virtio-i2c SBS battery; default true).
@@ -177,6 +182,7 @@ impl Default for Hardware {
         Self {
             cpus: 4,
             reclaim: crate::balloon_policy::ReclaimMode::Moderate,
+            cpu_reclaim: crate::vcpu_policy::CpuReclaim::default(),
             memory: Memory::default(),
             battery: true,
             snd: true,

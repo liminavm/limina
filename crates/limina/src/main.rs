@@ -22,6 +22,7 @@ mod sep;
 mod session;
 mod supervisor;
 mod tmpsock;
+mod vcpu_policy;
 mod vdagent;
 mod venus_env;
 mod vmlib;
@@ -248,6 +249,15 @@ struct Cli {
     /// still returns freed guest memory). See spikes/mem-overhead-2026-07-02 for the numbers.
     #[arg(long, value_enum, default_value_t = balloon_policy::ReclaimMode::Moderate)]
     reclaim: balloon_policy::ReclaimMode,
+
+    /// How hard idle guest vCPUs are offlined (the CPU sibling of `--reclaim`). `--cpus` is the
+    /// maximum and what the VM boots with; this governs how far below it the guest may be asked
+    /// to go while it has nothing to run — `light` gives back at most half, `moderate` squeezes
+    /// toward two, `aggressive` toward one. `disabled` (the default) never offlines anything, and
+    /// the guest is not even asked to report. A vCPU that is online but only lightly busy still
+    /// costs the host per-vCPU timer exits; see `crate::vcpu_policy` for the measurement.
+    #[arg(long, value_enum, default_value_t = vcpu_policy::CpuReclaim::Disabled)]
+    cpu_reclaim: vcpu_policy::CpuReclaim,
 
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
@@ -529,6 +539,9 @@ struct StartOverrides {
     /// Override the memory reclaim mode for this run (disabled/light/moderate/aggressive).
     #[arg(long, value_enum)]
     reclaim: Option<balloon_policy::ReclaimMode>,
+    /// Override the vCPU reclaim mode for this run (disabled/light/moderate/aggressive).
+    #[arg(long, value_enum)]
+    cpu_reclaim: Option<vcpu_policy::CpuReclaim>,
     /// Override the inbound-SSH host port for this run.
     #[arg(long)]
     ssh_port: Option<u16>,
@@ -724,6 +737,9 @@ fn cfg_with_overrides(
     ov: &StartOverrides,
 ) -> vmlib::schema::VmConfig {
     let mut cfg = cfg.clone();
+    if let Some(m) = ov.cpu_reclaim {
+        cfg.hardware.cpu_reclaim = m;
+    }
     if let Some(c) = ov.cpus {
         cfg.hardware.cpus = c;
     }
@@ -1111,6 +1127,7 @@ fn cli_from_definition(
         cdrom,
         share,
         cpus: ov.cpus.unwrap_or(cfg.hardware.cpus),
+        cpu_reclaim: ov.cpu_reclaim.unwrap_or(cfg.hardware.cpu_reclaim),
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1271,6 +1288,12 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         _ => None,
     };
 
+    // The dynamic vCPU policy (the CPU sibling of the balloon above): it consumes guest
+    // CpuPressure over the same control plane and answers with how many vCPUs to keep online.
+    // `new` returns None whenever the mode is disabled or the VM has no vCPUs to spare, and that
+    // None is what withholds the `vcpu` capability — so the guest never reports either.
+    let vcpu_policy = vcpu_policy::VcpuPolicy::new(cli.cpus, cli.cpu_reclaim);
+
     // Forward the VM options to the worker's CLI.
     let mut args: Vec<String> = vec![
         "--cpus".into(),
@@ -1424,6 +1447,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         match control::ControlPlane::start(
             &socket,
             balloon_policy,
+            vcpu_policy,
             fido_store.clone(),
             usb_fido_gadget,
         ) {

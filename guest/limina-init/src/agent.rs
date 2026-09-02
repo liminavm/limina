@@ -124,9 +124,13 @@ fn serve(stream: &mut File) -> std::io::Result<AgentEnd> {
             | Ok((_, Message::Heartbeat(_)))
             | Ok((_, Message::MemPressure(_)))
             | Ok((_, Message::Error(_))) => {}
-            // Clipboard/timesync frames (this agent never advertises those caps), HELLO
-            // from a host, stray acks: ignore rather than die.
-            Ok((_, Message::ClipOffer(_)))
+            // Clipboard/timesync/vcpu frames (this agent never advertises those caps), HELLO
+            // from a host, stray acks: ignore rather than die. A CpuTarget in particular is
+            // safe to drop on the floor: the host only ever learns the online count from a
+            // report this agent does not send, so it never concludes anything from silence.
+            Ok((_, Message::CpuPressure(_)))
+            | Ok((_, Message::CpuTarget(_)))
+            | Ok((_, Message::ClipOffer(_)))
             | Ok((_, Message::ClipRequest(_)))
             | Ok((_, Message::ClipData(_)))
             | Ok((_, Message::FidoReport(_)))
