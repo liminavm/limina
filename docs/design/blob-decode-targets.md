@@ -341,25 +341,25 @@ to be explained by this, and should not be left to discover the restore path for
 
 ## What this does not fix
 
-- **glupload's `DirectDmabuf` path renders near-blank**, and phase 1 is what exposed it. The
-  guest's EGL advertises 63 importable dmabuf fourccs including NV12, so glupload builds ONE
-  EGLImage over the whole planar buffer via
-  `gst_egl_image_from_dmabuf_direct_target_with_dma_drm` and samples it as a single RGBA 2D
-  texture; the result carries 2–25 distinct luma values against 256 in the source. The claim was
-  always false — phase 1 only made the decoder export NV12, so something finally exercised it.
-  The host log is clean across the failure, so this is guest-side EGL, not a rejected
-  submission. Phase 2's per-plane import is the real fix; dropping NV12 from the advertised
-  list, so glupload falls back to the copy uploader it already uses successfully, is the
-  standing companion patch if phase 2 lands and the pipeline is still flat.
-- **The composite RGBA view samples an empty texture on an IOSurface-backed target.**
-  `upload_mapped_plane` writes the picture into the IOSurface planes and returns before it
-  reaches `res->gl_id`, so a consumer that views the resource in its planar format — rather than
-  importing the planes — gets whatever that texture last held. Per-plane import, which is what
-  Firefox and every VA-API client do, does not go near it. glupload's `DirectDmabuf` path is such
-  a consumer, so **Showtime shows a black picture while the host decodes every frame** (hardware
-  decode confirmed on the host, 11% CPU in the guest, window luma one distinct value). This is
-  the one fault left between a GStreamer app and a picture. Fill the texture on demand, or refuse
-  the composite view on an IOSurface-backed target so the consumer takes the converting path.
+- **A composite view is filled on the GPU, and only for consumers that build one.** A planar
+  target has two kinds of consumer. Per-plane import — Firefox, every VA-API client — samples
+  the IOSurface planes through their own images. A *composite* view samples the resource's own
+  RGBA texture: dri2 builds one whenever the driver reports the planar format samplable
+  (`dri2_create_image_from_winsys`, the `use_lowered` gate), which is exactly what glupload's
+  `DirectDmabuf` path gets for its one EGLImage over the whole NV12 buffer. Nothing on the decode
+  path filled that texture — the delivery wrote the IOSurface planes and returned — so Showtime
+  decoded every frame in hardware and drew black, with a clean host log. Reporting NV12
+  unsamplable in the guest would lower the import to per-plane views, but the same report types
+  an untyped guest-memory blob at import, and those have no plane images; the gap is host-side.
+  `vrend_renderer_convert_planes_gl` (vrend_blitter.c) draws the two planes into the base texture
+  with a BT.601 program in the blit context — the CPU converter's matrix and range, so the two
+  fills agree — at the first composite view of a resource and at every delivery once one exists,
+  never inside a draw's sampler bind. The pass's plane textures are made once per resource and
+  die before the plane images at destroy, so the retain-count trace keeps its meaning. Firefox
+  never creates a composite view and never pays (1,115 per-plane views, 0 composite, one run).
+  The host log says when a resource enters this path: `composite view: WxH ... is sampled whole`.
+  Colour space is the standing limitation of both fills: the guest's EGL hint never reaches the
+  host, so HD content encoded BT.709 comes out slightly off.
 - **A refused composite create is invisible to the guest, so the capset is the contract.** The
   kernel hands out the handle before the host is asked; a create the host refuses leaves the
   guest attaching backing and building sampler views on a resource that does not exist, the host
@@ -394,7 +394,7 @@ to be explained by this, and should not be left to discover the restore path for
   unbacked read (the full length comes from attached iovecs), a staging copy (the guest maps
   the buffer directly and reads its own write back correctly), a visibility race (the same
   iovecs re-read 2 ms later are still zero), iovec fragmentation, handle reuse. Rate measured
-  2026-09-01 on the enhanced guest: 6 of 600 gst-va runs, idle and under CPU load alike. Next
+  2026-09-01/02 on the enhanced guest: 7 of 650 gst-va runs, idle and under CPU load alike. Next
   probe: which guest pages the buffer's `ATTACH_BACKING` named, against the pages the guest's
   mapping wrote — the zero region is the first page, which is where a stale translation would
   show.

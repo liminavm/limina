@@ -2411,19 +2411,18 @@ fork on every `vkGetMemoryBudget` poll. On a dogfood day that is a 12 MB `superv
 minutes, in which every line that explains anything is buried. It is a routine per-poll
 observation, not an error: demote it to debug on the fork, or rate-limit it to changes.
 
-## GStreamer apps and hardware decode: a black picture is what is left
+## GStreamer apps and hardware decode
 
-`Showtime`, Totem and anything else on GStreamer decode in hardware on the F44 enhanced
-guest as of virglrenderer `ede7bb19` + limina-kk `78d7ac6602b` + guest mesa `547d0179e58`,
-but draw a black picture. What stands between them and a frame, and what no longer does:
+`Showtime`, Totem and anything else on GStreamer decode in hardware and draw a picture on the
+F44 enhanced guest as of virglrenderer `283c9461` + limina-kk `78d7ac6602b` + guest mesa
+`547d0179e58`. What stood between them and a frame, for the record of what each fix was:
 
-- **Still open — the composite-view sampling gap.** glupload's `DirectDmabuf` path builds one
-  EGLImage over the whole NV12 buffer and samples the resource's own texture, which the
-  IOSurface-backed decode target never fills. Host decodes every frame (11% guest CPU), the
-  window's luma is one distinct value. `docs/design/blob-decode-targets.md` §What this does
-  not fix has the two candidate fixes.
+- **Closed — the composite-view sampling gap.** glupload's `DirectDmabuf` path samples the
+  planar resource's own RGBA texture, which the IOSurface-backed decode target never filled.
+  Now filled on the GPU when, and only when, a composite view exists (virglrenderer
+  `283c9461`; `docs/design/blob-decode-targets.md` §What this does not fix).
 - **Still open — one keyframe in ~100 arrives with a zero first page**, so that run shows
-  nothing (`-12909`). 6 of 600 runs measured 2026-09-01; page-granular, not whole-buffer.
+  nothing (`-12909`). 7 of 650 runs measured 2026-09-01/02; page-granular, not whole-buffer.
   Same design-doc section.
 - **Closed — the VA plugin's abort** (`malloc(): unaligned tcache chunk detected`): a
   double release of the planar chain, fixed in mesa `26.1.8-8.limina`.
@@ -2437,7 +2436,8 @@ but draw a black picture. What stands between them and a frame, and what no long
   independent holders (vrend never destroyed the plane EGLImages of a resource with no base
   image; zink filed the plane-1 import as an aux plane and skipped `DestroyImage`). Fixed in
   virglrenderer `ede7bb19` and limina-kk `78d7ac6602b`; 15,009 of 15,014 deallocated over 200
-  runs. Oracle: `LIMINA_GPU_MEM_BUDGET_CENSUS`.
+  runs, and 17 live surfaces steady through 50 more with the composite fill in place. Oracle:
+  `LIMINA_GPU_MEM_BUDGET_CENSUS`.
 
 **Delivery owes two things.** A guest mesa RPM carrying `547d0179e58` (the enhanced image is
 still on `-8`), and clearing the user's GStreamer registry: the pre-`-8` abort left
