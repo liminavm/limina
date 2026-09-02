@@ -372,22 +372,38 @@ to be explained by this, and should not be left to discover the restore path for
   the data itself: `status -12909` (`kVTVideoDecoderBadDataErr`) on all ten frames, `decode
   produced no picture`, luma still one distinct value.
 
-  The submission is not what differs. Traced where the host hands VideoToolbox the frame,
-  the browser and the GStreamer pipeline carry byte-identical bitstreams — equal FNV hashes
-  per frame, in the same order — with the same session parameters (`1920x1080 prof 0 depth 8
-  sub 1 target fmt 166 cv '420v'`, `hardware accelerated: yes`) against the same kind of
-  composite planar target. VideoToolbox accepts 300 of 300 from the browser and refuses 10 of
-  10 from the pipeline. So the difference lives in the codec object's state rather than its
-  input. The format description is not it either: both build the same one (`vp09`,
-  1920x1080, a zero-byte config). What is still untraced is the destination pixel-buffer
-  attributes the target contributes, and which thread calls `VTDecompressionSessionDecodeFrame`
-  — that is where the next probe goes.
+  VideoToolbox is right to refuse it: **the bitstream the host reads is all zeros**, and it is
+  the keyframe, so every later frame in that run fails behind it for want of a reference. The
+  failure is intermittent — 2 to 4 empty runs in 20, moving with host load — which is why a
+  handful of consecutive failures once read as "gst-va never decodes". It decodes fine the rest
+  of the time.
 
-  So an empty hardware-decoded picture here is at least three faults deep, and only the last
-  one is about pixels: the latch drops every submission, VT rejects the submissions that do get
-  through, and whichever sampling path the consumer picks then decides which shade of nothing
-  it shows. Give the rejection a voice before anything else — a silent `EINVAL` on every submit
-  is what made this read as a sampling bug for a day, and it hid the VT rejection behind it.
+  What the emptiness is *not*, each ruled out by measurement rather than reasoning:
+
+  - Not the bitstream content or the session. When a run succeeds, its frames hash identically
+    to the browser's, against the same session parameters, the same `vp09` format description
+    and the same kind of composite planar target.
+  - Not a short or unbacked read. The read returns the full 70037 bytes from attached iovecs.
+  - Not a staging copy. The guest maps the buffer directly (`copy_src` NULL) and its own
+    read-back of what it wrote is correct (`82 49 83 42`, the VP9 keyframe marker).
+  - Not a visibility race. Re-reading the *same* iovecs 2 ms later still yields zeros.
+  - Not fragmentation. Empty reads happen at 97, 104, 162, 208 and 254 iovecs, and runs at 97
+    and 254 also succeed.
+  - Not handle reuse: each empty handle appears exactly once.
+  - Never partial. The whole buffer is zero, every time — which is not the shape a bad
+    scatter-gather translation would leave.
+
+  So the guest writes the frame into its mapping and the host reads a wholly different,
+  untouched region for the same handle. The next probe is on the mapping itself: what guest
+  pages the buffer's `ATTACH_BACKING` actually named, against the pages the guest's own mapping
+  touches.
+
+  So an empty hardware-decoded picture here is three faults deep, and only the last one is
+  about pixels: an empty bitstream reaches the decoder, the latch then drops every submission
+  the poisoned context makes afterwards, and whichever sampling path the consumer picks decides
+  which shade of nothing it shows. Give the rejections a voice before anything else — a silent
+  `EINVAL` on every submit, and a read that reports a size it took from the descriptor rather
+  than the bytes it got, are between them what made this read as a sampling bug for a day.
 - **`glimagesink` poisons its virgl context** — a separate fault, on a different path, found
   alongside the above and not explained by it: 13 `CREATE_OBJECT` failures with EINVAL, after
   which 2652 consecutive `[SUBMIT3D]`s fail. It does not reproduce under `gldownload`.
