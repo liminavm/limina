@@ -18,9 +18,10 @@ The target feature set — see [Status](#status) for what's already shipped:
   takes/returns via ballooning)
 
 We own the whole stack and patch any layer to get the behavior we want — libkrun,
-virglrenderer, imago, the guest kernel, Mesa, and custom guest drivers/agents are all
-fair game (patch series committed under `patches/**`, source clones vendored under the
-gitignored `third_party/`). Two tiers always coexist: an **unmodified stock distro must
+virglrenderer, imago, the guest kernel, Mesa, the EFI firmware, and custom guest
+drivers/agents are all fair game. Every dependency is a fork under
+[github.com/liminavm](https://github.com/liminavm) whose `limina` branch is the delta,
+pinned by `third_party/manifest.toml` and vendored under the gitignored `third_party/`. Two tiers always coexist: an **unmodified stock distro must
 always boot** (degraded), and installing our custom kernel/drivers/agent **unlocks** the
 full experience. See [`CLAUDE.md`](CLAUDE.md) for the project tenets and
 [`docs/`](docs/) for the design.
@@ -53,13 +54,13 @@ repo? Read [`docs/dev-onboarding.md`](docs/dev-onboarding.md).
 | Path | Purpose |
 |------|---------|
 | `crates/` | The host Rust workspace — `limina` (AppKit supervisor/UI), `limina-vmm` (the HVF worker), display/input/proto/surfaceport/usbip helpers, `limina-test` (the boot-test harness) |
-| `guest/` | aarch64-linux guest components (their own workspace): `limina-agent` (+ session helper), `limina-init`, `limina-config`, the virtio-gpu DKMS driver, the GNOME clipboard extension |
+| `guest/` | aarch64-linux guest components (their own workspace): `limina-agent` (+ session helper), `limina-init`, `limina-mock-mutter` (test double), the stock-kernel virtio-gpu DKMS driver |
 | `xtask/` | The `cargo xtask` dev-task runner |
 | `scripts/` | The tested build/boot/provision scripts xtask wraps |
-| `patches/` | Committed `git format-patch` series: libkrun, virglrenderer, imago, linux, mesa, mutter, edk2 (KRUN_EFI firmware), kosmickrisp |
+| `patches/` | Mostly tombstones from the pre-fork-model days; the one live series is `mesa-guest/`, an export of the guest Mesa fork consumed by the RPM build (never hand-edited) |
 | `spikes/` | Standalone experiments (each with a `RESULTS.md`) |
 | `docs/` | [research](docs/research/) (source-cited), [design](docs/design/), [roadmap](docs/roadmap.md), [images](docs/images.md), [codebases](docs/codebases.md) |
-| `third_party/` | Vendored / patched native dependencies (gitignored; recreated by `cargo xtask vendor`) |
+| `third_party/` | The forked dependencies at their pinned revs (gitignored; recreated by `cargo xtask vendor`; `manifest.toml` is the tracked pin list) |
 
 ## Host environment (reference)
 
