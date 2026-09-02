@@ -1,0 +1,1201 @@
+[LIMINA-ALLOC-POOL] class 0 grew to 117 allocators (budget 4 MiB) — in-flight depth is outrunning completion
+[LIMINA-ALLOC-POOL] class 0 grew to 118 allocators (budget 4 MiB) — in-flight depth is outrunning completion
+[LIMINA-ALLOC-POOL] class 0 grew to 119 allocators (budget 4 MiB) — in-flight depth is outrunning completion
+[LIMINA-ALLOC-POOL] class 0 grew to 120 allocators (budget 4 MiB) — in-flight depth is outrunning completion
+[LIMINA-ALLOC-POOL] class 0 grew to 121 allocators (budget 4 MiB) — in-flight depth is outrunning completion
+[LIMINA-ALLOC-POOL] class 0 grew to 122 allocators (budget 4 MiB) — in-flight depth is outrunning completion
+[LIMINA] KK counts: barriers=623925 (breaks_pass=0 pregfx=320242 noop=303682) render_pass_starts=126078 restarts=0/0(flush) compute_during_pass=31719/34963(pregfx) color_map_nonidentity=0/1008624 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=57785 img->buf=21 img->img=750 buf->buf=80687
+[LIMINA]   unroll triggers: fan=34963 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=34963 (fan=34963 strip=0 other=0)
+[LIMINA]   pass starts: fresh=906 seen+LOAD=101512 seen+CLEAR=14460 seen+DONTCARE=9200 (fresh small=211) | reload_hazard=23660 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      34963
+[LIMINA] KK counts: barriers=625451 (breaks_pass=0 pregfx=321011 noop=304439) render_pass_starts=126552 restarts=0/0(flush) compute_during_pass=31869/35113(pregfx) color_map_nonidentity=0/1012416 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=57906 img->buf=21 img->img=750 buf->buf=80727
+[LIMINA]   unroll triggers: fan=35113 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=35113 (fan=35113 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=101914 seen+CLEAR=14527 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=23731 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      35113
+[LIMINA] KK counts: barriers=627061 (breaks_pass=0 pregfx=321780 noop=305280) render_pass_starts=126942 restarts=0/0(flush) compute_during_pass=31972/35216(pregfx) color_map_nonidentity=0/1015536 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=58043 img->buf=21 img->img=750 buf->buf=80841
+[LIMINA]   unroll triggers: fan=35216 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=35216 (fan=35216 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=102248 seen+CLEAR=14583 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=23787 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      35216
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 7748 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=7746/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:04:21Z WARN  limina::window] guest cursor: nothing has been drawn where the captured pointer is for 2.0s — the guest has its cursor plane on [1], not on the captured slot 0; surface 460 was EVICTED; slot 0: scanout 3840x2160 cursor visible=false id=Some(460) 64x64 at (3832,757) [shape=136@15596ms hide=0@271531ms shape=460@498068ms hide=0@585484ms]; slot 1: scanout 2048x1328 cursor visible=true id=Some(410) 64x64 at (556,403) [hide=0@606745ms shape=464@608540ms hide=0@608675ms shape=410@608782ms]
+[LIMINA] KK counts: barriers=628659 (breaks_pass=0 pregfx=322596 noop=306062) render_pass_starts=127344 restarts=0/0(flush) compute_during_pass=32093/35342(pregfx) color_map_nonidentity=0/1018752 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=58195 img->buf=21 img->img=750 buf->buf=80933
+[LIMINA]   unroll triggers: fan=35342 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=35342 (fan=35342 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=102606 seen+CLEAR=14627 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=23831 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      35342
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 7988 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=7986/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:04:22.089242Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 29), renders land in the surface directly
+[LIMINA] KK counts: barriers=630272 (breaks_pass=0 pregfx=323491 noop=306780) render_pass_starts=127731 restarts=0/0(flush) compute_during_pass=32217/35466(pregfx) color_map_nonidentity=0/1021848 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=58377 img->buf=21 img->img=750 buf->buf=81032
+[LIMINA]   unroll triggers: fan=35466 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=35466 (fan=35466 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=102964 seen+CLEAR=14656 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=23860 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      35466
+[2026-09-02T01:04:22.487571Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 447), renders land in the surface directly
+[LIMINA] KK counts: barriers=631891 (breaks_pass=0 pregfx=324300 noop=307591) render_pass_starts=128112 restarts=0/0(flush) compute_during_pass=32325/35574(pregfx) color_map_nonidentity=0/1024896 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=58524 img->buf=21 img->img=750 buf->buf=81146
+[LIMINA]   unroll triggers: fan=35574 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=35574 (fan=35574 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=103298 seen+CLEAR=14702 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=23906 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      35574
+[2026-09-02T01:04:22.957925Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 96), renders land in the surface directly
+[LIMINA] KK counts: barriers=633527 (breaks_pass=0 pregfx=325104 noop=308422) render_pass_starts=128476 restarts=0/0(flush) compute_during_pass=32420/35669(pregfx) color_map_nonidentity=0/1027808 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=58666 img->buf=21 img->img=750 buf->buf=81273
+[LIMINA]   unroll triggers: fan=35669 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=35669 (fan=35669 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=103616 seen+CLEAR=14749 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=23953 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      35669
+[LIMINA] KK counts: barriers=635098 (breaks_pass=0 pregfx=325920 noop=309177) render_pass_starts=128905 restarts=0/0(flush) compute_during_pass=32566/35815(pregfx) color_map_nonidentity=0/1031240 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=58792 img->buf=21 img->img=750 buf->buf=81349
+[LIMINA]   unroll triggers: fan=35815 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=35815 (fan=35815 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=104014 seen+CLEAR=14780 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=23984 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      35815
+[2026-09-02T01:04:23.554412Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 164), renders land in the surface directly
+[LIMINA] KK counts: barriers=636719 (breaks_pass=0 pregfx=326774 noop=309945) render_pass_starts=129284 restarts=0/0(flush) compute_during_pass=32674/35923(pregfx) color_map_nonidentity=0/1034272 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=58945 img->buf=21 img->img=750 buf->buf=81463
+[LIMINA]   unroll triggers: fan=35923 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=35923 (fan=35923 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=104355 seen+CLEAR=14817 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=24021 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      35923
+[LIMINA-ALLOC-POOL] periodic render: live=43 peak=122 retired=1117 | size hiwater=5016 KiB (budget 4096 KiB, 83235 retirements) | peak ops/cmdbuf=302
+[LIMINA-ALLOC-POOL] periodic compute: live=26 peak=64 retired=308 | size hiwater=5208 KiB (budget 4096 KiB, 34415 retirements) | peak ops/cmdbuf=241
+[LIMINA-ALLOC-POOL] periodic tombstones=1425 use-after-destroy=0 | resets=82075/34082 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=638363 (breaks_pass=0 pregfx=327598 noop=310764) render_pass_starts=129640 restarts=0/0(flush) compute_during_pass=32759/36008(pregfx) color_map_nonidentity=0/1037120 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=59105 img->buf=21 img->img=750 buf->buf=81585
+[LIMINA]   unroll triggers: fan=36008 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36008 (fan=36008 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=104666 seen+CLEAR=14863 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=24067 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36008
+[LIMINA] KK counts: barriers=640016 (breaks_pass=0 pregfx=328440 noop=311575) render_pass_starts=129987 restarts=0/0(flush) compute_during_pass=32843/36092(pregfx) color_map_nonidentity=0/1039896 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=59259 img->buf=21 img->img=750 buf->buf=81726
+[LIMINA]   unroll triggers: fan=36092 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36092 (fan=36092 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=104969 seen+CLEAR=14907 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=24111 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36092
+[LIMINA] KK counts: barriers=641657 (breaks_pass=0 pregfx=329271 noop=312385) render_pass_starts=130346 restarts=0/0(flush) compute_during_pass=32932/36181(pregfx) color_map_nonidentity=0/1042768 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=59403 img->buf=21 img->img=750 buf->buf=81847
+[LIMINA]   unroll triggers: fan=36181 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36181 (fan=36181 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=105284 seen+CLEAR=14951 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=24155 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36181
+[LIMINA] KK counts: barriers=643305 (breaks_pass=0 pregfx=330119 noop=313185) render_pass_starts=130698 restarts=0/0(flush) compute_during_pass=33021/36270(pregfx) color_map_nonidentity=0/1045584 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=59566 img->buf=21 img->img=750 buf->buf=81978
+[LIMINA]   unroll triggers: fan=36270 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36270 (fan=36270 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=105593 seen+CLEAR=14994 seen+DONTCARE=9204 (fresh small=211) | reload_hazard=24198 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36270
+[LIMINA] KK counts: barriers=645076 (breaks_pass=0 pregfx=331093 noop=313982) render_pass_starts=130927 restarts=0/0(flush) compute_during_pass=33036/36285(pregfx) color_map_nonidentity=0/1047416 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=59804 img->buf=21 img->img=750 buf->buf=82210
+[LIMINA]   unroll triggers: fan=36285 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36285 (fan=36285 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=105791 seen+CLEAR=15024 seen+DONTCARE=9205 (fresh small=211) | reload_hazard=24229 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36285
+[LIMINA] KK counts: barriers=646878 (breaks_pass=0 pregfx=332110 noop=314768) render_pass_starts=131125 restarts=0/0(flush) compute_during_pass=33039/36288(pregfx) color_map_nonidentity=0/1049000 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=60061 img->buf=21 img->img=750 buf->buf=82482
+[LIMINA]   unroll triggers: fan=36288 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36288 (fan=36288 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=105965 seen+CLEAR=15047 seen+DONTCARE=9205 (fresh small=211) | reload_hazard=24252 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36288
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=50 retired=99 | size hiwater=5208 KiB (budget 4096 KiB, 27722 retirements) | peak ops/cmdbuf=1188
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3816 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=15
+[LIMINA-ALLOC-POOL] periodic tombstones=99 use-after-destroy=0 | resets=27616/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=648676 (breaks_pass=0 pregfx=333123 noop=315552) render_pass_starts=131327 restarts=0/0(flush) compute_during_pass=33044/36293(pregfx) color_map_nonidentity=0/1050616 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=60330 img->buf=21 img->img=750 buf->buf=82737
+[LIMINA]   unroll triggers: fan=36293 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36293 (fan=36293 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=106145 seen+CLEAR=15070 seen+DONTCARE=9205 (fresh small=211) | reload_hazard=24275 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36293
+[2026-09-02T01:04:30.932500Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 456), renders land in the surface directly
+[LIMINA] KK counts: barriers=650344 (breaks_pass=0 pregfx=334080 noop=316263) render_pass_starts=131659 restarts=0/0(flush) compute_during_pass=33137/36392(pregfx) color_map_nonidentity=0/1053272 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=60522 img->buf=21 img->img=750 buf->buf=82888
+[LIMINA]   unroll triggers: fan=36392 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36392 (fan=36392 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=106459 seen+CLEAR=15084 seen+DONTCARE=9209 (fresh small=211) | reload_hazard=24293 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36392
+[LIMINA] KK counts: barriers=651925 (breaks_pass=0 pregfx=334992 noop=316932) render_pass_starts=132078 restarts=0/0(flush) compute_during_pass=33286/36541(pregfx) color_map_nonidentity=0/1056624 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=60688 img->buf=21 img->img=750 buf->buf=82958
+[LIMINA]   unroll triggers: fan=36541 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36541 (fan=36541 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=106870 seen+CLEAR=15091 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24301 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36541
+[2026-09-02T01:04:31Z WARN  limina::window::input] pointer capture: the host pointer stopped wearing the blank — something reset it behind us; re-worn
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 7926 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=7924/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=653551 (breaks_pass=0 pregfx=335817 noop=317733) render_pass_starts=132452 restarts=0/0(flush) compute_during_pass=33371/36626(pregfx) color_map_nonidentity=0/1059616 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=60846 img->buf=21 img->img=750 buf->buf=83074
+[LIMINA]   unroll triggers: fan=36626 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36626 (fan=36626 strip=0 other=0)
+[LIMINA]   pass starts: fresh=907 seen+LOAD=107187 seen+CLEAR=15148 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24358 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36626
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8118 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8116/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:04:32.040367Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 469), renders land in the surface directly
+[LIMINA] KK counts: barriers=655196 (breaks_pass=0 pregfx=336701 noop=318495) render_pass_starts=132807 restarts=0/0(flush) compute_during_pass=33461/36719(pregfx) color_map_nonidentity=0/1062456 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=61009 img->buf=21 img->img=750 buf->buf=83216
+[LIMINA]   unroll triggers: fan=36719 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36719 (fan=36719 strip=0 other=0)
+[LIMINA]   pass starts: fresh=908 seen+LOAD=107497 seen+CLEAR=15191 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24401 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36719
+[2026-09-02T01:04:32.317193Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 458), renders land in the surface directly
+[LIMINA] KK counts: barriers=656814 (breaks_pass=0 pregfx=337577 noop=319236) render_pass_starts=133189 restarts=0/0(flush) compute_during_pass=33565/36823(pregfx) color_map_nonidentity=0/1065512 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=61195 img->buf=21 img->img=750 buf->buf=83311
+[LIMINA]   unroll triggers: fan=36823 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36823 (fan=36823 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=107836 seen+CLEAR=15234 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24444 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36823
+[LIMINA] KK counts: barriers=658431 (breaks_pass=0 pregfx=338356 noop=320074) render_pass_starts=133572 restarts=0/0(flush) compute_during_pass=33652/36910(pregfx) color_map_nonidentity=0/1068576 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=61329 img->buf=21 img->img=750 buf->buf=83444
+[LIMINA]   unroll triggers: fan=36910 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=36910 (fan=36910 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=108151 seen+CLEAR=15302 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24512 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      36910
+[LIMINA] KK counts: barriers=660052 (breaks_pass=0 pregfx=339165 noop=320886) render_pass_starts=133951 restarts=0/0(flush) compute_during_pass=33742/37000(pregfx) color_map_nonidentity=0/1071608 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=61479 img->buf=21 img->img=750 buf->buf=83565
+[LIMINA]   unroll triggers: fan=37000 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37000 (fan=37000 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=108467 seen+CLEAR=15365 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24575 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37000
+[LIMINA-ALLOC-POOL] periodic render: live=40 peak=122 retired=1151 | size hiwater=5016 KiB (budget 4096 KiB, 86739 retirements) | peak ops/cmdbuf=302
+[LIMINA-ALLOC-POOL] periodic compute: live=23 peak=64 retired=326 | size hiwater=5208 KiB (budget 4096 KiB, 36190 retirements) | peak ops/cmdbuf=241
+[LIMINA-ALLOC-POOL] periodic tombstones=1477 use-after-destroy=0 | resets=85549/35843 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=661670 (breaks_pass=0 pregfx=339947 noop=321722) render_pass_starts=134333 restarts=0/0(flush) compute_during_pass=33827/37085(pregfx) color_map_nonidentity=0/1074664 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=61625 img->buf=21 img->img=750 buf->buf=83678
+[LIMINA]   unroll triggers: fan=37085 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37085 (fan=37085 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=108784 seen+CLEAR=15430 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24640 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37085
+[LIMINA] KK counts: barriers=663297 (breaks_pass=0 pregfx=340749 noop=322547) render_pass_starts=134706 restarts=0/0(flush) compute_during_pass=33908/37166(pregfx) color_map_nonidentity=0/1077648 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=61772 img->buf=21 img->img=750 buf->buf=83796
+[LIMINA]   unroll triggers: fan=37166 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37166 (fan=37166 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=109095 seen+CLEAR=15492 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24702 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37166
+[LIMINA] KK counts: barriers=664915 (breaks_pass=0 pregfx=341548 noop=323366) render_pass_starts=135088 restarts=0/0(flush) compute_during_pass=33998/37256(pregfx) color_map_nonidentity=0/1080704 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=61923 img->buf=21 img->img=750 buf->buf=83916
+[LIMINA]   unroll triggers: fan=37256 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37256 (fan=37256 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=109412 seen+CLEAR=15557 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24767 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37256
+[LIMINA] KK counts: barriers=666522 (breaks_pass=0 pregfx=342326 noop=324195) render_pass_starts=135481 restarts=0/0(flush) compute_during_pass=34088/37346(pregfx) color_map_nonidentity=0/1083848 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=62063 img->buf=21 img->img=750 buf->buf=84032
+[LIMINA]   unroll triggers: fan=37346 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37346 (fan=37346 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=109734 seen+CLEAR=15628 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24838 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37346
+[2026-09-02T01:04:36.320206Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 197), renders land in the surface directly
+[LIMINA] KK counts: barriers=668243 (breaks_pass=0 pregfx=343227 noop=325015) render_pass_starts=135760 restarts=0/0(flush) compute_during_pass=34126/37384(pregfx) color_map_nonidentity=0/1086080 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=62256 img->buf=21 img->img=750 buf->buf=84245
+[LIMINA]   unroll triggers: fan=37384 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37384 (fan=37384 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=109969 seen+CLEAR=15672 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24882 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37384
+[LIMINA] KK counts: barriers=670045 (breaks_pass=0 pregfx=344225 noop=325819) render_pass_starts=135958 restarts=0/0(flush) compute_during_pass=34129/37387(pregfx) color_map_nonidentity=0/1087664 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=62488 img->buf=21 img->img=750 buf->buf=84544
+[LIMINA]   unroll triggers: fan=37387 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37387 (fan=37387 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=110140 seen+CLEAR=15699 seen+DONTCARE=9210 (fresh small=211) | reload_hazard=24909 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37387
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11 retirements) | peak ops/cmdbuf=81
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4184 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=72
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=50 retired=99 | size hiwater=5208 KiB (budget 4096 KiB, 28600 retirements) | peak ops/cmdbuf=1188
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3816 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=15
+[LIMINA-ALLOC-POOL] periodic tombstones=99 use-after-destroy=0 | resets=28494/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=671826 (breaks_pass=0 pregfx=345197 noop=326628) render_pass_starts=136177 restarts=0/0(flush) compute_during_pass=34142/37400(pregfx) color_map_nonidentity=0/1089416 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=62705 img->buf=21 img->img=750 buf->buf=84812
+[LIMINA]   unroll triggers: fan=37400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37400 (fan=37400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=110322 seen+CLEAR=15725 seen+DONTCARE=9221 (fresh small=211) | reload_hazard=24946 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37400
+[LIMINA] KK counts: barriers=673493 (breaks_pass=0 pregfx=346085 noop=327407) render_pass_starts=136510 restarts=0/0(flush) compute_during_pass=34204/37464(pregfx) color_map_nonidentity=0/1092080 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=63304 img->buf=21 img->img=750 buf->buf=84944
+[LIMINA]   unroll triggers: fan=37464 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37464 (fan=37464 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=110572 seen+CLEAR=15803 seen+DONTCARE=9226 (fresh small=211) | reload_hazard=25029 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37464
+[2026-09-02T01:04:40.616234Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 208), renders land in the surface directly
+[LIMINA] KK counts: barriers=675195 (breaks_pass=0 pregfx=347039 noop=328156) render_pass_starts=136808 restarts=0/0(flush) compute_during_pass=34276/37537(pregfx) color_map_nonidentity=0/1094464 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=63540 img->buf=21 img->img=750 buf->buf=85136
+[LIMINA]   unroll triggers: fan=37537 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37537 (fan=37537 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=110831 seen+CLEAR=15841 seen+DONTCARE=9226 (fresh small=211) | reload_hazard=25067 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37537
+[LIMINA] KK counts: barriers=676791 (breaks_pass=0 pregfx=347990 noop=328801) render_pass_starts=137212 restarts=0/0(flush) compute_during_pass=34432/37693(pregfx) color_map_nonidentity=0/1097696 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=63679 img->buf=21 img->img=750 buf->buf=85192
+[LIMINA]   unroll triggers: fan=37693 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37693 (fan=37693 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=111212 seen+CLEAR=15864 seen+DONTCARE=9226 (fresh small=211) | reload_hazard=25090 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37693
+[LIMINA] KK counts: barriers=678369 (breaks_pass=0 pregfx=348936 noop=329433) render_pass_starts=137634 restarts=0/0(flush) compute_during_pass=34600/37861(pregfx) color_map_nonidentity=0/1101072 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=63875 img->buf=21 img->img=750 buf->buf=85248
+[LIMINA]   unroll triggers: fan=37861 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=37861 (fan=37861 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=111606 seen+CLEAR=15889 seen+DONTCARE=9229 (fresh small=211) | reload_hazard=25118 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      37861
+[LIMINA] KK counts: barriers=679943 (breaks_pass=0 pregfx=349959 noop=329983) render_pass_starts=138060 restarts=0/0(flush) compute_during_pass=34789/38050(pregfx) color_map_nonidentity=0/1104480 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=64016 img->buf=21 img->img=750 buf->buf=85287
+[LIMINA]   unroll triggers: fan=38050 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38050 (fan=38050 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=112031 seen+CLEAR=15891 seen+DONTCARE=9229 (fresh small=211) | reload_hazard=25120 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38050
+[LIMINA] KK counts: barriers=681523 (breaks_pass=0 pregfx=350958 noop=330564) render_pass_starts=138480 restarts=0/0(flush) compute_during_pass=34966/38227(pregfx) color_map_nonidentity=0/1107840 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=64147 img->buf=21 img->img=750 buf->buf=85345
+[LIMINA]   unroll triggers: fan=38227 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38227 (fan=38227 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=112441 seen+CLEAR=15901 seen+DONTCARE=9229 (fresh small=211) | reload_hazard=25130 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38227
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8114 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8112/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=683129 (breaks_pass=0 pregfx=351879 noop=331250) render_pass_starts=138874 restarts=0/0(flush) compute_during_pass=35096/38357(pregfx) color_map_nonidentity=0/1110992 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=64310 img->buf=21 img->img=750 buf->buf=85423
+[LIMINA]   unroll triggers: fan=38357 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38357 (fan=38357 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=112802 seen+CLEAR=15933 seen+DONTCARE=9229 (fresh small=211) | reload_hazard=25162 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38357
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8292 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8290/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=684742 (breaks_pass=0 pregfx=352676 noop=332065) render_pass_starts=139261 restarts=0/0(flush) compute_during_pass=35197/38458(pregfx) color_map_nonidentity=0/1114088 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=64471 img->buf=21 img->img=750 buf->buf=85548
+[LIMINA]   unroll triggers: fan=38458 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38458 (fan=38458 strip=0 other=0)
+[LIMINA]   pass starts: fresh=909 seen+LOAD=113128 seen+CLEAR=15995 seen+DONTCARE=9229 (fresh small=211) | reload_hazard=25224 (small=4736) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38458
+[LIMINA] KK counts: barriers=686348 (breaks_pass=0 pregfx=353329 noop=333018) render_pass_starts=139655 restarts=0/0(flush) compute_during_pass=35267/38528(pregfx) color_map_nonidentity=0/1117240 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=64579 img->buf=21 img->img=750 buf->buf=85676
+[LIMINA]   unroll triggers: fan=38528 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38528 (fan=38528 strip=0 other=0)
+[LIMINA]   pass starts: fresh=916 seen+LOAD=113395 seen+CLEAR=16041 seen+DONTCARE=9303 (fresh small=215) | reload_hazard=25344 (small=4765) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38528
+[LIMINA] KK counts: barriers=687922 (breaks_pass=0 pregfx=353837 noop=334085) render_pass_starts=140081 restarts=0/0(flush) compute_during_pass=35325/38586(pregfx) color_map_nonidentity=0/1120648 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=64673 img->buf=21 img->img=750 buf->buf=85740
+[LIMINA]   unroll triggers: fan=38586 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38586 (fan=38586 strip=0 other=0)
+[LIMINA]   pass starts: fresh=918 seen+LOAD=113625 seen+CLEAR=16072 seen+DONTCARE=9465 (fresh small=215) | reload_hazard=25537 (small=4804) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38586
+[LIMINA] KK counts: barriers=689505 (breaks_pass=0 pregfx=354624 noop=334880) render_pass_starts=140498 restarts=0/0(flush) compute_during_pass=35439/38700(pregfx) color_map_nonidentity=0/1123984 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=64838 img->buf=21 img->img=750 buf->buf=85784
+[LIMINA]   unroll triggers: fan=38700 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38700 (fan=38700 strip=0 other=0)
+[LIMINA]   pass starts: fresh=918 seen+LOAD=113987 seen+CLEAR=16128 seen+DONTCARE=9465 (fresh small=215) | reload_hazard=25593 (small=4804) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38700
+[LIMINA-ALLOC-POOL] periodic render: live=33 peak=122 retired=1198 | size hiwater=5016 KiB (budget 4096 KiB, 91665 retirements) | peak ops/cmdbuf=302
+[LIMINA-ALLOC-POOL] periodic compute: live=19 peak=64 retired=358 | size hiwater=5208 KiB (budget 4096 KiB, 38962 retirements) | peak ops/cmdbuf=241
+[LIMINA-ALLOC-POOL] periodic tombstones=1556 use-after-destroy=0 | resets=90434/38586 (render/compute) unmatched-discharge=0
+[2026-09-02T01:04:52Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 0 at (2408.0,873.0) on a 3840x2160 scanout but the guest's cursor there sits at (2671,939) — 271.2 px off; captured=true, capture slot 0, unit sent (0.6271,0.4042); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:04:53Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 0 at (2450.0,864.0) on a 3840x2160 scanout but the guest's cursor there sits at (2671,939) — 233.4 px off; captured=true, capture slot 0, unit sent (0.6380,0.4000); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:05:02.695442Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 318), renders land in the surface directly
+[LIMINA-ALLOC-POOL] periodic render: live=33 peak=122 retired=1198 | size hiwater=5016 KiB (budget 4096 KiB, 91697 retirements) | peak ops/cmdbuf=302
+[LIMINA-ALLOC-POOL] periodic compute: live=18 peak=64 retired=359 | size hiwater=5208 KiB (budget 4096 KiB, 38983 retirements) | peak ops/cmdbuf=241
+[LIMINA-ALLOC-POOL] periodic tombstones=1557 use-after-destroy=0 | resets=90466/38606 (render/compute) unmatched-discharge=0
+[2026-09-02T01:05:02.741945Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 442), renders land in the surface directly
+[LIMINA-ALLOC-POOL] periodic render: live=25 peak=50 retired=104 | size hiwater=5208 KiB (budget 4096 KiB, 28967 retirements) | peak ops/cmdbuf=1188
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3816 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=15
+[LIMINA-ALLOC-POOL] periodic tombstones=104 use-after-destroy=0 | resets=28839/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8142 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8140/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8314 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8312/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 14 retirements) | peak ops/cmdbuf=81
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4184 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=72
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:05:03.024447Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2625x1725 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 460), renders land in the surface directly
+[KK-MODIFIER] EXPLICIT rowPitch 10500 unusable (minimum 10512, alignment 16); using the computed pitch
+[2026-09-02T01:05:03.104767Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 459), renders land in the surface directly
+[LIMINA] KK counts: barriers=691067 (breaks_pass=0 pregfx=355149 noop=335918) render_pass_starts=140936 restarts=0/0(flush) compute_during_pass=35505/38767(pregfx) color_map_nonidentity=0/1127488 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=64945 img->buf=21 img->img=752 buf->buf=85857
+[LIMINA]   unroll triggers: fan=38767 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38767 (fan=38767 strip=0 other=0)
+[LIMINA]   pass starts: fresh=935 seen+LOAD=114203 seen+CLEAR=16174 seen+DONTCARE=9623 (fresh small=222) | reload_hazard=25797 (small=4895) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38767
+[2026-09-02T01:05:03.242424Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 462), renders land in the surface directly
+[LIMINA] KK counts: barriers=692627 (breaks_pass=0 pregfx=355653 noop=336974) render_pass_starts=141376 restarts=0/0(flush) compute_during_pass=35567/38829(pregfx) color_map_nonidentity=0/1131008 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65026 img->buf=21 img->img=752 buf->buf=85899
+[LIMINA]   unroll triggers: fan=38829 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38829 (fan=38829 strip=0 other=0)
+[LIMINA]   pass starts: fresh=939 seen+LOAD=114417 seen+CLEAR=16209 seen+DONTCARE=9810 (fresh small=225) | reload_hazard=26019 (small=5020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38829
+[2026-09-02T01:05:03.464065Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 262), renders land in the surface directly
+[LIMINA] KK counts: barriers=694180 (breaks_pass=0 pregfx=356104 noop=338075) render_pass_starts=141823 restarts=0/0(flush) compute_during_pass=35624/38887(pregfx) color_map_nonidentity=0/1134584 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65103 img->buf=21 img->img=752 buf->buf=85946
+[LIMINA]   unroll triggers: fan=38887 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38887 (fan=38887 strip=0 other=0)
+[LIMINA]   pass starts: fresh=943 seen+LOAD=114628 seen+CLEAR=16243 seen+DONTCARE=10009 (fresh small=227) | reload_hazard=26252 (small=5138) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38887
+[LIMINA] KK counts: barriers=695720 (breaks_pass=0 pregfx=356591 noop=339129) render_pass_starts=142283 restarts=0/0(flush) compute_during_pass=35701/38967(pregfx) color_map_nonidentity=0/1138264 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65204 img->buf=21 img->img=754 buf->buf=85982
+[LIMINA]   unroll triggers: fan=38967 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=38967 (fan=38967 strip=0 other=0)
+[LIMINA]   pass starts: fresh=944 seen+LOAD=114868 seen+CLEAR=16275 seen+DONTCARE=10195 (fresh small=228) | reload_hazard=26470 (small=5256) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      38967
+[LIMINA] KK counts: barriers=697268 (breaks_pass=0 pregfx=357012 noop=340256) render_pass_starts=142735 restarts=0/0(flush) compute_during_pass=35755/39021(pregfx) color_map_nonidentity=0/1141880 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65274 img->buf=21 img->img=754 buf->buf=86021
+[LIMINA]   unroll triggers: fan=39021 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39021 (fan=39021 strip=0 other=0)
+[LIMINA]   pass starts: fresh=945 seen+LOAD=115074 seen+CLEAR=16309 seen+DONTCARE=10406 (fresh small=229) | reload_hazard=26715 (small=5383) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39021
+[LIMINA] KK counts: barriers=698831 (breaks_pass=0 pregfx=357415 noop=341415) render_pass_starts=143172 restarts=0/0(flush) compute_during_pass=35793/39059(pregfx) color_map_nonidentity=0/1145376 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65346 img->buf=21 img->img=754 buf->buf=86083
+[LIMINA]   unroll triggers: fan=39059 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39059 (fan=39059 strip=0 other=0)
+[LIMINA]   pass starts: fresh=945 seen+LOAD=115248 seen+CLEAR=16331 seen+DONTCARE=10648 (fresh small=229) | reload_hazard=26979 (small=5541) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39059
+[LIMINA] KK counts: barriers=700411 (breaks_pass=0 pregfx=357884 noop=342526) render_pass_starts=143592 restarts=0/0(flush) compute_during_pass=35839/39105(pregfx) color_map_nonidentity=0/1148736 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65424 img->buf=21 img->img=754 buf->buf=86164
+[LIMINA]   unroll triggers: fan=39105 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39105 (fan=39105 strip=0 other=0)
+[LIMINA]   pass starts: fresh=947 seen+LOAD=115445 seen+CLEAR=16353 seen+DONTCARE=10847 (fresh small=231) | reload_hazard=27200 (small=5668) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39105
+[LIMINA] KK counts: barriers=701977 (breaks_pass=0 pregfx=358383 noop=343593) render_pass_starts=144026 restarts=0/0(flush) compute_during_pass=35900/39166(pregfx) color_map_nonidentity=0/1152208 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65505 img->buf=21 img->img=754 buf->buf=86233
+[LIMINA]   unroll triggers: fan=39166 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39166 (fan=39166 strip=0 other=0)
+[LIMINA]   pass starts: fresh=948 seen+LOAD=115672 seen+CLEAR=16390 seen+DONTCARE=11016 (fresh small=232) | reload_hazard=27406 (small=5777) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39166
+[LIMINA] KK counts: barriers=703544 (breaks_pass=0 pregfx=359015 noop=344528) render_pass_starts=144459 restarts=0/0(flush) compute_during_pass=35992/39258(pregfx) color_map_nonidentity=0/1155672 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65644 img->buf=21 img->img=754 buf->buf=86285
+[LIMINA]   unroll triggers: fan=39258 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39258 (fan=39258 strip=0 other=0)
+[LIMINA]   pass starts: fresh=949 seen+LOAD=115952 seen+CLEAR=16445 seen+DONTCARE=11113 (fresh small=233) | reload_hazard=27558 (small=5838) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39258
+[2026-09-02T01:05:04.859351Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 18), renders land in the surface directly
+[LIMINA] KK counts: barriers=705104 (breaks_pass=0 pregfx=359563 noop=345540) render_pass_starts=144899 restarts=0/0(flush) compute_during_pass=36068/39334(pregfx) color_map_nonidentity=0/1159192 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65754 img->buf=21 img->img=754 buf->buf=86342
+[LIMINA]   unroll triggers: fan=39334 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39334 (fan=39334 strip=0 other=0)
+[LIMINA]   pass starts: fresh=949 seen+LOAD=116208 seen+CLEAR=16495 seen+DONTCARE=11247 (fresh small=233) | reload_hazard=27742 (small=5924) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39334
+[LIMINA] KK counts: barriers=706672 (breaks_pass=0 pregfx=360134 noop=346538) render_pass_starts=145331 restarts=0/0(flush) compute_during_pass=36144/39410(pregfx) color_map_nonidentity=0/1162648 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65866 img->buf=21 img->img=754 buf->buf=86409
+[LIMINA]   unroll triggers: fan=39410 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39410 (fan=39410 strip=0 other=0)
+[LIMINA]   pass starts: fresh=949 seen+LOAD=116451 seen+CLEAR=16544 seen+DONTCARE=11386 (fresh small=233) | reload_hazard=27930 (small=6015) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39410
+[2026-09-02T01:05:05.243239Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 321), renders land in the surface directly
+[LIMINA] KK counts: barriers=708232 (breaks_pass=0 pregfx=360751 noop=347480) render_pass_starts=145771 restarts=0/0(flush) compute_during_pass=36238/39504(pregfx) color_map_nonidentity=0/1166168 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=65989 img->buf=21 img->img=754 buf->buf=86452
+[LIMINA]   unroll triggers: fan=39504 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39504 (fan=39504 strip=0 other=0)
+[LIMINA]   pass starts: fresh=951 seen+LOAD=116735 seen+CLEAR=16602 seen+DONTCARE=11483 (fresh small=234) | reload_hazard=28085 (small=6076) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39504
+[LIMINA] KK counts: barriers=709797 (breaks_pass=0 pregfx=361336 noop=348461) render_pass_starts=146206 restarts=0/0(flush) compute_during_pass=36318/39584(pregfx) color_map_nonidentity=0/1169648 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66105 img->buf=21 img->img=754 buf->buf=86511
+[LIMINA]   unroll triggers: fan=39584 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39584 (fan=39584 strip=0 other=0)
+[LIMINA]   pass starts: fresh=952 seen+LOAD=116989 seen+CLEAR=16654 seen+DONTCARE=11610 (fresh small=235) | reload_hazard=28264 (small=6155) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39584
+[LIMINA] KK counts: barriers=711358 (breaks_pass=0 pregfx=361863 noop=349494) render_pass_starts=146645 restarts=0/0(flush) compute_during_pass=36389/39655(pregfx) color_map_nonidentity=0/1173160 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66203 img->buf=21 img->img=754 buf->buf=86556
+[LIMINA]   unroll triggers: fan=39655 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39655 (fan=39655 strip=0 other=0)
+[LIMINA]   pass starts: fresh=953 seen+LOAD=117228 seen+CLEAR=16696 seen+DONTCARE=11768 (fresh small=236) | reload_hazard=28464 (small=6253) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39655
+[LIMINA] KK counts: barriers=712931 (breaks_pass=0 pregfx=362215 noop=350715) render_pass_starts=147072 restarts=0/0(flush) compute_during_pass=36409/39675(pregfx) color_map_nonidentity=0/1176576 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66240 img->buf=21 img->img=754 buf->buf=86629
+[LIMINA]   unroll triggers: fan=39675 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39675 (fan=39675 strip=0 other=0)
+[LIMINA]   pass starts: fresh=954 seen+LOAD=117359 seen+CLEAR=16709 seen+DONTCARE=12050 (fresh small=237) | reload_hazard=28759 (small=6422) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39675
+[2026-09-02T01:05:05Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 0 at (1493.5,412.8) on a 3840x2160 scanout but the guest's cursor there sits at (1490,412) — 3.6 px off; captured=false, capture slot 0, unit sent (0.3889,0.1911); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[LIMINA] KK counts: barriers=714483 (breaks_pass=0 pregfx=362548 noop=351934) render_pass_starts=147520 restarts=0/0(flush) compute_during_pass=36439/39705(pregfx) color_map_nonidentity=0/1180160 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66288 img->buf=21 img->img=754 buf->buf=86680
+[LIMINA]   unroll triggers: fan=39705 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39705 (fan=39705 strip=0 other=0)
+[LIMINA]   pass starts: fresh=955 seen+LOAD=117518 seen+CLEAR=16724 seen+DONTCARE=12323 (fresh small=238) | reload_hazard=29047 (small=6582) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39705
+[LIMINA] KK counts: barriers=716027 (breaks_pass=0 pregfx=362885 noop=353141) render_pass_starts=147976 restarts=0/0(flush) compute_during_pass=36478/39744(pregfx) color_map_nonidentity=0/1183808 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66342 img->buf=21 img->img=754 buf->buf=86734
+[LIMINA]   unroll triggers: fan=39744 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39744 (fan=39744 strip=0 other=0)
+[LIMINA]   pass starts: fresh=955 seen+LOAD=117695 seen+CLEAR=16741 seen+DONTCARE=12585 (fresh small=238) | reload_hazard=29326 (small=6744) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39744
+[LIMINA] KK counts: barriers=717564 (breaks_pass=0 pregfx=363140 noop=354423) render_pass_starts=148439 restarts=0/0(flush) compute_during_pass=36499/39765(pregfx) color_map_nonidentity=0/1187512 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66378 img->buf=21 img->img=754 buf->buf=86779
+[LIMINA]   unroll triggers: fan=39765 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39765 (fan=39765 strip=0 other=0)
+[LIMINA]   pass starts: fresh=955 seen+LOAD=117843 seen+CLEAR=16755 seen+DONTCARE=12886 (fresh small=238) | reload_hazard=29641 (small=6924) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39765
+[LIMINA] KK counts: barriers=719103 (breaks_pass=0 pregfx=363453 noop=355649) render_pass_starts=148900 restarts=0/0(flush) compute_during_pass=36535/39801(pregfx) color_map_nonidentity=0/1191200 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66425 img->buf=21 img->img=754 buf->buf=86818
+[LIMINA]   unroll triggers: fan=39801 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39801 (fan=39801 strip=0 other=0)
+[LIMINA]   pass starts: fresh=955 seen+LOAD=118017 seen+CLEAR=16773 seen+DONTCARE=13155 (fresh small=238) | reload_hazard=29928 (small=7086) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39801
+[LIMINA] KK counts: barriers=720656 (breaks_pass=0 pregfx=364004 noop=356651) render_pass_starts=149347 restarts=0/0(flush) compute_during_pass=36628/39894(pregfx) color_map_nonidentity=0/1194776 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66539 img->buf=21 img->img=754 buf->buf=86864
+[LIMINA]   unroll triggers: fan=39894 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39894 (fan=39894 strip=0 other=0)
+[LIMINA]   pass starts: fresh=955 seen+LOAD=118279 seen+CLEAR=16798 seen+DONTCARE=13315 (fresh small=238) | reload_hazard=30113 (small=7184) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39894
+[2026-09-02T01:05:06.793059Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 46), renders land in the surface directly
+[2026-09-02T01:05:06Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 0 at (1155.5,341.5) on a 3840x2160 scanout but the guest's cursor there sits at (1152,340) — 3.8 px off; captured=true, capture slot 0, unit sent (0.3009,0.1581); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[LIMINA] KK counts: barriers=722185 (breaks_pass=0 pregfx=364383 noop=357802) render_pass_starts=149818 restarts=0/0(flush) compute_during_pass=36696/39962(pregfx) color_map_nonidentity=0/1198544 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66608 img->buf=21 img->img=754 buf->buf=86903
+[LIMINA]   unroll triggers: fan=39962 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=39962 (fan=39962 strip=0 other=0)
+[LIMINA]   pass starts: fresh=958 seen+LOAD=118496 seen+CLEAR=16809 seen+DONTCARE=13554 (fresh small=241) | reload_hazard=30363 (small=7356) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      39962
+[LIMINA] KK counts: barriers=723711 (breaks_pass=0 pregfx=364772 noop=358938) render_pass_starts=150292 restarts=0/0(flush) compute_during_pass=36771/40037(pregfx) color_map_nonidentity=0/1202336 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66682 img->buf=21 img->img=754 buf->buf=86920
+[LIMINA]   unroll triggers: fan=40037 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40037 (fan=40037 strip=0 other=0)
+[LIMINA]   pass starts: fresh=958 seen+LOAD=118720 seen+CLEAR=16817 seen+DONTCARE=13797 (fresh small=241) | reload_hazard=30614 (small=7553) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40037
+[LIMINA] KK counts: barriers=725268 (breaks_pass=0 pregfx=365274 noop=359993) render_pass_starts=150735 restarts=0/0(flush) compute_during_pass=36856/40122(pregfx) color_map_nonidentity=0/1205880 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66772 img->buf=21 img->img=754 buf->buf=86982
+[LIMINA]   unroll triggers: fan=40122 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40122 (fan=40122 strip=0 other=0)
+[LIMINA]   pass starts: fresh=958 seen+LOAD=118959 seen+CLEAR=16826 seen+DONTCARE=13992 (fresh small=241) | reload_hazard=30818 (small=7712) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40122
+[LIMINA] KK counts: barriers=726832 (breaks_pass=0 pregfx=365973 noop=360858) render_pass_starts=151171 restarts=0/0(flush) compute_during_pass=36991/40257(pregfx) color_map_nonidentity=0/1209368 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66904 img->buf=21 img->img=754 buf->buf=87038
+[LIMINA]   unroll triggers: fan=40257 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40257 (fan=40257 strip=0 other=0)
+[LIMINA]   pass starts: fresh=958 seen+LOAD=119285 seen+CLEAR=16842 seen+DONTCARE=14086 (fresh small=241) | reload_hazard=30928 (small=7787) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40257
+[LIMINA] KK counts: barriers=728373 (breaks_pass=0 pregfx=366446 noop=361926) render_pass_starts=151630 restarts=0/0(flush) compute_during_pass=37078/40344(pregfx) color_map_nonidentity=0/1213040 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=66996 img->buf=21 img->img=754 buf->buf=87067
+[LIMINA]   unroll triggers: fan=40344 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40344 (fan=40344 strip=0 other=0)
+[LIMINA]   pass starts: fresh=958 seen+LOAD=119529 seen+CLEAR=16851 seen+DONTCARE=14292 (fresh small=241) | reload_hazard=31143 (small=7952) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40344
+[LIMINA] KK counts: barriers=729916 (breaks_pass=0 pregfx=366920 noop=362995) render_pass_starts=152087 restarts=0/0(flush) compute_during_pass=37166/40432(pregfx) color_map_nonidentity=0/1216696 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67082 img->buf=21 img->img=754 buf->buf=87104
+[LIMINA]   unroll triggers: fan=40432 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40432 (fan=40432 strip=0 other=0)
+[LIMINA]   pass starts: fresh=958 seen+LOAD=119770 seen+CLEAR=16857 seen+DONTCARE=14502 (fresh small=241) | reload_hazard=31359 (small=8120) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40432
+[LIMINA] KK counts: barriers=731459 (breaks_pass=0 pregfx=367358 noop=364100) render_pass_starts=152544 restarts=0/0(flush) compute_during_pass=37240/40506(pregfx) color_map_nonidentity=0/1220352 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67157 img->buf=21 img->img=754 buf->buf=87141
+[LIMINA]   unroll triggers: fan=40506 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40506 (fan=40506 strip=0 other=0)
+[LIMINA]   pass starts: fresh=958 seen+LOAD=119996 seen+CLEAR=16867 seen+DONTCARE=14723 (fresh small=241) | reload_hazard=31590 (small=8294) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40506
+[LIMINA] KK counts: barriers=733011 (breaks_pass=0 pregfx=367694 noop=365316) render_pass_starts=152992 restarts=0/0(flush) compute_during_pass=37270/40536(pregfx) color_map_nonidentity=0/1223936 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67202 img->buf=21 img->img=754 buf->buf=87179
+[LIMINA]   unroll triggers: fan=40536 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40536 (fan=40536 strip=0 other=0)
+[LIMINA]   pass starts: fresh=963 seen+LOAD=120153 seen+CLEAR=16880 seen+DONTCARE=14996 (fresh small=246) | reload_hazard=31876 (small=8513) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40536
+[LIMINA] KK counts: barriers=734566 (breaks_pass=0 pregfx=368032 noop=366534) render_pass_starts=153437 restarts=0/0(flush) compute_during_pass=37299/40565(pregfx) color_map_nonidentity=0/1227496 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67244 img->buf=21 img->img=754 buf->buf=87232
+[LIMINA]   unroll triggers: fan=40565 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40565 (fan=40565 strip=0 other=0)
+[LIMINA]   pass starts: fresh=964 seen+LOAD=120304 seen+CLEAR=16893 seen+DONTCARE=15275 (fresh small=247) | reload_hazard=32168 (small=8738) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40565
+[2026-09-02T01:05:07.874040Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 136), renders land in the surface directly
+[LIMINA] KK counts: barriers=736147 (breaks_pass=0 pregfx=368338 noop=367808) render_pass_starts=153856 restarts=0/0(flush) compute_during_pass=37299/40565(pregfx) color_map_nonidentity=0/1230848 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67271 img->buf=21 img->img=754 buf->buf=87302
+[LIMINA]   unroll triggers: fan=40565 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40565 (fan=40565 strip=0 other=0)
+[LIMINA]   pass starts: fresh=967 seen+LOAD=120399 seen+CLEAR=16902 seen+DONTCARE=15588 (fresh small=250) | reload_hazard=32490 (small=8986) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40565
+[LIMINA] KK counts: barriers=737715 (breaks_pass=0 pregfx=368607 noop=369107) render_pass_starts=154288 restarts=0/0(flush) compute_during_pass=37299/40565(pregfx) color_map_nonidentity=0/1234304 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67307 img->buf=21 img->img=754 buf->buf=87353
+[LIMINA]   unroll triggers: fan=40565 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40565 (fan=40565 strip=0 other=0)
+[LIMINA]   pass starts: fresh=967 seen+LOAD=120494 seen+CLEAR=16904 seen+DONTCARE=15923 (fresh small=250) | reload_hazard=32827 (small=9256) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40565
+[LIMINA] KK counts: barriers=739296 (breaks_pass=0 pregfx=368933 noop=370362) render_pass_starts=154707 restarts=0/0(flush) compute_during_pass=37304/40570(pregfx) color_map_nonidentity=0/1237656 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67373 img->buf=21 img->img=754 buf->buf=87422
+[LIMINA]   unroll triggers: fan=40570 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40570 (fan=40570 strip=0 other=0)
+[LIMINA]   pass starts: fresh=967 seen+LOAD=120600 seen+CLEAR=16908 seen+DONTCARE=16232 (fresh small=250) | reload_hazard=33140 (small=9505) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40570
+[LIMINA] KK counts: barriers=740844 (breaks_pass=0 pregfx=369615 noop=371228) render_pass_starts=155159 restarts=0/0(flush) compute_during_pass=37432/40698(pregfx) color_map_nonidentity=0/1241272 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67488 img->buf=21 img->img=754 buf->buf=87476
+[LIMINA]   unroll triggers: fan=40699 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40699 (fan=40699 strip=0 other=0)
+[LIMINA]   pass starts: fresh=967 seen+LOAD=120920 seen+CLEAR=16923 seen+DONTCARE=16351 (fresh small=250) | reload_hazard=33274 (small=9600) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40699
+[2026-09-02T01:05:08.592613Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 374), renders land in the surface directly
+[LIMINA] KK counts: barriers=742371 (breaks_pass=0 pregfx=370413 noop=371958) render_pass_starts=155632 restarts=0/0(flush) compute_during_pass=37614/40880(pregfx) color_map_nonidentity=0/1245056 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67626 img->buf=21 img->img=754 buf->buf=87500
+[LIMINA]   unroll triggers: fan=40880 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=40880 (fan=40880 strip=0 other=0)
+[LIMINA]   pass starts: fresh=967 seen+LOAD=121326 seen+CLEAR=16937 seen+DONTCARE=16401 (fresh small=250) | reload_hazard=33338 (small=9639) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      40880
+[LIMINA] KK counts: barriers=743900 (breaks_pass=0 pregfx=371107 noop=372793) render_pass_starts=156103 restarts=0/0(flush) compute_during_pass=37767/41033(pregfx) color_map_nonidentity=0/1248824 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67738 img->buf=21 img->img=754 buf->buf=87546
+[LIMINA]   unroll triggers: fan=41033 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41033 (fan=41033 strip=0 other=0)
+[LIMINA]   pass starts: fresh=967 seen+LOAD=121677 seen+CLEAR=16945 seen+DONTCARE=16513 (fresh small=250) | reload_hazard=33458 (small=9707) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41033
+[LIMINA] KK counts: barriers=745415 (breaks_pass=0 pregfx=371521 noop=373893) render_pass_starts=156588 restarts=0/0(flush) compute_during_pass=37850/41116(pregfx) color_map_nonidentity=0/1252704 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67806 img->buf=21 img->img=754 buf->buf=87572
+[LIMINA]   unroll triggers: fan=41116 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41116 (fan=41116 strip=0 other=0)
+[LIMINA]   pass starts: fresh=970 seen+LOAD=121911 seen+CLEAR=16947 seen+DONTCARE=16760 (fresh small=253) | reload_hazard=33707 (small=9862) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41116
+[LIMINA] KK counts: barriers=746935 (breaks_pass=0 pregfx=371953 noop=374981) render_pass_starts=157068 restarts=0/0(flush) compute_during_pass=37935/41201(pregfx) color_map_nonidentity=0/1256544 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=67878 img->buf=21 img->img=754 buf->buf=87594
+[LIMINA]   unroll triggers: fan=41201 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41201 (fan=41201 strip=0 other=0)
+[LIMINA]   pass starts: fresh=970 seen+LOAD=122148 seen+CLEAR=16948 seen+DONTCARE=17002 (fresh small=253) | reload_hazard=33950 (small=10008) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41201
+[2026-09-02T01:05:09Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 0 at (1094.0,1026.0) on a 3840x2160 scanout but the guest's cursor there sits at (1128,1020) — 34.5 px off; captured=true, capture slot 0, unit sent (0.2849,0.4750); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[LIMINA] KK counts: barriers=748658 (breaks_pass=0 pregfx=372711 noop=375946) render_pass_starts=157345 restarts=0/0(flush) compute_during_pass=37940/41206(pregfx) color_map_nonidentity=0/1258760 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=68047 img->buf=21 img->img=754 buf->buf=87811
+[LIMINA]   unroll triggers: fan=41206 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41206 (fan=41206 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=122300 seen+CLEAR=16966 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34071 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41206
+[LIMINA] KK counts: barriers=750448 (breaks_pass=0 pregfx=373706 noop=376742) render_pass_starts=157555 restarts=0/0(flush) compute_during_pass=37955/41221(pregfx) color_map_nonidentity=0/1260440 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=68262 img->buf=21 img->img=754 buf->buf=88122
+[LIMINA]   unroll triggers: fan=41221 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41221 (fan=41221 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=122481 seen+CLEAR=16994 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34099 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41221
+[2026-09-02T01:05:11.558760Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 437), renders land in the surface directly
+[LIMINA] KK counts: barriers=752094 (breaks_pass=0 pregfx=374538 noop=377555) render_pass_starts=157909 restarts=0/0(flush) compute_during_pass=38039/41305(pregfx) color_map_nonidentity=0/1263272 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=68409 img->buf=21 img->img=754 buf->buf=88283
+[LIMINA]   unroll triggers: fan=41305 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41305 (fan=41305 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=122780 seen+CLEAR=17050 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34155 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41305
+[LIMINA] KK counts: barriers=753729 (breaks_pass=0 pregfx=375359 noop=378369) render_pass_starts=158274 restarts=0/0(flush) compute_during_pass=38128/41394(pregfx) color_map_nonidentity=0/1266192 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=68553 img->buf=21 img->img=754 buf->buf=88423
+[LIMINA]   unroll triggers: fan=41394 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41394 (fan=41394 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=123093 seen+CLEAR=17102 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34207 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41394
+[LIMINA-ALLOC-POOL] periodic render: live=32 peak=122 retired=1261 | size hiwater=5016 KiB (budget 4096 KiB, 98817 retirements) | peak ops/cmdbuf=302
+[LIMINA-ALLOC-POOL] periodic compute: live=20 peak=64 retired=378 | size hiwater=5208 KiB (budget 4096 KiB, 43157 retirements) | peak ops/cmdbuf=241
+[LIMINA-ALLOC-POOL] periodic tombstones=1639 use-after-destroy=0 | resets=97524/42760 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=54 retired=165 | size hiwater=5208 KiB (budget 4096 KiB, 39095 retirements) | peak ops/cmdbuf=1188
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3816 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=15
+[LIMINA-ALLOC-POOL] periodic tombstones=165 use-after-destroy=0 | resets=38923/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8326 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8324/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8510 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8508/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=755376 (breaks_pass=0 pregfx=376187 noop=379188) render_pass_starts=158627 restarts=0/0(flush) compute_during_pass=38211/41477(pregfx) color_map_nonidentity=0/1269016 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=68701 img->buf=21 img->img=754 buf->buf=88566
+[LIMINA]   unroll triggers: fan=41477 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41477 (fan=41477 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=123396 seen+CLEAR=17152 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34257 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41477
+[LIMINA] KK counts: barriers=757016 (breaks_pass=0 pregfx=377010 noop=380005) render_pass_starts=158987 restarts=0/0(flush) compute_during_pass=38294/41560(pregfx) color_map_nonidentity=0/1271896 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=68845 img->buf=21 img->img=754 buf->buf=88700
+[LIMINA]   unroll triggers: fan=41560 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41560 (fan=41560 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=123703 seen+CLEAR=17205 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34310 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41560
+[LIMINA] KK counts: barriers=758669 (breaks_pass=0 pregfx=377840 noop=380828) render_pass_starts=159334 restarts=0/0(flush) compute_during_pass=38373/41639(pregfx) color_map_nonidentity=0/1274672 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=68993 img->buf=21 img->img=754 buf->buf=88855
+[LIMINA]   unroll triggers: fan=41639 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41639 (fan=41639 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=124001 seen+CLEAR=17254 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34359 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41639
+[LIMINA] KK counts: barriers=760301 (breaks_pass=0 pregfx=378653 noop=381647) render_pass_starts=159702 restarts=0/0(flush) compute_during_pass=38459/41725(pregfx) color_map_nonidentity=0/1277616 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=69137 img->buf=21 img->img=754 buf->buf=88979
+[LIMINA]   unroll triggers: fan=41725 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41725 (fan=41725 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=124315 seen+CLEAR=17308 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34413 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41725
+[LIMINA] KK counts: barriers=761956 (breaks_pass=0 pregfx=379492 noop=382463) render_pass_starts=160047 restarts=0/0(flush) compute_during_pass=38539/41805(pregfx) color_map_nonidentity=0/1280376 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=69288 img->buf=21 img->img=754 buf->buf=89135
+[LIMINA]   unroll triggers: fan=41805 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41805 (fan=41805 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=124613 seen+CLEAR=17355 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34460 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41805
+[LIMINA] KK counts: barriers=763598 (breaks_pass=0 pregfx=380321 noop=383276) render_pass_starts=160405 restarts=0/0(flush) compute_during_pass=38624/41890(pregfx) color_map_nonidentity=0/1283240 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=69436 img->buf=21 img->img=754 buf->buf=89269
+[LIMINA]   unroll triggers: fan=41890 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41890 (fan=41890 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=124921 seen+CLEAR=17405 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34510 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41890
+[LIMINA] KK counts: barriers=765239 (breaks_pass=0 pregfx=381150 noop=384088) render_pass_starts=160764 restarts=0/0(flush) compute_during_pass=38708/41974(pregfx) color_map_nonidentity=0/1286112 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=69580 img->buf=21 img->img=754 buf->buf=89407
+[LIMINA]   unroll triggers: fan=41974 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=41974 (fan=41974 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=125229 seen+CLEAR=17456 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34561 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      41974
+[LIMINA] KK counts: barriers=766975 (breaks_pass=0 pregfx=382063 noop=384911) render_pass_starts=161028 restarts=0/0(flush) compute_during_pass=38742/42008(pregfx) color_map_nonidentity=0/1288224 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=69773 img->buf=21 img->img=754 buf->buf=89637
+[LIMINA]   unroll triggers: fan=42008 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42008 (fan=42008 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=125453 seen+CLEAR=17496 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34601 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42008
+[2026-09-02T01:05:18.434519Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA] KK counts: barriers=768778 (breaks_pass=0 pregfx=383061 noop=385716) render_pass_starts=161225 restarts=0/0(flush) compute_during_pass=38747/42013(pregfx) color_map_nonidentity=0/1289800 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=69993 img->buf=21 img->img=754 buf->buf=89944
+[LIMINA]   unroll triggers: fan=42013 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42013 (fan=42013 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=125623 seen+CLEAR=17523 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34628 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42013
+[LIMINA] KK counts: barriers=770583 (breaks_pass=0 pregfx=384067 noop=386515) render_pass_starts=161420 restarts=0/0(flush) compute_during_pass=38751/42017(pregfx) color_map_nonidentity=0/1291360 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=70222 img->buf=21 img->img=754 buf->buf=90243
+[LIMINA]   unroll triggers: fan=42017 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42017 (fan=42017 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=125793 seen+CLEAR=17548 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34653 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42017
+[LIMINA] KK counts: barriers=772380 (breaks_pass=0 pregfx=385066 noop=387314) render_pass_starts=161623 restarts=0/0(flush) compute_during_pass=38761/42027(pregfx) color_map_nonidentity=0/1292984 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=70449 img->buf=21 img->img=754 buf->buf=90543
+[LIMINA]   unroll triggers: fan=42027 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42027 (fan=42027 strip=0 other=0)
+[LIMINA]   pass starts: fresh=974 seen+LOAD=125969 seen+CLEAR=17574 seen+DONTCARE=17105 (fresh small=253) | reload_hazard=34679 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42027
+[2026-09-02T01:05:24.273838Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 461), renders land in the surface directly
+[LIMINA-ALLOC-POOL] periodic render: live=20 peak=122 retired=1284 | size hiwater=5016 KiB (budget 4096 KiB, 101042 retirements) | peak ops/cmdbuf=302
+[LIMINA-ALLOC-POOL] periodic compute: live=9 peak=64 retired=391 | size hiwater=5208 KiB (budget 4096 KiB, 44273 retirements) | peak ops/cmdbuf=241
+[LIMINA-ALLOC-POOL] periodic tombstones=1675 use-after-destroy=0 | resets=99738/43876 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=54 retired=165 | size hiwater=5208 KiB (budget 4096 KiB, 39927 retirements) | peak ops/cmdbuf=1188
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3816 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=15
+[LIMINA-ALLOC-POOL] periodic tombstones=165 use-after-destroy=0 | resets=39755/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8486 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8484/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:05:24.278761Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 382), renders land in the surface directly
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8696 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8694/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=774104 (breaks_pass=0 pregfx=385978 noop=388125) render_pass_starts=161899 restarts=0/0(flush) compute_during_pass=38803/42069(pregfx) color_map_nonidentity=0/1295192 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=70650 img->buf=21 img->img=754 buf->buf=90766
+[LIMINA]   unroll triggers: fan=42069 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42069 (fan=42069 strip=0 other=0)
+[LIMINA]   pass starts: fresh=975 seen+LOAD=126193 seen+CLEAR=17621 seen+DONTCARE=17110 (fresh small=253) | reload_hazard=34731 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42069
+[LIMINA] KK counts: barriers=775716 (breaks_pass=0 pregfx=386773 noop=388942) render_pass_starts=162287 restarts=0/0(flush) compute_during_pass=38892/42158(pregfx) color_map_nonidentity=0/1298296 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=70794 img->buf=21 img->img=754 buf->buf=90878
+[LIMINA]   unroll triggers: fan=42158 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42158 (fan=42158 strip=0 other=0)
+[LIMINA]   pass starts: fresh=975 seen+LOAD=126513 seen+CLEAR=17689 seen+DONTCARE=17110 (fresh small=253) | reload_hazard=34799 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42158
+[LIMINA] KK counts: barriers=777329 (breaks_pass=0 pregfx=387558 noop=389770) render_pass_starts=162674 restarts=0/0(flush) compute_during_pass=38983/42249(pregfx) color_map_nonidentity=0/1301392 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=70951 img->buf=21 img->img=754 buf->buf=90981
+[LIMINA]   unroll triggers: fan=42249 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42249 (fan=42249 strip=0 other=0)
+[LIMINA]   pass starts: fresh=975 seen+LOAD=126839 seen+CLEAR=17750 seen+DONTCARE=17110 (fresh small=253) | reload_hazard=34860 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42249
+[2026-09-02T01:05:26.751889Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 410), renders land in the surface directly
+[LIMINA] KK counts: barriers=778937 (breaks_pass=0 pregfx=388327 noop=390609) render_pass_starts=163066 restarts=0/0(flush) compute_during_pass=39072/42338(pregfx) color_map_nonidentity=0/1304528 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71093 img->buf=21 img->img=754 buf->buf=91092
+[LIMINA]   unroll triggers: fan=42338 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42338 (fan=42338 strip=0 other=0)
+[LIMINA]   pass starts: fresh=976 seen+LOAD=127159 seen+CLEAR=17821 seen+DONTCARE=17110 (fresh small=253) | reload_hazard=34931 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42338
+[LIMINA] KK counts: barriers=780710 (breaks_pass=0 pregfx=389299 noop=391410) render_pass_starts=163293 restarts=0/0(flush) compute_during_pass=39093/42362(pregfx) color_map_nonidentity=0/1306344 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71318 img->buf=21 img->img=754 buf->buf=91376
+[LIMINA]   unroll triggers: fan=42362 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42362 (fan=42362 strip=0 other=0)
+[LIMINA]   pass starts: fresh=977 seen+LOAD=127351 seen+CLEAR=17854 seen+DONTCARE=17111 (fresh small=253) | reload_hazard=34965 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42362
+[2026-09-02T01:05:32.482615Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: cs decoder: ring FATAL set at vn_cs_decoder_set_fatal:69 (context 3 [synoik])
+[2026-09-02T01:05:33.554074Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 443), renders land in the surface directly
+[2026-09-02T01:05:33.554303Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 463), renders land in the surface directly
+[2026-09-02T01:05:33.554413Z WARN  krun_rutabaga_gfx::virgl_renderer] virgl: iosurface scanout: 2048x1296 PIPE_FORMAT_B8G8R8A8_UNORM EGL-backed (IOSurface id 29), renders land in the surface directly
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8548 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8546/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8766 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8764/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=17 peak=122 retired=1315 | size hiwater=5016 KiB (budget 4096 KiB, 102272 retirements) | peak ops/cmdbuf=302
+[LIMINA-ALLOC-POOL] periodic compute: live=8 peak=64 retired=405 | size hiwater=5208 KiB (budget 4096 KiB, 44759 retirements) | peak ops/cmdbuf=241
+[LIMINA-ALLOC-POOL] periodic tombstones=1720 use-after-destroy=0 | resets=100941/44349 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] teardown render: live=8 peak=54 retired=165 | size hiwater=5208 KiB (budget 4096 KiB, 40224 retirements) | peak ops/cmdbuf=1188
+[LIMINA-ALLOC-POOL] teardown compute: live=1 peak=1 retired=0 | size hiwater=3816 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=15
+[LIMINA-ALLOC-POOL] teardown tombstones=165 use-after-destroy=0 | resets=40051/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:05:36.117503Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 3 [synoik] destroyed — lifetime 944 charges totalling 2.8 GiB, peak 1.1 GiB
+[2026-09-02T01:05:36.348313Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: memory_budget ctx 13 heap 0 own=4259840 others=1311211520 cap=51539607552 ours=50228396032 driver=2597437440 final=2597437440 clamped=1
+[LIMINA-ALLOC-POOL] teardown render: live=0 peak=0 retired=0 | size hiwater=0 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=0
+[LIMINA-ALLOC-POOL] teardown compute: live=0 peak=0 retired=0 | size hiwater=0 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=0
+[LIMINA-ALLOC-POOL] teardown tombstones=0 use-after-destroy=0 | resets=0/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:05:36.376543Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 13 [CanvasRenderer] destroyed — lifetime 2 charges totalling 4.1 MiB, peak 4.1 MiB
+[LIMINA] KK counts: barriers=782456 (breaks_pass=0 pregfx=390194 noop=392261) render_pass_starts=163547 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1308376 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71487 img->buf=21 img->img=754 buf->buf=91748
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=127545 seen+CLEAR=17905 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35023 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA] KK counts: barriers=784246 (breaks_pass=0 pregfx=390932 noop=393313) render_pass_starts=163757 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1310056 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71487 img->buf=21 img->img=754 buf->buf=92592
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=127650 seen+CLEAR=18010 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35128 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[2026-09-02T01:05:45Z WARN  limina::window::input] pointer: the host pointer stopped wearing the guest's cursor — re-worn (was wearing some other shape); if this repeats while the hand is still, the guest's cursor disappears whenever the pointer rests
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8712 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8710/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8946 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8944/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=786035 (breaks_pass=0 pregfx=391669 noop=394365) render_pass_starts=163968 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1311744 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71488 img->buf=21 img->img=754 buf->buf=93432
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=127756 seen+CLEAR=18115 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35233 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 8886 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=8884/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9088 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9086/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=787825 (breaks_pass=0 pregfx=392406 noop=395418) render_pass_starts=164178 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1313424 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71488 img->buf=21 img->img=754 buf->buf=94275
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=127861 seen+CLEAR=18220 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35338 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA] KK counts: barriers=789614 (breaks_pass=0 pregfx=393142 noop=396471) render_pass_starts=164389 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1315112 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71488 img->buf=21 img->img=754 buf->buf=95116
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=127966 seen+CLEAR=18326 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35444 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9044 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9042/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9236 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9234/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=791406 (breaks_pass=0 pregfx=393893 noop=397512) render_pass_starts=164597 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1316776 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71501 img->buf=21 img->img=754 buf->buf=95948
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=128070 seen+CLEAR=18430 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35548 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9410 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9408/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:06:18.535679Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA] KK counts: barriers=793196 (breaks_pass=0 pregfx=394629 noop=398566) render_pass_starts=164807 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1318456 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71501 img->buf=21 img->img=754 buf->buf=96790
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=128175 seen+CLEAR=18535 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35653 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9564 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9562/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9692 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9690/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=794985 (breaks_pass=0 pregfx=395367 noop=399618) render_pass_starts=165018 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1320144 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71501 img->buf=21 img->img=754 buf->buf=97632
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=128280 seen+CLEAR=18640 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35758 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 15 retirements) | peak ops/cmdbuf=81
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4184 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=72
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=13/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:06:47Z WARN  limina::window::input] pointer: the host pointer stopped wearing the guest's cursor — re-worn (was wearing some other shape); if this repeats while the hand is still, the guest's cursor disappears whenever the pointer rests
+[2026-09-02T01:06:47Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (1135.4,598.7) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=false, capture slot 1, unit sent (0.5544,0.4509); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9812 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9810/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:06:48Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (728.0,68.2) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=false, capture slot 1, unit sent (0.3555,0.0514); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:06:49Z WARN  limina::window::input] pointer: the host pointer stopped wearing the guest's cursor — re-worn (was wearing some other shape); if this repeats while the hand is still, the guest's cursor disappears whenever the pointer rests
+[2026-09-02T01:06:49Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (778.2,43.6) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=false, capture slot 1, unit sent (0.3800,0.0328); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:06:49Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (768.0,84.6) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=false, capture slot 1, unit sent (0.3750,0.0637); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:06:50Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (770.5,56.2) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=true, capture slot 1, unit sent (0.3762,0.0423); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:06:51Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (551.5,60.2) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=true, capture slot 1, unit sent (0.2693,0.0453); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:06:52Z WARN  limina::window] guest cursor: nothing has been drawn where the captured pointer is for 2.0s — the guest has its cursor plane on [0], not on the captured slot 1; surface 196 was EVICTED; slot 0: scanout 3840x2160 cursor visible=true id=Some(468) 64x64 at (1128,1020) [hide=0@271531ms shape=460@498068ms hide=0@585484ms shape=468@620151ms]; slot 1: scanout 2048x1328 cursor visible=false id=Some(196) 64x64 at (110,483) [shape=410@608782ms hide=0@612478ms shape=196@620064ms hide=0@620148ms]
+[2026-09-02T01:06:52Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (797.5,550.2) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=true, capture slot 1, unit sent (0.3894,0.4143); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:06:56Z WARN  limina::window::input] pointer capture: the host pointer stopped wearing the blank — something reset it behind us; re-worn
+[2026-09-02T01:06:56Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 0 at (1846.0,831.2) on a 3840x2160 scanout but the guest's cursor there sits at (1128,1020) — 742.4 px off; captured=true, capture slot 0, unit sent (0.4807,0.3848); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[LIMINA] KK counts: barriers=796775 (breaks_pass=0 pregfx=396102 noop=400672) render_pass_starts=165228 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1321824 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71501 img->buf=21 img->img=754 buf->buf=98473
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=979 seen+LOAD=128385 seen+CLEAR=18746 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=35864 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9964 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9962/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10026 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10024/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:07:18.633359Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10041 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10039/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10062 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10060/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10129 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10127/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:08:18.731890Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA] KK counts: barriers=798570 (breaks_pass=0 pregfx=396834 noop=401736) render_pass_starts=165433 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1323464 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71508 img->buf=21 img->img=754 buf->buf=99274
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=983 seen+LOAD=128449 seen+CLEAR=18882 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=36000 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10194 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10192/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10264 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10262/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10330 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10328/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10363 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10361/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=800370 (breaks_pass=0 pregfx=397548 noop=402822) render_pass_starts=165633 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1325064 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71511 img->buf=21 img->img=754 buf->buf=100042
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128475 seen+CLEAR=19053 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=36171 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10436 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10434/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10504 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10502/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:09:18.802807Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9086 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9084/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=802173 (breaks_pass=0 pregfx=398297 noop=403875) render_pass_starts=165830 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1326640 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71540 img->buf=21 img->img=754 buf->buf=100799
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128509 seen+CLEAR=19217 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=36335 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10562 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10560/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10588 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10586/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10655 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10653/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10718 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10716/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=803970 (breaks_pass=0 pregfx=399009 noop=404960) render_pass_starts=166033 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1328264 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71540 img->buf=21 img->img=754 buf->buf=101580
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128545 seen+CLEAR=19384 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=36502 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10778 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10776/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 10860 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=10858/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:10:18.883689Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA] KK counts: barriers=805761 (breaks_pass=0 pregfx=399732 noop=406028) render_pass_starts=166242 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1329936 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71541 img->buf=21 img->img=754 buf->buf=102393
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128615 seen+CLEAR=19523 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=36641 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11018 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11016/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11159 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11157/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=807553 (breaks_pass=0 pregfx=400457 noop=407095) render_pass_starts=166450 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1331600 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71542 img->buf=21 img->img=754 buf->buf=103209
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128691 seen+CLEAR=19655 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=36773 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11295 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11293/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=809345 (breaks_pass=0 pregfx=401181 noop=408163) render_pass_starts=166658 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1333264 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71542 img->buf=21 img->img=754 buf->buf=104023
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128763 seen+CLEAR=19791 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=36909 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11418 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11416/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11525 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11523/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:11:08Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (973.3,634.9) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=false, capture slot 1, unit sent (0.4752,0.4781); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:08Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (781.9,563.1) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=true, capture slot 1, unit sent (0.3818,0.4240); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:10Z WARN  limina::window::capture_tap] guest pointer: we sent the pointer to slot 1 at (110.0,483.0) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; view point (0.0, 650.93359375) in fit (0.0,1.0 2048.0x1328.0); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:10Z WARN  limina::window::input] pointer: the host pointer stopped wearing the guest's cursor — re-worn (was wearing some other shape); if this repeats while the hand is still, the guest's cursor disappears whenever the pointer rests
+[2026-09-02T01:11:10Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (0.0,678.1) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=true, capture slot 1, unit sent (0.0000,0.5106); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:10Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (522.8,698.0) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=false, capture slot 1, unit sent (0.2553,0.5256); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:13Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (17.0,1134.0) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=true, capture slot 1, unit sent (0.0083,0.8539); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[LIMINA] KK counts: barriers=811139 (breaks_pass=0 pregfx=401904 noop=409234) render_pass_starts=166864 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1334912 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71542 img->buf=21 img->img=754 buf->buf=104830
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128827 seen+CLEAR=19933 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=37051 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[2026-09-02T01:11:13Z WARN  limina::window::capture_tap] guest pointer: we sent the pointer to slot 1 at (110.0,483.0) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; view point (0.0, 211.0078125) in fit (0.0,1.0 2048.0x1328.0); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:13Z WARN  limina::window::input] pointer: the host pointer stopped wearing the guest's cursor — re-worn (was wearing some other shape); if this repeats while the hand is still, the guest's cursor disappears whenever the pointer rests
+[2026-09-02T01:11:13Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (0.0,1118.0) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=true, capture slot 1, unit sent (0.0000,0.8419); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:14Z WARN  limina::window::capture_tap] guest pointer: we sent the pointer to slot 1 at (110.0,483.0) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; view point (0.0, 54.41015625) in fit (0.0,1.0 2048.0x1328.0); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:14Z WARN  limina::window::input] pointer: the host pointer stopped wearing the guest's cursor — re-worn (was wearing some other shape); if this repeats while the hand is still, the guest's cursor disappears whenever the pointer rests
+[2026-09-02T01:11:14Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (0.0,1274.6) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=true, capture slot 1, unit sent (0.0000,0.9598); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[2026-09-02T01:11:14Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 1 at (9.7,1277.4) but the guest shows its cursor on [(0, (1128, 1020))] and none on slot 1; captured=false, capture slot 1, unit sent (0.0048,0.9619); report: {0: (3072, 1728), 1: (2048, 1328)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11635 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11633/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:11:18.970853Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11724 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11722/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=812931 (breaks_pass=0 pregfx=402627 noop=410303) render_pass_starts=167072 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1336576 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71544 img->buf=21 img->img=754 buf->buf=105638
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128894 seen+CLEAR=20074 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=37192 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11838 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11836/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 11927 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=11925/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=814723 (breaks_pass=0 pregfx=403347 noop=411375) render_pass_starts=167280 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1338240 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71544 img->buf=21 img->img=754 buf->buf=106447
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=128960 seen+CLEAR=20216 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=37334 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12036 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12034/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12168 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12166/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=816514 (breaks_pass=0 pregfx=404074 noop=412439) render_pass_starts=167489 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1339912 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71544 img->buf=21 img->img=754 buf->buf=107270
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=129042 seen+CLEAR=20343 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=37461 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12325 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12323/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:12:19.044892Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[LIMINA] KK counts: barriers=818304 (breaks_pass=0 pregfx=404801 noop=413502) render_pass_starts=167699 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1341592 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71544 img->buf=21 img->img=754 buf->buf=108094
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=129124 seen+CLEAR=20471 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=37589 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12475 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12473/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12606 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12604/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=820095 (breaks_pass=0 pregfx=405527 noop=414567) render_pass_starts=167908 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1343264 (barrier)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71546 img->buf=21 img->img=754 buf->buf=108914
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=129202 seen+CLEAR=20602 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=37720 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12704 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12702/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12764 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12762/0 (render/compute) unmatched-discharge=0
+[LIMINA] KK counts: barriers=821886 (breaks_pass=0 pregfx=406245 noop=415641) render_pass_starts=168117 restarts=0/0(flush) compute_during_pass=39131/42400(pregfx) color_map_nonidentity=0/1344936 (rp)
+[LIMINA]   poly heap: hiwater=2464 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=71546 img->buf=21 img->img=754 buf->buf=109719
+[LIMINA]   unroll triggers: fan=42400 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=42400 (fan=42400 strip=0 other=0)
+[LIMINA]   pass starts: fresh=986 seen+LOAD=129261 seen+CLEAR=20751 seen+DONTCARE=17118 (fresh small=253) | reload_hazard=37869 (small=10020) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      42400
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12846 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] periodic compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=12844/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9090 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=9088/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] teardown render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 12868 retirements) | peak ops/cmdbuf=238
+[LIMINA-ALLOC-POOL] teardown compute: live=2 peak=2 retired=0 | size hiwater=4120 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=80
+[LIMINA-ALLOC-POOL] teardown tombstones=0 use-after-destroy=0 | resets=12866/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:13:12.097306Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 9 [ghost] destroyed — lifetime 44 charges totalling 839.3 MiB, peak 329.7 MiB
+[LIMINA-ALLOC-POOL] teardown render: live=1 peak=1 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9 retirements) | peak ops/cmdbuf=233
+[LIMINA-ALLOC-POOL] teardown compute: live=2 peak=2 retired=0 | size hiwater=4424 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=156
+[LIMINA-ALLOC-POOL] teardown tombstones=0 use-after-destroy=0 | resets=8/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:13:12.143333Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 10 [ghost] destroyed — lifetime 44 charges totalling 839.3 MiB, peak 329.7 MiB
+[LIMINA-ALLOC-POOL] teardown render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 9114 retirements) | peak ops/cmdbuf=135
+[LIMINA-ALLOC-POOL] teardown compute: live=1 peak=1 retired=0 | size hiwater=3768 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=47
+[LIMINA-ALLOC-POOL] teardown tombstones=0 use-after-destroy=0 | resets=9112/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:13:12.151721Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 8 [ghost] destroyed — lifetime 43 charges totalling 711.3 MiB, peak 329.7 MiB
+[LIMINA-ALLOC-POOL] teardown render: live=2 peak=2 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 15 retirements) | peak ops/cmdbuf=81
+[LIMINA-ALLOC-POOL] teardown compute: live=2 peak=2 retired=0 | size hiwater=4184 KiB (budget 4096 KiB, 1 retirements) | peak ops/cmdbuf=72
+[LIMINA-ALLOC-POOL] teardown tombstones=0 use-after-destroy=0 | resets=13/0 (render/compute) unmatched-discharge=0
+[2026-09-02T01:13:12.161491Z ERROR krun_rutabaga_gfx::virgl_renderer] virgl: vkr: limina GPU budget: ctx 6 [ghost] destroyed — lifetime 44 charges totalling 839.3 MiB, peak 449.2 MiB
+[2026-09-02T01:13:14.246839Z WARN  krun_devices::virtio::gpu::virtio_gpu] context fence 36387 (ctx 3 ring 0) refused by renderer (rutabaga component failed with error -1); retiring as lost
+[2026-09-02T01:13:14.246848Z WARN  krun_devices::virtio::gpu::worker] create_fence 36387 -> ErrRutabaga(ComponentError(-1))
+[2026-09-02T01:13:14.246864Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 3 submit_command -> Err("ErrRutabaga(ComponentError(-1))") (cmd_size=16, num_in_fences=0, avail_before_fences=16, avail_before_cmd=16)
+[2026-09-02T01:13:14.246866Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-1))
+[2026-09-02T01:13:14.247003Z WARN  krun_devices::virtio::gpu::virtio_gpu] context fence 36388 (ctx 3 ring 0) refused by renderer (rutabaga component failed with error -1); retiring as lost
+[2026-09-02T01:13:14.247005Z WARN  krun_devices::virtio::gpu::worker] create_fence 36388 -> ErrRutabaga(ComponentError(-1))
+[2026-09-02T01:13:14.251601Z WARN  krun_devices::virtio::gpu::journal] [GPUTRACE] gpu journal: 35 live ops (recorded=32915 pruned=32880): ctxs=3 blobs=6 (18592 KiB) maps=6 attaches=8 scanouts=0 classic=6 backings=6
+[2026-09-02T01:13:14.251609Z WARN  krun_rutabaga_gfx::rutabaga_core] [GPUTRACE] rutabaga state: 3 contexts [3, 4, 5], 9 resources (ids [6, 7, 8, 9, 14, 21, 22, 23, 564])
+time="2026-09-01T22:13:15-03:00" level=error msg="cannot receive packets from /var/folders/1f/rkfsdn6s4jndr5c9wc0dcy900000gn/T/krun-net-84282-0.sock, disconnecting: cannot read size from socket: read unixgram /var/folders/1f/rkfsdn6s4jndr5c9wc0dcy900000gn/T/limina-gvproxy-84279.sock: use of closed network connection"
+time="2026-09-01T22:13:15-03:00" level=error msg="gvproxy exiting: signal caught"
+time="2026-09-01T22:13:15-03:00" level=warning msg="bad log level \"\", falling back to \"info\""
+time="2026-09-01T22:13:15-03:00" level=info msg="gvproxy version v0.8.8"
+time="2026-09-01T22:13:15-03:00" level=info msg="waiting for clients..."
+[2026-09-02T01:13:15.761322Z WARN  krun_devices::virtio::mmio] virtio queue marked ready with QueueNum=0; defaulting to max_size=256
+[LIMINA] ZINK_DEBUG = 0x0 (<unset>)
+[LIMINA] KK counts: barriers=1 (breaks_pass=0 pregfx=0 noop=0) render_pass_starts=0 restarts=0/0(flush) compute_during_pass=0/0(pregfx) color_map_nonidentity=0/0 (barrier)
+[LIMINA]   copies: buf->img=0 img->buf=0 img->img=0 buf->buf=0
+[LIMINA]   unroll triggers: fan=0 promote=0 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=0 (fan=0 strip=0 other=0)
+[LIMINA]   pass starts: fresh=0 seen+LOAD=0 seen+CLEAR=0 seen+DONTCARE=0 (fresh small=0) | reload_hazard=0 (small=0) | pass ends DONTCARE=0 (small=0)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_BGRA, type = GL_UNSIGNED_INT_8_8_8_8)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_ABGR_EXT, type = GL_UNSIGNED_BYTE)
+Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_4_4_4_4_REV, internalformat = GL_RGBA4)
+Mesa: error: GL_INVALID_OPERATION in glTexImage2D(format = GL_BGRA, type = GL_UNSIGNED_SHORT_1_5_5_5_REV, internalformat = GL_RGB5_A1)
+Mesa: error: GL_INVALID_ENUM in glTexImage2D(incompatible format = GL_RGB, type = GL_UNSIGNED_BYTE_3_3_2)
+Mesa: error: GL_INVALID_VALUE in glTexImage2D(format = GL_ALPHA, type = GL_UNSIGNED_SHORT, internalformat = GL_ALPHA16)
