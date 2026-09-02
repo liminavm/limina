@@ -32,31 +32,56 @@ finds no next segment.
 No VM, no guest, no virglrenderer, and it touches neither `third_party/virgl-prefix` nor
 `/Volumes/mesa-cs/build-kk`.
 
-## Result: NOT REPRODUCED — and the run does not test the hypothesis
+## Results
 
-Ramp on the dev Mac, doubling from 64: **survived 4,194,304 blits on a single encoder**, clean
-exit, no fault at any step.
+All three vehicles run on the crashing hardware itself (Mac16,8, Apple M4 Pro, `AGXMetalG16X`)
+after an earlier ramp on an M1 Max proved worthless — that host loads `AGXMetalG13X`, a
+different driver binary, so it never executed the code under test. The vehicle was right and
+the host was wrong.
 
-**That number is worth nothing against this bug, because the GPU is wrong.** The crash is on
-`AGXMetalG16X` (Mac16,8, M4 Max). The dev Mac is an M1 Max and loads `AGXMetalG13X` — a
-different driver binary, a different generation's data-buffer pool. The ramp exercised code
-that is not the code that faults.
+| vehicle | scale reached | result |
+|---|---|---|
+| blits on ONE encoder | 4,194,304 | survived |
+| encoders on one allocator, NO reset | 200,000 (`allocatedSize` 55.8 GB) | survived |
+| reset/reuse cycles on one allocator | 200,000 (`allocatedSize` flat at 549,488) | survived |
 
-This is the "identical results across many configs mean the differential is not reaching the
-system under test" trap, met before running rather than after: the vehicle was right and the
-*host* was wrong. Both M-series machines available here are M1 Max, so no local
-host can run this test.
+So the fault is **not** blit count, **not** encoder count, and **not** allocator reuse. AGX grows
+and recycles this pool correctly under all three. Incidentally confirmed: `allocatedSize` never
+shrinks without a reset (55.8 GB after 200k encoders), and `[alloc reset]` returns it exactly to
+its steady state.
 
-## What this does and does not establish
+## What the registers say, which is more than the vehicles did
 
-- **Does not** falsify the 1 MiB-boundary hypothesis. It has not been tested.
-- **Does** establish that plain repeated blits on one encoder are fine on G13X to 4.2M — so if
-  the same test passes on a G16X, the trigger needs something this vehicle does not model
-  (encoder reuse across allocator resets, mixed render/compute in one buffer, a particular copy
-  geometry, or the midpass `pre_gfx` compute the geometry-unroll path submits).
+```
+cursor before the failing request   1,016,348      (0xf821c)
+space left in the 1 MiB segment        32,228
+the request (x1 = x2 = x3)             32,259      (0x7e03)
+overflow                                   31 bytes
+cursor after                        1,048,607      (0x10001f) = 1 MiB + 31
+next segment (x9)                        NULL      -> str x8, [x9, #0x98]
+```
 
-## To settle it
+The failing allocation **straddles the end of the segment by 31 bytes**. It is not that the pool
+was exhausted — the vehicles show exhaustion is handled — it is that a request which does not fit
+the current segment's remainder takes a path where the next segment pointer is NULL and AGX
+stores through it without checking.
 
-Run `./repro` on a G16X (M4) host. It is a few seconds per step and needs no VM — but it is a
-program *designed* to trip a GPU driver fault, so it should not be run casually on a machine
-someone is working on. Ask first.
+That explains both properties at once: **deterministic**, because the same request size against
+the same fill state reproduces the same arithmetic to the byte; and **rare**, because it needs the
+cursor to land in the narrow window where a ~32 KB request no longer fits. A 1 MiB segment holds
+only ~32.5 allocations of this size, so this is a large, occasional allocation — not the ~few
+hundred bytes a plain blit consumes, which is why 4.2M plain blits never came near it.
+
+## Where that leaves it
+
+This looks like an Apple defect in `AGX::ComputeContext::prepareForEnqueue` — an unchecked
+next-segment pointer on the straddling path — and is Radar material. What is not yet known is
+what KK submits that asks for 32,259 bytes of data buffer in one dispatch; the dogfood workload
+reaches this via the geometry-unroll route that submits `pre_gfx` compute inside an open render
+pass (421,045 times in the crashed run, against ~1 for a Wesnoth session), which none of these
+vehicles model.
+
+**Next vehicle, if it is worth building:** interleave compute into an open render pass the way
+`cs_get_compute(cmd, pre_gfx)` does, rather than issuing compute alone. That is the one axis of
+the crashed workload still unmodelled, and it is where a large per-dispatch allocation would
+plausibly come from.
