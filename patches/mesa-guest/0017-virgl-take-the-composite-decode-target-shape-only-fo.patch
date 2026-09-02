@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Tue, 1 Sep 2026 21:57:50 -0300
-Subject: [PATCH 17/17] virgl: take the composite decode-target shape only for
+Subject: [PATCH 17/19] virgl: take the composite decode-target shape only for
  a format the host can sample
 
 The composite create was gated on VIDEO_PLANAR_TARGET alone and relied on falling

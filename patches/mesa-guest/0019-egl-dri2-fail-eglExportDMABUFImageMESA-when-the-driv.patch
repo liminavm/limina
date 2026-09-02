@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Wed, 2 Sep 2026 18:15:23 -0300
+Subject: [PATCH 19/19] egl/dri2: fail eglExportDMABUFImageMESA when the driver
+ cannot export an fd
+
+dri2_export_dma_buf_image_mesa ignored the return value of the
+__DRI_IMAGE_ATTRIB_FD query and returned EGL_TRUE with the caller's fd array
+untouched, so a driver that cannot export an image (virgl refuses one whose guest
+storage is a stub) reported success and the caller went on to use an
+uninitialized value as a file descriptor. GTK4 built a GdkDmabufTexture around
+0xFFFF00FF, failed the download, and handed back a broken texture instead of
+falling back.
+
+Return EGL_FALSE, matching the adjacent stride and offset handling and the
+extension's contract: close any fds already exported for earlier planes, set every
+slot to -1, and release the plane image and display lock like the success path.
+GTK now logs the failure and falls back to a GL readback, which is correct.
+
+No EGL error is recorded, matching the existing early return when the image is not
+exportable at all; whether both should raise EGL_BAD_ACCESS is a question for
+upstream review.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/egl/drivers/dri2/egl_dri2.c | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/egl_dri2.c b/src/egl/drivers/dri2/egl_dri2.c
+index 8185b79bfed..3fd0293f891 100644
+--- a/src/egl/drivers/dri2/egl_dri2.c
++++ b/src/egl/drivers/dri2/egl_dri2.c
+@@ -2591,9 +2591,24 @@ dri2_export_dma_buf_image_mesa(_EGLDisplay *disp, _EGLImage *img, int *fds,
+           *    "If the number of fds is less than the number of planes, then
+           *    subsequent fd slots should contain -1."
+           */
+-         if (i == 0 || is_disjoint)
+-            dri2_query_image(image, __DRI_IMAGE_ATTRIB_FD, &fds[i]);
+-         else
++         if (i == 0 || is_disjoint) {
++            if (!dri2_query_image(image, __DRI_IMAGE_ATTRIB_FD, &fds[i])) {
++               /* The driver cannot export this image. Returning EGL_TRUE here
++                * would leave the caller's fd array untouched, and the caller
++                * would then use an uninitialized value as an fd.
++                */
++               if (i)
++                  dri2_destroy_image(image);
++               for (int j = 0; j < i; j++) {
++                  if (fds[j] >= 0)
++                     close(fds[j]);
++                  fds[j] = -1;
++               }
++               fds[i] = -1;
++               mtx_unlock(&dri2_dpy->lock);
++               return EGL_FALSE;
++            }
++         } else
+             fds[i] = -1;
+       }
+ 

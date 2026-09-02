@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Wed, 2 Sep 2026 18:26:47 -0300
+Subject: [PATCH 18/19] virgl: drop the too-small dmabuf export refusal
+
+virgl_resource_get_handle refused an FD export whenever the resource's laid-out
+size exceeded its guest BO. That was meant for video decode targets, whose guest
+BO was a one-page stub that GStreamer's dmabuf uploader mmapped and walked off,
+but the predicate is true of every staged texture: with copy-transfer in both
+directions virgl_resource_create_front gives every non-shared texture the same
+stub (alloc_size = 1), so eglExportDMABUFImageMESA failed for essentially every
+GL texture.
+
+That broke GTK4's texture readback. gdk_texture_download exports the rendered
+texture as a dmabuf and re-imports it; with the export refused it consumed an
+uninitialized fd and produced noise, and setting a user avatar in GNOME Settings
+wrote 496 KB of garbage. The RMSE of the saved image against its source was
+0.774 on this tree and 0 on vanilla 26.1.8 with only libgallium swapped, and no
+PRIME_HANDLE_TO_FD ioctl was ever issued here.
+
+A stub-backed fd is a perfectly good name for the host resource to a consumer
+that re-imports it, which virgl_resource_from_handle already handles by marking
+the import staged. The only consumer that mmaps is the VA-API descriptor's, and
+decode targets now get real guest memory whenever the host writes decoded frames
+back into it, which every host offering a decoder does. A host that offers a
+decoder without that writeback is not a configuration the enhanced tier
+supports, so the check guarded nothing and only broke legitimate exports.
+whandle->size stays filled in, so a consumer that reads the object size sees the
+memory it was handed.
+
+Found by the dogfood session investigating the avatar corruption.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/gallium/drivers/virgl/virgl_resource.c | 46 ++++------------------
+ 1 file changed, 8 insertions(+), 38 deletions(-)
+
+diff --git a/src/gallium/drivers/virgl/virgl_resource.c b/src/gallium/drivers/virgl/virgl_resource.c
+index 020d5e765a7..9b087c42624 100644
+--- a/src/gallium/drivers/virgl/virgl_resource.c
++++ b/src/gallium/drivers/virgl/virgl_resource.c
+@@ -858,16 +858,15 @@ static struct pipe_resource *virgl_resource_create_front(struct pipe_screen *scr
+    /* limina: a video decode target's plane needs storage that actually holds the
+     * frame, not the one-page staging stub.
+     *
+-    * The stub is why virgl_resource_get_handle has to refuse exporting these: an fd
+-    * naming 4096 bytes for a multi-megabyte picture, with a descriptor that reports
+-    * the real geometry, SIGBUSes any consumer that trusts it. Given real guest pages
+-    * the host writes each decoded frame into them, the export describes storage that
+-    * genuinely holds the picture, and the refusal stops applying on its own.
++    * Its consumers mmap the exported dmabuf: VADRMPRIMESurfaceDescriptor reports the
++    * real geometry, and GStreamer's dmabuf uploader maps the fd and copies the frame
++    * out whenever no direct dmabuf-to-texture import is available, so a stub SIGBUSes
++    * it. Given real guest pages the host writes each decoded frame into them and the
++    * export describes storage that genuinely holds the picture.
+     *
+-    * Gated on the host actually doing that writeback. Against a host without the bit
+-    * this would allocate the memory and export an honest-looking fd naming a frame
+-    * nothing ever wrote -- worse than the refusal, which at least falls back to a
+-    * path that works. */
++    * Gated on the host actually doing that writeback: without the bit this would
++    * allocate the memory and export an honest-looking fd naming a frame nothing ever
++    * wrote. The enhanced tier requires a host that has it. */
+    if ((templ->flags & VIRGL_RESOURCE_FLAG_VIDEO_TARGET) &&
+        (vs->caps.caps.v2.capability_bits_v2 & VIRGL_CAP_V2_VIDEO_GUEST_PLANES))
+       res->use_staging = false;
+@@ -1242,35 +1241,6 @@ bool virgl_resource_get_handle(struct pipe_screen *screen,
+    else
+       stride = res->metadata.stride[0];
+ 
+-   /*
+-    * Never hand out a dmabuf smaller than the image it claims to describe.
+-    *
+-    * A virgl resource whose storage lives on the host has a guest BO that is only a stub --
+-    * one page, whatever the resolution -- so drmPrimeHandleToFD below happily returns an fd
+-    * naming 4096 bytes for a multi-megabyte surface. Nothing in the descriptor says so:
+-    * VADRMPRIMESurfaceDescriptor reports the layer geometry, which is correct, and an object
+-    * size the winsys never fills in, which reads as 0. A consumer that trusts the geometry,
+-    * maps the fd and copies the frame out -- GStreamer's dmabuf uploader does exactly that
+-    * whenever no direct dmabuf-to-texture import is available -- walks off the end of the
+-    * first page and dies with SIGBUS.
+-    *
+-    * Refusing the export is the honest answer: the caller then negotiates system memory,
+-    * which costs a copy per frame and works. Exporting host-backed decode targets for real
+-    * requires them to be host-mappable blobs, which is a larger change.
+-    *
+-    * The predicate is the one virgl_resource_from_handle already uses to decide a resource
+-    * needs staging: the laid-out size exceeds the guest storage behind it. A resource in that
+-    * state has no guest memory holding its pixels, so there is nothing an fd can usefully
+-    * name. Only a definite, too-small size refuses -- an unknown (0) size on either side keeps
+-    * the previous behaviour rather than breaking exports this cannot reason about.
+-    */
+-   if (whandle->type == WINSYS_HANDLE_TYPE_FD && vs->vws->resource_get_storage_size) {
+-      uint32_t storage = vs->vws->resource_get_storage_size(vs->vws, res->hw_res);
+-
+-      if (storage && res->metadata.total_size && res->metadata.total_size > storage)
+-         return false;
+-   }
+-
+    /* limina: where this plane starts inside the exported allocation. Zero for every
+     * resource that is its own allocation, which is all of them but a chained plane of
+     * a composite target -- and for that one the winsys cannot know it, so an unset

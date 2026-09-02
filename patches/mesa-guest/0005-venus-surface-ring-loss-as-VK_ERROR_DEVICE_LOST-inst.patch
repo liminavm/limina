@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 5 Aug 2026 18:54:24 -0300
-Subject: [PATCH 05/17] venus: surface ring loss as VK_ERROR_DEVICE_LOST
+Subject: [PATCH 05/19] venus: surface ring loss as VK_ERROR_DEVICE_LOST
  instead of abort()
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
