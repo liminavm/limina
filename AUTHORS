@@ -1,0 +1,15 @@
+limina maintainers
+
+This is the record of "the limina maintainers" for the purposes of section 2
+(platform distribution grant) of LICENSES/LicenseRef-limina-exception.txt:
+Gustavo Noronha Silva and the successor maintainers he designates. Only a
+maintainer, or someone conveying limina with a maintainer's authorization, may
+rely on that grant. The authoritative copy of this file lives in the limina
+repository at https://github.com/liminavm/limina; a copy elsewhere designates
+no one.
+
+  Gustavo Noronha Silva <gustavo@noronha.dev.br>
+
+Copyright holders are recorded per file: in SPDX-FileCopyrightText headers,
+REUSE .license sidecars, or the REUSE.toml annotations. Contributors keep
+their own copyright; see CONTRIBUTING.md.

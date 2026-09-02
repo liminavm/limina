@@ -1,4 +1,14 @@
-The limina linking exception (an additional permission under GNU GPL version 2)
+The limina exception (additional permissions under GNU GPL version 2)
+
+This file states two additional permissions that accompany the GNU General
+Public License, version 2, for limina: a linking exception granted to every
+recipient, and a platform distribution grant made by every copyright holder to
+the limina maintainers. "limina" means the software distributed under the
+identifier GPL-2.0-only WITH LicenseRef-limina-exception, including every
+contribution conveyed under those terms.
+
+
+1. Linking exception
 
 In addition, as a special exception, the copyright holders of limina give you
 permission to combine limina with material licensed under any of the following
@@ -19,6 +29,38 @@ with the permitted license for the material licensed under it.
 You must obey the GNU General Public License, version 2, in all respects for
 all code used other than material under a permitted license.
 
-If you modify this software, you may extend this exception to your version,
-but you are not obligated to do so. If you do not wish to do so, delete this
-exception statement from your version.
+If you modify this software, you may extend this linking exception to your
+version, but you are not obligated to do so. If you do not wish to do so,
+delete this linking exception (section 1) from your version. That choice
+concerns the linking exception only; it does not affect section 2.
+
+
+2. Platform distribution grant
+
+Some application stores and similar distribution platforms bind their users to
+terms of use or service that impose conditions on recipients beyond those of
+the GNU General Public License, version 2, which section 6 of that license
+would otherwise not allow a distributor to accept on the recipients' behalf.
+
+In addition, as a special exception, every copyright holder of limina — each
+contributor, by conveying their contribution under GPL-2.0-only WITH
+LicenseRef-limina-exception — grants the limina maintainers, and anyone
+conveying limina with a maintainer's authorization, permission to convey
+limina, in source or object form, through such a platform under that
+platform's terms, notwithstanding sections 6 and 7 of the GNU General Public
+License, version 2, provided that the complete corresponding source code of
+the version so conveyed remains available to its recipients under GPL-2.0-only
+WITH LicenseRef-limina-exception.
+
+The limina maintainers are Gustavo Noronha Silva and any successor maintainer
+he designates. The AUTHORS file of the limina repository at
+https://github.com/liminavm/limina (or its announced successor) is the record
+of the current maintainers. A copy of this file, or an AUTHORS file, in any
+other tree does not designate a maintainer.
+
+This grant adds a permission and takes nothing away: it does not restrict, and
+must not be read as restricting, the rights of any recipient of limina under
+the GNU General Public License, version 2, or under section 1 above. It is
+made by every copyright holder whose material is conveyed under these terms,
+applies to every such contribution, and is not removed by the last paragraph
+of section 1.
