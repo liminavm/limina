@@ -53,9 +53,12 @@ userspace mapping of a shmem GEM object (`map_wc` false), 6 vCPUs; host: IPA gra
 The standalone one-shot sweep above is the same shape and does not reproduce it, so an ingredient of the
 real system is missing from the probe and remains unidentified (candidates: 16 KiB stage-1 pages over
 4 KiB stage-2 leaves, other vCPUs running during the change, the host-side heal reopening 16 KiB while
-the change was made in 4 KiB leaves). Nothing shipped protects a page the guest may be writing — the
-balloon changes only pages the guest has reported free and holds isolated — so this is a probe hazard
-today, not a product fault. Keep it in mind before building anything on write-protecting live guest
+the change was made in 4 KiB leaves). Nothing shipped changes the stage-2 mapping of a page the guest
+may be writing: libkrun has no `hv_vm_protect` call, and its two `hv_vm_unmap` sites are the balloon's
+release of ranges the guest has reported free and holds isolated
+(`third_party/libkrun/src/hvf/src/released_ram.rs:216`) and the blob-map window's map/unmap, which
+runs on the guest's own MAP_BLOB/UNMAP_BLOB request (`third_party/libkrun/src/hvf/src/lib.rs:535`
+via `src/vmm/src/macos/vstate.rs:149,163`). So this is a probe hazard today, not a product fault. Keep it in mind before building anything on write-protecting live guest
 pages (dirty tracking, copy-on-write snapshots): measure with the real guest first.
 
 The probe stays useful as a harness for stage-2 semantics questions (a tiny MMU-on guest with a
