@@ -378,8 +378,10 @@ to be explained by this, and should not be left to discover the restore path for
   sub 1 target fmt 166 cv '420v'`, `hardware accelerated: yes`) against the same kind of
   composite planar target. VideoToolbox accepts 300 of 300 from the browser and refuses 10 of
   10 from the pipeline. So the difference lives in the codec object's state rather than its
-  input — the format description we build, or the session, per codec instance — and that is
-  where the next probe goes.
+  input. The format description is not it either: both build the same one (`vp09`,
+  1920x1080, a zero-byte config). What is still untraced is the destination pixel-buffer
+  attributes the target contributes, and which thread calls `VTDecompressionSessionDecodeFrame`
+  — that is where the next probe goes.
 
   So an empty hardware-decoded picture here is at least three faults deep, and only the last
   one is about pixels: the latch drops every submission, VT rejects the submissions that do get
