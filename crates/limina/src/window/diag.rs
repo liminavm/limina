@@ -360,12 +360,18 @@ mod tests {
         let (tx, rx) = sync_channel::<CaptureFrame>(1);
         // A big frame, so a caller that encoded inline could not possibly be quick.
         let big = || frame(2560, 1440, 2560 * 4, &[1, 2, 3, 4]);
+        // Built before the clock starts: filling three 14 MB frames is the allocator's time,
+        // not the offer's, and on a small CI runner it alone exceeded the budget.
+        let (first, second, third) = (big(), big(), big());
 
         let t = Instant::now();
-        assert!(offer_capture(&tx, big()), "first frame should be accepted");
+        assert!(offer_capture(&tx, first), "first frame should be accepted");
         // The encoder has not run, so the slot is still full: the next frame is dropped.
-        assert!(!offer_capture(&tx, big()), "second frame should be dropped");
-        assert!(!offer_capture(&tx, big()), "third frame should be dropped");
+        assert!(
+            !offer_capture(&tx, second),
+            "second frame should be dropped"
+        );
+        assert!(!offer_capture(&tx, third), "third frame should be dropped");
         assert!(
             t.elapsed() < Duration::from_millis(200),
             "offers took {:?} — the caller is doing the encode",

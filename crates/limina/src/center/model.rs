@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn snapshot_lists_vms_and_tolerates_broken_bundles() {
-        let _guard = crate::vmlib::bundle::tests::ENV_LOCK.lock().unwrap();
+        let _guard = crate::vmlib::bundle::tests::env_lock();
         let lib = crate::vmlib::bundle::tests::scratch_library("model");
         std::env::set_var("LIMINA_VM_LIBRARY", &lib);
 
@@ -222,7 +222,7 @@ mod tests {
     /// disks line and leave the button live.
     #[test]
     fn a_vm_whose_disk_is_gone_reports_why_it_cannot_start() {
-        let _guard = crate::vmlib::bundle::tests::ENV_LOCK.lock().unwrap();
+        let _guard = crate::vmlib::bundle::tests::env_lock();
         let lib = crate::vmlib::bundle::tests::scratch_library("blocked");
         std::env::set_var("LIMINA_VM_LIBRARY", &lib);
 
@@ -232,11 +232,22 @@ mod tests {
         opts.disk = Some(src);
         let bundle = create(&opts, &lib).unwrap();
 
+        // The row reports the first blocker, and whether this host has gvproxy or a built
+        // GOP firmware is not what this test is about: satisfy both with stand-ins so the
+        // only thing that can block is the definition itself.
+        let gvproxy = lib.join("gvproxy");
+        std::fs::write(&gvproxy, b"").unwrap();
+        std::env::set_var("LIMINA_GVPROXY_BIN", &gvproxy);
+        let firmware = lib.join("firmware.fd");
+        std::fs::write(&firmware, b"").unwrap();
+        let mut cfg = bundle.load().unwrap();
+        cfg.boot.firmware = Some(firmware);
+        bundle.save(&cfg).unwrap();
+
         // Healthy: nothing to report about starting.
         let row = snapshot().into_iter().find(|r| r.name == "Alpha").unwrap();
         assert_eq!(row.blocked, None, "{:?}", row.disks);
 
-        let cfg = bundle.load().unwrap();
         std::fs::remove_file(bundle.resolve_path(&cfg.disks[0].path)).unwrap();
 
         let row = snapshot().into_iter().find(|r| r.name == "Alpha").unwrap();
@@ -247,13 +258,14 @@ mod tests {
             .expect("the row must say why Start is unavailable");
         assert!(why.contains("not found"), "{why}");
 
+        std::env::remove_var("LIMINA_GVPROXY_BIN");
         std::env::remove_var("LIMINA_VM_LIBRARY");
         std::fs::remove_dir_all(&lib).ok();
     }
 
     #[test]
     fn ssh_line_prefers_the_log_port_when_running() {
-        let _guard = crate::vmlib::bundle::tests::ENV_LOCK.lock().unwrap();
+        let _guard = crate::vmlib::bundle::tests::env_lock();
         let lib = crate::vmlib::bundle::tests::scratch_library("sshline");
         let bundle = create(
             &{

@@ -177,6 +177,13 @@ pub(crate) mod tests {
     /// Serialize the LIMINA_VM_LIBRARY-dependent tests (env vars are process-global).
     pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Serializes the tests that set `LIMINA_VM_LIBRARY`. A test that panics while holding
+    /// the lock poisons it; taking the guard back keeps that one failure from turning every
+    /// later test into a `PoisonError`.
+    pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub(crate) fn scratch_library(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "limina-vmlib-{tag}-{}-{:?}",
@@ -204,7 +211,7 @@ pub(crate) mod tests {
 
     #[test]
     fn resolve_finds_by_path_name_and_case() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let lib = scratch_library("resolve");
         std::env::set_var("LIMINA_VM_LIBRARY", &lib);
 
@@ -230,7 +237,7 @@ pub(crate) mod tests {
 
     #[test]
     fn save_is_atomic_and_reloadable() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let lib = scratch_library("save");
         let bundle = create(&basic_opts("editme"), &lib).unwrap();
 

@@ -163,7 +163,7 @@ pub fn reset_vm(bundle: &VmBundle, errors: &ErrorSink) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vmlib::bundle::tests::{basic_opts, scratch_library, ENV_LOCK};
+    use crate::vmlib::bundle::tests::{basic_opts, env_lock, scratch_library};
     use crate::vmlib::import::create;
 
     /// The originating bug, at the layer that had it: a bundle whose disk is gone must fail
@@ -171,7 +171,7 @@ mod tests {
     /// that dies into a truncated log.
     #[test]
     fn a_blocked_vm_is_refused_without_spawning() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let lib = scratch_library("spawn-blocked");
         std::env::set_var("LIMINA_VM_LIBRARY", &lib);
         let src = lib.join("seed.raw");
@@ -208,7 +208,7 @@ mod tests {
     /// saved a copy by hand before restarting.
     #[test]
     fn opening_a_run_log_keeps_the_previous_boot() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let lib = scratch_library("spawn-rotate");
         std::env::set_var("LIMINA_VM_LIBRARY", &lib);
         let bundle = create(&basic_opts("Rotate"), &lib).unwrap();

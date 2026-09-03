@@ -488,7 +488,7 @@ fn check_firmware(bundle: &VmBundle, cfg: &VmConfig, out: &mut Vec<Finding>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vmlib::bundle::tests::{basic_opts, scratch_library, ENV_LOCK};
+    use crate::vmlib::bundle::tests::{basic_opts, env_lock, scratch_library};
     use crate::vmlib::import::create;
     use crate::vmlib::schema::ShareEntry;
 
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn a_healthy_bundle_reports_nothing_blocking() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let (lib, bundle, cfg) = startable("pf-ok");
         let r = check(&bundle, &cfg, Depth::Cheap);
         assert!(config_blockers(&r).is_empty(), "{:?}", codes(&r));
@@ -538,7 +538,7 @@ mod tests {
     /// before anything is spawned.
     #[test]
     fn a_missing_disk_blocks_and_names_the_resolved_path() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let (lib, bundle, cfg) = startable("pf-nodisk");
         let disk = bundle.resolve_path(&cfg.disks[0].path);
         std::fs::remove_file(&disk).unwrap();
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn a_share_that_is_gone_or_symlinked_blocks() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let (lib, bundle, mut cfg) = startable("pf-share");
 
         cfg.shares = vec![ShareEntry {
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn zero_cpus_blocks_but_oversubscription_only_warns() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let (lib, bundle, mut cfg) = startable("pf-cpus");
 
         cfg.hardware.cpus = 0;
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn the_same_image_attached_twice_blocks() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let (lib, bundle, mut cfg) = startable("pf-dup");
         let dup = cfg.disks[0].clone();
         cfg.disks.push(dup);
@@ -615,7 +615,7 @@ mod tests {
     /// opening every image read-write on the center's 1 s refresh would be wasteful.
     #[test]
     fn a_disk_locked_by_another_vm_blocks_at_full_depth_only() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let (lib, bundle, cfg) = startable("pf-lock");
         let disk = bundle.resolve_path(&cfg.disks[0].path);
 
@@ -644,7 +644,7 @@ mod tests {
     /// `logs/` must not create them -- `vm-definitions.md` §8.4 is the cautionary tale.
     #[test]
     fn checking_creates_nothing() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let (lib, bundle, cfg) = startable("pf-readonly");
         std::fs::remove_dir_all(bundle.run_dir()).ok();
         std::fs::remove_dir_all(bundle.logs_dir()).ok();
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn every_blocker_is_listed_not_just_the_first() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         let (lib, bundle, mut cfg) = startable("pf-many");
         std::fs::remove_file(bundle.resolve_path(&cfg.disks[0].path)).unwrap();
         cfg.hardware.cpus = 0;
