@@ -1128,6 +1128,32 @@ mod tests {
         assert_eq!(cp.stall_x100, None);
     }
 
+    /// The other direction, and the one that matters the moment a guest is upgraded before its
+    /// host: a 0.6.1 agent's report, rate fields and all, must still decode in a host that only
+    /// knows fields 0..=6. Otherwise updating the guest alone would silently stop the vCPU policy
+    /// from getting any report at all.
+    #[test]
+    fn a_rate_carrying_report_decodes_into_the_old_shape() {
+        #[derive(Decode)]
+        struct OldCpuPressure {
+            #[n(0)]
+            nr_running: u32,
+            #[n(5)]
+            online: u32,
+        }
+        let bytes = minicbor::to_vec(CpuPressure {
+            nr_running: 3,
+            online: 4,
+            busy_x100: Some(275),
+            stall_x100: Some(1_800),
+            ..CpuPressure::default()
+        })
+        .unwrap();
+        let old: OldCpuPressure = minicbor::decode(&bytes).unwrap();
+        assert_eq!(old.nr_running, 3);
+        assert_eq!(old.online, 4);
+    }
+
     /// The plan never touches cpu0, works from the top down, and stops exactly on target.
     #[test]
     fn shrinking_takes_the_highest_cpus_and_never_cpu0() {
