@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Gustavo Noronha Silva
+
+# Guest-side sampler for tuning the vCPU re-plug (grow) policy against real life.
+#
+# Records, every 2 seconds, the inputs the host policy consumes today
+# (crates/limina/src/vcpu_policy.rs — the agent's CpuPressure report is built from the same
+# files) PLUS the variables a better policy would likely want: online CPUs, nr_running
+# (/proc/stat procs_running, the no-decay grow signal), loadavg, PSI cpu, and the cumulative
+# /proc/stat time counters for the aggregate AND every online vCPU (busy:idle:iowait:steal, in
+# USER_HZ jiffies — analysis diffs consecutive samples for exact per-vCPU and total utilization
+# over any window; steal is the host descheduling us, a signal no guest loadavg carries). An
+# offline vCPU simply has no cpuN field in that sample, which records the online set per-CPU.
+# Around each observed re-plug the trace shows WHICH grow trigger fired: nr_running > online,
+# loadavg1 >= online, or neither — "neither" fingers the host-side term (worker CPU ~ online
+# cores), which the guest cannot see directly but can isolate by elimination.
+#
+# Zero forks per sample, so the sampler cannot perturb the nr_running it is measuring:
+# every read is a bash builtin against /proc and /sys, the 2s wait is `read -t` on a fd that
+# never delivers, and the timestamp/day come from printf's builtin %(...)T.
+#
+# Output: one line per sample, key=value, appended to $OUTDIR/vcpu-trace.<YYYY-MM-DD>.log
+# (~15 MB/day at 10 vCPUs; prune old days by hand — this is a temporary tuning aid, not a product).
+
+OUTDIR="${1:-/var/log/limina-vcpu-trace}"
+mkdir -p "$OUTDIR"
+
+# A fd that never delivers data: `read -t 2 -u 9` then blocks the full 2s and times out,
+# giving a forkless sleep. The fifo lives only as this process's fd.
+fifo=$(mktemp -u) && mkfifo "$fifo" && exec 9<>"$fifo" && rm -f "$fifo"
+
+while :; do
+    read -r l1 l5 l15 runq _ </proc/loadavg
+    online=$(</sys/devices/system/cpu/online)
+    pr=- pb=- cpus=
+    # /proc/stat cpu lines: user nice system idle iowait irq softirq steal guest guest_nice.
+    # Record busy(=user+nice+system+irq+softirq+guest+guest_nice):idle:iowait:steal, cumulative.
+    while read -r k f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 _; do
+        case $k in
+        cpu | cpu[0-9] | cpu[0-9][0-9])
+            cpus+=" $k=$((f1 + f2 + f3 + f6 + f7 + f9 + f10)):$f4:$f5:$f8" ;;
+        procs_running) pr=$f1 ;;
+        procs_blocked) pb=$f1 ;;
+        esac
+    done </proc/stat
+    psi_some=- psi_full=-
+    if [[ -r /proc/pressure/cpu ]]; then
+        while read -r kind rest; do
+            case $kind in
+            some) psi_some=${rest// /,} ;;
+            full) psi_full=${rest// /,} ;;
+            esac
+        done </proc/pressure/cpu
+    fi
+    printf -v now '%(%s)T'
+    printf -v day '%(%F)T'
+    printf '%s online=%s nr_running=%s procs_blocked=%s load=%s/%s/%s runq=%s psi_some=%s psi_full=%s%s\n' \
+        "$now" "$online" "$pr" "$pb" "$l1" "$l5" "$l15" "$runq" "$psi_some" "$psi_full" "$cpus" \
+        >>"$OUTDIR/vcpu-trace.$day.log"
+    read -r -t 2 -u 9 _
+done

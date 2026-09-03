@@ -1,0 +1,18 @@
+# Temporary sampling aid for tuning the vCPU re-plug policy — see README.md alongside.
+[Unit]
+Description=limina vCPU re-plug trace (temporary policy-tuning sampler)
+
+[Service]
+ExecStart=/usr/local/bin/limina-vcpu-trace
+Restart=always
+RestartSec=5
+Nice=10
+# The sampler reads /proc and /sys and writes one log dir; keep it in a small box.
+# LogsDirectory has systemd create /var/log/limina-vcpu-trace before the sandbox is set up.
+ProtectSystem=full
+ProtectHome=yes
+LogsDirectory=limina-vcpu-trace
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

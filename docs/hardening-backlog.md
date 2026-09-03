@@ -2478,3 +2478,28 @@ F44 enhanced images and the dogfood guest. The installer now drops every user's
 `~/.cache/gstreamer-1.0/registry.*.bin` after the mesa step: GStreamer re-validates a cached
 plugin only when the plugin file changes, so a `libgstva.so` blacklisted by the pre-`-8` abort
 would otherwise survive the upgrade and keep every GStreamer app at `no element "vavp9dec"`.
+
+## Host-CPU cost of a busy VM: Parallels shows less, we don't know why yet
+
+Dogfood observation (2026-09-03): on similarly busy guests, Parallels' processes accrue visibly
+less Activity Monitor %CPU than our worker does. The known standing costs on our side — guest
+timer exits, the display/present pipeline, the 1 s agent heartbeat cadence, and the virtio-net
+interrupt-status storm (its own section above) — have never been itemized against a real desktop
+workload, only at idle (see *Efficiency is unmeasured except at idle*). The work: profile the
+worker under a representative busy session, attribute CPU to exit reason / device / thread
+(`docs/profiling` playbook), and compare like-for-like with Parallels on the same guest workload
+before assuming any single cause. Energy tab / `powermetrics`, not the %CPU column, is the
+scoreboard.
+
+## vCPU re-plug is too eager under power-saver — trace first, then tune
+
+With power-saver reclaim live on dogfood (agent 0.6.0), shrink behaves; the complaint is the way
+back up: grow is immediate, jumps to max, and every trigger's threshold shrinks with the machine
+(`nr_running > online`, `loadavg1 >= online`, worker CPU ≈ online cores — the last includes the
+worker's fixed ~0.7-core overhead, so a shrunken guest is disproportionately easy to startle; an
+ssh login alone re-plugged 3→10). A guest-side sampler now records the policy inputs plus
+per-vCPU/total utilization and steal on the dogfood guest every 2 s: `spikes/vcpu-replug-trace/`
+(README has the reading guide). Tune from that trace — candidate levers are a grow dwell, partial
+grow (steps, not max), a floor on the trigger thresholds, and discounting the worker's fixed
+overhead from the host term — mindful of the balloon lesson that two eager controllers on one
+knob oscillate.
