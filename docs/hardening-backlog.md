@@ -1346,6 +1346,35 @@ Fix belongs in mesa's `vl_compositor` and is upstreamable. See `docs/graphics.md
   never reaches the host at all (no `RESOURCE_CREATE_*`, no `RESOURCE_ATTACH_BACKING` —
   probe with `LIMINA_TRACE_ATTACH_BACKING=1`), so it needs guest-kernel work first.
 
+## GPU — a guest can deadlock the virtio-gpu control thread against one of its venus rings
+
+📋 open, found 2026-09-02 while reviewing the transport for the Rust virglrenderer rewrite; not yet
+reproduced. Two blocking transport commands wait on each other's producer:
+
+- `vkWaitVirtqueueSeqnoMESA(n)` runs on the ring thread and `cnd_wait`s until
+  `ring->virtqueue_seqno >= n` (`vkr_ring_wait_virtqueue_seqno`). No timeout, no guard; the only
+  producer of `virtqueue_seqno` is `vkSubmitVirtqueueSeqnoMESA`, dispatched from the control
+  queue.
+- `vkWaitRingSeqnoMESA(ring, s)` runs on libkrun's control-queue thread and blocks it until the
+  ring's head reaches `s` (`vkr_context_wait_ring_seqno`). Its only guard — the ring thread's
+  "tail can never reach the wanted seqno → ring FATAL" check — lives in the ring loop's **idle
+  branch**, so it never runs while the ring thread is blocked inside a dispatch.
+
+A guest that sends the ring wait with no preceding submit, then a `vkWaitRingSeqnoMESA` for a
+seqno past that command, parks both threads for good: the ring cannot advance, the control
+thread is the only thing that could release it, and every context on the device (scanout, cursor,
+fences included) stops with them. Reachable by a hostile guest; also by a driver reordering bug,
+since the legitimate protocol is submit-then-wait in that exact order.
+
+Fix shape (mechanism in vkr): make the two blockers visible to each other instead of adding a
+timeout. Each ring records the virtqueue seqno it is blocked on; `vkr_context_wait_ring_seqno`
+checks the target ring before every sleep and, if the ring is parked on a virtqueue seqno above
+its current value while the control thread is about to sleep on that ring, marks the ring FATAL
+and poisons the context immediately — deterministic, and nothing on the hot path. A timed
+`cnd_wait` would trade the wedge for the `thrd_busy` class above (a slow legitimate wait killing
+a healthy context). RED first: a `vkr_*` L2 that emits the two commands from a raw venus client
+and asserts the context dies while a sibling context keeps presenting.
+
 ## GPU — KosmicKrisp's command-allocator pool has no ceiling when the client never flushes
 
 Measured 2026-08-26 on the host (zink-on-KK), with `spikes/notification-text-corruption/glyphmimic`.
