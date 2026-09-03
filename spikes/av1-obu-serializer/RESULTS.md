@@ -103,11 +103,13 @@ The cost of holding a shown frame is that its picture reaches its target a submi
 late. The backend keeps `held_target` for exactly that, and nothing waits on delivery,
 so it is a frame of latency and not a stall -- but the guest is not told. Its
 `vaSyncSurface` waits on the command-stream fence, which signals when the host returns,
-so a consumer that reads the target as soon as the fence signals gets whatever the surface
-held before. Measured 2026-09-02 with `ffmpeg -hwaccel vaapi` reading back a libaom
-pyramid clip (the YouTube 480p capture) on both the stock and the enhanced image: every
-directly-shown frame at the wall comes back stale (odd frames at 20-40 dB against dav1d),
-every `show_existing` frame bit-exact, the same on both tiers. A player that queues even
+so a consumer that reads the target as soon as the fence signals gets whatever the target
+holds at that moment. Measured 2026-09-02 with `ffmpeg -hwaccel vaapi` reading back a
+libaom pyramid clip (the YouTube 480p capture) on both the stock and the enhanced image:
+every directly-shown frame at the wall comes back stale (odd frames at 20-40 dB against
+dav1d on stock, ~58 dB on enhanced), every `show_existing` frame bit-exact. The worker
+trace names the timing: past the eighth frame every unit logs `holding this frame` and its
+`deliver (sw)` follows the next unit's `flushing the held frame`. A player that queues even
 one frame ahead never sees it; a readback-then-submit loop sees it on every such frame.
 Booked in `docs/hardening-backlog.md`.
 

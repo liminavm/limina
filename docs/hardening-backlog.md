@@ -2213,12 +2213,16 @@ frame takes is known only from the *next* descriptor, so the frame is held one s
 (`spikes/av1-obu-serializer/RESULTS.md`, *Holding is about the slots*). Its picture lands in
 `held_target` when the next unit arrives. The guest is told nothing: `vaSyncSurface` waits on
 the command-stream fence, which signals at return, so a consumer reading the target at fence
-time gets the surface's previous contents. Measured 2026-09-02, `ffmpeg -hwaccel vaapi`
-reading back a libaom pyramid clip on the stock and the enhanced image alike: every
-directly-shown frame at the wall stale (20-40 dB against dav1d), every `show_existing` frame
-bit-exact. libaom streams (YouTube) sit at the wall for most of every GOP; SVT-AV1 streams
+time gets whatever the target holds at that moment. Measured 2026-09-02, `ffmpeg -hwaccel
+vaapi` reading back a libaom pyramid clip on the stock and the enhanced image alike: every
+directly-shown frame at the wall stale (20-40 dB against dav1d on stock, ~58 dB on enhanced),
+every `show_existing` frame bit-exact, and the worker trace shows every unit past the eighth
+as `holding this frame` with its `deliver (sw)` after the next unit's `flushing the held
+frame`. libaom streams (YouTube) sit at the wall for most of every GOP; SVT-AV1 streams
 never store a shown frame and are not affected. A player that runs one frame ahead never
 observes it; a decode-sync-read loop (transcoding, frame capture) does on half its frames.
+Unexplained from the same runs: the vaapi readback emits no frame at all for pts 0 and 2
+(the key frame and the first shown inter frame) on either tier, while libdav1d does.
 
 No cheap fix: the information is in the next descriptor by construction. What would close it
 is a guest-side channel carrying the encoder's `refresh_frame_flags` (VA-API has no field for

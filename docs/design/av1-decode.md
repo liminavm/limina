@@ -184,12 +184,14 @@ are live — which happens in any pyramid GOP — storing a ninth means evicting
 evicting one a later frame still references loses it for good. There is no way to choose
 correctly at the moment the frame arrives.
 
-So **hidden frames are held for one submission** and emitted once the following descriptor
-settles the question exactly. Only hidden frames: nothing waits on their pixels until a later
-`show_existing`, whereas holding a shown frame would stall a caller that reads its surface
-back before submitting the next one. Shown frames are emitted at once into a slot nothing
-live occupies — in a pyramid GOP they are never stored at all, and a low-delay stream, where
-they are, never fills eight slots.
+So **a frame is held for one submission whenever every slot is live**, shown or hidden, and
+emitted once the following descriptor settles the question exactly. While a slot is free the
+frame goes out at once into it. Whether the frame is shown does not enter into it: a libaom
+pyramid GOP stores shown frames and fills eight slots, and emitting one with nothing refreshed
+loses every later reference to it. The cost is that a held shown frame's picture reaches its
+target a submission late, after the guest's fence has already signalled — a consumer that
+reads the target at fence time gets a stale surface (measured; booked in
+`docs/hardening-backlog.md`), a player that runs a frame ahead never notices.
 
 What a frame stored is read as a **set difference between consecutive reference maps**, never
 against our own slots and never per-slot. Surface ids are recycled, so a freshly reused id
