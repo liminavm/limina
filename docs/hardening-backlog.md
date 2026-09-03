@@ -2311,6 +2311,13 @@ exactly as the spec intends. PipeWire's ALSA sink then ignores it: the sink node
 param is its own period (512 frames) and nothing else, so the device's `snd_pcm_delay`
 component never reaches the graph, `pa_stream_get_latency`, or Firefox's cubeb.
 
+It is not that the delay is read and then dropped on export: spa's `alsa-pcm.c` never calls
+`snd_pcm_delay` at all. `get_avail()` takes `snd_pcm_avail()` (optionally refined by
+`snd_pcm_htimestamp`, off by default) and `get_status()` derives playback delay as
+`buffer_frames - avail` — that is `appl_ptr - hw_ptr` by construction, and a driver's
+`runtime->delay` cannot appear in it. So the quantity PipeWire tracks is the ring occupancy
+and nothing else.
+
 Measured on F44 / PipeWire 1.6.2, `paplay --latency-msec=50`, A/B'd inside one boot with
 `LIMINA_SND_ZERO_LATENCY=1`:
 
@@ -2327,8 +2334,9 @@ decode traffic on the host) the offset is unchanged, which rules the decoder out
 
 Two ways to close it, neither free:
 
-- **Fix it in PipeWire** (fold `snd_pcm_delay`'s device component into the ALSA sink's reported
-  latency) and ship that as an enhanced-tier guest component. Upstreamable, and correct for
+- **Fix it in PipeWire** (make `get_status()` add `snd_pcm_delay`'s excess over
+  `buffer_frames - avail` to the reported delay) and ship that as an enhanced-tier guest
+  component. Upstreamable, and correct for
   every virtio-snd guest, not just ours. But the two-tier guarantee means a *stock* guest must
   still work, so this cannot be the only answer.
 - **Carry it in `appl_ptr - hw_ptr` instead**, by completing a tx descriptor only once its
