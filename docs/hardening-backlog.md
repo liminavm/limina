@@ -2303,6 +2303,23 @@ it; mesa writes a constant 1), which is an enhanced-tier extension of the descri
 our guest mesa, or delaying the fence until the held picture is delivered, which deadlocks the
 very loop that observes the problem. Until then it is a documented cost, not a bug.
 
+## mpv's VA-API path cannot render on venus
+
+`mpv --hwdec=vaapi` decodes but never displays: the VA-API driver loads and initialises
+(`virtio_gpu_drv_video.so`, VA-API 1.23), then mpv's libplacebo dmabuf interop fails while
+probing surface formats and the whole `vo/gpu` load is abandoned, so mpv silently falls back
+to software decode (`hwdec-current="no"`).
+
+    [vo/gpu/vaapi] Going to probe surface formats (may log bogus errors)...
+    [vo/gpu/libplacebo] vk->MapMemory(vk->dev, slab->mem, 0, VK_WHOLE_SIZE, 0, &slab->data):
+        VK_ERROR_MEMORY_MAP_FAILED (../src/vulkan/malloc.c:973)
+    [vo/gpu] Loading failed.
+
+Measured 2026-09-03, F44 enhanced guest, mpv 0.41.0. Firefox's VA-API path is unaffected, so
+this is mpv's libplacebo interop and not the decode stack. It matters mostly because it
+removes mpv as a *measuring* vehicle: mpv is the easiest source of objective A/V-sync and
+dropped-frame numbers, and on this tier those numbers only ever describe software decode.
+
 ## AV1: VideoToolbox does not return super-resolution frames
 
 Measured 2026-08-30 on M4 Pro, macOS 26.5.2, driving the serializer's own output
