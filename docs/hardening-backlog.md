@@ -1436,9 +1436,12 @@ Read the C before acting on any of them.
   dead client's buffer — the ordinary case) is credited at `vkr_mtl_iosurface_free` /
   `vkr_mtl_shm_free`, which run AFTER `vkr_budget_forget_context` has already logged the residual
   as "destroyed with N still charged — host GPU memory was not released" and subtracted it from the
-  global total; the late credit then finds no slot and is dropped. So every such teardown produces a
-  false leak line, and the global total undercounts by the shared bytes until the importer lets go
-  — a cap-enforcing configuration admits that much more than it should. Check: kill a Vulkan client
+  global total; the late credit then finds no slot and is dropped — or, because the guest kernel
+  recycles context ids and `forget` zeroes the slot for reuse, finds the slot of a NEW context that
+  took the same id and debits that innocent context (and the global total a second time). So every
+  such teardown produces a false leak line, and the global total undercounts by the shared bytes
+  until the importer lets go, more if the id was reused — a cap-enforcing configuration admits that
+  much more than it should. Check: kill a Vulkan client
   while the compositor still shows its last frame and read the worker log at teardown. Fix shape:
   re-home in the LEDGER, not the charge — at forget, move the slot's live bytes to the shared bucket
   and log them as outliving the context (information, not error); credit a retired context id into
