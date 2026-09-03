@@ -22,11 +22,11 @@
 use std::fs::File;
 use std::io::ErrorKind;
 use std::os::fd::FromRawFd;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use limina_proto::{
-    read_message, write_message, CpuPressure, CpuTarget, FidoReport, Heartbeat, Hello, MemPressure,
-    Message, PowerProfileMsg, CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT,
+    read_message, write_message, CpuPressure, CpuSampler, CpuTarget, FidoReport, Heartbeat, Hello,
+    MemPressure, Message, PowerProfileMsg, CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT,
 };
 
 mod fido;
@@ -250,6 +250,11 @@ fn serve(stream: &mut File, power: &power::ProfileWatcher) -> std::io::Result<En
     // Report our runnable-task load only once the host says it runs a vCPU policy. A host with no
     // dynamic range never asks, and then this costs a guest exactly nothing — no sample, no frame.
     let mut report_cpu = false;
+    // The rate fields of that report are differences between consecutive reads, so the sampler
+    // holds the previous one and we time the interval it covers. Both are per connection: a gap
+    // while disconnected would otherwise be reported as one enormous interval.
+    let mut cpu_sampler = CpuSampler::default();
+    let mut cpu_since = Instant::now();
 
     // Fresh per connection: level-triggered means the current profile is re-sent to every new
     // host, not just on change. A guest with no profile daemon stays silent (see power.rs).
@@ -264,6 +269,14 @@ fn serve(stream: &mut File, power: &power::ProfileWatcher) -> std::io::Result<En
         )?;
         if !stream_ready && !uhid_ready {
             seq += 1;
+            // Sample the CPU BEFORE writing anything. `nr_running` counts tasks in R state at the
+            // instant of the read, and a vsock write wakes a kernel TX thread that is briefly R
+            // — sampling after the write would partly measure our own wake path and inflate the
+            // very number the host's grow rule keys on.
+            let cpu = report_cpu
+                .then(|| read_cpu_pressure(&mut cpu_sampler, cpu_since.elapsed()))
+                .flatten();
+            cpu_since = Instant::now();
             write_message(
                 stream,
                 CHANNEL_CONTROL,
@@ -278,10 +291,8 @@ fn serve(stream: &mut File, power: &power::ProfileWatcher) -> std::io::Result<En
             // only ack a `CpuTarget` ever gets: it carries the online count we ACTUALLY have,
             // so a write that failed or a CPU the guest brought back itself corrects the host
             // on the next tick rather than leaving the two sides believing different things.
-            if report_cpu {
-                if let Some(cp) = read_cpu_pressure() {
-                    write_message(stream, CHANNEL_CONTROL, &Message::CpuPressure(cp))?;
-                }
+            if let Some(cp) = cpu {
+                write_message(stream, CHANNEL_CONTROL, &Message::CpuPressure(cp))?;
             }
             // The power profile, when it changed (or on this connection's first tick). Riding
             // the tick bounds the report at one a second and costs an idle guest one atomic
@@ -437,20 +448,21 @@ fn read_mem_pressure() -> Option<MemPressure> {
 /// executor cannot drift apart on the path.
 const CPU_SYSFS: &str = "/sys/devices/system/cpu";
 
-/// Read a one-shot runnable-task snapshot for the host's dynamic vCPU policy. Every input is
-/// optional — PSI is 0 without `/proc/pressure/cpu`, and an unreadable `online` yields 0, which
-/// the host reads as "no signal" and never acts on. Returns `None` only when the CPU sysfs is
-/// missing entirely, since without it there is nothing the host could ask us to do.
-/// The parsing lives in `limina_proto::CpuPressure::from_proc` (host-testable).
-fn read_cpu_pressure() -> Option<CpuPressure> {
+/// Read a runnable-task report for the host's dynamic vCPU policy. Every input is optional — PSI
+/// is 0 without `/proc/pressure/cpu`, and an unreadable `online` yields 0, which the host reads as
+/// "no signal" and never acts on. Returns `None` only when the CPU sysfs is missing entirely,
+/// since without it there is nothing the host could ask us to do.
+///
+/// The sampler carries the previous reading, which is what turns the cumulative `/proc` counters
+/// into the interval rates the host's grow rule needs; all of it lives in
+/// `limina_proto::CpuSampler` (host-testable). `since` is the wall time this report covers.
+fn read_cpu_pressure(sampler: &mut CpuSampler, since: Duration) -> Option<CpuPressure> {
     let online = std::fs::read_to_string(format!("{CPU_SYSFS}/online")).ok()?;
     let present = std::fs::read_to_string(format!("{CPU_SYSFS}/present")).unwrap_or_default();
     let stat = std::fs::read_to_string("/proc/stat").unwrap_or_default();
     let loadavg = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
     let pressure = std::fs::read_to_string("/proc/pressure/cpu").unwrap_or_default();
-    Some(CpuPressure::from_proc(
-        &pressure, &loadavg, &stat, &online, &present,
-    ))
+    Some(sampler.sample(&pressure, &loadavg, &stat, &online, &present, since))
 }
 
 /// Bring the guest's online CPU count to what the host asked for.

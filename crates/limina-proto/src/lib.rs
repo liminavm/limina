@@ -273,9 +273,9 @@ pub struct CpuPressure {
     #[n(2)]
     pub loadavg5_x100: u32,
     /// PSI `some` CPU pressure over the 10s/60s windows, hundredths of a percent. Carried but
-    /// **unused in v1**: it says tasks waited for CPU, which is what an over-shrunk guest looks
-    /// like, so it is the natural second-generation signal. 0 when `/proc/pressure/cpu` is
-    /// unavailable (kernel `psi=0`).
+    /// unused: the windows are too slow to gate a decision made every second — [`Self::stall_x100`]
+    /// is the same quantity over the report interval, and that is the one the policy reads. 0 when
+    /// `/proc/pressure/cpu` is unavailable (kernel `psi=0`).
     #[n(3)]
     pub some_avg10: u32,
     #[n(4)]
@@ -289,6 +289,25 @@ pub struct CpuPressure {
     /// How many CPUs exist at all (`/sys/devices/system/cpu/present`), i.e. the boot vCPU count.
     #[n(6)]
     pub present: u32,
+    /// CPU time actually burned over the interval since this agent's previous report, in
+    /// hundredths of a core (`400` = four cores' worth). The corroborating signal for
+    /// [`Self::nr_running`]: a spike in R state that consumed no CPU was a wake blip, not demand.
+    /// Unlike the loadavg fields it has no decay, so it stays as fast as `nr_running` while being
+    /// far less noisy — it integrates the whole interval instead of sampling one instant.
+    ///
+    /// `None` from an agent too old to measure it (the field is simply absent on the wire); the
+    /// host must read that as *no signal* and fall back, never as a real zero, or every old agent
+    /// would lose the ability to grow. Also `None` when the interval is unusable (see
+    /// [`CpuSampler`]).
+    #[n(7)]
+    pub busy_x100: Option<u32>,
+    /// PSI cpu `some` stall over that same interval, hundredths of a percent (`1000` = 10% of the
+    /// interval had at least one task waiting for a CPU). Where [`Self::busy_x100`] says the
+    /// machine is full, this says somebody was made to wait — the two catch different shapes of
+    /// starvation, and a load that never saturates can still stall. Hotplug-proof, unlike the
+    /// jiffy counters. `None` on an old agent or an unusable interval.
+    #[n(8)]
+    pub stall_x100: Option<u32>,
 }
 
 impl CpuPressure {
@@ -339,8 +358,148 @@ impl CpuPressure {
             some_avg60: avg(some, "avg60"),
             online: count_cpu_list(online),
             present: count_cpu_list(present),
+            // Rates need two readings; a single snapshot cannot honestly fill these in.
+            busy_x100: None,
+            stall_x100: None,
         }
     }
+}
+
+/// Turns consecutive `/proc` snapshots into the *rate* fields of [`CpuPressure`].
+///
+/// The agent keeps one of these for the life of the process and calls [`Self::sample`] on each
+/// report tick. It lives here, rather than in the agent, for the reason
+/// [`CpuPressure::from_proc`] does: the agent only ever builds for the guest, so anything of its
+/// logic that wants a test has to sit in a crate the host can compile.
+///
+/// **Why per-CPU lines and not the aggregate.** `/proc/stat`'s summary `cpu` line sums only the
+/// CPUs that are online *at the moment of the read*, so it drops by an offlined CPU's entire
+/// accumulated history and jumps by an onlined one's — differencing it across a hotplug yields a
+/// wild number, in exactly the samples this policy is most sensitive in. Differencing per-CPU
+/// lines over the set present at *both* ends is immune to that. It also removes the need to know
+/// `USER_HZ`: the busy *fraction* is a ratio of jiffies, and multiplying by how many CPUs were
+/// counted gives busy cores directly.
+///
+/// A CPU that went offline mid-interval is excluded, so its share of the work is not counted and
+/// that one interval under-reports. Deliberate: the sample right after a shrink is precisely
+/// where a spurious re-grow happens, and under-reporting there errs toward staying small — while
+/// the stall figure, which is not built from jiffies, still sees any real starvation.
+#[derive(Debug, Clone, Default)]
+pub struct CpuSampler {
+    prev: Option<CpuRaw>,
+}
+
+/// The cumulative counters one `sample` call reads, kept to difference against the next.
+#[derive(Debug, Clone, Default)]
+struct CpuRaw {
+    /// `(cpu id, busy jiffies, total jiffies)` per `cpuN` line, sorted by id.
+    per_cpu: Vec<(u32, u64, u64)>,
+    /// PSI cpu `some` `total=`, microseconds.
+    stall_us: u64,
+}
+
+impl CpuSampler {
+    /// Build the report for this tick. `elapsed` is the wall time since the previous call; the
+    /// first call (and any call with a zero/absurd interval) yields `None` rates, which the host
+    /// reads as "no signal".
+    pub fn sample(
+        &mut self,
+        pressure: &str,
+        loadavg: &str,
+        stat: &str,
+        online: &str,
+        present: &str,
+        elapsed: core::time::Duration,
+    ) -> CpuPressure {
+        let mut p = CpuPressure::from_proc(pressure, loadavg, stat, online, present);
+        let raw = CpuRaw {
+            per_cpu: parse_per_cpu(stat),
+            stall_us: parse_psi_total_us(pressure),
+        };
+        if let Some(prev) = &self.prev {
+            let micros = elapsed.as_micros();
+            if micros > 0 {
+                p.busy_x100 = busy_x100(&prev.per_cpu, &raw.per_cpu);
+                // A counter that went backwards means the guest rebooted under us, or PSI was
+                // turned off and back on; there is no honest rate to report for that interval.
+                p.stall_x100 = raw.stall_us.checked_sub(prev.stall_us).map(|d| {
+                    // hundredths of a percent of the interval, capped at 100.00%.
+                    u32::try_from(d as u128 * 10_000 / micros)
+                        .unwrap_or(10_000)
+                        .min(10_000)
+                });
+            }
+        }
+        self.prev = Some(raw);
+        p
+    }
+}
+
+/// `(cpu id, busy, total)` for every per-CPU line of `/proc/stat`, sorted by id. The summary
+/// `cpu` line (no digits) is skipped on purpose — see [`CpuSampler`].
+fn parse_per_cpu(stat: &str) -> Vec<(u32, u64, u64)> {
+    let mut out = Vec::new();
+    for line in stat.lines() {
+        let Some(rest) = line.strip_prefix("cpu") else {
+            continue;
+        };
+        let Some((id, fields)) = rest.split_once(' ') else {
+            continue;
+        };
+        let Ok(id) = id.parse::<u32>() else {
+            continue;
+        };
+        // user nice system idle iowait irq softirq steal guest guest_nice
+        let v: Vec<u64> = fields
+            .split_whitespace()
+            .map(|f| f.parse::<u64>().unwrap_or(0))
+            .collect();
+        if v.len() < 8 {
+            continue;
+        }
+        let total: u64 = v.iter().take(10).sum();
+        // Everything that is not idle or waiting on IO counts as busy: this measures how much of
+        // the machine was consumed, and steal (the host descheduling us) is time we asked for.
+        let idle = v[3] + v[4];
+        out.push((id, total.saturating_sub(idle), total));
+    }
+    out.sort_unstable();
+    out
+}
+
+/// The `some` line's `total=` field of `/proc/pressure/cpu`, microseconds; 0 when absent.
+fn parse_psi_total_us(pressure: &str) -> u64 {
+    pressure
+        .lines()
+        .find(|l| l.starts_with("some"))
+        .and_then(|l| {
+            l.split_whitespace()
+                .find_map(|t| t.strip_prefix("total=")?.parse::<u64>().ok())
+        })
+        .unwrap_or(0)
+}
+
+/// Busy cores over the interval, in hundredths, from the CPUs present in both readings.
+/// `None` when nothing is comparable (no shared CPU, or no time passed on the ones that are).
+fn busy_x100(a: &[(u32, u64, u64)], b: &[(u32, u64, u64)]) -> Option<u32> {
+    let (mut busy, mut total, mut n) = (0u64, 0u64, 0u64);
+    for (id, b_busy, b_total) in b {
+        let Some((_, a_busy, a_total)) = a.iter().find(|(i, _, _)| i == id) else {
+            continue;
+        };
+        // Counters run backwards only across a reboot; skip rather than report a negative rate.
+        let (Some(db), Some(dt)) = (b_busy.checked_sub(*a_busy), b_total.checked_sub(*a_total))
+        else {
+            continue;
+        };
+        busy += db;
+        total += dt;
+        n += 1;
+    }
+    if total == 0 {
+        return None;
+    }
+    u32::try_from(busy * 100 * n / total).ok()
 }
 
 /// Parse a kernel cpu-list string (`"0-9"`, `"0,2-3"`, `"0"`) into sorted CPU ids. Unparseable
@@ -767,6 +926,7 @@ pub fn read_message(r: &mut impl Read) -> io::Result<(u32, Message)> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::time::Duration;
 
     fn round_trip(msg: Message) -> (u32, Message) {
         let mut buf = Vec::new();
@@ -823,8 +983,6 @@ mod tests {
         assert_eq!(mp.mem_free_kib, 0); // absent from meminfo -> 0 = "not reported"
     }
 
-    /// Old-agent compat: a payload encoded WITHOUT the `#[cbor(default)]` tail fields
-    /// (`mem_free_kib`, `io_full_*`) must decode into the grown struct with those fields 0.
     #[test]
     fn cpu_pressure_and_target_round_trip() {
         let cp = CpuPressure {
@@ -835,6 +993,8 @@ mod tests {
             some_avg60: 56,
             online: 4,
             present: 10,
+            busy_x100: Some(275),
+            stall_x100: Some(0),
         };
         let (_, decoded) = round_trip(Message::CpuPressure(cp));
         assert_eq!(decoded, Message::CpuPressure(cp));
@@ -873,6 +1033,99 @@ mod tests {
             CpuPressure::from_proc("", "", "", "", ""),
             CpuPressure::default()
         );
+    }
+
+    /// A single snapshot cannot know a rate; only the second call can.
+    #[test]
+    fn the_first_sample_reports_no_rates() {
+        let stat = "cpu  0 0 0 0\ncpu0 100 0 0 900 0 0 0 0 0 0\nprocs_running 1\n";
+        let mut s = CpuSampler::default();
+        let cp = s.sample("", "", stat, "0\n", "0\n", Duration::from_secs(1));
+        assert_eq!(cp.busy_x100, None);
+        assert_eq!(cp.stall_x100, None);
+    }
+
+    /// Busy cores come out of the jiffy *ratio* times the number of CPUs counted, so the result
+    /// needs neither USER_HZ nor a trustworthy clock: two of four CPUs fully busy is 2.00 cores.
+    #[test]
+    fn busy_is_reported_in_hundredths_of_a_core() {
+        let before = "cpu0 0 0 0 100 0 0 0 0 0 0\ncpu1 0 0 0 100 0 0 0 0 0 0\n\
+                      cpu2 0 0 0 100 0 0 0 0 0 0\ncpu3 0 0 0 100 0 0 0 0 0 0\nprocs_running 1\n";
+        // Each CPU advances 100 jiffies; cpu0/cpu1 spend all of it in user, cpu2/cpu3 in idle.
+        let after = "cpu0 100 0 0 100 0 0 0 0 0 0\ncpu1 100 0 0 100 0 0 0 0 0 0\n\
+                     cpu2 0 0 0 200 0 0 0 0 0 0\ncpu3 0 0 0 200 0 0 0 0 0 0\nprocs_running 1\n";
+        let mut s = CpuSampler::default();
+        s.sample("", "", before, "0-3\n", "0-3\n", Duration::from_secs(1));
+        let cp = s.sample("", "", after, "0-3\n", "0-3\n", Duration::from_secs(1));
+        assert_eq!(cp.busy_x100, Some(200));
+    }
+
+    /// The whole reason for reading per-CPU lines: `/proc/stat`'s summary `cpu` line covers only
+    /// the CPUs online at that instant, so across a hotplug its delta is meaningless. A CPU that
+    /// disappeared is simply not compared, and the remaining ones still give an honest number.
+    #[test]
+    fn a_hotplug_does_not_corrupt_the_busy_reading() {
+        let before = "cpu  400 0 0 400 0 0 0 0 0 0\ncpu0 100 0 0 100 0 0 0 0 0 0\n\
+                      cpu1 100 0 0 100 0 0 0 0 0 0\nprocs_running 1\n";
+        // cpu1 went offline; the summary line collapses to cpu0 alone (a huge apparent drop),
+        // while cpu0 itself spent the interval half busy.
+        let after = "cpu  150 0 0 150 0 0 0 0 0 0\ncpu0 150 0 0 150 0 0 0 0 0 0\n\
+                     procs_running 1\n";
+        let mut s = CpuSampler::default();
+        s.sample("", "", before, "0-1\n", "0-1\n", Duration::from_secs(1));
+        let cp = s.sample("", "", after, "0\n", "0-1\n", Duration::from_secs(1));
+        assert_eq!(cp.busy_x100, Some(50)); // one CPU, half of it busy
+    }
+
+    /// Stall is the PSI `some` total advanced over the interval, as a share of it.
+    #[test]
+    fn stall_is_the_share_of_the_interval_someone_waited() {
+        let before = "some avg10=0.00 avg60=0.00 avg300=0.00 total=1000000\n";
+        let after = "some avg10=0.00 avg60=0.00 avg300=0.00 total=1250000\n";
+        let stat = "cpu0 0 0 0 100 0 0 0 0 0 0\nprocs_running 1\n";
+        let mut s = CpuSampler::default();
+        s.sample(before, "", stat, "0\n", "0\n", Duration::from_secs(1));
+        let cp = s.sample(after, "", stat, "0\n", "0\n", Duration::from_secs(1));
+        assert_eq!(cp.stall_x100, Some(2500)); // 0.25s of 1s = 25.00%
+    }
+
+    /// Old-agent compat, the load-bearing half of it: a payload carrying only fields 0..=6 must
+    /// decode with the two rate fields **absent**, not zero. The host reads `None` as "no signal"
+    /// and falls back to the pre-rate rule; a zero would read as "idle" and could never grow.
+    #[test]
+    fn a_pre_rate_agents_report_decodes_with_no_rates() {
+        #[derive(Encode)]
+        struct OldCpuPressure {
+            #[n(0)]
+            nr_running: u32,
+            #[n(1)]
+            loadavg1_x100: u32,
+            #[n(2)]
+            loadavg5_x100: u32,
+            #[n(3)]
+            some_avg10: u32,
+            #[n(4)]
+            some_avg60: u32,
+            #[n(5)]
+            online: u32,
+            #[n(6)]
+            present: u32,
+        }
+        let old = OldCpuPressure {
+            nr_running: 3,
+            loadavg1_x100: 152,
+            loadavg5_x100: 31,
+            some_avg10: 1234,
+            some_avg60: 56,
+            online: 4,
+            present: 10,
+        };
+        let bytes = minicbor::to_vec(&old).unwrap();
+        let cp: CpuPressure = minicbor::decode(&bytes).unwrap();
+        assert_eq!(cp.nr_running, 3);
+        assert_eq!(cp.online, 4);
+        assert_eq!(cp.busy_x100, None);
+        assert_eq!(cp.stall_x100, None);
     }
 
     /// The plan never touches cpu0, works from the top down, and stops exactly on target.

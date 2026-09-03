@@ -19,7 +19,7 @@
 //! −19% of the worker's vCPU CPU time, about 8.5% of a core, for identical work. Note the
 //! mechanism: **timer exits, not IPIs** — offlining *raised* IPI1 tenfold (function-call IPIs now
 //! reach fewer CPUs but the sender still pays) while total CPU fell. That is why the policy gates
-//! on how many tasks are runnable, not on IPI or wakeup counts.
+//! on how much CPU the guest actually wants, not on IPI or wakeup counts.
 //!
 //! Two regimes it deliberately does NOT chase:
 //! - A **truly idle** guest already costs ~1.8% of a core at 10 vCPUs under NO_HZ. There is
@@ -144,6 +144,33 @@ const HOST_CPU_MIN_INTERVAL: Duration = Duration::from_millis(900);
 /// How close to saturating its online vCPUs the guest must be before the host signal alone calls
 /// for a grow, in hundredths of a core. A quarter of a core of slack left.
 const GROW_WITHIN_X100: u32 = 25;
+
+/// How full the guest must actually be for a runnable-task spike to count as demand, as a
+/// percentage of its online vCPUs.
+///
+/// `nr_running` alone is one instant of a very spiky quantity, and it fires on things that are
+/// not demand at all: a handful of tasks woken together are in R state for microseconds before
+/// the scheduler places them, and on a shrunken machine a handful is already more than `online`.
+/// Measured on a lightly used desktop guest under `power-saver` (99 min, `spikes/vcpu-replug-trace`):
+/// **44 grows to max, every one of them with the guest burning 0.18–1.61 cores on 3–7 online**,
+/// median 0.32 — a bounce every 2.3 minutes, none of it demand. One sample reported 12 runnable
+/// tasks in a second that consumed 0.46 of a core.
+///
+/// So a spike must be corroborated by CPU the guest actually burned over the same interval
+/// ([`limina_proto::CpuPressure::busy_x100`]). That measurement has no decay either, so the pair
+/// stays as fast as `nr_running` was; it just refuses to act on a spike that consumed nothing.
+const GROW_UTIL_GATE_PCT: u32 = 75;
+
+/// How much of the report interval must have had a task waiting for a CPU before that *alone*
+/// calls for a grow, in hundredths of a percent.
+///
+/// The gate above asks whether the machine is full; this asks whether anyone was made to wait,
+/// which is the thing we actually care about and the one the gate can miss — an interactive load
+/// that never saturates can still stall on a machine squeezed too small. PSI is also immune to
+/// the hotplug artefacts the jiffy counters have to work around. Without this backstop, gating
+/// the spike would trade "too eager" for "silently starves", which is the same mistake the
+/// balloon policy made in the other direction.
+const GROW_STALL_GATE_X100: u32 = 1_000;
 
 /// One decision's inputs and outcome, for the debug trace.
 struct State {
@@ -309,20 +336,38 @@ impl VcpuPolicy {
         }
         let online = p.online.clamp(1, self.max);
 
-        // GROW — immediate, coarse, no dwell and no cooldown. More runnable tasks than CPUs, or
-        // a 1-minute load that already fills the machine, means the guest is short *now*; hand
-        // back everything rather than climbing one step per dwell while it waits.
-        // The host term: the worker is burning nearly as much CPU as the guest has vCPUs, so the
-        // guest is saturating what it has whatever its own report says (or has not said yet).
+        // GROW — immediate, coarse, no dwell and no cooldown. Any of four ways to be short
+        // *now*; hand back everything rather than climbing one step per dwell while it waits.
+        //
+        // 1. A runnable-task spike that the guest's own utilisation corroborates. The spike is
+        //    the fast signal and the utilisation is what makes it trustworthy — see
+        //    [`GROW_UTIL_GATE_PCT`]. An agent too old to measure utilisation reports `None`,
+        //    and then the spike stands alone exactly as it used to: an old guest must not lose
+        //    the ability to grow because we learned to be pickier.
+        let corroborated = p
+            .busy_x100
+            .is_none_or(|busy| busy >= GROW_UTIL_GATE_PCT * online);
+        // 2. Someone actually waited for a CPU over the last interval ([`GROW_STALL_GATE_X100`]).
+        let stalled = p
+            .stall_x100
+            .is_some_and(|stall| stall >= GROW_STALL_GATE_X100);
+        // 3. A 1-minute load that already fills the machine. Slow, but it is what the stock tier
+        //    and a `psi=0` kernel have.
+        let loaded = p.loadavg1_x100 >= online * 100;
+        // 4. The host term: the worker is burning nearly as much CPU as the guest has vCPUs, so
+        //    the guest is saturating what it has whatever its own report says (or has not said
+        //    yet). Already a utilisation measure, so it needs no gate of its own.
         let host_saturated =
             host_busy_x100.is_some_and(|busy| busy + GROW_WITHIN_X100 >= online * 100);
-        if p.nr_running > online || p.loadavg1_x100 >= online * 100 || host_saturated {
+        if (p.nr_running > online && corroborated) || stalled || loaded || host_saturated {
             st.calm_since = None;
             if online < self.max {
                 log::info!(
-                    "dynamic vCPUs: {online} online but {} runnable (load1 {:.2}, host {:.2} \
-                     cores) → asking for {}",
+                    "dynamic vCPUs: {online} online, {} runnable, {:.2} cores busy, {:.2}% \
+                     stalled (load1 {:.2}, host {:.2} cores) → asking for {}",
                     p.nr_running,
+                    p.busy_x100.map_or(f64::NAN, |b| f64::from(b) / 100.0),
+                    p.stall_x100.map_or(f64::NAN, |s| f64::from(s) / 100.0),
                     f64::from(p.loadavg1_x100) / 100.0,
                     host_busy_x100.map_or(f64::NAN, |b| f64::from(b) / 100.0),
                     self.max
@@ -375,6 +420,8 @@ impl VcpuPolicy {
 mod tests {
     use super::*;
 
+    /// A current agent on a guest doing nothing: one task runnable (itself, reading `/proc`),
+    /// no CPU burned, nobody waiting.
     fn idle(online: u32) -> CpuPressure {
         CpuPressure {
             nr_running: 1,
@@ -384,13 +431,18 @@ mod tests {
             some_avg60: 0,
             online,
             present: 10,
+            busy_x100: Some(0),
+            stall_x100: Some(0),
         }
     }
 
+    /// A guest genuinely working: the runnable tasks are running, so they show up as burned CPU
+    /// too — capped at what the machine physically has.
     fn busy(online: u32, nr_running: u32) -> CpuPressure {
         CpuPressure {
             nr_running,
             loadavg1_x100: nr_running * 100,
+            busy_x100: Some((nr_running * 100).min(online * 100)),
             ..idle(online)
         }
     }
@@ -481,6 +533,79 @@ mod tests {
         assert_eq!(
             p.decide(&idle(10), rearmed + DEFAULT_SHRINK_DWELL),
             Some(CpuTarget { online: 9 })
+        );
+    }
+
+    /// The regression the whole utilisation gate exists for, taken verbatim from a dogfood trace
+    /// (`spikes/vcpu-replug-trace`): twelve tasks in R state on a 4-CPU guest that burned less
+    /// than half a core that second. Tasks woken together sit in R for microseconds before the
+    /// scheduler places them, and on a shrunken machine a handful already exceeds `online`.
+    /// Acting on that spike is what produced a bounce to max every 2.3 minutes.
+    #[test]
+    fn a_runnable_spike_that_burned_no_cpu_is_not_demand() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let sample = CpuPressure {
+            nr_running: 12,
+            loadavg1_x100: 31,
+            busy_x100: Some(46),
+            ..idle(4)
+        };
+        assert_eq!(p.decide(&sample, Instant::now()), None);
+    }
+
+    /// ...and the other half of that gate: the same spike on a machine that IS full is exactly
+    /// the burst the policy must answer instantly.
+    #[test]
+    fn a_runnable_spike_on_a_full_machine_still_grows_at_once() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let sample = CpuPressure {
+            nr_running: 6,
+            loadavg1_x100: 31, // loadavg has not caught up yet — this is the burst's first second
+            busy_x100: Some(290),
+            ..idle(3)
+        };
+        assert_eq!(
+            p.decide(&sample, Instant::now()),
+            Some(CpuTarget { online: 10 })
+        );
+    }
+
+    /// An agent too old to measure utilisation sends no reading at all, and then the spike stands
+    /// alone exactly as it did before the gate existed. Being pickier must never cost an old
+    /// guest the ability to grow — that would be a stall the user feels, on a guest that cannot
+    /// even tell us why.
+    #[test]
+    fn a_pre_rate_agent_grows_on_the_spike_alone() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let sample = CpuPressure {
+            nr_running: 12,
+            loadavg1_x100: 31,
+            busy_x100: None,
+            stall_x100: None,
+            ..idle(4)
+        };
+        assert_eq!(
+            p.decide(&sample, Instant::now()),
+            Some(CpuTarget { online: 10 })
+        );
+    }
+
+    /// The backstop the gate needs: a load that never fills the machine can still make tasks
+    /// wait, and waiting is the actual harm. Nothing here would grow on utilisation, loadavg or
+    /// runnable count — only the stall says the guest was squeezed too small.
+    #[test]
+    fn tasks_waiting_for_a_cpu_grow_even_on_a_machine_that_is_not_full() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let sample = CpuPressure {
+            nr_running: 2,
+            loadavg1_x100: 190,
+            busy_x100: Some(210),
+            stall_x100: Some(1_800),
+            ..idle(4)
+        };
+        assert_eq!(
+            p.decide(&sample, Instant::now()),
+            Some(CpuTarget { online: 10 })
         );
     }
 
