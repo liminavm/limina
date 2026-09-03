@@ -24,6 +24,7 @@ original clip:
 | pan       | 31                     | 29            |
 | lowdelay  | 60                     | 0             |
 | aompyramid| 36                     | 28            |
+| gm        | 56                     | 40            |
 
 \* the `superres` capture carries a local repair: two of its tile payloads were
 recorded as zeros (see *Known defect* below) and were restored from the clip.
@@ -33,11 +34,27 @@ no decoder emits them. They are covered transitively: every shown picture is
 predicted from them, so a hidden frame decoded wrongly appears as a pixel
 difference in the frames that reference it.
 
-**Global motion is still unexercised.** No fixture induces it, so
-`write_global_motion_params()` is unverified. A clip that actually provokes warped
-motion is still owed.
+**Global motion is covered by `gm`** (libaom, a continuous zoom: ROTZOOM on 81 of 96
+frames). It is the fixture that caught the one serializer fault a real stream has shown
+so far: `write_gm_param()` subtracted the spec's `sub` term from the coded value as well
+as from the reference, so every diagonal term of a rotzoom or affine model was written at
+the range floor -- a scale of about 0.875 where the encoder meant 1.0. YouTube's libaom
+streams use global motion on pans and zooms, so a viewer saw smeared, block-copied
+pictures from the first such frame until the next keyframe, at the same timestamps every
+time. Two 40 s YouTube captures (480p and 1080p, 689 and 1318 shown pictures) decode
+bit-identically after the fix; they are not committed, `gm` stands in for them.
 
-**One encoder is not a GOP.** Six of the seven clips are SVT-AV1, and its pyramid never
+**A fixture that never provokes a syntax path proves nothing about it.** `pan` was
+encoded to induce global motion and never did; the row above said "unexercised" and was
+right. Measure coverage from the descriptors the guest produced (`./coverage`), never from
+the encoder flags.
+
+**The oracle pairs pictures by order hint, which wraps.** `frame_offset` is a few bits
+wide, so a clip longer than one order-hint cycle repeats offsets; the search for a
+counterpart starts after the previous match, never from the beginning, or every picture
+past the first cycle is paired with the wrong reference and reported as a mismatch.
+
+**One encoder is not a GOP.** Six of the eight clips are SVT-AV1, and its pyramid never
 stores a shown frame; libaom's does, which is a different shape of DPB and the one
 browsers actually play. `aompyramid` exists because that difference was worth a fixture,
 not because libaom exercises different syntax. Coverage of the *syntax* says nothing
@@ -56,13 +73,8 @@ evicts one, and evicting one a later frame still references loses it. Which slot
 the guest chose is information that exists **only in the next frame's reference
 map**, so it cannot be derived when the frame arrives.
 
-Hidden frames are therefore held for one submission and emitted once the next
-descriptor settles the question. Only hidden frames are held: nothing waits on
-their pixels until a later `show_existing`, whereas holding a shown frame would
-stall a caller that reads its surface back before submitting the next one. Shown
-frames go out immediately into a slot nothing live occupies — in a pyramid GOP
-they are never stored at all, and a low-delay stream, where they are, never fills
-eight slots.
+A frame is therefore held for one submission and emitted once the next descriptor
+settles the question -- shown or hidden, whenever every slot is live (next section).
 
 What a frame stored is read as a **set difference between consecutive reference
 maps**, never against our own slots and never per-slot. Surface ids are recycled
@@ -89,7 +101,15 @@ Every SVT-AV1 pyramid fixture has none.
 
 The cost of holding a shown frame is that its picture reaches its target a submission
 late. The backend keeps `held_target` for exactly that, and nothing waits on delivery,
-so it is a frame of latency and not a stall.
+so it is a frame of latency and not a stall -- but the guest is not told. Its
+`vaSyncSurface` waits on the command-stream fence, which signals when the host returns,
+so a consumer that reads the target as soon as the fence signals gets whatever the surface
+held before. Measured 2026-09-02 with `ffmpeg -hwaccel vaapi` reading back a libaom
+pyramid clip (the YouTube 480p capture) on both the stock and the enhanced image: every
+directly-shown frame at the wall comes back stale (odd frames at 20-40 dB against dav1d),
+every `show_existing` frame bit-exact, the same on both tiers. A player that queues even
+one frame ahead never sees it; a readback-then-submit loop sees it on every such frame.
+Booked in `docs/hardening-backlog.md`.
 
 `aompyramid` is the regression test: on the previous assignment its rebuilt stream does
 not decode at all.

@@ -408,11 +408,15 @@ int main(int argc, char **argv)
      * carries one decode per submission and emits a picture only for the frames the guest
      * marked shown. Comparing by index would pair different frames and report every one of
      * them as a pixel mismatch. */
+    /* frame_offset is an order hint, a few bits wide, so it repeats every hundred-odd
+     * frames; both decodes emit pictures in display order, so the counterpart is the next
+     * reference picture with that offset after the previous match, never an earlier one. */
+    unsigned r_next = 0;
     for (unsigned i = 0; i < sub.n; i++) {
         const char *why = NULL;
         unsigned r;
 
-        for (r = 0; r < ref.n; r++)
+        for (r = r_next; r < ref.n; r++)
             if (ref.pics[r].frame_hdr->frame_offset == sub.pics[i].frame_hdr->frame_offset)
                 break;
         if (r == ref.n) {
@@ -421,6 +425,7 @@ int main(int argc, char **argv)
             mismatches++;
             continue;
         }
+        r_next = r + 1;
         compared++;
         if (planes_equal(&ref.pics[r], &sub.pics[i], &why))
             continue;

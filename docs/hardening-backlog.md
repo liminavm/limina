@@ -2206,6 +2206,26 @@ at every replay (`Illegal resource 2122xx`/`3608xx`, contiguous ids) — stale v
 the guest had already destroyed, or decode targets that did not come back; not yet distinguished.
 Chrome recovers either way, so this is a warning-spam and audit item, not a symptom.
 
+## Open — AV1: a shown frame held at the eight-slot wall reaches its target a submission late
+
+The serializer assigns reference slots itself, and once eight pictures are live the slot a new
+frame takes is known only from the *next* descriptor, so the frame is held one submission
+(`spikes/av1-obu-serializer/RESULTS.md`, *Holding is about the slots*). Its picture lands in
+`held_target` when the next unit arrives. The guest is told nothing: `vaSyncSurface` waits on
+the command-stream fence, which signals at return, so a consumer reading the target at fence
+time gets the surface's previous contents. Measured 2026-09-02, `ffmpeg -hwaccel vaapi`
+reading back a libaom pyramid clip on the stock and the enhanced image alike: every
+directly-shown frame at the wall stale (20-40 dB against dav1d), every `show_existing` frame
+bit-exact. libaom streams (YouTube) sit at the wall for most of every GOP; SVT-AV1 streams
+never store a shown frame and are not affected. A player that runs one frame ahead never
+observes it; a decode-sync-read loop (transcoding, frame capture) does on half its frames.
+
+No cheap fix: the information is in the next descriptor by construction. What would close it
+is a guest-side channel carrying the encoder's `refresh_frame_flags` (VA-API has no field for
+it; mesa writes a constant 1), which is an enhanced-tier extension of the descriptor and of
+our guest mesa, or delaying the fence until the held picture is delivered, which deadlocks the
+very loop that observes the problem. Until then it is a documented cost, not a bug.
+
 ## AV1: VideoToolbox does not return super-resolution frames
 
 Measured 2026-08-30 on M4 Pro, macOS 26.5.2, driving the serializer's own output

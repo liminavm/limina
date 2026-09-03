@@ -59,6 +59,22 @@ enc lowdelay    "$SRC"                                pred-struct=1
 # A rigid pan over detailed content, the strongest inducement to global motion.
 enc pan         "${PAN},noise=alls=40:allf=t+u,crop=640:360:'min(t*60,640)':180"
 aom aompyramid  "$SRC"
+# A continuous zoom with a drift, which is what makes libaom emit ROTZOOM global motion on
+# nearly every inter frame (81 of 96 here). libaom, because SVT-AV1's pan above never
+# produced any; --enable-global-motion is on by default but is named so it cannot be lost.
+gmaom() {
+    local name=$1
+    echo "==> $name (libaom, global motion)"
+    ffmpeg -hide_banner -loglevel error -f lavfi -i "testsrc2=size=1280x720:rate=$RATE:duration=3" \
+        -vf "zoompan=z='1+0.015*on':d=1:x='iw/2-(iw/zoom/2)+on*3':y='ih/2-(ih/zoom/2)+on*2':s=640x360:fps=$RATE" \
+        -pix_fmt yuv420p -f yuv4mpegpipe -y "clips/$name.y4m"
+    aomenc --quiet --ivf --cpu-used=3 --end-usage=q --cq-level=30 --kf-max-dist=90 \
+        --lag-in-frames=19 --auto-alt-ref=1 --enable-global-motion=1 -o "clips/$name.ivf" "clips/$name.y4m"
+    rm -f "clips/$name.y4m"
+    ffmpeg -hide_banner -loglevel error -i "clips/$name.ivf" -c:v copy -y "clips/$name.mp4"
+    ffmpeg -hide_banner -loglevel error -i "clips/$name.ivf" -c:v copy -f obu -y "clips/$name.obu"
+}
+gmaom gm
 
 echo
 echo "clips:"
