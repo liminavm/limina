@@ -1387,10 +1387,10 @@ Read the C before acting on any of them.
   `vn_cs_decoder_get_fatal`). The guest's `vn_call_*` only checks that a reply shmem exists, so it
   decodes whatever the slot holds — a fresh reply-pool slot is zero-filled, which decodes as
   command type 0, `ret = 0 = VK_SUCCESS`, out-pointers "absent", every out parameter left
-  untouched. The rewrite hit exactly this shape from a different cause (a stub decoder) and it
-  surfaced as GTK `malloc`ing an uninitialised `size_t` 11 s later. Ghost containment was designed
-  for async creates, which carry no reply, so today this needs a reply-carrying command to name a
-  tombstoned object (`vkGetImageMemoryRequirements2` on a ghost image is the obvious one). Check:
+  untouched. The Rust rewrite found the same soft-skip shape in its own ghost path and now poisons
+  a reply-carrying command that names a refused object. Ghost containment was designed for async
+  creates, which carry no reply, so today this needs a reply-carrying command to name a tombstoned
+  object (`vkGetImageMemoryRequirements2` on a ghost image is the obvious one). Check:
   force a tombstone (the `LIMINA_VKR_FAIL_CREATE` hook, once it exists) and call a reply-carrying
   command on the ghost; the guest must see an error, not success with garbage. Fix shape: a
   soft-skipped command whose flags carry `GENERATE_REPLY` gets an explicit error reply
