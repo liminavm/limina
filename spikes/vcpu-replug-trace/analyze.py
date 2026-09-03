@@ -12,9 +12,10 @@ sample cadence (gaps mean the sampler stalled or the guest suspended), jiffy mon
 between the `online=` set and which cpuN fields are present.
 
 Attribution reads the sample window just before each upward `online` transition and asks which
-grow trigger (vcpu_policy.rs) could have fired: nr_running > online, loadavg1 >= online, or
-neither — "neither" fingers the host-side term (worker CPU ~ online cores) or a profile floor
-rise, which the guest cannot observe directly.
+grow trigger (vcpu_policy.rs) could have fired: a corroborated runnable spike (nr_running > online
+AND busy >= 0.75 * online), PSI stall, loadavg1 >= online, or none of them — "none" fingers the
+host-side term (worker CPU ~ online cores) or a profile floor rise, which the guest cannot observe
+directly. The busy figure printed for each grow is what decides the first of those.
 """
 
 import re

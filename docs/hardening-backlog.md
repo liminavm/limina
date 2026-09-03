@@ -2564,15 +2564,15 @@ worker under a representative busy session, attribute CPU to exit reason / devic
 before assuming any single cause. Energy tab / `powermetrics`, not the %CPU column, is the
 scoreboard.
 
-## vCPU re-plug is too eager under power-saver — trace first, then tune
+## vCPU grow thresholds are set from one workload, not a spread
 
-With power-saver reclaim live on dogfood (agent 0.6.0), shrink behaves; the complaint is the way
-back up: grow is immediate, jumps to max, and every trigger's threshold shrinks with the machine
-(`nr_running > online`, `loadavg1 >= online`, worker CPU ≈ online cores — the last includes the
-worker's fixed ~0.7-core overhead, so a shrunken guest is disproportionately easy to startle; an
-ssh login alone re-plugged 3→10). A guest-side sampler now records the policy inputs plus
-per-vCPU/total utilization and steal on the dogfood guest every 2 s: `spikes/vcpu-replug-trace/`
-(README has the reading guide). Tune from that trace — candidate levers are a grow dwell, partial
-grow (steps, not max), a floor on the trigger thresholds, and discounting the worker's fixed
-overhead from the host term — mindful of the balloon lesson that two eager controllers on one
-knob oscillate.
+The eager re-plug itself is fixed: a runnable-task spike must now be corroborated by CPU the guest
+actually burned over the report interval, with PSI stall over that interval as an independent
+trigger (`crates/limina/src/vcpu_policy.rs`; evidence and measurements in
+`spikes/vcpu-replug-trace/`). What is still owed is the *calibration*. The two constants — 75% of
+online busy, 10% of the interval stalled — were chosen against an idle desktop plus synthetic
+spinner bursts, which bracket the extremes and say nothing about the middle: a compile with a
+serial link step, a browser under video, a guest doing IO-heavy work where `busy` stays low while
+tasks genuinely wait. Collect traces across those, check the grow latency and the false-grow rate
+at each, and move the constants only on evidence — mindful of the balloon lesson that a controller
+tuned on one workload oscillates on the next.
