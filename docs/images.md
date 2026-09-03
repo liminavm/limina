@@ -62,7 +62,8 @@ Two facts the table cannot show:
 
 - **The guest agents are not RPMs and so are not in the table.** All three F44 enhanced images
   carry **`limina-agent` 0.6.0** and `limina-agent-session`, installed to `/usr/local/bin` with
-  their units (payload **r24**, delivered 2026-09-03). 0.6.0 added the `powerprofile` capability
+  their units (payload **r24**, delivered 2026-09-03; the dogfood guest took the same 0.6.0 binary
+  by hand the same day, straight from 0.4.0 — its first agent with the `vcpu` cap). 0.6.0 added the `powerprofile` capability
   (the GNOME power-mode toggle reaching host policy); 0.5.0 added `vcpu`, the floor for dynamic
   vCPU offlining. Check the version in a guest with `limina-agent --version`, which is also the
   fastest way to tell a stale image from a fresh one.
