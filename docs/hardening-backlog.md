@@ -1430,6 +1430,19 @@ Read the C before acting on any of them.
   the virtqueue) on the ring seqno instead of blocking the thread. That touches the virtqueue
   ordering contract (the following `CREATE_BLOB` relies on FIFO processing), so it is a design, not
   a patch.
+- **The GPU budget mis-reports a surface that outlives its exporting context.** Charges are
+  attributed to the dispatching context (`vkr_budget_set_context`) and credited when the object
+  dies. An IOSurface or mtl_shm carrier kept alive by an importing context (the compositor holding a
+  dead client's buffer — the ordinary case) is credited at `vkr_mtl_iosurface_free` /
+  `vkr_mtl_shm_free`, which run AFTER `vkr_budget_forget_context` has already logged the residual
+  as "destroyed with N still charged — host GPU memory was not released" and subtracted it from the
+  global total; the late credit then finds no slot and is dropped. So every such teardown produces a
+  false leak line, and the global total undercounts by the shared bytes until the importer lets go
+  — a cap-enforcing configuration admits that much more than it should. Check: kill a Vulkan client
+  while the compositor still shows its last frame and read the worker log at teardown. Fix shape:
+  re-home in the LEDGER, not the charge — at forget, move the slot's live bytes to the shared bucket
+  and log them as outliving the context (information, not error); credit a retired context id into
+  the shared bucket instead of dropping it.
 - The seqno-wait **deadlock** in the section above came out of the same review.
 
 ## GPU — KosmicKrisp's command-allocator pool has no ceiling when the client never flushes
