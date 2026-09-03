@@ -61,12 +61,11 @@ guest with `rpm -q`. Last verified by the r23 installer's own `rpm -q` in each b
 Two facts the table cannot show:
 
 - **The guest agents are not RPMs and so are not in the table.** All three F44 enhanced images
-  carry **`limina-agent` 0.5.0** and `limina-agent-session`, installed to `/usr/local/bin` with
-  their units (payload **r23**, delivered 2026-09-02; its agent binaries are byte-identical to
-  r22's, which introduced them). 0.5.0 is the release that added
-  the `vcpu` capability, so it is the floor for dynamic vCPU offlining on the enhanced tier; check
-  it in a guest with `limina-agent --version`, which is also the fastest way to tell a stale image
-  from a fresh one.
+  carry **`limina-agent` 0.6.0** and `limina-agent-session`, installed to `/usr/local/bin` with
+  their units (payload **r24**, delivered 2026-09-03). 0.6.0 added the `powerprofile` capability
+  (the GNOME power-mode toggle reaching host policy); 0.5.0 added `vcpu`, the floor for dynamic
+  vCPU offlining. Check the version in a guest with `limina-agent --version`, which is also the
+  fastest way to tell a stale image from a fresh one.
 
 - **The limina kernel branch carries two drm/virtio commits**, both upstream-now candidates:
   per-scanout rects exposed as suggested connector offsets (the guest half of the arrangement
@@ -108,7 +107,13 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r23.tar.zst`** (r23, 2026-09-02: kernel
+**Current payload: `payload/limina-guest-tools-f44-r24.tar.zst`** (r24, 2026-09-03: host-side
+repack of r23 with `limina-agent` 0.6.0 — the agent watches `ActiveProfile` on
+`net.hadess.PowerProfiles` and relays it as `POWER_PROFILE`, so a guest's power profile now moves
+host policy: `power-saver` reclaims idle vCPUs, flipping back restores them at once. Kernel, mesa
+and limina-agent-session identical to r23; applied to all three F44 enhanced images
+(`.bak-pre-r24.raw` CoW backups), both agent hashes verified, kernel install short-circuited so
+the permanent default stayed `7.1.8-limina16k.4`, no trial boot owed.) Previous: r23 (2026-09-02: kernel
 `limina-kernel-16k-7.1.8-4` unchanged, agents unchanged, mesa `26.1.8-10.limina` — virgl no longer
 refuses to export a dmabuf whose guest storage is smaller than its layout, and Mesa's EGL layer
 returns `EGL_FALSE` when a driver cannot export an fd instead of leaving the caller's fd array
