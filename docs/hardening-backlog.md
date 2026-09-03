@@ -1375,6 +1375,63 @@ and poisons the context immediately — deterministic, and nothing on the hot pa
 a healthy context). RED first: a `vkr_*` L2 that emits the two commands from a raw venus client
 and asserts the context dies while a sibling context keeps presenting.
 
+## GPU / venus — candidate bugs surfaced while consulting for the Rust virglrenderer rewrite
+
+📋 open, 2026-09-03. Each was found by reading our C and the guest mesa against a clean-room
+reimplementation's questions, none is reproduced yet, and each names the check that would settle it.
+Read the C before acting on any of them.
+
+- **A reply-carrying command dropped by ghost containment leaves the reply slot unwritten, and the
+  guest reads it as `VK_SUCCESS`.** `vkr_cs_decoder_lookup_object` on a tombstoned id sets
+  `soft_error`; the generated wrapper then skips both the handler and the reply encode (it consults
+  `vn_cs_decoder_get_fatal`). The guest's `vn_call_*` only checks that a reply shmem exists, so it
+  decodes whatever the slot holds — a fresh reply-pool slot is zero-filled, which decodes as
+  command type 0, `ret = 0 = VK_SUCCESS`, out-pointers "absent", every out parameter left
+  untouched. The rewrite hit exactly this shape from a different cause (a stub decoder) and it
+  surfaced as GTK `malloc`ing an uninitialised `size_t` 11 s later. Ghost containment was designed
+  for async creates, which carry no reply, so today this needs a reply-carrying command to name a
+  tombstoned object (`vkGetImageMemoryRequirements2` on a ghost image is the obvious one). Check:
+  force a tombstone (the `LIMINA_VKR_FAIL_CREATE` hook, once it exists) and call a reply-carrying
+  command on the ghost; the guest must see an error, not success with garbage. Fix shape: a
+  soft-skipped command whose flags carry `GENERATE_REPLY` gets an explicit error reply
+  (`VK_ERROR_DEVICE_LOST`, or `INVALID_EXTERNAL_HANDLE` where it fits) — never an unwritten slot.
+  A dispatch-loop assertion that the reply encoder advanced by the command's reply size whenever
+  `GENERATE_REPLY` is set would make the class unrepresentable.
+- **Every NULL reply is `VK_ERROR_OUT_OF_HOST_MEMORY` to the guest, including ring death.** Our guest
+  patch makes a submit on a FATAL ring return `VK_ERROR_DEVICE_LOST` from `vn_ring_submit_locked`,
+  but the generated `vn_call_*` collapses any missing reply to OOM (`vn_protocol_driver_*.h`:
+  `dec ? decode : VK_ERROR_OUT_OF_HOST_MEMORY`). This is the mechanical root of the standing
+  "OOM out of venus is never memory" rule: reply-pool alloc failure, ring FATAL at submit, ring FATAL
+  while waiting, and a real host refusal all reach the app as the same code. Guest-side,
+  upstreamable: carry the submit's result into `vn_ring_submit_command` and have `vn_call_*` return
+  it when the reply is absent. Cheap, and it makes the next dogfood OOM report self-classifying.
+- **Cross-context attach of a `map_ptr` blob aliases a borrowed pointer with no lifetime tie.**
+  `proxy_context_attach_resource` forwards a #28 host-visible blob (OPAQUE_HANDLE, no fd) to a
+  second context by raw `map_ptr`; the importer host-pointer-imports it. The pointer is
+  `vkMapMemory`'s, owned by the exporter's `VkDeviceMemory`, and `vkr_device_memory_release`
+  documents that it is only safe because "by free time the guest side is already gone" — true for
+  the OWNER (the guest driver orders bo-destroy → roundtrip → `vkFreeMemory`), not for an importer
+  the kernel keeps attached via the dma-buf refcount. Vulkan requires export info to export memory,
+  which routes every legitimate case through the mtl_shm carrier (a real shm-file share), so this
+  path is a fallback — but the guest KERNEL does not check Vulkan export flags: any client can
+  `CREATE_BLOB` a plain host-visible memory, hand the dma-buf to the compositor, then free the
+  memory. The compositor's context then samples a freed `MTLBuffer` (host memory disclosure into
+  another guest context, KK reading freed pages). Check: write that client. Fix shape: refuse the
+  cross-context attach of a `map_ptr` resource (loudly), or give host-visible exports an owned
+  carrier like the export-flagged path already has.
+- **`vkWaitRingSeqnoMESA` parks the whole device behind one client's ring.** By upstream design the
+  wait runs on libkrun's control-queue thread and blocks it until the named ring's head passes the
+  seqno. A ring that is mid `vkCreateGraphicsPipelines` (hundreds of ms on a cold cache) therefore
+  stalls every other context's `SET_SCANOUT`/flush/cursor/fence processing for that long — the
+  "STUCK >500ms" diagnostic exists because this happens. Not a bug against upstream, but a latency
+  fault of ours to measure: log the wait durations on a seated desktop under a shader-heavy client
+  and see how often the compositor's flush sits behind one. Fix shape, if it matters: make the wait
+  asynchronous — park the execbuf's continuation (its fence, and the `CREATE_BLOB` that follows on
+  the virtqueue) on the ring seqno instead of blocking the thread. That touches the virtqueue
+  ordering contract (the following `CREATE_BLOB` relies on FIFO processing), so it is a design, not
+  a patch.
+- The seqno-wait **deadlock** in the section above came out of the same review.
+
 ## GPU — KosmicKrisp's command-allocator pool has no ceiling when the client never flushes
 
 Measured 2026-08-26 on the host (zink-on-KK), with `spikes/notification-text-corruption/glyphmimic`.
