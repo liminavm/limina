@@ -2303,6 +2303,40 @@ it; mesa writes a constant 1), which is an enhanced-tier extension of the descri
 our guest mesa, or delaying the fence until the held picture is delivered, which deadlocks the
 very loop that observes the problem. Until then it is a documented cost, not a bug.
 
+## Open — PipeWire drops the audio device latency we report, so players still mis-sync
+
+The virtio-snd device reports the host DAC's remaining latency in
+`virtio_snd_pcm_status.latency_bytes`, and the guest kernel turns it into `runtime->delay`
+exactly as the spec intends. PipeWire's ALSA sink then ignores it: the sink node's `Latency`
+param is its own period (512 frames) and nothing else, so the device's `snd_pcm_delay`
+component never reaches the graph, `pa_stream_get_latency`, or Firefox's cubeb.
+
+Measured on F44 / PipeWire 1.6.2, `paplay --latency-msec=50`, A/B'd inside one boot with
+`LIMINA_SND_ZERO_LATENCY=1`:
+
+| device reports | ALSA `delay` − (appl−hw) | `pa_stream_get_latency` |
+| --- | --- | --- |
+| 1346 frames | 1346 | 78 190 µs |
+| 0 | 0 | 78 267 µs |
+
+The consequence is a steady lipsync error: video is scheduled against an audio clock short by
+the whole device latency — 28 ms on built-in speakers, and the Bluetooth link latency (worth
+hundreds of milliseconds) when the user is on AirPods. Confirmed against the symptom: with our
+VP9 decode path bypassed entirely (`LIBVA_DRIVER_NAME` pointed at nothing, verified by zero
+decode traffic on the host) the offset is unchanged, which rules the decoder out.
+
+Two ways to close it, neither free:
+
+- **Fix it in PipeWire** (fold `snd_pcm_delay`'s device component into the ALSA sink's reported
+  latency) and ship that as an enhanced-tier guest component. Upstreamable, and correct for
+  every virtio-snd guest, not just ours. But the two-tier guarantee means a *stock* guest must
+  still work, so this cannot be the only answer.
+- **Carry it in `appl_ptr - hw_ptr` instead**, by completing a tx descriptor only once its
+  frames are audible rather than merely consumed. That uses the channel PipeWire demonstrably
+  does track. It does not scale: the guest's ALSA buffer is 8192 frames (170 ms), so a
+  Bluetooth latency of ~200 ms cannot fit in it at all, and the guest would underrun. Viable
+  only as a clamped partial correction, if at all.
+
 ## mpv's VA-API path cannot render on venus
 
 `mpv --hwdec=vaapi` decodes but never displays: the VA-API driver loads and initialises
