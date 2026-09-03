@@ -90,8 +90,9 @@ fn watch_forever(cell: &AtomicU8) {
     loop {
         match watch_once(cell) {
             Ok(()) => {
-                // The property stream ended: the bus connection died (a dbus-broker restart).
-                // The daemon may come back with a different profile, so re-establish.
+                // Defensive only — see the KNOWN LIMITATION on watch_once: in zbus 5.16 the
+                // property stream never actually ends, it parks. If a future zbus starts ending
+                // it, this arm turns that into a re-watch instead of a dead thread.
                 eprintln!("limina-agent: power-profile stream ended; re-watching");
                 logged = false;
             }
@@ -105,7 +106,17 @@ fn watch_forever(cell: &AtomicU8) {
     }
 }
 
-/// Connect, read the initial profile, then block on changes until the stream ends.
+/// Connect, read the initial profile, then block on changes.
+///
+/// KNOWN LIMITATION: if the bus connection itself dies (a dbus-broker restart — in practice a
+/// system update or session teardown), the iterator does NOT end: zbus 5.16's `PropertyStream`
+/// returns `None` only when the proxy has no property cache (which the `get_property` below
+/// guarantees it has), and the cache's keep-updated task dies silently with the connection —
+/// nothing wakes the listener again (zbus-5.16.0 `src/proxy/mod.rs`, `poll_next` /
+/// `keep_updated`). So this thread parks on the last value until the agent restarts. That is the
+/// same stale-hold already accepted for a vanished daemon: the host keeps the last policy, and
+/// `balanced` is one toggle away for the user. A daemon restart while the bus stays up is fine —
+/// the signal stream tracks `NameOwnerChanged`, so the new instance's changes still match.
 fn watch_once(cell: &AtomicU8) -> zbus::Result<()> {
     let conn = zbus::blocking::Connection::system()?;
     let proxy = zbus::blocking::Proxy::new(
