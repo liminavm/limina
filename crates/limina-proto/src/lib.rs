@@ -460,6 +460,27 @@ pub struct PowerProfileMsg {
     pub profile: u8,
 }
 
+impl PowerProfileMsg {
+    /// The wire vocabulary. One source of truth for both ends: the guest encodes with
+    /// [`wire_from_dbus`], the host decodes in `PowerProfile::from_wire` — both against these.
+    ///
+    /// [`wire_from_dbus`]: PowerProfileMsg::wire_from_dbus
+    pub const POWER_SAVER: u8 = 0;
+    pub const BALANCED: u8 = 1;
+    pub const PERFORMANCE: u8 = 2;
+
+    /// Map the D-Bus `ActiveProfile` string to its wire value. Unknown strings map to
+    /// [`BALANCED`](Self::BALANCED) rather than erroring: the vocabulary belongs to the guest's
+    /// daemon, whose future values must degrade to the default, not desynchronise the host.
+    pub fn wire_from_dbus(s: &str) -> u8 {
+        match s {
+            "power-saver" => Self::POWER_SAVER,
+            "performance" => Self::PERFORMANCE,
+            _ => Self::BALANCED,
+        }
+    }
+}
+
 /// Host → guest: the host's authoritative wallclock. The guest kernel's CLOCK_REALTIME is
 /// CNTVCT-anchored and CNTVCT freezes while the host sleeps (mach_absolute_time), so a host
 /// nap lags the running guest's clock by the nap's length — and a snapshot restore lags it

@@ -26,10 +26,11 @@ use std::time::Duration;
 
 use limina_proto::{
     read_message, write_message, CpuPressure, CpuTarget, FidoReport, Heartbeat, Hello, MemPressure,
-    Message, CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT,
+    Message, PowerProfileMsg, CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT,
 };
 
 mod fido;
+mod power;
 
 /// How often the agent emits a HEARTBEAT while the channel is idle.
 const HEARTBEAT_EVERY: Duration = Duration::from_millis(1000);
@@ -52,13 +53,17 @@ fn main() {
     // has (system unit); a failed mount degrades to mount-by-hand, never fatal.
     mount_limina_shares();
 
+    // The power-profile watcher outlives connections: the D-Bus side has no reason to churn
+    // with the channel, and a reconnect only needs the current value, which the cell holds.
+    let power = power::ProfileWatcher::start();
+
     let mut logged_waiting = false;
     loop {
         match connect_once(port) {
             Some(mut stream) => {
                 logged_waiting = false;
                 eprintln!("limina-agent: connected");
-                match serve(&mut stream) {
+                match serve(&mut stream, &power) {
                     Ok(End::Shutdown) => {
                         eprintln!("limina-agent: host ordered shutdown; powering off");
                         // Let the just-written SHUTDOWN_ACK drain through the virtio
@@ -215,7 +220,7 @@ fn connect_once(port: u32) -> Option<File> {
 /// The control loop (mirrors the limina-init seed; see the module docs for why it's not
 /// shared). Heartbeat cadence is poll(2)-driven so a timer can never tear a frame
 /// mid-read.
-fn serve(stream: &mut File) -> std::io::Result<End> {
+fn serve(stream: &mut File, power: &power::ProfileWatcher) -> std::io::Result<End> {
     let pagesize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
     write_message(
         stream,
@@ -229,6 +234,7 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
                 "vcpu".to_string(),
                 "timesync".to_string(),
                 "fido".to_string(),
+                "powerprofile".to_string(),
             ],
             pagesize,
         }),
@@ -244,6 +250,10 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
     // Report our runnable-task load only once the host says it runs a vCPU policy. A host with no
     // dynamic range never asks, and then this costs a guest exactly nothing — no sample, no frame.
     let mut report_cpu = false;
+
+    // Fresh per connection: level-triggered means the current profile is re-sent to every new
+    // host, not just on change. A guest with no profile daemon stays silent (see power.rs).
+    let mut profile = power::ProfileReporter::new();
 
     let mut seq: u64 = 0;
     loop {
@@ -272,6 +282,16 @@ fn serve(stream: &mut File) -> std::io::Result<End> {
                 if let Some(cp) = read_cpu_pressure() {
                     write_message(stream, CHANNEL_CONTROL, &Message::CpuPressure(cp))?;
                 }
+            }
+            // The power profile, when it changed (or on this connection's first tick). Riding
+            // the tick bounds the report at one a second and costs an idle guest one atomic
+            // load — the D-Bus waiting happens on the watcher thread.
+            if let Some(p) = profile.due(power.current()) {
+                write_message(
+                    stream,
+                    CHANNEL_CONTROL,
+                    &Message::PowerProfile(PowerProfileMsg { profile: p }),
+                )?;
             }
             continue;
         }

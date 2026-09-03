@@ -16,6 +16,7 @@
 //! tested without a VM.
 
 use crate::vcpu_policy::CpuReclaim;
+use limina_proto::PowerProfileMsg;
 
 /// The three profiles `org.freedesktop.UPower.PowerProfiles` defines. Ordered from cheapest to
 /// most eager, which is the order the D-Bus `Profiles` array uses.
@@ -31,26 +32,6 @@ pub enum PowerProfile {
 }
 
 impl PowerProfile {
-    /// Parse the D-Bus `ActiveProfile` string. Unknown values fall back to [`Balanced`] rather
-    /// than erroring: the property is owned by the guest's daemon, whose vocabulary may grow, and
-    /// an unrecognised profile must not leave the host holding a stale policy.
-    ///
-    /// [`Balanced`]: PowerProfile::Balanced
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the agent's D-Bus watcher, which is what reads and sends a profile, lands next"
-        )
-    )]
-    pub fn parse(s: &str) -> PowerProfile {
-        match s {
-            "power-saver" => PowerProfile::PowerSaver,
-            "performance" => PowerProfile::Performance,
-            _ => PowerProfile::Balanced,
-        }
-    }
-
     /// The name this profile has on D-Bus.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -60,31 +41,15 @@ impl PowerProfile {
         }
     }
 
-    /// The wire encoding. Explicit rather than `as u8` so reordering the enum cannot silently
-    /// change the protocol.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the agent's D-Bus watcher, which is what reads and sends a profile, lands next"
-        )
-    )]
-    pub fn to_wire(self) -> u8 {
-        match self {
-            PowerProfile::PowerSaver => 0,
-            PowerProfile::Balanced => 1,
-            PowerProfile::Performance => 2,
-        }
-    }
-
-    /// Decode the wire encoding, defaulting to [`Balanced`] for anything unrecognised — a guest
-    /// running a newer agent must degrade to the default, not desynchronise the host.
+    /// Decode the wire encoding (the vocabulary lives in [`PowerProfileMsg`], shared with the
+    /// guest encoder), defaulting to [`Balanced`] for anything unrecognised — a guest running a
+    /// newer agent must degrade to the default, not desynchronise the host.
     ///
     /// [`Balanced`]: PowerProfile::Balanced
     pub fn from_wire(v: u8) -> PowerProfile {
         match v {
-            0 => PowerProfile::PowerSaver,
-            2 => PowerProfile::Performance,
+            PowerProfileMsg::POWER_SAVER => PowerProfile::PowerSaver,
+            PowerProfileMsg::PERFORMANCE => PowerProfile::Performance,
             _ => PowerProfile::Balanced,
         }
     }
@@ -168,22 +133,11 @@ mod tests {
         assert!(p.rt_band);
     }
 
-    /// A profile arriving from the guest is a string owned by someone else's daemon. An
-    /// unrecognised one must land on the default, never leave the host on a stale policy.
-    #[test]
-    fn an_unknown_profile_is_balanced() {
-        for s in ["", "quiet", "cool", "POWER-SAVER", "low-power", "🔋"] {
-            assert_eq!(PowerProfile::parse(s), PowerProfile::Balanced, "{s:?}");
-        }
-        assert_eq!(PowerProfile::parse("power-saver"), PowerProfile::PowerSaver);
-        assert_eq!(
-            PowerProfile::parse("performance"),
-            PowerProfile::Performance
-        );
-    }
-
-    /// The wire encoding is explicit, so reordering the enum cannot silently change it, and an
-    /// unknown value from a newer agent degrades rather than desynchronising.
+    /// The whole path a profile travels: the guest maps the D-Bus string to the wire with
+    /// `PowerProfileMsg::wire_from_dbus`, the host decodes it here. Round-trip through both ends
+    /// so the shared vocabulary cannot drift, and unknown values (a future daemon's new profile,
+    /// a newer agent's new wire value) degrade to `Balanced` at each end rather than
+    /// desynchronising.
     #[test]
     fn the_wire_encoding_round_trips_and_tolerates_the_unknown() {
         for p in [
@@ -191,8 +145,17 @@ mod tests {
             PowerProfile::Balanced,
             PowerProfile::Performance,
         ] {
-            assert_eq!(PowerProfile::from_wire(p.to_wire()), p);
-            assert_eq!(PowerProfile::parse(p.as_str()), p);
+            assert_eq!(
+                PowerProfile::from_wire(PowerProfileMsg::wire_from_dbus(p.as_str())),
+                p
+            );
+        }
+        for s in ["", "quiet", "cool", "POWER-SAVER", "low-power", "🔋"] {
+            assert_eq!(
+                PowerProfile::from_wire(PowerProfileMsg::wire_from_dbus(s)),
+                PowerProfile::Balanced,
+                "{s:?}"
+            );
         }
         for v in [3, 4, 200, 255] {
             assert_eq!(PowerProfile::from_wire(v), PowerProfile::Balanced);

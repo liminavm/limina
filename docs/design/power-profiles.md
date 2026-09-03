@@ -1,7 +1,8 @@
 # Power profiles: mostly already working, missing only the host half
 
-Status: **partly live, host half designed and not built.** The guest side needs nothing from us —
-it works on a stock F44 guest with no limina components. What is missing is a host that responds.
+Status: **live end to end for CPU reclaim; the worker levers are designed and not built.** The
+profile flows guest daemon → `limina-agent` → host policy; `power-saver` reclaims vCPUs and a flip
+back restores them at once. `little`/`rt_band` still need the worker channel (§7).
 
 ## 1. What already works, measured
 
@@ -59,10 +60,15 @@ Balloon giveback is deliberately **not** in the table. The balloon has its own p
 its own pressure signal, and two controllers writing one knob is how the oscillation classes in
 `limina-balloon-oscillation` were born.
 
-The relay is `limina-agent` watching the `ActiveProfile` property on the existing D-Bus name and
-sending it over the vsock control plane as `POWER_PROFILE`. No kernel work, no patched daemon,
-and the same code path works whether the provider is `tuned-ppd` or `power-profiles-daemon`,
-since only the D-Bus interface is involved.
+The relay is `limina-agent` watching the `ActiveProfile` property on the existing D-Bus name
+(`guest/limina-agent/src/power.rs`: a background thread blocks on the property stream and
+publishes into a cell the serve loop reads on its idle tick) and sending it over the vsock
+control plane as `POWER_PROFILE`. No kernel work, no patched daemon, and the same code path works
+whether the provider is `tuned-ppd` or `power-profiles-daemon`, since only the D-Bus interface is
+involved. A guest with neither (no bus at all, even) reports nothing and retries twice a minute;
+the host holds `balanced`. The watcher cost the agent its libc-only diet: zbus takes the static
+binary from 493 KB to 1.18 MB plus one executor thread — accepted, since the alternative was a
+D-Bus round trip on every idle tick forever.
 
 Two properties the policy must hold, both learned from ballooning:
 
@@ -138,16 +144,21 @@ analysis was answering a question about a daemon this guest does not run.
 
 ## 7. What is built
 
-The wire message (`POWER_PROFILE`, level-triggered), the profile-to-policy mapping
+The whole reclaim loop, verified on a real guest against tuned-ppd: the agent's watcher (§2), the
+wire message (`POWER_PROFILE`, level-triggered; vocabulary shared through
+`limina_proto::PowerProfileMsg` so the two ends cannot drift), the profile-to-policy mapping
 (`crates/limina/src/power_profile.rs`), and the control plane applying **CPU reclaim** —
-including growing the machine back at once when the floor rises, rather than waiting for the next
-pressure report.
+`power-saver` walks idle vCPUs down to the floor, and a flip back grows the machine at once
+rather than waiting for the next pressure report. The agent advertises `powerprofile` in HELLO.
 
-Not yet built: the agent's D-Bus watcher (so nothing sends the message yet), and the worker half.
-`little` and `rt_band` need a QoS override on the vCPU thread's `pthread_t`, which only the
-worker's own process holds, so they need a supervisor→worker channel. Until that lands a profile
-still moves reclaim, and `balanced` — what a guest reports unless its user says otherwise — asks
-for today's defaults anyway.
+Not yet built: the worker half. `little` and `rt_band` need a QoS override on the vCPU thread's
+`pthread_t`, which only the worker's own process holds, so they need a supervisor→worker channel —
+the shape exists twice already (the balloon and display-resize control sockets: supervisor
+allocates the path, worker binds it and wires it to the live handle), and the re-banding
+mechanism itself already runs inside the worker (the `rt+dyn` sampler arms and disarms live
+threads by mach port every 200 ms; only its *policy* is fixed at spawn, via `LIMINA_VCPU_SCHED`).
+Until that lands a profile still moves reclaim, and `balanced` — what a guest reports unless its
+user says otherwise — asks for today's defaults anyway.
 
 ## 8. Open
 
