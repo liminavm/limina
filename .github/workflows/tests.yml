@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Marcelo Jorge Vieira
+#
+# This hosted lane mirrors .githooks/pre-commit except for the full workspace Clippy pass:
+# limina-vmm's build probes host graphics libraries unavailable on the runner. The hosted tests
+# also cannot exercise HVF; scripts/run-suite.sh on a developer Mac remains the real validation.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  supervisor:
+    name: Supervisor unit tests
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+          key: v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'guest/Cargo.lock', 'xtask/Cargo.lock') }}
+          restore-keys: |
+            v1-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install bootstrap tools
+        run: brew install libusb meson
+
+      - name: Materialize vendored sources
+        run: cargo xtask vendor
+
+      - name: Check formatting
+        run: |
+          cargo fmt --check
+          for manifest in guest/*/Cargo.toml; do
+            cargo fmt --manifest-path "$manifest" --check
+          done
+          for manifest in spikes/*/Cargo.toml; do
+            cargo fmt --manifest-path "$manifest" --check
+          done
+          cargo fmt --manifest-path xtask/Cargo.toml --check
+
+      - name: Run supervisor Clippy
+        run: cargo clippy --locked -p limina --all-targets -- -D warnings
+
+      - name: Run xtask Clippy
+        run: cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
+
+      - name: Install guest Rust target
+        run: rustup target add aarch64-unknown-linux-musl
+
+      - name: Run guest Clippy
+        run: >-
+          cargo clippy
+          --manifest-path guest/Cargo.toml
+          --target aarch64-unknown-linux-musl
+          --all-targets
+          -- -D warnings
+
+      # The hosted macOS runners cannot run nested virtualization, so the
+      # LIMINA_HVF_TESTS boot suite remains a self-hosted/developer-Mac check.
+      - name: Run supervisor unit tests
+        run: cargo test --locked -p limina --bin limina
+
+      - name: Run supporting crate tests
+        run: >-
+          cargo test --locked
+          -p limina-display
+          -p limina-displayctl
+          -p limina-input
+          -p limina-paniclog
+          -p limina-proto
+          -p limina-surfaceport
+          -p limina-usbip
