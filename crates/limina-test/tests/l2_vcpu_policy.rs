@@ -137,8 +137,10 @@ fn an_idle_guest_sheds_vcpus_and_a_busy_one_gets_them_back() {
         "cpu0 must never be the one offlined; online mask is {online:?}"
     );
 
-    // Grow. Four spinners is more runnable tasks than online CPUs, which is the immediate-grow
-    // condition — no dwell, so this is a question of one report interval plus the sysfs writes.
+    // Grow. Four spinners are both more runnable tasks than online CPUs and enough burned CPU to
+    // corroborate that — spinners rather than a synthetic wake storm on purpose, since an
+    // uncorroborated spike is exactly what the policy now refuses to act on. No dwell on this
+    // side, so it is a question of one report interval plus the sysfs writes.
     guest
         .ssh_exec_timeout(
             "rm -f /tmp/spin.pids; for i in 1 2 3 4; do nohup timeout 240 sh -c \
@@ -146,7 +148,8 @@ fn an_idle_guest_sheds_vcpus_and_a_busy_one_gets_them_back() {
             STEP,
         )
         .expect("spawning the load");
-    // Budget for the SLOW tier. The enhanced agent reports `nr_running`, so it grows on the very
+    // Budget for the SLOW tier. The enhanced agent reports the spike and the utilisation behind
+    // it, so it grows on the very
     // next sample (~1s); the stock tier has only loadavg, a 1-minute average, so it cannot notice
     // a burst until the average climbs — measured at ~45 s to cross a 2-vCPU machine's threshold.
     // That gap is the honest cost of the stock tier, not a flake to paper over.
