@@ -332,7 +332,7 @@ int main(int argc, char **argv)
              * to be idempotent within a frame -- a second unit here would be a second
              * picture the guest never asked for. */
             n = virgl_av1_flush_held(&state, &desc, stream + stream_len,
-                                     stream_cap - stream_len);
+                                     stream_cap - stream_len, NULL);
             if (n < 0) {
                 fprintf(stderr, "frame %u: the serializer refused to flush the held frame\n", i);
                 return 1;

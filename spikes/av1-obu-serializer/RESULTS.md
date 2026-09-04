@@ -83,38 +83,38 @@ we already hold and teaches nothing; that alone cost seven frames. A per-slot di
 has the mirror-image flaw: it misses a frame landing in a slot whose contents were
 seen elsewhere. Pictures the guest stops listing are pruned for the same reason.
 
-## Holding is about the slots, not about whether a frame is shown
+## A shown frame owes its picture now and its slot later
 
-A frame is held for one submission, and emitted once the next descriptor reveals the
-guest's choice, whenever every reference slot is live. While any slot is free the frame
-goes out at once into it. That condition is the whole rule: whether the frame is
-displayed does not enter into it.
+A frame is held for one submission when every reference slot is live, because which slot the
+guest chose is visible only in the next descriptor. That is right for a *hidden* frame: nothing
+reads its target, and nothing needs its pixels until a later `show_existing`.
 
-It is tempting to hold only hidden frames, on the grounds that nothing waits on their
-pixels. That is a statement about delivery, not about the DPB, and the two are
-independent: whether the guest *stores* a frame has nothing to do with whether it
-*shows* it. A libaom pyramid GOP stores shown frames and fills eight slots, and emitting
-one with `refresh_frame_flags = 0` because no slot was free loses it -- every later
-reference resolves to whatever the slot still holds, usually the key frame. Over 124
-frames of a 720p YouTube stream, 64 are shown and stored; over `aompyramid`, 31 of 64.
-Every SVT-AV1 pyramid fixture has none.
+For a shown frame it is not, and the reason is worth stating as a rule: **a deferral that no one
+waits for is not latency, it is stale data**. The guest reads a shown frame's target as soon as
+the command-stream fence signals, and the fence signals when the host returns -- so withholding
+the picture hands the guest whatever that surface last held. Measured on a 1080p24 libaom
+YouTube stream, single-threaded `ffmpeg -hwaccel vaapi` reading back immediately: 325 of 615
+frames were an earlier picture, three to seven frames old, alternating with correct ones, and
+six were a surface never written at all. A client that queues a frame ahead absorbs all of it,
+which is why the multi-threaded readback of the same clip returned 614 of 615 bit-exact.
 
-The cost of holding a shown frame is that its picture reaches its target a submission
-late. The backend keeps `held_target` for exactly that, and nothing waits on delivery,
-so it is a frame of latency and not a stall -- but the guest is not told. Its
-`vaSyncSurface` waits on the command-stream fence, which signals when the host returns,
-so a consumer that reads the target as soon as the fence signals gets whatever the target
-holds at that moment. Measured 2026-09-02 with `ffmpeg -hwaccel vaapi` reading back a
-libaom pyramid clip (the YouTube 480p capture) on both the stock and the enhanced image:
-every directly-shown frame at the wall comes back stale (odd frames at 20-40 dB against
-dav1d on stock, ~58 dB on enhanced), every `show_existing` frame bit-exact. The worker
-trace names the timing: past the eighth frame every unit logs `holding this frame` and its
-`deliver (sw)` follows the next unit's `flushing the held frame`. A player that queues even
-one frame ahead never sees it; a readback-then-submit loop sees it on every such frame.
-Booked in `docs/hardening-backlog.md`.
+So the two are separated. The slot is needed only by the bitstream and the picture only by the
+guest: a shown frame at the wall is emitted at once with `refresh_frame_flags = 0` -- always
+legal, and settling no eviction -- and re-emitted hidden on the next submission with the real
+refresh, ahead of any frame that could reference it. The re-emission's picture is discarded: its
+target was written a submission ago and the guest may have recycled it. When the next descriptor
+shows the guest stored nothing, the copy is dropped and costs nothing.
 
-`aompyramid` is the regression test: on the previous assignment its rebuilt stream does
-not decode at all.
+The cost is decoding such a frame twice. On that clip 304 of 615 frames were re-emitted, against
+272 hidden frames still held outright. It is removable only by getting `refresh_frame_flags`
+across VA-API, which does not carry it.
+
+`sw-oracle` grades this directly: every shown frame must produce its unit on its own submission.
+`LIMINA_AV1_HOLD_SHOWN=1` restores the old behaviour, so both arms run against one build --
+33 of 64 shown frames late on `aompyramid`, 0 with the fix.
+
+`aompyramid` is the regression test for the slot assignment itself: on a round-robin assignment
+its rebuilt stream does not decode at all.
 
 ## The failure this produces is not where it happens
 

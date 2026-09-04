@@ -2279,29 +2279,38 @@ at every replay (`Illegal resource 2122xx`/`3608xx`, contiguous ids) — stale v
 the guest had already destroyed, or decode targets that did not come back; not yet distinguished.
 Chrome recovers either way, so this is a warning-spam and audit item, not a symptom.
 
-## Open — AV1: a shown frame held at the eight-slot wall reaches its target a submission late
+## Closed — AV1: a shown frame held at the eight-slot wall reached its target a submission late
 
 The serializer assigns reference slots itself, and once eight pictures are live the slot a new
-frame takes is known only from the *next* descriptor, so the frame is held one submission
-(`spikes/av1-obu-serializer/RESULTS.md`, *Holding is about the slots*). Its picture lands in
-`held_target` when the next unit arrives. The guest is told nothing: `vaSyncSurface` waits on
-the command-stream fence, which signals at return, so a consumer reading the target at fence
-time gets whatever the target holds at that moment. Measured 2026-09-02, `ffmpeg -hwaccel
-vaapi` reading back a libaom pyramid clip on the stock and the enhanced image alike: every
-directly-shown frame at the wall stale (20-40 dB against dav1d on stock, ~58 dB on enhanced),
-every `show_existing` frame bit-exact, and the worker trace shows every unit past the eighth
-as `holding this frame` with its `deliver (sw)` after the next unit's `flushing the held
-frame`. libaom streams (YouTube) sit at the wall for most of every GOP; SVT-AV1 streams
-never store a shown frame and are not affected. A player that runs one frame ahead never
-observes it; a decode-sync-read loop (transcoding, frame capture) does on half its frames.
-Unexplained from the same runs: the vaapi readback emits no frame at all for pts 0 and 2
-(the key frame and the first shown inter frame) on either tier, while libdav1d does.
+frame takes is known only from the *next* descriptor, so a frame at the wall was held one
+submission. Nothing makes the guest wait for it: `vaSyncSurface` waits on the command-stream
+fence, which signals when the host returns, so a consumer reading the target at fence time got
+whatever that surface last held. On a 1080p24 libaom stream 325 of 615 frames came back as an
+earlier picture, three to seven frames old, alternating with correct ones -- a picture lurching
+backwards and forwards -- and six as a surface never written, which reads as green. libaom
+streams (YouTube) sit at the wall for most of every GOP; SVT-AV1 never stores a shown frame and
+was unaffected. A client that queues a frame ahead absorbs it, which is why Firefox showed it
+and Chrome did not, and why a multi-threaded `ffmpeg -hwaccel vaapi` readback looked clean while
+the single-threaded one did not.
 
-No cheap fix: the information is in the next descriptor by construction. What would close it
-is a guest-side channel carrying the encoder's `refresh_frame_flags` (VA-API has no field for
-it; mesa writes a constant 1), which is an enhanced-tier extension of the descriptor and of
-our guest mesa, or delaying the fence until the held picture is delivered, which deadlocks the
-very loop that observes the problem. Until then it is a documented cost, not a bug.
+Fixed by separating the two things the wait conflated: the slot is needed only by the bitstream,
+the picture only by the guest. A shown frame at the wall is emitted immediately with
+`refresh_frame_flags = 0` and re-emitted hidden on the next submission carrying the real
+refresh. 325 of 615 wrong before, 0 after; all eight serializer fixtures still bit-exact. The
+same runs also resolve what was recorded here as unexplained -- the readback emitting no frame
+for pts 0 and 2 -- which was this fault at the head of the stream.
+
+**The lesson generalises: check what a wait actually buys.** This one was recorded as "a frame
+of latency, not a stall" and therefore as a documented cost. It bought nothing at all, because
+no one waits: the entry stood for a day describing corruption as latency. When deferring
+delivery, name the party that blocks -- if there is none, the deferral is not latency, it is
+handing out stale data.
+
+The residual cost is decoding such a frame twice, and only when the guest stored it (304 of 615
+on that clip). A guest-side channel carrying the encoder's `refresh_frame_flags` would remove
+even that -- VA-API has no field for it and mesa writes a constant 1
+(`picture_av1.c:224`) -- but it needs both ffmpeg and mesa changes, so it can only ever be an
+enhanced-tier optimisation, never the floor.
 
 ## Open — PipeWire drops the audio device latency we report, so players still mis-sync
 

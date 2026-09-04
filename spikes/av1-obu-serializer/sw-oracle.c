@@ -44,6 +44,8 @@ int main(int argc, char **argv)
     struct virgl_video_dav1d *sw;
     char *names[MAX_FRAMES];
     unsigned n = 0, units = 0, pictures = 0, hidden_missing = 0;
+    unsigned discarded = 0, late = 0;
+    bool discard;
     uint8_t *unit = NULL;
     size_t unit_cap = 0;
     DIR *d;
@@ -109,13 +111,15 @@ int main(int argc, char **argv)
             unit = realloc(unit, (size_t)need);
             unit_cap = (size_t)need;
         }
-        got = virgl_av1_flush_held(&state, &desc, unit, unit_cap);
+        got = virgl_av1_flush_held(&state, &desc, unit, unit_cap, &discard);
         if (got > 0) {
             units++;
             r = virgl_dav1d_decode(sw, unit, (size_t)got, &pic);
             if (r < 0) { fprintf(stderr, "held unit failed at %u\n", i); return 1; }
             if (r == 0) hidden_missing++;
             else { pictures++; virgl_dav1d_release(sw); }
+            if (discard)
+                discarded++;
         }
 
         need = (ssize_t)tiles_size + VIRGL_AV1_UNIT_OVERHEAD;
@@ -126,6 +130,15 @@ int main(int argc, char **argv)
         got = virgl_av1_build_temporal_unit(&state, &desc, tiles, tiles_size,
                                             unit, unit_cap);
         if (got < 0) { fprintf(stderr, "build failed at %u\n", i); return 1; }
+
+        /* A shown frame must produce its unit on its own submission. Withholding it does not
+         * delay the guest, which does not wait: it reads the target when the fence signals
+         * and gets whatever the surface last held. */
+        if (!got && desc.picture_parameter.pic_info_fields.show_frame) {
+            fprintf(stderr, "  frame %2u: SHOWN but emitted nothing; its target keeps "
+                    "whatever it held\n", i);
+            late++;
+        }
         if (got > 0) {
             units++;
             r = virgl_dav1d_decode(sw, unit, (size_t)got, &pic);
@@ -148,12 +161,17 @@ int main(int argc, char **argv)
     }
 
     virgl_dav1d_close(sw);
-    printf("\n%u units -> %u pictures (%u yielded none)\n", units, pictures, hidden_missing);
+    printf("\n%u units -> %u pictures (%u yielded none), %u re-emitted for the DPB alone\n",
+           units, pictures, hidden_missing, discarded);
     if (hidden_missing) {
         printf("FAIL: a unit produced no picture; the backend would leave that guest "
                "surface unwritten\n");
         return 1;
     }
-    printf("PASS: every unit produced exactly one picture\n");
+    if (late) {
+        printf("FAIL: %u shown frame(s) reached their target a submission late\n", late);
+        return 1;
+    }
+    printf("PASS: every unit produced exactly one picture, and every shown frame on time\n");
     return 0;
 }

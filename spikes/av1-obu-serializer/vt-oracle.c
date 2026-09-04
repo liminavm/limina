@@ -391,7 +391,7 @@ int main(int argc, char **argv)
         }
 
         /* decode_bitstream: flush whatever is held, now that a descriptor settles it. */
-        n = virgl_av1_flush_held(&state, &desc, unit, unit_cap);
+        n = virgl_av1_flush_held(&state, &desc, unit, unit_cap, NULL);
         if (n < 0) {
             fprintf(stderr, "frame %u: flush refused\n", i);
             return 1;
