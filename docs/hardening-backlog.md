@@ -1402,11 +1402,19 @@ Not related, despite the shape: the notification-card text loss
 screenshot of its framebuffer, so the host present path — this race included — is exonerated
 there; do not re-open the spike on the strength of this fix.
 
-Probe note from the same report, for whoever runs the spike next: `LIMINA_VREND_INK=WxH` arms in
-`limina_ink_probe`, which runs on a sampler-view bind, so `limina_rt_probe` and the per-draw print
-skip every draw before the first textured one in the run — a draw the probe never prints reads
-exactly like a dropped draw. If the probe stays, read its environment in `limina_rt_probe` at the
-first draw.
+Two follow-ups, both backlog by the user's decision (2026-09-03), neither started:
+
+- **Ship the fix in the all-contexts shape, not the current-context one.** At the
+  `virgl_renderer_resource_sync_iosurface` level, walk `virgl_context_foreach`, `glFinish` every vrend
+  context's sub-contexts, then ctx0 — so the finish covers whichever context rendered the scanout,
+  not the one that happened to be current. Reference for the shape: the rewrite's Rust side, commit
+  56b346c0 in the sibling `virglrenderer` checkout. Land it on `liminavm/virglrenderer` `limina`,
+  bump the manifest, run the suite.
+- **Re-arm the `LIMINA_VREND_INK=WxH` probe at the first draw.** It arms in `limina_ink_probe`, which
+  runs on a sampler-view bind, so `limina_rt_probe` and the per-draw print skip every draw before the
+  first textured one in the run — a draw the probe never prints reads exactly like a dropped draw
+  (it cost the rewrite a detour). Read the environment in `limina_rt_probe` at the first draw
+  instead. Spike: `spikes/notification-text-corruption/`.
 
 ## GPU / venus — candidate bugs surfaced while consulting for the Rust virglrenderer rewrite
 
