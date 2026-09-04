@@ -21,26 +21,28 @@ ends — `limina_proto::CpuSampler` does the same thing in the agent, for the sa
 
 ## What it established
 
-A dogfood desktop under `power-saver` (99 min, 2962 samples, 0 malformed, 0 per-CPU counter
-anomalies — which also confirms per-CPU jiffies survive hotplug) sawtoothed: **44 grows to max and
-242 single-step shrinks, a bounce every 2.3 minutes**, while the guest averaged 5.6% busy
-(0.39 cores) and accumulated 33 s of PSI cpu stall in the whole run. Shrink spacing (min/median
-20/22 s) matched the dwell exactly. Reclaim was not starving anything; the harm was pure churn, and
-hotplug churn costs host CPU.
+**A runnable-task spike is not demand.** A dogfood desktop under `power-saver` (99 min) sawtoothed:
+44 grows to max and 242 single-step shrinks, a bounce every 2.3 minutes, while the guest averaged
+0.39 busy cores and accumulated 33 s of PSI cpu stall in the whole run. At **every one of the 44
+grows** the guest was burning 0.18–1.61 cores (median 0.32) on 3–7 online; over all 2961 intervals
+it never once reached 0.75 × online busy and never had `load1 >= online`. One sample read
+`online=4 nr_running=12 busy=0.46 cores`. `procs_running` is a point sample of a spiky quantity,
+tasks woken together are runnable for microseconds before the scheduler places them, and on a
+machine the policy has already shrunk a handful already exceeds `online`. So a spike now has to be
+corroborated by CPU actually burned over the same interval.
 
-Attribution: at **every one of the 44 grows** the guest was burning 0.18–1.61 cores (median 0.32)
-on 3–7 online. Over all 2961 intervals the guest never once reached 0.75 × online busy, never had
-`load1 >= online`, and PSI `some avg10` peaked at 2.54%. One sample read `online=4 nr_running=12
-busy=0.46 cores`: twelve tasks in R state in a second that consumed less than half a core.
+**PSI stall is not scale-free either.** With the spike gated, the stall backstop became the
+dominant trigger, and 18 h of ordinary desktop use exposed why. On a workload averaging 0.50 busy
+cores throughout, *baseline* median stall rose steadily as the policy shrank the machine — 0.4% at
+9 online, 2.9% at 3, **5.0% at 2** (p90 7.8%) — because the same wakeups contend harder on fewer
+CPUs. An absolute gate therefore gets more hair-triggered the better the shrink works: grows ran at
+**30.7/h at 2 online, 5.6/h at 3, and ~3/h at 4 and above**. The host term was not involved (the
+worker was burning 0.42 cores; at 2 online it would need 1.75). The stall path now carries a
+utilisation floor of its own, lower than the spike gate because non-saturating loads are exactly
+what it exists for.
 
-That is the whole diagnosis. `procs_running` is a point sample of a spiky quantity, tasks woken
-together are runnable for microseconds before the scheduler places them, and on a machine the
-policy has already shrunk a handful already exceeds `online`. The rule now requires a spike to be
-corroborated by CPU actually burned over the interval, with PSI stall over the interval as an
-independent trigger for loads that make tasks wait without filling the machine.
-
-Measured after the change, same sampler, seated F44 enhanced guest, `--cpu-reclaim moderate`,
-6 vCPUs:
+Neither threshold came from the other's evidence, and both were kept honest by a controlled rig —
+a seated F44 enhanced guest, `--cpu-reclaim moderate`, 6 vCPUs:
 
 | stimulus | outcome |
 |---|---|
@@ -49,14 +51,18 @@ Measured after the change, same sampler, seated F44 enhanced guest, `--cpu-recla
 | 2 spinners on 2 online | grows to 6 within 1 s (1.99 cores busy, 0.96% stalled) |
 | 1 spinner on 2 online, 30 s | **no grow** — one core of work fits in two CPUs |
 
-Note what carried each real burst: `load1` was 0.00–0.40 and the host term 0.04–0.05 cores, so
-neither of the pre-existing fast paths would have caught either one, and the two-spinner case
-grew on utilisation with almost no stall while the six-spinner case had both. Both new signals
-earn their place.
+`load1` was 0.00–0.40 and the host term 0.04–0.05 cores at both real bursts, so neither pre-existing
+fast path would have caught either one; and both bursts sat at 91% and 99.5% of online, far above
+the stall path's floor. Every signal earns its place, and the floor costs neither burst.
 
 ## Reading a trace
 
 Find upward `online` transitions and look at the samples around them. `analyze.py` does the
 integrity checks (cadence, per-CPU monotonicity, `online=` set vs which `cpuN` fields are present)
 first, because a tuning decision gets made from this data, then time-in-state, utilisation, grow
-attribution and shrink spacing.
+attribution against the live thresholds, and shrink spacing.
+
+The sampler's 2 s interval is coarser than the agent's 1 s report, so it smooths stall peaks the
+policy acts on: a trace showing no crossing while the host log shows grows is that gap, not a
+contradiction. Attribution mirrors the policy's constants — keep the copies at the top of
+`analyze.py` in step with `vcpu_policy.rs`.

@@ -2730,15 +2730,23 @@ worker under a representative busy session, attribute CPU to exit reason / devic
 before assuming any single cause. Energy tab / `powermetrics`, not the %CPU column, is the
 scoreboard.
 
-## vCPU grow thresholds are set from one workload, not a spread
+## vCPU grow thresholds are calibrated at the extremes, not through the middle
 
-The eager re-plug itself is fixed: a runnable-task spike must now be corroborated by CPU the guest
-actually burned over the report interval, with PSI stall over that interval as an independent
-trigger (`crates/limina/src/vcpu_policy.rs`; evidence and measurements in
-`spikes/vcpu-replug-trace/`). What is still owed is the *calibration*. The two constants — 75% of
-online busy, 10% of the interval stalled — were chosen against an idle desktop plus synthetic
-spinner bursts, which bracket the extremes and say nothing about the middle: a compile with a
-serial link step, a browser under video, a guest doing IO-heavy work where `busy` stays low while
-tasks genuinely wait. Collect traces across those, check the grow latency and the false-grow rate
-at each, and move the constants only on evidence — mindful of the balloon lesson that a controller
-tuned on one workload oscillates on the next.
+The eager re-plug itself is fixed, twice: a runnable-task spike must be corroborated by CPU the
+guest actually burned over the report interval, and the PSI-stall backstop carries a utilisation
+floor of its own, because baseline stall rises as the machine shrinks and an absolute gate gets
+more hair-triggered the better the shrink works (`crates/limina/src/vcpu_policy.rs`; evidence in
+`spikes/vcpu-replug-trace/`). What is still owed is the *middle* of the workload range. All three
+constants were set against an idle desktop, a real desktop day, and synthetic spinner bursts —
+which bracket the extremes and say nothing about a compile with a serial link step, a browser under
+video, or IO-heavy work where `busy` stays low while tasks genuinely wait. Collect traces across
+those, check the grow latency and the false-grow rate at each, and move the constants only on
+evidence — mindful of the balloon lesson that a controller tuned on one workload oscillates on the
+next.
+
+Two loose ends the desktop trace left. A residual ~3 grows/hour at 4+ online attribute to no guest
+signal at all and were not the host term either (the worker was at 0.42 cores); they are most
+likely real sub-second bursts the 2 s sampler smooths away, but that is inference, not a
+measurement. And the sampler samples at 2 s while the agent reports at 1 s, so no trace can confirm
+a threshold crossing exactly as the policy saw it — closing that needs the host's own
+`dynamic vCPUs:` log lines correlated against the trace, not a finer sampler.

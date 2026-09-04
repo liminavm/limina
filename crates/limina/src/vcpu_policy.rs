@@ -172,6 +172,23 @@ const GROW_UTIL_GATE_PCT: u32 = 75;
 /// balloon policy made in the other direction.
 const GROW_STALL_GATE_X100: u32 = 1_000;
 
+/// How full the guest must be for a *stall* to count as demand, as a percentage of its online
+/// vCPUs. Lower than [`GROW_UTIL_GATE_PCT`] on purpose: the stall path exists precisely for loads
+/// that never saturate, so it must fire well below the gate — but not at zero.
+///
+/// PSI stall is not scale-free. Measured over 18 h of ordinary desktop use on the dogfood guest
+/// (`spikes/vcpu-replug-trace`), on a workload averaging 0.50 busy cores throughout, the *baseline*
+/// median stall rose as the policy shrank the machine: **0.4% at 9 online, 2.9% at 3, 5.0% at 2**
+/// (p90 7.8%). Same work, fewer CPUs, more contention between the same wakeups. So an absolute
+/// gate is not an absolute policy — it grows more hair-triggered the better the shrink works, and
+/// at 2 online it fired **30.7 times an hour** against 3/h at 4 and above.
+///
+/// A floor at 40% suppresses that (0.2 firings/h over the same trace) without touching either
+/// validated burst — two spinners on two vCPUs sat at 99.5% and six at 91% — and keeps the case
+/// the backstop is for: one thread pinned on a two-CPU machine is 40% full and stalls everything
+/// else.
+const GROW_STALL_UTIL_FLOOR_PCT: u32 = 40;
+
 /// One decision's inputs and outcome, for the debug trace.
 struct State {
     /// When the shrink condition started holding continuously. Cleared by any sample that
@@ -347,10 +364,18 @@ impl VcpuPolicy {
         let corroborated = p
             .busy_x100
             .is_none_or(|busy| busy >= GROW_UTIL_GATE_PCT * online);
-        // 2. Someone actually waited for a CPU over the last interval ([`GROW_STALL_GATE_X100`]).
+        // 2. Someone actually waited for a CPU over the last interval
+        //    ([`GROW_STALL_GATE_X100`]) on a machine doing enough work for that to mean
+        //    contention rather than the ordinary wakeup pattern of a small machine
+        //    ([`GROW_STALL_UTIL_FLOOR_PCT`]). `is_none_or` on the utilisation: an agent old
+        //    enough to lack it also lacks `stall_x100` and never reaches here at all, so the
+        //    absent case is only the freak sample where PSI moved and the jiffy delta did not —
+        //    a missing reading must not disarm the backstop.
         let stalled = p
             .stall_x100
-            .is_some_and(|stall| stall >= GROW_STALL_GATE_X100);
+            .is_some_and(|stall| stall >= GROW_STALL_GATE_X100)
+            && p.busy_x100
+                .is_none_or(|busy| busy >= GROW_STALL_UTIL_FLOOR_PCT * online);
         // 3. A 1-minute load that already fills the machine. Slow, but it is what the stock tier
         //    and a `psi=0` kernel have.
         let loaded = p.loadavg1_x100 >= online * 100;
@@ -592,7 +617,9 @@ mod tests {
 
     /// The backstop the gate needs: a load that never fills the machine can still make tasks
     /// wait, and waiting is the actual harm. Nothing here would grow on utilisation, loadavg or
-    /// runnable count — only the stall says the guest was squeezed too small.
+    /// runnable count — only the stall says the guest was squeezed too small. "Not full" is the
+    /// band between the two thresholds: 2.10 cores on 4 online is 52%, past the stall path's
+    /// floor and well short of the spike path's gate.
     #[test]
     fn tasks_waiting_for_a_cpu_grow_even_on_a_machine_that_is_not_full() {
         let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
@@ -602,6 +629,41 @@ mod tests {
             busy_x100: Some(210),
             stall_x100: Some(1_800),
             ..idle(4)
+        };
+        assert_eq!(
+            p.decide(&sample, Instant::now()),
+            Some(CpuTarget { online: 10 })
+        );
+    }
+
+    /// ...but a stall on a machine that is barely doing anything is not demand, it is what a
+    /// shrunken machine's ordinary wakeup pattern looks like. Verbatim from a dogfood desktop at
+    /// 2 online: 0.52 cores burned, 11% of the second with someone waiting.
+    #[test]
+    fn a_stall_on_a_nearly_idle_machine_is_not_demand() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let sample = CpuPressure {
+            nr_running: 1,
+            loadavg1_x100: 62,
+            busy_x100: Some(52),
+            stall_x100: Some(1_100),
+            ..idle(2)
+        };
+        assert_eq!(p.decide(&sample, Instant::now()), None);
+    }
+
+    /// The floor is where the backstop's reason for existing lives: one thread pinned on a
+    /// two-CPU machine fills 40% of it, never trips the 75% gate, and is exactly the
+    /// non-saturating load that makes other tasks wait.
+    #[test]
+    fn a_stall_on_a_machine_at_the_floor_still_grows() {
+        let p = VcpuPolicy::new(10, CpuReclaim::Moderate).unwrap();
+        let sample = CpuPressure {
+            nr_running: 1,
+            loadavg1_x100: 95,
+            busy_x100: Some(80),
+            stall_x100: Some(1_100),
+            ..idle(2)
         };
         assert_eq!(
             p.decide(&sample, Instant::now()),
