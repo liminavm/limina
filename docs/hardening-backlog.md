@@ -1416,6 +1416,63 @@ Two follow-ups, both backlog by the user's decision (2026-09-03), neither starte
   (it cost the rewrite a detour). Read the environment in `limina_rt_probe` at the first draw
   instead. Spike: `spikes/notification-text-corruption/`.
 
+## GPU / vrend — the shader blitter leaves its texture parameters on the shared source texture, so the next draw through an already-bound sampler view renders wrong
+
+📋 open, reported 2026-09-04 by the Rust virglrenderer rewrite's replay harness against our C
+(`harness/replay/make-sampled-corpus.py` → `sampled.bin` in the sibling `virglrenderer` checkout;
+the fixture `harness/replay/fixtures/sampled.score` is pinned from the Rust side because of this,
+the only such fixture in that tree). Two identical draws with no state change between them render
+differently in the C when a shader blit off the sampled texture sits between them:
+
+- res 50 is a B8G8R8X8 2D texture; a sampler view on it (full level range) asks for swizzle
+  Z,Y,X,W. Draw through that view into res 52.
+- Blit res 50 → res 51 (B8G8R8X8 → B8G8R8A8: not copy-compatible, lands on the shader blitter).
+- Re-bind the SAME view handle into the same slot, draw again into res 53.
+
+Measured: the C's res 53 is byte-identical to res 51, the blit's own destination (identity
+swizzle, alpha forced to one), not to res 52. Both implementations are deterministic over two runs.
+
+Mechanism, verified in the source. `vrend_set_tex_param`
+(`third_party/virglrenderer/src/vrend/vrend_blitter.c:737`, called from `vrend_renderer_blit_gl`)
+writes `GL_TEXTURE_SWIZZLE_*`, `GL_TEXTURE_BASE_LEVEL`/`MAX_LEVEL`, the wrap modes and the filters
+onto whatever `info->src_view` names — and `vrend_renderer_blit_int`
+(`vrend_renderer.c:12888`) sets that to `src_res->gl_id`, the SHARED texture object, whenever the
+blit's source format equals the resource's format. A transient view (`vrend_make_view`) is made
+only for reinterpreting blits, and is deleted afterwards. GL texture objects are shared across GL
+contexts, so the blitter running in its own context (`blit_ctx->gl_context`) shields nothing. On
+the way back, `vrend_set_single_sampler_view` (`vrend_renderer.c:3879`) returns early when the same
+view handle is bound into the same slot, and the per-draw sampler bind is gated on
+`shader_view->dirty_mask` — so nothing re-applies the view's swizzle. Worse, the texture's cached
+`cur_swizzle`/`cur_base`/`cur_max` (`vrend_renderer.c:547`) are NOT updated by the blit, so even a
+bind of a DIFFERENT view whose swizzle equals the stale cache skips the `glTexParameter` at
+`vrend_renderer.c:3919`: the cache asserts a state the GL object no longer holds, and every repair
+path that trusts it stays quiet.
+
+Observable surface: the swizzle only. A view that restricts levels is backed by its own GL texture
+view carrying its own parameters, and filters/wrap come from the bound sampler object, which
+overrides the texture's. Any guest that samples a swizzled format (BGRX/RGBX and every
+`VIRGL_TEXTURE_NEED_SWIZZLE` entry) and blits from the same texture between draws — a GTK4 or
+Chromium-style scene doing a copy off a live surface — hits it; the symptom is swapped red/blue or
+a wrong alpha on the next draw, with no error anywhere. The notification-text spike is not this
+(text loss, not a colour swap), but this is a candidate for any "colours flip after a copy"
+sighting on the GL tier.
+
+Fix shape, recommended structural, not a purge at the blit: have the shader blitter sample through
+a texture it owns. `vrend_renderer_blit_int` already has the transient-view path for reinterpreting
+blits; take it unconditionally when `feat_texture_view` is present (GL 4.3 / `GL_ARB_texture_view`
+/ `GL_OES_texture_view` / `GL_EXT_texture_view` — confirm which the host GL reports on KK, the
+FEAT table is `vrend_renderer.c:341`), so the blit's parameters die with the view. Where texture
+views are unavailable, the fallback is to restore the shared object after the blit: re-apply
+`cur_swizzle`/`cur_base`/`cur_max` when they hold a real value (sentinels are `-1`/`-1`/`10000`,
+`vrend_renderer.c:10067`), which puts the object back to what its bound views last wrote. A purge
+alone leaves the next call site that mutates shared texture state to be found in production; the
+cache-vs-object split is the deeper fault and the sentinel reset is the minimal repair of it. The
+rewrite's Rust side does not reproduce; do not assume its structure is what shields it (its bind
+is dirty-gated the same way) — the replay measurement is the fact, the shield is unverified. Land
+on `liminavm/virglrenderer` `limina`, bump the manifest, run the suite; the rewrite's fixture then
+goes back to being C-pinned and the deviation notes in its `docs/rust-rewrite.md` and
+`harness/README.md` can go.
+
 ## GPU / venus — candidate bugs surfaced while consulting for the Rust virglrenderer rewrite
 
 📋 open, 2026-09-03. Each was found by reading our C and the guest mesa against a clean-room
