@@ -31,7 +31,7 @@ void virgl_error(const char *fmt, ...)
     va_end(ap);
 }
 
-#define MAX_FRAMES 512
+#define MAX_FRAMES 4096
 
 static int cmp(const void *a, const void *b)
 {

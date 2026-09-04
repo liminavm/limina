@@ -105,9 +105,31 @@ refresh, ahead of any frame that could reference it. The re-emission's picture i
 target was written a submission ago and the guest may have recycled it. When the next descriptor
 shows the guest stored nothing, the copy is dropped and costs nothing.
 
-The cost is decoding such a frame twice. On that clip 304 of 615 frames were re-emitted, against
-272 hidden frames still held outright. It is removable only by getting `refresh_frame_flags`
-across VA-API, which does not carry it.
+The cost is decoding such a frame twice. How often that happens is a property of the GOP, not of
+the resolution: 304 of 615 frames on the 1080p24 clip, 457 of 900 on a 4K60 one -- about half
+either way, because a libaom pyramid sits at the wall for most of every GOP.
+
+What that costs depends entirely on what the pipeline is bound by, and the two measurements do
+not agree:
+
+| 4K60, 900 frames | units decoded | cost |
+| --- | --- | --- |
+| decode alone (`sw-oracle`, dav1d, no VM) | 1003 -> 1461 | 10.9 s -> 15.1 s CPU, **+38%** |
+| through the VM (`ffmpeg -hwaccel vaapi` readback) | same | 23.4 s -> 22.7 s wall, **no difference** |
+
+The end-to-end path runs at ~39 fps for 4K60 and is bound by transport and readback, not by the
+decoder, so the extra decodes vanish into it -- the fixed arm even measured slightly faster,
+which is the noise floor. Isolated, they are a real +38%.
+
+The requirement this sets is worth stating directly: sustaining 4K60 needs the decoder to deliver
+about **91 decodes per second at 4K**, not 60. On this host that is dav1d in software and the
+question is moot; on a host with AV1 silicon it is unmeasured, and `VT_MAX_WIDTH`/`HEIGHT` cap us
+at 4096 either way.
+
+Removing the cost needs `refresh_frame_flags` across VA-API, which does not carry it.
+`kVTDecodeFrame_DoNotOutputFrame` on the re-emission would drop the output surface and its copy
+(12 MB per frame at 4K) without touching the decode; untested here, since this host has no AV1
+silicon to test it on.
 
 `sw-oracle` grades this directly: every shown frame must produce its unit on its own submission.
 `LIMINA_AV1_HOLD_SHOWN=1` restores the old behaviour, so both arms run against one build --
