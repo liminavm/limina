@@ -1375,6 +1375,39 @@ and poisons the context immediately — deterministic, and nothing on the hot pa
 a healthy context). RED first: a `vkr_*` L2 that emits the two commands from a raw venus client
 and asserts the context dies while a sibling context keeps presenting.
 
+## GPU / vrend — the IOSurface scanout sync finishes the wrong GL context, so a present can read the previous frame
+
+📋 open, reported 2026-09-03 by the Rust virglrenderer rewrite's replay harness against our C.
+`vrend_renderer_resource_sync_iosurface` (EGLImage mode, the zero-copy scanout path every GL
+desktop presents through) does `vrend_hw_switch_context(ctx0, true); glFinish();`. `glFinish`
+waits for the CURRENT context's queue only, and ctx0 never draws: the compositor's renders sit on
+its own sub-context's queue, which the make-current flushes but nothing waits for. libkrun's
+`flush_resource` then reads the IOSurface bytes (`present_surface`) before those renders have
+landed — the present shows the frame before last, or a partially updated one. Measured, not
+inferred: replaying the recorded vrend corpus, the C read the 1280x800 scanout (res 5) as
+`a40c9076…` while the same resource's texture read back `a02f365e…`, and the surface value moved
+with how much readback traffic preceded it — the golden had pinned a stale read. Fix in the
+rewrite's C tree (the sibling `virglrenderer` checkout) commit 873825d3: `glFinish()` on the context
+that is current BEFORE switching to ctx0 (nine lines, cherry-pickable onto `liminavm/virglrenderer`
+`limina`). Caveat for the port: "the context that was current" is only "the one that rendered the
+scanout" when the compositor's batch was the last one dispatched; with several guest GL contexts
+live, a finish over every context's current sub-context (what the Rust side does) is the safe form,
+and a per-resource "last renderer" is the cheap one. This is the concrete symptom of the open
+"fence-accurate present is not wired for vrend" item (`docs/graphics.md` §9): the finish was
+standing in for a completion fence and was waiting on the wrong queue. Check after the fix: the
+overview-toggle stress and a `LIMINA_WINDOW_CAPTURE` diff against the guest's own screenshot.
+
+Not related, despite the shape: the notification-card text loss
+(`spikes/notification-text-corruption/`). That damage is already present in the GUEST's own
+screenshot of its framebuffer, so the host present path — this race included — is exonerated
+there; do not re-open the spike on the strength of this fix.
+
+Probe note from the same report, for whoever runs the spike next: `LIMINA_VREND_INK=WxH` arms in
+`limina_ink_probe`, which runs on a sampler-view bind, so `limina_rt_probe` and the per-draw print
+skip every draw before the first textured one in the run — a draw the probe never prints reads
+exactly like a dropped draw. If the probe stays, read its environment in `limina_rt_probe` at the
+first draw.
+
 ## GPU / venus — candidate bugs surfaced while consulting for the Rust virglrenderer rewrite
 
 📋 open, 2026-09-03. Each was found by reading our C and the guest mesa against a clean-room
