@@ -233,6 +233,7 @@ is weak by the stochastic finding.
 | baseline, unchanged configuration | 5 | 5 lost |
 | `KK_LIMINA_HEAP_NORESET=1` — the shared bump heap never recycled | 4 | 1 survived (226k unrolls), 3 lost |
 | `LIMINA_KK_FORCE_ROBUST=1` — every vertex fetch clamped to its range | 3 | 1 survived, 2 lost |
+| `LIMINA_KK_TEX_LEAK=1 LIMINA_KK_VIEW_LEAK=1` — no texture or view ever released | 1 | lost (arm cut short: host memory) |
 | `KK_LIMINA_BARRIER=widen` (pre_gfx barrier scope ALL) | 1 | lost |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
