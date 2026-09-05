@@ -1538,7 +1538,10 @@ reasons: our one host-initiated readback (`read_2d_resource`, the software-2D/ca
 passes ctx_id 0, and vrend's submit gate is `ctx->ctx_id != 0 && ctx->in_error`
 (`vrend_renderer.c:13356,13402`), which exempts ctx0 anyway. **Keep host-initiated transfers on
 ctx0.** A future readback path that borrows a guest's ctx_id to get at its resources would convert
-any refusal on that path into a dead guest context.
+any refusal on that path into a dead guest context. The stronger shape, if this is ever
+restructured: let the *type* of the failure decide whether it poisons, not the ctx_id or the call
+site — a fault raised from a command handler poisons, a transfer error returned to the host ABI
+cannot, and then no call site can get it wrong by naming the wrong id.
 
 Refusing rather than re-deriving the bound, because the operation has no correct meaning in either
 direction: no single `glTexSubImage2D` fills two planes, a guest that CPU-writes a decode target
