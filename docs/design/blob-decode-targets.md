@@ -206,6 +206,34 @@ storage, so sampling needs no re-read and scanout can take the surface by id. Th
 glupload's direct importers, which refuse everything today with `cannot produce texture-target
 2D` and fall back to the copy uploader however well-formed the buffer is.
 
+**Phase 2 also ends the canonical layout, and that is the part the plane index hides.** The two
+sides compute the same tight layout today only because a copy sits between them:
+`writeback_plane_to_guest` walks the source at the surface's own `plane->pitch` and the
+destination at `guest_pixels_stride`, moving one tight row at a time
+(`vrend_video.c:405`). The strides are decoupled by construction, so the host surface's
+padding never reaches the guest and `get_param(PIPE_RESOURCE_PARAM_STRIDE)` correctly describes
+the guest BO, which is the storage its consumers map.
+
+An IOSurface's plane pitch is **not** the tight stride. Measured 2026-09-04 on an M1 Max, plane 0
+of a two-plane 420f surface: 64x64 gives pitch 128 against a tight 64; 65x33 gives 128 against 65;
+352x240 gives 384 against 352; 1280x720 and 1920x1080 give a pitch equal to the tight stride. The
+kernel rounds up, and the coincidence at common widths is what makes this easy to miss — 352x240
+is a real clip size and 64x64 is the extent gst-va probes every fourcc at during registration, so
+the first composite surface a guest asks for is already one that diverges.
+
+When the surface becomes the texture's storage the copy disappears and with it the
+reconciliation. The export then names storage with padded rows while the guest still reports a
+tight stride, and the result is a sheared picture rather than an error. So **phase 2 must
+transmit the layout from the host that allocated it** rather than have both ends recompute it.
+The carrier exists on the import path — SET_TYPE's `plane_strides`/`plane_offsets` overwrite
+`guest_pixels_*`, which is why `vrend_resource_init_planar_guest_layout` is written to lose to it
+— but a composite target is created directly and has no such path. That, not the plane index, is
+the load-bearing gap.
+
+Two rules that follow for anything built in the meantime: never derive `guest_pixels_stride` from
+a surface pitch, which would write padded rows into tight guest storage; and never treat the two
+strides as interchangeable because they agree at 1280 and 1920.
+
 **Phase 2's cost is a plane index that no layer carries.** Every mechanism it needs already
 ships. vrend adopts an IOSurface as a GL texture's storage in
 `vrend_resource_iosurface_init` (`vrend_renderer.c:9428`) for SCANOUT and SHARED resources;
