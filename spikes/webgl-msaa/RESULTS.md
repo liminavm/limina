@@ -83,33 +83,40 @@ report, a shader dump and a second run's report all name one thing. The label mu
 derived: it is hashed into the UID Metal reports against, so labelling with a per-run pointer makes
 every UID per-run too and two runs cannot be joined at all.
 
-## What the trigger actually is: a large drawing buffer, presented 1:1
+## What the trigger needs: fullscreen AND a canvas above some size
 
-Four arms, one VM, one build, display forced to 2560x1440 in every one, the page
-reporting the drawing-buffer size it actually got:
+Every arm below ran on one build, with the display forced to 2560x1440 and the page
+reporting the drawing buffer it actually got. Because the guest display is 2560x1440
+at scale 2, a fullscreen kiosk window is **1280x720 logical**, and a canvas that
+"follows the window" is 1280x720 — not 2560x1440. That single fact retired an earlier
+reading of this table.
 
-| Firefox window | canvas (drawing buffer) | result |
+| Firefox window | drawing buffer | result |
 |---|---|---|
-| kiosk | follows the window (large) | **dies — 45 s, and 55 s on repeat** |
-| kiosk | forced 800x600 | survives 210 s |
-| windowed (~1830x1030) | follows the window | survives 210 s |
-| windowed | forced 2560x1440, CSS-scaled into the window | survives 210 s |
+| kiosk | 1280x720 (follows the window) | **dies — 45 s, 55 s, 65 s** |
+| kiosk | 1279x719 | **dies** |
+| kiosk | 800x600 | survives 210 s |
+| windowed | follows the window | survives 210 s |
+| windowed | 2560x1440, scaled into the window | survives 210 s |
 
-So it is not the display size, not the window, and not the canvas size on its own. A
-large drawing buffer survives when it is scaled down into a smaller surface, and a
-small one survives in a full-size surface. What dies is the case where a large
-drawing buffer is presented at its own size.
+So it needs **both**: fullscreen, and a drawing buffer above some threshold between
+800x600 and 1279x719. Neither alone does it — a 2560x1440 buffer survives in a window,
+and an 800x600 one survives fullscreen. Size is not monotonic on its own, which is why
+"a large drawing buffer" was the wrong description.
 
-The economical reading — a reading, not yet a measurement — is that this is the path
-where the compositor takes the client's buffer straight through instead of copying it
-through an intermediate, so the WebGL buffer itself becomes what is presented. Every
-negative below is consistent with it: none of the probes present at all.
+Two hypotheses are already dead. It is **not** the display or the scanout path: forcing
+`--display-size 2560x1440` on the capture path reproduces in 45 s, and the earlier
+1280x800 arm that suggested otherwise had switched scanout path along with the size.
+And it is **not** Firefox's native compositor: the killing config with
+`gfx.webrender.compositor=false` still dies, in 65 s.
 
-An earlier framing of this section said the loss was display-size dependent, from a
-1280x800 arm that survived. That arm changed the scanout path as well as the size
-(`--display-capture` defaults to 1280x800 where `--window` gives 2560x1440). Forcing
-`--display-size 2560x1440` on the capture path reproduces the loss in 45 s, so the
-scanout path is not the variable and the earlier arm did not measure what it claimed.
+**A caveat that applies to the whole table:** the GNOME shell was in the Overview for
+every arm, survivors and deaths alike, because nothing ever focused a window in these
+headless sessions. That is a different compositing path from a normal desktop and it
+was not a controlled variable. The deaths are real regardless — the killing
+configuration has now reproduced five times — but the survivals are only survivals
+*in the Overview*, and should be re-run with a focused window before any of them is
+built on.
 
 ## What has been ruled out
 
@@ -130,6 +137,9 @@ scanout path is not the variable and the earlier arm did not measure what it cla
 | MSAA render-to-texture at full size, host | `host-msaa-loop`, 2560x1440, 4 samples, no VM | 20,520 frames, survives |
 | the same, plus reallocation churn | `--churn 30`, canvas+depth+FBO rebuilt every 30 frames | 30,712 frames, survives |
 | the same, inside the guest over virgl | `msaa-loop` on the guest, MSAA granted (`SAMPLES=4`) | **226,909 frames, survives** |
+| presenting fullscreen, multisampled surface | `guest-msaa-present --fullscreen --mode surface` | 144,037 frames, survives |
+| presenting fullscreen, MSRTT canvas blitted 1:1 | `guest-msaa-present --fullscreen --mode msrtt` | 139,000+ frames, survives |
+| Firefox's native compositor | `gfx.webrender.compositor=false` on the killing config | **dies in 65 s** |
 | descriptor slot decoding | both virglrenderer implementations traced in guest ids | identical |
 
 **No Vulkan resolve is involved, in either implementation.** Upstream mesa replaced KosmicKrisp's
@@ -163,17 +173,18 @@ genuine misaddress rather than a silent layer-0 substitution. It is **not** yet 
 
 ## Where to look next
 
-The differential is now narrow enough to name: everything that renders multisampled
-survives, and only the configuration that *presents* a full-size buffer dies. The next
-arm should instrument the scanout import rather than the draw — which resource the
-guest hands over when the window is full-size, and what the host does with it — since
-that is the only step the surviving probes never take.
+`guest-msaa-present.c` already presents — fullscreen, through a real Wayland surface,
+with multisampling confirmed granted, in both of the two shapes the canvas could have
+(a multisampled window surface, and an MSRTT canvas blitted 1:1) — and neither
+reproduces. Presenting is therefore **not** the missing ingredient either, and the
+probe's value now is as a control: it isolates everything the browser does *except*
+whatever the remaining difference is.
 
-`host-msaa-loop.c` builds and runs unchanged inside the guest (`gcc -lEGL -lGLESv2`),
-which is how the guest arm above was run; teaching it to present through a real
-Wayland surface instead of `EGL_PLATFORM=surfaceless` would turn a 45-second boot-plus-
-browser reproduction into a seconds-long one, and is the highest-value piece of work
-left on the vehicle.
+The cheapest way to find that difference is to keep bisecting the browser rather than
+to keep enriching the probe, because the browser is a reliable 45-second reproducer and
+the probe is a reliable negative. Bisect the threshold first — the canvas size between
+800x600 and 1279x719 where kiosk starts dying — since a sharp threshold names a
+resource limit and a soft one names a rate.
 
 1. **Reproduce at 2560×1440 in kiosk, or not at all.** Every other configuration
    measured so far survives, so an arm that is not this one measures nothing.
@@ -200,6 +211,17 @@ left on the vehicle.
   validation affordable silently moved the run to a configuration that does not crash.
 - **A label can perturb what it names.** A pipeline label is hashed into the pipeline UID, so
   adding one invalidates every UID recorded before it.
+- **A liveness check must not match itself.** Two arms reported a full-duration
+  "survived" from a loop whose `grep 'debug/limina-vmm --cpus'` matched its own grep
+  process, so the loop could never observe the VM exiting. The worker log said the VM
+  had died mid-arm. Always bracket the pattern (`'[l]imina-vmm'`), and confirm a
+  survival against the worker log rather than against the watcher that was supposed to
+  notice.
+- **Read the size the workload actually got, not the one you configured.** A fullscreen
+  kiosk window on a 2560x1440 display at scale 2 is 1280x720 logical, so "the canvas
+  follows the window" meant 1280x720 while a deliberately-forced canvas was 2560x1440 —
+  the killing arm had the *smaller* buffer. The page prints its drawing-buffer size for
+  exactly this reason; a table built without it inverted the conclusion.
 - **Prove the mask is not the slowdown.** Validation costs ~10x; that a workload survives under it
   means nothing until an arm shows the mask working at full speed, or the fault returning with the
   slowdown kept.

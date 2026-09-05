@@ -619,28 +619,38 @@ rects). Remaining:
   thousands of live `MTLCommandAllocator`s outstanding. It is **not** zink's device-lost abort:
   both of those are gated on `abort_on_hang`, which is `ZINK_HANG_ABORT`, default false.
 
-  **The trigger is a large drawing buffer presented at its own size** — not the display
-  size, not the window, not the canvas size alone. Four arms, one VM, one build, display
-  forced to 2560x1440 throughout: kiosk with the canvas following the window dies (45 s,
-  and 55 s on repeat); kiosk with the canvas forced to 800x600 survives 210 s; a windowed
-  browser with the canvas following the window survives 210 s; and a windowed browser with
-  a forced 2560x1440 canvas scaled down into the smaller surface also survives 210 s. A big
-  buffer lives if it is scaled on the way out, and a small one lives in a full-size surface.
-  The economical reading, still a reading, is the path where the compositor takes the
-  client's buffer through unchanged instead of copying it into an intermediate.
+  **The trigger needs fullscreen AND a drawing buffer above some size.** The guest
+  display at 2560x1440 runs at scale 2, so a fullscreen kiosk window is 1280x720
+  logical. Measured on one build with the display forced to 2560x1440: kiosk with the
+  canvas following the window (1280x720) dies at 45 s, 55 s and 65 s; kiosk at 1279x719
+  dies; kiosk at 800x600 survives 210 s; a windowed browser survives, and a windowed
+  browser with a forced 2560x1440 canvas survives too. Neither variable alone does it —
+  a 2560x1440 buffer survives in a window and an 800x600 one survives fullscreen — and
+  the killing arm has the *smaller* buffer of the two extremes, so "large buffer" is the
+  wrong description. The threshold sits between 800x600 and 1279x719 and is worth
+  bisecting: a sharp one names a resource limit, a soft one names a rate.
 
-  That retires an earlier "display-size dependent" framing here, which came from a 1280x800
-  arm that had also switched scanout path — `--display-capture` defaults to 1280x800 where
-  `--window` gives 2560x1440. Forced to 2560x1440, the capture path dies in 45 s.
+  Two candidates are dead. Not the display or the scanout path: forced to 2560x1440 the
+  capture path dies in 45 s, and the earlier arm suggesting a display-size dependence had
+  switched scanout path along with the size. Not Firefox's native compositor either — the
+  killing config with `gfx.webrender.compositor=false` still dies in 65 s.
 
-  **Nothing that merely renders multisampled reproduces it.** `spikes/webgl-msaa/host-msaa-loop.c`
-  drives EXT_multisampled_render_to_texture at 2560x1440 with four samples, a textured draw,
-  a composite pass and optional reallocation churn: 20,520 frames on the host untouched,
-  30,712 with churn, and — built and run unchanged inside the guest, over virgl, with
-  multisampling confirmed granted — **226,909 frames in 180 s**, roughly fifty times what
-  the browser draws before dying. The shadow blit, a full-size multisample target, and
-  image-view churn are each insufficient, together and separately. The one thing none of
-  those probes does is present.
+  **Caveat on every survival above:** the GNOME shell was in the Overview throughout,
+  survivors and deaths alike, because nothing focused a window in these headless
+  sessions. The deaths are real — the killing config has reproduced five times — but the
+  survivals are survivals *in the Overview* and need re-running with a focused window.
+
+  **Nothing that merely renders or presents reproduces it.** `spikes/webgl-msaa/host-msaa-loop.c`
+  drives EXT_multisampled_render_to_texture at 2560x1440 with four samples, a textured
+  draw, a composite pass and optional reallocation churn: 20,520 frames on the host,
+  30,712 with churn, and 226,909 in 180 s built unchanged inside the guest over virgl
+  with multisampling confirmed granted. `spikes/webgl-msaa/guest-msaa-present.c` adds the
+  step the others skip — it presents, fullscreen, through a real Wayland surface, in both
+  shapes the canvas could take (a multisampled window surface, and an MSRTT canvas
+  blitted 1:1) — and survives 144,037 and 139,000+ frames. So the shadow blit, a
+  full-size multisample target, image-view churn and presentation are each insufficient.
+  The probes are now the control: they do everything the browser does except whatever is
+  left.
 
   **The underlying Metal error is `PageFault` (~6 ms) on some runs and `Hang` (~46 ms) on others,
   from the identical build** — measured across five arms, roughly evenly split. The outer code is
@@ -676,12 +686,9 @@ rects). Remaining:
   2DMultisample layouts differ, so that read misaddresses rather than silently substituting layer
   0 — the memory-unsafe member of the class. Not yet tied to the loss.
 
-  **Next:** instrument the scanout import rather than the draw — which resource the guest
-  hands over when the window is full-size, and what the host does with it — since that is
-  the only step every surviving probe skips. Teaching `host-msaa-loop.c` to present through
-  a real Wayland surface would turn a boot-plus-browser reproduction into a seconds-long
-  one. Failing that, reproduce at 2560×1440 in kiosk only, then isolate by masking one
-  pipeline at a time
+  **Next:** bisect the canvas-size threshold between 800x600 and 1279x719, with a focused
+  window rather than the Overview, since the browser is a reliable 45-second reproducer and
+  the probes are reliable negatives. Then isolate by masking one pipeline at a time
   (`MTL_SHADER_VALIDATION_DEFAULT_STATE=none` plus `ENABLE_PIPELINES=<one UID>`,
   `FAIL_MODE=allow`): the pipeline whose masking alone both survives and blackens the cubes is the
   fatal read. A fix must show the page running ≥5 minutes with the cubes **visibly rendering** —
