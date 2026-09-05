@@ -620,23 +620,49 @@ rects). Remaining:
   `MTLCommandAllocator`s outstanding. It is **not** zink's device-lost abort: both of those are
   gated on `abort_on_hang`, which is `ZINK_HANG_ABORT`, default false.
 
+  **The loss is a GPU address fault, not a hang.** Metal says so once KosmicKrisp stops discarding
+  the reason (`kk: say why the device was lost`): the outer code is `TIMEOUT`, the underlying one
+  is `kIOGPUCommandBufferCallbackErrorPageFault`, and the command buffer had 6 ms of GPU time. So
+  the GPU dereferenced an address it could not translate. Reading only the outer code sends you
+  after a hang that is not there.
+
   Ruled out as the variable: the KK revision, windowed vs `--display-capture`, stock vs enhanced
   guest, and fan unrolling (`LIMINA_ZINK_NO_FANS=1` dies identically) — so the geometry-unroll
-  route is where the abort travels, not what triggers the loss. The structural fact still in view
-  is that KosmicKrisp implements no `VK_EXT_multisampled_render_to_single_sampled`, so every MSAA
+  route is where the abort travels, not what triggers the loss. Four mechanisms are closed
+  outright: the KK allocator pool's retirement (`LIMINA_KK_ALLOC_DESTROY=0`, verified 34
+  retirements → 0), BO lifetime (`LIMINA_KK_BO_LEAK=1` — nothing ever released or made
+  non-resident, so the faulting address is live, not dangling), texture residency (plane textures
+  and their views are now registered and Metal's complaint goes to zero), and the MSAA resolve —
+  in *either* implementation. Upstream's replacement of the meta/shader resolve with Metal's
+  render-pass resolve (`db5ab8de776`, MR 43216) is the obvious candidate and does not help,
+  because instrumenting it shows `kk_attachment_do_renderpass_resolve` never sees a real resolve:
+  zink emulates `EXT_multisampled_render_to_texture` with a `util_blitter` draw and never asks
+  Vulkan to resolve anything.
+
+  So the structural fact remains the live one, now with the resolve half of it excluded:
+  KosmicKrisp implements no `VK_EXT_multisampled_render_to_single_sampled`, so every MSAA
   render-to-texture goes through `zink_render_attachment_shadow`'s `util_blitter` blit with
-  `ctx->blitting` set — the same path that carries the fixed recursion defect and the open stale
-  `pStencilAttachment` one. Neither is confirmed to be this.
+  `ctx->blitting` set — ordinary drawing to and sampling from a 4-sample texture. That path
+  carries the fixed recursion defect and the open stale `pStencilAttachment` one; neither is
+  confirmed to be this. The sharpest remaining lead is Metal shader validation: with
+  `FAIL_MODE=allow` the loss does not occur, and diffing report *instances* (pipeline UID +
+  `program_source` line, not classes) between an AA and a non-AA half of one run leaves three
+  AA-only pipelines with real volume, all reading a texture with missing resource usage from a
+  fragment shader.
 
   **Two things this invalidates.** The "Firefox MSAA silent non-AA, cosmetic only" entry below is
   MoltenVK-era and no longer describes this stack: the page reports `granted aa=true SAMPLES=4`,
   so MSAA is genuinely taken. And a VM dying from a web page means the guest-facing crash surface
   is wider than the Vulkan path the trust-boundary work hardens — this arrives through GL/vrend.
 
-  **Method note that cost time:** a check 150 s in read as healthy on a VM that died 40 s later,
-  and a `kill -0` liveness check called a VM healthy while its display was 94.6% black. Neither
-  process liveness nor an early sample is an oracle here; read the presented pixels and give it
-  the full window.
+  **Method notes that cost time.** A check 150 s in read as healthy on a VM that died 40 s later,
+  and a `kill -0` liveness check called a VM healthy while its display was 94.6% black — neither
+  process liveness nor an early sample is an oracle; read the presented pixels and give it the
+  full window. A validator class that fires on every healthy frame explains nothing: two arms went
+  into Metal's residency reports before noticing they were equally loud on single-sample textures
+  that never fault, and the signal was in the *instances*, not the class. And give every arm its
+  own capture path — successive arms overwriting one `--display-capture` file cost an arm that
+  "survived" only because Firefox had exited and the guest was sitting in the Overview.
 
 - **~~`vkGetPipelineCacheData` returns `VK_ERROR_OUT_OF_HOST_MEMORY`, and GTK4 aborts on it~~ —
   ROOT-CAUSED + FIXED the same day (virglrenderer 0058).** It was never a KosmicKrisp or

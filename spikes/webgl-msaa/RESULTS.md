@@ -1,6 +1,7 @@
 # A WebGL page that asks for antialiasing loses the Vulkan device and kills the VMM
 
-**Status:** OPEN — reproducible on the shipped stack, cause not found.
+**Status:** OPEN — reproducible on the shipped stack. The fault is named (a GPU address
+fault, not a hang); the cause is not.
 **Vehicle:** `webgl-msaa.html`, self-contained (no network, generated texture). Three textured
 cubes on a `webgl` context; `?aa=0` requests `{antialias:false}` for the control arm.
 **Backlog entry:** `docs/hardening-backlog.md` §"A guest WebGL page that requests MSAA loses the
@@ -70,29 +71,82 @@ that pass. `kk_alloc_pool` calls this "the dangerous route" in its own comments.
 | scanout path | windowed (`--window`) vs headless (`--display-capture`) | both die |
 | guest tier | stock F44 vs enhanced F44 | both die |
 | context attributes | `{antialias:true}`, defaults, vs `{antialias:false}` | only AA dies |
-| fan unrolling | `LIMINA_ZINK_NO_FANS=1` vs default | **both die** (device loss, then signal 6) |
+| fan unrolling | `LIMINA_ZINK_NO_FANS=1` vs default | both die |
+| KK allocator pool retirement | `LIMINA_KK_ALLOC_DESTROY=0` (verified: 34 retirements → 0) | both die |
+| BO lifetime | `LIMINA_KK_BO_LEAK=1` — nothing ever released or de-resident | both die |
+| texture residency | plane textures + sampled/storage views registered | both die |
+| MSAA resolve implementation | meta/shader resolve vs upstream's Metal render-pass resolve | **neither runs** |
 
-**Time-to-device-loss is fixed from page load, and the fan flag does not move it.** Measured
-independently on a stock guest, headless: 9906 fan unrolls vs 0 with the flag, and the device is
-lost at launch+20 s to the second in both arms. Whatever loses the device does it on a schedule,
-untouched by how much work the fan path generates. That is the sharpest constraint here and the
-best place to start: look for something periodic, not something cumulative.
+The last four are the load-bearing ones, because each closes a whole mechanism rather than a
+setting. Nothing KK allocated was ever freed or made non-resident in the leak arm, so the faulting
+address is not a dangling one; the fault is a *live* address the GPU could not translate.
 
-Time-to-abort does move (60 s vs 105 s) while the pool grows *bigger* in the longer-lived arm
-(8209 vs 12379), which is consistent with the abort being a count the pool walks toward at a rate
-the fan path affects. Neither number measures severity of the loss.
+**No Vulkan resolve is involved, in either implementation.** Upstream mesa replaced KosmicKrisp's
+meta/shader resolve with Metal's native render-pass resolve (`db5ab8de776`, `a86f79d5f66`, MR
+43216), which is the obvious candidate for an MSAA fault and post-dates our base. Ported onto
+`limina-kk` it does not help — and instrumenting the path shows why: `kk_attachment_do_renderpass_resolve`
+never once sees an attachment with `resolve_mode != VK_RESOLVE_MODE_NONE` on this workload. zink
+emulates `EXT_multisampled_render_to_texture` with a `util_blitter` draw, so the multisample
+traffic here is ordinary rendering to and sampling from a 4-sample texture, and never a resolve.
+Both resolve implementations are irrelevant to this bug. (The port lives on the local
+`msaa-resolve-test` branch of the KK checkout; it is upstream work we get on the next rebase, not
+something to carry.)
 
-The fan row matters most. The workload's most striking signature is geometry unrolling —
-`unroll triggers: fan=69366`, `midpass pre_gfx caller: kk_draw 83666` — which is also the
-signature named as the live lead for the separate AGX allocator crash class. Disabling fan
-unrolling does **not** prevent the device loss, so the fan route is not the trigger. It remains
-the route the eventual abort travels, which is a different claim.
+## What the fault actually is
 
-MSAA render-to-texture on this stack is structurally special for one reason worth keeping in
-view: KosmicKrisp does not implement `VK_EXT_multisampled_render_to_single_sampled`, so every such
-render goes through `zink_render_attachment_shadow` and a `util_blitter` blit with
-`ctx->blitting` set. That path already carries one fixed defect (infinite recursion) and one open
-one (a stale `pStencilAttachment` against `VK_FORMAT_UNDEFINED`). Neither is confirmed to be this.
+Metal names it, once KosmicKrisp stops discarding the reason (`kk: say why the device was lost`
+on `limina-kk`):
+
+```
+[LIMINA-DEVICE-LOST] MTL_COMMAND_QUEUE_ERROR_TIMEOUT (code 1) gpu=...(6.3 ms)
+  message: The operation couldn't be completed. (MTL4CommandQueueErrorDomain error 1.)
+  details: ... Code=2 "Caused GPU Address Fault Error
+           (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)"
+```
+
+**Read the underlying error, not the outer one.** The outer code is `TIMEOUT` and the underlying
+one is a page fault; 6 ms of GPU time says the command buffer touched something invalid, not that
+it ran long. Taking the outer code at face value sends you looking for a hang that is not there.
+
+## The residency reports are chronic, and were a dead end
+
+Metal's debug layer reports, on every frame, that attachment textures are "not added to any
+residency set". Labelling the textures makes the reports name a 4-sample 2D-multisample texture at
+the canvas size as the dominant offender — 383 hits against 36 for the next. That is a real
+omission and is now fixed, and the reports go to zero. **The fault survives it.** The same reports
+were being emitted for single-sample textures that never fault, which was the tell: a class that
+fires constantly on healthy frames cannot explain a failure that is specific to one of them.
+
+## What still points somewhere
+
+Metal shader validation with `MTL_SHADER_VALIDATION_FAIL_MODE=allow` prevents the loss for as long
+as it has been run. Its reports carry a pipeline UID and a `program_source` line, so instances —
+not classes — can be diffed between an AA and a non-AA half of one run. Three pipelines appear only
+in the AA half with real volume (66795, 22264, 701 hits), all of class *"MTLResourceUsage flags
+mismatch or missing for texture executing fragment function"*. That is the sharpest surviving lead.
+
+Two cautions on it. Validation also slows the workload by roughly an order of magnitude, so its
+survival is not by itself proof of masking; the control that separates those is to keep validation
+on and turn off only `MTL_SHADER_VALIDATION_TEXTURE_USAGE` / `_RESOURCE_USAGE`. And the class is
+chronic like the residency one — it is the *instance* diff, not the class, that carries the signal.
+
+The mechanism this would fit: KosmicKrisp has no `VK_EXT_multisampled_render_to_single_sampled`,
+so MSAA resolve goes through `vk_meta_resolve_rendering` — a fragment shader that samples the
+multisample texture. A shader handed a resource ID it cannot correctly dereference faults exactly
+this way. KK's texture-type plumbing is independently known to be confused somewhere ("Invalid
+texture type MTLTextureType2DArray bound to shader, expected MTLTextureType2D", 127k hits) —
+though that class is equally present without MSAA, so it is a neighbour, not the culprit.
+
+## Method notes worth keeping
+
+- **A validator class that fires on healthy frames explains nothing.** Two arms were spent on the
+  residency reports. Diff *instances* (pipeline UID + source line) between a failing and a passing
+  half of the same run; classes are identical, instances are not.
+- **Give it the full window, and do not read process liveness as health.** A worker-log check at
+  150 s called a VM healthy that died 40 s later.
+- **One capture path per arm.** Successive arms writing the same `LIMINA_WINDOW_CAPTURE` /
+  `--display-capture` file overwrite each other, and the `granted aa=` evidence for the earlier arm
+  is simply gone.
 
 ## Reproducing
 
