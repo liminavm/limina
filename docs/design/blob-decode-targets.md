@@ -5,10 +5,11 @@ resources whose pixels live on the host, so `drmPrimeHandleToFD` yields a one-pa
 resolution and an exported dmabuf names no frame memory at all. Measured, with a reproducer, in
 `spikes/va-dmabuf-size`.
 
-The stopgap in place today refuses that export. It stops the SIGBUS in consumers that mmap the
-fd, and it takes Firefox's hardware decoder away outright — Firefox imports the fd on the GPU,
-never maps it, and has no fallback but software. Neither half of that trade is worth keeping.
-This is the fix that removes the trade: give the decode target storage the guest can see.
+The fix is to give the decode target storage the guest can see. The stopgap it replaced refused
+that export outright, which stopped the SIGBUS in consumers that mmap the fd and took Firefox's
+hardware decoder with it — Firefox imports the fd on the GPU, never maps it, and has no fallback
+but software. Neither half of that trade was worth keeping. The refusal is gone (§The export
+refusal is gone) and the storage is real.
 
 ## What the stack already does, and why this is a small change
 
@@ -40,7 +41,7 @@ enabled in every shipped enhanced guest since 2026-07-25.
 
 ## Shape
 
-One blob per decode target, replacing today's ordinary per-plane resources. **What backs that
+One blob per decode target, in place of ordinary per-plane resources. **What backs that
 blob is a phase choice, and the protocol is the same either way** — which is what lets the
 cheap version ship first and the zero-copy version replace the storage underneath it.
 
@@ -66,13 +67,12 @@ allocation.
 **Phase 2 backs it with an IOSurface instead**, which is what buys the zero copies: the GPU
 binds the surface as texture storage, and scanout takes it by `iosurface_id`.
 
-The guest side is `virgl_video_create_buffer` (`virgl_video.c:1242`), which today defers to
-`vl_video_buffer_create` and so gets ordinary per-plane resources. It allocates from a blob
-instead, and must still furnish `get_sampler_view_planes`, which the same function consumes at
-line 1262.
+The guest side is `virgl_video_create_buffer` (`virgl_video.c:1242`). Deferring to
+`vl_video_buffer_create` is what yields ordinary per-plane resources; it allocates from a blob
+instead, and still furnishes `get_sampler_view_planes`, which the same function consumes.
 
 NV12 becomes **one object with two layers** at distinct offsets — what real drivers report and
-what `VADRMPRIMESurfaceDescriptor` is shaped for. Today's two-objects-of-4096 is an artefact of
+what `VADRMPRIMESurfaceDescriptor` is shaped for. The two-objects-of-4096 form is an artefact of
 per-plane resources, not a format requirement. This is also what VideoToolbox already hands back:
 its output is IOSurface-backed even when the IOSurface properties are omitted entirely, and NV12
 arrives as one surface with two planes at distinct offsets.
@@ -92,10 +92,10 @@ held case, since the guest keeps reference frames alive for its DPB. Ordering ru
 independently — VA-API names the render target in `vaBeginPicture` *before* the frame decodes,
 while VideoToolbox reveals its choice afterwards.
 
-That copy is **not new cost**: today the host already CPU-maps every decoded plane and uploads it
-with `glTexSubImage2D` (`upload_mapped_plane`, `vrend_video.c:156`), and the guest pays a
-host→guest transfer on top to get pixels into its own memory. One copy into memory the guest
-already maps replaces both. The copy engine is a free choice — CPU `memcpy` or a Metal blit —
+That copy is **not new cost**: the host already CPU-maps every decoded plane and uploads it
+with `glTexSubImage2D` (`upload_mapped_plane`, `vrend_video.c:156`), and the per-plane form made
+the guest pay a host→guest transfer on top to get pixels into its own memory. One copy into
+memory the guest already maps replaces both. The copy engine is a free choice — CPU `memcpy` or a Metal blit —
 because coherency constrains neither.
 
 **Do not contort the layout to make pitches agree.** The row-by-row copy and the single
@@ -104,16 +104,30 @@ Only bandwidth matters, so the guest picks whatever layout suits it.
 
 ## Who dictates layout
 
-**The guest computes the layout; the host allocates to match, or refuses.** The guest must
-report offsets, pitches and sizes in the export descriptor and cannot report what it did not
-choose. In phase 1 that is trivially satisfied — the storage *is* guest memory, so there is no
-second allocator to disagree with. The rest of this section is the phase 2 contract, and it
-holds: IOSurface allocates *exactly* the requested per-plane `bytesPerRow` with no
-rounding in any case tested, odd widths and heights included, and the
-`IOSurfaceGetPropertyAlignment` values are advisory once explicit `kIOSurfacePlaneInfo` is
-supplied (128-byte rows reported, an 854-byte pitch accepted). The refusal path stays anyway, so
-a future case IOSurface will not honour fails the buffer creation and the guest falls back,
-rather than two ends proceeding with disagreeing pictures of one allocation.
+**Layout is dictated, never discovered.** The guest must report offsets, pitches and sizes in
+the export descriptor and cannot report what it did not choose. Where the storage is guest memory
+there is no second allocator to disagree with. Where it is an IOSurface,
+`vkr_mtl_iosurface_alloc_planar` supplies an explicit `kIOSurfacePlaneInfo` array — width,
+height, bytes-per-element, bytes-per-row and offset for every plane — and then reads
+`IOSurfaceGetBytesPerRowOfPlane` back and **refuses the surface if the kernel overrode it**
+(`[KK-STRIDE]`). Refusing costs a fallback to the copy path; keeping it would hand the guest
+offsets that do not describe the surface.
+
+`IOSurfaceGetPropertyAlignment` is advisory once explicit plane info is supplied: no rounding was
+applied in any case tested, odd widths and heights included, and an 854-byte pitch was accepted.
+**Letting IOSurface choose is what rounds** — measured 2026-09-04 on an M1 Max, a surface created
+without plane info gives plane 0 a pitch of 128 at width 64, 128 at 65 and 384 at 352, while
+1280 and 1920 come back exact. That coincidence at common widths is why the plane info is not
+optional.
+
+**The pitch we dictate is not the tight one either.** Each plane's is
+`align_up(width * bpe, minimumLinearTextureAlignmentForPixelFormat)` for the format the plane is
+*sampled* as — R8 or RG88 — queried from Metal rather than hardcoded, because a plane is imported
+as its own single-component texture and the composite surface has no `MTLPixelFormat` to align
+to. So it equals the guest's tight stride only where `width * bpe` is already a multiple of that
+alignment. Aligning for the wrong format has a measured precedent: a whole-surface pitch aligned
+as if for the composite slid every row of every GL window sideways by exactly
+`(align256 - align16)/4` pixels.
 
 `destinationImageBufferAttributes` then holds VideoToolbox to the same layout — every row and
 plane alignment requested was applied exactly, on the hardware decoder, at no measurable cost.
@@ -152,14 +166,15 @@ not one: SET_TYPE transmits `plane_strides`/`plane_offsets` only for untyped blo
 through `resource_create_from_handle`, and a composite target is created directly.
 `VIRGL_CAP_V2_RESOURCE_LAYOUT` is unrelated — it gates a query about a target handle. So both
 ends compute the same canonical layout instead: tight, in plane order, each plane's stride being
-its own width times its own block size. A divergence cannot corrupt silently — too large trips
-the writeback's extent check, too small is visible in the picture.
+its own width times its own block size. A divergence cannot corrupt silently *while the writeback
+copy stands between the two layouts* — too large trips its extent check, too small is visible in
+the picture. That protection ends when the surface becomes the storage; see §Phases.
 
 ## Capability negotiation, and the order this ships in
 
 A guest that allocates blob decode targets against a host that cannot back them must fall back,
 not fail. The host advertises a capset bit; `virgl_video_create_buffer` checks it and otherwise
-calls `vl_video_buffer_create` exactly as today. That makes the two sides independently
+calls `vl_video_buffer_create` as before. That makes the two sides independently
 shippable and fixes the order:
 
 1. **virglrenderer first** — a host that can back blob decode targets, advertising the bit.
@@ -183,69 +198,74 @@ Never the reverse; a guest-enabling change ahead of its host fix is the mistake
 `limina-enh-delivery` records. It also keeps the capability granular, per `docs/graphics.md`
 §3.4 — a partially upgraded guest gets the old path for video and keeps everything else.
 
-## The export refusal is not removed — it lifts itself
+## The export refusal is gone
 
-The guard refuses an FD export whose laid-out size exceeds the guest storage behind it. A
-blob-backed target has storage at least as large as its layout, so the export simply passes.
-Nothing needs deleting, and the guard goes on protecting every resource that still arrives
-unbacked — including the stock tier, which keeps today's behaviour until the refusal is
-upstreamed. The phase that fixes video must not be the phase that reopens the SIGBUS for
-everything else.
+The guard refused an FD export whose laid-out size exceeded the guest storage behind it. It was
+written for decode targets and their one-page stub, but the predicate is true of **every staged
+texture**: with copy-transfer in both directions `virgl_resource_create_front` gives every
+non-shared texture the same `alloc_size = 1`, so `eglExportDMABUFImageMESA` failed for
+essentially every GL texture. GTK4's `gdk_texture_download` then consumed an uninitialized fd,
+and setting a user avatar in GNOME Settings wrote noise — RMSE 0.774 against the source, 0 on
+vanilla 26.1.8 with only libgallium swapped. Dropped in guest mesa `26.1.8-10.limina`
+(`patches/mesa-guest/0018`), alongside an EGL layer that now returns `EGL_FALSE` when a driver
+cannot export an fd instead of leaving the caller's fd array untouched (`0019`).
+
+What makes dropping it safe is this design. A decode target has real guest memory on every host
+that offers a decoder, so the case the guard existed for cannot arise; `whandle->size` is still
+filled in, so a consumer that reads the object size sees the memory it was handed; and a
+stub-backed fd remains a good name for the host resource to a consumer that re-imports rather
+than maps it, which `virgl_resource_from_handle` already marks staged.
+
+The rule that generalises: **a guard whose predicate is broader than the case it was written for
+will fire somewhere else first.** This one shipped in `-5` and was found three releases later
+from the wrong end, as a corrupted avatar.
 
 ## Phases
 
-**Phase 1 — correct, guest-visible frames, on guest-memory storage.** Allocation, layout
-contract, capset bit, and the frame landing in the target's blob. Confined to virglrenderer and
-guest mesa. At the end of it the export is honest, GStreamer's mmap path reads correct pixels
-instead of crashing, and **Firefox has its hardware decoder back** — it needs only that the
-export succeed and the EGL import resolve, both of which it had before the refusal existed. The
-per-frame cost is what it is today: one host copy in, one re-read out.
+**Phase 1 — correct, guest-visible frames on guest-memory storage — shipped.** Allocation,
+layout contract, capset bits, and the frame landing in the target's blob, confined to
+virglrenderer and guest mesa. The export is honest, GStreamer's mmap path reads correct pixels
+instead of crashing, and **Firefox has its hardware decoder back** — it needed only that the
+export succeed and the EGL import resolve, both of which it had before the refusal existed.
 
-**Phase 2 — the remaining copies.** Move the storage to an IOSurface bound as the GL texture's
-storage, so sampling needs no re-read and scanout can take the surface by id. Then fix
-glupload's direct importers, which refuse everything today with `cannot produce texture-target
-2D` and fall back to the copy uploader however well-formed the buffer is.
+**Phase 2 — the remaining copies — largely shipped.** The storage is an IOSurface: a composite
+target is backed by one two-plane surface whose planes are EGL-bound and sampled directly
+(`vrend_resource_iosurface_init_planes`), and the plane index reaches Metal. Two things remain.
+glupload's direct importers still refuse everything with `cannot produce texture-target 2D` and
+fall back to the copy uploader however well-formed the buffer is. And the layout contract below
+is still owed, because the guest-memory writeback is what currently hides it.
 
-**Phase 2 also ends the canonical layout, and that is the part the plane index hides.** The two
-sides compute the same tight layout today only because a copy sits between them:
-`writeback_plane_to_guest` walks the source at the surface's own `plane->pitch` and the
-destination at `guest_pixels_stride`, moving one tight row at a time
-(`vrend_video.c:405`). The strides are decoupled by construction, so the host surface's
-padding never reaches the guest and `get_param(PIPE_RESOURCE_PARAM_STRIDE)` correctly describes
-the guest BO, which is the storage its consumers map.
+**The copy is what reconciles the two layouts, so removing it is the open work.** The guest
+computes tight; the surface is Metal-aligned (§Who dictates layout); they differ wherever
+`width * bpe` is not already aligned. Nothing breaks today because a copy sits between them:
+`writeback_plane_to_guest` walks the source at the decoded buffer's own `plane->pitch` and the
+destination at `guest_pixels_stride`, moving one tight row at a time (`vrend_video.c:405`). Two
+strides in one loop, deliberately. So no host pitch reaches the guest, and
+`get_param(PIPE_RESOURCE_PARAM_STRIDE)` correctly describes the guest BO — which is the storage
+its consumers map. The extent check bounds the destination, so it too is entirely in guest
+arithmetic; the one guard that could fire, `stride < row`, needs the *guest* stride to be short
+and a padded host pitch cannot trip it.
 
-An IOSurface's plane pitch is **not** the tight stride. Measured 2026-09-04 on an M1 Max, plane 0
-of a two-plane 420f surface: 64x64 gives pitch 128 against a tight 64; 65x33 gives 128 against 65;
-352x240 gives 384 against 352; 1280x720 and 1920x1080 give a pitch equal to the tight stride. The
-kernel rounds up, and the coincidence at common widths is what makes this easy to miss — 352x240
-is a real clip size and 64x64 is the extent gst-va probes every fourcc at during registration, so
-the first composite surface a guest asks for is already one that diverges.
-
-When the surface becomes the texture's storage the copy disappears and with it the
-reconciliation. The export then names storage with padded rows while the guest still reports a
-tight stride, and the result is a sheared picture rather than an error. So **phase 2 must
-transmit the layout from the host that allocated it** rather than have both ends recompute it.
-The carrier exists on the import path — SET_TYPE's `plane_strides`/`plane_offsets` overwrite
+When the surface becomes the texture's storage that copy disappears, and the reconciliation with
+it. The export then names storage with padded rows while the guest still reports a tight stride,
+and the result is a sheared picture rather than an error. So **the layout must then be
+transmitted by the host that allocated it** rather than recomputed at both ends. The carrier
+exists on the import path — SET_TYPE's `plane_strides`/`plane_offsets` overwrite
 `guest_pixels_*`, which is why `vrend_resource_init_planar_guest_layout` is written to lose to it
-— but a composite target is created directly and has no such path. That, not the plane index, is
-the load-bearing gap.
+— but a composite target is created directly and has no such path. **Solve that before the copy
+comes out, not after.**
 
-Two rules that follow for anything built in the meantime: never derive `guest_pixels_stride` from
-a surface pitch, which would write padded rows into tight guest storage; and never treat the two
-strides as interchangeable because they agree at 1280 and 1920.
+Two rules meanwhile: never derive `guest_pixels_stride` from a surface pitch, which would write
+padded rows into tight guest storage; and never treat the two strides as interchangeable because
+they agree at the common widths.
 
-**Phase 2's cost is a plane index that no layer carries.** Every mechanism it needs already
-ships. vrend adopts an IOSurface as a GL texture's storage in
-`vrend_resource_iosurface_init` (`vrend_renderer.c:9428`) for SCANOUT and SHARED resources;
-the VMM's `resource_map_blob` is context-agnostic, gated only on `map_ptr` succeeding, so a
-mappable vrend blob needs no VMM work; VideoToolbox already decodes into IOSurface-backed
-`CVPixelBuffer`s (`virgl_video_vt.c:857`). What is missing is that the existing import is
-whole-surface and 8888-only. An NV12 target needs a plane index and R8/RG88 formats through
-`virgl_egl_image_from_iosurface` (`vrend_winsys_egl.c:852`), the attribute-less
-`EGL_IOSURFACE_LIMINA` target (`egl_dri2.c:2660`), `dri2_from_iosurface_limina` (`dri2.c:925`,
-whose per-plane geometry comes from `IOSurfaceGet*OfPlane`), zink's `resource_from_handle`, and
-KK's `mtl_new_texture_with_descriptor_iosurface` (`mtl_device.m:379`), which passes a hardcoded
-`plane:0` to Metal.
+**Every other mechanism phase 2 needs already ships.** vrend adopts an IOSurface as a GL
+texture's storage in `vrend_resource_iosurface_init`; the VMM's `resource_map_blob` is
+context-agnostic, gated only on `map_ptr` succeeding, so a mappable vrend blob needs no VMM work;
+VideoToolbox already decodes into IOSurface-backed `CVPixelBuffer`s (`virgl_video_vt.c:857`); and
+the import carries a plane index and R8/RG88 formats through `virgl_egl_image_from_iosurface`,
+the `EGL_IOSURFACE_LIMINA` target, `dri2_from_iosurface_limina` and zink's
+`resource_from_handle`.
 
 The zink→KK step was the one with no carrier, and it now has one. `VK_EXT_external_memory_metal`
 imports a surface as a bare `VkImportMemoryMetalHandleInfoEXT::handle` with nowhere to say
@@ -272,40 +292,32 @@ silently, for any other subsampling. Oracle: `spikes/vrend-iosurface/planeimport
 
 What remains for phase 2 is the layout contract above, not the index.
 
-**The guest half comes first, because the host half is inert without it.** Measured
-2026-09-01, VP9 through `vavp9dec ! glupload` on the mesa -6 guest: the host sees *two*
-resources per decode target, `PIPE_FORMAT_R8_UNORM` at luma size and
-`PIPE_FORMAT_R8G8_UNORM` at chroma size — 107 of each across the clip, and not one
-planar-format resource. That is the lowered path, one `resource_create` per plane, and on it
-each plane is already its own resource with its own texture, so no host-side plane machinery
-is reachable: `vrend_resource_iosurface_init` is never called with a planar format at all.
-Routing the guest through `vl_video_buffer_create_as_resource` is therefore the prerequisite
-for the host work, not a follow-on to it.
+**The guest half is the prerequisite, because the host half is inert without it.** Measured
+2026-09-01 on a guest still taking the per-plane form, VP9 through `vavp9dec ! glupload`: the
+host saw *two* resources per decode target, `PIPE_FORMAT_R8_UNORM` at luma size and
+`PIPE_FORMAT_R8G8_UNORM` at chroma size — 107 of each across the clip, and not one planar-format
+resource. On the lowered path each plane is already its own resource with its own texture, so no
+host-side plane machinery is reachable at all: `vrend_resource_iosurface_init` never sees a
+planar format. Any host work here is dead code until the guest routes through
+`vl_video_buffer_create_as_resource`.
 
-**Sampling the second plane needs no guest change at all — both ends of that path already
-exist.** The host keeps a separate EGLImage per plane in `aux_plane_egl_image`
-(`vrend_renderer.h:106`), filled today only from a GBM bo (`vrend_renderer.c:9798`) and so
-always NULL on macOS. The guest already names the plane: `metadata.plane`
-(`virgl_resource.c:636`, set from the winsys handle on import at `:875`) is written as the
-sampler view's whole layer dword (`virgl_encode.c:1180`), arriving as `first_layer = N,
-last_layer = 0`. So a guest that imports a decode target's planes as separate component-format
-resources — which is what the dmabuf importers do — is already asking for plane N by index, and
-the host is already looking for an image to answer with. Phase 2's host work is to put one
-there: a plane-carrying import into `aux_plane_egl_image[1]`.
+**Sampling the second plane needed no guest change, because both ends of that path already
+existed.** The host keeps a separate EGLImage per plane in `aux_plane_egl_image`, and the guest
+already names the plane: `metadata.plane` is written as the sampler view's whole layer dword, so
+it arrives as `first_layer = N, last_layer = 0`. A genuine layer range never has `last_layer`
+below `first_layer`, which is what makes the encoding unambiguous rather than a guess. A guest
+that imports a decode target's planes as separate component-format resources — what the dmabuf
+importers do — is therefore already asking for plane N by index. The host work was to put an
+image there, which `vrend_resource_iosurface_init_planes` now does; where no image answers the
+index it is still cleared, which is correct for the lowered path, where sampling the resource
+already is sampling the plane.
 
-This does not explain the near-blank chroma, and nothing yet does. That symptom would need
-plane-indexed views of one shared resource, and the decode path does not produce them on
-either upload branch — measured 2026-09-01, the raw uploader and `Dmabuf Passthrough` both
-put the same 107 `R8` + 107 `R8G8` per-plane resources on the wire and no indexed view at
-all. Whatever the near-blank is, it is not the cleared index.
-
-**Filling it re-arms a context poison, so the branch order must change with it.** A surviving
-index sets `needs_view`, and the `glTextureView` branch (`vrend_renderer.c:2874`) then computes
-`num_layers = 0` and returns EINVAL — which puts the whole context in error for its lifetime.
-The aux bind (`:2977`) is an `else if` below it, reached in the GBM world only because that
-path strips `VREND_STORAGE_GL_IMMUTABLE` when `EXT_EGL_image_storage` is absent; on zink-on-KK
-it is present, so the bit survives and the view branch wins. The aux image must therefore be
-consulted *before* the texture-view branch, not only after it.
+**The aux bind sits ahead of the texture-view branch, and must stay there.** A surviving index
+sets `needs_view`, and `glTextureView` would then be asked for a zero-layer view and return
+EINVAL, putting the whole context in error for its lifetime. The GBM path reaches its aux bind
+below the view branch only because its EGLImage fallback strips `VREND_STORAGE_GL_IMMUTABLE` when
+`EXT_EGL_image_storage` is absent; on zink-on-KK it is present, so the bit survives and the view
+branch would win. Order is load-bearing here, not stylistic.
 
 The guest half of the *allocation* is smaller than the host half, and needs no new protocol
 concept. The one-object
@@ -313,20 +325,21 @@ shape is `vl_video_buffer_create_as_resource` (`vl_video_buffer.c:517`): it call
 `resource_create` once with the planar format, takes planes 1 and 2 from the chained
 `resources[0]->next`, and sets `contiguous_planes`. Gallium's VA frontend already exports that
 as one object with two layers (`va/surface.c:1453`), gated on `screen->resource_get_param`,
-which virgl installs. So the guest work is to route `virgl_video_create_buffer`
-(`virgl_video.c:1243`) through that constructor instead of `vl_video_buffer_create`, give
-virgl's `resource_create` the plane chaining a planar format implies, and answer
-`PIPE_RESOURCE_PARAM_STRIDE` and `_OFFSET` in `virgl_resource_get_param`, which today handles
-only `MODIFIER` (`virgl_resource.c:942`).
+which virgl installs. The guest work was therefore to route `virgl_video_create_buffer` through that
+constructor instead of `vl_video_buffer_create`, give virgl's `resource_create` the plane
+chaining a planar format implies, and answer `PIPE_RESOURCE_PARAM_STRIDE` and `_OFFSET` in
+`virgl_resource_get_param`, which had handled only `MODIFIER`. All three shipped in guest mesa
+`26.1.8-7.limina` (`patches/mesa-guest/0014`), with `get_param` walking the chain by the plane
+argument the way every driver that builds one does, because that is how gst-va asks.
 
-That also settles how the host tells a decode target apart from anything else, without a new
+That also settles how the host tells a decode target apart from anything else, with no new
 flag on the wire: it is a single `PIPE_RESOURCE_CREATE` carrying a planar format, arriving
 through the ordinary `vrend_renderer_pipe_resource_create` blob path. `vrend_resource_iosurface_init`
-already discriminates on format there — it returns early for anything that is not BGRA/RGBA —
-so a planar format is simply a case it does not handle yet.
+discriminates on format there, and a planar format is the **first** case it dispatches — ahead of
+the SCANOUT/SHARED bind gate, which a decode target is neither of and would never pass.
 
-Phase 1 is the correctness win and it stands alone. Do not gate the Firefox recovery on either
-the plane work or the importer work.
+Phase 1 is the correctness win and it stands alone: the Firefox recovery was deliberately not
+gated on the plane work or the importer work, and a later phase must not re-couple them.
 
 **Phase 1 costs guest RAM, by design.** Decode targets stop being one-page stubs and become
 their real size, and a decoder holds a whole DPB of them — a 16-deep 4K NV12 DPB is ~190 MB
@@ -339,8 +352,10 @@ and equally not a leak.
 
 1. ✅ **Can VideoToolbox decode into surfaces we supply?** No — but it honours a layout we
    dictate, and the copy that follows costs ~0.10 ms at 1080p. `spikes/vt-blob-decode-target/`.
-2. ✅ **Layout agreement.** IOSurface allocates the guest's pitches exactly, odd dimensions
-   included. Same spike.
+2. ✅ **Layout agreement.** IOSurface honours dictated per-plane pitches exactly, odd dimensions
+   included, once explicit `kIOSurfacePlaneInfo` is supplied — and rounds when it is left to
+   choose. Same spike. The pitch we dictate is Metal's linear alignment for the plane's own
+   sampled format, not the guest's tight stride; §Who dictates layout.
 3. ✅ **Can an IOSurface's base address be mapped into a guest at all?** Yes —
    `spikes/hv-iosurface-map/`. `hv_vm_map` accepts IOKit-owned pages, the guest reads and
    writes them coherently across the whole allocation, and the mapping survives the host
