@@ -128,7 +128,15 @@ The desktop's own compositing blit stays on the FBO path; **every MSAA resolve t
 shader blitter**, and `redblue_or_fmt=1` names the format difference as the reason. The
 companion knob `LIMINA_VREND_FORCE_FBO_BLIT=1` keeps such a blit on the FBO path (colours
 come out wrong, which is acceptable for an arm asking only whether the route is what loses
-the device); that arm has not been read yet.
+the device).
+
+**That arm returns no reading.** Forced onto the FBO path, the device is lost within a
+second of the first resolve — but forcing it is itself invalid usage: an MS-source
+`glBlitFramebuffer` between differing formats is precisely what GLES forbids and what the
+predicate exists to refuse, so its page fault may be the knob's own and says nothing about
+the shader blitter. A version that *can* be read has to make the blit legal rather than
+merely allowed: view the destination as fmt 67 through `vrend_make_view`, so the colours
+swap but the usage stays defined.
 
 ## The size and fullscreen framings are both dead
 
@@ -138,15 +146,23 @@ survived 240 s with antialiasing granted and 14,944 frames drawn. The same displ
 both kills and survives, so display size was never the variable, and neither was the
 canvas size or fullscreen that replaced it.
 
-The "+66 to +85 s schedule" the archived logs seemed to show is dead too, and the way it
-died named a much larger error: **an arm launched over plain `ssh` is not this workload.**
-Firefox started from an ssh command line — even with `WAYLAND_DISPLAY` and a live
-compositor — does not inherit the seated session's environment, renders through a
-different driver, and survives indefinitely. Two such arms read as clean 4-minute
-survivals of a configuration that kills. Launched through the session's own manager
-(`systemd-run --user`, with `DBUS_SESSION_BUS_ADDRESS` exported so the call does not fail
-silently), the same build on the same clone lost the device inside 4 minutes. The launch
-method is a load-bearing variable, not a convenience.
+The "+66 to +85 s schedule" the archived logs seemed to show is dead too, and what replaced
+it is the sharpest A/B in this record. Two Firefox instances, **same build, same clone, same
+page, same resolve** — the wire shows the identical `GLFB src=fmt67/s4 → dst=fmt1/s0` route
+for both, so this is not two different rendering paths:
+
+| launch | outcome |
+|---|---|
+| over plain `ssh`, `WAYLAND_DISPLAY=wayland-0 MOZ_ENABLE_WAYLAND=1` | ~12 min, 16,512 AA frames, **no loss** |
+| through the session manager, `systemd-run --user` | device lost inside 4 min |
+
+So **how the client is started decides whether the same blit kills the device**, and the
+discriminator is not yet named. Two candidates are already dead: it is not a different
+driver (the surviving instance issued the killing resolve, timestamped in the worker log
+fourteen minutes before the other instance existed), and it is not the Activities overview
+(the capture shows *both* instances composited as overview thumbnails, the dying one
+included). What remains is the process environment itself — enumerable in one arm by
+diffing `/proc/<pid>/environ` between the two launches.
 
 Two further corrections fall out:
 
