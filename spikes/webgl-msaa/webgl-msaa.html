@@ -24,7 +24,18 @@ c.height = parseInt(q.get('h') || '0', 10) || window.innerHeight;
 // Keep it visually inside the window whatever the backing store is.
 c.style.width = '100%'; c.style.height = 'auto';
 
-const gl = c.getContext('webgl', { antialias: wantAA, depth: true });
+// Workload bisection. Every driver-side lever came back negative -- the pass is
+// alone on the GPU, its pointers are live, its descriptors name nothing dead --
+// so the remaining question is which ingredient of the DRAW the fault needs.
+// ?notex=1  fragment shader returns a constant, sampling nothing.
+// ?nodepth=1 no depth buffer and no depth test, so the 4-sample depth companion
+//            is never created.
+// ?cubes=N  how many draws per frame (default 3).
+const noTex = q.get('notex') === '1';
+const noDepth = q.get('nodepth') === '1';
+const cubes = parseInt(q.get('cubes') || '3', 10);
+
+const gl = c.getContext('webgl', { antialias: wantAA, depth: !noDepth });
 if (!gl) { d.textContent = 'NO WEBGL'; throw new Error('no webgl'); }
 
 // What the driver actually granted, which is the point: a stack that refuses a
@@ -35,6 +46,7 @@ const diag = 'canvas=' + c.width + 'x' + c.height + '  requested aa=' + wantAA +
              '  granted aa=' + attrs.antialias +
              '  SAMPLES=' + gl.getParameter(gl.SAMPLES) +
              '  SAMPLE_BUFFERS=' + gl.getParameter(gl.SAMPLE_BUFFERS) +
+             '  notex=' + noTex + ' nodepth=' + noDepth + ' cubes=' + cubes +
              '\nrenderer=' + gl.getParameter(gl.RENDERER);
 
 const vs = `
@@ -42,7 +54,10 @@ attribute vec3 p; attribute vec2 uv;
 uniform mat4 mvp;
 varying vec2 v;
 void main(){ v = uv; gl_Position = mvp * vec4(p,1.0); }`;
-const fs = `
+const fs = noTex ? `
+precision mediump float;
+varying vec2 v;
+void main(){ gl_FragColor = vec4(v.x, v.y, 0.6, 1.0); }` : `
 precision mediump float;
 uniform sampler2D t;
 varying vec2 v;
@@ -102,10 +117,10 @@ gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, px)
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-gl.uniform1i(gl.getUniformLocation(prog, 't'), 0);
+if (!noTex) gl.uniform1i(gl.getUniformLocation(prog, 't'), 0);
 
 const mvp = gl.getUniformLocation(prog, 'mvp');
-gl.enable(gl.DEPTH_TEST);
+if (!noDepth) gl.enable(gl.DEPTH_TEST);
 gl.viewport(0, 0, c.width, c.height);
 
 function mul(a, b) {
@@ -132,9 +147,10 @@ let frames = 0;
 const P = persp(1.1, c.width/c.height, 0.1, 100);
 function draw(t) {
   gl.clearColor(0.06, 0.06, 0.09, 1);
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.clear(gl.COLOR_BUFFER_BIT | (noDepth ? 0 : gl.DEPTH_BUFFER_BIT));
   const a = t * 0.0008;
-  for (const tx of [-3.2, 0, 3.2]) {
+  for (let i = 0; i < cubes; i++) {
+    const tx = -3.2 + i * 3.2;
     gl.uniformMatrix4fv(mvp, false, mul(P, model(tx, a + tx)));
     gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
   }

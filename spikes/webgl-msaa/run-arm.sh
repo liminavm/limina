@@ -21,6 +21,8 @@ BASE="${LIMINA_BASE_IMAGE:-Fedora-Workstation-44.enhanced.test.raw}"
 NAME="${1:-arm}"
 OUT="${LIMINA_ARM_OUT:-/tmp/webgl-msaa-$NAME}"
 WATCH="${LIMINA_ARM_WATCH:-360}"
+# Workload bisection: appended to the page's query string, e.g. "&notex=1".
+QUERY="${LIMINA_ARM_QUERY:-}"
 CLONE="msaa-$NAME.raw"
 
 mkdir -p "$OUT"
@@ -61,12 +63,14 @@ scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 
 # Through the session manager, not a bare ssh command line: both inherit the same
 # environment (measured, byte-identical), but this is the launch the desktop uses.
-"${SSH[@]}" 'export XDG_RUNTIME_DIR=/run/user/1000 \
+URL="file:///home/claude/webgl-msaa.html?aa=1${QUERY}"
+echo "page URL: $URL"
+"${SSH[@]}" "export XDG_RUNTIME_DIR=/run/user/1000 \
                     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
              rm -rf /tmp/ffarm && mkdir -p /tmp/ffarm
              systemd-run --user --unit=webglmsaa --collect /usr/bin/firefox \
                  --profile /tmp/ffarm --new-instance --kiosk \
-                 "file:///home/claude/webgl-msaa.html?aa=1"'
+                 '$URL'"
 
 # The page must be shown reaching the GPU before a survival can be read: an arm
 # whose browser never started looks exactly like a healthy one, and this has

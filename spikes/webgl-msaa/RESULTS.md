@@ -176,10 +176,28 @@ the first two vertex bindings — in the BO address registry at encode, with a d
 dropped so a freed range reads as unknown. On a losing arm it **reports nothing**: every address
 the draw binds is live.
 
-What remains is the one thing a draw hands the GPU that is *not* an address: the resource IDs
-inside its descriptor sets. A released texture's `MTLResourceID` can be reissued to an unrelated
-one, and a shader dereferencing a stale ID is exactly a read fault at an address that has nothing
-to do with the draw — which is what the kernel reports every time.
+`LIMINA_KK_TEX_LEAK=1 LIMINA_KK_VIEW_LEAK=1` makes a stale resource ID unrepresentable — no
+texture and no view is ever released — and the device is lost in **4 arms of 4**. A dead-ID scan
+agrees from the other side: KK remembers every `MTLResourceID` that dies with its view and walks
+the memory of every descriptor set a multisampled draw binds looking for one, and on a losing arm
+it finds none.
+
+### The fragment shader's texture sample is required
+
+So the driver-side levers are exhausted, and the workload itself is where the ingredient is.
+`?notex=1` swaps the fragment shader for one that returns a gradient and samples nothing,
+changing nothing else — same three passes, same 4-sample RGBA8 target, same depth companion, same
+resolve on the wire, `granted aa=true SAMPLES=4`.
+
+**It survives, 22,880 frames with the cubes visibly rendering in the capture.** One arm so far, and
+one arm decides nothing here — but it is the first lever in this investigation that changed the
+outcome at all, and it is on the workload rather than in the driver.
+
+That converges with the one genuine Vulkan violation already in the descriptor log: a
+`COMBINED_IMAGE_SAMPLER` naming a `VK_IMAGE_VIEW_TYPE_2D` view of a **4-sample** image, so a
+shader declaring `texture2d<float>` samples an `MTLTextureType2DMultisample`. Metal's 2D and
+2DMultisample layouts differ, so that read misaddresses — a scattered read fault at an address
+with nothing to do with the draw, which is what the kernel reports every time.
 
 ## The blit, and how the route was read
 
@@ -251,7 +269,8 @@ is weak by the stochastic finding.
 | `LIMINA_KK_FORCE_ROBUST=1` — every vertex fetch clamped to its range | 3 | 1 survived, 2 lost |
 | `LIMINA_KK_SERIALIZE_SUBMIT=1` — one command buffer on the GPU at a time | 2 | 2 lost |
 | `LIMINA_KK_ADDR_CHECK=1` — every bound address looked up at encode | 1 | lost, **nothing reported** |
-| `LIMINA_KK_TEX_LEAK=1 LIMINA_KK_VIEW_LEAK=1` — no texture or view ever released | 1 | lost (arm cut short: host memory) |
+| `LIMINA_KK_TEX_LEAK=1 LIMINA_KK_VIEW_LEAK=1` — no texture or view ever released | 4 | 4 lost |
+| `?notex=1` — the fragment shader samples nothing | 1 | **survived**, 22,880 frames |
 | `KK_LIMINA_BARRIER=widen` (pre_gfx barrier scope ALL) | 1 | lost |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
@@ -344,17 +363,16 @@ The KK-side knobs — `LIMINA_KK_ADDR_LOG`, `KK_LIMINA_HEAP_NORESET`, `KK_LIMINA
 `/Volumes/mesa-cs/mesa`, and each prints a line when engaged. Read that line: an arm whose lever
 cannot be observed in the log is worse than no arm.
 
-**Survival happens by chance — about one arm in four.** Two of thirteen baseline-shaped arms
-survived their full window, so a single survival is not a result and a rate under five is barely
-one. Budget three arms per side, and prefer an instrument that reads the failure deterministically
-over an A/B that needs repeats.
+**Survival happens by chance — about one arm in four.** A single survival is not a result and a
+rate under five is barely one. Budget three arms per side, and prefer an instrument that reads the
+failure deterministically over an A/B that needs repeats.
 
-**Keep the guest small — the arms poison the host.** Every arm that dies ends in SIGABRT and
-strands host anonymous memory that no reboot-free reclaim gets back: compressor occupancy doubled
-per arm (203k → 406k → 810k → 1,014k pages) on 8 GiB guests, and a day of arms panicked the machine
-on compressor-segment exhaustion. At 3 GiB it grows by roughly 40k pages per losing arm. Record
-`vm_stat` around each arm — `run-arm.sh` does — and reboot well before the segment limit. A
-surviving arm costs nothing, so the cheap arms are the ones that pass.
+**Keep the guest small — the arms poison the host, whatever their outcome.** Compressor occupancy
+doubled per arm (203k → 406k → 810k → 1,014k pages) on 8 GiB guests and a day of arms panicked the
+machine on compressor-segment exhaustion; at 3 GiB it still grows by 40k pages on a short losing
+arm and **208k on a full six-minute survival** — the cost tracks how long the VM ran, not how it
+ended, and a survival is the *expensive* outcome. Budget about four arms per reboot, record
+`vm_stat` around each (`run-arm.sh` does), and ask for a reboot at ~900k pages occupied.
 
 **A fix must show all four:** the page for ≥5 minutes across repeats, no `DEVICE_LOST`, no nil
 views, and the cubes visibly rendering in the capture. Black cubes with no fault is the validation
