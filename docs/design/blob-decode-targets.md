@@ -129,6 +129,11 @@ alignment. Aligning for the wrong format has a measured precedent: a whole-surfa
 as if for the composite slid every row of every GL window sideways by exactly
 `(align256 - align16)/4` pixels.
 
+**Dictating the pitch does not make the two layouts agree**, and reading it that way is the
+available mistake. It settles who chooses, not what is chosen: the guest's layout stays tight and
+the surface's stays aligned, so they part at every width the alignment does not divide — which is
+most widths. The copy is still what reconciles them (§Phases).
+
 `destinationImageBufferAttributes` then holds VideoToolbox to the same layout — every row and
 plane alignment requested was applied exactly, on the hardware decoder, at no measurable cost.
 But **alignment is paid per row**: a 16384-byte row alignment took a 352x240 surface from 136 KiB
