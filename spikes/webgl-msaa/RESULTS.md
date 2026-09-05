@@ -83,6 +83,46 @@ report, a shader dump and a second run's report all name one thing. The label mu
 derived: it is hashed into the UID Metal reports against, so labelling with a per-run pointer makes
 every UID per-run too and two runs cannot be joined at all.
 
+## What the GPU was actually doing — the resolve is not it
+
+KosmicKrisp now records every command buffer as it closes and marks the failing commit's own
+entries in the device-loss report. Four arms, four losses, and the marked work is the same
+every time:
+
+| arm | Metal error | the failing commit held |
+|---|---|---|
+| probe1 | Hang, 86.0 ms | 3x `render 1280x720 s4 rts1 fmt37 ops=5` |
+| r1 | PageFault, 5.7 ms | 3x `render 1280x720 s4 rts1 fmt37 ops=5` |
+| r2 | Hang, 510 ms | 1x `render 1280x720 s4 rts1 fmt37 ops=5` |
+| r3 | PageFault, 6.4 ms | 3x `render 1280x636 s4 rts1 fmt37 ops=5` |
+
+`fmt37`/`fmt44` are `VK_FORMAT_R8G8B8A8_UNORM` and `B8G8R8A8_UNORM`, so the ring shows both ends
+of the blit read off the wire above. A frame is three 4-sample RGBA8 passes, a compute buffer,
+then one single-sample BGRA8 pass at the same size — that last one *is* vrend's shader blitter
+doing the resolve — and separately the compositor's own `2560x1440 s1 rts1 fmt44` passes:
+
+```
+      911  compute ops=2
+ *    912  render 1280x720 s4 rts1 fmt37 ops=5
+ *    913  render 1280x720 s4 rts1 fmt37 ops=5
+ *    914  render 1280x720 s4 rts1 fmt37 ops=5
+      915  compute ops=1
+      916  render 1280x720 s1 rts1 fmt44 ops=5      <- the resolve
+      919  render 2560x1440 s1 rts1 fmt44 ops=40    <- the compositor
+```
+
+**The faulting commit holds only multisampled passes — the guest's own antialiased rendering.
+The resolve is never in it, and neither is the compositor.** That inverts the premise the rest of
+this record was built on: the resolve is what *made* the content multisampled and what led us to
+the shape, but the work the GPU dies on is the render into the 4-sample target, not the copy out
+of it. Both Metal error classes agree, which also retires the idea that `Hang` and `PageFault`
+are two different bugs — they are two reports of the same work.
+
+That the fault is an *address* fault in three of four makes a dangling reference the leading
+candidate: something the pass touches — its colour attachment, its depth companion, or a
+descriptor reaching one of them — is freed or recycled while the GPU still holds the address.
+The next instrument therefore has to name the attachment, not just the pass shape.
+
 ## The failing path, read off the wire
 
 `LIMINA_VREND_TRACE=256` on the killing configuration, dumped 25 s in (the tracer dumps
