@@ -1,7 +1,7 @@
 # A WebGL page that asks for antialiasing loses the Vulkan device and kills the VMM
 
-**Status:** OPEN — reproducible on the shipped stack. The fault is named (a GPU address
-fault, not a hang); the cause is not.
+**Status:** OPEN — reproducible on the shipped stack, and localized to one shader's texture
+read. The faulting access is named; the reason the binding is wrong is not.
 **Vehicle:** `webgl-msaa.html`, self-contained (no network, generated texture). Three textured
 cubes on a `webgl` context; `?aa=0` requests `{antialias:false}` for the control arm.
 **Backlog entry:** `docs/hardening-backlog.md` §"A guest WebGL page that requests MSAA loses the
@@ -10,7 +10,7 @@ Vulkan device and aborts the VMM".
 ## What happens
 
 An `{antialias:true}` context — which is also what `getContext('webgl')` with no options gives,
-since `antialias` defaults to true in the spec — kills the VM in about two minutes:
+since `antialias` defaults to true in the spec — kills the VM in one to two minutes:
 
 ```
 MESA: error: ZINK: vkQueueSubmit failed (VK_ERROR_DEVICE_LOST)
@@ -21,7 +21,11 @@ VM stopped — worker terminated by signal 6
 
 The pool runaway is **downstream**, not a second fault: once the device is lost nothing completes,
 so no allocator ever drains, and `kk_alloc_pool_get` mints on every request by design (it never
-blocks on GPU progress). The abort is downstream again — see below.
+blocks on GPU progress). The abort is downstream again — it lands in Apple's
+`IOGPUMetalCommandBufferStorageAllocResourceAtIndex`, reached via `cs_get_compute` ←
+`kk_dispatch_precomp` ← `kk_draw`, which is AGX refusing to allocate with thousands of live
+`MTLCommandAllocator`s outstanding. It is **not** zink's device-lost abort: both of those are
+gated on `abort_on_hang`, which is `ZINK_HANG_ABORT`, default false.
 
 `{antialias:false}` runs indefinitely with the frame still animating.
 
@@ -37,113 +41,116 @@ This is the whole reason the failure went unnoticed: pages that never take the M
 and until MSAA started actually working there was no MSAA path to take. Any A/B here **must** read
 `getContextAttributes().antialias`; "requested AA" is not evidence AA happened.
 
-## Where it aborts
+## What Metal reports, and what it does not
 
-From the crash report's faulting thread (`gpu worker`, SIGABRT, `abort() called`):
+KosmicKrisp now prints the reason it used to discard (`kk: say why the device was lost` on
+`limina-kk`). The outer code is always `MTL_COMMAND_QUEUE_ERROR_TIMEOUT`; the underlying error is
+one of two, and **which one varies between runs of the identical build**:
+
+| underlying error | GPU time |
+|---|---|
+| `kIOGPUCommandBufferCallbackErrorPageFault` | ~6 ms |
+| `kIOGPUCommandBufferCallbackErrorHang` | ~46 ms |
+
+Measured across five arms, roughly evenly split. **Read the underlying error, not the outer one** —
+the outer `TIMEOUT` sends you after a hang that is only half the time even there. Neither figure
+is a long-running command buffer; both are what a bad resource dereference looks like from
+outside, depending on whether the address translated.
+
+## The faulting access
+
+Metal shader validation names it. With `MTL_SHADER_VALIDATION=1` the loss does not occur, and the
+dominant report — 111,873 hits in an 11-minute run, against 305 for the next — is:
 
 ```
-IOGPU          IOGPUMetalCommandBufferStorageAllocResourceAtIndex → abort()
-AGXMetalG13X   ContextCommon::newCommand → beginComputePass
-               -[AGXG13XFamilyCommandBuffer_mtlnext computeCommandEncoder]
-KosmicKrisp    mtl_new_compute_command_encoder ← cs_get_compute
-               ← kk_dispatch_precomp ← kk_cmd_write ← kk_heap ← kk_draw
-zink           draw<zink_multidraw> → tc_call_draw_single → _tc_sync → tc_flush
-               → st_glFlush → _mesa_make_current → eglMakeCurrent
-virglrenderer  vrend context make_current ← submit ← virgl_renderer_submit_cmd
+Invalid texture type MTLTextureType2DArray bound to shader, expected MTLTextureType2D,
+executing fragment function: "main_entrypoint"
+pipeline UID: B7B504DD3C3CD60243A9EAA4E55AE34B5D3A4BADD0FEDAFB060D7916720ABBD9
+	* frame #0: main_entrypoint() - /program_source:69:19
 ```
 
-**This is not zink's device-lost abort.** Both of those (`zink_screen.h:96`, `zink_batch.c:624`)
-are gated on `screen->abort_on_hang && !screen->robust_ctx_count`, and `abort_on_hang` comes from
-`ZINK_HANG_ABORT`, default false. The abort is Apple's, inside IOGPU's command-buffer storage
-allocator, and the plausible reading is AGX refusing to allocate with thousands of live
-`MTLCommandAllocator`s outstanding — i.e. a consequence of the pool runaway, hence of the device
-loss. One root, two derived symptoms.
+That pipeline's MSL (via `KK_LIMINA_SHADER_DUMP`) is **u_blitter's blit fragment shader** — one
+`texture2d<float>` sampled with a LOD bias and written to all eight color outputs — which is what
+`zink_render_attachment_shadow` runs, since KosmicKrisp implements no
+`VK_EXT_multisampled_render_to_single_sampled`. Line 69 is its `.sample()`. The NIR that produced
+it declares `sampler2D` and a `2D` tex op, so **KK's code generation is right and the binding is
+wrong**: a 2D-array texture reached a slot the shader dereferences as 2D.
 
-The route is `cs_get_compute` — pre-gfx compute submitted inside an open render pass, on a
-different command buffer and therefore a different allocator than the draws already recorded in
-that pass. `kk_alloc_pool` calls this "the dangerous route" in its own comments.
+Two independent confirmations that this read is the fault:
+
+- **Validation masks it at full speed.** 11 minutes, 54 fps, no loss — and the cubes render
+  **black**, because `FAIL_MODE=allow` makes the invalid read return zero instead of faulting.
+  The identical build with no `MTL_*` env dies in 65 seconds with the cubes rendering correctly.
+  So masking is not the ~10x slowdown full validation costs; the mask is the substituted read.
+- **The address is live.** Two leak arms (below) removed every free from the picture and the loss
+  survived both, so this is a mistyped binding, not a dangling one.
 
 ## What has been ruled out
 
 | variable | arms | result |
 |---|---|---|
 | KK revision | pinned `552edc3f62f` vs a bundle two commits older | both die |
-| scanout path | windowed (`--window`) vs headless (`--display-capture`) | both die |
+| scanout path | windowed (`--window`) vs `--display-capture` | both die |
 | guest tier | stock F44 vs enhanced F44 | both die |
 | context attributes | `{antialias:true}`, defaults, vs `{antialias:false}` | only AA dies |
 | fan unrolling | `LIMINA_ZINK_NO_FANS=1` vs default | both die |
 | KK allocator pool retirement | `LIMINA_KK_ALLOC_DESTROY=0` (verified: 34 retirements → 0) | both die |
 | BO lifetime | `LIMINA_KK_BO_LEAK=1` — nothing ever released or de-resident | both die |
+| image-view lifetime | `LIMINA_KK_VIEW_LEAK=1` — no view ever released | both die |
+| nil texture views | `mtl_new_texture_view_with` reports nil unconditionally | zero, three arms |
 | texture residency | plane textures + sampled/storage views registered | both die |
 | MSAA resolve implementation | meta/shader resolve vs upstream's Metal render-pass resolve | **neither runs** |
-
-The last four are the load-bearing ones, because each closes a whole mechanism rather than a
-setting. Nothing KK allocated was ever freed or made non-resident in the leak arm, so the faulting
-address is not a dangling one; the fault is a *live* address the GPU could not translate.
+| the sampled-image descriptor write | `LIMINA_KK_DESCLOG=1`, every distinct type tuple | all honest |
 
 **No Vulkan resolve is involved, in either implementation.** Upstream mesa replaced KosmicKrisp's
 meta/shader resolve with Metal's native render-pass resolve (`db5ab8de776`, `a86f79d5f66`, MR
-43216), which is the obvious candidate for an MSAA fault and post-dates our base. Ported onto
-`limina-kk` it does not help — and instrumenting the path shows why: `kk_attachment_do_renderpass_resolve`
-never once sees an attachment with `resolve_mode != VK_RESOLVE_MODE_NONE` on this workload. zink
-emulates `EXT_multisampled_render_to_texture` with a `util_blitter` draw, so the multisample
-traffic here is ordinary rendering to and sampling from a 4-sample texture, and never a resolve.
-Both resolve implementations are irrelevant to this bug. (The port lives on the local
-`msaa-resolve-test` branch of the KK checkout; it is upstream work we get on the next rebase, not
-something to carry.)
+43216), which is the obvious candidate and post-dates our base. Ported onto `limina-kk` it does not
+help — and instrumenting the path shows why: `kk_attachment_do_renderpass_resolve` never once sees
+an attachment with `resolve_mode != VK_RESOLVE_MODE_NONE` on this workload. zink emulates
+`EXT_multisampled_render_to_texture` with a `util_blitter` draw, so the multisample traffic here is
+ordinary rendering to and sampling from a 4-sample texture, and never a resolve. (The port lives on
+the local `msaa-resolve-test` branch of the KK checkout; it is upstream work we get on the next
+rebase, not something to carry.)
 
-## What the fault actually is
-
-Metal names it, once KosmicKrisp stops discarding the reason (`kk: say why the device was lost`
-on `limina-kk`):
+**The sampled-image descriptor path is not where the mistyped binding is written.** A whole run
+produces exactly three distinct (descriptor type, `VkImageViewType`, `MTLTextureType`) tuples, and
+each is correct:
 
 ```
-[LIMINA-DEVICE-LOST] MTL_COMMAND_QUEUE_ERROR_TIMEOUT (code 1) gpu=...(6.3 ms)
-  message: The operation couldn't be completed. (MTL4CommandQueueErrorDomain error 1.)
-  details: ... Code=2 "Caused GPU Address Fault Error
-           (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)"
+desc_type=1 vk_view_type=1 input=0 -> mtl_texture_type=2 samples=1 512x512      # 2D -> 2D
+desc_type=2 vk_view_type=5 input=0 -> mtl_texture_type=3 samples=1 4096x4096    # 2D_ARRAY -> 2DArray
+desc_type=1 vk_view_type=1 input=0 -> mtl_texture_type=4 samples=4 960x600      # 2D+4s -> 2DMultisample
 ```
 
-**Read the underlying error, not the outer one.** The outer code is `TIMEOUT` and the underlying
-one is a page fault; 6 ms of GPU time says the command buffer touched something invalid, not that
-it ran long. Taking the outer code at face value sends you looking for a hang that is not there.
+KosmicKrisp does not implement `VK_EXT_descriptor_buffer` (checked, not assumed), so
+`get_sampled_image_view_desc` really is the path a `vkUpdateDescriptorSets` binding takes.
 
-## The residency reports are chronic, and do not explain this
+## Where to look next
 
-Metal's debug layer reports, on every frame, that attachment textures are "not added to any
-residency set". Labelling the textures makes the reports name a 4-sample 2D-multisample texture at
-the canvas size as the dominant offender — 383 hits against 36 for the next. That is a real
-omission and is now fixed, and the reports go to zero. **The fault survives it.** The tell was
-there in advance: the same reports fire for single-sample textures that never fault, and a class
-that fires constantly on healthy frames cannot explain a failure specific to one of them.
+The remaining producer of a forced array type is `kk_image_view_init`'s attachment block: for any
+color/depth-stencil view that is not already 3D or 2D_ARRAY it rewrites `view_layout.view_type` to
+`VK_IMAGE_VIEW_TYPE_2D_ARRAY` and builds `mtl_handle_input` from that. Whether that handle, or an
+argument-table binding outside the descriptor-set path, is what the blit shader dereferences is the
+open question — and it is answerable by extending the same tuple log to every site that hands a
+`MTLResourceID` to a shader, rather than by reading the source.
 
-## What still points somewhere
+The third descriptor tuple above is worth keeping in view for a different reason: a
+`COMBINED_IMAGE_SAMPLER` legitimately carries a 4-sample texture, and only one dumped fragment
+shader declares `texture2d_ms`. A second shader reaching that texture would be the same class of
+fault by a different route.
 
-Metal shader validation with `MTL_SHADER_VALIDATION_FAIL_MODE=allow` prevents the loss for as long
-as it has been run. Its reports carry a pipeline UID and a `program_source` line, so instances —
-not classes — can be diffed between an AA and a non-AA half of one run. Three pipelines appear only
-in the AA half with real volume (66795, 22264, 701 hits), all of class *"MTLResourceUsage flags
-mismatch or missing for texture executing fragment function"*. That is the sharpest surviving lead.
-
-Two cautions on it. Validation also slows the workload by roughly an order of magnitude, so its
-survival is not by itself proof of masking; the control that separates those is to keep validation
-on and turn off only `MTL_SHADER_VALIDATION_TEXTURE_USAGE` / `_RESOURCE_USAGE`. And the class is
-chronic like the residency one — it is the *instance* diff, not the class, that carries the signal.
-
-The mechanism this would fit: KosmicKrisp has no `VK_EXT_multisampled_render_to_single_sampled`,
-so MSAA resolve goes through `vk_meta_resolve_rendering` — a fragment shader that samples the
-multisample texture. A shader handed a resource ID it cannot correctly dereference faults exactly
-this way. KK's texture-type plumbing is independently known to be confused somewhere ("Invalid
-texture type MTLTextureType2DArray bound to shader, expected MTLTextureType2D", 127k hits) —
-though that class is equally present without MSAA, so it is a neighbour, not the culprit.
-
-## Method notes worth keeping
+## Method rules this bug earned
 
 - **A validator class that fires on healthy frames explains nothing.** Diff *instances* (pipeline
   UID + source line) between a failing and a passing half of the same run; classes are identical,
-  instances are not.
-- **Give it the full window, and do not read process liveness as health.** This bug kills at
-  ~2 minutes, so a check at 150 s can still read healthy.
+  instances are not. Note the converse trap too: a pipeline UID hashes `rasterSampleCount`, so
+  every pipeline drawing into an MSAA target has an "AA-only" twin. Only a shader with no non-AA
+  twin — a blit that exists because of MSAA — is evidence on its own.
+- **Prove the mask is not the slowdown.** Validation costs ~10x; that a workload survives under it
+  means nothing until an arm shows the mask working at full speed, or the fault returning with the
+  slowdown kept.
+- **Give it the full window, and do not read process liveness as health.** This bug kills between
+  60 s and ~2 minutes, so a check at 150 s can still read healthy.
 - **One capture path per arm.** Arms sharing a `LIMINA_WINDOW_CAPTURE` / `--display-capture` file
   overwrite each other's only evidence that the workload was running at all — a VM that "survived"
   because the browser had exited reads exactly like a VM that survived.
@@ -159,5 +166,11 @@ ssh … 'XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --unit=webglmsaa --co
         firefox --kiosk file:///home/claude/webgl-msaa.html'
 ```
 
-Then watch the worker log for `DEVICE_LOST`. Allow ~2 minutes: a check at 150 s read as healthy on
-a VM that died 40 s later.
+Then watch the worker log for `DEVICE_LOST`. The KK-side knobs used above —
+`LIMINA_KK_ALLOC_DESTROY`, `LIMINA_KK_BO_LEAK`, `LIMINA_KK_VIEW_LEAK`, `LIMINA_KK_DESCLOG`,
+`KK_LIMINA_SHADER_DUMP`, `LIMINA_KK_LABELS` — all live on the `limina-kk` branch of
+`/Volumes/mesa-cs/mesa`.
+
+**A fix must show all four:** the page for ≥5 minutes, no `DEVICE_LOST`, no nil views, **and the
+cubes visibly rendering in the capture**. Black cubes with no fault is the validation mask, not a
+fix.
