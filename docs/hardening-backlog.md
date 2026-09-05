@@ -735,13 +735,25 @@ rects). Remaining:
   difference between a clean exit and an abnormal one is ours. No difference points at accounting,
   and the entry can be closed. Until then, a reboot is the only reclaim.
 
+  **It is not a curiosity: it panics the host.** Left to accumulate over a day of arms, the machine
+  died with `panic(cpu 3): watchdog timeout: no checkins from watchdogd in 91 seconds`, the panic
+  log reporting `91% of compressed pages limit (OK) and 100% of segments limit (BAD) with 86
+  swapfiles` — compressor-segment exhaustion starving a critical daemon out of its check-in, not a
+  GPU fault. After the reboot the compressor is empty, which is the one cheap confirmation that the
+  stranded memory is reclaimed by nothing short of that. Anyone running repeated crash arms should
+  watch `vm_stat`'s compressor pages and reboot before the segment limit, and the discriminating
+  arm above should be run before another long session.
+
 - **KosmicKrisp's command-allocator pool has no back-pressure, so a slow GPU aborts the worker**
   (OPEN, hardening). Under full Metal shader validation the GPU runs ~10x slower, in-flight work
   outruns completion, and `kk_alloc_pool_get` mints allocators without bound — measured class 1
   growing to 7,283 with a 4 MiB budget, logging "in-flight depth is outrunning completion" once
   per allocator, until Apple's `IOGPUMetalCommandBufferStorageAllocResourceAtIndex` refuses and the
   worker takes SIGABRT. Validation is only the cheapest way to provoke it; any sustained
-  submit-faster-than-complete does the same, which a guest can arrange. The pool should block on
+  submit-faster-than-complete does the same, which a guest can arrange — and **a lost device is
+  exactly such an arrangement**: after the WebGL MSAA device loss the pool climbed to 1,854 class-0
+  allocators with 3,970 growth crossings before the abort, so the pool turns a recoverable
+  `VK_ERROR_DEVICE_LOST` into a dead VMM. The pool should block on
   GPU progress at a ceiling rather than mint, and the growth warning should be rate-limited — at
   7,283 lines it is itself a load source.
 

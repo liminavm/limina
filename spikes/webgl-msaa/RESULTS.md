@@ -114,6 +114,22 @@ Their negatives — 226,909 frames in the guest, 144,037 presenting — constrai
 shadow-attachment path and say nothing about this bug. Every "shadow blit" line in the
 older parts of this record describes the probe, not the browser.
 
+The route is now read directly from the renderer rather than inferred from the source.
+`LIMINA_VREND_BLIT_LOG=1` (on the `limina` branch of our virglrenderer fork; the shipped
+build compiles `VREND_DEBUG` out) prints each distinct blit shape once with the route and
+the predicate that forced it. On the killing configuration it prints exactly two shapes:
+
+```
+FBO   src=fmt67/s0 2560x1440 -> dst=fmt67/s0 2560x1440  (swizzle=0 redblue_or_fmt=0 …)
+GLFB  src=fmt67/s4 1280x720  -> dst=fmt1/s0  1280x720   (swizzle=0 redblue_or_fmt=1 …)
+```
+
+The desktop's own compositing blit stays on the FBO path; **every MSAA resolve takes the
+shader blitter**, and `redblue_or_fmt=1` names the format difference as the reason. The
+companion knob `LIMINA_VREND_FORCE_FBO_BLIT=1` keeps such a blit on the FBO path (colours
+come out wrong, which is acceptable for an arm asking only whether the route is what loses
+the device); that arm has not been read yet.
+
 ## The size and fullscreen framings are both dead
 
 They were built on single-shot arms with no repeats. The archived logs falsify them
@@ -122,9 +138,15 @@ survived 240 s with antialiasing granted and 14,944 frames drawn. The same displ
 both kills and survives, so display size was never the variable, and neither was the
 canvas size or fullscreen that replaced it.
 
-What the archived logs do show is a **schedule**: across ten arms that died, death lands
-+66 to +85 s after the worker's first log line, most of them +66 to +70. Whatever this
-is, it is closer to periodic than to accumulated work.
+The "+66 to +85 s schedule" the archived logs seemed to show is dead too, and the way it
+died named a much larger error: **an arm launched over plain `ssh` is not this workload.**
+Firefox started from an ssh command line — even with `WAYLAND_DISPLAY` and a live
+compositor — does not inherit the seated session's environment, renders through a
+different driver, and survives indefinitely. Two such arms read as clean 4-minute
+survivals of a configuration that kills. Launched through the session's own manager
+(`systemd-run --user`, with `DBUS_SESSION_BUS_ADDRESS` exported so the call does not fail
+silently), the same build on the same clone lost the device inside 4 minutes. The launch
+method is a load-bearing variable, not a convenience.
 
 Two further corrections fall out:
 
@@ -227,6 +249,10 @@ fullscreen, since 1280x800 both kills and survives.
   same profile gets session restore, so the second half runs both pages. Give each half its own
   `--profile <dir> --new-instance`, and create the directory: Firefox refuses a missing one with a
   modal, and the arm then measures a VM with no workload on it.
+- **The workload must be shown running before a survival is read.** A survival is the one
+  reading a broken arm produces for free: no browser, no session environment, wrong driver,
+  all look like health. Check the capture *and* that the guest process exists before
+  starting the clock, and prefer launching through the session manager over `ssh`.
 - **A capture is not optional.** Two arms in one session measured nothing — one where the browser
   never started, one where the halves were swapped — and in both the capture was the only thing
   that could have said so. Never run an arm without one.
@@ -258,14 +284,19 @@ Boot any enhanced F44 image and run the page in the seated session:
 ```
 cargo xtask run --disk <clone>.raw          # or LIMINA_DISPLAY_CAPTURE=<png> for headless
 scp spikes/webgl-msaa/webgl-msaa.html claude@127.0.0.1:/home/claude/   # port from the worker log
-ssh … 'XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --unit=webglmsaa --collect \
-        firefox --kiosk file:///home/claude/webgl-msaa.html'
+ssh … 'export XDG_RUNTIME_DIR=/run/user/1000 \
+             DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus; \
+        rm -rf /tmp/ff && mkdir -p /tmp/ff; \
+        systemd-run --user --unit=webglmsaa --collect /usr/bin/firefox \
+            --profile /tmp/ff --new-instance --kiosk \
+            file:///home/claude/webgl-msaa.html?aa=1'
 ```
 
 Then watch the worker log for `DEVICE_LOST`. The KK-side knobs used above —
 `LIMINA_KK_ALLOC_DESTROY`, `LIMINA_KK_BO_LEAK`, `LIMINA_KK_VIEW_LEAK`, `LIMINA_KK_DESCLOG`,
 `KK_LIMINA_SHADER_DUMP`, `LIMINA_KK_LABELS` — all live on the `limina-kk` branch of
-`/Volumes/mesa-cs/mesa`. Keep `--display-size 2560x1440`: the loss does not reproduce below it.
+`/Volumes/mesa-cs/mesa`. Arms here all run at `--display-size 2560x1440`. Size is not the variable (see above), but
+holding it fixed removes one source of noise.
 
 Full Metal shader validation is not survivable on this workload for more than a couple of minutes:
 the slowed GPU makes KosmicKrisp's allocator pool run away (class 1 grew to 7,283 allocators,
