@@ -57,33 +57,40 @@ the outer `TIMEOUT` sends you after a hang that is only half the time even there
 is a long-running command buffer; both are what a bad resource dereference looks like from
 outside, depending on whether the address translated.
 
-## The faulting access
+## What the validator's reports do and do not say
 
-Metal shader validation names it. With `MTL_SHADER_VALIDATION=1` the loss does not occur, and the
-dominant report — 111,873 hits in an 11-minute run, against 305 for the next — is:
+The dominant report class is a texture-type mismatch:
 
 ```
 Invalid texture type MTLTextureType2DArray bound to shader, expected MTLTextureType2D,
 executing fragment function: "main_entrypoint"
-pipeline UID: B7B504DD3C3CD60243A9EAA4E55AE34B5D3A4BADD0FEDAFB060D7916720ABBD9
-	* frame #0: main_entrypoint() - /program_source:69:19
+pipeline: "msl=<hash>", UID: "<hash>" encoder: "87", draw: 6
 ```
 
-That pipeline's MSL (via `KK_LIMINA_SHADER_DUMP`) is **u_blitter's blit fragment shader** — one
-`texture2d<float>` sampled with a LOD bias and written to all eight color outputs — which is what
-`zink_render_attachment_shadow` runs, since KosmicKrisp implements no
-`VK_EXT_multisampled_render_to_single_sampled`. Line 69 is its `.sample()`. The NIR that produced
-it declares `sampler2D` and a `2D` tex op, so **KK's code generation is right and the binding is
-wrong**: a 2D-array texture reached a slot the shader dereferences as 2D.
+Three properties of the class bound how much it can carry. It is **chronic** — it fires on many
+pipelines in every run, a healthy desktop included. It is **bidirectional**: `2D` bound where
+`2DArray` was expected occurs alongside the reverse. And a report carries no texture identity, no
+address and no binding index, so a report alone can never name the resource that produced it.
 
-Two independent confirmations that this read is the fault:
+An earlier reading of this section identified one pipeline as the faulting access. That was wrong
+on two counts: the pipeline named was reporting a different validation class (`MTLResourceUsage
+flags mismatch`), and no single pipeline survives a controlled AA-versus-non-AA repeat. Nothing
+here currently names a faulting access.
 
-- **Validation masks it at full speed.** 11 minutes, 54 fps, no loss — and the cubes render
-  **black**, because `FAIL_MODE=allow` makes the invalid read return zero instead of faulting.
-  The identical build with no `MTL_*` env dies in 65 seconds with the cubes rendering correctly.
-  So masking is not the ~10x slowdown full validation costs; the mask is the substituted read.
-- **The address is live.** Two leak arms (below) removed every free from the picture and the loss
-  survived both, so this is a mistyped binding, not a dangling one.
+**Pipelines are now self-identifying.** KosmicKrisp labels each `MTLRenderPipelineState` with a
+hash of its generated MSL, and `KK_LIMINA_SHADER_DUMP` names its files by the same hash, so a
+report, a shader dump and a second run's report all name one thing. The label must be content-
+derived: it is hashed into the UID Metal reports against, so labelling with a per-run pointer makes
+every UID per-run too and two runs cannot be joined at all.
+
+## The loss is display-size dependent
+
+At `--display-size 2560x1440` the VM dies in 60–120 s. At `1280x800`, with `antialias` granted
+(`SAMPLES=4`, `SAMPLE_BUFFERS=1`), cubes rendering and 14,944 frames drawn, it survives past four
+minutes. Measured 2026-09-05, same build, no Metal validation in either.
+
+This is the strongest structural hint available: whatever is exhausted or mis-addressed scales with
+render-target size, and it retires every measurement taken at the smaller size.
 
 ## What has been ruled out
 
@@ -100,7 +107,8 @@ Two independent confirmations that this read is the fault:
 | nil texture views | `mtl_new_texture_view_with` reports nil unconditionally | zero, three arms |
 | texture residency | plane textures + sampled/storage views registered | both die |
 | MSAA resolve implementation | meta/shader resolve vs upstream's Metal render-pass resolve | **neither runs** |
-| the sampled-image descriptor write | `LIMINA_KK_DESCLOG=1`, every distinct type tuple | all honest |
+| the zink shadow blit alone | `spikes/zink-shadow-recursion` on host zink-on-KK, no VM | **no mismatch** |
+| descriptor slot decoding | both virglrenderer implementations traced in guest ids | identical |
 
 **No Vulkan resolve is involved, in either implementation.** Upstream mesa replaced KosmicKrisp's
 meta/shader resolve with Metal's native render-pass resolve (`db5ab8de776`, `a86f79d5f66`, MR
@@ -112,48 +120,56 @@ ordinary rendering to and sampling from a 4-sample texture, and never a resolve.
 the local `msaa-resolve-test` branch of the KK checkout; it is upstream work we get on the next
 rebase, not something to carry.)
 
-**The sampled-image descriptor path is not where the mistyped binding is written.** A whole run
-produces exactly three distinct (descriptor type, `VkImageViewType`, `MTLTextureType`) tuples, and
-each is correct:
+**The shadow blit alone does not produce the mismatch.** `spikes/zink-shadow-recursion` drives
+`zink_render_attachment_shadow` against host zink-on-KK with no VM in the loop; under full Metal
+shader validation it reports nothing. Its blit source is a `2D_ARRAY` view of the multisample
+transient, `MTLTextureType2DMultisampleArray`, and the validator is content with it — so zink and
+the blit shader agree on that path.
 
-```
-desc_type=1 vk_view_type=1 input=0 -> mtl_texture_type=2 samples=1 512x512      # 2D -> 2D
-desc_type=2 vk_view_type=5 input=0 -> mtl_texture_type=3 samples=1 4096x4096    # 2D_ARRAY -> 2DArray
-desc_type=1 vk_view_type=1 input=0 -> mtl_texture_type=4 samples=4 960x600      # 2D+4s -> 2DMultisample
-```
+**Descriptor writes are honest per slot.** With the log keyed on (set, binding, array element,
+texture identity) rather than on a type tuple, every sampled-image write in a run is internally
+consistent. What the log does show is the shape of what zink asks for: mipmap chains, 2560×1440
+down to 2×1, each level a separate `VK_IMAGE_VIEW_TYPE_2D_ARRAY` view with `layerCount=1`, all
+written into one slot. Array views reaching shaders that declare plain `texture2d` is therefore
+routine here, which is consistent with the mismatch class being chronic and mostly survivable.
 
-KosmicKrisp does not implement `VK_EXT_descriptor_buffer` (checked, not assumed), so
-`get_sampled_image_view_desc` really is the path a `vkUpdateDescriptorSets` binding takes.
+One write in that log is a genuine Vulkan violation rather than a curiosity: a
+`COMBINED_IMAGE_SAMPLER` naming a `VK_IMAGE_VIEW_TYPE_2D` view of a **4-sample** image, so a
+shader declaring `texture2d<float>` samples an `MTLTextureType2DMultisample`. That is the
+memory-unsafe member of the class — Metal's 2D and 2DMultisample layouts differ, so the read is a
+genuine misaddress rather than a silent layer-0 substitution. It is **not** yet tied to the loss.
 
 ## Where to look next
 
-The remaining producer of a forced array type is `kk_image_view_init`'s attachment block: for any
-color/depth-stencil view that is not already 3D or 2D_ARRAY it rewrites `view_layout.view_type` to
-`VK_IMAGE_VIEW_TYPE_2D_ARRAY` and builds `mtl_handle_input` from that. Whether that handle, or an
-argument-table binding outside the descriptor-set path, is what the blit shader dereferences is the
-open question — and it is answerable by extending the same tuple log to every site that hands a
-`MTLResourceID` to a shader, rather than by reading the source.
-
-The third descriptor tuple above is worth keeping in view for a different reason: a
-`COMBINED_IMAGE_SAMPLER` legitimately carries a 4-sample texture, and only one dumped fragment
-shader declares `texture2d_ms`. A second shader reaching that texture would be the same class of
-fault by a different route.
+1. **Reproduce at 2560×1440 or not at all.** Every census below that size is invalid.
+2. **Isolate by masking one pipeline.** With stable hashes: one validation run to collect UID↔hash
+   pairs, then `MTL_SHADER_VALIDATION_DEFAULT_STATE=none` plus `ENABLE_PIPELINES=<one UID>` and
+   `FAIL_MODE=allow`, one pipeline at a time. The pipeline whose masking *alone* both survives and
+   blackens the cubes is the fatal read. Capture must be on or the blackening cannot be seen.
+3. **Trace the 4-sample sampler view to its zink site**, since it is the one mismatch in the class
+   that can misaddress rather than mis-sample.
 
 ## Method rules this bug earned
 
-- **A validator class that fires on healthy frames explains nothing.** Diff *instances* (pipeline
-  UID + source line) between a failing and a passing half of the same run; classes are identical,
-  instances are not. Note the converse trap too: a pipeline UID hashes `rasterSampleCount`, so
-  every pipeline drawing into an MSAA target has an "AA-only" twin. Only a shader with no non-AA
-  twin — a blit that exists because of MSAA — is evidence on its own.
+- **A validator class that fires on healthy frames explains nothing.** Diff *instances* between a
+  failing and a passing half of the same run — and check the halves are what they claim before
+  reading the diff.
+- **Relaunching a browser does not reset it.** An A/B that stops Firefox and starts it again on the
+  same profile gets session restore, so the second half runs both pages. Give each half its own
+  `--profile <dir> --new-instance`, and create the directory: Firefox refuses a missing one with a
+  modal, and the arm then measures a VM with no workload on it.
+- **A capture is not optional.** Two arms in one session measured nothing — one where the browser
+  never started, one where the halves were swapped — and in both the capture was the only thing
+  that could have said so. Never run an arm without one.
+- **Never change two variables to make an arm cheaper.** Dropping the display size to make
+  validation affordable silently moved the run to a configuration that does not crash.
+- **A label can perturb what it names.** A pipeline label is hashed into the pipeline UID, so
+  adding one invalidates every UID recorded before it.
 - **Prove the mask is not the slowdown.** Validation costs ~10x; that a workload survives under it
   means nothing until an arm shows the mask working at full speed, or the fault returning with the
   slowdown kept.
 - **Give it the full window, and do not read process liveness as health.** This bug kills between
   60 s and ~2 minutes, so a check at 150 s can still read healthy.
-- **One capture path per arm.** Arms sharing a `LIMINA_WINDOW_CAPTURE` / `--display-capture` file
-  overwrite each other's only evidence that the workload was running at all — a VM that "survived"
-  because the browser had exited reads exactly like a VM that survived.
 
 ## Reproducing
 
@@ -169,7 +185,11 @@ ssh … 'XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --unit=webglmsaa --co
 Then watch the worker log for `DEVICE_LOST`. The KK-side knobs used above —
 `LIMINA_KK_ALLOC_DESTROY`, `LIMINA_KK_BO_LEAK`, `LIMINA_KK_VIEW_LEAK`, `LIMINA_KK_DESCLOG`,
 `KK_LIMINA_SHADER_DUMP`, `LIMINA_KK_LABELS` — all live on the `limina-kk` branch of
-`/Volumes/mesa-cs/mesa`.
+`/Volumes/mesa-cs/mesa`. Keep `--display-size 2560x1440`: the loss does not reproduce below it.
+
+Full Metal shader validation is not survivable on this workload for more than a couple of minutes:
+the slowed GPU makes KosmicKrisp's allocator pool run away (class 1 grew to 7,283 allocators,
+"in-flight depth is outrunning completion") and the worker aborts. Use selective validation.
 
 **A fix must show all four:** the page for ≥5 minutes, no `DEVICE_LOST`, no nil views, **and the
 cubes visibly rendering in the capture**. Black cubes with no fault is the validation mask, not a

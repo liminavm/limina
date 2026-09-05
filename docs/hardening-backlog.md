@@ -619,56 +619,77 @@ rects). Remaining:
   thousands of live `MTLCommandAllocator`s outstanding. It is **not** zink's device-lost abort:
   both of those are gated on `abort_on_hang`, which is `ZINK_HANG_ABORT`, default false.
 
-  **The faulting access is named: a texture read in u_blitter's blit fragment shader.** Metal
-  shader validation reports, 111,873 times in an 11-minute run against 305 for the next, that
-  pipeline `B7B504DD…` has an `MTLTextureType2DArray` bound where the shader dereferences an
-  `MTLTextureType2D`, at its one `.sample()`. That pipeline is what
-  `zink_render_attachment_shadow` runs — KosmicKrisp implements no
-  `VK_EXT_multisampled_render_to_single_sampled`, so every MSAA render-to-texture becomes a
-  `util_blitter` draw. The NIR feeding it declares `sampler2D` and a `2D` tex op, so KK's code
-  generation is right and **the binding is wrong**.
-
-  Two things confirm that read is the fault rather than a bystander. Validation masks the loss
-  **at full speed** (11 minutes, 54 fps) and renders the cubes black, because `FAIL_MODE=allow`
-  substitutes zero for the invalid read; the identical build with no `MTL_*` env dies in 65
-  seconds with the cubes rendering. And two leak arms (`LIMINA_KK_BO_LEAK=1`,
-  `LIMINA_KK_VIEW_LEAK=1`) removed every free from the picture without helping, so the address is
-  live and mistyped, not dangling.
+  **The loss scales with render-target size.** At `--display-size 2560x1440` it kills the VM in
+  60–120 s; at `1280x800`, with antialiasing genuinely granted (`SAMPLES=4`, `SAMPLE_BUFFERS=1`),
+  cubes rendering and 14,944 frames drawn, the same build survives past four minutes. So whatever
+  is exhausted or mis-addressed grows with the target, and no measurement taken below 2560×1440
+  says anything about this bug.
 
   **The underlying Metal error is `PageFault` (~6 ms) on some runs and `Hang` (~46 ms) on others,
   from the identical build** — measured across five arms, roughly evenly split. The outer code is
   always `TIMEOUT` and is a trap either way; neither figure is a long-running command buffer.
 
+  **A texture-type mismatch is the standing lead, and it is not yet a cause.** Metal shader
+  validation reports `MTLTextureType2DArray` bound where a shader dereferences `MTLTextureType2D`
+  — but the class fires on many pipelines in every run including healthy ones, runs in *both*
+  directions, and carries no texture identity, address or binding index. Validation does mask the
+  loss at full speed (11 minutes, 54 fps) while rendering the cubes black, which says the fault is
+  something validation substitutes for; it does not say which of the reports is it.
+
+  Pipelines are now self-identifying: KK labels each `MTLRenderPipelineState` with a hash of its
+  generated MSL and `KK_LIMINA_SHADER_DUMP` names its dumps by the same hash. The label must be
+  content-derived — it is hashed into the UID Metal reports against, so a per-run pointer makes
+  every UID per-run and two runs cannot be joined.
+
   Closed by measurement, each a whole mechanism rather than a setting: the KK allocator pool's
   retirement (`LIMINA_KK_ALLOC_DESTROY=0`, verified 34 retirements → 0); BO lifetime; image-view
-  lifetime; nil texture views (zero across three arms, now reported unconditionally); texture
-  residency (plane textures and their views are registered and Metal's complaint goes to zero);
-  the MSAA resolve in *either* implementation — upstream's Metal render-pass resolve
-  (`db5ab8de776`, MR 43216) does not help because `kk_attachment_do_renderpass_resolve` never sees
-  a real resolve on this workload; and the sampled-image descriptor write, where a whole run
-  produces three distinct (descriptor type, `VkImageViewType`, `MTLTextureType`) tuples and all
-  three are correct (`LIMINA_KK_DESCLOG=1`; KK implements no `VK_EXT_descriptor_buffer`, checked).
+  lifetime, so the address is live and mistyped rather than dangling; nil texture views (zero
+  across three arms, now reported unconditionally); texture residency; the MSAA resolve in
+  *either* implementation — upstream's Metal render-pass resolve (`db5ab8de776`, MR 43216) does not
+  help because `kk_attachment_do_renderpass_resolve` never sees a real resolve on this workload;
+  the zink shadow blit on its own, which `spikes/zink-shadow-recursion` drives against host
+  zink-on-KK with no VM and which produces no mismatch at all; and descriptor slot decoding, which
+  the Rust-virglrenderer session compared against the C implementation in guest ids across six
+  venus corpora — 197 elements, byte-identical (bounded: no corpus exercises push descriptors or
+  descriptor copies, and none is an antialias run).
 
-  **Next:** find the site that actually hands the blit shader its `MTLResourceID`. The remaining
-  producer of a forced array type is `kk_image_view_init`'s attachment block, which rewrites any
-  non-3D, non-array attachment view to `VK_IMAGE_VIEW_TYPE_2D_ARRAY` for `mtl_handle_input`.
-  Extend the tuple log to every site that binds a resource id to a shader rather than reading the
-  source for it. A fix must show the page running ≥5 minutes with the cubes **visibly rendering**
-  — black cubes with no fault is the validation mask, not a fix — and the same texture-type class
-  is chronic elsewhere on the desktop, so it needs the suite and an eyeball pass behind it.
+  **One descriptor write in the log is a real Vulkan violation** and worth chasing on its own: a
+  `COMBINED_IMAGE_SAMPLER` naming a `VK_IMAGE_VIEW_TYPE_2D` view of a **4-sample** image, so a
+  shader declaring `texture2d<float>` samples an `MTLTextureType2DMultisample`. Metal's 2D and
+  2DMultisample layouts differ, so that read misaddresses rather than silently substituting layer
+  0 — the memory-unsafe member of the class. Not yet tied to the loss.
+
+  **Next:** reproduce at 2560×1440 only, then isolate by masking one pipeline at a time
+  (`MTL_SHADER_VALIDATION_DEFAULT_STATE=none` plus `ENABLE_PIPELINES=<one UID>`,
+  `FAIL_MODE=allow`): the pipeline whose masking alone both survives and blackens the cubes is the
+  fatal read. A fix must show the page running ≥5 minutes with the cubes **visibly rendering** —
+  black cubes with no fault is the validation mask, not a fix — and the same texture-type class is
+  chronic elsewhere on the desktop, so it needs the suite and an eyeball pass behind it.
 
   **Two things this invalidates.** The "Firefox MSAA silent non-AA, cosmetic only" entry below is
   MoltenVK-era and no longer describes this stack: the page reports `granted aa=true SAMPLES=4`,
   so MSAA is genuinely taken. And a VM dying from a web page means the guest-facing crash surface
   is wider than the Vulkan path the trust-boundary work hardens — this arrives through GL/vrend.
 
-  **Method rules this bug earned.** Diff validator *instances* (pipeline UID + source line), never
-  classes — but note a pipeline UID hashes `rasterSampleCount`, so every pipeline drawing into an
-  MSAA target has an "AA-only" twin; only a shader with no non-AA twin is evidence on its own.
-  Prove a mask is not a slowdown: validation costs ~10x, so survival under it means nothing until
-  an arm shows the mask working at full speed. Process liveness is not health and an early sample
-  is not a verdict. And give every arm its own capture path; arms sharing one overwrite each
-  other's only evidence that the workload was running.
+  **Method rules this bug earned.** A validator class that fires on healthy frames explains
+  nothing; diff instances, and check the halves of an A/B are what they claim before reading the
+  diff. Relaunching a browser does not reset it — session restore carries the first half's page
+  into the second, so give each half its own `--profile <dir> --new-instance`, and create the
+  directory or Firefox stops at a modal and the arm measures a VM with no workload on it. Never
+  run an arm without a capture: two arms in one session measured nothing and only the capture could
+  say so. Never change two variables to make an arm cheaper — dropping the display size to afford
+  validation moved the run to a configuration that does not crash. A label can perturb what it
+  names. And prove a mask is not a slowdown before reading survival under it.
+
+- **KosmicKrisp's command-allocator pool has no back-pressure, so a slow GPU aborts the worker**
+  (OPEN, hardening). Under full Metal shader validation the GPU runs ~10x slower, in-flight work
+  outruns completion, and `kk_alloc_pool_get` mints allocators without bound — measured class 1
+  growing to 7,283 with a 4 MiB budget, logging "in-flight depth is outrunning completion" once
+  per allocator, until Apple's `IOGPUMetalCommandBufferStorageAllocResourceAtIndex` refuses and the
+  worker takes SIGABRT. Validation is only the cheapest way to provoke it; any sustained
+  submit-faster-than-complete does the same, which a guest can arrange. The pool should block on
+  GPU progress at a ceiling rather than mint, and the growth warning should be rate-limited — at
+  7,283 lines it is itself a load source.
 
 - **~~`vkGetPipelineCacheData` returns `VK_ERROR_OUT_OF_HOST_MEMORY`, and GTK4 aborts on it~~ —
   ROOT-CAUSED + FIXED the same day (virglrenderer 0058).** It was never a KosmicKrisp or
