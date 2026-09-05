@@ -1416,6 +1416,36 @@ Two follow-ups, both backlog by the user's decision (2026-09-03), neither starte
   (it cost the rewrite a detour). Read the environment in `limina_rt_probe` at the first draw
   instead. Spike: `spikes/notification-text-corruption/`.
 
+## GPU / guest mesa — the composite decode-target create is gated on the sampler bitmask at the caller, not at the site that emits it
+
+Surfaced 2026-09-04 while answering the Rust rewrite's capset questions. Not a live fault: the
+guard that matters is in place and the tier decodes. It is recorded because the fix was applied
+one level above the code it protects, so the next caller reinstates the bug.
+
+The guest takes the composite planar shape through two independent gates:
+
+- `virgl_video_create_buffer` (`virgl_video.c:1279`) — `VIDEO_PLANAR_TARGET` **and** not
+  interlaced **and** more than one plane **and** `is_format_supported(buffer_format,
+  PIPE_BIND_SAMPLER_VIEW)`. The sampler term is what mesa-guest patch 0017 added, after a
+  composite create the host refused poisoned every gst-va context on the tier.
+- `virgl_resource_create_front` (`virgl_resource.c:826`) — `VIDEO_TARGET` **and**
+  `VIDEO_PLANAR_TARGET` **and** more than one plane. **No sampler term.** This is the site that
+  actually emits the planar create.
+
+Today the second gate is unreachable with a format the host has not blessed, because the only
+code that sets `VIRGL_RESOURCE_FLAG_VIDEO_TARGET` is the first gate's composite branch, and the
+per-plane fallback creates single-plane resources that fail the plane count. That is an accident
+of there being one caller. Anything that later creates a video target resource directly, or any
+relaxation of the video gate, restores the exact failure 0017 fixed — and it fails in the worst
+available way: the kernel has already handed out the handle, so the refusal is invisible, the
+context goes to `Illegal resource` for the rest of its life, and every later submission including
+the decode is dropped silently.
+
+The fix is to move the sampler lookup down to `virgl_resource_create_front`, or to duplicate it
+there, so the create cannot go out for a format the host's bitmask does not list regardless of
+who asks. Landing: `liminavm/mesa` `limina-guest`, re-export via
+`scripts/export-mesa-guest-patches.sh`, mesa RPM release bump, redeliver.
+
 ## GPU / vrend — the shader blitter leaves its texture parameters on the shared source texture, so the next draw through an already-bound sampler view renders wrong
 
 📋 open, reported 2026-09-04 by the Rust virglrenderer rewrite's replay harness against our C
