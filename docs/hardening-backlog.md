@@ -655,14 +655,13 @@ rects). Remaining:
   so MSAA is genuinely taken. And a VM dying from a web page means the guest-facing crash surface
   is wider than the Vulkan path the trust-boundary work hardens — this arrives through GL/vrend.
 
-  **Method notes that cost time.** A check 150 s in read as healthy on a VM that died 40 s later,
-  and a `kill -0` liveness check called a VM healthy while its display was 94.6% black — neither
-  process liveness nor an early sample is an oracle; read the presented pixels and give it the
-  full window. A validator class that fires on every healthy frame explains nothing: two arms went
-  into Metal's residency reports before noticing they were equally loud on single-sample textures
-  that never fault, and the signal was in the *instances*, not the class. And give every arm its
-  own capture path — successive arms overwriting one `--display-capture` file cost an arm that
-  "survived" only because Firefox had exited and the guest was sitting in the Overview.
+  **Method rules this bug earned.** Process liveness is not health and an early sample is not a
+  verdict: read the presented pixels, and give an arm the full window (this one kills at ~2 min,
+  and a check at 150 s can still read healthy). A validator class that fires on every healthy
+  frame explains nothing — diff report *instances* (pipeline UID + source line) between a failing
+  and a passing half of one run, never classes. Give every arm its own capture path; arms sharing
+  one `--display-capture` file overwrite each other's only evidence that the workload was even
+  running.
 
 - **~~`vkGetPipelineCacheData` returns `VK_ERROR_OUT_OF_HOST_MEMORY`, and GTK4 aborts on it~~ —
   ROOT-CAUSED + FIXED the same day (virglrenderer 0058).** It was never a KosmicKrisp or
@@ -1677,6 +1676,34 @@ is dirty-gated the same way) — the replay measurement is the fact, the shield 
 on `liminavm/virglrenderer` `limina`, bump the manifest, run the suite; the rewrite's fixture then
 goes back to being C-pinned and the deviation notes in its `docs/rust-rewrite.md` and
 `harness/README.md` can go.
+
+## GPU / vrend — two diagnosability defects surfaced by the Rust rewrite
+
+📋 open, 2026-09-05. Both are ours to fix on `liminavm/virglrenderer` `limina`; both were found
+by the Rust virglrenderer session hitting them and asking what the C intends. Credit the rewrite
+in the commits.
+
+- **`VIRGL_ERROR_CTX_TRANSFER_IOV_BOUNDS` is one code for two unrelated conditions, and its
+  message names only one of them.** `vrend_renderer.c:11508` reports it for
+  `resource_contains_box` (the box escapes the resource) and `:11513` for `check_iov_bounds`
+  (the iov cannot hold the transfer), and the text — "IOV data size exceeds resource capacity" —
+  describes only the second. `check_iov_bounds` itself has four distinct exits (stride, layer
+  stride, total size, offset) that all collapse into it. A guest developer reading the error is
+  told the wrong thing about half the time and is told nothing about which of the four bounds
+  failed. Measured: on a real failure the rewrite's instrumentation showed `resource_contains_box`
+  firing zero times and the stride exit carrying every case — which is exactly the reading the
+  message argues against. Fix shape: a distinct code per condition, the four `check_iov_bounds`
+  exits distinguished, and the deciding numbers (the two quantities compared) in the message.
+  Diagnosability only; no behaviour changes.
+- **`vrend_set_single_sampler_view` calls `glTexBuffer` with no feature guard, and on a GLES host
+  that is an `abort()`.** The buffer-texture path at `vrend_renderer.c:3954` and `:3965` calls
+  `glTexBuffer`/`glTexBufferRange` unguarded, while the other two call sites (`:6067`, `:9174`)
+  test `feat_arb_or_gles_ext_texture_buffer` first. When the feature is absent epoxy has no
+  provider for the entry point and calls `abort()` — killing the VMM from a guest command, which
+  the "a guest must never kill the VMM" rule forbids outright. This is live on limina's shipping
+  host: `GPU_COEXIST_FLAGS` sets `USE_GLES`, measured `gl_version 31 - es profile enabled`
+  (`spikes/vrend-planar-transfer/RESULTS.md`). Fix shape: guard both calls on the same feature
+  the other sites test and report a context error instead.
 
 ## GPU / venus — candidate bugs surfaced while consulting for the Rust virglrenderer rewrite
 

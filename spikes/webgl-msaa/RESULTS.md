@@ -108,14 +108,14 @@ on `limina-kk`):
 one is a page fault; 6 ms of GPU time says the command buffer touched something invalid, not that
 it ran long. Taking the outer code at face value sends you looking for a hang that is not there.
 
-## The residency reports are chronic, and were a dead end
+## The residency reports are chronic, and do not explain this
 
 Metal's debug layer reports, on every frame, that attachment textures are "not added to any
 residency set". Labelling the textures makes the reports name a 4-sample 2D-multisample texture at
 the canvas size as the dominant offender — 383 hits against 36 for the next. That is a real
-omission and is now fixed, and the reports go to zero. **The fault survives it.** The same reports
-were being emitted for single-sample textures that never fault, which was the tell: a class that
-fires constantly on healthy frames cannot explain a failure that is specific to one of them.
+omission and is now fixed, and the reports go to zero. **The fault survives it.** The tell was
+there in advance: the same reports fire for single-sample textures that never fault, and a class
+that fires constantly on healthy frames cannot explain a failure specific to one of them.
 
 ## What still points somewhere
 
@@ -139,14 +139,14 @@ though that class is equally present without MSAA, so it is a neighbour, not the
 
 ## Method notes worth keeping
 
-- **A validator class that fires on healthy frames explains nothing.** Two arms were spent on the
-  residency reports. Diff *instances* (pipeline UID + source line) between a failing and a passing
-  half of the same run; classes are identical, instances are not.
-- **Give it the full window, and do not read process liveness as health.** A worker-log check at
-  150 s called a VM healthy that died 40 s later.
-- **One capture path per arm.** Successive arms writing the same `LIMINA_WINDOW_CAPTURE` /
-  `--display-capture` file overwrite each other, and the `granted aa=` evidence for the earlier arm
-  is simply gone.
+- **A validator class that fires on healthy frames explains nothing.** Diff *instances* (pipeline
+  UID + source line) between a failing and a passing half of the same run; classes are identical,
+  instances are not.
+- **Give it the full window, and do not read process liveness as health.** This bug kills at
+  ~2 minutes, so a check at 150 s can still read healthy.
+- **One capture path per arm.** Arms sharing a `LIMINA_WINDOW_CAPTURE` / `--display-capture` file
+  overwrite each other's only evidence that the workload was running at all — a VM that "survived"
+  because the browser had exited reads exactly like a VM that survived.
 
 ## Reproducing
 
