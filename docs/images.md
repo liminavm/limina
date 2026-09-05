@@ -16,6 +16,17 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
   keep the pristine copy untouched. Boot a **CoW clone** instead: `cp -c SRC.raw CLONE.raw` is an
   instant APFS copy-on-write (shared blocks, no extra space until written). The run scripts
   (`run-fedora-window.sh`, `run-enhanced.sh`) clone automatically.
+- **A delivery reaches the images it was pointed at, and nothing else.** Every payload note below
+  reads "applied to all three F44 enhanced images", and that means the three canonical files in
+  the image directory — `enhanced.raw`, `enhanced.test.raw`, `enhanced.synoik.raw`. A clone taken
+  outside this tree (a rig, a spike, a sibling checkout's `harness/vm/disks/`) is a **fork from
+  the moment it is copied**: nothing tracks it, no later `deliver-payload.sh` finds it, and this
+  document cannot see it. So the Component versions table describes the canonical images only.
+  **Before trusting a version on any clone, read it in the guest** — `rpm -q mesa-dri-drivers`,
+  `limina-agent --version` — rather than inferring it from this table or from the clone's mtime.
+  Bring a stale one forward with `scripts/provision/deliver-payload.sh <payload> <clone>` like any
+  other image.
+
 - **APFS CoW means `du` lies.** Clones share unchanged blocks, so the per-file "real" sizes
   double-count shared data; deleting a clone only frees the blocks it *uniquely* owns. Don't expect
   freed space to equal the listed size.
