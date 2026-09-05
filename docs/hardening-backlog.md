@@ -1487,9 +1487,14 @@ who asks. Landing: `liminavm/mesa` `limina-guest`, re-export via
 
 ## Closed — a planar-YUV transfer was bounded with gallium's blocksize and performed with the format table's GL triple
 
-Fixed by `vrend: refuse a transfer on a multi-plane format` (`3b5a8e2d`, `liminavm/virglrenderer`
-`limina` branch). `vrend_renderer_transfer_internal` now refuses any transfer whose resource
-format has more than one plane, loudly.
+Fixed by `vrend: refuse a transfer on a multi-plane format` (`859cf2ef`, `liminavm/virglrenderer`
+`limina` branch). `vrend_renderer_transfer_{write,send}_iov` now refuse, loudly, any transfer
+whose resource format has more than one plane. Those two wrappers are the funnel and the guard
+belongs in them rather than in `vrend_renderer_transfer_internal`: only `TRANSFER3D` arrives
+through `transfer_internal`, while `RESOURCE_INLINE_WRITE` (`vrend_transfer_inline_write`) and
+`COPY_TRANSFER3D` in both directions (`vrend_renderer_copy_transfer3d{,_from_host}`) run their
+own `check_iov_bounds` and then call the wrappers directly — three command-stream routes a guard
+in `transfer_internal` alone would leave open.
 
 `vrend_formats.c:553-558` registers the four planar YUV formats with a four-byte GL triple
 (`GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE`) so a planar guest blob can be sampled as RGBA after
@@ -1527,7 +1532,7 @@ direction: no single `glTexSubImage2D` fills two planes, a guest that CPU-writes
 hands the host NV12 bytes to upload as RGBA, and one that CPU-reads gets RGBA back to interpret as
 NV12. Both are garbage before any bounds question, so a refusal cannot regress a working path,
 while fixing only the bound would keep memory safe and leave the meaningless conversion in place.
-The paths that legitimately move planar pixels never enter `transfer_internal`:
+The paths that legitimately move planar pixels never enter the iov wrappers:
 `vrend_resource_upload_guest_pixels` and `writeback_plane_to_guest` walk the guest iovecs with
 `vrend_read_from_iovec`, which bounds-checks and refuses on short.
 

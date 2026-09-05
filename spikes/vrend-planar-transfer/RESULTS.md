@@ -1,7 +1,7 @@
 # vrend planar-YUV transfer — the bound and the access disagree
 
 **Status:** GREEN — fixed by `vrend: refuse a transfer on a multi-plane format`
-(`3b5a8e2d` on the `liminavm/virglrenderer` `limina` branch). The probe is SIGBUS before it
+(`859cf2ef` on the `liminavm/virglrenderer` `limina` branch). The probe is SIGBUS before it
 and EINVAL after, in both directions.
 **Backlog entry:** `docs/hardening-backlog.md` §"GPU / vrend — a planar-YUV transfer is bounded
 with gallium's blocksize and performed with the format table's GL triple".
@@ -70,7 +70,12 @@ So on this host the live defect is the **out-of-bounds read** on the upload dire
 
 A hostile guest reaches it directly: the sampler bitmask advertises NV12/NV21 unconditionally
 (`add_sampler_only_formats` in `vrend_build_format_list_common`), which is the guest's permission
-to create the resource, and nothing in `vrend_renderer_transfer_internal` refuses a planar format.
+to create the resource, and nothing in the transfer path refused a planar format. Four routes
+reach the vulnerable access: `TRANSFER3D` in either direction via
+`vrend_renderer_transfer_internal`, plus `RESOURCE_INLINE_WRITE` and `COPY_TRANSFER3D` in both
+directions, which bounds-check themselves and then call `vrend_renderer_transfer_{write,send}_iov`
+directly. The probe drives the first; the guard sits in the two wrappers all four share, so the
+other three are closed by construction rather than by measurement.
 Under the two-tier guarantee a stock guest is a configuration we do not control, so that alone
 earns the fix.
 
@@ -88,7 +93,7 @@ one gets RGBA bytes back interpreted as NV12. Both are garbage before any bounds
 refusing the transfer cannot regress anything that currently works — it converts silent garbage
 plus a memory-safety hole into a loud, safe failure.
 
-Our own decode path never enters `transfer_internal` at all: decode targets skip staging
+Our own decode path never enters the iov wrappers at all: decode targets skip staging
 (`patches/mesa-guest/0013`) and the host fills them through `vrend_resource_upload_guest_pixels`
 and `writeback_plane_to_guest`, both of which bound-check with `vrend_read_from_iovec` and refuse
 on short.
