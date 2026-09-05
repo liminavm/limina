@@ -563,6 +563,20 @@ rects). Remaining:
   `HostGone → try_connect` path sleeps only when `vsock_connect` itself fails, so any future
   drop-after-accept storms again; a backoff on a channel that died before its first reply
   closes that class.
+- **zink sets `pStencilAttachment` while `stencilAttachmentFormat` stays `VK_FORMAT_UNDEFINED`.**
+  Measured 2026-09-04 on dogfood: `assert(!ctx->dynamic_fb.info.pStencilAttachment ||
+  ctx->gfx_pipeline_state.rendering_info.stencilAttachmentFormat)` at
+  `zink_context.c:3335`, reached from `zink_draw` → `zink_batch_rp` → `begin_rendering` on a
+  gallium threaded-context worker (`limina-v:gdrv0`), SIGABRT after 29 h of session. The
+  triggering guest workload is unknown — the app-launched worker's stderr is not captured, so
+  nothing named the draw. The two writers disagree about *when* they read `zink_is_zsbuf_used`:
+  `begin_rendering` samples it once at entry and only refreshes the attachment pointers inside
+  its `rp_changed || rp_layout_changed || …` block, while `zink_update_rendering_info` recomputes
+  the formats unconditionally further down. Whether the divergence is upstream zink's or comes
+  from the `limina-kk` branch is the first question for whoever chases it. **Not urgent:** asserts
+  are compiled out of the shipped stack now, which downgrades this to a possible rendering glitch.
+- The abort route above is **not** vkr: a guest's GL stream reaches zink directly through vrend.
+  The trust-boundary work above hardens the Vulkan path only; nothing validates on the GL one.
 
 ## Guest app crashes (venus/KK correctness)
 

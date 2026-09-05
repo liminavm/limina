@@ -67,12 +67,17 @@ The meson line that produces the venus backend (Vulkan only, no GL frontend)::
    macro is what compiles in every ``mesa_logd`` call — e.g. the very chatty
    ``MESA: debug: kk_GetPhysicalDeviceFormatProperties2: ignored VkStructureType
    VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT`` you get during venus init.
-   ``debugoptimized`` (Mesa's own default, ``-O2``) compiles those out **and** keeps asserts on
-   (``b_ndebug=if-release`` only drops asserts for the ``release`` buildtype) — so KK still aborts
-   loudly on the bugs its asserts catch, while the release app is quiet and optimized. ``release``
-   additionally disables asserts (riskier while KK matures). Switch an existing build dir without a
-   full re-setup: ``meson configure /Volumes/mesa-cs/build-kk -Dbuildtype=debugoptimized && ninja
-   -C /Volumes/mesa-cs/build-kk`` (same for ``build-zink-kk`` + ``meson install`` it to its prefix).
+   ``debugoptimized`` (Mesa's own default, ``-O2``) compiles those out and keeps ``-g``, so crash
+   reports still symbolicate. Pair it with **``-Db_ndebug=true`` on every build dir whose output the
+   ``.app`` bundles** — ``build-kk`` *and* ``build-zink-kk``. The default ``b_ndebug=if-release``
+   drops asserts only for the ``release`` buildtype, so ``debugoptimized`` alone ships live asserts,
+   and a Mesa assert reached from the guest SIGABRTs the worker and kills the whole VM.
+   ``scripts/build-app.sh`` refuses to bundle any Mesa dylib that still references ``__assert_rtn``.
+   Switch an existing build dir without a full re-setup::
+
+     export PATH="$(brew --prefix llvm)/bin:$PATH"   # ninja re-runs meson; it needs llvm-config
+     meson configure /Volumes/mesa-cs/build-zink-kk -Db_ndebug=true
+     ninja -C /Volumes/mesa-cs/build-zink-kk && meson install -C /Volumes/mesa-cs/build-zink-kk
 
 Running the worker on KK
 ------------------------

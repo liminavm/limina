@@ -647,11 +647,18 @@ killed the VM rather than the offending context: degenerate `vkCmdClearAttachmen
 produces a loggable, attributable refusal. Regression tests live in
 `crates/limina-test/tests/venus_bad_usage.rs`, one arm per incident.
 
-The mesa/KK asserts that used to *catch* these are **compiled out now**: KK builds with
-`b_ndebug=true` (verified 2026-08-16 — the devenv library has zero `assert` symbol references and
-zero assertion-failure strings, and the dogfood bundle builds release). Older notes saying "~820
-asserts are live, shipping `-Db_ndebug=true` is still TODO" are stale. Note this is not purely good
-news: removing the tripwire means an unchecked bad command now runs on into undefined behaviour
+**The same is true one tier down, through GL.** A guest's GL stream reaches zink-on-KK on a
+gallium threaded-context worker, and zink asserts on state that stream drives:
+`assert(!pStencilAttachment || stencilAttachmentFormat)` in `begin_rendering`
+(`zink_context.c:3335`) aborted a dogfood worker mid-session. So "guest input can abort the host"
+is a property of the whole Mesa stack we bundle, not of vkr.
+
+Asserts must therefore be **compiled out of every Mesa dylib the `.app` bundles** — `-Db_ndebug=true`
+on `build-kk` *and* `build-zink-kk`, keeping `buildtype=debugoptimized` so `-O2`/`-g` and crash-report
+symbolication are unaffected. This is meson state on the sparse image that nothing in the repo pins,
+so `scripts/build-app.sh` refuses to bundle **any** dlopen root still referencing `__assert_rtn`; the
+guard covers every root because guarding one dylib of a stack says nothing about its neighbours.
+Note this is not purely good news: removing the tripwire means an unchecked bad command now runs on into undefined behaviour
 instead of aborting loudly, so the trust-boundary checks are no longer defence in depth — they are
 the only defence.
 
