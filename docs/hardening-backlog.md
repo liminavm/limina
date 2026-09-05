@@ -681,6 +681,29 @@ rects). Remaining:
   validation moved the run to a configuration that does not crash. A label can perturb what it
   names. And prove a mask is not a slowdown before reading survival under it.
 
+- **~76 GiB of host anonymous memory outlived every process that could own it, during a day of
+  VM arms** (OPEN, attribution unproven — measured 2026-09-05 on the dev Mac, 32 GiB, 5d7h
+  uptime). Swap went from ~8 GiB accumulated over four days to 68.7 GiB in one afternoon, and all
+  of that afternoon's VM activity was one investigation's arms. At rest afterwards, with no VM
+  running and Limina.app idle at 20 MB: all 480 processes summed to 10.5 GiB of footprint
+  (4.9 GiB of it compressed), while the compressor occupied 12 GiB of RAM and swap held 68.7 GiB.
+  `Swapouts` and `vm.swapusage used` were frozen across several minutes, so nothing was consuming
+  it — it was stranded, not active. Only 39 IOSurfaces existed system-wide, so the scanout ring is
+  not the holder.
+
+  What makes this worth a line rather than a shrug is that the kernel frees a dead task's
+  anonymous memory unconditionally, so ~76 GiB with no owner should not be representable. Two
+  readings, and nothing yet separates them: macOS's compressor accounting is simply wrong at this
+  scale, or something in the stack strands anonymous memory when a worker dies abnormally — which
+  several of the day's arms did (SIGABRT under the allocator-pool runaway above), and which is
+  plausible where guest pages are handed to Metal as no-copy buffers and to the GPU driver as
+  mappings that may outlive the owner.
+
+  **To discriminate, one arm is enough:** record `vm.swapusage` and `vm_stat`, boot a VM, kill the
+  worker with SIGKILL, and re-read both after the supervisor exits; repeat with SIGABRT. A
+  difference between a clean exit and an abnormal one is ours. No difference points at accounting,
+  and the entry can be closed. Until then, a reboot is the only reclaim.
+
 - **KosmicKrisp's command-allocator pool has no back-pressure, so a slow GPU aborts the worker**
   (OPEN, hardening). Under full Metal shader validation the GPU runs ~10x slower, in-flight work
   outruns completion, and `kk_alloc_pool_get` mints allocators without bound — measured class 1
