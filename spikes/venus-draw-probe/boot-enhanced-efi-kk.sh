@@ -129,6 +129,13 @@ done
 
 NET_FLAG=--net
 [ "${LIMINA_NET:-1}" = "0" ] && NET_FLAG=
+# LIMINA_DISPLAY_CAPTURE=<file.png> boots HEADLESS instead of windowed: the guest gets a virtio-gpu
+# display whose presented frames go to that PNG, and no NSWindow exists. It is the fringe mode (see
+# CLAUDE.md — windowed is the default vehicle), and it is here rather than in a forked copy of this
+# script because the two boots must differ in NOTHING ELSE for a windowed-vs-headless A/B to mean
+# anything. --window and --display-capture are mutually exclusive, so this replaces the flag.
+DISPLAY_FLAG=(--window)
+[ -n "${LIMINA_DISPLAY_CAPTURE:-}" ] && DISPLAY_FLAG=(--display-capture "$LIMINA_DISPLAY_CAPTURE")
 EXTRA_ARGS=()
 [ -n "${LIMINA_EXTRA_ARGS:-}" ] && read -ra EXTRA_ARGS <<<"$LIMINA_EXTRA_ARGS"
 # LIMINA_BIN runs a different supervisor binary with this same env — in practice the one inside a
@@ -142,7 +149,8 @@ EXTRA_ARGS=()
 BIN="${LIMINA_BIN:-target/debug/limina}"
 "$BIN" --vmm-bin target/debug/limina-vmm \
   --firmware "$FW" \
-  --disk "$WORK" --cpus "${LIMINA_CPUS:-6}" --ram-mib "${LIMINA_RAM_MIB:-8192}" $NET_FLAG --window \
+  --disk "$WORK" --cpus "${LIMINA_CPUS:-6}" --ram-mib "${LIMINA_RAM_MIB:-8192}" $NET_FLAG \
+  "${DISPLAY_FLAG[@]}" \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
   >"$LOG" 2>&1 &
 echo "limina pid=$! (worker log $LOG, disk $WORK, firmware $FW, ICD $ICD)"

@@ -605,6 +605,39 @@ rects). Remaining:
 
 ## Guest app crashes (venus/KK correctness)
 
+- **A guest WebGL page that requests MSAA loses the Vulkan device and aborts the VMM** (OPEN,
+  reproducible on the shipped stack — vehicle + measurements in `spikes/webgl-msaa/`). A `webgl`
+  context with `{antialias:true}` — which is also what `getContext('webgl')` with no options
+  gives, since the spec defaults it to true — reaches `vkQueueSubmit → VK_ERROR_DEVICE_LOST` in
+  about two minutes, after which the KK allocator pool climbs into the thousands and the worker
+  takes SIGABRT. `{antialias:false}` runs indefinitely.
+
+  Only the device loss is a fault. The pool runaway follows from it (nothing completes, so no
+  allocator drains, and `kk_alloc_pool_get` mints rather than blocking on GPU progress — by
+  design), and the abort follows from that: it lands in Apple's
+  `IOGPUMetalCommandBufferStorageAllocResourceAtIndex`, reached via `cs_get_compute` ←
+  `kk_dispatch_precomp` ← `kk_draw`, which is AGX refusing to allocate with thousands of live
+  `MTLCommandAllocator`s outstanding. It is **not** zink's device-lost abort: both of those are
+  gated on `abort_on_hang`, which is `ZINK_HANG_ABORT`, default false.
+
+  Ruled out as the variable: the KK revision, windowed vs `--display-capture`, stock vs enhanced
+  guest, and fan unrolling (`LIMINA_ZINK_NO_FANS=1` dies identically) — so the geometry-unroll
+  route is where the abort travels, not what triggers the loss. The structural fact still in view
+  is that KosmicKrisp implements no `VK_EXT_multisampled_render_to_single_sampled`, so every MSAA
+  render-to-texture goes through `zink_render_attachment_shadow`'s `util_blitter` blit with
+  `ctx->blitting` set — the same path that carries the fixed recursion defect and the open stale
+  `pStencilAttachment` one. Neither is confirmed to be this.
+
+  **Two things this invalidates.** The "Firefox MSAA silent non-AA, cosmetic only" entry below is
+  MoltenVK-era and no longer describes this stack: the page reports `granted aa=true SAMPLES=4`,
+  so MSAA is genuinely taken. And a VM dying from a web page means the guest-facing crash surface
+  is wider than the Vulkan path the trust-boundary work hardens — this arrives through GL/vrend.
+
+  **Method note that cost time:** a check 150 s in read as healthy on a VM that died 40 s later,
+  and a `kill -0` liveness check called a VM healthy while its display was 94.6% black. Neither
+  process liveness nor an early sample is an oracle here; read the presented pixels and give it
+  the full window.
+
 - **~~`vkGetPipelineCacheData` returns `VK_ERROR_OUT_OF_HOST_MEMORY`, and GTK4 aborts on it~~ —
   ROOT-CAUSED + FIXED the same day (virglrenderer 0058).** It was never a KosmicKrisp or
   pipeline-cache bug. `vkr_context_wait_ring_seqno` tested `thrd_timeout` while the c11 shim

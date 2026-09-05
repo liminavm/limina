@@ -1,0 +1,140 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>webgl-msaa</title>
+<style>
+  html,body { margin:0; background:#101018; color:#eee; font:14px monospace; }
+  #d { position:fixed; top:0; left:0; padding:6px 10px; background:#000c;
+       white-space:pre; z-index:10; font-size:18px; }
+  canvas { display:block; }
+</style>
+<div id="d">starting…</div>
+<canvas id="c"></canvas>
+<script>
+// Antialias is the variable under test: ?aa=0 requests a non-multisampled
+// default framebuffer, anything else (the default) requests MSAA.
+const wantAA = new URLSearchParams(location.search).get('aa') !== '0';
+const c = document.getElementById('c');
+const d = document.getElementById('d');
+c.width = window.innerWidth; c.height = window.innerHeight;
+
+const gl = c.getContext('webgl', { antialias: wantAA, depth: true });
+if (!gl) { d.textContent = 'NO WEBGL'; throw new Error('no webgl'); }
+
+// What the driver actually granted, which is the point: a stack that refuses a
+// multisampled backbuffer reports antialias:false here and never takes the
+// MSAA path at all.
+const attrs = gl.getContextAttributes();
+const diag = 'requested aa=' + wantAA +
+             '  granted aa=' + attrs.antialias +
+             '  SAMPLES=' + gl.getParameter(gl.SAMPLES) +
+             '  SAMPLE_BUFFERS=' + gl.getParameter(gl.SAMPLE_BUFFERS) +
+             '\nrenderer=' + gl.getParameter(gl.RENDERER);
+
+const vs = `
+attribute vec3 p; attribute vec2 uv;
+uniform mat4 mvp;
+varying vec2 v;
+void main(){ v = uv; gl_Position = mvp * vec4(p,1.0); }`;
+const fs = `
+precision mediump float;
+uniform sampler2D t;
+varying vec2 v;
+void main(){ gl_FragColor = texture2D(t, v); }`;
+
+function sh(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+gl.linkProgram(prog); gl.useProgram(prog);
+
+// A unit cube: 24 vertices so each face gets its own texture coordinates.
+const F = [
+  [[-1,-1, 1],[ 1,-1, 1],[ 1, 1, 1],[-1, 1, 1]],
+  [[ 1,-1,-1],[-1,-1,-1],[-1, 1,-1],[ 1, 1,-1]],
+  [[-1, 1, 1],[ 1, 1, 1],[ 1, 1,-1],[-1, 1,-1]],
+  [[-1,-1,-1],[ 1,-1,-1],[ 1,-1, 1],[-1,-1, 1]],
+  [[ 1,-1, 1],[ 1,-1,-1],[ 1, 1,-1],[ 1, 1, 1]],
+  [[-1,-1,-1],[-1,-1, 1],[-1, 1, 1],[-1, 1,-1]],
+];
+const pos = [], uvs = [], idx = [];
+F.forEach((f, i) => {
+  f.forEach(v => pos.push(...v));
+  uvs.push(0,0, 1,0, 1,1, 0,1);
+  const b = i*4;
+  idx.push(b,b+1,b+2, b,b+2,b+3);
+});
+
+function buf(target, data, Ctor) {
+  const b = gl.createBuffer();
+  gl.bindBuffer(target, b);
+  gl.bufferData(target, new Ctor(data), gl.STATIC_DRAW);
+  return b;
+}
+buf(gl.ARRAY_BUFFER, pos, Float32Array);
+const ap = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap, 3, gl.FLOAT, false, 0, 0);
+buf(gl.ARRAY_BUFFER, uvs, Float32Array);
+const au = gl.getAttribLocation(prog, 'uv');
+gl.enableVertexAttribArray(au); gl.vertexAttribPointer(au, 2, gl.FLOAT, false, 0, 0);
+buf(gl.ELEMENT_ARRAY_BUFFER, idx, Uint16Array);
+
+// A 64x64 checker, generated rather than fetched so the page is one self-contained file.
+const N = 64, px = new Uint8Array(N*N*4);
+for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+  const o = (y*N+x)*4, on = ((x>>3) ^ (y>>3)) & 1;
+  px[o] = on ? 240 : 30; px[o+1] = on ? 120 : 60; px[o+2] = on ? 40 : 200; px[o+3] = 255;
+}
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.uniform1i(gl.getUniformLocation(prog, 't'), 0);
+
+const mvp = gl.getUniformLocation(prog, 'mvp');
+gl.enable(gl.DEPTH_TEST);
+gl.viewport(0, 0, c.width, c.height);
+
+function mul(a, b) {
+  const o = new Float32Array(16);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += a[k*4+j] * b[i*4+k];
+    o[i*4+j] = s;
+  }
+  return o;
+}
+function persp(fov, asp, n, f) {
+  const t = 1/Math.tan(fov/2);
+  return new Float32Array([t/asp,0,0,0, 0,t,0,0, 0,0,(f+n)/(n-f),-1, 0,0,2*f*n/(n-f),0]);
+}
+function model(tx, ang) {
+  const cx = Math.cos(ang), sx = Math.sin(ang);
+  const ry = new Float32Array([cx,0,-sx,0, 0,1,0,0, sx,0,cx,0, tx,0,-8,1]);
+  const rx = new Float32Array([1,0,0,0, 0,cx,sx,0, 0,-sx,cx,0, 0,0,0,1]);
+  return mul(ry, rx);
+}
+
+let frames = 0;
+const P = persp(1.1, c.width/c.height, 0.1, 100);
+function draw(t) {
+  gl.clearColor(0.06, 0.06, 0.09, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  const a = t * 0.0008;
+  for (const tx of [-3.2, 0, 3.2]) {
+    gl.uniformMatrix4fv(mvp, false, mul(P, model(tx, a + tx)));
+    gl.drawElements(gl.TRIANGLES, idx.length, gl.UNSIGNED_SHORT, 0);
+  }
+  frames++;
+  if ((frames & 31) === 0) d.textContent = diag + '\nframes=' + frames;
+  requestAnimationFrame(draw);
+}
+d.textContent = diag + '\nframes=0';
+requestAnimationFrame(draw);
+</script>
