@@ -51,6 +51,14 @@ SSH=(ssh -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null 
 scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     spikes/webgl-msaa/webgl-msaa.html claude@127.0.0.1:/home/claude/webgl-msaa.html
 
+# The session has to be up before a client can be launched into it: sshd answers
+# its banner well before mutter has a compositor.
+"${SSH[@]}" 'for i in $(seq 1 60); do
+                 [ -S /run/user/1000/wayland-0 ] && exit 0
+                 sleep 2
+             done
+             echo "no wayland socket after 120s" >&2; exit 1'
+
 # Through the session manager, not a bare ssh command line: both inherit the same
 # environment (measured, byte-identical), but this is the launch the desktop uses.
 "${SSH[@]}" 'export XDG_RUNTIME_DIR=/run/user/1000 \
@@ -60,11 +68,34 @@ scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
                  --profile /tmp/ffarm --new-instance --kiosk \
                  "file:///home/claude/webgl-msaa.html?aa=1"'
 
-# The page must be shown running before a survival can be read: an arm whose
-# browser never started looks exactly like a healthy one.
+# The page must be shown reaching the GPU before a survival can be read: an arm
+# whose browser never started looks exactly like a healthy one, and this has
+# happened repeatedly -- a missing profile directory, a page never copied, a
+# session not yet up. Two independent checks, and the arm is VOID if either
+# fails, because a void arm reported as a survival is worse than no arm.
 sleep 25
-"${SSH[@]}" 'pgrep -c firefox' > "$OUT/firefox-count.txt" || true
-echo "firefox processes after launch: $(cat "$OUT/firefox-count.txt")"
+FF=$("${SSH[@]}" 'pgrep -c firefox' 2>/dev/null || echo 0)
+echo "$FF" > "$OUT/firefox-count.txt"
+echo "firefox processes after launch: $FF"
+
+# The multisampled blit on the wire is the workload, not the browser: only it
+# proves the antialiased canvas is actually rendering through vrend.
+for _ in $(seq 1 20); do
+    grep -q 'LIMINA-BLIT.*s4' "$WORKER" && break
+    sleep 3
+done
+
+if [ "$FF" -eq 0 ] || ! grep -q 'LIMINA-BLIT.*s4' "$WORKER"; then
+    cp "$WORKER" "$OUT/worker.log" 2>/dev/null || true
+    cp "$OUT/capture.png" "$OUT/capture-live.png" 2>/dev/null || true
+    PID=$(pgrep -f '[l]imina --vmm-bin' || true)
+    [ -n "$PID" ] && kill "$PID" 2>/dev/null || true
+    sleep 8
+    rm -f "$CLONE" "$CLONE.limina-suspend.bin"
+    echo "=== $NAME: VOID -- firefox=$FF, multisampled blit on the wire: $(grep -c 'LIMINA-BLIT.*s4' "$OUT/worker.log" 2>/dev/null || echo 0)"
+    echo "    (look at $OUT/capture.png; the workload never reached the GPU)"
+    exit 75
+fi
 
 START=$(date +%s)
 VERDICT=survived
@@ -77,6 +108,10 @@ done
 ELAPSED=$(( $(date +%s) - START ))
 
 cp "$WORKER" "$OUT/worker.log" 2>/dev/null || true
+# Before the kill: stopping the supervisor shuts the guest down, and the capture
+# is overwritten once a second, so the file left behind otherwise shows nothing
+# but systemd stopping units -- for a survival and a death alike.
+cp "$OUT/capture.png" "$OUT/capture-live.png" 2>/dev/null || true
 PID=$(pgrep -f '[l]imina --vmm-bin' || true)
 [ -n "$PID" ] && kill "$PID" 2>/dev/null || true
 sleep 8
