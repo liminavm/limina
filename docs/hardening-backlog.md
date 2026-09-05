@@ -564,17 +564,42 @@ rects). Remaining:
   drop-after-accept storms again; a backoff on a channel that died before its first reply
   closes that class.
 - **zink sets `pStencilAttachment` while `stencilAttachmentFormat` stays `VK_FORMAT_UNDEFINED`.**
-  Measured 2026-09-04 on dogfood: `assert(!ctx->dynamic_fb.info.pStencilAttachment ||
+  Measured 2026-09-04 on dogfood (crash report + provenance kept in
+  `spikes/zink-stencil-attachment-assert/`, because the dylib that crashed was rebuilt in place
+  and no longer exists): `assert(!ctx->dynamic_fb.info.pStencilAttachment ||
   ctx->gfx_pipeline_state.rendering_info.stencilAttachmentFormat)` at
   `zink_context.c:3335`, reached from `zink_draw` → `zink_batch_rp` → `begin_rendering` on a
   gallium threaded-context worker (`limina-v:gdrv0`), SIGABRT after 29 h of session. The
   triggering guest workload is unknown — the app-launched worker's stderr is not captured, so
-  nothing named the draw. The two writers disagree about *when* they read `zink_is_zsbuf_used`:
-  `begin_rendering` samples it once at entry and only refreshes the attachment pointers inside
-  its `rp_changed || rp_layout_changed || …` block, while `zink_update_rendering_info` recomputes
-  the formats unconditionally further down. Whether the divergence is upstream zink's or comes
-  from the `limina-kk` branch is the first question for whoever chases it. **Not urgent:** asserts
-  are compiled out of the shipped stack now, which downgrades this to a possible rendering glitch.
+  nothing named the draw. The assert is upstream's own valid-usage tripwire (`887f72990ed6`,
+  2023, "validate zs VUs"), so tripping it means zink was about to begin rendering with a stencil
+  attachment bound while the pipeline's rendering info declared no stencil format.
+
+  Mechanism, **derived from source and not yet observed**: the attachment pointers are refreshed
+  only inside `begin_rendering`'s `rp_changed || rp_layout_changed || (!in_rp && rp_loadop_changed)`
+  block, but `zink_update_rendering_info` recomputes the formats on every call that gets past
+  `if (!rp_changed && in_rp) return 0` — so a call with all four flags false and `in_rp` false
+  skips the refresh and keeps the previous call's pointers. `zink_is_zsbuf_used()` returns
+  `ctx->blitting || tc_renderpass_info_is_zsbuf_used(…)`, so a `begin_rendering` *during a blit*
+  sets `pStencilAttachment` unconditionally; `zink_batch_no_rp` then skips its `tc_info` reset
+  while blitting, and `zink_set_framebuffer_state` raises `rp_changed` only when the framebuffer's
+  *shape* changes (cbuf count, zsbuf null↔non-null, resolve, fbfetch, layers, viewmask) — none of
+  which a blit's rebind-and-restore of the same fb touches. The next draw therefore reads a stale
+  non-NULL pointer against a freshly-UNDEFINED format.
+
+  The competing explanation — a stencil-capable pipe format mapping to `VK_FORMAT_UNDEFINED` in
+  `fb_formats`, which would fire on the first draw with no staleness at all — is **ruled out**:
+  `zink_get_format` returns UNDEFINED only for two 4444 *colour* formats, and packed depth-stencil
+  falls back D24S8 → D32S8 for exactly the driver KK is.
+
+  So the state machine is upstream's, but **our stack meets it far more often than most**, because
+  KosmicKrisp does not implement `EXT_multisampled_render_to_single_sampled` (0 hits in
+  `src/kosmickrisp/`) — every MSAA render-to-texture goes through `zink_render_attachment_shadow`,
+  which toggles `ctx->blitting` around a `util_blitter` blit, i.e. straight through the window
+  above. Nothing similar is reported upstream. **Not urgent:** asserts are compiled out of the
+  shipped stack now, so this degrades to Vulkan undefined behaviour — most likely wrong rendering
+  confined to the frame, though a stale image view reaching KK is conceivable and has not been
+  ruled out.
 - The abort route above is **not** vkr: a guest's GL stream reaches zink directly through vrend.
   The trust-boundary work above hardens the Vulkan path only; nothing validates on the GL one.
 
