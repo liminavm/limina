@@ -81,10 +81,13 @@ earns the fix.
 
 **No benign guest reaches it.** Measured across seven recorded corpora by merge-sorting the
 resource log against the command records and maintaining a live handle→format map (handles are
-reused, so a static map would be wrong): every `TRANSFER3D`/`COPY_TRANSFER3D` destination
-resolves to a component format, none to a planar one. The strongest arm is a stock-tier Fedora
-gst-va run — stock guest mesa, classic decode path — with 2082 `TRANSFER3D`s and zero planar
-destinations. So this is hardening against a hostile guest, not a bug live in shipped dogfood.
+reused, so a static map would be wrong): every destination of all three guarded commands
+resolves to a component format, none to a planar one. Per-command totals across the seven —
+9709 `COPY_TRANSFER3D`, 8885 `TRANSFER3D`, 0 `RESOURCE_INLINE_WRITE` — with every destination
+handle resolved. The strongest arm is a stock-tier Fedora gst-va run — stock guest mesa, classic
+decode path — at 3201 + 2082 + 0. The third route the guard closes is unexercised outright: no
+recorded guest issues a `RESOURCE_INLINE_WRITE` at all. So this is hardening against a hostile
+guest, not a bug live in shipped dogfood.
 
 That does not soften the fix, because **the operation has no correct meaning today in either
 direction.** A guest that CPU-writes

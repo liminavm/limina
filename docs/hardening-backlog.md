@@ -1522,8 +1522,11 @@ vrend's `FEAT` row names only the ARB one.
 Reachability, both halves measured rather than argued. A hostile guest reached it directly: the
 sampler bitmask advertises NV12/NV21 unconditionally, which is the guest's permission to create
 the resource, and the create succeeds (a two-plane EGL-backed IOSurface). No benign guest did:
-across seven recorded corpora — including a stock-tier gst-va run with 2082 `TRANSFER3D`s — every
-transfer destination resolves to a component format and none to a planar one. So it was hardening
+across seven recorded corpora, covering all three guarded commands — 9709 `COPY_TRANSFER3D`,
+8885 `TRANSFER3D`, 0 `RESOURCE_INLINE_WRITE`, every destination handle resolved — the destination
+is a component format in every case and a planar one in none. The strongest arm is a stock-tier
+gst-va run (stock guest mesa, classic decode path) at 3201 + 2082 + 0. `RESOURCE_INLINE_WRITE` is
+not merely planar-free but unexercised: no recorded guest issues one at all. So it was hardening
 against a hostile guest under the "a guest must never kill the VMM" rule, not a bug live in
 dogfood.
 
