@@ -83,14 +83,33 @@ report, a shader dump and a second run's report all name one thing. The label mu
 derived: it is hashed into the UID Metal reports against, so labelling with a per-run pointer makes
 every UID per-run too and two runs cannot be joined at all.
 
-## The loss is display-size dependent
+## What the trigger actually is: a large drawing buffer, presented 1:1
 
-At `--display-size 2560x1440` the VM dies in 60–120 s. At `1280x800`, with `antialias` granted
-(`SAMPLES=4`, `SAMPLE_BUFFERS=1`), cubes rendering and 14,944 frames drawn, it survives past four
-minutes. Measured 2026-09-05, same build, no Metal validation in either.
+Four arms, one VM, one build, display forced to 2560x1440 in every one, the page
+reporting the drawing-buffer size it actually got:
 
-This is the strongest structural hint available: whatever is exhausted or mis-addressed scales with
-render-target size, and it retires every measurement taken at the smaller size.
+| Firefox window | canvas (drawing buffer) | result |
+|---|---|---|
+| kiosk | follows the window (large) | **dies — 45 s, and 55 s on repeat** |
+| kiosk | forced 800x600 | survives 210 s |
+| windowed (~1830x1030) | follows the window | survives 210 s |
+| windowed | forced 2560x1440, CSS-scaled into the window | survives 210 s |
+
+So it is not the display size, not the window, and not the canvas size on its own. A
+large drawing buffer survives when it is scaled down into a smaller surface, and a
+small one survives in a full-size surface. What dies is the case where a large
+drawing buffer is presented at its own size.
+
+The economical reading — a reading, not yet a measurement — is that this is the path
+where the compositor takes the client's buffer straight through instead of copying it
+through an intermediate, so the WebGL buffer itself becomes what is presented. Every
+negative below is consistent with it: none of the probes present at all.
+
+An earlier framing of this section said the loss was display-size dependent, from a
+1280x800 arm that survived. That arm changed the scanout path as well as the size
+(`--display-capture` defaults to 1280x800 where `--window` gives 2560x1440). Forcing
+`--display-size 2560x1440` on the capture path reproduces the loss in 45 s, so the
+scanout path is not the variable and the earlier arm did not measure what it claimed.
 
 ## What has been ruled out
 
@@ -108,6 +127,9 @@ render-target size, and it retires every measurement taken at the smaller size.
 | texture residency | plane textures + sampled/storage views registered | both die |
 | MSAA resolve implementation | meta/shader resolve vs upstream's Metal render-pass resolve | **neither runs** |
 | the zink shadow blit alone | `spikes/zink-shadow-recursion` on host zink-on-KK, no VM | **no mismatch** |
+| MSAA render-to-texture at full size, host | `host-msaa-loop`, 2560x1440, 4 samples, no VM | 20,520 frames, survives |
+| the same, plus reallocation churn | `--churn 30`, canvas+depth+FBO rebuilt every 30 frames | 30,712 frames, survives |
+| the same, inside the guest over virgl | `msaa-loop` on the guest, MSAA granted (`SAMPLES=4`) | **226,909 frames, survives** |
 | descriptor slot decoding | both virglrenderer implementations traced in guest ids | identical |
 
 **No Vulkan resolve is involved, in either implementation.** Upstream mesa replaced KosmicKrisp's
@@ -141,7 +163,20 @@ genuine misaddress rather than a silent layer-0 substitution. It is **not** yet 
 
 ## Where to look next
 
-1. **Reproduce at 2560×1440 or not at all.** Every census below that size is invalid.
+The differential is now narrow enough to name: everything that renders multisampled
+survives, and only the configuration that *presents* a full-size buffer dies. The next
+arm should instrument the scanout import rather than the draw — which resource the
+guest hands over when the window is full-size, and what the host does with it — since
+that is the only step the surviving probes never take.
+
+`host-msaa-loop.c` builds and runs unchanged inside the guest (`gcc -lEGL -lGLESv2`),
+which is how the guest arm above was run; teaching it to present through a real
+Wayland surface instead of `EGL_PLATFORM=surfaceless` would turn a 45-second boot-plus-
+browser reproduction into a seconds-long one, and is the highest-value piece of work
+left on the vehicle.
+
+1. **Reproduce at 2560×1440 in kiosk, or not at all.** Every other configuration
+   measured so far survives, so an arm that is not this one measures nothing.
 2. **Isolate by masking one pipeline.** With stable hashes: one validation run to collect UID↔hash
    pairs, then `MTL_SHADER_VALIDATION_DEFAULT_STATE=none` plus `ENABLE_PIPELINES=<one UID>` and
    `FAIL_MODE=allow`, one pipeline at a time. The pipeline whose masking *alone* both survives and

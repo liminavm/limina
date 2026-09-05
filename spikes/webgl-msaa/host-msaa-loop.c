@@ -226,6 +226,23 @@ int main(int argc, char **argv) {
       return SKIP;
    }
 
+   /* Ask what was GRANTED, never what was requested. A stack that quietly
+    * declines the multisampled attachment reports a complete framebuffer and
+    * renders at full speed, and every "survived" from such a run is a statement
+    * about a workload that never took the path under test. */
+   GLint got_samples = 0, got_sample_buffers = 0;
+   glGetIntegerv(GL_SAMPLES, &got_samples);
+   glGetIntegerv(GL_SAMPLE_BUFFERS, &got_sample_buffers);
+   printf("granted: SAMPLES=%d SAMPLE_BUFFERS=%d\n", got_samples,
+          got_sample_buffers);
+   if (got_samples < 2 || got_sample_buffers < 1) {
+      fprintf(stderr,
+              "SKIP: multisampling not granted (SAMPLES=%d SAMPLE_BUFFERS=%d) — "
+              "this run would not exercise the shadow-attachment path\n",
+              got_samples, got_sample_buffers);
+      return SKIP;
+   }
+
    /* The compositor's target: single-sample, sampling the canvas. */
    GLuint composite;
    glGenTextures(1, &composite);

@@ -15,7 +15,14 @@
 const wantAA = new URLSearchParams(location.search).get('aa') !== '0';
 const c = document.getElementById('c');
 const d = document.getElementById('d');
-c.width = window.innerWidth; c.height = window.innerHeight;
+// Canvas size is separable from window size on purpose: the loss tracks the
+// SIZE OF THE DRAWING BUFFER, not the size of the window or the display, and
+// a page that only ever sizes itself to the window cannot tell those apart.
+const q = new URLSearchParams(location.search);
+c.width  = parseInt(q.get('w') || '0', 10) || window.innerWidth;
+c.height = parseInt(q.get('h') || '0', 10) || window.innerHeight;
+// Keep it visually inside the window whatever the backing store is.
+c.style.width = '100%'; c.style.height = 'auto';
 
 const gl = c.getContext('webgl', { antialias: wantAA, depth: true });
 if (!gl) { d.textContent = 'NO WEBGL'; throw new Error('no webgl'); }
@@ -24,7 +31,7 @@ if (!gl) { d.textContent = 'NO WEBGL'; throw new Error('no webgl'); }
 // multisampled backbuffer reports antialias:false here and never takes the
 // MSAA path at all.
 const attrs = gl.getContextAttributes();
-const diag = 'requested aa=' + wantAA +
+const diag = 'canvas=' + c.width + 'x' + c.height + '  requested aa=' + wantAA +
              '  granted aa=' + attrs.antialias +
              '  SAMPLES=' + gl.getParameter(gl.SAMPLES) +
              '  SAMPLE_BUFFERS=' + gl.getParameter(gl.SAMPLE_BUFFERS) +
