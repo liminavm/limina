@@ -1530,6 +1530,16 @@ not merely planar-free but unexercised: no recorded guest issues one at all. So 
 against a hostile guest under the "a guest must never kill the VMM" rule, not a bug live in
 dogfood.
 
+The refusal marks the context in error, and `in_error` is sticky, so a refusal charged to a guest
+context drops every later submit on it. That is right when the guest asked, and wrong when the
+*host* asked — `virgl_renderer_transfer_read_iov` takes a `ctx_id`, so a VMM-initiated readback
+could poison a guest for a request the guest never made. limina is not exposed, for two independent
+reasons: our one host-initiated readback (`read_2d_resource`, the software-2D/capture scanout sink)
+passes ctx_id 0, and vrend's submit gate is `ctx->ctx_id != 0 && ctx->in_error`
+(`vrend_renderer.c:13356,13402`), which exempts ctx0 anyway. **Keep host-initiated transfers on
+ctx0.** A future readback path that borrows a guest's ctx_id to get at its resources would convert
+any refusal on that path into a dead guest context.
+
 Refusing rather than re-deriving the bound, because the operation has no correct meaning in either
 direction: no single `glTexSubImage2D` fills two planes, a guest that CPU-writes a decode target
 hands the host NV12 bytes to upload as RGBA, and one that CPU-reads gets RGBA back to interpret as
