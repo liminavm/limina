@@ -146,23 +146,34 @@ survived 240 s with antialiasing granted and 14,944 frames drawn. The same displ
 both kills and survives, so display size was never the variable, and neither was the
 canvas size or fullscreen that replaced it.
 
-The "+66 to +85 s schedule" the archived logs seemed to show is dead too, and what replaced
-it is the sharpest A/B in this record. Two Firefox instances, **same build, same clone, same
-page, same resolve** — the wire shows the identical `GLFB src=fmt67/s4 → dst=fmt1/s0` route
-for both, so this is not two different rendering paths:
+The "+66 to +85 s schedule" the archived logs seemed to show is dead too, and so is every
+framing that replaced it — because **the failure is stochastic on an unchanged
+configuration**. Four consecutive arms, same build, same clone, same page, same
+`GLFB src=fmt67/s4 → dst=fmt1/s0` resolve on the wire:
 
-| launch | outcome |
-|---|---|
-| over plain `ssh`, `WAYLAND_DISPLAY=wayland-0 MOZ_ENABLE_WAYLAND=1` | ~12 min, 16,512 AA frames, **no loss** |
-| through the session manager, `systemd-run --user` | device lost inside 4 min |
+| arm | client | outcome |
+|---|---|---|
+| ssh-launched kiosk, fresh VM | sole | ~12 min, 16,512 AA frames, **survived** |
+| session-launched kiosk, fresh VM | sole | 6 min, 23,456 AA frames, **survived** |
+| session-launched kiosk, same VM after the above was stopped | second | lost, ~2 s after the transition |
+| session-launched kiosk, fresh VM | sole | lost, ~25 s after its first resolve |
 
-So **how the client is started decides whether the same blit kills the device**, and the
-discriminator is not yet named. Two candidates are already dead: it is not a different
-driver (the surviving instance issued the killing resolve, timestamped in the worker log
-fourteen minutes before the other instance existed), and it is not the Activities overview
-(the capture shows *both* instances composited as overview thumbnails, the dying one
-included). What remains is the process environment itself — enumerable in one arm by
-diffing `/proc/<pid>/environ` between the two launches.
+The last row refutes the row above it: a sole first client on a fresh VM both survives six
+minutes and dies in twenty-five seconds. Nothing in the configuration separates them.
+
+That kills the whole family of one-arm discriminators tried here — display size, canvas
+size, fullscreen, the Activities overview (the capture shows a *dying* client composited as
+an overview thumbnail), the launch method, and a preceding client's teardown. It also
+disposes of the launch-environment theory by measurement rather than by inference: dumped
+from `/proc/<pid>/environ`, the two launches are **byte-identical**, twenty variables, empty
+`diff` — `systemd-run --user` passes the caller's environment, `SSH_CLIENT` included.
+
+**What this costs is method, not just theories.** A single arm cannot discriminate anything
+about this bug, and most of this record was built from single arms. What the next hypothesis
+needs is a *survival rate* over k repeats of each side, run unattended, with the capture and
+the worker log kept per repeat — and a hypothesis worth that expense. The cheapest one
+available is not an A/B at all: instrument the fault so the arm that dies names what it
+touched.
 
 Two further corrections fall out:
 
@@ -265,6 +276,11 @@ fullscreen, since 1280x800 both kills and survives.
   same profile gets session restore, so the second half runs both pages. Give each half its own
   `--profile <dir> --new-instance`, and create the directory: Firefox refuses a missing one with a
   modal, and the arm then measures a VM with no workload on it.
+- **One arm decides nothing when the failure is stochastic, and you will not know it is
+  stochastic until you repeat an arm.** Every discriminator in this investigation was tried
+  once per side, and each looked decisive until the same configuration produced the opposite
+  outcome. Repeat the *unchanged* configuration first: if it disagrees with itself, no A/B
+  built on single arms means anything, and the budget belongs in instrumentation instead.
 - **The workload must be shown running before a survival is read.** A survival is the one
   reading a broken arm produces for free: no browser, no session environment, wrong driver,
   all look like health. Check the capture *and* that the guest process exists before
