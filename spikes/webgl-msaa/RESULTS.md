@@ -161,9 +161,25 @@ clamping into every pipeline whatever it asked for, and the device is still lost
 this clamps the *attribute* fetch only: a garbage `firstIndex` or `indexCount` is not covered, so
 this does not by itself retire out-of-range indices.
 
-What remains for a scattered *read* fault in a pass that draws once: the index fetch, the
-descriptor/root buffers the draw binds, and the bindless texture read in its fragment shader — the
-one class where a resource id can outlive the texture it names.
+### Nothing concurrent, and no bad address
+
+`LIMINA_KK_SERIALIZE_SUBMIT=1` commits one Metal command buffer at a time and blocks until its
+completion callback fires — no timeouts, so the wait really held. **The device is still lost.** The
+faulting work is therefore one render pass, one draw, alone on the GPU. That retires the whole
+family of inter-commit races at once: the poly heap's reset, the `pre_gfx`/`gfx` split,
+upload-pool and allocator reuse, a residency removal or a released texture landing under work
+already in flight. Whatever the GPU reads badly is put there by the CPU before the pass is
+committed.
+
+`LIMINA_KK_ADDR_CHECK=1` looks up every address the draw hands the GPU — root table, index buffer,
+the first two vertex bindings — in the BO address registry at encode, with a destroyed BO's entry
+dropped so a freed range reads as unknown. On a losing arm it **reports nothing**: every address
+the draw binds is live.
+
+What remains is the one thing a draw hands the GPU that is *not* an address: the resource IDs
+inside its descriptor sets. A released texture's `MTLResourceID` can be reissued to an unrelated
+one, and a shader dereferencing a stale ID is exactly a read fault at an address that has nothing
+to do with the draw — which is what the kernel reports every time.
 
 ## The blit, and how the route was read
 
@@ -233,6 +249,8 @@ is weak by the stochastic finding.
 | baseline, unchanged configuration | 5 | 5 lost |
 | `KK_LIMINA_HEAP_NORESET=1` — the shared bump heap never recycled | 4 | 1 survived (226k unrolls), 3 lost |
 | `LIMINA_KK_FORCE_ROBUST=1` — every vertex fetch clamped to its range | 3 | 1 survived, 2 lost |
+| `LIMINA_KK_SERIALIZE_SUBMIT=1` — one command buffer on the GPU at a time | 2 | 2 lost |
+| `LIMINA_KK_ADDR_CHECK=1` — every bound address looked up at encode | 1 | lost, **nothing reported** |
 | `LIMINA_KK_TEX_LEAK=1 LIMINA_KK_VIEW_LEAK=1` — no texture or view ever released | 1 | lost (arm cut short: host memory) |
 | `KK_LIMINA_BARRIER=widen` (pre_gfx barrier scope ALL) | 1 | lost |
 | --- | | |
