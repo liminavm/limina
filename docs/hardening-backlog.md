@@ -1485,6 +1485,81 @@ there, so the create cannot go out for a format the host's bitmask does not list
 who asks. Landing: `liminavm/mesa` `limina-guest`, re-export via
 `scripts/export-mesa-guest-patches.sh`, mesa RPM release bump, redeliver.
 
+## GPU / vrend — a planar-YUV transfer is bounded with gallium's blocksize and performed with the format table's GL triple, so it reads and writes 4x what was checked
+
+`vrend_formats.c:553-558` registers the four planar YUV formats with a four-byte GL triple
+(`GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE`) so that a planar guest blob can be sampled as RGBA after
+conversion. `util_format_get_blocksize()` for those same formats is **1**. Every bound in the
+transfer path is computed from the second number and every access is performed with the first, so
+the access is four times the bound. Neither guard closes it: `check_iov_bounds`
+(`vrend_renderer.c:10420`) sizes with `util_format_get_stride`/`util_format_get_2d_size`, and the
+inner guard (`:10650` for `send_size`, `:10709` for the `iov[0]` check) uses `elsize` — both are
+gallium's view, not the triple's. `glPixelStorei(GL_UNPACK_ROW_LENGTH, stride / elsize)` (`:10717`)
+then hands GL a row length in 4-byte texels that was measured in bytes.
+
+This overruns for **any** iov size, including a correctly sized one: an NV12 iov of `w*h*3/2` is
+overrun exactly as surely as a short one, because the guard admitted `w*h` and GL reads `w*h*4`.
+
+Both directions are affected, and they are not the same severity:
+
+- **`TRANSFER_TO_HOST` — out-of-bounds read, unconditional.** Two variants, and the one that is
+  *not* in the original report is the common one. With `num_iovs == 1` the upload reads past
+  `iov[0].iov_base`. With `num_iovs > 1` — which forces `need_temp`, and is the normal shape of
+  scattered guest backing — `read_transfer_data` (`:10253`) fills a `malloc(send_size)` temp sized
+  at `w*h` and `glTexSubImage2D` then reads `w*h*4` out of it: a `3*w*h`-byte **heap** over-read.
+- **`TRANSFER_FROM_HOST` — heap buffer overflow (a write), conditional.** Planar formats are
+  registered sampler-only, so `vrend_format_can_render` is false and readback falls to
+  `vrend_transfer_send_getteximage`, which sizes `tex_size = w*h*1`, does `malloc(tex_size)`, and
+  calls `glGetTexImage(..., GL_RGBA, GL_UNSIGNED_BYTE, data)` — the driver writes `w*h*4` into a
+  `w*h` allocation. **Gated on `GL_ARB_robustness` being absent**: with it, the call is
+  `glGetnTexImageARB(..., tex_size, data)` and is bounded. `FEAT(arb_robustness, UNAVAIL, UNAVAIL,
+  ...)` (`:258`) is never implied by a core version, so this is an extension-string question about
+  the host GL our worker actually gets (zink-on-KK) — settle it by logging `has_feature` once
+  rather than assuming either way.
+
+**The small case is silent, which is the part to weight.** At 2560x1440 the read faults
+(`EXC_BAD_ACCESS` in `_platform_memmove` under `util_copy_rect` ← `zink_image_subdata` ←
+`_mesa_TexSubImage2D`). At 64x64 it reads roughly 48 KB past the buffer and **returns success** —
+no error, no context error, nothing in the log.
+
+**Reachability is the open question, and it decides whether this is hardening or a live bug.**
+Both entry points funnel through `vrend_renderer_transfer_internal` (`:11414`) with no planar
+early-out: `virgl_renderer_transfer_write_iov`, which rutabaga calls for `TRANSFER_TO_HOST_3D`,
+and `VIRGL_CCMD_TRANSFER3D` from the guest command stream. The capset invites the resource: the
+sampler bitmask advertises NV12/NV21 unconditionally (`add_sampler_only_formats` runs in
+`vrend_build_format_list_common`), and that bitmask is exactly the guest's permission to create
+such a resource. So a hostile guest can drive this deliberately — create an NV12 resource, attach
+an iov, transfer — and that alone justifies the fix under the "a guest must never kill the VMM"
+rule, since a stock guest is a supported configuration we do not control.
+
+What is **not** yet established is whether a *benign* guest reaches it. Our own enhanced guest
+gives decode targets real guest memory and turns off staging (`patches/mesa-guest/0013`), and the
+host fills them through `vrend_resource_upload_guest_pixels` / `writeback_plane_to_guest`, which
+bounds-check with `vrend_read_from_iovec` and refuse on short — neither goes through
+`transfer_internal`, so neither is affected. The question is whether any CPU map of a decode
+target (`vlVaPutImage`, `vlVaGetImage`, `vaDeriveImage` + `vaMapBuffer`) still emits a TRANSFER3D
+whose target carries the *planar* format rather than a component format. Settle it by counting
+TRANSFER3D commands against planar-format resources in a recorded gst-va corpus; a replay that
+merely completes is weak evidence, a count is strong.
+
+Fix shapes, as a menu rather than a pick:
+- refuse a transfer outright when `util_format_get_num_planes(res->base.format) > 1`. There is no
+  single `glTexSubImage2D` that fills two planes, so the operation has no correct meaning today;
+  this is the only option that does not leave a semantically meaningless RGBA-over-planar upload
+  behind, and it touches neither writeback path above;
+- size the guard from the GL triple the access will actually use rather than from gallium's
+  blocksize — closes the memory-safety hole but keeps the meaningless upload;
+- both.
+
+The general rule this is an instance of, and the reason it survived review: **a bound and the
+access it guards must be derived from one description of the format, never from two.** vrend keeps
+two (gallium's `util_format_*` and `tex_conv_table`) and they disagree for exactly the formats
+where one was added late.
+
+Landing target: the `liminavm/virglrenderer` fork. Reported by the Rust-virglrenderer session,
+which is unaffected — it sizes its staging buffer from the same format-table entry it uploads with,
+so the two sizes cannot disagree, and refuses a short iov rather than reading past it.
+
 ## GPU / vrend — the shader blitter leaves its texture parameters on the shared source texture, so the next draw through an already-bound sampler view renders wrong
 
 📋 open, reported 2026-09-04 by the Rust virglrenderer rewrite's replay harness against our C
