@@ -330,6 +330,18 @@ Then watch the worker log for `DEVICE_LOST`. The KK-side knobs used above —
 `/Volumes/mesa-cs/mesa`. Arms here all run at `--display-size 2560x1440`. Size is not the variable (see above), but
 holding it fixed removes one source of noise.
 
+**Keep the guest small — the arms poison the host.** One WebGL page needs nothing like the
+boot script's default 8 GiB, and every arm ends in SIGABRT, which strands host anonymous
+memory that no reboot-free reclaim gets back: compressor occupancy doubled per arm
+(203k → 406k → 810k → 1,014k pages) on a fresh boot, and a day of arms panicked the machine
+on compressor-segment exhaustion. Run `LIMINA_RAM_MIB=3072 LIMINA_CPUS=4`, record `vm_stat`
+around each arm, and reboot well before the segment limit.
+
+When an arm dies, the worker log now names the work rather than only the Metal error code:
+KosmicKrisp records each command buffer as it closes and the device-loss report marks the
+failing commit's own entries, so `render 1280x720 s4 rts1 … +resolve` in the marked range
+says the resolve was the faulting work, and its absence says it was not.
+
 Full Metal shader validation is not survivable on this workload for more than a couple of minutes:
 the slowed GPU makes KosmicKrisp's allocator pool run away (class 1 grew to 7,283 allocators,
 "in-flight depth is outrunning completion") and the worker aborts. Use selective validation.
