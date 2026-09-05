@@ -1,6 +1,8 @@
 # vrend planar-YUV transfer — the bound and the access disagree
 
-**Status:** RED reproduced on this host (2026-09-05), fix pending.
+**Status:** GREEN — fixed by `vrend: refuse a transfer on a multi-plane format`
+(`3b5a8e2d` on the `liminavm/virglrenderer` `limina` branch). The probe is SIGBUS before it
+and EINVAL after, in both directions.
 **Backlog entry:** `docs/hardening-backlog.md` §"GPU / vrend — a planar-YUV transfer is bounded
 with gallium's blocksize and performed with the format table's GL triple".
 **Reported by:** the Rust-virglrenderer session, which found it making the composite planar
@@ -41,9 +43,10 @@ separate processes — a caught fault leaves the GL driver's state untrustworthy
 | | result |
 |---|---|
 | NV12 `resource_create` | **succeeds** — `64x64 PIPE_FORMAT_Y8_U8V8_420_UNORM two-plane EGL-backed (IOSurface id 607)` |
-| `TRANSFER_TO_HOST`, correctly sized iov | **SIGBUS** — the over-read reaches the guard page |
-| `TRANSFER_FROM_HOST` | returns `-1`, allocating nothing |
+| `TRANSFER_TO_HOST`, correctly sized iov | **SIGBUS** before the fix, `EINVAL` after |
+| `TRANSFER_FROM_HOST` | `-1` before the fix (allocating nothing), `EINVAL` after |
 | host vrend GL flavour | `gl_version 31 - es profile enabled` — **GLES** |
+| `feat_arb_robustness` | **false** — the ES context advertises `GL_KHR_robustness`, and vrend's `FEAT` row names only the ARB spelling |
 
 Two of those rows change the shape of the bug from what the source alone suggested:
 
@@ -71,8 +74,15 @@ to create the resource, and nothing in `vrend_renderer_transfer_internal` refuse
 Under the two-tier guarantee a stock guest is a configuration we do not control, so that alone
 earns the fix.
 
-A benign guest's exposure is narrower than it first looks, and the reason matters for the fix
-shape: **the operation has no correct meaning today in either direction.** A guest that CPU-writes
+**No benign guest reaches it.** Measured across seven recorded corpora by merge-sorting the
+resource log against the command records and maintaining a live handle→format map (handles are
+reused, so a static map would be wrong): every `TRANSFER3D`/`COPY_TRANSFER3D` destination
+resolves to a component format, none to a planar one. The strongest arm is a stock-tier Fedora
+gst-va run — stock guest mesa, classic decode path — with 2082 `TRANSFER3D`s and zero planar
+destinations. So this is hardening against a hostile guest, not a bug live in shipped dogfood.
+
+That does not soften the fix, because **the operation has no correct meaning today in either
+direction.** A guest that CPU-writes
 a decode target hands the host NV12 bytes which are then uploaded as RGBA; a guest that CPU-reads
 one gets RGBA bytes back interpreted as NV12. Both are garbage before any bounds question. So
 refusing the transfer cannot regress anything that currently works — it converts silent garbage
@@ -82,3 +92,15 @@ Our own decode path never enters `transfer_internal` at all: decode targets skip
 (`patches/mesa-guest/0013`) and the host fills them through `vrend_resource_upload_guest_pixels`
 and `writeback_plane_to_guest`, both of which bound-check with `vrend_read_from_iovec` and refuse
 on short.
+
+## Why refusing, rather than fixing the bound
+
+Both were on the table. Re-deriving the bound from the GL triple would close the memory-safety
+hole and leave a transfer that uploads NV12 bytes as RGBA — meaningless work that no caller wants
+and that would still need removing. Refusing closes both, and cannot regress a working path:
+nothing correct depends on a transfer whose result is garbage by construction.
+
+The refusal is deliberately **loud** (`virgl_error` naming the format and dimensions, plus a
+context error). Benign reachability was measured at zero, but a measurement over recorded corpora
+cannot cover every guest, so if one does arrive we want it named rather than silently losing
+frames.
