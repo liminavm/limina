@@ -247,15 +247,30 @@ whose per-plane geometry comes from `IOSurfaceGet*OfPlane`), zink's `resource_fr
 KK's `mtl_new_texture_with_descriptor_iosurface` (`mtl_device.m:379`), which passes a hardcoded
 `plane:0` to Metal.
 
-Of those, only the zink→KK step has no carrier: `winsys_handle::plane` already exists and the
-dmabuf path uses it, but zink conveys the surface to KK as a bare
-`VkImportMemoryMetalHandleInfoEXT::handle`, which has nowhere to put an index. Both halves are
-ours, so the index travels in a limina-private struct chained onto that import — an explicit
-index rather than letting KK infer the plane by matching the dedicated image's dimensions
-against the surface's, which happens to be unambiguous for 4:2:0 and would silently stop being
-so for any other subsampling.
+The zink→KK step was the one with no carrier, and it now has one. `VK_EXT_external_memory_metal`
+imports a surface as a bare `VkImportMemoryMetalHandleInfoEXT::handle` with nowhere to say
+"plane 1", so every import defaulted to plane 0 and a biplanar target could expose only its luma.
+The index rides in `VkImportIOSurfacePlaneLIMINA`, chained onto the import
+(`src/kosmickrisp/bridge/kk_limina_plane.h` on `limina-kk`), and the whole chain is threaded:
 
-Nothing works until the whole chain lands, which is precisely why it is not phase 1.
+    eglCreateImageKHR(EGL_IOSURFACE_LIMINA, {PLANE, FOURCC})
+      → dri2_from_iosurface_limina(plane, pipe_format)
+      → winsys_handle::plane   (the field already existed for dmabuf)
+      → VkImportIOSurfacePlaneLIMINA
+      → newTextureWithDescriptor:iosurface:plane:
+
+Both ends are on our branch, so it is an internal contract kept in one header rather than an ABI,
+shaped after `VK_EXT_metal_objects`' `VkImportMetalTextureInfoEXT` — which carries exactly this as
+an aspect bit — to keep a later migration mechanical. With no attribs the behaviour is unchanged:
+whole surface, format from the surface, plane 0, which is the shipping scanout and shared-buffer
+import. With attribs the surface's own fourcc is deliberately not consulted, since a planar
+surface reports `420f`, the name of the pair, which is neither plane's texture format.
+
+Deriving the plane by matching the dedicated image's dimensions against the surface's was the
+alternative and is rejected: it happens to be unambiguous for 4:2:0 and would stop being so,
+silently, for any other subsampling. Oracle: `spikes/vrend-iosurface/planeimport-probe.c`.
+
+What remains for phase 2 is the layout contract above, not the index.
 
 **The guest half comes first, because the host half is inert without it.** Measured
 2026-09-01, VP9 through `vavp9dec ! glupload` on the mesa -6 guest: the host sees *two*
