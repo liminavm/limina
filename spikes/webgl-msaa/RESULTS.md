@@ -72,7 +72,17 @@ that pass. `kk_alloc_pool` calls this "the dangerous route" in its own comments.
 | context attributes | `{antialias:true}`, defaults, vs `{antialias:false}` | only AA dies |
 | fan unrolling | `LIMINA_ZINK_NO_FANS=1` vs default | **both die** (device loss, then signal 6) |
 
-The last row matters most. The workload's most striking signature is geometry unrolling —
+**Time-to-device-loss is fixed from page load, and the fan flag does not move it.** Measured
+independently on a stock guest, headless: 9906 fan unrolls vs 0 with the flag, and the device is
+lost at launch+20 s to the second in both arms. Whatever loses the device does it on a schedule,
+untouched by how much work the fan path generates. That is the sharpest constraint here and the
+best place to start: look for something periodic, not something cumulative.
+
+Time-to-abort does move (60 s vs 105 s) while the pool grows *bigger* in the longer-lived arm
+(8209 vs 12379), which is consistent with the abort being a count the pool walks toward at a rate
+the fan path affects. Neither number measures severity of the loss.
+
+The fan row matters most. The workload's most striking signature is geometry unrolling —
 `unroll triggers: fan=69366`, `midpass pre_gfx caller: kk_draw 83666` — which is also the
 signature named as the live lead for the separate AGX allocator crash class. Disabling fan
 unrolling does **not** prevent the device loss, so the fan route is not the trigger. It remains
