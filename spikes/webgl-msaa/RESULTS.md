@@ -83,40 +83,60 @@ report, a shader dump and a second run's report all name one thing. The label mu
 derived: it is hashed into the UID Metal reports against, so labelling with a per-run pointer makes
 every UID per-run too and two runs cannot be joined at all.
 
-## What the trigger needs: fullscreen AND a canvas above some size
+## The failing path, read off the wire
 
-Every arm below ran on one build, with the display forced to 2560x1440 and the page
-reporting the drawing buffer it actually got. Because the guest display is 2560x1440
-at scale 2, a fullscreen kiosk window is **1280x720 logical**, and a canvas that
-"follows the window" is 1280x720 — not 2560x1440. That single fact retired an earlier
-reading of this table.
+`LIMINA_VREND_TRACE=256` on the killing configuration, dumped 25 s in (the tracer dumps
+on `echo x > $LIMINA_VREND_TRACE_FIFO`; the worker SIGABRTs, so its `atexit` dump never
+runs). In a 31-second window: 3,220 draws, 248 framebuffer changes, and **134 BLITs,
+every one of them the same shape**:
 
-| Firefox window | drawing buffer | result |
-|---|---|---|
-| kiosk | 1280x720 (follows the window) | **dies — 45 s, 55 s, 65 s** |
-| kiosk | 1279x719 | **dies** |
-| kiosk | 800x600 | survives 210 s |
-| windowed | follows the window | survives 210 s |
-| windowed | 2560x1440, scaled into the window | survives 210 s |
+```
+src  res=1209  1280x720  nr_samples=4  format=67  bind=0xa
+dst  res=1217/1218/1229/1230/1231/1233  1280x720  nr_samples=0  format=1  bind=0x10000a
+```
 
-So it needs **both**: fullscreen, and a drawing buffer above some threshold between
-800x600 and 1279x719. Neither alone does it — a 2560x1440 buffer survives in a window,
-and an 800x600 one survives fullscreen. Size is not monotonic on its own, which is why
-"a large drawing buffer" was the wrong description.
+That is an **explicit multisample resolve** — one 4-sample colour texture resolved into
+each of six rotating single-sample destinations carrying the shared/scanout bind bit,
+i.e. a swap-chain pool. The whole guest run contains exactly two multisampled resources
+(the colour target above and its 4-sample depth companion, res=1210).
 
-Two hypotheses are already dead. It is **not** the display or the scanout path: forcing
-`--display-size 2560x1440` on the capture path reproduces in 45 s, and the earlier
-1280x800 arm that suggested otherwise had switched scanout path along with the size.
-And it is **not** Firefox's native compositor: the killing config with
-`gfx.webrender.compositor=false` still dies, in 65 s.
+**Source and destination formats differ (67 vs 1), and that decides the route.** On a
+GLES host — which limina is — `vrend_renderer_prepare_blit` returns false for an
+MS-source RGBA blit whose `src.format != dst.format`, so the blit does **not** take the
+FBO path; it falls through to `vrend_renderer_blit_gl`, the shader blitter, running in
+its own GL context (`third_party/virglrenderer/src/vrend/vrend_renderer.c:12751-12764`,
+dispatch at `:12965-12973`).
 
-**A caveat that applies to the whole table:** the GNOME shell was in the Overview for
-every arm, survivors and deaths alike, because nothing ever focused a window in these
-headless sessions. That is a different compositing path from a normal desktop and it
-was not a controlled variable. The deaths are real regardless — the killing
-configuration has now reproduced five times — but the survivals are only survivals
-*in the Overview*, and should be re-run with a focused window before any of them is
-built on.
+**This is not the path any probe took.** `host-msaa-loop.c` and `guest-msaa-present.c`
+both use `EXT_multisampled_render_to_texture`, which is implicit MSAA: vrend's
+`feat_implicit_msaa`, zink's shadow-attachment emulation, no `VIRGL_CCMD_BLIT` at all.
+Their negatives — 226,909 frames in the guest, 144,037 presenting — constrain the
+shadow-attachment path and say nothing about this bug. Every "shadow blit" line in the
+older parts of this record describes the probe, not the browser.
+
+## The size and fullscreen framings are both dead
+
+They were built on single-shot arms with no repeats. The archived logs falsify them
+outright: at **1280x800**, `log-armL-noval.log` dies at +66 s while `cap-armS.png`'s run
+survived 240 s with antialiasing granted and 14,944 frames drawn. The same display size
+both kills and survives, so display size was never the variable, and neither was the
+canvas size or fullscreen that replaced it.
+
+What the archived logs do show is a **schedule**: across ten arms that died, death lands
++66 to +85 s after the worker's first log line, most of them +66 to +70. Whatever this
+is, it is closer to periodic than to accumulated work.
+
+Two further corrections fall out:
+
+- **The validation-mask arm ran at 1280x800** (`armK.sh` sets no `--display-size`, and
+  `cap-armK.png` is 1280x800) — a configuration that both kills and survives. "Validation
+  masks the loss" is therefore not established, and neither is the texture-type lead that
+  rested on it. Worse, "the cubes render black" is indistinguishable from a zeroed canvas
+  against this page's near-black clear colour; the page needs a loud clear before that
+  observation can mean anything.
+- **Metal names nothing.** The device-lost report carries `NSMultipleUnderlyingErrorsKey`
+  and an `IOGPUCommandQueueErrorDomain` code and no encoder, label or resource, so the
+  faulting work has to be named by our own instrumentation.
 
 ## What has been ruled out
 
@@ -140,7 +160,7 @@ built on.
 | presenting fullscreen, multisampled surface | `guest-msaa-present --fullscreen --mode surface` | 144,037 frames, survives |
 | presenting fullscreen, MSRTT canvas blitted 1:1 | `guest-msaa-present --fullscreen --mode msrtt` | 139,000+ frames, survives |
 | Firefox's native compositor | `gfx.webrender.compositor=false` on the killing config | **dies in 65 s** |
-| descriptor slot decoding | both virglrenderer implementations traced in guest ids | identical |
+| descriptor slot decoding | both virglrenderer implementations traced in guest ids | identical — but a **venus** result, so it constrains nothing on this GL path |
 
 **No Vulkan resolve is involved, in either implementation.** Upstream mesa replaced KosmicKrisp's
 meta/shader resolve with Metal's native render-pass resolve (`db5ab8de776`, `a86f79d5f66`, MR
@@ -173,27 +193,30 @@ genuine misaddress rather than a silent layer-0 substitution. It is **not** yet 
 
 ## Where to look next
 
-`guest-msaa-present.c` already presents — fullscreen, through a real Wayland surface,
-with multisampling confirmed granted, in both of the two shapes the canvas could have
-(a multisampled window surface, and an MSRTT canvas blitted 1:1) — and neither
-reproduces. Presenting is therefore **not** the missing ingredient either, and the
-probe's value now is as a control: it isolates everything the browser does *except*
-whatever the remaining difference is.
+The path is named, so the next arms are on it rather than near it.
 
-The cheapest way to find that difference is to keep bisecting the browser rather than
-to keep enriching the probe, because the browser is a reliable 45-second reproducer and
-the probe is a reliable negative. Bisect the threshold first — the canvas size between
-800x600 and 1279x719 where kiosk starts dying — since a sharp threshold names a
-resource limit and a soft one names a rate.
+1. **`vrend_renderer_blit_gl` is where every frame's resolve goes.** It runs in the
+   blitter's own GL context against a texture shared with the client's context, and
+   there is already an open finding that the shader blitter leaves its texture
+   parameters on the shared source texture. Instrument that function first: log the
+   source/destination resources, the sampler state it sets and restores, and whether the
+   source is multisampled.
+2. **Make the blit take the FBO path instead** and see if the loss goes. The route is
+   chosen only because `src.format != dst.format`; a targeted change (or forcing the
+   comparison true for this case) is a one-line experiment with a clear reading — it
+   survives, the GL fallback is implicated; it dies, the resolve is innocent and the
+   destination or the sharing is the ingredient.
+3. **Rebuild the probe against the explicit path**, not the implicit one: a real
+   `glRenderbufferStorageMultisample` target resolved with `glBlitFramebuffer` into a
+   destination whose format differs from the source, and — for the closest rung — into
+   an imported/dmabuf-backed texture sampled by a second context.
+4. **Forward zink's debug labels to the Metal encoder.** KosmicKrisp advertises
+   `EXT_debug_utils` but only labels encoders for capture; `MESA_TRACE=markers` makes
+   zink emit `blit_resolve(...)`/`copy_image(...)` labels, and passing them through would
+   make the device-lost report name the operation instead of nothing.
 
-1. **Reproduce at 2560×1440 in kiosk, or not at all.** Every other configuration
-   measured so far survives, so an arm that is not this one measures nothing.
-2. **Isolate by masking one pipeline.** With stable hashes: one validation run to collect UID↔hash
-   pairs, then `MTL_SHADER_VALIDATION_DEFAULT_STATE=none` plus `ENABLE_PIPELINES=<one UID>` and
-   `FAIL_MODE=allow`, one pipeline at a time. The pipeline whose masking *alone* both survives and
-   blackens the cubes is the fatal read. Capture must be on or the blackening cannot be seen.
-3. **Trace the 4-sample sampler view to its zink site**, since it is the one mismatch in the class
-   that can misaddress rather than mis-sample.
+Arms that are no longer worth running: anything varying display size, canvas size or
+fullscreen, since 1280x800 both kills and survives.
 
 ## Method rules this bug earned
 

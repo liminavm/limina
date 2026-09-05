@@ -619,38 +619,38 @@ rects). Remaining:
   thousands of live `MTLCommandAllocator`s outstanding. It is **not** zink's device-lost abort:
   both of those are gated on `abort_on_hang`, which is `ZINK_HANG_ABORT`, default false.
 
-  **The trigger needs fullscreen AND a drawing buffer above some size.** The guest
-  display at 2560x1440 runs at scale 2, so a fullscreen kiosk window is 1280x720
-  logical. Measured on one build with the display forced to 2560x1440: kiosk with the
-  canvas following the window (1280x720) dies at 45 s, 55 s and 65 s; kiosk at 1279x719
-  dies; kiosk at 800x600 survives 210 s; a windowed browser survives, and a windowed
-  browser with a forced 2560x1440 canvas survives too. Neither variable alone does it —
-  a 2560x1440 buffer survives in a window and an 800x600 one survives fullscreen — and
-  the killing arm has the *smaller* buffer of the two extremes, so "large buffer" is the
-  wrong description. The threshold sits between 800x600 and 1279x719 and is worth
-  bisecting: a sharp one names a resource limit, a soft one names a rate.
+  **The failing path is an explicit multisample resolve through vrend's GL fallback.**
+  Read off the wire with `LIMINA_VREND_TRACE` on the killing configuration: in a 31-second
+  window, 134 BLITs, every one the same shape — src a 4-sample 1280x720 colour texture,
+  dst one of six rotating single-sample 1280x720 buffers carrying the shared/scanout bind
+  bit (a swap-chain pool). The run contains exactly two multisampled resources. Source and
+  destination formats differ, and on a GLES host that sends an MS-source RGBA blit down
+  `vrend_renderer_blit_gl` — the shader blitter, in its own GL context — rather than the
+  FBO path (`third_party/virglrenderer/src/vrend/vrend_renderer.c:12751-12764`, dispatched
+  at `:12965-12973`). There is already an open finding that this blitter leaves its texture
+  parameters on the shared source texture.
 
-  Two candidates are dead. Not the display or the scanout path: forced to 2560x1440 the
-  capture path dies in 45 s, and the earlier arm suggesting a display-size dependence had
-  switched scanout path along with the size. Not Firefox's native compositor either — the
-  killing config with `gfx.webrender.compositor=false` still dies in 65 s.
+  **Every probe built for this bug was off-path.** `host-msaa-loop.c` and
+  `guest-msaa-present.c` use `EXT_multisampled_render_to_texture` — implicit MSAA, zink's
+  shadow-attachment emulation, no `VIRGL_CCMD_BLIT`. Their negatives (226,909 frames in the
+  guest, 144,037 presenting) constrain that path and say nothing here.
 
-  **Caveat on every survival above:** the GNOME shell was in the Overview throughout,
-  survivors and deaths alike, because nothing focused a window in these headless
-  sessions. The deaths are real — the killing config has reproduced five times — but the
-  survivals are survivals *in the Overview* and need re-running with a focused window.
+  **The size, canvas and fullscreen framings are all dead**, and were built on single-shot
+  arms with no repeats: at 1280x800 one archived arm dies at +66 s and another survives
+  240 s with antialiasing granted and 14,944 frames drawn. Across ten arms that died, death
+  lands +66 to +85 s after the worker's first log line, most at +66 to +70 — closer to a
+  schedule than to accumulated work.
 
-  **Nothing that merely renders or presents reproduces it.** `spikes/webgl-msaa/host-msaa-loop.c`
-  drives EXT_multisampled_render_to_texture at 2560x1440 with four samples, a textured
-  draw, a composite pass and optional reallocation churn: 20,520 frames on the host,
-  30,712 with churn, and 226,909 in 180 s built unchanged inside the guest over virgl
-  with multisampling confirmed granted. `spikes/webgl-msaa/guest-msaa-present.c` adds the
-  step the others skip — it presents, fullscreen, through a real Wayland surface, in both
-  shapes the canvas could take (a multisampled window surface, and an MSRTT canvas
-  blitted 1:1) — and survives 144,037 and 139,000+ frames. So the shadow blit, a
-  full-size multisample target, image-view churn and presentation are each insufficient.
-  The probes are now the control: they do everything the browser does except whatever is
-  left.
+  Two corrections follow. The validation-mask arm also ran at 1280x800, so "validation masks
+  the loss" is not established and neither is the texture-type lead resting on it — and
+  "the cubes render black" is indistinguishable from a zeroed canvas against the page's
+  near-black clear. And the peer session's descriptor-slot negative is a **venus** result;
+  this bug is on the vrend/GL path, so it constrains nothing here.
+
+  Metal names nothing in the report — no encoder, label or resource — so the faulting work
+  must be named by our own instrumentation. KosmicKrisp advertises `EXT_debug_utils` but only
+  labels encoders for capture; forwarding zink's `MESA_TRACE=markers` labels through would
+  make the device-lost report name the operation.
 
   **The underlying Metal error is `PageFault` (~6 ms) on some runs and `Hang` (~46 ms) on others,
   from the identical build** — measured across five arms, roughly evenly split. The outer code is
@@ -686,9 +686,11 @@ rects). Remaining:
   2DMultisample layouts differ, so that read misaddresses rather than silently substituting layer
   0 — the memory-unsafe member of the class. Not yet tied to the loss.
 
-  **Next:** bisect the canvas-size threshold between 800x600 and 1279x719, with a focused
-  window rather than the Overview, since the browser is a reliable 45-second reproducer and
-  the probes are reliable negatives. Then isolate by masking one pipeline at a time
+  **Next:** instrument `vrend_renderer_blit_gl`, then force the same blit down the FBO path
+  (the route is chosen only because the formats differ) — it survives and the GL fallback is
+  implicated, it dies and the resolve is innocent. Rebuild the probe against the explicit
+  resolve rather than the implicit one. Stop varying display size, canvas size and
+  fullscreen: 1280x800 both kills and survives. Then isolate by masking one pipeline at a time
   (`MTL_SHADER_VALIDATION_DEFAULT_STATE=none` plus `ENABLE_PIPELINES=<one UID>`,
   `FAIL_MODE=allow`): the pipeline whose masking alone both survives and blackens the cubes is the
   fatal read. A fix must show the page running ≥5 minutes with the cubes **visibly rendering** —

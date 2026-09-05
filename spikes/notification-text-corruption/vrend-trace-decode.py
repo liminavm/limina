@@ -364,9 +364,17 @@ def main():
                 ref(dw[1], r[0], "SET_INDEX_BUFFER")
             elif name == "RESOURCE_INLINE_WRITE" and len(dw) > 1:
                 ref(dw[1], r[0], "RESOURCE_INLINE_WRITE")
-            elif name in ("BLIT", "RESOURCE_COPY_REGION") and len(dw) > 2:
-                ref(dw[1], r[0], name + " dst")
-                ref(dw[2], r[0], name + " src")
+            elif name == "BLIT" and len(dw) > 13:
+                # virgl_protocol.h: DST_RES_HANDLE is word 4 and SRC_RES_HANDLE word 13,
+                # not 1 and 2. Reading 1/2 attributed every blit to the S0 flags word and
+                # a scissor word, so the source resource of a resolve never appeared in
+                # the reference graph at all.
+                ref(dw[4], r[0], "BLIT dst")
+                ref(dw[13], r[0], "BLIT src")
+            elif name == "RESOURCE_COPY_REGION" and len(dw) > 6:
+                # DST_RES_HANDLE 1, SRC_RES_HANDLE 6.
+                ref(dw[1], r[0], "RESOURCE_COPY_REGION dst")
+                ref(dw[6], r[0], "RESOURCE_COPY_REGION src")
             elif name == "CREATE_OBJECT" and len(dw) > 2:
                 kind = (dw[0] >> 8) & 0xFF
                 if kind in (3, 8):   # sampler view, surface -- both name a resource
