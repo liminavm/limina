@@ -1,0 +1,3 @@
+# GPU captures are hundreds of MB; keep them out of the repo but next to the spike.
+*.gputrace/
+*-worker.log
