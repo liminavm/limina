@@ -26,6 +26,15 @@
  *     minutes, so a probe at a toy size proves nothing. WIDTHxHEIGHT default to
  *     2560x1440 for that reason; --size overrides.
  *
+ *   - optionally, one render pass PER DRAW (--pass-per-draw). This is the shape
+ *     the guest actually produces and the plain loop does not: the losing run's
+ *     command-buffer dump is three separate `render 1280x720 s4 rts1 fmt37 …
+ *     draws=1` passes per frame into the SAME attachment, each loading what the
+ *     last one stored, not one pass carrying three draws. Every byte of the
+ *     descriptor chain is now known to be correct at encode and still correct at
+ *     the fault, so the pass structure is one of the few differences left that
+ *     the CPU side can still express.
+ *
  *   - optionally, reallocation churn (--churn N: rebuild the multisampled
  *     canvas, its depth buffer and its framebuffer every N frames). A browser
  *     reallocates a canvas constantly and the guest run's descriptor log is full
@@ -145,6 +154,7 @@ static void make_canvas(FBTEX2DMS fbtex2dms, RBSTORAGEMS rbstorage_ms, int width
 
 int main(int argc, char **argv) {
    int width = 2560, height = 1440, samples = 4, seconds = 180, churn = 0;
+   int pass_per_draw = 0;
 
    for (int i = 1; i < argc; i++) {
       if (!strcmp(argv[i], "--seconds") && i + 1 < argc)
@@ -155,10 +165,12 @@ int main(int argc, char **argv) {
          sscanf(argv[++i], "%dx%d", &width, &height);
       else if (!strcmp(argv[i], "--churn") && i + 1 < argc)
          churn = atoi(argv[++i]);
+      else if (!strcmp(argv[i], "--pass-per-draw"))
+         pass_per_draw = 1;
       else {
          fprintf(stderr,
                  "usage: %s [--seconds N] [--size WxH] [--samples N] "
-                 "[--churn FRAMES]\n",
+                 "[--churn FRAMES] [--pass-per-draw]\n",
                  argv[0]);
          return 2;
       }
@@ -196,8 +208,9 @@ int main(int argc, char **argv) {
    }
 
    printf("GL_RENDERER: %s\n", (const char *)glGetString(GL_RENDERER));
-   printf("target: %dx%d, %d samples, %d s, churn every %d frames\n", width,
-          height, samples, seconds, churn);
+   printf("target: %dx%d, %d samples, %d s, churn every %d frames, %s\n", width,
+          height, samples, seconds, churn,
+          pass_per_draw ? "one pass per draw" : "one pass for all draws");
 
    const char *exts = (const char *)glGetString(GL_EXTENSIONS);
    if (!exts || !strstr(exts, "GL_EXT_multisampled_render_to_texture")) {
@@ -313,6 +326,11 @@ int main(int argc, char **argv) {
          float a = (float)((frames + i * 40) % 240) / 240.0f;
          glUniform2f(u_off, -0.5f + i * 0.5f, -0.3f + 0.6f * a);
          glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+         /* Close the render pass after each draw, so the next one LOADs the
+          * multisampled attachment instead of continuing in the same pass --
+          * three one-draw passes per frame, which is what the guest produces. */
+         if (pass_per_draw)
+            glFlush();
       }
 
       /* Pass 2: composite, sampling the resolved canvas. */
