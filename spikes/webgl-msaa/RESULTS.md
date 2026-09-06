@@ -308,6 +308,31 @@ Seventeen uniform draws over that range would give well under one such pair; thr
 23 MiB, is a deterministic allocator putting a real object at a stable VA — a region that has no
 mapping *at that instant*, rather than a wild pointer.
 
+### What the rest of the report says
+
+The files had only ever been grepped for three fields. Parsed whole (one JSON header line, then a
+JSON body), the `analysis` object carries more, and it is consistent across all 23 reports:
+
+| field | every report |
+|---|---|
+| `guilty_dm` | **2** — the same data master every time, page faults and MMU interrupts alike |
+| `signature` | 562 for a page fault, 674 for an MMU interrupt — the two classes, nothing finer |
+| `command_buffer_trace_id` | a distinct increasing id per event; no Metal API hands this back, so it cannot yet be matched to a command buffer |
+| `bif0_fault.level` | **1 or 2** |
+| `registers` | empty |
+
+`level` is the page-table level at which the walk failed, and 1 or 2 means it failed **high** — the
+address has no entry at all, not a leaf that lost its mapping. That distinction matters more than
+anything else in the report: a resource whose pages were evicted, or a texture dropped from the
+residency set, faults at the leaf. Every fault here is in a region the GPU page tables never
+described. Which is why every residency arm has failed to change anything, and why the un-resident
+minted views could not have been the cause.
+
+Taken with the 64-byte alignment, the shape that fits is **a valid base plus a wild offset** — a
+fetch addressed off a real allocation with a stride, index or extent that is wrong by orders of
+magnitude — rather than a corrupt pointer or an evicted page. That is a lead, not a conclusion:
+the alignment may be the reporter's granule, and the `level` encoding is not documented.
+
 The daemon lags: no `.ips` appeared for six losses between 21:36 and 22:20 while the newest file
 was 13:27, and some sessions produce none at all. Read them later and match by timestamp; never
 wait on one.
