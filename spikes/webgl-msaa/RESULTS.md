@@ -256,7 +256,7 @@ What is required is the **GPU actually walking the chain**: `root + 864` → the
 descriptor → the view's resource ID and `sampler_table.handles[idx]` → `sample()`. Nothing before
 that dereference is sufficient.
 
-## The faulting pointer was never one of ours
+## The faulting address is in nothing KK allocates, and it recurs across processes
 
 The kernel writes `gpuEvent-limina-vmm-*.ips` under `/Library/Logs/DiagnosticReports/`. They are
 readable directly — the files are `root:_analyticsusers` with group read, and the account is in
@@ -264,27 +264,41 @@ that group. Each carries `restart_reason_desc` and, for a page fault, `bif0_faul
 address, the page-table level, the direction, and **`requestor`/`sideband`**, which name the
 hardware unit that asked.
 
-Seventeen faults, every one a **read**:
+Seventeen faults, every one a **read**, 64 B-or-coarser aligned:
 
 | | |
 |---|---|
-| addresses | `0x0aaa79d000` … `0xca25b38a40` |
-| the process's whole GPU address band | `0x0` … `0x1c55320000` (113 GiB), from a fully address-logged arm |
-| faults inside that band | **1 of 17** |
+| KK's own allocation band | `0x1500000000` … `0x1c44b90000` — **84.0 … 113.1 GiB** |
+| what that band covers | every `kk_alloc_bo` (MTLHeap + MTLBuffer) **and** every image plane; `LIMINA_KK_ADDR_LOG` logs `bo+`/`bo-` and `img+`/`img-` alike |
+| faults inside that band | **0 of 17** |
+| fault spread | 42.7 GiB … 808.6 GiB |
 | requestor / sideband | 13 × `174/103`, 4 × `112`\|`96`\|`80` `/65` — two different units |
-| alignment | 64 B or coarser, never byte-random |
 
-The value the shader dereferenced was **never anything KK allocated**. That closes every stale- or
-dangling-resource theory at once — a freed BO, a recycled slot, a dangling view would all fault
-*inside* the band. It also rules out a single fixed buffer being non-resident (the sampler table,
-say, at `0x15000b0000`): one buffer faults at one range, not seventeen scattered ones.
+So the address is in no BO and no image plane of ours. That closes the stale/dangling/recycled
+*resource* theories — a freed BO, a recycled slot or a dangling view would all fault inside the
+band — and closes "one fixed buffer is not resident" (the sampler table at `0x15000b0000` is one
+range, not seventeen). It does **not** make the address garbage: the band excludes everything
+Metal allocates for itself (argument tables, texture descriptors, the sampler heap), and a fault
+there would look exactly like this.
 
-Two requestors mean two hardware units fault across arms, which is a discriminator worth carrying
-into the next report — map new ones onto the arm that produced them. The daemon lags: no `.ips` has
-appeared for six losses between 21:36 and 22:20 while the newest file is 13:27, so read them later
-and match by timestamp, never wait on one.
+The distribution says the address is structured, not random. Across **different processes**, minutes
+to half an hour apart:
 
-## …and yet the chain is clean when it is recorded
+| pair | apart |
+|---|---|
+| 643.78 / 643.80 GiB, both requestor 112 | **22.6 MiB** |
+| 238.24 / 238.49 GiB | 256 MiB |
+| 590.70 / 590.98 GiB | 289 MiB |
+
+Seventeen uniform draws over that range would give well under one such pair; three, one of them
+23 MiB, is a deterministic allocator putting a real object at a stable VA — a region that has no
+mapping *at that instant*, rather than a wild pointer.
+
+The daemon lags: no `.ips` appeared for six losses between 21:36 and 22:20 while the newest file
+was 13:27, and some sessions produce none at all. Read them later and match by timestamp; never
+wait on one.
+
+## …and the chain is clean when it is recorded
 
 `LIMINA_KK_ADDR_CHECK=1` now walks, at every multisampled draw, the chain the generated MSL walks —
 and reads it out of the **uploaded root buffer's own bytes** at `offsetof(root, sets) + i*8`, not
@@ -304,8 +318,9 @@ The slots were visited, none was skipped for being past the set size, and the sa
 sits at offset 0 of its own set — binding 128 is a binding *number*, not a byte offset. So the
 result stands: the descriptor chain is consistent when it is written, every ID in it is one KK
 minted, every sampler index is in range, and serialising submits already excluded anything
-changing it after the record. **The garbage address is not in the bytes we write; it is produced
-in the decode of a valid ID.**
+changing it after the record. **The faulting address is not in the bytes we write.** It is
+produced downstream of them — in the table lookup Metal owns behind a `MTLResourceID`, whose
+entries mean something only while the allocation they name is resident.
 
 Keep the counters in any future check. This negative was reported once before the counters existed,
 while the layout walk was bounded by a size clamped to 4 KiB — the number could not then say
@@ -401,6 +416,8 @@ is weak by the stochastic finding.
 | `LIMINA_KK_ADDR_CHECK=1` with the full chain walk | 1 | lost, **every check silent** |
 | `KK_LIMINA_BARRIER=widen` (pre_gfx barrier scope ALL) | 1 | lost |
 | `?nodepth=1` — no depth buffer, no depth test, `d=0` in the failing pass | 1 | lost |
+| `LIMINA_KK_TEX_LEAK=1` — also suppresses the texture's residency-set removal | 4 | 4 lost |
+| `LIMINA_KK_BO_LEAK=1` — also suppresses the BO's residency-set removal | 1 | lost |
 | the chain walk again, now counting what it inspected | 1 | lost, 54 slots inspected, **all silent** |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
