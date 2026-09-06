@@ -583,6 +583,20 @@ frame or two later. That is the useful case, not a failure of aim.
 Writing the trace to a directory does **not** segfault on this command stream, unlike the
 notification-text one the lever was built for, so no attached Xcode is needed to record.
 
+### Xcode cannot show a KosmicKrisp draw's bindings at all
+
+Even with the recorded stream browsable, Bound Resources reports **"Resource unavailable"** for
+`buffer(0)` on both the vertex and fragment stages of the failing draw. That is correct, not a
+navigation mistake: KK binds the root descriptor by **raw GPU address** —
+`mtl_set_address` → `[MTL4ArgumentTable setAddress:atIndex:]` — so there is no `MTLBuffer` object
+for the debugger to name. The same is true of every bindless texture, which the shader reaches
+through a `MTLResourceID` read out of that root.
+
+So the debugger's central promise on this bug — "show me what this draw actually binds" — cannot be
+kept for this driver, whatever the replay does. What the capture still holds is the **heap
+contents** (`MTLHeap-*` files in the bundle), which is where the root descriptor and the tables
+physically live; reaching them means mapping a GPU address to a file offset ourselves.
+
 ## The host loop that does not reproduce it
 
 `spikes/webgl-msaa/host-msaa-loop.c` is the attempt: GLES-over-EGL on the same host
