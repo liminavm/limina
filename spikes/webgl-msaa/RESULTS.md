@@ -241,8 +241,20 @@ shader makes none of.
 
 **A fragment shader that reads a uniform and samples nothing survives** (`?fsuniform=1`, 360 s), so
 it is not fragment-stage descriptor access in general — the root → set → load chain is exercised
-there too, and by the vertex shader in every surviving arm. What is left is the sampler set, the
-`sampler_table` read, or the sample instruction itself.
+there too (that shader's uniform comes through `root + 848`), and by the vertex shader in every
+surviving arm.
+
+**Binding the sampler is not enough either.** `?texbound=1` declares the sampler, binds it, and puts
+the sample behind a loop whose trip count is a uniform pinned to 0 — a loop rather than an `if`,
+because NIR flattens a small `if` around a side-effect-free tex into a `bcsel` and runs it anyway.
+The compiled MSL confirms the shape: the loop and the sample are still there, and the break comes
+before the descriptor load. It **survives**, 22,944 frames at `SAMPLES=4`. So every CPU-side step —
+zink writing the descriptor, binding the set, the sampler sitting in the device table — is
+exercised in a surviving arm.
+
+What is required is the **GPU actually walking the chain**: `root + 864` → the sampled-image
+descriptor → the view's resource ID and `sampler_table.handles[idx]` → `sample()`. Nothing before
+that dereference is sufficient.
 
 ## The blit, and how the route was read
 
@@ -318,6 +330,7 @@ is weak by the stochastic finding.
 | `?notex=1` — the fragment shader samples nothing | 3 | **3 survived** |
 | `LIMINA_KK_SAMPLER_LEAK=1` — no sampler slot ever retired | 1 | lost, **0 retirements to suppress** |
 | `?fsuniform=1` — the fragment shader reads a uniform, samples nothing | 1 | **survived** |
+| `?texbound=1` — sampler bound and reachable, sample never executed | 1 | **survived**, 22,944 frames |
 | `KK_LIMINA_BARRIER=widen` (pre_gfx barrier scope ALL) | 1 | lost |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
