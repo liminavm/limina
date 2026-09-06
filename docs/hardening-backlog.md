@@ -3180,3 +3180,22 @@ null-dereference.
 The debugger is **not** wholly unusable: the recorded command stream still browses, and the
 labelled passes and their bindings can be read even when the replay dies. What is lost is
 everything that needs re-execution — attachment previews, the shader debugger, profiling.
+
+## A NULL allocation reaches Metal's residency set and crashes inside the driver
+
+`kk_device_add_{heap,buffer,texture}_to_residency_set` accepted NULL and passed it to
+`mtl_residency_set_add_allocation`. Metal stores it, and the next queue submit dereferences it in
+`-[AGXG13XFamilyResidencySet _commitAddedAllocations:count:removedAllocations:count:]` —
+`KERN_INVALID_ADDRESS at 0x18`, inside Apple's driver, on whichever ring thread happens to submit,
+arbitrarily far from whoever added the NULL. A suite run failed exactly that way on
+`synoik_desktop_survives_snapshot_restore` (worker SIGSEGV on `vkr-ring-2`), which is a different
+failure from that test's known pixel-drift flake.
+
+Guarded: all four entry points refuse NULL, and the texture path names the caller's return address.
+
+**What put a NULL there is not established.** The suspect is the change that registers every minted
+image-view texture, since it added three unguarded call sites in that path and the crash appeared
+in the same suite — but the test has passed since without the guard ever firing, so the trigger is
+either intermittent or elsewhere. The guard converts a crash into an attributable log line; it does
+not explain the NULL. If `[LIMINA-RESIDENCY] refused a NULL texture` ever appears, symbolise the
+return address it prints and that names the site outright.
