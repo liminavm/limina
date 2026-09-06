@@ -390,7 +390,15 @@ the descriptor *write*, not who reads it, and that write is perfectly legal — 
 resolve consumes exactly this through `texture2DMS`. It is a violation only if a shader declaring
 `texture2d<float>` reads it, which no descriptor byte can show. `[LIMINA-MSBIND]` in the draw walk
 is the test: it fires only in multisampled passes, so the resolve is never walked, and the cube
-pass's only legitimate sampled image is the 64x64 checker.
+pass's only legitimate sampled image is the 64x64 checker (`id=0xa3`, `mtl_type=2`).
+
+**It never fires.** A death (`ms1`) with the check live:
+
+    chain check: 24 multisampled draws walked, 0 multisampled textures bound as sampled images
+
+Every sampled slot the failing pass binds names a single-sample texture. So `0x117` is not read by
+the cube shader, and the mistyped-read theory is dead: the descriptor bound at the failing draw is
+the checker, correctly typed.
 
 **Pipelines are self-identifying.** KosmicKrisp labels each `MTLRenderPipelineState` with a hash of
 its generated MSL, and `KK_LIMINA_SHADER_DUMP` names its files by the same hash. The label must be
@@ -421,6 +429,7 @@ is weak by the stochastic finding.
 | `LIMINA_KK_TEX_LEAK=1` — also suppresses the texture's residency-set removal | 4 | 4 lost |
 | `LIMINA_KK_BO_LEAK=1` — also suppresses the BO's residency-set removal | 1 | lost |
 | the chain walk again, now counting what it inspected | 1 | lost, 54 slots inspected, **all silent** |
+| `[LIMINA-MSBIND]` — is a multisampled texture bound as a sampled image at the failing draw | 1 | lost, **0 of 24 draws** |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
 | scanout path: windowed vs `--display-capture` | 1 each | both die |
