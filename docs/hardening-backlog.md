@@ -3108,11 +3108,12 @@ a `VK_IMAGE_VIEW_TYPE_2D` view of a **four-sample** image: Metal's 2D and 2DMult
 differ, so that read addresses with the wrong stride off a valid base — a misaddress that no check
 on the descriptor bytes can see, because the ID in them is valid, minted and live.
 
-Vulkan already forbids it (a `sampled` view of a multisampled image must be consumed as
-`texture2DMS`), so this is a debug assertion we are missing, not a rule we need to invent. Add one
-at descriptor write: compare the view's `sample_count_sa` against the binding's declared type and
-`assert`. `LIMINA_KK_ADDR_CHECK` now reports it per draw as `[LIMINA-MSBIND]`, which is where the
-mechanism should move once it is understood.
+Vulkan already forbids the *read* (a multisampled image must be consumed as `texture2DMS`), so this
+is a debug assertion we are missing, not a rule we need to invent — but it cannot live at
+descriptor write, because a set layout does not know any shader's declared dimensionality and many
+pipelines share one layout. It belongs at the draw, where both halves are known: the bound
+pipeline's declared image dimension against the bound view's `sample_count_sa`.
+`LIMINA_KK_ADDR_CHECK` already reports the view half there as `[LIMINA-MSBIND]`.
 
 Whether this is the cause of the WebGL `{antialias:true}` device loss
 (`spikes/webgl-msaa/RESULTS.md`) is being measured; it is a defect either way.

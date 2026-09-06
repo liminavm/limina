@@ -384,11 +384,13 @@ included — **bidirectional**, and carries no texture identity, address or bind
 report alone can never name the resource that produced it. Nothing in this class currently names a
 faulting access.
 
-One write in the descriptor log is a genuine Vulkan violation rather than a curiosity: a
-`COMBINED_IMAGE_SAMPLER` naming a `VK_IMAGE_VIEW_TYPE_2D` view of a **4-sample** image, so a shader
-declaring `texture2d<float>` samples an `MTLTextureType2DMultisample`. Metal's 2D and
-2DMultisample layouts differ, so that read is a genuine misaddress. It is **not** yet tied to the
-loss.
+One write in the descriptor log is worth chasing: a `COMBINED_IMAGE_SAMPLER` naming a
+`VK_IMAGE_VIEW_TYPE_2D` view of a **4-sample** image (`id=0x117`, `mtl_type=4`). The log records
+the descriptor *write*, not who reads it, and that write is perfectly legal — u_blitter's MSAA
+resolve consumes exactly this through `texture2DMS`. It is a violation only if a shader declaring
+`texture2d<float>` reads it, which no descriptor byte can show. `[LIMINA-MSBIND]` in the draw walk
+is the test: it fires only in multisampled passes, so the resolve is never walked, and the cube
+pass's only legitimate sampled image is the 64x64 checker.
 
 **Pipelines are self-identifying.** KosmicKrisp labels each `MTLRenderPipelineState` with a hash of
 its generated MSL, and `KK_LIMINA_SHADER_DUMP` names its files by the same hash. The label must be
