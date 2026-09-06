@@ -30,8 +30,13 @@ c.style.width = '100%'; c.style.height = 'auto';
 // ?notex=1  fragment shader returns a constant, sampling nothing.
 // ?nodepth=1 no depth buffer and no depth test, so the 4-sample depth companion
 //            is never created.
+// ?texbound=1 create, bind and name the texture exactly as normal, but do not
+//            READ it in the shader -- separates "a sampler descriptor is bound"
+//            from "the shader executes the sample".
 // ?cubes=N  how many draws per frame (default 3).
-const noTex = q.get('notex') === '1';
+const texBound = q.get('texbound') === '1';
+const fsUniform = q.get('fsuniform') === '1';
+const noTex = q.get('notex') === '1' || fsUniform;
 const noDepth = q.get('nodepth') === '1';
 const cubes = parseInt(q.get('cubes') || '3', 10);
 
@@ -54,7 +59,24 @@ attribute vec3 p; attribute vec2 uv;
 uniform mat4 mvp;
 varying vec2 v;
 void main(){ v = uv; gl_Position = mvp * vec4(p,1.0); }`;
-const fs = noTex ? `
+// The fragment stage is where the one working differential lives, so it comes in three
+// shapes: samples a texture, reads a uniform and samples nothing, reads nothing at all.
+const fs = texBound ? `
+precision mediump float;
+uniform sampler2D t;
+uniform float k;
+varying vec2 v;
+// The sampler is declared, bound and reachable, and the sample never executes: k is 0, and a
+// loop (not an `if`) keeps NIR from flattening the branch into a bcsel that runs the tex anyway.
+void main(){
+  vec4 c = vec4(v.x, v.y, 0.6, 1.0);
+  for (int i = 0; i < 8; i++) { if (float(i) >= k) break; c = texture2D(t, v); }
+  gl_FragColor = c;
+}` : fsUniform ? `
+precision mediump float;
+uniform vec3 tint;
+varying vec2 v;
+void main(){ gl_FragColor = vec4(v.x * tint.x, v.y * tint.y, tint.z, 1.0); }` : noTex ? `
 precision mediump float;
 varying vec2 v;
 void main(){ gl_FragColor = vec4(v.x, v.y, 0.6, 1.0); }` : `
@@ -117,7 +139,14 @@ gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, px)
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-if (!noTex) gl.uniform1i(gl.getUniformLocation(prog, 't'), 0);
+const tloc = gl.getUniformLocation(prog, 't');
+if (tloc) gl.uniform1i(tloc, 0);
+// texbound keeps the sampler bound and the sample unreachable; fsuniform gives the fragment
+// stage a uniform to read and no texture at all.
+const kloc = gl.getUniformLocation(prog, 'k');
+if (kloc) gl.uniform1f(kloc, 0.0);
+const tintLoc = gl.getUniformLocation(prog, 'tint');
+if (tintLoc) gl.uniform3f(tintLoc, 1.0, 1.0, 0.6);
 
 const mvp = gl.getUniformLocation(prog, 'mvp');
 if (!noDepth) gl.enable(gl.DEPTH_TEST);

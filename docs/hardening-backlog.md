@@ -3076,3 +3076,24 @@ likely real sub-second bursts the 2 s sampler smooths away, but that is inferenc
 measurement. And the sampler samples at 2 s while the agent reports at 1 s, so no trace can confirm
 a threshold crossing exactly as the policy saw it — closing that needs the host's own
 `dynamic vCPUs:` log lines correlated against the trace, not a finer sampler.
+
+## Nothing catches a KosmicKrisp sampler destroyed while submitted work still names it
+
+A `COMBINED_IMAGE_SAMPLER` descriptor carries a 16-bit **index** into a device-wide sampler table,
+not the sampler's resource ID (`kk_descriptor_set.c:162`, `kk_descriptor_types.h:15`). When the
+last reference to a `VkSampler` goes away, `kk_sampler_heap_remove_locked` releases the
+`MTLSamplerState` and calls `kk_query_table_remove`, which writes 0 into the GPU-visible slot and
+returns the index to the free list. Retiring on the last reference is legal — Vulkan makes it the
+application's job not to destroy a sampler that submitted work still uses — so the hazard is not
+that KK frees too early; it is that **nothing catches an app that gets it wrong**. A shader loads a
+zeroed (or, once the index is recycled, a different) sampler and dereferences it, and what surfaces
+is a GPU address fault arbitrarily later with nothing naming the sampler.
+
+Worth a debug-build check: record the last submission to reference each slot and assert on a
+retirement that runs ahead of it. The dead-resource-ID scan cannot serve here — an index is not an
+ID, and a recycled index looks perfectly live.
+
+This is not what kills the WebGL-MSAA workload: an arm with the retirement suppressed still dies,
+and the counter (`LIMINA_KK_SAMPLER_LEAK`, `kk_limina_sampler_retires`) shows zero slots retired
+during a run at all, so that free list is never exercised there
+(`spikes/webgl-msaa/RESULTS.md`).

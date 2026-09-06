@@ -189,15 +189,60 @@ So the driver-side levers are exhausted, and the workload itself is where the in
 changing nothing else — same three passes, same 4-sample RGBA8 target, same depth companion, same
 resolve on the wire, `granted aa=true SAMPLES=4`.
 
-**It survives, 22,880 frames with the cubes visibly rendering in the capture.** One arm so far, and
-one arm decides nothing here — but it is the first lever in this investigation that changed the
-outcome at all, and it is on the workload rather than in the driver.
+**It survives 3 arms of 3** — the first with 22,880 frames and the cubes visibly rendering in the
+capture. Against a baseline that loses roughly three arms in four, three survivals in a row is
+p ≈ 0.016. This is the first lever in the investigation that changed the outcome at all, and it is
+on the workload rather than in the driver.
 
-That converges with the one genuine Vulkan violation already in the descriptor log: a
-`COMBINED_IMAGE_SAMPLER` naming a `VK_IMAGE_VIEW_TYPE_2D` view of a **4-sample** image, so a
-shader declaring `texture2d<float>` samples an `MTLTextureType2DMultisample`. Metal's 2D and
-2DMultisample layouts differ, so that read misaddresses — a scattered read fault at an address
-with nothing to do with the draw, which is what the kernel reports every time.
+The change is the sample and only the sample: the KK pass counts hold their shape across it
+(`seen+LOAD` ≈ 2 × `seen+CLEAR`, `breaks_pass=0`, `restarts=0`), so the arm is not quietly
+rendering a different frame graph.
+
+### What a sample touches that a gradient does not
+
+Reading the sampled-image path afterwards turns up one lifetime hazard that fits every constraint
+the arms have left standing. A `COMBINED_IMAGE_SAMPLER` descriptor holds the view's own
+`MTLResourceID` *and* a **16-bit index into a device-wide sampler table**
+(`kk_descriptor_set.c:162`, `kk_descriptor_types.h:15`). The table is
+`kk_query_table`: retiring an entry writes **0** into the GPU-visible slot and pushes the index
+straight back onto the free list (`kk_query_table.c:kk_query_table_remove`), and
+`kk_sampler_heap_remove_locked` calls it as soon as the last `VkSampler` reference goes away, with
+nothing waiting on the command buffers already submitted against it. A draw still executing then
+loads a zeroed — or recycled — sampler ID out of the table and dereferences it.
+
+That path is reachable only from a shader that samples, and the dead-RID scan cannot see it,
+because the descriptor carries an *index* and a recycled index is indistinguishable from a live
+one. **It is not what kills this workload, though: the counter says zero slots are ever retired
+during an arm**, so the free list is never exercised and the run never loads a zeroed sampler. The
+hazard stands on its own and is filed in `docs/hardening-backlog.md`; the WebGL loss is not it.
+
+The same arm reports the residency set at its death: **141 heaps, 0 buffers, 95 textures**. That is
+small and steady, so set size is not the story either.
+
+### What the sampling shader dereferences
+
+`MESA_KK_DEBUG=msl` on a losing arm shows the chain a `texture2D` compiles to. The root buffer is
+argument-table binding 0, rebound per draw; the sampler table is binding 1, bound once when the
+command buffer is created and never changed:
+
+```
+t6  = &buf0.contents[0];                     // root
+t8  = t6 + 864;
+t9  = *(constant ulong*)(t8);                // the descriptor set's address, LOADED from the root
+t16 = *(constant texture2d<float>*)t9;       // the view's resource ID, out of the descriptor
+t18 = *(coherent device ushort*)(t9 + 8);    // sampler_index
+t19 = sampler_table.handles[t18];            // a second, device-wide buffer
+t20 = *(constant ulong*)(t9);
+if (t20 != 0) t23 = t16.sample(t19, t4, bias(t10));
+```
+
+The texture handle is null-guarded; the sampler index is not. Three pointer chases the gradient
+shader makes none of.
+
+**A fragment shader that reads a uniform and samples nothing survives** (`?fsuniform=1`, 360 s), so
+it is not fragment-stage descriptor access in general — the root → set → load chain is exercised
+there too, and by the vertex shader in every surviving arm. What is left is the sampler set, the
+`sampler_table` read, or the sample instruction itself.
 
 ## The blit, and how the route was read
 
@@ -270,7 +315,9 @@ is weak by the stochastic finding.
 | `LIMINA_KK_SERIALIZE_SUBMIT=1` — one command buffer on the GPU at a time | 2 | 2 lost |
 | `LIMINA_KK_ADDR_CHECK=1` — every bound address looked up at encode | 1 | lost, **nothing reported** |
 | `LIMINA_KK_TEX_LEAK=1 LIMINA_KK_VIEW_LEAK=1` — no texture or view ever released | 4 | 4 lost |
-| `?notex=1` — the fragment shader samples nothing | 1 | **survived**, 22,880 frames |
+| `?notex=1` — the fragment shader samples nothing | 3 | **3 survived** |
+| `LIMINA_KK_SAMPLER_LEAK=1` — no sampler slot ever retired | 1 | lost, **0 retirements to suppress** |
+| `?fsuniform=1` — the fragment shader reads a uniform, samples nothing | 1 | **survived** |
 | `KK_LIMINA_BARRIER=widen` (pre_gfx barrier scope ALL) | 1 | lost |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
