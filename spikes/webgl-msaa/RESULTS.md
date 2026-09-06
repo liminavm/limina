@@ -326,6 +326,44 @@ Keep the counters in any future check. This negative was reported once before th
 while the layout walk was bounded by a size clamped to 4 KiB — the number could not then say
 whether the walk had reached anything at all.
 
+## The bytes are still right when the device dies
+
+The encode-time walk proves what was written. It cannot tell that apart from something overwriting
+it afterwards — serialising submits excludes a CPU race between commits, but not a GPU write from
+an earlier command buffer landing in descriptor memory. So the loss callback now re-reads the same
+bytes: the last sixteen multisampled draws' root address, set address, resource ID and sampler
+index are kept, and each is read back at the loss.
+
+First, the walk is reading the right bytes. The generated MSL loads `t9 = *(constant ulong*)(root
++ 864)`; the run prints
+
+    KK draw address checking ON; root.sets at +848
+    [LIMINA-SLOT] set2 (root+864) binding128[0] +0 id=0x118 samp=2 (pass 1280x720 s4)
+
+`(864 − 848) / 8 = 2`, so the slot inspected is exactly the one the shader dereferences — set 2,
+offset 0, which is zink's sampler-view set. The clean-chain negative is not hollow.
+
+Then, at the death:
+
+    draw[-12] s4 set2: at encode set=0x1512ae9cc0 id=0x118 samp=2 | now set=0x1512ae9cc0 id=0x118 samp=2 | sampler handle 0x1f
+    …
+    draw[-1]  s4 set2: at encode set=0x15125f1cc0 id=0x118 samp=2 | now set=0x15125f1cc0 id=0x118 samp=2 | sampler handle 0x1f
+
+**Twelve draws unchanged**, covering the three failing passes and the three frames before them: same
+set address in the root buffer, same resource ID, same sampler index, and the sampler table entry
+that index selects is a live `0x1f`. (`draw[-16]`…`draw[-13]` read back as `set=0x0` or as a later
+descriptor — that is the upload pool wrapping and rewriting those addresses, which is what it is
+for. `KK_LIMINA_HEAP_NORESET=1` freezes the poly heap, not the descriptor pool.)
+
+So every byte on the path from the root table to the sampler is correct when written **and** still
+correct when the GPU faults. Combined with the fault landing in no allocation of ours, the whole
+CPU-visible half of this bug is exonerated: a valid, live resource ID, dereferenced by the texture
+unit, resolves to an address in no page table.
+
+**That ends the knobs.** There is no remaining byte in our stack to check, and no A/B that can
+narrow it further — the next thing worth building is a repro without the VM (see *Toward a
+no-VM repro* below).
+
 ## The multisampled depth companion is not an ingredient
 
 `?nodepth=1` — a WebGL context requested with `depth:false`, no depth test — **dies**, and the
@@ -430,6 +468,7 @@ is weak by the stochastic finding.
 | `LIMINA_KK_BO_LEAK=1` — also suppresses the BO's residency-set removal | 1 | lost |
 | the chain walk again, now counting what it inspected | 1 | lost, 54 slots inspected, **all silent** |
 | `[LIMINA-MSBIND]` — is a multisampled texture bound as a sampled image at the failing draw | 1 | lost, **0 of 24 draws** |
+| post-mortem re-read of the descriptor bytes at the loss | 1 | lost, **12 of 12 draws unchanged** |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
 | scanout path: windowed vs `--display-capture` | 1 each | both die |
