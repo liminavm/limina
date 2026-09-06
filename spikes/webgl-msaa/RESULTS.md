@@ -308,6 +308,31 @@ Seventeen uniform draws over that range would give well under one such pair; thr
 23 MiB, is a deterministic allocator putting a real object at a stable VA — a region that has no
 mapping *at that instant*, rather than a wild pointer.
 
+## The damage is not the fault; it is the runaway that follows it
+
+Losing the device is survivable. What is not is what the host does next. In the instrumented arm,
+counted either side of the `[LIMINA-DEVICE-LOST]` line in the same log:
+
+| | before the loss | after |
+|---|---|---|
+| `[LIMINA-ALLOC-POOL] … grew to N allocators` | **0** | **3608** |
+| command allocators in class 1 | 65 | **3672** |
+| `bo+` allocations | steady | **13070 more** |
+
+Nothing completes once the device is gone, so KK's command-allocator pool never recycles and grows
+without bound — `in-flight depth is outrunning completion`, thousands of times — while fresh BOs
+keep being minted behind it. This is the mechanism behind the ~100k compressor pages that every
+dying arm strands and that only a host reboot returns.
+
+So the user-visible cost of this bug is mostly **not** the GPU fault. It is that a lost device puts
+the worker into an unbounded allocation loop instead of stopping. zink does not abort here —
+`ZINK_HANG_ABORT` defaults false and `zink_screen_handle_vkresult` only aborts when it is set and no
+robust context exists — it marks the screen lost and returns failure, and everything above keeps
+submitting work that can never complete.
+
+That makes containment a fix worth having **whatever the fault turns out to be**: it is the half of
+the damage that is ours, that we can reach, and that does not depend on ever finding the cause.
+
 ## What the GPU was actually given, read out of the capture
 
 Xcode cannot resolve KK's bindings to resources, but it does print the argument-table commands with
