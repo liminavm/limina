@@ -308,6 +308,32 @@ Seventeen uniform draws over that range would give well under one such pair; thr
 23 MiB, is a deterministic allocator putting a real object at a stable VA — a region that has no
 mapping *at that instant*, rather than a wild pointer.
 
+## A shader load from an unmapped address does not fault; it reads zero
+
+`spikes/gpu-fault-calibrate/` dispatches a compute kernel that dereferences a raw 64-bit address,
+the way every KosmicKrisp shader reaches everything. Against a planted value it reads back
+`0xcafebabe`, so the kernel demonstrably runs. Against an unmapped address it returns **zero and
+completes with no error** — including at two of the addresses the real faults actually reported
+(`0x93bebcd440`, `0xca25b38a40`), and at `0x7f0000000000` and `0xffffff0000000000`.
+
+That holds through classic Metal *and* through the exact MTL4 shape KK uses: an `MTL4CommandQueue`,
+an `MTL4ArgumentTable` bound with `setAddress:`, and an explicit `MTLResidencySet` holding only the
+two real buffers. Neither the API nor residency changes it.
+
+**So the faults are not shader pointer dereferences.** Whatever requestor 174 is, it is not the
+shader load path, because that path does not fault at all. The faulting agent has to be a
+fixed-function unit that computes an address from a descriptor — the texture sampler, vertex fetch,
+or the render output — and the fault therefore comes from a *descriptor* being wrong, not from a
+shader chasing a bad pointer.
+
+This retires a whole family at once: every theory in which the shader reads a stale root, a
+recycled slot, or a pointer that used to be valid. It also explains why auditing the descriptor
+chain on the CPU kept coming back clean and kept being irrelevant — the audit was of the wrong
+agent.
+
+The experiment costs nothing: no VM, no entitlements, no compressor pages (360549 before and
+after), seconds per run.
+
 ### What the rest of the report says
 
 The files had only ever been grepped for three fields. Parsed whole (one JSON header line, then a
