@@ -168,6 +168,22 @@ paints at all: its GL context dies at the first frame. If you see `Illegal resou
 `failed to dispatch CREATE_OBJECT`, look for a missing SET_TYPE, not for a rendering bug.
 
 
+#### Multisampling is switched off, deliberately
+
+vrend advertises `max_samples = 1`. A guest cannot ask for multisampling it has not been told
+exists, so a WebGL context requesting `{antialias:true}` — the default for a bare
+`getContext('webgl')` — comes back reporting `antialias:false` and renders aliased. Every browser
+handles that; it is the specification's own degradation path.
+
+This is a mitigation, not a design choice. Multisampled rendering on this tier loses the host
+Vulkan device within a couple of frames and kills the VM, on ordinary web pages; the same page
+without antialiasing runs indefinitely. The root cause is open —
+`spikes/webgl-msaa/RESULTS.md` has the investigation, including what it has ruled out.
+
+The ceiling is `VREND_MAX_SAMPLES`, set to 1 by the worker unless the environment already names a
+value, so `VREND_MAX_SAMPLES=4` restores multisampling for a test. The cost is antialiasing for
+every guest GL application, not only the ones that would have crashed.
+
 ### 3.3 venus — Vulkan, and the one thing that needs the enhanced guest
 
 venus is the Vulkan side only. In an enhanced guest:
@@ -756,6 +772,7 @@ or commit while it runs.
 
 | item | where |
 |---|---|
+| **Multisampling is disabled on the GL tier** — a `{antialias:true}` WebGL context takes a GPU address fault and loses the host Vulkan device; mitigated by advertising `max_samples = 1`, root cause open | §3.2, `spikes/webgl-msaa/RESULTS.md` |
 | **A venus failure kills the whole Vulkan loader** — upstream the stub-instance patch so a stock guest keeps llvmpipe when venus goes down | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
 | **Fence-accurate present is not wired for vrend** — vrend's flush path never reaches `try_park_present`, so `FENCEPRESENT` never fires and the #24 tear/pacing work does not apply to the tier the desktop actually runs on. **No observable symptom, though:** the overview-toggle stress (historically the most tear-prone workload) was human-verified smooth on both present paths on 2026-08-16, so this is a missing mechanism rather than a live defect. Re-open it if tearing is ever reported. | `docs/hardening-backlog.md`, `spikes/graphics-doc-audit/RESULTS.md` row 20 |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
