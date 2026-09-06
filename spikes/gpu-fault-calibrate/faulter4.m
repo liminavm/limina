@@ -55,6 +55,30 @@ int main(int argc, char **argv)
       uint64_t *c = (uint64_t *)cfg.contents;
       c[0] = self_test ? cfg.gpuAddress + 8 : addr;
       c[1] = self_test ? 0xcafebabeull : addr;
+
+      /* texload has no meaning without proof that a texture read happens at all:
+       * "no fault" and "the kernel never ran" produce the same all-zero output.
+       * So `texload self` reads through a REAL texture holding a known pixel. */
+      id<MTLTexture> tex = nil;
+      if (self_test && strcmp(mode, "texload") == 0) {
+         MTLTextureDescriptor *td =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                               width:4 height:4 mipmapped:NO];
+         td.usage = MTLTextureUsageShaderRead;
+         td.storageMode = MTLStorageModeShared;
+         tex = [dev newTextureWithDescriptor:td];
+         uint8_t px[4 * 4 * 4];
+         for (int i = 0; i < 4 * 4; i++) {
+            px[i * 4 + 0] = 0xff; px[i * 4 + 1] = 0x00;
+            px[i * 4 + 2] = 0x00; px[i * 4 + 3] = 0xff;
+         }
+         [tex replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                  withBytes:px bytesPerRow:16];
+         MTLResourceID rid = tex.gpuResourceID;
+         memcpy(&c[1], &rid, sizeof(rid));
+         printf("control texture resource id 0x%llx (expect out = 1 0 0 1)\n",
+                (unsigned long long)c[1]);
+      }
       printf("cfg gpuAddress 0x%llx, target 0x%llx\n", (unsigned long long)cfg.gpuAddress,
              (unsigned long long)c[0]);
 
@@ -64,6 +88,8 @@ int main(int argc, char **argv)
       id<MTLResidencySet> rs = [dev newResidencySetWithDescriptor:rsd error:&err];
       [rs addAllocation:cfg];
       [rs addAllocation:out];
+      if (tex != nil)
+         [rs addAllocation:tex];
       [rs commit];
       [rs requestResidency];
 
@@ -108,7 +134,9 @@ int main(int argc, char **argv)
          printf("completed with no error -- no fault taken\n");
 
       uint32_t *r = (uint32_t *)out.contents;
-      printf("out[0..3] = %u %u %u %u\n", r[0], r[1], r[2], r[3]);
+      float *f = (float *)out.contents;
+      printf("out[0..3] as uint  = %u %u %u %u\n", r[0], r[1], r[2], r[3]);
+      printf("out[0..3] as float = %g %g %g %g\n", f[0], f[1], f[2], f[3]);
       return 0;
    }
 }

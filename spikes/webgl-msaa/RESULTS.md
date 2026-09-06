@@ -344,13 +344,26 @@ fixed-function unit that computes an address from a descriptor — the texture s
 or the render output — and the fault therefore comes from a *descriptor* being wrong, not from a
 shader chasing a bad pointer.
 
-This retires a whole family at once: every theory in which the shader reads a stale root, a
-recycled slot, or a pointer that used to be valid. It also explains why auditing the descriptor
-chain on the CPU kept coming back clean and kept being irrelevant — the audit was of the wrong
-agent.
+A bindless texture read through an invalid `MTLResourceID` does not fault either. The control
+matters here, because "no fault" and "the kernel never ran" both produce all-zero output: reading
+through a **real** texture's id returns its planted red pixel (`1 0 0 1`), so the read genuinely
+happens. Through an id that names nothing it returns zero and completes — at `0x2`, `0x3`, `0x10`,
+`0x100`, `0xffff`, `0xffffffff` and `0xdeadbeef00000000` alike. (A real id on this device is `0x1`:
+`MTLResourceID` is an opaque index, not an address, so near-misses and wild values are both just
+out-of-range indices.)
 
-The experiment costs nothing: no VM, no entitlements, no compressor pages (360549 before and
-after), seconds per run.
+This retires a whole family at once: every theory in which the shader reads a stale root, a
+recycled slot, a pointer that used to be valid, or a texture handle that outlived what it named.
+It also explains why auditing the descriptor chain on the CPU kept coming back clean and kept being
+irrelevant — the audit was of the wrong agent.
+
+What is left as the faulting agent is a unit that derives an address from a descriptor it trusts:
+the render backend loading or storing an attachment, depth/stencil, or a sampler working from a
+descriptor whose extent or stride is wrong — not a handle that is merely invalid.
+
+The experiment costs nothing: no VM, no entitlements, no compressor pages moved across any run,
+seconds each. Its one intended output it did **not** produce: with no fault taken, there is no
+`gpuEvent` report, so `requestor` 174 and the address granule remain uncalibrated.
 
 ### What the rest of the report says
 
