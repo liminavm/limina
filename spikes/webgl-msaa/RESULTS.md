@@ -256,6 +256,50 @@ What is required is the **GPU actually walking the chain**: `root + 864` → the
 descriptor → the view's resource ID and `sampler_table.handles[idx]` → `sample()`. Nothing before
 that dereference is sufficient.
 
+## The faulting pointer was never one of ours
+
+The kernel writes `gpuEvent-limina-vmm-*.ips` under `/Library/Logs/DiagnosticReports/`. They are
+readable directly — the files are `root:_analyticsusers` with group read, and the account is in
+that group. Each carries `restart_reason_desc` and, for a page fault, `bif0_fault` with the
+address, the page-table level, the direction, and **`requestor`/`sideband`**, which name the
+hardware unit that asked.
+
+Seventeen faults, every one a **read**:
+
+| | |
+|---|---|
+| addresses | `0x0aaa79d000` … `0xca25b38a40` |
+| the process's whole GPU address band | `0x0` … `0x1c55320000` (113 GiB), from a fully address-logged arm |
+| faults inside that band | **1 of 17** |
+| requestor / sideband | 13 × `174/103`, 4 × `112`\|`96`\|`80` `/65` — two different units |
+| alignment | 64 B or coarser, never byte-random |
+
+The value the shader dereferenced was **never anything KK allocated**. That closes every stale- or
+dangling-resource theory at once — a freed BO, a recycled slot, a dangling view would all fault
+*inside* the band. It also rules out a single fixed buffer being non-resident (the sampler table,
+say, at `0x15000b0000`): one buffer faults at one range, not seventeen scattered ones.
+
+Two requestors mean two hardware units fault across arms, which is a discriminator worth carrying
+into the next report — map new ones onto the arm that produced them. The daemon lags: no `.ips` has
+appeared for six losses between 21:36 and 22:20 while the newest file is 13:27, so read them later
+and match by timestamp, never wait on one.
+
+## …and yet the chain is clean when it is recorded
+
+`LIMINA_KK_ADDR_CHECK=1` now walks, at every multisampled draw, the chain the generated MSL walks —
+and reads it out of the **uploaded root buffer's own bytes** at `offsetof(root, sets) + i*8`, not
+the CPU struct the upload was made from, so a root uploaded stale or bound from another draw would
+show. Sampled-image slots are visited by layout, so each reported value is the one the GPU will
+dereference; every texture resource ID KK mints is registered at view create.
+
+Through a full death: **`ROOTSKEW` 0, `ALIENRID` 0, `BADSAMPIDX` 0, `BADADDR` 0, `DEADRID` 0.**
+
+So the descriptor chain is consistent when it is written, every ID in it is one KK minted, every
+sampler index is in range — and serialising submits already excluded anything changing it after
+the record. The garbage address is therefore not in the bytes we write. What is left is the
+decode: a valid resource ID, dereferenced by the GPU, resolving to an address in no page table.
+The next instrument is a triggered GPU capture of the failing pass, not another knob.
+
 ## The blit, and how the route was read
 
 `LIMINA_VREND_TRACE=256` on the killing configuration: in a 31-second window, 3,220 draws, 248
@@ -331,6 +375,8 @@ is weak by the stochastic finding.
 | `LIMINA_KK_SAMPLER_LEAK=1` — no sampler slot ever retired | 1 | lost, **0 retirements to suppress** |
 | `?fsuniform=1` — the fragment shader reads a uniform, samples nothing | 1 | **survived** |
 | `?texbound=1` — sampler bound and reachable, sample never executed | 1 | **survived**, 22,944 frames |
+| `LIMINA_KK_SAMPTAB_RESIDENT=1` — sampler table pinned in the residency set | 1 | lost (and the fault spread had already refuted it) |
+| `LIMINA_KK_ADDR_CHECK=1` with the full chain walk | 1 | lost, **every check silent** |
 | `KK_LIMINA_BARRIER=widen` (pre_gfx barrier scope ALL) | 1 | lost |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
