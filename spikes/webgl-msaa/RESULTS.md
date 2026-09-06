@@ -308,6 +308,32 @@ Seventeen uniform draws over that range would give well under one such pair; thr
 23 MiB, is a deterministic allocator putting a real object at a stable VA — a region that has no
 mapping *at that instant*, rather than a wild pointer.
 
+## Serialising every submit does not prevent it
+
+`KK_LIMINA_SERIALIZE=1` chains command buffers on a queue event so no two can execute
+concurrently or out of order. With it on, and multisampled blits on the wire, **the device was lost
+anyway**. So no ordering fault between KK's command buffers can be the cause: the bug is in what is
+encoded, not in when it runs. (That arm was VOID by the harness's own guard — the browser was gone
+by the 25 s check, plausibly because the GPU died first — but the three facts that matter are
+directly in the log: serialisation on, an `s4` blit on the wire, and the loss.)
+
+Serialisation was never a candidate mitigation regardless; its own comment calls it
+catastrophically slow by design. It was run for the datum.
+
+## Containment works
+
+The same arm, with the fix from `kk: stop allocating once the device is lost`:
+
+| after the device loss | before the fix | with it |
+|---|---|---|
+| allocator growth warnings | 3608 | **0** |
+| further `bo+` allocations | 13070 | **0** |
+| live allocators in the class | 3672 | **8** |
+
+One `[LIMINA-ALLOC-POOL] device is lost — refusing to mint allocators` line, and the bleed stops
+dead. Host compressor across that whole arm rose 48k pages against the ~100k an uncontained
+incident cost, though a single arm cannot separate the VM's own footprint from the remainder.
+
 ## The damage is not the fault; it is the runaway that follows it
 
 Losing the device is survivable. What is not is what the host does next. In the instrumented arm,
