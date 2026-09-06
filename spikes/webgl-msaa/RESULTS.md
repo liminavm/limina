@@ -541,7 +541,41 @@ attachment with `resolve_mode != VK_RESOLVE_MODE_NONE` on this workload. zink em
 `EXT_multisampled_render_to_texture` with a `util_blitter` draw, so the multisample traffic is
 ordinary rendering to and sampling from a 4-sample texture.
 
-## Toward a no-VM repro
+## There is a no-VM repro: a GPU capture of the failing passes
+
+A Metal capture of the three multisampled passes **faults again when Xcode replays it**, in the
+replayer process, with no VM, no guest and no vrend context anywhere. The trace is therefore the
+standalone, deterministic repro this investigation spent weeks failing to write by hand — it can
+be replayed as often as wanted, bisected inside Xcode, and attached to a Radar.
+
+Making one, with the lever in `kk_limina_capture.c`:
+
+```
+MTL_CAPTURE_ENABLED=1 KK_LIMINA_CAPTURE=any KK_LIMINA_CAPTURE_SAMPLES=4 \
+KK_LIMINA_CAPTURE_ARM=any KK_LIMINA_CAPTURE_REPEAT=1 KK_LIMINA_CAPTURE_PASSES=3 \
+KK_LIMINA_CAPTURE_MAX_CBS=20 KK_LIMINA_CAPTURE_DIR=<dir> spikes/webgl-msaa/run-arm.sh <name>
+```
+
+Two things make that recipe work where the obvious one does not:
+
+- **Arm on the sample count, never on the extent.** The browser's window layout picks the canvas
+  size, so consecutive arms of the same repro rendered 1280x636 and 1280x720. An extent read off
+  the previous arm's dump is a lottery; `s4` is not, because only the antialiased canvas passes are
+  multisampled and everything the compositor draws is `s1`.
+- **`_REPEAT=1` opens the window on the second render into an attachment already seen**, which is
+  exactly the second of the three passes — and because the pass is noted before its Metal command
+  buffer exists, that pass is inside the trace rather than just before it.
+
+The capture is itself a synchronisation, so the captured frame usually survives; the arm then dies
+a frame or two later on the *same* attachment and the *same* command-buffer object. That is the
+useful case, not a failure of aim: the trace holds a byte-identical iteration of the work that
+faults, and it faults on replay anyway.
+
+Writing the trace to a directory does **not** segfault on this command stream, unlike the
+notification-text one the lever was built for, so no attached Xcode is needed to record — only to
+read.
+
+## The host loop that does not reproduce it
 
 `spikes/webgl-msaa/host-msaa-loop.c` is the attempt: GLES-over-EGL on the same host
 zink-on-KK, so it exercises the same driver without a guest, a vrend context or an
