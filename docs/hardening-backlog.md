@@ -3166,7 +3166,17 @@ that was captured — a real trap, because it looks exactly like the captured wo
 And Xcode's Metal debugger is unusable on this stack until the mangling is understood, which costs
 us the one tool that shows a draw's bindings as the GPU sees them.
 
-Where the corruption comes from is open. The runtime compiles the same sources without complaint,
-which points at the capture's serialisation rather than at what KK submits — but KK's own library
-creation should be checked first for a source buffer that is a slice, or one whose length and
-NUL-termination disagree.
+The corruption is on the **read** side, and neither half is ours. The trace on disk is correct:
+all 14 MSL sources extracted from the bundle compile clean under `xcrun metal -std=metal3.2`, and
+`mtl_new_library` passes a plain NUL-terminated C string into `MTL4LibraryDescriptor.source` with
+nothing sliced. So GPU Tools writes the source faithfully and mangles it when reconstructing it.
+
+Losing a varying number of *leading* bytes, across 25 libraries built concurrently through
+`dispatch`, has the shape of a race in that reconstruction rather than a fixed offset error — which
+predicts that replaying the same trace again may succeed. Worth trying before anything more
+expensive, and worth a Radar either way: the driver should report a failed library rather than
+null-dereference.
+
+The debugger is **not** wholly unusable: the recorded command stream still browses, and the
+labelled passes and their bindings can be read even when the replay dies. What is lost is
+everything that needs re-execution — attachment previews, the shader debugger, profiling.
