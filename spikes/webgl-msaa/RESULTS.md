@@ -308,6 +308,24 @@ Seventeen uniform draws over that range would give well under one such pair; thr
 23 MiB, is a deterministic allocator putting a real object at a stable VA — a region that has no
 mapping *at that instant*, rather than a wild pointer.
 
+## What the GPU was actually given, read out of the capture
+
+Xcode cannot resolve KK's bindings to resources, but it does print the argument-table commands with
+their raw values, and those are the root the GPU really got:
+
+| | |
+|---|---|
+| pass #1 | `setAddress:0x1578f90080 atIndex:0`, `setAddress:0x15000b0000 atIndex:1` |
+| pass #3 | `setAddress:0x1578f91280 atIndex:0`; index 1 unchanged, so still `0x15000b0000` |
+
+Both roots fall inside **one live 128 KiB allocation** — `bo+ gpu=0x1578f90000..0x1578fb0000` at
+seq 803, the upload pool, 4608 bytes apart as the pool advances per pass. Index 1 is exactly the
+logged `samplertab gpu=0x15000b0000..0x15000b8000`.
+
+So the address the GPU was handed matches the address KK logs on the CPU, and it names a live,
+tracked allocation. There is nothing dangling on the binding side, and the address log is
+trustworthy where it has coverage.
+
 ## A shader load from an unmapped address does not fault; it reads zero
 
 `spikes/gpu-fault-calibrate/` dispatches a compute kernel that dereferences a raw 64-bit address,
