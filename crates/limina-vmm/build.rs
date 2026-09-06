@@ -37,6 +37,10 @@ fn main() {
     // TSan-instrumented virglrenderer has to live in its own prefix so the working one stays
     // usable, and the worker bakes the dylib's absolute path in at link time, so choosing it has
     // to happen here rather than at run time.
+    // Cargo caches a build script's output, so without this a changed LIMINA_VIRGL_PREFIX
+    // relinks nothing and the worker keeps the prefix it was first built against.
+    println!("cargo:rerun-if-env-changed=LIMINA_VIRGL_PREFIX");
+    println!("cargo:rerun-if-env-changed=MESA_PREFIX");
     let virgl_prefix = std::env::var("LIMINA_VIRGL_PREFIX")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| tp.join("virgl-prefix"));
@@ -78,14 +82,30 @@ fn main() {
                 .first()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "<unknown>".into());
-            if where_.contains("virgl-prefix") {
+            // Against the prefix that was ASKED for, not a hardcoded name -- the same check
+            // scripts/check-virgl-link.sh makes, and for the same reason: matching on the
+            // string "virgl-prefix" fails a deliberate LIMINA_VIRGL_PREFIX build while passing
+            // a stale default one, which is the check inverted.
+            // Canonicalized because the default prefix is reached through `../..` while
+            // pkg-config reports the .pc's own libdir, and `starts_with` compares components.
+            let want = virgl_prefix
+                .join("lib")
+                .canonicalize()
+                .unwrap_or(virgl_prefix.join("lib"));
+            if Path::new(&where_)
+                .canonicalize()
+                .unwrap_or_default()
+                .starts_with(&want)
+            {
                 println!("cargo:warning=virglrenderer: linking OUR prefix ({where_})");
             } else {
                 println!(
-                    "cargo:warning=virglrenderer: linking {where_} — NOT third_party/virgl-prefix! \
+                    "cargo:warning=virglrenderer: linking {where_} — NOT {}! \
                      venus will degrade to software-2D. Rebuild with \
-                     PKG_CONFIG_PATH=third_party/virgl-prefix/lib/pkgconfig:... or run \
-                     scripts/build-virglrenderer.sh first."
+                     PKG_CONFIG_PATH={}:... or run \
+                     scripts/build-virglrenderer.sh first.",
+                    virgl_prefix.display(),
+                    prefix_pc.display()
                 );
             }
         }
