@@ -39,12 +39,14 @@ CARGO_FLAGS=()
 [ "$PROFILE" = "release" ] && CARGO_FLAGS=(--release)
 
 # ---- dev source locations (the things we vendor into the bundle) -----------------
-# The virglrenderer prefix. Exported, not just read: crates/limina-vmm/build.rs honours the
-# same variable to pick what the worker LINKS, so one value decides both what is linked and
-# what is bundled. Set them separately and the .app ships a dylib the worker never linked --
-# which loads, because the two implementations serve one ABI, and is a different renderer.
+# The virglrenderer prefix. One value decides both what the worker LINKS and what is
+# bundled, so it is exported under BOTH names: this script and the dylib closure below read
+# VIRGL_PREFIX, and crates/limina-vmm/build.rs reads LIMINA_VIRGL_PREFIX. Setting only one
+# of them ships a dylib the worker never linked -- which loads, because the two
+# implementations serve one ABI, and is a different renderer.
 # Point it at virglrs/install.sh's output to bundle the Rust implementation.
-export VIRGL_PREFIX="${VIRGL_PREFIX:-$ROOT/third_party/virgl-prefix}"
+export VIRGL_PREFIX="${VIRGL_PREFIX:-${LIMINA_VIRGL_PREFIX:-$ROOT/third_party/virgl-prefix}}"
+export LIMINA_VIRGL_PREFIX="$VIRGL_PREFIX"
 VIRGL="$VIRGL_PREFIX/lib/libvirglrenderer.1.dylib"
 EPOXY="$ROOT/third_party/epoxy-egl-prefix/lib/libepoxy.0.dylib"
 KK_BUILD="${LIMINA_KK_BUILD:-/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan}"
