@@ -264,17 +264,31 @@ that group. Each carries `restart_reason_desc` and, for a page fault, `bif0_faul
 address, the page-table level, the direction, and **`requestor`/`sideband`**, which name the
 hardware unit that asked.
 
-Seventeen faults, every one a **read**, 64 B-or-coarser aligned:
+Seventeen faults, every one a **read**, and every one exactly 64-byte aligned (five of them
+4 KiB-aligned). Seventeen aligned values would be a remarkable coincidence for random bytes, so the
+value being dereferenced looks well-formed rather than garbage — but this is **not established**:
+a GPU fault reporter may simply record the access granule rather than the exact byte, and there is
+no control sample on this host (the only two non-limina `gpuEvent-*.ips` files carry no address at
+all). Treat "the pointer is well-formed" as a lead, not a fact.
+
+The population, then:
 
 | | |
 |---|---|
 | KK's own allocation band | `0x1500000000` … `0x1c44b90000` — **84.0 … 113.1 GiB** |
-| what that band covers | every `kk_alloc_bo` (MTLHeap + MTLBuffer) **and** every image plane; `LIMINA_KK_ADDR_LOG` logs `bo+`/`bo-` and `img+`/`img-` alike |
+| what that band covers | every `kk_alloc_bo` (MTLHeap + MTLBuffer) **and** every locally created image plane; `LIMINA_KK_ADDR_LOG` logs `bo+`/`bo-` and `img+`/`img-` alike |
+| what it does **not** cover | every import path in `kk_device_memory.c` — an IOSurface texture, a Metal heap, and a host pointer via `newBufferWithBytesNoCopy` — none of which is logged |
 | faults inside that band | **0 of 17** |
 | fault spread | 42.7 GiB … 808.6 GiB |
 | requestor / sideband | 13 × `174/103`, 4 × `112`\|`96`\|`80` `/65` — two different units |
 
-So the address is in no BO and no image plane of ours. That closes the stale/dangling/recycled
+So the address is in no BO and no image plane KK allocates **locally**. Imported memory is a
+separate population and the log does not cover it, which is the honest limit of this negative —
+though the loss report's own residency census narrows it: `160 heaps, 0 buffers, 192 textures`.
+A host-pointer import is the one thing that calls `kk_device_add_buffer_to_residency_set`, so at
+the death there was **no live host-pointer import on the faulting device** at all.
+
+The reading of the alignment below is likewise bounded:  That closes the stale/dangling/recycled
 *resource* theories — a freed BO, a recycled slot or a dangling view would all fault inside the
 band — and closes "one fixed buffer is not resident" (the sampler table at `0x15000b0000` is one
 range, not seventeen). It does **not** make the address garbage: the band excludes everything
@@ -478,6 +492,7 @@ is weak by the stochastic finding.
 | `LIMINA_KK_ALLOC_DESTROY=0` (34 retirements → 0) | 1 | dies |
 | `LIMINA_KK_BO_LEAK=1` — nothing released or de-resident | 1 | dies |
 | `LIMINA_KK_VIEW_LEAK=1` — no view released | 1 | dies |
+| input/render/subres views registered in the residency set (`kk_image_view.c`) | 1 | **lost at 0 s** — the un-resident minted views are a real defect, not this one |
 | nil texture views (`mtl_new_texture_view_with` → nil) | 3 | zero |
 | Metal render-pass resolve (upstream `db5ab8de776`) | 1 | **never runs** |
 | the zink shadow blit alone, no VM | 1 | **no mismatch** |

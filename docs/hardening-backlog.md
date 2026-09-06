@@ -3135,3 +3135,18 @@ An unregistered allocation is not immediately wrong — it simply stays mapped u
 the pages, which makes the resulting fault stochastic, a read, and at an address in no allocation
 KosmicKrisp tracks. Fixed by registering every handle we mint and remembering which ones they are,
 so teardown unregisters only those and never the parent's texture that the retain branches alias.
+
+Not the cause of the WebGL `{antialias:true}` device loss: an arm with every minted handle
+registered died on the first frames (`spikes/webgl-msaa/RESULTS.md`).
+
+## A KosmicKrisp meta dispatch leaves the compute root bound
+
+`kk_cmd_bind_root_to_argument_table` records what it bound in `cmd->state.root_addr`, and the
+compute path binds the *compute* root through it (`kk_cmd_dispatch.c:34`). The "rebind the exiting
+root" at the end of a dispatch (`kk_cmd_buffer.c:1257`) then restores `cmd->state.root_addr` —
+which is the compute root that dispatch just bound, not the graphics root that was live before it.
+
+Nothing has been seen to break: the graphics path rebinds unconditionally at every draw flush
+(`kk_cmd_draw.c:1519`), so the stale bind never survives to a draw. It is still the wrong value to
+restore, and the comment says it means to restore the other one. Save and restore the root the
+caller had, rather than the field the callee overwrote.
