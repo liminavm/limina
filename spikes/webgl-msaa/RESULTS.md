@@ -333,6 +333,11 @@ fetch addressed off a real allocation with a stride, index or extent that is wro
 magnitude — rather than a corrupt pointer or an evicted page. That is a lead, not a conclusion:
 the alignment may be the reporter's granule, and the `level` encoding is not documented.
 
+Cross-referencing closes the local half for good: `fault-vs-addrlog.py` run over the fully
+instrumented arm's log — **16932 logged ranges spanning 0 … 112.6 GiB** — matches **0 of the 18
+addressed faults**. The import paths added no ranges to that map, because an imported IOSurface
+texture has no GPU address any Metal API returns; that population stays unaddressable from here.
+
 The daemon lags: no `.ips` appeared for six losses between 21:36 and 22:20 while the newest file
 was 13:27, and some sessions produce none at all. Read them later and match by timestamp; never
 wait on one.
