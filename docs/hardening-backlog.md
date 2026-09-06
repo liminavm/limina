@@ -3150,3 +3150,23 @@ Nothing has been seen to break: the graphics path rebinds unconditionally at eve
 (`kk_cmd_draw.c:1519`), so the stale bind never survives to a draw. It is still the wrong value to
 restore, and the comment says it means to restore the other one. Save and restore the root the
 caller had, rather than the field the callee overwrote.
+
+## A Metal GPU capture records KosmicKrisp's shader source with bytes missing
+
+A `.gputrace` taken from the worker cannot be replayed: the MSL it stores comes back with leading
+bytes stripped from identifiers at varying offsets — `at4` for `float4`, `ong` for `long`, `ype`
+for `type`. Function signatures are chewed up, so thousands of statements land at program scope,
+every `-[MTL4Compiler newLibraryWithDescriptor:error:]` fails, and `AGXMetalG13X` then
+null-dereferences while building a pipeline (`KERN_INVALID_ADDRESS 0xe0` in
+`createVertexProgramVariant`) rather than reporting the error. Artefacts:
+`spikes/webgl-msaa/traces/cap3-replay-errors.txt` and `cap3-replay-crash.ips`.
+
+Two consequences. A replayer crash on one of our traces is **not** evidence about the workload
+that was captured — a real trap, because it looks exactly like the captured work reproducing.
+And Xcode's Metal debugger is unusable on this stack until the mangling is understood, which costs
+us the one tool that shows a draw's bindings as the GPU sees them.
+
+Where the corruption comes from is open. The runtime compiles the same sources without complaint,
+which points at the capture's serialisation rather than at what KK submits — but KK's own library
+creation should be checked first for a source buffer that is a slice, or one whose length and
+NUL-termination disagree.
