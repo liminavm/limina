@@ -495,6 +495,33 @@ attachment with `resolve_mode != VK_RESOLVE_MODE_NONE` on this workload. zink em
 `EXT_multisampled_render_to_texture` with a `util_blitter` draw, so the multisample traffic is
 ordinary rendering to and sampling from a 4-sample texture.
 
+## Toward a no-VM repro
+
+`spikes/webgl-msaa/host-msaa-loop.c` is the attempt: GLES-over-EGL on the same host
+zink-on-KK, so it exercises the same driver without a guest, a vrend context or an
+IOSurface scanout. It already renders into an implicitly-multisampled texture, samples a
+64x64 LINEAR texture from the fragment shader inside that pass, and composites the resolved
+result in a second single-sample pass.
+
+The shape it has to match, read off the loss dumps:
+
+| the guest does | the loop does |
+|---|---|
+| three `1280x720 s4 rts1 fmt37` passes per frame, each LOAD + **one** textured draw | `--pass-per-draw` (a `glFlush()` after each of the three draws) |
+| an `s1 fmt44` pass reading the multisampled texture as 2DMS | composite pass, but it samples the **resolved** texture |
+| a `2560x1440` composite | `--size` |
+| many zink contexts and venus rings on one `VkDevice` | one context |
+| textures backed by guest memory, transferred in | locally created |
+
+**It survives everything tried so far**: 111322 frames at 885 fps with `--pass-per-draw`, and
+20k frames before that without. So neither the sampled draw into a 4-sample target nor the
+pass boundary is the ingredient by itself — which is a real narrowing, because both were
+prime suspects. What is left in the table above is the 2DMS read and the multi-context
+environment, and the environment is the harder one to bring across.
+
+The loop is cheap (no boot, no image clone, and it strands no host memory), so it is the
+right place to test any theory that does not need the guest.
+
 ## Where to look next
 
 1. **The bindless texture read.** The attachments are alive, the draw is not unrolled, and vertex

@@ -3117,3 +3117,21 @@ pipeline's declared image dimension against the bound view's `sample_count_sa`.
 
 Whether this is the cause of the WebGL `{antialias:true}` device loss
 (`spikes/webgl-msaa/RESULTS.md`) is being measured; it is a defect either way.
+
+## KosmicKrisp minted image-view textures Metal never had to keep mapped
+
+`kk_image_view_init` mints up to five Metal textures per plane, but only registered two of them
+in the device residency set: the sampled view and the storage view. The input view — created
+whenever the view needs a type or format change, which a 2D multisampled colour attachment always
+does — the render view (created on a format change, and the texture the render pass binds), and
+the compressed-reinterpret subresource texture were all left out.
+
+KK's own code carries the reason this matters: `kk_image.c` registers the texture and not just the
+heap it sits on, because Metal validation says "the resource must be added to a residency set on
+the command buffer or command queue" even when its heap already is. A texture *view* is likewise
+its own Metal allocation with its own `MTLResourceID`, and it is that ID a shader dereferences.
+
+An unregistered allocation is not immediately wrong — it simply stays mapped until Metal wants
+the pages, which makes the resulting fault stochastic, a read, and at an address in no allocation
+KosmicKrisp tracks. Fixed by registering every handle we mint and remembering which ones they are,
+so teardown unregisters only those and never the parent's texture that the retain branches alias.
