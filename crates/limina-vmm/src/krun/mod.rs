@@ -341,9 +341,23 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
         (None, true) => (true, GPU_COEXIST_FLAGS), // flags unused when software_2d (no rutabaga)
         (None, false) => (false, GPU_COEXIST_FLAGS),
     };
+    // Multisampling on the GL tier loses the host Vulkan device: a WebGL context created with
+    // {antialias:true} — which is also what a bare getContext('webgl') gives, since the spec
+    // defaults it true — takes a GPU address fault within a couple of frames, and the same page
+    // with {antialias:false} runs indefinitely (spikes/webgl-msaa/RESULTS.md). Until that is
+    // understood, do not tell the guest multisampling exists: it then reports antialias:false to
+    // the page, which is the spec's own degradation and what every browser already handles.
+    // Set VREND_MAX_SAMPLES yourself (to 4, say) to put it back for testing.
+    if std::env::var_os("VREND_MAX_SAMPLES").is_none() {
+        // SAFETY: single-threaded here — this runs during VM construction, before any renderer
+        // thread exists, and virglrenderer reads the variable once when it fills its caps.
+        unsafe { std::env::set_var("VREND_MAX_SAMPLES", "1") };
+    }
     log::info!(
-        "virtio-gpu virgl_flags = {flags:#x}, software_2d = {software_2d} (coexist = {})",
-        !software_2d
+        "virtio-gpu virgl_flags = {flags:#x}, software_2d = {software_2d} (coexist = {}), \
+         vrend max_samples ceiling = {}",
+        !software_2d,
+        std::env::var("VREND_MAX_SAMPLES").unwrap_or_else(|_| "unset".into())
     );
     vmr.set_gpu_virgl_flags(flags);
     vmr.set_gpu_software_2d(software_2d);

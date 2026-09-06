@@ -308,6 +308,34 @@ Seventeen uniform draws over that range would give well under one such pair; thr
 23 MiB, is a deterministic allocator putting a real object at a stable VA — a region that has no
 mapping *at that instant*, rather than a wild pointer.
 
+## The mitigation: do not advertise multisampling on the GL tier
+
+A guest cannot ask for what it has not been told exists. `VREND_MAX_SAMPLES` caps the sample count
+vrend advertises in its caps; the worker sets it to **1** unless the environment already names a
+value, so the guest's GL reports no multisampling and a WebGL context asking for
+`{antialias:true}` comes back reporting `antialias:false`. That is the WebGL specification's own
+degradation path, and every browser already handles it — the page keeps running, aliased.
+
+Measured on this host: `clamping advertised max_samples 4 -> 1`, **zero** `s4` blits on the wire
+with the page rendering, and the arm **survived 421 s** with no device loss.
+
+One survival would normally prove little here, since roughly one arm in four survives by chance.
+It is worth more than that in this case because the mechanism is not statistical: with
+`max_samples=1` the page takes the very same single-sample path as `{antialias:false}`, which has
+never died in any arm. The mitigation does not make the failure less likely; it stops the workload
+that fails from being reachable.
+
+Mechanism sits in virglrenderer (a ceiling, no policy) and the value in limina, so restoring
+multisampling for a test is `VREND_MAX_SAMPLES=4` in the worker's environment and nothing else.
+
+The cost is real and worth stating plainly: **no antialiasing for any guest GL application**, not
+just the ones that would have crashed. That is the trade until the fault is understood — a slightly
+worse-looking desktop against a VM that dies on ordinary web pages.
+
+`spikes/webgl-msaa/run-arm.sh` takes `LIMINA_ARM_EXPECT_MSAA=0` for this configuration: its
+validity guard demands a multisampled blit on the wire, and under the mitigation the *absence* of
+one is what proves the arm is testing the right thing.
+
 ## Serialising every submit does not prevent it
 
 `KK_LIMINA_SERIALIZE=1` chains command buffers on a queue event so no two can execute

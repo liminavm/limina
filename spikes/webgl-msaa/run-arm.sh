@@ -84,19 +84,26 @@ echo "firefox processes after launch: $FF"
 
 # The multisampled blit on the wire is the workload, not the browser: only it
 # proves the antialiased canvas is actually rendering through vrend.
+#
+# LIMINA_ARM_EXPECT_MSAA=0 inverts that: with the host advertising max_samples=1
+# the page still runs but takes the single-sample path, so an s4 blit must NOT
+# appear, and requiring one would void every arm of the mitigation being tested.
+EXPECT_MSAA="${LIMINA_ARM_EXPECT_MSAA:-1}"
 for _ in $(seq 1 20); do
     grep -q 'LIMINA-BLIT.*s4' "$WORKER" && break
     sleep 3
 done
+S4=$(grep -c 'LIMINA-BLIT.*s4' "$WORKER" 2>/dev/null || echo 0)
 
-if [ "$FF" -eq 0 ] || ! grep -q 'LIMINA-BLIT.*s4' "$WORKER"; then
+if [ "$FF" -eq 0 ] || { [ "$EXPECT_MSAA" = 1 ] && [ "$S4" -eq 0 ]; } \
+                   || { [ "$EXPECT_MSAA" = 0 ] && [ "$S4" -ne 0 ]; }; then
     cp "$WORKER" "$OUT/worker.log" 2>/dev/null || true
     cp "$OUT/capture.png" "$OUT/capture-live.png" 2>/dev/null || true
     PID=$(pgrep -f '[l]imina --vmm-bin' || true)
     [ -n "$PID" ] && kill "$PID" 2>/dev/null || true
     sleep 8
     rm -f "$CLONE" "$CLONE.limina-suspend.bin"
-    echo "=== $NAME: VOID -- firefox=$FF, multisampled blit on the wire: $(grep -c 'LIMINA-BLIT.*s4' "$OUT/worker.log" 2>/dev/null || echo 0)"
+    echo "=== $NAME: VOID -- firefox=$FF, multisampled blit on the wire: $S4 (expected $EXPECT_MSAA)"
     echo "    (look at $OUT/capture.png; the workload never reached the GPU)"
     exit 75
 fi
