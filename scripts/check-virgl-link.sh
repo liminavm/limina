@@ -11,6 +11,10 @@
 # Usage: scripts/check-virgl-link.sh [path-to-limina-vmm]   (default: target/debug/limina-vmm)
 set -euo pipefail
 WORKER="${1:-target/debug/limina-vmm}"
+# What the worker is SUPPOSED to link -- the same variable build.rs and build-app.sh use, so
+# the guard checks the prefix that was asked for rather than a hardcoded one. Hardcoding it
+# would fail an intentional virglrs build while passing a stale prefix, which inverts the check.
+PREFIX="${VIRGL_PREFIX:-$PWD/third_party/virgl-prefix}"
 
 if [[ ! -x "$WORKER" ]]; then
     echo "check-virgl-link: worker not found at $WORKER (build it first)" >&2
@@ -24,8 +28,8 @@ if [[ -z "$link" ]]; then
     exit 1
 fi
 
-if echo "$link" | grep -q 'third_party/virgl-prefix'; then
-    echo "check-virgl-link: OK — $WORKER links our virgl-prefix virglrenderer"
+if echo "$link" | grep -qF "$PREFIX/lib/"; then
+    echo "check-virgl-link: OK — $WORKER links $PREFIX"
     exit 0
 fi
 
@@ -33,11 +37,11 @@ cat >&2 <<EOF
 check-virgl-link: WRONG VIRGLRENDERER LINK — venus will silently degrade to software-2D!
   $WORKER links:
 $link
-  Expected: .../third_party/virgl-prefix/lib/libvirglrenderer.*.dylib
+  Expected: $PREFIX/lib/libvirglrenderer.*.dylib
   Fix: rebuild the worker so build.rs/pkg-config resolves our prefix, e.g.
-    PKG_CONFIG_PATH="\$PWD/third_party/virgl-prefix/lib/pkgconfig:\$(brew --prefix)/opt/molten-vk/lib/pkgconfig:\$(brew --prefix)/lib/pkgconfig:\$(brew --prefix)/share/pkgconfig" \\
+    PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:\$(brew --prefix)/opt/molten-vk/lib/pkgconfig:\$(brew --prefix)/lib/pkgconfig:\$(brew --prefix)/share/pkgconfig" \\
       cargo build -p limina-vmm && crates/limina-vmm/sign.sh debug
   (build.rs now prepends the prefix automatically, so a clean rebuild should fix it.)
-  If third_party/virgl-prefix is missing, run scripts/build-virglrenderer.sh first.
+  If $PREFIX is missing, run scripts/build-virglrenderer.sh (or virglrs/install.sh) first.
 EOF
 exit 1
