@@ -541,14 +541,25 @@ attachment with `resolve_mode != VK_RESOLVE_MODE_NONE` on this workload. zink em
 `EXT_multisampled_render_to_texture` with a `util_blitter` draw, so the multisample traffic is
 ordinary rendering to and sampling from a 4-sample texture.
 
-## There is a no-VM repro: a GPU capture of the failing passes
+## A GPU capture of the failing passes exists; Xcode cannot read it
 
-A Metal capture of the three multisampled passes **faults again when Xcode replays it**, in the
-replayer process, with no VM, no guest and no vrend context anywhere. The trace is therefore the
-standalone, deterministic repro this investigation spent weeks failing to write by hand — it can
-be replayed as often as wanted, bisected inside Xcode, and attached to a Radar.
+The capture works. `spikes/webgl-msaa/traces/` holds a ~760 MB `.gputrace` covering the three
+multisampled passes, taken one frame before an arm that then faulted on the *same* attachment and
+the *same* command-buffer object — a byte-identical iteration of the work that dies.
 
-Making one, with the lever in `kk_limina_capture.c`:
+**Xcode cannot replay it, and the reason is unrelated to this bug.** The replayer SIGSEGVs at
+`KERN_INVALID_ADDRESS 0xe0` inside Apple's own shader compiler
+(`AGXMetalG13X`, `createVertexProgramVariant`) while loading the trace, behind 25 failures of
+`-[MTL4Compiler newLibraryWithDescriptor:error:]`. The MSL the trace hands back is **mangled**:
+identifiers have lost leading bytes at varying offsets (`at4` for `float4`, `ong` for `long`,
+`ype` for `type`), which chews up the function signatures and leaves 5828 statements at program
+scope. Every library then fails to build and the driver dereferences a null pipeline instead of
+reporting the error. Artefacts: `traces/cap3-replay-errors.txt`, `traces/cap3-replay-crash.ips`.
+
+A replayer crash is therefore **not** evidence about the workload, and must not be read as one.
+The trace records the shaders wrongly; nothing about the recorded *fault* is being reproduced.
+
+Making a capture, with the lever in `kk_limina_capture.c`:
 
 ```
 MTL_CAPTURE_ENABLED=1 KK_LIMINA_CAPTURE=any KK_LIMINA_CAPTURE_SAMPLES=4 \
@@ -566,14 +577,11 @@ Two things make that recipe work where the obvious one does not:
   exactly the second of the three passes — and because the pass is noted before its Metal command
   buffer exists, that pass is inside the trace rather than just before it.
 
-The capture is itself a synchronisation, so the captured frame usually survives; the arm then dies
-a frame or two later on the *same* attachment and the *same* command-buffer object. That is the
-useful case, not a failure of aim: the trace holds a byte-identical iteration of the work that
-faults, and it faults on replay anyway.
+The capture is itself a synchronisation, so the captured frame usually survives and the arm dies a
+frame or two later. That is the useful case, not a failure of aim.
 
 Writing the trace to a directory does **not** segfault on this command stream, unlike the
-notification-text one the lever was built for, so no attached Xcode is needed to record — only to
-read.
+notification-text one the lever was built for, so no attached Xcode is needed to record.
 
 ## The host loop that does not reproduce it
 
