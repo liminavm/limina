@@ -294,11 +294,33 @@ dereference; every texture resource ID KK mints is registered at view create.
 
 Through a full death: **`ROOTSKEW` 0, `ALIENRID` 0, `BADSAMPIDX` 0, `BADADDR` 0, `DEADRID` 0.**
 
-So the descriptor chain is consistent when it is written, every ID in it is one KK minted, every
-sampler index is in range — and serialising submits already excluded anything changing it after
-the record. The garbage address is therefore not in the bytes we write. What is left is the
-decode: a valid resource ID, dereferenced by the GPU, resolving to an address in no page table.
-The next instrument is a triggered GPU capture of the failing pass, not another knob.
+A silent check is only evidence if the walk reached the slots, so it counts what it inspected and
+the loss report prints it. A dying arm (`nd1`):
+
+    chain check: 108 sets walked by layout, 54 sampled slots inspected,
+                 0 slots past set size, max slot offset 0
+
+The slots were visited, none was skipped for being past the set size, and the sampler's descriptor
+sits at offset 0 of its own set — binding 128 is a binding *number*, not a byte offset. So the
+result stands: the descriptor chain is consistent when it is written, every ID in it is one KK
+minted, every sampler index is in range, and serialising submits already excluded anything
+changing it after the record. **The garbage address is not in the bytes we write; it is produced
+in the decode of a valid ID.**
+
+Keep the counters in any future check. This negative was reported once before the counters existed,
+while the layout walk was bounded by a size clamped to 4 KiB — the number could not then say
+whether the walk had reached anything at all.
+
+## The multisampled depth companion is not an ingredient
+
+`?nodepth=1` — a WebGL context requested with `depth:false`, no depth test — **dies**, and the
+failing commit is the same three `render 1280x720 s4 rts1 fmt37 … draws=1 unroll=0` passes, now
+recorded with `d=0`: no depth attachment exists at all.
+
+So the conjunction is not "sample + 4-sample D32S8". `?notex=1`, `?fsuniform=1` and `?texbound=1`
+make the executed texture sample *necessary*; this makes the depth companion *irrelevant*. What is
+left of the failing draw's shape is a fragment shader that actually executes a `sample()` into a
+4-sample colour target.
 
 ## The blit, and how the route was read
 
@@ -378,6 +400,8 @@ is weak by the stochastic finding.
 | `LIMINA_KK_SAMPTAB_RESIDENT=1` — sampler table pinned in the residency set | 1 | lost (and the fault spread had already refuted it) |
 | `LIMINA_KK_ADDR_CHECK=1` with the full chain walk | 1 | lost, **every check silent** |
 | `KK_LIMINA_BARRIER=widen` (pre_gfx barrier scope ALL) | 1 | lost |
+| `?nodepth=1` — no depth buffer, no depth test, `d=0` in the failing pass | 1 | lost |
+| the chain walk again, now counting what it inspected | 1 | lost, 54 slots inspected, **all silent** |
 | --- | | |
 | KK revision: pinned `552edc3f62f` vs two commits older | 1 each | both die |
 | scanout path: windowed vs `--display-capture` | 1 each | both die |
