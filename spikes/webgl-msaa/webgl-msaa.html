@@ -67,7 +67,8 @@ uniform sampler2D t;
 uniform float k;
 varying vec2 v;
 // The sampler is declared, bound and reachable, and the sample never executes: k is 0, and a
-// loop (not an `if`) keeps NIR from flattening the branch into a bcsel that runs the tex anyway.
+// loop -- not a plain conditional -- keeps NIR from flattening the branch into a bcsel that
+// would run the tex anyway.
 void main(){
   vec4 c = vec4(v.x, v.y, 0.6, 1.0);
   for (int i = 0; i < 8; i++) { if (float(i) >= k) break; c = texture2D(t, v); }
@@ -88,7 +89,10 @@ void main(){ gl_FragColor = texture2D(t, v); }`;
 function sh(type, src) {
   const s = gl.createShader(type);
   gl.shaderSource(s, src); gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    d.textContent = 'shader compile failed:\n' + gl.getShaderInfoLog(s);
+    throw new Error(gl.getShaderInfoLog(s));
+  }
   return s;
 }
 const prog = gl.createProgram();
