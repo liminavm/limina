@@ -493,6 +493,7 @@ is weak by the stochastic finding.
 | `LIMINA_KK_BO_LEAK=1` — nothing released or de-resident | 1 | dies |
 | `LIMINA_KK_VIEW_LEAK=1` — no view released | 1 | dies |
 | input/render/subres views registered in the residency set (`kk_image_view.c`) | 1 | **lost at 0 s** — the un-resident minted views are a real defect, not this one |
+| every instrument at once (`ADDR_CHECK` + `ADDR_LOG` + `IMPORT_TRACE`) | 1 | lost at 0 s; 132 texture imports, **0 host-pointer and 0 heap imports**, chain clean over the failing passes |
 | nil texture views (`mtl_new_texture_view_with` → nil) | 3 | zero |
 | Metal render-pass resolve (upstream `db5ab8de776`) | 1 | **never runs** |
 | the zink shadow blit alone, no VM | 1 | **no mismatch** |
@@ -536,6 +537,24 @@ environment, and the environment is the harder one to bring across.
 
 The loop is cheap (no boot, no image clone, and it strands no host memory), so it is the
 right place to test any theory that does not need the guest.
+
+## What the imports turn out to be
+
+With every import path logged, a losing run carries **132 `import-tex+`** — IOSurface and Metal
+texture imports, which is the vrend/venus "IOSurface world" — and **zero `import-heap+` and zero
+`import-host+`**. Nothing on this route aliases host or guest pages into the GPU, which kills the
+whole family of theories where a CPU-side `madvise`, a balloon reclaim or a guest free changes
+pages under a live GPU mapping. (These arms run at a fixed `--ram-mib` with no balloon range and
+free-page reporting off by default, so there was no reclaim to do it anyway.) It agrees with the
+residency census: no live host-pointer import means no `kk_device_add_buffer_to_residency_set`,
+which is why the census reads `0 buffers`.
+
+An imported texture has no GPU address any Metal API will hand back, so `import-tex+` records the
+handle and the size and cannot place a fault inside it. That is the current hole in the address
+map, and it is the population the fault is most likely to belong to.
+
+`spikes/webgl-msaa/fault-vs-addrlog.py` cross-references the `.ips` faults against every logged
+range; run it against a losing arm's `worker.log` the day after, once the reports land.
 
 ## Where to look next
 
