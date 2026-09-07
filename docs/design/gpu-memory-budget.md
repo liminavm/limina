@@ -169,7 +169,7 @@ chained (`vn_physical_device.c`), so `VK_EXT_memory_budget` is the one backpress
 the transport does not throw away — the only way a client can learn to shrink its caches
 *before* it loses its context.
 
-`vkr_budget_answer_memory_budget` (`vkr_physical_device.c`) overwrites the driver's reply
+The renderer's `vkGetPhysicalDeviceMemoryProperties2` handler overwrites the driver's reply
 from the ledger:
 
     heapUsage  = what the asking context holds

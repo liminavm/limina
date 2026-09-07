@@ -12,7 +12,7 @@
 //! re-allocating a 4K backdrop texture, ~51 GB/hour, killed at 142 GB — see
 //! `spikes/wallpaper-backdrop-leak/`).
 //!
-//! `vkr_budget.c` bounds it: past the cap the offending venus context is refused and
+//! The renderer's `venus/budget.rs` bounds it: past the cap the offending venus context is refused and
 //! killed deliberately, so one guest client loses its GPU context while the VM and every
 //! other client keep running.
 //!
@@ -144,11 +144,14 @@ fn runaway_guest_allocation_kills_the_client_not_the_vm() {
          names WHICH allocation is running away (the 2026-08-06 leak was identified from \
          exactly such a size histogram)."
     );
+    // The refusal's own words, from the poison line the renderer prints as it stops the ring.
+    // Not a generic ring-FATAL marker: that fires for any bad command, so it would pass on a
+    // context killed for something else entirely while the budget did nothing.
     assert!(
-        log.contains("ring FATAL set at"),
+        log.contains("the host memory budget refused this allocation"),
         "the allocation was refused but the context was not actually killed — on venus a \
          refusal that only returns an error changes nothing, because the guest never reads \
-         the result (see vkr_budget.h)."
+         the result (see the renderer's venus/budget.rs)."
     );
 
     // (3) One client died, not the VM.
@@ -196,8 +199,8 @@ fn heap_line(out: &str, index: u32, when: &str) -> Option<(u64, u64)> {
 
 /// One host-side `memory_budget` trace line: what we answered *before* KosmicKrisp got a vote.
 ///
-/// Emitted by `vkr_budget_trace_heap` (virglrenderer fork, `src/venus/vkr_physical_device.c`)
-/// under `LIMINA_GPU_MEM_BUDGET_TRACE=1`. Only `ours` is limina's arithmetic; `driver` is the
+/// Emitted by the renderer's `Budget::trace_heap` (virglrs, `src/venus/budget.rs`) under
+/// `LIMINA_GPU_MEM_BUDGET_TRACE=1`. Only `ours` is limina's arithmetic; `driver` is the
 /// host Vulkan driver's own answer and `final` is `min` of the two.
 #[derive(Debug, Clone, Copy)]
 struct BudgetTrace {

@@ -508,7 +508,7 @@ fn init_worker_logging() {
 /// and its allocation histogram named in the worker log, while the VM and every other
 /// client keep running. It is a context kill rather than a returned error because venus
 /// submits `vkAllocateMemory` asynchronously and never reads the host's result — full
-/// reasoning in `vkr_budget.h`.
+/// reasoning in the renderer's `venus/budget.rs`.
 ///
 /// Deliberately generous: this is a runaway backstop, not a working-set limit. A healthy
 /// desktop guest holds well under its own RAM in host GPU memory, and the two-tier
@@ -543,7 +543,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Bound the host GPU memory the guest can hold (mechanism: virglrenderer's
-    // `vkr_budget.c`, which reads this once at its first allocation). Policy is here
+    // `venus/budget.rs`, which reads this once at its first allocation). Policy is here
     // because guest RAM is here. An explicit setting always wins; `0` keeps the ledger
     // and its diagnostics but lifts the cap.
     if std::env::var_os("LIMINA_GPU_MEM_BUDGET_MIB").is_none() {
