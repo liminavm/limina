@@ -1,7 +1,7 @@
 # Host GPU-memory budget
 
-**Status:** shipped 2026-08-07 (virglrenderer `24a3c2d9`). Accounting always on; the cap is
-on by default with a generous ceiling set by the worker.
+**Status:** shipped 2026-08-07, ported to virglrs. Accounting always on; the cap is on by
+default with a generous ceiling set by the worker.
 
 ## The problem it solves
 
@@ -19,18 +19,24 @@ largely because nothing in the stack could say *which* allocation was growing.
 
 ## Shape
 
-Two halves, in `third_party/virglrenderer/src/venus/vkr_budget.{c,h}`.
+Two halves, in the renderer's `src/venus/budget.rs` (`third_party/virglrs`).
 
 ### Accounting (always on)
 
 A per-context live total plus an **exact-size histogram**, charged at each host allocator
-call site and credited at the matching free:
+call site:
 
-| site | charged | freed |
+| site | charged | filed under |
 |---|---|---|
-| the driver's own `vkAllocateMemory` | `allocationSize` | `vkr_device_memory_release` |
-| `vkr_mtl_iosurface_alloc` / `_alloc_plain` | `IOSurfaceGetAllocSize` | `vkr_mtl_iosurface_free` |
-| `vkr_mtl_shm_alloc` | the page-aligned size | `vkr_mtl_shm_free` |
+| the driver's own `vkAllocateMemory` | `allocationSize` | `device memory` |
+| a minted IOSurface | `IOSurfaceGetAllocSize` | `IOSurface` |
+| memory exported to the guest | the page-aligned length | `exported pages` |
+
+**Nothing credits the ledger explicitly.** A charge is a value that lives in the record of
+whatever it paid for, and crediting it *is* dropping it — so a free, a device teardown and a
+context destroy all reach the ledger without knowing it exists. There is no release call site
+to forget, which is the point: a ledger with manual credits grows one more place to be wrong
+every time a destroy path is added.
 
 **Charging at the allocator, not at the Vulkan entry point, is the rule that keeps this
 honest.** A scanout memory that host-pointer-imports an IOSurface, or a cross-context
@@ -94,7 +100,7 @@ in the log.
 
 ## Policy
 
-`LIMINA_GPU_MEM_BUDGET_MIB`, read once by the renderer:
+`LIMINA_GPU_MEM_BUDGET_MIB`, read once by the renderer at startup:
 
 - **unset** — accounting only, no cap. A bare virglrenderer is unaffected.
 - **`0`** — accounting only, explicitly. The A/B lever and the escape hatch.
@@ -127,8 +133,8 @@ live set of venus images moved `owned unmapped` from 16.1M to 19.2M and back, wh
 (`spikes/venus-churn-retention/`). Against a healthy compositor the census reads:
 
 ```
-limina GPU budget: census — 126.9 MiB live of 16.0 GiB cap (0%)
-limina GPU budget:   ctx 2 [synoik]: 126.9 MiB live — 4 x 14.1 MiB (IOSurface), …
+[virglrs] limina GPU budget: census — 126.9 MiB live of 16.0 GiB cap (0%)
+[virglrs] limina GPU budget:   ctx 2 [synoik]: 126.9 MiB live — 4 x 14.1 MiB (IOSurface), …
 ```
 
 `4 x 14.1 MiB` is a 4-slot swapchain at 2560×1440 — named, per context, no correlation
@@ -143,15 +149,24 @@ legitimate workload and far below the footprint that gets a worker killed.
 ## Reading a refusal
 
 ```
-vkr: limina GPU budget: cap 2048 MiB
-vkr: limina GPU budget: 80% watermark crossed — 1.8 GiB live of 2.0 GiB cap (87%)
-vkr: limina GPU budget:   ctx 2 [python3]: 1.8 GiB live — 7 x 256.0 MiB (device memory)
-vkr: limina GPU budget: REFUSING a 256.0 MiB device memory allocation for ctx 2 [python3]
-     and killing this context deliberately. This is limina's host-memory cap ...
-vkr: limina GPU budget: at refusal — 2.0 GiB live of 2.0 GiB cap (100%)
-vkr: limina GPU budget:   ctx 2 [python3]: 2.0 GiB live — 8 x 256.0 MiB (device memory)
-vkr: context 2: ring FATAL set at vkr_dispatch_vkAllocateMemory:290
+[virglrs] limina GPU budget: cap 2048 MiB, refusal stops the context
+[virglrs] limina GPU budget: 80% watermark crossed — 1.8 GiB live of 2.0 GiB cap (87%)
+[virglrs] limina GPU budget:   ctx 2 [python3]: 1.8 GiB live — 7 x 256.0 MiB (exported pages)
+[virglrs] limina GPU budget: REFUSING a 256.0 MiB exported pages allocation for ctx 2 [python3]
+[virglrs] limina GPU budget:   and killing this context deliberately: this is limina's
+          host-memory cap (LIMINA_GPU_MEM_BUDGET_MIB), not the GPU running out of memory
+[virglrs] limina GPU budget: at refusal — 2.0 GiB live of 2.0 GiB cap (100%)
+[virglrs] limina GPU budget:   ctx 2 [python3]: 2.0 GiB live — 8 x 256.0 MiB (exported pages)
 ```
+
+Transcribed from a `vkr_budget` run, not composed. A further line follows from the ring
+being stopped, naming the command and the refusal's own words — the test asserts on it,
+because a generic ring-FATAL marker fires for any bad command and would pass on a context
+killed for something else entirely.
+
+`exported pages` rather than `device memory` because the charge is taken where the host
+allocation happens: this client's memory is exportable, so it is billed at the export. The
+bucket names the allocator, which is the point of having them.
 
 The refusal line is verbose by design. What the guest sees is a lost device or an aborted
 process — which is also what a dozen unrelated venus transport failures look like
@@ -198,13 +213,12 @@ rule, so the test sets the variable explicitly rather than relying on it (`docs/
 
 ## Known limits
 
-- **Attribution on the vrend path.** `vkr_budget_set_context` is called from the venus
-  dispatch entry points only, so an IOSurface allocated for a classic vrend resource used to
-  be charged to whatever context that thread last dispatched for. vrend now binds a shared
-  pseudo-context at its own entry (`vkr_budget_set_vrend`) — the honest answer rather than a
-  fix, since at classic-resource creation time nobody owns the resource yet. Those bytes are
-  billed to one "vrend" bucket instead of to an innocent guest client; totals are exact
-  either way.
+- **The vrend path is not accounted at all.** Every charge is taken on the venus path,
+  because that is where a context holds the account to charge against. A classic GL
+  resource's IOSurface is invisible to the ledger, so the totals here describe venus and
+  nothing else. This is a gap, not a policy: the C billed those bytes to a shared
+  pseudo-context bound to the calling thread, which is the ambient attribution this renderer
+  does not have and does not want — the honest fix gives vrend an account of its own.
 - **zink reads the wrong field.** `zink_query_memory_info` computes available memory as
   `heap.size − heapUsage` and ignores `heapBudget` entirely, so the GL-level
   `GL_NVX_gpu_memory_info` numbers still describe the host heap, not our cap. Clients that
