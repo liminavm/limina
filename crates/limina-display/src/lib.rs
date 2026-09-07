@@ -109,6 +109,21 @@ impl DisplayBackendBasicFramebuffer for CaptureBackend {
             .checked_mul(height as usize)
             .and_then(|px| px.checked_mul(ResourceFormat::BYTES_PER_PIXEL))
             .ok_or(DisplayBackendError::InvalidParam)?;
+        // A same-geometry re-declaration keeps the buffer it already has. The guest re-declares
+        // a scanout it has not changed -- Fedora walks simpledrm -> plymouth -> GDM that way, and
+        // a compositor re-laying-out after an EDID change does it once per frame -- and each of
+        // those arrives here as a `configure_scanout` identical to the live one. Replacing the
+        // buffer on those is not a resize, it is erasing the frame the guest just drew: the next
+        // `present_frame` snapshots zeroes and the capture goes black. `WindowBackend` has always
+        // taken this branch; this backend reallocating instead is what made a re-laid-out desktop
+        // capture as a solid black frame, at 60 re-declarations a second.
+        if let Some(s) = self.scanout.as_ref()
+            && s.width == width
+            && s.height == height
+            && s.format == format
+        {
+            return Ok(());
+        }
         log::info!(
             "capture: configure scanout {scanout_id}: {width}x{height} {format:?} \
              (display {display_width}x{display_height}, {len} bytes)"
@@ -332,6 +347,45 @@ fn swizzle_to_rgba(format: ResourceFormat, src: &[u8], dst: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The frame survives a re-declaration of the scanout it is already on. A compositor
+    /// re-laying-out after a monitor change re-declares the same mode once per frame; if each
+    /// one replaced the staging buffer, every present in that window would capture zeroes and
+    /// a live desktop would read as a solid black frame.
+    #[test]
+    fn a_same_geometry_reconfigure_keeps_the_frame() {
+        let dir = std::env::temp_dir().join(format!("limina-capture-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("test scratch");
+        let mut b = CaptureBackend::new(Some(&CaptureConfig {
+            png_path: dir.join("cap.png"),
+        }));
+        b.configure_scanout(0, 64, 32, 64, 32, ResourceFormat::BGRX)
+            .expect("first configure");
+
+        // The guest draws.
+        let (_id, buf) = b.alloc_frame(0).expect("alloc");
+        buf.fill(0xAB);
+
+        // ... and re-declares the very same scanout before the frame is presented.
+        b.configure_scanout(0, 64, 32, 64, 32, ResourceFormat::BGRX)
+            .expect("same-geometry reconfigure");
+        let (_id, buf) = b.alloc_frame(0).expect("alloc after reconfigure");
+        assert!(
+            buf.iter().all(|&x| x == 0xAB),
+            "a same-geometry reconfigure erased the frame the guest had drawn"
+        );
+
+        // A real mode change still reallocates, and the new buffer is the new size.
+        b.configure_scanout(0, 128, 64, 128, 64, ResourceFormat::BGRX)
+            .expect("mode change");
+        let (_id, buf) = b.alloc_frame(0).expect("alloc after mode change");
+        assert_eq!(
+            buf.len(),
+            128 * 64 * ResourceFormat::BYTES_PER_PIXEL,
+            "a real mode change must resize the buffer"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn swizzle_bgra_to_rgba() {
