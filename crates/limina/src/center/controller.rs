@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
-use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
     NSApplicationDelegate, NSBezelStyle, NSBox, NSBoxType, NSButton, NSColor, NSFont, NSImage,
@@ -172,11 +172,10 @@ define_class!(
 
         #[unsafe(method(forceStopClicked:))]
         fn force_stop_clicked(&self, sender: &NSButton) {
-            if let Some(row) = self.row_for(sender) {
-                if let Err(e) = spawn::stop_vm(&row.bundle, true) {
+            if let Some(row) = self.row_for(sender)
+                && let Err(e) = spawn::stop_vm(&row.bundle, true) {
                     self.alert("Could not force-stop the VM", &format!("{e:#}"));
                 }
-            }
         }
 
         #[unsafe(method(resetClicked:))]
@@ -258,8 +257,8 @@ define_class!(
 
         #[unsafe(method(copySshClicked:))]
         fn copy_ssh_clicked(&self, sender: &NSButton) {
-            if let Some(row) = self.row_for(sender) {
-                if let Some(ssh) = &row.ssh {
+            if let Some(row) = self.row_for(sender)
+                && let Some(ssh) = &row.ssh {
                     let pb = NSPasteboard::generalPasteboard();
                     pb.clearContents();
                     pb.setString_forType(&NSString::from_str(ssh), unsafe {
@@ -278,7 +277,6 @@ define_class!(
                         NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
                     }
                 }
-            }
         }
 
         #[unsafe(method(newVmClicked:))]
@@ -1172,11 +1170,11 @@ impl CenterController {
         // The resolution list: what this Mac's display offers (plus the currently
         // configured size, so an existing choice never silently changes).
         let mut resolutions = mac_display_points();
-        if let vmlib::schema::DisplayResolution::Fixed(w, h) = cfg.display.resolution {
-            if !resolutions.contains(&(w, h)) {
-                resolutions.push((w, h));
-                resolutions.sort_by_key(|&(w, h)| std::cmp::Reverse(u64::from(w) * u64::from(h)));
-            }
+        if let vmlib::schema::DisplayResolution::Fixed(w, h) = cfg.display.resolution
+            && !resolutions.contains(&(w, h))
+        {
+            resolutions.push((w, h));
+            resolutions.sort_by_key(|&(w, h)| std::cmp::Reverse(u64::from(w) * u64::from(h)));
         }
         let titles: Vec<String> = resolutions
             .iter()

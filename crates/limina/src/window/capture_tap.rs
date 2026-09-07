@@ -28,31 +28,31 @@ use std::cell::{Cell, RefCell};
 use std::os::fd::RawFd;
 use std::os::raw::c_void;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSEvent, NSRunningApplication, NSView};
 use objc2_core_foundation::CFArray;
 use objc2_core_graphics::{
-    kCGWindowOwnerPID, CGEvent, CGWindowListCopyWindowInfo, CGWindowListOption,
+    CGEvent, CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowOwnerPID,
 };
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSString};
 
+use limina_input::InputEvent;
 use limina_input::auxkey::{
-    decode_aux_data1, nx_key_to_linux, route_aux_event_key, GrabMode,
-    NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+    GrabMode, NX_SUBTYPE_AUX_CONTROL_BUTTONS, decode_aux_data1, nx_key_to_linux,
+    route_aux_event_key,
 };
 use limina_input::constants::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_KEY};
-use limina_input::InputEvent;
 
+use super::WorkerConn;
 use super::fit;
 use super::grab_policy::{self, Release};
 use super::input::{
-    match_host_shortcut, send_event, HostShortcut, InputState, RevealSrc, UngrabAction,
+    HostShortcut, InputState, RevealSrc, UngrabAction, match_host_shortcut, send_event,
 };
-use super::WorkerConn;
 
 type CFMachPortRef = *mut c_void;
 type CFRunLoopSourceRef = *mut c_void;
@@ -572,18 +572,18 @@ extern "C" fn tap_callback(
             // synthetic click re-send must never consume this). See `WarpSwallow`.
             let (dx, dy) = ctx.input.swallow_warp(rdx, rdy);
             let step = ctx.input.captured_step_and_emit(dx, dy, &ctx.view);
-            if edge_trace() {
-                if let Some(s) = &step {
-                    eprintln!(
-                        "[CAP] t={:.1} d=({dx:.1},{dy:.1}) -> slot={} view=({:.1},{:.1}) range=({:.0},{:.0})",
-                        trace_ms(),
-                        s.slot,
-                        s.view_point.0,
-                        s.view_point.1,
-                        s.range.0,
-                        s.range.1,
-                    );
-                }
+            if edge_trace()
+                && let Some(s) = &step
+            {
+                eprintln!(
+                    "[CAP] t={:.1} d=({dx:.1},{dy:.1}) -> slot={} view=({:.1},{:.1}) range=({:.0},{:.0})",
+                    trace_ms(),
+                    s.slot,
+                    s.view_point.0,
+                    s.view_point.1,
+                    s.range.0,
+                    s.range.1,
+                );
             }
             // Park the hidden cursor so it can't reach a hot corner / screen edge.
             // NOTE: re-pinning every event fights any OTHER agent that also moves the macOS cursor
@@ -627,10 +627,10 @@ extern "C" fn tap_callback(
             // The press and release are judged in the CAPTURE window's view space — the window
             // the grab was taken in, whose fit clamps the virtual cursor. Every edge of that
             // fit can pin and so can press, a seam to a neighbouring guest window included.
-            if let Some(s) = &step {
-                if let Some((edge, release)) = grab_release_edge(ctx, s, dx, dy, pf.fullscreen) {
-                    release_grab(ctx, s, edge, release);
-                }
+            if let Some(s) = &step
+                && let Some((edge, release)) = grab_release_edge(ctx, s, dx, dy, pf.fullscreen)
+            {
+                release_grab(ctx, s, edge, release);
             }
         }
         LMB_DOWN => send_click(BTN_LEFT, true),

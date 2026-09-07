@@ -52,7 +52,7 @@
 //!    `guest-ssh-add-authorized-keys` — the other half of a bootstrap, since a guest with
 //!    no key is a guest nobody can reach.
 
-use limina_test::{repo_root, Guest, GuestConfig};
+use limina_test::{Guest, GuestConfig, repo_root};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 

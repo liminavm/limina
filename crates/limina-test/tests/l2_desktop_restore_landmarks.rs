@@ -93,7 +93,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use limina_test::landmarks::{
-    by_row, cell_delta, cell_means, color_diversity, settled_capture, CELL_TOL,
+    CELL_TOL, by_row, cell_delta, cell_means, color_diversity, settled_capture,
 };
 use limina_test::{DisplayControl, EdidSpec, Guest, GuestConfig};
 

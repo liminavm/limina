@@ -98,10 +98,10 @@ impl MocStore {
     }
 
     fn persist(&self, p: &Persisted) {
-        if let Some(path) = &self.path {
-            if let Ok(json) = serde_json::to_vec_pretty(p) {
-                let _ = std::fs::write(path, json);
-            }
+        if let Some(path) = &self.path
+            && let Ok(json) = serde_json::to_vec_pretty(p)
+        {
+            let _ = std::fs::write(path, json);
         }
     }
 }

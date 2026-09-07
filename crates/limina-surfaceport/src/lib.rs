@@ -38,7 +38,7 @@
 //! simplest parent/child rendezvous that needs no launchd plist.
 #![allow(deprecated)] // objc2-io-surface 0.3 renamed the Mach-port free fns; libc deprecates mach_task_self.
 
-use std::ffi::{c_char, CString};
+use std::ffi::{CString, c_char};
 use std::io;
 
 use objc2_core_foundation::CFRetained;
@@ -385,13 +385,13 @@ mod tests {
     use std::ffi::c_void;
 
     use objc2_core_foundation::{
-        kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
-        CFRetained, CFString,
+        CFDictionary, CFNumber, CFRetained, CFString, kCFTypeDictionaryKeyCallBacks,
+        kCFTypeDictionaryValueCallBacks,
     };
     use objc2_io_surface::{
-        kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
-        kIOSurfaceWidth, IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetID, IOSurfaceLock,
-        IOSurfaceLockOptions, IOSurfaceUnlock,
+        IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetID, IOSurfaceLock,
+        IOSurfaceLockOptions, IOSurfaceUnlock, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow,
+        kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
     };
 
     fn cfnum(v: i32) -> CFRetained<CFNumber> {

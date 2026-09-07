@@ -23,7 +23,7 @@
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicI32, Ordering};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use utils::eventfd::EventFd;
 
 /// Write end of the bracket-trigger eventfd, published for the (async-signal-safe) handler. On macOS

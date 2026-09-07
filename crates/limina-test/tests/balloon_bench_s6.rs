@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use limina_proto::Message;
 use limina_test::bench::{
-    json_object, now_ms, parse_trace, real_report, sample_host, BenchRun, GuestSampler, HostSample,
+    BenchRun, GuestSampler, HostSample, json_object, now_ms, parse_trace, real_report, sample_host,
 };
 use limina_test::{Guest, GuestConfig};
 
@@ -89,10 +89,10 @@ fn run_mode(run: &BenchRun, mode: &str) -> String {
                 host_samples.push(s);
             }
             tick += 1;
-            if tick.is_multiple_of(5) {
-                if let Some(r) = real_report(&guest) {
-                    let _ = conn.send(&Message::MemPressure(r));
-                }
+            if tick.is_multiple_of(5)
+                && let Some(r) = real_report(&guest)
+            {
+                let _ = conn.send(&Message::MemPressure(r));
             }
         }
         let end = host_samples.last().copied().unwrap_or_default();

@@ -515,10 +515,10 @@ pub fn parse_cpu_list(s: &str) -> Vec<u32> {
         }
         match part.split_once('-') {
             Some((a, b)) => {
-                if let (Ok(a), Ok(b)) = (a.trim().parse::<u32>(), b.trim().parse::<u32>()) {
-                    if b >= a {
-                        ids.extend(a..=b);
-                    }
+                if let (Ok(a), Ok(b)) = (a.trim().parse::<u32>(), b.trim().parse::<u32>())
+                    && b >= a
+                {
+                    ids.extend(a..=b);
                 }
             }
             None => {

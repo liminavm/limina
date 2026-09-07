@@ -243,25 +243,24 @@ pub fn take_pending_resume(
     if !snapshot.exists() {
         // Reconcile a stale [suspended] record pointing at a missing snapshot so status
         // stops claiming a resume that can't happen.
-        if let Some(state) = state_file {
-            if crate::vmlib::state::load(state)
+        if let Some(state) = state_file
+            && crate::vmlib::state::load(state)
                 .and_then(|s| s.suspended)
                 .is_some()
-            {
-                log::warn!(
-                    "state.toml records a suspend but snapshot {} is missing; cold-booting",
-                    snapshot.display()
-                );
-                let _ = crate::vmlib::state::set_suspended(state, None);
-            }
+        {
+            log::warn!(
+                "state.toml records a suspend but snapshot {} is missing; cold-booting",
+                snapshot.display()
+            );
+            let _ = crate::vmlib::state::set_suspended(state, None);
         }
         return None;
     }
     log::info!("resume pending: restoring from {}", snapshot.display());
-    if let Some(state) = state_file {
-        if let Err(e) = crate::vmlib::state::set_suspended(state, None) {
-            log::warn!("clearing the suspended state failed: {e}; continuing");
-        }
+    if let Some(state) = state_file
+        && let Err(e) = crate::vmlib::state::set_suspended(state, None)
+    {
+        log::warn!("clearing the suspended state failed: {e}; continuing");
     }
     // SINGLE-USE enforcement (M9.4-1b): rename the snapshot out of its canonical name before
     // the worker reads it. A snapshot is only valid against the disk EXACTLY as the suspend
@@ -374,26 +373,25 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     cmd.arg("--qga-fd").arg(qga_worker.as_raw_fd().to_string());
     // Auto-resume (M9.4): decided HERE, per spawn, never via spec.args — see
     // `take_pending_resume` for why (a reboot relaunch must cold-boot, not re-restore).
-    if let Some(snap) = &spec.snapshot_file {
-        if let Some(pending) = take_pending_resume(snap, spec.suspend_state_file.as_deref()) {
-            cmd.arg("--restore").arg(&pending);
-        }
+    if let Some(snap) = &spec.snapshot_file
+        && let Some(pending) = take_pending_resume(snap, spec.suspend_state_file.as_deref())
+    {
+        cmd.arg("--restore").arg(&pending);
     }
 
     // When running from an assembled limina.app, hand the worker the bundle-relative venus
     // env (KK ICD + zink-on-KK Mesa selectors). In a dev/cargo run no bundle is present, so
     // this is a no-op and the inherited env (boot-seated-kk.sh) stands.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            if let Some(envs) = crate::venus_env::bundle_venus_env(dir, |p| p.exists()) {
-                log::info!(
-                    "limina.app: using bundled venus stack ({} vars)",
-                    envs.len()
-                );
-                for (k, v) in envs {
-                    cmd.env(k, v);
-                }
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+        && let Some(envs) = crate::venus_env::bundle_venus_env(dir, |p| p.exists())
+    {
+        log::info!(
+            "limina.app: using bundled venus stack ({} vars)",
+            envs.len()
+        );
+        for (k, v) in envs {
+            cmd.env(k, v);
         }
     }
     // KosmicKrisp's allocator-pool snapshot. The driver writes its current state to this path
@@ -563,15 +561,15 @@ pub fn monitor(
             }
             suspend_at = Some(Instant::now());
         }
-        if let Some(t) = suspend_at {
-            if t.elapsed() >= SUSPEND_BRACKET_TIMEOUT {
-                log::warn!(
-                    "suspend bracket did not complete within {SUSPEND_BRACKET_TIMEOUT:?} (guest \
+        if let Some(t) = suspend_at
+            && t.elapsed() >= SUSPEND_BRACKET_TIMEOUT
+        {
+            log::warn!(
+                "suspend bracket did not complete within {SUSPEND_BRACKET_TIMEOUT:?} (guest \
                      could not quiesce — e.g. a virtiofs mount); the VM keeps running"
-                );
-                SUSPEND.store(false, Ordering::SeqCst);
-                suspend_at = None;
-            }
+            );
+            SUSPEND.store(false, Ordering::SeqCst);
+            suspend_at = None;
         }
 
         if STOP.load(Ordering::SeqCst) && shutdown_at.is_none() {
@@ -695,11 +693,11 @@ pub fn run(
 
         // Recycle the NAT gateway: gvproxy's vfkit socket is single-connection, so the fresh
         // worker can't reconnect to the old one. Restart it at the same path before re-spawning.
-        if let Some(gw) = gateway {
-            if let Err(e) = gw.restart() {
-                log::error!("could not restart the NAT gateway for the reboot: {e:#}; stopping");
-                return Ok(code);
-            }
+        if let Some(gw) = gateway
+            && let Err(e) = gw.restart()
+        {
+            log::error!("could not restart the NAT gateway for the reboot: {e:#}; stopping");
+            return Ok(code);
         }
         log::info!("guest rebooted (PSCI SYSTEM_RESET) → relaunching the VM worker");
     }

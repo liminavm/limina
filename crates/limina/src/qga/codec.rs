@@ -10,8 +10,8 @@
 //! a previous client and must be dropped), and the fact that an error is a *reply*
 //! (`{"error": {...}}`), not a transport failure.
 
-use anyhow::{bail, Result};
-use serde_json::{json, Value};
+use anyhow::{Result, bail};
+use serde_json::{Value, json};
 
 /// The byte `qemu-ga` prepends to a `guest-sync-delimited` reply (`qga/main.c:672-675`),
 /// and the byte we send ahead of that request to break its JSON parser out of any partial

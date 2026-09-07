@@ -26,8 +26,8 @@
 //! Tests point this at a private NAMED pasteboard via `LIMINA_PASTEBOARD` (the general
 //! pasteboard is the product default) — see `crates/limina-test/tests/l1_clipboard.rs`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use limina_proto::{ClipData, ClipOffer, ClipRequest, Message};
 use objc2::rc::Retained;

@@ -328,9 +328,9 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
         ),
     );
     std::thread::sleep(Duration::from_secs(2)); // longer than RestartSec, so a respawn shows
-                                                // `pgrep -x` refuses names longer than 15 characters (it warns and matches nothing), and
-                                                // "limina-agent-session" is 20 — so match the command line instead. The bracket keeps the
-                                                // pattern from matching the shell that carries it.
+    // `pgrep -x` refuses names longer than 15 characters (it warns and matches nothing), and
+    // "limina-agent-session" is 20 — so match the command line instead. The bracket keeps the
+    // pattern from matching the shell that carries it.
     let still_up = ssh_soft(&guest, "pgrep -f '[l]imina-agent-session'");
     assert!(
         still_up.is_empty(),

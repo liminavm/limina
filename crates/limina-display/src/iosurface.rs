@@ -43,14 +43,14 @@ use std::os::fd::{FromRawFd, RawFd};
 use std::ptr;
 
 use objc2_core_foundation::{
-    kCFBooleanTrue, kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary,
-    CFNumber, CFNumberType, CFRetained, CFString,
+    CFDictionary, CFNumber, CFNumberType, CFRetained, CFString, kCFBooleanTrue,
+    kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks,
 };
 use objc2_io_surface::{
-    kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfaceIsGlobal,
-    kIOSurfacePixelFormat, kIOSurfaceWidth, IOSurfaceCreate, IOSurfaceGetBaseAddress,
-    IOSurfaceGetBytesPerRow, IOSurfaceGetHeight, IOSurfaceGetID, IOSurfaceGetWidth, IOSurfaceLock,
-    IOSurfaceLockOptions, IOSurfaceLookup, IOSurfaceRef, IOSurfaceUnlock,
+    IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceGetHeight,
+    IOSurfaceGetID, IOSurfaceGetWidth, IOSurfaceLock, IOSurfaceLockOptions, IOSurfaceLookup,
+    IOSurfaceRef, IOSurfaceUnlock, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow,
+    kIOSurfaceHeight, kIOSurfaceIsGlobal, kIOSurfacePixelFormat, kIOSurfaceWidth,
 };
 
 use krun_display::{
@@ -223,10 +223,10 @@ impl WindowBackend {
     /// Hand a freshly-created surface to the supervisor over the Mach channel, keyed by its id.
     /// No-op when there's no receiver (legacy global path — the supervisor `IOSurfaceLookup`s it).
     fn publish(&self, id: u32, surface: &IOSurfaceRef) {
-        if let Some(tx) = self.sender.as_ref() {
-            if let Err(e) = tx.send(id, surface) {
-                log::error!("window: surface-port send(id={id}) failed: {e}");
-            }
+        if let Some(tx) = self.sender.as_ref()
+            && let Err(e) = tx.send(id, surface)
+        {
+            log::error!("window: surface-port send(id={id}) failed: {e}");
         }
     }
 }
@@ -247,13 +247,15 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         // reallocating fresh global IOSurfaces each time would churn their ids and free
         // surfaces out from under the supervisor's pending lookups. Keeping them stable
         // makes the steady state a no-op and avoids that race.
-        if let Some(s) = self.scanouts[slot].as_mut() {
-            if s.width == width && s.height == height && s.format == format {
-                // Same mode: keep the surfaces, but force the next present to repaint the
-                // whole frame (the guest just re-declared the scanout; play it safe).
-                s.needs_full = true;
-                return Ok(());
-            }
+        if let Some(s) = self.scanouts[slot].as_mut()
+            && s.width == width
+            && s.height == height
+            && s.format == format
+        {
+            // Same mode: keep the surfaces, but force the next present to repaint the
+            // whole frame (the guest just re-declared the scanout; play it safe).
+            s.needs_full = true;
+            return Ok(());
         }
         let len = (width as usize)
             .checked_mul(height as usize)
@@ -346,10 +348,10 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
     /// release naming a recycled IOSurface id from overtaking the publish that reused it. See
     /// `limina_surfaceport`'s module docs for the ordering argument.
     fn release_surface(&mut self, iosurface_id: u32) -> Result<(), DisplayBackendError> {
-        if let Some(tx) = self.sender.as_ref() {
-            if let Err(e) = tx.release(iosurface_id) {
-                log::error!("window: surface-port release(id={iosurface_id}) failed: {e}");
-            }
+        if let Some(tx) = self.sender.as_ref()
+            && let Err(e) = tx.release(iosurface_id)
+        {
+            log::error!("window: surface-port release(id={iosurface_id}) failed: {e}");
         }
         Ok(())
     }

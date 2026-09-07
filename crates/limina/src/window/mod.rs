@@ -25,7 +25,7 @@ use std::time::Duration;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::NSObjectProtocol;
-use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
+use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
     NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationTerminateReply,
@@ -65,9 +65,9 @@ mod windows;
 
 pub use lifecycle::{WorkerConn, WorkerIo};
 pub use present::{
-    empty_surface_map, mark_resume_dead, mark_worker_exited, mark_worker_running,
-    mark_worker_suspended, mark_worker_swapped, spawn_reader, surface_rendezvous, Shared,
-    SurfaceMap,
+    Shared, SurfaceMap, empty_surface_map, mark_resume_dead, mark_worker_exited,
+    mark_worker_running, mark_worker_suspended, mark_worker_swapped, spawn_reader,
+    surface_rendezvous,
 };
 
 // `input` builds the host pointer's default (blank) shape from the cursor module; re-exported
@@ -1501,10 +1501,10 @@ impl ExtendOverlay {
         self.apply_placement(strip, shifted);
         // A reveal that had no trustworthy frame to go up at waits here, where there is one: this
         // rect was computed from the screen the carrier is on *now*. See [`Self::show`].
-        if self.reveal_pending.replace(false) {
-            if let Some(window) = self.window.borrow().as_ref() {
-                window.setAlphaValue(1.0);
-            }
+        if self.reveal_pending.replace(false)
+            && let Some(window) = self.window.borrow().as_ref()
+        {
+            window.setAlphaValue(1.0);
         }
     }
 
@@ -2247,38 +2247,33 @@ pub fn run(
                 }
                 let gate = !latch_marker;
                 let mut freed = true;
-                if gate {
-                    if let Some(prev) = &prev {
-                        let t0 = std::time::Instant::now();
-                        let gated = prev.is_in_use();
-                        let shown_cap = std::time::Duration::from_millis(if fence_capped {
-                            cap_ms
-                        } else {
-                            50
-                        });
-                        while prev.is_in_use() && t0.elapsed() < shown_cap {
-                            std::thread::sleep(std::time::Duration::from_micros(500));
-                        }
-                        freed = !prev.is_in_use();
-                        if gated {
-                            // Engagement oracle (the 0114 lesson): the FIRST gated ack logs
-                            // at INFO — one line per run confirms the mode without any
-                            // per-frame firehose; the periodic wait sample stays at trace.
-                            static GATED: std::sync::atomic::AtomicU64 =
-                                std::sync::atomic::AtomicU64::new(0);
-                            let n = GATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            if n == 0 {
-                                log::info!(
-                                    "window: off-glass ack gating ENGAGED (first gated ack waited {:?}, fence cap {:?})",
-                                    t0.elapsed(),
-                                    shown_cap
-                                );
-                            } else if n.is_multiple_of(512) {
-                                log::trace!(
-                                    "window: off-glass ack gate n={n}, last wait {:?}",
-                                    t0.elapsed()
-                                );
-                            }
+                if gate && let Some(prev) = &prev {
+                    let t0 = std::time::Instant::now();
+                    let gated = prev.is_in_use();
+                    let shown_cap =
+                        std::time::Duration::from_millis(if fence_capped { cap_ms } else { 50 });
+                    while prev.is_in_use() && t0.elapsed() < shown_cap {
+                        std::thread::sleep(std::time::Duration::from_micros(500));
+                    }
+                    freed = !prev.is_in_use();
+                    if gated {
+                        // Engagement oracle (the 0114 lesson): the FIRST gated ack logs
+                        // at INFO — one line per run confirms the mode without any
+                        // per-frame firehose; the periodic wait sample stays at trace.
+                        static GATED: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let n = GATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n == 0 {
+                            log::info!(
+                                "window: off-glass ack gating ENGAGED (first gated ack waited {:?}, fence cap {:?})",
+                                t0.elapsed(),
+                                shown_cap
+                            );
+                        } else if n.is_multiple_of(512) {
+                            log::trace!(
+                                "window: off-glass ack gate n={n}, last wait {:?}",
+                                t0.elapsed()
+                            );
                         }
                     }
                 }
@@ -2288,21 +2283,17 @@ pub fn run(
                 // The worker ignores unknown verbs today; this is the wire's release
                 // signal for any future reuse-safety bookkeeping, and it keeps the
                 // over-hold tail observable (trace) without moving the fence.
-                if !freed {
-                    if let Some(prev) = &prev {
-                        let t0 = std::time::Instant::now();
-                        while prev.is_in_use()
-                            && t0.elapsed() < std::time::Duration::from_millis(50)
-                        {
-                            std::thread::sleep(std::time::Duration::from_micros(500));
-                        }
-                        freed = !prev.is_in_use();
-                        if freed {
-                            log::trace!(
-                                "window: over-hold tail on frame {id}: replaced surface cleared {:?} after the fence cap",
-                                t0.elapsed()
-                            );
-                        }
+                if !freed && let Some(prev) = &prev {
+                    let t0 = std::time::Instant::now();
+                    while prev.is_in_use() && t0.elapsed() < std::time::Duration::from_millis(50) {
+                        std::thread::sleep(std::time::Duration::from_micros(500));
+                    }
+                    freed = !prev.is_in_use();
+                    if freed {
+                        log::trace!(
+                            "window: over-hold tail on frame {id}: replaced surface cleared {:?} after the fence cap",
+                            t0.elapsed()
+                        );
                     }
                 }
                 send_line(format!("free {id}\n"));
@@ -2738,16 +2729,14 @@ pub fn run(
                 let adjusted = host
                     .as_ref()
                     .is_some_and(|h| !migrated && !handed_over && h.mode_key() != mode_sent.get());
-                if handed_over {
-                    if let Some(host) = host.as_ref() {
-                        identity_sent.set(host.identity_key());
-                        mode_sent.set(host.mode_key());
-                        // `screen_sent` deliberately NOT pre-set: in host mode the block it
-                        // gates also re-locks the window's aspect, reshapes it to the arriving
-                        // panel and refreshes the relaunch size, and those are owed whatever
-                        // carried the identity. Only the *push* is redundant, and it is skipped
-                        // at the send below.
-                    }
+                if handed_over && let Some(host) = host.as_ref() {
+                    identity_sent.set(host.identity_key());
+                    mode_sent.set(host.mode_key());
+                    // `screen_sent` deliberately NOT pre-set: in host mode the block it
+                    // gates also re-locks the window's aspect, reshapes it to the arriving
+                    // panel and refreshes the relaunch size, and those are owed whatever
+                    // carried the identity. Only the *push* is redundant, and it is skipped
+                    // at the send below.
                 }
 
                 match mode {
@@ -2907,27 +2896,28 @@ pub fn run(
                 // may not dictate the guest's resolution, so both pushes go without a size; the
                 // guest re-reads either way.
                 // Gated on the guest having presented a frame, like every other push here.
-                if !matches!(mode, DisplayResolution::Host) && geom.get() != (0, 0) {
-                    if let Some(host) = host.as_ref() {
-                        if migrated {
-                            identity_sent.set(host.identity_key());
-                            mode_sent.set(host.mode_key());
-                            send_display_commands(
-                                sock,
-                                hostdisplay::migration_commands(
-                                    host,
-                                    false,
-                                    restore_hotplug(&restore_inplace),
-                                    slot,
-                                ),
-                            );
-                        } else if adjusted {
-                            mode_sent.set(host.mode_key());
-                            send_display_command(
-                                sock,
-                                hostdisplay::adjustment_command(host, false, slot),
-                            );
-                        }
+                if !matches!(mode, DisplayResolution::Host)
+                    && geom.get() != (0, 0)
+                    && let Some(host) = host.as_ref()
+                {
+                    if migrated {
+                        identity_sent.set(host.identity_key());
+                        mode_sent.set(host.mode_key());
+                        send_display_commands(
+                            sock,
+                            hostdisplay::migration_commands(
+                                host,
+                                false,
+                                restore_hotplug(&restore_inplace),
+                                slot,
+                            ),
+                        );
+                    } else if adjusted {
+                        mode_sent.set(host.mode_key());
+                        send_display_command(
+                            sock,
+                            hostdisplay::adjustment_command(host, false, slot),
+                        );
                     }
                 }
             }
@@ -3087,10 +3077,10 @@ pub fn run(
         // A worker that has gone (powered off, crashed, suspended) is not playing anything, and
         // there is nothing left for a media key to reach. Step aside at once rather than serving
         // out the retire hold: the hold exists to ride out a track gap, and this is not one.
-        if exited || worker_suspended {
-            if let Some(media_policy::Action::Retire) = media_policy.borrow_mut().worker_gone() {
-                media_session.borrow_mut().retire();
-            }
+        if (exited || worker_suspended)
+            && let Some(media_policy::Action::Retire) = media_policy.borrow_mut().worker_gone()
+        {
+            media_session.borrow_mut().retire();
         }
 
         // Worker gone (guest powered off, orderly or not): net any process-group
@@ -3135,10 +3125,10 @@ pub fn run(
                     if let Some(o) = ov.take() {
                         o.remove();
                     }
-                    if let Some(content) = window.contentView() {
-                        if let Some(host_layer) = content.layer() {
-                            ov.replace(overlay::Overlay::parked(&host_layer, &content));
-                        }
+                    if let Some(content) = window.contentView()
+                        && let Some(host_layer) = content.layer()
+                    {
+                        ov.replace(overlay::Overlay::parked(&host_layer, &content));
                     }
                     // The other displays' windows go with it. This path returns before the
                     // frame-apply closure runs, so nothing else would ever take them down —
@@ -3173,14 +3163,14 @@ pub fn run(
                         if let Some(o) = ov.take() {
                             o.remove();
                         }
-                        if let Some(content) = window.contentView() {
-                            if let Some(host_layer) = content.layer() {
-                                ov.replace(overlay::Overlay::resuming(
-                                    &host_layer,
-                                    &content,
-                                    splash_save_path.as_deref(),
-                                ));
-                            }
+                        if let Some(content) = window.contentView()
+                            && let Some(host_layer) = content.layer()
+                        {
+                            ov.replace(overlay::Overlay::resuming(
+                                &host_layer,
+                                &content,
+                                splash_save_path.as_deref(),
+                            ));
                         }
                         window.setTitle(&NSString::from_str(&title));
                     } else {
@@ -3278,12 +3268,11 @@ pub fn run(
                 if let Some(content) = window.contentView() {
                     o.fit(&content);
                 }
-            } else if suspending {
-                if let Some(content) = window.contentView() {
-                    if let Some(host_layer) = content.layer() {
-                        ov.replace(overlay::Overlay::suspend(&host_layer, &content));
-                    }
-                }
+            } else if suspending
+                && let Some(content) = window.contentView()
+                && let Some(host_layer) = content.layer()
+            {
+                ov.replace(overlay::Overlay::suspend(&host_layer, &content));
             }
             // The other panels freeze with this one, so they say so with it. Only the suspend
             // flavor reaches them: by the time the window is parked or resuming, the park has
@@ -3406,23 +3395,21 @@ pub fn run(
                 .contentView()
                 .map(|v| v.inLiveResize())
                 .unwrap_or(false);
-            if !in_live {
-                if let Some(snap) = window_state_snapshot(&window, saved_state.get()) {
-                    if pending_state.get() != Some(snap) {
-                        pending_state.set(Some(snap));
-                        stable_ticks.set(0);
-                    } else if stable_ticks.get() < 30 {
-                        stable_ticks.set(stable_ticks.get() + 1);
-                        if stable_ticks.get() == 30 && saved_state.get() != Some(snap) {
-                            saved_state.set(Some(snap));
-                            let path = path.clone();
-                            std::thread::spawn(move || {
-                                // Merge (set_window), never whole-save — see save_state_final.
-                                if let Err(e) = crate::vmlib::state::set_window(&path, Some(snap)) {
-                                    log::warn!("window state save failed: {e}");
-                                }
-                            });
-                        }
+            if !in_live && let Some(snap) = window_state_snapshot(&window, saved_state.get()) {
+                if pending_state.get() != Some(snap) {
+                    pending_state.set(Some(snap));
+                    stable_ticks.set(0);
+                } else if stable_ticks.get() < 30 {
+                    stable_ticks.set(stable_ticks.get() + 1);
+                    if stable_ticks.get() == 30 && saved_state.get() != Some(snap) {
+                        saved_state.set(Some(snap));
+                        let path = path.clone();
+                        std::thread::spawn(move || {
+                            // Merge (set_window), never whole-save — see save_state_final.
+                            if let Err(e) = crate::vmlib::state::set_window(&path, Some(snap)) {
+                                log::warn!("window state save failed: {e}");
+                            }
+                        });
                     }
                 }
             }
@@ -3861,39 +3848,38 @@ pub fn run(
         // Host shortcuts are intercepted BEFORE the guest sees them. We match on key-down; the
         // orphan key-up that leaks to the guest is dropped by the guest input core (a release of
         // an un-pressed key). Modifier flagsChanged still flow through, which is fine.
-        if ev.r#type() == NSEventType::KeyDown {
-            if let Some(sc) = input::match_host_shortcut(ev.keyCode(), ev.modifierFlags().0 as u64)
-            {
-                match sc {
-                    input::HostShortcut::ToggleFullScreen => {
-                        // One mechanism for both policies now: `extend` is delivered by an
-                        // overlay floating over this very Space (see `ExtendOverlay`), not by a
-                        // different kind of fullscreen. That also retires the wart where the
-                        // green title-bar button and this shortcut did different things.
-                        shortcut_window.toggleFullScreen(None);
-                    }
-                    input::HostShortcut::ToggleCapture => {
-                        // An installed tap consumes this combo itself, so reaching the local
-                        // monitor means the tap is MISSING (no Accessibility at startup). Retry —
-                        // a grant given since then takes effect on a fresh create — and if it's
-                        // still missing, raise the system prompt (once per run) rather than
-                        // degrading silently to the warp path.
-                        if capture_tap::retry_install() {
-                            // Tap present (or just healed by the retry) — capture normally.
-                            input_state.toggle_capture(&monitor_view);
-                        } else if !capture_tap::prompt_accessibility_once() {
-                            // The prompt was already shown earlier and Accessibility is still
-                            // ungranted: honor the toggle in degraded (leaky warp) mode. On the
-                            // FIRST tap-less toggle prompt_accessibility_once() returns true and we
-                            // deliberately do NOT grab — the just-opened Accessibility dialog needs
-                            // a clickable cursor, and a captured pointer is parked/consumed. The
-                            // user grants, then presses Cmd-Ctrl-G again to actually capture.
-                            input_state.toggle_capture(&monitor_view);
-                        }
+        if ev.r#type() == NSEventType::KeyDown
+            && let Some(sc) = input::match_host_shortcut(ev.keyCode(), ev.modifierFlags().0 as u64)
+        {
+            match sc {
+                input::HostShortcut::ToggleFullScreen => {
+                    // One mechanism for both policies now: `extend` is delivered by an
+                    // overlay floating over this very Space (see `ExtendOverlay`), not by a
+                    // different kind of fullscreen. That also retires the wart where the
+                    // green title-bar button and this shortcut did different things.
+                    shortcut_window.toggleFullScreen(None);
+                }
+                input::HostShortcut::ToggleCapture => {
+                    // An installed tap consumes this combo itself, so reaching the local
+                    // monitor means the tap is MISSING (no Accessibility at startup). Retry —
+                    // a grant given since then takes effect on a fresh create — and if it's
+                    // still missing, raise the system prompt (once per run) rather than
+                    // degrading silently to the warp path.
+                    if capture_tap::retry_install() {
+                        // Tap present (or just healed by the retry) — capture normally.
+                        input_state.toggle_capture(&monitor_view);
+                    } else if !capture_tap::prompt_accessibility_once() {
+                        // The prompt was already shown earlier and Accessibility is still
+                        // ungranted: honor the toggle in degraded (leaky warp) mode. On the
+                        // FIRST tap-less toggle prompt_accessibility_once() returns true and we
+                        // deliberately do NOT grab — the just-opened Accessibility dialog needs
+                        // a clickable cursor, and a captured pointer is parked/consumed. The
+                        // user grants, then presses Cmd-Ctrl-G again to actually capture.
+                        input_state.toggle_capture(&monitor_view);
                     }
                 }
-                return std::ptr::null_mut(); // swallow — don't forward to the guest
             }
+            return std::ptr::null_mut(); // swallow — don't forward to the guest
         }
         let swallow = input_state.handle(ev, &monitor_view);
         if swallow {

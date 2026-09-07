@@ -41,11 +41,11 @@ use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::os::unix::process::CommandExt;
 
 /// Default Homebrew location; overridable with `LIMINA_GVPROXY_BIN`, else found on `PATH`.
@@ -702,11 +702,12 @@ fn sweep_orphans(dir: &Path) {
             continue;
         }
         let (gpid, socket) = read_record(&path);
-        if let Some(gpid) = gpid {
-            if gpid > 0 && process_is_gvproxy(gpid) {
-                reap_foreign(gpid);
-                log::info!("swept orphaned gvproxy (pid {gpid}) from dead supervisor {owner}");
-            }
+        if let Some(gpid) = gpid
+            && gpid > 0
+            && process_is_gvproxy(gpid)
+        {
+            reap_foreign(gpid);
+            log::info!("swept orphaned gvproxy (pid {gpid}) from dead supervisor {owner}");
         }
         if let Some(sock) = socket {
             let _ = fs::remove_file(local_bind_path(&sock));
@@ -799,9 +800,11 @@ mod tests {
 
     #[test]
     fn debug_flag_added_only_when_logging() {
-        assert!(gvproxy_args(Path::new("/x"), 2222, true, None)
-            .iter()
-            .any(|a| a == "-debug"));
+        assert!(
+            gvproxy_args(Path::new("/x"), 2222, true, None)
+                .iter()
+                .any(|a| a == "-debug")
+        );
     }
 
     #[test]
@@ -942,12 +945,12 @@ mod tests {
         // gvproxy writes its pid-file shortly after start.
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(s) = fs::read_to_string(&pidfile) {
-                if let Ok(pid) = s.trim().parse::<i32>() {
-                    if pid > 0 && pid_is_alive(pid) {
-                        return pid;
-                    }
-                }
+            if let Ok(s) = fs::read_to_string(&pidfile)
+                && let Ok(pid) = s.trim().parse::<i32>()
+                && pid > 0
+                && pid_is_alive(pid)
+            {
+                return pid;
             }
             assert!(Instant::now() < deadline, "orphan gvproxy never came up");
             std::thread::sleep(Duration::from_millis(50));

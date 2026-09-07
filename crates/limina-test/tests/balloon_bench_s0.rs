@@ -19,11 +19,11 @@
 
 use std::time::{Duration, Instant};
 
-use limina_test::bench::{
-    fetch_balloon_journal, json_object, now_ms, parse_trace, sample_host, tier, tier_config,
-    verify_tier, BenchRun, Tier,
-};
 use limina_test::Guest;
+use limina_test::bench::{
+    BenchRun, Tier, fetch_balloon_journal, json_object, now_ms, parse_trace, sample_host, tier,
+    tier_config, verify_tier,
+};
 
 const MIN_MIB: usize = 2048;
 const MAX_MIB: usize = 6144;

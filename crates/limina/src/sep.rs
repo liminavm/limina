@@ -7,7 +7,7 @@
 //! prompt. Persistence is the opaque CryptoKit blob (Spike A — no keychain, no
 //! entitlements). Every op is one FFI call into a caller-owned buffer.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 // C ABI from fido_sep.swift. Each returns a byte count written to `out`, or a
 // negative error (-1 access-control, -2 buffer too small, -3 enclave/CryptoKit).

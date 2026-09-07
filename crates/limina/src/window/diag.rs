@@ -6,16 +6,16 @@
 //! LIMINA_PRESENT_LOCK present-race probes (see the arming comments in [`super::run`]).
 
 use objc2_core_foundation::{
-    kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
-    CFNumberType, CFRetained, CFString,
+    CFDictionary, CFNumber, CFNumberType, CFRetained, CFString, kCFTypeDictionaryKeyCallBacks,
+    kCFTypeDictionaryValueCallBacks,
 };
 use std::time::Duration;
 
 use objc2_io_surface::{
+    IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceGetHeight,
+    IOSurfaceGetWidth, IOSurfaceLock, IOSurfaceLockOptions, IOSurfaceRef, IOSurfaceUnlock,
     kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
-    kIOSurfaceWidth, IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow,
-    IOSurfaceGetHeight, IOSurfaceGetWidth, IOSurfaceLock, IOSurfaceLockOptions, IOSurfaceRef,
-    IOSurfaceUnlock,
+    kIOSurfaceWidth,
 };
 
 /// Minimum time between periodic capture dumps (`LIMINA_WINDOW_CAPTURE_INTERVAL_MS`, default
@@ -33,15 +33,15 @@ use objc2_io_surface::{
 pub(crate) fn capture_interval_from_env() -> Duration {
     // The old apply-counted knob, honoured so an existing invocation is not silently ignored.
     // One apply is the useful setting of it, and that is what the time gate does by default.
-    if let Ok(v) = std::env::var("LIMINA_WINDOW_CAPTURE_EVERY") {
-        if v.trim().parse::<u64>().is_ok() {
-            log::warn!(
-                "LIMINA_WINDOW_CAPTURE_EVERY counts applies and is superseded by \
+    if let Ok(v) = std::env::var("LIMINA_WINDOW_CAPTURE_EVERY")
+        && v.trim().parse::<u64>().is_ok()
+    {
+        log::warn!(
+            "LIMINA_WINDOW_CAPTURE_EVERY counts applies and is superseded by \
                  LIMINA_WINDOW_CAPTURE_INTERVAL_MS, which counts milliseconds; treating it as \
                  a request for the most frequent cadence"
-            );
-            return Duration::ZERO;
-        }
+        );
+        return Duration::ZERO;
     }
     std::env::var("LIMINA_WINDOW_CAPTURE_INTERVAL_MS")
         .ok()

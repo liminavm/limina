@@ -18,8 +18,8 @@
 //! shuttles frames over a UNIX socket into this engine — the FIDO Stage-C proxy split reused.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod store;
 pub mod usb;
@@ -230,10 +230,10 @@ impl Engine {
     fn commit(&self, cmd: &[u8]) -> Option<Reply> {
         let len = cmd.get(7).copied().unwrap_or(0) as usize;
         let len = len.min(ELAN_MAX_USER_ID_LEN);
-        if let Some(uid) = cmd.get(8..8 + len) {
-            if !uid.is_empty() {
-                self.store.set(uid.to_vec());
-            }
+        if let Some(uid) = cmd.get(8..8 + len)
+            && !uid.is_empty()
+        {
+            self.store.set(uid.to_vec());
         }
         data(EP_CMD_IN, vec![0x40, ELAN_MSG_OK])
     }

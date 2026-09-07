@@ -19,7 +19,7 @@
 use std::time::{Duration, Instant};
 
 use super::fit;
-use super::grab_policy::{capture_tier, free_step, press_step, Free, GrabState, Press, Release};
+use super::grab_policy::{Free, GrabState, Press, Release, capture_tier, free_step, press_step};
 
 /// One trace line this replay understands, in file order.
 #[derive(Debug)]

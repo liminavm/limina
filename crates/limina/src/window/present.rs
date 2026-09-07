@@ -379,13 +379,15 @@ pub type SurfaceMap = Arc<Mutex<SurfaceStore>>;
 /// Survives worker relaunches: a relaunched worker re-looks-up the same bootstrap name and
 /// re-sends its surfaces, which land in the same store.
 fn spawn_surface_receiver(receiver: SurfacePortReceiver, map: SurfaceMap) {
-    std::thread::spawn(move || loop {
-        match receiver.recv(None) {
-            Ok(SurfaceMsg::Published(id, surface)) => map.lock().unwrap().insert(id, surface),
-            Ok(SurfaceMsg::Released(id)) => map.lock().unwrap().note_released(id),
-            Err(e) => {
-                log::warn!("window: surface-port recv failed: {e}");
-                std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::spawn(move || {
+        loop {
+            match receiver.recv(None) {
+                Ok(SurfaceMsg::Published(id, surface)) => map.lock().unwrap().insert(id, surface),
+                Ok(SurfaceMsg::Released(id)) => map.lock().unwrap().note_released(id),
+                Err(e) => {
+                    log::warn!("window: surface-port recv failed: {e}");
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
         }
     });
@@ -893,16 +895,16 @@ mod tests {
     use std::ffi::c_void;
 
     use objc2_core_foundation::{
-        kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
-        CFString,
+        CFDictionary, CFNumber, CFString, kCFTypeDictionaryKeyCallBacks,
+        kCFTypeDictionaryValueCallBacks,
     };
     use objc2_io_surface::{
-        kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
-        kIOSurfaceWidth, IOSurfaceCreate,
+        IOSurfaceCreate, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight,
+        kIOSurfacePixelFormat, kIOSurfaceWidth,
     };
 
     use super::{
-        parse_cursor_coord, CFRetained, GoneReason, IOSurfaceRef, SurfaceStore, FRAME_CACHE_CAP,
+        CFRetained, FRAME_CACHE_CAP, GoneReason, IOSurfaceRef, SurfaceStore, parse_cursor_coord,
     };
 
     fn cfnum(v: i32) -> CFRetained<CFNumber> {

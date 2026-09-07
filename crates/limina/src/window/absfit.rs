@@ -162,28 +162,28 @@ impl Axis {
         if s.pixel <= 0.0 || s.pixel >= extent - 1.0 {
             return;
         }
-        if let Some(l) = self.line {
-            if (l.pixel(s.u) - s.pixel).abs() > TOLERANCE_PX {
-                self.pending.push(s);
-                if self.pending.len() >= CONTRADICTIONS {
-                    // The arrangement moved: everything learned under the old one is worthless,
-                    // and the samples that proved it are the seed of the new fit.
-                    let seed = std::mem::take(&mut self.pending);
-                    match fit(&seed, extent) {
-                        Some(l) => {
-                            self.samples = seed;
-                            self.line = Some(l);
-                        }
-                        // Enough to doubt the old line, not enough to state a new one. Keep
-                        // the line: a wrong-but-stable mapping beats none, because none is
-                        // what makes the slot incomplete and summons a sweep. The dissenters
-                        // stay pending, so the next contradiction is judged on a wider base
-                        // and the arrangement that really did move still wins, a little later.
-                        None => self.pending = seed,
+        if let Some(l) = self.line
+            && (l.pixel(s.u) - s.pixel).abs() > TOLERANCE_PX
+        {
+            self.pending.push(s);
+            if self.pending.len() >= CONTRADICTIONS {
+                // The arrangement moved: everything learned under the old one is worthless,
+                // and the samples that proved it are the seed of the new fit.
+                let seed = std::mem::take(&mut self.pending);
+                match fit(&seed, extent) {
+                    Some(l) => {
+                        self.samples = seed;
+                        self.line = Some(l);
                     }
+                    // Enough to doubt the old line, not enough to state a new one. Keep
+                    // the line: a wrong-but-stable mapping beats none, because none is
+                    // what makes the slot incomplete and summons a sweep. The dissenters
+                    // stay pending, so the next contradiction is judged on a wider base
+                    // and the arrangement that really did move still wins, a little later.
+                    None => self.pending = seed,
                 }
-                return;
             }
+            return;
         }
         self.pending.clear();
         self.push(s);
@@ -315,10 +315,10 @@ pub(crate) fn abs_position(slot: usize, u: f64, v: f64, abs_max: i32) -> Option<
     if !super::arrangement::has_report() {
         let sizes = super::echo::scanout_sizes();
         // One display's share IS the range: there is nothing to learn, and identity is exact.
-        if sizes.iter().filter(|s| s.0 > 0 && s.1 > 0).count() > 1 {
-            if let Some(p) = place(slot, (u, v), sizes[slot], abs_max) {
-                return Some(p);
-            }
+        if sizes.iter().filter(|s| s.0 > 0 && s.1 > 0).count() > 1
+            && let Some(p) = place(slot, (u, v), sizes[slot], abs_max)
+        {
+            return Some(p);
         }
     }
     super::arrangement::abs_through_report(slot, u, v, abs_max)
@@ -486,7 +486,7 @@ pub(crate) fn forget() {
 
 #[cfg(test)]
 mod probe_start_tests {
-    use super::{probe_may_start, ProbeGate, PROBE_COOLDOWN, PROBE_QUIET};
+    use super::{PROBE_COOLDOWN, PROBE_QUIET, ProbeGate, probe_may_start};
     use std::time::Duration;
 
     /// A want, a free pointer, and a hand that is not mid-stroke.
@@ -565,7 +565,7 @@ mod probe_start_tests {
 
 #[cfg(test)]
 mod clamped_sample_tests {
-    use super::{Axis, Sample, CONTRADICTIONS};
+    use super::{Axis, CONTRADICTIONS, Sample};
 
     /// The rig's slot 0 on the y axis: a 1440-tall mode whose full height is the whole range.
     const H: f64 = 1440.0;

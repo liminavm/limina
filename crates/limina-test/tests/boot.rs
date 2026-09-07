@@ -25,7 +25,7 @@
 
 use std::time::{Duration, Instant};
 
-use limina_test::{assert_console_has, Guest, GuestConfig};
+use limina_test::{Guest, GuestConfig, assert_console_has};
 
 #[test]
 fn fedora_stock_image_boots_to_bootloader() {

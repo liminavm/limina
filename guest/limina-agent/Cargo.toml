@@ -6,7 +6,7 @@
 [package]
 name = "limina-agent"
 version = "0.6.1"
-edition = "2021"
+edition = "2024"
 license = "GPL-2.0-only WITH LicenseRef-limina-exception"
 
 [[bin]]

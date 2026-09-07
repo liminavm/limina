@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 
-use limina_proto::{Message, Shutdown, Welcome, CHANNEL_CONTROL, ERR_UNSUPPORTED};
+use limina_proto::{CHANNEL_CONTROL, ERR_UNSUPPORTED, Message, Shutdown, Welcome};
 use limina_test::{Guest, GuestConfig};
 
 const AGENT_PORT: u32 = 1234;

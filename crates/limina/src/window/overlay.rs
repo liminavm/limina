@@ -27,9 +27,9 @@
 //! `CABasicAnimation` (CA animates it without any AppKit drawing). The render timer re-fits
 //! the overlay every tick (`fit`) and tears it down via `remove`.
 
+use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::AnyThread;
 use objc2_app_kit::{NSImage, NSView};
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{

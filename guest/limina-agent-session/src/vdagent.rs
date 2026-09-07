@@ -65,10 +65,10 @@ pub fn serving() -> bool {
             _ => continue,
         }
         // A process can exit between readdir and read — a missing comm is just "gone".
-        if let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
-            if comm.trim_end() == COMM {
-                return true;
-            }
+        if let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+            && comm.trim_end() == COMM
+        {
+            return true;
         }
     }
     false

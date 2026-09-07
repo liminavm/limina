@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use limina_proto::{
-    read_message, write_message, Message, Shutdown, Welcome, CHANNEL_CLIPBOARD, CHANNEL_CONTROL,
+    CHANNEL_CLIPBOARD, CHANNEL_CONTROL, Message, Shutdown, Welcome, read_message, write_message,
 };
 
 /// How long the orderly path gets before the caller escalates to the next rung (the power
@@ -391,10 +391,11 @@ impl ControlPlane {
         let deadline = Instant::now() + wait;
         while Instant::now() < deadline {
             // Only a report made AFTER we asked can confirm the ask.
-            if let Some((at, online)) = *self.inner.guest_vcpus_online.lock().unwrap() {
-                if at > asked && online >= target.online {
-                    return true;
-                }
+            if let Some((at, online)) = *self.inner.guest_vcpus_online.lock().unwrap()
+                && at > asked
+                && online >= target.online
+            {
+                return true;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -708,10 +709,10 @@ impl Inner {
             return;
         };
         // The enhanced agent owns this whenever it is present and talking.
-        if let Some(at) = *self.agent_cpu_report_at.lock().unwrap() {
-            if at.elapsed() < AGENT_CPU_FRESH {
-                return;
-            }
+        if let Some(at) = *self.agent_cpu_report_at.lock().unwrap()
+            && at.elapsed() < AGENT_CPU_FRESH
+        {
+            return;
         }
         if self.qga_vcpu_failures.load(Ordering::Relaxed) >= QGA_VCPU_GIVE_UP {
             return;
@@ -983,10 +984,10 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         silent: Arc::new(AtomicBool::new(false)),
     });
     // A late joiner needs the CURRENT host clipboard, not just the next change.
-    if peer.has_cap("clipboard") {
-        if let Some(offer) = inner.clipboard.initial_offer() {
-            let _ = peer.send(&offer, CHANNEL_CLIPBOARD);
-        }
+    if peer.has_cap("clipboard")
+        && let Some(offer) = inner.clipboard.initial_offer()
+    {
+        let _ = peer.send(&offer, CHANNEL_CLIPBOARD);
     }
     // Seed the guest clock immediately: the agent (re)connects at boot AND right after a
     // snapshot restore — exactly the moments the guest's CNTVCT-anchored clock is stale.
@@ -1085,10 +1086,10 @@ fn serve_loop(
                 let now = Instant::now();
                 *inner.guest_vcpus_online.lock().unwrap() = Some((now, p.online));
                 *inner.agent_cpu_report_at.lock().unwrap() = Some(now);
-                if let Some(policy) = &inner.vcpu_policy {
-                    if let Some(target) = policy.on_pressure(&p) {
-                        reply(&Message::CpuTarget(target), CHANNEL_CONTROL)?;
-                    }
+                if let Some(policy) = &inner.vcpu_policy
+                    && let Some(target) = policy.on_pressure(&p)
+                {
+                    reply(&Message::CpuTarget(target), CHANNEL_CONTROL)?;
                 }
             }
             // The guest desktop's power profile. The guest needs no limina components to have
@@ -1231,17 +1232,23 @@ mod tests {
         // No gadget (--no-usb): uhid is the only way to keep passkeys, so it is offered.
         assert!(welcome_caps(true, false, false).iter().any(|c| c == "fido"));
         // No store (no Secure Enclave, or --no-fido): no authenticator either way.
-        assert!(!welcome_caps(false, false, false)
-            .iter()
-            .any(|c| c == "fido"));
+        assert!(
+            !welcome_caps(false, false, false)
+                .iter()
+                .any(|c| c == "fido")
+        );
         assert!(!welcome_caps(false, true, false).iter().any(|c| c == "fido"));
         // The rest of the handshake is unaffected.
-        assert!(welcome_caps(true, true, false)
-            .iter()
-            .any(|c| c == "clipboard"));
-        assert!(welcome_caps(true, true, false)
-            .iter()
-            .any(|c| c == "shutdown"));
+        assert!(
+            welcome_caps(true, true, false)
+                .iter()
+                .any(|c| c == "clipboard")
+        );
+        assert!(
+            welcome_caps(true, true, false)
+                .iter()
+                .any(|c| c == "shutdown")
+        );
     }
 
     /// The `vcpu` capability is the whole opt-in: a guest is only asked to sample and report its
@@ -1250,9 +1257,11 @@ mod tests {
     /// offline on a host that never asked for it.
     #[test]
     fn the_vcpu_capability_is_only_offered_when_a_policy_exists() {
-        assert!(!welcome_caps(false, false, false)
-            .iter()
-            .any(|c| c == "vcpu"));
+        assert!(
+            !welcome_caps(false, false, false)
+                .iter()
+                .any(|c| c == "vcpu")
+        );
         assert!(welcome_caps(false, false, true).iter().any(|c| c == "vcpu"));
     }
 

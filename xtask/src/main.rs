@@ -39,7 +39,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 /// In-bundle path the supervisor writes its rendered-layer PNG to (LSEnvironment), so a
@@ -173,11 +173,7 @@ fn bash_script(repo: &Path, script: &str, args: &[impl AsRef<std::ffi::OsStr>]) 
 }
 
 fn profile_name(release: bool) -> &'static str {
-    if release {
-        "release"
-    } else {
-        "debug"
-    }
+    if release { "release" } else { "debug" }
 }
 
 // --- bootstrap ---------------------------------------------------------------------------------

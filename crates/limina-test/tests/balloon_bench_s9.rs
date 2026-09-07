@@ -48,12 +48,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use limina_proto::Message;
-use limina_test::bench::{
-    count_oom_since, fetch_balloon_journal, guest_epoch_secs, join_control_as_agent, json_object,
-    now_ms, real_report, sample_host, tier, tier_config, verify_tier, BenchRun, GuestSampler,
-    HostSample, Tier,
-};
 use limina_test::Guest;
+use limina_test::bench::{
+    BenchRun, GuestSampler, HostSample, Tier, count_oom_since, fetch_balloon_journal,
+    guest_epoch_secs, join_control_as_agent, json_object, now_ms, real_report, sample_host, tier,
+    tier_config, verify_tier,
+};
 
 const MIB: u64 = 1 << 20;
 /// Defaults size a cheap smoke (no ballast → every cycle VOID by construction, which
@@ -532,12 +532,11 @@ fn s9_ledger_churn() {
                 host_samples.push(s);
             }
             tick += 1;
-            if tick.is_multiple_of(5) {
-                if let Some(c) = conn.as_mut() {
-                    if let Some(r) = real_report(guest) {
-                        let _ = c.send(&Message::MemPressure(r));
-                    }
-                }
+            if tick.is_multiple_of(5)
+                && let Some(c) = conn.as_mut()
+                && let Some(r) = real_report(guest)
+            {
+                let _ = c.send(&Message::MemPressure(r));
             }
             if last_ledger.elapsed() >= Duration::from_secs(60) {
                 *last_ledger = Instant::now();

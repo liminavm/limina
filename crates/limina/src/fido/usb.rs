@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::store::FidoStore;
-use super::{pump, FidoAuthenticator, REPORT_SIZE};
+use super::{FidoAuthenticator, REPORT_SIZE, pump};
 
 /// Spawn the FIDO USB serve thread: connect to the worker's gadget socket and bridge CTAPHID
 /// to an authenticator backed by `store`. Reconnects across worker relaunches; runs for the

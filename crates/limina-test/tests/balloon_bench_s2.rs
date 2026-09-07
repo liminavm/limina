@@ -25,13 +25,13 @@
 use std::time::{Duration, Instant};
 
 use limina_proto::Message;
-use limina_test::bench::{
-    burst_status, count_oom_since, counter_delta, fetch_balloon_journal,
-    first_target_decrease_after, guest_epoch_secs, idle_report, join_control_as_agent, json_object,
-    kill_burst, now_ms, parse_trace, psi_integral_pct_s, real_report, sample_host, start_burst,
-    tier, tier_config, verify_tier, BenchRun, BurstStatus, GuestSampler, HostSample, Tier,
-};
 use limina_test::Guest;
+use limina_test::bench::{
+    BenchRun, BurstStatus, GuestSampler, HostSample, Tier, burst_status, count_oom_since,
+    counter_delta, fetch_balloon_journal, first_target_decrease_after, guest_epoch_secs,
+    idle_report, join_control_as_agent, json_object, kill_burst, now_ms, parse_trace,
+    psi_integral_pct_s, real_report, sample_host, start_burst, tier, tier_config, verify_tier,
+};
 
 const MIB: u64 = 1 << 20;
 const MIN_MIB: usize = 2048;
@@ -180,10 +180,10 @@ fn run_point(run: &BenchRun, p: &Point) -> PointOutcome {
         }
         tick += 1;
         if tick.is_multiple_of(5) {
-            if let Some(c) = conn.as_mut() {
-                if let Some(r) = real_report(&guest) {
-                    let _ = c.send(&Message::MemPressure(r));
-                }
+            if let Some(c) = conn.as_mut()
+                && let Some(r) = real_report(&guest)
+            {
+                let _ = c.send(&Message::MemPressure(r));
             }
             match burst_status(&guest).unwrap_or(BurstStatus::Died) {
                 BurstStatus::Complete(ts) => break Ok(ts),

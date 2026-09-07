@@ -20,8 +20,8 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value, json};
 
 use super::codec::{self, Lines};
 use super::policy::TimeSample;
@@ -1134,9 +1134,10 @@ mod tests {
             _ => None,
         });
         qga.time_sample().unwrap();
-        assert!(qga
-            .call("guest-ping", None, Duration::from_millis(50))
-            .is_err());
+        assert!(
+            qga.call("guest-ping", None, Duration::from_millis(50))
+                .is_err()
+        );
         let s = qga
             .time_sample()
             .expect("the stale ping reply must not land here");
@@ -1208,8 +1209,8 @@ mod tests {
     /// `guest-exec-status` says the process exited, and its output arrives base64-encoded.
     #[test]
     fn a_command_is_polled_until_it_exits_and_its_output_decoded() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
         let polls = Arc::new(AtomicU32::new(0));
         let n = polls.clone();
         let (qga, _h) = client_with(move |cmd, args| match cmd {

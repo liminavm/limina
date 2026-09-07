@@ -51,7 +51,7 @@
 //! [`Selection`] is fixed at `CLIPBOARD` for now; `PRIMARY` (the X11 middle-click
 //! selection) has no NSPasteboard counterpart worth bridging.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// `VD_AGENT_PROTOCOL` — the only protocol version that exists.
 pub const PROTOCOL: u32 = 1;

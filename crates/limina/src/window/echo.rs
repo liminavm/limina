@@ -361,9 +361,11 @@ mod tests {
         // Pinned at the seam on the WRONG scanout: the pointer crossed where we believed it
         // was pressing — the other-slot branch names it.
         let echo = rig(CursorEcho::NONE, shown(3, 500, 1512, 980));
-        assert!(at_edge_verdict(0, Edge::Right, &echo)
-            .unwrap_err()
-            .contains("none on slot 0"));
+        assert!(
+            at_edge_verdict(0, Edge::Right, &echo)
+                .unwrap_err()
+                .contains("none on slot 0")
+        );
         // Hidden everywhere: skipped.
         assert_eq!(
             at_edge_verdict(0, Edge::Right, &rig(CursorEcho::NONE, CursorEcho::NONE)),

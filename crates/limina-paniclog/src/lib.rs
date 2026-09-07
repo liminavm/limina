@@ -47,10 +47,10 @@ pub fn log_path() -> Option<PathBuf> {
 /// nowhere to write and the sink stays silent rather than inventing a relative path in whatever
 /// directory the process happens to be in.
 fn path_from(override_var: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
-    if let Some(p) = override_var {
-        if !p.is_empty() {
-            return Some(PathBuf::from(p));
-        }
+    if let Some(p) = override_var
+        && !p.is_empty()
+    {
+        return Some(PathBuf::from(p));
     }
     let home = home.filter(|h| !h.is_empty())?;
     Some(PathBuf::from(home).join("Library/Logs/Limina/panic.log"))

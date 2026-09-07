@@ -14,11 +14,11 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use super::bundle::{VmBundle, BUNDLE_EXT};
+use super::bundle::{BUNDLE_EXT, VmBundle};
 use super::runtime;
 use super::schema::{
-    mac_for_uuid, rfc3339_utc_now, uuid_v4, DiskEntry, DisplayCfg, Hardware, Identity, Memory,
-    NetMode, NetworkEntry, VmConfig, CONFIG_VERSION,
+    CONFIG_VERSION, DiskEntry, DisplayCfg, Hardware, Identity, Memory, NetMode, NetworkEntry,
+    VmConfig, mac_for_uuid, rfc3339_utc_now, uuid_v4,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

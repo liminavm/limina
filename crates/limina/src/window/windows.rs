@@ -23,12 +23,12 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 
-use objc2::rc::Retained;
 use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_app_kit::{
     NSBackingStoreType, NSScreen, NSTrackingArea, NSTrackingAreaOptions, NSWindow,
     NSWindowCollectionBehavior, NSWindowStyleMask,
@@ -37,7 +37,7 @@ use objc2_core_foundation::CFRetained;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
 
-use super::present::{AckMsg, Shared, SurfaceMap, MAX_SCANOUTS};
+use super::present::{AckMsg, MAX_SCANOUTS, Shared, SurfaceMap};
 use crate::vmlib::schema::DisplayResolution;
 
 thread_local! {
@@ -346,25 +346,24 @@ impl PrimaryDisplay {
             .window
             .styleMask()
             .contains(NSWindowStyleMask::FullScreen)
+            && let Some(s) = self.core.window.screen()
         {
-            if let Some(s) = self.core.window.screen() {
-                // Read the store BEFORE learning so the trace shows the transition.
-                let was = super::hostdisplay::fullscreen_inset(&s);
-                let observed = self.core.learn_native_inset();
-                if super::display_trace() {
-                    let frame = s.frame().size;
-                    let sz = self.core.view.bounds().size;
-                    eprintln!(
-                        "[DISPTRACE] learn id={} name={:?} frame={}x{} view={}x{} \
+            // Read the store BEFORE learning so the trace shows the transition.
+            let was = super::hostdisplay::fullscreen_inset(&s);
+            let observed = self.core.learn_native_inset();
+            if super::display_trace() {
+                let frame = s.frame().size;
+                let sz = self.core.view.bounds().size;
+                eprintln!(
+                    "[DISPTRACE] learn id={} name={:?} frame={}x{} view={}x{} \
                          observed={observed:?} was={was}",
-                        super::hostdisplay::display_id_of(&s),
-                        s.localizedName().to_string(),
-                        frame.width,
-                        frame.height,
-                        sz.width,
-                        sz.height,
-                    );
-                }
+                    super::hostdisplay::display_id_of(&s),
+                    s.localizedName().to_string(),
+                    frame.width,
+                    frame.height,
+                    sz.width,
+                    sz.height,
+                );
             }
         }
     }
@@ -659,18 +658,15 @@ impl PrimaryDisplay {
         // Targeted per-id sweep — look each requested global id up fresh (no cache) and
         // dump it, so we can read the venus blob surface directly even when it isn't the
         // presented one.
-        if !self.capture_ids.is_empty() && self.applies.get().is_multiple_of(30) {
-            if let Some(base) = &self.capture_path {
-                for &cid in &self.capture_ids {
-                    if let Some(s) = IOSurfaceLookup(cid) {
-                        super::diag::capture_iosurface_async(
-                            &s,
-                            cid,
-                            &format!("{base}.id{cid}.png"),
-                        );
-                    } else {
-                        log::info!("capture: IOSurfaceLookup({cid}) -> none (not alive)");
-                    }
+        if !self.capture_ids.is_empty()
+            && self.applies.get().is_multiple_of(30)
+            && let Some(base) = &self.capture_path
+        {
+            for &cid in &self.capture_ids {
+                if let Some(s) = IOSurfaceLookup(cid) {
+                    super::diag::capture_iosurface_async(&s, cid, &format!("{base}.id{cid}.png"));
+                } else {
+                    log::info!("capture: IOSurfaceLookup({cid}) -> none (not alive)");
                 }
             }
         }
@@ -1334,12 +1330,12 @@ impl SecondaryWindow {
         // Keep the strip over the band and its copy of the layer on the same image, every
         // tick: nothing in AppKit holds a borderless window in place across a display
         // reconfiguration, and the fit it mirrors can change under it.
-        if self.core.overlay.claims_band() {
-            if let Some(screen) = self.core.window.screen() {
-                self.core
-                    .overlay
-                    .place(&screen, b.size.height, strip_inset, target);
-            }
+        if self.core.overlay.claims_band()
+            && let Some(screen) = self.core.window.screen()
+        {
+            self.core
+                .overlay
+                .place(&screen, b.size.height, strip_inset, target);
         }
     }
 
@@ -1370,20 +1366,20 @@ impl SecondaryWindow {
         // decoded against its layer (the shifted guest-image rect) yields the right unit
         // coordinates by the same math as the main window's. Registered once, when the strip
         // first exists; deregistered by Drop.
-        if !self.strip_registered {
-            if let Some(strip) = self.core.overlay.strip_window() {
-                let slot = WINDOW_SLOTS.with(|m| {
-                    m.borrow()
-                        .get(&(&*self.core.window as *const NSWindow as usize))
-                        .copied()
+        if !self.strip_registered
+            && let Some(strip) = self.core.overlay.strip_window()
+        {
+            let slot = WINDOW_SLOTS.with(|m| {
+                m.borrow()
+                    .get(&(&*self.core.window as *const NSWindow as usize))
+                    .copied()
+            });
+            if let Some(slot) = slot {
+                WINDOW_SLOTS.with(|m| {
+                    m.borrow_mut()
+                        .insert(&*strip as *const NSWindow as usize, slot)
                 });
-                if let Some(slot) = slot {
-                    WINDOW_SLOTS.with(|m| {
-                        m.borrow_mut()
-                            .insert(&*strip as *const NSWindow as usize, slot)
-                    });
-                    self.strip_registered = true;
-                }
+                self.strip_registered = true;
             }
         }
         // If the strip just came up, hand it the frame the window is already showing —
@@ -1412,7 +1408,7 @@ impl SecondaryWindow {
 
 #[cfg(test)]
 mod tests {
-    use super::{slot_fate, Fate};
+    use super::{Fate, slot_fate};
 
     /// The gdm handover, and every modeset before it: the guest disables the scanout and
     /// reconfigures it a moment later. Closing the window there cost the secondary its

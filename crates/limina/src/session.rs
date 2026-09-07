@@ -439,17 +439,17 @@ impl WindowedSession {
                     }
                 }
                 // Recycle gvproxy (single-connection vfkit socket) before the fresh worker dials it.
-                if let Some(gw) = &gateway {
-                    if let Err(e) = gw.restart() {
-                        log::error!(
-                            "could not restart the NAT gateway for the reboot: {e:#}; stopping"
-                        );
-                        window::mark_worker_exited(&monitor_shared);
-                        if resuming {
-                            window::mark_resume_dead(&monitor_shared);
-                        }
-                        break;
+                if let Some(gw) = &gateway
+                    && let Err(e) = gw.restart()
+                {
+                    log::error!(
+                        "could not restart the NAT gateway for the reboot: {e:#}; stopping"
+                    );
+                    window::mark_worker_exited(&monitor_shared);
+                    if resuming {
+                        window::mark_resume_dead(&monitor_shared);
                     }
+                    break;
                 }
                 // Boot the fresh worker at the resolution the window is CURRENTLY driving,
                 // not the original one (see `pack_size`).

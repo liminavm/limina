@@ -313,10 +313,10 @@ mod tests {
     fn usages_are_unique() {
         let mut seen = std::collections::HashMap::new();
         for &key in SUPPORTED_KEYBOARD_KEYS {
-            if let Some(u) = key_usage(key) {
-                if let Some(prev) = seen.insert(u, key) {
-                    panic!("usage {u:#04x} claimed by both KEY {prev} and KEY {key}");
-                }
+            if let Some(u) = key_usage(key)
+                && let Some(prev) = seen.insert(u, key)
+            {
+                panic!("usage {u:#04x} claimed by both KEY {prev} and KEY {key}");
             }
         }
     }

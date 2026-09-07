@@ -18,7 +18,7 @@ use std::io::ErrorKind;
 use std::os::fd::FromRawFd;
 use std::time::Duration;
 
-use limina_proto::{read_message, write_message, Heartbeat, Hello, Message, CHANNEL_CONTROL};
+use limina_proto::{CHANNEL_CONTROL, Heartbeat, Hello, Message, read_message, write_message};
 
 /// How often the agent emits a HEARTBEAT while the channel is idle.
 const HEARTBEAT_EVERY: Duration = Duration::from_millis(1000);

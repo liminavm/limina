@@ -21,11 +21,11 @@
 
 use std::time::{Duration, Instant};
 
-use limina_test::bench::{
-    fetch_balloon_journal, json_object, mib_per_s, now_ms, sample_host, tier, tier_config,
-    verify_tier, BenchRun, GuestSampler, HostSample,
-};
 use limina_test::Guest;
+use limina_test::bench::{
+    BenchRun, GuestSampler, HostSample, fetch_balloon_journal, json_object, mib_per_s, now_ms,
+    sample_host, tier, tier_config, verify_tier,
+};
 
 const MIB: u64 = 1 << 20;
 /// Guest RAM: comfortably above the balloon excursion so the idle guest never fights S1.
@@ -103,7 +103,9 @@ fn drive_leg(
 #[test]
 fn s1_mechanism_deflate_inflate() {
     if std::env::var("LIMINA_BALLOON_BENCH").ok().as_deref() != Some("1") {
-        eprintln!("SKIPPED s1_mechanism_deflate_inflate: set LIMINA_BALLOON_BENCH=1 (bench runs are on-demand, see docs/design/balloon-bench.md §9)");
+        eprintln!(
+            "SKIPPED s1_mechanism_deflate_inflate: set LIMINA_BALLOON_BENCH=1 (bench runs are on-demand, see docs/design/balloon-bench.md §9)"
+        );
         return;
     }
     if !limina_test::require_hvf_or_skip("s1_mechanism_deflate_inflate") {

@@ -159,32 +159,40 @@ mod tests {
 
     #[test]
     fn a_busy_host_or_a_busy_guest_defers_the_trim() {
-        assert!(gate_ok(Gate {
-            host_calm: false,
-            guest_io_full_avg10: Some(0),
-        })
-        .is_err());
-        assert!(gate_ok(Gate {
-            host_calm: true,
-            guest_io_full_avg10: Some(GUEST_IO_CALM + 1),
-        })
-        .is_err());
-        assert!(gate_ok(Gate {
-            host_calm: true,
-            guest_io_full_avg10: Some(GUEST_IO_CALM),
-        })
-        .is_ok());
+        assert!(
+            gate_ok(Gate {
+                host_calm: false,
+                guest_io_full_avg10: Some(0),
+            })
+            .is_err()
+        );
+        assert!(
+            gate_ok(Gate {
+                host_calm: true,
+                guest_io_full_avg10: Some(GUEST_IO_CALM + 1),
+            })
+            .is_err()
+        );
+        assert!(
+            gate_ok(Gate {
+                host_calm: true,
+                guest_io_full_avg10: Some(GUEST_IO_CALM),
+            })
+            .is_ok()
+        );
     }
 
     /// The stock tier reports no PSI at all, and it is the tier this feature is for. A
     /// missing reading must read as "no reason to wait", never as "assume the worst".
     #[test]
     fn a_stock_guest_reporting_no_psi_is_not_treated_as_busy() {
-        assert!(gate_ok(Gate {
-            host_calm: true,
-            guest_io_full_avg10: None,
-        })
-        .is_ok());
+        assert!(
+            gate_ok(Gate {
+                host_calm: true,
+                guest_io_full_avg10: None,
+            })
+            .is_ok()
+        );
     }
 
     /// The mirror of the rule above: a guest that *stops* reporting must stop being believed.
@@ -199,11 +207,13 @@ mod tests {
         );
         assert_eq!(fresh_psi(a + PSI_FRESH, busy), None);
         assert_eq!(fresh_psi(a, None), None);
-        assert!(gate_ok(Gate {
-            host_calm: true,
-            guest_io_full_avg10: fresh_psi(a + PSI_FRESH, busy),
-        })
-        .is_ok());
+        assert!(
+            gate_ok(Gate {
+                host_calm: true,
+                guest_io_full_avg10: fresh_psi(a + PSI_FRESH, busy),
+            })
+            .is_ok()
+        );
     }
 
     #[test]

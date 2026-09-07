@@ -17,8 +17,8 @@
 //! same credential [`store`].
 
 use std::path::PathBuf;
-use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 pub mod ctap2;
@@ -34,11 +34,7 @@ use store::FidoStore;
 /// see the test — but it is the same principle: a passkey is a credential a *real site* keeps, so
 /// an authenticator that cannot remember its half is not a degraded authenticator, it is a trap.
 fn store_location(capable: bool, path: Option<PathBuf>) -> Option<PathBuf> {
-    if capable {
-        path
-    } else {
-        None
-    }
+    if capable { path } else { None }
 }
 
 /// Build the shared per-VM passkey store **iff** this host can back a FIDO authenticator — a

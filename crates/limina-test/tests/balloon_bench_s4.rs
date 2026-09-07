@@ -19,11 +19,11 @@
 use std::time::{Duration, Instant};
 
 use limina_proto::Message;
-use limina_test::bench::{
-    fetch_balloon_journal, json_object, now_ms, parse_trace, real_report, sample_host,
-    target_reversals, tier, tier_config, verify_tier, BenchRun, GuestSampler, HostSample, Tier,
-};
 use limina_test::Guest;
+use limina_test::bench::{
+    BenchRun, GuestSampler, HostSample, Tier, fetch_balloon_journal, json_object, now_ms,
+    parse_trace, real_report, sample_host, target_reversals, tier, tier_config, verify_tier,
+};
 
 const MIB: u64 = 1 << 20;
 const MIN_MIB: usize = 2048;
@@ -92,10 +92,10 @@ fn s4_idle_inflate_convergence() {
     let mut last_target: Option<u64> = None;
     let mut last_move = Instant::now();
     while start.elapsed() < RUN_BUDGET {
-        if let Some(c) = conn.as_mut() {
-            if let Some(r) = real_report(&guest) {
-                let _ = c.send(&Message::MemPressure(r));
-            }
+        if let Some(c) = conn.as_mut()
+            && let Some(r) = real_report(&guest)
+        {
+            let _ = c.send(&Message::MemPressure(r));
         }
         std::thread::sleep(Duration::from_millis(1000));
         if let Ok(s) = sample_host(&guest) {

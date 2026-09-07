@@ -60,8 +60,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use limina_test::landmarks::{
-    by_row, cell_delta, cell_means, color_diversity, settled_capture, CELL_TOL, GRID_COLS,
-    GRID_ROWS,
+    CELL_TOL, GRID_COLS, GRID_ROWS, by_row, cell_delta, cell_means, color_diversity,
+    settled_capture,
 };
 use limina_test::{CapturedFrame, Guest, GuestConfig};
 

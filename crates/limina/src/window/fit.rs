@@ -876,11 +876,7 @@ pub(crate) fn edge_overflow(cur: (f64, f64), dx: f64, dy: f64, fit: FitRect) -> 
         } else {
             p <= lo + EPS
         };
-        if d != 0.0 && against {
-            d
-        } else {
-            0.0
-        }
+        if d != 0.0 && against { d } else { 0.0 }
     };
     (
         out(cur.0, fit.x, fit.x + fit.w, dx, 1.0),

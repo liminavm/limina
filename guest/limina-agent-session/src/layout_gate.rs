@@ -74,11 +74,7 @@ impl LayoutGate {
     /// copy died with the old channel and the compositor will not repeat itself. Quiet
     /// while inactive — the active session's helper owns the wire.
     pub fn for_new_channel(&self, active: bool) -> Option<DisplayLayout> {
-        if active {
-            self.latest.clone()
-        } else {
-            None
-        }
+        if active { self.latest.clone() } else { None }
     }
 }
 

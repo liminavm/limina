@@ -161,10 +161,10 @@ fn macos_modifier_usage(macos_keycode: u16) -> Option<u32> {
 /// bookkeeping is correct in macOS's own space. This function is the single seam where that
 /// space is translated into the guest's.
 pub fn macos_keycode_to_linux_remapped(keycode: u16, remap: &KeyRemap) -> Option<u16> {
-    if remap.normalize {
-        if let Some(code) = remap.normalized_modifier(keycode) {
-            return Some(code);
-        }
+    if remap.normalize
+        && let Some(code) = remap.normalized_modifier(keycode)
+    {
+        return Some(code);
     }
     macos_keycode_to_linux(keycode)
 }
@@ -784,7 +784,7 @@ mod tests {
         // refocus carries led=false while we still believe on, so one heal tap re-syncs.
         let mut s = CapsLockSync::new();
         assert!(s.observe(true)); // caps on (guest on)
-                                  // ... unfocused: host toggled caps OFF; the VM saw no event, so the belief stays on ...
+        // ... unfocused: host toggled caps OFF; the VM saw no event, so the belief stays on ...
         assert!(s.observe(false)); // first post-refocus event carries led=off -> heal tap
         assert!(!s.observe(false)); // now back in sync
     }

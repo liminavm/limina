@@ -56,8 +56,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use limina_proto::{
-    read_message, write_message, ClipData, ClipOffer, ClipRequest, Heartbeat, Hello, Message,
-    CHANNEL_CLIPBOARD, CHANNEL_CONTROL, CONTROL_PORT,
+    CHANNEL_CLIPBOARD, CHANNEL_CONTROL, CONTROL_PORT, ClipData, ClipOffer, ClipRequest, Heartbeat,
+    Hello, Message, read_message, write_message,
 };
 
 mod layout_gate;
@@ -213,12 +213,11 @@ fn yield_phase(
         // (only the active seat session writes); a send lost to a dead channel is fine — the
         // reconnect below re-seeds from the gate.
         let active = layout_gate::seat_active();
-        if let Some(layout) = gate.poll(layouts.try_iter(), active) {
-            if let Some(mut h) = host.take() {
-                if write_message(&mut h, CHANNEL_CONTROL, &Message::DisplayLayout(layout)).is_ok() {
-                    host = Some(h);
-                }
-            }
+        if let Some(layout) = gate.poll(layouts.try_iter(), active)
+            && let Some(mut h) = host.take()
+            && write_message(&mut h, CHANNEL_CONTROL, &Message::DisplayLayout(layout)).is_ok()
+        {
+            host = Some(h);
         }
         // Keep the control channel alive without the clipboard capability. A fresh channel
         // is seeded with the arrangement (if we may write it): the host's copy died with
@@ -594,10 +593,10 @@ impl Bridge {
     }
 
     fn send(&mut self, channel: u32, msg: &Message) {
-        if let Some(stream) = self.host.as_mut() {
-            if write_message(stream, channel, msg).is_err() {
-                self.host = None;
-            }
+        if let Some(stream) = self.host.as_mut()
+            && write_message(stream, channel, msg).is_err()
+        {
+            self.host = None;
         }
     }
 
@@ -906,7 +905,7 @@ fn write_ignoring_epipe(file: &mut File, data: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod channel_tests {
     use super::{hello_msg, open_channel};
-    use limina_proto::{read_message, DisplayLayout, GuestMonitor, Message};
+    use limina_proto::{DisplayLayout, GuestMonitor, Message, read_message};
 
     fn seed() -> DisplayLayout {
         DisplayLayout {

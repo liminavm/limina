@@ -8,9 +8,9 @@
 use std::cell::Cell;
 use std::sync::{Arc, Mutex};
 
+use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::AnyThread;
 use objc2_app_kit::{NSCursor, NSImage};
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{
@@ -460,7 +460,7 @@ mod resolve_tests {
     use std::sync::{Arc, Mutex};
 
     use super::super::present::{SurfaceMap, SurfaceStore};
-    use super::{resolve_cursor, AckMsg};
+    use super::{AckMsg, resolve_cursor};
 
     /// The missing-pointer fault (dogfood 2026-08-26): the guest is showing a shape whose
     /// surface we cannot resolve. Giving up silently is not one skipped frame — the worker
@@ -496,7 +496,7 @@ mod resolve_tests {
 
 #[cfg(test)]
 mod shape_slot_tests {
-    use super::{shape_slot, undrawn_fault, LayerVerdict};
+    use super::{LayerVerdict, shape_slot, undrawn_fault};
 
     /// The steady state says nothing at all: the layer is drawing.
     #[test]

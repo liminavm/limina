@@ -32,7 +32,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 // Re-exported so tests can build display commands without depending on the crate directly.
 pub use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec};
 
@@ -2009,7 +2009,7 @@ impl Guest {
                 Err(e) => {
                     return Err(e).with_context(|| {
                         format!("connecting to the display-control socket {path:?}")
-                    })
+                    });
                 }
             }
         };
@@ -2036,7 +2036,7 @@ impl Guest {
                 Err(e) => {
                     return Err(e).with_context(|| {
                         format!("connecting to the balloon-control socket {path:?}")
-                    })
+                    });
                 }
             }
         }
@@ -2136,10 +2136,10 @@ impl Guest {
     pub fn wait_for_capture(&mut self, timeout: Duration) -> Result<CapturedFrame> {
         let deadline = Instant::now() + timeout;
         loop {
-            if self.capture_png.as_ref().is_some_and(|p| p.exists()) {
-                if let Ok(frame) = self.read_capture() {
-                    return Ok(frame);
-                }
+            if self.capture_png.as_ref().is_some_and(|p| p.exists())
+                && let Ok(frame) = self.read_capture()
+            {
+                return Ok(frame);
             }
             if let Some(status) = self.child.try_wait().context("polling supervisor")? {
                 // The supervisor exited; a final frame may have landed just before it did.

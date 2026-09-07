@@ -1071,7 +1071,7 @@ fn cli_from_definition(
     bundle: &vmlib::bundle::VmBundle,
     ov: &StartOverrides,
 ) -> Result<Cli> {
-    use vmlib::schema::{memory_to_cli, GpuMode, Memory};
+    use vmlib::schema::{GpuMode, Memory, memory_to_cli};
 
     let (ram_mib, memory) = match &ov.memory {
         Some(s) => memory_to_cli(&Memory::parse(s).context("--memory")?)?,
@@ -1560,19 +1560,17 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // Stock-tier fingerprint reader gadget (M14 wave 3): the same proxy shape as FIDO. Gated on a
     // usable Touch ID sensor (or the test knob) via `moc_store`. The worker binds the socket and
     // presents the elanmoc identity; the supervisor runs the protocol + Touch ID here.
-    if fingerprint {
-        if let Some(store) = &moc_store {
-            let moc_socket =
-                std::env::temp_dir().join(format!("limina-moc-usb-{}.sock", std::process::id()));
-            tmpsock::own(&moc_socket);
-            args.push("--moc-socket".into());
-            args.push(path_arg(&moc_socket)?);
-            moc::usb::serve(
-                moc_socket,
-                store.clone(),
-                fingerprint_vm_label(cli.window_title.as_deref()),
-            );
-        }
+    if fingerprint && let Some(store) = &moc_store {
+        let moc_socket =
+            std::env::temp_dir().join(format!("limina-moc-usb-{}.sock", std::process::id()));
+        tmpsock::own(&moc_socket);
+        args.push("--moc-socket".into());
+        args.push(path_arg(&moc_socket)?);
+        moc::usb::serve(
+            moc_socket,
+            store.clone(),
+            fingerprint_vm_label(cli.window_title.as_deref()),
+        );
     }
     if let Some(policy) = &cli.on_host_sleep {
         args.push("--on-host-sleep".into());
@@ -2152,36 +2150,36 @@ struct DiskOpt {
 /// `--snapshot-file` always wins, and a read-only boot disk (`:ro` / `--read-only`) or an
 /// ISO-only boot stays unarmed (nothing durable to resume against).
 fn default_arm_flat_suspend(cli: &mut Cli) -> Result<()> {
-    if cli.snapshot_file.is_none() && cli.suspend_state_file.is_none() {
-        if let Some(spec) = cli.disk.first() {
-            let disk = parse_disk(spec)?;
-            if !disk.read_only && !cli.read_only {
-                let armed = PathBuf::from(format!("{}.limina-suspend.bin", disk.path.display()));
-                if armed.exists() {
-                    log::info!(
-                        "pending suspend found at {} — resuming (pass --discard-suspend to \
+    if cli.snapshot_file.is_none()
+        && cli.suspend_state_file.is_none()
+        && let Some(spec) = cli.disk.first()
+    {
+        let disk = parse_disk(spec)?;
+        if !disk.read_only && !cli.read_only {
+            let armed = PathBuf::from(format!("{}.limina-suspend.bin", disk.path.display()));
+            if armed.exists() {
+                log::info!(
+                    "pending suspend found at {} — resuming (pass --discard-suspend to \
                          cold-boot instead)",
-                        armed.display()
-                    );
-                } else {
-                    log::info!(
-                        "suspend armed by default: snapshot path {}",
-                        armed.display()
-                    );
-                }
-                cli.snapshot_file = Some(armed);
+                    armed.display()
+                );
+            } else {
+                log::info!(
+                    "suspend armed by default: snapshot path {}",
+                    armed.display()
+                );
             }
+            cli.snapshot_file = Some(armed);
         }
     }
-    if cli.discard_suspend {
-        if let Some(snap) = cli.snapshot_file.clone() {
-            if snap.exists() {
-                std::fs::remove_file(&snap)
-                    .with_context(|| format!("discarding the pending suspend {snap:?}"))?;
-                let _ = std::fs::remove_file(snap.with_extension("splash.png"));
-                println!("discarded pending suspend {} — cold boot", snap.display());
-            }
-        }
+    if cli.discard_suspend
+        && let Some(snap) = cli.snapshot_file.clone()
+        && snap.exists()
+    {
+        std::fs::remove_file(&snap)
+            .with_context(|| format!("discarding the pending suspend {snap:?}"))?;
+        let _ = std::fs::remove_file(snap.with_extension("splash.png"));
+        println!("discarded pending suspend {} — cold boot", snap.display());
     }
     Ok(())
 }
@@ -2711,12 +2709,14 @@ mod tests {
         );
 
         // A path given as both `--disk` and `--cdrom` (or twice) is rejected.
-        assert!(build_disk_args(
-            std::slice::from_ref(&ds),
-            false,
-            std::slice::from_ref(&data)
-        )
-        .is_err());
+        assert!(
+            build_disk_args(
+                std::slice::from_ref(&ds),
+                false,
+                std::slice::from_ref(&data)
+            )
+            .is_err()
+        );
 
         // `:create=SIZE` makes a missing data disk, then forwards it read-write (no `:ro`).
         let made = dir.join("created.raw");
@@ -3072,10 +3072,10 @@ mod tests {
             }
             other => panic!("expected create, got {other:?}"),
         }
-        assert!(Cli::try_parse_from([
-            "limina", "create", "x", "--blank", "1G", "--disk", "/d.raw"
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from(["limina", "create", "x", "--blank", "1G", "--disk", "/d.raw"])
+                .is_err()
+        );
 
         // stop/rm/ls/center parse.
         assert!(matches!(

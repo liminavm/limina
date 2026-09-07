@@ -18,8 +18,8 @@
 //! alternative — polling the property from the tick — would put a D-Bus round trip on every idle
 //! second forever, in an agent whose surrounding workstream is about *removing* idle work.
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use limina_proto::PowerProfileMsg;

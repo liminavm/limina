@@ -42,8 +42,8 @@ use std::time::{Duration, Instant};
 
 use limina_proto::Message;
 use limina_test::bench::{
-    fetch_balloon_journal, json_object, now_ms, parse_trace, psi_integral_pct_s, real_report,
-    sample_host, BenchRun, GuestSampler, HostSample,
+    BenchRun, GuestSampler, HostSample, fetch_balloon_journal, json_object, now_ms, parse_trace,
+    psi_integral_pct_s, real_report, sample_host,
 };
 use limina_test::{Guest, GuestConfig};
 
@@ -214,10 +214,10 @@ fn run_point(run: &BenchRun, label: &str, mode: &str, dig_under_warn: bool) -> P
             host_samples.push(s);
         }
         tick += 1;
-        if tick.is_multiple_of(5) {
-            if let Some(r) = real_report(&guest) {
-                let _ = conn.send(&Message::MemPressure(r));
-            }
+        if tick.is_multiple_of(5)
+            && let Some(r) = real_report(&guest)
+        {
+            let _ = conn.send(&Message::MemPressure(r));
         }
     }
     let passes = pass_times(&guest);

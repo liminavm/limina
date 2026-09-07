@@ -43,12 +43,12 @@ fn wait_for_nproc(guest: &Guest, limit: Duration, want: impl Fn(u32) -> bool) ->
     let deadline = Instant::now() + limit;
     let mut last = 0;
     while Instant::now() < deadline {
-        if let Ok(out) = guest.ssh_exec_timeout("nproc", STEP) {
-            if let Ok(n) = out.trim().parse::<u32>() {
-                last = n;
-                if want(n) {
-                    return (true, n);
-                }
+        if let Ok(out) = guest.ssh_exec_timeout("nproc", STEP)
+            && let Ok(n) = out.trim().parse::<u32>()
+        {
+            last = n;
+            if want(n) {
+                return (true, n);
             }
         }
         std::thread::sleep(Duration::from_secs(2));

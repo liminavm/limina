@@ -892,12 +892,13 @@ mod tests {
             Presentation::FullscreenAll { panel: BUILT_IN },
             &[BUILT_IN, STUDIO],
         );
-        assert!(t
-            .plan(
+        assert!(
+            t.plan(
                 Presentation::FullscreenAll { panel: BUILT_IN },
                 &[BUILT_IN, STUDIO]
             )
-            .is_empty());
+            .is_empty()
+        );
     }
 
     #[test]
@@ -1015,12 +1016,13 @@ mod tests {
             "every slot the arrangement keeps must be described again, slot 0 included"
         );
         // Said once: the tick runs at frame rate.
-        assert!(t
-            .plan(
+        assert!(
+            t.plan(
                 Presentation::FullscreenAll { panel: STUDIO },
                 &[BUILT_IN, STUDIO]
             )
-            .is_empty());
+            .is_empty()
+        );
     }
 
     #[test]

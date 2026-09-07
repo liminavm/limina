@@ -226,14 +226,14 @@ fn check_bundle(bundle: &VmBundle, out: &mut Vec<Finding>) {
     // `runtime::status` reads an unopenable lock as Stopped, so a bundle we cannot read
     // presents as startable and then fails at acquire. Say so instead.
     let lock = bundle.run_dir().join("lock");
-    if let Err(e) = std::fs::File::open(&lock) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            out.push(Finding::blocker(
-                Code::LockUnreadable,
-                lock.display().to_string(),
-                format!("cannot read the VM's run lock at {}: {e}", lock.display()),
-            ));
-        }
+    if let Err(e) = std::fs::File::open(&lock)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        out.push(Finding::blocker(
+            Code::LockUnreadable,
+            lock.display().to_string(),
+            format!("cannot read the VM's run lock at {}: {e}", lock.display()),
+        ));
     }
 }
 

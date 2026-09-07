@@ -17,18 +17,18 @@
 //! keys somewhere else outside it. No libkrun-side query is involved.
 
 use std::os::fd::{BorrowedFd, RawFd};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use krun_input::{
-    write_bitmap, InputAbsInfo, InputBackendError, InputConfigBackend, InputDeviceIds,
+    InputAbsInfo, InputBackendError, InputConfigBackend, InputDeviceIds,
     InputEvent as KrunInputEvent, InputEventProviderBackend, InputEventsImpl, InputQueryConfig,
-    IntoInputConfig, IntoInputEvents, ObjectNew,
+    IntoInputConfig, IntoInputEvents, ObjectNew, write_bitmap,
 };
 
+use crate::WIRE_LEN;
 use crate::constants::*;
 use crate::router::{self, HidReportSink};
-use crate::WIRE_LEN;
 
 /// Userdata carrying the read socket for a device's event stream, plus (for the keyboard) the
 /// flag published while the guest holds the device. `RawFd` is `Copy + Sync` and `Arc<Atomic*>`

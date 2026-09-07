@@ -85,8 +85,8 @@ fn read_devices() -> Vec<(String, Vec<(u32, u32)>)> {
 #[cfg(target_os = "macos")]
 fn read_devices() -> Vec<(String, Vec<(u32, u32)>)> {
     use objc2_core_foundation::{
-        kCFPreferencesAnyApplication, kCFPreferencesCurrentHost, kCFPreferencesCurrentUser,
         CFArray, CFDictionary, CFPreferencesCopyKeyList, CFPreferencesCopyValue, CFString,
+        kCFPreferencesAnyApplication, kCFPreferencesCurrentHost, kCFPreferencesCurrentUser,
     };
 
     // SAFETY: the three domain constants are static CFStrings owned by CoreFoundation, and the

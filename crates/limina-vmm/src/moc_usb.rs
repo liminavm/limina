@@ -57,10 +57,10 @@ pub fn build(socket_path: &Path) -> Result<Arc<dyn UsbDeviceModel>> {
     let sink_conn = conn.clone();
     let out_sink: BulkSink = Arc::new(move |ep: u8, payload: Vec<u8>| {
         let mut guard = sink_conn.lock().unwrap();
-        if let Some(stream) = guard.as_mut() {
-            if write_frame(stream, ep, KIND_DATA, &payload).is_err() {
-                *guard = None; // supervisor gone; wait for a reconnect
-            }
+        if let Some(stream) = guard.as_mut()
+            && write_frame(stream, ep, KIND_DATA, &payload).is_err()
+        {
+            *guard = None; // supervisor gone; wait for a reconnect
         }
     });
 
@@ -70,10 +70,10 @@ pub fn build(socket_path: &Path) -> Result<Arc<dyn UsbDeviceModel>> {
     let cancel_conn = conn.clone();
     let cancel_sink: BulkCancelSink = Arc::new(move |ep: u8| {
         let mut guard = cancel_conn.lock().unwrap();
-        if let Some(stream) = guard.as_mut() {
-            if write_frame(stream, ep, KIND_CANCEL, &[]).is_err() {
-                *guard = None;
-            }
+        if let Some(stream) = guard.as_mut()
+            && write_frame(stream, ep, KIND_CANCEL, &[]).is_err()
+        {
+            *guard = None;
         }
     });
 

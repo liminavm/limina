@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 
 use vmm::Vmm;
 
-use anyhow::{anyhow, Result};
-use utils::eventfd::{EventFd, EFD_NONBLOCK};
+use anyhow::{Result, anyhow};
+use utils::eventfd::{EFD_NONBLOCK, EventFd};
 
 /// Write end of the wake eventfd, published for the (async-signal-safe) handler and [`pulse`]. On
 /// macOS `EventFd` is a pipe; `as_raw_fd()` is the *read* end (which the GPIO subscriber epolls), so

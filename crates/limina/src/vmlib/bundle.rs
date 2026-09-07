@@ -180,7 +180,7 @@ pub fn list() -> Result<Vec<VmBundle>> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::vmlib::import::{create, CreateOpts, ImportMode};
+    use crate::vmlib::import::{CreateOpts, ImportMode, create};
     use crate::vmlib::schema::Memory;
 
     /// Serialize the LIMINA_VM_LIBRARY-dependent tests (env vars are process-global).

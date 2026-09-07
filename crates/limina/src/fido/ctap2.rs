@@ -184,13 +184,13 @@ fn make_credential(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     // spec's, and the reason is privacy — the error itself reveals that this account has a passkey
     // here, so the human authorizes the disclosure. Checked before minting anything, so a refused
     // registration leaves no key behind.
-    if let Some(list) = map_get(&root, 5).and_then(as_array) {
-        if holds_any(store, rp_id, list) {
-            if !user_presence(&format!("{rp_id} already has a passkey on this Mac")) {
-                return Err(CTAP2_ERR_OPERATION_DENIED);
-            }
-            return Err(CTAP2_ERR_CREDENTIAL_EXCLUDED);
+    if let Some(list) = map_get(&root, 5).and_then(as_array)
+        && holds_any(store, rp_id, list)
+    {
+        if !user_presence(&format!("{rp_id} already has a passkey on this Mac")) {
+            return Err(CTAP2_ERR_OPERATION_DENIED);
         }
+        return Err(CTAP2_ERR_CREDENTIAL_EXCLUDED);
     }
 
     // Mint the enclave key and a random credential id.

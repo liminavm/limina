@@ -23,11 +23,11 @@
 
 use std::time::{Duration, Instant};
 
-use limina_test::bench::{
-    counter_delta, fetch_balloon_journal, json_object, now_ms, parse_trace, sample_host, tier,
-    tier_config, verify_tier, BenchRun, GuestSampler, HostSample, Tier,
-};
 use limina_test::Guest;
+use limina_test::bench::{
+    BenchRun, GuestSampler, HostSample, Tier, counter_delta, fetch_balloon_journal, json_object,
+    now_ms, parse_trace, sample_host, tier, tier_config, verify_tier,
+};
 
 const MIB: u64 = 1 << 20;
 const MIN_MIB: usize = 2048;
@@ -156,16 +156,16 @@ fn s8_desktop_steady_state() {
                 Some((start, _)) => (start, s.ts_ms.saturating_sub(start)),
                 None => (s.ts_ms, 0),
             });
-        } else if let Some((start, len)) = cur.take() {
-            if len >= EPISODE_MIN.as_millis() as u64 {
-                episodes.push((start, len));
-            }
-        }
-    }
-    if let Some((start, len)) = cur {
-        if len >= EPISODE_MIN.as_millis() as u64 {
+        } else if let Some((start, len)) = cur.take()
+            && len >= EPISODE_MIN.as_millis() as u64
+        {
             episodes.push((start, len));
         }
+    }
+    if let Some((start, len)) = cur
+        && len >= EPISODE_MIN.as_millis() as u64
+    {
+        episodes.push((start, len));
     }
     let gap_ms: u64 = episodes.iter().map(|(_, len)| len).sum();
     let episodes_json: Vec<String> = episodes

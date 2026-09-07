@@ -14,7 +14,7 @@ mod battery;
 mod console;
 mod display_update;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::unbounded;
 use devices::display::DisplayInfo;
 use devices::virtio::block::{CacheType, ImageType, SyncMode};
@@ -203,11 +203,11 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // Host battery mirror (virtio-i2c SBS battery): only when asked AND the host
     // actually has a battery to mirror (or the fake hook is set) — a desktop Mac
     // attaches nothing and the guest correctly shows no battery.
-    if spec.battery {
-        if let Some(provider) = battery::provider() {
-            log::info!("battery: mirroring the host battery into the guest");
-            vmr.battery_provider = Some(provider);
-        }
+    if spec.battery
+        && let Some(provider) = battery::provider()
+    {
+        log::info!("battery: mirroring the host battery into the guest");
+        vmr.battery_provider = Some(provider);
     }
 
     if let Some(vc) = &spec.virtio_console {
@@ -241,13 +241,12 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // the VM to macOS as a media player while the guest holds the audio device open. Only
     // possible with a window: the control socketpair is the supervisor's, and a headless VM
     // has no media session to hold.
-    if spec.snd {
-        if let Some(DisplaySink::Window { control_fd, .. }) = spec.display.as_ref().map(|d| &d.sink)
-        {
-            vmr.snd_state_cb = crate::audio_state::control_writer(*control_fd);
-            vmr.snd_audibility_cb = crate::audio_state::audibility_writer(*control_fd)
-                .map(|cb| (crate::audio_state::PAUSE_SILENCE, cb));
-        }
+    if spec.snd
+        && let Some(DisplaySink::Window { control_fd, .. }) = spec.display.as_ref().map(|d| &d.sink)
+    {
+        vmr.snd_state_cb = crate::audio_state::control_writer(*control_fd);
+        vmr.snd_audibility_cb = crate::audio_state::audibility_writer(*control_fd)
+            .map(|cb| (crate::audio_state::PAUSE_SILENCE, cb));
     }
     // Emulated xHCI USB controller (opt-in, default off). A stock guest binds it via
     // its own xhci-plat driver and enumerates any cold-plugged device models.
@@ -1104,7 +1103,7 @@ fn serve_balloon_conn(
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_image_type, ImageType};
+    use super::{ImageType, detect_image_type};
     use crate::config::{BootSource, VmSpec};
     use std::path::PathBuf;
 

@@ -17,8 +17,8 @@
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicI32, Ordering};
 
-use anyhow::{anyhow, Result};
-use utils::eventfd::{EventFd, EFD_NONBLOCK};
+use anyhow::{Result, anyhow};
+use utils::eventfd::{EFD_NONBLOCK, EventFd};
 
 /// Write end of the shutdown eventfd, published for the (async-signal-safe) handler. On macOS
 /// `EventFd` is a pipe; `as_raw_fd()` is the *read* end (which the GPIO subscriber epolls), so the

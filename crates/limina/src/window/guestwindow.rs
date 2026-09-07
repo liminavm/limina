@@ -248,10 +248,11 @@ impl GuestWindow {
     pub(crate) fn seed_strip_if_new(&self) {
         let up = self.overlay.is_active();
         let was = self.strip_was_up.replace(up);
-        if up && !was {
-            if let Some(surface) = self.last_surface() {
-                present::set_layer_surface(&self.overlay.strip_layer(), &surface, None);
-            }
+        if up
+            && !was
+            && let Some(surface) = self.last_surface()
+        {
+            present::set_layer_surface(&self.overlay.strip_layer(), &surface, None);
         }
     }
 

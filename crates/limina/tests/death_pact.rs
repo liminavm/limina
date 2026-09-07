@@ -52,12 +52,12 @@ fn launch_orphan_gvproxy(dir: &Path, socket: &Path) -> i32 {
     let _ = launcher.wait();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(s) = std::fs::read_to_string(&pidfile) {
-            if let Ok(pid) = s.trim().parse::<i32>() {
-                if pid > 0 && pid_is_alive(pid) {
-                    return pid;
-                }
-            }
+        if let Ok(s) = std::fs::read_to_string(&pidfile)
+            && let Ok(pid) = s.trim().parse::<i32>()
+            && pid > 0
+            && pid_is_alive(pid)
+        {
+            return pid;
         }
         assert!(Instant::now() < deadline, "orphan gvproxy never came up");
         std::thread::sleep(Duration::from_millis(50));

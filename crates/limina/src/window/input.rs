@@ -20,25 +20,25 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::os::fd::RawFd;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::WorkerConn;
 
-use objc2::rc::Retained;
 use objc2::Message;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSCursor, NSEvent, NSEventType, NSView, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect};
 
+use limina_input::InputEvent;
 use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
     REL_HWHEEL_HI_RES, REL_WHEEL, REL_WHEEL_HI_RES, REL_X, REL_Y,
 };
 use limina_input::keymap::{
-    capslock_on, macos_keycode_to_linux_remapped, modifier_emit, reconcile_modifiers, CapsLockSync,
-    KeyRemap, ModEmit, MACOS_KC_CAPSLOCK, MODIFIER_KEYCODES,
+    CapsLockSync, KeyRemap, MACOS_KC_CAPSLOCK, MODIFIER_KEYCODES, ModEmit, capslock_on,
+    macos_keycode_to_linux_remapped, modifier_emit, reconcile_modifiers,
 };
-use limina_input::InputEvent;
 
 // CoreGraphics (already linked): display geometry only. The pointer-capture / mouselook
 // primitives (`CGWarpMouseCursorPosition`, `CGAssociateMouseAndMouseCursorPosition`) are
@@ -2044,15 +2044,14 @@ impl InputState {
     /// caps toggle done while the VM was unfocused — the monitor gets no event for that and
     /// macOS sends no reconciling flagsChanged on refocus, so the next event here re-syncs.
     fn sync_capslock(&self, raw_flags: u64) {
-        if self.caps.borrow_mut().observe(capslock_on(raw_flags)) {
-            if let Some(code) =
+        if self.caps.borrow_mut().observe(capslock_on(raw_flags))
+            && let Some(code) =
                 macos_keycode_to_linux_remapped(MACOS_KC_CAPSLOCK, &self.remap.get())
-            {
-                self.send_kbd(InputEvent::new(EV_KEY, code, 1));
-                self.send_kbd(InputEvent::syn());
-                self.send_kbd(InputEvent::new(EV_KEY, code, 0));
-                self.send_kbd(InputEvent::syn());
-            }
+        {
+            self.send_kbd(InputEvent::new(EV_KEY, code, 1));
+            self.send_kbd(InputEvent::syn());
+            self.send_kbd(InputEvent::new(EV_KEY, code, 0));
+            self.send_kbd(InputEvent::syn());
         }
     }
 
@@ -2470,23 +2469,23 @@ impl InputState {
         // movement the user actually intends instead. Emitted for the whole top band, tagged
         // with why the step ended, since a gesture that does not fire is exactly the
         // interesting case.
-        if let Some(t) = trace {
-            if super::capture_tap::edge_trace() {
-                eprintln!(
-                    "[REVEAL] t={:.1} src={} slot={slot} p=({:.1},{:.1}) dy={delta_y:.1} \
+        if let Some(t) = trace
+            && super::capture_tap::edge_trace()
+        {
+            eprintln!(
+                "[REVEAL] t={:.1} src={} slot={slot} p=({:.1},{:.1}) dy={delta_y:.1} \
                      top={:.1} overlaid={} push={:.1} charge={:.3} ask={:?} {}",
-                    super::capture_tap::trace_ms(),
-                    src.tag(),
-                    p.0,
-                    p.1,
-                    fit.y + fit.h,
-                    sample.overlay_active,
-                    t.push,
-                    t.charge,
-                    t.ask,
-                    t.why,
-                );
-            }
+                super::capture_tap::trace_ms(),
+                src.tag(),
+                p.0,
+                p.1,
+                fit.y + fit.h,
+                sample.overlay_active,
+                t.push,
+                t.charge,
+                t.ask,
+                t.why,
+            );
         }
     }
 
@@ -2631,10 +2630,10 @@ impl InputState {
         if !self.is_captured() || self.capture_slot.get() == self.park_slot.get() {
             return;
         }
-        if let Some(t) = self.last_captured_motion.get() {
-            if t.elapsed() < REPARK_QUIESCENCE {
-                return;
-            }
+        if let Some(t) = self.last_captured_motion.get()
+            && t.elapsed() < REPARK_QUIESCENCE
+        {
+            return;
         }
         // Nothing to say when this one declines: a crossing whose window is not placeable this
         // tick simply re-parks on a later tick. Only the re-pin's repair path is a symptom.
@@ -3112,10 +3111,10 @@ impl InputState {
             if !Self::slot_visible(&facts, slot) {
                 continue;
             }
-            if let Some((window, fit)) = super::windows::window_of_slot(slot) {
-                if let Some(view) = window.contentView() {
-                    out.push((slot, view, fit));
-                }
+            if let Some((window, fit)) = super::windows::window_of_slot(slot)
+                && let Some(view) = window.contentView()
+            {
+                out.push((slot, view, fit));
             }
         }
         out
@@ -3248,10 +3247,10 @@ impl InputState {
                 let Some(f) = view.window().and_then(|w| w.screen()).map(|s| s.frame()) else {
                     continue;
                 };
-                if contains(f, if pass == 0 { 2.0 } else { 0.0 }) {
-                    if let Some(p) = cg_global_to_view_point(view, loc) {
-                        return (*slot, p, *fit);
-                    }
+                if contains(f, if pass == 0 { 2.0 } else { 0.0 })
+                    && let Some(p) = cg_global_to_view_point(view, loc)
+                {
+                    return (*slot, p, *fit);
                 }
             }
         }

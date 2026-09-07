@@ -34,8 +34,8 @@
 //! When in doubt this policy is wrong in the cheap direction.
 
 use limina_proto::{CpuPressure, CpuTarget};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 /// How hard the policy reclaims idle guest vCPUs. Mirrors

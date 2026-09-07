@@ -91,24 +91,24 @@ fn main() {
     // (host slept / snapshot restored / CNTVCT wrapped) for the timesync L1 test. The
     // real agent then spawns, connects, receives the host's TimeSync, and must step the
     // clock back; the test asserts the agent's console line.
-    if let Some(secs) = cmdline_value("limina.skew_clock") {
-        if let Ok(skew) = secs.parse::<i64>() {
-            let mut now = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            unsafe {
-                libc::clock_gettime(libc::CLOCK_REALTIME, &mut now);
-            }
-            #[allow(deprecated)]
-            {
-                now.tv_sec += skew as libc::time_t;
-            }
-            if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &now) } == 0 {
-                klog(b"[limina-init] skewed the clock per limina.skew_clock");
-            } else {
-                klog(b"[limina-init] limina.skew_clock: clock_settime failed");
-            }
+    if let Some(secs) = cmdline_value("limina.skew_clock")
+        && let Ok(skew) = secs.parse::<i64>()
+    {
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_REALTIME, &mut now);
+        }
+        #[allow(deprecated)]
+        {
+            now.tv_sec += skew as libc::time_t;
+        }
+        if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &now) } == 0 {
+            klog(b"[limina-init] skewed the clock per limina.skew_clock");
+        } else {
+            klog(b"[limina-init] limina.skew_clock: clock_settime failed");
         }
     }
     // `limina.real_agent`: spawn the PRODUCT agent binary (staged at /limina-agent by
@@ -1015,14 +1015,13 @@ fn run_xhci_probe() {
         // A bound platform device appears as a symlink under the driver dir, named
         // `<addr>.usb` by the OF core (the driver dir's own files are bind/unbind/uevent —
         // none contain "usb").
-        if let Ok(entries) = std::fs::read_dir(driver_dir) {
-            if entries
+        if let Ok(entries) = std::fs::read_dir(driver_dir)
+            && entries
                 .filter_map(|e| e.ok())
                 .any(|e| e.file_name().to_string_lossy().contains("usb"))
-            {
-                bound = true;
-                break;
-            }
+        {
+            bound = true;
+            break;
         }
         unsafe { sleep_ms(20) };
     }

@@ -816,9 +816,11 @@ mod tests {
         // A second writable attach of the SAME file is refused.
         assert!(lock_writable_disks(std::slice::from_ref(&rw)).is_err());
         // A read-only attach is allowed (and takes no lock).
-        assert!(lock_writable_disks(std::slice::from_ref(&ro))
-            .unwrap()
-            .is_empty());
+        assert!(
+            lock_writable_disks(std::slice::from_ref(&ro))
+                .unwrap()
+                .is_empty()
+        );
 
         // Dropping the guard releases the lock so it can be taken again.
         drop(guard);

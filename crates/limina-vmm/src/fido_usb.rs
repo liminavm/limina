@@ -79,10 +79,10 @@ pub fn build(socket_path: &Path) -> Result<Arc<dyn UsbDeviceModel>> {
     let out_sink: ReportSink = Arc::new(move |mut frame: Vec<u8>| {
         frame.resize(REPORT_SIZE, 0);
         let mut guard = sink_conn.lock().unwrap();
-        if let Some(stream) = guard.as_mut() {
-            if stream.write_all(&frame[..REPORT_SIZE]).is_err() {
-                *guard = None; // supervisor gone; wait for a reconnect
-            }
+        if let Some(stream) = guard.as_mut()
+            && stream.write_all(&frame[..REPORT_SIZE]).is_err()
+        {
+            *guard = None; // supervisor gone; wait for a reconnect
         }
     });
 

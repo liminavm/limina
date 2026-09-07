@@ -103,10 +103,10 @@ impl FidoStore {
     }
 
     fn persist(&self, creds: &[Credential]) {
-        if let Some(path) = &self.path {
-            if let Ok(json) = serde_json::to_vec_pretty(creds) {
-                let _ = std::fs::write(path, json);
-            }
+        if let Some(path) = &self.path
+            && let Ok(json) = serde_json::to_vec_pretty(creds)
+        {
+            let _ = std::fs::write(path, json);
         }
     }
 }

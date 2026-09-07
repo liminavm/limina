@@ -563,11 +563,7 @@ fn alt_mode_for(size: (u32, u32), refresh_hz: u32) -> Option<(u32, u32, u32)> {
 
 fn refresh_of(screen: &NSScreen) -> u32 {
     let reported = screen.maximumFramesPerSecond();
-    if reported > 0 {
-        reported as u32
-    } else {
-        60
-    }
+    if reported > 0 { reported as u32 } else { 60 }
 }
 
 /// The `CGDirectDisplayID` behind an `NSScreen`, from its device description. Zero when the key

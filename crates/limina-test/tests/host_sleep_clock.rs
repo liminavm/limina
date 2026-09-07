@@ -160,7 +160,9 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
 
     let (real1, mono1, boot1) = clocks(&guest, "after");
     let (d_real, d_mono, d_boot) = (real1 - real0, mono1 - mono0, boot1 - boot0);
-    eprintln!("deltas across a {sleep_gap:?} host sleep: real={d_real:+.3} mono={d_mono:+.3} boot={d_boot:+.3}");
+    eprintln!(
+        "deltas across a {sleep_gap:?} host sleep: real={d_real:+.3} mono={d_mono:+.3} boot={d_boot:+.3}"
+    );
 
     let gap = sleep_gap.as_secs_f64();
 

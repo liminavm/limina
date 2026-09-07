@@ -30,11 +30,11 @@
 
 use std::time::Duration;
 
-use limina_test::bench::{
-    count_oom_since, fetch_balloon_journal, guest_epoch_secs, json_object, mib_per_s, now_ms,
-    sample_host, tier, tier_config, verify_tier, BenchRun, GuestSampler, HostSample,
-};
 use limina_test::Guest;
+use limina_test::bench::{
+    BenchRun, GuestSampler, HostSample, count_oom_since, fetch_balloon_journal, guest_epoch_secs,
+    json_object, mib_per_s, now_ms, sample_host, tier, tier_config, verify_tier,
+};
 
 const MIB: u64 = 1 << 20;
 

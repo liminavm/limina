@@ -21,8 +21,8 @@
 //! prompt replaying into the session that prompt unlocked.
 
 use std::os::fd::RawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::constants::EV_KEY;
 use crate::hidkbd::{KeyboardReport, REPORT_LEN};
@@ -94,10 +94,10 @@ impl Route {
         if self.on_usb {
             // HID reports are self-delimiting, so EV_SYN has nothing to carry, and no other
             // event type reaches a keyboard.
-            if ev.type_ == EV_KEY {
-                if let Some(report) = self.report.apply(ev.code, ev.value) {
-                    out.usb.push(report);
-                }
+            if ev.type_ == EV_KEY
+                && let Some(report) = self.report.apply(ev.code, ev.value)
+            {
+                out.usb.push(report);
             }
         } else {
             out.virtio = Some(ev);

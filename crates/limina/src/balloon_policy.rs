@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use limina_proto::MemPressure;
 
-use crate::vmlib::logrot::{rotate as rotate_trace, GENERATIONS as TRACE_GENERATIONS};
+use crate::vmlib::logrot::{GENERATIONS as TRACE_GENERATIONS, rotate as rotate_trace};
 
 /// `some` pressure (hundredths of a percent) at/above which we deflate fast (give memory back).
 const PRESSURE_HIGH: u32 = 1000; // 10.00%
@@ -892,28 +892,28 @@ impl BalloonPolicy {
             // under the floor means the gap standing NOW is honest overhead, so pause demand
             // sweeps at that level rather than spinning at the rate limit for nothing. The
             // level is the point — see `DemandHoldoff`.
-            if let (Some(at), Some(w)) = (st.demand_sweep_at, wstats.as_ref()) {
-                if w.sweeps > at {
-                    st.demand_sweep_at = None;
-                    if w.sweep_debited_bytes < DEMAND_SWEEP_MIN_YIELD {
-                        let proven_gap = footprint.saturating_sub(guest_live);
-                        st.demand_holdoff = Some(DemandHoldoff {
-                            until: now + sweep_cooldown(self.mode),
-                            proven_gap,
-                        });
-                        log::warn!(
-                            "autoballoon: demand sweep yielded only {} MiB — the {} MiB gap \
+            if let (Some(at), Some(w)) = (st.demand_sweep_at, wstats.as_ref())
+                && w.sweeps > at
+            {
+                st.demand_sweep_at = None;
+                if w.sweep_debited_bytes < DEMAND_SWEEP_MIN_YIELD {
+                    let proven_gap = footprint.saturating_sub(guest_live);
+                    st.demand_holdoff = Some(DemandHoldoff {
+                        until: now + sweep_cooldown(self.mode),
+                        proven_gap,
+                    });
+                    log::warn!(
+                        "autoballoon: demand sweep yielded only {} MiB — the {} MiB gap \
                              standing now is honest overhead; pausing demand sweeps until it \
                              grows or a cadence period passes",
-                            w.sweep_debited_bytes >> 20,
-                            proven_gap >> 20
-                        );
-                        trace_sweep(&mut st, "holdoff", proven_gap, Some(w.sweep_debited_bytes));
-                    } else {
-                        // A real debit proves there WAS reclaimable material: any standing
-                        // holdoff described a state that no longer holds.
-                        st.demand_holdoff = None;
-                    }
+                        w.sweep_debited_bytes >> 20,
+                        proven_gap >> 20
+                    );
+                    trace_sweep(&mut st, "holdoff", proven_gap, Some(w.sweep_debited_bytes));
+                } else {
+                    // A real debit proves there WAS reclaimable material: any standing
+                    // holdoff described a state that no longer holds.
+                    st.demand_holdoff = None;
                 }
             }
             if demand_sweep_due(footprint, guest_live, st.last_sweep, st.demand_holdoff, now) {
@@ -965,10 +965,10 @@ impl BalloonPolicy {
                     }
                 }
             }
-            if let Some(h) = st.inelastic.as_mut() {
-                if h.observe(p.mem_free_kib) {
-                    st.inelastic = None; // the guest freed real memory: probe again
-                }
+            if let Some(h) = st.inelastic.as_mut()
+                && h.observe(p.mem_free_kib)
+            {
+                st.inelastic = None; // the guest freed real memory: probe again
             }
         }
         // Track how long the free list has continuously offered capturable headroom. An acute
@@ -2192,10 +2192,10 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
         && i.host != HostPressure::Critical
         && i.mode != ReclaimMode::Aggressive
     {
-        if let Some(t) = i.last_change {
-            if i.now.duration_since(t) < DWELL {
-                return Decision::Hold(Hold::Dwell);
-            }
+        if let Some(t) = i.last_change
+            && i.now.duration_since(t) < DWELL
+        {
+            return Decision::Hold(Hold::Dwell);
         }
         // The step doubles per consecutive give-back (256 MiB → 512 MiB → 1 GiB): the first
         // step stays sensor-paced, but a trigger that survives a whole dwell after a step
@@ -2243,10 +2243,10 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
         {
             return Decision::Hold(Hold::Cooldown);
         }
-        if let Some(t) = i.last_change {
-            if i.now.duration_since(t) < DWELL {
-                return Decision::Hold(Hold::Dwell);
-            }
+        if let Some(t) = i.last_change
+            && i.now.duration_since(t) < DWELL
+        {
+            return Decision::Hold(Hold::Dwell);
         }
         // Self-preservation pacing clamp. The driver satisfies ANY target: past the guest's
         // free list it digs into page cache at full inflate speed (and toward guest death
@@ -4106,7 +4106,7 @@ mod tests {
         );
         let base = Instant::now();
         let now = base + l.cooldown; // long enough for every mode
-                                     // Light: Warn is not enough; Critical is.
+        // Light: Warn is not enough; Critical is.
         assert!(!scrub_due(
             &l,
             HostPressure::Warn,

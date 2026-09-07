@@ -12,7 +12,7 @@
 //! substitutes a fixed state, which is both the L2-test hook and a way to demo
 //! the guest battery on a desktop Mac.
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{CStr, c_char, c_void};
 use std::sync::Arc;
 
 use devices::virtio::{BatteryProvider, BatteryState};

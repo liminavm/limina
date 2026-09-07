@@ -171,7 +171,7 @@ fn human_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vmlib::import::{create, CreateOpts, ImportMode};
+    use crate::vmlib::import::{CreateOpts, ImportMode, create};
     use crate::vmlib::schema::Memory;
 
     #[test]

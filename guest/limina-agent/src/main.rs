@@ -25,8 +25,8 @@ use std::os::fd::FromRawFd;
 use std::time::{Duration, Instant};
 
 use limina_proto::{
-    read_message, write_message, CpuPressure, CpuSampler, CpuTarget, FidoReport, Heartbeat, Hello,
-    MemPressure, Message, PowerProfileMsg, CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT,
+    CHANNEL_CONTROL, CHANNEL_FIDO, CONTROL_PORT, CpuPressure, CpuSampler, CpuTarget, FidoReport,
+    Heartbeat, Hello, MemPressure, Message, PowerProfileMsg, read_message, write_message,
 };
 
 mod fido;
@@ -306,21 +306,19 @@ fn serve(stream: &mut File, power: &power::ProfileWatcher) -> std::io::Result<En
             }
             continue;
         }
-        if uhid_ready {
-            if let Some(bridge) = fido_bridge.as_mut() {
-                match bridge.read_event() {
-                    Ok(Some(report)) => write_message(
-                        stream,
-                        CHANNEL_FIDO,
-                        &Message::FidoReport(FidoReport {
-                            data: report.to_vec(),
-                        }),
-                    )?,
-                    Ok(None) => {}
-                    Err(e) => {
-                        eprintln!("limina-agent: uhid error ({e}); dropping the FIDO device");
-                        fido_bridge = None;
-                    }
+        if uhid_ready && let Some(bridge) = fido_bridge.as_mut() {
+            match bridge.read_event() {
+                Ok(Some(report)) => write_message(
+                    stream,
+                    CHANNEL_FIDO,
+                    &Message::FidoReport(FidoReport {
+                        data: report.to_vec(),
+                    }),
+                )?,
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("limina-agent: uhid error ({e}); dropping the FIDO device");
+                    fido_bridge = None;
                 }
             }
         }
@@ -349,14 +347,13 @@ fn serve(stream: &mut File, power: &power::ProfileWatcher) -> std::io::Result<En
             }
             // A host authenticator reply: hand it to the device as an INPUT report.
             Ok((_, Message::FidoReport(r))) => {
-                if let Some(bridge) = fido_bridge.as_mut() {
-                    if let Err(e) = bridge.deliver(&r.data) {
+                if let Some(bridge) = fido_bridge.as_mut()
+                    && let Err(e) = bridge.deliver(&r.data) {
                         eprintln!(
                             "limina-agent: uhid deliver failed ({e}); dropping the FIDO device"
                         );
                         fido_bridge = None;
                     }
-                }
             }
             // How many vCPUs the host wants online. Advisory: we pick which ones (cpu0 never
             // goes), we do not ack, and we never let a refused write stop the loop — a guest
@@ -539,12 +536,11 @@ fn power_off() -> ! {
     if let Ok(status) = std::process::Command::new("systemctl")
         .arg("poweroff")
         .status()
+        && status.success()
     {
-        if status.success() {
-            // systemd is taking the system down; it will SIGTERM us shortly. Park.
-            loop {
-                sleep(Duration::from_secs(3600));
-            }
+        // systemd is taking the system down; it will SIGTERM us shortly. Park.
+        loop {
+            sleep(Duration::from_secs(3600));
         }
     }
     eprintln!("limina-agent: systemctl poweroff unavailable; using reboot(2)");

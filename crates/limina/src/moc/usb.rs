@@ -21,11 +21,11 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use super::store::MocStore;
-use super::{AlwaysApprove, Engine, PromptCanceller, Reply, SepVerifier, Verifier, EP_MOC_IN};
+use super::{AlwaysApprove, EP_MOC_IN, Engine, PromptCanceller, Reply, SepVerifier, Verifier};
 
 const KIND_DATA: u8 = 0;
 const KIND_STALL: u8 = 1;
@@ -278,7 +278,7 @@ fn set_nosigpipe(stream: &UnixStream) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::moc::{VerifyOutcome, EP_CMD_IN};
+    use crate::moc::{EP_CMD_IN, VerifyOutcome};
     use std::sync::Mutex;
 
     /// Stands in for a Touch ID sheet: parks the serve thread until the test releases it, and
@@ -416,7 +416,7 @@ mod tests {
                 std::thread::yield_now();
             }
             write_frame(&mut worker, 0x01, KIND_DATA, &[0x40, 0x19]).unwrap(); // FW version
-                                                                               // Only now does the abandoned sheet resolve, as a dismissed one does.
+            // Only now does the abandoned sheet resolve, as a dismissed one does.
             release_tx.send(VerifyOutcome::Cancelled).unwrap();
 
             worker
