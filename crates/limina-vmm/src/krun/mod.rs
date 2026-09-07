@@ -16,7 +16,7 @@ mod display_update;
 
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::unbounded;
-use devices::display::DisplayInfo;
+use devices::display::{DisplayInfo, DisplayInfoEdid, EdidIdentity, EdidParams};
 use devices::virtio::block::{CacheType, ImageType, SyncMode};
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use limina_display::{CaptureConfig, WindowConfig};
@@ -173,7 +173,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     }
 
     if let Some(display) = &spec.display {
-        add_display(&mut vmr, display)?;
+        add_display(&mut vmr, display, &spec.disks)?;
     }
 
     // The USB HID keyboard gadget is built here, before the input devices, because the key
@@ -319,7 +319,54 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
 /// oracle or shared-IOSurface window). Selects the GPU mode: the coexist device by default
 /// (software-2D 2D/scanout + Venus 3D, degrading to software-2D if venus init fails), or
 /// software-2D-only when forced via `--gpu-software-2d`.
-fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
+/// Pad an ASCII name into the EDID product-name descriptor's fixed 13 bytes.
+fn edid_name(text: &str) -> [u8; 13] {
+    let mut out = [b' '; 13];
+    let bytes = text.as_bytes();
+    let n = bytes.len().min(12);
+    out[..n].copy_from_slice(&bytes[..n]);
+    out[n] = 0x0A;
+    out
+}
+
+/// The monitor identity the guest boots with, before anything pushes a real one.
+///
+/// A guest compositor keys its remembered per-monitor configuration on vendor/product/serial,
+/// so the identity is not cosmetic: it decides *whose* remembered scale and layout this VM
+/// picks up. Left unset, every guest boots as libkrun's anonymous `RHT`/`krun-display`/serial 1
+/// — one name shared by every VM on the machine and baked into any image captured with a seated
+/// session, so a remembered scale recorded once is inherited by every VM afterwards. Measured:
+/// the L2 golden carries a monitors.xml pinning scale 2 to exactly that identity, which outranks
+/// whatever density the EDID claims and is why a 2560x1440 desktop seated at 2x.
+///
+/// The serial is derived from the boot disk, so it is stable across boots of one VM — a
+/// compositor that remembers this monitor finds it again next time — and distinct between VMs,
+/// so neither inherits the other's configuration.
+///
+/// A windowed boot replaces this with the host screen's identity on the first poll after a
+/// frame. This is what the display has until then, and the only identity a boot with no window
+/// ever gets. Non-windowed boots are the odd ones for limina — which is exactly why they must
+/// not sit in a state a windowed boot never reaches.
+fn boot_identity(disks: &[DiskSpec]) -> EdidIdentity {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match disks.first() {
+        Some(disk) => disk.path.hash(&mut hasher),
+        // No disk is a direct-kernel boot; every such VM on this host shares one identity, which
+        // is still better than sharing one with every VM that ever ran.
+        None => "limina-diskless".hash(&mut hasher),
+    }
+    EdidIdentity {
+        manufacturer: *b"LMN",
+        product_id: 0x4C56,
+        // Non-zero, and the low bits carry the entropy.
+        serial: (hasher.finish() as u32) | 1,
+        product_name: edid_name("limina"),
+        serial_string: None,
+    }
+}
+
+fn add_display(vmr: &mut VmResources, display: &DisplaySpec, disks: &[DiskSpec]) -> Result<()> {
     // Power-user escape hatch: LIMINA_VIRGL_FLAGS=0x.. forces a specific renderer flag set
     // (and thus the renderer/coexist path) without recompiling — for experiments/sweeps.
     let virgl_override = std::env::var("LIMINA_VIRGL_FLAGS").ok().and_then(|s| {
@@ -365,18 +412,25 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec) -> Result<()> {
     // read once by the driver — so they boot disconnected: the guest sees the connectors, reports
     // them unplugged, and hands us a slot to fill whenever limina pushes an identity and connects
     // it. A pool of 1 produces exactly the device we shipped before this existed.
-    vmr.displays
-        .push(DisplayInfo::new(display.width, display.height));
+    let identity = boot_identity(disks);
+    let mut slot0 = DisplayInfo::new(display.width, display.height);
+    slot0.edid = DisplayInfoEdid::Generated(EdidParams {
+        identity: Some(identity),
+        ..EdidParams::default()
+    });
+    vmr.displays.push(slot0);
     for _ in 1..display.pool {
         let mut spare = DisplayInfo::new(display.width, display.height);
         spare.connected = false;
         vmr.displays.push(spare);
     }
     log::info!(
-        "virtio-gpu displays: {} scanout(s), slot 0 connected at {}x{}",
+        "virtio-gpu displays: {} scanout(s), slot 0 connected at {}x{} as LMN/limina serial \
+         {:#010x}",
         display.pool,
         display.width,
-        display.height
+        display.height,
+        identity.serial
     );
 
     vmr.display_backend = Some(match &display.sink {
