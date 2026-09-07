@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 2 Sep 2026 18:26:47 -0300
-Subject: [PATCH 18/19] virgl: drop the too-small dmabuf export refusal
+Subject: [PATCH 18/20] virgl: drop the too-small dmabuf export refusal
 
 virgl_resource_get_handle refused an FD export whenever the resource's laid-out
 size exceeded its guest BO. That was meant for video decode targets, whose guest

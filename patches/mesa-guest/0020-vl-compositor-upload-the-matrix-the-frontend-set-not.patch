@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Mon, 7 Sep 2026 14:18:37 -0300
+Subject: [PATCH 20/20] vl/compositor: upload the matrix the frontend set, not
+ the init default
+
+The graphics compositor uploaded vl_compositor_state::csc_matrix, which nothing writes after
+vl_compositor_init_state() seeds it with BT.709 limited NV12 -> B8G8R8A8. The VA frontend
+computes into ::yuv2rgb and ::rgb2yuv, and only the compute compositor reads those, so every
+post-processing conversion on a driver without prefer_compute_for_multimedia -- virgl among
+them, only radeonsi sets it -- converted with the seed instead of the requested matrix.
+
+It is invisible wherever the seed happens to be right, which is the common case: a decode
+into NV12 downloaded as BGRA wants exactly that matrix. An RGB -> RGB scale wants identity
+and gets a YUV -> RGB conversion applied to RGB texels: the geometry is exact and the colours
+are not. Measured through virgl on a stock Fedora 44 guest, source blue (0,0,255) came back
+(209,0,0), which is the seed matrix applied to (0,0,1).
+
+5bc0df5aa ("vl,frontends/va: Implement YUV->YUV matrix coeff conversion") moved the frontend
+onto the two directional fields and updated vl_compositor_cs.c alone; a337a97429 then removed
+the setter that had kept csc_matrix current. This restores the graphics path by deleting the
+field rather than writing it in a second place -- one matrix, one owner, so a frontend cannot
+set a matrix the shader will not read.
+
+Both shaders take the matrix from constants 0..2, so the direction is chosen from the layer:
+the RGB->YUV shaders get rgb2yuv and everything else yuv2rgb. That half was wrong the same
+way and in the same place, and is why an RGB -> YUV VPP came out with permuted colours.
+
+Both fields are seeded at init with what the graphics path used to hold, so a frontend that
+sets neither draws as before rather than through a zero matrix.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/gallium/auxiliary/vl/vl_compositor.c     |  7 ++++++-
+ src/gallium/auxiliary/vl/vl_compositor.h     |  1 -
+ src/gallium/auxiliary/vl/vl_compositor_gfx.c | 18 +++++++++++++++---
+ 3 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/src/gallium/auxiliary/vl/vl_compositor.c b/src/gallium/auxiliary/vl/vl_compositor.c
+index e38e4c31415..ed08152ba2f 100644
+--- a/src/gallium/auxiliary/vl/vl_compositor.c
++++ b/src/gallium/auxiliary/vl/vl_compositor.c
+@@ -880,9 +880,14 @@ vl_compositor_init_state(struct vl_compositor_state *s, struct pipe_context *pip
+ 
+    vl_compositor_clear_layers(s);
+ 
++   /* Seed both directions, so a frontend that never sets them draws with what the gfx
++    * compositor used to hold rather than with a zero matrix. */
+    vl_csc_get_rgbyuv_matrix(PIPE_VIDEO_VPP_MCF_BT709, PIPE_FORMAT_NV12, PIPE_FORMAT_B8G8R8A8_UNORM,
+                             PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_REDUCED, PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_FULL,
+-                            &s->csc_matrix);
++                            &s->yuv2rgb);
++   vl_csc_get_rgbyuv_matrix(PIPE_VIDEO_VPP_MCF_BT709, PIPE_FORMAT_B8G8R8A8_UNORM, PIPE_FORMAT_NV12,
++                            PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_FULL, PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_REDUCED,
++                            &s->rgb2yuv);
+ 
+    return true;
+ }
+diff --git a/src/gallium/auxiliary/vl/vl_compositor.h b/src/gallium/auxiliary/vl/vl_compositor.h
+index ecd8ea92681..71928299934 100644
+--- a/src/gallium/auxiliary/vl/vl_compositor.h
++++ b/src/gallium/auxiliary/vl/vl_compositor.h
+@@ -137,7 +137,6 @@ struct vl_compositor_state
+    vl_csc_matrix rgb2yuv;
+    vl_csc_matrix primaries;
+ 
+-   vl_csc_matrix csc_matrix; /* gfx compositor only */
+ };
+ 
+ struct vl_compositor
+diff --git a/src/gallium/auxiliary/vl/vl_compositor_gfx.c b/src/gallium/auxiliary/vl/vl_compositor_gfx.c
+index fba5388830c..58807ce6463 100644
+--- a/src/gallium/auxiliary/vl/vl_compositor_gfx.c
++++ b/src/gallium/auxiliary/vl/vl_compositor_gfx.c
+@@ -647,9 +647,21 @@ gen_vertex_data(struct vl_compositor *c, struct vl_compositor_state *s, struct u
+ }
+ 
+ static void
+-set_csc_matrix(struct vl_compositor_state *s)
++set_csc_matrix(struct vl_compositor_state *s, struct vl_compositor *c)
+ {
+    struct pipe_transfer *buf_transfer;
++   const vl_csc_matrix *matrix = &s->yuv2rgb;
++
++   /* Both fragment shaders read the matrix from constants 0..2, so which direction belongs
++    * there is decided by the layer in play: the RGB->YUV shaders convert the other way. */
++   for (unsigned i = 0; i < VL_COMPOSITOR_MAX_LAYERS; ++i) {
++      if (!(s->used_layers & (1 << i)))
++         continue;
++      if (s->layers[i].fs == c->fs_rgb_yuv.y || s->layers[i].fs == c->fs_rgb_yuv.uv) {
++         matrix = &s->rgb2yuv;
++         break;
++      }
++   }
+ 
+    float *ptr = pipe_buffer_map(s->pipe, s->shader_params,
+                                 PIPE_MAP_WRITE | PIPE_MAP_DISCARD_WHOLE_RESOURCE,
+@@ -658,7 +670,7 @@ set_csc_matrix(struct vl_compositor_state *s)
+    if (!ptr)
+      return;
+ 
+-   memcpy(ptr, &s->csc_matrix, sizeof(vl_csc_matrix));
++   memcpy(ptr, matrix, sizeof(vl_csc_matrix));
+ 
+    ptr += sizeof(vl_csc_matrix) / sizeof(float);
+    *ptr++ = 0.0f; /* luma_min */
+@@ -727,7 +739,7 @@ vl_compositor_gfx_render(struct vl_compositor_state *s,
+ 
+    struct pipe_resource *releasebuf = NULL;
+    gen_vertex_data(c, s, dirty_area, &releasebuf);
+-   set_csc_matrix(s);
++   set_csc_matrix(s, c);
+ 
+    if (clear_dirty && dirty_area &&
+        (dirty_area->x0 < dirty_area->x1 || dirty_area->y0 < dirty_area->y1)) {
