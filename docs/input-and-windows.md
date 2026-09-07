@@ -230,6 +230,8 @@ the guess, on the wrong display.) Consequences that keep catching people:
 - Capture runs through a session-level `CGEventTap` (needs Accessibility) *and* the local
   `NSEvent` monitor. **The two must map identically** — both call the one
   `InputState::captured_step_and_emit`; any new mapping must be shared rather than duplicated.
+  Without the grant the tap does not install and only the (leaky) monitor path remains; §5b is
+  the plan for making that rung genuinely useful.
 - `capture_pos` is a point in the view space of the window `capture_slot` names, and **nothing
   else, ever**; every write sets both in the same breath. A point in one window's space read
   against another window's geometry was the fault class behind every multi-display capture bug.
@@ -411,6 +413,41 @@ load-bearing parts:
   hotspot sits on the last scanline and the bitmap is clipped, so how much of it survives depends
   on the cursor's size on that display. The echo is what tells the two apart; the cursor is drawn
   in full at a monitor's *top* edge, where the arrow points away from the boundary.
+
+### 5b. The Accessibility grant is the tap's price, and most of capture does not need it — OWED
+
+`CGEventTapCreate` needs Accessibility (System Settings → Privacy & Security → Accessibility).
+That grant is what buys the tap's one irreplaceable property: it **consumes** events
+session-wide, so a click can never escape to another app while captured. Everything else
+capture does has a tap-free equivalent, and UTM ships all of it sandboxed on the Mac App Store
+with no Accessibility grant at all (`Platform/macOS/Display/VMMetalView.swift`):
+
+- `CGAssociateMouseAndMouseCursorPosition(0)` + `CGWarpMouseCursorPosition(center)` +
+  `NSCursor.hide()` on capture, motion read from `event.deltaX/deltaY` on **local** `NSEvent`s.
+- `CGSSetGlobalHotKeyOperatingMode(CGSMainConnectionID(), .disable)` for the system-key half —
+  this is what delivers `Cmd-Tab`/`Cmd-Space` to the guest without a tap. It is a **private CGS
+  SPI**, not public API; the public equivalent, `VZVirtualMachineView.capturesSystemKeys`, is
+  Virtualization-framework-only.
+
+**The first thing to measure, before any of this is designed:** `capture_tap.rs`'s header
+records that `CGAssociateMouseAndMouseCursorPosition(false)` *does not freeze the cursor on
+macOS 26*, which is why we went to a consuming tap. UTM's design depends on it working. One of
+the two is wrong on the shipping OS, and the answer changes the whole shape — measure it, do not
+reason about it.
+
+**What a tap-free path would cost us here**, if it works: our capture model is not UTM's. We
+integrate deltas into a virtual cursor driving the guest's **absolute tablet** with the
+uncaptured fit mapping, and feed edge-clamped motion to the relative device as *pressure* so
+mutter's barriers fire. A re-centre loop redefines "the edge", so the clamp and pressure logic
+and `grab_policy`'s release path both need rework — cheaply, since `grab_policy` is pure and
+unit-tested for exactly this reason.
+
+**The goal is a ladder, not a replacement.** Every rung of capture that can work without
+Accessibility should, so an ungranted app is useful rather than degraded; the tap stays the
+top rung, taken when the grant is there, and buys only the hard guarantee that no event
+reaches another app. The Accessibility grant also happens to be the single thing a Mac App
+Store build could never hold (`docs/design/distribution.md` §2.1), so this work is what keeps
+that channel open — but it is worth doing for the ungranted first run regardless.
 
 ## 6. Fullscreen, the notch, and why there is more than one window shape
 
