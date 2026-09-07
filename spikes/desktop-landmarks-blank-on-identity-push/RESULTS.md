@@ -85,6 +85,30 @@ So the open question is no longer where the pixels go. It is why a scanout resou
 the push does not receive renders when an identically-minted one from thirty seconds earlier
 does.
 
+## Renders keep going to the surfaces from before the push
+
+Measured in one boot with both traces armed (`LIMINA_READBACK_TRACE=1`):
+
+    mints            pre-push 7, 25, 26      post-push adds 49, 69
+    render targets   7, 25, 26, 31, 44, 47, 50, 51, 61, 63, 72   (116 attachments)
+    blank readbacks  none this run
+
+**The surfaces minted at the push are never attached as a render target.** The pre-push scanouts
+are, repeatedly; 49 and 69 appear nowhere in 116 attachments. So the compositor goes on rendering
+into the surfaces it had while `SET_SCANOUT` presents the new ones -- two holders of "the current
+scanout" with only one of them updated. The presented surface is one nothing draws into, which is
+why it is black immediately, black forever, and error-free on every path.
+
+This is the reading that "the new surfaces are empty" could not establish on its own: empty is
+equally what nothing-is-rendering looks like. The render-target list rules that out -- rendering
+continues, at volume, to the wrong surfaces.
+
+**Unexplained, and left that way:** this boot produced *no* blank-readback lines, where the two
+before it produced them continuously, and the capture was black in all three. The readback path
+therefore differs run to run. The `sync_iosurface` latch clearing `s.iosurface_id` and diverting
+to `read_2d_resource` (which this trace does not cover) would produce exactly that, but nothing
+here measures it. It does not affect the finding above, which is measured on the render side.
+
 ## Ruled out along the way, and the cheapest cut
 
 In the classic (`ctx_id == 0`) branch of `flush_resource`, a failing `sync_iosurface` logs a
