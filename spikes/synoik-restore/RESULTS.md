@@ -1,8 +1,8 @@
 # Snapshot/restore of a Vulkan-compositor desktop
 
-Four faults, all ours, all found on `Fedora-Workstation-44.enhanced.synoik.raw` with a seated
-synoik session. Three are fixed; the fourth is fixed for the resume path a user actually takes
-and open for one that a test harness takes.
+Five faults, all ours, all found on `Fedora-Workstation-44.enhanced.synoik.raw` with a seated
+synoik session. All are fixed, and `l2_synoik_restore_landmarks` is green on the fresh-supervisor
+restore path — the one the fifth fault made unusable.
 
 ## What the snapshot could not see, and what it does now
 
@@ -89,8 +89,16 @@ exercises is a path whose faults only an enhanced guest will report.
 
 ## The oracles this left behind
 
-`l2_synoik_restore_landmarks` asserts zero content losses, counting the `vkMapMemory REFUSED`
-refusal line among them, and zero ring stalls — a wedged ring holds the last correct frame, so a
-landmark diff passes on a dead session and only the stall line sees it. The vkstill asset takes
+`l2_synoik_restore_landmarks` asserts zero content losses and zero ring stalls — a wedged ring
+holds the last correct frame, so a landmark diff passes on a dead session and only the stall line
+sees it.
+
+Its loss needles are a claim about what two other repositories log, and the claim was false for
+four of its five lines: they named a re-upload loop that had been deleted and used spellings
+(`content export ctx`, `DROPPED`, `vkMapMemory REFUSED`) that no emitter has ever written. The
+gate reported zero losses because nothing it looked for could appear. They now match the emitted
+text, with a unit test carrying the real lines verbatim, and the renderer's restore account is
+**counted rather than matched** — it prints on a benign journal drop as well as on a refusal, so
+matching it whole would fail every clean run. The vkstill asset takes
 `VKSTILL_IDLE_AFTER=<n>`: a client that presents every frame repaints itself and hides the fault
 the gate exists to catch.

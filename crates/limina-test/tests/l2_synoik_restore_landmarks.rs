@@ -53,10 +53,12 @@
 //! 2. **Nothing was skipped at snapshot time** — `content read failed` in the snapshotting
 //!    worker's log. A partial capture that happens not to show today is still partial.
 //! 3. **Colour diversity survives** — the content floor. A blanked desktop collapses it.
-//! 4. **Every classic resource got its content back** — the restoring worker's own count of
-//!    refused re-uploads. This is the only oracle here that does not depend on the lost pixels
-//!    landing somewhere visible in this run's frame, which is exactly why it belongs: the frame
-//!    diff alone called several genuinely broken restores clean.
+//! 4. **Every classic resource got its content back** — both workers' own accounts of the
+//!    content export and restore, down to the renderer's per-resource counts, which are finer
+//!    than the one integer the ABI answers with. This is the only oracle here that does not
+//!    depend on the lost pixels landing somewhere visible in this run's frame, which is exactly
+//!    why it belongs: the frame diff alone called several genuinely broken restores clean. See
+//!    [`content_losses`] for which lines it reads and why one of them is counted, not matched.
 //! 5. **Every workload process is still alive**, on both sides. Weak on its own — a wedged
 //!    client stays alive — but it catches a client that died rather than lost its pixels.
 
@@ -210,29 +212,80 @@ fn workload_procs(guest: &Guest, apps: &[String]) -> String {
 /// own words. Each line means at least one texture comes back empty until something repaints
 /// it — which is why this is asserted directly and not only through the frame diff.
 ///
-/// Three mechanisms, deliberately covered together because each one alone has been the whole
-/// story at some point in this investigation and none of them was visible in a default log:
+/// Four mechanisms, deliberately covered together because each one alone has been the whole
+/// story at some point in this investigation and none of them was visible in a default log.
+/// Two are libkrun's per-context verdict and two are the renderer's own account, which is
+/// finer: the ABI answers with one integer, so a level the capture could not read is invisible
+/// to libkrun and the renderer's log line is the only record there is.
 ///
-/// - `re-upload FAILED` — libkrun's guest-shadow transfers, which rebuild a full-level box
-///   from the resource's create dimensions and are refused when it does not fit the backing.
-/// - `content export ... SKIPPED` — the snapshot's own per-resource GL readback gave up on a
-///   resource, so the snapshot never carried its pixels at all.
-/// - `content restore ... DROPPED` — the restore had the pixels and could not put them back.
-///   `vrend_renderer_restore_ctx_contents` returns success regardless, so this log line is the
-///   only account of it.
-/// - `vkMapMemory REFUSED` — a venus VkDeviceMemory the snapshot wanted and could not read. The
-///   client window buffers land here: the compositor samples them, so their absence is a blank
-///   window that only the client's own next repaint fills in.
+/// - `gpu snapshot: content export failed for classic ctx N` — the export produced nothing at
+///   all for a context.
+/// - `gpu restore: classic content restore failed for ctx N` — the blob existed and would not
+///   go back in.
+/// - `[virglrs] classic content ctx N: ... SKIPPED ...` — the per-resource GL readback gave up
+///   on a level, so the snapshot never carried its pixels. Printed only when something was
+///   skipped, so the line's presence is the loss.
+/// - `[virglrs] classic content ctx N: X restored, Y refused, ...` — the restore had the
+///   pixels and could not put them back.
+///
+/// That last one needs its count read rather than its presence taken, and it is the whole
+/// reason this is not a list of substrings: the renderer prints it when EITHER a refusal or a
+/// **drop** occurred, and a drop is not a loss — it is the journal's own drop of a resource
+/// that died around the snapshot, which reaches the restore as an entry naming nothing. A
+/// healthy restore logs `free`-class drops by the dozen. Matching the line whole would fail
+/// every clean run.
+///
+/// The venus side (`content read failed`, a `VkDeviceMemory` the snapshot could not map) is
+/// oracle 2's, read from the snapshotting worker rather than from here.
 fn content_losses(log: &str) -> Vec<&str> {
     log.lines()
         .filter(|l| {
-            l.contains("classic content re-upload FAILED")
-                || l.contains("classic content restore failed")
-                || l.contains("content export ctx") && l.contains("SKIPPED")
-                || l.contains("content restore ctx") && l.contains("DROPPED")
-                || l.contains("vkMapMemory REFUSED")
+            l.contains("classic content restore failed")
+                || l.contains("content export failed for classic ctx")
+                || (l.contains("classic content ctx") && l.contains("SKIPPED"))
+                || refused_count(l).is_some_and(|n| n > 0)
         })
         .collect()
+}
+
+/// The `Y` of the renderer's `classic content ctx N: X restored, Y refused, Z named no
+/// resource` account, or `None` when this is not that line.
+fn refused_count(line: &str) -> Option<u64> {
+    if !line.contains("classic content ctx") {
+        return None;
+    }
+    let head = line.split(" refused").next()?;
+    head.rsplit(|c: char| !c.is_ascii_digit())
+        .find(|s| !s.is_empty())?
+        .parse()
+        .ok()
+}
+
+#[test]
+fn content_losses_reads_the_lines_the_workers_actually_write() {
+    // Verbatim from the emitting code: libkrun's `virtio_gpu.rs` and virglrs's `ffi.rs`. A
+    // needle here is a claim about what another repository logs, and the claim this replaces
+    // was false for four of its five lines — the gate counted zero losses because nothing it
+    // looked for had been written since the re-upload loop was deleted.
+    let healthy = "\
+gpu restore: classic content restored (7 contexts, 0 failed), 3 scanout flips
+[virglrs] classic content ctx 9: 194 restored, 0 refused, 124 named no resource this context can reach";
+    assert!(
+        content_losses(healthy).is_empty(),
+        "a restore that refused nothing must report no losses, drops and all"
+    );
+
+    let lossy = "\
+gpu snapshot: content export failed for classic ctx 4
+gpu restore: classic content restore failed for ctx 9 (8192 bytes)
+[virglrs] classic content ctx 9: 61 entries, 7 SKIPPED, 2 excluded -- the skipped levels have no content in this snapshot
+[virglrs] classic content ctx 2: 194 restored, 3 refused, 0 named no resource this context can reach";
+    assert_eq!(
+        content_losses(lossy).len(),
+        4,
+        "each of the four loss mechanisms has to be seen: {:?}",
+        content_losses(lossy)
+    );
 }
 
 #[test]
