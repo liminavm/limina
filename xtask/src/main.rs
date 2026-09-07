@@ -212,7 +212,10 @@ fn vendor(heavy: bool) -> Result<()> {
     // — so limina pins virglrs and nothing underneath it.
     vendor_fork(&repo, "virglrs")?;
     eprintln!("==> vendoring virglrs's own dependencies");
-    run(Command::new("scripts/vendor.sh").current_dir(repo.join("third_party/virglrs")))?;
+    // Absolute program path: a relative one resolves against the parent's cwd on some platforms
+    // and the child's on others, and `current_dir` is set here.
+    let virglrs = repo.join("third_party/virglrs");
+    run(Command::new(virglrs.join("scripts/vendor.sh")).current_dir(&virglrs))?;
 
     // imago: the fork-model pilot ([patch.crates-io] path override; the tree is a clone of our
     // fork pinned by third_party/manifest.toml — no patch series, the `limina` branch IS the delta).
