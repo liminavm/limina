@@ -35,7 +35,14 @@ The push is immediately followed by three IOSurface scanout mints:
     [virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 55);  ...
 
 They come from the **classic/vrend** mint site (`virglrs src/vrend/resource.rs:1837`), not the
-venus one. Whether any were minted *before* the push is not yet measured.
+venus one. Measured on both sides of the push: **3 before, 6 after**. IOSurface scanouts were
+therefore already in use while the desktop was painting at 537 colours, and were being read back
+correctly through the headless sink. The push does not switch the scanout onto the IOSurface
+path; it mints three more on a path that already worked.
+
+That is the fact any remaining theory has to fit. A freshly minted IOSurface is zero-filled, so
+reading one that renders never landed in yields black forever -- which points at *which* surface
+the readback resolves to, not at whether the path is covered.
 
 ## What is ruled out, and how
 
