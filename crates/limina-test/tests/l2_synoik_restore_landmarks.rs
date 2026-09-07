@@ -3,30 +3,34 @@
 
 //! L2 — a **Vulkan compositor's** desktop must come back from a restore with its pixels.
 //!
-//! # The bug this is written against (OPEN — this test is expected to FAIL)
+//! # What this gates
 //!
-//! A restore re-uploads each classic (vrend) resource's content by rebuilding its transfer box
-//! from the resource's *create* dimensions with a zero stride and offset, then pushing the
-//! guest backing store in. vrend refuses the transfer whenever that box does not fit the
-//! resource or the derived IOV does not match the backing — `resource_contains_box` /
-//! `check_iov_bounds` — and every refused resource comes back carrying **no content**:
+//! Two ways a Vulkan compositor's desktop loses its pixels across a restore. Both are closed;
+//! this is what holds them closed. Dossier and frames: `spikes/synoik-restore/RESULTS.md`.
 //!
-//! ```text
-//! vrend_renderer_transfer_internal: context error reported 0 "HOST" IOV data size exceeds \
-//!   resource capacity 328
-//! ```
+//! **Classic content re-uploaded from the guest shadow.** The restore used to transfer every
+//! backed classic (vrend) resource from its guest backing store, rebuilding the box from the
+//! resource's *create* dimensions with a zero stride and offset. vrend refuses that transfer
+//! whenever the box does not fit the resource or the derived IOV does not match the backing
+//! (`resource_contains_box` / `check_iov_bounds`), so every resource whose backing does not
+//! span the whole surface came back carrying no content — 61–97 per restore on a poke VM, 244
+//! on the dogfood Mac, 72 here. The host-side P2 export supersedes it: it reads the GL objects
+//! back at snapshot and covers the same resources plus the ones whose only copy lives there
+//! (icon atlases, glyph caches, corner masks). The re-upload loop is gone; oracle 4 is what
+//! notices if anything reintroduces a lossy path.
 //!
-//! Measured on every restore of every session tried, healthy-looking ones included: 137–268
-//! refusals on a local poke VM, 244 on the dogfood Mac. The visible symptom is a window that
-//! is blank until something repaints it, which is why a cycle can look clean — anything that
-//! redraws itself hides its own loss, and incidental damage (a notification, a workspace
-//! switch) heals the rest before anyone looks.
+//! **Device-local venus memory the snapshot could not read.** The capture takes a
+//! `VkDeviceMemory` by `vkMapMemory` + `memcpy` (`vkr_device_memory_content_copy`), and on
+//! KosmicKrisp a client's exported image memory is an IOSurface import that answers
+//! `VK_ERROR_MEMORY_MAP_FAILED` — the storage is not the driver's to map. Capture reads the
+//! IOSurface instead, never the memory's `mtl_shm` carrier, whose bytes are never the pixels.
+//! Oracle 2 asserts nothing was skipped, because a partial capture that happens not to show
+//! today is still partial.
 //!
-//! A second, narrower gap sits behind it: the venus snapshot captures a `VkDeviceMemory` by
-//! `vkMapMemory` + `memcpy` (`vkr_device_memory_content_copy`), so a device-local allocation —
-//! the compositor's own scanout images — is skipped with a `warn!`. Those pixels live only in
-//! host heaps, never in the RAM snapshot. Both are asserted here; the first is the one that has
-//! been costing windows. Dossier and frames: `spikes/synoik-restore/RESULTS.md`.
+//! The visible symptom of either is a window blank until something repaints it, which is why a
+//! cycle can look clean: anything that redraws itself hides its own loss, and incidental damage
+//! (a notification, a workspace switch) heals the rest before anyone looks. That is what the
+//! still workload and oracle 4 exist to defeat.
 //!
 //! # Why this cannot be folded into `l2_desktop_restore_landmarks`
 //!

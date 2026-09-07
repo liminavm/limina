@@ -63,8 +63,13 @@ exercises is a path whose faults only an enhanced guest will report.
 ## Facts worth keeping
 
 - **P2 classic content is byte-complete** — 194 exported / 0 skipped, 194 restored / 0 dropped
-  across 7 contexts. Phase C's guest-shadow re-upload refuses 61–97 transfers per restore (244 on
-  the dogfood Mac) and is superseded by P2; that loop wants deleting.
+  across 7 contexts. It superseded Phase C's guest-shadow re-upload, which refused 61–97
+  transfers per restore (244 on the dogfood Mac, 72 in the L2 gate) and had those refusals
+  counted as lost content; that loop is deleted.
+- **`l2_synoik_restore_landmarks` passes.** Measured 2026-09-07, 2/2: 0 of 920 body landmark
+  cells moved, 46 in the panel band with band colours 28 -> 21 and 27 -> 21, colour diversity
+  234 -> 222 and 233 -> 222, 0 allocations skipped at capture, 0 content-loss lines, 0 ring
+  stalls, every workload process alive across the restore.
 - **Every replay drop is FREE-class.** A partial batch free is keyed to its pool, so it outlives
   the allocate that was pruned when its ids all died, and is dropped harmlessly. `free`=124 with
   everything else at 0 is a healthy restore, not a lossy one.
