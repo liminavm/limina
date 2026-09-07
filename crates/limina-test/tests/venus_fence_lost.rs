@@ -129,11 +129,27 @@ fn lost_context_fence_still_signals_its_sync_file() {
     if out.contains("UNSUPPORTED") || out.contains("NODEV") {
         panic!("venus missing on the enhanced golden — not a fence bug:\n{out}");
     }
-    assert!(
-        out.contains(&format!("STORM DONE {STORM_ITERATIONS}/{STORM_ITERATIONS}"))
-            && !out.contains("STUCK"),
-        "unarmed storm is not healthy — a different bug:\n{out}"
-    );
+    // The guest's half of a device loss is a bare `-4`; the reason is only ever on the host,
+    // so the worker log goes in the message. Without it this assertion reports that something
+    // broke and takes the evidence down with the VM.
+    if !out.contains(&format!("STORM DONE {STORM_ITERATIONS}/{STORM_ITERATIONS}"))
+        || out.contains("STUCK")
+    {
+        let log = g.supervisor_log();
+        let host: Vec<&str> = log
+            .lines()
+            .filter(|l| l.contains("[virglrs]") || l.contains("ring FATAL"))
+            .collect();
+        panic!(
+            "unarmed storm is not healthy — a different bug:\n{out}\n\
+             --- what the host said ---\n{}",
+            if host.is_empty() {
+                String::from("(nothing from the renderer)")
+            } else {
+                host.join("\n")
+            }
+        );
+    }
 
     // Phase 2 — the poisoned export. Start the one-shot client, let it finish
     // device init (STORM READY), arm the seam, THEN release it: its single
