@@ -77,7 +77,12 @@ fn runaway_guest_allocation_kills_the_client_not_the_vm() {
             .with_coexist_display(1280, 800)
             .with_net()
             .with_supervisor_log()
-            .with_env("LIMINA_GPU_MEM_BUDGET_MIB", &BUDGET_MIB.to_string()),
+            .with_env("LIMINA_GPU_MEM_BUDGET_MIB", &BUDGET_MIB.to_string())
+            // The census is the leak-hunting instrument, and it is the half of the ledger
+            // nothing else here would exercise: the watermark and the refusal both print
+            // because the hog drives the total into them, whereas this prints because time
+            // passed. Short enough to tick during a run that lasts under a minute.
+            .with_env("LIMINA_GPU_MEM_BUDGET_CENSUS", "5"),
         Err(e) => {
             eprintln!("SKIPPED runaway_guest_allocation_kills_the_client_not_the_vm: {e}");
             return;
@@ -152,6 +157,23 @@ fn runaway_guest_allocation_kills_the_client_not_the_vm() {
         "the allocation was refused but the context was not actually killed — on venus a \
          refusal that only returns an error changes nothing, because the guest never reads \
          the result (see the renderer's venus/budget.rs)."
+    );
+
+    // The two lines the ledger prints on its own schedule rather than in reaction to a
+    // refusal. They are what a leak hunt reads: the watermark says the total is climbing
+    // while the VM is still healthy, and the census says what is held even when nothing is
+    // going wrong. Both are documented in `docs/design/gpu-memory-budget.md`, which is the
+    // page an operator reads this log with open.
+    assert!(
+        log.contains("limina GPU budget: 80% watermark crossed"),
+        "the cap was reached without the 80% line ever printing, so the one warning that \
+         arrives BEFORE a client is killed is not being emitted."
+    );
+    assert!(
+        log.contains("limina GPU budget: census"),
+        "LIMINA_GPU_MEM_BUDGET_CENSUS=5 was set and no census printed, so the timed \
+         breakdown — the instrument for telling a guest leak from one of ours — is not \
+         reaching the worker."
     );
 
     // (3) One client died, not the VM.
