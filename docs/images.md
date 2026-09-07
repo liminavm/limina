@@ -60,21 +60,22 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified by the r23 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-02, and the dogfood row by `rpm -V` on the dev VM the same day after its mesa-only delivery. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
+guest with `rpm -q`. Last verified by the r26 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-07, and the dogfood row by `rpm -V` on the dev VM the same day after its mesa-only delivery. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`vanilla`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-10.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
-| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-10.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-11.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-11.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 
 Two facts the table cannot show:
 
 - **The guest agents are not RPMs and so are not in the table.** All three F44 enhanced images
   carry **`limina-agent` 0.6.1** and `limina-agent-session`, installed to `/usr/local/bin` with
-  their units (payload **r25**, delivered 2026-09-03; the dogfood guest is one step behind at 0.6.0,
-  taken by hand the same day straight from 0.4.0 — its first agent with the `vcpu` cap). 0.6.1 added
+  their units (payload **r26**, delivered 2026-09-07; the dogfood guest is one step behind at 0.6.0,
+  taken by hand on 2026-09-03 straight from 0.4.0 — its first agent with the `vcpu` cap). r26
+  changed mesa only: the agents and the 16k kernel are byte-identical to r25's. 0.6.1 added
   the CPU utilisation and stall rates the host's vCPU grow rule needs; 0.6.0 added the
   `powerprofile` capability (the GNOME power-mode toggle reaching host policy); 0.5.0 added `vcpu`,
   the floor for dynamic vCPU offlining. Check the version in a guest with `limina-agent --version`, which is also the

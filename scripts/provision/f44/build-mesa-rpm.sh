@@ -16,17 +16,18 @@
 # scripts/export-mesa-guest-patches.sh regenerates the series from base..rev). The fork branch
 # is the source of truth; per-patch rationale lives in each patch's own commit message. To
 # change the set: commit on the fork, push, bump the manifest rev, re-export, then re-run this
-# with LIMINA_REL bumped. Current series (venus-only — guest GL rides virgl/vrend since
-# drop-guest-zink 2026-08-04, so the old zink rows 0001/0014 are gone):
-#   0001  venus/wsi linear-modifier fallback + 16F swapchain block — THE black-screen fix
-#   0002  venus/wsi drop the 16-bit-unorm wayland swapchain format (wgpu ghost-UI)
-#   0003  venus: degrade to the stub instance when ring setup fails (stock-4k GRUB fallback
-#         boot must not lose lavapipe)
-#   0004  venus: pin the ICD when creating the TLS-destructor key (thread-exit SIGSEGV)
-#   0005  venus: ring loss -> VK_ERROR_DEVICE_LOST, not abort() (snapshot-resume survival)
-#   0006  venus: track vn_ring_submit capacity in its own field (quadratic CPU creep;
-#         upstream main has 09fb7ca8d82 but this release branch does NOT — its %prep
-#         apply-FAILURE at a future base bump is the retirement signal)
+# with LIMINA_REL bumped. Do NOT enumerate the series here — the directory listing is the
+# list, each patch's subject line says what it does, and an enumeration in this header went
+# stale twice. The areas it covers, so a reader knows what is at stake if one stops applying:
+#   venus     the guest Vulkan driver — WSI formats (the black-screen fix), ring-failure
+#             survival, the TLS-destructor SIGSEGV
+#   virgl     the gallium driver — the planar/decode-target and dmabuf-export work
+#   vl        the video-layer compositor shared by every VA post-process
+#   egl/dri2  dmabuf export refusal when the driver cannot honour it
+#   zink      still carried even though the guest SESSION GL rides virgl/vrend since
+#             drop-guest-zink 2026-08-04: the L2 venus_replay test drives zink inside the
+#             guest deliberately, as a vehicle for exercising venus offscreen. "Guest GL is
+#             not zink any more" is what left that gap open once; do not re-derive it.
 # We add them via the spec (NOT a tolerant pre-apply) ON PURPOSE: a non-applying patch FAILS
 # %prep loudly, rather than silently shipping a present-fix-less (black-screen) mesa.
 #
