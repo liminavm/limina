@@ -19,7 +19,7 @@ largely because nothing in the stack could say *which* allocation was growing.
 
 ## Shape
 
-Two halves, in the renderer's `src/venus/budget.rs` (`third_party/virglrs`).
+Two halves, in the renderer's `src/budget.rs` (`third_party/virglrs`).
 
 ### Accounting (always on)
 

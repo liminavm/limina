@@ -12,7 +12,7 @@
 //! re-allocating a 4K backdrop texture, ~51 GB/hour, killed at 142 GB — see
 //! `spikes/wallpaper-backdrop-leak/`).
 //!
-//! The renderer's `venus/budget.rs` bounds it: past the cap the offending venus context is refused and
+//! The renderer's `budget.rs` bounds it: past the cap the offending venus context is refused and
 //! killed deliberately, so one guest client loses its GPU context while the VM and every
 //! other client keep running.
 //!
@@ -156,7 +156,7 @@ fn runaway_guest_allocation_kills_the_client_not_the_vm() {
         log.contains("the host memory budget refused this allocation"),
         "the allocation was refused but the context was not actually killed — on venus a \
          refusal that only returns an error changes nothing, because the guest never reads \
-         the result (see the renderer's venus/budget.rs)."
+         the result (see the renderer's budget.rs)."
     );
 
     // The two lines the ledger prints on its own schedule rather than in reaction to a
@@ -221,7 +221,7 @@ fn heap_line(out: &str, index: u32, when: &str) -> Option<(u64, u64)> {
 
 /// One host-side `memory_budget` trace line: what we answered *before* KosmicKrisp got a vote.
 ///
-/// Emitted by the renderer's `Budget::trace_heap` (virglrs, `src/venus/budget.rs`) under
+/// Emitted by the renderer's `Budget::trace_heap` (virglrs, `src/budget.rs`) under
 /// `LIMINA_GPU_MEM_BUDGET_TRACE=1`. Only `ours` is limina's arithmetic; `driver` is the
 /// host Vulkan driver's own answer and `final` is `min` of the two.
 #[derive(Debug, Clone, Copy)]

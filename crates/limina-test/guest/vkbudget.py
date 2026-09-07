@@ -8,7 +8,7 @@ Three roles, chosen by the mode argument:
           aborts the guest process when the ring goes fatal. A clean exit, an error
           return, and an abort are all consistent with the cap having fired — which
           one you get depends on where the ring death lands, so none of them is the
-          oracle. The host's worker log is (see the renderer's venus/budget.rs).
+          oracle. The host's worker log is (see the renderer's budget.rs).
 
   probe — allocate ONE chunk and free it. Run after `hog` as the recovery check: a
           fresh context must still work, which is only true if the host credited the
