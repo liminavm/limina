@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Mon, 7 Sep 2026 14:18:37 -0300
-Subject: [PATCH 20/20] vl/compositor: upload the matrix the frontend set, not
+Subject: [PATCH 20/21] vl/compositor: upload the matrix the frontend set, not
  the init default
 
 The graphics compositor uploaded vl_compositor_state::csc_matrix, which nothing writes after

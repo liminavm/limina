@@ -66,7 +66,7 @@ base = "418f2963a15"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-guest"
-rev = "e69a7e1d4f8b107232a33574d1f9a0e23f912d7f"
+rev = "71410b3be160cd7c0988f82a424655d6e26baf03"
 base = "mesa-26.1.7"
 
 # The host GPU renderer, consumed by rutabaga as a Rust crate — nothing here is loaded at
