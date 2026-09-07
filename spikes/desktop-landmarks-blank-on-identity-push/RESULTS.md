@@ -85,55 +85,45 @@ So the open question is no longer where the pixels go. It is why a scanout resou
 the push does not receive renders when an identically-minted one from thirty seconds earlier
 does.
 
-## Renders keep going to the surfaces from before the push
+## After the push the scanout is written by something that is not a render target
 
-Measured in one boot with both traces armed (`LIMINA_READBACK_TRACE=1`):
+Measured in one boot, with the render-target census taken from the log *after* the push only:
 
-    mints            pre-push 7, 25, 26      post-push adds 49, 69
-    render targets   7, 25, 26, 31, 44, 47, 50, 51, 61, 63, 72   (116 attachments)
-    blank readbacks  none this run
+    post-push mints         49, 69       SCANOUT-bound, and presented
+    render targets AFTER    55, 63, 72   resources 2279, 2337, 2426
+    blank readbacks         49, 69       resources 2275, 2412
 
-**The surfaces minted at the push are never attached as a render target.** The pre-push scanouts
-are, repeatedly; 49 and 69 appear nowhere in 116 attachments. So the compositor goes on rendering
-into the surfaces it had while `SET_SCANOUT` presents the new ones -- two holders of "the current
-scanout" with only one of them updated. The presented surface is one nothing draws into, which is
-why it is black immediately, black forever, and error-free on every path.
+Renders after the push go to surfaces that are neither the new scanouts nor the old ones. The
+pre-push scanouts (7, 23, 25) stop being drawn into as well, so "renders keep going to the
+surfaces from before the push" is **false** -- it was read off a deduped list spanning the whole
+run, which cannot place an attachment relative to the push.
 
-This is the reading that "the new surfaces are empty" could not establish on its own: empty is
-equally what nothing-is-rendering looks like. The render-target list rules that out -- rendering
-continues, at volume, to the wrong surfaces.
+55, 63 and 72 have no `iosurface scanout` mint line, so they were minted through the SHARED path.
+Before the push the scanout surfaces were themselves render targets; after it they are not. So
+the compositor moves to rendering offscreen and something must copy the result into the scanout
+resource -- and that copy does not land in the IOSurface.
 
-**Unexplained, and left that way:** this boot produced *no* blank-readback lines, where the two
-before it produced them continuously, and the capture was black in all three. The readback path
-therefore differs run to run. The `sync_iosurface` latch clearing `s.iosurface_id` and diverting
-to `read_2d_resource` (which this trace does not cover) would produce exactly that, but nothing
-here measures it. It does not affect the finding above, which is measured on the render side.
+A copy of that shape would be invisible to this trace by construction: `attach_surface` sees only
+`set_framebuffer_state`, and the blit paths in `context/blit.rs` bind their own FBOs. "Never a
+render target" was never the same claim as "never written", and only the blank readback carries
+the second one.
 
-## Ruled out along the way, and the cheapest cut
+## The sync fallback, measured and not implicated
 
-In the classic (`ctx_id == 0`) branch of `flush_resource`, a failing `sync_iosurface` logs a
-warning and **clears `s.iosurface_id = None`** (`virtio_gpu.rs:2425-2440`), permanently switching
-that scanout to a different readback path for the rest of the session. A one-way switch of this
-shape is the only mechanism found so far that explains black *forever* rather than black for a
-frame. Whether it fires here is one grep away and has never been checked, because every log
-filter this spike used matched `IOSurface` case-sensitively and the device spells its own
-diagnostic `vrend iosurface sync failed for res N`.
+The zero-copy path falls back to readback by clearing `s.iosurface_id` when `sync_iosurface`
+fails (`virtio_gpu.rs`, the `ctx_id == 0` branch of `flush_resource`). This was read for a while
+as a permanent one-way switch, and it is not one: the next `SET_SCANOUT` re-arms `iosurface_id`,
+and `SET_SCANOUT` arrives once per page-flip, so a persistent failure re-enters the fallback
+every frame rather than sticking.
 
-That grep can only ever confirm, never exclude. The warning fires once, at the instant the
-switch flips, and the supervisor log is read as a retained tail -- so a run that comes back with
-no match is inconclusive, not negative. Confirming the switch *did not* happen needs the state
-made queryable rather than the event caught: a counter dumped at teardown, or the fallback
-re-logged on each flush that takes it.
+It is now instrumented as state rather than as an event -- `sync_failures` and
+`on_readback_fallback` on the scanout, carried across the per-flip re-declaration, with one line
+on entering the fallback and one on returning to zero-copy. **On the instrumented boot neither
+line appears**, so the fallback does not fire on this failure and it is not the mechanism here.
 
-The other half of the question -- whether readback writes zeros or does not write at all -- is
-answerable in any format by pre-filling the staging buffer with a sentinel before readback
-instead of trusting that zero means untouched. Black then means something wrote black; sentinel
-means nothing wrote. One memset in a debug path, and it also separates reading the wrong surface
-from reading no surface.
-
-Not yet measured, and worth having in the same run: the count of `iosurface scanout` mints
-*before* the push, so "the push switches the scanout path" is a measurement rather than an
-inference from a log window that only ever showed the last 80 matching lines.
+Left standing as unexplained: the readback path still differs between boots. One run produced no
+blank-readback lines at all while the capture was black; the others produced them continuously.
+Nothing yet measures what that boot did instead.
 
 ## The uncontrolled variable
 
