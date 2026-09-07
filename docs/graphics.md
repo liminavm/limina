@@ -66,22 +66,20 @@ nothing. To see it:
 RUST_LOG=limina_vmm=info …    # "virtio-gpu virgl_flags = 0x35b, software_2d = false (coexist = true)"
 ```
 
-### The link trap (read this before diagnosing any GPU bug)
+### Which renderer the worker runs
 
-The worker **must** link `third_party/virgl-prefix/lib/libvirglrenderer.*`. Homebrew ships a
-virglrenderer with no venus render-server support; if the worker picks that one up,
-`virgl_renderer_init` returns −1 and the GPU **silently degrades to software-2D**. The VM still
-boots, 2D and ssh work, and venus simply never enumerates — which reads exactly like a venus bug
-and has burned hours. `build.rs` now prepends our prefix to `PKG_CONFIG_PATH` and prints a
-`cargo:warning` naming the resolved library, so a plain `cargo build` is safe and a wrong link is
-loud. Verify anyway:
+virglrs, the Rust rewrite, compiled into the worker: rutabaga depends on it as a crate
+(`../../virglrenderer/virglrs`, a sibling checkout of this repo). There is no `libvirglrenderer` to
+load, so there is nothing to point at the wrong one — the trap this section used to describe, where
+Homebrew's venus-less build was picked up and `virgl_renderer_init` returned −1 into a silent
+software-2D degrade, cannot arise.
 
-```sh
-otool -L target/debug/limina-vmm | grep virgl     # must show third_party/virgl-prefix/…
-```
+`third_party/virglrenderer` is still built and still useful, but only as the reference the rewrite
+records goldens from. Nothing the worker runs comes out of `third_party/virgl-prefix`.
 
-If a worker log shows `degrading to software-2D` or `ComponentError(-1)` right after `virgl_flags`,
-check the link before suspecting anything else.
+A worker log that still shows `degrading to software-2D` or `ComponentError(-1)` right after
+`virgl_flags` is now a real renderer-init failure, not a link mistake: read the `[virglrs]` lines
+above it.
 
 ## 3. The three tiers
 

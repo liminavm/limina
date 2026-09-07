@@ -282,9 +282,11 @@ while read -r dep; do
     ""|/usr/lib/*|/System/*|@*) continue ;;
   esac
   depleaf="$(basename "$dep")"
-  if [ -e "$FW/$depleaf" ]; then
-    install_name_tool -change "$dep" "@rpath/$depleaf" "$MACOS/limina-vmm"
-  fi
+  # The worker links the renderer's dependencies itself (virglrs is compiled into it), so its
+  # own closure is the root: bundle what is not already there rather than skipping it, or the
+  # app ships a binary pointing at this machine's absolute paths.
+  [ -e "$FW/$depleaf" ] || { [ -e "$dep" ] || { echo "  WARN unresolved dep $dep (of limina-vmm)"; continue; }; bundle_dylib "$dep"; }
+  install_name_tool -change "$dep" "@rpath/$depleaf" "$MACOS/limina-vmm"
 done < <(otool -L "$MACOS/limina-vmm" | tail -n +2 | awk '{print $1}')
 
 # ---- relative KosmicKrisp ICD ----------------------------------------------------

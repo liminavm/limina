@@ -391,10 +391,8 @@ fn the_guest_sees_our_cap_through_vk_ext_memory_budget() {
     assert!(
         !traces.is_empty(),
         "no `limina GPU budget: memory_budget` trace lines in the worker log for heap \
-         {target}. LIMINA_GPU_MEM_BUDGET_TRACE=1 was set, so either the worker is linked \
-         against a virglrenderer without `vkr_budget_trace_heap` (check \
-         `otool -L target/debug/limina-vmm | grep virgl` — it must be third_party/virgl-prefix, \
-         see `limina-virgl-link-trap`) or the query never reached the host."
+         {target}. LIMINA_GPU_MEM_BUDGET_TRACE=1 was set, so either the renderer compiled into \
+         the worker does not trace the heap, or the query never reached the host."
     );
     // The probe is the context that ends up holding the most: it allocates `allocated`
     // bytes, far past anything an idle enhanced guest keeps.

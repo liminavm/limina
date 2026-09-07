@@ -66,8 +66,8 @@ right tool — not treat upstream as immutable:
   `github.com/liminavm/virglrenderer` (`limina` branch; upstream is
   `gitlab.freedesktop.org/virgl/virglrenderer`), pinned by `third_party/manifest.toml`. **The branch
   IS the delta — there is no `patches/virglrenderer/` any more**, and `scripts/apply-virgl-patches.sh`
-  is gone. Built from source into `third_party/virgl-prefix` (the worker links it; see
-  the link-trap bullet under *Working conventions* and `docs/graphics.md` §2). It's the host renderer for **both** accelerated tiers — venus
+  is gone. **The worker no longer uses it**: it is the reference the
+  Rust rewrite records goldens from. It is the host renderer for **both** accelerated tiers — venus
   (Vulkan→KosmicKrisp) and vrend (GL via zink-on-KK) — and carries our whole macOS/venus enablement,
   zero-copy IOSurface scanout, the snapshot/restore journal, and vrend/vkr fixes. To change it:
   commit on the fork's `limina` branch, push, update the manifest rev. The branch is **rewritten** as
@@ -228,21 +228,14 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
     run VMs on this host. Match on something unique to your own run (the disk path), and confirm
     with a full, untruncated `ps -o pid,lstart,command -p <pid>` *before* the kill — a truncated
     listing hid `--cpus 8 --ram-mib 12288` once and killed the shared build VM.
-- **The worker MUST link our `third_party/virgl-prefix` virglrenderer, not Homebrew's.**
-  This is a costly silent trap: a plain `cargo build -p limina-vmm` with no `PKG_CONFIG_PATH`
-  used to relink the worker against Homebrew's stock `virglrenderer` (whose `.pc` pkg-config
-  finds by default). That build lacks venus render-server support → on boot
-  `virgl_renderer_init` returns -1 and the GPU **silently degrades to software-2D**: the VM
-  still runs (2D/SSH/llvmpipe desktop all fine) but venus never enumerates in the guest
-  (`vkEnumeratePhysicalDevices → ERROR_INITIALIZATION_FAILED`), which reads like a venus/guest
-  bug and burns hours. `build.rs` now prepends our prefix to `PKG_CONFIG_PATH` and prints a
-  `cargo:warning` naming the resolved lib, so plain builds are safe and a wrong link is loud.
-  Still: **verify with `otool -L target/debug/limina-vmm | grep virgl`** (must show
-  `third_party/virgl-prefix/…`); if the worker log shows `degrading to software-2D` /
-  `ComponentError(-1)` after `virgl_flags`, check the link before suspecting venus. To debug
-  venus host init, run with `RUST_LOG=debug` (the worker + supervisor default to `warn` and now
-  honor `RUST_LOG` — `RUST_LOG=limina_vmm=debug` for just the worker, `RUST_LOG=trace` adds the
-  per-frame GPU present DIAGs `[FLUSH2]`/`[FENCEPRESENT]`).
+- **The renderer is compiled in, not loaded.** rutabaga depends on the `virglrs` crate
+  (`../../virglrenderer/virglrs`, a **sibling checkout**, not `third_party/`), so there is no
+  `libvirglrenderer` to load and no prefix to point at: `LIMINA_VIRGL_PREFIX`,
+  `check-virgl-link.sh` and the pkg-config steering in `crates/limina-vmm/build.rs` are all gone.
+  A clone without that sibling does not build — an open question, not a decision.
+  To debug venus host init, run with `RUST_LOG=debug` (the worker + supervisor default to `warn`
+  and honor `RUST_LOG` — `RUST_LOG=limina_vmm=debug` for just the worker, `RUST_LOG=trace` adds
+  the per-frame GPU present DIAGs `[FLUSH2]`/`[FENCEPRESENT]`).
 - **fmt + clippy stay clean.** A pre-commit hook (`.githooks/pre-commit`, enabled via
   `scripts/setup-hooks.sh` → `core.hooksPath`) runs `cargo fmt --check` on every workspace
   we own and `cargo clippy --workspace -- -D warnings` on the shipped code (+ the guest at

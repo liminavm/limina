@@ -33,8 +33,8 @@
 #
 # Prereqs:
 #   - build the kernel:  scripts/build-test-kernel.sh PAGESIZE=16k   (-> Image-16k)
-#   - build the 1.3.0 Venus virglrenderer:  scripts/build-virglrenderer.sh
-#   - build + sign limina against it (PKG_CONFIG_PATH=third_party/virgl-prefix/lib/pkgconfig:...)
+#   - build + sign limina:  cargo build -p limina -p limina-vmm && crates/limina-vmm/sign.sh debug
+#     (the renderer, virglrs, is a crate the worker compiles in — nothing to build separately)
 #   - build KosmicKrisp (the host Vulkan backend) and mount third_party/mesa-cs.sparseimage
 #     (docs/drivers/kosmickrisp.rst) — required; MoltenVK is not supported.
 #
