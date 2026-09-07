@@ -289,6 +289,15 @@ fn seated_gpu_workload_survives_restore_unchanged() {
 
     launch_workload(&g1);
     std::thread::sleep(SETTLE);
+    // The desktop's content before the identity push is pushed. Without it, a blank baseline
+    // below is ambiguous between a session that never seated and one the push blanked, and the
+    // two want completely different investigations -- which has cost this gate a wrong
+    // attribution once already.
+    let seated_colors = g1
+        .read_capture()
+        .map(|f| color_diversity(&f))
+        .unwrap_or_default();
+    eprintln!("pre-push desktop: {seated_colors} distinct colours");
     // Give the guest a monitor identity the restored device will not have by default, then let
     // its compositor finish re-laying-out for it before anything is measured.
     g1.update_display(pushed_identity())
@@ -341,6 +350,14 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         stable.len(),
         means_a.len()
     );
+    // Kept before the assertions below, not after: they panic, and a failing run that discards
+    // its own frame leaves nothing to look at but a colour count.
+    let pid = std::process::id();
+    let pre_png = std::env::temp_dir().join(format!("limina-landmark-pre-{pid}.png"));
+    if let Some(p) = g1.display_capture_path() {
+        let _ = std::fs::copy(p, &pre_png);
+    }
+    eprintln!("pre-suspend reference frame kept at {pre_png:?}");
     assert!(
         stable.len() >= MIN_STABLE_CELLS,
         "only {} of {} grid cells held still across two settled frames (need \
@@ -352,15 +369,15 @@ fn seated_gpu_workload_survives_restore_unchanged() {
     assert!(
         pre_colors >= 200,
         "the live desktop capture shows only {pre_colors} distinct colours — not a real \
-         seated frame; the content floor can't gate on this baseline"
+         seated frame; the content floor can't gate on this baseline. The same desktop showed \
+         {seated_colors} colours before the monitor identity was pushed, so this is {} — see \
+         {pre_png:?}",
+        if seated_colors >= 200 {
+            "a desktop the push blanked, not a session that never seated"
+        } else {
+            "a session that never seated, before the push had any part in it"
+        }
     );
-
-    // Keep the reference frame for failure forensics (g1's scratch dies with it).
-    let pid = std::process::id();
-    let pre_png = std::env::temp_dir().join(format!("limina-landmark-pre-{pid}.png"));
-    if let Some(p) = g1.display_capture_path() {
-        let _ = std::fs::copy(p, &pre_png);
-    }
 
     let edid_before = guest_edid_md5(&g1);
     let boot_id = ssh_retry(&g1, "cat /proc/sys/kernel/random/boot_id");
