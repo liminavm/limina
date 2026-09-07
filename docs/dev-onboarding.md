@@ -42,14 +42,10 @@ cargo xtask build          # cargo build limina + limina-vmm, codesign the worke
 cargo xtask sign           # just re-codesign the worker (after a plain `cargo build`)
 ```
 
-`build` produces a runnable, codesigned worker. Two traps it guards for you:
+`build` produces a runnable, codesigned worker. The trap it guards for you:
 
 - **The worker needs the `com.apple.security.hypervisor` entitlement** (for `hv_vm_*`) —
   `build`/`sign` codesign it (`crates/limina-vmm/sign.sh`).
-- **The worker MUST link our `third_party/virgl-prefix` virglrenderer, not Homebrew's** —
-  a wrong link silently degrades venus to software-2D and reads like a guest bug.
-  `build` runs `check-virgl-link.sh` and fails loudly if it's wrong (see
-  `docs/graphics.md` §2).
 
 ## 3. Run it
 

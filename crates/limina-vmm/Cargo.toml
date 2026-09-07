@@ -35,6 +35,3 @@ libc              = { workspace = true }
 log               = { workspace = true }
 tracing-appender = "0.2.5"
 
-[build-dependencies]
-# Emit the virglrenderer link search path (see build.rs).
-pkg-config = "0.3"

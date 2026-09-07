@@ -1304,11 +1304,11 @@ milestone.
   patch path — the imago script downloads the `.crate` from crates.io directly). Confirms the repo
   model: **patch series committed (`patches/**`), source clones gitignored (`third_party/`).**
 - **`build [--release]`** — `cargo build -p limina -p limina-vmm` + codesign the worker
-  (`crates/limina-vmm/sign.sh`, hypervisor entitlement) + `check-virgl-link.sh` (the venus link
-  guard). The inner-loop "make a runnable worker" step, previously split across cargo + two scripts.
+  (`crates/limina-vmm/sign.sh`, hypervisor entitlement). The inner-loop "make a runnable worker"
+  step, previously split across cargo + a script.
 - **`sign [--release]`** — just the worker codesign, when you built via plain `cargo` and only need
   the entitlement.
-- **`test [--release] [args…]`** — wraps `scripts/test-boot.sh`: build + codesign + link-check +
+- **`test [--release] [args…]`** — wraps `scripts/test-boot.sh`: build + codesign +
   build the L1 guest + trap probe + run the HVF boot tests (`LIMINA_HVF_TESTS=1`). Extra args forward
   to the test run (`--test <name>` filters, a substring after `--`). The canonical "did I break boot".
 - **`run --disk <enhanced.raw> [--no-net] [--cpus N] [--ram-mib N] [-- extra…]`** — boot an

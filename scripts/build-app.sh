@@ -39,16 +39,9 @@ CARGO_FLAGS=()
 [ "$PROFILE" = "release" ] && CARGO_FLAGS=(--release)
 
 # ---- dev source locations (the things we vendor into the bundle) -----------------
-# The virglrenderer prefix. One value decides both what the worker LINKS and what is
-# bundled, so it is exported under BOTH names: this script and the dylib closure below read
-# VIRGL_PREFIX, and crates/limina-vmm/build.rs reads LIMINA_VIRGL_PREFIX. Setting only one
-# of them ships a dylib the worker never linked -- which loads, because the two
-# implementations serve one ABI, and is a different renderer.
-# Point it at virglrs/install.sh's output to bundle the Rust implementation.
-export VIRGL_PREFIX="${VIRGL_PREFIX:-${LIMINA_VIRGL_PREFIX:-$ROOT/third_party/virgl-prefix}}"
-export LIMINA_VIRGL_PREFIX="$VIRGL_PREFIX"
-VIRGL="$VIRGL_PREFIX/lib/libvirglrenderer.1.dylib"
-EPOXY="$ROOT/third_party/epoxy-egl-prefix/lib/libepoxy.0.dylib"
+# The renderer is virglrs, a Rust crate compiled into the worker: there is no dylib to
+# choose, to bundle, or to get wrong. Its own dependencies (Mesa's libEGL, the Vulkan
+# loader) are in the worker's link closure and are bundled with it below.
 KK_BUILD="${LIMINA_KK_BUILD:-/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan}"
 ZINK="/Volumes/mesa-cs/zink-kk-prefix/lib"
 KK_DRIVER="$KK_BUILD/libvulkan_kosmickrisp.dylib"
@@ -79,7 +72,7 @@ if [ "${#ZINK_GALLIUM[@]}" -ne 1 ] || [ ! -e "${ZINK_GALLIUM[0]}" ]; then
 fi
 DLOPEN_ROOTS+=("${ZINK_GALLIUM[0]}")
 
-for f in "$VIRGL" "$EPOXY" "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY"; do
+for f in "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY"; do
   [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
 done
 
@@ -252,8 +245,6 @@ bundle_dylib() {
 }
 
 echo "==> bundling dylib closure into Frameworks"
-bundle_dylib "$VIRGL"
-bundle_dylib "$EPOXY"
 for r in "${DLOPEN_ROOTS[@]}"; do bundle_dylib "$r"; done
 
 # The M14 FIDO Secure-Enclave shim: the supervisor links liblimina_sep.dylib (built by

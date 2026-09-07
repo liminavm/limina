@@ -374,23 +374,14 @@ fn sign_worker(repo: &Path, release: bool) -> Result<()> {
     bash_script(repo, "crates/limina-vmm/sign.sh", &[profile_name(release)])
 }
 
-/// Verify the worker links our `third_party/virgl-prefix` virglrenderer, not Homebrew's — the
-/// costly silent venus link trap (see the limina-virgl-link-trap memory).
-fn check_virgl_link(repo: &Path, release: bool) -> Result<()> {
-    eprintln!("==> checking the worker links our virglrenderer (venus guard)");
-    let worker = format!("target/{}/limina-vmm", profile_name(release));
-    bash_script(repo, "scripts/check-virgl-link.sh", &[worker])
-}
-
-/// The inner-loop "make a runnable worker": build both binaries, guard the virgl link, sign the
-/// worker. Everything a `cargo xtask run` / a manual boot needs, minus the tests.
+/// The inner-loop "make a runnable worker": build both binaries, sign the worker. Everything a
+/// `cargo xtask run` / a manual boot needs, minus the tests.
 fn build(release: bool) -> Result<()> {
     let repo = repo_root();
     cargo_build_binaries(&repo, release)?;
     sign_worker(&repo, release)?;
-    check_virgl_link(&repo, release)?;
     eprintln!(
-        "==> build complete: target/{}/{{limina,limina-vmm}} (worker signed, virgl link OK)",
+        "==> build complete: target/{}/{{limina,limina-vmm}} (worker signed)",
         profile_name(release)
     );
     Ok(())
