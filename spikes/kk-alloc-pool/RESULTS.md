@@ -1,10 +1,44 @@
 # The KosmicKrisp command-allocator pool, measured
 
-Instrumentation for the 2026-08-31 dogfood SIGSEGV: a nil store inside AGX's own MTL4 compute
-data-buffer pool, reached from a guest GL texture upload
-(`vrend_renderer_transfer_write_iov` → zink → `kk_CmdCopyBufferToImage2` → `blitCDMBufferToTexture`
-→ `prepareForEnqueue`). The allocator behind that pool is ours (`kk_device.c`), so the question is
-whether we destroyed, reset, or overfilled one under a live encoder.
+Instrumentation raised for the dogfood SIGSEGV that has now killed `limina-vmm` four times: a
+store through a NULL pointer inside AGX `prepareForEnqueue`, reached from a guest GL texture
+upload (`vrend_renderer_transfer_write_iov` → zink → `kk_CmdCopyBufferToImage2` →
+`blitCDMBufferToTexture`). The allocator behind the encoder is ours (`kk_device.c`), so the
+question this spike asks is whether we destroyed, reset, or overfilled one under a live encoder.
+
+**The answer is no, and the fault is not about allocators at all** — see the next section. The
+measurements below stand as what the pool actually does under real workloads, and the vehicle
+requirements at the end still hold for anything that wants to exercise this code.
+
+## What the fault actually is
+
+Disassembly of AGXMetalG16X puts the fault at `prepareForEnqueue+672`, `str x8, [x9, #0x98]` with
+`x9` loaded from `ComputeContext+0x918`. That field is the compute-pass state block, and its only
+writer in the whole binary is `beginComputePass` (`newCommand(...)+0xc0`, which cannot be zero,
+and with no early return before it). AGX runs `beginComputePass` from
+`-[AGXG16XFamilyComputeContext_mtlnext initWithCommandBuffer:allocator:...]`, i.e. at
+`[cmd_buf computeCommandEncoder]` — so every encoder KK is handed has been begun, and a NULL there
+means a dispatch reached a compute context whose pass was never opened.
+
+`x13`/`x14`/`x15` (`0x20000`, `0x10001f`, `0x100000`) are invariant across all four occurrences and
+were once read as a pool cursor one step past a 1 MiB segment boundary. They are register state
+left by the sampler-heap `addToResourceList` call, not the faulting operand; the fault is one
+thing, `0x918 == NULL`. The dispatch that faulted is likewise ordinary — the crash-surviving ring
+(`spikes/kk-dispatch-trace/`) named it as a `45x32` glyph upload indistinguishable from its
+neighbours. **Nothing about size, count, or pool occupancy is the variable.**
+
+What is left is the encoder's lifetime. The faulting pointer appeared 59 times in the ring, which
+reads as one long-lived encoder — but a seated desktop recycles encoder *addresses* within tens of
+encoders (measured: generation 17 → 21 on one address across three dispatches, 271 → 312 on
+another), so those entries spanned several incarnations and the pointer carried no identity. A
+stale pointer used across a recycle produces exactly this state, and a liveness flag alone cannot
+see it because the new tenant is perfectly live.
+
+So KK now stamps a **generation** per encoder address (`mtl_encoder.m`), `kk_encoder_state`
+remembers the generation it was handed, and `cs_get_compute` refuses to hand out an encoder whose
+address has been re-tenanted. Every compute record entry point checks liveness as well, so a use
+after `endEncoding` or after release is named at the use site instead of segfaulting inside
+Apple's driver several operations later. `LIMINA_KK_ENC_GUARD=abort` takes a core there.
 
 `kk_alloc_pool_report()` prints per class on the release path
 (`[LIMINA-ALLOC-POOL]`, every 2000 encoder closes and at device teardown):
@@ -88,4 +122,8 @@ guest mesa) rather than the RPM used here. Either could be the source of the tri
    `kk_CmdCopyBufferToImage2` ran; the `copies: buf->img=…` line added afterwards answers that
    directly, and any future claim about reaching the path should cite it.
 3. Drive the compute class past its floor of eight if the destroy path is to be tested there —
-   though on this evidence destruction is more likely a bystander than the cause.
+   though on this evidence destruction is a bystander, not the cause.
+
+Note that the pool instrumentation was armed and silent *through* the fourth occurrence: 4445
+growth events in the retained log, no `KK_PA_DEAD`, no unmatched discharge, no guard trip. That is
+evidence against allocator misuse from a second direction, independent of the disassembly.

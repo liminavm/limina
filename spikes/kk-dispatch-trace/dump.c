@@ -12,13 +12,28 @@
 #include <stdint.h>
 #include <string.h>
 
-#define MAGIC 0x4c444d54u
+/* v2: entries carry the encoder generation and liveness. The magic was bumped with the layout so
+ * an older dumper refuses the file rather than reading the fields at the wrong offsets. */
+#define MAGIC 0x4c444d32u
 
 struct entry {
    uint64_t seq, done, thread, encoder, buffer, texture;
    uint64_t offset_B, stride_B, image_2d_B;
    uint32_t w, h, d, x, y, z, slice, level, options, kind;
+   uint64_t gen;
+   uint32_t enc_state, pad2;
 };
+
+/* Mirrors enum limina_enc_state in mtl_encoder.m. */
+static const char *encstate(uint32_t st)
+{
+   switch (st) {
+   case 1: return "live";
+   case 2: return "ENDED";
+   case 3: return "RELEASED";
+   default: return "unknown";
+   }
+}
 struct hdr {
    uint32_t magic, entry_size, entries, pad;
    uint64_t next;
@@ -72,8 +87,9 @@ int main(int argc, char **argv)
          printf("    offset=%llu stride=%llu image2d=%llu\n",
                 (unsigned long long)e->offset_B, (unsigned long long)e->stride_B,
                 (unsigned long long)e->image_2d_B);
-         printf("    encoder=0x%llx buffer=0x%llx texture=0x%llx\n",
-                (unsigned long long)e->encoder, (unsigned long long)e->buffer,
+         printf("    encoder=0x%llx (gen %llu, %s) buffer=0x%llx texture=0x%llx\n",
+                (unsigned long long)e->encoder, (unsigned long long)e->gen,
+                encstate(e->enc_state), (unsigned long long)e->buffer,
                 (unsigned long long)e->texture);
       }
    }
@@ -87,9 +103,10 @@ int main(int argc, char **argv)
    for (uint64_t s = start; s <= h->next; s++) {
       struct entry *e = &h->e[s % h->entries];
       if (e->seq != s) continue;
-      printf("  seq=%-8llu %-9s %5ux%-5u origin=(%u,%u) lvl=%u stride=%-8llu img2d=%-10llu %s\n",
-             (unsigned long long)e->seq, kindname(e->kind), e->w, e->h, e->x, e->y, e->level,
-             (unsigned long long)e->stride_B, (unsigned long long)e->image_2d_B,
+      printf("  seq=%-8llu %-9s %5ux%-5u lvl=%u stride=%-8llu enc=0x%llx gen=%-6llu %-8s %s\n",
+             (unsigned long long)e->seq, kindname(e->kind), e->w, e->h, e->level,
+             (unsigned long long)e->stride_B, (unsigned long long)e->encoder,
+             (unsigned long long)e->gen, encstate(e->enc_state),
              e->done ? "" : "<- IN FLIGHT");
    }
    return 0;
