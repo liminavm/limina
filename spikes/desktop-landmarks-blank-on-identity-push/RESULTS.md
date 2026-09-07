@@ -17,10 +17,25 @@ Through that whole minute the capture file is rewritten at ~2 Hz at a constant 7
 Frames keep being presented; every one of them is black. One run watched for 60 s, so "it does
 not recover within a minute" is what is measured -- not "never".
 
-Guest-side during the black period: no EGL, venus, zink or renderer errors. gnome-shell logs
-only `clutter_actor_has_allocation` assertions and `Can't update stage views ... needs an
-allocation`, which is a compositor mid-relayout. The push is what provokes the relayout -- it
-changes the EDID so the guest drops from 250% scale to 100%.
+The black is RGB `(0,0,0)`. Its alpha reads `255` and means nothing: the scanout is `BGRX`, and
+`swizzle_to_rgba` forces opaque alpha for the `X` channel by construction
+(`limina-display/src/lib.rs:326`). This format cannot distinguish a never-written buffer from a
+deliberately cleared one, so do not spend a run trying.
+
+Guest-side during the black period: no EGL, venus, zink or renderer errors. gnome-shell answers
+D-Bus (`ShellVersion '50.0'`) and logs only `clutter_actor_has_allocation` assertions and
+`Can't update stage views ... needs an allocation`, which is a compositor mid-relayout. The push
+is what provokes the relayout -- it changes the EDID so the guest drops from 250% scale to 100%.
+
+The push is immediately followed by three IOSurface scanout mints:
+
+    display-control: DisplayControl { display_id: 0, size: Some((2560,1440)), edid: Some(..) }
+    [virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 113); ...
+    [virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 117); ...
+    [virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 55);  ...
+
+They come from the **classic/vrend** mint site (`virglrs src/vrend/resource.rs:1837`), not the
+venus one. Whether any were minted *before* the push is not yet measured.
 
 ## What is ruled out, and how
 
@@ -28,29 +43,65 @@ changes the EDID so the guest drops from 250% scale to 100%.
 |---|---|
 | r26 guest image | 3/3 fail on a pre-r26 clone of the same test golden |
 | the virglrs budget commits | 549 -> 1 colours identically at `0292db7` and at `0a0a75f` |
-| KosmicKrisp | `libvulkan_kosmickrisp.dylib` dated Sep 6 10:49, unchanged across every run |
+| KosmicKrisp | fails identically on the Sep 6 10:49 and the Sep 7 17:27 dylib |
 | the sampler-view GL objects (`0292db7`) | never implicated: the desktop paints until the push |
 | the coexist display path as such | `vrend_session_restore` passes on the same EFI-seated vehicle with `with_coexist_display` |
 | a slow relayout the test does not wait out | disproved: it is black continuously to +60 s, not late |
+| `CaptureBackend` reallocating its staging buffer per `configure_scanout` | disproved **on mechanism**, not on timing: a same-geometry early return takes the `configure scanout` log from 2168 lines to 0 -- so the guard is proven reached -- and the capture is still 1 colour, 3/3 |
+| the capture backend not being on the blob/zero-copy scanout path at all | refuted from the code: `CaptureBackend` has no `present_surface`, so the vtable default returns `MethodNotSupported` (`rust_to_c.rs:72-80`), and the device falls through to readback on every route -- `virtio_gpu.rs:2470-2478` -> `alloc_frame` (2521) -> `read_iosurface` (2534) -> `present_frame` (2601), under a comment naming the headless capture sink |
+
+Readback therefore runs, every frame, and fills the buffer with black. That the file is rewritten
+at ~2 Hz is the independent confirmation that `present_frame` keeps being called.
+
+## Open, and the cheapest cut
+
+In the classic (`ctx_id == 0`) branch of `flush_resource`, a failing `sync_iosurface` logs a
+warning and **clears `s.iosurface_id = None`** (`virtio_gpu.rs:2425-2440`), permanently switching
+that scanout to a different readback path for the rest of the session. A one-way switch of this
+shape is the only mechanism found so far that explains black *forever* rather than black for a
+frame. Whether it fires here is one grep away and has never been checked, because every log
+filter this spike used matched `IOSurface` case-sensitively and the device spells its own
+diagnostic `vrend iosurface sync failed for res N`.
+
+That grep can only ever confirm, never exclude. The warning fires once, at the instant the
+switch flips, and the supervisor log is read as a retained tail -- so a run that comes back with
+no match is inconclusive, not negative. Confirming the switch *did not* happen needs the state
+made queryable rather than the event caught: a counter dumped at teardown, or the fallback
+re-logged on each flush that takes it.
+
+The other half of the question -- whether readback writes zeros or does not write at all -- is
+answerable in any format by pre-filling the staging buffer with a sentinel before readback
+instead of trusting that zero means untouched. Black then means something wrote black; sentinel
+means nothing wrote. One memset in a debug path, and it also separates reading the wrong surface
+from reading no surface.
+
+Not yet measured, and worth having in the same run: the count of `iosurface scanout` mints
+*before* the push, so "the push switches the scanout path" is a measurement rather than an
+inference from a log window that only ever showed the last 80 matching lines.
 
 ## The uncontrolled variable
 
-`0292db7` records 4/4 passes at ~13:56. Every failure here -- 10 of them -- is from 16:08 on.
+`0292db7` records 4/4 passes at ~13:56. Every failure here -- 14 of them -- is from 16:08 on.
 The host was restarted at ~15:43, between the two. Nothing distinguishes the two sets that has
 been controlled for, so this is a reproducible failure with an unexplained set of passes behind
 it, not a defect proved deterministic.
 
-## Next
-
-Score it against the C reference leg: that separates a virglrs scanout defect from a guest
-mutter one, and nothing cheaper does. A screenshot taken inside the guest during the black
-period answers the same question from the other side -- guest painted and host black is
-scanout; black on both is the compositor.
-
-## The rule this earned
+## The rules this earned
 
 A gate that panics on a measurement must keep the artifact the measurement was taken from,
 *before* the assertion. Every failing run of this test discarded its own frame, because the PNG
 was saved after the assert -- so seven runs produced a colour count and no picture, and the one
 probe that looked at the desktop before the push settled in a single run what three rounds of
 counting could not.
+
+A diagnostic filter is a claim about what the code logs, and it fails silently. Match log
+needles case-folded: the one line that would have named this mechanism was excluded for three
+rounds by an `IOSurface` that the emitting code spells `iosurface`.
+
+A diagnostic for a latching condition must be readable after the fact, not only at the instant
+it latches. A one-shot warning about a state that then persists forever is unfindable by anyone
+who starts looking afterwards -- which is everyone. Log the state on each use, or expose a
+counter; do not make the reader have been listening at the right moment.
+
+A satisfying mechanism is not a passing test. The staging-buffer theory explained every symptom,
+had a unit test, and was wrong; it was announced before it was run. Verify first, then say it.
