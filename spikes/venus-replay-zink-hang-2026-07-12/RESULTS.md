@@ -96,6 +96,26 @@ Key scoping facts:
 - Trigger is probabilistic (same test, same image was green before); concurrent shell
   rendering + snapshot readback every 100 calls is the aggravating workload.
 
+## This is not what wedges `venus_replay` today
+
+The guest carries the fix — `patches/mesa-guest/0021`, in mesa 26.1.8-11.limina on
+`Fedora-Workstation-44.enhanced.test.raw` — and both zink replays still wedge:
+
+    measured 2026-09-07, r26 guest
+    venus_replay_matches_llvmpipe_reference        FAIL  958.1 s   (ssh timeout)
+    venus_shell_replay_matches_llvmpipe_reference  FAIL  957.3 s   (ssh timeout)
+    venus_vk_replay_matches_lavapipe_reference     PASS   82.1 s   (no zink)
+
+Unchanged from the same three before the patch. `GL_RENDERER` reads
+`zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))`, so zink-on-venus
+is genuinely what hung — not the env trap, and not llvmpipe.
+
+The rule that earns its place: **a check that separates "zink" from "not zink" cannot
+name which zink bug.** The Vulkan leg passing while the two zink legs time out was read
+as evidence for this defect; it is evidence for the whole guest GL stack and no more,
+and it fits every other wedge in it equally well. Localisation needs a stack, which is
+what the 2026-07-12 capture above has and the current failure does not.
+
 ## Next steps (when it bites again / if we chase it)
 
 - Reproduce with `ZINK_DEBUG=flushsync` (if available) or with the threaded context
