@@ -368,11 +368,11 @@ fn hardware_decode_in_flight_survives_restore() {
         misses.len(),
         misses.join("\n")
     );
-    for line in slog
-        .lines()
-        .filter(|l| l.contains("dropping inter frames") || l.contains("re-seeded by a keyframe"))
-    {
-        eprintln!("resync: {line}");
+    // Everything the backend said about this codec, not a chosen few phrases. A filter that
+    // names the lines it expects reports silence identically to a renderer that said something
+    // else entirely — which is how a codec decoding nothing at all read as a clean run here.
+    for line in slog.lines().filter(|l| l.contains("[virglrs]")) {
+        eprintln!("host: {line}");
     }
 
     // ORACLE 2 — the tail is exact. A codec that came back but never re-seeded, or that
