@@ -536,7 +536,8 @@ fn main() -> Result<()> {
     // adopt upstream's implementation instead of carrying our own advertise (mechanism
     // upstream, policy here). Respect an explicit override from the environment.
     if std::env::var_os("MESA_KK_EXPERIMENTAL").is_none() {
-        std::env::set_var("MESA_KK_EXPERIMENTAL", "custom_border");
+        // SAFETY: still on main() with no thread spawned, so nothing can be in `getenv`.
+        unsafe { std::env::set_var("MESA_KK_EXPERIMENTAL", "custom_border") };
     }
 
     let cli = Cli::parse();
@@ -546,10 +547,13 @@ fn main() -> Result<()> {
     // because guest RAM is here. An explicit setting always wins; `0` keeps the ledger
     // and its diagnostics but lifts the cap.
     if std::env::var_os("LIMINA_GPU_MEM_BUDGET_MIB").is_none() {
-        std::env::set_var(
-            "LIMINA_GPU_MEM_BUDGET_MIB",
-            default_gpu_mem_budget_mib(cli.ram_mib).to_string(),
-        );
+        // SAFETY: still on main() with no thread spawned, so nothing can be in `getenv`.
+        unsafe {
+            std::env::set_var(
+                "LIMINA_GPU_MEM_BUDGET_MIB",
+                default_gpu_mem_budget_mib(cli.ram_mib).to_string(),
+            )
+        };
     }
 
     // clap guarantees exactly one of --firmware / --kernel is present.
@@ -618,14 +622,16 @@ fn main() -> Result<()> {
                 // #8 leg 2: the GPU device reads the supervisor's "shown <id>" acks off
                 // the control socketpair (same fd; the display backend only writes).
                 // The fd number is process-wide — env is just the in-process rendezvous.
-                std::env::set_var("LIMINA_SHOWN_ACK_FD", control_fd.to_string());
+                // SAFETY: still on main(); the GPU and renderer threads start below.
+                unsafe { std::env::set_var("LIMINA_SHOWN_ACK_FD", control_fd.to_string()) };
             }
             // The venus zero-copy scanouts are created deep inside virglrenderer (in-process),
             // which can't see our CLI args — hand it the receiver name via the environment so it
             // creates its IOSurfaces non-global and publishes their Mach ports too (the sw2d path
             // uses the WindowConfig below). Set before any GPU/renderer init.
             if let Some(name) = cli.surface_port_name.as_deref() {
-                std::env::set_var("LIMINA_SURFACE_PORT_NAME", name);
+                // SAFETY: still on main(); the GPU and renderer threads start below.
+                unsafe { std::env::set_var("LIMINA_SURFACE_PORT_NAME", name) };
             }
             Some(DisplaySink::Window {
                 control_fd,

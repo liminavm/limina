@@ -3605,7 +3605,7 @@ pub fn run(
             let shape_slot = cursor::shape_slot(cursor_slot, &visible);
             let c = s.slots[shape_slot].cursor;
             (
-                (c.gen, c.visible, c.id, c.w, c.h, c.hot_x, c.hot_y),
+                (c.generation, c.visible, c.id, c.w, c.h, c.hot_x, c.hot_y),
                 s.slots[cursor_slot].width,
                 shape_slot,
             )

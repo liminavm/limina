@@ -660,7 +660,7 @@ struct Scrub {
     /// Monotonic id so the watchdog thread can tell whether the scrub it armed for is still the
     /// one in flight: a finished or *aborted* scrub must never be "restored" to `resume_pages` —
     /// after an abort the guest just proved it needs its memory.
-    gen: u64,
+    generation: u64,
     /// Progress tracking for the inflate stall detector.
     last_actual_bytes: u64,
     stall_ticks: u32,
@@ -1127,21 +1127,29 @@ impl BalloonPolicy {
         st.elastic_probe = None; // scrub churn must not feed an elasticity verdict
         st.giveback_streak = 0; // same: an episode must not straddle a scrub cycle
         st.scrub_gen += 1;
-        let gen = st.scrub_gen;
+        let generation = st.scrub_gen;
         st.scrub = Some(Scrub {
             phase: ScrubPhase::Inflating,
             phase_since: now,
             target_pages: inflate_to,
             resume_pages,
-            gen,
+            generation,
             last_actual_bytes: 0,
             stall_ticks: 0,
         });
-        trace_scrub(st, "start", gen, resume_pages, None, None, Some(trigger));
+        trace_scrub(
+            st,
+            "start",
+            generation,
+            resume_pages,
+            None,
+            None,
+            Some(trigger),
+        );
         log::warn!(
             "autoballoon: {trigger} scrub start (inflate to {inflate_to} pages, resume {resume_pages})"
         );
-        self.spawn_scrub_watchdog(gen, resume_pages);
+        self.spawn_scrub_watchdog(generation, resume_pages);
     }
 
     /// Advance an in-flight scrub one report-tick. Every phase advances on timeout alone —
@@ -1162,10 +1170,10 @@ impl BalloonPolicy {
                 None => {}
             }
         }
-        let (phase, phase_since, gen, resume_pages, stall_ticks) = (
+        let (phase, phase_since, generation, resume_pages, stall_ticks) = (
             scrub.phase,
             scrub.phase_since,
-            scrub.gen,
+            scrub.generation,
             scrub.resume_pages,
             scrub.stall_ticks,
         );
@@ -1189,7 +1197,7 @@ impl BalloonPolicy {
                 // field debugger without timestamp correlation.
                 let pct =
                     actual.map(|a| a.min(target_bytes).saturating_mul(100) / target_bytes.max(1));
-                trace_scrub(st, "hold", gen, resume_pages, actual, pct, None);
+                trace_scrub(st, "hold", generation, resume_pages, actual, pct, None);
             }
             ScrubStep::ToDeflating => {
                 // Only advance once the deflate command actually went out; a failed send leaves
@@ -1202,13 +1210,13 @@ impl BalloonPolicy {
                         s.phase = ScrubPhase::Deflating;
                         s.phase_since = now;
                     }
-                    trace_scrub(st, "deflate", gen, resume_pages, actual, None, None);
+                    trace_scrub(st, "deflate", generation, resume_pages, actual, None, None);
                 }
             }
             ScrubStep::Done => {
                 st.scrub = None;
                 st.last_scrub_end = now;
-                trace_scrub(st, "done", gen, resume_pages, actual, None, None);
+                trace_scrub(st, "done", generation, resume_pages, actual, None, None);
                 log::warn!("autoballoon: scrub done (resumed {resume_pages} pages)");
                 // The release path just settled the pool's shares; sweep now to catch the
                 // live side at its low point (and reset the cadence — it would be due soon
@@ -1225,19 +1233,31 @@ impl BalloonPolicy {
     /// is somehow still in flight — the report stream died mid-scrub, so ticks stopped — deflate
     /// back unconditionally. A completed or aborted scrub bumped past the generation and makes
     /// this a no-op, so an abort's release is never undone by a stale re-inflate.
-    fn spawn_scrub_watchdog(&self, gen: u64, resume_pages: u32) {
+    fn spawn_scrub_watchdog(&self, generation: u64, resume_pages: u32) {
         let state = Arc::clone(&self.state);
         let socket = self.socket.clone();
         std::thread::spawn(move || {
             std::thread::sleep(SCRUB_WATCHDOG);
             let mut st = state.lock().unwrap();
-            if st.scrub.as_ref().is_some_and(|s| s.gen == gen) {
+            if st
+                .scrub
+                .as_ref()
+                .is_some_and(|s| s.generation == generation)
+            {
                 st.scrub = None;
                 st.last_scrub_end = Instant::now();
                 if send_target(&socket, &mut st, resume_pages) {
                     st.target_pages = resume_pages;
                 }
-                trace_scrub(&mut st, "watchdog", gen, resume_pages, None, None, None);
+                trace_scrub(
+                    &mut st,
+                    "watchdog",
+                    generation,
+                    resume_pages,
+                    None,
+                    None,
+                    None,
+                );
                 log::warn!(
                     "autoballoon: scrub watchdog fired (pressure reports stalled mid-scrub) — \
                      deflated to {resume_pages} pages"
@@ -1650,7 +1670,15 @@ fn abort_scrub(st: &mut State, now: Instant) {
         return;
     };
     st.last_scrub_end = now;
-    trace_scrub(st, "abort", scrub.gen, scrub.resume_pages, None, None, None);
+    trace_scrub(
+        st,
+        "abort",
+        scrub.generation,
+        scrub.resume_pages,
+        None,
+        None,
+        None,
+    );
     log::warn!("autoballoon: scrub aborted (guest under pressure)");
 }
 
@@ -1660,7 +1688,7 @@ fn abort_scrub(st: &mut State, now: Instant) {
 fn trace_scrub(
     st: &mut State,
     event: &str,
-    gen: u64,
+    generation: u64,
     resume_pages: u32,
     actual_bytes: Option<u64>,
     reached_pct: Option<u64>,
@@ -1677,7 +1705,7 @@ fn trace_scrub(
         .unwrap_or(0);
     let json_stat = |v: Option<u64>| v.map_or("null".to_string(), |v| v.to_string());
     let line = format!(
-        "{{\"ts_ms\":{ts_ms},\"scrub\":\"{event}\",\"gen\":{gen},\"resume_pages\":{resume_pages},\
+        "{{\"ts_ms\":{ts_ms},\"scrub\":\"{event}\",\"gen\":{generation},\"resume_pages\":{resume_pages},\
          \"actual_bytes\":{},\"reached_pct\":{},\"trigger\":{}}}\n",
         json_stat(actual_bytes),
         json_stat(reached_pct),
@@ -3642,7 +3670,7 @@ mod tests {
         use std::os::unix::net::UnixListener;
         use std::sync::mpsc;
 
-        std::env::set_var("LIMINA_HOST_PRESSURE", "normal");
+        unsafe { std::env::set_var("LIMINA_HOST_PRESSURE", "normal") };
         let sock = std::env::temp_dir().join(format!(
             "limina-demand-sweep-wiring-{}.sock",
             std::process::id()
@@ -4004,7 +4032,7 @@ mod tests {
         // Pin the host sample: the real sysctls could read Warn on a loaded dev machine and
         // legitimately veto the idle scrub. Only `on_pressure` reads this variable, and this
         // is the sole test driving it.
-        std::env::set_var("LIMINA_HOST_PRESSURE", "normal");
+        unsafe { std::env::set_var("LIMINA_HOST_PRESSURE", "normal") };
 
         // A fake worker on a real socket: answers `stats` with a fixed fill, records every
         // other command. The policy keeps one connection open across commands.
@@ -4391,7 +4419,7 @@ mod tests {
                 phase_since: now,
                 target_pages: ROOM,
                 resume_pages: GIB_PAGES,
-                gen: 3,
+                generation: 3,
                 last_actual_bytes: 0,
                 stall_ticks: 0,
             }),

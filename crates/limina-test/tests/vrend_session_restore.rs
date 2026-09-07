@@ -133,16 +133,18 @@ fn classic_vrend_world_survives_snapshot_restore() {
 
     // GPUTRACE ticks are the positive-signal oracle (submits advancing) and the
     // bracket must not double-trigger the in-guest suspend.
-    std::env::set_var("LIMINA_GPU_TRACE", "1");
-    std::env::set_var("LIMINA_BRACKET_NO_BUTTON", "1");
+    unsafe { std::env::set_var("LIMINA_GPU_TRACE", "1") };
+    unsafe { std::env::set_var("LIMINA_BRACKET_NO_BUTTON", "1") };
     // The firmware→OS handover ("guest OS driver took the GPU over", first GET_EDID) logs at
     // debug in the device; the phase assertion below waits for it in the restore leg's log.
     // This is a capture-mode boot — the supervisor never parses the display control channel
     // here, so the worker-side line is the only observable for the handover.
-    std::env::set_var(
-        "RUST_LOG",
-        "info,krun_devices::virtio::gpu::virtio_gpu=debug",
-    );
+    unsafe {
+        std::env::set_var(
+            "RUST_LOG",
+            "info,krun_devices::virtio::gpu::virtio_gpu=debug",
+        )
+    };
 
     // --- Guest 1: seated desktop (compositor on classic vrend), snapshot-armed ---
     let cfg1 = devices(base_cfg.clone())
@@ -291,7 +293,7 @@ fn classic_vrend_world_survives_snapshot_restore() {
     // gnome-shell, one blank window when it is an app. Whether a journal grows such an
     // entry is chance (an 11-minute soak did, a 2-minute one did not), so the gate below
     // is only honest with the lever forcing it.
-    std::env::set_var("LIMINA_REPLAY_POISON", "1");
+    unsafe { std::env::set_var("LIMINA_REPLAY_POISON", "1") };
     let mut cfg2 = devices(base_cfg.clone())
         .with_coexist_display(1280, 800)
         .with_net()

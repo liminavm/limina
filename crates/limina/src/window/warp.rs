@@ -44,7 +44,7 @@ use super::hostdisplay;
 use super::input::HostCursor;
 
 // `connected` is a `boolean_t` (C `int`); 0 = decoupled (captured), 1 = normal.
-extern "C" {
+unsafe extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
     fn CGWarpMouseCursorPosition(point: NSPoint) -> i32;
     fn CGMainDisplayID() -> u32;

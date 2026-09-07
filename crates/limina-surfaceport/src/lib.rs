@@ -107,7 +107,7 @@ struct RecvMsg {
     trailer: [u8; 72],
 }
 
-extern "C" {
+unsafe extern "C" {
     static bootstrap_port: mach_port_t;
     fn bootstrap_register(bp: mach_port_t, name: *const c_char, sp: mach_port_t) -> i32;
     fn bootstrap_look_up(bp: mach_port_t, name: *const c_char, sp: *mut mach_port_t) -> i32;

@@ -416,7 +416,7 @@ pub fn empty_surface_map() -> SurfaceMap {
 // services; it calls the frame-apply hook `run()` registers.
 #[allow(non_camel_case_types)]
 type dispatch_queue_t = *mut std::ffi::c_void;
-extern "C" {
+unsafe extern "C" {
     static _dispatch_main_q: std::ffi::c_void;
     fn dispatch_async_f(
         queue: dispatch_queue_t,
@@ -462,8 +462,8 @@ pub struct SlotPresent {
     pub(crate) width: u32,
     pub(crate) height: u32,
     /// Bumped on any update (new surface geometry or a new frame) — the timer re-applies.
-    pub(crate) gen: u64,
-    /// Count of *presented frames* (`frame` messages), as opposed to `gen`, which also bumps
+    pub(crate) generation: u64,
+    /// Count of *presented frames* (`frame` messages), as opposed to `generation`, which also bumps
     /// on surface geometry. The restore overlay comes down on the first real frame, not on
     /// the fresh worker's surface announcement (which would flash black under the spinner).
     pub(crate) frames: u64,
@@ -526,7 +526,7 @@ pub struct CursorState {
     pub(crate) pos_x: i32,
     pub(crate) pos_y: i32,
     /// Bumped on any shape/visibility change — the timer re-applies.
-    pub(crate) gen: u64,
+    pub(crate) generation: u64,
     /// Who last changed the flags above ([`CursorLog`]).
     pub(crate) log: CursorLog,
 }
@@ -671,7 +671,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                         slot.width = w;
                         slot.height = h;
                         slot.cursor.log.record("scanout", w);
-                        slot.gen += 1;
+                        slot.generation += 1;
                         drop(s);
                         wake_main_apply();
                     }
@@ -684,7 +684,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                         let mut s = shared.lock().unwrap();
                         let slot = &mut s.slots[slot];
                         slot.show_id = Some(id);
-                        slot.gen += 1;
+                        slot.generation += 1;
                         slot.frames += 1;
                         drop(s);
                         wake_main_apply();
@@ -699,7 +699,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                         slot.show_id = None;
                         slot.width = 0;
                         slot.height = 0;
-                        slot.gen += 1;
+                        slot.generation += 1;
                         slot.cursor.log.record("scanoutgone", 0);
                         drop(s);
                         wake_main_apply();
@@ -749,7 +749,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                         c.hot_x = hx;
                         c.hot_y = hy;
                         c.visible = true;
-                        c.gen += 1;
+                        c.generation += 1;
                         c.log.record("shape", id);
                         // Protect the surface for as long as it is the shape being worn: the
                         // guest may not change cursor again for minutes, and this is the only
@@ -797,7 +797,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                         let mut s = shared.lock().unwrap();
                         let c = &mut s.slots[slot].cursor;
                         c.visible = false;
-                        c.gen += 1;
+                        c.generation += 1;
                         c.log.record("hide", 0);
                         publish_echo(&s, slot);
                         drop(s);

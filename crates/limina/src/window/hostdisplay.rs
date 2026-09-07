@@ -24,7 +24,7 @@ use objc2_foundation::{NSNumber, NSPoint, NSRect, NSString};
 
 // CoreGraphics (already linked): the arrangement queries the pointer assertions are judged
 // against. Points are CG global (top-left origin of the main display).
-extern "C" {
+unsafe extern "C" {
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> NSRect;
     fn CGGetActiveDisplayList(max_displays: u32, displays: *mut u32, count: *mut u32) -> i32;
@@ -711,7 +711,7 @@ struct CGSize {
     height: f64,
 }
 
-extern "C" {
+unsafe extern "C" {
     /// Physical size of the display in millimetres; (0, 0) when unknown.
     fn CGDisplayScreenSize(display: u32) -> CGSize;
     /// The panel's own EDID vendor / model / serial, hence stable across reboots.

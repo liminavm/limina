@@ -178,7 +178,7 @@ mod tests {
     fn snapshot_lists_vms_and_tolerates_broken_bundles() {
         let _guard = crate::vmlib::bundle::tests::env_lock();
         let lib = crate::vmlib::bundle::tests::scratch_library("model");
-        std::env::set_var("LIMINA_VM_LIBRARY", &lib);
+        unsafe { std::env::set_var("LIMINA_VM_LIBRARY", &lib) };
 
         let src = lib.join("img.raw");
         std::fs::write(&src, vec![0u8; 2 * 1024 * 1024]).unwrap();
@@ -214,7 +214,7 @@ mod tests {
         assert!(trash.broken);
         assert!(trash.summary.starts_with("broken:"), "{}", trash.summary);
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -224,7 +224,7 @@ mod tests {
     fn a_vm_whose_disk_is_gone_reports_why_it_cannot_start() {
         let _guard = crate::vmlib::bundle::tests::env_lock();
         let lib = crate::vmlib::bundle::tests::scratch_library("blocked");
-        std::env::set_var("LIMINA_VM_LIBRARY", &lib);
+        unsafe { std::env::set_var("LIMINA_VM_LIBRARY", &lib) };
 
         let src = lib.join("img.raw");
         std::fs::write(&src, vec![0u8; 2 * 1024 * 1024]).unwrap();
@@ -237,7 +237,7 @@ mod tests {
         // only thing that can block is the definition itself.
         let gvproxy = lib.join("gvproxy");
         std::fs::write(&gvproxy, b"").unwrap();
-        std::env::set_var("LIMINA_GVPROXY_BIN", &gvproxy);
+        unsafe { std::env::set_var("LIMINA_GVPROXY_BIN", &gvproxy) };
         let firmware = lib.join("firmware.fd");
         std::fs::write(&firmware, b"").unwrap();
         let mut cfg = bundle.load().unwrap();
@@ -258,8 +258,8 @@ mod tests {
             .expect("the row must say why Start is unavailable");
         assert!(why.contains("not found"), "{why}");
 
-        std::env::remove_var("LIMINA_GVPROXY_BIN");
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_GVPROXY_BIN") };
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 

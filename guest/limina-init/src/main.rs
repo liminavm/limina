@@ -474,109 +474,111 @@ fn run_console_shell() {
 /// (0 = ok, 127 = unknown). Deliberately tiny — enough to read real guest state (files,
 /// kernel identity) over the console so tests can assert on it without a real shell binary.
 unsafe fn run_builtin(fd: libc::c_int, cmd: &str) -> i32 {
-    let mut parts = cmd.split_whitespace();
-    let Some(prog) = parts.next() else {
-        return 0;
-    };
-    match prog {
-        // echo the rest of the line back verbatim (the simplest round-trip).
-        "echo" => {
-            let rest = cmd.strip_prefix("echo").unwrap_or("").trim_start();
-            write_all(fd, rest.as_bytes());
-            write_all(fd, b"\n");
-            0
-        }
-        // cat a guest file (e.g. /proc/cmdline, /proc/meminfo) — reads real guest state.
-        "cat" => match parts.next() {
-            Some(path) => match std::fs::read(path) {
-                Ok(bytes) => {
-                    write_all(fd, &bytes);
-                    if !bytes.ends_with(b"\n") {
-                        write_all(fd, b"\n");
-                    }
-                    0
-                }
-                Err(_) => {
-                    write_all(fd, format!("cat: {path}: cannot read\n").as_bytes());
-                    1
-                }
-            },
-            None => {
-                write_all(fd, b"cat: missing path\n");
-                1
-            }
-        },
-        // xxd a guest file as one line of lowercase hex. `cat` is useless for binary sysfs
-        // attributes — the EDID blob is full of control bytes (and 0x0A, which the console
-        // protocol delimits on), so it has to be escaped to survive the serial line.
-        "xxd" => match parts.next() {
-            Some(path) => match std::fs::read(path) {
-                Ok(bytes) => {
-                    let mut hex = String::with_capacity(bytes.len() * 2 + 1);
-                    for byte in &bytes {
-                        hex.push_str(&format!("{byte:02x}"));
-                    }
-                    hex.push('\n');
-                    write_all(fd, hex.as_bytes());
-                    0
-                }
-                Err(_) => {
-                    write_all(fd, format!("xxd: {path}: cannot read\n").as_bytes());
-                    1
-                }
-            },
-            None => {
-                write_all(fd, b"xxd: missing path\n");
-                1
-            }
-        },
-        // ls a directory (names only, newline-separated) — lets tests discover dynamic sysfs
-        // paths (e.g. the virtio-gpu DRM connector under /sys/class/drm) without a shell binary.
-        "ls" => match parts.next() {
-            Some(path) => match std::fs::read_dir(path) {
-                Ok(entries) => {
-                    for entry in entries.flatten() {
-                        write_all(fd, entry.file_name().as_encoded_bytes());
-                        write_all(fd, b"\n");
-                    }
-                    0
-                }
-                Err(_) => {
-                    write_all(fd, format!("ls: {path}: cannot read\n").as_bytes());
-                    1
-                }
-            },
-            None => {
-                write_all(fd, b"ls: missing path\n");
-                1
-            }
-        },
-        // uname(2): a syscall, not a file — proves the guest acts on the command.
-        "uname" => {
-            let mut u: libc::utsname = std::mem::zeroed();
-            if libc::uname(&mut u) == 0 {
-                let sys = cstr_to_string(u.sysname.as_ptr());
-                let rel = cstr_to_string(u.release.as_ptr());
-                write_all(fd, format!("{sys} {rel}\n").as_bytes());
+    unsafe {
+        let mut parts = cmd.split_whitespace();
+        let Some(prog) = parts.next() else {
+            return 0;
+        };
+        match prog {
+            // echo the rest of the line back verbatim (the simplest round-trip).
+            "echo" => {
+                let rest = cmd.strip_prefix("echo").unwrap_or("").trim_start();
+                write_all(fd, rest.as_bytes());
+                write_all(fd, b"\n");
                 0
-            } else {
-                write_all(fd, b"uname: failed\n");
-                1
             }
-        }
-        other => {
-            write_all(
-                fd,
-                format!("limina-shell: unknown command: {other}\n").as_bytes(),
-            );
-            127
+            // cat a guest file (e.g. /proc/cmdline, /proc/meminfo) — reads real guest state.
+            "cat" => match parts.next() {
+                Some(path) => match std::fs::read(path) {
+                    Ok(bytes) => {
+                        write_all(fd, &bytes);
+                        if !bytes.ends_with(b"\n") {
+                            write_all(fd, b"\n");
+                        }
+                        0
+                    }
+                    Err(_) => {
+                        write_all(fd, format!("cat: {path}: cannot read\n").as_bytes());
+                        1
+                    }
+                },
+                None => {
+                    write_all(fd, b"cat: missing path\n");
+                    1
+                }
+            },
+            // xxd a guest file as one line of lowercase hex. `cat` is useless for binary sysfs
+            // attributes — the EDID blob is full of control bytes (and 0x0A, which the console
+            // protocol delimits on), so it has to be escaped to survive the serial line.
+            "xxd" => match parts.next() {
+                Some(path) => match std::fs::read(path) {
+                    Ok(bytes) => {
+                        let mut hex = String::with_capacity(bytes.len() * 2 + 1);
+                        for byte in &bytes {
+                            hex.push_str(&format!("{byte:02x}"));
+                        }
+                        hex.push('\n');
+                        write_all(fd, hex.as_bytes());
+                        0
+                    }
+                    Err(_) => {
+                        write_all(fd, format!("xxd: {path}: cannot read\n").as_bytes());
+                        1
+                    }
+                },
+                None => {
+                    write_all(fd, b"xxd: missing path\n");
+                    1
+                }
+            },
+            // ls a directory (names only, newline-separated) — lets tests discover dynamic sysfs
+            // paths (e.g. the virtio-gpu DRM connector under /sys/class/drm) without a shell binary.
+            "ls" => match parts.next() {
+                Some(path) => match std::fs::read_dir(path) {
+                    Ok(entries) => {
+                        for entry in entries.flatten() {
+                            write_all(fd, entry.file_name().as_encoded_bytes());
+                            write_all(fd, b"\n");
+                        }
+                        0
+                    }
+                    Err(_) => {
+                        write_all(fd, format!("ls: {path}: cannot read\n").as_bytes());
+                        1
+                    }
+                },
+                None => {
+                    write_all(fd, b"ls: missing path\n");
+                    1
+                }
+            },
+            // uname(2): a syscall, not a file — proves the guest acts on the command.
+            "uname" => {
+                let mut u: libc::utsname = std::mem::zeroed();
+                if libc::uname(&mut u) == 0 {
+                    let sys = cstr_to_string(u.sysname.as_ptr());
+                    let rel = cstr_to_string(u.release.as_ptr());
+                    write_all(fd, format!("{sys} {rel}\n").as_bytes());
+                    0
+                } else {
+                    write_all(fd, b"uname: failed\n");
+                    1
+                }
+            }
+            other => {
+                write_all(
+                    fd,
+                    format!("limina-shell: unknown command: {other}\n").as_bytes(),
+                );
+                127
+            }
         }
     }
 }
 
 /// Render a NUL-terminated C char array (e.g. a `utsname` field) as a String.
 unsafe fn cstr_to_string(ptr: *const libc::c_char) -> String {
-    CStr::from_ptr(ptr).to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() }
 }
 
 // --- framebuffer test pattern (M2 display oracle) ---------------------------------
@@ -665,8 +667,10 @@ impl Fb {
     /// virtio-gpu fbdev, mmap writes alone don't issue a RESOURCE_FLUSH; FBIOPUT_VSCREENINFO
     /// (set_par) does. (FBIOPAN_DISPLAY is a no-op here — single-buffered — but harmless.)
     unsafe fn flush(&mut self) {
-        libc::ioctl(self.fd, FBIOPAN_DISPLAY, &mut self.var);
-        libc::ioctl(self.fd, FBIOPUT_VSCREENINFO, &mut self.var);
+        unsafe {
+            libc::ioctl(self.fd, FBIOPAN_DISPLAY, &mut self.var);
+            libc::ioctl(self.fd, FBIOPUT_VSCREENINFO, &mut self.var);
+        }
     }
 }
 
@@ -1526,102 +1530,104 @@ fn run_blob_probe() {
 /// success (the mapping is released, the bo — and its drm_mm window node — stays alive so a
 /// later blob packs after it).
 unsafe fn probe_one_blob(fd: libc::c_int, blob_id: u64, size: u64, tag: &str) -> Option<u32> {
-    // EXECBUFFER: VIRGL_CCMD_PIPE_RESOURCE_CREATE(48), len 11 dwords — an untyped
-    // PIPE_BUFFER (target 0, format R8_UNORM=64, bind VERTEX_BUFFER=1<<4), flags
-    // MAP_PERSISTENT|MAP_COHERENT (1<<1 | 1<<2) so vrend gives it persistently mappable
-    // glBufferStorage storage, tagged for the CREATE_BLOB below.
-    let cmds: [u32; 12] = [
-        48 | (11 << 16),     // VIRGL_CMD0(PIPE_RESOURCE_CREATE, 0, 11)
-        0,                   // target = PIPE_BUFFER
-        64,                  // format = VIRGL_FORMAT_R8_UNORM
-        1 << 4,              // bind = VIRGL_BIND_VERTEX_BUFFER
-        size as u32,         // width = size in bytes
-        1,                   // height
-        1,                   // depth
-        1,                   // array_size
-        0,                   // last_level
-        0,                   // nr_samples
-        (1 << 1) | (1 << 2), // flags = MAP_PERSISTENT | MAP_COHERENT
-        blob_id as u32,      // blob_id
-    ];
-    let exec = VirtgpuExecbuffer {
-        flags: 0,
-        size: (cmds.len() * 4) as u32,
-        command: cmds.as_ptr() as u64,
-        bo_handles: 0,
-        num_bo_handles: 0,
-        fence_fd: 0,
-        ring_idx: 0,
-        syncobj_stride: 0,
-        num_in_syncobjs: 0,
-        num_out_syncobjs: 0,
-        in_syncobjs: 0,
-        out_syncobjs: 0,
-    };
-    let ok = libc::ioctl(fd, drm_iowr(0x42, 64), &exec) == 0;
-    blob_result(&format!("{tag}_execbuffer"), ok);
-    if !ok {
-        return None;
-    }
+    unsafe {
+        // EXECBUFFER: VIRGL_CCMD_PIPE_RESOURCE_CREATE(48), len 11 dwords — an untyped
+        // PIPE_BUFFER (target 0, format R8_UNORM=64, bind VERTEX_BUFFER=1<<4), flags
+        // MAP_PERSISTENT|MAP_COHERENT (1<<1 | 1<<2) so vrend gives it persistently mappable
+        // glBufferStorage storage, tagged for the CREATE_BLOB below.
+        let cmds: [u32; 12] = [
+            48 | (11 << 16),     // VIRGL_CMD0(PIPE_RESOURCE_CREATE, 0, 11)
+            0,                   // target = PIPE_BUFFER
+            64,                  // format = VIRGL_FORMAT_R8_UNORM
+            1 << 4,              // bind = VIRGL_BIND_VERTEX_BUFFER
+            size as u32,         // width = size in bytes
+            1,                   // height
+            1,                   // depth
+            1,                   // array_size
+            0,                   // last_level
+            0,                   // nr_samples
+            (1 << 1) | (1 << 2), // flags = MAP_PERSISTENT | MAP_COHERENT
+            blob_id as u32,      // blob_id
+        ];
+        let exec = VirtgpuExecbuffer {
+            flags: 0,
+            size: (cmds.len() * 4) as u32,
+            command: cmds.as_ptr() as u64,
+            bo_handles: 0,
+            num_bo_handles: 0,
+            fence_fd: 0,
+            ring_idx: 0,
+            syncobj_stride: 0,
+            num_in_syncobjs: 0,
+            num_out_syncobjs: 0,
+            in_syncobjs: 0,
+            out_syncobjs: 0,
+        };
+        let ok = libc::ioctl(fd, drm_iowr(0x42, 64), &exec) == 0;
+        blob_result(&format!("{tag}_execbuffer"), ok);
+        if !ok {
+            return None;
+        }
 
-    // RESOURCE_CREATE_BLOB: HOST3D (2) + USE_MAPPABLE (1), referencing the blob_id. The
-    // kernel maps the vram bo into the host-visible window right here (the host-side
-    // MAP_BLOB → hv_vm_map), but records failure asynchronously — mmap below is where a
-    // host-side failure surfaces (map_state != OK → EINVAL).
-    let mut blob = VirtgpuResourceCreateBlob {
-        blob_mem: 2,
-        blob_flags: 1,
-        bo_handle: 0,
-        res_handle: 0,
-        size,
-        pad: 0,
-        cmd_size: 0,
-        cmd: 0,
-        blob_id,
-    };
-    let ok = libc::ioctl(fd, drm_iowr(0x4a, 48), &mut blob) == 0;
-    blob_result(&format!("{tag}_create"), ok);
-    if !ok {
-        return None;
-    }
+        // RESOURCE_CREATE_BLOB: HOST3D (2) + USE_MAPPABLE (1), referencing the blob_id. The
+        // kernel maps the vram bo into the host-visible window right here (the host-side
+        // MAP_BLOB → hv_vm_map), but records failure asynchronously — mmap below is where a
+        // host-side failure surfaces (map_state != OK → EINVAL).
+        let mut blob = VirtgpuResourceCreateBlob {
+            blob_mem: 2,
+            blob_flags: 1,
+            bo_handle: 0,
+            res_handle: 0,
+            size,
+            pad: 0,
+            cmd_size: 0,
+            cmd: 0,
+            blob_id,
+        };
+        let ok = libc::ioctl(fd, drm_iowr(0x4a, 48), &mut blob) == 0;
+        blob_result(&format!("{tag}_create"), ok);
+        if !ok {
+            return None;
+        }
 
-    // The DRM mmap fake offset for the bo.
-    let mut map = VirtgpuMap {
-        offset: 0,
-        handle: blob.bo_handle,
-        pad: 0,
-    };
-    let ok = libc::ioctl(fd, drm_iowr(0x41, 16), &mut map) == 0;
-    blob_result(&format!("{tag}_map_offset"), ok);
-    if !ok {
-        return Some(blob.bo_handle);
-    }
+        // The DRM mmap fake offset for the bo.
+        let mut map = VirtgpuMap {
+            offset: 0,
+            handle: blob.bo_handle,
+            pad: 0,
+        };
+        let ok = libc::ioctl(fd, drm_iowr(0x41, 16), &mut map) == 0;
+        blob_result(&format!("{tag}_map_offset"), ok);
+        if !ok {
+            return Some(blob.bo_handle);
+        }
 
-    // THE ASSERTION: mmap succeeds only if the host hv_vm_map'ed the blob into the shm
-    // window. EINVAL = the host rejected the mapping (misaligned size pre-libkrun-0043,
-    // misaligned window offset pre-guest-alignment).
-    let ptr = libc::mmap(
-        std::ptr::null_mut(),
-        size as usize,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_SHARED,
-        fd,
-        map.offset as libc::off_t,
-    );
-    let mapped = ptr != libc::MAP_FAILED;
-    blob_result(&format!("{tag}_map"), mapped);
+        // THE ASSERTION: mmap succeeds only if the host hv_vm_map'ed the blob into the shm
+        // window. EINVAL = the host rejected the mapping (misaligned size pre-libkrun-0043,
+        // misaligned window offset pre-guest-alignment).
+        let ptr = libc::mmap(
+            std::ptr::null_mut(),
+            size as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            map.offset as libc::off_t,
+        );
+        let mapped = ptr != libc::MAP_FAILED;
+        blob_result(&format!("{tag}_map"), mapped);
 
-    if mapped {
-        // Prove the pages are live host memory end to end: write + read back through the
-        // mapping, including the last byte of the tail page.
-        let base = ptr as *mut u8;
-        *base = 0xa5;
-        *base.add((size - 1) as usize) = 0x5a;
-        let rw = *base == 0xa5 && *base.add((size - 1) as usize) == 0x5a;
-        blob_result(&format!("{tag}_rw"), rw);
-        libc::munmap(ptr, size as usize);
+        if mapped {
+            // Prove the pages are live host memory end to end: write + read back through the
+            // mapping, including the last byte of the tail page.
+            let base = ptr as *mut u8;
+            *base = 0xa5;
+            *base.add((size - 1) as usize) = 0x5a;
+            let rw = *base == 0xa5 && *base.add((size - 1) as usize) == 0x5a;
+            blob_result(&format!("{tag}_rw"), rw);
+            libc::munmap(ptr, size as usize);
+        }
+        Some(blob.bo_handle)
     }
-    Some(blob.bo_handle)
 }
 
 /// Write the whole buffer to a raw fd, returning false on any error. Used by the USB/IP client
@@ -1658,30 +1664,36 @@ fn klog(msg: &[u8]) {
 }
 
 unsafe fn sleep_ms(ms: i64) {
-    let ts = libc::timespec {
-        tv_sec: ms / 1000,
-        tv_nsec: (ms % 1000) * 1_000_000,
-    };
-    libc::nanosleep(&ts, std::ptr::null_mut());
+    unsafe {
+        let ts = libc::timespec {
+            tv_sec: ms / 1000,
+            tv_nsec: (ms % 1000) * 1_000_000,
+        };
+        libc::nanosleep(&ts, std::ptr::null_mut());
+    }
 }
 
 /// Open `path` write-only and write `buf`, ignoring any failure.
 unsafe fn write_to(path: &CStr, buf: &[u8]) {
-    let fd = libc::open(path.as_ptr(), libc::O_WRONLY);
-    if fd >= 0 {
-        write_all(fd, buf);
-        libc::close(fd);
+    unsafe {
+        let fd = libc::open(path.as_ptr(), libc::O_WRONLY);
+        if fd >= 0 {
+            write_all(fd, buf);
+            libc::close(fd);
+        }
     }
 }
 
 /// Write the whole buffer, ignoring partial writes/errors (best-effort, never panics).
 unsafe fn write_all(fd: libc::c_int, mut buf: &[u8]) {
-    while !buf.is_empty() {
-        let n = libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len());
-        if n <= 0 {
-            break;
+    unsafe {
+        while !buf.is_empty() {
+            let n = libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len());
+            if n <= 0 {
+                break;
+            }
+            buf = &buf[n as usize..];
         }
-        buf = &buf[n as usize..];
     }
 }
 

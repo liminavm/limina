@@ -130,7 +130,7 @@ struct SlotSnapshot {
     show_id: Option<u32>,
     width: u32,
     height: u32,
-    gen: u64,
+    generation: u64,
 }
 
 /// What this tick does with one slot's secondary window, after the dismissal pass has closed
@@ -183,7 +183,7 @@ pub(crate) struct PrimaryDisplay {
     /// Which pool slot this window presents. Shared: the control plane assigns it per tick,
     /// the input path projects events through it.
     slot: Rc<Cell<u32>>,
-    /// Last applied `gen`, so an unchanged slot costs nothing per tick.
+    /// Last applied `generation`, so an unchanged slot costs nothing per tick.
     last_gen: Cell<u64>,
     /// Last applied guest geometry. Shared with the control plane, whose pushes gate on
     /// "the guest has presented" (`geom != (0, 0)`).
@@ -538,13 +538,13 @@ impl PrimaryDisplay {
             show_id,
             width,
             height,
-            gen,
+            generation,
             ..
         } = *snap;
-        if gen == self.last_gen.get() {
+        if generation == self.last_gen.get() {
             return;
         }
-        self.last_gen.set(gen);
+        self.last_gen.set(generation);
 
         // Gate order is the primary's own: `show_id` BEFORE the modeset follow (a secondary
         // follows geometry first and gates on `show_id` after). Deliberate until proven
@@ -681,7 +681,7 @@ impl PrimaryDisplay {
 /// secondary-only state (cover styling, panel homing, per-slot frame gating).
 struct SecondaryWindow {
     core: super::guestwindow::GuestWindow,
-    /// Last applied `gen`, so an unchanged slot costs nothing per tick.
+    /// Last applied `generation`, so an unchanged slot costs nothing per tick.
     last_gen: u64,
     /// Last applied guest geometry, so the window is resized only on a real modeset.
     geom: (u32, u32),
@@ -797,7 +797,7 @@ impl GuestWindows {
                         show_id: d.show_id,
                         width: d.width,
                         height: d.height,
-                        gen: d.gen,
+                        generation: d.generation,
                     }
                 })
                 .collect();
@@ -860,7 +860,7 @@ impl GuestWindows {
             show_id,
             width,
             height,
-            gen,
+            generation,
         } in slots
         {
             // The primary's slot already had its walk above; it gets no secondary window.
@@ -911,10 +911,10 @@ impl GuestWindows {
             // the user can change the box under us with no modeset anywhere. One refit is the
             // answer to all of them.
             entry.refit(mode);
-            if entry.last_gen == gen {
+            if entry.last_gen == generation {
                 continue;
             }
-            entry.last_gen = gen;
+            entry.last_gen = generation;
             if fate == Fate::Dark {
                 // The ring the guest just disabled is gone, and its ids are free to be reused
                 // for something unrelated — so nothing cached may outlive it. The layer keeps

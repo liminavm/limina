@@ -1509,7 +1509,7 @@ fn display_index(resolution: vmlib::schema::DisplayResolution) -> isize {
 /// own mode list is the natural menu.
 fn mac_display_points() -> Vec<(u32, u32)> {
     use std::ffi::c_void;
-    extern "C" {
+    unsafe extern "C" {
         fn CGMainDisplayID() -> u32;
         fn CGDisplayCopyAllDisplayModes(display: u32, options: *const c_void) -> *mut c_void;
         fn CFArrayGetCount(array: *const c_void) -> isize;
@@ -1551,7 +1551,7 @@ fn mac_display_points() -> Vec<(u32, u32)> {
 
 /// The main display's current point size (what Match Host would drive the guest to).
 fn main_screen_points() -> (u32, u32) {
-    extern "C" {
+    unsafe extern "C" {
         fn CGMainDisplayID() -> u32;
         fn CGDisplayBounds(display: u32) -> NSRect;
     }

@@ -11,7 +11,7 @@ use anyhow::{bail, Result};
 
 // C ABI from fido_sep.swift. Each returns a byte count written to `out`, or a
 // negative error (-1 access-control, -2 buffer too small, -3 enclave/CryptoKit).
-extern "C" {
+unsafe extern "C" {
     fn limina_sep_available() -> i32;
     fn limina_sep_has_touchid() -> i32;
     fn limina_sep_verify(token: u64, reason: *const std::os::raw::c_char) -> i32;

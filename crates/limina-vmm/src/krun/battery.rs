@@ -25,7 +25,7 @@ type CFTypeRef = *const c_void;
 type CFIndex = isize;
 
 #[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CFRelease(cf: CFTypeRef);
     fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
     fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: CFIndex) -> CFTypeRef;
@@ -47,7 +47,7 @@ extern "C" {
 }
 
 #[link(name = "IOKit", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn IOPSCopyPowerSourcesInfo() -> CFTypeRef;
     fn IOPSCopyPowerSourcesList(blob: CFTypeRef) -> CFTypeRef;
     fn IOPSGetPowerSourceDescription(blob: CFTypeRef, ps: CFTypeRef) -> CFTypeRef;
@@ -78,46 +78,52 @@ impl Drop for CfString {
 
 /// `dict[key]` as i32, if present and numeric.
 unsafe fn dict_i32(dict: CFTypeRef, key: &str) -> Option<i32> {
-    let key = CfString::new(key);
-    let value = CFDictionaryGetValue(dict, key.0);
-    if value.is_null() {
-        return None;
+    unsafe {
+        let key = CfString::new(key);
+        let value = CFDictionaryGetValue(dict, key.0);
+        if value.is_null() {
+            return None;
+        }
+        let mut out: i32 = 0;
+        CFNumberGetValue(
+            value,
+            K_CF_NUMBER_SINT32_TYPE,
+            &mut out as *mut i32 as *mut c_void,
+        )
+        .then_some(out)
     }
-    let mut out: i32 = 0;
-    CFNumberGetValue(
-        value,
-        K_CF_NUMBER_SINT32_TYPE,
-        &mut out as *mut i32 as *mut c_void,
-    )
-    .then_some(out)
 }
 
 /// `dict[key]` as bool, if present.
 unsafe fn dict_bool(dict: CFTypeRef, key: &str) -> Option<bool> {
-    let key = CfString::new(key);
-    let value = CFDictionaryGetValue(dict, key.0);
-    (!value.is_null()).then(|| CFBooleanGetValue(value))
+    unsafe {
+        let key = CfString::new(key);
+        let value = CFDictionaryGetValue(dict, key.0);
+        (!value.is_null()).then(|| CFBooleanGetValue(value))
+    }
 }
 
 /// `dict[key]` as an owned Rust string, if present.
 unsafe fn dict_string(dict: CFTypeRef, key: &str) -> Option<String> {
-    let key = CfString::new(key);
-    let value = CFDictionaryGetValue(dict, key.0);
-    if value.is_null() {
-        return None;
+    unsafe {
+        let key = CfString::new(key);
+        let value = CFDictionaryGetValue(dict, key.0);
+        if value.is_null() {
+            return None;
+        }
+        let direct = CFStringGetCStringPtr(value, K_CF_STRING_ENCODING_UTF8);
+        if !direct.is_null() {
+            return Some(CStr::from_ptr(direct).to_string_lossy().into_owned());
+        }
+        let mut buf = [0 as c_char; 128];
+        CFStringGetCString(
+            value,
+            buf.as_mut_ptr(),
+            buf.len() as CFIndex,
+            K_CF_STRING_ENCODING_UTF8,
+        )
+        .then(|| CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned())
     }
-    let direct = CFStringGetCStringPtr(value, K_CF_STRING_ENCODING_UTF8);
-    if !direct.is_null() {
-        return Some(CStr::from_ptr(direct).to_string_lossy().into_owned());
-    }
-    let mut buf = [0 as c_char; 128];
-    CFStringGetCString(
-        value,
-        buf.as_mut_ptr(),
-        buf.len() as CFIndex,
-        K_CF_STRING_ENCODING_UTF8,
-    )
-    .then(|| CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned())
 }
 
 /// Snapshot the first internal battery via IOKit. `None` = no battery (desktop).

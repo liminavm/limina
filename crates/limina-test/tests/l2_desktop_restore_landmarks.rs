@@ -238,7 +238,7 @@ fn seated_gpu_workload_survives_restore_unchanged() {
             .with_supervisor_arg("--no-battery")
             .with_net_mac(NET_MAC)
     };
-    std::env::set_var("LIMINA_BRACKET_NO_BUTTON", "1");
+    unsafe { std::env::set_var("LIMINA_BRACKET_NO_BUTTON", "1") };
 
     // --- Guest 1: seated desktop with the workload, snapshot-armed ---
     let cfg1 = devices(base_cfg.clone())

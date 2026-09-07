@@ -121,7 +121,7 @@ mod ffi {
     );
 
     #[link(name = "IOKit", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         pub fn IORegisterForSystemPower(
             refcon: *mut c_void,
             the_port_ref: *mut IoNotificationPortRef,
@@ -135,7 +135,7 @@ mod ffi {
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         pub static kCFRunLoopDefaultMode: CfStringRef;
         pub fn CFRunLoopGetCurrent() -> CfRunLoopRef;
         pub fn CFRunLoopAddSource(rl: CfRunLoopRef, source: CfRunLoopSourceRef, mode: CfStringRef);

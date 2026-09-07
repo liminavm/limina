@@ -495,7 +495,7 @@ mod tests {
     /// A bundle whose disk exists, so each test can remove exactly the one thing it is about.
     fn startable(tag: &str) -> (PathBuf, VmBundle, VmConfig) {
         let lib = scratch_library(tag);
-        std::env::set_var("LIMINA_VM_LIBRARY", &lib);
+        unsafe { std::env::set_var("LIMINA_VM_LIBRARY", &lib) };
         let src = lib.join("seed.raw");
         std::fs::write(&src, vec![0u8; 1024]).unwrap();
         let mut opts = basic_opts("Probe");
@@ -530,7 +530,7 @@ mod tests {
         let (lib, bundle, cfg) = startable("pf-ok");
         let r = check(&bundle, &cfg, Depth::Cheap);
         assert!(config_blockers(&r).is_empty(), "{:?}", codes(&r));
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -551,7 +551,7 @@ mod tests {
         assert!(msg.contains(disk.to_str().unwrap()), "{msg}");
         assert!(msg.contains(":create=SIZE"), "{msg}");
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -577,7 +577,7 @@ mod tests {
         cfg.shares[0].path = target;
         assert!(config_blockers(&check(&bundle, &cfg, Depth::Cheap)).is_empty());
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -595,7 +595,7 @@ mod tests {
         assert!(config_blockers(&r).is_empty(), "{:?}", codes(&r));
         assert!(codes(&r).contains(&Code::CpusExceedHost));
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -606,7 +606,7 @@ mod tests {
         let dup = cfg.disks[0].clone();
         cfg.disks.push(dup);
         assert!(codes(&check(&bundle, &cfg, Depth::Cheap)).contains(&Code::ImageAttachedTwice));
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -636,7 +636,7 @@ mod tests {
         drop(held);
         assert!(!codes(&check(&bundle, &cfg, Depth::Full)).contains(&Code::DiskInUse));
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -654,7 +654,7 @@ mod tests {
         assert!(!bundle.run_dir().exists(), "pre-flight created run/");
         assert!(!bundle.logs_dir().exists(), "pre-flight created logs/");
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -674,7 +674,7 @@ mod tests {
         assert!(err.contains("vCPU"), "{err}");
         assert!(err.contains("not found"), "{err}");
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 }

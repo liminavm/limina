@@ -244,7 +244,7 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
     ) {
         let guard = PASTEBOARD_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("LIMINA_PASTEBOARD", pasteboard);
+        unsafe { std::env::set_var("LIMINA_PASTEBOARD", pasteboard) };
         let clipboard = Arc::new(Clipboard::new());
         let (host, guest) = crate::supervisor::socketpair(libc::SOCK_STREAM).unwrap();
         let agent = VdAgent::start(host, clipboard.clone()).unwrap();

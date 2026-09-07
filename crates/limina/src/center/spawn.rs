@@ -173,7 +173,7 @@ mod tests {
     fn a_blocked_vm_is_refused_without_spawning() {
         let _g = env_lock();
         let lib = scratch_library("spawn-blocked");
-        std::env::set_var("LIMINA_VM_LIBRARY", &lib);
+        unsafe { std::env::set_var("LIMINA_VM_LIBRARY", &lib) };
         let src = lib.join("seed.raw");
         std::fs::write(&src, vec![0u8; 1024]).unwrap();
         let mut opts = basic_opts("Blocked");
@@ -199,7 +199,7 @@ mod tests {
         );
         assert!(!runtime::status(&bundle).is_running());
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 
@@ -210,7 +210,7 @@ mod tests {
     fn opening_a_run_log_keeps_the_previous_boot() {
         let _g = env_lock();
         let lib = scratch_library("spawn-rotate");
-        std::env::set_var("LIMINA_VM_LIBRARY", &lib);
+        unsafe { std::env::set_var("LIMINA_VM_LIBRARY", &lib) };
         let bundle = create(&basic_opts("Rotate"), &lib).unwrap();
         std::fs::create_dir_all(bundle.logs_dir()).unwrap();
         std::fs::write(
@@ -231,7 +231,7 @@ mod tests {
             "the previous run must survive the start that follows it"
         );
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 

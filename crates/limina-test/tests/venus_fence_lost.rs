@@ -84,8 +84,8 @@ fn lost_context_fence_still_signals_its_sync_file() {
     // ring would mask the loss, so the poisoned one must be the LAST).
     let seam_file = std::env::temp_dir().join(format!("limina-fail-fence-{}", std::process::id()));
     let _ = std::fs::remove_file(&seam_file);
-    std::env::set_var("LIMINA_GPU_TEST_FAIL_FENCE_FILE", &seam_file);
-    std::env::set_var("LIMINA_GPU_TEST_TRACE_FENCES", "1");
+    unsafe { std::env::set_var("LIMINA_GPU_TEST_FAIL_FENCE_FILE", &seam_file) };
+    unsafe { std::env::set_var("LIMINA_GPU_TEST_TRACE_FENCES", "1") };
 
     eprintln!("booting the enhanced golden headless (fence-failure seam armed)");
     let mut g = Guest::boot(&cfg).expect("spawning the limina supervisor");

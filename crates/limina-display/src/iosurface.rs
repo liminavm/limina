@@ -732,11 +732,13 @@ fn create_scanout_iosurface(
 }
 
 unsafe fn cfnum(v: i32) -> Option<CFRetained<CFNumber>> {
-    CFNumber::new(
-        None,
-        CFNumberType::SInt32Type,
-        &v as *const i32 as *const c_void,
-    )
+    unsafe {
+        CFNumber::new(
+            None,
+            CFNumberType::SInt32Type,
+            &v as *const i32 as *const c_void,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -939,10 +941,12 @@ mod tests {
 
     // Read one BGRA pixel back out of a (locked) IOSurface.
     unsafe fn px(surface: &IOSurfaceRef, x: usize, y: usize) -> [u8; 4] {
-        let base = IOSurfaceGetBaseAddress(surface).as_ptr() as *const u8;
-        let stride = IOSurfaceGetBytesPerRow(surface);
-        let p = base.add(y * stride + x * 4);
-        [*p, *p.add(1), *p.add(2), *p.add(3)]
+        unsafe {
+            let base = IOSurfaceGetBaseAddress(surface).as_ptr() as *const u8;
+            let stride = IOSurfaceGetBytesPerRow(surface);
+            let p = base.add(y * stride + x * 4);
+            [*p, *p.add(1), *p.add(2), *p.add(3)]
+        }
     }
 
     /// A staging frame where pixel (x,y) is BGRX = [x, y, tag, 0].

@@ -1399,7 +1399,7 @@ mod tests {
     /// write out and drop the peer instead.
     #[test]
     fn wedged_peer_cannot_stall_request_shutdown() {
-        std::env::set_var("LIMINA_CONTROL_WRITE_TIMEOUT_MS", "200");
+        unsafe { std::env::set_var("LIMINA_CONTROL_WRITE_TIMEOUT_MS", "200") };
         let path =
             std::env::temp_dir().join(format!("limina-ctl-test-{}.sock", std::process::id()));
         let plane = ControlPlane::start(&path, None, None, None, false).unwrap();

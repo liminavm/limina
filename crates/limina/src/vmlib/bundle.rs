@@ -222,7 +222,7 @@ pub(crate) mod tests {
     fn resolve_finds_by_path_name_and_case() {
         let _guard = env_lock();
         let lib = scratch_library("resolve");
-        std::env::set_var("LIMINA_VM_LIBRARY", &lib);
+        unsafe { std::env::set_var("LIMINA_VM_LIBRARY", &lib) };
 
         let bundle = create(&basic_opts("Fedora"), &lib).unwrap();
 
@@ -240,7 +240,7 @@ pub(crate) mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].dir_name(), "Fedora");
 
-        std::env::remove_var("LIMINA_VM_LIBRARY");
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
 

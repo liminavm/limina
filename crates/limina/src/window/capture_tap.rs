@@ -64,7 +64,7 @@ type CGEventTapProxy = *mut c_void;
 type CGEventTapCallBack =
     extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef;
 
-extern "C" {
+unsafe extern "C" {
     fn CGEventTapCreate(
         tap: u32,
         place: u32,
@@ -104,7 +104,7 @@ extern "C" {
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     /// Returns whether the process is trusted for Accessibility; with
     /// `kAXTrustedCheckOptionPrompt = true` it ALSO raises the system prompt that registers the
     /// app in System Settings → Privacy & Security → Accessibility (TCC attributes the request

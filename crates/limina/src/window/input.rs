@@ -44,7 +44,7 @@ use limina_input::InputEvent;
 // primitives (`CGWarpMouseCursorPosition`, `CGAssociateMouseAndMouseCursorPosition`) are
 // private to [`super::warp`] — every warp goes through the broker, which is what makes its
 // obligation bundle (landing asserts, blank re-assert, suppression bookkeeping) unforgettable.
-extern "C" {
+unsafe extern "C" {
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> NSRect;
 }

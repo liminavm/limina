@@ -107,7 +107,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // Inherited by supervisor -> worker: this test suspends from INSIDE the guest, so
     // the bracket must not add a second (button) suspend trigger — see the bracket
     // comment below.
-    std::env::set_var("LIMINA_BRACKET_NO_BUTTON", "1");
+    unsafe { std::env::set_var("LIMINA_BRACKET_NO_BUTTON", "1") };
     eprintln!("booting the seated enhanced venus desktop (snapshot-armed)");
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     let banner = g1
