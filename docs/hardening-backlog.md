@@ -3070,12 +3070,24 @@ those, check the grow latency and the false-grow rate at each, and move the cons
 evidence — mindful of the balloon lesson that a controller tuned on one workload oscillates on the
 next.
 
-Two loose ends the desktop trace left. A residual ~3 grows/hour at 4+ online attribute to no guest
-signal at all and were not the host term either (the worker was at 0.42 cores); they are most
-likely real sub-second bursts the 2 s sampler smooths away, but that is inference, not a
-measurement. And the sampler samples at 2 s while the agent reports at 1 s, so no trace can confirm
-a threshold crossing exactly as the policy saw it — closing that needs the host's own
-`dynamic vCPUs:` log lines correlated against the trace, not a finer sampler.
+**The floor fix delivered, and what it left behind is the host term.** Measured on the dogfood
+desktop across the shipped change (traces in `spikes/vcpu-replug-trace/dogfood-2026-09-03..06/`),
+grows out of 2 online fell from **27.4/h** to **2.2/h** and then **0.8/h** — the acceptance the
+utilisation floor was written for. Nearly every survivor attributes to *no guest signal whatsoever*
+(81 of 90, then 14 of 14), and at the `moderate` floor several of them exclude the guest paths
+arithmetically: 0.12–0.18 cores busy on 2 online cannot hide the spike gate's 1.5 cores, the stall
+floor's 0.8, or `load1 >= 2`, and a profile floor rise would have held at 10 rather than shrinking
+back. By elimination that is the **host term** — the worker within 0.25 of a core of `online`,
+which at 2 online is a bar of 1.75 cores that the worker's *device* threads (the GPU renderer
+above all) can clear on their own while the guest is idle. The term measures the whole worker
+process on purpose, and near the floor that stops being a proxy for vCPU demand.
+
+Confirming it needs the host's own `dynamic vCPUs:` line, which prints `host {:.2} cores` — but it
+is `info!` and the shipped app runs at `warn`, so those lines do not exist in a dogfood run. The
+next round of evidence needs `RUST_LOG=limina=info` on the host *and* the guest sampler
+re-installed; the sampler was removed from the dogfood guest on 2026-09-06 once the acceptance
+landed. A 2 s sampler cannot close it alone in any case — the agent reports every 1 s, so no trace
+confirms a crossing exactly as the policy saw it.
 
 ## Nothing catches a KosmicKrisp sampler destroyed while submitted work still names it
 

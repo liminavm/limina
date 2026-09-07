@@ -11,7 +11,7 @@ perturb the `nr_running` it measures. One `key=value` line per sample into
 `/var/log/limina-vcpu-trace/vcpu-trace.<date>.log`, ~15 MB/day at 10 vCPUs. `analyze.py` reads it.
 
 It is a tuning aid, not a product: install it on a guest when the vCPU policy needs evidence,
-remove it when the tuning lands.
+remove it when the tuning lands. It is **not** installed on the dogfood guest.
 
 **Trap it exists to avoid.** `/proc/stat`'s aggregate `cpu` line sums only the CPUs online at the
 instant of the read, so it *drops* by an offlined CPU's whole accumulated history and jumps by an
@@ -40,6 +40,11 @@ CPUs. An absolute gate therefore gets more hair-triggered the better the shrink 
 worker was burning 0.42 cores; at 2 online it would need 1.75). The stall path now carries a
 utilisation floor of its own, lower than the spike gate because non-saturating loads are exactly
 what it exists for.
+
+**Both fixes held on the dogfood desktop.** Across the shipped change, grows out of 2 online went
+27.4/h → 2.2/h → 0.8/h (traces in `dogfood-2026-09-03..06/`). What survives attributes to no guest
+signal at all — see the vCPU entry in `docs/hardening-backlog.md` for why that points at the host
+term rather than at these thresholds.
 
 Neither threshold came from the other's evidence, and both were kept honest by a controlled rig —
 a seated F44 enhanced guest, `--cpu-reclaim moderate`, 6 vCPUs:
