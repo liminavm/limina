@@ -206,29 +206,13 @@ fn vendor(heavy: bool) -> Result<()> {
     // so the checkout is the build input directly — fork model (task #14).
     vendor_fork(&repo, "libkrun")?;
 
-    // virglrenderer: a from-source git checkout built into third_party/virgl-prefix (the worker
-    // links it — see the limina-virgl-link-trap memory). Clone if absent, then apply our series.
-    // virglrenderer: the host renderer for both accelerated tiers. Fork model —
-    // the `limina` branch IS the delta (60 commits at migration), so there is no patch series to
-    // apply. Built separately into `third_party/virgl-prefix` by `scripts/build-virglrenderer.sh`
-    // (the worker links it — see the virgl-link trap in CLAUDE.md).
-    vendor_fork(&repo, "virglrenderer")?;
-
-    // venus-protocol: since upstream 131e5a72 the generated protocol headers live in a
-    // meson subproject (a revision-pinned git wrap) instead of in-tree. Materialize it at
-    // vendor time so `scripts/build-virglrenderer.sh` needs no network; a pinned rev
-    // predating the wrap simply lacks the file and skips this.
-    let virgl = repo.join("third_party/virglrenderer");
-    if virgl.join("subprojects/venus-protocol.wrap").exists()
-        && !virgl.join("subprojects/venus-protocol-1.0").exists()
-    {
-        eprintln!("==> downloading the venus-protocol subproject (pinned wrap)");
-        run(Command::new("meson").current_dir(&virgl).args([
-            "subprojects",
-            "download",
-            "venus-protocol",
-        ]))?;
-    }
+    // virglrs: the host GPU renderer for both accelerated tiers, consumed by rutabaga as a Rust
+    // crate. It pins and materializes its own dependencies — the C virglrenderer it generates
+    // format tables from and records goldens against, and the venus-protocol the wire comes from
+    // — so limina pins virglrs and nothing underneath it.
+    vendor_fork(&repo, "virglrs")?;
+    eprintln!("==> vendoring virglrs's own dependencies");
+    run(Command::new("scripts/vendor.sh").current_dir(repo.join("third_party/virglrs")))?;
 
     // imago: the fork-model pilot ([patch.crates-io] path override; the tree is a clone of our
     // fork pinned by third_party/manifest.toml — no patch series, the `limina` branch IS the delta).
@@ -269,12 +253,11 @@ fn vendor_fork(repo: &Path, name: &str) -> Result<()> {
         }
         c.args([&m.repo, &format!("third_party/{name}")]);
         run(&mut c)?;
-        run(Command::new("git").current_dir(&dir).args([
-            "remote",
-            "add",
-            "upstream",
-            &m.upstream,
-        ]))?;
+        if let Some(upstream) = &m.upstream {
+            run(Command::new("git")
+                .current_dir(&dir)
+                .args(["remote", "add", "upstream", upstream]))?;
+        }
     }
     let has_rev = Command::new("git")
         .current_dir(&dir)
@@ -312,7 +295,9 @@ fn vendor_fork(repo: &Path, name: &str) -> Result<()> {
 
 struct ForkPin {
     repo: String,
-    upstream: String,
+    /// The project this is a fork of, added as a second remote. `None` for a repository that is
+    /// ours outright and forks nothing.
+    upstream: Option<String>,
     branch: String,
     rev: String,
     /// Multi-GB tree this host never builds: skipped by `vendor` unless `--heavy`, and cloned
@@ -341,7 +326,10 @@ fn manifest_entry(repo: &Path, name: &str) -> Result<ForkPin> {
     };
     Ok(ForkPin {
         repo: field("repo")?,
-        upstream: field("upstream")?,
+        upstream: entry
+            .get("upstream")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         branch: field("branch")?,
         rev: field("rev")?,
         heavy: entry

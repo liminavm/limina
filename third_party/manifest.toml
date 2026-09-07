@@ -69,12 +69,17 @@ branch = "limina-guest"
 rev = "c6fa43882d85fc99e4323ab672cae9f1eccc3532"
 base = "mesa-26.1.7"
 
-[virglrenderer]
-repo = "https://github.com/liminavm/virglrenderer.git"
-upstream = "https://gitlab.freedesktop.org/virgl/virglrenderer.git"
-branch = "limina"
-rev = "c59a10679c6b93f6c8d23d8e264c5aa3d748aec6"
-base = "f2945d3974256fefc731f0411c28b865680eebdc"
+# The host GPU renderer, consumed by rutabaga as a Rust crate — nothing here is loaded at
+# runtime any more, so this pin decides what the worker *is*, not what it finds. Ours outright,
+# so there is no `upstream` and no `base`: the branch is not a delta over anyone.
+#
+# It carries its own pin of the C virglrenderer (as a build input and as the harness's reference
+# leg) in its own third_party/manifest.toml, materialized by its scripts/vendor.sh. limina does
+# not pin the C any more: one owner, and this is not it.
+[virglrs]
+repo = "https://github.com/liminavm/virglrs.git"
+branch = "main"
+rev = "041b430ae47984c07d0e235aaa4d27be8273b06f"
 
 [linux]
 repo = "https://github.com/liminavm/linux.git"

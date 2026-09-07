@@ -545,7 +545,7 @@ per-script `dnf install` is gone and builds start instantly. Consumers: `build-k
 `build-mutter-rpm`, `build-kernel-rpm`, `build-test-kernel`, `build-mesa-zink`, `build-venus`,
 `build-gfxreconstruct`. Each still mounts its own persistent source/cache `container volume` (the image
 carries the toolchain; the volume carries source + incremental state). **Exceptions** (correctly NOT on
-this image): the macOS-native builds (`build-app`, `build-virglrenderer`, `build-hvf-trap-probe`,
+this image): the macOS-native builds (`build-app`, `build-hvf-trap-probe`,
 `build-test-guest`) emit Mach-O, not Linux; and `build-dbus-guest` stays on Alpine — it extracts a *musl*
 dbus for the musl L1 guest, which a glibc image can't produce. Requires Rosetta (Apple `container`'s
 BuildKit needs it); install once with `softwareupdate --install-rosetta --agree-to-license`.

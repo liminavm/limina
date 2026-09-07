@@ -6,7 +6,7 @@
 #
 # The host KosmicKrisp and zink-on-KK builds live on third_party/mesa-cs.sparseimage,
 # not in the repo. macOS drops the mount on reboot, which makes every consumer of
-# /Volumes/mesa-cs (build-app.sh, build-virglrenderer.sh, the venus tests, …) fail with
+# /Volumes/mesa-cs (build-app.sh, the venus tests, …) fail with
 # a missing-file error that looks like a lost build. Re-attach it instead.
 #
 # Source it (`. scripts/ensure-mesa-cs.sh`) or run it standalone; idempotent either way.

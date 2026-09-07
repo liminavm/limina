@@ -62,17 +62,16 @@ right tool — not treat upstream as immutable:
   fixed-capacity virtio-blk device across a reboot — see `spikes/m10-disk-durability/`), plus a
   vm-memory pin to the stack's ^0.17. To change imago: commit on the fork's `limina` branch, push,
   update the manifest rev. Audit status: `docs/upstreaming/ledger/imago.md`.
-- **virglrenderer** — **fork model** (migrated 2026-08-04): `third_party/virglrenderer` is a clone of
-  `github.com/liminavm/virglrenderer` (`limina` branch; upstream is
-  `gitlab.freedesktop.org/virgl/virglrenderer`), pinned by `third_party/manifest.toml`. **The branch
-  IS the delta — there is no `patches/virglrenderer/` any more**, and `scripts/apply-virgl-patches.sh`
-  is gone. **The worker no longer uses it**: it is the reference the
-  Rust rewrite records goldens from. It is the host renderer for **both** accelerated tiers — venus
-  (Vulkan→KosmicKrisp) and vrend (GL via zink-on-KK) — and carries our whole macOS/venus enablement,
-  zero-copy IOSurface scanout, the snapshot/restore journal, and vrend/vkr fixes. To change it:
-  commit on the fork's `limina` branch, push, update the manifest rev. The branch is **rewritten** as
-  patches merge upstream or get dropped, so **tag before every rewrite** — every rev ever pinned in
-  the manifest must stay reachable. Audit status: `docs/upstreaming/ledger/virglrenderer.md`.
+- **virglrs** — **THE host GPU renderer**, for both accelerated tiers: venus (Vulkan→KosmicKrisp)
+  and vrend (GL via zink-on-KK). `github.com/liminavm/virglrs`, ours outright rather than a fork,
+  pinned by `third_party/manifest.toml` and consumed by rutabaga as a **Rust crate** — see the
+  compiled-in bullet under *Working conventions*. It pins its own dependencies, including the C
+  virglrenderer it generates format tables from and records goldens against, so limina pins
+  virglrs and nothing underneath it.
+- **virglrenderer (the C)** — no longer limina's concern. `github.com/liminavm/virglrenderer`'s
+  `limina` branch still carries our macOS/venus enablement, IOSurface scanout, the snapshot
+  journal and the vrend/vkr fixes, and is where upstreaming work happens; it is pinned and
+  vendored by virglrs, not here. Audit status: `docs/upstreaming/ledger/virglrenderer.md`.
   **rutabaga** — the Apple blob `get_map_ptr` delta lives in libkrun's rutabaga against upstream's
   resource_map API.
 - **Mesa — two builds, one fork.** `github.com/liminavm/mesa` (upstream:
@@ -228,11 +227,12 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
     run VMs on this host. Match on something unique to your own run (the disk path), and confirm
     with a full, untruncated `ps -o pid,lstart,command -p <pid>` *before* the kill — a truncated
     listing hid `--cpus 8 --ram-mib 12288` once and killed the shared build VM.
-- **The renderer is compiled in, not loaded.** rutabaga depends on the `virglrs` crate
-  (`../../virglrenderer/virglrs`, a **sibling checkout**, not `third_party/`), so there is no
-  `libvirglrenderer` to load and no prefix to point at: `LIMINA_VIRGL_PREFIX`,
-  `check-virgl-link.sh` and the pkg-config steering in `crates/limina-vmm/build.rs` are all gone.
-  A clone without that sibling does not build — an open question, not a decision.
+- **The renderer is compiled in, not loaded.** rutabaga depends on the `virglrs` crate at
+  `third_party/virglrs`, materialized by `cargo xtask vendor`, so there is no `libvirglrenderer`
+  to load and no prefix to point at: `LIMINA_VIRGL_PREFIX`, `check-virgl-link.sh` and the
+  pkg-config steering in `crates/limina-vmm/build.rs` are all gone. A path dependency and not a
+  git one, because virglrs generates code from a C tree its own `scripts/vendor.sh` fetches, and
+  a cargo git checkout has no step that could run it.
   To debug venus host init, run with `RUST_LOG=debug` (the worker + supervisor default to `warn`
   and honor `RUST_LOG` — `RUST_LOG=limina_vmm=debug` for just the worker, `RUST_LOG=trace` adds
   the per-frame GPU present DIAGs `[FLUSH2]`/`[FENCEPRESENT]`).

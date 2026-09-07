@@ -417,7 +417,8 @@ guest's 3D is on.
 The host half is ours: upstream virglrenderer implements its codec backend only against libva,
 so `src/vrend/virgl_video_vt.c` in our fork implements the same `virgl_video.h` interface
 against VideoToolbox. `src/meson.build` picks one backend by host OS; they are never built
-together. Enabled by `-Dvideo=true` (`scripts/build-virglrenderer.sh`) plus
+together. Enabled by `-Dvideo=true` in the reference C build (virglrs's
+`scripts/build-reference.sh`) plus
 `VIRGLRENDERER_USE_VIDEO` in the worker's virgl flags.
 
 **Nothing gates it.** Caps are negotiated: a Mac with no silicon for a codec advertises none,
