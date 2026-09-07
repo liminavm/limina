@@ -4,8 +4,9 @@
 
 # limina pre-commit: rustfmt + clippy must be clean for the code we own.
 #
-# Never touches third_party/ (vendored libkrun is built, not linted; our libkrun changes
-# live in patches/libkrun/). Enable with: git config core.hooksPath .githooks
+# Never touches third_party/: those are separate git repositories, so their commits never
+# reach this hook. third_party/libkrun has its own, .githooks/libkrun/pre-commit, wired into
+# the clone by xtask's `vendor_fork`. Enable this one with: git config core.hooksPath .githooks
 # (scripts/setup-hooks.sh does this). Bypass a single commit with `git commit --no-verify`.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"

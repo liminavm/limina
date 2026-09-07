@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Gustavo Noronha Silva
+
+# pre-commit for the vendored libkrun clone (third_party/libkrun), which is its own git
+# repository and so is never covered by limina's own .githooks/pre-commit.
+#
+# It mirrors the fork's CI (.github/workflows/formatting.yml) so a commit that would fail
+# there fails here instead. Formatting only — clippy and the tests are libkrun's CI to run.
+#
+# Wired up by xtask's `vendor_fork`, which points the clone's core.hooksPath at this
+# directory whenever it materializes the tree; nothing needs installing by hand.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+fail() {
+    echo "pre-commit(libkrun): FAILED — $1" >&2
+    echo "                     fix it, or bypass once with: git commit --no-verify" >&2
+    exit 1
+}
+
+# rustfmt.toml pins style_edition here, so this agrees with an editor on save and with a
+# bare `rustfmt <file>` — the drift that used to leave this tree dirty on its own.
+echo "pre-commit(libkrun): cargo fmt --check"
+cargo fmt --all --check || fail "rustfmt — run 'cargo fmt --all'"
+for w in examples tests; do
+    [ -f "$w/Cargo.toml" ] || continue
+    (cd "$w" && cargo fmt --check) || fail "rustfmt ($w) — run 'cd $w && cargo fmt'"
+done
+
+echo "pre-commit(libkrun): ok"

@@ -242,6 +242,14 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
   its `aarch64-unknown-linux-musl` target). It never touches `third_party/`. Run
   `scripts/setup-hooks.sh` once per clone; bypass a commit with `--no-verify` only in a
   pinch.
+  - **Every crate we own is edition 2024, matching libkrun's — but format each tree from
+    inside it.** rustfmt's style follows the *package's* edition, so a 2021/2024 split across
+    trees silently produced two different formattings of the same code. `cargo fmt` at the
+    limina root does not reach `third_party/`: format libkrun by running `cargo fmt` inside
+    `third_party/libkrun`, which pins `style_edition` in its own `rustfmt.toml` and carries its
+    own pre-commit hook (`.githooks/libkrun/`, wired into the clone by `cargo xtask vendor`).
+    Never format a `third_party/` file with a bare `rustfmt <file>` — that defaults to the 2015
+    style and is how the drift got in.
 - **Fix bugs RED-first.** Every bug fix starts with a failing test that reproduces it,
   then the fix turns it green. Tests drive the *shipped binaries* (`limina` → `limina-vmm`),
   not libkrun internals — the harness is `crates/limina-test`. See the testing section in

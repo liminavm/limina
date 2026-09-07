@@ -289,6 +289,19 @@ fn vendor_fork(repo: &Path, name: &str) -> Result<()> {
             .current_dir(&dir)
             .args(["checkout", "-B", &m.branch, &m.rev]))?;
     }
+
+    // A fork with hooks of its own in `.githooks/<name>/` gets them wired here rather than in
+    // scripts/setup-hooks.sh: this is the only path that can create the clone, and a re-vendor
+    // that re-clones would otherwise silently drop the config. `core.hooksPath` is local, so it
+    // has to be set per clone. Absolute, so git worktrees off the clone find it too.
+    let hooks = repo.join(".githooks").join(name);
+    if hooks.is_dir() {
+        run(Command::new("git").current_dir(&dir).args([
+            "config",
+            "core.hooksPath",
+            &hooks.display().to_string(),
+        ]))?;
+    }
     Ok(())
 }
 
