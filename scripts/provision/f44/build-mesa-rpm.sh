@@ -28,6 +28,11 @@
 #             drop-guest-zink 2026-08-04: the L2 venus_replay test drives zink inside the
 #             guest deliberately, as a vehicle for exercising venus offscreen. "Guest GL is
 #             not zink any more" is what left that gap open once; do not re-derive it.
+#             The lost-wakeup patch is carried on correctness -- a real race upstream still
+#             has. Its own commit message predicts it unwedges venus_replay; that was
+#             measured on 2026-09-07 and is false (958.1 s and 957.3 s, unchanged), so
+#             "it did not fix what it claims" is not grounds to drop it. See
+#             spikes/venus-replay-zink-hang-2026-07-12/RESULTS.md.
 # We add them via the spec (NOT a tolerant pre-apply) ON PURPOSE: a non-applying patch FAILS
 # %prep loudly, rather than silently shipping a present-fix-less (black-screen) mesa.
 #
