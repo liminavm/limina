@@ -60,7 +60,32 @@ the readback resolves to, not at whether the path is covered.
 Readback therefore runs, every frame, and fills the buffer with black. That the file is rewritten
 at ~2 Hz is the independent confirmation that `present_frame` keeps being called.
 
-## Open, and the cheapest cut
+## What readback actually resolves
+
+Measured in one boot with `LIMINA_READBACK_TRACE=1` (ids are comparable only within a boot):
+
+    pre-push mints      IOSurface 21, 23, 27      desktop painting, 537 colours
+    post-push mints     IOSurface 63, 75, 21      (21 is a REUSED id, not the same surface)
+    blank readbacks     IOSurface 63, 75, 21      1440 of 1440 rows read, every flip
+
+**Readback resolves the post-push surfaces, and they are empty.** Three resources page-flip in
+strict rotation for the whole black period; each returns the full row count, so the copy
+succeeds and the surface it copies from simply has nothing in it. The pre-push set works, so
+neither minting nor readback is broken in general -- it is the surfaces minted *at the push*
+that renders never reach, while each one's mint line claims "renders land in the surface
+directly".
+
+Two guards on that claim. `21` appears in both lists, so for that surface alone old and new are
+indistinguishable -- an IOSurface id names a surface only while it lives. 63 and 75 are
+unambiguously post-push and carry the conclusion on their own. And "blank" here is the first row,
+which is what the trace tests; a frame with content only below row 0 would be misread, though
+nothing else about the capture suggests one.
+
+So the open question is no longer where the pixels go. It is why a scanout resource minted at
+the push does not receive renders when an identically-minted one from thirty seconds earlier
+does.
+
+## Ruled out along the way, and the cheapest cut
 
 In the classic (`ctx_id == 0`) branch of `flush_resource`, a failing `sync_iosurface` logs a
 warning and **clears `s.iosurface_id = None`** (`virtio_gpu.rs:2425-2440`), permanently switching
