@@ -319,6 +319,33 @@ fn seated_gpu_workload_survives_restore_unchanged() {
     // between "renders went to the wrong surface" and "renders stopped" -- and reading a
     // whole-run set as if it were the post-push half is a mistake this probe has already made.
     let log_lines_at_push = g1.supervisor_log().lines().count();
+    // What the guest was on BEFORE the push. "250% -> 100%" is what the fabricated EDID is
+    // designed to provoke and has only ever been read back on the far side; the near side has
+    // been assumed. It is the size of the jump, not the destination, that a compositor relayout
+    // would be sensitive to -- and a stock guest pushed from 1.25 to 1.0 by hand recovers, so
+    // the two are worth being able to compare.
+    let before_identity = ssh_retry(
+        &g1,
+        "export XDG_RUNTIME_DIR=/run/user/1000 \
+         DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus; \
+         timeout 20 gdbus call --session -d org.gnome.Mutter.DisplayConfig \
+           -o /org/gnome/Mutter/DisplayConfig \
+           -m org.gnome.Mutter.DisplayConfig.GetCurrentState 2>&1 || echo NOSTATE",
+    );
+    eprintln!("DIAG identity BEFORE the push: {before_identity}");
+    // Where the scale actually comes from. The EDID's preferred scale and the scale mutter lays
+    // out in have been observed to disagree, and a remembered per-monitor configuration outranks
+    // a computed default -- keyed on the monitor identity, which for a guest that is never given
+    // one is the shared anonymous `krun-display`.
+    let scale_source = ssh_retry(
+        &g1,
+        "echo '--- monitors.xml ---'; cat ~/.config/monitors.xml 2>&1 | head -30; \
+         echo '--- gsettings ---'; \
+         gsettings get org.gnome.mutter experimental-features 2>&1; \
+         gsettings get org.gnome.desktop.interface scaling-factor 2>&1; \
+         gsettings get org.gnome.desktop.interface text-scaling-factor 2>&1",
+    );
+    eprintln!("DIAG where the scale comes from:\n{scale_source}");
     // The same census on the painting desktop, so the after-set can be read against a before-set
     // rather than against an expectation. It is what names the compositor's context: whichever
     // one attaches a full-size render target while the desktop is at 536 colours.
