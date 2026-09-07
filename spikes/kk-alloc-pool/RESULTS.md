@@ -35,10 +35,30 @@ stale pointer used across a recycle produces exactly this state, and a liveness 
 see it because the new tenant is perfectly live.
 
 So KK now stamps a **generation** per encoder address (`mtl_encoder.m`), `kk_encoder_state`
-remembers the generation it was handed, and `cs_get_compute` refuses to hand out an encoder whose
-address has been re-tenanted. Every compute record entry point checks liveness as well, so a use
-after `endEncoding` or after release is named at the use site instead of segfaulting inside
-Apple's driver several operations later. `LIMINA_KK_ENC_GUARD=abort` takes a core there.
+remembers the generation it was handed, and both `cs_get_compute` and `kk_stop_encoder` refuse to
+act when the address has been re-tenanted. Every compute record entry point checks liveness as
+well, so a use after `endEncoding` or after release is named at the use site instead of
+segfaulting inside Apple's driver several operations later. `LIMINA_KK_ENC_GUARD=abort` takes a
+core at any of them.
+
+**The stop site is the one with teeth.** `kk_stop_encoder`'s `mtl_end_encoding` + `mtl_release`
+on a re-tenanted address ends *someone else's live encoder* and drops a retain they still hold, so
+their object dies under them and their next dispatch lands on a freed or re-inited context. A
+stale pointer therefore had a way to manufacture this exact fault **in a thread that did nothing
+wrong** — which is why every crash report named AGX and none of them named the code responsible.
+The general lesson: a stale reference should fail on its own, rather than oblige every call site
+to remember to test. NULL checks at the callers, the first fix that suggests itself here, would
+have left this path fully intact.
+
+Two details that are easy to get backwards. A generation of 0 means the table evicted that slot,
+not that anything is wrong, so it must **pass** — reading it as stale drops real work. And the
+stale-handout log is rate-limited and carries `__builtin_return_address(0)`: a stale pointer stays
+stale until `cs_end`, and the record path runs millions of times a session, so an unpaced line
+there is a flood — the same mistake as the `clamped=1` ERROR flood two sections down.
+
+**Silence is no longer evidence.** The change stops the crash, so an uneventful week says nothing
+about whether the condition still occurs. The oracle is
+`grep -E 'LIMINA-ENC|is stale|refusing to close'` in the worker log.
 
 `kk_alloc_pool_report()` prints per class on the release path
 (`[LIMINA-ALLOC-POOL]`, every 2000 encoder closes and at device teardown):
