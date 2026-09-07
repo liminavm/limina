@@ -298,6 +298,44 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         .map(|f| color_diversity(&f))
         .unwrap_or_default();
     eprintln!("pre-push desktop: {seated_colors} distinct colours");
+    // The ids, not just the count: a count says the push minted more surfaces, and the question
+    // is whether the ones readback then resolves are these or the new ones. Ids are not
+    // comparable across runs, so both halves have to come from the same boot.
+    let mint_lines = |log: String| -> Vec<String> {
+        log.lines()
+            .filter(|l| l.contains("iosurface scanout"))
+            .map(|l| l.trim().to_string())
+            .collect()
+    };
+    let scanouts_before = mint_lines(g1.supervisor_log());
+    eprintln!(
+        "DIAG iosurface scanouts before the push: {}\n{}",
+        scanouts_before.len(),
+        scanouts_before.join("\n")
+    );
+    // How much log there already is, so the render targets seen AFTER the push can be told from
+    // the ones seen before it. A single deduped set over the whole run cannot say whether the
+    // old surfaces are still being drawn into once the new ones exist, which is the difference
+    // between "renders went to the wrong surface" and "renders stopped" -- and reading a
+    // whole-run set as if it were the post-push half is a mistake this probe has already made.
+    let log_lines_at_push = g1.supervisor_log().lines().count();
+    // The same census on the painting desktop, so the after-set can be read against a before-set
+    // rather than against an expectation. It is what names the compositor's context: whichever
+    // one attaches a full-size render target while the desktop is at 536 colours.
+    {
+        let before = g1.supervisor_log();
+        let mut targets: Vec<&str> = before
+            .lines()
+            .filter(|l| l.contains("render target:"))
+            .map(str::trim)
+            .collect();
+        targets.sort_unstable();
+        targets.dedup();
+        eprintln!(
+            "DIAG distinct render targets BEFORE the push:\n{}",
+            targets.join("\n")
+        );
+    }
     // Give the guest a monitor identity the restored device will not have by default, then let
     // its compositor finish re-laying-out for it before anything is measured.
     g1.update_display(pushed_identity())
@@ -327,6 +365,140 @@ fn seated_gpu_workload_survives_restore_unchanged() {
     // a few seconds later. The workload is still, so the two should agree everywhere except
     // where something moved anyway — the panel clock — and those cells drop out of the
     // comparison rather than being tolerated in it.
+    // DIAG (uncommitted): does the frame exist inside the guest while the host capture is black?
+    // Guest painted + host black is a scanout defect that is ours; black on both is the
+    // compositor having stopped painting after the EDID change, and closes the virglrs question.
+    {
+        let host_colors = g1.read_capture().map(|f| color_diversity(&f)).unwrap_or(0);
+        let tools = ssh_retry(
+            &g1,
+            "for t in grim gnome-screenshot gdbus; do command -v $t >/dev/null \
+             && echo HAVE:$t; done; echo ok",
+        );
+        eprintln!("DIAG host capture now: {host_colors} colours; guest tools: {tools}");
+
+        let env = "export XDG_RUNTIME_DIR=/run/user/1000 \
+                   DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+                   WAYLAND_DISPLAY=wayland-0;";
+        // Is the shell answering D-Bus at all? A wedged shell is its own answer.
+        let alive = ssh_retry(
+            &g1,
+            &format!(
+                "{env} timeout 15 gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell \
+                 -m org.freedesktop.DBus.Properties.Get org.gnome.Shell ShellVersion 2>&1 \
+                 || echo NOANSWER"
+            ),
+        );
+        eprintln!("DIAG gnome-shell dbus: {alive}");
+
+        // The shell's Screenshot method is gated in GNOME 50 -- it answers AccessDenied to
+        // anything but the screenshot UI -- and grim is not in the image, so there is no way to
+        // ask the compositor for its own frame. These two ask the layers under it instead, and
+        // neither goes through the session's screenshot policy.
+        //
+        // What the mode set actually settled on. "The guest drops 250% -> 100%" is what the
+        // fabricated EDID is designed to provoke; it has never been read back.
+        let modes = ssh_retry(
+            &g1,
+            &format!(
+                "{env} timeout 20 gdbus call --session -d org.gnome.Mutter.DisplayConfig \
+                 -o /org/gnome/Mutter/DisplayConfig \
+                 -m org.gnome.Mutter.DisplayConfig.GetCurrentState 2>&1 || echo NOSTATE"
+            ),
+        );
+        eprintln!("DIAG mutter display state: {modes}");
+
+        // What KMS is scanning out: size, format and the buffer behind it. A framebuffer here
+        // that the shell never rendered into is the guest's answer, taken below the compositor.
+        let kms = ssh_retry(
+            &g1,
+            "sudo cat /sys/kernel/debug/dri/0/framebuffer 2>&1; \
+             echo ---; sudo cat /sys/kernel/debug/dri/0/state 2>&1 || echo NOSTATE",
+        );
+        eprintln!("DIAG kms scanout:\n{kms}");
+
+        // virglrs's own view of the push: whether a new scanout resource was created, whether a
+        // 2560x1440 IOSurface mint succeeded, and anything it refused.
+        let log = g1.supervisor_log();
+        let renderer: Vec<&str> = log
+            .lines()
+            .filter(|l| {
+                // Case-folded: the device's own diagnostics spell it "iosurface", and a
+                // case-sensitive "IOSurface" filter reads straight past the one line that
+                // says the zero-copy path gave up ("vrend iosurface sync failed for res N").
+                let f = l.to_ascii_lowercase();
+                f.contains("[virglrs]")
+                    || f.contains("scanout")
+                    || f.contains("iosurface")
+                    || f.contains("display")
+                    || f.contains("limina-enc")
+                    || f.contains("is stale")
+                    || f.contains("sync failed")
+                    || f.contains("failed to read")
+                    || f.contains("readback")
+                    || f.contains("render target")
+                    || f.contains("scanout write")
+            })
+            .collect();
+        // Printed in full rather than left to the last-80 window below: there are only a handful,
+        // and the readback trace floods that window, which cost this exact comparison a run.
+        let scanouts_after = mint_lines(log.clone());
+        eprintln!(
+            "DIAG iosurface scanouts: {} before the push, {} after. All mints this boot:\n{}",
+            scanouts_before.len(),
+            scanouts_after.len(),
+            scanouts_after.join("\n")
+        );
+        // Deduped, so the comparison against the mint ids above is readable at a glance instead
+        // of buried under one line per flip.
+        let mut reads: Vec<&str> = renderer
+            .iter()
+            .copied()
+            .filter(|l| l.contains("readback:"))
+            .collect();
+        reads.sort_unstable();
+        reads.dedup();
+        eprintln!("DIAG distinct blank readbacks:\n{}", reads.join("\n"));
+        // The other half of the comparison: which surfaces renders were actually aimed at. Taken
+        // from the whole log rather than the tail window below, so the flip-rate lines cannot
+        // push it out of view -- that is how the mint ids were lost once already.
+        let mut targets: Vec<&str> = log
+            .lines()
+            .skip(log_lines_at_push)
+            .filter(|l| l.contains("render target:"))
+            .map(str::trim)
+            .collect();
+        let target_total = targets.len();
+        targets.sort_unstable();
+        targets.dedup();
+        eprintln!(
+            "DIAG distinct render targets AFTER the push ({target_total} attachments):\n{}",
+            targets.join("\n")
+        );
+        // The other half of "was anything asked to write it": copies, clears and transfers, which
+        // bind their own framebuffers and so never appear as render targets. Silence here and
+        // above, for a scanout being presented, means nothing on the host was asked to paint it.
+        let mut writes: Vec<&str> = log
+            .lines()
+            .skip(log_lines_at_push)
+            .filter(|l| l.contains("scanout write:"))
+            .map(str::trim)
+            .collect();
+        let write_total = writes.len();
+        writes.sort_unstable();
+        writes.dedup();
+        eprintln!(
+            "DIAG distinct scanout writes AFTER the push ({write_total} writes):\n{}",
+            writes.join("\n")
+        );
+        let tail = renderer.len().saturating_sub(80);
+        eprintln!(
+            "DIAG supervisor ({} matching lines):\n{}",
+            renderer.len(),
+            renderer[tail..].join("\n")
+        );
+    }
+
     let pre_a =
         settled_capture(&g1, Duration::from_secs(90)).expect("pre-suspend capture never settled");
     std::thread::sleep(Duration::from_secs(5));
