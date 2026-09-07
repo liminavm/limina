@@ -248,6 +248,29 @@ fn content_losses(log: &str) -> Vec<&str> {
         .collect()
 }
 
+/// How many classic contexts the restore put content back into, from libkrun's unconditional
+/// `gpu restore: classic content restored (N contexts, M failed)`.
+///
+/// The liveness control for [`content_losses`]. Every line that oracle reads is printed only
+/// when something went wrong, so a silent log is indistinguishable from a log the oracle can no
+/// longer read — which is what this gate was doing. This line is written whenever P2 carried
+/// anything at all, so a zero here means the content path did not run and the loss count below
+/// it is worth nothing.
+fn p2_contexts_restored(log: &str) -> u32 {
+    log.lines()
+        .filter_map(|l| {
+            let head = l.split(" contexts,").next()?;
+            l.contains("classic content restored")
+                .then(|| {
+                    head.rsplit(|c: char| !c.is_ascii_digit())
+                        .find(|s| !s.is_empty())
+                })?
+                .and_then(|n| n.parse().ok())
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// The `Y` of the renderer's `classic content ctx N: X restored, Y refused, Z named no
 /// resource` account, or `None` when this is not that line.
 fn refused_count(line: &str) -> Option<u64> {
@@ -285,6 +308,18 @@ gpu restore: classic content restore failed for ctx 9 (8192 bytes)
         4,
         "each of the four loss mechanisms has to be seen: {:?}",
         content_losses(lossy)
+    );
+
+    // The liveness control, whose absence is what let the dead needles pass for green.
+    assert_eq!(
+        p2_contexts_restored(healthy),
+        7,
+        "the restored-context count is read"
+    );
+    assert_eq!(
+        p2_contexts_restored("gpu restore: nothing of the sort"),
+        0,
+        "a log without the line means the content path did not run, not that it was clean"
     );
 }
 
@@ -512,6 +547,14 @@ fn synoik_desktop_survives_snapshot_restore() {
     // log, since this is a restore-side failure. It is the one oracle here that does not
     // depend on the lost pixels happening to be visible in this run's frame.
     let g2_log = g2.supervisor_log();
+    // ...and its positive control, because "no losses" is also what a blind oracle says. The
+    // loss lines are printed only when something is lost, so their absence cannot distinguish a
+    // clean restore from one where the content path never ran or stopped being logged the way
+    // this test reads it. This line is unconditional whenever P2 carried anything, so it is the
+    // one that says the world was live. The needles went dead once already — every one of them
+    // was matching text no emitter had written since the re-upload loop was deleted, and the
+    // gate was green throughout.
+    let p2_contexts = p2_contexts_restored(&g2_log);
     let mut lost: Vec<String> = content_losses(&g1_log)
         .iter()
         .map(|l| format!("at snapshot: {l}"))
@@ -580,7 +623,7 @@ fn synoik_desktop_survives_snapshot_restore() {
         "post-restore: procs={procs_after} landmarks moved {}/{} body ({:.1}%) + {} in the \
          panel band (blur, band colours {band_pre} -> {band_post}), colours \
          {pre_colors} -> {post_colors}, {} allocation(s) skipped at snapshot, {} content-loss \
-         line(s)",
+         line(s) over {p2_contexts} restored context(s)",
         body_moved.len(),
         body_cells,
         moved_share * 100.0,
@@ -595,6 +638,7 @@ fn synoik_desktop_survives_snapshot_restore() {
         && post_colors * 4 >= pre_colors
         && skipped.is_empty()
         && lost.is_empty()
+        && p2_contexts > 0
         && stalls.is_empty()
         && !procs_after.contains("=0");
     if !verdict_ok {
@@ -619,6 +663,8 @@ fn synoik_desktop_survives_snapshot_restore() {
              colour diversity:  {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
              skipped at capture: {} allocation(s) the snapshot could not read\n\
              content loss:      {} line(s) naming resources that lost their pixels\n\
+             content path ran:  {p2_contexts} context(s) restored (0 means the loss count \
+above is blind, not clean)\n\
              ring stalls:       {} venus ring(s) stopped consuming after the restore\n\
              workload procs:    {procs_before} -> {procs_after}",
             pre.width,
