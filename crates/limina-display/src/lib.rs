@@ -154,6 +154,18 @@ impl DisplayBackendBasicFramebuffer for CaptureBackend {
             .ok_or(DisplayBackendError::InvalidScanoutId)?;
         let frame_id = self.next_frame_id;
         self.next_frame_id = self.next_frame_id.wrapping_add(1);
+        // LIMINA_CAPTURE_SENTINEL=1 paints the buffer magenta before the device fills it, so a
+        // captured frame says which of two things happened. A black frame means something wrote
+        // black; a magenta one means nothing wrote at all. Zero cannot make that distinction
+        // here: the scanout is BGRX and `swizzle_to_rgba` forces the X channel to opaque alpha,
+        // so an untouched buffer and a deliberately cleared one both encode as (0,0,0,255).
+        if std::env::var_os("LIMINA_CAPTURE_SENTINEL").is_some() {
+            // BGRX byte order: B=0xFF, G=0x00, R=0xFF -> magenta, which no desktop paints
+            // edge to edge.
+            for px in scanout.buffer.as_chunks_mut::<4>().0 {
+                px.copy_from_slice(&[0xFF, 0x00, 0xFF, 0xFF]);
+            }
+        }
         Ok((frame_id, &mut scanout.buffer))
     }
 
