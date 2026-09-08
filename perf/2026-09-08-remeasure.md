@@ -41,8 +41,12 @@ Two things the optimization moved that are worth separating:
   the `-O0` renderer was costing the **venus** side too, not just vrend. Anyone reasoning about
   this as a vrend-only problem would be wrong.
 - **`gl-replay-venus` did not move at all: 56.91 both ways**, to three decimals across six runs.
-  Whatever binds that trace, it is not renderer CPU — which makes it a useful control, and the one
-  workload here the build profile could not touch.
+  It runs `eglretrace --headless` (`perf-ledger.sh:120`), so it **never presents** — no page-flip,
+  no scanout, nothing reaching `resource_sync_iosurface`. That makes it a clean control *for
+  presentation*. It is a poor control for renderer cost: it runs zink→venus, and `vk-replay` — also
+  venus — gained 28% from `-O3`, so its flatness is not a venus property. Something neither
+  renderer optimization nor presentation touches binds it, most likely guest-side CPU in zink's
+  GL→Vulkan translation.
 
 The llvmpipe CPU control is down 4% across the day, so a few points of every graphics number are
 the host rather than the stack.
@@ -101,6 +105,10 @@ hypothesis therefore survives it: every virtio-gpu command from every context �
 updates included — queues behind a drain of the aquarium's GPU-bound frame once per
 page-flip.
 
+Both rigs now agree at 25 000 fish — **20 fps here, 19 on the virglrs session's**, same method and
+same verified-pinned display — so the residual is **~2.2x**, not the 1.7x quoted from an earlier
+reading that did not reproduce.
+
 The supporting observation is not from this rig: loading the aquarium to 25 000 fish slows
 down *everything else in the guest, including the mouse pointer*, which is a serialization
 signature rather than a cost. This rig's `iosurface scanout: 1280x800 B8G8R8X8_UNORM …
@@ -145,6 +153,13 @@ codesign and reads exactly like a VM bug. Re-run `cargo xtask sign --release`.
 **A timed wrapper that builds on first use** measures the build once and the work every time
 after, saying nothing about which you got. This produced a spurious 12x before a repeat disagreed
 with it.
+
+**`pgrep -f '[l]imina-vmm'` selects the SUPERVISOR, not the worker** — the supervisor's argv
+carries `--vmm-bin target/debug/limina-vmm` and the disk path, and it sorts first. Use
+`pgrep -f '[l]imina-vmm --cpus'`. Anything built on the first shape — `ps eww` env checks, `sample`,
+`vmmap` — has been inspecting the parent. Better still, **prefer a process printing its own
+configuration** (`vrend max_samples ceiling = 4` in the worker log) over any external inspection
+of it.
 
 `aquarium-run.sh` has three defects, two silent:
 
