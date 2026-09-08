@@ -3051,9 +3051,37 @@ pub fn quiesce_desktop(guest: &Guest) {
     }
 }
 
+/// Lines where a venus ring went **fatal**: it stopped consuming, and every
+/// `vkWaitRingSeqnoMESA` on it now waits for a head that will never move again. The guest's
+/// compositor parks in that wait holding the last frame it presented — a correct-looking
+/// picture — which is why this has to be asserted on rather than inferred from pixels.
+///
+/// The markers mirror the three `die()` sites in virglrs `src/venus/ring_thread.rs`, matched on
+/// the stable tail of each sentence because the rest of the line carries ids and seqnos.
+///
+/// This needle read `wait_ring_seqno STUCK` until 2026-09-08. That is the **C** renderer's
+/// wording and appears nowhere in virglrs, so it matched nothing for the entire life of the Rust
+/// renderer: `l2_synoik_restore_landmarks` printed `ring stalls: 0` on restores whose compositor
+/// context had just been poisoned by the first marker below. Pair it with
+/// [`renderer::spoke`](crate::renderer::spoke) — the positive control that the renderer wrote to
+/// this log at all, without which "no stalls" and "no renderer" read alike.
+///
+/// The `ring-seqno wait stuck >500ms` line is deliberately absent: virglrs prints it as a
+/// diagnostic and then goes on waiting, so it fires on host load and says nothing about a ring
+/// that is actually finished.
 pub fn ring_stalls(log: &str) -> Vec<&str> {
+    /// The waiter and its own ring thread are blocked on each other.
+    const DEADLOCKED: &str = "neither can proceed";
+    /// The ring is drained and the guest asked to be told about bytes it never sent.
+    const UNREACHABLE: &str = "cannot reach ring seqno";
+    /// The guest wrote more than its own ring buffer holds.
+    const OVERRAN: &str = "-byte ring";
     log.lines()
-        .filter(|l| l.contains("wait_ring_seqno STUCK"))
+        .filter(|l| {
+            [DEADLOCKED, UNREACHABLE, OVERRAN]
+                .iter()
+                .any(|m| l.contains(m))
+        })
         .collect()
 }
 
@@ -3134,6 +3162,66 @@ mod run_capped_tests {
         let err = run_capped(cmd, Duration::from_millis(300)).expect_err("must time out");
         assert!(start.elapsed() < Duration::from_secs(10), "killed promptly");
         assert!(err.to_string().contains("did not finish"), "{err}");
+    }
+
+    /// The one line that made this needle matter, captured verbatim from a synoik restore on
+    /// 2026-09-08 (worker log, `RUST_LOG=info`). The previous needle read the C's
+    /// `wait_ring_seqno STUCK` and scored this log as zero stalls.
+    const SYNOIK_RESTORE_DEADLOCK: &str = "\
+[2026-09-08T10:54:20Z INFO  limina::window] display: restored guest\n\
+[virglrs] ctx 2: 187653480211552 waits for ring seqno 232956 while 187653480211552 sleeps for \
+virtqueue                      seqno 1, which only this stream can publish -- neither can proceed\n\
+[2026-09-08T10:54:20.721976Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: ring wait: the \
+context is poisoned\n";
+
+    #[test]
+    fn a_ring_that_deadlocked_on_restore_is_counted() {
+        let stalls = ring_stalls(SYNOIK_RESTORE_DEADLOCK);
+        assert_eq!(stalls.len(), 1, "got {stalls:?}");
+        assert!(
+            stalls[0].contains("waits for ring seqno 232956"),
+            "{stalls:?}"
+        );
+    }
+
+    /// The C's spelling must NOT be what this matches — restoring it would re-open the gap,
+    /// since virglrs never prints it.
+    #[test]
+    fn the_c_renderers_wording_is_not_what_we_look_for() {
+        let c_only = "[virgl] vkr: wait_ring_seqno STUCK ring 1 seqno 5\n";
+        assert!(ring_stalls(c_only).is_empty(), "matched the C's wording");
+    }
+
+    /// A ring that is merely slow is not a ring that is finished: virglrs logs this and keeps
+    /// waiting, so counting it would make the oracle fire on host load.
+    #[test]
+    fn the_slow_wait_diagnostic_is_not_a_stall() {
+        let slow = "[virglrs] ctx 2: 99 ring-seqno wait stuck >500ms: want 7 head 3 tail 9 \
+                    status 0x1\n";
+        assert!(
+            ring_stalls(slow).is_empty(),
+            "counted the non-fatal diagnostic"
+        );
+    }
+
+    #[test]
+    fn the_other_two_fatal_endings_are_counted() {
+        let drained = "[virglrs] ctx 2: 99 is drained at 4 and cannot reach ring seqno 12\n";
+        let overran = "[virglrs] 99: guest wrote 9000 bytes into a 4096-byte ring\n";
+        assert_eq!(ring_stalls(drained).len(), 1, "drained ring missed");
+        assert_eq!(ring_stalls(overran).len(), 1, "ring overrun missed");
+    }
+
+    #[test]
+    fn a_healthy_restore_has_no_stalls() {
+        let healthy = "\
+[virglrs] vrend: OpenGL ES 3.1 Mesa 26.3.0-devel (gles 31), 152 formats\n\
+[2026-09-08T10:54:20.656434Z INFO  krun_devices::virtio::gpu::virtio_gpu] gpu restore: classic \
+content restored (2 contexts, 0 failed), 1 scanout flips\n";
+        assert!(
+            ring_stalls(healthy).is_empty(),
+            "false positive on a clean restore"
+        );
     }
 
     #[test]
