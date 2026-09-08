@@ -65,6 +65,24 @@ pub fn spoke(log: &str) -> bool {
 /// refusal check above is decoration — see the module docs.
 #[track_caller]
 pub fn assert_renderer_served(log: &str, when: &str) {
+    served(log, when, std::env::var_os("LIMINA_GL_TRACE").is_some())
+}
+
+/// The check itself, with its one piece of environment passed in.
+///
+/// `trace_on` is a parameter rather than a read because a test that proved this arm by setting the
+/// variable would set it for every other test in the process.
+#[track_caller]
+fn served(log: &str, when: &str, trace_on: bool) {
+    // virglrs's GL call trace drains `glGetError` itself, so an error it consumes never reaches
+    // the check that poisons: a boot with it on refuses nothing and reads perfectly clean here.
+    // That would make this assertion unable to fail — the exact fault the module exists to stop,
+    // measured on a boot that poisoned without the trace and reported zero refusals with it.
+    assert!(
+        !trace_on,
+        "{when}: LIMINA_GL_TRACE is set, and it consumes the GL errors this asserts on, so a \
+         poisoning boot would pass here. It is for finding which call failed, never for gating."
+    );
     assert!(
         spoke(log),
         "{when}: the supervisor log contains no renderer output at all, so the refusal check \
@@ -124,6 +142,14 @@ mod tests {
     #[should_panic(expected = "the renderer REFUSED work")]
     fn the_gate_fires_on_a_poisoned_boot() {
         assert_renderer_served(POISONED, "the poisoned fixture");
+    }
+
+    /// The trace hides what this gates on, so a boot that carries it is not a boot this can
+    /// judge. Refusing to answer beats answering "clean" for a run whose errors were eaten.
+    #[test]
+    #[should_panic(expected = "LIMINA_GL_TRACE is set")]
+    fn the_gl_trace_disqualifies_the_log_rather_than_passing_it() {
+        served(HEALTHY, "the traced fixture", true);
     }
 
     /// The failure this whole module exists to prevent, in its purest form: a log that cannot
