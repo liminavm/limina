@@ -1,13 +1,19 @@
-# vkmark's arrival poisons the compositor's vrend context, permanently
+# The compositor cannot sample a client buffer that needs a minted texture view
 
-Launching **vkmark** on the enhanced tier kills the GNOME session's rendering for good. The
-desktop stops updating; the dash animates because gnome-shell keeps submitting frames that are
-all refused. Nothing recovers it but restarting the session.
+When gnome-shell's sampler view of an IOSurface-backed client buffer requires a *minted*
+`glTextureView`, the host GL refuses it with `GL_INVALID_OPERATION`, and virglrs poisons the
+compositor's context permanently. The desktop stops updating for good; the dash animates because
+gnome-shell keeps submitting frames that are all refused. Nothing recovers it but restarting the
+session.
 
-Observed on limina `ce19a95b` with virglrs pinned at `894b36d`, guest F44 enhanced
-(`7.1.8-limina16k.4`, mesa `26.1.8-11.limina.fc44`), 4 vCPU / 4 GiB, 1280x800 @ 1.0, booted
-through `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`. **2 vkmark launches into a healthy
-session, 2 poisons** — the second on a freshly restarted session with nothing else running.
+`vkmark` is the reproducer to hand — its raw Vulkan Wayland swapchain images require such a view.
+`glmark2-es2-wayland` on venus does **not**, so it never trips this despite being a windowed,
+venus-backed client whose buffers the compositor samples every frame.
+
+Observed at limina `30e5658b` / virglrs `34ed41d`, guest F44 enhanced (`7.1.8-limina16k.4`, mesa
+`26.1.8-11.limina.fc44`), 4 vCPU / 4 GiB, 1280x800 @ 1.0, through
+`spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`. **Every vkmark launch into a healthy session
+poisons** — 4 for 4 across two pins.
 
 ## The fault
 
@@ -20,147 +26,63 @@ ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command
       -> Err("ErrRutabaga(ComponentError(-22))")
 ```
 
-`ctx 2` is **gnome-shell's own vrend context** (`CTX_CREATE ctx=2 init=0x2 name="gnome-shell"`),
-not vkmark's (`init=0x4`, venus). So the compositor's classic-GL context throws
-`GL_INVALID_OPERATION` creating a sampler view — the path where vrend samples a venus client's
-buffer. It fires **128 ms** (incident 1) and **227 ms** (incident 2) after vkmark's second
-`CTX_CREATE`, before vkmark draws anything.
+`ctx 2` is **gnome-shell's own vrend context** (`init=0x2`), not vkmark's (`init=0x4`, venus). It
+fires 128–227 ms after vkmark's second `CTX_CREATE`, before vkmark draws anything. Every
+subsequent `CmdSubmit3d` from gnome-shell is then refused for the life of the session — 26 927
+refusals across the first two incidents, 5 886 in the verdict run. Killing vkmark changes nothing;
+only `systemctl isolate multi-user.target` → `graphical.target` restores rendering.
 
-virglrs then poisons the context, and **every subsequent `CmdSubmit3d` from gnome-shell is
-refused for the life of the session** — 26 927 refusals across the two incidents here. Killing
-vkmark changes nothing. Only `systemctl isolate multi-user.target` → `graphical.target`
-restores rendering.
+vkmark itself is unharmed — it completes every scene and scores. "The Vulkan client works" is not
+evidence the stack is healthy.
 
-vkmark itself is unharmed: it completes all six scenes and scores 3903. Its venus path is
-healthy; only the compositor dies. So "the Vulkan client works" is not evidence the stack is.
+## The failing call, and what does not explain it
 
-## It is vkmark specifically, not venus clients in general
-
-Fourteen other venus contexts were created and destroyed across the same session with no fault:
-
-| client | `init` | venus contexts | poisoned |
-|---|---|---|---|
-| `glmark2-es2-wayland` (windowed, zink→venus) | 0x4 | 3 | no |
-| `glmark2-es2` | 0x4 | 3 | no |
-| `eglretrace` | 0x4 | 3 | no |
-| `gfxrecon-replay` | 0x4 | 3 | no |
-| `gst-plugin-scan` | 0x4 | 2 | no |
-| **`vkmark`** | **0x4** | **2 (into a healthy session)** | **2/2** |
-
-`glmark2-es2-wayland` is the interesting negative: it is *also* a windowed venus-backed client
-whose buffers the compositor samples, and it never faults. So the discriminator is narrower than
-"venus" — it is something about the buffers vkmark exports (a raw Vulkan Wayland swapchain)
-versus the ones zink exports.
-
-Nothing was playing video. The two `gst-plugin-scan` contexts are GStreamer's registry scan at
-session start, minutes earlier and benign. No Firefox — whether it trips this is **untested**.
-
-## The failing call is `glTextureView`, and the discriminator is IOSurface backing
-
-A `LIMINA_GL_TRACE=1` run (limina `118c9155` / virglrs `58a29c9`) names it. Full evidence in
-`gl-trace-excerpt.log`; the four failures are vkmark's swapchain images:
+`LIMINA_GL_TRACE=1` puts the error on `glTextureView`. Full lines in `gl-trace-excerpt.log`:
 
 ```
-[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(1050) (1280x720
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(1180) (1280x720
     R8G8B8X8_UNORM, immutable true, surface true, supports_view true) as R8G8B8X8_UNORM
     target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
 [virglrs] vrend: sampler view: texture_view left GL error 0x502
 ```
 
-Across the whole session the split is total:
+`surface true` is `Resource::surface()` — *"the IOSurface this resource's storage is"*
+(`vrend/resource.rs:530`) — so it means IOSurface-backed, **not** a render-target binding.
 
-| `texture_view` calls | count | left `0x502` |
-|---|---|---|
-| IOSurface-backed source (`surface true`) | 4 | **4** |
-| ordinary GL texture (`surface false`) | 658 | 0 |
+Ruled out by measurement, not argument:
 
-`Resource::surface()` is *"the IOSurface this resource's storage is, if it is one"*
-(`vrend/resource.rs:530`) — so this field means **IOSurface/EGLImage-backed**, not a
-render-target binding.
+- **Format, target, view range and the `supports_view` gate.** The same session makes 658
+  successful `texture_view` calls, including `(64x64 R8G8B8X8_UNORM, immutable true, surface
+  false, supports_view true) as R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1
+  layers 0+1` — identical in every field but `surface`.
+- **A stale immutability flag.** virglrs `34ed41d` replaced the predicted `immutable` with a
+  `GL_TEXTURE_IMMUTABLE_FORMAT` query at both exits of `alloc_texture`. The four still report
+  `immutable true` and still leave `0x502`. So KosmicKrisp's `EXT_EGL_image_storage` delivers
+  genuinely immutable-format storage, and **the host refuses to view externally imported storage
+  regardless of immutability**. `34ed41d` is a correct hygiene fix — two copies of one fact, the
+  read one unchecked — and not a cure.
 
-The clean cases include the *same format* at the same target, internalformat, level and layer
-range — `(64x64 R8G8B8X8_UNORM, immutable true, surface false, supports_view true) as
-R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1`. So format
-compatibility, target, view range and the `supports_view` gate are all exonerated.
+What remains is to route image-backed sources away from `glTextureView` altogether.
 
-**`immutable` in that line is a prediction, not a measurement.** `glTextureView` raises
-`GL_INVALID_OPERATION` on a source that is not immutable-format, and `alloc_texture`
-(`vrend/resource.rs:2057`) initialises the flag from the *feature census* —
-`features.has(texture_storage) && entry.can_texture_storage` — a statement about the format table
-and the host's advertised capabilities. The `glEGLImageTargetTexture2DOES` fallback arm clears it
-to `false`; the `glEGLImageTargetTexStorageEXT` arm that these four took leaves it untouched, and
-nothing in the tree ever calls `glGetTexParameteriv(GL_TEXTURE_IMMUTABLE_FORMAT)`. So
-`immutable true` on the failing lines is the census being printed back, not the driver's answer,
-and it is consistent with the storage actually being mutable.
+## What is *not* the discriminator
 
-Two facts, one of them unchecked, and the unchecked one is what every reader consults. virglrs
-`34ed41d` reads `GL_TEXTURE_IMMUTABLE_FORMAT` back at both exits of `alloc_texture` and stores
-that instead, which makes the trace line's `immutable` mean something different from what it
-meant in this run.
+Not the client, and not venus. `glmark2-es2-wayland` on venus, run first in the same session,
+makes **zero `texture_view` calls** — its buffers never reach the view route at all. Nor do
+`eglretrace`, `gfxrecon-replay`, `glmark2-es2` or `gst-plugin-scan`, which between them opened
+fourteen further venus contexts across these runs without a fault.
 
-### Measured at `34ed41d`: the flag was honest, and the poison is not cured
+So the axis is whether the sampler view must *mint* a view of an IOSurface-backed source, which
+vkmark's swapchain images require and zink-exported buffers do not. Whether Firefox mints one is
+**untested**, and it decides whether a real desktop hits this.
 
-With the query live, vkmark's four still print **`immutable true`**, and `0x502` still follows all
-four. So KosmicKrisp's `EXT_EGL_image_storage` does deliver genuinely immutable-format storage,
-and the flag was not the fault. **The host refuses to view externally imported storage even when
-it is immutable-format.**
+## `supports_view false` does not arise here
 
-`34ed41d` is therefore correct and not a cure: it replaces a prediction with an answer, which is
-worth having on its own terms, but the untraced verdict run poisons exactly as before — one
-`refused: vrend`, 5 886 poisoned submits, compositor wedged and confirmed wedged on screen. The
-remaining fix is to route image-backed sources away from `glTextureView` regardless of what
-`GL_TEXTURE_IMMUTABLE_FORMAT` says.
-
-That the query is live and not the census is established by construction: the read shadows the
-outer binding immediately before *both* `Storage::Texture` constructions, so the field cannot
-carry the census any more.
-
-### vkmark and glmark2 were never comparable
-
-`glmark2-es2-wayland` on venus, run first in the same session, makes **zero `texture_view` calls
-at all** — its window buffers never reach the view route. So the earlier "vkmark is special among
-venus clients" framing was measuring the wrong thing: the discriminator is not the client but
-whether the compositor's sampler view needs a *minted texture view*, which vkmark's buffers
-require and zink's do not.
-
-### `supports_view false` does not arise here
-
-All 662 traced `texture_view` calls in the session carry `supports_view true`; not one is false.
-So the second, latent poison in `view_route` — where a texture that cannot be viewed is still
-routed to `glTextureView` when the view reinterprets — is not exercised by this workload, and the
-contradiction between `resource.rs:1207` ("reads its channels in the wrong order") and
-`context.rs:2754` ("the driver refuses with `GL_INVALID_OPERATION`") stays unsettled. Neither
-client here produces IOSurface-backed `B8G8R8A8/X8_UNORM`.
-
-### The gap in this evidence
-
-All 658 clean calls are ordinary compositor textures — cursors, icons, 1x1 and 64x64 atlases.
-**None of them is a client swapchain buffer sampled by the compositor**, so the run contains no
-IOSurface-backed control. The claim that `glmark2-es2-wayland` is a clean windowed-venus client
-rests on the earlier untraced run, where it cannot be seen how its window buffers enter the
-trace. The next traced boot should run `glmark2-es2-wayland` *before* vkmark: `surface true` and
-succeeding falsifies the correlation outright; `surface false` moves the question to why zink's
-buffers are not IOSurface-backed and vkmark's are; no `texture_view` line at all would mean the
-compositor samples them by another route and the two clients were never comparable.
-
-The traced run did **not** poison, exactly as designed — the trace drains the error. Zero
-`refused: vrend` lines against 26 927 refusals in the untraced run, and the desktop kept
-rendering. That is the drain, not a fix.
-
-**A traced run therefore cannot score a fix.** The trace is what kept this run alive, so a clean
-traced boot proves only which branch we are in. Any cure has to be scored on an *untraced* boot —
-no refusals, compositor alive — and both boots are needed: the traced one to read `immutable`,
-the untraced one to render the verdict.
-
-## What the log does *not* say
-
-There is no `[virglrs] vrend:` line of any kind between vkmark's `CTX_CREATE` and the refusal —
-no "sampled whole" notice, no `composite target`, no `iosurface scanout`. The composite-target
-lines in the log all belong to the earlier `gst-plugin-scan` contexts. So the offending resource
-announced itself on none of the routes that log.
-
-Exactly one `refused: vrend` line exists in the whole 105k-line worker log. Every other refusal
-in it is the benign video-format capability notice.
+All 662 traced `texture_view` calls carry `supports_view true`. virglrs's second, latent
+`view_route` poison — where a texture that cannot be viewed is still routed to `glTextureView`
+when the view reinterprets — is therefore unexercised by this workload, and the tree's own
+contradiction about what such a view does (`resource.rs:1207`, "reads its channels in the wrong
+order", against `context.rs:2754`, "the driver refuses with `GL_INVALID_OPERATION`") stays
+unsettled. Neither client here produces IOSurface-backed `B8G8R8A8/X8_UNORM`.
 
 ## Reproduce
 
@@ -176,18 +98,17 @@ ssh -p $port claude@127.0.0.1 \
 grep -e "refused: vrend" -e poisoned /tmp/limina-worker-poison.log
 ```
 
-To name the GL call rather than the command, add `LIMINA_GL_TRACE=1` to the worker's
-environment — `create_sampler_view` then prints which call left the error. **That trace drains
-the error, so a traced run does not poison**: it gets further, and a clean traced run is the
-trace eating the failure, not a fix. Only the printed line is evidence.
+Add `LIMINA_GL_TRACE=1` to name the GL call. **That trace drains the error, so a traced run does
+not poison** — it renders on, and a clean traced run is the trace eating the failure. A traced run
+can say which branch we are in; only an untraced run can say whether a fix cures.
 
-## Two separable questions
+## The open question this bug raises independently
 
-1. **Is the sampler view genuinely invalid** for an imported venus resource, or is `0x502` a
-   stale error left in GL state and only observed at this check? This is the same class as the
-   sampler-view routing fix already pinned, so that fix may be incomplete for the cross-tier case.
-2. **Should one failed `CreateObject` poison a context permanently?** Even granting a bad create,
-   the blast radius is the whole desktop. The C renderer logged the GL error and carried on, so
-   this is a behavioural change of the rewrite independent of question 1.
+Should one failed `CreateObject` poison a context permanently? Even granting a bad create, the
+blast radius is the whole desktop from one bad object. The C renderer logged the GL error and
+carried on, so this is a behavioural change of the rewrite, and it is what turns a wrong-looking
+window into a dead session.
 
-`worker-excerpt.log` holds every context create/destroy plus a window around each refusal.
+`worker-excerpt.log` holds context creates/destroys and windows around the first two refusals;
+`gl-trace-excerpt.log` the traced call sites; `immutable-query.patch` the `34ed41d` change as
+applied here.
