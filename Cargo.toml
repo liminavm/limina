@@ -83,5 +83,13 @@ ciborium          = "0.2"
 [profile.dev.package.limina-display]
 opt-level = 3
 
+# The graphics renderer is compiled into limina-vmm, so a debug worker carries a debug renderer --
+# and that is not slow the way debug code is usually slow, it is slow per guest command. The
+# WebGL aquarium read 4 fps against 42 for the optimized C renderer it replaced, which is the whole
+# of that gap and nothing to do with either renderer's behaviour. Every rig that boots
+# `target/debug/limina-vmm` measures whatever this says, so it says the same as release.
+[profile.dev.package.virglrs]
+opt-level = 3
+
 [patch.crates-io]
 imago = { path = "third_party/imago" }
