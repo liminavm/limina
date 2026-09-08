@@ -55,6 +55,42 @@ versus the ones zink exports.
 Nothing was playing video. The two `gst-plugin-scan` contexts are GStreamer's registry scan at
 session start, minutes earlier and benign. No Firefox — whether it trips this is **untested**.
 
+## The failing call is `glTextureView`, and the discriminator is `surface`
+
+A `LIMINA_GL_TRACE=1` run (limina `118c9155` / virglrs `58a29c9`) names it. Full evidence in
+`gl-trace-excerpt.log`; the four failures are vkmark's swapchain images:
+
+```
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(1050) (1280x720
+    R8G8B8X8_UNORM, immutable true, surface true, supports_view true) as R8G8B8X8_UNORM
+    target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
+[virglrs] vrend: sampler view: texture_view left GL error 0x502
+```
+
+Across the whole session the split is total:
+
+| `texture_view` calls | count | left `0x502` |
+|---|---|---|
+| resource has a surface (`surface true`) | 4 | **4** |
+| no surface (`surface false`) | 658 | 0 |
+
+The clean cases include the *same format* at the same target, internalformat, level and layer
+range — `(64x64 R8G8B8X8_UNORM, immutable true, surface false, supports_view true) as
+R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1`. So format
+compatibility, target, view range and the `supports_view` gate are all exonerated. The only
+logged field that differs is `surface`.
+
+`glTextureView` raises `GL_INVALID_OPERATION` if the source texture is not immutable-format.
+`immutable true` here is virglrs's own bookkeeping, not a `GL_TEXTURE_IMMUTABLE_FORMAT` query —
+so the hypothesis this evidence supports is that a resource carrying a surface reaches GL by a
+route that does not produce an immutable-format texture (an EGLImage/IOSurface import rather
+than `glTexStorage`), while virglrs's record still says immutable. **Not yet confirmed**: the
+check that would settle it is querying `GL_TEXTURE_IMMUTABLE_FORMAT` on the source at the call.
+
+The traced run did **not** poison, exactly as designed — the trace drains the error. Zero
+`refused: vrend` lines against 26 927 refusals in the untraced run, and the desktop kept
+rendering. That is the drain, not a fix.
+
 ## What the log does *not* say
 
 There is no `[virglrs] vrend:` line of any kind between vkmark's `CTX_CREATE` and the refusal —

@@ -1,0 +1,26 @@
+# LIMINA_GL_TRACE=1 run, 2026-09-08
+# limina 118c9155 / virglrs 58a29c9, guest 7.1.8-limina16k.4 + mesa 26.1.8-11
+# vkmark -s 1280x720 into a healthy session. No poison (the trace drains the error).
+
+## Every texture_view call that left GL 0x502, with the description that precedes it
+
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(1050) (1280x720 R8G8B8X8_UNORM, immutable true, surface true, supports_view true) as R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
+[virglrs] vrend: sampler view: texture_view left GL error 0x502
+--
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(1052) (1280x720 R8G8B8X8_UNORM, immutable true, surface true, supports_view true) as R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
+[virglrs] vrend: sampler view: texture_view left GL error 0x502
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(1053) (1280x720 R8G8B8X8_UNORM, immutable true, surface true, supports_view true) as R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
+[virglrs] vrend: sampler view: texture_view left GL error 0x502
+--
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(1051) (1280x720 R8G8B8X8_UNORM, immutable true, surface true, supports_view true) as R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
+[virglrs] vrend: sampler view: texture_view left GL error 0x502
+
+## The split across all 662 texture_view calls in the session
+#   surface true : 4 calls, 4 errors
+#   surface false: 658 calls, 0 errors
+
+## The clean R8G8B8X8_UNORM shape, for contrast (same format, no surface)
+
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(N) (1x1 R8G8B8X8_UNORM, immutable true, surface false, supports_view true) as R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(N) (64x64 B8G8R8X8_UNORM, immutable true, surface false, supports_view true) as B8G8R8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
+[virglrs] vrend: sampler view: texture_view of resource ResourceHandle(N) (64x64 R8G8B8X8_UNORM, immutable true, surface false, supports_view true) as R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1
