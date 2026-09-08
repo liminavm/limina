@@ -249,3 +249,15 @@ date,commit,workload,metric,value,notes
 2026-08-27,53a1387,gl-replay-llvmpipe,fps,716.217,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
 2026-08-27,53a1387,vk-replay-venus-headless,fps,1933.186653,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
 2026-08-27,53a1387,glmark2-wayland-venus,score,2702,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
+2026-09-08,ce19a95b,gl-replay-venus,fps,57.5581,virglrs 894b36d full battery run 1
+2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,691.278,virglrs 894b36d full battery run 1
+2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1769.429358,virglrs 894b36d full battery run 1
+2026-09-08,ce19a95b,glmark2-wayland-venus,score,2287,virglrs 894b36d full battery run 1
+2026-09-08,ce19a95b,gl-replay-venus,fps,56.9412,virglrs 894b36d full battery run 2
+2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,703.658,virglrs 894b36d full battery run 2
+2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1606.957057,virglrs 894b36d full battery run 2
+2026-09-08,ce19a95b,glmark2-wayland-venus,score,2425,virglrs 894b36d full battery run 2
+2026-09-08,ce19a95b,gl-replay-venus,fps,57.0181,virglrs 894b36d full battery run 3
+2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,699.75,virglrs 894b36d full battery run 3
+2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1759.219962,virglrs 894b36d full battery run 3
+2026-09-08,ce19a95b,glmark2-wayland-venus,score,2296,virglrs 894b36d full battery run 3

@@ -21,10 +21,13 @@ Workloads (see `scripts/perf-ledger.sh` for the exact invocations):
   `--wsi headless` (no present, no vsync cap), fps. The purest venus-pipeline
   throughput number of the three.
 - `glmark2-wayland-venus` — live glmark2-es2-wayland build-scene score (the classic battery
-  number, vsync-free offscreen-ish but composited). ⚠ **The name lies after 2026-08-04.** The
-  workload measured zink→venus up to the GL default flip; since then the identical command runs
-  on **vrend** (`docs/graphics.md` §3.2). Rows either side of that date are not comparable. The
-  name was left alone deliberately — renaming it would misdescribe the earlier half instead.
+  number, vsync-free offscreen-ish but composited). **The name is accurate: this row runs on
+  zink→venus, on both sides of the 2026-08-04 GL default flip**, because `perf-ledger.sh` exports
+  `MESA_LOADER_DRIVER_OVERRIDE=zink` and the venus ICD for every leg. Verified 2026-09-08 by
+  reading `GL_RENDERER` out of a full-output run: `zink Vulkan 1.4(Virtio-GPU Venus …)` under the
+  ledger env, against `virgl (zink Vulkan 1.4(Apple M1 Max …))` with no override. So the row
+  tracks venus, *not* the shipped desktop GL path — which is a live gap in the battery, since
+  nothing here measures what a real desktop actually renders on.
 
 - `glmark2-display-*` — the on-display three-tier comparison (venus / software-2D / virgl),
   `-b build -b shading -b texture` at 800x600 through the full compositor. **The `virgl` row is
