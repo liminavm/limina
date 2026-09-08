@@ -55,7 +55,7 @@ versus the ones zink exports.
 Nothing was playing video. The two `gst-plugin-scan` contexts are GStreamer's registry scan at
 session start, minutes earlier and benign. No Firefox — whether it trips this is **untested**.
 
-## The failing call is `glTextureView`, and the discriminator is `surface`
+## The failing call is `glTextureView`, and the discriminator is IOSurface backing
 
 A `LIMINA_GL_TRACE=1` run (limina `118c9155` / virglrs `58a29c9`) names it. Full evidence in
 `gl-trace-excerpt.log`; the four failures are vkmark's swapchain images:
@@ -71,21 +71,37 @@ Across the whole session the split is total:
 
 | `texture_view` calls | count | left `0x502` |
 |---|---|---|
-| resource has a surface (`surface true`) | 4 | **4** |
-| no surface (`surface false`) | 658 | 0 |
+| IOSurface-backed source (`surface true`) | 4 | **4** |
+| ordinary GL texture (`surface false`) | 658 | 0 |
+
+`Resource::surface()` is *"the IOSurface this resource's storage is, if it is one"*
+(`vrend/resource.rs:530`) — so this field means **IOSurface/EGLImage-backed**, not a
+render-target binding.
 
 The clean cases include the *same format* at the same target, internalformat, level and layer
 range — `(64x64 R8G8B8X8_UNORM, immutable true, surface false, supports_view true) as
 R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1`. So format
-compatibility, target, view range and the `supports_view` gate are all exonerated. The only
-logged field that differs is `surface`.
+compatibility, target, view range and the `supports_view` gate are all exonerated.
 
-`glTextureView` raises `GL_INVALID_OPERATION` if the source texture is not immutable-format.
-`immutable true` here is virglrs's own bookkeeping, not a `GL_TEXTURE_IMMUTABLE_FORMAT` query —
-so the hypothesis this evidence supports is that a resource carrying a surface reaches GL by a
-route that does not produce an immutable-format texture (an EGLImage/IOSurface import rather
-than `glTexStorage`), while virglrs's record still says immutable. **Not yet confirmed**: the
-check that would settle it is querying `GL_TEXTURE_IMMUTABLE_FORMAT` on the source at the call.
+**The obvious explanation is ruled out by the source.** `glTextureView` raises
+`GL_INVALID_OPERATION` on a source that is not immutable-format, but `alloc_texture`
+(`vrend/resource.rs:2067`) tracks that honestly: `immutable` stays `true` only on the
+`glEGLImageTargetTexStorageEXT` path and is set `false` on the older
+`glEGLImageTargetTexture2DOES` fallback. The failing lines say `immutable true`, so they took the
+storage entry point and the flag is not lying. What remains is that the host GL will not make a
+view of *externally imported* storage even when it reports `GL_TEXTURE_IMMUTABLE_FORMAT` — which
+would be a host-driver limit rather than a bookkeeping bug, and is **not yet confirmed**.
+
+### The gap in this evidence
+
+All 658 clean calls are ordinary compositor textures — cursors, icons, 1x1 and 64x64 atlases.
+**None of them is a client swapchain buffer sampled by the compositor**, so the run contains no
+IOSurface-backed control. The claim that `glmark2-es2-wayland` is a clean windowed-venus client
+rests on the earlier untraced run, where it cannot be seen how its window buffers enter the
+trace. The next traced boot should run `glmark2-es2-wayland` *before* vkmark: `surface true` and
+succeeding falsifies the correlation outright; `surface false` moves the question to why zink's
+buffers are not IOSurface-backed and vkmark's are; no `texture_view` line at all would mean the
+compositor samples them by another route and the two clients were never comparable.
 
 The traced run did **not** poison, exactly as designed — the trace drains the error. Zero
 `refused: vrend` lines against 26 927 refusals in the untraced run, and the desktop kept
