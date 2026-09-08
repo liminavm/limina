@@ -1,4 +1,4 @@
-# The compositor cannot sample a client buffer that needs a minted texture view
+# The compositor could not sample a client buffer that needed a minted texture view
 
 When gnome-shell's sampler view of an IOSurface-backed client buffer requires a *minted*
 `glTextureView`, the host GL refuses it with `GL_INVALID_OPERATION`, and virglrs poisons the
@@ -62,7 +62,30 @@ Ruled out by measurement, not argument:
   regardless of immutability**. `34ed41d` is a correct hygiene fix — two copies of one fact, the
   read one unchecked — and not a cure.
 
-What remains is to route image-backed sources away from `glTextureView` altogether.
+## The cure
+
+virglrs `42008bb` (`reimport-route.patch` as applied and measured here). vkmark's view is an
+**identity** view — same format, same target, full level and layer range, so `reinterprets` is
+false. The only thing it needed was the `W -> One` swizzle every alpha-less format carries, and a
+swizzle needs a *private object*, not a view: GL keeps the swizzle on the texture object, so
+sharing one texture across views lets the last writer win for every sampler reading it. The route
+asked for a view anyway because the `Reimport` guard was gated on `!supports_view`, and
+`supports_view` is true for XBGR8888.
+
+`Route::Reimport` is `glEGLImageTargetTexture2DOES` into a fresh texture name — it aliases the
+same EGL image, so there is no copy and no allocation beyond a texture object, once per
+`CREATE_OBJECT(SamplerView)`. The new guard routes on the *need* rather than on the storage, so an
+identity view of imported storage still mints nothing. The same rule also covers the latent case
+where `!supports_view && reinterprets` fell through to `View`: a reinterpretation over storage no
+view can be taken of is now served unreinterpreted rather than refused, on the same terms as a
+host with no `glTextureView`.
+
+**Measured cured**, untraced, at that patch: vkmark completes all scenes and scores 3363, **zero
+`refused: vrend`, zero poisoned submits**. The compositor keeps rendering — successive scanout
+captures differ under load — Firefox launches and the desktop keeps painting, and a human
+confirmed the desktop looks healthy on screen. The two routing tests fail against the old
+`view_route` (`left: View`) and pass against the new, checked by reverting the function rather
+than by assuming.
 
 ## What is *not* the discriminator
 

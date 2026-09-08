@@ -1,0 +1,56 @@
+diff --git a/src/vrend/context.rs b/src/vrend/context.rs
+index 48b4f8f..ec76861 100644
+--- a/src/vrend/context.rs
++++ b/src/vrend/context.rs
+@@ -2774,8 +2774,10 @@ fn view_route(n: ViewNeed) -> Route {
+     if !n.reinterprets && !n.private {
+         return Route::Shared;
+     }
+-    if !n.supports_view && !n.reinterprets && n.has_image {
+-        return Route::Reimport;
++    if n.has_image || !n.supports_view {
++        // The private object is still available, as a second import. The reinterpretation is not
++        // available at all, and goes unserved rather than refused.
++        return if n.private && n.has_image { Route::Reimport } else { Route::Shared };
+     }
+     if n.can_view { Route::View } else { Route::Shared }
+ }
+@@ -4361,6 +4363,10 @@ mod tests {
+     /// and the driver refuses, so the only object it can have is a second import of its image.
+     const UNVIEWABLE: ViewNeed = ViewNeed { supports_view: false, has_image: true, ..ORDINARY };
+ 
++    /// An IOSurface-backed texture a `glTextureView` would be accepted over -- XBGR8888, say. The
++    /// host takes the call and refuses the result, so its private object is an import too.
++    const IMPORTED: ViewNeed = ViewNeed { has_image: true, ..ORDINARY };
++
+     #[test]
+     fn a_view_that_asks_for_nothing_shares_the_texture() {
+         assert_eq!(view_route(ORDINARY), Route::Shared);
+@@ -4386,12 +4392,24 @@ mod tests {
+         assert_eq!(view_route(n), Route::View);
+     }
+ 
++    /// The bug this cures. A swizzle over imported storage the host *says* it can view: it takes
++    /// the `glTextureView` and refuses the result, killing the context. The need is a private
++    /// object, not a view, and a second import is one.
++    #[test]
++    fn a_swizzle_over_imported_storage_reimports_even_when_a_view_is_offered() {
++        let n = ViewNeed { private: true, ..IMPORTED };
++        assert_eq!(view_route(n), Route::Reimport);
++    }
++
+     /// Reinterpreting is the one need a second import cannot serve -- it hands back the whole
+-    /// surface in its own format -- so it goes to a view even where a view is a poor bet.
++    /// surface in its own format. Over imported storage there is no object that can serve it, so
++    /// it is served unreinterpreted rather than refused, on the same terms as a host with no
++    /// `glTextureView` at all.
+     #[test]
+-    fn reinterpreting_always_asks_for_a_view() {
++    fn reinterpreting_asks_for_a_view_only_where_one_can_be_taken() {
+         assert_eq!(view_route(ViewNeed { reinterprets: true, ..ORDINARY }), Route::View);
+-        assert_eq!(view_route(ViewNeed { reinterprets: true, ..UNVIEWABLE }), Route::View);
++        assert_eq!(view_route(ViewNeed { reinterprets: true, ..UNVIEWABLE }), Route::Shared);
++        assert_eq!(view_route(ViewNeed { reinterprets: true, ..IMPORTED }), Route::Shared);
+     }
+ 
+     /// A host with no `glTextureView`, or a mutable texture, has no object to give: the shared
