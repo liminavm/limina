@@ -92,18 +92,47 @@ samples, and the cadence around them, which a replay structurally cannot exercis
 **It is also not vrend's GL.** Same session, one variable: glmark2 scores **4687** on the shipped
 vrend path against **2157** on zink→venus. vrend's windowed GL is more than twice the venus path.
 
-### The fence A/B eliminates one site, not the idea
+### Where the time actually goes, and why the fence A/B is the interesting result
 
 `VIRGLRS_FENCE_FINISH` gates only `finish_classic_for_fence` (`renderer.rs:1102`).
 `resource_sync_iosurface` calls the same `finish_all()` **unconditionally**
 (`vrend/vrend.rs:564`), and `finish_all` walks every context and sub-context doing
 `make_current` + `glFinish` on each, with the renderer's single mutex held.
 
-So the A/B above measures that the *fence* site costs nothing and leaves the
-`flush_resource` → `sync_iosurface` page-flip site **untested**. The serialization
-hypothesis therefore survives it: every virtio-gpu command from every context — cursor
-updates included — queues behind a drain of the aquarium's GPU-bound frame once per
-page-flip.
+A 20 s worker profile (the virglrs session, `gpu worker` thread, 11838 samples) says where
+the time is:
+
+| path | samples | share |
+|---|---|---|
+| `create_fence` → `finish_all` | ~8827 | **75%** |
+| `submit_cmd` (actual work) | 2739 | 23% |
+| `sync_iosurface` → `finish_all` | 12 | **0.1%** |
+
+So the dominant site is the **fence** one — the site `VIRGLRS_FENCE_FINISH` gates and the
+one the A/B above already covered. The page-flip site is negligible. **Do not build a knob
+for it.**
+
+That makes the null A/B the interesting result rather than a retired one, and it is a real
+null: `spawn_worker` (`crates/limina/src/supervisor.rs:359`) only ever *adds* environment
+variables and there is no `env_clear`/`env_remove` anywhere in `crates/limina/src/`, so the
+worker inherits `VIRGLRS_FENCE_FINISH=0` and the knob did take.
+
+**Blocked 75% of the time is not 75% recoverable.** The leaf of that chain is
+`-[IOSurfaceSharedEvent waitUntilSignaledValue:]` — waiting on GPU work already submitted.
+If the aquarium saturates the GPU at 25 000 fish, removing the wait relocates it rather than
+removing it, which is exactly what two independent instruments measured: 4 vs 4 and 4 vs 3
+in the VM, 2.61 s vs 2.59 s VM-free. The likely reading is that **this workload is GPU-bound
+on KosmicKrisp**, and the C-era 42 was measured against a host driver that has since moved —
+which is what the `timestampPeriod` 41.666668 evidence independently says.
+
+### Serialization is a separate question from throughput
+
+One `gpu worker` thread services virtio-gpu commands for **every** context, and it holds the
+renderer lock while parked in `glFinish` 75% of the time. Cursor updates queue behind an
+aquarium frame drain whether or not removing that drain would raise anyone's fps. That is a
+latency and fairness defect, it is what a human sees as the whole desktop going sticky, and
+**no throughput number in this memo would reveal it** — the closest is the flat 20/19, and
+only because a drain-bound figure stops tracking the workload.
 
 Both rigs now agree at 25 000 fish — **20 fps here, 19 on the virglrs session's**, same method and
 same verified-pinned display — so the residual is **~2.2x**, not the 1.7x quoted from an earlier
@@ -120,9 +149,7 @@ That also reframes the flat 20 @ 25k vs 19 @ 30k: if presents serialize behind a
 fps stops tracking fish count and starts tracking the drain. Those two rows may be evidence
 rather than an artefact.
 
-**The measurement that would settle it** is the same treatment the fence site already has — an
-env gate around the `finish_all()` in `resource_sync_iosurface`, turning the hypothesis into a
-one-boot A/B on an unchanged build. Not a shipping configuration; a knob.
+
 
 ## Not measured
 
