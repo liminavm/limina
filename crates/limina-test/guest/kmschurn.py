@@ -334,6 +334,7 @@ ST_COMMAND_BUFFER_BEGIN_INFO = 42
 ST_IMAGE_MEMORY_BARRIER = 45
 ST_EXTERNAL_MEMORY_IMAGE = 1000072001
 ST_EXPORT_MEMORY_ALLOCATE_INFO = 1000072002
+ST_IMPORT_MEMORY_FD_INFO = 1000074000
 ST_MEMORY_GET_FD_INFO = 1000074002
 ST_MEMORY_DEDICATED_ALLOCATE_INFO = 1000127001
 ST_MODIFIER_LIST = 1000158003
@@ -447,6 +448,38 @@ class MemoryDedicatedAllocateInfo(C.Structure):
     _fields_ = [("sType", C.c_uint32), ("pNext", P), ("image", H), ("buffer", H)]
 
 
+# VkMemoryPropertyFlagBits. The memory arms aim an allocation at one of the renderer's
+# backings, and the backing is chosen from exactly these bits plus whether the allocation
+# declares an export -- so naming a type by its first allowed bit (what `first_memory_type`
+# does, which is all the scanout arm needs) cannot express the target.
+MEM_DEVICE_LOCAL = 0x1
+MEM_HOST_VISIBLE = 0x2
+MEM_HOST_COHERENT = 0x4
+
+VK_MAX_MEMORY_TYPES = 32
+VK_MAX_MEMORY_HEAPS = 16
+
+
+class MemoryType(C.Structure):
+    _fields_ = [("propertyFlags", C.c_uint32), ("heapIndex", C.c_uint32)]
+
+
+class MemoryHeap(C.Structure):
+    _fields_ = [("size", C.c_uint64), ("flags", C.c_uint32)]
+
+
+class PhysicalDeviceMemoryProperties(C.Structure):
+    _fields_ = [("memoryTypeCount", C.c_uint32),
+                ("memoryTypes", MemoryType * VK_MAX_MEMORY_TYPES),
+                ("memoryHeapCount", C.c_uint32),
+                ("memoryHeaps", MemoryHeap * VK_MAX_MEMORY_HEAPS)]
+
+
+class ImportMemoryFdInfo(C.Structure):
+    _fields_ = [("sType", C.c_uint32), ("pNext", P), ("handleType", C.c_uint32),
+                ("fd", C.c_int)]
+
+
 class MemoryGetFdInfo(C.Structure):
     _fields_ = [("sType", C.c_uint32), ("pNext", P), ("memory", H),
                 ("handleType", C.c_uint32)]
@@ -516,6 +549,7 @@ def load_vk():
         ("vkCreateInstance", [P, P, P], C.c_int),
         ("vkEnumeratePhysicalDevices", [P, P, P], C.c_int),
         ("vkGetPhysicalDeviceProperties", [P, P], None),
+        ("vkGetPhysicalDeviceMemoryProperties", [P, P], None),
         ("vkCreateDevice", [P, P, P, P], C.c_int),
         ("vkGetDeviceProcAddr", [P, C.c_char_p], P),
         ("vkGetDeviceQueue", [P, C.c_uint32, C.c_uint32, P], None),
@@ -598,7 +632,7 @@ def make_vk_device(vk, want="Venus"):
     if not addr:
         fail("vkGetDeviceProcAddr", "vkGetMemoryFdKHR missing")
     get_fd = C.CFUNCTYPE(C.c_int, P, P, C.POINTER(C.c_int))(addr)
-    return dev, get_fd
+    return dev, get_fd, phys
 
 
 class Recorder:
@@ -869,6 +903,158 @@ def await_flip(fd):
     return False
 
 
+# ------------------------------------------------------------------------------------
+# The memory arms (`mem-*`).
+#
+# The scanout arms above answer one question: does a fresh SCANOUT buffer per frame leave
+# host state behind. They reach exactly one of the renderer's allocation backings -- the
+# one a recognised scanout takes -- because that is all a KMS presenter can allocate.
+#
+# These arms allocate the other shapes. virglrs decides at `vkAllocateMemory` which backing
+# an allocation gets, from the memory type's property bits plus whether the allocation
+# declares an export, and each backing owns its storage differently; a release path that
+# works for one can be missing for another and no scanout workload would notice. What each
+# arm asks the driver for is in `MEM_ARMS` and is reported on the run; which backing virglrs
+# then picks is the renderer's decision, and nothing here observes it.
+#
+# They need NO display: no DRM master, no modeset, no flips, no compositor. Just the venus
+# ICD and an allocate/free loop, which is why they branch before `main` touches the card.
+#
+# **What they cannot measure on this stack, and why.** A leaked `VkDeviceMemory` here is not
+# measurable from the host at all. Every memory type venus advertises over KosmicKrisp is
+# host-visible (see below), so the driver backs each one with `newBufferWithBytesNoCopy` over
+# pages the renderer minted -- and dropping the renderer's record frees those pages whether
+# or not `vkFreeMemory` was ever called. What survives is a small Metal wrapper, costing no
+# resident bytes. The scanout arms score in bytes because a SCANOUT's pages belong to an
+# IOSurface, and the no-copy buffer holds those past the release; with no IOSurface there is
+# nothing to hold. Measured 2026-09-08 across a renderer that frees these allocations and one
+# that does not: `vmmap` `owned unmapped`, `IOAccelerator` and `Physical footprint` all +0 on
+# every arm, and KosmicKrisp's own BO census (`LIMINA_KK_BOCENSUS`) equal within its sampling
+# noise -- `kk_bo.c` does not charge host-pointer imports, which is exactly what these are.
+#
+# So do not build a retention gate on these arms. The guard for that defect is a unit test in
+# virglrs, `every_backing_gives_its_allocation_back`, which sees the free directly. What these
+# arms are good for is reaching the shapes by hand from a real guest, and they become an
+# oracle again the day an arm allocates something IOSurface-backed.
+# ------------------------------------------------------------------------------------
+
+# Measured 2026-09-08 on venus over KosmicKrisp: the device advertises ONE memory type, flags
+# 0xf — DEVICE_LOCAL and HOST_VISIBLE and COHERENT and CACHED at once. So a host-visible arm must
+# not deny DEVICE_LOCAL (nothing would match), and the arm aimed at memory the host cannot address
+# has no type to allocate from at all. That last one is reported, not failed: a backing this
+# driver cannot produce is a fact about the driver, and a test that treated it as a broken arm
+# would be asserting about a shape no guest here can reach.
+MEM_ARMS = {
+    # name          want bits          deny bits          declares an export
+    "mem-heap":   (MEM_HOST_VISIBLE, 0,                False),
+    "mem-linear": (MEM_HOST_VISIBLE, 0,                True),
+    "mem-device": (MEM_DEVICE_LOCAL, MEM_HOST_VISIBLE, False),
+    "mem-import": (MEM_HOST_VISIBLE, 0,                True),
+}
+
+# 4 MiB, the scanout arm's buffer size, so a leak here is counted in the same unit.
+MEM_ALLOC_B = 4 * 1024 * 1024
+
+
+def pick_memory_type(vk, phys, want, deny):
+    """A memory type index with every `want` bit and no `deny` bit, or None.
+
+    Reported, never silently chosen: which type an arm allocates from is the whole premise
+    of the arm, so the index and its flags go in the log as the evidence for it. `None` is
+    a real answer -- this device may simply have no such type -- and the caller says so.
+    """
+    props = PhysicalDeviceMemoryProperties()
+    vk.vkGetPhysicalDeviceMemoryProperties(phys, C.byref(props))
+    have = [hex(props.memoryTypes[i].propertyFlags)
+            for i in range(props.memoryTypeCount)]
+    print(f"KMS MEMTYPES {have}", flush=True)
+    for i in range(props.memoryTypeCount):
+        flags = props.memoryTypes[i].propertyFlags
+        if flags & want == want and flags & deny == 0:
+            print(f"KMS MEMTYPE index={i} flags=0x{flags:x} "
+                  f"want=0x{want:x} deny=0x{deny:x}", flush=True)
+            return i
+    return None
+
+
+def mem_churn(mode_name, rounds):
+    """Allocate and free `rounds` allocations aimed at one backing."""
+    want, deny, export = MEM_ARMS[mode_name]
+    vk = load_vk()
+    vkdev, get_fd, phys = make_vk_device(vk)
+    for var in ENV_OF_RECORD:
+        print(f"KMS ENV {var}={os.environ.get(var, 'UNSET')}", flush=True)
+    idx = pick_memory_type(vk, phys, want, deny)
+    if idx is None:
+        # Not a failure: this driver has no such memory type, so no guest on it can reach the
+        # backing this arm is aimed at. Said in the DONE line's own vocabulary so one parser
+        # reads it, with created=0 to make "nothing ran" impossible to read as "nothing leaked".
+        print(f"CHURN SKIP {mode_name} no memory type with want=0x{want:x} deny=0x{deny:x}",
+              flush=True)
+        print(f"CHURN DONE {mode_name} flips=0 created=0 handles=0 elapsed=0.0", flush=True)
+        return
+    importing = mode_name == "mem-import"
+
+    print(f"CHURN START {mode_name} rounds={rounds} size={MEM_ALLOC_B} "
+          f"type={idx} export={export} import={importing}", flush=True)
+    created = 0
+    started = time.monotonic()
+    for i in range(rounds):
+        exp = ExportMemoryAllocateInfo()
+        exp.sType = ST_EXPORT_MEMORY_ALLOCATE_INFO
+        exp.handleTypes = HANDLE_DMA_BUF
+        ai = MemoryAllocateInfo()
+        ai.sType = ST_MEMORY_ALLOCATE_INFO
+        ai.pNext = vp(exp) if export else None
+        ai.allocationSize = MEM_ALLOC_B
+        ai.memoryTypeIndex = idx
+        mem = H(0)
+        r = vk.vkAllocateMemory(vkdev, C.byref(ai), None, C.byref(mem))
+        if r != VK_SUCCESS:
+            fail("vkAllocateMemory", f"VkResult={r} round={i} type={idx}")
+        created += 1
+
+        # The import arm takes a second allocation over the first one's dma-buf, which is
+        # the only way to reach the renderer's imported backing from a single process.
+        imported = H(0)
+        if importing:
+            gfi = MemoryGetFdInfo()
+            gfi.sType = ST_MEMORY_GET_FD_INFO
+            gfi.memory = mem
+            gfi.handleType = HANDLE_DMA_BUF
+            fd_out = C.c_int(-1)
+            r = get_fd(vkdev, C.byref(gfi), C.byref(fd_out))
+            if r != VK_SUCCESS:
+                fail("vkGetMemoryFdKHR", f"VkResult={r} round={i}")
+            imp = ImportMemoryFdInfo()
+            imp.sType = ST_IMPORT_MEMORY_FD_INFO
+            imp.handleType = HANDLE_DMA_BUF
+            imp.fd = fd_out.value
+            ai2 = MemoryAllocateInfo()
+            ai2.sType = ST_MEMORY_ALLOCATE_INFO
+            ai2.pNext = vp(imp)
+            ai2.allocationSize = MEM_ALLOC_B
+            ai2.memoryTypeIndex = idx
+            r = vk.vkAllocateMemory(vkdev, C.byref(ai2), None, C.byref(imported))
+            if r != VK_SUCCESS:
+                fail("vkAllocateMemory(import)", f"VkResult={r} round={i}")
+            created += 1
+            # The import consumed the fd (dma-buf import takes ownership), so it is not
+            # closed here; closing it would be a double close.
+
+        if imported.value:
+            vk.vkFreeMemory(vkdev, imported, None)
+        vk.vkFreeMemory(vkdev, mem, None)
+        if (i + 1) % 50 == 0:
+            print(f"CHURN PROGRESS {i + 1} created={created}", flush=True)
+
+    elapsed = time.monotonic() - started
+    # Same shape as the scanout arms' line so one parser reads both. `flips=0` is honest:
+    # nothing was presented, and the arm does not pretend a display was involved.
+    print(f"CHURN DONE {mode_name} flips=0 created={created} "
+          f"handles={created} elapsed={elapsed:.1f}", flush=True)
+
+
 def main():
     mode_name = sys.argv[1] if len(sys.argv) > 1 else "probe"
     frames = int(sys.argv[2]) if len(sys.argv) > 2 else 300
@@ -878,6 +1064,12 @@ def main():
 
     # `-vk` swaps the ALLOCATOR and nothing else: same modeset, same flips, same release
     # discipline, so a gbm/vk pair differs in exactly one variable.
+    # The memory arms touch no display at all, so they branch before the card is opened
+    # and before DRM master is taken -- a test for them needs neither a window nor a seat.
+    if mode_name in MEM_ARMS:
+        mem_churn(mode_name, frames)
+        return
+
     vulkan = mode_name.endswith("-vk")
     base_mode = mode_name[:-3] if vulkan else mode_name
     if base_mode not in ("probe", "churn", "static"):
@@ -903,7 +1095,7 @@ def main():
 
     if vulkan:
         vk = load_vk()
-        vkdev, get_fd = make_vk_device(vk)
+        vkdev, get_fd, _phys = make_vk_device(vk)
         ctx = (vk, vkdev, get_fd, Recorder(vk, vkdev))
         dev = None
         make_buffer = VkBuffer
