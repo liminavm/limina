@@ -27,6 +27,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <errno.h>
 
 #include <wayland-client.h>
 #include "xdg-shell-client-protocol.h"
@@ -58,6 +60,52 @@ static void vk_check(VkResult r, const char *what) {
     if (r != VK_SUCCESS) {
         fprintf(stderr, "vkstill: %s failed (VkResult %d)\n", what, (int)r);
         exit(1);
+    }
+}
+
+
+/* ---- instrumentation ----------------------------------------------------- */
+
+/* Every interesting event, stamped with a monotonic clock and flushed immediately so the
+ * ordering against an strace log is meaningful. VKSTILL_TRACE=0 turns it off; the default is on
+ * because a client that is being debugged should say what it is doing. */
+static bool trace_on(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *v = getenv("VKSTILL_TRACE");
+        cached = (v && !strcmp(v, "0")) ? 0 : 1;
+    }
+    return cached == 1;
+}
+
+static double now_s(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
+}
+
+#define VKSTILL_LOG(...)                                                                 \
+    do {                                                                                 \
+        if (trace_on()) {                                                                \
+            fprintf(stderr, "vkstill[%.3f] ", now_s());                                  \
+            fprintf(stderr, __VA_ARGS__);                                                \
+            fputc('\n', stderr);                                                         \
+            fflush(stderr);                                                              \
+        }                                                                                \
+    } while (0)
+
+static const char *vkres(VkResult r) {
+    switch (r) {
+    case VK_SUCCESS: return "SUCCESS";
+    case VK_NOT_READY: return "NOT_READY";
+    case VK_TIMEOUT: return "TIMEOUT";
+    case VK_SUBOPTIMAL_KHR: return "SUBOPTIMAL_KHR";
+    case VK_ERROR_OUT_OF_DATE_KHR: return "ERROR_OUT_OF_DATE_KHR";
+    case VK_ERROR_SURFACE_LOST_KHR: return "ERROR_SURFACE_LOST_KHR";
+    case VK_ERROR_DEVICE_LOST: return "ERROR_DEVICE_LOST";
+    case VK_ERROR_OUT_OF_HOST_MEMORY: return "ERROR_OUT_OF_HOST_MEMORY";
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "ERROR_OUT_OF_DEVICE_MEMORY";
+    default: return "other";
     }
 }
 
@@ -103,6 +151,8 @@ static const struct wl_registry_listener registry_listener = {
 static void xdg_surface_configure(void *data, struct xdg_surface *xs, uint32_t serial) {
     struct wl_state *s = data;
     xdg_surface_ack_configure(xs, serial);
+    if (!s->configured) VKSTILL_LOG("wl: first xdg_surface configure, serial %u", serial);
+    else VKSTILL_LOG("wl: xdg_surface configure, serial %u", serial);
     s->configured = true;
 }
 static const struct xdg_surface_listener xdg_surface_listener = {
@@ -115,10 +165,12 @@ static void toplevel_configure(void *data, struct xdg_toplevel *t, int32_t w, in
     (void)t; (void)states;
     // A zero size means "you choose"; keep whatever we already had.
     if (w > 0 && h > 0) { s->width = w; s->height = h; }
+    VKSTILL_LOG("wl: toplevel_configure %dx%d (kept %dx%d)", w, h, s->width, s->height);
 }
 static void toplevel_close(void *data, struct xdg_toplevel *t) {
     struct wl_state *s = data;
     (void)t;
+    VKSTILL_LOG("wl: toplevel CLOSE requested — the compositor is asking us to quit");
     s->closed = true;
 }
 static const struct xdg_toplevel_listener toplevel_listener = {
@@ -191,6 +243,9 @@ static void create_swapchain(struct vk_state *vk) {
         .presentMode = VK_PRESENT_MODE_FIFO_KHR,
         .clipped = VK_TRUE,
     };
+    VKSTILL_LOG("swapchain: creating %ux%u, %u images requested, caps min=%u max=%u current=%ux%u",
+                vk->extent.width, vk->extent.height, want, caps.minImageCount,
+                caps.maxImageCount, caps.currentExtent.width, caps.currentExtent.height);
     vk_check(vkCreateSwapchainKHR(vk->device, &ci, NULL, &vk->swapchain), "vkCreateSwapchainKHR");
 
     VkImage images[MAX_IMAGES];
@@ -497,20 +552,67 @@ int main(void) {
     long idle_after = idle_env ? strtol(idle_env, NULL, 10) : 0;
     long presented = 0;
 
+    /* Swapchain rebuilds, named on stderr so the journal says whether this client is spinning.
+     *
+     * VK_SUBOPTIMAL_KHR is a SUCCESS code, and rebuilding on it -- which is what everyone does --
+     * only terminates if the rebuild actually resolves it. If the driver keeps saying suboptimal,
+     * this loop tears the swapchain down and builds it again every frame for as long as the
+     * client lives, which is not a still workload at all. Logged with the extent so a rebuild
+     * that changes nothing is visible as one. */
+    long rebuilds = 0;
+    struct timespec first_rebuild = { 0, 0 };
+#define VKSTILL_NOTE_REBUILD(where, res)                                                        \
+    do {                                                                                        \
+        rebuilds++;                                                                             \
+        if (rebuilds == 1) clock_gettime(CLOCK_MONOTONIC, &first_rebuild);                      \
+        if (rebuilds <= 5 || rebuilds % 100 == 0) {                                             \
+            struct timespec now;                                                                \
+            clock_gettime(CLOCK_MONOTONIC, &now);                                               \
+            fprintf(stderr,                                                                     \
+                    "vkstill: swapchain rebuild #%ld at %s (%s), extent %ux%u, %ld frames "     \
+                    "presented, %.1fs since the first rebuild\n",                               \
+                    rebuilds, (where),                                                          \
+                    (res) == VK_SUBOPTIMAL_KHR ? "SUBOPTIMAL" : "OUT_OF_DATE",                  \
+                    vk.extent.width, vk.extent.height, presented,                               \
+                    (double)(now.tv_sec - first_rebuild.tv_sec)                                 \
+                        + (double)(now.tv_nsec - first_rebuild.tv_nsec) / 1e9);                 \
+            fflush(stderr);                                                                     \
+        }                                                                                       \
+    } while (0)
+
+    VKSTILL_LOG("entering the present loop; idle_after=%ld", idle_after);
     while (!wl.closed) {
-        if (wl_display_dispatch_pending(wl.display) == -1) break;
-        wl_display_flush(wl.display);
+        double t_disp = now_s();
+        if (wl_display_dispatch_pending(wl.display) == -1) {
+            VKSTILL_LOG("wl_display_dispatch_pending failed — the connection is gone");
+            break;
+        }
+        if (wl_display_flush(wl.display) == -1)
+            VKSTILL_LOG("wl_display_flush failed (errno %d)", errno);
+        double t_disp_done = now_s();
+        if (t_disp_done - t_disp > 0.05)
+            VKSTILL_LOG("wayland dispatch/flush took %.1fms", (t_disp_done - t_disp) * 1e3);
 
         if (idle_after > 0 && presented >= idle_after) {
             if (wl_display_dispatch(wl.display) == -1) break;
             continue;
         }
 
+        double t_fence = now_s();
         vkWaitForFences(vk.device, 1, &vk.in_flight, VK_TRUE, UINT64_MAX);
+        double t_acq = now_s();
         uint32_t idx = 0;
         VkResult r = vkAcquireNextImageKHR(vk.device, vk.swapchain, UINT64_MAX, vk.acquired,
                                            VK_NULL_HANDLE, &idx);
+        double t_acq_done = now_s();
+        /* Every frame for the first 20, then every 30th: a stall shows as a gap in the stamps
+         * and a slow call shows in its own duration, without a 60Hz flood in between. */
+        if (presented < 20 || presented % 30 == 0)
+            VKSTILL_LOG("frame %ld: fence %.1fms, acquire %.1fms -> %s idx %u",
+                        presented, (t_acq - t_fence) * 1e3, (t_acq_done - t_acq) * 1e3,
+                        vkres(r), idx);
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
+            VKSTILL_NOTE_REBUILD("acquire", r);
             vkDeviceWaitIdle(vk.device);
             destroy_swapchain(&vk);
             create_swapchain(&vk);
@@ -541,8 +643,14 @@ int main(void) {
             .pSwapchains = &vk.swapchain,
             .pImageIndices = &idx,
         };
+        double t_pres = now_s();
         r = vkQueuePresentKHR(vk.queue, &pi);
+        double t_pres_done = now_s();
+        if (presented < 20 || presented % 30 == 0)
+            VKSTILL_LOG("frame %ld: submit+present %.1fms -> %s", presented,
+                        (t_pres_done - t_pres) * 1e3, vkres(r));
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
+            VKSTILL_NOTE_REBUILD("present", r);
             vkDeviceWaitIdle(vk.device);
             destroy_swapchain(&vk);
             create_swapchain(&vk);
