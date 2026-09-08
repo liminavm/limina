@@ -249,30 +249,30 @@ date,commit,workload,metric,value,notes
 2026-08-27,53a1387,gl-replay-llvmpipe,fps,716.217,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
 2026-08-27,53a1387,vk-replay-venus-headless,fps,1933.186653,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
 2026-08-27,53a1387,glmark2-wayland-venus,score,2702,ipa-granule A/B: arm B (--ipa-granule 4k), run 3
-2026-09-08,ce19a95b,gl-replay-venus,fps,57.5581,virglrs 894b36d full battery run 1
-2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,691.278,virglrs 894b36d full battery run 1
-2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1769.429358,virglrs 894b36d full battery run 1
-2026-09-08,ce19a95b,glmark2-wayland-venus,score,2287,virglrs 894b36d full battery run 1
-2026-09-08,ce19a95b,gl-replay-venus,fps,56.9412,virglrs 894b36d full battery run 2
-2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,703.658,virglrs 894b36d full battery run 2
-2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1606.957057,virglrs 894b36d full battery run 2
-2026-09-08,ce19a95b,glmark2-wayland-venus,score,2425,virglrs 894b36d full battery run 2
-2026-09-08,ce19a95b,gl-replay-venus,fps,57.0181,virglrs 894b36d full battery run 3
-2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,699.75,virglrs 894b36d full battery run 3
-2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1759.219962,virglrs 894b36d full battery run 3
-2026-09-08,ce19a95b,glmark2-wayland-venus,score,2296,virglrs 894b36d full battery run 3
-2026-09-08,b095253d,gl-replay-venus,fps,57.394,virglrs 42008bb full battery run 1
-2026-09-08,b095253d,gl-replay-llvmpipe,fps,710.801,virglrs 42008bb full battery run 1
-2026-09-08,b095253d,vk-replay-venus-headless,fps,1852.548702,virglrs 42008bb full battery run 1
-2026-09-08,b095253d,glmark2-wayland-venus,score,2277,virglrs 42008bb full battery run 1
-2026-09-08,b095253d,gl-replay-venus,fps,56.9095,virglrs 42008bb full battery run 2
-2026-09-08,b095253d,gl-replay-llvmpipe,fps,728.621,virglrs 42008bb full battery run 2
-2026-09-08,b095253d,vk-replay-venus-headless,fps,1679.076666,virglrs 42008bb full battery run 2
-2026-09-08,b095253d,glmark2-wayland-venus,score,2268,virglrs 42008bb full battery run 2
-2026-09-08,b095253d,gl-replay-venus,fps,56.9065,virglrs 42008bb full battery run 3
-2026-09-08,b095253d,gl-replay-llvmpipe,fps,722.266,virglrs 42008bb full battery run 3
-2026-09-08,b095253d,vk-replay-venus-headless,fps,1742.091354,virglrs 42008bb full battery run 3
-2026-09-08,b095253d,glmark2-wayland-venus,score,2261,virglrs 42008bb full battery run 3
+2026-09-08,ce19a95b,gl-replay-venus,fps,57.5581,virglrs 894b36d full battery run 1 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,691.278,virglrs 894b36d full battery run 1 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1769.429358,virglrs 894b36d full battery run 1 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,glmark2-wayland-venus,score,2287,virglrs 894b36d full battery run 1 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,gl-replay-venus,fps,56.9412,virglrs 894b36d full battery run 2 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,703.658,virglrs 894b36d full battery run 2 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1606.957057,virglrs 894b36d full battery run 2 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,glmark2-wayland-venus,score,2425,virglrs 894b36d full battery run 2 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,gl-replay-venus,fps,57.0181,virglrs 894b36d full battery run 3 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,gl-replay-llvmpipe,fps,699.75,virglrs 894b36d full battery run 3 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,vk-replay-venus-headless,fps,1759.219962,virglrs 894b36d full battery run 3 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,ce19a95b,glmark2-wayland-venus,score,2296,virglrs 894b36d full battery run 3 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,gl-replay-venus,fps,57.394,virglrs 42008bb full battery run 1 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,gl-replay-llvmpipe,fps,710.801,virglrs 42008bb full battery run 1 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,vk-replay-venus-headless,fps,1852.548702,virglrs 42008bb full battery run 1 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,glmark2-wayland-venus,score,2277,virglrs 42008bb full battery run 1 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,gl-replay-venus,fps,56.9095,virglrs 42008bb full battery run 2 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,gl-replay-llvmpipe,fps,728.621,virglrs 42008bb full battery run 2 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,vk-replay-venus-headless,fps,1679.076666,virglrs 42008bb full battery run 2 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,glmark2-wayland-venus,score,2268,virglrs 42008bb full battery run 2 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,gl-replay-venus,fps,56.9065,virglrs 42008bb full battery run 3 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,gl-replay-llvmpipe,fps,722.266,virglrs 42008bb full battery run 3 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,vk-replay-venus-headless,fps,1742.091354,virglrs 42008bb full battery run 3 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
+2026-09-08,b095253d,glmark2-wayland-venus,score,2261,virglrs 42008bb full battery run 3 (DEBUG renderer, -O0 -- measures the build profile, not the renderer)
 2026-09-08,d27bc7cc,gl-replay-venus,fps,56.9092,virglrs c299aae optimized dev profile run 1
 2026-09-08,d27bc7cc,gl-replay-llvmpipe,fps,717.5,virglrs c299aae optimized dev profile run 1
 2026-09-08,d27bc7cc,vk-replay-venus-headless,fps,2187.977338,virglrs c299aae optimized dev profile run 1
