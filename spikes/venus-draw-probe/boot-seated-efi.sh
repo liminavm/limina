@@ -42,6 +42,16 @@ export VK_DRIVER_FILES="$ICD"
 export MESA_LOADER_DRIVER_OVERRIDE=zink
 export GALLIUM_DRIVER=zink
 export LIBGL_DRIVERS_PATH="$MESA_PREFIX/lib"
+# Since the 2026-08-05 MTL4 rebase, mesa's zink dlopens "@rpath/libvulkan.1.dylib" and the
+# installed libgallium carries no matching LC_RPATH (meson strips build rpaths at install), so
+# the dlopen fails, `virgl_renderer_init` fails, and the worker DEGRADES TO SOFTWARE-2D rather
+# than refusing to boot -- a black screen behind a graphical.target that reads active. Only
+# DYLD_LIBRARY_PATH can fix it: it intercepts by leaf name BEFORE rpath resolution, while
+# DYLD_FALLBACK_LIBRARY_PATH above is consulted after and never gets the chance. The directory
+# holds only this one symlink, so it shadows nothing else by leaf name.
+mkdir -p "$MESA_PREFIX/vulkan-rpath"
+ln -sf /opt/homebrew/lib/libvulkan.1.dylib "$MESA_PREFIX/vulkan-rpath/libvulkan.1.dylib"
+export DYLD_LIBRARY_PATH="$MESA_PREFIX/vulkan-rpath${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 export EGL_PLATFORM=surfaceless
 # vkr_log emits at virgl INFO; the default logger level is WARNING, which silently
 # swallows every limina: line in vkr_*.c — keep INFO on for this A/B vehicle.
