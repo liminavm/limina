@@ -536,6 +536,38 @@ with passwordless sudo.
   + FIDO + fingerprint, NAT, windowed — the settings to recreate if it is wrapped in a `.liminavm`
   again. Boot it flat with `cargo xtask run --disk Debian-testing.luks.raw`.
 
+## The virglrs harness rig (`harness/vm/disks/`)
+
+The virglrs harness records its corpora from a real guest, so its rig keeps its own copies of
+three images. They are ordinary CoW clones of the canonical files here and are **forks from the
+moment they are copied**, by the rule under Conventions: no `deliver-payload.sh` finds them, and
+the Component versions table above does not describe them. Read a version in the booted rig guest
+rather than inferring it.
+
+| Rig disk | Cloned from | What it is for |
+|---|---|---|
+| `Fedora-Workstation-44.enhanced.synoik.raw` | `enhanced.synoik` | the venus corpora — synoik starts at boot |
+| `Fedora-Workstation-44.enhanced.test.raw` | `enhanced.test` | enhanced-tier GNOME, for the venus-from-clients corpora |
+| `Fedora-Workstation-44.stock.test.raw` | `stock.test` | classic virgl and the video path |
+
+`harness/vm/make-rig.sh` in virglrs makes them, and nothing about how they are *built* lives
+there: an image is produced and refreshed exactly as this document says, and the rig only clones
+the result. To stand one up, or to bring a stale rig clone forward:
+
+```bash
+cd ~/Projects/virglrs/harness/vm
+./make-rig.sh --disks-only          # cp -c from the canonical images in the limina checkout
+# a stale clone is brought forward like any other image:
+# limina/scripts/provision/deliver-payload.sh <payload> <the rig clone>
+```
+
+**Only recording a new corpus needs these.** virglrs's replay layers are VM-free — every pinned
+score in `harness/replay/fixtures/` replays from a stored corpus with no guest, no disk and no
+GPU-side boot — so a checkout with no images can still run and regress the whole replay suite.
+That is why the corpora are published as release assets and these images are not: 75 GB that this
+document already explains how to rebuild, against ~100 MB that cannot be rebuilt at all, because a
+recording of a guest session is not reproducible.
+
 ## The unified build image (`limina-build:fc43`)
 
 Every **Linux** build runs in one container image — `scripts/build-image/Containerfile`, built on first
