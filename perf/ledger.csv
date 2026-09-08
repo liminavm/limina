@@ -273,3 +273,15 @@ date,commit,workload,metric,value,notes
 2026-09-08,b095253d,gl-replay-llvmpipe,fps,722.266,virglrs 42008bb full battery run 3
 2026-09-08,b095253d,vk-replay-venus-headless,fps,1742.091354,virglrs 42008bb full battery run 3
 2026-09-08,b095253d,glmark2-wayland-venus,score,2261,virglrs 42008bb full battery run 3
+2026-09-08,d27bc7cc,gl-replay-venus,fps,56.9092,virglrs c299aae optimized dev profile run 1
+2026-09-08,d27bc7cc,gl-replay-llvmpipe,fps,717.5,virglrs c299aae optimized dev profile run 1
+2026-09-08,d27bc7cc,vk-replay-venus-headless,fps,2187.977338,virglrs c299aae optimized dev profile run 1
+2026-09-08,d27bc7cc,glmark2-wayland-venus,score,3099,virglrs c299aae optimized dev profile run 1
+2026-09-08,d27bc7cc,gl-replay-venus,fps,56.8777,virglrs c299aae optimized dev profile run 2
+2026-09-08,d27bc7cc,gl-replay-llvmpipe,fps,691.467,virglrs c299aae optimized dev profile run 2
+2026-09-08,d27bc7cc,vk-replay-venus-headless,fps,2265.242961,virglrs c299aae optimized dev profile run 2
+2026-09-08,d27bc7cc,glmark2-wayland-venus,score,3109,virglrs c299aae optimized dev profile run 2
+2026-09-08,d27bc7cc,gl-replay-venus,fps,56.9197,virglrs c299aae optimized dev profile run 3
+2026-09-08,d27bc7cc,gl-replay-llvmpipe,fps,719.206,virglrs c299aae optimized dev profile run 3
+2026-09-08,d27bc7cc,vk-replay-venus-headless,fps,2224.329156,virglrs c299aae optimized dev profile run 3
+2026-09-08,d27bc7cc,glmark2-wayland-venus,score,2959,virglrs c299aae optimized dev profile run 3
