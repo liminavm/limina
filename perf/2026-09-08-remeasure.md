@@ -54,7 +54,13 @@ the host rather than the stack.
 ## WebGL aquarium — the fence drain
 
 1024×1024 canvas, seated session, fps read from the supervisor's frame capture. Crops in
-`perf/evidence/2026-09-08/`.
+`perf/evidence/2026-09-08/`. **Every cell here is a single capture, not n=3** — the 1.8x below is
+solid at that granularity, the individual numbers are not.
+
+**Flatness across fish counts is not a signal.** This memo previously read the flat 20 @ 25k /
+19 @ 30k as evidence of a drain-bound workload. With the drain removed the pair reads 35 / 34 —
+just as flat — and the C-era baseline was 42 / 39, also fairly flat. It never discriminated
+anything and no argument here rests on it.
 
 | numFish | 08-08 (C) | virglrs `-O0` | virglrs `-O3` | **`-O3`, `VIRGLRS_FENCE_FINISH=0`** |
 |---|---|---|---|---|
@@ -67,8 +73,14 @@ Two costs, stacked, and both are ours:
 2. **A `glFinish` of every context on every classic fence** — worth a further **1.8x**
    (19 → 35 at 25 000, measured by the virglrs session on the optimized build).
 
-That leaves ~1.2x against the C-era 42, which is small enough to be the KosmicKrisp and guest
-mesa drift over the same month.
+That leaves **~1.2x unattributed** against the C-era 42. That figure is a *subtraction, not a
+measurement*: 35 against a 42 taken on a different host driver and a different guest mesa, both
+single captures. Nothing has scored it, and it should not be quoted as "KosmicKrisp and mesa
+drift" until something does.
+
+It will also need recomputing rather than inheriting. `VIRGLRS_FENCE_FINISH=0` is not the fix, and
+a `glFenceSync` that actually waits is not free — the shipping number will land somewhere between
+19 and 35, and the residual is whatever remains against *that*.
 
 The `create_fence` → `finish_all` path is **75%** of the `gpu worker` thread's samples on the
 stock optimized build (11838 samples; `submit_cmd` 23%, `sync_iosurface` → `finish_all` 0.1%).
@@ -98,11 +110,17 @@ such a result looks stale.
 | elimination | build | status |
 |---|---|---|
 | classic-fence `glFinish` (`VIRGLRS_FENCE_FINISH=0`) | `-O0` | **FALSIFIED** — it is 1.8x |
-| the 09-06 multisample cap (`VREND_MAX_SAMPLES=4`) | `-O0` | **suspect, re-run owed** |
+| the 09-06 multisample cap (`VREND_MAX_SAMPLES=4`) | `-O0` | **suspect, re-run owed — with a positive control** |
 | the sampler-view cure (pre-cure `34ed41d`) | `-O0` | **suspect as a timing result** |
 | vrend vs zink→venus glmark2 (4687 / 2157) | `-O0` + fence off | **suspect** — an unshipped config |
 | Firefox's version (150.0, April) | n/a | stands — not a timing measurement |
 | the command stream (VM-free replay, C ~2.12 s vs virglrs ~2.61 s) | `--release` | stands |
+
+**A null needs a positive control to mean anything.** "No cost" is only concludable from a
+measurement that *could* have shown one, so re-running the multisample cap as a bare timing A/B on
+the fast build would buy a second null and more confidence in it, which is worse than the first.
+What made the fence A/B trustworthy was `finish_all` going 8827 → 30 in the profile — the variable
+was visibly moved. The re-run needs the equivalent.
 
 The pre-cure leg's **zero poison** stands regardless — that is a behavioural observation, not a
 timing one, and it still shows Firefox's canvas never takes the minted-`glTextureView` route.
