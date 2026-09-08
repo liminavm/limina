@@ -53,6 +53,44 @@ anything the command doesn't expose). Both also run `scripts/build-test-guest.sh
 kernel, cross-builds `guest/limina-init`, stages the rootfs); run that standalone to rebuild just
 the L1 guest.
 
+## Debugging a failing L2 test
+
+An L2 test boots a whole desktop and runs several apps in it. When one fails, the fault is
+somewhere in guest + workload + host, and the cheapest way to be wrong for a day is to start
+theorising about the host. Work in this order.
+
+**1. Halve the workload before theorising.** Run each app alone, then in pairs
+(`LIMINA_L2_WORKLOAD=nautilus` in `l2_desktop_restore_landmarks`, `VKSTILL_IDLE_AFTER` and the
+app list elsewhere). One boot per app is minutes; it names the culprit or proves the fault needs
+a combination, and either answer redirects everything after it. A whole day has gone into the
+display path of a failure that one app reproduced on its own.
+
+**2. Ask whether the guest is doing what you think.** The guest's own state is one ssh away and
+is not guessable from the host: `gdbus call … Mutter.DisplayConfig.GetCurrentState` for the mode
+and scale actually in force, `/sys/kernel/debug/dri/0/framebuffer` and `/state` for what KMS is
+scanning out and who allocated it, `journalctl --user` for what the session thinks. A parameter
+named in a doc comment ("the guest drops to 100%") is a design intent until something reads it
+back.
+
+**3. Count restarts, not processes.** `pgrep -c` says 1 whether that process is the original or
+the ninth. A relaunch cycle shows up in `systemctl --user show -p NRestarts`, in failed units,
+and in process ages — never in a count.
+
+**4. Put the probe inside the window the fault happens in.** Diagnostics gathered before the
+symptom appears report a healthy system, truthfully and uselessly. If the failure is a 90-second
+settle that times out, read the guest again *at the timeout*, not only before it.
+
+**5. Beware oracles that cannot fail.** `pgrep -f <pattern>` matches the shell running it, so a
+count keyed on it never reaches zero and the assertion built on it never fires. A log needle is
+a claim about text another repository writes, and it rots silently. Pair any "nothing bad in the
+log" check with a line the code writes unconditionally, and assert on that too.
+
+**6. Prefer a window when the question is "what does it look like".**
+`with_windowed_coexist_display` opens a real window; a person watching it for thirty seconds
+answers questions no capture PNG can ("the dash was throbbing"). Note the two display flags are
+mutually exclusive, so a windowed boot writes no capture and the pixel oracles cannot run — this
+is for looking, not for gating.
+
 ### Environment overrides
 
 | Var | Default |
