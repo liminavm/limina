@@ -84,6 +84,10 @@ fn boot_seated(test_name: &str) -> Option<Guest> {
     let cfg = cfg
         .with_coexist_display(1280, 800)
         .with_net()
+        // The renderer's refusal marker lands on the worker's stderr and nowhere else, so
+        // without this capture `assert_renderer_served` below has nothing to read and a
+        // poisoned context is invisible to every check in this file. See `renderer.rs`.
+        .with_supervisor_log()
         .with_env("LIMINA_PRESENT_COPY", "1");
     eprintln!("booting the seated dev-enh golden (KK ICD {icd:?})");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
@@ -101,6 +105,96 @@ fn boot_seated(test_name: &str) -> Option<Guest> {
         )
         .expect("the autologin session's Xwayland never came up");
     Some(guest)
+}
+
+/// What a guest-side GL probe gets before it is called wedged.
+///
+/// `glmark2-es2 -b build:duration=1` is a two-second benchmark; a hundred and twenty seconds is
+/// the difference between "the host is loaded" and "this is never coming back".
+const PROBE_DEADLINE: Duration = Duration::from_secs(120);
+
+/// What one replay leg gets. Measured ~80 s for either backend on this trace; the ceiling is
+/// wide because X11 present on this stack is known-slow, not because a replay might legitimately
+/// take five minutes.
+const REPLAY_DEADLINE: Duration = Duration::from_secs(300);
+
+/// Run a command in the guest under `deadline`, and when it fails say what the RENDERER was
+/// doing — which is the only place the real cause is ever written.
+///
+/// A poisoned venus context does not fail here in any way that names itself. The guest's driver
+/// reports the refusal in its own vocabulary (zink turns an unserved `vkQueueSubmit2` into
+/// `VK_ERROR_OUT_OF_HOST_MEMORY`, then a heap allocation failure, then a deadlock in `futex_wait`
+/// on a fence nothing will signal), so what a test sees is a timeout with no exit code and no
+/// crash. Folding [`renderer::refusals`] into the panic turns that into the name of the command.
+fn run_in_guest(guest: &Guest, cmd: &str, deadline: Duration, when: &str) -> String {
+    match guest.ssh_exec_timeout(cmd, deadline) {
+        Ok(out) => out,
+        Err(e) => {
+            let log = guest.supervisor_log();
+            let refused = limina_test::renderer::refusals(&log);
+            let why = if refused.is_empty() {
+                "the renderer refused nothing, so this is the guest's own fault".to_string()
+            } else {
+                format!(
+                    "the renderer REFUSED {} time(s) — this is why:\n{}",
+                    refused.len(),
+                    refused
+                        .iter()
+                        .take(8)
+                        .map(|l| format!("  {}\n", l.trim()))
+                        .collect::<String>()
+                )
+            };
+            panic!("{when} failed: {e}\n{why}");
+        }
+    }
+}
+
+/// The X11 backend guard: an EGL client must come up on real venus AND draw with it.
+///
+/// `GL_RENDERER` alone is not that. It is printed during context creation, before a single frame,
+/// so it answers "was the venus ICD selected" — and it went on answering yes through a boot whose
+/// every submit was being refused, letting the 90-second replay below run into the ssh cap
+/// instead of failing here in two minutes. glmark2's score is written only after frames were
+/// rendered and timed, so it is the half of this probe that a dead stack cannot fake.
+///
+/// Doubles as the regression test for the X11-EGL-on-zink crash (mesa patch 0006 + the
+/// x11-enabled venus ICD, commit 14cf463): before the fix this exact invocation segfaulted in
+/// `eglMakeCurrent`.
+fn assert_gl_probe_rendered(guest: &Guest, x11: &str) {
+    let probe = run_in_guest(
+        guest,
+        &format!(
+            "env {x11} {ZINK_ENV} glmark2-es2 -b build:duration=1 --size 256x256 2>&1 \
+             | grep -E 'GL_RENDERER|glmark2 Score'"
+        ),
+        PROBE_DEADLINE,
+        "the X11 GL probe",
+    );
+    eprintln!("X11 GL probe:\n{}", probe.trim());
+    assert!(
+        probe.contains("Virtio-GPU Venus"),
+        "X11 GL stack is not on venus (env trap / venus regression?): {probe}"
+    );
+    // Before the score, because this is the half that can say WHY. A poisoned context does not
+    // hang glmark2 reliably -- measured against a renderer with `vkQueueSubmit2` unserved, it
+    // exited cleanly having printed its renderer string and no score at all, so `run_in_guest`
+    // saw a success and the failure below would have read "it drew nothing" with no cause. The
+    // log names the command.
+    limina_test::renderer::assert_renderer_served(&guest.supervisor_log(), "during the GL probe");
+    let score: u32 = probe
+        .lines()
+        .find_map(|l| l.split_once("glmark2 Score:"))
+        .map(|(_, n)| n.trim())
+        .unwrap_or_else(|| {
+            panic!("the probe printed no glmark2 score, so it drew nothing:\n{probe}")
+        })
+        .parse()
+        .unwrap_or_else(|e| panic!("unreadable glmark2 score ({e}):\n{probe}"));
+    assert!(
+        score > 0,
+        "the probe scored zero: the venus ICD was selected and then rendered no frames\n{probe}"
+    );
 }
 
 /// Compare same-named snapshot PNGs between `venus_dir` and `ref_dir` with the tolerance
@@ -212,20 +306,7 @@ fn venus_replay_matches_llvmpipe_reference() {
     let x11 = "DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* | head -1) \
                XDG_RUNTIME_DIR=/run/user/1000";
 
-    // Backend guard + X11-crash regression: an X11 EGL client must come up on REAL venus.
-    // Pre-14cf463 this segfaulted (kopper NULL-fp); a silent llvmpipe fallback (the env
-    // trap) would render the whole comparison meaningless, so assert the renderer string.
-    let probe = guest
-        .ssh_exec(&format!(
-            "env {x11} {ZINK_ENV} glmark2-es2 -b build:duration=1 --size 256x256 2>&1 \
-             | grep GL_RENDERER"
-        ))
-        .expect("X11 EGL probe crashed (the kopper X11 regression?)");
-    eprintln!("X11 GL probe: {}", probe.trim());
-    assert!(
-        probe.contains("Virtio-GPU Venus"),
-        "X11 GL stack is not on venus (env trap / venus regression?): {probe}"
-    );
+    assert_gl_probe_rendered(&guest, x11);
 
     guest
         .scp_to_guest(&trace, "/tmp/replay.trace")
@@ -248,17 +329,24 @@ fn venus_replay_matches_llvmpipe_reference() {
             "GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1",
         ),
     ] {
-        let out = guest
-            .ssh_exec(&format!(
+        let out = run_in_guest(
+            &guest,
+            &format!(
                 "mkdir -p /tmp/snap-{name} && env {unset} {x11} {env} eglretrace --headless \
                  --snapshot-interval=100 -s /tmp/snap-{name}/ /tmp/replay.trace 2>&1 \
                  | tail -2"
-            ))
-            .unwrap_or_else(|e| panic!("{name} replay failed: {e}"));
+            ),
+            REPLAY_DEADLINE,
+            &format!("the {name} replay"),
+        );
         eprintln!("{name} replay: {}", out.trim());
         assert!(
             out.contains("Rendered") && out.contains("frames"),
             "{name} replay did not report rendered frames:\n{out}"
+        );
+        limina_test::renderer::assert_renderer_served(
+            &guest.supervisor_log(),
+            &format!("after the {name} replay"),
         );
     }
 
@@ -273,6 +361,7 @@ fn venus_replay_matches_llvmpipe_reference() {
         .expect("pulling llvmpipe snapshots");
     compare_snapshot_dirs(&venus_dir, &ref_dir, 10);
 
+    limina_test::renderer::assert_renderer_served(&guest.supervisor_log(), "at teardown");
     let outcome = guest
         .shutdown(Duration::from_secs(20))
         .expect("shutting down the guest");
@@ -306,18 +395,7 @@ fn venus_shell_replay_matches_llvmpipe_reference() {
     let x11 = "DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.* | head -1) \
                XDG_RUNTIME_DIR=/run/user/1000";
 
-    // Backend guard (the env trap): the venus leg must run on real venus.
-    let probe = guest
-        .ssh_exec(&format!(
-            "env {x11} {ZINK_ENV} glmark2-es2 -b build:duration=1 --size 256x256 2>&1 \
-             | grep GL_RENDERER"
-        ))
-        .expect("X11 EGL probe crashed");
-    eprintln!("X11 GL probe: {}", probe.trim());
-    assert!(
-        probe.contains("Virtio-GPU Venus"),
-        "X11 GL stack is not on venus (env trap / venus regression?): {probe}"
-    );
+    assert_gl_probe_rendered(&guest, x11);
 
     guest
         .scp_to_guest(&trace, "/tmp/shell.trace")
@@ -334,17 +412,24 @@ fn venus_shell_replay_matches_llvmpipe_reference() {
             "GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1",
         ),
     ] {
-        let out = guest
-            .ssh_exec(&format!(
+        let out = run_in_guest(
+            &guest,
+            &format!(
                 "mkdir -p /tmp/shellsnap-{name} && env {unset} {x11} {env} eglretrace --headless \
                  --snapshot-interval=10 -s /tmp/shellsnap-{name}/ /tmp/shell.trace 2>&1 \
                  | grep Rendered"
-            ))
-            .unwrap_or_else(|e| panic!("{name} shell replay failed: {e}"));
+            ),
+            REPLAY_DEADLINE,
+            &format!("the {name} shell replay"),
+        );
         eprintln!("{name} shell replay: {}", out.trim());
         assert!(
             out.contains("Rendered") && out.contains("frames"),
             "{name} shell replay did not report rendered frames:\n{out}"
+        );
+        limina_test::renderer::assert_renderer_served(
+            &guest.supervisor_log(),
+            &format!("after the {name} shell replay"),
         );
     }
 
@@ -371,6 +456,7 @@ fn venus_shell_replay_matches_llvmpipe_reference() {
     }
     compare_snapshot_dirs(&venus_dir, &ref_dir, 3);
 
+    limina_test::renderer::assert_renderer_served(&guest.supervisor_log(), "at teardown");
     let outcome = guest
         .shutdown(Duration::from_secs(20))
         .expect("shutting down the guest");
@@ -403,12 +489,16 @@ fn venus_vk_replay_matches_lavapipe_reference() {
                 VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1";
 
     // Backend guard: venus must enumerate the real host GPU before the replay means anything.
-    let probe = guest
-        .ssh_exec(
-            "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
-             vulkaninfo --summary 2>/dev/null | grep deviceName | head -1",
-        )
-        .expect("vulkaninfo probe failed");
+    // Enumeration only: vulkaninfo draws nothing, so there is no rendering half to assert here
+    // the way the GL probe has one. The replay leg below is this test's first real work, and the
+    // renderer check after it is what names a refusal.
+    let probe = run_in_guest(
+        &guest,
+        "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
+         vulkaninfo --summary 2>/dev/null | grep deviceName | head -1",
+        PROBE_DEADLINE,
+        "the venus enumeration probe",
+    );
     eprintln!("venus probe: {}", probe.trim());
     assert!(
         probe.contains("Virtio-GPU Venus"),
@@ -429,20 +519,27 @@ fn venus_vk_replay_matches_lavapipe_reference() {
         // prints "Measured FPS", NOT "Replay FPS" (the old string was version-skewed and silently
         // failed the test, masked until --no-fail-fast actually ran it) — plus the device-mismatch
         // banner used just below.
-        let out = guest
-            .ssh_exec(&format!(
+        let out = run_in_guest(
+            &guest,
+            &format!(
                 "mkdir -p /tmp/vksnap-{name} && env {base} \
                  VK_DRIVER_FILES=/usr/share/vulkan/icd.d/{icd} \
                  /opt/gfxreconstruct/bin/gfxrecon-replay {extra} \
                  --screenshots 10,50,100,150,190 --screenshot-format png \
                  --screenshot-dir /tmp/vksnap-{name} /tmp/replay.gfxr 2>&1 \
                  | grep -E 'Measured FPS|Replay device info'"
-            ))
-            .unwrap_or_else(|e| panic!("{name} vk replay failed: {e}"));
+            ),
+            REPLAY_DEADLINE,
+            &format!("the {name} vk replay"),
+        );
         eprintln!("{name} vk replay: {}", out.trim());
         assert!(
             out.contains("Measured FPS"),
             "{name} vk replay did not complete:\n{out}"
+        );
+        limina_test::renderer::assert_renderer_served(
+            &guest.supervisor_log(),
+            &format!("after the {name} vk replay"),
         );
         // The capture is from venus, so gfxrecon warns with the replay device info iff
         // the replay device differs. The reference leg MUST be on llvmpipe — a vacuous
@@ -471,6 +568,7 @@ fn venus_vk_replay_matches_lavapipe_reference() {
         .expect("pulling lavapipe vk snapshots");
     compare_snapshot_dirs(&venus_dir, &ref_dir, 5);
 
+    limina_test::renderer::assert_renderer_served(&guest.supervisor_log(), "at teardown");
     let outcome = guest
         .shutdown(Duration::from_secs(20))
         .expect("shutting down the guest");
