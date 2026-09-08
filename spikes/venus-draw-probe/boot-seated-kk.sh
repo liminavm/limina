@@ -45,6 +45,18 @@ export VK_ICD_FILENAMES="$ICD"
 # it honors it. Matches spikes/virgl-zink-kk/boot-virgl-windowed.sh + scripts/build-virglrenderer.sh.
 MESA_PREFIX="${MESA_PREFIX:-/Volumes/mesa-cs/zink-kk-prefix}"
 export DYLD_FALLBACK_LIBRARY_PATH="$MESA_PREFIX/lib:$ROOT/third_party/epoxy-egl-prefix/lib:/opt/homebrew/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+# Since the 2026-08-05 MTL4 rebase, mesa's zink dlopens "@rpath/libvulkan.1.dylib" and the
+# installed libgallium carries no matching LC_RPATH (meson strips build rpaths at install), so
+# the dlopen fails, `virgl_renderer_init` fails, and the worker DEGRADES TO SOFTWARE-2D rather
+# than refusing to boot: the guest's CTX_CREATE is answered ErrUnspec, mutter falls back to
+# kms_swrast, finds no gbm device and exits "No GPUs found", and gdm gives up after six tries --
+# a black screen behind `gdm.service active` and `graphical.target active`. DYLD_LIBRARY_PATH
+# intercepts by leaf name BEFORE rpath resolution, but pointing it at all of /opt/homebrew/lib
+# would shadow every Homebrew leaf name for the whole process tree, so use a shim dir holding
+# ONLY the Vulkan loader symlink. Same shim as boot-enhanced-efi-kk.sh and `with_virgl_host_gl`.
+mkdir -p "$MESA_PREFIX/vulkan-rpath"
+ln -sf /opt/homebrew/lib/libvulkan.1.dylib "$MESA_PREFIX/vulkan-rpath/libvulkan.1.dylib"
+export DYLD_LIBRARY_PATH="$MESA_PREFIX/vulkan-rpath${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 export VK_DRIVER_FILES="$ICD"
 export MESA_LOADER_DRIVER_OVERRIDE=zink
 export GALLIUM_DRIVER=zink
