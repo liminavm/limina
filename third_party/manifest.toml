@@ -79,7 +79,7 @@ base = "mesa-26.1.7"
 [virglrs]
 repo = "https://github.com/liminavm/virglrs.git"
 branch = "main"
-rev = "34ed41da0e9d7baba80cd22d514716c5b527cf33"
+rev = "42008bb6a231613667a80dbf2d207ec38120077e"
 
 [linux]
 repo = "https://github.com/liminavm/linux.git"
