@@ -98,11 +98,39 @@ Two facts, one of them unchecked, and the unchecked one is what every reader con
 that instead, which makes the trace line's `immutable` mean something different from what it
 meant in this run.
 
-**That makes the next boot decisive either way.** If the line prints `immutable false`, KK's
-`EXT_EGL_image_storage` does not deliver immutable-format storage, the view route is skipped and
-the poison should be cured. If it prints `immutable true` and `0x502` still follows, the host
-refuses to view externally imported storage regardless, and the view route needs gating on
-image-backing rather than on immutability.
+### Measured at `34ed41d`: the flag was honest, and the poison is not cured
+
+With the query live, vkmark's four still print **`immutable true`**, and `0x502` still follows all
+four. So KosmicKrisp's `EXT_EGL_image_storage` does deliver genuinely immutable-format storage,
+and the flag was not the fault. **The host refuses to view externally imported storage even when
+it is immutable-format.**
+
+`34ed41d` is therefore correct and not a cure: it replaces a prediction with an answer, which is
+worth having on its own terms, but the untraced verdict run poisons exactly as before — one
+`refused: vrend`, 5 886 poisoned submits, compositor wedged and confirmed wedged on screen. The
+remaining fix is to route image-backed sources away from `glTextureView` regardless of what
+`GL_TEXTURE_IMMUTABLE_FORMAT` says.
+
+That the query is live and not the census is established by construction: the read shadows the
+outer binding immediately before *both* `Storage::Texture` constructions, so the field cannot
+carry the census any more.
+
+### vkmark and glmark2 were never comparable
+
+`glmark2-es2-wayland` on venus, run first in the same session, makes **zero `texture_view` calls
+at all** — its window buffers never reach the view route. So the earlier "vkmark is special among
+venus clients" framing was measuring the wrong thing: the discriminator is not the client but
+whether the compositor's sampler view needs a *minted texture view*, which vkmark's buffers
+require and zink's do not.
+
+### `supports_view false` does not arise here
+
+All 662 traced `texture_view` calls in the session carry `supports_view true`; not one is false.
+So the second, latent poison in `view_route` — where a texture that cannot be viewed is still
+routed to `glTextureView` when the view reinterprets — is not exercised by this workload, and the
+contradiction between `resource.rs:1207` ("reads its channels in the wrong order") and
+`context.rs:2754` ("the driver refuses with `GL_INVALID_OPERATION`") stays unsettled. Neither
+client here produces IOSurface-backed `B8G8R8A8/X8_UNORM`.
 
 ### The gap in this evidence
 

@@ -1,0 +1,62 @@
+diff --git a/src/vrend/gl.rs b/src/vrend/gl.rs
+index 666dbf8..fce45ac 100644
+--- a/src/vrend/gl.rs
++++ b/src/vrend/gl.rs
+@@ -672,6 +672,15 @@ impl Gl {
+         unsafe { self.t.glTexParameteri()(target, name, value) };
+     }
+ 
++    /// `glGetTexParameteriv` for a parameter with one integer answer, on the bound texture.
++    pub fn get_tex_parameter_i(&self, target: GLenum, name: GLenum) -> GLint {
++        let mut value: GLint = 0;
++        // SAFETY: every parameter this is called with has exactly one integer answer, so the
++        // driver writes one `GLint` through the pointer, and it points at one.
++        unsafe { self.t.glGetTexParameteriv()(target, name, &raw mut value) };
++        value
++    }
++
+     pub fn pixel_store_i(&self, name: GLenum, value: GLint) {
+         // SAFETY: plain scalars.
+         unsafe { self.t.glPixelStorei()(name, value) };
+diff --git a/src/vrend/resource.rs b/src/vrend/resource.rs
+index aa21e39..20da381 100644
+--- a/src/vrend/resource.rs
++++ b/src/vrend/resource.rs
+@@ -2054,7 +2054,7 @@ fn alloc_texture(
+     planes: Option<Planes>,
+ ) -> Result<Storage, Refusal> {
+     let entry = formats.get(a.format).ok_or(Refusal::UnsupportedFormat)?;
+-    let mut immutable = features.has(Feature::texture_storage) && entry.can_texture_storage;
++    let immutable = features.has(Feature::texture_storage) && entry.can_texture_storage;
+     let (ifmt, glformat, gltype) = (entry.gl.internalformat, entry.gl.glformat, entry.gl.gltype);
+     let levels = (a.last_level + 1) as GLsizei;
+     let (w, h) = (a.width as GLsizei, a.height as GLsizei);
+@@ -2068,7 +2068,6 @@ fn alloc_texture(
+             gl.egl_image_target_tex_storage(target, &image);
+             true
+         } else if features.has(Feature::egl_image) {
+-            immutable = false;
+             gl.egl_image_target_texture_2d(target, &image);
+             true
+         } else {
+@@ -2088,6 +2087,10 @@ fn alloc_texture(
+             a.height,
+             a.format.name()
+         );
++        // What the driver actually made, not what the feature census predicted: a view of a
++        // mutable source is GL_INVALID_OPERATION, so this must be an answer, never a guess.
++        let immutable =
++            gl.get_tex_parameter_i(target, GL_TEXTURE_IMMUTABLE_FORMAT) == GL_TRUE as GLint;
+         gl.bind_texture(target, None);
+         return Ok(Storage::Texture(Arc::new(Texture {
+             name,
+@@ -2181,6 +2184,9 @@ fn alloc_texture(
+         gl.tex_parameter_i(target, GL_TEXTURE_BASE_LEVEL, 0);
+         gl.tex_parameter_i(target, GL_TEXTURE_MAX_LEVEL, a.last_level as GLint);
+     }
++    // What the driver actually made, not what the feature census predicted: a view of a
++    // mutable source is GL_INVALID_OPERATION, so this must be an answer, never a guess.
++    let immutable = gl.get_tex_parameter_i(target, GL_TEXTURE_IMMUTABLE_FORMAT) == GL_TRUE as GLint;
+     gl.bind_texture(target, None);
+     Ok(Storage::Texture(Arc::new(Texture {
+         name,
