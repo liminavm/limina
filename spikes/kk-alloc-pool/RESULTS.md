@@ -1,10 +1,11 @@
 # The KosmicKrisp command-allocator pool, measured
 
-Instrumentation raised for the dogfood SIGSEGV that has now killed `limina-vmm` four times: a
-store through a NULL pointer inside AGX `prepareForEnqueue`, reached from a guest GL texture
+Instrumentation raised for the dogfood SIGSEGV that has now killed `limina-vmm` five times: a
+store through a pointer AGX read out of its own encoder state, reached from a guest GL texture
 upload (`vrend_renderer_transfer_write_iov` → zink → `kk_CmdCopyBufferToImage2` →
-`blitCDMBufferToTexture`). The allocator behind the encoder is ours (`kk_device.c`), so the
-question this spike asks is whether we destroyed, reset, or overfilled one under a live encoder.
+`mtl_copy_from_buffer_to_texture`). The allocator behind the encoder is ours (`kk_device.c`), so
+the question this spike asks is whether we destroyed, reset, or overfilled one under a live
+encoder.
 
 **The answer is no, and the fault is not about allocators at all** — see the next section. The
 measurements below stand as what the pool actually does under real workloads, and the vehicle
@@ -20,7 +21,26 @@ and with no early return before it). AGX runs `beginComputePass` from
 `[cmd_buf computeCommandEncoder]` — so every encoder KK is handed has been begun, and a NULL there
 means a dispatch reached a compute context whose pass was never opened.
 
-`x13`/`x14`/`x15` (`0x20000`, `0x10001f`, `0x100000`) are invariant across all four occurrences and
+**The fault site is not fixed, and that is the discriminating evidence.** Four occurrences landed
+at `prepareForEnqueue+672`; the fifth landed at
+`MSLBlitDispatchContext::blitCDMTextureToTexture+840`, a different structure entirely:
+
+    +824  ldr  x9,  [x19]           ; the blit dispatch context's encoder state — writable, ours
+    +828  ldr  x10, [x9, #0x18]     ; base pointer  -> 0
+    +832  ldr  w9,  [x9, #0x4]      ; 32-bit offset -> 0x21f6d26f
+    +836  add  x9,  x10, x9
+    +840  str  x8,  [x9, #0x8]      ; FAULT at 0x21f6d277, storing the uber-blit pipeline address
+
+A single uninitialised field would keep faulting in the same place. Two unrelated fields in two
+unrelated structures, selected by which shape the copy takes (a CDM texture-to-texture path here,
+a direct buffer-to-texture path in the other four), is what a stale encoder looks like: whatever
+AGX touches first after the handout is what faults. Note also that the block at `[x19]` is
+mapped and writable — the three `stp xzr, xzr` stores just before the fault land in it — and the
+offset field holds an odd ~568 MB value. Its contents are no longer the encoder's; whether that is
+foreign data or a partial teardown does not change the conclusion.
+
+`x13`/`x14`/`x15` (`0x20000`, `0x10001f`, `0x100000`) are invariant across the four
+`prepareForEnqueue` occurrences and
 were once read as a pool cursor one step past a 1 MiB segment boundary. They are register state
 left by the sampler-heap `addToResourceList` call, not the faulting operand; the fault is one
 thing, `0x918 == NULL`. The dispatch that faulted is likewise ordinary — the crash-surviving ring
@@ -55,6 +75,13 @@ not that anything is wrong, so it must **pass** — reading it as stale drops re
 stale-handout log is rate-limited and carries `__builtin_return_address(0)`: a stale pointer stays
 stale until `cs_end`, and the record path runs millions of times a session, so an unpaced line
 there is a flood — the same mistake as the `clamped=1` ERROR flood two sections down.
+
+**One residual, known and not closed.** All three checks key on the address. If the generation
+table has evicted the slot for a stale address — `limina_enc_find` misses, generation reads 0, the
+bridge check returns `UNKNOWN` — every one of them passes and the fault reproduces unchanged. That
+needs all sixteen probe slots of one bucket occupied by live entries, which is unlikely at 8192
+slots, but the probability grows with uptime and uptime is exactly where these cluster. Closing it
+means a table that cannot evict a live encoder, not a bigger table.
 
 **Silence is no longer evidence.** The change stops the crash, so an uneventful week says nothing
 about whether the condition still occurs. The oracle is
@@ -136,14 +163,60 @@ guest mesa) rather than the RPM used here. Either could be the source of the tri
 
 ## What the next vehicle has to do
 
-1. **Hit the midpass-unroll path.** Target the dogfood ratio of ~0.14 `unroll_geometry` calls per
-   render pass. Without it the vehicle is not running the code the crash ran.
+1. **Hit the midpass-unroll path** — but do not treat any particular rate as the threshold. The
+   fifth crash came out of a run at 0.0065 `unroll_geometry` calls per render pass (35,288 over
+   5.4 M pass starts in 6 h 18 m), 21x below the ratio measured on the run that crashed before it.
+   What both have in common is the *route*, not the rate: every copy that crashed came through
+   `cs_get_compute(cmd, true)`, the pre_gfx path. A vehicle that takes it at all is exercising the
+   code; one that never takes it is not.
 2. **Attribute the copies.** "The compute encoder is busy" is not evidence that
    `kk_CmdCopyBufferToImage2` ran; the `copies: buf->img=…` line added afterwards answers that
    directly, and any future claim about reaching the path should cite it.
 3. Drive the compute class past its floor of eight if the destroy path is to be tested there —
    though on this evidence destruction is a bystander, not the cause.
 
-Note that the pool instrumentation was armed and silent *through* the fourth occurrence: 4445
-growth events in the retained log, no `KK_PA_DEAD`, no unmatched discharge, no guard trip. That is
-evidence against allocator misuse from a second direction, independent of the disassembly.
+Note that the pool instrumentation was armed and silent *through* the fourth and fifth
+occurrences: 4445 growth events in the retained log the first time, and `use-after-destroy=0`
+`unmatched-discharge=0` at the last report before the fifth crash. No `KK_PA_DEAD`, no guard trip
+either time. That is evidence against allocator misuse from a second direction, independent of the
+disassembly.
+
+## Catching the cause, and why a sanitizer is only half an answer
+
+There are two ways an encoder can stop being ours, and they need different tools:
+
+- **Freed and the address reused.** A memory error, and every malloc-level tool sees it.
+- **`endEncoding` called, the object still allocated and internally reset.** *Not* a memory error.
+  No sanitizer will say a word; only a state table like this one can.
+
+The four `prepareForEnqueue` faults read as the second (a NULL pass-state field, not garbage); the
+fifth reads as the first (a mapped block holding foreign values). So both are probably in play, and
+"turn on ASan" cannot be the whole plan.
+
+In rough order of cost, cheapest first:
+
+1. **`MallocScribble=1`** in the VM's environment. No rebuild, negligible cost. Freed blocks are
+   filled with `0x55`, so the next crash's registers answer the question outright: `0x5555...`
+   means freed-and-not-yet-reused, plausible garbage means freed-and-reallocated, zeros mean the
+   object was reset rather than freed. Every outcome is informative, which is rare.
+2. **`MallocStackLoggingNoCompact=1`** beside it, so `malloc_history` can name the alloc and free
+   stacks for the faulting address — that is "who freed it", the cause itself.
+3. **`NSZombieEnabled=1`** catches a message to a freed encoder by class and selector. Precise,
+   but zombies are never freed, so it suits a bounded dev-Mac repro, not a multi-day session.
+4. **ASan on KK only.** Its runtime interposes malloc process-wide, so AGX's own allocations are
+   covered too, and it gives alloc + free stacks at the bad access. But it needs library
+   validation disabled, costs 2-3x, and above all it needs a *reproducer* — which is the thing we
+   do not have. It is the tool for after a vehicle exists, not for catching this in the wild.
+5. **Guard Malloc** is decisive and far too heavy for a seated desktop.
+
+**But the guard has already made the cheapest oracle the best one.** It converts what used to be a
+crash into a *refusal* — a live, non-fatal moment at which both the code holding the stale pointer
+and the code that took the address still exist. So the table records the frames that created and
+ended each incarnation, and a refusal prints both. That is cause attribution with no sanitizer, no
+slowdown, and nothing that a post-mortem crash report could ever have supplied, because by then
+one of the two parties is gone. **A guard that survives the fault is worth more than a tool that
+describes it afterwards.**
+
+The dispatch ring was **not** armed on the fifth run — `LIMINA_KK_POOL_SNAPSHOT` was unset, so no
+`.dispatch.*` file exists beside the logs — which cost the one piece of evidence that named the
+faulting pointer's history last time. A dogfood launch should set it.
