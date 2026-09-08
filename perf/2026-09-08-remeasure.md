@@ -51,105 +51,65 @@ Two things the optimization moved that are worth separating:
 The llvmpipe CPU control is down 4% across the day, so a few points of every graphics number are
 the host rather than the stack.
 
-## WebGL aquarium — the residual
+## WebGL aquarium — the fence drain
 
 1024×1024 canvas, seated session, fps read from the supervisor's frame capture. Crops in
 `perf/evidence/2026-09-08/`.
 
-| numFish | 08-08 (C) | virglrs `-O0` | **virglrs `-O3`** |
-|---|---|---|---|
-| 25 000 | 42 | 4 | **20** |
-| 30 000 | 39 | 3 | **19** |
+| numFish | 08-08 (C) | virglrs `-O0` | virglrs `-O3` | **`-O3`, `VIRGLRS_FENCE_FINISH=0`** |
+|---|---|---|---|---|
+| 25 000 | 42 | 4 | 19–20 | **35** |
+| 30 000 | 39 | 3 | 19 | — |
 
-The build profile was **5–6x** of the gap. A **~2x residual** remains and is not explained.
+Two costs, stacked, and both are ours:
 
-Two cautions on these numbers. Each is a single instantaneous read of the page's own counter from
-one scanout capture, not an average over a window. And 20 at 25 000 against 19 at 30 000 is
-suspiciously flat for a 20% workload increase — either the workload is not GPU-bound at these
-counts on this build, or the counter is read before it settles. The virglrs session measures 23 at
-25 000 in the same nominal configuration; 15% apart is more than "where the counter is read"
-comfortably explains, and the two should be reconciled before anyone declares the residual closed.
+1. **The renderer was compiled `-O0`** — worth 5–6x.
+2. **A `glFinish` of every context on every classic fence** — worth a further **1.8x**
+   (19 → 35 at 25 000, measured by the virglrs session on the optimized build).
 
-### Candidates eliminated for the residual
+That leaves ~1.2x against the C-era 42, which is small enough to be the KosmicKrisp and guest
+mesa drift over the same month.
 
-Each a single-variable A/B, ceiling-free rows, same guest and build:
+The `create_fence` → `finish_all` path is **75%** of the `gpu worker` thread's samples on the
+stock optimized build (11838 samples; `submit_cmd` 23%, `sync_iosurface` → `finish_all` 0.1%).
+With the finish off it falls to 0.2% and `submit_cmd` rises to 91%, with waiting primitives
+totalling ~200 of 11121 samples — **the thread does work rather than waiting elsewhere, so the
+GPU was never saturated and the wait was needless.**
 
-| candidate | test | result |
+`VIRGLRS_FENCE_FINISH=0` is **not shippable**: the finish exists because Metal orders no queue
+against another, so an early fence hands a venus compositor a buffer whose renders have not run.
+The knob is the measurement; the fix is the `glFenceSync` the code comment already names, taken
+where the work is queued and waited on without holding the renderer.
+
+### Serialization is a separate defect from throughput
+
+One `gpu worker` thread services virtio-gpu commands for **every** context and holds the renderer
+lock while parked in `glFinish`. Cursor updates queue behind an aquarium frame drain, which is why
+loading the aquarium slows the guest's **mouse pointer** — a human-visible latency and fairness
+defect that no throughput number here would reveal.
+
+### Every A/B below `-O3` is suspect, including four of mine
+
+**An A/B taken on the `-O0` build measured the build profile, not its variable.** With the
+unoptimized renderer as the bottleneck, a real effect behind it reads as a null — which is exactly
+what happened to the fence: 4 vs 4 and 4 vs 3 at `-O0`, against 19 → 35 at `-O3`. Nothing about
+such a result looks stale.
+
+| elimination | build | status |
 |---|---|---|
-| the 09-06 multisample cap | `VREND_MAX_SAMPLES=4` | no effect |
-| virglrs's classic-fence `glFinish` | `VIRGLRS_FENCE_FINISH=0` | no effect, in the VM **and** VM-free — but see below |
-| virglrs `42008bb` (the sampler-view cure) | boot at pre-cure `34ed41d` | no effect, **and zero poison** |
-| Firefox itself | version in the guest | 150.0, installed 2026-04-22, unchanged |
-| the command stream | VM-free replay of this workload, both renderers, n=5 | C ~2.12 s vs virglrs ~2.61 s — **23%, not tenfold** |
+| classic-fence `glFinish` (`VIRGLRS_FENCE_FINISH=0`) | `-O0` | **FALSIFIED** — it is 1.8x |
+| the 09-06 multisample cap (`VREND_MAX_SAMPLES=4`) | `-O0` | **suspect, re-run owed** |
+| the sampler-view cure (pre-cure `34ed41d`) | `-O0` | **suspect as a timing result** |
+| vrend vs zink→venus glmark2 (4687 / 2157) | `-O0` + fence off | **suspect** — an unshipped config |
+| Firefox's version (150.0, April) | n/a | stands — not a timing measurement |
+| the command stream (VM-free replay, C ~2.12 s vs virglrs ~2.61 s) | `--release` | stands |
 
-The pre-cure leg is doubly informative: same fps *and no poison*, so Firefox's WebGL canvas never
-takes the minted-`glTextureView` route, and the cure was never in this path in either direction.
+The pre-cure leg's **zero poison** stands regardless — that is a behavioural observation, not a
+timing one, and it still shows Firefox's canvas never takes the minted-`glTextureView` route.
 
-The VM-free replay (the virglrs session's `harness/replay/vrend-replay.sh`) is what places the
-residual **outside the command stream** — in presentation, scanout, the IOSurface a compositor
-samples, and the cadence around them, which a replay structurally cannot exercise.
-
-**It is also not vrend's GL.** Same session, one variable: glmark2 scores **4687** on the shipped
-vrend path against **2157** on zink→venus. vrend's windowed GL is more than twice the venus path.
-
-### Where the time actually goes, and why the fence A/B is the interesting result
-
-`VIRGLRS_FENCE_FINISH` gates only `finish_classic_for_fence` (`renderer.rs:1102`).
-`resource_sync_iosurface` calls the same `finish_all()` **unconditionally**
-(`vrend/vrend.rs:564`), and `finish_all` walks every context and sub-context doing
-`make_current` + `glFinish` on each, with the renderer's single mutex held.
-
-A 20 s worker profile (the virglrs session, `gpu worker` thread, 11838 samples) says where
-the time is:
-
-| path | samples | share |
-|---|---|---|
-| `create_fence` → `finish_all` | ~8827 | **75%** |
-| `submit_cmd` (actual work) | 2739 | 23% |
-| `sync_iosurface` → `finish_all` | 12 | **0.1%** |
-
-So the dominant site is the **fence** one — the site `VIRGLRS_FENCE_FINISH` gates and the
-one the A/B above already covered. The page-flip site is negligible. **Do not build a knob
-for it.**
-
-That makes the null A/B the interesting result rather than a retired one, and it is a real
-null: `spawn_worker` (`crates/limina/src/supervisor.rs:359`) only ever *adds* environment
-variables and there is no `env_clear`/`env_remove` anywhere in `crates/limina/src/`, so the
-worker inherits `VIRGLRS_FENCE_FINISH=0` and the knob did take.
-
-**Blocked 75% of the time is not 75% recoverable.** The leaf of that chain is
-`-[IOSurfaceSharedEvent waitUntilSignaledValue:]` — waiting on GPU work already submitted.
-If the aquarium saturates the GPU at 25 000 fish, removing the wait relocates it rather than
-removing it, which is exactly what two independent instruments measured: 4 vs 4 and 4 vs 3
-in the VM, 2.61 s vs 2.59 s VM-free. The likely reading is that **this workload is GPU-bound
-on KosmicKrisp**, and the C-era 42 was measured against a host driver that has since moved —
-which is what the `timestampPeriod` 41.666668 evidence independently says.
-
-### Serialization is a separate question from throughput
-
-One `gpu worker` thread services virtio-gpu commands for **every** context, and it holds the
-renderer lock while parked in `glFinish` 75% of the time. Cursor updates queue behind an
-aquarium frame drain whether or not removing that drain would raise anyone's fps. That is a
-latency and fairness defect, it is what a human sees as the whole desktop going sticky, and
-**no throughput number in this memo would reveal it** — the closest is the flat 20/19, and
-only because a drain-bound figure stops tracking the workload.
-
-Both rigs now agree at 25 000 fish — **20 fps here, 19 on the virglrs session's**, same method and
-same verified-pinned display — so the residual is **~2.2x**, not the 1.7x quoted from an earlier
-reading that did not reproduce.
-
-The supporting observation is not from this rig: loading the aquarium to 25 000 fish slows
-down *everything else in the guest, including the mouse pointer*, which is a serialization
-signature rather than a cost. This rig's `iosurface scanout: 1280x800 B8G8R8X8_UNORM …
-renders land in the surface directly` confirms the scanout is a vrend resource here too, so
-`ctx_id == 0` holds and the path is live on these measurements. **"The guest is on venus" is
-true of Vulkan and not of the scanout.**
-
-That also reframes the flat 20 @ 25k vs 19 @ 30k: if presents serialize behind a full drain,
-fps stops tracking fish count and starts tracking the drain. Those two rows may be evidence
-rather than an artefact.
-
-
+**Ledger rows are not affected beyond today's.** The virglrs-era rows in `ledger.csv` are only
+2026-09-08; everything from 08-09 and 08-27 predates the switch and ran on the C renderer. The
+`-O0` rows are labelled in place.
 
 ## Not measured
 
