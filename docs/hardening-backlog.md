@@ -3211,3 +3211,31 @@ in the same suite — but the test has passed since without the guard ever firin
 either intermittent or elsewhere. The guard converts a crash into an attributable log line; it does
 not explain the NULL. If `[LIMINA-RESIDENCY] refused a NULL texture` ever appears, symbolise the
 return address it prints and that names the site outright.
+
+## vsock spins on an undersized RX descriptor, ~6M log lines per restore
+
+📋 booked 2026-09-08, while poking the synoik snapshot/restore path.
+
+A headless restore of the synoik enhanced image (`--display-capture`, guest agent connected)
+produces a **585 MB** worker log in a couple of minutes. It is one line, repeated 6,161,873
+times:
+
+```
+WARN krun_devices::virtio::vsock::device] RX queue error: HdrDescTooSmall(N)
+```
+
+The device takes a descriptor it considers too small to hold the packet header, warns, and
+retries against the same descriptor without consuming it or advancing — so it spins as fast as
+the log can absorb it. The warning is the only thing bounding the loop.
+
+Two costs, and the second is the one that bit: the busy-loop burns a core, and the flood buries
+every other line in the log. It hid the GPU restore accounting behind six million lines of noise
+while that path was under investigation; the workaround is `RUST_LOG=info,krun_devices::virtio::vsock=off`,
+which is a gag, not a fix.
+
+Not established: whether the undersized descriptor is the guest's fault (a driver posting a
+too-small RX buffer) or ours (a header size the two sides disagree on — the "two values that must
+agree" shape). Start at the `HdrDescTooSmall` site in `third_party/libkrun/src/devices/src/virtio/vsock/`,
+find what the guest actually posted vs what the device demanded, and decide which side is wrong
+before either rate-limiting the log or changing the check. Rate-limiting alone would leave the
+spin and remove the evidence.
