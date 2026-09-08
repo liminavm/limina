@@ -85,11 +85,45 @@ about a factor of ten.
 - **No GPU device loss.** No fault, no `DEVICE_LOST`, no Mesa error in the worker log across the
   sweep; the only match is a benign zink copy-box perf warning.
 
-What is left unexamined, in the order I would take them: the classic-fence `glFinish` virglrs
-added (its own author flags it as unmeasured, and an on-display composited workload is where a
-per-fence finish would hurt most); the KosmicKrisp bump in `fe305ee4`; and guest mesa
-`26.1.5-7 → 26.1.8-11`. The discriminating experiment is the same sweep against the last C
-virglrenderer host commit on this identical guest.
+### Four candidates tested and eliminated
+
+Each is a single-variable A/B on one build, ceiling-free rows, same guest:
+
+| candidate | test | result |
+|---|---|---|
+| the 09-06 multisample cap | `VREND_MAX_SAMPLES=4` | 18 fps vs 18 — **no effect** |
+| virglrs's classic-fence `glFinish` | `VIRGLRS_FENCE_FINISH=0` | 25k: 4 vs 4; 30k: 4 vs 3 — **no effect** |
+| virglrs `42008bb` (the sampler-view cure) | boot at pre-cure `34ed41d` | 25k: **4 — identical**, and **zero poison** |
+| Firefox itself | version in the guest | 150.0, installed 2026-04-22 — **unchanged since the baseline** |
+
+The pre-cure leg is doubly informative. It came back at the same 4 fps *and never poisoned*, which
+means Firefox's WebGL canvas does not take the minted-`glTextureView` route at all — so the cure
+was never in this path, in either direction. That also matches the shape of the commit: it only
+ever moved routes from *refused* to *working*, never from cheap to expensive.
+
+### It is not vrend's GL either
+
+Same session, one variable:
+
+| GL path | `GL_RENDERER` | glmark2 |
+|---|---|---|
+| vrend (shipped default) | `virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP)))` | **4687** |
+| zink → venus (ledger env) | `zink Vulkan 1.4(Virtio-GPU Venus …)` | 2157 |
+
+**vrend's windowed GL is more than twice the venus path** and far above the ledger row. So the
+regression is not vrend throughput, not its present path, and not compositing in general — it is
+specific to Firefox's WebGL on top of it.
+
+### What is left
+
+The KosmicKrisp bump (`fe305ee4`) and guest mesa `26.1.5-7 → 26.1.8-11`. There is independent
+evidence the host driver moved: a timestamp probe run against KosmicKrisp with no renderer in the
+path reports `timestampPeriod` 41.666668 and resolves two stamps either side of a 16 MiB fill to
+the same tick, which is not the driver the 08-08 numbers were taken on.
+
+**The discriminating experiment is the same sweep against the last C virglrenderer host commit on
+this identical guest.** It separates virglrs as a whole from a month of KosmicKrisp and guest mesa
+drift, which the two pin-to-pin legs above cannot. Not run.
 
 Note the shape: `gl-replay-venus` is *up* 20% and `glmark2` down 23%, while the aquarium is down
 several-fold. Whatever this is, it hurts a composited on-display browser workload far more than a
@@ -97,9 +131,10 @@ direct GL one, which is the case that matters most for a desktop.
 
 ## Not measured
 
-- **Aquarium `zinkvenus` arm.** Firefox would not launch under the zink environment in the
-  benchmark unit; the captures were the idle desktop. Distinguishing a harness defect from a real
-  failure to start is owed.
+- **Aquarium `zinkvenus` arm.** Firefox does not launch under the zink environment in the
+  benchmark unit — reproduced three times across two boots, always an idle-desktop capture. Whether
+  that is a harness defect or a real failure of Firefox to get a GL context on zink→venus is itself
+  unanswered, and worth answering: it would be a tier-2 bug.
 - **`IOAccelerator (graphics)` closed-to-closed ratchet.** The open/close cycle silently ran with
   no Firefox at all, so the identical before/after readings (401.7 MiB, 1402 regions) measure
   nothing. **The 08-08 regression is neither confirmed nor cleared.**
