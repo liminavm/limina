@@ -83,9 +83,26 @@ needs all sixteen probe slots of one bucket occupied by live entries, which is u
 slots, but the probability grows with uptime and uptime is exactly where these cluster. Closing it
 means a table that cannot evict a live encoder, not a bigger table.
 
-**Silence is no longer evidence.** The change stops the crash, so an uneventful week says nothing
-about whether the condition still occurs. The oracle is
-`grep -E 'LIMINA-ENC|is stale|refusing to close'` in the worker log.
+**Silence is no longer evidence**, so the guard states its own liveness. `[LIMINA-ALLOC-POOL]
+… encoder guard:` carries, every report, the number of checks performed, the per-state bad counts,
+both refusal counts, encoders seen, and table occupancy — so `grep -E 'LIMINA-ENC|is stale|refusing
+to close'` coming back empty can be read as evidence rather than inferred from. A rising `checks`
+with zeros beside it means the guard is working; `checks` frozen means the needle is dead.
+
+That line was first put on the `[LIMINA] KK counts:` block, and a smoke boot caught it: that block
+is driven by `kk_CmdPipelineBarrier2`, and a seated F44 desktop running Firefox and glmark2 issued
+so few barriers that it printed **three times in a whole boot**. The guard's totals sat at
+`checks=2` for the entire session — indistinguishable from a guard that was not running. Moved
+onto the pool report, which is paced by encoder closes, the same workload reads `checks=4861
+untracked=0 … encoders=374 table=63/8192`. The generalisation is one step past the cadence rule
+below it: **a diagnostic must be paced by something that moves with what it measures**, or it
+reports a stale value with the confidence of a fresh one. (Note the rest of that block —
+`copies:`, the unroll counts, the pass-start histogram — is paced the same way and was equally
+frozen on this workload; the dogfood runs it was designed against are barrier-heavy, so its
+numbers there are sound, but it is not a general-purpose reporter.)
+
+Table occupancy of 63/8192 on a full desktop session also puts a number on the eviction residual
+above: it is nowhere near the pressure needed to lose a live encoder's slot.
 
 `kk_alloc_pool_report()` prints per class on the release path
 (`[LIMINA-ALLOC-POOL]`, every 2000 encoder closes and at device teardown):
