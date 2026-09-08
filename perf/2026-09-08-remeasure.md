@@ -121,9 +121,32 @@ evidence the host driver moved: a timestamp probe run against KosmicKrisp with n
 path reports `timestampPeriod` 41.666668 and resolves two stamps either side of a 16 MiB fill to
 the same tick, which is not the driver the 08-08 numbers were taken on.
 
-**The discriminating experiment is the same sweep against the last C virglrenderer host commit on
-this identical guest.** It separates virglrs as a whole from a month of KosmicKrisp and guest mesa
-drift, which the two pin-to-pin legs above cannot. Not run.
+### The command stream is not where the tenfold is
+
+The virglrs session replayed a 1 GB recording of this exact workload against both renderers on the
+host with no VM (`harness/replay/vrend-replay.sh`, n=5 each):
+
+| renderer | median |
+|---|---|
+| C virglrenderer | ~2.12 s |
+| virglrs | ~2.61 s |
+| virglrs, `VIRGLRS_FENCE_FINISH=0` | ~2.59 s |
+
+**virglrs is ~23% slower than the C on the command stream — not tenfold**, and the fence finish is
+worth nothing there either, corroborating the in-VM A/B above from a second direction.
+
+So the tenfold lives in what a VM-free replay cannot exercise: **presentation, scanout, the
+IOSurface a compositor samples, and the fence/present cadence around them.** The command side is
+eliminated; the present path is what is left, alongside the KosmicKrisp and guest mesa drift.
+
+The remaining experiment is the same sweep against a C-renderer bundle **in the VM** — the replay
+holds the guest constant by removing it, which is exactly why it cannot see a present-path
+difference. Assigned to the virglrs session, which holds a C bundle. Not run here.
+
+**Trap, if anyone times that replay script:** it runs `cargo build --release` for the Rust prefix,
+so a single timed run measures the build the first time and the replay every time after, and the
+output does not say which you got. It produced a spurious 12x before a repeat disagreed with it.
+Warm it first, or discard run one.
 
 Note the shape: `gl-replay-venus` is *up* 20% and `glmark2` down 23%, while the aquarium is down
 several-fold. Whatever this is, it hurts a composited on-display browser workload far more than a
