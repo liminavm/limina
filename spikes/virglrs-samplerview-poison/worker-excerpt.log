@@ -1,0 +1,338 @@
+[2026-09-08T19:42:51.767077Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=2 init=0x2 name=Some("gnome-shell")
+
+... [26 lines elided] ...
+
+[2026-09-08T19:42:52.443153Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x2 name=Some("gst-plugin-scan")
+
+... [67 lines elided] ...
+
+[2026-09-08T19:42:52.780885Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan")
+
+... [11 lines elided] ...
+
+[2026-09-08T19:42:52.804809Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-09-08T19:42:52.805728Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan")
+
+... [11 lines elided] ...
+
+[2026-09-08T19:42:52.813017Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-09-08T19:42:52.813773Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan")
+
+... [11 lines elided] ...
+
+[2026-09-08T19:42:52.836279Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-09-08T19:42:52.840263Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-09-08T19:42:53.012138Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("gst-plugin-scan")
+[2026-09-08T19:42:53.400970Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("Xwayland")
+
+... [6 lines elided] ...
+
+[2026-09-08T19:42:53.716850Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+
+... [3 lines elided] ...
+
+[2026-09-08T19:42:53.833569Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=7 init=0x2 name=Some("mutter-x11-fram")
+[2026-09-08T19:42:53.837807Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x2 name=Some("ibus-x11")
+
+... [4 lines elided] ...
+
+[2026-09-08T19:43:29.996694Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("glmark2-es2-way")
+
+... [94 lines elided] ...
+
+[2026-09-08T19:43:31.084717Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+
+... [1 lines elided] ...
+
+[2026-09-08T19:43:31.241142Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x2 name=Some("glmark2-es2-way")
+
+... [17 lines elided] ...
+
+[2026-09-08T19:43:32.253989Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+
+... [1 lines elided] ...
+
+[2026-09-08T19:43:48.694736Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("glmark2-es2")
+
+... [15 lines elided] ...
+
+[2026-09-08T19:43:48.761151Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+
+... [7 lines elided] ...
+
+[2026-09-08T19:43:48.852088Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("eglretrace")
+
+... [264 lines elided] ...
+
+[2026-09-08T19:45:09.281047Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+
+... [14 lines elided] ...
+
+[2026-09-08T19:45:16.024165Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("gfxrecon-replay")
+
+... [20 lines elided] ...
+
+[2026-09-08T19:45:16.139878Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+[2026-09-08T19:45:16.162438Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("glmark2-es2-way")
+
+... [245 lines elided] ...
+
+[2026-09-08T19:45:19.217702Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+[2026-09-08T19:45:27.117919Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("glmark2-es2")
+
+... [15 lines elided] ...
+
+[2026-09-08T19:45:27.166636Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+
+... [6 lines elided] ...
+
+[2026-09-08T19:45:27.244964Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("eglretrace")
+
+... [244 lines elided] ...
+
+[2026-09-08T19:46:48.549185Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+
+... [13 lines elided] ...
+
+[2026-09-08T19:46:55.164353Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("gfxrecon-replay")
+
+... [27 lines elided] ...
+
+[2026-09-08T19:46:55.282403Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+[2026-09-08T19:46:55.306038Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("glmark2-es2-way")
+
+... [251 lines elided] ...
+
+[2026-09-08T19:46:58.363225Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+
+... [6 lines elided] ...
+
+[2026-09-08T19:46:59.111116Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("glmark2-es2")
+
+... [9 lines elided] ...
+
+[2026-09-08T19:46:59.147281Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+
+... [6 lines elided] ...
+
+[2026-09-08T19:46:59.230369Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("eglretrace")
+
+... [244 lines elided] ...
+
+[2026-09-08T19:48:20.417503Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+
+... [13 lines elided] ...
+
+[2026-09-08T19:48:27.074000Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("gfxrecon-replay")
+
+... [27 lines elided] ...
+
+[2026-09-08T19:48:27.182646Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+[2026-09-08T19:48:27.201732Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x4 name=Some("glmark2-es2-way")
+
+... [222 lines elided] ...
+
+[LIMINA] KK counts: barriers=336791 (breaks_pass=0 pregfx=92953 noop=243837) render_pass_starts=41212 restarts=0/0(flush) compute_during_pass=1388/12645(pregfx) color_map_nonidentity=0/329696 (barrier)
+[LIMINA]   poly heap: hiwater=0 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=725 img->buf=13921 img->img=607 buf->buf=36931
+[LIMINA]   unroll triggers: fan=6582 promote=6063 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=12645 (fan=6582 strip=0 other=6063)
+[LIMINA]   pass starts: fresh=82 seen+LOAD=1207 seen+CLEAR=39690 seen+DONTCARE=232 (fresh small=74) | reload_hazard=39922 (small=39722) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      12645
+[LIMINA-ALLOC-POOL] teardown render: live=3 peak=3 retired=0 | size hiwater=4997 KiB (budget 4096 KiB, 6886 retirements) | peak ops/cmdbuf=5
+[LIMINA-ALLOC-POOL] teardown render growth: 7 MiB crossings | peak ops between resets=20
+[LIMINA-ALLOC-POOL] teardown compute: live=1 peak=1 retired=0 | size hiwater=2533 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=2
+[LIMINA-ALLOC-POOL] teardown compute growth: 2 MiB crossings | peak ops between resets=20683
+[LIMINA-ALLOC-POOL] teardown tombstones=0 use-after-destroy=0 | resets=6883/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] teardown encoder guard: checks=251341 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=92915 table=204/8192
+[virglrs] limina GPU budget: ctx 9 [glmark2-es2-way] destroyed with 3.0 MiB still charged, now counted as shared -- storage a resource still holds a share of, or a charge this renderer did not drop
+[virglrs] limina GPU budget:   3 x 1.0 MiB (IOSurface)
+[2026-09-08T19:48:30.253645Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=30 retired=75 | size hiwater=4997 KiB (budget 4096 KiB, 3607 retirements) | peak ops/cmdbuf=123
+[LIMINA-ALLOC-POOL] periodic render growth: 166 MiB crossings | peak ops between resets=131
+[LIMINA-ALLOC-POOL] periodic compute: live=8 peak=9 retired=1 | size hiwater=4661 KiB (budget 4096 KiB, 509 retirements) | peak ops/cmdbuf=155
+[LIMINA-ALLOC-POOL] periodic compute growth: 35 MiB crossings | peak ops between resets=3144
+[LIMINA-ALLOC-POOL] periodic tombstones=76 use-after-destroy=0 | resets=3525/501 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=252277 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=92961 table=204/8192
+[2026-09-08T19:48:44.960550Z ERROR krun_devices::virtio::vsock::muxer] unexpected dgram pkt: 3
+[2026-09-08T19:48:48.621564Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("vkmark")
+[2026-09-08T19:48:48.628054Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+[2026-09-08T19:48:48.630511Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("vkmark")
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=30 retired=75 | size hiwater=4997 KiB (budget 4096 KiB, 3620 retirements) | peak ops/cmdbuf=123
+[LIMINA-ALLOC-POOL] periodic render growth: 166 MiB crossings | peak ops between resets=131
+[LIMINA-ALLOC-POOL] periodic compute: live=8 peak=9 retired=1 | size hiwater=4661 KiB (budget 4096 KiB, 518 retirements) | peak ops/cmdbuf=155
+[LIMINA-ALLOC-POOL] periodic compute growth: 35 MiB crossings | peak ops between resets=3144
+[LIMINA-ALLOC-POOL] periodic tombstones=76 use-after-destroy=0 | resets=3538/511 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=252582 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=92980 table=204/8192
+[LIMINA-ALLOC-POOL] periodic render: live=0 peak=0 retired=0 | size hiwater=0 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=0
+[LIMINA-ALLOC-POOL] periodic render growth: 0 MiB crossings | peak ops between resets=0
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=661 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=2
+[LIMINA-ALLOC-POOL] periodic compute growth: 0 MiB crossings | peak ops between resets=2
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=0/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=252729 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=92987 table=204/8192
+[LIMINA-ALLOC-POOL] GROWTH alloc=0xb1a59cd80 class=1 0->1 MiB | ops=2 ops_since_reset=4 begins=2 resets=0 pending=2 (1 crossings this class)
+[virglrs] refused: vrend ctx 2: CreateObject(SamplerView): GL error 0x502
+[2026-09-08T19:48:48.758067Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: submit_cmd: the context is poisoned
+[2026-09-08T19:48:48.758121Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command -> Err("ErrRutabaga(ComponentError(-22))") (cmd_size=19376, num_in_fences=0, avail_before_fences=19376, avail_before_cmd=19376)
+[2026-09-08T19:48:48.758167Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-22))
+[2026-09-08T19:48:48.759093Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: submit_cmd: the context is poisoned
+[2026-09-08T19:48:48.759127Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command -> Err("ErrRutabaga(ComponentError(-22))") (cmd_size=4104, num_in_fences=0, avail_before_fences=4104, avail_before_cmd=4104)
+[2026-09-08T19:48:48.759183Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-22))
+[2026-09-08T19:48:48.760131Z WARN  krun_devices::virtio::gpu::journal] [GPUTRACE] gpu journal: 456 live ops (recorded=5772 pruned=5316): ctxs=5 blobs=9 (23792 KiB) maps=9 attaches=152 scanouts=1 classic=140 backings=140
+[2026-09-08T19:48:48.760200Z WARN  krun_rutabaga_gfx::rutabaga_core] [GPUTRACE] rutabaga state: 5 contexts [2, 4, 5, 7, 8], 147 resources (ids [3, 5, 6, 158, 904, 905, 906, 907, 912, 915, 916, 917, 918, 920, 921, 924, 926, 928, 929, 930, 931, 932, 933, 934, 935, 936, 937, 938, 939, 940, 942, 944] …)
+[2026-09-08T19:48:48.760264Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: 147 resources, 5 contexts
+[2026-09-08T19:48:48.760345Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: vrend journal: 123 creates + 30 state slots, 45 KiB of wire
+[2026-09-08T19:48:48.761676Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   ctx 2: 23264 bytes, 141 entries
+[2026-09-08T19:48:48.761703Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   ctx 4: 308 bytes, 5 entries
+[2026-09-08T19:48:48.761724Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   ctx 5: 27228 bytes, 21 entries
+[2026-09-08T19:48:48.761747Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   ctx 7: 308 bytes, 5 entries
+[2026-09-08T19:48:48.761846Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for       37 x vkQueueSubmit
+[2026-09-08T19:48:48.761877Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for       31 x vkResetFences
+[2026-09-08T19:48:48.761904Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for       23 x vkWaitRingSeqnoMESA
+[2026-09-08T19:48:48.761929Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for       18 x vkWaitForFences
+[2026-09-08T19:48:48.761955Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for       17 x vkImportSemaphoreResourceMESA
+[2026-09-08T19:48:48.761982Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for       15 x vkWaitSemaphoreResourceMESA
+[2026-09-08T19:48:48.762009Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for        7 x vkGetPhysicalDeviceFormatProperties2
+[2026-09-08T19:48:48.762037Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for        6 x vkNotifyRingMESA
+[2026-09-08T19:48:48.762062Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for        5 x vkGetImageMemoryRequirements2
+[2026-09-08T19:48:48.762089Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for        4 x vkGetBufferMemoryRequirements2
+[2026-09-08T19:48:48.762117Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs:   journal kept nothing for        4 x vkGetImageDrmFormatModifierPropertiesEXT
+
+... [54583 lines elided] ...
+
+[2026-09-08T19:50:59.116414Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+
+... [6 lines elided] ...
+
+[2026-09-08T19:50:59.133597Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("vkmark")
+
+... [6 lines elided] ...
+
+[2026-09-08T19:50:59.140573Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+[2026-09-08T19:50:59.143130Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("vkmark")
+
+... [2720 lines elided] ...
+
+[2026-09-08T19:51:05.023281Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+
+... [12 lines elided] ...
+
+[2026-09-08T19:51:05.041077Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("vkmark")
+[2026-09-08T19:51:05.047224Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+[2026-09-08T19:51:05.050046Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("vkmark")
+
+... [19009 lines elided] ...
+
+[2026-09-08T19:51:47.084780Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+
+... [34 lines elided] ...
+
+[2026-09-08T19:51:47.201655Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=7
+[2026-09-08T19:51:47.208793Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+
+... [21 lines elided] ...
+
+[2026-09-08T19:51:47.294045Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=2
+
+... [7 lines elided] ...
+
+[2026-09-08T19:51:51.073077Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=2 init=0x2 name=Some("gnome-shell")
+
+... [7 lines elided] ...
+
+[2026-09-08T19:51:51.591239Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x2 name=Some("gst-plugin-scan")
+
+... [68 lines elided] ...
+
+[2026-09-08T19:51:51.828331Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan")
+
+... [11 lines elided] ...
+
+[2026-09-08T19:51:51.886225Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-09-08T19:51:51.887045Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan")
+
+... [11 lines elided] ...
+
+[2026-09-08T19:51:51.930948Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-09-08T19:51:51.931589Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("gst-plugin-scan")
+
+... [11 lines elided] ...
+
+[2026-09-08T19:51:51.937789Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=5
+[2026-09-08T19:51:51.938849Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-09-08T19:51:51.941526Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("gst-plugin-scan")
+
+... [3 lines elided] ...
+
+[2026-09-08T19:51:52.531180Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+
+... [18 lines elided] ...
+
+[2026-09-08T19:52:56Z INFO  limina::control] control: guest agent connected: limina-agent-session/0.1.1 caps=["clipboard"] pagesize=16384
+[LIMINA-ALLOC-POOL] periodic render: live=22 peak=30 retired=82 | size hiwater=4997 KiB (budget 4096 KiB, 3868 retirements) | peak ops/cmdbuf=123
+[LIMINA-ALLOC-POOL] periodic render growth: 208 MiB crossings | peak ops between resets=131
+[LIMINA-ALLOC-POOL] periodic compute: live=8 peak=12 retired=5 | size hiwater=4661 KiB (budget 4096 KiB, 546 retirements) | peak ops/cmdbuf=170
+[LIMINA-ALLOC-POOL] periodic compute growth: 47 MiB crossings | peak ops between resets=3144
+[LIMINA-ALLOC-POOL] periodic tombstones=87 use-after-destroy=0 | resets=3764/537 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=2271397 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=764783 table=208/8192
+[LIMINA-ALLOC-POOL] periodic render: live=16 peak=30 retired=88 | size hiwater=4997 KiB (budget 4096 KiB, 3874 retirements) | peak ops/cmdbuf=123
+[LIMINA-ALLOC-POOL] periodic render growth: 208 MiB crossings | peak ops between resets=131
+[LIMINA-ALLOC-POOL] periodic compute: live=8 peak=12 retired=5 | size hiwater=4661 KiB (budget 4096 KiB, 546 retirements) | peak ops/cmdbuf=170
+[LIMINA-ALLOC-POOL] periodic compute growth: 47 MiB crossings | peak ops between resets=3144
+[LIMINA-ALLOC-POOL] periodic tombstones=93 use-after-destroy=0 | resets=3770/537 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=2271444 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=764790 table=208/8192
+[LIMINA-ALLOC-POOL] GROWTH alloc=0xb17a6fec0 class=0 0->2 MiB | ops=5 ops_since_reset=5 begins=1 resets=0 pending=1 (209 crossings this class)
+[2026-09-08T19:53:10.737080Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("vkmark")
+[2026-09-08T19:53:10.756840Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-09-08T19:53:10.762815Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x4 name=Some("vkmark")
+[LIMINA-ALLOC-POOL] periodic render: live=0 peak=0 retired=0 | size hiwater=0 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=0
+[LIMINA-ALLOC-POOL] periodic render growth: 0 MiB crossings | peak ops between resets=0
+[LIMINA-ALLOC-POOL] periodic compute: live=1 peak=1 retired=0 | size hiwater=661 KiB (budget 4096 KiB, 0 retirements) | peak ops/cmdbuf=2
+[LIMINA-ALLOC-POOL] periodic compute growth: 0 MiB crossings | peak ops between resets=2
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=0/0 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=2271870 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=764837 table=214/8192
+[LIMINA-ALLOC-POOL] GROWTH alloc=0xb17a6c480 class=1 0->1 MiB | ops=2 ops_since_reset=4 begins=2 resets=0 pending=2 (1 crossings this class)
+[LIMINA] KK counts: barriers=4168069 (breaks_pass=0 pregfx=765597 noop=3402472) render_pass_starts=679934 restarts=0/0(flush) compute_during_pass=1733/15047(pregfx) color_map_nonidentity=0/5439472 (rp)
+[LIMINA]   poly heap: hiwater=0 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=1247 img->buf=13921 img->img=609 buf->buf=37128
+[LIMINA]   unroll triggers: fan=7771 promote=7276 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=15047 (fan=7771 strip=0 other=7276)
+[LIMINA]   pass starts: fresh=112 seen+LOAD=1456 seen+CLEAR=573164 seen+DONTCARE=105199 (fresh small=93) | reload_hazard=678363 (small=39927) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      15047
+[LIMINA] KK counts: barriers=4169774 (breaks_pass=0 pregfx=765897 noop=3403876) render_pass_starts=680229 restarts=0/0(flush) compute_during_pass=1748/15132(pregfx) color_map_nonidentity=0/5441832 (barrier)
+[LIMINA]   poly heap: hiwater=0 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=1247 img->buf=13921 img->img=609 buf->buf=37128
+[LIMINA]   unroll triggers: fan=7831 promote=7301 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=15132 (fan=7831 strip=0 other=7301)
+[LIMINA]   pass starts: fresh=112 seen+LOAD=1466 seen+CLEAR=573450 seen+DONTCARE=105199 (fresh small=93) | reload_hazard=678649 (small=39927) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      15132
+[virglrs] refused: vrend ctx 2: CreateObject(SamplerView): GL error 0x502
+[2026-09-08T19:53:10.989324Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: submit_cmd: the context is poisoned
+[2026-09-08T19:53:10.989381Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command -> Err("ErrRutabaga(ComponentError(-22))") (cmd_size=5904, num_in_fences=0, avail_before_fences=5904, avail_before_cmd=5904)
+[2026-09-08T19:53:10.989428Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-22))
+[2026-09-08T19:53:10.989946Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: submit_cmd: the context is poisoned
+[2026-09-08T19:53:10.989990Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command -> Err("ErrRutabaga(ComponentError(-22))") (cmd_size=4104, num_in_fences=0, avail_before_fences=4104, avail_before_cmd=4104)
+[2026-09-08T19:53:10.990034Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-22))
+[2026-09-08T19:53:11.004932Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: submit_cmd: the context is poisoned
+[2026-09-08T19:53:11.005001Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command -> Err("ErrRutabaga(ComponentError(-22))") (cmd_size=4828, num_in_fences=0, avail_before_fences=4828, avail_before_cmd=4828)
+[2026-09-08T19:53:11.005048Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-22))
+[2026-09-08T19:53:11.005190Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: submit_cmd: the context is poisoned
+[2026-09-08T19:53:11.005240Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command -> Err("ErrRutabaga(ComponentError(-22))") (cmd_size=4104, num_in_fences=0, avail_before_fences=4104, avail_before_cmd=4104)
+[2026-09-08T19:53:11.005309Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-22))
+[2026-09-08T19:53:11.021562Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: submit_cmd: the context is poisoned
+[2026-09-08T19:53:11.021614Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command -> Err("ErrRutabaga(ComponentError(-22))") (cmd_size=4568, num_in_fences=0, avail_before_fences=4568, avail_before_cmd=4568)
+[2026-09-08T19:53:11.021665Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-22))
+[2026-09-08T19:53:11.021794Z ERROR krun_rutabaga_gfx::virgl_renderer] virglrs: submit_cmd: the context is poisoned
+[2026-09-08T19:53:11.021845Z ERROR krun_devices::virtio::gpu::worker] [SUBMIT3D] ctx 2 submit_command -> Err("ErrRutabaga(ComponentError(-22))") (cmd_size=4104, num_in_fences=0, avail_before_fences=4104, avail_before_cmd=4104)
+[2026-09-08T19:53:11.021904Z WARN  krun_devices::virtio::gpu::worker] Some(CmdSubmit3d) -> ErrRutabaga(ComponentError(-22))
+[LIMINA] KK counts: barriers=4171485 (breaks_pass=0 pregfx=766188 noop=3405296) render_pass_starts=680518 restarts=0/0(flush) compute_during_pass=1753/15148(pregfx) color_map_nonidentity=0/5444144 (barrier)
+[LIMINA]   poly heap: hiwater=0 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=1247 img->buf=13921 img->img=609 buf->buf=37128
+[LIMINA]   unroll triggers: fan=7843 promote=7305 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=15148 (fan=7843 strip=0 other=7305)
+[LIMINA]   pass starts: fresh=112 seen+LOAD=1470 seen+CLEAR=573735 seen+DONTCARE=105199 (fresh small=93) | reload_hazard=678934 (small=39927) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      15148
+
+... [26193 lines elided] ...
+
+[2026-09-08T19:54:10.722830Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
