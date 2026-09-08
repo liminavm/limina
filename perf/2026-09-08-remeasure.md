@@ -73,7 +73,7 @@ Each a single-variable A/B, ceiling-free rows, same guest and build:
 | candidate | test | result |
 |---|---|---|
 | the 09-06 multisample cap | `VREND_MAX_SAMPLES=4` | no effect |
-| virglrs's classic-fence `glFinish` | `VIRGLRS_FENCE_FINISH=0` | no effect, in the VM |
+| virglrs's classic-fence `glFinish` | `VIRGLRS_FENCE_FINISH=0` | no effect, in the VM **and** VM-free — but see below |
 | virglrs `42008bb` (the sampler-view cure) | boot at pre-cure `34ed41d` | no effect, **and zero poison** |
 | Firefox itself | version in the guest | 150.0, installed 2026-04-22, unchanged |
 | the command stream | VM-free replay of this workload, both renderers, n=5 | C ~2.12 s vs virglrs ~2.61 s — **23%, not tenfold** |
@@ -87,6 +87,34 @@ samples, and the cadence around them, which a replay structurally cannot exercis
 
 **It is also not vrend's GL.** Same session, one variable: glmark2 scores **4687** on the shipped
 vrend path against **2157** on zink→venus. vrend's windowed GL is more than twice the venus path.
+
+### The fence A/B eliminates one site, not the idea
+
+`VIRGLRS_FENCE_FINISH` gates only `finish_classic_for_fence` (`renderer.rs:1102`).
+`resource_sync_iosurface` calls the same `finish_all()` **unconditionally**
+(`vrend/vrend.rs:564`), and `finish_all` walks every context and sub-context doing
+`make_current` + `glFinish` on each, with the renderer's single mutex held.
+
+So the A/B above measures that the *fence* site costs nothing and leaves the
+`flush_resource` → `sync_iosurface` page-flip site **untested**. The serialization
+hypothesis therefore survives it: every virtio-gpu command from every context — cursor
+updates included — queues behind a drain of the aquarium's GPU-bound frame once per
+page-flip.
+
+The supporting observation is not from this rig: loading the aquarium to 25 000 fish slows
+down *everything else in the guest, including the mouse pointer*, which is a serialization
+signature rather than a cost. This rig's `iosurface scanout: 1280x800 B8G8R8X8_UNORM …
+renders land in the surface directly` confirms the scanout is a vrend resource here too, so
+`ctx_id == 0` holds and the path is live on these measurements. **"The guest is on venus" is
+true of Vulkan and not of the scanout.**
+
+That also reframes the flat 20 @ 25k vs 19 @ 30k: if presents serialize behind a full drain,
+fps stops tracking fish count and starts tracking the drain. Those two rows may be evidence
+rather than an artefact.
+
+**The measurement that would settle it** is the same treatment the fence site already has — an
+env gate around the `finish_all()` in `resource_sync_iosurface`, turning the hypothesis into a
+one-boot A/B on an unchanged build. Not a shipping configuration; a knob.
 
 ## Not measured
 
