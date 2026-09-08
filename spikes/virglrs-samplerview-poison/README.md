@@ -83,14 +83,26 @@ range — `(64x64 R8G8B8X8_UNORM, immutable true, surface false, supports_view t
 R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1 layers 0+1`. So format
 compatibility, target, view range and the `supports_view` gate are all exonerated.
 
-**The obvious explanation is ruled out by the source.** `glTextureView` raises
-`GL_INVALID_OPERATION` on a source that is not immutable-format, but `alloc_texture`
-(`vrend/resource.rs:2067`) tracks that honestly: `immutable` stays `true` only on the
-`glEGLImageTargetTexStorageEXT` path and is set `false` on the older
-`glEGLImageTargetTexture2DOES` fallback. The failing lines say `immutable true`, so they took the
-storage entry point and the flag is not lying. What remains is that the host GL will not make a
-view of *externally imported* storage even when it reports `GL_TEXTURE_IMMUTABLE_FORMAT` — which
-would be a host-driver limit rather than a bookkeeping bug, and is **not yet confirmed**.
+**`immutable` in that line is a prediction, not a measurement.** `glTextureView` raises
+`GL_INVALID_OPERATION` on a source that is not immutable-format, and `alloc_texture`
+(`vrend/resource.rs:2057`) initialises the flag from the *feature census* —
+`features.has(texture_storage) && entry.can_texture_storage` — a statement about the format table
+and the host's advertised capabilities. The `glEGLImageTargetTexture2DOES` fallback arm clears it
+to `false`; the `glEGLImageTargetTexStorageEXT` arm that these four took leaves it untouched, and
+nothing in the tree ever calls `glGetTexParameteriv(GL_TEXTURE_IMMUTABLE_FORMAT)`. So
+`immutable true` on the failing lines is the census being printed back, not the driver's answer,
+and it is consistent with the storage actually being mutable.
+
+Two facts, one of them unchecked, and the unchecked one is what every reader consults. virglrs
+`34ed41d` reads `GL_TEXTURE_IMMUTABLE_FORMAT` back at both exits of `alloc_texture` and stores
+that instead, which makes the trace line's `immutable` mean something different from what it
+meant in this run.
+
+**That makes the next boot decisive either way.** If the line prints `immutable false`, KK's
+`EXT_EGL_image_storage` does not deliver immutable-format storage, the view route is skipped and
+the poison should be cured. If it prints `immutable true` and `0x502` still follows, the host
+refuses to view externally imported storage regardless, and the view route needs gating on
+image-backing rather than on immutability.
 
 ### The gap in this evidence
 
@@ -106,6 +118,11 @@ compositor samples them by another route and the two clients were never comparab
 The traced run did **not** poison, exactly as designed — the trace drains the error. Zero
 `refused: vrend` lines against 26 927 refusals in the untraced run, and the desktop kept
 rendering. That is the drain, not a fix.
+
+**A traced run therefore cannot score a fix.** The trace is what kept this run alive, so a clean
+traced boot proves only which branch we are in. Any cure has to be scored on an *untraced* boot —
+no refusals, compositor alive — and both boots are needed: the traced one to read `immutable`,
+the untraced one to render the verdict.
 
 ## What the log does *not* say
 
