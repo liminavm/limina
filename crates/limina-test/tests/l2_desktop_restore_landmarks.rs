@@ -175,33 +175,94 @@ fn guest_edid_md5(guest: &Guest) -> String {
     )
 }
 
+/// Which workload apps to launch. `LIMINA_L2_WORKLOAD` takes a comma list of `nautilus`,
+/// `firefox` and `vkstill`; unset means all three, which is the only configuration that gates
+/// anything.
+///
+/// A bisect lever, not a knob to turn a red run green: each app covers a different way the
+/// desktop's pixels are produced (see the module docs), so a subset proves less by exactly the
+/// app it drops. It exists because "which of these three is doing that" is otherwise a question
+/// you cannot ask without editing the test.
+fn workload_apps() -> Vec<String> {
+    match std::env::var("LIMINA_L2_WORKLOAD") {
+        Ok(list) => list
+            .split(',')
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Err(_) => ["nautilus", "firefox", "vkstill"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+    }
+}
+
 /// Launch the three-app workload in the seated session. Each goes through `systemd-run --user`
 /// so it outlives the ssh connection and its failures land in the journal.
 fn launch_workload(guest: &Guest) {
     let env = "export XDG_RUNTIME_DIR=/run/user/1000 \
                DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus;";
+    let apps = workload_apps();
+    let mut cmd = String::from(env);
+    if apps.iter().any(|a| a == "nautilus") {
+        cmd.push_str(
+            " systemd-run --user --collect --unit l2-naut \
+               env WAYLAND_DISPLAY=wayland-0 nautilus >/dev/null 2>&1;",
+        );
+    }
+    if apps.iter().any(|a| a == "firefox") {
+        cmd.push_str(
+            " systemd-run --user --collect --unit l2-ff \
+               env WAYLAND_DISPLAY=wayland-0 MOZ_ENABLE_WAYLAND=1 \
+               firefox --new-window file:///tmp/webgl-still.html >/dev/null 2>&1;",
+        );
+    }
+    if apps.iter().any(|a| a == "vkstill") {
+        cmd.push_str(
+            " systemd-run --user --collect --unit l2-vkstill \
+               env WAYLAND_DISPLAY=wayland-0 /tmp/vkstill/vkstill >/dev/null 2>&1;",
+        );
+    }
+    cmd.push_str(" echo launched");
+    eprintln!("DIAG workload: {}", apps.join(","));
+    ssh_retry(guest, &cmd);
+}
+
+/// Anything in the session that is starting over and over: a unit systemd has restarted, and
+/// the processes that have been alive for less time than the workload has.
+///
+/// A dash icon throbbing on a cycle is an app being launched repeatedly, and it does not show up
+/// in a process count — the count is 1 whether that one process is the original or the ninth.
+fn restart_census(guest: &Guest) -> String {
     ssh_retry(
         guest,
-        &format!(
-            "{env} \
-             systemd-run --user --collect --unit l2-naut \
-               env WAYLAND_DISPLAY=wayland-0 nautilus >/dev/null 2>&1; \
-             systemd-run --user --collect --unit l2-ff \
-               env WAYLAND_DISPLAY=wayland-0 MOZ_ENABLE_WAYLAND=1 \
-               firefox --new-window file:///tmp/webgl-still.html >/dev/null 2>&1; \
-             systemd-run --user --collect --unit l2-vkstill \
-               env WAYLAND_DISPLAY=wayland-0 /tmp/vkstill/vkstill >/dev/null 2>&1; \
-             echo launched"
-        ),
-    );
+        "export XDG_RUNTIME_DIR=/run/user/1000 \
+           DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus; \
+         echo '--- unit restarts ---'; \
+         for u in l2-naut l2-ff l2-vkstill; do \
+           printf '%s NRestarts=%s Result=%s\\n' \"$u\" \
+             \"$(systemctl --user show -p NRestarts --value $u 2>/dev/null)\" \
+             \"$(systemctl --user show -p Result --value $u 2>/dev/null)\"; done; \
+         echo '--- session units that died ---'; \
+         systemctl --user list-units --state=failed --no-pager --no-legend 2>&1 | head -20; \
+         echo '--- most-restarted journal messages ---'; \
+         journalctl --user -b --no-pager 2>/dev/null \
+           | grep -oiE 'thumbnail[a-z]*|gstreamer|totem|Failed to (start|spawn) [a-z.-]+' \
+           | sort | uniq -c | sort -rn | head -12; \
+         echo '--- youngest gui processes (elapsed) ---'; \
+         ps -eo etimes,comm --sort=etimes 2>/dev/null | head -15",
+    )
 }
 
 /// Which of the workload's processes are alive, as a stable one-line summary.
 fn workload_procs(guest: &Guest) -> String {
     ssh_retry(
         guest,
+        // The bracketed letter keeps the pattern from matching the shell that carries it: a
+        // full-command-line match finds its own caller, so this count could never reach zero and
+        // the assertion built on it could never fire.
         "echo naut=$(pgrep -c nautilus || true) \
-             ff=$(pgrep -fc lib64/firefox/firefox || true) \
+             ff=$(pgrep -fc 'lib64/firefox/[f]irefox' || true) \
              vkstill=$(pgrep -c vkstill || true)",
     )
 }
@@ -307,6 +368,15 @@ fn seated_gpu_workload_survives_restore_unchanged() {
             .map(|l| l.trim().to_string())
             .collect()
     };
+    // Before anything is measured: did the renderer serve the workload at all? A poisoned
+    // context refuses every submit that follows it, so the compositor stops painting while every
+    // other oracle here — processes alive, windows present, last good frame still on screen —
+    // goes on passing. This gate caught nothing for two days because it was a DIAG print.
+    limina_test::renderer::assert_renderer_served(
+        &g1.supervisor_log(),
+        "with the workload running, before the identity push",
+    );
+
     let scanouts_before = mint_lines(g1.supervisor_log());
     eprintln!(
         "DIAG iosurface scanouts before the push: {}\n{}",
@@ -365,6 +435,16 @@ fn seated_gpu_workload_survives_restore_unchanged() {
     }
     // Give the guest a monitor identity the restored device will not have by default, then let
     // its compositor finish re-laying-out for it before anything is measured.
+    // Marked on stderr with a wall clock, because on a windowed run the oracle is a person
+    // watching the screen and "it went black a while after it settled" needs an anchor to be a
+    // measurement rather than an impression.
+    eprintln!(
+        ">>> PUSHING MONITOR IDENTITY NOW <<< ({}s since the epoch)",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    );
     g1.update_display(pushed_identity())
         .expect("pushing the monitor identity");
     std::thread::sleep(Duration::from_secs(10));
@@ -377,13 +457,17 @@ fn seated_gpu_workload_survives_restore_unchanged() {
          || echo none",
     );
     eprintln!("workload up: {procs_before} | {vk_device}");
+    // Under the bisect lever these two assertions are about apps that were deliberately not
+    // launched, so they gate the full workload only. A subset run is a diagnostic, and it says
+    // so on the DIAG line above rather than by quietly passing a weaker version of this test.
+    let full_workload = std::env::var_os("LIMINA_L2_WORKLOAD").is_none();
     assert!(
-        vk_device.contains("Venus"),
+        !full_workload || vk_device.contains("Venus"),
         "vkstill is not running on venus ({vk_device}) — the Vulkan half of this test would \
          be gating software rendering"
     );
     assert!(
-        !procs_before.contains("=0"),
+        !full_workload || !procs_before.contains("=0"),
         "part of the workload never started ({procs_before}) — the pre-suspend desktop is not \
          the one this test means to compare against"
     );
@@ -417,6 +501,14 @@ fn seated_gpu_workload_survives_restore_unchanged() {
             ),
         );
         eprintln!("DIAG gnome-shell dbus: {alive}");
+        eprintln!("DIAG restarts:\n{}", restart_census(&g1));
+        // vkstill's own account of itself. Its stderr goes to the journal, so a probe compiled
+        // into the client is invisible here unless something fetches it.
+        let vk_journal = ssh_retry(
+            &g1,
+            "journalctl --user -u l2-vkstill --no-pager 2>/dev/null | tail -n 40 || echo NONE",
+        );
+        eprintln!("DIAG vkstill journal:\n{vk_journal}");
 
         // The shell's Screenshot method is gated in GNOME 50 -- it answers AccessDenied to
         // anything but the screenshot UI -- and grim is not in the image, so there is no way to
@@ -526,8 +618,36 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         );
     }
 
-    let pre_a =
-        settled_capture(&g1, Duration::from_secs(90)).expect("pre-suspend capture never settled");
+    // The blank arrives well after the desktop settles, so the diagnostics above are read before
+    // it happens. Anything asked only there is being asked outside the window the event occurs
+    // in, which is how a probe reports "nothing" about a fault it never overlapped.
+    let pre_a = match settled_capture(&g1, Duration::from_secs(90)) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!(
+                "DIAG vkstill journal, LATE:\n{}",
+                ssh_retry(
+                    &g1,
+                    "journalctl --user -u l2-vkstill --no-pager 2>/dev/null | tail -n 40 \
+                     || echo NONE",
+                )
+            );
+            eprintln!("DIAG restarts, LATE:\n{}", restart_census(&g1));
+            eprintln!(
+                "DIAG compositor, LATE:\n{}",
+                ssh_retry(
+                    &g1,
+                    "export XDG_RUNTIME_DIR=/run/user/1000; \
+                     echo -n 'clutter complaints: '; \
+                     journalctl --user -b --no-pager 2>/dev/null \
+                       | grep -ciE 'clutter_actor_has_allocation|needs an allocation\
+|update stage views'; \
+                     journalctl --user -b --no-pager -n 25 2>/dev/null | cut -c1-160",
+                )
+            );
+            panic!("pre-suspend capture never settled: {e}");
+        }
+    };
     std::thread::sleep(Duration::from_secs(5));
     let pre_b = g1
         .read_capture()
@@ -768,12 +888,16 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         );
     }
 
+    let _ = std::fs::remove_file(&pre_png);
+    cleanup();
+    // Matching pixels are not proof the renderer survived: a compositor whose context died keeps
+    // its last good frame on screen, and this comparison is of two still desktops.
+    limina_test::renderer::assert_renderer_served(&g2.supervisor_log(), "after the restore");
+
     eprintln!(
         "desktop restored unchanged: EDID stable, {}/{} landmarks held, colours \
          {pre_colors} -> {post_colors}",
         stable.len() - moved.len(),
         stable.len()
     );
-    let _ = std::fs::remove_file(&pre_png);
-    cleanup();
 }

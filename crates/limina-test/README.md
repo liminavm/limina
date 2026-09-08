@@ -59,6 +59,14 @@ An L2 test boots a whole desktop and runs several apps in it. When one fails, th
 somewhere in guest + workload + host, and the cheapest way to be wrong for a day is to start
 theorising about the host. Work in this order.
 
+**0. Read the host renderer's log first.** Before any theory about the guest, grep the supervisor
+log for `[virglrs] refused:` and `submit_command -> Err`. virglrs poisons a context that raises a
+host GL error: every later submit from it is refused, and if that context is the compositor's the
+desktop stops being painted while the guest stays perfectly healthy — processes alive, windows
+present, last good frame still on screen. The guest is downstream of the renderer, so a guest-side
+investigation of a renderer fault finds only symptoms. `renderer::assert_renderer_served` makes
+this automatic for a test that carries it; do it by hand for one that does not.
+
 **1. Halve the workload before theorising.** Run each app alone, then in pairs
 (`LIMINA_L2_WORKLOAD=nautilus` in `l2_desktop_restore_landmarks`, `VKSTILL_IDLE_AFTER` and the
 app list elsewhere). One boot per app is minutes; it names the culprit or proves the fault needs
@@ -84,6 +92,13 @@ settle that times out, read the guest again *at the timeout*, not only before it
 count keyed on it never reaches zero and the assertion built on it never fires. A log needle is
 a claim about text another repository writes, and it rots silently. Pair any "nothing bad in the
 log" check with a line the code writes unconditionally, and assert on that too.
+
+Two failures of this rule cost the same investigation twice over. The renderers used to poison in
+different words, so checking venus's needle, finding it clean and concluding "the renderer refuses
+nothing" read vrend's 46318 refusals as silence — one needle for a two-renderer question. And the
+line that finally named the fault had been *printed* on three earlier runs, inside a DIAG dump,
+where nothing asserted on it. **A diagnostic is not an oracle.** If a line would change the
+verdict, assert on it; if it would not, it does not belong in the dump.
 
 **6. Prefer a window when the question is "what does it look like".**
 `with_windowed_coexist_display` opens a real window; a person watching it for thirty seconds

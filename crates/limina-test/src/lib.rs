@@ -38,6 +38,7 @@ pub use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec}
 
 pub mod bench;
 pub mod landmarks;
+pub mod renderer;
 
 /// Last-resort fallback firmware: the krunkit-shipped blob (an EDK2 `.fd`), the same one the
 /// M1 boot spikes used. It is a **DEBUG_GCC5 build with live ASSERTs that end in

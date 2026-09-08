@@ -683,6 +683,12 @@ above is blind, not clean)\n\
         );
     }
 
+    let _ = std::fs::remove_file(&pre_png);
+    cleanup();
+    // Matching pixels are not proof the renderer survived: a compositor whose context died keeps
+    // its last good frame on screen, and this comparison is of two still desktops.
+    limina_test::renderer::assert_renderer_served(&g2.supervisor_log(), "after the restore");
+
     eprintln!(
         "the Vulkan compositor's desktop survived: {}/{} landmarks held, colours \
          {pre_colors} -> {post_colors}, nothing skipped at capture, every classic resource \
@@ -690,6 +696,4 @@ above is blind, not clean)\n\
         body_cells - body_moved.len(),
         body_cells
     );
-    let _ = std::fs::remove_file(&pre_png);
-    cleanup();
 }
