@@ -91,5 +91,24 @@ opt-level = 3
 [profile.dev.package.virglrs]
 opt-level = 3
 
+# Naming virglrs alone was not enough: a package override does not reach that package's
+# dependencies, so the renderer's own hot path kept calling into unoptimized library code. Measured
+# 2026-09-08: rustc-hash at opt-level 0 left `FxBuildHasher::build_hasher` and `FxHasher::default`
+# as two out-of-line calls per hash lookup, 284 of 5883 samples (4.8%) of the classic command path
+# -- a handicap carried only by the arm that had just been changed to use hash tables, which is the
+# worst possible place for one. The release binary has neither symbol; the debug binary has both,
+# which is how to check this rather than trusting the profile.
+#
+# These are the crates virglrs reaches on a per-command path. Anything new it grows there belongs
+# here too -- or raise the whole graph and accept the compile time.
+[profile.dev.package.rustc-hash]
+opt-level = 3
+
+[profile.dev.package.bumpalo]
+opt-level = 3
+
+[profile.dev.package.bytemuck]
+opt-level = 3
+
 [patch.crates-io]
 imago = { path = "third_party/imago" }
