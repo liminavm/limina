@@ -63,6 +63,9 @@ for n in "${FISH[@]}"; do
   # normal with it. Stop any prior unit first and let the compositor settle before relaunching.
   "${SSH[@]}" "export XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
     systemctl --user stop ff-bench 2>/dev/null || true
+    # A unit that exited nonzero stays in 'failed' and systemd-run REFUSES to reuse the name, so
+    # the second fish count in a sweep dies on the launch rather than on the measurement.
+    systemctl --user reset-failed ff-bench 2>/dev/null || true
     sleep 3
     busctl --user set-property org.gnome.Shell /org/gnome/Shell org.gnome.Shell OverviewActive b false 2>/dev/null || true
     systemd-run --user --unit=ff-bench \
