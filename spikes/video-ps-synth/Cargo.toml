@@ -1,0 +1,24 @@
+# The Rust half of the H.264/HEVC parameter-set oracles.
+#
+# Standalone on purpose: `spikes` is excluded from the root workspace, so this never
+# enters `cargo clippy --workspace` and cannot gate a commit that has nothing to do with it.
+[package]
+name = "video-ps-synth"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+publish = false
+
+# The renderer is the subject, so it is a path dependency on the pinned tree rather than a
+# copy of anything out of it. `[lib] name` in virglrs's manifest is `virglrenderer`, which is
+# what the binaries import.
+[dependencies]
+virglrs = { path = "../../third_party/virglrs" }
+
+[[bin]]
+name = "synth-h264"
+path = "src/bin/synth-h264.rs"
+
+[[bin]]
+name = "synth-h265"
+path = "src/bin/synth-h265.rs"

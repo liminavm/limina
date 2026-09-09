@@ -12,8 +12,21 @@
 # Deliberately NOT extracted and handed over: pic_width_in_mbs_minus1,
 # pic_height_in_map_units_minus1 and the frame_crop_* values. The serializer derives those
 # from the display size, so passing them in would test nothing.
+#
+# The subject is the SHIPPING Rust serializer in virglrs. virglrs's own video-oracle tests
+# already diff it against the C byte for byte; that is a relative check and proves no regression,
+# not that either is right. This is the absolute one -- a real decoder over a real stream is the
+# only thing that can say the sets are conformant rather than merely unchanged.
+#
+# SYNTH overrides the binary, so `SYNTH=./synth ./verify.sh ...` grades the C instead (see
+# RESULTS.md for how to build it) and the two can be run against each other.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+if [ -z "${SYNTH:-}" ]; then
+  cargo build --release --quiet --manifest-path ../video-ps-synth/Cargo.toml
+  SYNTH=../video-ps-synth/target/release/synth-h264
+fi
 
 CLIP="${1:?usage: verify.sh <clip.264> <width> <height>}"
 W="${2:?width}"
@@ -43,7 +56,7 @@ echo "  profile_idc $(grep -E '^sps_profile_idc=' "$WORK/fields" | cut -d= -f2),
      "cabac $(grep -E '^pps_entropy_coding_mode_flag=' "$WORK/fields" | cut -d= -f2)," \
      "stream crop_bottom $(grep -E '^sps_frame_crop_bottom_offset=' "$WORK/fields" | cut -d= -f2 || echo 0)"
 
-./synth "$WORK/fields" "$W" "$H" "$WORK/ps.bin"
+"$SYNTH" "$WORK/fields" "$W" "$H" "$WORK/ps.bin"
 
 ffmpeg -v error -i "$CLIP" -c copy -bsf:v "filter_units=remove_types=7|8" -f h264 -y "$WORK/slices.264"
 cat "$WORK/ps.bin" "$WORK/slices.264" > "$WORK/ours.264"

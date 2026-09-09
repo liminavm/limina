@@ -10,8 +10,21 @@
 # Deliberately NOT extracted and handed over -- these are what the backend must invent:
 # the entire VPS, general_level_idc, the conf_win_* offsets, and the contents of every
 # short_term_ref_pic_set.
+#
+# The subject is the SHIPPING Rust serializer in virglrs. virglrs's own video-oracle tests
+# already diff it against the C byte for byte; that is a relative check and proves no regression,
+# not that either is right. This is the absolute one -- a real decoder over a real stream is the
+# only thing that can say the sets are conformant rather than merely unchanged.
+#
+# SYNTH overrides the binary, so `SYNTH=./synth ./verify.sh ...` grades the C instead (see
+# RESULTS.md for how to build it) and the two can be run against each other.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+if [ -z "${SYNTH:-}" ]; then
+  cargo build --release --quiet --manifest-path ../video-ps-synth/Cargo.toml
+  SYNTH=../video-ps-synth/target/release/synth-h265
+fi
 
 CLIP="${1:?usage: verify.sh <clip.265> <width> <height>}"
 W="${2:?width}"
@@ -48,7 +61,7 @@ echo "  coded $(grep -E '^sps_pic_width_in_luma_samples=' "$WORK/fields" | cut -
      "sao $(grep -E '^sps_sample_adaptive_offset_enabled_flag=' "$WORK/fields" | cut -d= -f2)," \
      "amp $(grep -E '^sps_amp_enabled_flag=' "$WORK/fields" | cut -d= -f2)"
 
-./synth "$WORK/fields" "$W" "$H" "$WORK/ps.bin"
+"$SYNTH" "$WORK/fields" "$W" "$H" "$WORK/ps.bin"
 
 ffmpeg -v error -i "$CLIP" -c copy -bsf:v "filter_units=remove_types=32|33|34" -f hevc -y "$WORK/slices.265"
 cat "$WORK/ps.bin" "$WORK/slices.265" > "$WORK/ours.265"

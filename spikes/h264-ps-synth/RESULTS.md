@@ -2,9 +2,14 @@
 
 The VideoToolbox backend has to write real SPS/PPS bytes from the parsed picture parameters
 the guest sends (`docs/design/h264-hevc-decode.md`). This spike is the oracle for that
-serializer — `third_party/virglrenderer/src/vrend/virgl_video_h264_ps.c` — and it exists
-because a malformed parameter set does not announce itself: VideoToolbox either rejects the
-format description outright, or accepts it and decodes subtly wrong.
+serializer — `virglrs`'s `vrend::video::h264` — and it exists because a malformed parameter
+set does not announce itself: VideoToolbox either rejects the format description outright, or
+accepts it and decodes subtly wrong.
+
+**This is the ABSOLUTE oracle, and the only one.** virglrs's own `video-oracle` tests diff the
+Rust serializer against the C it was ported from, byte for byte. That is a *relative* check: it
+proves no regression against the C, not that either is right. Nothing but a real decoder over a
+real stream can say the sets are conformant, which is what this does.
 
 ## The method
 
@@ -35,6 +40,11 @@ The serializer derives those from the display size; passing them in would test n
 The last three are what a single x264 High clip could never have covered. Using the M1's own
 hardware encoder for one of them matters beyond convenience: it is a genuinely independent
 SPS writer, so agreeing with it is not agreeing with x264's conventions.
+
+**The Rust serializer scores 4/4 bit-exact on this corpus, and so does the C leg** — run
+against each other on the same field files, they are the same verdict. Agreement between the
+two legs is worth only what would have made them differ, so it is the absolute result that
+carries here, not the match.
 
 `check.c` covers the other two entry points:
 
@@ -117,13 +127,32 @@ fallbacks to the session-rebuild path.
 
 ## Reproducing
 
+`verify.sh` builds `spikes/video-ps-synth` and grades the Rust serializer. Nothing else is needed:
+
 ```
-cc -O1 -Wall -Wextra -I shim -I <virgl>/src/vrend -I <virgl>/src -I <virgl>/src/gallium/include \
-   synth.c <virgl>/src/vrend/virgl_video_h264_ps.c -o synth
 ./verify.sh ref.264 640 480
 ./verify.sh vt1080.264 1920 1080
 ./verify.sh base480.264 640 480
 ./verify.sh main854.264 854 482
+```
+
+**The width and height are load-bearing and are not the clip's file name.** They are the display
+size the serializer derives the macroblock counts and the cropping window from, so a wrong pair
+produces a wrong-but-plausible SPS and the run fails. Use the four above. That this is how the
+oracle fails is also the evidence its needle is live: with `main854` given 854×480 instead of
+854×482, both the Rust and the C legs fail 30 of 30 frames.
+
+To grade the C instead — it is the reference the Rust was ported from, and the two can be run
+against each other — build it out of the checkout virglrs pins and point `SYNTH` at it:
+
+```
+cc -O1 -Wall -Wextra -I shim \
+   -I ../../third_party/virglrs/third_party/virglrenderer/src/vrend \
+   -I ../../third_party/virglrs/third_party/virglrenderer/src \
+   -I ../../third_party/virglrs/third_party/virglrenderer/src/gallium/include \
+   synth.c ../../third_party/virglrs/third_party/virglrenderer/src/vrend/virgl_video_h264_ps.c \
+   -o synth
+SYNTH=./synth ./verify.sh ref.264 640 480
 ```
 
 `shim/virgl_util.h` stands in for the real header, which pulls in meson-generated config the

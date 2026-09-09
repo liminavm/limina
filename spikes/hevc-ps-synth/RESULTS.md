@@ -2,9 +2,13 @@
 
 The VideoToolbox backend must write a real VPS, SPS and PPS from the picture parameters the
 guest sends (`docs/design/h264-hevc-decode.md`). This spike is the oracle for that
-serializer — `third_party/virglrenderer/src/vrend/virgl_video_h265_ps.c` — and is the direct
-sibling of `spikes/h264-ps-synth`. Read `spikes/hevc-vt-probe` first: it establishes *why*
-the reference picture sets can be placeholders, which is the premise everything here rests on.
+serializer — `virglrs`'s `vrend::video::h265` — and is the direct sibling of
+`spikes/h264-ps-synth`. Read `spikes/hevc-vt-probe` first: it establishes *why* the reference
+picture sets can be placeholders, which is the premise everything here rests on.
+
+**This is the ABSOLUTE oracle.** virglrs's own `video-oracle` tests diff the Rust against the C
+byte for byte, which proves no regression rather than correctness; only a real decoder over a
+real stream judges conformance.
 
 ## The method
 
@@ -76,14 +80,30 @@ confident false failures and zero true ones.
 
 ## Reproducing
 
+`verify.sh` builds `spikes/video-ps-synth` and grades the Rust serializer. **The width and height
+are load-bearing** — they are the display size the conformance window is derived from, so a wrong
+pair fails a clip that is otherwise fine. Use these:
+
 ```
-cc -O1 -Wall -Wextra -I shim -I <virgl>/src/vrend -I <virgl>/src -I <virgl>/src/gallium/include \
-   synth.c <virgl>/src/vrend/virgl_video_h265_ps.c -o synth
 ./verify.sh ../hevc-vt-probe/x265.265      640  480
 ./verify.sh ../hevc-vt-probe/x265-1080.265 1920 1080
 ./verify.sh ../hevc-vt-probe/vt1080.265    1920 1080
 ./verify.sh ../hevc-vt-probe/odd854.265     854  482
 ./verify.sh ../hevc-vt-probe/vtodd.265     1278  718
+```
+
+**The Rust serializer scores 5/5 bit-exact on this corpus.**
+
+To grade the C instead, build it out of the checkout virglrs pins and point `SYNTH` at it:
+
+```
+cc -O1 -Wall -Wextra -I shim \
+   -I ../../third_party/virglrs/third_party/virglrenderer/src/vrend \
+   -I ../../third_party/virglrs/third_party/virglrenderer/src \
+   -I ../../third_party/virglrs/third_party/virglrenderer/src/gallium/include \
+   synth.c ../../third_party/virglrs/third_party/virglrenderer/src/vrend/virgl_video_h265_ps.c \
+   -o synth
+SYNTH=./synth ./verify.sh ../hevc-vt-probe/x265.265 640 480
 ```
 
 ## End-to-end verdict
