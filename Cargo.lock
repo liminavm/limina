@@ -1940,6 +1940,7 @@ dependencies = [
  "bumpalo",
  "bytemuck",
  "libc",
+ "rustc-hash",
 ]
 
 [[package]]
