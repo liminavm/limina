@@ -14,7 +14,8 @@ set -euxo pipefail
 cd "$(dirname "$0")/../.."
 REPO="$PWD"
 
-SRC="${VIRGL_SRC:-$REPO/third_party/virglrenderer}"
+# The C is virglrs's now — limina neither pins nor vendors it.
+SRC="${VIRGL_SRC:-$REPO/third_party/virglrs/third_party/virglrenderer}"
 BUILD="$SRC/build-gl"
 PREFIX="${VIRGL_GL_PREFIX:-$REPO/third_party/virgl-gl-prefix}"
 MESA_PREFIX="${MESA_PREFIX:-/Volumes/mesa-cs/zink-kk-prefix}"

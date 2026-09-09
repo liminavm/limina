@@ -69,7 +69,7 @@ co-design** across two of our forks in the hot path. So the spike is timeboxed t
 
 ## Code map (verified against live source, 3 independent reads)
 
-Host ring = `third_party/virglrenderer/src/venus/vkr_ring.{c,h}`. Guest ring = the venus
+Host ring = `third_party/virglrs/third_party/virglrenderer/src/venus/vkr_ring.{c,h}`. Guest ring = the venus
 Vulkan driver `vn_ring.{c,h}` (checkout under `spikes/venus-261-source/virtio-vulkan/`).
 libkrun EVENT_IDX = `third_party/libkrun/src/devices/src/virtio/queue.rs` (+ gpu, patch 0091).
 

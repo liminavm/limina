@@ -8,10 +8,15 @@ set -eu
 cd "$(dirname "$0")"
 ROOT="$(cd ../.. && pwd)"
 PREFIX="$ROOT/third_party/virgl-prefix"
-[ -f "$PREFIX/lib/libvirglrenderer.dylib" ] || { echo "build virglrenderer first: scripts/build-virglrenderer.sh"; exit 1; }
+# The C is virglrs's now — limina neither pins nor vendors it, and
+# scripts/build-virglrenderer.sh retired with it.
+SRC="$ROOT/third_party/virglrs/third_party/virglrenderer"
+[ -f "$PREFIX/lib/libvirglrenderer.dylib" ] || {
+   echo "build virglrenderer first, from $SRC:"
+   echo "  meson setup build --prefix=$PREFIX && ninja -C build install"; exit 1; }
 cc -O2 -Wall -Wextra -o vrend-replay vrend-replay.c \
-   -I"$ROOT/third_party/virglrenderer/src" \
-   -I"$ROOT/third_party/virglrenderer/build/src" \
+   -I"$SRC/src" \
+   -I"$SRC/build/src" \
    -I"$PREFIX/include/virgl" \
    -L"$PREFIX/lib" -lvirglrenderer -Wl,-rpath,"$PREFIX/lib"
 echo "built: $PWD/vrend-replay"

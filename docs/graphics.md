@@ -74,8 +74,9 @@ load, so there is nothing to point at the wrong one — the trap this section us
 Homebrew's venus-less build was picked up and `virgl_renderer_init` returned −1 into a silent
 software-2D degrade, cannot arise.
 
-`third_party/virglrenderer` is still built and still useful, but only as the reference the rewrite
-records goldens from. Nothing the worker runs comes out of `third_party/virgl-prefix`.
+The C renderer is still useful, but only as the reference the rewrite records goldens against, and
+it lives inside virglrs — `third_party/virglrs/third_party/virglrenderer`, pinned by virglrs. limina
+does not pin or vendor it. Nothing the worker runs comes out of `third_party/virgl-prefix`.
 
 A worker log that still shows `degrading to software-2D` or `ComponentError(-1)` right after
 `virgl_flags` is now a real renderer-init failure, not a link mistake: read the `[virglrs]` lines
@@ -556,7 +557,7 @@ present as a corruption bug.
 
 Host memory allocated on the guest's behalf is invisible to the guest, so a guest-side leak ends
 with macOS jetsamming the worker and killing the whole VM with no guest-side evidence. The budget
-ledger in `third_party/virglrenderer/src/venus/vkr_budget.{c,h}` fixes the attribution: exact-size
+ledger in `third_party/virglrs/third_party/virglrenderer/src/venus/vkr_budget.{c,h}` fixes the attribution: exact-size
 per-context accounting (always on) plus an enforced cap that kills the offending context rather
 than the VM. The guest is told the cap through `VK_EXT_memory_budget` — the one backpressure
 channel the venus transport does not discard.

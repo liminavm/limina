@@ -14,10 +14,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 MESA_PREFIX="${MESA_PREFIX:-/Volumes/mesa-cs/zink-kk-prefix}"
 VIRGL_PREFIX="$ROOT/third_party/virgl-prefix"
-VIRGL_SRC="$ROOT/third_party/virglrenderer"
+# The C is virglrs's now — limina neither pins nor vendors it.
+VIRGL_SRC="$ROOT/third_party/virglrs/third_party/virglrenderer"
 
+# scripts/build-virglrenderer.sh retired with the C; build from virglrs's checkout instead.
 [ -f "$VIRGL_PREFIX/lib/libvirglrenderer.dylib" ] || {
-  echo "virgl-prefix missing — run scripts/build-virglrenderer.sh first" >&2; exit 2; }
+  echo "virgl-prefix missing — build it from $VIRGL_SRC:" >&2
+  echo "  meson setup build --prefix=$VIRGL_PREFIX && ninja -C build install" >&2
+  exit 2; }
 
 clang -O0 -g -o "$HERE/planar-transfer-probe" "$HERE/planar-transfer-probe.c" \
   -I"$VIRGL_PREFIX/include/virgl" -I"$VIRGL_SRC/src" \

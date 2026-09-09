@@ -572,8 +572,9 @@ exactly two multisampled resources: that colour target and its 4-sample depth co
 **Source and destination formats differ, and that decides the route.** On a GLES host,
 `vrend_renderer_prepare_blit` returns false for an MS-source RGBA blit whose
 `src.format != dst.format`, so the blit falls through to `vrend_renderer_blit_gl`, the shader
-blitter, in its own GL context (`third_party/virglrenderer/src/vrend/vrend_renderer.c:12751-12764`,
-dispatch at `:12965-12973`). Read directly from the renderer with `LIMINA_VREND_BLIT_LOG=1`:
+blitter, in its own GL context
+(`third_party/virglrs/third_party/virglrenderer/src/vrend/vrend_renderer.c:12772-12785`,
+dispatch at `:12985-12994`). Read directly from the renderer with `LIMINA_VREND_BLIT_LOG=1`:
 
 ```
 FBO   src=fmt67/s0 2560x1440 -> dst=fmt67/s0 2560x1440  (redblue_or_fmt=0 …)

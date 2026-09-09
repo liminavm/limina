@@ -56,7 +56,7 @@ execution time under a shared sequence counter. libkrun owns the merged journal 
 file section; virglrenderer provides the record tee and the replay entry point.
 
 Replay is then: walk the journal in order, dispatching rutabaga entries to the device layer and
-wire entries to `vkr_context_submit_cmd()` (`third_party/virglrenderer/src/venus/vkr_context.c:241`)
+wire entries to `vkr_context_submit_cmd()` (`third_party/virglrs/third_party/virglrenderer/src/venus/vkr_context.c:243`)
 — the same funnel live traffic uses, bypassing the ring.
 
 ## 4. Inventory: what must be reconstructed

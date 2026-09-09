@@ -3,7 +3,7 @@
 # Copyright © 2026 Gustavo Noronha Silva
 #
 # Decode a dump from vrend's in-memory command tracer (LIMINA_VREND_TRACE, see
-# third_party/virglrenderer/src/vrend/vrend_trace.[ch]).
+# third_party/virglrs/third_party/virglrenderer/src/vrend/vrend_trace.[ch]).
 #
 # The tracer buffers in RAM and writes only on request, because the fault it exists to observe is
 # cured by a bare glFlush -- a tracer doing per-command I/O would move the very boundary under

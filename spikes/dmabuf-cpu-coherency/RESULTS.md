@@ -49,8 +49,9 @@ takes ~9 ms of pipeline setup — which is the reporter's "the first write alway
 
 ## The timestamp proof
 
-`vrend-coh-instrument.patch` (apply to `third_party/virglrenderer`, rebuild with
-`scripts/build-virglrenderer.sh`, run the VM with `LIMINA_COH_TRACE=1`) stamps
+`vrend-coh-instrument.patch` (apply to `third_party/virglrs/third_party/virglrenderer`, rebuild it
+with meson — `scripts/build-virglrenderer.sh` retired with the C — run the VM with
+`LIMINA_COH_TRACE=1`) stamps
 `CLOCK_REALTIME` at each `vrend_renderer_transfer_write_iov`; `LIMINA_COH_TRACE=1` on the
 probe stamps the guest side. The guest clock is anchored to the host's, and the two series
 carried a constant 64.80 ms offset (identical inter-event deltas, so the alignment is not a

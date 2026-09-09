@@ -522,7 +522,7 @@ flip straight to the primary plane). Converged truth + open-threads ledger live 
   MoltenVK builds/patches archived under `spikes/archive/moltenvk/`.
 - **virglrenderer:** our fork carries the Apple blob support (`RUTABAGA_MEM_HANDLE_TYPE_APPLE`,
   `VIRGL_RENDERER_BLOB_FD_TYPE_APPLE`, `virgl_renderer_resource_get_map_ptr`) + IOSurface /
-  cross-context patches. Build the libkrun-flavored fork under `third_party/virglrenderer` — do NOT
+  cross-context patches. Build the libkrun-flavored fork under `third_party/virglrs/third_party/virglrenderer` — do NOT
   link Homebrew's (it silently degrades venus to software-2D; see the `limina-virgl-link-trap` note).
 
 ### Open M4 items (the remaining ledger)

@@ -297,7 +297,7 @@ with it**, at 1280x800 over 301 buffers. 1213 MiB is 301 x 4 MiB — one whole f
 frame, exactly. The gbm arm's own RED/GREEN (2340 / 98 MiB) is above; the vk arm's is half
 because it allocates half the surfaces.
 
-Repeating the census: apply `iosurface-site-census.patch` to `third_party/virglrenderer`,
+Repeating the census: apply `iosurface-site-census.patch` to `third_party/virglrs/third_party/virglrenderer`,
 rebuild, boot, `systemctl isolate multi-user.target`, then run both arms and tally
 `[IOSITE]` in the worker log. Revert and rebuild after — the patch is instrumentation, not a
 change we carry.

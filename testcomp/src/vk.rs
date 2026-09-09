@@ -443,11 +443,12 @@ impl Vk {
     ///
     /// **This is the path M3 exists to exercise.** On a limina guest the fd names a venus blob,
     /// so the import crosses from the client's virtio-gpu context into the compositor's, and the
-    /// host resolves it in `vkr_create_device_memory` (`third_party/virglrenderer/src/venus/
-    /// vkr_device_memory.c:319`) by looking the exporter's resource up in *this* context's table
-    /// and aliasing its bytes. When the exporter's resource carries an IOSurface, the host takes
-    /// a **borrowed `+1`** on it into `mem->imported_iosurface` (`:794`), released only by
-    /// `vkr_device_memory_release` (`:981`). That reference is the host-side holder the whole
+    /// host resolves it in `vkr_dispatch_vkAllocateMemory_impl`
+    /// (`third_party/virglrs/third_party/virglrenderer/src/venus/vkr_device_memory.c:294`) by
+    /// looking the exporter's resource up in *this* context's table and aliasing its bytes. When
+    /// the exporter's resource carries an IOSurface, the host takes a **borrowed `+1`** on it
+    /// (`:358`) and stores it in `mem->imported_iosurface` (`:885`), released only by
+    /// `vkr_device_memory_release` (`:1098`). That reference is the host-side holder the whole
     /// `buffer-lifetime-matrix.md` is written about.
     ///
     /// The host has a **silent fallback ladder** underneath that (IOSurface → `map_ptr` →

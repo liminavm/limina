@@ -117,7 +117,7 @@ real trap is the **Homebrew dylib vs header mismatch** (§1.1).
   HANG_UP claim in doc 07 — these drive concrete design decisions.)
 
 ### 1.7 [UNVERIFIED, high-stakes] virglrenderer Apple blob patches (doc 03 OPEN)
-- Still the #1 graphics unknown: does Homebrew (or the `third_party/virglrenderer`
+- Still the #1 graphics unknown: does Homebrew (or the `third_party/virglrs/third_party/virglrenderer`
   checkout) carry `RUTABAGA_MEM_HANDLE_TYPE_APPLE=0x0006` /
   `virgl_renderer_resource_get_map_ptr`? Decides whether Venus host-visible memory and
   MAP_BLOB work. Not checked this pass. Keep as a blocker.

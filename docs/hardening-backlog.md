@@ -626,8 +626,8 @@ rects). Remaining:
   bit (a swap-chain pool). The run contains exactly two multisampled resources. Source and
   destination formats differ, and on a GLES host that sends an MS-source RGBA blit down
   `vrend_renderer_blit_gl` — the shader blitter, in its own GL context — rather than the
-  FBO path (`third_party/virglrenderer/src/vrend/vrend_renderer.c:12751-12764`, dispatched
-  at `:12965-12973`). There is already an open finding that this blitter leaves its texture
+  FBO path (`third_party/virglrs/third_party/virglrenderer/src/vrend/vrend_renderer.c:12772-12785`,
+  dispatched at `:12985-12994`). There is already an open finding that this blitter leaves its texture
   parameters on the shared source texture.
 
   **Every probe built for this bug was off-path.** `host-msaa-loop.c` and
@@ -1731,10 +1731,10 @@ Measured: the C's res 53 is byte-identical to res 51, the blit's own destination
 swizzle, alpha forced to one), not to res 52. Both implementations are deterministic over two runs.
 
 Mechanism, verified in the source. `vrend_set_tex_param`
-(`third_party/virglrenderer/src/vrend/vrend_blitter.c:737`, called from `vrend_renderer_blit_gl`)
+(`third_party/virglrs/third_party/virglrenderer/src/vrend/vrend_blitter.c:737`, called from `vrend_renderer_blit_gl`)
 writes `GL_TEXTURE_SWIZZLE_*`, `GL_TEXTURE_BASE_LEVEL`/`MAX_LEVEL`, the wrap modes and the filters
 onto whatever `info->src_view` names — and `vrend_renderer_blit_int`
-(`vrend_renderer.c:12888`) sets that to `src_res->gl_id`, the SHARED texture object, whenever the
+(`vrend_renderer.c:12968`) sets that to `src_res->gl_id`, the SHARED texture object, whenever the
 blit's source format equals the resource's format. A transient view (`vrend_make_view`) is made
 only for reinterpreting blits, and is deleted afterwards. GL texture objects are shared across GL
 contexts, so the blitter running in its own context (`blit_ctx->gl_context`) shields nothing. On

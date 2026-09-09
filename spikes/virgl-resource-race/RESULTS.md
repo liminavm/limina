@@ -1,6 +1,6 @@
 # The virgl_resource_table race
 
-`virgl_resource_table` (`third_party/virglrenderer/src/virgl_resource.c`) is a process-global
+`virgl_resource_table` (`third_party/virglrs/third_party/virglrenderer/src/virgl_resource.c`) is a process-global
 hash table with no lock. Upstream never needed one: every operation runs on the VMM's virtio-gpu
 thread, through the `virgl_renderer_*` entry points.
 
@@ -39,7 +39,7 @@ nodes get benignly reused often enough that an unsanitized build can run clean f
 ./build.sh && ./race
 ```
 
-Needs a configured meson build at `third_party/virglrenderer/build` for `config.h` and
+Needs a configured meson build at `third_party/virglrs/third_party/virglrenderer/build` for `config.h` and
 `virgl-version.h`.
 
 Before the lock:

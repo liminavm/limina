@@ -114,11 +114,14 @@ index bfa41a5b..a9499dbd 100644
      * a dedicated import allocation names this image, and the adopted texture's pixel
 
 --- HOW TO USE (not part of the diff) -------------------------------------------------------
-Apply to third_party/virglrenderer (a clone of liminavm/virglrenderer at the manifest rev),
-rebuild with scripts/build-virglrenderer.sh, and boot with LIMINA_GPU_MEM_BUDGET_MIB=2048.
+Apply to the C checkout virglrs pins (limina does not pin it), rebuild it with meson, and boot with
+LIMINA_GPU_MEM_BUDGET_MIB=2048. scripts/build-virglrenderer.sh retired with the C.
 
-    git -C third_party/virglrenderer apply ../../spikes/venus-churn-retention/fault-inject-paths-3-4.patch
-    ./scripts/build-virglrenderer.sh
+    git -C third_party/virglrs/third_party/virglrenderer apply \
+        ../../../../spikes/venus-churn-retention/fault-inject-paths-3-4.patch
+    meson setup third_party/virglrs/third_party/virglrenderer/build \
+        third_party/virglrs/third_party/virglrenderer --prefix=$PWD/third_party/virgl-prefix
+    ninja -C third_party/virglrs/third_party/virglrenderer/build install
     ./crates/limina-vmm/sign.sh
 
 Both injectors are OFF unless a file exists ON THE HOST — a file rather than an env var so RED

@@ -6,11 +6,18 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-vr=$here/../../third_party/virglrenderer
+# The C is virglrs's now — limina neither pins nor vendors it, so this reaches through virglrs.
+vr=$here/../../third_party/virglrs/third_party/virglrenderer
 out=$here/race
 
-[ -d "$vr/src" ] || { echo "no virglrenderer checkout: run 'cargo xtask vendor'" >&2; exit 1; }
-[ -f "$vr/build/config.h" ] || { echo "no configured build at $vr/build (needs config.h + virgl-version.h)" >&2; exit 1; }
+[ -d "$vr/src" ] || { echo "no virglrenderer checkout at $vr: run 'cargo xtask vendor'" >&2; exit 1; }
+# virglrs's vendor step only fetches the source; nothing configures it, so the meson build this
+# needs for config.h + virgl-version.h has to be set up here by hand.
+[ -f "$vr/build/config.h" ] || {
+   echo "no configured build at $vr/build (needs config.h + virgl-version.h)" >&2
+   echo "  meson setup $vr/build $vr && ninja -C $vr/build" >&2
+   exit 1
+}
 
 clang -fsanitize=thread -g -O1 -std=c11 -Wall \
    -DUTIL_ARCH_LITTLE_ENDIAN=1 -DUTIL_ARCH_BIG_ENDIAN=0 \

@@ -37,7 +37,7 @@ failure (immutability, not sync, is the load-bearing property — see RESULTS.md
   the kernel attaches one) arrives as a **global-ring** fence today → would retire
   instantly. It must instead be parked until present-complete.
 
-### virglrenderer/vkr (third_party/virglrenderer, src/venus/)
+### virglrenderer/vkr (third_party/virglrs/third_party/virglrenderer, src/venus/)
 
 - Context fences are **true GPU completion**, not decode completion:
   `vkr_queue_sync_submit` (`vkr_queue.c:78-112`) does a zero-command

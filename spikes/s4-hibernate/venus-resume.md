@@ -2,7 +2,7 @@
 
 Date: 2026-06-28. Method: two grounded source passes (Explore), every claim cited `file:line`:
 - **Guest venus driver** (Mesa): `/Volumes/mesa-cs/mesa/src/virtio/vulkan/` (`vn_*.c`).
-- **Host venus render-server** (virglrenderer): `third_party/virglrenderer/src/venus/` (`vkr_*.c`).
+- **Host venus render-server** (virglrenderer): `third_party/virglrs/third_party/virglrenderer/src/venus/` (`vkr_*.c`).
 
 ## The question
 
