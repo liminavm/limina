@@ -6,9 +6,32 @@ frame header at the ffmpeg→VA-API boundary — `av1dec.c` passes only
 `raw_tile_group->tile_data.data` — so the header has to be synthesized from the
 descriptor and the tile payload passed through verbatim.
 
-The serializer itself lives in the virglrenderer fork
-(`src/vrend/virgl_video_av1_obu.{c,h}`); this directory holds the fixtures and the
-oracle that grade it.
+The serializer that **ships** is `virglrs`'s `vrend::video::av1`. The C
+(`src/vrend/virgl_video_av1_obu.{c,h}`, in the checkout virglrs pins) is the reference it was
+ported from, and both are graded here.
+
+The two halves are split so the dav1d harness is written once. `av1-rebuild`, in
+`spikes/video-ps-synth`, drives the Rust serializer and writes the rebuilt stream;
+`AV1_ORACLE_STREAM=<file>` points this oracle's dav1d half at it. Without that variable the
+oracle builds the stream itself with the C, which is the control:
+
+```
+make oracle
+cargo build --release --manifest-path ../video-ps-synth/Cargo.toml
+R=../video-ps-synth/target/release/av1-rebuild
+$R capture/baseline /tmp/rs.obu
+AV1_ORACLE_STREAM=/tmp/rs.obu ./oracle capture/baseline clips/baseline.obu   # the Rust
+./oracle capture/baseline clips/baseline.obu                                 # the C
+```
+
+**The Rust and the C rebuild byte-identical streams on all eight fixtures**, and each decodes
+bit-identically to the original clip. Byte equality is only the relative check — it says the port
+did not change the output, not that the output is right; the dav1d comparison against the
+original is what makes either result absolute.
+
+`AV1_REBUILD_CONTRACT=1 av1-rebuild ...` drives the serializer the way a buggy backend would,
+building each frame without ever flushing the held one, and passes only if it *refuses*. That
+guard is unreachable on the normal path, so it needs a mode of its own.
 
 ## Status
 

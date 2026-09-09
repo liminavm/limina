@@ -1,9 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 #
-# The serializer under test is MIT code in the virglrenderer fork, compiled straight from
-# there rather than copied: a copy would drift, and the point of the oracle is to judge the
-# thing that actually ships. dav1d is BSD-2 and stays on this side of the fence.
-VIRGL   := ../../third_party/virglrenderer/src
+# These targets build the C serializer, which is now the REFERENCE rather than the thing that
+# ships. The shipping serializer is virglrs's Rust; `spikes/video-ps-synth`'s av1-rebuild drives
+# it and `AV1_ORACLE_STREAM` points this oracle's dav1d half at the result, so the two can be
+# graded against each other and against the original clip. See RESULTS.md.
+#
+# The C is MIT code compiled straight out of the checkout virglrs pins rather than copied: a copy
+# would drift, and the point of the oracle is to judge a thing that actually ships. dav1d is
+# BSD-2 and stays on this side of the fence.
+VIRGL   := ../../third_party/virglrs/third_party/virglrenderer/src
 CFLAGS  += -O2 -g -Wall -Wextra -Wno-unused-parameter -I$(VIRGL) -I$(VIRGL)/vrend -I$(VIRGL)/gallium/include
 DAV1D_CFLAGS := $(shell pkg-config --cflags dav1d)
 DAV1D_LIBS   := $(shell pkg-config --libs dav1d)

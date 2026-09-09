@@ -247,6 +247,12 @@ int main(int argc, char **argv)
      * than quietly losing a picture. Worth a mode of its own because the normal path always
      * flushes, so nothing else here ever reaches that guard. */
     const bool contract = getenv("AV1_ORACLE_CONTRACT") != NULL;
+    /* AV1_ORACLE_STREAM=<file> grades a stream someone else rebuilt instead of building one
+     * here. That is how the SHIPPING Rust serializer is scored: `av1-rebuild` (in
+     * spikes/video-ps-synth) writes the stream, and this decodes it against the original. The
+     * dav1d half is the expensive and codec-agnostic part, so it is written once and grades
+     * either implementation rather than being duplicated in Rust. */
+    const char *prebuilt = getenv("AV1_ORACLE_STREAM");
     bool held_seen = false;
     const char *capture_dir, *clip_path;
 
@@ -265,11 +271,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (!(stream = malloc(stream_cap))) return 1;
+    if (prebuilt) {
+        if (!(stream = slurp(prebuilt, &stream_len))) {
+            fprintf(stderr, "cannot read %s\n", prebuilt);
+            return 1;
+        }
+        printf("grading a prebuilt stream: %s (%zu bytes)\n", prebuilt, stream_len);
+    } else if (!(stream = malloc(stream_cap))) {
+        return 1;
+    }
 
     virgl_av1_obu_state_init(&state);
 
-    for (unsigned i = 0; ; i++) {
+    for (unsigned i = 0; !prebuilt; i++) {
         struct virgl_av1_picture_desc desc;
         char path[2048];
         uint8_t *tiles;
@@ -358,31 +372,33 @@ int main(int argc, char **argv)
 
     /* A hidden frame may still be held: it waits one submission so its refresh can be
      * derived from the next descriptor, and after the last one there is no next. */
-    if (stream_len + (2 << 20) > stream_cap) {
-        stream_cap = stream_len + (2 << 20);
-        stream = realloc(stream, stream_cap);
-        if (!stream) return 1;
-    }
-    ssize_t tail = virgl_av1_flush_temporal_unit(&state, stream + stream_len,
-                                                 stream_cap - stream_len);
-    if (tail < 0) {
-        fprintf(stderr, "the serializer refused to flush the held frame\n");
-        return 1;
-    }
-    stream_len += (size_t)tail;
+    if (!prebuilt) {
+        if (stream_len + (2 << 20) > stream_cap) {
+            stream_cap = stream_len + (2 << 20);
+            stream = realloc(stream, stream_cap);
+            if (!stream) return 1;
+        }
+        ssize_t tail = virgl_av1_flush_temporal_unit(&state, stream + stream_len,
+                                                     stream_cap - stream_len);
+        if (tail < 0) {
+            fprintf(stderr, "the serializer refused to flush the held frame\n");
+            return 1;
+        }
+        stream_len += (size_t)tail;
 
-    if (contract) {
-        printf("SKIP: no frame was ever held, so the guard was not reached\n");
-        return 0;
-    }
+        if (contract) {
+            printf("SKIP: no frame was ever held, so the guard was not reached\n");
+            return 0;
+        }
 
-    if (!frames) {
-        fprintf(stderr, "no fixtures in %s\n", capture_dir);
-        return 1;
-    }
+        if (!frames) {
+            fprintf(stderr, "no fixtures in %s\n", capture_dir);
+            return 1;
+        }
 
-    printf("rebuilt %u frames into %zu bytes (original clip: %zu)\n\n",
-           frames, stream_len, original_size);
+        printf("rebuilt %u frames into %zu bytes (original clip: %zu)\n\n",
+               frames, stream_len, original_size);
+    }
 
     if (getenv("AV1_ORACLE_DUMP")) {
         FILE *d = fopen(getenv("AV1_ORACLE_DUMP"), "wb");
@@ -510,7 +526,13 @@ int main(int argc, char **argv)
      * them, so no decoder emits them. They are still covered: every shown picture is
      * predicted from them, so a hidden frame decoded wrongly shows up as a pixel difference
      * in the frames that reference it. */
-    printf("\nPASS: all %u shown pictures are bit-identical to the original stream's decode "
-           "(%u hidden frames covered as references)\n", compared, frames - compared);
+    /* `frames` counts what THIS process built, so it is zero when the stream was rebuilt
+     * elsewhere and there is no hidden-frame count to report. */
+    if (prebuilt)
+        printf("\nPASS: all %u shown pictures are bit-identical to the original stream's "
+               "decode\n", compared);
+    else
+        printf("\nPASS: all %u shown pictures are bit-identical to the original stream's decode "
+               "(%u hidden frames covered as references)\n", compared, frames - compared);
     return 0;
 }
