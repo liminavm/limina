@@ -35,7 +35,7 @@ guard is unreachable on the normal path, so it needs a mode of its own.
 
 ## Status
 
-All six fixtures rebuild into a stream dav1d decodes **bit-identically** to the
+All eight fixtures rebuild into a stream dav1d decodes **bit-identically** to the
 original clip:
 
 | fixture   | shown pictures compared | hidden frames |
@@ -48,6 +48,10 @@ original clip:
 | lowdelay  | 60                     | 0             |
 | aompyramid| 36                     | 28            |
 | gm        | 56                     | 40            |
+
+`capture/youtube` is a ninth capture with no clip beside it, kept from the 2026-09-01
+corruption bug. It rebuilds, but nothing grades its pixels — there is no original to
+compare against.
 
 \* the `superres` capture carries a local repair: two of its tile payloads were
 recorded as zeros (see *Known defect* below) and were restored from the clip.
