@@ -24,9 +24,10 @@ on a `cp -c` clone of `Fedora-Workstation-44.enhanced.raw` booted through
 - **Three of the four ledger workloads are at or above the 08-08 C-renderer baseline**, and vkmark
   is **+26%**. The ledger is flat across the fence fix, which is the correct answer: none of those
   four workloads depend on the classic fence path.
-- **The mouse-pointer stutter is NOT fixed** by either change, and it is the symptom that motivated
-  the fence work. Its cause is a *third* drain — `resource_sync_iosurface`, on the compositor's
-  present. Not measured here; not yet fixed.
+- **The mouse-pointer stutter is not fixed by either change here**, and it is the symptom that
+  motivated the fence work. Its cause is a *third* drain — `resource_sync_iosurface`, on the
+  compositor's present. Fixed the next day in virglrs `7c65f0f`; scored smooth by a human at the
+  same 25 000-fish load that produced this memo's negative. See `perf/2026-09-09-remeasure.md`.
 - A regression this memo previously reported as "`glmark2` −23%, unattributed" **was the build
   profile**. It is now +5% on the baseline.
 
@@ -36,9 +37,16 @@ on a `cp -c` clone of `Fedora-Workstation-44.enhanced.raw` booted through
 |---|---|---|---|---|---|
 | `gl-replay-venus` (fps) | 47.60 | 56.91 | 56.91 | **56.94** | **+20%** |
 | `gl-replay-llvmpipe` (CPU control) | 746 | 722.3 | 717.5 | **717.4** | −4% |
-| `vk-replay-venus-headless` (fps) | 1974.7 | 1742.1 | 2224.3 | **2229.5** | **+13%** |
-| `glmark2-wayland-venus` (score) | 2944 | 2268 | 3099 | **3160** | **+7%** |
+| `vk-replay-venus-headless` (fps) | 1974.7 | 1742.1 | 2224.3 | **2229.5** | unresolvable |
+| `glmark2-wayland-venus` (score) | 2944 | 2268 | 3099 | **3160** | unresolvable |
 | **vkmark** | 3151 | 3382 | 3981 | not re-run | **+26%** |
+
+**The `vs 08-08` column resolves only the two large steps.** `vk-replay`'s own outlier band is
+9-15% and `glmark2`'s between-boot variance is ±10%, so neither supports a cross-day attribution of
+13% or 7%; the `-O0` → `-O3` step (+28% on `vk-replay`) and the profile regression (−23% on
+`glmark2`) clear those floors and stand. The `-O3` vkmark column is virglrs `c299aae`, which
+**predates the fence fix `4afa3ef` by 7 commits** — vkmark was never run at the fence pin.
+See `perf/2026-09-09-remeasure.md` §Instruments.
 
 The `-O0` rows are kept and labelled in `ledger.csv`, because a trend file that silently drops a
 bad measurement teaches nothing.
@@ -91,9 +99,10 @@ costs something the knob did not — plausibly its `glFenceSync` + `glFlush` for
 the bare drain-removal got for free — but both are single captures and the observed run-to-run
 spread is at least that wide. It needs n=3 on both arms before anyone writes that story down.
 
-**The residual against the C era is ~1.2x and remains unattributed.** It is a *subtraction, not a
-measurement*: 36 against a 42 taken on a different host driver and a different guest mesa, both
-single captures. It should not be quoted as "KosmicKrisp and mesa drift" until something scores it.
+**The residual against the C era was ~1.2x, and it is gone rather than explained.** 2026-09-09
+measured 45 (25k) and 39 (30k) at n=3 against the C era's 42 and 39. The subtraction that produced
+the residual should never have been quoted: 36 against a 42 taken on a different host driver and a
+different guest mesa, both single captures, on a workload whose spread is ~15%.
 
 ### The positive control for the fence fix
 
@@ -234,10 +243,9 @@ screen is what recovered this session.
 
 ## Follow-ups
 
-1. **Fix `resource_sync_iosurface`** to finish what the present actually needs, then score the
-   pointer with a human watching. Owned by virglrs.
-2. **The aquarium at n=3** on 25 000 and 30 000, on the pin that ships, before the 30 000 gap or
-   the ~1.2x residual is attributed to anything.
+1. ~~Fix `resource_sync_iosurface`~~ — done, virglrs `7c65f0f`; pointer scored smooth by a human.
+2. ~~The aquarium at n=3~~ — done 2026-09-09: 45 (25k) / 39 (30k), and the workload's spread is
+   ~15%, so **every single-capture comparison in this memo is weaker than it reads**.
 3. **Re-measure the `IOAccelerator` ratchet** with a verified-running workload.
 4. **Re-run the multisample cap** with a positive control.
 5. Answer the zinkvenus launch failure as its own question.
