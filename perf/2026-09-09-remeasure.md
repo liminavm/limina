@@ -159,10 +159,18 @@ exist yet; the large changes are what this pass is for. If it is ever wanted, `7
 parent `f00ec03` with vkmark n=3 is the run, because vkmark can resolve it and nothing else can.
 
 **Correctness of the command path is scored: rs == c, byte-identical, nine classic corpora**
-(virglrs's harness). Its own boundary: that proves *no regression against the C*, not that either leg
-is right — both lose the same half of the `vrend-webgl` stream, whose pinned fixture was recorded
-under a host GL stack that no longer matches. Re-recording a pinned asset is a decision for the
-repository owner.
+(virglrs's harness), each leg replaying its corpus in full. Its own boundary: that proves *no
+regression against the C*, not that either leg is right.
+
+The route to it carries a rule worth more than the result. An apparent divergence on `vrend-webgl`
+(45 343 of 82 916 commands, `failed 0`) was first cleared as "environmental" because **both legs
+lost the same half identically** — and that reasoning was wrong. Both legs had been handed the same
+wrong invocation: `vrend-replay` replays one virgl context by default, and the fixture was recorded
+with `--ctx 2,9`. With the flag, both legs replay all 82 916 and match the pinned fixture exactly.
+**A control that both arms share is not a control**: two identically-misinvoked runs agreeing with
+each other says nothing about the thing they were supposed to be testing. The output had announced
+it — `replay: no --ctx given, picking ctx 2 (45343 commands)` — and was read past while an
+environmental theory was constructed to explain the number that line was naming.
 
 **The fence fix's ordering hazard is scored.** `vrend::waiter::tests::
 a_cpu_reader_sees_the_render_the_fence_waited_for` (virglrs `f00ec03`) passes, and **its control
