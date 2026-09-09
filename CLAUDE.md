@@ -209,6 +209,14 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
     suite — a false green nearly shipped that way on 2026-08-14. The verdict is the log's
     `Summary`/`FAILED` lines, which the script prints; a log with no Summary line is a failure,
     not a pass. The script also refuses to start while another run is live.
+    **The suite runs detached by default** (its own session, orphaned to init), so the thing you
+    backgrounded is only a *waiter*: an agent harness that reaps it does not kill the run. One
+    did on 2026-09-09 — `stopped because the system is running low on memory` with ~10 GB free,
+    29 minutes in, and the 22 tests it never reached were the ones the run existed to answer.
+    The launch banner names the suite's pid up front; re-attach with
+    `scripts/run-suite.sh --wait <log> <pid>` rather than starting over. Both halves are needed
+    and neither substitutes for the other: setsid defeats a process-group kill, the double fork
+    defeats a walk of the child tree. `--attached` restores the old in-process behaviour.
   - **Bundle, then let the user poke, and only then start the suite.** Cut the app first
     (`cargo xtask app`) whenever the change is one the user will want to try — do it as a matter
     of course, not only when asked. Hand a human `app`'s output, never `xtask bundle`'s: that one
