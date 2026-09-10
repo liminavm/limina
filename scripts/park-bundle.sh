@@ -31,6 +31,17 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 [ -f "$DMG" ] || { echo "park-bundle: no such dmg: $DMG" >&2; exit 1; }
 mkdir -p "$LOT"
 
+# The lot is a git repo tracking INDEX.md and nothing else — the images are ~80-250 MB each and
+# have no business in history, but the provenance is worth keeping and diffing. Set up here
+# rather than by hand so a fresh machine gets it right without anyone remembering to.
+if ! git -C "$LOT" rev-parse --git-dir >/dev/null 2>&1; then
+  git -C "$LOT" init -q
+  printf '# The images themselves: large, opaque, and recoverable by rebuilding at the\n# revisions INDEX.md records. Only the provenance is tracked.\n*.dmg\n*.app/\n' \
+    > "$LOT/.gitignore"
+  git -C "$LOT" add .gitignore
+  git -C "$LOT" -c commit.gpgsign=false commit -q -m 'parking lot: track the index, never the images' || true
+fi
+
 # Next free ordinal for today, starting at 0. Scanning the directory rather than keeping a
 # counter means a manually deleted or copied-in bundle cannot desynchronise it.
 DATE=$(date +%Y-%m-%d)
@@ -132,6 +143,15 @@ fi
   describe mesa-guest /Volumes/mesa-cs/mesa-guest
   echo
 } >> "$INDEX"
+
+# One commit per bundle, so the index has a history worth diffing rather than one ever-growing
+# untracked file. Non-fatal: a build that succeeded must not be reported as failed because a
+# bookkeeping commit did not land.
+if git -C "$LOT" rev-parse --git-dir >/dev/null 2>&1; then
+  git -C "$LOT" add INDEX.md .gitignore 2>/dev/null || true
+  git -C "$LOT" -c commit.gpgsign=false commit -q -m "$NAME" 2>/dev/null ||
+    echo "note: nothing committed to the parking lot index" >&2
+fi
 
 echo "==> parked: $LOT/$NAME"
 echo "    index:  $INDEX"
