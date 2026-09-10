@@ -1,0 +1,7 @@
+/usr/bin/glmark2-es2-wayland
+renderableType = 4
+1666: warning: unsupported eglQueryDmaBufModifiersEXT call
+1667: warning: unsupported eglQueryDmaBufModifiersEXT call
+2145: warning: unsupported eglQueryDmaBufModifiersEXT call
+2146: warning: unsupported eglQueryDmaBufModifiersEXT call
+Rendered 4628 frames in 5.97193 secs, average of 774.959 fps
