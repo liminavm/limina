@@ -32,7 +32,14 @@ flat. That is the expected signature of a small real cost: vkmark is the only fi
 attributed** — the window also contains the `4bfdefe → 4654a34` virglrs delta, which includes two
 classic-fence correctness fixes, one of which makes a classic fence sync *every* sub-context of its
 context plus ctx0 rather than whichever happened to be current. More syncing per fence is a
-plausible cost, and it is a lead, not a finding.
+plausible cost, and it is a lead, not a finding. Its ctx0 half is priced in
+`2026-09-10-ctx0.md`: skipping the ctx0 sync moves vkmark by under 2%, so it is not the cause. The
+every-sub-context half is not priced, but it cannot bite a context holding a single
+sub-context — for one, the coverage fix's only delta *is* the ctx0 sync. So if the compositor's
+contexts each hold one sub-context (unverified), the drop is park-present's own price.
+**Do not test that with `LIMINA_FENCE_PRESENT=0`:** it also disables venus blob parking, which
+predates this change, and would over-attribute. The clean vehicle is a build — libkrun at
+`0dba6b9c` with current virglrs — not a knob.
 
 ## Stock arm: the Basemark baseline
 
