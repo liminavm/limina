@@ -190,7 +190,9 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
   --help` lists everything): `setup` (fresh-clone bootstrap = vendor + git hooks), `vendor`
   (materialize `third_party/`), `build`/`sign` (make a runnable, codesigned worker + venus
   link-check), `test` (the full HVF boot suite — see below), `run --disk <enhanced.raw>` (boot
-  EFI+venus in a window), `app`/`bundle` (package). Each just shells out to the tested `scripts/`,
+  EFI+venus in a window), `app`/`bundle` (package — **`app` also parks its `.dmg` with every
+  dependency hash in `~/Projects/LiminaParkingLot`; that `INDEX.md` is what answers "which build
+  is this?"**). Each just shells out to the tested `scripts/`,
   which stay the source of truth — reach for the command, fall back to the script it wraps only
   when you need a flag it doesn't expose. New onboarding lives in `docs/dev-onboarding.md`.
 - **Full validation = `cargo xtask test` (= `scripts/test-boot.sh`, sets `LIMINA_HVF_TESTS=1`).**

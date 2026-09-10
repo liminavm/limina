@@ -3108,7 +3108,8 @@ evidence — mindful of the balloon lesson that a controller tuned on one worklo
 next.
 
 **The floor fix delivered, and what it left behind is the host term.** Measured on the dogfood
-desktop across the shipped change (traces in `spikes/vcpu-replug-trace/dogfood-2026-09-03..06/`),
+desktop across the shipped change (traces in `archive/spikes/vcpu-replug-trace/dogfood-2026-09-03..06/`,
+local to this machine and not in the repo),
 grows out of 2 online fell from **27.4/h** to **2.2/h** and then **0.8/h** — the acceptance the
 utilisation floor was written for. Nearly every survivor attributes to *no guest signal whatsoever*
 (81 of 90, then 14 of 14), and at the `moderate` floor several of them exclude the guest paths
@@ -3208,7 +3209,8 @@ for `type`. Function signatures are chewed up, so thousands of statements land a
 every `-[MTL4Compiler newLibraryWithDescriptor:error:]` fails, and `AGXMetalG13X` then
 null-dereferences while building a pipeline (`KERN_INVALID_ADDRESS 0xe0` in
 `createVertexProgramVariant`) rather than reporting the error. Artefacts:
-`spikes/webgl-msaa/traces/cap3-replay-errors.txt` and `cap3-replay-crash.ips`.
+`archive/spikes/webgl-msaa/traces/cap3-replay-errors.txt` and `cap3-replay-crash.ips` (local to
+this machine, not in the repo).
 
 Two consequences. A replayer crash on one of our traces is **not** evidence about the workload
 that was captured — a real trap, because it looks exactly like the captured work reproducing.

@@ -691,7 +691,8 @@ the *same* command-buffer object — a byte-identical iteration of the work that
 identifiers have lost leading bytes at varying offsets (`at4` for `float4`, `ong` for `long`,
 `ype` for `type`), which chews up the function signatures and leaves 5828 statements at program
 scope. Every library then fails to build and the driver dereferences a null pipeline instead of
-reporting the error. Artefacts: `traces/cap3-replay-errors.txt`, `traces/cap3-replay-crash.ips`.
+reporting the error. Artefacts: `archive/spikes/webgl-msaa/traces/cap3-replay-errors.txt` and
+`cap3-replay-crash.ips` — local to this machine, not in the repo.
 
 A replayer crash is therefore **not** evidence about the workload, and must not be read as one.
 The trace records the shaders wrongly; nothing about the recorded *fault* is being reproduced.

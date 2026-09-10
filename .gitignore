@@ -112,3 +112,15 @@ spikes/now-playing-media-keys/ctl.fifo
 spikes/av1-obu-serializer/coverage
 spikes/av1-obu-serializer/clips/
 spikes/av1-obu-serializer/capture/
+
+# The local archive: run artifacts, captures, traces and scratch notes moved out of the working
+# tree so `git status` stays readable. A noisy status is how something private or enormous gets
+# swept into a commit -- the signal only works if it is normally empty. Nothing here is needed to
+# build or test; anything worth keeping gets committed where it belongs instead.
+archive/
+
+# Kept in place rather than archived, because their paths are what you type: the guest-tools
+# payload tarballs deliver-payload.sh takes as an argument, and a reference .app kept for
+# comparison against a current build (it still carries the C libvirglrenderer).
+payload/
+reference/
