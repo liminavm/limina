@@ -424,6 +424,13 @@ if [ "$SIGN_ID" != "-" ]; then
   codesign -s "$SIGN_ID" ${TS[@]+"${TS[@]}"} --force "$DMG"
 fi
 
+# ---- parking lot -----------------------------------------------------------------
+# Park the image with its provenance. This is here rather than left to whoever runs the build
+# because a bundle without an index entry is worse than no bundle: the lot looks complete and
+# is not, and the one moment the revisions are knowable has passed. Never fatal — a failure to
+# record provenance must not destroy a build that succeeded.
+"$ROOT/scripts/park-bundle.sh" "$DMG" "$PROFILE" || echo "WARNING: could not park $DMG" >&2
+
 echo "==> done: $APP"
 du -sh "$APP" | awk '{print "    bundle size: " $1}'
 echo "    dmg:         $(du -sh "$DMG" | awk '{print $1}')  $DMG"

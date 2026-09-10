@@ -226,6 +226,17 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
     usually means another commit, which would invalidate the run
     anyway. A suite started too early spends 28 minutes proving a tree we are about to change.
     Bisecting a regression later is cheap; a wasted run is not.
+  - **Every `cargo xtask app` parks its image, with provenance, in `~/Projects/LiminaParkingLot`.**
+    `scripts/park-bundle.sh` (called by `build-app.sh`) copies the `.dmg` there as
+    `Limina-<YYYY-MM-DD>-<n>.dmg`, `n` from 0 per day, and appends the revisions it was built
+    from to `INDEX.md`. **A built bundle is otherwise opaque about its own provenance** — nothing
+    inside a `.dmg` says which virglrs, libkrun or mesa it carries — so "which build is this?"
+    has no answer a week later, and that is exactly when it gets asked. Hashes come from each
+    checkout's `HEAD`, **never from `third_party/manifest.toml`**: the manifest says what a tree
+    *should* be on, and the two disagreed three times in two days. Both mesa trees live on
+    `/Volumes/mesa-cs`, outside `third_party/`, and are recorded too. It annotates rather than
+    refuses — a dirty-tree bundle is a normal thing to hand someone, and blocking it would mean
+    the interesting builds are the ones missing from the index.
   - **Never `cargo build` (or `git commit` — the pre-commit hook runs clippy) while the suite is
     running**; a concurrent build relinks the binaries under the running tests. Hold commits until
     it finishes, or use `--no-verify` deliberately for a docs-only change. (A `--release` bundle
