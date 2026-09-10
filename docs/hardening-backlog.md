@@ -1607,6 +1607,39 @@ Two follow-ups, both backlog by the user's decision (2026-09-03), neither starte
   (it cost the rewrite a detour). Read the environment in `limina_rt_probe` at the first draw
   instead. Spike: `spikes/notification-text-corruption/`.
 
+## GPU — fence-accurate present is armed only on a windowed boot, so no automated gate can see it
+
+📋 open, noticed 2026-09-10 while wiring fence-accurate present for vrend scanouts (which closes
+the `docs/graphics.md` §9 item named in the scanout-sync section above).
+
+`fence_present_policy` defaults to on **only when the supervisor's shown-ack channel exists** —
+`LIMINA_SHOWN_ACK_FD`, which its own comment says is "set only by windowed workers". So every
+headless boot presents synchronously, and every headless boot is exactly what we can score
+automatically: fluster, the replay corpora, `capture.sh`, the frame oracle in the rewrite's
+`harness/vm/frame.py`. **The path that ships is the one path no gate exercises.** That is not
+hypothetical: the rewrite's pixel check of the parked classic present read green while inert, and
+only forcing `LIMINA_FENCE_PRESENT=1` made it test anything. A gate that cannot reach the shipped
+path reports on something else and sounds like it reported on this.
+
+Headless-without-acks is already a designed mode rather than a degradation: with `ack_active`
+false, `virtio_gpu.rs` drops the cookie from `unconfirmed` at present time — "presenting IS the
+confirmation (the open-loop latch delay supplies the margin)" — and the hold completes after
+`latch_delay`. So the flip is small. Two things make it not free, and both want settling first:
+
+- **It arms venus parking headless too, for the first time.** `try_park_present` tests
+  `fence_present_enabled()` before it ever looks at `ctx_id`, so today blobs present synchronously
+  headless as well. Flipping the default changes present timing for every headless boot, including
+  the ones the video corpora and the fluster goldens were recorded from. Whether those move is to
+  be measured, not assumed — re-verify or re-record before the flip, not after.
+- **The 35 ms latch does not obviously transfer.** `LIMINA_FENCE_LATCH_MS` defaults to 35, tuned
+  for CoreAnimation's latch, and headless there is no glass. The hold is still doing real work —
+  the PNG encoder reads that surface and must not race the guest — but that is a different consumer
+  with a different timing, and 35 ms per fenced flush would cap a headless boot near 28 fps. Choose
+  the headless delay for the encoder rather than inheriting CA's.
+
+Check after the flip: the pinned fluster verdicts and the replay corpora scores unchanged, and the
+rewrite's frame oracle exercising the parked path with no knob set.
+
 ## GPU / guest mesa — the composite decode-target create is gated on the sampler bitmask at the caller, not at the site that emits it
 
 Surfaced 2026-09-04 while answering the Rust rewrite's capset questions. Not a live fault: the
