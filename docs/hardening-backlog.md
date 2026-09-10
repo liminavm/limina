@@ -1607,19 +1607,23 @@ Two follow-ups, both backlog by the user's decision (2026-09-03), neither starte
   (it cost the rewrite a detour). Read the environment in `limina_rt_probe` at the first draw
   instead. Spike: `spikes/notification-text-corruption/`.
 
-## GPU — fence-accurate present is armed only on a windowed boot, so no automated gate can see it
+## GPU — fence-accurate present is armed only on a windowed boot, so no automated gate reaches a parked CLASSIC scanout
 
 📋 open, noticed 2026-09-10 while wiring fence-accurate present for vrend scanouts (which closes
 the `docs/graphics.md` §9 item named in the scanout-sync section above).
 
 `fence_present_policy` defaults to on **only when the supervisor's shown-ack channel exists** —
 `LIMINA_SHOWN_ACK_FD`, which its own comment says is "set only by windowed workers". So every
-headless boot presents synchronously, and every headless boot is exactly what we can score
-automatically: fluster, the replay corpora, `capture.sh`, the frame oracle in the rewrite's
-`harness/vm/frame.py`. **The path that ships is the one path no gate exercises.** That is not
+headless boot presents synchronously, and headless is what we score automatically: fluster, the
+replay corpora, `capture.sh`, the frame oracle in the rewrite's `harness/vm/frame.py`. That is not
 hypothetical: the rewrite's pixel check of the parked classic present read green while inert, and
 only forcing `LIMINA_FENCE_PRESENT=1` made it test anything. A gate that cannot reach the shipped
 path reports on something else and sounds like it reported on this.
+
+**Scope, stated precisely, because the broad version of this claim is false.** `venus_fence_present`
+and `venus_park_on_busy_reset` both force the knob and do cover the blob present chain, and the perf
+battery runs `--window`, so it scores the default arm. What nothing reaches is a parked **classic
+vrend scanout** — the path added 2026-09-10 — and the headless boots generally.
 
 Headless-without-acks is already a designed mode rather than a degradation: with `ack_active`
 false, `virtio_gpu.rs` drops the cookie from `unconfirmed` at present time — "presenting IS the
