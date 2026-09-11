@@ -9,6 +9,13 @@ license.workspace = true
 name = "limina"
 path = "src/main.rs"
 
+[build-dependencies]
+# build.rs reads third_party/manifest.toml for the pins of dependencies with no checkout on
+# the build host (the edk2 firmware, built from its pin in a container). The real parser, not
+# a line scanner: a reshaped manifest should yield nothing, never a plausible-looking wrong
+# revision in the About box.
+toml = { workspace = true }
+
 [dependencies]
 # The supervisor does not call hv_vm_create itself, so it needs no entitlement and
 # no libkrun deps — it spawns the (signed) limina-vmm worker and monitors it.

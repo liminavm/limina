@@ -149,6 +149,12 @@ pub fn run() -> ! {
     let app_item = NSMenuItem::new(mtm);
     menubar.addItem(&app_item);
     let app_menu = NSMenu::new(mtm);
+    // The same About dialog the VM window's menu opens — version, build date, dependency
+    // revisions. The center is the window that exists before any VM is started, so "what am
+    // I running?" has to be answerable from here too, and the item carries its own target so
+    // the center owes the VM window's menu nothing.
+    app_menu.addItem(&crate::about::menu_item(mtm));
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
     // Close hides the window; the center keeps running (Dock icon brings it back).
     let close = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(

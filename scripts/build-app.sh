@@ -203,6 +203,11 @@ HARDEN=("${TS[@]}" --options runtime)
 [ "$SIGN_ID" = "-" ] && HARDEN=()
 
 echo "==> building limina + limina-vmm ($PROFILE)"
+# Stamp the bundle with the moment it was cut (the About menu shows it). Without this the
+# date would be whenever crates/limina/build.rs last happened to rerun, which on an
+# incremental tree can be days stale; the env var is a rerun-if-env-changed input, so a
+# new value re-bakes it.
+export LIMINA_BUILD_STAMP="$(date -u '+%Y-%m-%d %H:%M UTC')"
 cargo build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -p limina -p limina-vmm
 
 echo "==> assembling $APP"
