@@ -851,23 +851,35 @@ define_class!(
             );
         }
 
+        // Limina ▸ About Limina: the build stamp — our version and revision, the build
+        // date, and every dependency pin — in a dialog, with a button that copies it.
+        #[unsafe(method(showAbout:))]
+        fn show_about(&self, _sender: &NSMenuItem) {
+            crate::about::show(self.mtm());
+        }
+
         // Copy SSH Command: the NAT gateway's inbound forward, ready to paste.
         #[unsafe(method(copySshVm:))]
         fn copy_ssh_vm(&self, _sender: &NSMenuItem) {
             let Some(cmd) = MENU_CTX.with(|c| c.borrow().ssh_cmd.clone()) else {
                 return;
             };
-            unsafe {
-                let pb = objc2_app_kit::NSPasteboard::generalPasteboard();
-                pb.clearContents();
-                pb.setString_forType(
-                    &NSString::from_str(&cmd),
-                    objc2_app_kit::NSPasteboardTypeString,
-                );
-            }
+            copy_to_pasteboard(&cmd);
         }
     }
 );
+
+/// Put text on the general pasteboard (the menu's two copy verbs).
+fn copy_to_pasteboard(text: &str) {
+    unsafe {
+        let pb = objc2_app_kit::NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        pb.setString_forType(
+            &NSString::from_str(text),
+            objc2_app_kit::NSPasteboardTypeString,
+        );
+    }
+}
 
 /// Republish what the Displays menu shows, if it changed. Called from the render timer, which
 /// is the only place that knows both the slot table and which panel the window is on.
@@ -1000,6 +1012,16 @@ fn populate_input_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
     });
     unsafe { item.setTarget(Some(actions)) };
     menu.addItem(&item);
+}
+
+/// A menu-actions object for a menu bar outside the VM window (the control center's).
+///
+/// Most of the verbs here are about a running VM and mean nothing there, but the About
+/// menu's copy action is global — a build stamp is the same wherever it is read from —
+/// so the control center can hang the same menu off one of these. The caller must keep
+/// it alive: NSMenuItem targets are weak.
+pub(crate) fn menu_actions(mtm: MainThreadMarker) -> Retained<VmMenuActions> {
+    unsafe { msg_send![VmMenuActions::alloc(mtm), init] }
 }
 
 /// Build the "Virtual Machine" verbs menu (shared between the menu bar and the Dock menu).
@@ -1838,6 +1860,19 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication) {
     let app_item = NSMenuItem::new(mtm);
     menubar.addItem(&app_item);
     let app_menu = NSMenu::new(mtm);
+    // What this build is (version, date, dependency pins) — the answer a bug report needs,
+    // where macOS has always kept it: the top of the app menu.
+    let about = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("About Limina"),
+            Some(objc2::sel!(showAbout:)),
+            &NSString::from_str(""),
+        )
+    };
+    unsafe { about.setTarget(Some(&*actions)) };
+    app_menu.addItem(&about);
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
     let cc = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),

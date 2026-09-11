@@ -149,6 +149,24 @@ pub fn run() -> ! {
     let app_item = NSMenuItem::new(mtm);
     menubar.addItem(&app_item);
     let app_menu = NSMenu::new(mtm);
+    // The same About dialog the VM window's menu opens — version, build date, dependency
+    // pins. The center is the window that exists before any VM is started, so "what am I
+    // running?" has to be answerable from here too. The actions object is the VM window's
+    // (only this global verb means anything here); NSMenuItem targets are weak, so it is
+    // leaked deliberately below.
+    let about_actions = crate::window::menu_actions(mtm);
+    let about = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("About Limina"),
+            Some(objc2::sel!(showAbout:)),
+            &NSString::from_str(""),
+        )
+    };
+    unsafe { about.setTarget(Some(&*about_actions)) };
+    app_menu.addItem(&about);
+    std::mem::forget(about_actions);
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
     // Close hides the window; the center keeps running (Dock icon brings it back).
     let close = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
