@@ -46,6 +46,12 @@ kill_by_disk() { # <clone>
     log "killing our own VM: $(ps -o pid,lstart,command -p "$p" | tail -n 1)"
     kill "$p"
   done
+  # A stalled guest's worker has been seen to ignore SIGTERM; escalate rather than block the sweep.
+  for _ in $(seq 1 20); do pgrep -f "[l]imina.*--disk $1" >/dev/null || return 0; sleep 1; done
+  for p in $(pgrep -f "[l]imina.*--disk $1"); do
+    log "still alive after SIGTERM, SIGKILL: $(ps -o pid,lstart,command -p "$p" | tail -n 1)"
+    kill -9 "$p"
+  done
 }
 # The boot vehicle truncates its per-disk worker log on the next boot, so keep it with the point.
 keep_log() { # <clone> <tag>

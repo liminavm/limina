@@ -1,0 +1,22 @@
+compositor pid=1448 (gnome-shell)
+  inherited: XDG_RUNTIME_DIR=/run/user/1000
+WAYLAND_DISPLAY=wayland-0
+=== one Firefox for the whole run
+1789119065.695865380 restorecon: SELinux: Could not get canonical path for /home/claude/.config/mozilla/firefox/*/gmp-widevinecdm/* restorecon: No such file or directory.
+1789119066.265581118 1789119066264	Marionette	INFO	Listening on port 2828
+1789119067.031534963 GetShaderInfoLog() ->
+1789119067.037746477 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1789119067.038499395 
+1789119067.039067188 GetShaderSource() ->
+1789119067.039831398 
+1789119067.040474733 #extension GL_EXT_shader_texture_lod: require
+1789119067.041016818 void main() {}
+1789119067.041620236 
+1789119067.042148695 JavaScript warning: file:///tmp/basemark-probe.html, line 3: WEBGL_debug_renderer_info is deprecated in Firefox and will be removed. Please use RENDERER.
+1789119067.042714946 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+1789119067.702904679 console.warn: RSLoader: Recipe new-tab-157020260831183837-to-release-155-addondeployment not returned from collection nimbus-secure-experiments because it does not contain at least one required feature ID.
+1789119067.703582514 console.warn: RSLoader: Recipe train-hop-to-beta-limited-mechanism-test-1 not returned from collection nimbus-secure-experiments because it does not contain at least one required feature ID.
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+=== configuring: community mode and the graphics suite, in the same session
+--- reported configuration:
+REFUSING: the suite is unreported, not Graphics

@@ -1,3 +1,3 @@
-trend p10-d0416c9: virglrs d0416c9 + libkrun 4c779150 patched with libkrun-4c77915-fences-drain.patch; host mesa 5e99e7c1763; limina 503f6dbf
+trend s1-p02: virglrs 42008bb + libkrun 95214346; host mesa 5e99e7c1763; limina 503f6dbf
 -rwxr-xr-x@ 1 kov  staff  15248712 Sep 10 23:00 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
 -rwxr-xr-x@ 1 kov  staff  21727328 Sep 10 22:49 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-26.3.0-devel.dylib

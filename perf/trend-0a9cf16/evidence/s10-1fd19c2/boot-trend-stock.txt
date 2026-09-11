@@ -1,0 +1,2 @@
+limina pid=89521 (worker log /tmp/limina-worker-trend-stock.log, disk perf-work.noindex/trend-stock.raw, firmware target/krun-efi/KRUN_EFI.gop.fd, ICD /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json)
+spikes/venus-draw-probe/boot-enhanced-efi-kk.sh: line 157: 89521 Killed: 9               "$BIN" --vmm-bin target/debug/limina-vmm --firmware "$FW" --disk "$WORK" --cpus "${LIMINA_CPUS:-6}" --ram-mib "${LIMINA_RAM_MIB:-8192}" $NET_FLAG "${DISPLAY_FLAG[@]}" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} > "$LOG" 2>&1
