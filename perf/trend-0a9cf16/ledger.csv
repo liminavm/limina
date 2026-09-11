@@ -1,0 +1,27 @@
+date,commit,workload,metric,value,notes
+2026-09-10,a294d921,gl-replay-venus,fps,56.6793,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 1/3
+2026-09-10,a294d921,gl-replay-llvmpipe,fps,726.361,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 1/3
+2026-09-10,a294d921,vk-replay-venus-headless,fps,2239.165239,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 1/3
+2026-09-10,a294d921,glmark2-wayland-venus,score,3191,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 1/3
+2026-09-10,a294d921,gl-replay-venus,fps,56.734,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 2/3
+2026-09-10,a294d921,gl-replay-llvmpipe,fps,730.664,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 2/3
+2026-09-10,a294d921,vk-replay-venus-headless,fps,2229.213283,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 2/3
+2026-09-10,a294d921,glmark2-wayland-venus,score,3172,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 2/3
+2026-09-10,a294d921,gl-replay-venus,fps,56.7539,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3
+2026-09-10,a294d921,gl-replay-llvmpipe,fps,731.346,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3
+2026-09-10,a294d921,vk-replay-venus-headless,fps,2254.728925,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3
+2026-09-10,a294d921,glmark2-wayland-venus,score,3165,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3
+2026-09-10,a294d921,vkmark-default-venus,score,4406,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 1/3 INVALID: compositor vrend context poisoned at 23:11:57 by vkmark itself (SamplerView bug fixed in virglrs 42008bb)"
+2026-09-10,a294d921,vkmark-default-venus,score,4567,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 2/3 INVALID: compositor vrend context poisoned at 23:11:57 by vkmark itself (SamplerView bug fixed in virglrs 42008bb)"
+2026-09-10,a294d921,vkmark-default-venus,score,4518,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3 INVALID: compositor vrend context poisoned at 23:11:57 by vkmark itself (SamplerView bug fixed in virglrs 42008bb)"
+2026-09-10,a294d921,basemark-webgl102-vrend,score,3643.86,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; stock guest, second suite run scored"
+2026-09-10,a294d921,basemark-webgl20-vrend,score,4604.69,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; stock guest, second suite run scored"
+2026-09-10,a294d921,basemark-shader-pipeline-vrend,score,1200.00,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; stock guest, second suite run scored"
+2026-09-10,a294d921,basemark-drawcall-stress-vrend,score,80.96,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; stock guest, second suite run scored"
+2026-09-10,a294d921,basemark-geometry-stress-vrend,score,1580.48,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; stock guest, second suite run scored"
+2026-09-10,a294d921,basemark-canvas-vrend,score,1163.98,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; stock guest, second suite run scored"
+2026-09-10,a294d921,basemark-svg-vrend,score,993.92,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; stock guest, second suite run scored"
+2026-09-10,a294d921,aquarium-25000-vrend,fps,35,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 1/2; read off the fps crop"
+2026-09-10,a294d921,aquarium-30000-vrend,fps,36,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 1/2; read off the fps crop"
+2026-09-10,a294d921,aquarium-25000-vrend,fps,37,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 2/2; read off the fps crop"
+2026-09-10,a294d921,aquarium-30000-vrend,fps,35,"trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 2/2; read off the fps crop"

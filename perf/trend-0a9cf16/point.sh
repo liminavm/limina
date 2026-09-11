@@ -44,7 +44,7 @@ kill_by_disk() { # <clone>
 keep_log() { # <clone> <tag>
   local wl; wl="/tmp/limina-worker-$(basename "$1" .raw).log"
   cp "$wl" "$EV/worker-$2.log" 2>/dev/null
-  log "worker-$2: $(grep -c poisoned "$EV/worker-$2.log" 2>/dev/null || echo 0) poisoned-context lines"
+  log "worker-$2: $(grep -c poisoned "$EV/worker-$2.log" 2>/dev/null || true) poisoned-context lines"
 }
 SSHO=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 boot() { # <clone> <source-image> [capture] -> sets PORT, BPID, SSH
@@ -58,7 +58,7 @@ boot() { # <clone> <source-image> [capture] -> sets PORT, BPID, SSH
   SSH=(ssh -p "$PORT" "${SSHO[@]}" claude@127.0.0.1)
 }
 settle() { # <tag>
-  "${SSH[@]}" 'for i in $(seq 1 48); do
+  timeout 900 "${SSH[@]}" 'for i in $(seq 1 48); do
       L=$(cut -d" " -f1 /proc/loadavg); up=$(cut -d. -f1 /proc/uptime)
       if [ "$up" -ge 200 ]; then case "$L" in 0.0*|0.1*|0.2*) echo "SETTLED up=${up}s load=$L"; break;; esac; fi
       sleep 15
@@ -67,8 +67,8 @@ settle() { # <tag>
   cat "$EV/settle-$1.txt"
 }
 shut() { # <clone>
-  "${SSH[@]}" 'sudo systemctl isolate multi-user.target' >/dev/null 2>&1; sleep 5
-  "${SSH[@]}" 'sudo systemctl poweroff' >/dev/null 2>&1
+  timeout 60 "${SSH[@]}" 'sudo systemctl isolate multi-user.target' >/dev/null 2>&1; sleep 5
+  timeout 30 "${SSH[@]}" 'sudo systemctl poweroff' >/dev/null 2>&1
   for _ in $(seq 1 60); do kill -0 "$BPID" 2>/dev/null || break; sleep 3; done
   if kill -0 "$BPID" 2>/dev/null; then
     log "poweroff timed out"; kill_by_disk "$1"; wait "$BPID" 2>/dev/null
@@ -77,31 +77,59 @@ shut() { # <clone>
 }
 row() { echo "$(date +%Y-%m-%d),$(git rev-parse --short HEAD),$1,$2,$3,\"$NOTE; $4\"" >> "$LEDGER"; }
 
+# WATCHDOG. Before virglrs 42008bb a venus client can poison the compositor's vrend context: the
+# screen flickers, the shell chrome vanishes, and every number taken afterwards is not a
+# measurement. A background watch on the worker log drops a POISONED marker the moment the first
+# refusal lands; every row written after it says INVALID. Every guest step also runs under a
+# timeout, so a wedged guest costs its point and never strands the sweep.
+POISON="$EV/POISONED"
+watch_start() { # <clone>
+  local wl; wl="/tmp/limina-worker-$(basename "$1" .raw).log"
+  ( while :; do
+      if grep -q 'context is poisoned' "$wl" 2>/dev/null && [ ! -f "$POISON" ]; then
+        echo "$(date +%H:%M:%S) $(basename "$1" .raw): $(grep -m1 'refused: vrend' "$wl")" > "$POISON"
+        log "WATCHDOG: compositor context POISONED on $(basename "$1" .raw); later rows are INVALID"
+      fi
+      sleep 10
+    done ) &
+  WATCH=$!
+}
+watch_stop() { kill "$WATCH" 2>/dev/null; wait "$WATCH" 2>/dev/null; }
+valid() { [ -f "$POISON" ] && echo "INVALID: compositor context poisoned at $(cut -d' ' -f1 "$POISON")"; }
+step() { # <timeout-secs> <cmd...>: run a guest step; a timeout is logged as WEDGED
+  local t=$1; shift
+  timeout "$t" "$@"; local rc=$?
+  [ "$rc" = 124 ] && log "WEDGED: step timed out after ${t}s: $*"
+  return "$rc"
+}
+
 # --- enhanced guest
 log "enhanced boot"
 boot "$ENH" Fedora-Workstation-44.enhanced.raw "$ROOT/perf-work.noindex/aq-capture.png" ||
   { log "ABORT: enhanced boot"; kill_by_disk "$ENH"; keep_log "$ENH" enh; exit 3; }
+watch_start "$ENH"
 settle enh
 # Aquarium first: it is the vrend reading, and before virglrs 42008bb the first venus client
 # poisons the compositor's vrend context for the rest of the session. Every venus client
 # (perf-ledger, vkmark) therefore runs after it.
 for r in r1 r2; do
   LIMINA_SSH_PORT="$PORT" LIMINA_CAPTURE="$ROOT/perf-work.noindex/aq-capture.png" AQ_OUT="$EV/aquarium-$r" \
-    scripts/perf/aquarium-run.sh vrend 25000 30000 > "$EV/aquarium-$r.txt" 2>&1
-  log "aquarium $r exit=$?"
+    step 900 scripts/perf/aquarium-run.sh vrend 25000 30000 > "$EV/aquarium-$r.txt" 2>&1
+  log "aquarium $r exit=$? $(valid)"
 done
 for r in 1 2 3; do
-  LIMINA_SSH_PORT="$PORT" LIMINA_PERF_LEDGER="$LEDGER" scripts/perf-ledger.sh "$NOTE; run $r/3" \
+  LIMINA_SSH_PORT="$PORT" LIMINA_PERF_LEDGER="$LEDGER" step 900 scripts/perf-ledger.sh "$NOTE; run $r/3 $(valid)" \
     > "$EV/ledger-run$r.txt" 2>&1
-  log "perf-ledger run $r exit=$?"; grep -E 'ABORT|GUARD|^[0-9-]+,.*(gl-replay|vk-replay|glmark2)' "$EV/ledger-run$r.txt" | cut -d, -f3,5
+  log "perf-ledger run $r exit=$? $(valid)"; grep -E 'ABORT|GUARD|^[0-9-]+,.*(gl-replay|vk-replay|glmark2)' "$EV/ledger-run$r.txt" | cut -d, -f3,5
 done
 for r in 1 2 3; do
-  "${SSH[@]}" 'export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0; vkmark -s 1280x720' \
+  step 600 "${SSH[@]}" 'export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0; vkmark -s 1280x720' \
     > "$EV/vkmark-run$r.txt" 2>&1
   s=$(sed -n 's/.*vkmark Score: \([0-9]*\).*/\1/p' "$EV/vkmark-run$r.txt")
-  log "vkmark run $r: ${s:-NO SCORE}"; [ -n "$s" ] && row vkmark-default-venus score "$s" "run $r/3"
+  log "vkmark run $r: ${s:-NO SCORE} $(valid)"; [ -n "$s" ] && row vkmark-default-venus score "$s" "run $r/3 $(valid)"
 done
-shut "$ENH"; keep_log "$ENH" enh
+watch_stop; shut "$ENH"; keep_log "$ENH" enh
+POISON="$EV/POISONED-stock"
 
 # --- stock guest
 log "stock boot"
@@ -113,8 +141,9 @@ done
 scp -P "$PORT" "${SSHO[@]}" -q perf-work.noindex/harness/client-basemark.sh perf-work.noindex/harness/marionette.py \
   perf-work.noindex/harness/tap-keys.py claude@127.0.0.1:/tmp/
 "${SSH[@]}" 'chmod +x /tmp/client-basemark.sh; sudo systemctl isolate graphical.target'
+watch_start "$STOCK"
 settle stock
-"${SSH[@]}" '/tmp/client-basemark.sh' > "$EV/basemark.txt" 2>&1
+step 2400 "${SSH[@]}" '/tmp/client-basemark.sh' > "$EV/basemark.txt" 2>&1
 log "basemark exit=$?"; grep -E 'renderer=|REFUS' "$EV/basemark.txt"
 awk '/--- scores \(run 2\)/{on=1} on && /Test$/{t=$0; getline v; print t "=" v}' "$EV/basemark.txt" |
 while IFS='=' read -r t v; do
@@ -124,7 +153,7 @@ while IFS='=' read -r t v; do
     "Geometry Stress Test") w=basemark-geometry-stress-vrend ;; "Canvas Test") w=basemark-canvas-vrend ;;
     "SVG Test") w=basemark-svg-vrend ;; *) continue ;;
   esac
-  log "basemark $t $v"; row "$w" score "$v" "stock guest, second suite run scored"
+  log "basemark $t $v $(valid)"; row "$w" score "$v" "stock guest; second suite run scored $(valid)"
 done
-shut "$STOCK"; keep_log "$STOCK" stock
+watch_stop; shut "$STOCK"; keep_log "$STOCK" stock
 log "point $LABEL done; read $EV/aquarium-r*/*-fps.png"

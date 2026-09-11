@@ -1,0 +1,7 @@
+verify OK: Virtual-1 1280x800 scale=1.0
+PROVENANCE: kernel=7.1.8-limina16k.4 pagesize=16384 mesa=26.1.8-11.limina.fc44 vnperf=<unset> vcpus=4 ram=3940MiB display=Virtual-1: 1280x800@59.974 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/trend-0a9cf16/ledger.csv:
+2026-09-10,a294d921,gl-replay-venus,fps,56.7539,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3
+2026-09-10,a294d921,gl-replay-llvmpipe,fps,731.346,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3
+2026-09-10,a294d921,vk-replay-venus-headless,fps,2254.728925,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3
+2026-09-10,a294d921,glmark2-wayland-venus,score,3165,trend p00-0a9cf16: virglrs 0a9cf16 + libkrun 95214346; host mesa 5e99e7c1763; limina a294d921; run 3/3

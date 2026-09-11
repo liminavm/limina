@@ -1,0 +1,3 @@
+# Large, and full of host paths; kept on disk for the investigation, never committed.
+evidence/*/worker-*.log
+evidence/*/build.log
