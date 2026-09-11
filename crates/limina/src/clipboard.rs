@@ -34,6 +34,20 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_foundation::NSString;
 
+/// Put text on the general pasteboard: the menu's copy verbs (the SSH command, the About
+/// build stamp), which are one-shot writes with none of the bridge's bookkeeping.
+///
+/// Deliberately the general pasteboard and NOT the bridge's [`Pasteboard`]: a copy the user
+/// asked for is a host copy like any other and should reach the guest the same way, whereas a
+/// write through the bridge would record its own change count to suppress exactly that.
+pub(crate) fn copy_to_pasteboard(text: &str) {
+    unsafe {
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    }
+}
+
 /// The only format M5 speaks. (Guests also commonly advertise bare `text/plain`;
 /// we accept either on offers and always request/serve the utf-8 one we can honor.)
 pub const TEXT_MIME: &str = "text/plain;charset=utf-8";

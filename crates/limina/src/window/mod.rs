@@ -858,14 +858,7 @@ define_class!(
             let Some(cmd) = MENU_CTX.with(|c| c.borrow().ssh_cmd.clone()) else {
                 return;
             };
-            unsafe {
-                let pb = objc2_app_kit::NSPasteboard::generalPasteboard();
-                pb.clearContents();
-                pb.setString_forType(
-                    &NSString::from_str(&cmd),
-                    objc2_app_kit::NSPasteboardTypeString,
-                );
-            }
+            crate::clipboard::copy_to_pasteboard(&cmd);
         }
     }
 );
@@ -1839,6 +1832,11 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication) {
     let app_item = NSMenuItem::new(mtm);
     menubar.addItem(&app_item);
     let app_menu = NSMenu::new(mtm);
+    // What this build is (version, date, dependency revisions) — the answer a bug report
+    // needs, where macOS has always kept it: the top of the app menu. It brings its own
+    // target, so About stays a verb of the app rather than of this window.
+    app_menu.addItem(&crate::about::menu_item(mtm));
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
     let cc = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),

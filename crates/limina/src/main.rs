@@ -8,6 +8,8 @@
 //! power-off on Ctrl-C, force-kill on timeout, report when the VM stops). The
 //! AppKit UI grows on top of this supervisor later.
 
+// What this build is: version, date, and the dependency pins (the About menu).
+mod about;
 mod balloon_policy;
 mod center;
 mod clipboard;
