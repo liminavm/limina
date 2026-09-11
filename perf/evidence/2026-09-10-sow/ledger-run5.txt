@@ -1,0 +1,7 @@
+verify OK: Virtual-1 1280x800 scale=1.0
+PROVENANCE: kernel=7.1.8-limina16k.4 pagesize=16384 mesa=26.1.8-11.limina.fc44 vnperf=<unset> vcpus=4 ram=3940MiB display=Virtual-1: 1280x800@59.974 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/ledger.csv:
+2026-09-10,6b0af433,gl-replay-venus,fps,56.7041,virglrs 5582aa3 (sync-on-leave; unpushed) + host mesa limina-kk 351a1b5e (local) on limina 6b0af433; TREND reading, not attribution; quiet host, guest settled, display verified by perf-ledger; 4 vCPU / 4 GiB; run 5/5
+2026-09-10,6b0af433,gl-replay-llvmpipe,fps,731.489,virglrs 5582aa3 (sync-on-leave; unpushed) + host mesa limina-kk 351a1b5e (local) on limina 6b0af433; TREND reading, not attribution; quiet host, guest settled, display verified by perf-ledger; 4 vCPU / 4 GiB; run 5/5
+2026-09-10,6b0af433,vk-replay-venus-headless,fps,2204.610860,virglrs 5582aa3 (sync-on-leave; unpushed) + host mesa limina-kk 351a1b5e (local) on limina 6b0af433; TREND reading, not attribution; quiet host, guest settled, display verified by perf-ledger; 4 vCPU / 4 GiB; run 5/5
+2026-09-10,6b0af433,glmark2-wayland-venus,score,2899,virglrs 5582aa3 (sync-on-leave; unpushed) + host mesa limina-kk 351a1b5e (local) on limina 6b0af433; TREND reading, not attribution; quiet host, guest settled, display verified by perf-ledger; 4 vCPU / 4 GiB; run 5/5
