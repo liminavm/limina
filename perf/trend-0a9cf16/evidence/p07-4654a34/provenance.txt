@@ -1,0 +1,3 @@
+trend p07-4654a34: virglrs 4654a34 + libkrun bae5de4a; host mesa 5e99e7c1763; limina 1bb36a25
+-rwxr-xr-x@ 1 kov  staff  15248712 Sep 10 23:00 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+-rwxr-xr-x@ 1 kov  staff  21727328 Sep 10 22:49 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-26.3.0-devel.dylib

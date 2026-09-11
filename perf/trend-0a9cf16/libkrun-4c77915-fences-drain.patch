@@ -1,0 +1,13 @@
+diff --git a/src/rutabaga_gfx/src/virgl_renderer.rs b/src/rutabaga_gfx/src/virgl_renderer.rs
+index 04514ae8..4934a6e6 100644
+--- a/src/rutabaga_gfx/src/virgl_renderer.rs
++++ b/src/rutabaga_gfx/src/virgl_renderer.rs
+@@ -279,7 +279,7 @@ impl VirglRenderer {
+             // driver this binary is built and shipped against. A build of libkrun carrying a stock
+             // Mesa must not set it: the flush is what submits the work the fence covers, and
+             // without either, a fence never retires.
+-            gl_fences_without_draining: true,
++            gl_fences_without_draining: false,
+         };
+ 
+         // No context factory: limina has no GL of its own to lend, so vrend opens the renderer's

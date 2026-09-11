@@ -9,6 +9,8 @@
 # afterwards and add those rows by hand.
 #
 # Usage: perf/trend-0a9cf16/point.sh <label> <virglrs-rev> <libkrun-rev>
+# STOCK_ONLY=1 skips the enhanced guest and runs the Basemark arm alone.
+# LIBKRUN_PATCH=<file> applies a patch to libkrun for the build only; it is reverted right after.
 # Leaves third_party/virglrs and third_party/libkrun checked out (detached) at the given revs.
 set -uo pipefail
 LABEL="${1:?label}"; VREV="${2:?virglrs rev}"; LREV="${3:?libkrun rev}"
@@ -25,13 +27,18 @@ drop_clones() { rm -f perf-work.noindex/trend-enh.raw perf-work.noindex/trend-st
 
 git -C third_party/virglrs checkout -q --detach "$VREV" || { log "ABORT: virglrs checkout"; exit 1; }
 git -C third_party/libkrun checkout -q --detach "$LREV" || { log "ABORT: libkrun checkout"; exit 1; }
-V=$(git -C third_party/virglrs rev-parse --short HEAD); L=$(git -C third_party/libkrun rev-parse --short HEAD)
+if [ -n "${LIBKRUN_PATCH:-}" ]; then
+  git -C third_party/libkrun apply "$ROOT/$LIBKRUN_PATCH" || { log "ABORT: libkrun patch"; exit 1; }
+fi
+V=$(git -C third_party/virglrs rev-parse --short HEAD); L=$(git -C third_party/libkrun rev-parse --short HEAD)${LIBKRUN_PATCH:+ patched with $(basename "$LIBKRUN_PATCH")}
 M=$(git -C /Volumes/mesa-cs/mesa rev-parse --short HEAD)
 # No commas: perf-ledger.sh writes its notes column unquoted.
 NOTE="trend $LABEL: virglrs $V + libkrun $L; host mesa $M; limina $(git rev-parse --short HEAD)"
 { echo "$NOTE"; ls -l /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium*.dylib /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib; } > "$EV/provenance.txt"
 log "build $NOTE"
-cargo xtask build > "$EV/build.log" 2>&1 || { log "ABORT: build failed, see $EV/build.log"; exit 2; }
+cargo xtask build > "$EV/build.log" 2>&1; brc=$?
+[ -n "${LIBKRUN_PATCH:-}" ] && git -C third_party/libkrun apply -R "$ROOT/$LIBKRUN_PATCH"   # built; leave the tree clean
+[ "$brc" = 0 ] || { log "ABORT: build failed, see $EV/build.log"; exit 2; }
 
 # A VM whose boot failed is still running; take it down by its disk before bailing out.
 kill_by_disk() { # <clone>
@@ -104,6 +111,7 @@ step() { # <timeout-secs> <cmd...>: run a guest step; a timeout is logged as WED
 }
 
 # --- enhanced guest
+if [ "${STOCK_ONLY:-0}" != 1 ]; then
 log "enhanced boot"
 boot "$ENH" Fedora-Workstation-44.enhanced.raw "$ROOT/perf-work.noindex/aq-capture.png" ||
   { log "ABORT: enhanced boot"; kill_by_disk "$ENH"; keep_log "$ENH" enh; exit 3; }
@@ -129,6 +137,7 @@ for r in 1 2 3; do
   log "vkmark run $r: ${s:-NO SCORE} $(valid)"; [ -n "$s" ] && row vkmark-default-venus score "$s" "run $r/3 $(valid)"
 done
 watch_stop; shut "$ENH"; keep_log "$ENH" enh
+fi
 POISON="$EV/POISONED-stock"
 
 # --- stock guest

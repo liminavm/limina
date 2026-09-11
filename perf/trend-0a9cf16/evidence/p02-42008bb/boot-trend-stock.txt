@@ -1,0 +1,1 @@
+limina pid=46942 (worker log /tmp/limina-worker-trend-stock.log, disk perf-work.noindex/trend-stock.raw, firmware target/krun-efi/KRUN_EFI.gop.fd, ICD /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json)
