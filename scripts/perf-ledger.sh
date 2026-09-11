@@ -29,7 +29,9 @@ NOTES="${1:-}"
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"
 
-LEDGER=perf/ledger.csv
+# LIMINA_PERF_LEDGER sends the rows to a separate ledger, for an exercise that must stay off the
+# shared trend (e.g. a sweep across old revisions); it defaults to the shared one.
+LEDGER="${LIMINA_PERF_LEDGER:-perf/ledger.csv}"
 DATE=$(date +%Y-%m-%d)
 COMMIT=$(git rev-parse --short HEAD)
 [ -f "$LEDGER" ] || echo "date,commit,workload,metric,value,notes" > "$LEDGER"
