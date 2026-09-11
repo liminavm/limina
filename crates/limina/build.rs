@@ -17,6 +17,8 @@ fn main() {
     println!("cargo:rerun-if-changed={src}");
     println!("cargo:rerun-if-changed=build.rs");
 
+    build_stamp();
+
     // macOS-only; on any other host leave the dylib absent and let the Rust side
     // compile the FFI declarations without linking (the whole app is macOS, so this
     // branch only keeps `cargo check` honest on foreign CI).
@@ -67,4 +69,52 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", out_dir.display());
     // The Swift runtime dylibs (libswiftCore etc.) live here on macOS.
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+}
+
+/// Bake the build date and the source revision in for the About menu (`src/about.rs`).
+///
+/// Reruns on every commit/checkout (`.git/HEAD` moves) and whenever `LIMINA_BUILD_STAMP`
+/// changes — `scripts/build-app.sh` sets that to the release build's own timestamp, so a
+/// shipped bundle always carries the date it was actually cut rather than whenever this
+/// script last happened to run.
+fn build_stamp() {
+    println!("cargo:rerun-if-env-changed=LIMINA_BUILD_STAMP");
+    if let Some(head) = git(&["rev-parse", "--git-path", "HEAD"]) {
+        println!("cargo:rerun-if-changed={head}");
+    }
+
+    let date = std::env::var("LIMINA_BUILD_STAMP").ok().unwrap_or_else(|| {
+        Command::new("date")
+            .args(["-u", "+%Y-%m-%d %H:%M UTC"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "unknown".into())
+    });
+    println!("cargo:rustc-env=LIMINA_BUILD_DATE={date}");
+
+    // A dirty tree gets a `-dirty` suffix: the rev alone would name a build that does not
+    // exist anywhere, and a bug report from one is worth knowing about.
+    let rev = match git(&["rev-parse", "--short=12", "HEAD"]) {
+        Some(rev) if dirty() => format!("{rev}-dirty"),
+        Some(rev) => rev,
+        None => "unknown".into(),
+    };
+    println!("cargo:rustc-env=LIMINA_GIT_REV={rev}");
+}
+
+/// Whether the tracked tree carries uncommitted changes.
+fn dirty() -> bool {
+    git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty())
+}
+
+/// Run git in the crate's directory; `None` if git is missing or the command failed
+/// (a source tarball with no repo still builds — the About menu just says "unknown").
+fn git(args: &[&str]) -> Option<String> {
+    let out = Command::new("git").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
