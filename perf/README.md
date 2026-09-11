@@ -10,6 +10,12 @@ variance (thermals, host load, what else is running) makes hard thresholds flaky
 read trends from it; nothing in the test suite asserts on these numbers. Correctness is
 the replay tests' job (`venus_replay`, `venus_vk_replay`).
 
+**virglrs SHAs in `perf/` predate virglrs's 2026-09-11 message reword.** Every commit on virglrs
+`main` got a new SHA with an identical tree, and the memos, ledgers, evidence directories and
+sweep scripts here keep the SHAs they were measured at. Translate with `commit-map.tsv` on
+virglrs's `rewrite-map` branch (old SHA → new SHA); the old objects are still in any clone that
+fetched before the reword.
+
 Workloads (see `scripts/perf-ledger.sh` for the exact invocations):
 
 - `gl-replay-venus` — deterministic apitrace replay of the glmark2-build fixture on

@@ -10,7 +10,7 @@ session.
 `glmark2-es2-wayland` on venus does **not**, so it never trips this despite being a windowed,
 venus-backed client whose buffers the compositor samples every frame.
 
-Observed at limina `30e5658b` / virglrs `34ed41d`, guest F44 enhanced (`7.1.8-limina16k.4`, mesa
+Observed at limina `30e5658b` / virglrs `99463fb`, guest F44 enhanced (`7.1.8-limina16k.4`, mesa
 `26.1.8-11.limina.fc44`), 4 vCPU / 4 GiB, 1280x800 @ 1.0, through
 `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`. **Every vkmark launch into a healthy session
 poisons** — 4 for 4 across two pins.
@@ -55,16 +55,16 @@ Ruled out by measurement, not argument:
   successful `texture_view` calls, including `(64x64 R8G8B8X8_UNORM, immutable true, surface
   false, supports_view true) as R8G8B8X8_UNORM target 0xde1 internalformat 0x8058 levels 0+1
   layers 0+1` — identical in every field but `surface`.
-- **A stale immutability flag.** virglrs `34ed41d` replaced the predicted `immutable` with a
+- **A stale immutability flag.** virglrs `99463fb` replaced the predicted `immutable` with a
   `GL_TEXTURE_IMMUTABLE_FORMAT` query at both exits of `alloc_texture`. The four still report
   `immutable true` and still leave `0x502`. So KosmicKrisp's `EXT_EGL_image_storage` delivers
   genuinely immutable-format storage, and **the host refuses to view externally imported storage
-  regardless of immutability**. `34ed41d` is a correct hygiene fix — two copies of one fact, the
+  regardless of immutability**. `99463fb` is a correct hygiene fix — two copies of one fact, the
   read one unchecked — and not a cure.
 
 ## The cure
 
-virglrs `42008bb` (`reimport-route.patch` as applied and measured here). vkmark's view is an
+virglrs `58aa6d6` (`reimport-route.patch` as applied and measured here). vkmark's view is an
 **identity** view — same format, same target, full level and layer range, so `reinterprets` is
 false. The only thing it needed was the `W -> One` swizzle every alpha-less format carries, and a
 swizzle needs a *private object*, not a view: GL keeps the swizzle on the texture object, so
@@ -133,5 +133,5 @@ carried on, so this is a behavioural change of the rewrite, and it is what turns
 window into a dead session.
 
 `worker-excerpt.log` holds context creates/destroys and windows around the first two refusals;
-`gl-trace-excerpt.log` the traced call sites; `immutable-query.patch` the `34ed41d` change as
+`gl-trace-excerpt.log` the traced call sites; `immutable-query.patch` the `99463fb` change as
 applied here.
