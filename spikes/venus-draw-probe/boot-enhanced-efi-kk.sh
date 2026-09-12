@@ -65,6 +65,10 @@ export DYLD_LIBRARY_PATH="$MESA_PREFIX/vulkan-rpath${DYLD_LIBRARY_PATH:+:$DYLD_L
 # same guest, same virgl protocol, same vrend GL stream, only the driver underneath changes.
 # It is the locus split for "is this fault above or below vrend?"; llvmpipe needs a host mesa
 # built with -Dgallium-drivers=zink,llvmpipe and MESA_PREFIX pointed at it. Default stays zink.
+# The worker links libEGL by its absolute zink-kk-prefix path (virglrs is compiled in), and the
+# fallback path above never overrides a path that exists; DYLD_LIBRARY_PATH matches by leaf name
+# first, so a swapped MESA_PREFIX has to go there to be the libEGL/libgallium actually loaded.
+[ -n "${LIMINA_HOST_GALLIUM:-}" ] && export DYLD_LIBRARY_PATH="$MESA_PREFIX/lib:$DYLD_LIBRARY_PATH"
 export MESA_LOADER_DRIVER_OVERRIDE="${LIMINA_HOST_GALLIUM:-zink}"
 export GALLIUM_DRIVER="${LIMINA_HOST_GALLIUM:-zink}"
 export LIBGL_DRIVERS_PATH="$MESA_PREFIX/lib"
