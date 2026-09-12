@@ -1,3 +1,0 @@
-trend s7-p03: virglrs 4afa3ef + libkrun 7c4ada05; host mesa 5e99e7c1763; limina 503f6dbf
--rwxr-xr-x@ 1 kov  staff  15248712 Sep 10 23:00 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
--rwxr-xr-x@ 1 kov  staff  21727328 Sep 10 22:49 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-26.3.0-devel.dylib

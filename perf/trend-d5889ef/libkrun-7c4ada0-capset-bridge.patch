@@ -1,0 +1,19 @@
+Bridge for virglrs fa8c765..d1b6278 (fa8c765, 6728ba1, 411326e, 69207f2, d1b6278): those trees have
+already dropped Renderer::capset_max but do not yet take a GL context factory in Renderer::new, so
+they build against neither libkrun 7c4ada0 (still calls capset_max) nor 0dba6b9c (passes the
+factory). This is 0dba6b9c's capset hunk alone, applied on 7c4ada0 via point.sh's LIBKRUN_PATCH.
+
+diff --git a/src/rutabaga_gfx/src/virgl_renderer.rs b/src/rutabaga_gfx/src/virgl_renderer.rs
+index 336ac46b..2de937ed 100644
+--- a/src/rutabaga_gfx/src/virgl_renderer.rs
++++ b/src/rutabaga_gfx/src/virgl_renderer.rs
+@@ -331,7 +331,8 @@ impl RutabagaComponent for VirglRenderer {
+         self.r
+             .lock()
+             .unwrap()
+-            .capset_max(CapsetId::from_raw((capset_id & 0xff) as u8))
++            .capset(CapsetId::from_raw((capset_id & 0xff) as u8))
++            .map(|c| (c.version(), c.as_bytes().len() as u32))
+             .unwrap_or((0, 0))
+     }
+ 

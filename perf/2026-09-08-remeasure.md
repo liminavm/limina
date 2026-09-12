@@ -6,8 +6,8 @@ on a `cp -c` clone of `Fedora-Workstation-44.enhanced.raw` booted through
 `Virtual-1 1280x800 scale=1.0`, guest `7.1.8-limina16k.4`, mesa `26.1.8-11.limina.fc44`, Firefox
 150.0, `VN_PERF` unset:
 
-- **profile fix** — limina `d27bc7cc` / virglrs `c299aae`
-- **fence fix** — limina `095e2856` / virglrs `4afa3ef` / libkrun `7c4ada05`
+- **profile fix** — limina `d27bc7cc` / virglrs `eba607f`
+- **fence fix** — limina `095e2856` / virglrs `b1460a6` / libkrun `7c4ada05`
 
 **This pass is incomplete** — see *Not measured*.
 
@@ -19,14 +19,14 @@ on a `cp -c` clone of `Fedora-Workstation-44.enhanced.raw` booted through
   `[profile.dev.package.virglrs] opt-level = 3`. **This dominates every graphics number below**,
   and it is the single most important finding of the day.
 - **A second cost sat behind it: a `glFinish` of every context on every classic fence.** Worth a
-  further 1.8x on the aquarium. Fixed in virglrs `4afa3ef`, which takes a `glFenceSync` on the
+  further 1.8x on the aquarium. Fixed in virglrs `b1460a6`, which takes a `glFenceSync` on the
   context that queued the work and waits it off the worker thread.
 - **Three of the four ledger workloads are at or above the 08-08 C-renderer baseline**, and vkmark
   is **+26%**. The ledger is flat across the fence fix, which is the correct answer: none of those
   four workloads depend on the classic fence path.
 - **The mouse-pointer stutter is not fixed by either change here**, and it is the symptom that
   motivated the fence work. Its cause is a *third* drain — `resource_sync_iosurface`, on the
-  compositor's present. Fixed the next day in virglrs `7c65f0f`; scored smooth by a human at the
+  compositor's present. Fixed the next day in virglrs `8dc2589`; scored smooth by a human at the
   same 25 000-fish load that produced this memo's negative. See `perf/2026-09-09-remeasure.md`.
 - A regression this memo previously reported as "`glmark2` −23%, unattributed" **was the build
   profile**. It is now +5% on the baseline.
@@ -44,8 +44,8 @@ on a `cp -c` clone of `Fedora-Workstation-44.enhanced.raw` booted through
 **The `vs 08-08` column resolves only the two large steps.** `vk-replay`'s own outlier band is
 9-15% and `glmark2`'s between-boot variance is ±10%, so neither supports a cross-day attribution of
 13% or 7%; the `-O0` → `-O3` step (+28% on `vk-replay`) and the profile regression (−23% on
-`glmark2`) clear those floors and stand. The `-O3` vkmark column is virglrs `c299aae`, which
-**predates the fence fix `4afa3ef` by 7 commits** — vkmark was never run at the fence pin.
+`glmark2`) clear those floors and stand. The `-O3` vkmark column is virglrs `eba607f`, which
+**predates the fence fix `b1460a6` by 7 commits** — vkmark was never run at the fence pin.
 See `perf/2026-09-09-remeasure.md` §Instruments.
 
 The `-O0` rows are kept and labelled in `ledger.csv`, because a trend file that silently drops a
@@ -164,7 +164,7 @@ such a result looks stale.
 |---|---|---|
 | classic-fence `glFinish` | `-O0` | **FALSIFIED** — it is 1.8x |
 | the 09-06 multisample cap (`VREND_MAX_SAMPLES=4`) | `-O0` | **suspect, re-run owed — with a positive control** |
-| the sampler-view cure (pre-cure `34ed41d`) | `-O0` | **suspect as a timing result** |
+| the sampler-view cure (pre-cure `99463fb`) | `-O0` | **suspect as a timing result** |
 | vrend vs zink→venus glmark2 (4687 / 2157) | `-O0` + fence off | **suspect** — an unshipped config |
 | Firefox's version (150.0, April) | n/a | stands — not a timing measurement |
 | the command stream (VM-free replay, C ~2.12 s vs virglrs ~2.61 s) | `--release` | stands |
@@ -243,7 +243,7 @@ screen is what recovered this session.
 
 ## Follow-ups
 
-1. ~~Fix `resource_sync_iosurface`~~ — done, virglrs `7c65f0f`; pointer scored smooth by a human.
+1. ~~Fix `resource_sync_iosurface`~~ — done, virglrs `8dc2589`; pointer scored smooth by a human.
 2. ~~The aquarium at n=3~~ — done 2026-09-09: 45 (25k) / 39 (30k), and the workload's spread is
    ~15%, so **every single-capture comparison in this memo is weaker than it reads**.
 3. **Re-measure the `IOAccelerator` ratchet** with a verified-running workload.

@@ -1,6 +1,6 @@
 # Remeasure at the virglrs Linux-port pin
 
-**Subject:** virglrs `d30b8ce` → `4bfdefe` on limina `55f392d1`, libkrun `0dba6b9c`.
+**Subject:** virglrs `4813d7a` → `24a91eb` on limina `55f392d1`, libkrun `0dba6b9c`.
 Ledger rows carry commit `55f392d1`; evidence in `perf/evidence/2026-09-09b/`.
 
 This is a **regression gate, not attribution**. The four ledger workloads catch large
@@ -11,24 +11,24 @@ instrument for "did ~40 commits of virglrs regress macOS" and the wrong one for 
 
 Two stacked deltas, neither separable here:
 
-1. `d30b8ce → feef548` — limina `2d6dbc92`, **never perf-measured**.
-2. `feef548 → 4bfdefe` — the pin gap to virglrs `origin/main` plus the Linux port.
+1. `4813d7a → c6b0d21` — limina `2d6dbc92`, **never perf-measured**.
+2. `c6b0d21 → 24a91eb` — the pin gap to virglrs `origin/main` plus the Linux port.
 
-If a later pass finds a regression in this window, the first bisection arm is `feef548`.
+If a later pass finds a regression in this window, the first bisection arm is `c6b0d21`.
 
 **The measured pin is HVF-ungraded.** The 138/138 suite ran at `bc1937a`; the pin is four
 commits and +263/−10 past it, including a new cursor-readback path in `vrend.rs` and
 `transfer.rs`. Those commits are Linux-port work and are not expected to reach macOS, but no
-HVF run stands behind `4bfdefe` itself.
+HVF run stands behind `24a91eb` itself.
 
 ## Result: no regression on any guest-idle instrument
 
-Every guest-idle band overlaps its `d30b8ce` counterpart. n=5 unless noted; **quiet host**, both
+Every guest-idle band overlaps its `4813d7a` counterpart. n=5 unless noted; **quiet host**, both
 virglrs sessions holding VMs and GPU replays; display **verified** 1280x800 @ 1.0; guest
 `7.1.8-limina16k.4` / mesa `26.1.8-11`; debug worker with the dev `opt-level = 3` overrides —
 the same vehicle every prior ledger row used.
 
-| workload | this pin | `d30b8ce` (09-09) | verdict |
+| workload | this pin | `4813d7a` (09-09) | verdict |
 |---|---|---|---|
 | `gl-replay-venus` | 56.88 – 57.27 | 56.86 – 57.43 | overlap |
 | `gl-replay-llvmpipe` (control) | 720.4 – 735.5 | 717.4 – 733.6 | overlap |
@@ -44,7 +44,7 @@ All five runs here sit in band, so all five are readable.
 
 ## The one number that moved: the contended arm
 
-| | this pin | `d30b8ce` (09-09) |
+| | this pin | `4813d7a` (09-09) |
 |---|---|---|
 | `vkmark-under-aquarium25k-venus` | 1247 / 1261 (boot 1), 1231 / 1208 (boot 2) | 1450 / 1439 |
 
@@ -54,7 +54,7 @@ only adverse result in the pass and it is not dismissible as noise.
 **What it is not: settled.** The baseline is a **single-boot pair** taken when this workload was
 new, so it has exactly the weakness this pass corrected for on its own side. A two-boot
 measurement against a one-boot baseline can separate because the baseline never sampled its own
-between-boot spread. **What would settle it is a re-measure of this workload at `d30b8ce`**, not
+between-boot spread. **What would settle it is a re-measure of this workload at `4813d7a`**, not
 more samples at this pin.
 
 The uncontended instruments are flat, so whatever this is does not show without a competing GPU

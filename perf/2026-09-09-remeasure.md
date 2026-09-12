@@ -1,6 +1,6 @@
-# 2026-09-09 — virglrs `d30b8ce`: the stutter is fixed, and the battery cannot score it
+# 2026-09-09 — virglrs `4813d7a`: the stutter is fixed, and the battery cannot score it
 
-limina `c4cdab53` / virglrs `d30b8ce` / libkrun `7c4ada05`. F44 enhanced CoW clone, 4 vCPU /
+limina `c4cdab53` / virglrs `4813d7a` / libkrun `7c4ada05`. F44 enhanced CoW clone, 4 vCPU /
 4 GiB, display **verified** `Virtual-1 1280x800 @ 1.0`, guest `7.1.8-limina16k.4` (16 KiB pages) /
 mesa `26.1.8-11`, Firefox 150.0. Zero `refused: vrend`, zero poisoned contexts across the whole
 session. Method: [`limina-profiling-playbook`]. Rows in `perf/ledger.csv`; raw stdout and fps crops
@@ -18,9 +18,9 @@ Its cause was three stacked drains, all now fixed:
    inherits the worker's profile, and **nothing in any build output says which profile a compiled-in
    renderer got.** Fixed by `[profile.dev.package.virglrs] opt-level = 3`.
 2. **A `glFinish` of every context on every classic fence** (`create_fence -> finish_all`, 75% of
-   the `gpu worker` thread). Fixed in virglrs `4afa3ef`.
+   the `gpu worker` thread). Fixed in virglrs `b1460a6`.
 3. **`resource_sync_iosurface` calling `finish_all()` on the compositor's present** — every context,
-   every sub-context, per page-flip. Fixed in virglrs `7c65f0f`, which finishes only the surface's
+   every sub-context, per page-flip. Fixed in virglrs `8dc2589`, which finishes only the surface's
    own contexts.
 
 A fourth, in the same family: **`[profile.dev.package.virglrs]` does not reach virglrs's
@@ -35,8 +35,8 @@ That is a count, not a cost — unmeasured, and named here so it is not mistaken
 | pin | runs | median |
 |---|---|---|
 | 08-08, C renderer | 3146 / 3151 / 3155 | 3151 |
-| 09-08, virglrs `c299aae` | 3980 / 3981 / 4051 | 3981 |
-| **09-09, virglrs `d30b8ce`** | 4146 / 4201 / 4215 | **4201** |
+| 09-08, virglrs `eba607f` | 3980 / 3981 / 4051 | 3981 |
+| **09-09, virglrs `4813d7a`** | 4146 / 4201 / 4215 | **4201** |
 
 Stated in its strongest available form: **the 09-08 and 09-09 bands do not overlap.** Not as a
 percentage — see *Instruments* below for why vkmark does not support one.
@@ -113,7 +113,7 @@ it. `resource_sync_iosurface` profiling at 0.1%, and again at 0.7-3.0%, only bec
 sat ahead of it — it went 12 → 460 samples once that drain was removed, and the human verdict above
 is the positive evidence it was real. A needle pinned at 56.9. Instruments whose needles do move,
 but by less than their own noise. The one case that came out the other way is the shape to copy:
-`f00ec03` refused to conclude until its control armed, and then it did.
+`721df76` refused to conclude until its control armed, and then it did.
 
 **Operational form — before believing a null, name the result that would have shown the effect, and
 check the instrument has produced a result of that size for a known cause.** vkmark passes (2140 →
@@ -141,22 +141,22 @@ instrument chosen only for the first is a dead needle: it delivers its null with
 
 ## Attribution, and what stays open
 
-**The +5.5% window is 22 virglrs commits (`c299aae..d30b8ce`) plus limina's `c4cdab53`**, and this
-pass does not narrow it further. `c299aae` predates the fence fix `4afa3ef` by 7 commits, so the
-whole fence rework, `7c65f0f`, and the command-path work are all inside it. Two facts do bound it:
+**The +5.5% window is 22 virglrs commits (`eba607f..4813d7a`) plus limina's `c4cdab53`**, and this
+pass does not narrow it further. `eba607f` predates the fence fix `b1460a6` by 7 commits, so the
+whole fence rework, `8dc2589`, and the command-path work are all inside it. Two facts do bound it:
 
-- **virglrs `886f0d8` cannot contribute.** It adds `[profile.dev]` to virglrs's own `Cargo.toml`,
+- **virglrs `94c1f21` cannot contribute.** It adds `[profile.dev]` to virglrs's own `Cargo.toml`,
   and **Cargo ignores `[profile.*]` in any non-root package** — only the workspace root's profile
   applies. It governs virglrs-as-root builds only.
 - **`c4cdab53` was not in the 09-08 build.** That vkmark leg ran 20:39 local; the commit landed
   23:32 local.
 
-`7c65f0f` is the mechanism most likely to explain a *guest-idle venus* gain: vkmark is a windowed
+`8dc2589` is the mechanism most likely to explain a *guest-idle venus* gain: vkmark is a windowed
 Wayland client, so it presents, and the fix removes `finish_all()` work from the gpu worker thread
 venus queues behind. **The gain is banked, not attributed** — no separation run. These are not the
 right instruments for fine attribution, and the environment control that would make them so does not
-exist yet; the large changes are what this pass is for. If it is ever wanted, `7c65f0f` against its
-parent `f00ec03` with vkmark n=3 is the run, because vkmark can resolve it and nothing else can.
+exist yet; the large changes are what this pass is for. If it is ever wanted, `8dc2589` against its
+parent `721df76` with vkmark n=3 is the run, because vkmark can resolve it and nothing else can.
 
 **Correctness of the command path is scored: rs == c, byte-identical, nine classic corpora**
 (virglrs's harness), each leg replaying its corpus in full. Its own boundary: that proves *no
@@ -173,7 +173,7 @@ it — `replay: no --ctx given, picking ctx 2 (45343 commands)` — and was read
 environmental theory was constructed to explain the number that line was naming.
 
 **The fence fix's ordering hazard is scored.** `vrend::waiter::tests::
-a_cpu_reader_sees_the_render_the_fence_waited_for` (virglrs `f00ec03`) passes, and **its control
+a_cpu_reader_sees_the_render_the_fence_waited_for` (virglrs `721df76`) passes, and **its control
 armed at the first size tried** (`FIRST_PASSES = 400`): the unwaited read came back `0x00`, the
 waited read `0xff`, the colour the render wrote. The needle was demonstrated live before the
 assertion meant anything — which is what makes the pass evidence rather than a dead needle. Real

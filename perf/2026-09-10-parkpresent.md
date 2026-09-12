@@ -1,6 +1,6 @@
 # Remeasure at the parked-classic-present pin, and the Basemark baseline
 
-**Subject:** virglrs `4bfdefe` → `4654a34` and libkrun `0dba6b9c` → `bae5de4a`, on limina `9fc8eea4`.
+**Subject:** virglrs `24a91eb` → `02d047b` and libkrun `0dba6b9c` → `bae5de4a`, on limina `9fc8eea4`.
 Classic vrend scanouts now present by parking on a fence instead of blocking the GPU worker.
 Evidence in `perf/evidence/2026-09-10/`. HVF suite **138/138** at this tree.
 
@@ -16,7 +16,7 @@ stock-guest Basemark arm is the one that exercises the diff. The probe confirms 
 n=5, quiet host, guest settled, display **verified** 1280x800 @ 1.0, guest `7.1.8-limina16k.4` /
 mesa `26.1.8-11`, debug worker with the dev `opt-level = 3` overrides.
 
-| workload | this pin | `4bfdefe` (09-09b) | verdict |
+| workload | this pin | `24a91eb` (09-09b) | verdict |
 |---|---|---|---|
 | `gl-replay-venus` | 56.92 – 56.98 | 56.88 – 57.27 | overlap |
 | `gl-replay-llvmpipe` (control) | 721.1 – 726.5 | 720.4 – 735.5 | overlap |
@@ -29,7 +29,7 @@ mesa `26.1.8-11`, debug worker with the dev `opt-level = 3` overrides.
 **vkmark does not overlap and it reproduces across two boots**, while every coarse workload is
 flat. That is the expected signature of a small real cost: vkmark is the only fine instrument here
 ([[limina-perf-instruments]]), and the four ledger workloads average it away. It is **not
-attributed** — the window also contains the `4bfdefe → 4654a34` virglrs delta, which includes two
+attributed** — the window also contains the `24a91eb → 02d047b` virglrs delta, which includes two
 classic-fence correctness fixes, one of which makes a classic fence sync *every* sub-context of its
 context plus ctx0 rather than whichever happened to be current. More syncing per fence is a
 plausible cost, and it is a lead, not a finding. Its ctx0 half is priced in
@@ -74,7 +74,7 @@ commensurable in either direction.
 **This arm cannot answer the WebGL 2.0 question it was partly run for.** The virglrs session sees
 WebGL 2.0 ~10% down against its own previous build. There is no Basemark row at the previous pin
 in this vehicle, so nothing here confirms or refutes that. Settling it needs a Basemark run at
-`4bfdefe`/`0dba6b9c`.
+`24a91eb`/`0dba6b9c`.
 
 ## Not measured
 
