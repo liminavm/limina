@@ -99,9 +99,31 @@ either: the sixth crash had a zink driver thread in `kk_draw` (`kk_flush_dynamic
 crash had a zink flush thread in `reset_batch_state_internal`. The other three reports in the
 repo show no second thread in KK at all.
 
-The discriminating next step is to make the context visible: record, per encoder, the context AGX
-attached at creation and compare it at each use; and record which allocator each open encoder is
-on, so an allocator reset or re-begin can be checked against open encoders.
+### The context is now visible (mesa `limina-kk` `bb3994fc6db`)
+
+Each guarded encoder records the `_impl`, `_allocator` and `_command_buffer` ivars AGX gave it (the
+offsets are looked up by name, and they differ by chip: `_impl` is at 64 on G16X and 72 on G13X),
+plus the pass-state word, read before anything is recorded. Every compute op re-reads them. When the
+state has gone NULL, or either pointer has changed, the encoder is marked BROKEN, reported once with
+`[LIMINA-CTX]`, and its ops are skipped rather than faulting. The canary is armed only for a known
+driver UUID, and only after `[+off] == [+off-8] + 0xc0`, the relation beginComputePass writes, has
+been seen on a live encoder. The counters sit on the pool report's `encoder guard` line after
+`context:`.
+
+How to read a trip:
+
+- **`born-broken`**: AGX handed out an encoder whose context was already zeroed. The fault is
+  AGX's, at encoder creation. Look at the allocator's `resets` and `ops since its last reset` on
+  the follow-up line: a just-reset allocator points at AGX reusing allocator memory.
+- **`died`**: the context was fine at birth and lost its state later. Look at "other live
+  encoder(s) on this context". Two live encoders on one context means AGX re-issued it.
+- **`swapped`**: the encoder was re-pointed at a different context or allocator.
+- **Silent at the next fault** (counters zero, canary armed): the context is fine at our check and
+  dies inside the call. That leaves the check-then-use window and AGX-internal state as the only
+  candidates.
+
+Measured on G13X (vkcube): AGX gives successive encoders on one allocator the SAME page-aligned
+ComputeContext, so the previous tenant of an address sharing its context is normal.
 
 The route every crashing copy took is unchanged: `kk_CmdCopyBufferToImage2` →
 `cs_get_compute(cmd, true)`, the pre_gfx slot.
