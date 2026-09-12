@@ -1660,6 +1660,20 @@ keeps the copy. libkrun already reports the change (`scanout_held`), so the supe
 nothing. Check with `LIMINA_PRESENT_MUTATION_TRACE=1` (zero surfaces changed while up) and the
 worker's `scanout N flushes are fenced` line.
 
+## GPU — a WebGL window repaints as a slideshow in the GNOME overview unless another window is hovered
+
+📋 open, user-seen 2026-09-12 on stock Debian (GNOME 50.3, vrend), with the WebGL aquarium in one
+Firefox window and the Imminence page in another. With the overview open, the aquarium's
+thumbnail repaints as a fast slideshow while no window is hovered or while the aquarium's own
+window is; hovering the Imminence window makes the aquarium run at the frame rate it reports.
+Outside the overview both are fine, and the rest of this build (no stale frames, smooth pointer
+under load) held.
+
+Not yet measured. Start from the worker log's `control queue drain ran` lines with the overview
+open in each hover state, and whether presents stall or the guest simply stops drawing; the
+hover dependence says it is the guest's compositor choosing what to repaint, until a log says
+otherwise.
+
 ## GPU / guest mesa — the composite decode-target create is gated on the sampler bitmask at the caller, not at the site that emits it
 
 Surfaced 2026-09-04 while answering the Rust rewrite's capset questions. Not a live fault: the
