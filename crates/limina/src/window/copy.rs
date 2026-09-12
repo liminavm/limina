@@ -5,9 +5,9 @@
 //!
 //! A zero-copy present hands the window server a surface the guest still owns. That is safe only
 //! while the guest is held off the surface until the frame has left glass, and the device can hold
-//! only a guest that fences its scanout flushes (`scanout_held` in libkrun's display API). A stock
-//! kernel does not, and its compositor draws later frames into a buffer the window server is still
-//! compositing. Measured 2026-09-12 in the WebGL aquarium at 30k fish: about 60% of frames changed
+//! only a guest that fences its scanout flushes (`scanout_held` in libkrun's display API). The guest
+//! kernel fences none of a vrend desktop's flushes, on either tier, and its compositor draws later
+//! frames into a buffer the window server is still compositing. Measured 2026-09-12 in the WebGL aquarium at 30k fish: about 60% of frames changed
 //! while on glass, and the visible part was older frames flashing back. A copy the guest never
 //! sees cannot change under the window server.
 //!

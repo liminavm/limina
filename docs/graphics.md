@@ -288,15 +288,17 @@ bug that no longer exists. The cap is a memory bound on client transients, not a
 share. History: `spikes/scanout-blob-freeze/RESULTS.md`.
 
 **Zero-copy is safe only while the guest is held off the surface on glass.** A present hands the
-window server a surface the guest still owns. A guest that fences its scanout flushes (the enhanced
-kernel) is held on that fence until the frame has left glass (`GuestFlushHold` in libkrun's
-`virtio_gpu.rs`). A stock kernel sends no fence, so nothing holds it: its compositor draws later
-frames into a buffer the window server is still compositing, and older frames flash back on screen
-(measured 2026-09-12: about 60% of frames changed while on glass under a heavy WebGL load). The
-worker reports each scanout's state as it changes (`held <scanout> <0|1>`, from libkrun's optional
-`scanout_held` display call), and the supervisor shows a slot that is not held through a private
-copy: a Metal blit into a 3-deep ring (`crates/limina/src/window/copy.rs`). A held slot stays
-zero-copy. `LIMINA_PRESENT_COPY=1` forces the copy; `LIMINA_PRESENT_MUTATION_TRACE=1` fingerprints
+window server a surface the guest still owns. A guest whose scanout flush carries a fence is held
+on it until the frame has left glass (`GuestFlushHold` in libkrun's `virtio_gpu.rs`). The guest
+kernel attaches that fence only for a dumb or imported guest-blob primary plane
+(`virtgpu_prepare_fb`, `third_party/linux/drivers/gpu/drm/virtio/virtgpu_plane.c:369`, unchanged
+from upstream), so a GNOME desktop scanning out through vrend is **not held on either tier**: its
+compositor draws later frames into a buffer the window server is still compositing, and older
+frames flash back on screen (measured 2026-09-12: about 60% of frames changed while on glass under a
+heavy WebGL load). The worker reports each scanout's state as it changes (`held <scanout> <0|1>`,
+from libkrun's optional `scanout_held` display call), and the supervisor shows a slot that is not
+held through a private copy: a Metal blit into a 3-deep ring (`crates/limina/src/window/copy.rs`),
+about 1.2 ms per frame on the main thread (M1 Max, measured 2026-09-12). A held slot stays zero-copy. `LIMINA_PRESENT_COPY=1` forces the copy; `LIMINA_PRESENT_MUTATION_TRACE=1` fingerprints
 each zero-copy surface as it goes up and again as it is replaced, and logs the ones that changed in
 between — the direct test for this race.
 
@@ -786,6 +788,7 @@ or commit while it runs.
 | item | where |
 |---|---|
 | **Multisampling is disabled on the GL tier** — a `{antialias:true}` WebGL context takes a GPU address fault and loses the host Vulkan device; mitigated by advertising `max_samples = 1`, root cause open | §3.2, `spikes/webgl-msaa/RESULTS.md` |
+| **A vrend desktop is never held off its scanout, so every frame is copied** — the guest kernel fences no non-blob primary flush; a Metal blit keeps it correct at ~1.2 ms per frame, and fencing those flushes in the enhanced kernel would restore zero-copy there | §4, `docs/hardening-backlog.md` |
 | **A venus failure kills the whole Vulkan loader** — upstream the stub-instance patch so a stock guest keeps llvmpipe when venus goes down | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |

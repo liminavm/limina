@@ -211,7 +211,7 @@ pub(crate) struct PrimaryDisplay {
     // LIMINA_PRESENT_COPY=1 forces the copy (`super::copy`) on this window whatever the worker
     // says. A slot the worker reports as not held — a guest whose scanout flushes carry no
     // fence, so it may draw into the surface on glass — gets the copy without it; a held slot
-    // (the fenced enhanced tier) stays zero-copy. The env arms it for the whole run; the
+    // stays zero-copy. The env arms it for the whole run; the
     // marker file toggles it LIVE (touch/rm /tmp/limina-present-copy), so a suspected reuse
     // race can be A/B'd within one session.
     present_copy_env: bool,

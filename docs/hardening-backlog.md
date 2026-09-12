@@ -1644,6 +1644,22 @@ confirmation (the open-loop latch delay supplies the margin)" — and the hold c
 Check after the flip: the pinned fluster verdicts and the replay corpora scores unchanged, and the
 rewrite's frame oracle exercising the parked path with no knob set.
 
+## GPU / guest kernel — a vrend scanout flush carries no fence, so every desktop pays a copy per frame
+
+📋 open. `virtgpu_prepare_fb` (`third_party/linux/drivers/gpu/drm/virtio/virtgpu_plane.c:369`)
+returns before allocating a plane fence for any primary plane that is not a guest blob, and then
+fences only dumb or imported objects. A GNOME desktop scans out through vrend (non-blob) on both
+tiers, so its flushes carry no fence, no `GuestFlushHold` forms, and the compositor may render into
+the buffer on glass. The supervisor covers that with a Metal-blit copy of every unheld frame
+(`docs/graphics.md` §4): correct, but about 1.2 ms mean and 4.6–6.1 ms worst on the main thread per
+frame (measured 2026-09-12, 24–33 fps WebGL load; not yet measured at a 60 Hz desktop).
+
+The deep fix is on the enhanced kernel (a `limina` branch commit): fence every primary-plane flush
+the host can hold, so the enhanced tier is held and goes back to zero-copy while the stock tier
+keeps the copy. libkrun already reports the change (`scanout_held`), so the supervisor needs
+nothing. Check with `LIMINA_PRESENT_MUTATION_TRACE=1` (zero surfaces changed while up) and the
+worker's `scanout N flushes are fenced` line.
+
 ## GPU / guest mesa — the composite decode-target create is gated on the sampler bitmask at the caller, not at the site that emits it
 
 Surfaced 2026-09-04 while answering the Rust rewrite's capset questions. Not a live fault: the
