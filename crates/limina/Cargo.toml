@@ -143,6 +143,21 @@ objc2-quartz-core = { version = "0.3", features = [
     "CATextLayer",
 ] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
+# The copy shown for a guest that is not held off its scanout buffers is a GPU blit
+# (`window/copy.rs`).
+objc2-metal = { version = "0.3", default-features = false, features = [
+    "std",
+    "MTLAllocation",
+    "MTLBlitCommandEncoder",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLTexture",
+    "objc2-io-surface",
+] }
 objc2-core-foundation = { version = "0.3", features = [
     "CFBase",
     # macOS's own Modifier Keys configuration (src/hostmods.rs). It lives in the ByHost

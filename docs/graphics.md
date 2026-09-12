@@ -287,6 +287,19 @@ buffers on a transition to keep its scanout alive; a compositor that does so is 
 bug that no longer exists. The cap is a memory bound on client transients, not a budget guests
 share. History: `spikes/scanout-blob-freeze/RESULTS.md`.
 
+**Zero-copy is safe only while the guest is held off the surface on glass.** A present hands the
+window server a surface the guest still owns. A guest that fences its scanout flushes (the enhanced
+kernel) is held on that fence until the frame has left glass (`GuestFlushHold` in libkrun's
+`virtio_gpu.rs`). A stock kernel sends no fence, so nothing holds it: its compositor draws later
+frames into a buffer the window server is still compositing, and older frames flash back on screen
+(measured 2026-09-12: about 60% of frames changed while on glass under a heavy WebGL load). The
+worker reports each scanout's state as it changes (`held <scanout> <0|1>`, from libkrun's optional
+`scanout_held` display call), and the supervisor shows a slot that is not held through a private
+copy: a Metal blit into a 3-deep ring (`crates/limina/src/window/copy.rs`). A held slot stays
+zero-copy. `LIMINA_PRESENT_COPY=1` forces the copy; `LIMINA_PRESENT_MUTATION_TRACE=1` fingerprints
+each zero-copy surface as it goes up and again as it is replaced, and logs the ones that changed in
+between — the direct test for this race.
+
 ### More than one display
 
 The guest may have several connectors, so every line of the worker→supervisor present protocol
@@ -774,7 +787,6 @@ or commit while it runs.
 |---|---|
 | **Multisampling is disabled on the GL tier** — a `{antialias:true}` WebGL context takes a GPU address fault and loses the host Vulkan device; mitigated by advertising `max_samples = 1`, root cause open | §3.2, `spikes/webgl-msaa/RESULTS.md` |
 | **A venus failure kills the whole Vulkan loader** — upstream the stub-instance patch so a stock guest keeps llvmpipe when venus goes down | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
-| **Fence-accurate present is not wired for vrend** — vrend's flush path never reaches `try_park_present`, so `FENCEPRESENT` never fires and the #24 tear/pacing work does not apply to the tier the desktop actually runs on. **No observable symptom, though:** the overview-toggle stress (historically the most tear-prone workload) was human-verified smooth on both present paths on 2026-08-16, so this is a missing mechanism rather than a live defect. Re-open it if tearing is ever reported. | `docs/hardening-backlog.md`, `spikes/graphics-doc-audit/RESULTS.md` row 20 |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |
 | Explicit sync: only binary `SYNC_FD` external semaphores exist; timeline/`OPAQUE_FD` do not | `docs/research/venus-explicit-sync-gap.md` (and read §5–6 before chasing `OPAQUE_FD`) |

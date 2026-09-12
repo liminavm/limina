@@ -42,6 +42,7 @@ use objc2_quartz_core::{CALayer, CATransaction};
 pub(crate) mod absfit;
 pub(crate) mod arrangement;
 mod capture_tap;
+mod copy;
 mod cursor;
 mod diag;
 mod displays;

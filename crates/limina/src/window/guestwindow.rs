@@ -66,6 +66,9 @@ pub(crate) struct GuestWindow {
     /// present path runs inside `Fn` closures (the frame-apply and the render timer share the
     /// window through `Rc`), where no `&mut self` exists.
     last_ca: RefCell<Option<CFRetained<IOSurfaceRef>>>,
+    /// The private copies [`Self::show`] puts on glass instead of a guest surface the guest may
+    /// still draw into.
+    copies: RefCell<super::copy::CopyRing>,
 }
 
 /// Resolve a presented surface id to the retained surface to put on glass, or arrange for its
@@ -171,6 +174,7 @@ impl GuestWindow {
             // cap held 4× the intended memory bound.
             cache: RefCell::new(SurfaceStore::with_cap(present::FRAME_CACHE_CAP)),
             last_ca: RefCell::new(None),
+            copies: RefCell::new(super::copy::CopyRing::default()),
         }
     }
 
@@ -231,14 +235,35 @@ impl GuestWindow {
         }
     }
 
+    /// Put the guest's `surface` on glass as frame `id` — or, when `copy`, a private copy of it,
+    /// for a guest that may draw into the surface while the window server still composites it
+    /// ([`super::copy`]). The ack names the guest's `id` either way.
+    pub(crate) fn show(
+        &self,
+        id: u32,
+        surface: &CFRetained<IOSurfaceRef>,
+        ack_tx: &SyncSender<AckMsg>,
+        copy: bool,
+    ) {
+        let copied = copy
+            .then(|| self.copies.borrow_mut().copy(surface))
+            .flatten();
+        self.show_with_ack(id, copied.as_ref().unwrap_or(surface), ack_tx);
+    }
+
     /// Put the presented surface `id` on this window's layer (and its strip, when up), with
-    /// the shown-ack the worker's flush fence depends on: [`Self::resolve`] +
-    /// [`Self::show_with_ack`].
-    pub(crate) fn present(&self, id: u32, surface_map: &SurfaceMap, ack_tx: &SyncSender<AckMsg>) {
+    /// the shown-ack the worker's flush fence depends on: [`Self::resolve`] + [`Self::show`].
+    pub(crate) fn present(
+        &self,
+        id: u32,
+        surface_map: &SurfaceMap,
+        ack_tx: &SyncSender<AckMsg>,
+        copy: bool,
+    ) {
         let Some(surface) = self.resolve(id, surface_map, ack_tx) else {
             return;
         };
-        self.show_with_ack(id, &surface, ack_tx);
+        self.show(id, &surface, ack_tx, copy);
     }
 
     /// On the tick the `extend` strip comes up, hand it the frame this window is already

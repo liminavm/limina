@@ -469,6 +469,11 @@ pub struct SlotPresent {
     /// on surface geometry. The restore overlay comes down on the first real frame, not on
     /// the fresh worker's surface announcement (which would flash black under the spinner).
     pub(crate) frames: u64,
+    /// Whether the worker says the guest is held off this scanout's presented buffers (`held`
+    /// messages). `Some(false)` means it may draw into the surface on glass, so the window shows
+    /// a copy. `None` until the worker says: an older worker never does, and zero-copy is what
+    /// it always got.
+    pub(crate) held: Option<bool>,
     /// This scanout's hardware cursor.
     ///
     /// Per slot because the guest enables its cursor plane on one CRTC at a time and disables
@@ -720,6 +725,16 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                         log::info!("window: <- {line}");
                         shared.lock().unwrap().audio_events.push((stream, event));
                         wake_main_apply();
+                    }
+                }
+                Some("held") => {
+                    // held <scanout> <0|1> — whether the guest is held off the buffers this
+                    // scanout presents. Takes effect on the slot's next frame.
+                    log::info!("window: <- {line}");
+                    let slot = parse_slot(parts.next());
+                    let held = parts.next().and_then(|s| s.parse::<u8>().ok());
+                    if let (Some(slot), Some(held)) = (slot, held) {
+                        shared.lock().unwrap().slots[slot].held = Some(held != 0);
                     }
                 }
                 Some("guestdriver") => {

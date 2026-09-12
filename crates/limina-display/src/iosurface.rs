@@ -368,6 +368,15 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         Ok(())
     }
 
+    /// Whether the guest is held off this scanout's presented buffers. The supervisor shows a
+    /// copy of a scanout that is not held, because the guest may draw into the surface while the
+    /// window server is still compositing it.
+    fn scanout_held(&mut self, scanout_id: u32, held: bool) -> Result<(), DisplayBackendError> {
+        slot_of(scanout_id)?;
+        self.send(&format!("held {scanout_id} {}", u8::from(held)));
+        Ok(())
+    }
+
     fn alloc_frame(&mut self, scanout_id: u32) -> Result<(u32, &mut [u8]), DisplayBackendError> {
         let scanout = self.scanouts[slot_of(scanout_id)?]
             .as_mut()

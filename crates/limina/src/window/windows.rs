@@ -33,9 +33,8 @@ use objc2_app_kit::{
     NSBackingStoreType, NSScreen, NSTrackingArea, NSTrackingAreaOptions, NSWindow,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_core_foundation::CFRetained;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
+use objc2_io_surface::IOSurfaceLookup;
 
 use super::present::{AckMsg, MAX_SCANOUTS, Shared, SurfaceMap};
 use crate::vmlib::schema::DisplayResolution;
@@ -131,6 +130,7 @@ struct SlotSnapshot {
     width: u32,
     height: u32,
     generation: u64,
+    held: Option<bool>,
 }
 
 /// What this tick does with one slot's secondary window, after the dismissal pass has closed
@@ -208,17 +208,12 @@ pub(crate) struct PrimaryDisplay {
     geom_traced: Cell<Option<(u32, u32, u32, bool)>>,
     /// Last `[LAYER]` state logged — the two layer frames as CA actually holds them.
     layer_traced: Cell<Option<(i32, i32, i32, i32)>>,
-    // Diagnostic (LIMINA_PRESENT_COPY=1): never hand the GUEST's scanout surface to Core
-    // Animation — copy it into a private 3-deep ring and show the copy. The zero-copy venus
-    // path shares mutter's own double-buffered swapchain with the window server; with no
-    // flip-completion feedback the guest reuses/repaints a buffer while CA may still be
-    // compositing it (IOSurfaceLock is advisory), so mid-repaint states reach glass — seen
-    // as the damaged region (a busy window) blinking out while the rest stays intact. The
-    // copy decouples CA from the guest's write cycle entirely; if the flicker vanishes with
-    // this on, that race is convicted (the real fix is flip-completion pacing, roadmap #8).
-    // Env arms it for the whole run; the marker file toggles it LIVE (touch/rm
-    // /tmp/limina-present-copy) so an intermittent flicker can be A/B'd within one session —
-    // flicker present → touch → gone → rm → returns is the within-session conviction.
+    // LIMINA_PRESENT_COPY=1 forces the copy (`super::copy`) on this window whatever the worker
+    // says. A slot the worker reports as not held — a guest whose scanout flushes carry no
+    // fence, so it may draw into the surface on glass — gets the copy without it; a held slot
+    // (the fenced enhanced tier) stays zero-copy. The env arms it for the whole run; the
+    // marker file toggles it LIVE (touch/rm /tmp/limina-present-copy), so a suspected reuse
+    // race can be A/B'd within one session.
     present_copy_env: bool,
     // Lock-only variant (LIMINA_PRESENT_LOCK / touch /tmp/limina-present-lock): keep
     // zero-copy, but IOSurfaceLock+Unlock the guest surface before handing it to CA.
@@ -236,9 +231,6 @@ pub(crate) struct PrimaryDisplay {
     marker_poll_at: Cell<std::time::Instant>,
     copy_marker: Cell<bool>,
     lock_marker: Cell<bool>,
-    copy_ring: RefCell<Vec<CFRetained<IOSurfaceRef>>>,
-    copy_geom: Cell<(u32, u32)>,
-    copy_idx: Cell<usize>,
     applies: Cell<u64>,
     /// Diagnostic: dump the presented IOSurface to a PNG (no screen-record perm needed).
     /// `LIMINA_WINDOW_CAPTURE`.
@@ -283,9 +275,6 @@ impl PrimaryDisplay {
             marker_poll_at: Cell::new(std::time::Instant::now()),
             copy_marker: Cell::new(std::fs::metadata("/tmp/limina-present-copy").is_ok()),
             lock_marker: Cell::new(std::fs::metadata("/tmp/limina-present-lock").is_ok()),
-            copy_ring: RefCell::new(Vec::new()),
-            copy_geom: Cell::new((0, 0)),
-            copy_idx: Cell::new(0),
             applies: Cell::new(0),
             capture_path: std::env::var("LIMINA_WINDOW_CAPTURE").ok(),
             capture_interval: super::diag::capture_interval_from_env(),
@@ -541,6 +530,7 @@ impl PrimaryDisplay {
             width,
             height,
             generation,
+            held,
             ..
         } = *snap;
         if generation == self.last_gen.get() {
@@ -615,28 +605,10 @@ impl PrimaryDisplay {
             self.lock_marker
                 .set(std::fs::metadata("/tmp/limina-present-lock").is_ok());
         }
-        let present_copy = self.present_copy_env || self.copy_marker.get();
-        if present_copy {
-            if self.copy_geom.get() != (width, height) {
-                self.copy_geom.set((width, height));
-                let mut ring = self.copy_ring.borrow_mut();
-                ring.clear();
-                for _ in 0..3 {
-                    if let Some(s) = super::diag::create_local_iosurface(width, height) {
-                        ring.push(s);
-                    }
-                }
-            }
-            let ring = self.copy_ring.borrow();
-            if ring.len() == 3 {
-                let dst = &ring[self.copy_idx.get() % 3];
-                self.copy_idx.set(self.copy_idx.get().wrapping_add(1));
-                super::diag::copy_surface(surface, dst);
-                self.core.show_with_ack(id, dst, ack_tx);
-            } else {
-                self.core.show_with_ack(id, surface, ack_tx);
-            }
-        } else {
+        // A copy when the worker says the guest is not held off this scanout's buffers, or
+        // when the diagnostic asks for one.
+        let copy = held == Some(false) || self.present_copy_env || self.copy_marker.get();
+        if !copy {
             let present_lock = self.present_lock_env || self.lock_marker.get();
             if present_lock {
                 super::diag::sync_surface(surface);
@@ -644,8 +616,8 @@ impl PrimaryDisplay {
             if let Some(trace) = &self.mutation_trace {
                 trace.showing(id, surface);
             }
-            self.core.show_with_ack(id, surface, ack_tx);
         }
+        self.core.show(id, surface, ack_tx, copy);
 
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
         // long-running headless check ends with a recent frame, not just early boot.
@@ -800,6 +772,7 @@ impl GuestWindows {
                         width: d.width,
                         height: d.height,
                         generation: d.generation,
+                        held: d.held,
                     }
                 })
                 .collect();
@@ -863,6 +836,7 @@ impl GuestWindows {
             width,
             height,
             generation,
+            held,
         } in slots
         {
             // The primary's slot already had its walk above; it gets no secondary window.
@@ -942,7 +916,9 @@ impl GuestWindows {
             }
 
             let Some(id) = show_id else { continue };
-            entry.core.present(id, surface_map, ack_tx);
+            entry
+                .core
+                .present(id, surface_map, ack_tx, held == Some(false));
         }
     }
 
