@@ -1946,6 +1946,27 @@ before flushing.
 (`pool->watermark_warned` only ever increases), so the log shows growth but never the subsequent
 drain — read the count as a high-water mark, not a live value.
 
+## GPU — nothing stops a guest from submitting seconds ahead of the host's decode
+
+A classic (vrend) client that submits faster than the virtio-gpu worker decodes keeps the control
+queue permanently non-empty. Measured 2026-09-12 on a stock F44 guest with the webglsamples
+aquarium at 15k fish: the worker was CPU-bound in a single `process_queue` drain for up to 25 s.
+About 75% of its time went to decoding. About 25% was blocked in `Vrend::fence_global` →
+`glFenceSync` → mesa `tc_flush`/`_tc_sync`, a full threaded-context sync on every guest global
+fence. Meanwhile the page's own fps counter read ~57. Presenting retired frames from inside the
+drain keeps the window live, but the guest still runs arbitrarily far ahead, so every input and
+every frame the host shows is seconds stale under overload.
+
+Owed: a back-pressure mechanism, so that a guest cannot queue more work than the host will
+decode within a bounded time. Candidates, none evaluated:
+- Hold the guest's fences until their work has been decoded, not just queued.
+- Bound how much a context may have in flight.
+- Stop draining after a budget and let the guest's queue fill.
+
+Whatever is chosen must not reintroduce the head-of-line blocking the present pump removed, and
+must not let one heavy context stall another. The cost of a global fence (the `tc_flush` sync) is
+a separate throughput item.
+
 ## GPU / rendering perf
 - **Should KosmicKrisp advertise `VK_EXT_vertex_input_dynamic_state`?** — 📋 open, raised 2026-08-26
   after the notification-text root cause. **Not a correctness item** — the bug it would have masked is
