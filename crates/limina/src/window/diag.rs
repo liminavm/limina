@@ -3,19 +3,21 @@
 
 //! Present-path diagnostics: the LIMINA_WINDOW_CAPTURE / LIMINA_CAPTURE_IDS IOSurface-dump
 //! oracles (pixel truth without Screen Recording permission) and the LIMINA_PRESENT_COPY /
-//! LIMINA_PRESENT_LOCK present-race probes (see the arming comments in [`super::run`]).
+//! LIMINA_PRESENT_LOCK present-race probes (see the arming comments in [`super::run`]), and the
+//! LIMINA_PRESENT_MUTATION_TRACE detector for the race they probe.
 
 use objc2_core_foundation::{
     CFDictionary, CFNumber, CFNumberType, CFRetained, CFString, kCFTypeDictionaryKeyCallBacks,
     kCFTypeDictionaryValueCallBacks,
 };
-use std::time::Duration;
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use objc2_io_surface::{
-    IOSurfaceCreate, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceGetHeight,
-    IOSurfaceGetWidth, IOSurfaceLock, IOSurfaceLockOptions, IOSurfaceRef, IOSurfaceUnlock,
-    kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
-    kIOSurfaceWidth,
+    IOSurfaceCreate, IOSurfaceGetAllocSize, IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow,
+    IOSurfaceGetHeight, IOSurfaceGetWidth, IOSurfaceLock, IOSurfaceLockOptions, IOSurfaceRef,
+    IOSurfaceUnlock, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight,
+    kIOSurfacePixelFormat, kIOSurfaceWidth,
 };
 
 /// Minimum time between periodic capture dumps (`LIMINA_WINDOW_CAPTURE_INTERVAL_MS`, default
@@ -305,6 +307,87 @@ pub(crate) fn sync_surface(surface: &CFRetained<IOSurfaceRef>) {
             IOSurfaceLockOptions::ReadOnly,
             std::ptr::null_mut(),
         );
+    }
+}
+
+/// A cheap fingerprint of a surface's contents: 16 blocks of 4 KiB spread over its allocation,
+/// read under a ReadOnly lock so in-flight GPU writes land first.
+fn sample_surface(surface: &CFRetained<IOSurfaceRef>) -> u64 {
+    use std::hash::{DefaultHasher, Hasher};
+    const BLOCKS: usize = 16;
+    const BLOCK: usize = 4096;
+    let mut h = DefaultHasher::new();
+    unsafe {
+        IOSurfaceLock(
+            surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+        let base = IOSurfaceGetBaseAddress(surface).as_ptr() as *const u8;
+        let size = IOSurfaceGetAllocSize(surface);
+        if size >= BLOCK {
+            let stride = (size - BLOCK) / (BLOCKS - 1);
+            for i in 0..BLOCKS {
+                h.write(std::slice::from_raw_parts(base.add(i * stride), BLOCK));
+            }
+        }
+        IOSurfaceUnlock(
+            surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+    }
+    h.finish()
+}
+
+type OnGlass = (CFRetained<IOSurfaceRef>, u32, u64, Instant);
+
+/// `LIMINA_PRESENT_MUTATION_TRACE`: fingerprint each surface as it goes on glass and again as
+/// the next frame replaces it. A surface whose contents changed in between was written while it
+/// was up — the guest reusing a buffer the window server may still be compositing.
+pub(crate) struct MutationTrace {
+    /// The surface on glass, its guest id, its fingerprint then, and when it went up.
+    up: RefCell<Option<OnGlass>>,
+    replaced: Cell<u64>,
+    changed: Cell<u64>,
+}
+
+impl MutationTrace {
+    pub(crate) fn from_env() -> Option<Self> {
+        std::env::var_os("LIMINA_PRESENT_MUTATION_TRACE").map(|_| Self {
+            up: RefCell::new(None),
+            replaced: Cell::new(0),
+            changed: Cell::new(0),
+        })
+    }
+
+    pub(crate) fn showing(&self, id: u32, surface: &CFRetained<IOSurfaceRef>) {
+        let mut up = self.up.borrow_mut();
+        if let Some((prev, prev_id, hash, since)) = up.take()
+            && !std::ptr::eq::<IOSurfaceRef>(&*prev, &**surface)
+        {
+            self.replaced.set(self.replaced.get() + 1);
+            if sample_surface(&prev) != hash {
+                self.changed.set(self.changed.get() + 1);
+                let n = self.changed.get();
+                if n == 1 || n.is_multiple_of(100) {
+                    log::warn!(
+                        "present mutation: surface {prev_id} changed while on glass ({:?} after it \
+                         went up); {n} of {} replaced frames so far",
+                        since.elapsed(),
+                        self.replaced.get()
+                    );
+                }
+            }
+            if self.replaced.get().is_multiple_of(1000) {
+                log::warn!(
+                    "present mutation: {} of {} replaced frames changed while on glass",
+                    self.changed.get(),
+                    self.replaced.get()
+                );
+            }
+        }
+        *up = Some((surface.clone(), id, sample_surface(surface), Instant::now()));
     }
 }
 

@@ -227,6 +227,8 @@ pub(crate) struct PrimaryDisplay {
     // the copy's load-bearing property is IMMUTABILITY, not the GPU-write sync. Do not
     // enable; use LIMINA_PRESENT_COPY. COPY wins if both are set.
     present_lock_env: bool,
+    /// `LIMINA_PRESENT_MUTATION_TRACE`, on the zero-copy path only: see `diag::MutationTrace`.
+    mutation_trace: Option<super::diag::MutationTrace>,
     /// The live /tmp marker toggles are re-stat'ed at most every 500 ms, NOT per frame: a
     /// synchronous /tmp stat on the main-thread frame apply is a present-path stall source
     /// of exactly the hard-to-attribute kind (same class as libkrun 0113; the worker's
@@ -277,6 +279,7 @@ impl PrimaryDisplay {
             layer_traced: Cell::new(None),
             present_copy_env: std::env::var_os("LIMINA_PRESENT_COPY").is_some(),
             present_lock_env: std::env::var_os("LIMINA_PRESENT_LOCK").is_some(),
+            mutation_trace: super::diag::MutationTrace::from_env(),
             marker_poll_at: Cell::new(std::time::Instant::now()),
             copy_marker: Cell::new(std::fs::metadata("/tmp/limina-present-copy").is_ok()),
             lock_marker: Cell::new(std::fs::metadata("/tmp/limina-present-lock").is_ok()),
@@ -637,6 +640,9 @@ impl PrimaryDisplay {
             let present_lock = self.present_lock_env || self.lock_marker.get();
             if present_lock {
                 super::diag::sync_surface(surface);
+            }
+            if let Some(trace) = &self.mutation_trace {
+                trace.showing(id, surface);
             }
             self.core.show_with_ack(id, surface, ack_tx);
         }
