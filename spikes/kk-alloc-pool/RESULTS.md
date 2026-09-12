@@ -1,117 +1,137 @@
 # The KosmicKrisp command-allocator pool, measured
 
-Instrumentation raised for the dogfood SIGSEGV that has now killed `limina-vmm` five times: a
-store through a pointer AGX read out of its own encoder state, reached from a guest GL texture
-upload (`vrend_renderer_transfer_write_iov` → zink → `kk_CmdCopyBufferToImage2` →
-`mtl_copy_from_buffer_to_texture`). The allocator behind the encoder is ours (`kk_device.c`), so
-the question this spike asks is whether we destroyed, reset, or overfilled one under a live
-encoder.
+Instrumentation raised for the dogfood SIGSEGV that has now killed `limina-vmm` six times: a
+store through a pointer AGX read out of its own compute-context state, reached from a guest GL
+texture upload (`vrend … transfer write` → zink `zink_copy_image_buffer` →
+`kk_CmdCopyBufferToImage2` → `mtl_copy_from_buffer_to_texture`). The allocator behind the encoder
+is ours (`kk_device.c`), so the question this spike first asked is whether we destroyed, reset, or
+overfilled one under a live encoder.
 
-**The answer is no, and the fault is not about allocators at all** — see the next section. The
-measurements below stand as what the pool actually does under real workloads, and the vehicle
-requirements at the end still hold for anything that wants to exercise this code.
+**The pool is not misused, and neither is the encoder KK can see.** Both KK-side guards were armed
+and silent through the latest crash. What is left is the AGX compute context *behind* the encoder
+— see the next section. The measurements further down stand as what the pool actually does under
+real workloads, and the vehicle requirements at the end still hold for anything that wants to
+exercise this code.
 
 ## What the fault actually is
 
 Disassembly of AGXMetalG16X puts the fault at `prepareForEnqueue+672`, `str x8, [x9, #0x98]` with
-`x9` loaded from `ComputeContext+0x918`. That field is the compute-pass state block, and its only
-writer in the whole binary is `beginComputePass` (`newCommand(...)+0xc0`, which cannot be zero,
-and with no early return before it). AGX runs `beginComputePass` from
-`-[AGXG16XFamilyComputeContext_mtlnext initWithCommandBuffer:allocator:...]`, i.e. at
-`[cmd_buf computeCommandEncoder]` — so every encoder KK is handed has been begun, and a NULL there
-means a dispatch reached a compute context whose pass was never opened.
+`x9` loaded from `ComputeContext+0x918` (`x19` is the context). That field is the compute-pass
+state block. Across the whole arm64e slice (build `84D26FE7`), the **only** instructions that store
+to `+0x910` or `+0x918` on a context are the two in `beginComputePass` (one per HAL variant:
+`newCommand(...)` into `+0x910`, that `+0xc0` into `+0x918`, which cannot be zero); no end, reset
+or teardown path clears either field. AGX runs `beginComputePass` at `[cmd_buf
+computeCommandEncoder]`, so every encoder KK is handed has been begun. A NULL there therefore means
+the context's memory was zeroed or re-initialised **wholesale**, and nothing has begun a pass on it
+since.
 
-**The fault site is not fixed, and that is the discriminating evidence.** Four occurrences landed
-at `prepareForEnqueue+672`; the fifth landed at
-`MSLBlitDispatchContext::blitCDMTextureToTexture+840`, a different structure entirely:
+Five occurrences landed at that site. One landed at
+`MSLBlitDispatchContext::blitCDMTextureToTexture+840`, a different structure:
 
-    +824  ldr  x9,  [x19]           ; the blit dispatch context's encoder state — writable, ours
+    +824  ldr  x9,  [x19]           ; the blit dispatch context's encoder state — mapped, writable
     +828  ldr  x10, [x9, #0x18]     ; base pointer  -> 0
     +832  ldr  w9,  [x9, #0x4]      ; 32-bit offset -> 0x21f6d26f
     +836  add  x9,  x10, x9
     +840  str  x8,  [x9, #0x8]      ; FAULT at 0x21f6d277, storing the uber-blit pipeline address
 
 A single uninitialised field would keep faulting in the same place. Two unrelated fields in two
-unrelated structures, selected by which shape the copy takes (a CDM texture-to-texture path here,
-a direct buffer-to-texture path in the other four), is what a stale encoder looks like: whatever
-AGX touches first after the handout is what faults. Note also that the block at `[x19]` is
-mapped and writable — the three `stp xzr, xzr` stores just before the fault land in it — and the
-offset field holds an odd ~568 MB value. Its contents are no longer the encoder's; whether that is
-foreign data or a partial teardown does not change the conclusion.
+unrelated structures, selected by which shape the copy takes, is what AGX state that is no longer
+the encoder's looks like: whatever AGX touches first is what faults.
 
-`x13`/`x14`/`x15` (`0x20000`, `0x10001f`, `0x100000`) are invariant across the four
-`prepareForEnqueue` occurrences and
-were once read as a pool cursor one step past a 1 MiB segment boundary. They are register state
-left by the sampler-heap `addToResourceList` call, not the faulting operand; the fault is one
-thing, `0x918 == NULL`. The dispatch that faulted is likewise ordinary — the crash-surviving ring
-(`spikes/kk-dispatch-trace/`) named it as a `45x32` glyph upload indistinguishable from its
-neighbours. **Nothing about size, count, or pool occupancy is the variable.**
+### The context is not the object KK holds
 
-What is left is the encoder's lifetime. The faulting pointer appeared 59 times in the ring, which
-reads as one long-lived encoder — but a seated desktop recycles encoder *addresses* within tens of
-encoders (measured: generation 17 → 21 on one address across three dispatches, 271 → 312 on
-another), so those entries spanned several incarnations and the pointer carried no identity. A
-stale pointer used across a recycle produces exactly this state, and a liveness flag alone cannot
-see it because the new tenant is perfectly live.
+The faulting context is a **separate allocation** behind the ObjC encoder. On the run that had the
+crash-surviving dispatch ring armed, the copy in flight at the fault used encoder `0xb612cb660`;
+the faulting context `x19` was `0xb5fa74000`, and appears nowhere in the ring. Every faulting `x19`
+is page-aligned (`0xb5fa74000`, `0xbe31dc000`); no encoder pointer ever recorded is.
 
-So KK now stamps a **generation** per encoder address (`mtl_encoder.m`), `kk_encoder_state`
-remembers the generation it was handed, and both `cs_get_compute` and `kk_stop_encoder` refuse to
-act when the address has been re-tenanted. Every compute record entry point checks liveness as
-well, so a use after `endEncoding` or after release is named at the use site instead of
-segfaulting inside Apple's driver several operations later. `LIMINA_KK_ENC_GUARD=abort` takes a
-core at any of them.
+### The encoder KK passed was its own, live, current incarnation
 
-**The stop site is the one with teeth.** `kk_stop_encoder`'s `mtl_end_encoding` + `mtl_release`
-on a re-tenanted address ends *someone else's live encoder* and drops a retain they still hold, so
-their object dies under them and their next dispatch lands on a freed or re-inited context. A
-stale pointer therefore had a way to manufacture this exact fault **in a thread that did nothing
-wrong** — which is why every crash report named AGX and none of them named the code responsible.
-The general lesson: a stale reference should fail on its own, rather than oblige every call site
-to remember to test. NULL checks at the callers, the first fix that suggests itself here, would
-have left this path fully intact.
+KK stamps a **generation** per compute-encoder address (`mtl_encoder.m`): set at
+`mtl_new_compute_command_encoder`, moved to ENDED at `mtl_end_encoding` and to RELEASED before the
+last `mtl_release`. `kk_encoder_state` records the generation it was handed, `cs_get_compute` and
+`kk_stop_encoder` refuse when the address now holds a different one, and every compute record
+entry point — including `mtl_copy_from_buffer_to_texture`, immediately before the faulting
+`copyFromBuffer:` — checks the address is present and LIVE.
 
-Two details that are easy to get backwards. A generation of 0 means the table evicted that slot,
-not that anything is wrong, so it must **pass** — reading it as stale drops real work. And the
-stale-handout log is rate-limited and carries `__builtin_return_address(0)`: a stale pointer stays
-stale until `cs_end`, and the record path runs millions of times a session, so an unpaced line
-there is a flood — the same mistake as the `clamped=1` ERROR flood two sections down.
+The sixth crash ran on that build for 2 d 2 h 54 m. Its last guard line, from the final seconds:
 
-**One residual, known and not closed.** All three checks key on the address. If the generation
-table has evicted the slot for a stale address — `limina_enc_find` misses, generation reads 0, the
-bridge check returns `UNKNOWN` — every one of them passes and the fault reproduces unchanged. That
-needs all sixteen probe slots of one bucket occupied by live entries, which is unlikely at 8192
-slots, but the probability grows with uptime and uptime is exactly where these cluster. Closing it
-means a table that cannot evict a live encoder, not a bigger table.
+    encoder guard: checks=249801960 untracked=0 | bad: null=0 ended=0 released=0 |
+                   refused: handout=0 close=0 | encoders=63706059 table=2140/8192
 
-**Silence is no longer evidence**, so the guard states its own liveness. `[LIMINA-ALLOC-POOL]
-… encoder guard:` carries, every report, the number of checks performed, the per-state bad counts,
-both refusal counts, encoders seen, and table occupancy — so `grep -E 'LIMINA-ENC|is stale|refusing
-to close'` coming back empty can be read as evidence rather than inferred from. A rising `checks`
-with zeros beside it means the guard is working; `checks` frozen means the needle is dead.
+So on the faulting call KK's encoder was in the table (the eviction hole was not involved), LIVE,
+and the same incarnation `cs_get_compute` had handed out. **KK never ended, released, or re-created
+the encoder it passed**, and never closed anyone else's either. A stale KK-side pointer used across
+an address recycle is excluded for this crash.
 
-That line was first put on the `[LIMINA] KK counts:` block, and a smoke boot caught it: that block
-is driven by `kk_CmdPipelineBarrier2`, and a seated F44 desktop running Firefox and glmark2 issued
-so few barriers that it printed **three times in a whole boot**. The guard's totals sat at
-`checks=2` for the entire session — indistinguishable from a guard that was not running. Moved
-onto the pool report, which is paced by encoder closes, the same workload reads `checks=4861
-untracked=0 … encoders=374 table=63/8192`. The generalisation is one step past the cadence rule
-below it: **a diagnostic must be paced by something that moves with what it measures**, or it
-reports a stale value with the confidence of a fresh one. (Note the rest of that block —
-`copies:`, the unroll counts, the pass-start histogram — is paced the same way and was equally
-frozen on this workload; the dogfood runs it was designed against are barrier-heavy, so its
-numbers there are sound, but it is not a general-purpose reporter.)
+The rule that falsification leaves behind: **a liveness table proves the calls it hooks did not
+fire; it says nothing about the calls it does not hook — and it can only key on the object it can
+see.** Here the object that went bad is one level below it.
 
-Table occupancy of 63/8192 on a full desktop session also puts a number on the eviction residual
-above: it is nowhere near the pressure needed to lose a live encoder's slot.
+KK's other lifecycle paths were read against this and are clean: `kk_reset_cmd_buffer_internal`
+closes lingering encoders only through `cs_end` → `kk_stop_encoder` (tracked);
+`mtl_end_command_buffer` is called only in `kk_stop_encoder`, after `mtl_end_encoding`; the pool
+resets an allocator only when it is neither borrowed nor has pending work, and
+`kk_alloc_pool_take_surplus` never picks one that is.
 
-`kk_alloc_pool_report()` prints per class on the release path
-(`[LIMINA-ALLOC-POOL]`, every 2000 encoder closes and at device teardown):
+### What remains
+
+- **AGX re-initialises or re-issues a compute context while an encoder still refers to it.**
+  Nothing KK does is known to cause that, and a page-aligned context is consistent with it living
+  in heap memory AGX manages — possibly the command allocator's, which KK reuses legally the
+  moment a command buffer ends.
+- **A second party on the same encoder or context** that the crash reports do not show. The guard
+  has a check-then-use window, so a concurrent end between the check and the call would leave
+  every counter at zero. No thread in any report is on a stop path at the fault, so this is a
+  limit of the evidence, not a lead.
+
+Concurrent KK recording on *different* command buffers is normal here and is not evidence of
+either: the sixth crash had a zink driver thread in `kk_draw` (`kk_flush_dynamic_state`, cmd
+`0x399ef8000`, which appears nowhere in the faulting thread's registers), and the second-site
+crash had a zink flush thread in `reset_batch_state_internal`. The other three reports in the
+repo show no second thread in KK at all.
+
+The discriminating next step is to make the context visible: record, per encoder, the context AGX
+attached at creation and compare it at each use; and record which allocator each open encoder is
+on, so an allocator reset or re-begin can be checked against open encoders.
+
+The route every crashing copy took is unchanged: `kk_CmdCopyBufferToImage2` →
+`cs_get_compute(cmd, true)`, the pre_gfx slot.
+
+### Guard liveness, and what pacing it wrong looked like
+
+`[LIMINA-ALLOC-POOL] … encoder guard:` carries, every report, the checks performed, the count that
+missed the table, the per-state bad counts, both refusal counts, encoders seen, and table
+occupancy. A rising `checks` with zeros beside it is evidence; a frozen `checks` means the needle
+is dead. A refusal prints the frames that created and ended the incarnation.
+
+That line was first put on the `[LIMINA] KK counts:` block, which is driven by
+`kk_CmdPipelineBarrier2`; a seated F44 desktop running Firefox and glmark2 issued so few barriers
+that it printed **three times in a whole boot**, reading `checks=2` all session. On the pool
+report, paced by encoder closes, the same workload reads `checks=4861 … encoders=374
+table=63/8192`. **A diagnostic must be paced by something that moves with what it measures**, or
+it reports a stale value with the confidence of a fresh one. The rest of that block (`copies:`,
+unroll counts, pass-start histogram) is paced the same way; the dogfood runs are barrier-heavy
+enough that its numbers there are sound, but it is not a general-purpose reporter.
+
+Table occupancy stays far from eviction pressure: 63/8192 on a short desktop session, 2140/8192
+after two days of dogfood, `untracked=0` throughout.
+
+`kk_alloc_pool_report()` prints per class on the release path (`[LIMINA-ALLOC-POOL]`, on the clock
+and at device teardown):
 
     live / peak / retired | size hiwater vs budget, retirement count | peak ops per command buffer
     tombstones, use-after-destroy
 
 A destroyed allocator keeps its struct, stamped `KK_PA_DEAD`, so any stale pointer is named at the
-call that used it. `LIMINA_KK_ALLOC_GUARD=abort` turns the report into a core dump there.
+call that used it. `LIMINA_KK_ALLOC_GUARD=abort` turns the report into a core dump there;
+`LIMINA_KK_ENC_GUARD=abort` does the same for the encoder guard.
+
+`x13`/`x14`/`x15` (`0x20000`, `0x10001f`, `0x100000`) are invariant across the `prepareForEnqueue`
+occurrences and are register state left by the sampler-heap `addToResourceList` call, not the
+faulting operand. The dispatch in flight at a fault is ordinary — the ring named a `45x32` glyph
+upload indistinguishable from its neighbours. **Nothing about size, count, or pool occupancy is
+the variable.**
 
 ## Baseline: F44 enhanced.synoik, seated desktop, glmark2 on vrend/zink-on-KK
 
@@ -180,60 +200,37 @@ guest mesa) rather than the RPM used here. Either could be the source of the tri
 
 ## What the next vehicle has to do
 
-1. **Hit the midpass-unroll path** — but do not treat any particular rate as the threshold. The
-   fifth crash came out of a run at 0.0065 `unroll_geometry` calls per render pass (35,288 over
-   5.4 M pass starts in 6 h 18 m), 21x below the ratio measured on the run that crashed before it.
-   What both have in common is the *route*, not the rate: every copy that crashed came through
-   `cs_get_compute(cmd, true)`, the pre_gfx path. A vehicle that takes it at all is exercising the
-   code; one that never takes it is not.
+1. **Hit the midpass-unroll path** — but do not treat any particular rate as the threshold. One
+   crash came out of a run at 0.0065 `unroll_geometry` calls per render pass (35,288 over 5.4 M
+   pass starts in 6 h 18 m); the sixth out of one at 0.15 (20.7 M over 138 M). What they share is
+   the *route*, not the rate: every copy that crashed came through `cs_get_compute(cmd, true)`, the
+   pre_gfx path. A vehicle that takes it at all is exercising the code; one that never takes it is
+   not.
 2. **Attribute the copies.** "The compute encoder is busy" is not evidence that
-   `kk_CmdCopyBufferToImage2` ran; the `copies: buf->img=…` line added afterwards answers that
-   directly, and any future claim about reaching the path should cite it.
+   `kk_CmdCopyBufferToImage2` ran; the `copies: buf->img=…` line answers that directly, and any
+   future claim about reaching the path should cite it.
 3. Drive the compute class past its floor of eight if the destroy path is to be tested there —
    though on this evidence destruction is a bystander, not the cause.
 
-Note that the pool instrumentation was armed and silent *through* the fourth and fifth
-occurrences: 4445 growth events in the retained log the first time, and `use-after-destroy=0`
-`unmatched-discharge=0` at the last report before the fifth crash. No `KK_PA_DEAD`, no guard trip
-either time. That is evidence against allocator misuse from a second direction, independent of the
-disassembly.
+The pool instrumentation was armed and silent through the fourth, fifth and sixth occurrences:
+`use-after-destroy=0`, `unmatched-discharge=0`, no `KK_PA_DEAD`, no guard trip. That is evidence
+against allocator misuse from a second direction, independent of the disassembly.
 
-## Catching the cause, and why a sanitizer is only half an answer
+## Catching the cause
 
-There are two ways an encoder can stop being ours, and they need different tools:
+The KK-side guards are now spent as oracles for this fault: they name misuse of the encoder and
+the allocator, and neither is misused. What they cannot see is the AGX context, so the tools that
+remain are the ones that see memory:
 
-- **Freed and the address reused.** A memory error, and every malloc-level tool sees it.
-- **`endEncoding` called, the object still allocated and internally reset.** *Not* a memory error.
-  No sanitizer will say a word; only a state table like this one can.
-
-The four `prepareForEnqueue` faults read as the second (a NULL pass-state field, not garbage); the
-fifth reads as the first (a mapped block holding foreign values). So both are probably in play, and
-"turn on ASan" cannot be the whole plan.
-
-In rough order of cost, cheapest first:
-
-1. **`MallocScribble=1`** in the VM's environment. No rebuild, negligible cost. Freed blocks are
-   filled with `0x55`, so the next crash's registers answer the question outright: `0x5555...`
-   means freed-and-not-yet-reused, plausible garbage means freed-and-reallocated, zeros mean the
-   object was reset rather than freed. Every outcome is informative, which is rare.
+1. **`MallocScribble=1`** in the VM's environment. No rebuild, negligible cost. If the context is
+   a malloc block, a freed one is filled with `0x55`, so the next crash's context contents separate
+   freed-not-reused from reallocated from reset-in-place. If it is not malloc memory (a page-aligned
+   context suggests it may not be), the scribble stays out of it, and that is itself an answer.
 2. **`MallocStackLoggingNoCompact=1`** beside it, so `malloc_history` can name the alloc and free
-   stacks for the faulting address — that is "who freed it", the cause itself.
-3. **`NSZombieEnabled=1`** catches a message to a freed encoder by class and selector. Precise,
-   but zombies are never freed, so it suits a bounded dev-Mac repro, not a multi-day session.
-4. **ASan on KK only.** Its runtime interposes malloc process-wide, so AGX's own allocations are
-   covered too, and it gives alloc + free stacks at the bad access. But it needs library
-   validation disabled, costs 2-3x, and above all it needs a *reproducer* — which is the thing we
-   do not have. It is the tool for after a vehicle exists, not for catching this in the wild.
-5. **Guard Malloc** is decisive and far too heavy for a seated desktop.
+   stacks for the faulting address.
+3. **ASan on KK**, which interposes malloc process-wide — for after a reproducer exists.
+4. Guard Malloc is decisive and far too heavy for a seated desktop.
 
-**But the guard has already made the cheapest oracle the best one.** It converts what used to be a
-crash into a *refusal* — a live, non-fatal moment at which both the code holding the stale pointer
-and the code that took the address still exist. So the table records the frames that created and
-ended each incarnation, and a refusal prints both. That is cause attribution with no sanitizer, no
-slowdown, and nothing that a post-mortem crash report could ever have supplied, because by then
-one of the two parties is gone. **A guard that survives the fault is worth more than a tool that
-describes it afterwards.**
-
-The dispatch ring was **not** armed on the fifth run — `LIMINA_KK_POOL_SNAPSHOT` was unset, so no
-`.dispatch.*` file exists beside the logs — which cost the one piece of evidence that named the
-faulting pointer's history last time. A dogfood launch should set it.
+The dispatch ring (`LIMINA_KK_POOL_SNAPSHOT` set, `.dispatch.<pid>` beside the logs) was not armed
+on the fifth or sixth runs. It is the only evidence that ties the faulting context to the encoder
+and copy in flight, which is exactly the question left. A dogfood launch should set it.

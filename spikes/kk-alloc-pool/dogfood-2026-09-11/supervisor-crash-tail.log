@@ -1,0 +1,60 @@
+[LIMINA]   unroll_geometry calls=20688896 (fan=20688109 strip=0 other=787)
+[LIMINA]   pass starts: fresh=13430 seen+LOAD=65262722 seen+CLEAR=3751000 seen+DONTCARE=69361886 (fresh small=4066) | reload_hazard=73112886 (small=54867108) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      20688896
+[LIMINA] KK counts: barriers=437914685 (breaks_pass=0 pregfx=114823153 noop=323091531) render_pass_starts=138393325 restarts=0/0(flush) compute_during_pass=20573127/20688896(pregfx) color_map_nonidentity=0/1107146600 (barrier)
+[LIMINA]   poly heap: hiwater=3008 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=19532461 img->buf=18875 img->img=489236 buf->buf=10031838
+[LIMINA]   unroll triggers: fan=20688109 promote=787 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=20688896 (fan=20688109 strip=0 other=787)
+[LIMINA]   pass starts: fresh=13433 seen+LOAD=65263253 seen+CLEAR=3751240 seen+DONTCARE=69361890 (fresh small=4069) | reload_hazard=73113130 (small=54867112) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      20688896
+[LIMINA] KK counts: barriers=437916124 (breaks_pass=0 pregfx=114823517 noop=323092606) render_pass_starts=138393886 restarts=0/0(flush) compute_during_pass=20573127/20688896(pregfx) color_map_nonidentity=0/1107151088 (barrier)
+[LIMINA]   poly heap: hiwater=3008 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=19532829 img->buf=18875 img->img=489236 buf->buf=10031868
+[LIMINA]   unroll triggers: fan=20688109 promote=787 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=20688896 (fan=20688109 strip=0 other=787)
+[LIMINA]   pass starts: fresh=13434 seen+LOAD=65263634 seen+CLEAR=3751418 seen+DONTCARE=69361891 (fresh small=4070) | reload_hazard=73113309 (small=54867113) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      20688896
+[LIMINA] KK counts: barriers=437917575 (breaks_pass=0 pregfx=114823899 noop=323093676) render_pass_starts=138394435 restarts=0/0(flush) compute_during_pass=20573127/20688896(pregfx) color_map_nonidentity=0/1107155480 (rp)
+[LIMINA]   poly heap: hiwater=3008 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=19533230 img->buf=18875 img->img=489236 buf->buf=10031868
+[LIMINA]   unroll triggers: fan=20688109 promote=787 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=20688896 (fan=20688109 strip=0 other=787)
+[LIMINA]   pass starts: fresh=13434 seen+LOAD=65264008 seen+CLEAR=3751588 seen+DONTCARE=69361895 (fresh small=4070) | reload_hazard=73113483 (small=54867116) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      20688896
+[LIMINA-ALLOC-POOL] periodic render: live=8 peak=267 retired=144113 | size hiwater=6808 KiB (budget 4096 KiB, 48783958 retirements) | peak ops/cmdbuf=5048
+[LIMINA-ALLOC-POOL] periodic render growth: 289007 MiB crossings | peak ops between resets=24082
+[LIMINA-ALLOC-POOL] periodic compute: live=8 peak=119 retired=62964 | size hiwater=9368 KiB (budget 4096 KiB, 23122916 retirements) | peak ops/cmdbuf=947
+[LIMINA-ALLOC-POOL] periodic compute growth: 251835 MiB crossings | peak ops between resets=5878674
+[LIMINA-ALLOC-POOL] periodic tombstones=207077 use-after-destroy=0 | resets=48639837/23059946 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=249801614 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=63706023 table=2140/8192
+[2026-09-12T02:20:14Z WARN  limina::window::input] guest pointer: we sent the pointer to slot 0 at (2381.0,1373.0) on a 3840x2160 scanout but the guest's cursor there sits at (2382,1366) — 7.1 px off; captured=true, capture slot 0, unit sent (0.6201,0.6356); report: {1: (2048, 1328), 0: (3072, 1728)}; arrangement: 3(main)@0,0 3840x2160 | 1@3840,-89 2048x1330
+[LIMINA-ALLOC-POOL] periodic render: live=3 peak=3 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 56886 retirements) | peak ops/cmdbuf=81
+[LIMINA-ALLOC-POOL] periodic render growth: 6 MiB crossings | peak ops between resets=177
+[LIMINA-ALLOC-POOL] periodic compute: live=4 peak=4 retired=0 | size hiwater=4504 KiB (budget 4096 KiB, 7 retirements) | peak ops/cmdbuf=128
+[LIMINA-ALLOC-POOL] periodic compute growth: 15 MiB crossings | peak ops between resets=209636
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=56883/4 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=249801849 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=63706047 table=2140/8192
+[LIMINA-ALLOC-POOL] periodic render: live=4 peak=4 retired=0 | size hiwater=5016 KiB (budget 4096 KiB, 55480 retirements) | peak ops/cmdbuf=81
+[LIMINA-ALLOC-POOL] periodic render growth: 9 MiB crossings | peak ops between resets=188
+[LIMINA-ALLOC-POOL] periodic compute: live=8 peak=8 retired=0 | size hiwater=5976 KiB (budget 4096 KiB, 128809 retirements) | peak ops/cmdbuf=163
+[LIMINA-ALLOC-POOL] periodic compute growth: 33 MiB crossings | peak ops between resets=389
+[LIMINA-ALLOC-POOL] periodic tombstones=0 use-after-destroy=0 | resets=55476/128801 (render/compute) unmatched-discharge=0
+[LIMINA-ALLOC-POOL] periodic encoder guard: checks=249801960 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=63706059 table=2140/8192
+[LIMINA] KK counts: barriers=437919007 (breaks_pass=0 pregfx=114824235 noop=323094771) render_pass_starts=138395003 restarts=0/0(flush) compute_during_pass=20573127/20688896(pregfx) color_map_nonidentity=0/1107160024 (barrier)
+[LIMINA]   poly heap: hiwater=3008 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=19533582 img->buf=18875 img->img=489236 buf->buf=10031888
+[LIMINA]   unroll triggers: fan=20688109 promote=787 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=20688896 (fan=20688109 strip=0 other=787)
+[LIMINA]   pass starts: fresh=13436 seen+LOAD=65264395 seen+CLEAR=3751766 seen+DONTCARE=69361897 (fresh small=4072) | reload_hazard=73113663 (small=54867118) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      20688896
+[LIMINA] KK counts: barriers=437920452 (breaks_pass=0 pregfx=114824599 noop=323095852) render_pass_starts=138395558 restarts=0/0(flush) compute_during_pass=20573127/20688896(pregfx) color_map_nonidentity=0/1107164464 (barrier)
+[LIMINA]   poly heap: hiwater=3008 size=134217712 (0.00% of heap)
+[LIMINA]   copies: buf->img=19533961 img->buf=18875 img->img=489236 buf->buf=10031898
+[LIMINA]   unroll triggers: fan=20688109 promote=787 robust=0 restart=0
+[LIMINA]   unroll_geometry calls=20688896 (fan=20688109 strip=0 other=787)
+[LIMINA]   pass starts: fresh=13437 seen+LOAD=65264774 seen+CLEAR=3751939 seen+DONTCARE=69361899 (fresh small=4073) | reload_hazard=73113838 (small=54867120) | pass ends DONTCARE=0 (small=0)
+[LIMINA]   midpass pre_gfx caller: kk_draw                                      20688896
+[2026-09-12T02:20:19Z WARN  limina::supervisor] VM stopped — worker terminated by signal 11
+time="2026-09-11T23:20:19-03:00" level=error msg="cannot receive packets from /var/folders/1f/rkfsdn6s4jndr5c9wc0dcy900000gn/T/krun-net-72232-0.sock, disconnecting: cannot read size from socket: read unixgram /var/folders/1f/rkfsdn6s4jndr5c9wc0dcy900000gn/T/limina-gvproxy-72229.sock: use of closed network connection"
+time="2026-09-11T23:20:19-03:00" level=error msg="gvproxy exiting: signal caught"
