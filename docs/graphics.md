@@ -298,7 +298,10 @@ frames flash back on screen (measured 2026-09-12: about 60% of frames changed wh
 heavy WebGL load). The worker reports each scanout's state as it changes (`held <scanout> <0|1>`,
 from libkrun's optional `scanout_held` display call), and the supervisor shows a slot that is not
 held through a private copy: a Metal blit into a 3-deep ring (`crates/limina/src/window/copy.rs`),
-about 1.2 ms per frame on the main thread (M1 Max, measured 2026-09-12). A held slot stays zero-copy. `LIMINA_PRESENT_COPY=1` forces the copy; `LIMINA_PRESENT_MUTATION_TRACE=1` fingerprints
+about 1.2 ms of GPU time per frame (M1 Max, measured 2026-09-12). The main thread never waits for
+it: the blit's completion wakes the main queue and the next apply puts the copy up, one blit in
+flight and the newest frame waiting behind it (waiting on the main thread instead stuttered the
+pointer). A held slot stays zero-copy. `LIMINA_PRESENT_COPY=1` forces the copy; `LIMINA_PRESENT_MUTATION_TRACE=1` fingerprints
 each zero-copy surface as it goes up and again as it is replaced, and logs the ones that changed in
 between — the direct test for this race.
 

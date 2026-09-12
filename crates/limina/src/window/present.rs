@@ -440,7 +440,7 @@ extern "C" fn apply_trampoline(_ctx: *mut std::ffi::c_void) {
 }
 
 /// Schedule an immediate frame apply on the main thread (callable from any thread).
-fn wake_main_apply() {
+pub(crate) fn wake_main_apply() {
     unsafe {
         let main_q = &_dispatch_main_q as *const _ as dispatch_queue_t;
         dispatch_async_f(main_q, std::ptr::null_mut(), apply_trampoline);

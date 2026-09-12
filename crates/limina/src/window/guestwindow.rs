@@ -71,6 +71,14 @@ pub(crate) struct GuestWindow {
     copies: RefCell<super::copy::CopyRing>,
 }
 
+/// Ack frames that will never reach glass. They replaced nothing on the layer, so the worker has
+/// nothing to wait on before releasing them.
+fn ack_unshown(ids: &[u32], ack_tx: &SyncSender<AckMsg>) {
+    for &id in ids {
+        let _ = ack_tx.try_send(AckMsg::Shown(id, None));
+    }
+}
+
 /// Resolve a presented surface id to the retained surface to put on glass, or arrange for its
 /// recovery and return `None` (skip the frame — never panic the UI).
 ///
@@ -237,7 +245,8 @@ impl GuestWindow {
 
     /// Put the guest's `surface` on glass as frame `id` — or, when `copy`, a private copy of it,
     /// for a guest that may draw into the surface while the window server still composites it
-    /// ([`super::copy`]). The ack names the guest's `id` either way.
+    /// ([`super::copy`]). A copy on the GPU goes up later, from [`Self::finish_copy`]. The ack
+    /// names the guest's `id` either way.
     pub(crate) fn show(
         &self,
         id: u32,
@@ -245,10 +254,34 @@ impl GuestWindow {
         ack_tx: &SyncSender<AckMsg>,
         copy: bool,
     ) {
-        let copied = copy
-            .then(|| self.copies.borrow_mut().copy(surface))
-            .flatten();
-        self.show_with_ack(id, copied.as_ref().unwrap_or(surface), ack_tx);
+        self.finish_copy(ack_tx);
+        let mut dropped = Vec::new();
+        let now = if copy {
+            match self.copies.borrow_mut().submit(id, surface, &mut dropped) {
+                super::copy::Submitted::Show(copied) => Some(copied),
+                super::copy::Submitted::Pending => None,
+                super::copy::Submitted::Unavailable => Some(surface.clone()),
+            }
+        } else {
+            // A copy finishing after this would put an older frame over this one.
+            self.copies.borrow_mut().cancel(&mut dropped);
+            Some(surface.clone())
+        };
+        ack_unshown(&dropped, ack_tx);
+        if let Some(shown) = now {
+            self.show_with_ack(id, &shown, ack_tx);
+        }
+    }
+
+    /// Put up the copy whose blit has finished, if there is one. Every apply runs this before
+    /// its frame gate: the blit's completion wakes the main queue without a new frame.
+    pub(crate) fn finish_copy(&self, ack_tx: &SyncSender<AckMsg>) {
+        let mut dropped = Vec::new();
+        let ready = self.copies.borrow_mut().take_ready(&mut dropped);
+        ack_unshown(&dropped, ack_tx);
+        if let Some((id, copied)) = ready {
+            self.show_with_ack(id, &copied, ack_tx);
+        }
     }
 
     /// Put the presented surface `id` on this window's layer (and its strip, when up), with

@@ -1651,8 +1651,8 @@ returns before allocating a plane fence for any primary plane that is not a gues
 fences only dumb or imported objects. A GNOME desktop scans out through vrend (non-blob) on both
 tiers, so its flushes carry no fence, no `GuestFlushHold` forms, and the compositor may render into
 the buffer on glass. The supervisor covers that with a Metal-blit copy of every unheld frame
-(`docs/graphics.md` §4): correct, but about 1.2 ms mean and 4.6–6.1 ms worst on the main thread per
-frame (measured 2026-09-12, 24–33 fps WebGL load; not yet measured at a 60 Hz desktop).
+(`docs/graphics.md` §4): correct, but it costs a GPU blit and about 1.2 ms of added latency per
+frame, 4.6–6.1 ms worst (measured 2026-09-12, 24–33 fps WebGL load).
 
 The deep fix is on the enhanced kernel (a `limina` branch commit): fence every primary-plane flush
 the host can hold, so the enhanced tier is held and goes back to zero-copy while the stock tier

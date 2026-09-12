@@ -786,6 +786,7 @@ impl GuestWindows {
         self.primary.register();
         self.primary.reconcile(notch);
         self.primary.refit(mode);
+        self.primary.core.finish_copy(ack_tx);
         if let Some(snap) = slots.iter().find(|s| s.slot == primary) {
             self.primary.present(snap, surface_map, ack_tx, mode);
         }
@@ -887,6 +888,7 @@ impl GuestWindows {
             // the user can change the box under us with no modeset anywhere. One refit is the
             // answer to all of them.
             entry.refit(mode);
+            entry.core.finish_copy(ack_tx);
             if entry.last_gen == generation {
                 continue;
             }

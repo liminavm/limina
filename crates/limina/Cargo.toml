@@ -147,6 +147,7 @@ objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceType
 # (`window/copy.rs`).
 objc2-metal = { version = "0.3", default-features = false, features = [
     "std",
+    "block2",
     "MTLAllocation",
     "MTLBlitCommandEncoder",
     "MTLCommandBuffer",
