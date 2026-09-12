@@ -60,7 +60,15 @@ The sixth crash ran on that build for 2 d 2 h 54 m. Its last guard line, from th
                    refused: handout=0 close=0 | encoders=63706059 table=2140/8192
 
 So on the faulting call KK's encoder was in the table (the eviction hole was not involved), LIVE,
-and the same incarnation `cs_get_compute` had handed out. **KK never ended, released, or re-created
+and the same incarnation `cs_get_compute` had handed out.
+
+The crash-surviving dispatch ring for that run (`dogfood-2026-09-11/dispatch-ring-72232.bin`) says
+the same from the other side, and adds one fact. The copy in flight — a 266x54 upload — was the
+**first copy recorded on a brand-new encoder**: generation 63706106, LIVE, at address
+`0xbed4b9cc0`, which generation 63706105 had occupied for the eleven copies before it. That is not
+rare in itself — the last 4096 copies ran through only three encoder addresses and 318
+generations, so 7.8% of all copies are the first on their encoder — but it fits a context that
+never had its pass begun, or had it undone, between encoder creation and first use. **KK never ended, released, or re-created
 the encoder it passed**, and never closed anyone else's either. A stale KK-side pointer used across
 an address recycle is excluded for this crash.
 
@@ -231,6 +239,7 @@ remain are the ones that see memory:
 3. **ASan on KK**, which interposes malloc process-wide — for after a reproducer exists.
 4. Guard Malloc is decisive and far too heavy for a seated desktop.
 
-The dispatch ring (`LIMINA_KK_POOL_SNAPSHOT` set, `.dispatch.<pid>` beside the logs) was not armed
-on the fifth or sixth runs. It is the only evidence that ties the faulting context to the encoder
-and copy in flight, which is exactly the question left. A dogfood launch should set it.
+The dispatch ring lands at `<LIMINA_KK_POOL_SNAPSHOT>.dispatch.<pid>`. The supervisor points that
+at the VM bundle's `logs/` only when the variable is unset; an explicit value set through
+`launchctl setenv` wins, and the ring is then wherever that names — look there before concluding
+it was not armed.
