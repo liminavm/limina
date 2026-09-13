@@ -160,6 +160,35 @@ driving of a windowed VM is deterministic and independent of the macOS event sys
 GNOME state problem hit above: kiosk-mode app launch is the workaround; robust key injection is the
 fix. Small; unblocks scripted UI tests and reliable agent control of the desktop.
 
+**Backlog — guest profiling without a guest PMU.** HVF shows the guest no PMU, so guest `perf`
+falls back to hrtimer sampling. That sampling interrupt is an ordinary IRQ, masked through hardirq
+and most softirq work, so exactly the interrupt-heavy paths (virtio-net RX, NAPI) come back
+under-sampled or invisible. Two pieces that share the per-vCPU plumbing; build them in this order:
+
+1. **Host-side guest sampler** (the `perf kvm --guest` shape). A sampler thread in `limina-vmm`,
+   enabled by something like `LIMINA_GUEST_PROFILE=<file>[,hz]`, kicks the vCPUs out with
+   `hv_vcpus_exit` (already used by libkrun's HVF loop, `third_party/libkrun/src/hvf/src/lib.rs`)
+   at ~1 kHz. Each vCPU records PC, LR and exception level, and optionally walks guest frame
+   pointers for a short stack. A vCPU already outside the guest is tagged by exit reason instead
+   (MMIO doorbell, WFI, interrupt injection), so hypervisor time shows up too, which no guest-side
+   profiler can see. Symbolize offline against the guest's `/proc/kallsyms` or `vmlinux`. Needs
+   nothing in the guest, so it works on both tiers; a forced exit lands regardless of guest
+   interrupt masking. Cost is one extra exit per vCPU per sample, opt-in. Caveat: a kernel built
+   without frame pointers yields leaf-PC (flat) profiles only.
+2. **Virtual PMUv3 backed by the host's counters**, so guest `perf` just works. Present the
+   *architectural* PMUv3, not Apple's PMU: every stock arm64 kernel has its driver, whereas the
+   upstream Apple driver (`apple_m1_cpu_pmu`, from Asahi) takes its overflow as an AIC FIQ and does
+   not bind on our GICv3. Asahi's driver is still the reference for the Apple counter events and
+   controls we would map PMUv3 events onto. Shape: advertise PMUv3 in `ID_AA64DFR0_EL1` plus a DT
+   PMU node, emulate the PMU sysregs on trap, have each vCPU thread read its real Apple counters
+   through kperf/kpc, and inject the PMU interrupt when an emulated counter would overflow. Guest
+   `perf` then behaves as on bare-metal arm64: still blind under masked interrupts unless the guest
+   boots with pseudo-NMI. **Gates to measure before building:** (a) HVF traps guest PMU sysreg
+   accesses to us rather than handling them itself; (b) kpc is usable by an unprivileged,
+   sandboxed worker (it may need root, which collides with the app-bundle and App Store paths);
+   (c) the counters can be filtered to guest execution only, or the counts include hypervisor
+   time on the vCPU thread. The sampler in (1) is the oracle for validating (2).
+
 ---
 
 ## Robustness & resource discipline (cross-cutting)
