@@ -542,6 +542,9 @@ fn add_vsock(vmr: &mut VmResources, vsock: &VsockSpec) -> Result<()> {
         host_port_map: None,
         unix_ipc_port_map: Some(unix_ipc_port_map),
         tsi_flags: devices::virtio::TsiFlags::empty(),
+        // Our guests take the time over the control plane; none listens on libkrun's timesync
+        // port, so its per-minute datagram only ever came back as a reset.
+        timesync: false,
     })
     .map_err(|e| anyhow!("set_vsock_device: {e:?}"))?;
 

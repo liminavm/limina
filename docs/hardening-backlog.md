@@ -555,14 +555,13 @@ rects). Remaining:
   wrote its `DisplayLayout` seed ahead of the HELLO, the host dropped the peer, the helper
   reconnected with no backoff — 396,747 connects in 150 s — and the worker died of `EMFILE` at
   `third_party/libkrun/src/devices/src/virtio/vsock/muxer.rs:633`, an `unwrap()` on the proxy
-  socket creation; the reaper thread then died of the poisoned lock). The guest bug is fixed
-  (HELLO first), but two host-side holes remain: (a) that `unwrap` — a failed proxy socket must
-  refuse the one connection (RST it), never abort the VMM; (b) the control plane accepts and
-  drops first-message violators at whatever rate the guest offers — consider a per-peer accept
-  backoff or a cap on concurrent unauthenticated peers. Guest side, (c) the helper's
-  `HostGone → try_connect` path sleeps only when `vsock_connect` itself fails, so any future
-  drop-after-accept storms again; a backoff on a channel that died before its first reply
-  closes that class.
+  socket creation; the reaper thread then died of the poisoned lock). Fixed: the helper sends
+  HELLO first and holds off 2 s after a channel that dies within 5 s of opening; the muxer
+  resets a connection whose proxy socket cannot be created instead of aborting; the control
+  plane's accept loop retries transient errors (`EMFILE`, `ENFILE`, `ENOBUFS`, `ENOMEM`)
+  instead of ending. **Still open:** the control plane accepts and drops first-message violators
+  at whatever rate the guest offers — consider a per-peer accept backoff or a cap on concurrent
+  unauthenticated peers.
 - **zink sets `pStencilAttachment` while `stencilAttachmentFormat` stays `VK_FORMAT_UNDEFINED`.**
   Measured 2026-09-04 on dogfood (crash report + provenance kept in
   `spikes/zink-stencil-attachment-assert/`, because the dylib that crashed was rebuilt in place
@@ -2135,8 +2134,9 @@ up (955 s total). Venus was live in that same guest (the X11 GL probe enumerated
 rerun passed in 65 s — flake by rerun, not by analysis. Note the failing run was ~40% slower
 overall than the same-day 103/103 (3099 vs 2195 s): host load is the suspected ingredient.
 **If it fires again, stop treating it as noise:** grab the worker log at the wedge timestamps
-and check what eglretrace was waiting on (the per-minute dgram error is the one recurring
-signal — identify pkt type 3's sender first).
+and check what eglretrace was waiting on. The once-a-minute dgram line is not a lead: it was
+the guest resetting libkrun's macOS timesync datagram (port 123, every 60 s, no listener in
+our guests), and limina now turns that datagram off.
 
 **Second occurrence, 2026-08-13** (full suite over the demand-sweep commit, 103/104): same
 signature to the second — the replay stalled 956.6 s and the isolated rerun passed in 63.6 s,
@@ -3314,9 +3314,10 @@ times:
 WARN krun_devices::virtio::vsock::device] RX queue error: HdrDescTooSmall(N)
 ```
 
-The device takes a descriptor it considers too small to hold the packet header, warns, and
-retries against the same descriptor without consuming it or advancing — so it spins as fast as
-the log can absorb it. The warning is the only thing bounding the loop.
+The device does not retry one descriptor: `process_rx` (`vsock/device.rs:114-123`) warns, then
+returns the rejected descriptor to the guest as used with length 0. Six million lines therefore
+means six million descriptors, a ping-pong in which the guest keeps posting RX buffers the host
+keeps rejecting. A stale view of the RX ring after restore is the leading suspect.
 
 Two costs, and the second is the one that bit: the busy-loop burns a core, and the flood buries
 every other line in the log. It hid the GPU restore accounting behind six million lines of noise
