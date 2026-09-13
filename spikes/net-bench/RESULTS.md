@@ -93,9 +93,13 @@ host sample both had it about half busy. Its ordering of the busy samples still 
   takes the interrupts from 820k to 584k–708k per 30 s (the spread is across same-code reruns,
   so call it ~20%); the rest come from the guest finishing a poll before the next 32 KB frame
   arrives and re-arming.
-- A blank virtio-net header makes the guest verify every byte's checksum. The frames come out of
-  gvproxy's own stack over a local socket, so the device marks them valid when the guest
-  negotiated GUEST_CSUM. No checksum errors or discards in the guest afterwards.
+- A blank virtio-net header makes the guest verify every byte's checksum. gvproxy's frames come
+  out of its own stack over a local socket, so limina vouches for them per interface
+  (`NetworkInterfaceConfig::rx_csum_valid`, `NET_FLAG_CSUM_VALID` in the C API), and the device
+  marks them valid when the guest negotiated GUEST_CSUM. Nothing is inferred from the backend
+  type, because a unixgram backend can just as well relay LAN frames. With it, `do_csum` drops out
+  of the guest's busy samples (it was the top leaf before), and the guest shows no checksum errors
+  or discards.
 - `GOGC=400` cuts gvproxy's collector leaves from ~0.5 to 0.12 cores. Its cost is memory:
   gvproxy's footprint mid-run was 65 MB, against 31 MB at the default GOGC on the same transfer
   (where gvproxy measured 235% again, at 8.08 Gbit/s).
