@@ -60,7 +60,7 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified by the r26 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-07, and the dogfood row by `rpm -V` on the dev VM the same day after its mesa-only delivery. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
+guest with `rpm -q`. Last verified by the r27 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-13, and the dogfood row by `rpm -V` on the dev VM 2026-09-07 after its mesa-only delivery. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
@@ -73,9 +73,11 @@ Two facts the table cannot show:
 
 - **The guest agents are not RPMs and so are not in the table.** All three F44 enhanced images
   carry **`limina-agent` 0.6.1** and `limina-agent-session`, installed to `/usr/local/bin` with
-  their units (payload **r26**, delivered 2026-09-07; the dogfood guest is one step behind at 0.6.0,
-  taken by hand on 2026-09-03 straight from 0.4.0 — its first agent with the `vcpu` cap). r26
-  changed mesa only: the agents and the 16k kernel are byte-identical to r25's. 0.6.1 added
+  their units (payload **r27**, delivered 2026-09-13; the dogfood guest is one step behind at 0.6.0,
+  taken by hand on 2026-09-03 straight from 0.4.0 — its first agent with the `vcpu` cap — but
+  carries r27's `limina-agent-session`, installed by hand 2026-09-13). r27 changed
+  `limina-agent-session` only: a channel the host drops within 5 s of opening now holds off the
+  next connect, so a drop-after-accept cannot become a connect storm. 0.6.1 added
   the CPU utilisation and stall rates the host's vCPU grow rule needs; 0.6.0 added the
   `powerprofile` capability (the GNOME power-mode toggle reaching host policy); 0.5.0 added `vcpu`,
   the floor for dynamic vCPU offlining. Check the version in a guest with `limina-agent --version`, which is also the
@@ -121,7 +123,13 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r25.tar.zst`** (r25, 2026-09-03: host-side
+**Current payload: `payload/limina-guest-tools-f44-r27.tar.zst`** (r27, 2026-09-13: host-side
+repack of r26 with `limina-agent-session` rebuilt at limina `c3676af3` — the drop-after-accept
+backoff. Kernel, mesa and `limina-agent` identical to r26; applied to all three F44 enhanced images
+(`.bak-pre-r27.raw` CoW backups), both agent hashes verified, kernel install short-circuited so the
+permanent default stayed `7.1.8-limina16k.4`, no trial boot owed.) Previous: r26 (2026-09-07: mesa
+`26.1.8-11.limina` only — vl/compositor matrix upload and the zink unflushed-batch wait fix).
+Previous: r25 (2026-09-03: host-side
 repack of r24 with `limina-agent` 0.6.1 — `CpuPressure` now carries how much CPU the guest burned
 and how long anything waited for one over the report interval, which is what lets the host stop
 re-plugging vCPUs on runnable-task spikes that consumed nothing. Kernel, mesa and
