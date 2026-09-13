@@ -458,3 +458,76 @@ fn l1_snapshot_completes_with_a_never_onlined_vcpu() {
         "snapshot file missing or empty at {snap:?}"
     );
 }
+
+/// A snapshot resumes only into a machine with the same devices at the same slots. Slots are
+/// handed out in attach order, so one device fewer moves every device after it, and the guest's
+/// drivers keep talking to slots that now hold something else (a windowed snapshot resumed
+/// headless flooded the log with vsock `HdrDescTooSmall`). The resume must be refused, say what
+/// differs, and keep the snapshot so resuming the right way still works.
+#[test]
+fn l1_resume_into_different_devices_is_refused_and_keeps_the_snapshot() {
+    if !limina_test::require_hvf_or_skip(
+        "l1_resume_into_different_devices_is_refused_and_keeps_the_snapshot",
+    ) {
+        return;
+    }
+
+    let share = std::env::temp_dir().join(format!("limina-refused-share-{}", std::process::id()));
+    std::fs::create_dir_all(&share).expect("creating the extra share");
+    let base = || {
+        let mut c = GuestConfig::l1_from_env()
+            .expect("resolving L1 guest config")
+            .append_cmdline("limina.counter")
+            .with_supervisor_log();
+        c.cpus = 2;
+        c.ram_mib = 512;
+        c
+    };
+
+    // --- Suspend a VM that has one virtio-fs device more than the one it resumes into ---
+    let suspend_cfg = base()
+        .with_share("extra", &share)
+        .with_snapshot()
+        .with_env("LIMINA_RAW_SNAPSHOT_SEAM", "1");
+    let mut g1 = Guest::boot(&suspend_cfg).expect("spawning the first limina supervisor");
+    g1.wait_for("LIMINA_COUNTER_READY", Duration::from_secs(20))
+        .expect("counter guest did not reach userspace");
+    g1.snapshot().expect("triggering the snapshot");
+    let outcome = g1
+        .wait_supervisor_exit(Duration::from_secs(30))
+        .expect("supervisor did not exit after the snapshot trigger");
+    assert_eq!(outcome.code, Some(126), "the first VM should suspend");
+    let snap = std::env::temp_dir().join(format!("limina-refused-{}.bin", std::process::id()));
+    std::fs::copy(g1.snapshot_path().expect("snapshot path configured"), &snap)
+        .expect("copying the snapshot out of the suspended VM's scratch");
+    drop(g1);
+    let consumed = snap.with_extension("bin.consumed");
+
+    // --- Resume it without the share ---
+    let mut g2 =
+        Guest::boot(&base().restore_from(&snap)).expect("spawning the resuming supervisor");
+    let outcome = g2.wait_supervisor_exit(Duration::from_secs(60));
+    let log = g2.supervisor_log();
+    let kept = snap.exists();
+    let left_consumed = consumed.exists();
+    let _ = std::fs::remove_file(&snap);
+    let _ = std::fs::remove_file(&consumed);
+    let _ = std::fs::remove_dir_all(&share);
+
+    let outcome = outcome.unwrap_or_else(|e| panic!("the resume was not refused: {e}\n{log}"));
+    assert_eq!(
+        outcome.code,
+        Some(124),
+        "the supervisor should exit 'restore refused' (124); got {outcome:?}\n{log}"
+    );
+    assert!(
+        log.contains("restore refused"),
+        "no refusal in the log:\n{log}"
+    );
+    assert!(
+        log.contains("suspended with virtio-fs"),
+        "the refusal must name the missing device:\n{log}"
+    );
+    assert!(kept, "the refused snapshot must be back at {snap:?}\n{log}");
+    assert!(!left_consumed, "no .consumed copy may be left behind");
+}

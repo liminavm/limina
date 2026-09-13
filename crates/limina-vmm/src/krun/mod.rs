@@ -663,7 +663,10 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         spec.shares.len(),
         spec.display.is_some(),
     );
-    let vmm = vmm::builder::build_microvm(
+    /// The snapshot was taken on a machine whose devices differ from this one's. Mirrored by
+    /// hand in limina's `supervisor::WORKER_EXIT_RESTORE_REFUSED`.
+    const WORKER_EXIT_RESTORE_REFUSED: i32 = 124;
+    let vmm = match vmm::builder::build_microvm(
         &vmr,
         &mut event_manager,
         Some(shutdown_efd),
@@ -672,8 +675,15 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         Some(wake_efd),
         worker_tx,
         spec.restore_file.clone(),
-    )
-    .map_err(|e| anyhow!("build_microvm: {e:?}"))?;
+    ) {
+        Ok(vmm) => vmm,
+        // libkrun has already logged how the devices differ. Nothing is running yet, so a plain
+        // exit is enough; the distinct code tells the supervisor to keep the snapshot.
+        Err(vmm::builder::StartMicrovmError::Internal(vmm::Error::RestoreRefused(_))) => {
+            std::process::exit(WORKER_EXIT_RESTORE_REFUSED)
+        }
+        Err(e) => return Err(anyhow!("build_microvm: {e:?}")),
+    };
     if let Some(path) = &spec.restore_file {
         log::info!("restoring from snapshot {path:?}");
     }

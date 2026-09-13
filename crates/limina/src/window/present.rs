@@ -559,6 +559,9 @@ pub struct Shared {
     /// (spawn or gateway-restart failure): the window must not wait for a worker that
     /// will never come.
     pub(crate) resume_dead: bool,
+    /// Set (before `worker_exited`) when the worker refused to restore a snapshot taken on
+    /// different devices: the window explains that instead of closing silently.
+    pub(crate) restore_refused: bool,
     /// Whether a guest OS driver has taken the GPU over from boot firmware (the worker's
     /// `guestdriver` line). Firmware paints head 0 and only head 0, so before this the pool is
     /// not ours to arrange; after it, each host panel can own a slot. Cleared on a reboot
@@ -603,6 +606,12 @@ pub fn mark_worker_running(shared: &Arc<Mutex<Shared>>) {
     s.worker_suspended = false;
     s.worker_epoch += 1;
     s.resume_dead = false;
+    s.restore_refused = false;
+}
+
+/// Mark that the worker refused to restore the snapshot. Call BEFORE [`mark_worker_exited`].
+pub fn mark_restore_refused(shared: &Arc<Mutex<Shared>>) {
+    shared.lock().unwrap().restore_refused = true;
 }
 
 /// A fresh worker's endpoints have been swapped in — a guest reboot (`resuming == false`) or a

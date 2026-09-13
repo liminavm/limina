@@ -578,6 +578,9 @@ struct StartOverrides {
     /// Bind the control plane at this path (lets a test harness join as a peer).
     #[arg(long)]
     control_socket: Option<PathBuf>,
+    /// Throw away a pending suspended session and boot fresh.
+    #[arg(long)]
+    discard_suspend: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1160,7 +1163,7 @@ fn cli_from_definition(
         // M9.2 suspend wiring (computed above): arm the worker's snapshot path and hand run_vm
         // the state.toml to persist `[suspended]` into on a 126 exit.
         snapshot_file: Some(snapshot_bin),
-        discard_suspend: false,
+        discard_suspend: ov.discard_suspend,
         suspend_state_file: Some(state_toml),
         on_window_close: cfg.display.on_window_close,
         virtio_console: None,
@@ -1839,6 +1842,11 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 snapshot.display()
             );
         }
+    }
+    if code == supervisor::WORKER_EXIT_RESTORE_REFUSED
+        && let Some(snapshot) = &cli.snapshot_file
+    {
+        supervisor::keep_refused_snapshot(snapshot, cli.suspend_state_file.as_deref());
     }
     // The worker is gone: a consumed snapshot (this run restored from it) has no further use —
     // free the ~half-GB. Missing file is the normal case.

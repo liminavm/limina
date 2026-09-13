@@ -81,7 +81,10 @@ pub fn start_vm(bundle: &VmBundle, errors: &ErrorSink) -> Result<()> {
         let mut child = child;
         let started = Instant::now();
         let Ok(status) = child.wait() else { return };
-        if status.success() || started.elapsed() > STARTUP_GRACE {
+        // A refused resume can take longer than the grace to read a large snapshot, and it is
+        // always a failure to start, never a guest that ran and died.
+        let refused = status.code() == Some(crate::supervisor::WORKER_EXIT_RESTORE_REFUSED);
+        if status.success() || (started.elapsed() > STARTUP_GRACE && !refused) {
             return;
         }
         let detail = explain_early_exit(&log_path);
@@ -130,6 +133,9 @@ fn explain_early_exit(log_path: &std::path::Path) -> String {
 /// Pre-flight deliberately does not guess at these (`vmlib::preflight`'s "not checked" list);
 /// recognising them here is the other half of that bargain.
 fn known_cause(log: &str) -> Option<&'static str> {
+    if log.contains("restore refused") {
+        return Some(crate::supervisor::RESTORE_REFUSED_ADVICE);
+    }
     if log.contains("VmCreate") {
         return Some(
             "The VM worker could not create a hypervisor VM. It is most likely not codesigned \
@@ -259,5 +265,13 @@ mod tests {
         let hint = known_cause("worker: Error: VmCreate\n").expect("VmCreate must be recognised");
         assert!(hint.contains("com.apple.security.hypervisor"), "{hint}");
         assert!(known_cause("some unrelated failure").is_none());
+    }
+
+    #[test]
+    fn a_refused_resume_is_translated() {
+        let log = "ERROR krun_vmm::builder] restore refused: this VM's devices differ from the \
+                   ones it was suspended with (suspended with virtio-input @0xa009000 irq 48)\n";
+        let hint = known_cause(log).expect("a refused resume must be recognised");
+        assert!(hint.contains("--discard-suspend"), "{hint}");
     }
 }

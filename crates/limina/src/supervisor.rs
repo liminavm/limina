@@ -47,6 +47,43 @@ pub const WORKER_EXIT_REBOOT: i32 = 125;
 /// leaves it alone (it only ever relaunches [`WORKER_EXIT_REBOOT`]); we just report it distinctly.
 pub const WORKER_EXIT_SNAPSHOT: i32 = 126;
 
+/// Worker process exit code meaning "the snapshot was taken on a machine whose devices differ
+/// from this one's, so the worker refused to restore it" — restoring would leave the guest's
+/// drivers bound to slots that now hold other devices. Mirrors limina-vmm's constant by hand,
+/// like the two above. The supervisor puts the snapshot back ([`keep_refused_snapshot`]).
+pub const WORKER_EXIT_RESTORE_REFUSED: i32 = 124;
+
+/// What a refused resume tells the user, in the log, the window and the control center alike.
+pub const RESTORE_REFUSED_ADVICE: &str = "This VM was suspended with a different set of devices \
+    than it has now — for example, suspended with a window and started without one. Resuming it \
+    would leave the guest talking to hardware that is no longer where it expects, so it was not \
+    resumed, and the suspended session is kept. Start the VM the way it was suspended to resume \
+    it, or start it with --discard-suspend to throw the suspended session away and boot fresh.";
+
+/// Put a snapshot the worker refused back where the next start looks for it, undoing what
+/// [`take_pending_resume`] did at spawn: the rename to `.consumed` and the cleared
+/// `[suspended]` record. A refusal must never cost the user their suspended session.
+pub fn keep_refused_snapshot(snapshot: &std::path::Path, state_file: Option<&std::path::Path>) {
+    let consumed = snapshot.with_extension("bin.consumed");
+    if consumed.exists()
+        && let Err(e) = std::fs::rename(&consumed, snapshot)
+    {
+        log::error!(
+            "could not put the refused snapshot back at {}: {e}",
+            snapshot.display()
+        );
+        return;
+    }
+    if let Some(state) = state_file {
+        let sus = crate::vmlib::state::Suspended {
+            snapshot: snapshot.to_path_buf(),
+        };
+        if let Err(e) = crate::vmlib::state::set_suspended(state, Some(sus)) {
+            log::error!("re-recording the suspended state failed: {e}");
+        }
+    }
+}
+
 /// A worker that exits with [`WORKER_EXIT_REBOOT`] after running less than this is treated as a
 /// boot loop, not a healthy reboot.
 const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(5);
@@ -713,6 +750,8 @@ fn report_exit(status: ExitStatus) -> i32 {
             log::info!("guest rebooted (worker exit {WORKER_EXIT_REBOOT})");
         } else if code == WORKER_EXIT_SNAPSHOT {
             log::info!("guest snapshotted (worker exit {WORKER_EXIT_SNAPSHOT}); VM suspended");
+        } else if code == WORKER_EXIT_RESTORE_REFUSED {
+            log::error!("resume refused: {RESTORE_REFUSED_ADVICE}");
         } else {
             log::warn!("VM stopped — worker exited with code {code}");
         }
@@ -807,6 +846,31 @@ mod tests {
 
         // The SAME check again (what a reboot relaunch does) must find nothing: one-shot.
         assert_eq!(take_pending_resume(&snap, Some(&state)), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A resume the worker refused must leave the VM exactly as suspended as it was: the
+    /// snapshot back at its canonical name and the `[suspended]` record back in state.toml.
+    #[test]
+    fn a_refused_resume_keeps_the_suspended_session() {
+        let dir = scratch("refused");
+        let snap = dir.join("snapshot.bin");
+        let state = dir.join("state.toml");
+        std::fs::write(&snap, b"fake-snapshot").unwrap();
+        take_pending_resume(&snap, Some(&state)).expect("a pending resume");
+
+        keep_refused_snapshot(&snap, Some(&state));
+
+        assert_eq!(std::fs::read(&snap).unwrap(), b"fake-snapshot");
+        assert!(!dir.join("snapshot.bin.consumed").exists());
+        assert_eq!(
+            crate::vmlib::state::load(&state)
+                .and_then(|s| s.suspended)
+                .map(|s| s.snapshot),
+            Some(snap.clone())
+        );
+        // And the next start finds it again.
+        assert!(take_pending_resume(&snap, Some(&state)).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

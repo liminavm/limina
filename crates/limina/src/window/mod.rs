@@ -66,9 +66,9 @@ mod windows;
 
 pub use lifecycle::{WorkerConn, WorkerIo};
 pub use present::{
-    Shared, SurfaceMap, empty_surface_map, mark_resume_dead, mark_worker_exited,
-    mark_worker_running, mark_worker_suspended, mark_worker_swapped, spawn_reader,
-    surface_rendezvous,
+    Shared, SurfaceMap, empty_surface_map, mark_restore_refused, mark_resume_dead,
+    mark_worker_exited, mark_worker_running, mark_worker_suspended, mark_worker_swapped,
+    spawn_reader, surface_rendezvous,
 };
 
 // `input` builds the host pointer's default (blank) shape from the cursor module; re-exported
@@ -3063,7 +3063,7 @@ pub fn run(
             media_session.borrow_mut().set_playing(playing);
         }
 
-        let (exited, worker_suspended, show_id, frames, worker_epoch, resume_dead) = {
+        let (exited, worker_suspended, show_id, frames, worker_epoch, resume_dead, restore_refused) = {
             let s = shared.lock().unwrap();
             (
                 s.worker_exited,
@@ -3072,8 +3072,24 @@ pub fn run(
                 s.slots[timer_primary_slot.get() as usize].frames,
                 s.worker_epoch,
                 s.resume_dead,
+                s.restore_refused,
             )
         };
+
+        // The worker would not restore a snapshot taken on different devices. The supervisor
+        // has already put the snapshot back; the user needs to know why nothing came up.
+        if exited && restore_refused {
+            let alert = NSAlert::new(mtm);
+            alert.setMessageText(&NSString::from_str(&format!("“{title}” can't resume")));
+            alert.setInformativeText(&NSString::from_str(
+                crate::supervisor::RESTORE_REFUSED_ADVICE,
+            ));
+            alert.addButtonWithTitle(&NSString::from_str("OK"));
+            alert.runModal();
+            save_state_final(timer_state_path.as_deref(), &window);
+            crate::exit_cleanup();
+            std::process::exit(crate::supervisor::WORKER_EXIT_RESTORE_REFUSED);
+        }
 
         // A worker that has gone (powered off, crashed, suspended) is not playing anything, and
         // there is nothing left for a media key to reach. Step aside at once rather than serving

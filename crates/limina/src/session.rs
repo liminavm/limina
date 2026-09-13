@@ -412,6 +412,12 @@ impl WindowedSession {
                             }
                         }
                     }
+                    if code == supervisor::WORKER_EXIT_RESTORE_REFUSED
+                        && let Some(snapshot) = &snapshot_file
+                    {
+                        supervisor::keep_refused_snapshot(snapshot, suspend_state_file.as_deref());
+                        window::mark_restore_refused(&monitor_shared);
+                    }
                     // A consumed snapshot (this run restored from it) has no further use once
                     // the worker is gone — free the ~half-GB. Missing file is the normal case.
                     if let Some(snapshot) = &snapshot_file {
