@@ -576,6 +576,8 @@ fn add_net(vmr: &mut VmResources, net: &NetSpec) -> Result<()> {
         ),
         mac: net.mac.unwrap_or(NET_GUEST_MAC),
         features: NET_COMPAT_FEATURES,
+        // gvproxy builds every frame in its own gVisor stack, so the guest can skip re-summing.
+        rx_csum_valid: true,
     })
     .map_err(|e| anyhow!("add_network_interface(gvproxy): {e:?}"))?;
     vmr.dhcp_client = true;
