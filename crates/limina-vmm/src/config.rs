@@ -92,6 +92,10 @@ pub struct VsockSpec {
     pub port: u32,
     /// Host UNIX socket path the host side listens on.
     pub socket_path: PathBuf,
+    /// A second guest port bridged the same way to its own host socket, so the vsock path
+    /// can be benchmarked without touching the control plane. Set only from
+    /// `LIMINA_VSOCK_BENCH=<port>:<socket>`.
+    pub bench: Option<(u32, PathBuf)>,
 }
 
 /// A virtio-gpu display attached to the guest. `width`/`height` set the advertised mode

@@ -535,6 +535,14 @@ fn add_fs_share(vmr: &mut VmResources, share: &FsShare) -> Result<()> {
 fn add_vsock(vmr: &mut VmResources, vsock: &VsockSpec) -> Result<()> {
     let mut unix_ipc_port_map = std::collections::HashMap::new();
     unix_ipc_port_map.insert(vsock.port, (vsock.socket_path.clone(), false));
+    if let Some((port, path)) = &vsock.bench {
+        anyhow::ensure!(
+            *port != vsock.port,
+            "LIMINA_VSOCK_BENCH port {port} is the control plane's"
+        );
+        log::warn!("vsock: bench port {port} bridged to {path:?} (LIMINA_VSOCK_BENCH)");
+        unix_ipc_port_map.insert(*port, (path.clone(), false));
+    }
 
     vmr.set_vsock_device(VsockDeviceConfig {
         vsock_id: "vsock0".to_string(),

@@ -611,7 +611,22 @@ fn main() -> Result<()> {
     }
 
     let vsock = match (cli.vsock_port, cli.vsock_socket) {
-        (Some(port), Some(socket_path)) => Some(VsockSpec { port, socket_path }),
+        (Some(port), Some(socket_path)) => Some(VsockSpec {
+            port,
+            socket_path,
+            bench: match std::env::var("LIMINA_VSOCK_BENCH") {
+                Ok(spec) => {
+                    let (port, path) = spec.split_once(':').ok_or_else(|| {
+                        anyhow::anyhow!("LIMINA_VSOCK_BENCH wants <port>:<socket>")
+                    })?;
+                    let port = port
+                        .parse()
+                        .with_context(|| format!("LIMINA_VSOCK_BENCH port {port:?}"))?;
+                    Some((port, PathBuf::from(path)))
+                }
+                Err(_) => None,
+            },
+        }),
         _ => None,
     };
 
