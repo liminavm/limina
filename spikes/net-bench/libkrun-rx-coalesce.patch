@@ -1,0 +1,425 @@
+From eb9588e6cbf767bae6c4d22ea462a4890c1e427b Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Sun, 13 Sep 2026 16:15:19 -0300
+Subject: [PATCH] virtio/net: hold a requested RX interrupt for a coalescing
+ window
+
+With EVENT_IDX the guest only asks for an RX interrupt when it has
+finished polling, but at bulk rates it finishes a poll before the next
+frame lands and asks again, so each frame can still cost it an
+interrupt. Borrow a NIC's rx-usecs: when the previous RX interrupt went
+out under the window ago, hold the new one and let a oneshot timer pay
+it at the end of the window. The first interrupt after idle and one
+for a guest out of RX buffers still go out at once.
+
+The window comes from KRUN_NET_RX_COALESCE_US and defaults to zero,
+which keeps today's behaviour. Only macOS has the worker timer, so
+elsewhere it stays zero. The macOS epoll gains add_oneshot_timer_id,
+because kqueue keys timers by ident and the TX retry timer holds ident 0.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ src/devices/src/virtio/net/device.rs |  16 ++
+ src/devices/src/virtio/net/worker.rs | 214 +++++++++++++++++++++++++--
+ src/utils/src/macos/epoll.rs         |   8 +-
+ 3 files changed, 227 insertions(+), 11 deletions(-)
+
+diff --git a/src/devices/src/virtio/net/device.rs b/src/devices/src/virtio/net/device.rs
+index 5c5dc847..44db2163 100644
+--- a/src/devices/src/virtio/net/device.rs
++++ b/src/devices/src/virtio/net/device.rs
+@@ -21,6 +21,7 @@ use std::io::Write;
+ use std::os::fd::RawFd;
+ use std::path::PathBuf;
+ use std::thread::JoinHandle;
++use std::time::Duration;
+ use utils::eventfd::{EFD_NONBLOCK, EventFd};
+ use virtio_bindings::virtio_net::{VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_MAC};
+ use virtio_bindings::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
+@@ -140,6 +141,20 @@ impl Net {
+     }
+ }
+ 
++/// How long the worker holds an RX interrupt after the previous one (`KRUN_NET_RX_COALESCE_US`).
++/// Only macOS has the timer that pays a held interrupt, so elsewhere it is always zero.
++fn rx_coalesce() -> Duration {
++    let us = std::env::var("KRUN_NET_RX_COALESCE_US")
++        .ok()
++        .and_then(|v| v.parse().ok())
++        .unwrap_or(0);
++    if cfg!(target_os = "macos") {
++        Duration::from_micros(us)
++    } else {
++        Duration::ZERO
++    }
++}
++
+ impl VirtioDevice for Net {
+     fn avail_features(&self) -> u64 {
+         self.avail_features
+@@ -245,6 +260,7 @@ impl VirtioDevice for Net {
+             backend,
+             stop_fd,
+             rx_data_valid,
++            rx_coalesce(),
+         );
+         self.worker_thread = Some(worker.run());
+         self.device_state = DeviceState::Activated(mem, interrupt);
+diff --git a/src/devices/src/virtio/net/worker.rs b/src/devices/src/virtio/net/worker.rs
+index 7fc87700..1bacb39e 100644
+--- a/src/devices/src/virtio/net/worker.rs
++++ b/src/devices/src/virtio/net/worker.rs
+@@ -14,6 +14,7 @@ use super::device::{FrontendError, RxError, TxError, VirtioNetBackend};
+ use std::os::fd::RawFd;
+ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+ use std::thread;
++use std::time::{Duration, Instant};
+ use std::{cmp, result};
+ use utils::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
+ use utils::eventfd::EventFd;
+@@ -36,6 +37,11 @@ pub struct NetWorker {
+     rx_has_deferred_frame: bool,
+     // The guest negotiated GUEST_CSUM, so a frame from a proxy can reach it marked checksum-valid.
+     rx_data_valid: bool,
++    // Hold an RX interrupt the guest asked for until this long after the previous one, like a
++    // NIC's rx-usecs; zero signals every time.
++    rx_coalesce: Duration,
++    rx_last_irq: Option<Instant>,
++    rx_irq_owed: bool,
+ 
+     tx_iovec: Vec<(GuestAddress, usize)>,
+     tx_frame_buf: [u8; MAX_BUFFER_SIZE],
+@@ -87,6 +93,7 @@ impl NetWorker {
+         backend: Box<dyn NetBackend + Send>,
+         stop_fd: EventFd,
+         rx_data_valid: bool,
++        rx_coalesce: Duration,
+     ) -> Self {
+         Self {
+             rx_q,
+@@ -101,6 +108,9 @@ impl NetWorker {
+             rx_frame_buf_len: 0,
+             rx_has_deferred_frame: false,
+             rx_data_valid,
++            rx_coalesce,
++            rx_last_irq: None,
++            rx_irq_owed: false,
+ 
+             tx_frame_buf: [0u8; MAX_BUFFER_SIZE],
+             tx_frame_len: 0,
+@@ -121,6 +131,13 @@ impl NetWorker {
+     fn work(mut self) -> Box<dyn NetBackend + Send> {
+         #[cfg(target_os = "macos")]
+         const TX_TIMER_FD: RawFd = -2;
++        #[cfg(target_os = "macos")]
++        const RX_TIMER_FD: RawFd = -3;
++        // kqueue keys timers by ident; the TX retry timer has 0.
++        #[cfg(target_os = "macos")]
++        const RX_TIMER_ID: usize = 1;
++        #[cfg(target_os = "macos")]
++        let mut rx_timer_armed = false;
+ 
+         let virtq_rx_ev_fd = self.rx_q.event.as_raw_fd();
+         let virtq_tx_ev_fd = self.tx_q.event.as_raw_fd();
+@@ -197,6 +214,11 @@ impl NetWorker {
+                             _ if event_set.is_empty() && source == TX_TIMER_FD => {
+                                 self.process_tx_loop();
+                             }
++                            #[cfg(target_os = "macos")]
++                            _ if event_set.is_empty() && source == RX_TIMER_FD => {
++                                rx_timer_armed = false;
++                                self.process_rx_coalesce_timer();
++                            }
+                             _ => {
+                                 log::warn!(
+                                     "Received unknown event: {event_set:?} from fd: {source:?}"
+@@ -214,6 +236,12 @@ impl NetWorker {
+                             epoll.add_oneshot_timer(delay, TX_TIMER_FD as u64);
+                         }
+                     }
++                    #[cfg(target_os = "macos")]
++                    if self.rx_irq_owed && !rx_timer_armed {
++                        let due_us = self.rx_irq_due_in().as_micros().max(1) as u64;
++                        epoll.add_oneshot_timer_id(RX_TIMER_ID, due_us, RX_TIMER_FD as u64);
++                        rx_timer_armed = true;
++                    }
+                 }
+                 Err(e) => {
+                     debug!("vsock: failed to consume muxer epoll event: {e}");
+@@ -262,6 +290,14 @@ impl NetWorker {
+         }
+     }
+ 
++    pub(crate) fn process_rx_coalesce_timer(&mut self) {
++        if self.rx_irq_owed
++            && let Err(e) = self.raise_rx_irq(Instant::now())
++        {
++            log::error!("Failed to raise held rx interrupt: {e:?}");
++        }
++    }
++
+     pub(crate) fn process_backend_socket_writeable(&mut self) {
+         match self
+             .backend
+@@ -318,14 +354,44 @@ impl NetWorker {
+                 .needs_notification(&self.mem)
+                 .unwrap_or(true)
+         {
+-            self.interrupt
+-                .try_signal_used_queue()
+-                .map_err(RxError::DeviceError)?;
++            self.signal_rx(self.rx_has_deferred_frame)?;
+         }
+ 
+         result
+     }
+ 
++    /// Raise an RX interrupt the guest asked for, or hold it for the coalescing timer when the
++    /// previous one went out under `rx_coalesce` ago. A guest out of buffers hears at once: it
++    /// cannot take another frame until it posts more.
++    fn signal_rx(&mut self, starved: bool) -> result::Result<(), RxError> {
++        let now = Instant::now();
++        let recent = self
++            .rx_last_irq
++            .is_some_and(|last| now.duration_since(last) < self.rx_coalesce);
++        if recent && !starved {
++            self.rx_irq_owed = true;
++            return Ok(());
++        }
++        self.raise_rx_irq(now)
++    }
++
++    fn raise_rx_irq(&mut self, now: Instant) -> result::Result<(), RxError> {
++        self.rx_irq_owed = false;
++        self.rx_last_irq = Some(now);
++        self.interrupt
++            .try_signal_used_queue()
++            .map_err(RxError::DeviceError)
++    }
++
++    /// When the held interrupt is due, measured from the previous one.
++    #[cfg(target_os = "macos")]
++    fn rx_irq_due_in(&self) -> Duration {
++        let since = self
++            .rx_last_irq
++            .map_or(self.rx_coalesce, |last| last.elapsed());
++        self.rx_coalesce.saturating_sub(since)
++    }
++
+     fn process_tx_loop(&mut self) {
+         loop {
+             self.tx_q.queue.disable_notification(&self.mem).unwrap();
+@@ -532,8 +598,8 @@ impl NetWorker {
+ #[cfg(test)]
+ mod tests {
+     use std::collections::VecDeque;
+-    use std::sync::Arc;
+     use std::sync::atomic::Ordering;
++    use std::sync::{Arc, Mutex};
+ 
+     use utils::eventfd::EFD_NONBLOCK;
+     use vm_memory::GuestAddress;
+@@ -548,16 +614,30 @@ mod tests {
+     /// A backend holding the frames the proxy has queued for the guest; `synthesizes` false
+     /// stands in for a tap, which relays the host kernel's header (blank here).
+     struct Proxy {
+-        frames: VecDeque<Vec<u8>>,
++        frames: Frames,
+         synthesizes: bool,
+     }
+ 
++    type Frames = Arc<Mutex<VecDeque<Vec<u8>>>>;
++
++    fn queue_frames(frames: &Frames, n: usize) {
++        frames
++            .lock()
++            .unwrap()
++            .extend((0..n).map(|_| vec![0xab; 60]));
++    }
++
+     impl NetBackend for Proxy {
+         fn synthesizes_vnet_hdr(&self) -> bool {
+             self.synthesizes
+         }
+         fn read_frame(&mut self, buf: &mut [u8]) -> result::Result<usize, ReadError> {
+-            let frame = self.frames.pop_front().ok_or(ReadError::NothingRead)?;
++            let frame = self
++                .frames
++                .lock()
++                .unwrap()
++                .pop_front()
++                .ok_or(ReadError::NothingRead)?;
+             let hdr_len = write_virtio_net_hdr(buf);
+             buf[hdr_len..hdr_len + frame.len()].copy_from_slice(&frame);
+             Ok(hdr_len + frame.len())
+@@ -600,6 +680,41 @@ mod tests {
+         frames: usize,
+         guest_csum: bool,
+         synthesizes: bool,
++    ) -> (NetWorker, InterruptTransport) {
++        let proxy = Proxy {
++            frames: Frames::default(),
++            synthesizes,
++        };
++        queue_frames(&proxy.frames, frames);
++        build(mem, rx, tx, buffers, proxy, guest_csum, Duration::ZERO)
++    }
++
++    /// A worker that holds an RX interrupt until `window` after the previous one, and a handle
++    /// on its proxy's frames so a test can land more between drains.
++    fn coalescing_worker(
++        mem: &GuestMemoryMmap,
++        rx: &GuestQueue,
++        tx: &GuestQueue,
++        buffers: u16,
++        window: Duration,
++    ) -> (NetWorker, InterruptTransport, Frames) {
++        let frames = Frames::default();
++        let proxy = Proxy {
++            frames: frames.clone(),
++            synthesizes: true,
++        };
++        let (worker, interrupt) = build(mem, rx, tx, buffers, proxy, false, window);
++        (worker, interrupt, frames)
++    }
++
++    fn build(
++        mem: &GuestMemoryMmap,
++        rx: &GuestQueue,
++        tx: &GuestQueue,
++        buffers: u16,
++        proxy: Proxy,
++        guest_csum: bool,
++        coalesce: Duration,
+     ) -> (NetWorker, InterruptTransport) {
+         for i in 0..buffers {
+             rx.dtable[i as usize].set(0x8000 + i as u64 * 0x1000, 0x1000, VIRTQ_DESC_F_WRITE, 0);
+@@ -613,10 +728,6 @@ mod tests {
+         };
+         let interrupt =
+             InterruptTransport::new(DummyIrqChip::new().into(), "net-test".to_string()).unwrap();
+-        let proxy = Proxy {
+-            frames: (0..frames).map(|_| vec![0xab; 60]).collect(),
+-            synthesizes,
+-        };
+         let worker = NetWorker::new(
+             queue(rx),
+             queue(tx),
+@@ -625,6 +736,7 @@ mod tests {
+             Box::new(proxy),
+             EventFd::new(EFD_NONBLOCK).unwrap(),
+             guest_csum,
++            coalesce,
+         );
+         (worker, interrupt)
+     }
+@@ -710,4 +822,86 @@ mod tests {
+             "used index 2 passes used_event 0"
+         );
+     }
++
++    const LONG: Duration = Duration::from_secs(60);
++
++    #[test]
++    fn a_first_frame_after_idle_interrupts_at_once() {
++        let mem = memory();
++        let rx = GuestQueue::new(GuestAddress(0x1000), &mem, 16);
++        let tx = GuestQueue::new(GuestAddress(0x3000), &mem, 16);
++        let (mut worker, interrupt, frames) = coalescing_worker(&mem, &rx, &tx, 8, LONG);
++
++        queue_frames(&frames, 1);
++        rx.avail.event.set(0);
++        worker.process_backend_socket_readable();
++
++        assert!(
++            take_interrupt(&interrupt),
++            "nothing was signalled recently, so there is nothing to wait for"
++        );
++    }
++
++    #[test]
++    fn a_wake_inside_the_window_waits_for_the_timer() {
++        let mem = memory();
++        let rx = GuestQueue::new(GuestAddress(0x1000), &mem, 16);
++        let tx = GuestQueue::new(GuestAddress(0x3000), &mem, 16);
++        let (mut worker, interrupt, frames) = coalescing_worker(&mem, &rx, &tx, 8, LONG);
++        queue_frames(&frames, 1);
++        rx.avail.event.set(0);
++        worker.process_backend_socket_readable();
++        assert!(take_interrupt(&interrupt));
++
++        // The guest drained its ring and re-armed, and the next frame lands straight away.
++        rx.avail.event.set(1);
++        queue_frames(&frames, 1);
++        worker.process_backend_socket_readable();
++        assert!(
++            !take_interrupt(&interrupt),
++            "the previous interrupt went out under a window ago"
++        );
++
++        worker.process_rx_coalesce_timer();
++        assert!(
++            take_interrupt(&interrupt),
++            "the timer pays the interrupt the guest asked for"
++        );
++    }
++
++    #[test]
++    fn the_timer_owes_nothing_when_nothing_was_held() {
++        let mem = memory();
++        let rx = GuestQueue::new(GuestAddress(0x1000), &mem, 16);
++        let tx = GuestQueue::new(GuestAddress(0x3000), &mem, 16);
++        let (mut worker, interrupt, frames) = coalescing_worker(&mem, &rx, &tx, 8, LONG);
++        queue_frames(&frames, 1);
++        rx.avail.event.set(0);
++        worker.process_backend_socket_readable();
++        assert!(take_interrupt(&interrupt));
++
++        worker.process_rx_coalesce_timer();
++        assert!(!take_interrupt(&interrupt));
++    }
++
++    #[test]
++    fn a_guest_out_of_rx_buffers_is_interrupted_at_once() {
++        let mem = memory();
++        let rx = GuestQueue::new(GuestAddress(0x1000), &mem, 16);
++        let tx = GuestQueue::new(GuestAddress(0x3000), &mem, 16);
++        let (mut worker, interrupt, frames) = coalescing_worker(&mem, &rx, &tx, 2, LONG);
++        queue_frames(&frames, 1);
++        rx.avail.event.set(0);
++        worker.process_backend_socket_readable();
++        assert!(take_interrupt(&interrupt));
++
++        // Two frames for the one buffer left: the second has nowhere to go.
++        rx.avail.event.set(1);
++        queue_frames(&frames, 2);
++        worker.process_backend_socket_readable();
++        assert!(
++            take_interrupt(&interrupt),
++            "a guest with no buffers left has to hear about it to post more"
++        );
++    }
+ }
+diff --git a/src/utils/src/macos/epoll.rs b/src/utils/src/macos/epoll.rs
+index cae27154..9c204224 100644
+--- a/src/utils/src/macos/epoll.rs
++++ b/src/utils/src/macos/epoll.rs
+@@ -352,8 +352,14 @@ impl Epoll {
+     /// Register a one-shot timer that fires after `delay_us` microseconds.
+     /// The resulting event will have `data` set to `udata`.
+     pub fn add_oneshot_timer(&self, delay_us: u64, udata: u64) {
++        self.add_oneshot_timer_id(0, delay_us, udata)
++    }
++
++    /// [`Epoll::add_oneshot_timer`] for a caller running more than one timer: kqueue keys a timer
++    /// by `id`, so adding an `id` again re-arms that timer rather than starting a second one.
++    pub fn add_oneshot_timer_id(&self, id: usize, delay_us: u64, udata: u64) {
+         let kev = libc::kevent {
+-            ident: 0,
++            ident: id,
+             filter: libc::EVFILT_TIMER,
+             flags: libc::EV_ADD | libc::EV_ONESHOT,
+             fflags: libc::NOTE_USECONDS,
+-- 
+2.54.0 (Apple Git-157)
+

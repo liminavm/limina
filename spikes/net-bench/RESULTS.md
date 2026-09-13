@@ -7,7 +7,8 @@ rides this path (gvproxy's `127.0.0.1:<port> → 192.168.127.2:22` forward), not
 
 - `Fedora-Workstation-44.enhanced` clone at payload r27 (kernel `7.1.8-limina16k.4`), 6 vCPUs,
   8 GiB, EFI + venus, headless (`LIMINA_DISPLAY_CAPTURE`), M1 Max host, gvproxy v0.8.8.
-- Release `limina` + `limina-vmm` (`LIMINA_BIN` / `LIMINA_VMM_BIN`), libkrun `af648dfe`.
+- Release `limina` + `limina-vmm` (`LIMINA_BIN` / `LIMINA_VMM_BIN`). libkrun is `af648dfe` for
+  the baseline and MTU tables, and the `limina` branch from `c890e1bd` on for everything after.
 - iperf: guest `iperf3 -c 192.168.127.254` → virtio-net → libkrun unixgram backend → gvproxy
   netstack → host `iperf3 -s -B 127.0.0.1`. `-R` reverses it.
 - ssh: host `ssh -p <fwd>` with `head -c <n> /dev/zero` on one end and `/dev/null` on the other,
@@ -110,8 +111,8 @@ host sample both had it about half busy. Its ordering of the busy samples still 
 
 Two ways to take interrupts off the guest:
 
-- **Device side:** libkrun `eb9588e6` (not carried; local tag `spike/net-rx-coalesce` in the
-  fork checkout) holds an RX interrupt the guest asked for until
+- **Device side:** libkrun `eb9588e6`, not carried; it is kept as `libkrun-rx-coalesce.patch`
+  next to this file. It holds an RX interrupt the guest asked for until
   `KRUN_NET_RX_COALESCE_US` after the previous one. A oneshot kqueue timer pays it. The first
   interrupt after idle, and one for a guest out of buffers, go out at once.
 - **Guest side:** Linux's per-device NAPI knobs. `napi_defer_hard_irqs` sets how many empty polls
@@ -140,7 +141,13 @@ Setup, measured 2026-09-13:
 - **Device coalescing costs latency even off-peak.** gvproxy's pure ACK arrives just ahead of the
   reply and spends the window, and the reply waits out the rest of it. That is the bimodal p50 at
   100 µs.
-- **One earlier leg is unconfirmed:** defer 2 / gro 100 µs, at default GOGC. It read CPU0 at
-  11.8% + 24.9% on 485k IRQs, at 7.5 Gbit/s. The 50 µs leg above shows no saving at all.
+- **defer 2 / gro 100 µs saves guest CPU only some of the time, and always costs latency.** Two
+  alternating A/B pairs on one boot, where the off legs read 17.7% + 43.6% and 17.7% + 41.0%:
+  - one leg at 8.6 Gbit/s read 14.6% + 42.4%, no saving;
+  - the other, at 8.2 Gbit/s, read 13.2% + 30.9%;
+  - an earlier leg at default GOGC read 11.8% + 24.9%, at 7.5 Gbit/s.
+
+  The saving appears only in legs that also moved less data. Interrupts fell 24% in both pairs.
+  RTT p50 went from ~130 to 234 µs on every round trip.
 - **defer 2 / gro 20 µs collapsed mid-run once:** 4.4 Gbit/s with 14 retransmits. Not
   investigated.
