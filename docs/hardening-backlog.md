@@ -3302,31 +3302,36 @@ either intermittent or elsewhere. The guard converts a crash into an attributabl
 not explain the NULL. If `[LIMINA-RESIDENCY] refused a NULL texture` ever appears, symbolise the
 return address it prints and that names the site outright.
 
-## vsock spins on an undersized RX descriptor, ~6M log lines per restore
+## A restore into a different machine floods the log with vsock `HdrDescTooSmall(8)`
 
-📋 booked 2026-09-08, while poking the synoik snapshot/restore path.
+📋 booked 2026-09-08; reproduced 2026-09-13 on limina `7efe6102` (libkrun `95625e59`).
 
-A headless restore of the synoik enhanced image (`--display-capture`, guest agent connected)
-produces a **585 MB** worker log in a couple of minutes. It is one line, repeated 6,161,873
-times:
+Resuming a snapshot into a worker whose device set differs from the one that took it makes the
+vsock device reject RX descriptors as fast as the guest re-posts them. Recipe: boot a synoik clone
+windowed with `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`, suspend it through the worker
+(`kill -TSTP <worker>`), then resume the same disk headless with `LIMINA_DISPLAY_CAPTURE` set.
+Within 20 s the worker has logged 8.7 million copies of
 
 ```
-WARN krun_devices::virtio::vsock::device] RX queue error: HdrDescTooSmall(N)
+WARN krun_devices::virtio::vsock::device] RX queue error: HdrDescTooSmall(8)
 ```
 
-The device does not retry one descriptor: `process_rx` (`vsock/device.rs:114-123`) warns, then
-returns the rejected descriptor to the guest as used with length 0. Six million lines therefore
-means six million descriptors, a ping-pong in which the guest keeps posting RX buffers the host
-keeps rejecting. A stale view of the RX ring after restore is the leading suspect.
+and reaches 4.3 GB (41.5 million lines) in about three minutes. It burns 1–2 host cores, and
+neither guest agent reconnects. The same snapshot resumed windowed logs none, and neither does a
+headless snapshot resumed headless, on this libkrun or on the 09-10 bundle's (`bae5de4a`).
 
-Two costs, and the second is the one that bit: the busy-loop burns a core, and the flood buries
-every other line in the log. It hid the GPU restore accounting behind six million lines of noise
-while that path was under investigation; the workaround is `RUST_LOG=info,krun_devices::virtio::vsock=off`,
-which is a gag, not a fix.
+- **N is 8 in every line.** 8 bytes is `struct virtio_input_event`, the buffer virtio-input
+  posts; a vsock RX buffer is 4 KiB. `process_stream_rx` returns each rejected descriptor to the
+  guest as used with length 0, so the guest re-posts it at once.
+- **The two machines differ in their devices.** The windowed boot has three virtio-input devices
+  (`input0`–`input2`) and four scanouts at 2560x1440; the headless boot has no input devices and
+  one 1280x800 scanout. The restore logs the difference — `gpu restore: snapshot has display 1,
+  device has no such scanout`, an xHCI port reconciled away — and carries on.
+- **Inferred, not verified:** with the input devices gone, the restored guest's virtio-input
+  driver posts its event buffers to an MMIO slot that vsock now occupies.
 
-Not established: whether the undersized descriptor is the guest's fault (a driver posting a
-too-small RX buffer) or ours (a header size the two sides disagree on — the "two values that must
-agree" shape). Start at the `HdrDescTooSmall` site in `third_party/libkrun/src/devices/src/virtio/vsock/`,
-find what the guest actually posted vs what the device demanded, and decide which side is wrong
-before either rate-limiting the log or changing the check. Rate-limiting alone would leave the
-spin and remove the evidence.
+The defect is that a resume does not refuse a machine whose device set differs from the
+snapshot's; the vsock flood is one symptom of it. The fix belongs there: record the device set in
+the snapshot and fail closed on a mismatch, with `--discard-suspend` as the way out. Rate-limiting
+the log would leave the spin and remove the evidence. Untested: whether other flag differences
+(`--cpus`, `--net`, `--usb`) trigger it too.
