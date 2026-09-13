@@ -1,17 +1,18 @@
 # vsock bulk-transfer profile
 
-What a large transfer over libkrun's vsock costs, where the cost lands, and why host→guest is the
-expensive direction.
+What a large transfer over libkrun's vsock costs, where the cost lands, and what moves it.
 
 ## Vehicle
 
 - `Fedora-Workstation-44.enhanced` clone at payload r27, 6 vCPUs, 8 GiB, EFI + venus, M1 Max host.
-- Release `limina-vmm` at limina `21ff92f3` (libkrun `1315acdb`), booted with
-  `LIMINA_VMM_BIN=target/release/limina-vmm` — a debug worker's unoptimised device code would
-  dominate the profile.
+- Release `limina-vmm`, booted with `LIMINA_VMM_BIN=target/release/limina-vmm` — a debug worker's
+  unoptimised device code would dominate the profile. libkrun at `1315acdb` for the baseline,
+  `e1c9a195` (EVENT_IDX) and `95625e59` (1 MiB proxy send buffer) for the fixes.
 - Path: guest `iperf3 -c 127.0.0.1:5201` → guest `socat TCP-LISTEN:5201 VSOCK-CONNECT:2:7000` →
   libkrun muxer → `LIMINA_VSOCK_BENCH=7000:/tmp/limina-vsockbench.sock` → host
   `socat UNIX-LISTEN TCP:127.0.0.1:5201` → host `iperf3 -s`.
+- The host relay runs at socat's defaults (8 KiB writes, 8 KiB send buffer) unless a row says
+  otherwise; "big writer" is `socat -b 1048576 UNIX-LISTEN:…,fork,sndbuf=1048576`.
 - The bench socket lives in `/tmp` because macOS caps a UNIX socket path at 104 bytes; socat
   truncates a longer one silently and binds the wrong path.
 
@@ -20,49 +21,74 @@ expensive direction.
 
 ## Measured 2026-09-13
 
-| run | throughput | worker CPU | vsock interrupts | bytes / interrupt |
+Guest → host:
+
+| libkrun | host relay | throughput | worker CPU | interrupts/s |
 |---|---|---|---|---|
-| idle | — | ~3% | — | — |
-| guest→host, 1 stream | 4.6–4.8 Gbit/s | ~114% | 7.3k/s | 82 KB |
-| guest→host, 4 streams | 4.65 Gbit/s | ~126% | — | — |
-| host→guest, 1 stream | 3.1–3.3 Gbit/s | ~223% | 47k/s | 8.7 KB |
-| host→guest, relay `-b 65536` | 3.8 Gbit/s | — | 50k/s | 9.4 KB |
-| host loopback, no VM | 75 Gbit/s | — | — | — |
+| `1315acdb` | default | 4.4–4.8 Gbit/s | 119% | 7.6k |
+| `e1c9a195` | default | 4.5 Gbit/s | 94% | 6.8k |
+| `95625e59` | default | 11.2–11.3 Gbit/s | 190% | 20.7k |
+| `95625e59` | big writer | 12.1 Gbit/s | — | 24.9k |
 
-Idle, the vsock threads are blocked (`vsock muxer` in `kevent`, `vsock reaper` on its channel)
-and no timesync thread exists, since limina turns the datagram off.
+Host → guest:
 
-## Guest→host: one thread, one syscall per packet
+| libkrun | host relay | throughput | worker CPU | interrupts/s | bytes/interrupt |
+|---|---|---|---|---|---|
+| `1315acdb` | default | 3.1–3.2 Gbit/s | 223% | 46k | 8.7 KB |
+| `1315acdb` | `-b 65536` | 3.8 Gbit/s | — | 50k | 9.4 KB |
+| `1315acdb` | 1 MiB `rcvbuf` + `sndbuf`, 8 KiB writes | 3.3 Gbit/s | — | 44k | 9.2 KB |
+| `1315acdb` | big writer | 9.2 Gbit/s | — | 21.6k | 53 KB |
+| `e1c9a195` | default | 3.0–3.2 Gbit/s | 234% | 27.5k | 14.7 KB |
+| `95625e59` | default | 3.0–3.3 Gbit/s | 234% | 27.6k | 14.8 KB |
+| `95625e59` | big writer | 9.3 Gbit/s | — | 18.9k | 61 KB |
 
-About 85% of the main thread's samples (5,682 of 6,695) sit in
-`Vsock::process_stream_tx` → `VsockMuxer::send_stream_pkt` → `UnixProxy::sendmsg` → `__sendto`:
-one host-socket write per guest TX packet, all on the event-manager thread. Four streams move no
-more than one, so that thread is the ceiling. The guest sends packets of up to 64 KiB
-(`VIRTIO_VSOCK_MAX_PKT_BUF_SIZE`), which is why this direction is the cheap one.
+Host loopback with no VM: 75 Gbit/s. Idle, the vsock threads are blocked (`vsock muxer` in
+`kevent`, `vsock reaper` on its channel) and no timesync thread exists, since limina turns the
+datagram off.
 
-## Host→guest: an 8 KiB socket buffer, and every interrupt on vCPU 0
+## On a macOS UNIX stream socket, size the sender's buffer
 
-- **Each wakeup finds at most ~8 KiB to deliver.** macOS sizes a UNIX stream socket's buffers at
-  `net.local.stream.sendspace` / `recvspace` = 8192. `UnixProxy::recv_pkt`
-  (`third_party/libkrun/src/devices/src/virtio/vsock/unix.rs:249`) drains the socket until
-  `EAGAIN` and signals the guest once per event, so bytes per interrupt tracks what the socket
-  holds: 8.7–9.4 KB, 6.5× the interrupts of guest→host for less data. Raising the host relay's
-  write chunk from socat's 8 KiB to 64 KiB (`-b 65536`) left it at 50k interrupts/s and
-  9.4 KB each, so the writer is not the limit.
+macOS gives a UNIX stream socket 8 KiB of send and receive buffer (`net.local.stream.sendspace` /
+`recvspace`), and what the connection holds in flight is bounded by the *sender's* send buffer.
+Raising the receiver's buffer, or the sender's write size alone, changes nothing; the sender's
+`SO_SNDBUF` together with writes that fill it does. Every direction below is set by which side is
+the sender.
+
+## Guest → host: libkrun is the sender
+
+- At `1315acdb`, 85% of the event-manager thread's samples (5,682 of 6,695) sit in
+  `Vsock::process_stream_tx` → `VsockMuxer::send_stream_pkt` → `UnixProxy::sendmsg` →
+  `__sendto`. A connected proxy's socket is blocking, and a guest packet carries up to 64 KiB
+  (`VIRTIO_VSOCK_MAX_PKT_BUF_SIZE`), so each packet waited on the host reader through an 8 KiB
+  buffer. Four streams move no more than one.
+- EVENT_IDX lets the guest skip the doorbell while the device is still draining TX: the same
+  throughput on 94% of a core instead of 119%.
+- A 1 MiB `SO_SNDBUF` on the proxy socket takes the stream to 11.3 Gbit/s, at 17% of a core per
+  Gbit/s instead of 21%.
+
+## Host → guest: the host peer is the sender
+
+- `UnixProxy::recv_pkt` (`third_party/libkrun/src/devices/src/virtio/vsock/unix.rs`) drains the
+  socket until `EAGAIN` and signals the guest once per wakeup, so the bytes per interrupt are what
+  the socket holds when the muxer wakes. With the host relay at socat's defaults that is ~9 KB,
+  whatever libkrun does; a big writer takes the same libkrun to 9.2 Gbit/s at 53 KB per
+  interrupt.
+- EVENT_IDX cuts the interrupts by 40% with the default writer, with throughput and worker CPU
+  unchanged. The guest driver re-arms `used_event` at the end of each drain, so suppression only
+  holds while it is mid-drain.
+- **All interrupts land on guest CPU 0.** `virtio10` (irq 24) had 2.7M interrupts on CPU0 and none
+  elsewhere. virtio-mmio gives a device one interrupt line, so it cannot be spread across CPUs.
+  `fc_vcpu 0` is the hot worker thread (~74% at `1315acdb`), and its host-side waits are inside
+  Hypervisor.framework's interrupt delivery — `Gic::compute_list_registers` /
+  `apply_list_registers` from `sync_from/to_gic_state` (671 ticks) and `Gic::generate_sgis` (431).
 - **The guest posts 4 KiB RX buffers** — `VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE` is
   `SKB_WITH_OVERHEAD(1024 * 4)` in the pinned kernel's `include/linux/virtio_vsock.h:138`. Each
   descriptor gets its own `recv`, so this sets the syscall count, not the interrupt count.
-- **All of them land on guest CPU 0.** `virtio10` (irq 24) had 2.7M interrupts on CPU0 and none
-  elsewhere; `effective_affinity_list` is `0` although irqbalance is active. `fc_vcpu 0` is the
-  hot worker thread (~74%): 3,724 ticks of guest execution (`hv_trap`), and its host-side waits
-  are inside Hypervisor.framework's interrupt delivery — `Gic::compute_list_registers` /
-  `apply_list_registers` from `sync_from/to_gic_state` (671 ticks) and `Gic::generate_sgis`
-  (431). vCPUs 1 and 2 are mostly parked.
-- **The muxer thread is ~45% busy** (2,910 of 6,630 samples outside its waits), most of it the
-  per-descriptor `__recvfrom`.
-- **The main thread re-arms epoll per packet**: `process_proxy_update` → `update_polling` →
-  `Epoll::ctl` → `kevent` (110 ticks), a syscall on top of each data syscall.
-- **In the guest**, two kworkers run at ~15% each and hard-IRQ time reaches ~10%.
+- The muxer thread is ~45% busy at `1315acdb` (2,910 of 6,630 samples outside its waits), most of
+  it the per-descriptor `__recvfrom`.
+- The event-manager thread re-arms the proxy's epoll registration on each credit update:
+  `process_proxy_update` → `update_polling` → `Epoll::ctl` → `kevent` (110 ticks).
+- In the guest, two kworkers run at ~15% each and hard-IRQ time reaches ~10%.
 
 ## Harness artefact
 
@@ -71,11 +97,10 @@ client would remove it; it is part of the bench, not of vsock.
 
 ## Candidate levers — none measured yet
 
-- **A bigger proxy socket buffer.** `SO_RCVBUF` on the host-side fd in `UnixProxy` (a libkrun
-  change) would let each wakeup carry more than 8 KiB, and so fewer interrupts per byte.
-- **Coalesce the interrupt.** virtio-mmio gives the device one interrupt line, so it lives on one
-  CPU at a time and cannot be spread; the lever is fewer, larger batches per signal.
-- **Larger guest RX buffers.** The 4 KiB default is a guest-kernel constant, and we build the
-  kernel; bigger buffers would cut the per-descriptor `recv` calls, not the interrupts.
-- **Fewer syscalls per byte on the host.** `recvmsg` into several chained descriptors at once on
-  RX; batch sends on TX; skip the `Epoll::ctl` re-arm when the interest set has not changed.
+- **limina's own host-side writers.** Anything limina sends to the guest over a vsock port moves
+  at the rate its own socket allows: a large `SO_SNDBUF` and large writes on the host end, per the
+  rule above.
+- **The muxer's level-triggered registrations.** While the guest's RX ring is empty, a readable
+  proxy socket keeps waking the muxer thread until the guest refills.
+- **The epoll re-arm per credit update**, when the interest set has not changed.
+- **`recvmsg` into several chained descriptors** on RX, instead of one `recv` per 4 KiB buffer.
