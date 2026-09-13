@@ -95,4 +95,9 @@ host sample both had it about half busy. Its ordering of the busy samples still 
 - A blank virtio-net header makes the guest verify every byte's checksum. The frames come out of
   gvproxy's own stack over a local socket, so the device marks them valid when the guest
   negotiated GUEST_CSUM. No checksum errors or discards in the guest afterwards.
-- `GOGC=400` cuts gvproxy's collector work; gvproxy's footprint read 65 MB mid-run.
+- `GOGC=400` cuts gvproxy's collector leaves from ~0.5 to 0.12 cores. Its cost is memory:
+  gvproxy's footprint mid-run was 65 MB, against 31 MB at the default GOGC on the same transfer
+  (where gvproxy measured 235% again, at 8.08 Gbit/s).
+- What is left in gvproxy at `GOGC=400`: `sendto` to the worker (0.38 cores) and scheduler
+  overhead. With the worker's `recvfrom` copy (~0.2), the socket hop between them is ~0.6 cores
+  of the ~3.5 the transfer costs in total.

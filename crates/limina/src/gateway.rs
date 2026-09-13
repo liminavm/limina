@@ -284,6 +284,9 @@ fn spawn_gvproxy_process(
     // Own process group so a terminal Ctrl-C (SIGINT to the foreground group) doesn't kill
     // gvproxy out from under the guest before we drive an orderly shutdown.
     cmd.process_group(0);
+    if let Some(gogc) = gvproxy_gogc(std::env::var_os("GOGC").as_deref()) {
+        cmd.env("GOGC", gogc);
+    }
     if let Some(log) = debug_log {
         let f = fs::File::create(log).with_context(|| format!("creating gvproxy log {log:?}"))?;
         let f2 = f.try_clone().context("cloning gvproxy log handle")?;
@@ -312,6 +315,14 @@ fn spawn_gvproxy_process(
 /// Ceiling: libkrun's net buffer holds a 65550-byte Ethernet frame (`MAX_BUFFER_SIZE` less
 /// the virtio-net header), and gvproxy's 1 MiB send buffer allows a datagram that size.
 const GVPROXY_MTU: u16 = 65520;
+
+/// The Go collector target gvproxy runs with, unless the user exported their own `GOGC`. At the
+/// default (100) the collector was about half of gvproxy's busy CPU on a bulk transfer; at 400
+/// gvproxy went from 235% to 186% of a core and host → guest from 8.1 to 8.7 Gbit/s, for a
+/// footprint of 65 MB instead of 31 under that load (`spikes/net-bench/RESULTS.md`).
+fn gvproxy_gogc(inherited: Option<&OsStr>) -> Option<&'static str> {
+    inherited.is_none().then_some("400")
+}
 
 /// Build gvproxy's argv (pure — unit-tested). `-listen-vfkit` must take an ABSOLUTE
 /// `unixgram://` URL (gvproxy parses `unixgram://host/path`, so a relative path's first
@@ -845,6 +856,13 @@ mod tests {
             let mp = args.iter().position(|a| a == "-mtu").expect("-mtu present");
             assert_eq!(args[mp + 1], OsString::from("65520"), "{config:?}");
         }
+    }
+
+    #[test]
+    fn gvproxy_collects_less_often_unless_told_otherwise() {
+        assert_eq!(gvproxy_gogc(None), Some("400"));
+        // A GOGC the user exported reaches gvproxy untouched.
+        assert_eq!(gvproxy_gogc(Some(OsStr::new("100"))), None);
     }
 
     #[test]
