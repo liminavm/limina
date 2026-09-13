@@ -151,7 +151,7 @@ EXTRA_ARGS=()
 # It is also the only way to test anything that depends on Info.plist. Found the hard way,
 # 2026-08-01.
 BIN="${LIMINA_BIN:-target/debug/limina}"
-"$BIN" --vmm-bin target/debug/limina-vmm \
+"$BIN" --vmm-bin "${LIMINA_VMM_BIN:-target/debug/limina-vmm}" \
   --firmware "$FW" \
   --disk "$WORK" --cpus "${LIMINA_CPUS:-6}" --ram-mib "${LIMINA_RAM_MIB:-8192}" $NET_FLAG \
   "${DISPLAY_FLAG[@]}" \
