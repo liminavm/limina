@@ -59,8 +59,40 @@ At 65520: no errors or drops on the guest NIC, 3 TCP retransmits across all runs
 limina passes `-mtu 65520` by default (`GVPROXY_MTU` in `crates/limina/src/gateway.rs`); on that
 build, without the wrapper, host → guest iperf measured 8.09 Gbit/s.
 
-## What still costs
+## Where the CPU goes at 8 Gbit/s host → guest (MTU 65520)
 
-At 8 Gbit/s host → guest the worker runs at ~165% and gvproxy at ~230% of a core. Unmeasured
-levers on the libkrun side: the RX drain signals the guest on every pass without asking
-`needs_notification` (TX does ask), and every frame is its own `recv` into one descriptor chain.
+`limina-vmm`'s ~165% is mostly the guest itself: `busyleaves.py` over the worker sample puts
+vCPU0 at 63% (51% of it `hv_trap`, i.e. running the guest; every net interrupt lands on CPU0),
+the other vCPUs at ~35% together, and the `virtio-net worker` thread at ~36% (20% of that in
+`recvfrom`, which on a non-blocking socket is the copy, not a wait). Inside the guest, `mpstat`
+taken in the same run has CPU0 at 21.6% hard IRQ + 46.1% softirq, on 28k net interrupts/s for
+~30k frames/s.
+
+gvproxy's ~235% is spread over ~12 Go threads. With a symbolized build of v0.8.8 (the Homebrew
+binary is stripped), the busy leaves are the Go runtime (~0.9 cores, mostly the garbage
+collector: `scanblock`, `findObject`, `tryDeferToSpanScan`) and `sendto` (~0.35); gVisor's TCP
+and checksum code is under 0.1.
+
+`perf` inside the guest is not a usable oracle here: with no PMU it samples on a timer that
+cannot fire inside interrupt-disabled code, and reported vCPU0 90% idle while `mpstat` and the
+host sample both had it about half busy. Its ordering of the busy samples still pointed at
+`virtnet_poll` → `receive_buf` → `gro_receive_skb`, with `do_csum` the top busy leaf.
+
+## Fixes, host → guest iperf at MTU 65520
+
+| change | throughput | worker CPU | gvproxy CPU | net IRQs / 30 s | guest CPU0 hard+soft IRQ |
+|---|---|---|---|---|---|
+| baseline | 8.0 Gbit/s | 165% | 230% | 820k | 21.6% + 46.1% |
+| RX asks `needs_notification` | 7.9 Gbit/s | 150–175% | 230% | 584k | 15.3% + 43.9% |
+| + `VIRTIO_NET_HDR_F_DATA_VALID` | 8.0 Gbit/s | 160–175% | 235% | 663k | 16.9% + 37.8% |
+| + gvproxy `GOGC=400` | 8.7 Gbit/s | 167% | 186% | 708k | — |
+
+- Linux's virtio-net NAPI parks `used_event` while it polls and, once the device has fired,
+  trusts it not to fire again until `used_event` moves (`virtqueue_disable_cb_split` in
+  `drivers/virtio/virtio_ring.c`). The device signalled every drain regardless. Honouring it
+  removes 29% of the interrupts; the rest come from the guest finishing a poll before the next
+  32 KB frame arrives and re-arming.
+- A blank virtio-net header makes the guest verify every byte's checksum. The frames come out of
+  gvproxy's own stack over a local socket, so the device marks them valid when the guest
+  negotiated GUEST_CSUM. No checksum errors or discards in the guest afterwards.
+- `GOGC=400` cuts gvproxy's collector work; gvproxy's footprint read 65 MB mid-run.
