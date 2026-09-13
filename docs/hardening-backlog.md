@@ -3302,36 +3302,29 @@ either intermittent or elsewhere. The guard converts a crash into an attributabl
 not explain the NULL. If `[LIMINA-RESIDENCY] refused a NULL texture` ever appears, symbolise the
 return address it prints and that names the site outright.
 
-## A restore into a different machine floods the log with vsock `HdrDescTooSmall(8)`
+## Closed — a restore into a different machine flooded the log with vsock `HdrDescTooSmall(8)`
 
-📋 booked 2026-09-08; reproduced 2026-09-13 on limina `7efe6102` (libkrun `95625e59`).
+✅ fixed 2026-09-13: libkrun `af648dfe`, limina `16356959`.
 
-Resuming a snapshot into a worker whose device set differs from the one that took it makes the
-vsock device reject RX descriptors as fast as the guest re-posts them. Recipe: boot a synoik clone
-windowed with `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`, suspend it through the worker
-(`kill -TSTP <worker>`), then resume the same disk headless with `LIMINA_DISPLAY_CAPTURE` set.
-Within 20 s the worker has logged 8.7 million copies of
+virtio-mmio slots are handed out in attach order, so a machine with one device more or fewer puts
+every later device at a different address. A windowed snapshot resumed headless lost its three
+virtio-input devices; vsock slid into the first input slot, the guest's virtio-input driver kept
+posting its 8-byte `virtio_input_event` buffers there, and the vsock device rejected each one
+(`HdrDescTooSmall(8)`, 8.7 million lines in 20 s, 1–2 host cores, agents never reconnect).
 
-```
-WARN krun_devices::virtio::vsock::device] RX queue error: HdrDescTooSmall(8)
-```
+- **A resume now refuses a machine whose devices moved.** Snapshot v9 records every virtio-mmio
+  device's type, base and irq; restore compares both ways before any RAM is applied and names the
+  difference. A v8 snapshot carries no record and restores unchecked.
+- **A refusal keeps the suspended session.** The worker exits 124; the supervisor renames the
+  snapshot back and re-records `[suspended]`. The log, the window alert and the control center all
+  say to start the VM the way it was suspended, or with `--discard-suspend` (now accepted by
+  `limina start` too) to boot fresh.
+- **The scanout count is not compared.** The GPU copes with fewer displays, and suspending docked
+  then resuming undocked is legitimate.
+- Any flag that adds or removes a virtio device (`--window`, `--net`, a disk, a share) or shifts
+  the virtio slots (`--usb`, whose controller registers before them) is refused. `--cpus` and
+  `--ram-mib` were already refused by the vCPU-count and layout checks.
 
-and reaches 4.3 GB (41.5 million lines) in about three minutes. It burns 1–2 host cores, and
-neither guest agent reconnects. The same snapshot resumed windowed logs none, and neither does a
-headless snapshot resumed headless, on this libkrun or on the 09-10 bundle's (`bae5de4a`).
-
-- **N is 8 in every line.** 8 bytes is `struct virtio_input_event`, the buffer virtio-input
-  posts; a vsock RX buffer is 4 KiB. `process_stream_rx` returns each rejected descriptor to the
-  guest as used with length 0, so the guest re-posts it at once.
-- **The two machines differ in their devices.** The windowed boot has three virtio-input devices
-  (`input0`–`input2`) and four scanouts at 2560x1440; the headless boot has no input devices and
-  one 1280x800 scanout. The restore logs the difference — `gpu restore: snapshot has display 1,
-  device has no such scanout`, an xHCI port reconciled away — and carries on.
-- **Inferred, not verified:** with the input devices gone, the restored guest's virtio-input
-  driver posts its event buffers to an MMIO slot that vsock now occupies.
-
-The defect is that a resume does not refuse a machine whose device set differs from the
-snapshot's; the vsock flood is one symptom of it. The fix belongs there: record the device set in
-the snapshot and fail closed on a mismatch, with `--discard-suspend` as the way out. Rate-limiting
-the log would leave the spin and remove the evidence. Untested: whether other flag differences
-(`--cpus`, `--net`, `--usb`) trigger it too.
+Gate: `l1_resume_into_different_devices_is_refused_and_keeps_the_snapshot`. On the synoik recipe
+above (windowed suspend, headless resume) the resume is refused with zero `HdrDescTooSmall` lines,
+and the same snapshot resumed windowed comes back.
