@@ -102,20 +102,41 @@ host sample both had it about half busy. Its ordering of the busy samples still 
 - What is left in gvproxy at `GOGC=400`: `sendto` to the worker (0.38 cores) and scheduler
   overhead. With the worker's `recvfrom` copy (~0.2), the socket hop between them is ~0.6 cores
   of the ~3.5 the transfer costs in total.
-## What interrupt coalescing could buy, measured with the guest's own knobs
+## Interrupt coalescing does not reduce the guest's RX cost
 
-Linux already has NIC-style RX coalescing as per-device sysfs knobs: `napi_defer_hard_irqs`
-(stay in poll mode for N empty polls before re-enabling the interrupt) and `gro_flush_timeout`
-(the timer, in ns, that drives the next poll while deferred). Setting them is the upper bound on
-what device-side coalescing in libkrun could do, with no code. Host → guest iperf at MTU 65520,
-default GOGC, same VM and build, with in-run guest `mpstat`; latency from `rr.py` (one-byte TCP
-round trips, guest → host echo server through gvproxy, 10k per run).
+Two ways to take interrupts off the guest:
 
-| guest knobs | throughput | worker CPU | net IRQs / 30 s | guest CPU0 hard+soft IRQ | RTT p50 / p90 / p99 |
+- **Device side:** libkrun `eb9588e6` (not carried; local tag `spike/net-rx-coalesce` in the
+  fork checkout) holds an RX interrupt the guest asked for until
+  `KRUN_NET_RX_COALESCE_US` after the previous one. A oneshot kqueue timer pays it. The first
+  interrupt after idle, and one for a guest out of buffers, go out at once.
+- **Guest side:** Linux's per-device NAPI knobs. `napi_defer_hard_irqs` sets how many empty polls
+  run before the interrupt is re-enabled. `gro_flush_timeout` (ns) is the timer that drives the
+  next poll while deferred, and it holds GRO open.
+
+Setup, measured 2026-09-13:
+
+- host → guest iperf at MTU 65520, gvproxy at `GOGC=400`;
+- guest CPU from `mpstat` taken inside the run;
+- latency from `rr.py`: one-byte TCP round trips from the guest to a host echo server through
+  gvproxy, two runs of 10k per leg;
+- one boot per device window.
+
+| setting | throughput | worker CPU | net IRQs / 30 s | guest CPU0 hard+soft IRQ | RTT p50 / p90 / p99 |
 |---|---|---|---|---|---|
-| off (0 / 0) | 7.8–8.0 Gbit/s | 160–175% | 660k | 16.9% + 37.8% | 129 / 157 / 186 µs |
-| `2` / `100000` | 7.5 Gbit/s | 136–146% | 485k | 11.8% + 24.9% | 120 / 231 / 244 µs |
+| none | 8.5 Gbit/s | 166–178% | 685k | 17.6% + 40.6% | 130 / 158 / 189 µs |
+| device 50 µs | 8.9 Gbit/s | 167–179% | 603k | 15.6% + 40.2% | 148 / 169 / 195 µs |
+| device 100 µs | 8.8 Gbit/s | 164–168% | 557k | 15.0% + 41.8% | 127–231 / 257 / 280 µs |
+| guest defer 0, gro 50 µs | 8.7 Gbit/s | 169–182% | 698k | 18.3% + 40.0% | 130 / 156 / 188 µs |
+| guest defer 2, gro 50 µs | 8.5 Gbit/s | 157–169% | 533k | 16.9% + 42.3% | 127 / 146–187 / 209–219 µs |
 
-Coalescing saves CPU, not throughput: about 18 points of guest CPU0 and 20 points of worker, with
-throughput unchanged within noise, because gvproxy (~235%, one flow) is the limit. The cost is the
-timer showing up in latency: p90 +75 µs, p99 +58 µs.
+- **Interrupts are not the cost driver.** Both mechanisms cut interrupts by up to 22% and leave
+  guest CPU0 where it was. The guest's RX cost is per frame, not per interrupt, so bigger batches
+  per poll buy nothing. Holding GRO open without deferring (defer 0) changes nothing either.
+- **Device coalescing costs latency even off-peak.** gvproxy's pure ACK arrives just ahead of the
+  reply and spends the window, and the reply waits out the rest of it. That is the bimodal p50 at
+  100 µs.
+- **One earlier leg is unconfirmed:** defer 2 / gro 100 µs, at default GOGC. It read CPU0 at
+  11.8% + 24.9% on 485k IRQs, at 7.5 Gbit/s. The 50 µs leg above shows no saving at all.
+- **defer 2 / gro 20 µs collapsed mid-run once:** 4.4 Gbit/s with 14 retransmits. Not
+  investigated.
