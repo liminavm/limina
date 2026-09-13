@@ -304,6 +304,15 @@ fn spawn_gvproxy_process(
     Ok(child)
 }
 
+/// The MTU gvproxy runs the guest link at, and hands the guest in its DHCP lease (a stock
+/// NetworkManager applies it). At the default 1500 every host → guest byte arrives in a
+/// 1500-byte frame, each costing a `recv` in the worker, a descriptor and nearly an interrupt:
+/// 1.1 Gbit/s against 8.1 at this value (`spikes/net-bench/RESULTS.md`). The link ends at
+/// gvproxy's netstack, which terminates TCP, so the real network never sees these frames.
+/// Ceiling: libkrun's net buffer holds a 65550-byte Ethernet frame (`MAX_BUFFER_SIZE` less
+/// the virtio-net header), and gvproxy's 1 MiB send buffer allows a datagram that size.
+const GVPROXY_MTU: u16 = 65520;
+
 /// Build gvproxy's argv (pure — unit-tested). `-listen-vfkit` must take an ABSOLUTE
 /// `unixgram://` URL (gvproxy parses `unixgram://host/path`, so a relative path's first
 /// component is mistaken for the URL host → `bind: no such file or directory`). `-ssh-port`
@@ -326,6 +335,9 @@ fn gvproxy_args(
         "unixgram://{}",
         socket_path.display()
     )));
+    // Unlike `-ssh-port`, gvproxy applies `-mtu` over a config file, so it goes in both modes.
+    v.push("-mtu".into());
+    v.push(OsString::from(GVPROXY_MTU.to_string()));
     match config {
         Some(c) => {
             v.push("-config".into());
@@ -823,6 +835,16 @@ mod tests {
             .expect("-config present");
         assert_eq!(args[cp + 1], OsString::from("/c.yaml"));
         assert!(!args.iter().any(|a| a == "-ssh-port"));
+    }
+
+    #[test]
+    fn the_nat_link_runs_at_a_jumbo_mtu_in_both_modes() {
+        // gvproxy applies `-mtu` over a config file too, so the flag covers both spawn paths.
+        for config in [None, Some(Path::new("/c.yaml"))] {
+            let args = gvproxy_args(Path::new("/tmp/x.sock"), 2345, false, config);
+            let mp = args.iter().position(|a| a == "-mtu").expect("-mtu present");
+            assert_eq!(args[mp + 1], OsString::from("65520"), "{config:?}");
+        }
     }
 
     #[test]

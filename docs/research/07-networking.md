@@ -231,6 +231,10 @@ guest virtio_net -> TX vq -> net worker -> UNIX socket -> vmnet helper (root)
   machine, krunkit). One call: `krun_add_net_unixgram(path,-1,mac,feats,NET_FLAG_VFKIT)`.
 - **Cons:** userspace TCP stack ⇒ throughput/latency cost; NAT only; we supervise
   gvproxy + socket lifecycle + forward rules; no worker auto-reconnect on crash.
+- **Throughput is set by gvproxy's MTU in the host → guest direction** (the guest
+  sends TSO frames the other way): 1.1 Gbit/s at the default 1500, 8.1 at 65520,
+  which limina passes as `-mtu` and gvproxy hands the guest over DHCP.
+  Measurements: `spikes/net-bench/RESULTS.md`.
 - **Verdict:** strong default for NAT. (Prefer the new `unixgram` API over the
   legacy `set_gvproxy_path` krunkit still uses, so we can pass MAC + TSO6 directly.)
 
