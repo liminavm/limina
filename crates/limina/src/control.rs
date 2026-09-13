@@ -933,6 +933,10 @@ fn accept_loop(listener: UnixListener, inner: Arc<Inner>) {
                     log::warn!("control: cannot spawn peer thread: {e}");
                 }
             }
+            Err(e) if accept_error_is_transient(&e) => {
+                log::warn!("control: accept failed ({e}); retrying");
+                std::thread::sleep(ACCEPT_RETRY);
+            }
             Err(e) => {
                 // Listener broken (e.g. socket unlinked early) — nothing left to serve.
                 log::warn!("control: accept failed: {e}");
@@ -940,6 +944,26 @@ fn accept_loop(listener: UnixListener, inner: Arc<Inner>) {
             }
         }
     }
+}
+
+/// Pause after a transient accept failure, so a full descriptor table is waited out
+/// rather than spun on.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+
+/// Whether an accept failure leaves the listener usable: the process or system ran out of
+/// descriptors or memory for the new socket, or one connection went away mid-accept.
+fn accept_error_is_transient(e: &std::io::Error) -> bool {
+    matches!(
+        e.raw_os_error(),
+        Some(
+            libc::EMFILE
+                | libc::ENFILE
+                | libc::ENOBUFS
+                | libc::ENOMEM
+                | libc::ECONNABORTED
+                | libc::EINTR
+        )
+    )
 }
 
 /// One agent session: HELLO → WELCOME, register, then serve until EOF. Heartbeats keep
@@ -1200,6 +1224,32 @@ fn set_nosigpipe(stream: &UnixStream) {
 mod tests {
     use super::*;
     use limina_proto::Hello;
+
+    /// A full descriptor table is a moment, not the end of the listener: an accept that
+    /// fails on it must be retried, or the control plane stops for the VM's whole life.
+    #[test]
+    fn accept_retries_exhaustion_and_stops_on_a_dead_listener() {
+        use std::io::Error;
+        for errno in [
+            libc::EMFILE,
+            libc::ENFILE,
+            libc::ENOBUFS,
+            libc::ENOMEM,
+            libc::ECONNABORTED,
+            libc::EINTR,
+        ] {
+            assert!(
+                accept_error_is_transient(&Error::from_raw_os_error(errno)),
+                "errno {errno} should be retried"
+            );
+        }
+        for errno in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK] {
+            assert!(
+                !accept_error_is_transient(&Error::from_raw_os_error(errno)),
+                "errno {errno} should stop the loop"
+            );
+        }
+    }
 
     /// Connect a fake agent to the plane's socket, handshake, and return the stream.
     fn connect_agent(path: &Path, caps: &[&str]) -> UnixStream {
