@@ -53,7 +53,7 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::FromRawFd;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use limina_proto::{
     CHANNEL_CLIPBOARD, CHANNEL_CONTROL, CONTROL_PORT, ClipData, ClipOffer, ClipRequest, Heartbeat,
@@ -72,6 +72,18 @@ const OFFER_MIMES: [&str; 2] = [TEXT_MIME, "text/plain"];
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(1);
 /// Backoff between vsock reconnect attempts.
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
+/// A channel the host closes sooner than this was refused, not served: reconnecting at
+/// once would only be refused again, as fast as the two sides can loop.
+const REFUSED_WITHIN: Duration = Duration::from_secs(5);
+
+/// How long to wait before reconnecting, given how long the last channel lived.
+fn reconnect_delay(lived: Duration) -> Duration {
+    if lived < REFUSED_WITHIN {
+        RECONNECT_EVERY
+    } else {
+        Duration::ZERO
+    }
+}
 /// Quiet-tier probe attempts before the RemoteDesktop fallback is taken (× RECONNECT_EVERY
 /// ≈ 20 s). A session that is merely still coming up grows its ext-data-control backend
 /// well inside this, so the loud tier is a last resort rather than a race winner. Only
@@ -347,6 +359,8 @@ fn claim_phase(
         host_serial: 0,
         cached_host_text: None,
         logged_waiting: false,
+        connected_at: None,
+        retry_after: None,
     };
 
     loop {
@@ -548,11 +562,18 @@ struct Bridge {
     /// Host clipboard content we own the guest selection with, served on transfers.
     cached_host_text: Option<Vec<u8>>,
     logged_waiting: bool,
+    /// When the live channel was opened, to tell a refused channel from a served one.
+    connected_at: Option<Instant>,
+    /// No reconnect attempt before this.
+    retry_after: Option<Instant>,
 }
 
 impl Bridge {
     /// One vsock connect + HELLO attempt; spawns the reader thread on success.
     fn try_connect(&mut self, port: u32, tx: &mpsc::Sender<Event>, gate: &layout_gate::LayoutGate) {
+        if self.retry_after.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
         let Some(mut stream) = vsock_connect(port) else {
             if !self.logged_waiting {
                 eprintln!("limina-agent-session: host not reachable yet; retrying quietly");
@@ -565,9 +586,11 @@ impl Bridge {
         let hello = hello_msg(&["clipboard"]);
         let seed = gate.for_new_channel(layout_gate::seat_active());
         if open_channel(&mut stream, &hello, seed).is_err() {
+            self.back_off(Duration::ZERO);
             return;
         }
         let Ok(reader) = stream.try_clone() else {
+            self.back_off(Duration::ZERO);
             return;
         };
         let tx = tx.clone();
@@ -590,13 +613,28 @@ impl Bridge {
         eprintln!("limina-agent-session: connected to host");
         self.logged_waiting = false;
         self.host = Some(stream);
+        self.connected_at = Some(Instant::now());
+        self.retry_after = None;
+    }
+
+    /// Drop the channel, holding off the next attempt if it lived only `lived`.
+    fn back_off(&mut self, lived: Duration) {
+        self.host = None;
+        self.connected_at = None;
+        self.retry_after = Some(Instant::now() + reconnect_delay(lived));
+    }
+
+    /// The channel died: back off if the host dropped it before serving it.
+    fn channel_lost(&mut self) {
+        let lived = self.connected_at.map_or(Duration::ZERO, |t| t.elapsed());
+        self.back_off(lived);
     }
 
     fn send(&mut self, channel: u32, msg: &Message) {
         if let Some(stream) = self.host.as_mut()
             && write_message(stream, channel, msg).is_err()
         {
-            self.host = None;
+            self.channel_lost();
         }
     }
 
@@ -610,7 +648,7 @@ impl Bridge {
 
     fn handle(&mut self, ev: Event) {
         match ev {
-            Event::HostGone => self.host = None,
+            Event::HostGone => self.channel_lost(),
             Event::Layout(layout) => {
                 // Storage and arbitration live in the [`layout_gate`]; by the time a
                 // layout reaches the bridge it has already been cleared to go out.
@@ -973,5 +1011,24 @@ mod cli_tests {
     fn unknown_arguments_exit_nonzero_instead_of_daemonizing() {
         assert_eq!(run(&["--nope"]), Some(2));
         assert_eq!(run(&["serve"]), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use super::{RECONNECT_EVERY, reconnect_delay};
+    use std::time::Duration;
+
+    /// A host that accepts and then drops the channel must not be reconnected to at once:
+    /// that loop once made 396,747 connects in 150 s and killed the worker.
+    #[test]
+    fn a_channel_the_host_drops_at_once_waits_before_reconnecting() {
+        assert_eq!(reconnect_delay(Duration::ZERO), RECONNECT_EVERY);
+        assert_eq!(reconnect_delay(Duration::from_millis(500)), RECONNECT_EVERY);
+    }
+
+    #[test]
+    fn a_channel_that_served_for_a_while_reconnects_at_once() {
+        assert_eq!(reconnect_delay(Duration::from_secs(60)), Duration::ZERO);
     }
 }
