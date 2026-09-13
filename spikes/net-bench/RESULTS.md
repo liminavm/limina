@@ -90,8 +90,9 @@ host sample both had it about half busy. Its ordering of the busy samples still 
 - Linux's virtio-net NAPI parks `used_event` while it polls and, once the device has fired,
   trusts it not to fire again until `used_event` moves (`virtqueue_disable_cb_split` in
   `drivers/virtio/virtio_ring.c`). The device signalled every drain regardless. Honouring it
-  removes 29% of the interrupts; the rest come from the guest finishing a poll before the next
-  32 KB frame arrives and re-arming.
+  takes the interrupts from 820k to 584k–708k per 30 s (the spread is across same-code reruns,
+  so call it ~20%); the rest come from the guest finishing a poll before the next 32 KB frame
+  arrives and re-arming.
 - A blank virtio-net header makes the guest verify every byte's checksum. The frames come out of
   gvproxy's own stack over a local socket, so the device marks them valid when the guest
   negotiated GUEST_CSUM. No checksum errors or discards in the guest afterwards.
@@ -101,3 +102,20 @@ host sample both had it about half busy. Its ordering of the busy samples still 
 - What is left in gvproxy at `GOGC=400`: `sendto` to the worker (0.38 cores) and scheduler
   overhead. With the worker's `recvfrom` copy (~0.2), the socket hop between them is ~0.6 cores
   of the ~3.5 the transfer costs in total.
+## What interrupt coalescing could buy, measured with the guest's own knobs
+
+Linux already has NIC-style RX coalescing as per-device sysfs knobs: `napi_defer_hard_irqs`
+(stay in poll mode for N empty polls before re-enabling the interrupt) and `gro_flush_timeout`
+(the timer, in ns, that drives the next poll while deferred). Setting them is the upper bound on
+what device-side coalescing in libkrun could do, with no code. Host → guest iperf at MTU 65520,
+default GOGC, same VM and build, with in-run guest `mpstat`; latency from `rr.py` (one-byte TCP
+round trips, guest → host echo server through gvproxy, 10k per run).
+
+| guest knobs | throughput | worker CPU | net IRQs / 30 s | guest CPU0 hard+soft IRQ | RTT p50 / p90 / p99 |
+|---|---|---|---|---|---|
+| off (0 / 0) | 7.8–8.0 Gbit/s | 160–175% | 660k | 16.9% + 37.8% | 129 / 157 / 186 µs |
+| `2` / `100000` | 7.5 Gbit/s | 136–146% | 485k | 11.8% + 24.9% | 120 / 231 / 244 µs |
+
+Coalescing saves CPU, not throughput: about 18 points of guest CPU0 and 20 points of worker, with
+throughput unchanged within noise, because gvproxy (~235%, one flow) is the limit. The cost is the
+timer showing up in latency: p90 +75 µs, p99 +58 µs.
