@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! Enhanced-tier 3D test: venus works on our custom 16 KiB-page kernel.
+//! Enhanced-tier 3D tests: venus works on our custom 16 KiB-page kernel.
 //!
-//! Drives the real `limina` supervisor to direct-boot the in-repo Fedora image's btrfs root
-//! with our **16 KiB-page** kernel (`Image-16k`), the coexist (venus) GPU, and user-mode NAT.
-//! Then it SSHes in and asks `vulkaninfo`: a 16 KiB guest places host-visible virtio-gpu
+//! `venus_enumerates_on_16k_kernel` drives the real `limina` supervisor to direct-boot the
+//! stock image's btrfs root with our **16 KiB-page** test kernel (`Image-16k`) — the
+//! 16k-kernel-on-stock-userspace mix — with the coexist (venus) GPU and user-mode NAT; the two
+//! seated tests EFI-boot the enhanced golden on its own installed 16k kernel instead.
+//! The first test SSHes in and asks `vulkaninfo`: a 16 KiB guest places host-visible virtio-gpu
 //! blobs on 16 KiB boundaries, so `hv_vm_map` accepts them and venus enumerates the real
 //! host GPU — whereas the stock 4 KiB Fedora kernel can't map those blobs and falls back to
 //! llvmpipe (see memory `limina-tier2-venus`, roadmap M4).
 //!
-//! Prereqs: the 16 KiB kernel (`scripts/build-test-kernel.sh PAGESIZE=16k`) and the Fedora
-//! image. The test SKIPs cleanly if either is missing. Gated behind LIMINA_HVF_TESTS; run via
+//! Prereqs: the 16 KiB test kernel (`scripts/build-test-kernel.sh PAGESIZE=16k`) and the stock
+//! image for the first test; the enhanced golden and the GOP firmware for the seated ones. Each
+//! SKIPs cleanly if its prerequisite is missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`. This is a heavy test (full Fedora desktop boot on a custom kernel).
 
 use std::time::{Duration, Instant};
@@ -119,7 +122,7 @@ fn our_mesa_venus_renders_seated_desktop() {
 
     // The seated enhanced golden (enhanced.test.raw) + coexist venus display + NAT. Guest::boot
     // wires KosmicKrisp automatically for the coexist display.
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         // LIMINA_PRESENT_COPY=1 mirrors the product launcher's default (boot-seated-efi.sh) and
         // venus_replay, so we boot the seated desktop the way limina actually ships it. (It does NOT
         // silence the harness-only `present_surface -2` host-present gap — that persists either way and
@@ -224,7 +227,7 @@ fn venus_desktop_pixel_verifies_through_host_capture() {
         return;
     }
 
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg
             .with_coexist_display(1280, 800)
             .with_net()

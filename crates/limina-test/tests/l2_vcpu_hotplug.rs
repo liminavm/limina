@@ -19,9 +19,9 @@
 //! RED (pre-fix): the offline hangs / wedges the guest → the post-offline SSH assert fails.
 //! GREEN (post-fix): offline + re-online round-trip cleanly.
 //!
-//! Uses the ≥7.1 injected-kernel enhanced path (`enhanced_share_from_env`, 4 vCPUs) — the kernel
-//! carries CONFIG_HOTPLUG_CPU. SKIPs if the ≥7.1 kernel / disk is missing (build with
-//! `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh`).
+//! EFI-boots the enhanced golden (`seated_efi_fedora_from_env`, 4 vCPUs) on its own installed
+//! 16k kernel, which carries CONFIG_HOTPLUG_CPU. SKIPs if the golden or the GOP firmware is
+//! missing.
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
 use std::time::Duration;
@@ -38,8 +38,8 @@ fn guest_vcpu_offline_online_does_not_wedge() {
         return;
     }
 
-    // 4-vCPU ≥7.1 guest + NAT (no display — this is a scheduler/PSCI test, not venus).
-    let cfg = match GuestConfig::enhanced_share_from_env() {
+    // 4-vCPU enhanced guest + NAT (no display — this is a scheduler/PSCI test, not venus).
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg.with_net(),
         Err(e) => {
             eprintln!("SKIPPED guest_vcpu_offline_online_does_not_wedge: {e}");
@@ -50,7 +50,7 @@ fn guest_vcpu_offline_online_does_not_wedge() {
         cfg.cpus, 4,
         "this test expects 4 vCPUs to offline two secondaries"
     );
-    eprintln!("booting a 4-vCPU ≥7.1 guest to exercise runtime vCPU offline/online");
+    eprintln!("booting a 4-vCPU enhanced guest to exercise runtime vCPU offline/online");
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest

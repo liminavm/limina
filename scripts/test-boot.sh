@@ -46,13 +46,13 @@ echo "==> running boot tests (LIMINA_HVF_TESTS=1)"
 # machine without them still gets a green, honest run:
 # - `venus` is the enhanced-tier (16 KiB kernel) 3D test; it SKIPs instantly unless
 #   `Image-16k` exists (build with `scripts/build-test-kernel.sh PAGESIZE=16k`), and when it
-#   does it runs a full Fedora-on-custom-kernel boot (~minutes) to confirm venus enumerates.
+#   does it runs a full Fedora-on-custom-kernel boot (~10 s to sshd) to confirm venus enumerates.
 # - `venus_replay` is the tier-2 RENDERING test (seated dev-enh boot + GL trace replay,
 #   venus vs llvmpipe pixel compare); it SKIPs without the dev-enh golden, the KK ICD, or
 #   the trace fixture (fixtures/traces/ — regenerate via spikes/trace-replay/).
-# - `l2_share_71` is the ≥7.1-kernel virtiofs --share guard (libkrun 0090); it SKIPs unless a
-#   ≥7.1 16 KiB test kernel exists (build with
-#   `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh`).
+# - `l2_share_71` is the ≥7.1-kernel virtiofs --share guard (libkrun 0090); it EFI-boots the
+#   enhanced golden on its own ≥7.1 kernel and SKIPs only when that image or the GOP firmware is
+#   missing.
 #
 # --no-fail-fast is load-bearing: cargo test fail-fasts ACROSS test binaries, so without it the
 # first failing binary (e.g. boot) silently stops the run and every later binary (net, venus,

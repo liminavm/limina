@@ -50,7 +50,7 @@ fn fence_present_chain_presents_and_never_wedges() {
         return;
     }
 
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg
             .with_coexist_display(1280, 800)
             .with_net()

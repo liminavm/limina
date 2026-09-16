@@ -68,7 +68,7 @@ fn an_idle_guest_sheds_vcpus_and_a_busy_one_gets_them_back() {
         return;
     }
 
-    let cfg = match GuestConfig::enhanced_share_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg
             .with_net()
             .with_supervisor_arg("--cpu-reclaim")
@@ -204,7 +204,7 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
         return;
     }
 
-    let base = match GuestConfig::enhanced_share_from_env() {
+    let base = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg
             .with_net()
             .with_supervisor_arg("--cpu-reclaim")

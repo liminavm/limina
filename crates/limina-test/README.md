@@ -115,8 +115,8 @@ is for looking, not for gating.
 | `LIMINA_FIRMWARE` | `/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd` (L2) |
 | `LIMINA_TEST_DISK` | `Fedora-Workstation-43.raw` at the repo root (L2) |
 | `LIMINA_TEST_KERNEL` / `LIMINA_TEST_ROOTFS` | `target/test-guest/{Image,rootfs}` (L1) |
-| `LIMINA_TEST_KERNEL_16K` | `target/test-guest/kernel/Image-16k` (enhanced/venus L2, 6.12) |
-| `LIMINA_TEST_KERNEL_71` | `target/test-guest/kernel/Image-16k-71` (≥7.1 virtiofs share guard, `l2_share_71`) |
+| `LIMINA_TEST_KERNEL_16K` | `target/test-guest/kernel/Image-16k` (the `enhanced_fedora_from_env` L2 boots: the 16k test kernel on the stock image; every other L2 EFI-boots an image's own kernel) |
+| `LIMINA_TEST_KERNEL_71` | `target/test-guest/kernel/Image-16k-71` (≥7.1 16 KiB test kernel; `l1_multidisplay`'s ≥7.1 leg) |
 | `LIMINA_TEST_CMDLINE` | `console=ttyAMA0 rootfstype=virtiofs rw init=/init` (L1) |
 | `LIMINA_TEST_SHUTDOWN_GRACE` | `3` (seconds the supervisor waits before force-kill) |
 

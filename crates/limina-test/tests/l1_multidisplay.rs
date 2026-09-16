@@ -356,8 +356,8 @@ fn l1_b_back_to_back_updates_survive_the_ack_race() {
     // pre-fix driver (v7.1.0 and the default L1 kernel) the work func acks ~40us after the
     // read and the response callback ITSELF fires the hotplug, so every wiped update is still
     // healed by the in-flight reply — measured with a device-side trace: no observable window
-    // at all, 2000 raced shots green against the raciest libkrun. Same skip contract as
-    // l2_share_71, but the tag matters:
+    // at all, 2000 raced shots green against the raciest libkrun. SKIPs when the ≥7.1 test
+    // kernel is absent; the tag matters:
     // `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh`.
     let kernel_71 = std::env::var("LIMINA_TEST_KERNEL_71")
         .map(std::path::PathBuf::from)

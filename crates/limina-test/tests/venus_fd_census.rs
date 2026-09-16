@@ -19,7 +19,7 @@
 //! carrier fds — it must return to baseline after the run. Pre-0032 this fails at
 //! baseline + 2·N (both contexts' attaches leak); post-0032 it is flat.
 //!
-//! Boots the seated ENHANCED golden (`seated_fedora_from_env`): dma_buf external
+//! Boots the seated ENHANCED golden (`seated_efi_fedora_from_env`): dma_buf external
 //! memory needs our mesa's venus — STOCK mesa's venus advertises neither
 //! `VK_KHR_external_memory_fd` nor dma_buf against this host, so the cycler can't run
 //! on the stock image (verified empirically). The idle gnome-shell session
@@ -81,7 +81,7 @@ fn cross_context_attach_leaves_worker_fd_census_flat() {
         );
         return;
     }
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg.with_coexist_display(1280, 800).with_net(),
         Err(e) => {
             eprintln!("SKIPPED cross_context_attach_leaves_worker_fd_census_flat: {e}");

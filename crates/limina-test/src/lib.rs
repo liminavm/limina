@@ -99,7 +99,7 @@ fn fedora_rel() -> String {
 ///   (`fedora_from_env`) boot its own stock Fedora kernel to prove the compatibility floor, and the
 ///   venus tests (`enhanced_fedora_from_env`) boot it with an external 16 KiB kernel to prove stock
 ///   mesa's venus works on 16 KiB pages.
-/// - `enhanced.test` — the venus golden ([`GuestConfig::seated_fedora_from_env`]).
+/// - `enhanced.test` — the enhanced golden ([`GuestConfig::seated_efi_fedora_from_env`]).
 ///
 /// Created once with `cp -c Fedora-Workstation-<REL>.accessible.raw Fedora-Workstation-<REL>.<role>.raw`
 /// (APFS clone: instant, shares blocks); refresh by re-cloning. Per-run the harness still makes its
@@ -818,46 +818,25 @@ impl GuestConfig {
         })
     }
 
-    /// Like [`GuestConfig::enhanced_fedora_from_env`], but booting the **seated ENHANCED test
-    /// golden** (`Fedora-Workstation-<REL>.enhanced.test.raw`, override `LIMINA_TEST_DISK_ENH`): the
-    /// RPM-delivered enhanced image (16k kernel + mesa 26.2 venus at `/usr` + patched mutter) with
-    /// gdm autologin to a gnome-shell-on-venus session, plus the test tooling baked in —
-    /// `apitrace`/`eglretrace` and `/opt/gfxreconstruct/bin/gfxrecon-replay` (see
-    /// `docs/images.md`). This is the vehicle for tests that need a *running graphical session*
-    /// (Xwayland, the zink→venus GL stack) rather than just venus enumeration. (Replaces the retired
-    /// source-built `dev-enh.raw`; mesa moved `/opt/mesa-zink` → `/usr`, so `ZINK_ENV` in the tests
-    /// drops the loader-path vars but keeps the driver-selection knobs — env-trap still applies.)
+    /// **The enhanced-tier L2 vehicle**: EFI-boot the **seated ENHANCED test golden**
+    /// (`Fedora-Workstation-<REL>.enhanced.test.raw`, override `LIMINA_TEST_DISK_ENH`) through the
+    /// GOP firmware — the guest's OWN installed 16k kernel + initrd, enforcing SELinux, exactly as
+    /// production boots it (`cargo xtask run --disk`). The image is the RPM-delivered enhanced
+    /// tier (16k kernel + venus mesa at `/usr`) with gdm autologin to a gnome-shell-on-venus
+    /// session, plus the test tooling baked in — `apitrace`/`eglretrace` and
+    /// `/opt/gfxreconstruct/bin/gfxrecon-replay` (see `docs/images.md`). Use it for anything that
+    /// needs a *running graphical session*, the real classic-vrend world next to venus, or simply
+    /// the shipped enhanced kernel (virtio-fs on ≥7.1, vCPU hotplug, s2idle with every device
+    /// freezing). The only L2 boots that still inject a test kernel are the
+    /// [`enhanced_fedora_from_env`](GuestConfig::enhanced_fedora_from_env) ones, which exist to
+    /// exercise the 16 KiB-kernel-on-stock-userspace mix.
     ///
-    /// The host Vulkan backend (KosmicKrisp) is wired automatically by [`Guest::boot`] for any
-    /// coexist/venus display — see [`kosmickrisp_icd`]; a venus-requiring test should still SKIP
-    /// up front when KK is absent (so it doesn't silently run on the software-2D fallback).
-    /// Returns an error (the test should SKIP) if the 16 KiB kernel or the enhanced disk is missing.
-    pub fn seated_fedora_from_env() -> Result<GuestConfig> {
-        let mut cfg = GuestConfig::enhanced_fedora_from_env()?;
-        let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {
-            Ok(p) => PathBuf::from(p),
-            Err(_) => fedora_image("enhanced.test"),
-        };
-        anyhow::ensure!(
-            disk.exists(),
-            "seated enhanced disk not found at {disk:?} (set LIMINA_TEST_DISK_ENH); this is the \
-             machine-local enhanced test golden, see docs/images.md"
-        );
-        if let Boot::KernelDisk { disk: d, .. } = &mut cfg.boot {
-            *d = disk;
-        }
-        Ok(cfg)
-    }
-
-    /// Like [`GuestConfig::seated_fedora_from_env`], but **EFI-booting** the seated enhanced
-    /// golden through the GOP firmware — the guest's OWN installed kernel + initrd, enforcing
-    /// SELinux, exactly as production boots it (`cargo xtask run --disk`). This is the vehicle
-    /// for **classic-vrend (GL ladder) session tests**: the injected-6.12 seated path never
-    /// produces classic `CmdSubmit3d` traffic even on a live desktop (its shell composites
-    /// without classic submits — kms_swrast-like), while the EFI-booted session runs the real
-    /// vrend world (task #19). Overrides: `LIMINA_GOP_FIRMWARE`, `LIMINA_TEST_DISK_ENH`, plus
-    /// the usual `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
-    /// GOP firmware or the enhanced disk is missing.
+    /// No display is attached by default; a venus test adds `with_coexist_display`, and
+    /// [`Guest::boot`] then wires KosmicKrisp automatically — see [`kosmickrisp_icd`]; a
+    /// venus-requiring test should still SKIP up front when KK is absent (so it doesn't silently
+    /// run on the software-2D fallback). Overrides: `LIMINA_GOP_FIRMWARE`, `LIMINA_TEST_DISK_ENH`,
+    /// plus the usual `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
+    /// GOP firmware or the enhanced disk is missing; it does not need any test kernel.
     pub fn seated_efi_fedora_from_env() -> Result<GuestConfig> {
         let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
             .map(PathBuf::from)
@@ -867,11 +846,16 @@ impl GuestConfig {
             "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
              (or set LIMINA_GOP_FIRMWARE)"
         );
-        let mut cfg = GuestConfig::seated_fedora_from_env()?;
-        let disk = match &cfg.boot {
-            Boot::KernelDisk { disk, .. } => disk.clone(),
-            other => anyhow::bail!("seated_fedora_from_env built an unexpected boot {other:?}"),
+        let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => fedora_image("enhanced.test"),
         };
+        anyhow::ensure!(
+            disk.exists(),
+            "seated enhanced disk not found at {disk:?} (set LIMINA_TEST_DISK_ENH); this is the \
+             machine-local enhanced test golden, see docs/images.md"
+        );
+        let mut cfg = GuestConfig::fedora_from_env()?;
         cfg.boot = Boot::Firmware {
             firmware,
             disk,
@@ -893,14 +877,13 @@ impl GuestConfig {
     /// overrides for a deliberate different disk (e.g. an older clone, to check the test
     /// discriminates).
     ///
-    /// **EFI is load-bearing here, not stylistic.** The injected-kernel seated path
-    /// ([`seated_fedora_from_env`](GuestConfig::seated_fedora_from_env)) boots the test
-    /// `Image-16k`, a 6.12 binary built *before* the 2026-08-04 drop of our two virtio-gpu plane
-    /// commits (`74ae69adc645` advertise `DRM_FORMAT_MOD_LINEAR`, `1f4c2049b30b` widen the primary
-    /// plane format list). That kernel still advertises LINEAR, so synoik's format negotiation
-    /// succeeds on it whatever the compositor does — a test on that path would be green today and
-    /// blind to the whole failure class. Only the guest's **own installed kernel**, booted through
-    /// the GOP firmware, meets a stock virtio-gpu plane. See `docs/images.md` §KNOWN DRIFT.
+    /// **EFI is load-bearing here, not stylistic.** The injected 6.12 test kernel (`Image-16k`,
+    /// built *before* the 2026-08-04 drop of our two virtio-gpu plane commits — `74ae69adc645`
+    /// advertise `DRM_FORMAT_MOD_LINEAR`, `1f4c2049b30b` widen the primary plane format list) still
+    /// advertises LINEAR, so synoik's format negotiation succeeds on it whatever the compositor
+    /// does — a test injecting it would be green today and blind to the whole failure class. Only
+    /// the guest's **own installed kernel**, booted through the GOP firmware, meets a stock
+    /// virtio-gpu plane. See `docs/images.md` §KNOWN DRIFT.
     ///
     /// Overrides: `LIMINA_TEST_DISK_SYNOIK`, `LIMINA_GOP_FIRMWARE`, plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
@@ -921,83 +904,6 @@ impl GuestConfig {
             other => anyhow::bail!("seated_efi_fedora_from_env built an unexpected boot {other:?}"),
         }
         Ok(cfg)
-    }
-
-    /// L2 config for the **≥7.1-kernel virtiofs share guard** (task #36): the same injected-kernel
-    /// enhanced path as [`enhanced_fedora_from_env`](GuestConfig::enhanced_fedora_from_env), but
-    /// booting a **≥7.1** 16 KiB test kernel instead of the venus tests' 6.12 `Image-16k`.
-    ///
-    /// Linux ≥7.1 added `virtio_fs_verify_response`, which rejects any FUSE reply whose virtio
-    /// used-ring length doesn't cover the out-header (`-EIO` → latches `fc->conn_error` → surfaces
-    /// as `ECONNREFUSED` at `mount(2)`); libkrun 0090 reports the reply byte count as the used
-    /// length. No automated test ran a share on a ≥7.1 guest before this — L1 (`l1_share`) uses
-    /// libkrunfw's 6.12 kernel, the enhanced/seated L2 inject the 6.12 `Image-16k`, and only the
-    /// un-tested EFI path runs the real 7.1.4 — so the fix shipped without a guard. Kept on a
-    /// **distinct** kernel file so the venus suite still runs on its validated 6.12 kernel.
-    ///
-    /// Build the kernel first:
-    /// `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh`.
-    /// Overrides: `LIMINA_TEST_KERNEL_71` (default `target/test-guest/kernel/Image-16k-71`),
-    /// `LIMINA_TEST_DISK` (default this release's `stock.test`), plus the usual
-    /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the ≥7.1 kernel or
-    /// the disk is missing. Pair with [`with_net`](GuestConfig::with_net) +
-    /// [`with_share`](GuestConfig::with_share)/[`with_share_ro`](GuestConfig::with_share_ro); no
-    /// display is needed (this exercises virtio-fs, not venus).
-    pub fn enhanced_share_from_env() -> Result<GuestConfig> {
-        let kernel = std::env::var("LIMINA_TEST_KERNEL_71")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join("target/test-guest/kernel/Image-16k-71"));
-        anyhow::ensure!(
-            kernel.exists(),
-            "≥7.1 test kernel not found at {kernel:?}; build it with \
-             `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 \
-             scripts/build-test-kernel.sh` (or set LIMINA_TEST_KERNEL_71)"
-        );
-        let disk = match std::env::var("LIMINA_TEST_DISK") {
-            Ok(p) => PathBuf::from(p),
-            Err(_) => fedora_image("stock.test"),
-        };
-        anyhow::ensure!(
-            disk.exists(),
-            "guest disk not found at {disk:?} (set LIMINA_TEST_DISK)"
-        );
-
-        Ok(GuestConfig {
-            limina_bin: resolve_bin("limina", "LIMINA_BIN")?,
-            vmm_bin: resolve_bin("limina-vmm", "LIMINA_VMM_BIN")?,
-            boot: Boot::KernelDisk {
-                kernel,
-                disk,
-                // systemd.zram=0: the injected test kernel has no zram module, and Fedora's
-                // zram-generator otherwise emits dev-zram0.swap, which sysinit waits 45 s for
-                // (50 s to sshd instead of 6 s, measured 2026-09-16). The token disables the
-                // generator; the image keeps its zram config, as a stock guest does.
-                cmdline: "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 \
-                          console=ttyAMA0 systemd.zram=0"
-                    .to_string(),
-            },
-            vsock: None,
-            display: None,
-            cpus: 4,
-            ram_mib: 4096,
-            shutdown_grace: Duration::from_secs(grace_from_env()),
-            console_input: false,
-            console_channel: ConsoleChannel::Virtio,
-            net: false,
-            ssh_port: None,
-            net_mac: None,
-            supervisor_log: false,
-            control_socket: false,
-            balloon_control: false,
-            memory: None,
-            reclaim: None,
-            envs: Vec::new(),
-            shares: Vec::new(),
-            data_disks: Vec::new(),
-            snapshot: false,
-            restore_from: None,
-            extra_supervisor_args: Vec::new(),
-        })
     }
 
     /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its

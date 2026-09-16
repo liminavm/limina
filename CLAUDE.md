@@ -429,9 +429,10 @@ cleverness but from refusing to trust anything we hadn't directly observed.
     log mean venus **is** rendering. Full picture: `docs/graphics.md`.
   - **FRINGE — `--kernel` injection** (`spikes/venus-draw-probe/boot-seated-kk.sh`,
     `scripts/run-venus-window.sh`): direct-boots an *external* `Image-16k` with `selinux=0`, bypassing
-    the guest's GRUB and SELinux. Use **only** when you need a deterministic test kernel (the L2 venus
-    tests wire this in) or are debugging kernel/early-boot itself — NOT for normal image validation, and
-    not "because venus needs it" (EFI+venus works). Don't reach for it by habit.
+    the guest's GRUB and SELinux. Use **only** when you need a deterministic test kernel (only the
+    `enhanced_fedora_from_env` L2 tests still do, for the 16k-kernel-on-stock-userspace mix) or are
+    debugging kernel/early-boot itself — NOT for normal image validation, and not "because venus
+    needs it" (EFI+venus works). Don't reach for it by habit.
   - **FRINGE — `--gpu-software-2d`**: ONLY when software-2D is the explicit subject (the capture oracle
     / a GPU-less host), per the coexist-by-default rule (`docs/graphics.md` §2). Never a workaround to
     "avoid" venus — coexist venus works.

@@ -64,7 +64,7 @@ fn trace_fixture(env_override: &str, name: &str) -> PathBuf {
 /// autologin session's Xwayland. Returns `None` (after printing a SKIPPED line) when a
 /// machine-local prerequisite is missing.
 fn boot_seated(test_name: &str) -> Option<Guest> {
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("SKIPPED {test_name}: {e}");

@@ -53,7 +53,7 @@ fn classic_virgl_gbm_buffer_imports_into_venus() {
         );
         return;
     }
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg.with_coexist_display(1280, 800).with_net(),
         Err(e) => {
             eprintln!("SKIPPED classic_virgl_gbm_buffer_imports_into_venus: {e}");

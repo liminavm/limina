@@ -8,19 +8,18 @@
 //! which rejects any FUSE reply whose used length doesn't cover the out-header (`-EIO` → latches
 //! `fc->conn_error` → surfaces as `fsconfig() failed: Connection refused` at `mount(2)`). That
 //! bricked every share on a ≥7.1 guest — and it escaped review because **no automated test ran a
-//! share on a ≥7.1 kernel**: L1 (`l1_share`) uses libkrunfw's bundled 6.12; the enhanced/seated L2
-//! configs inject the 6.12 `Image-16k`; only the un-tested EFI path runs the real 7.1.4.
+//! share on a ≥7.1 kernel**: L1 (`l1_share`) uses libkrunfw's bundled 6.12, and at the time every
+//! enhanced L2 config injected a 6.12 test kernel.
 //!
-//! This closes that gap with the light option from the task: a fast injected-kernel L2 booting a
-//! **≥7.1** 16 KiB test kernel (`Image-16k-71`, distinct from the venus suite's 6.12 kernel so it
-//! runs on its validated kernel), NAT + SSH, and a `mount -t virtiofs` of both a read-write and a
+//! This closes that gap: EFI-boot the enhanced golden on its own installed **≥7.1** 16 KiB kernel
+//! (asserted at runtime below, so a golden that regressed to an older kernel fails instead of
+//! passing vacuously), NAT + SSH, and a `mount -t virtiofs` of both a read-write and a
 //! read-only share. On a pre-0090 worker the share is dead — `Connection refused` at mount or at
 //! the first file access (RED-verified: mount returns, the first read fails); with the fix it
 //! mounts, reads the host-staged file, and round-trips a write, while the read-only share still
 //! refuses writes (GREEN).
 //!
-//! SKIPs cleanly if the ≥7.1 kernel or the disk is missing — build the kernel with
-//! `KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh`.
+//! SKIPs cleanly if the enhanced golden or the GOP firmware is missing.
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
 use std::time::Duration;
@@ -60,10 +59,10 @@ fn share_mounts_and_round_trips_on_71_kernel() {
     std::fs::create_dir_all(&ro_dir).expect("creating the ro share dir");
     std::fs::write(ro_dir.join("ping"), "ro-ping").expect("staging ro ping");
 
-    // The ≥7.1 injected-kernel enhanced path + NAT + both shares. No display: this exercises
+    // The EFI-booted enhanced golden + NAT + both shares. No display: this exercises
     // virtio-fs, not venus, so it needs neither KosmicKrisp nor a coexist GPU (and doesn't SKIP
     // when they're absent — a lean, always-on guard once the kernel artifact exists).
-    let cfg = match GuestConfig::enhanced_share_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg
             .with_net()
             .with_share("testshare", &share_dir)
@@ -73,11 +72,11 @@ fn share_mounts_and_round_trips_on_71_kernel() {
             return;
         }
     };
-    eprintln!("booting Fedora on the ≥7.1 16 KiB kernel (NAT + rw/ro shares)");
+    eprintln!("booting the enhanced golden (NAT + rw/ro shares)");
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
-    // Full Fedora userspace boot on the injected kernel (systemd → NM → sshd) takes a while.
+    // Full Fedora userspace boot (firmware → GRUB → systemd → NM → sshd) takes a while.
     let banner = guest
         .wait_for_ssh_banner(Duration::from_secs(180))
         .expect("guest sshd never became reachable through gvproxy");
@@ -93,7 +92,7 @@ fn share_mounts_and_round_trips_on_71_kernel() {
         kernel_major_minor(&release).unwrap_or_else(|| panic!("unparseable uname -r: {release:?}"));
     assert!(
         (major, minor) >= (7, 1),
-        "this guard must run on a ≥7.1 kernel (got {release:?}); build Image-16k-71 from a ≥7.1 source"
+        "this guard must run on a ≥7.1 kernel (got {release:?}); the enhanced golden should carry limina-kernel-16k ≥7.1"
     );
     eprintln!("guest kernel {release:?} (>= 7.1, verifies the virtio-fs used length)");
 

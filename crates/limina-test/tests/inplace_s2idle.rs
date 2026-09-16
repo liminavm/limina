@@ -422,7 +422,7 @@ fn venus_session_survives_inplace_s2idle() {
         );
         return;
     }
-    let base_cfg = match GuestConfig::seated_fedora_from_env() {
+    let base_cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("SKIPPED venus_session_survives_inplace_s2idle: {e}");
@@ -430,9 +430,9 @@ fn venus_session_survives_inplace_s2idle() {
         }
     };
 
-    // The injected 16 KiB test kernel (6.12) has no freeze support in virtio_i2c/virtio_snd,
-    // so those devices would abort the guest's s2idle entry — drop them (same as the
-    // snapshot gate test). No MAC pinning needed: the worker and gvproxy never die here.
+    // Neither battery nor audio is part of what this test measures; drop them so the s2idle
+    // quiesce has the smallest device set to freeze (same as the snapshot gate test). No MAC
+    // pinning needed: the worker and gvproxy never die here.
     let cfg = base_cfg
         .with_supervisor_arg("--no-snd")
         .with_supervisor_arg("--no-battery")

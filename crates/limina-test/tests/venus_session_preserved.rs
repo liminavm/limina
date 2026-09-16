@@ -74,7 +74,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
         );
         return;
     }
-    let base_cfg = match GuestConfig::seated_fedora_from_env() {
+    let base_cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("SKIPPED seated_gnome_session_survives_snapshot_restore: {e}");
@@ -82,10 +82,9 @@ fn seated_gnome_session_survives_snapshot_restore() {
         }
     };
 
-    // The harness's injected 16 KiB test kernel (a 6.12 build) has no freeze support in
-    // virtio_i2c/virtio_snd, so those two devices hold out the s2idle quiesce and the
-    // suspend bracket aborts. The test needs neither battery nor audio — drop them on
-    // BOTH sides of the round-trip (restore requires an identical device topology).
+    // The test needs neither battery nor audio — drop them so the s2idle quiesce has the
+    // smallest device set to freeze, on BOTH sides of the round-trip (restore requires an
+    // identical device topology).
     //
     // The MAC is pinned on both sides: the restored guest keeps the NIC identity it read
     // at boot (it does not re-probe config space mid-resume), and production restore
@@ -319,8 +318,12 @@ fn seated_gnome_session_survives_snapshot_restore() {
         .with_net()
         .with_supervisor_log()
         .restore_from(&snap);
-    if let limina_test::Boot::KernelDisk { disk: d, .. } = &mut cfg2.boot {
-        *d = disk.clone();
+    // The restore must run against the preserved disk, never a fresh clone of the golden.
+    // A shape mismatch here must fail loudly: a silent non-match once restored guest 1's
+    // memory over a pristine clone and the guest died ~35 s later (2026-09-16).
+    match &mut cfg2.boot {
+        limina_test::Boot::Firmware { disk: d, .. } => *d = disk.clone(),
+        other => panic!("seated EFI config built an unexpected boot {other:?}"),
     }
     let mut g2 = Guest::boot(&cfg2).expect("spawning the restoring supervisor");
     g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
@@ -533,8 +536,9 @@ fn seated_gnome_session_survives_snapshot_restore() {
         .with_net()
         .with_supervisor_log()
         .restore_from(&snap);
-    if let limina_test::Boot::KernelDisk { disk: d, .. } = &mut cfg3.boot {
-        *d = disk2.clone();
+    match &mut cfg3.boot {
+        limina_test::Boot::Firmware { disk: d, .. } => *d = disk2.clone(),
+        other => panic!("seated EFI config built an unexpected boot {other:?}"),
     }
     let mut g3 = Guest::boot(&cfg3).expect("spawning the gen-2 restoring supervisor");
     let banner = g3

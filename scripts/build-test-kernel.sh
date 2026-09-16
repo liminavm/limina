@@ -49,8 +49,8 @@ case "$PAGESIZE" in
     *)   echo "PAGESIZE must be 4k or 16k (got '$PAGESIZE')" >&2; exit 1 ;;
 esac
 # Output-name override: build a variant to a distinct file without clobbering the default
-# (e.g. KIMAGE_NAME=Image-16k-71 for the ≥7.1 virtiofs share guard, task #36 — kept separate
-# from the 6.12 Image-16k the venus tests inject).
+# (e.g. KIMAGE_NAME=Image-16k-71, the ≥7.1 kernel `l1_multidisplay` boots — kept separate from
+# the 6.12 Image-16k the `enhanced_fedora_from_env` L2 tests inject).
 OUT_NAME="${KIMAGE_NAME:-$OUT_NAME}"
 
 command -v container >/dev/null || { echo "Apple 'container' not installed (brew install container)" >&2; exit 1; }

@@ -15,7 +15,7 @@
 //!
 //! This guard reproduces the create-fence failure deterministically with the
 //! worker's one-shot fault seam (`LIMINA_GPU_TEST_FAIL_NEXT_FENCE=1`) instead of
-//! racing a real suspend: the guest boots **headless** (multi-user.target), so
+//! racing a real suspend: the guest is dropped to **headless** (multi-user.target) right after boot, so
 //! the vkfencestorm client's exports are the only context-ring fences and the
 //! seam poisons exactly one of them. Oracles:
 //!
@@ -62,18 +62,17 @@ fn lost_context_fence_still_signals_its_sync_file() {
     if !limina_test::require_hvf_or_skip("lost_context_fence_still_signals_its_sync_file") {
         return;
     }
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("SKIPPED lost_context_fence_still_signals_its_sync_file: {e}");
             return;
         }
     };
-    // Headless: no compositor, no KMS flips — the storm's exports are the only
-    // context-ring fences in the whole session, so the one-shot seam
-    // deterministically poisons one of them (and nothing else can wedge).
+    // Headless (isolated to multi-user.target right after boot, below): no compositor, no KMS
+    // flips — the storm's exports are the only context-ring fences in the whole session, so
+    // the one-shot seam deterministically poisons one of them (and nothing else can wedge).
     let cfg = cfg
-        .append_cmdline("systemd.unit=multi-user.target")
         .with_coexist_display(1280, 800)
         .with_net()
         .with_supervisor_log();
@@ -94,6 +93,17 @@ fn lost_context_fence_still_signals_its_sync_file() {
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 
+    // EFI boots the image's own autologin desktop; drop it so the session is headless from
+    // here on. sshd lives in multi-user.target, so the connection survives the isolate.
+    g.ssh_exec_timeout(
+        "sudo systemctl isolate multi-user.target; echo ISOLATED",
+        Duration::from_secs(120),
+    )
+    .expect("isolating multi-user.target");
+    g.ssh_poll("! pgrep -x gnome-shell >/dev/null", Duration::from_secs(60))
+        .expect("gnome-shell did not go away after isolating multi-user.target");
+    eprintln!("session isolated to multi-user.target (headless)");
+
     ssh_retry(
         &g,
         &format!("cat > /tmp/vkfdcycle.py <<'VKFDCYCLE_PY_EOF'\n{VKFDCYCLE}\nVKFDCYCLE_PY_EOF"),
@@ -109,7 +119,7 @@ fn lost_context_fence_still_signals_its_sync_file() {
         ),
     );
 
-    // sudo everywhere below: a headless (multi-user.target) boot has no logind
+    // sudo everywhere below: the headless (multi-user.target) session has no logind
     // seat, so no uaccess ACL lands on /dev/dri and the loader enumerates nothing
     // as a plain user.
     const STORM_ENV: &str =
@@ -227,7 +237,7 @@ fn lost_context_fence_still_signals_its_sync_file() {
     );
 
     // Ledger reconvergence, best-effort: last-signaled catches up to last-emitted
-    // (the pair that stayed `fence 30246 30247` forever in the live wedge). The 6.12 test
+    // (the pair that stayed `fence 30246 30247` forever in the live wedge). The guest
     // kernel may not expose the debugfs file — skip the oracle if absent.
     let ledger_path = ssh_retry(
         &g,

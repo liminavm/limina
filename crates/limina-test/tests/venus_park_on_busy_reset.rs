@@ -86,7 +86,7 @@ fn busy_seated_session_parks_across_reset() {
         );
         return;
     }
-    let cfg = match GuestConfig::seated_fedora_from_env() {
+    let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg
             .with_coexist_display(1280, 800)
             .with_net()
