@@ -54,7 +54,7 @@ fn l1_edid_identity_is_stable_and_pushable() {
     eprintln!("virtio-gpu connector: {connector}");
 
     // ---- 1. The boot EDID is well-formed and carries the historical anonymous identity.
-    let boot_edid = read_edid(&mut guest, &edid_path);
+    let boot_edid = read_edid(&mut guest, &edid_path).expect("reading the boot EDID");
     assert!(
         boot_edid.len() >= 128,
         "expected at least one 128-byte EDID block, got {} bytes",
@@ -72,8 +72,10 @@ fn l1_edid_identity_is_stable_and_pushable() {
     guest
         .resize_display(900, 650)
         .expect("sending the runtime resize");
-    let resized = wait_for_edid_change(&mut guest, &edid_path, &boot_edid)
-        .expect("the EDID never changed after a resize (config-change not delivered?)");
+    let resized = wait_for_edid(&mut guest, &edid_path, |edid| {
+        edid[DESCRIPTOR_0] != boot_edid[DESCRIPTOR_0]
+    })
+    .expect("the preferred timing never moved after a resize (config-change not delivered?)");
     assert_ne!(
         resized[DESCRIPTOR_0], boot_edid[DESCRIPTOR_0],
         "the preferred timing should have moved with the resize"
@@ -112,15 +114,13 @@ fn l1_edid_identity_is_stable_and_pushable() {
         .update_display(control)
         .expect("sending the display identity update");
 
-    let identified = wait_for_edid_change(&mut guest, &edid_path, &resized)
-        .expect("the EDID never changed after an identity push");
-    assert_eq!(
-        checksum(&identified[..128]),
-        0,
-        "the pushed EDID has a bad checksum"
-    );
     // 'LMN' → five bits per letter, big-endian.
     let expected_vendor = (((12u16) << 10) | ((13u16) << 5) | 14u16).to_be_bytes();
+    // The boot identity is LMN too, so the product code is what tells the pushed EDID apart.
+    let identified = wait_for_edid(&mut guest, &edid_path, |edid| {
+        edid[10..12] == 0x4242u16.to_le_bytes()
+    })
+    .expect("the pushed product code never reached the guest");
     assert_eq!(
         &identified[MANUFACTURER], &expected_vendor,
         "the pushed manufacturer id did not reach the guest"
@@ -181,12 +181,12 @@ fn l1_edid_identity_is_stable_and_pushable() {
         })
         .expect("sending the high-clock mode");
 
-    let hidpi = wait_for_edid_change(&mut guest, &edid_path, &identified)
-        .expect("the EDID never changed after the high-clock push");
+    let hidpi = wait_for_edid(&mut guest, &edid_path, |edid| edid.len() > 128)
+        .expect("an over-ceiling mode must arrive with an extension block; none ever did");
     assert_eq!(
         hidpi.len(),
         256,
-        "an over-ceiling mode must arrive with an extension block"
+        "an over-ceiling mode must arrive with exactly one extension block"
     );
     assert_eq!(hidpi[126], 1, "the base block must declare one extension");
     assert_eq!(checksum(&hidpi[..128]), 0, "base block checksum");
@@ -265,8 +265,9 @@ fn l1_edid_identity_is_stable_and_pushable() {
 }
 
 /// Read the connector's EDID as bytes. `cat` would mangle it (the blob is binary and the
-/// console protocol is line-delimited), so the guest hexdumps it for us.
-fn read_edid(guest: &mut Guest, path: &str) -> Vec<u8> {
+/// console protocol is line-delimited), so the guest hexdumps it for us. `None` when the
+/// console output did not carry a whole EDID block — the pollers treat that as "not yet".
+fn read_edid(guest: &mut Guest, path: &str) -> Option<Vec<u8>> {
     let output = guest
         .console_command(&format!("xxd {path}"), Duration::from_secs(10))
         .expect("reading the connector EDID over the console");
@@ -283,13 +284,14 @@ fn read_edid(guest: &mut Guest, path: &str) -> Vec<u8> {
                 && token.len() % 2 == 0
                 && token.bytes().all(|b| b.is_ascii_hexdigit())
         })
-        .max_by_key(|token| token.len())
-        .unwrap_or_else(|| {
-            panic!(
-                "no EDID hex found in the console output (is VIRTIO_GPU_F_EDID negotiated?); \
-                 output was:\n{output}"
-            )
-        });
+        .max_by_key(|token| token.len());
+    let Some(hex) = hex else {
+        eprintln!(
+            "no EDID hex in the console output (is VIRTIO_GPU_F_EDID negotiated?); output \
+             was:\n{output}"
+        );
+        return None;
+    };
 
     let bytes: Vec<u8> = hex
         .as_bytes()
@@ -299,12 +301,11 @@ fn read_edid(guest: &mut Guest, path: &str) -> Vec<u8> {
                 .expect("valid hex")
         })
         .collect();
-    assert_eq!(
-        &bytes[..8],
-        &[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00],
-        "what we parsed is not an EDID block (console noise?): {hex}"
-    );
-    bytes
+    if bytes.len() < 128 || bytes[..8] != [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00] {
+        eprintln!("what we parsed is not a whole EDID block (console noise?): {hex}");
+        return None;
+    }
+    Some(bytes)
 }
 
 fn read_trimmed(guest: &mut Guest, path: &str) -> String {
@@ -315,13 +316,22 @@ fn read_trimmed(guest: &mut Guest, path: &str) -> String {
         .to_string()
 }
 
-/// Poll until the EDID differs from `previous` — the guest re-reads it asynchronously, on the
-/// config-change work queue.
-fn wait_for_edid_change(guest: &mut Guest, path: &str, previous: &[u8]) -> Option<Vec<u8>> {
+/// Poll until the guest's EDID is a whole, checksum-valid block that `settled` accepts — the
+/// guest re-reads it asynchronously on the config-change work queue, and under a loaded host
+/// a push can be observed through more than one re-read before the last one lands. Waiting
+/// for the state the push is expected to produce, rather than for the first block that merely
+/// differs from the previous one, keeps an intermediate or torn read from being judged.
+fn wait_for_edid(
+    guest: &mut Guest,
+    path: &str,
+    settled: impl Fn(&[u8]) -> bool,
+) -> Option<Vec<u8>> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let current = read_edid(guest, path);
-        if current != previous {
+        if let Some(current) = read_edid(guest, path)
+            && checksum(&current[..128]) == 0
+            && settled(&current)
+        {
             return Some(current);
         }
         if Instant::now() >= deadline {
