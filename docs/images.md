@@ -516,6 +516,22 @@ cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw
 | `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard *(historical — mutter left the delivery 2026-07-11 and is stock going forward; see the note above)*, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. **Respun 2026-07-04 to kernel `7.1.2-limina16k` + mesa `26.1.3-3` (dogfood parity — see the respin note above); versions in this row are the 2026-06-29 baseline.** **REBUILT FRESH 2026-07-05** from `accessible` per the procedure above (the prior `enhanced.raw`/`.test.raw` had accumulated bad state — the 16k kernel failed its `/boot/efi` mount and dropped to the rescue BLS entry; a clean clone+install booted `7.1.2-limina16k` with `/boot/efi` mounted, venus seated on the new KK). | ✅ finalized 2026-06-29; respun 2026-07-04; rebuilt 2026-07-05 |
 | `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. **Recloned 2026-07-05 from the fresh rebuild** (see the `enhanced.raw` note). | ✅ **L2 GREEN 7/7 2026-06-29** (venus×3 + replay×3 + reset; replay tooling baked in); recloned 2026-07-05 |
 
+**All five F44 images above plus `enhanced.synoik` boot with a zero GRUB menu timeout**
+(`scripts/provision/trim-boot-delays.sh`, applied 2026-09-16; `make-accessible.sh` bakes the same
+step into a base rebuilt from vanilla, and every CoW refresh inherits it). The frozen goldens never
+record `boot_success`, so Workstation's menu auto-hide never engaged and every EFI boot sat 5 s in
+the menu. The menu is therefore never drawn on these images (GRUB skips it at timeout 0, so the
+boot tests key on its `Booting \`Fedora …'` line instead); a pristine `vanilla` clone is the
+vehicle when you actually need to reach it. Measured on `stock.test`, spawn to sshd: 15.4 s →
+10.6 s.
+
+**zram swap stays on every image, on purpose.** A kernel without the zram module — every
+`--kernel`-injected test kernel — waits the full 45 s `dev-zram0.device` job timeout in sysinit
+(50 s to sshd instead of 6 s), but the fix is `systemd.zram=0` on the inject command line
+(`GuestConfig::enhanced_fedora_from_env`, the fringe inject scripts), not the image: a stock guest
+has zram swap, and the balloon guards are written against that — with it removed, `balloon_burst`'s
+3 GiB burst OOM-killed at chunk 6.
+
 `Fedora-Workstation-44.boot.raw` (the pre-accessible image) and the decompressed
 `Fedora-Workstation-44.vanilla.raw` were **deleted 2026-09-02**; `accessible.raw` supersedes the
 first, and `xz -dk Fedora-Workstation-44.vanilla.raw.xz` regenerates the second when a pristine

@@ -115,13 +115,15 @@ fn managed_vm_lifecycle_create_start_stop_rm() {
     let child = KillOnDrop(start.spawn().expect("spawning limina start"));
     let supervisor_pid = child.0.id();
 
-    // Boot oracle: the firmware banner then GRUB on the captured serial console —
+    // Boot oracle: GRUB's own `Booting \`Fedora …'` line on the captured serial console —
     // proves the definition resolved to a real bootable VM (firmware read the cloned
-    // virtio-blk disk, found the ESP, ran the bootloader).
+    // virtio-blk disk, found the ESP, ran the bootloader, which picked its entry). The menu
+    // header is not a usable marker: the images boot with a zero GRUB timeout, and GRUB skips
+    // drawing the menu when there is nothing to wait for.
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         let text = std::fs::read_to_string(&console).unwrap_or_default();
-        if text.contains("GRUB") {
+        if text.contains("Booting `Fedora") {
             break;
         }
         assert!(

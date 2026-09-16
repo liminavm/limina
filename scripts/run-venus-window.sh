@@ -85,6 +85,6 @@ echo "    SSH:  ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/d
 echo "    (close the window or Ctrl-C to quit)"
 exec "target/$PROFILE/limina" --vmm-bin "target/$PROFILE/limina-vmm" \
     --kernel "$KERNEL" \
-    --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
+    --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0 systemd.zram=0" \
     --disk "$DISK" --cpus "$CPUS" --ram-mib "$RAM" --net \
     --window --display-size "$SIZE"

@@ -116,7 +116,7 @@ EXTRA_ARGS=()
 [ -n "${LIMINA_EXTRA_ARGS:-}" ] && read -ra EXTRA_ARGS <<<"$LIMINA_EXTRA_ARGS"
 target/debug/limina --vmm-bin target/debug/limina-vmm \
   --kernel target/test-guest/kernel/Image-16k \
-  --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
+  --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0 systemd.zram=0" \
   --disk "$WORK" --cpus 4 --ram-mib 4096 $NET_FLAG --window \
   ${SHARE_FLAGS[@]+"${SHARE_FLAGS[@]}"} \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \

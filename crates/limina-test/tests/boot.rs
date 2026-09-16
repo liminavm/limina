@@ -6,9 +6,10 @@
 //! These drive the real `limina` supervisor → `limina-vmm` worker → libkrun/HVF chain. Three tiers:
 //!
 //! - [`fedora_stock_image_boots_to_bootloader`] — disk **read-only** (never mutated), asserts
-//!   the guest reaches its **bootloader** (EDK2 firmware banner + GRUB) on the silent firmware's
-//!   serial console: limina boots the firmware, the firmware reads the virtio-blk disk, finds the
-//!   ESP, and runs the distro bootloader.
+//!   the guest reaches its **bootloader** (EDK2 firmware banner + GRUB's `Booting` line) on the
+//!   silent firmware's serial console: limina boots the firmware, the firmware reads the
+//!   virtio-blk disk, finds the ESP, and runs the distro bootloader. The images carry a zero GRUB
+//!   timeout, so the menu is never drawn; the entry GRUB announces as it boots is the marker.
 //! - [`fedora_stock_image_efi_boots_to_userspace`] — silent firmware, writable COW clone; asserts
 //!   the full chain on **serial** (firmware → GRUB → kernel → getty `login:`) plus **sshd**,
 //!   guarding against the SELinux autorelabel reboot loop. Needs an image prepared by
@@ -26,6 +27,11 @@
 use std::time::{Duration, Instant};
 
 use limina_test::{Guest, GuestConfig, assert_console_has};
+
+/// What GRUB prints on the serial console as it boots the selected entry (`Booting \`Fedora
+/// Linux (…)'`). This is the bootloader marker: with the images' zero menu timeout GRUB never
+/// draws its menu, so its version header does not appear; this line is printed regardless.
+const GRUB_BOOTING: &str = "Booting `Fedora";
 
 #[test]
 fn fedora_stock_image_boots_to_bootloader() {
@@ -47,19 +53,22 @@ fn fedora_stock_image_boots_to_bootloader() {
         .wait_for("UEFI firmware", Duration::from_secs(30))
         .expect("guest did not reach EFI firmware");
 
-    // GRUB proves the firmware read the disk, found the ESP, and ran the bootloader.
+    // GRUB's own `Booting \`<entry>'` line proves the firmware read the disk, found the ESP, ran
+    // the bootloader, and the bootloader read its config and picked the Fedora entry. (The menu
+    // header is not a usable marker: the images boot with a zero timeout, and GRUB skips drawing
+    // the menu entirely when there is nothing to wait for.)
     guest
-        .wait_for("GRUB", Duration::from_secs(60))
+        .wait_for(GRUB_BOOTING, Duration::from_secs(60))
         .expect("guest did not reach the GRUB bootloader");
 
     // Sanity-check both markers are present together in the final capture.
-    assert_console_has(&guest.console(), &["UEFI firmware", "GRUB"])
+    assert_console_has(&guest.console(), &["UEFI firmware", GRUB_BOOTING])
         .expect("expected boot markers");
 
-    // Clean teardown. This guest is still in GRUB: there is no kernel, no agent, and nothing
-    // that could act on the GPIO power button, and limina never kills a guest on a timer — so
-    // stopping it is the user's `--force`, not a polite request. What we still require is that
-    // the supervisor's own teardown works, which is what `forced` reports below.
+    // Clean teardown. The guest has at most a kernel stalling on its read-only root: no agent,
+    // and nothing that could act on the GPIO power button, and limina never kills a guest on a
+    // timer — so stopping it is the user's `--force`, not a polite request. What we still
+    // require is that the supervisor's own teardown works, which is what `forced` reports below.
     let outcome = guest
         .force_shutdown(Duration::from_secs(20))
         .expect("supervisor did not stop");
@@ -111,7 +120,7 @@ fn fedora_stock_image_efi_boots_to_userspace() {
         .wait_for("UEFI firmware", Duration::from_secs(30))
         .expect("guest did not reach EFI firmware");
     guest
-        .wait_for("GRUB", Duration::from_secs(60))
+        .wait_for(GRUB_BOOTING, Duration::from_secs(60))
         .expect("guest did not reach the GRUB bootloader");
 
     // The regression guard: the stock kernel must boot all the way to a running sshd. If the

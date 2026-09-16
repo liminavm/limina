@@ -786,8 +786,12 @@ impl GuestConfig {
                 disk,
                 // vda3 = Fedora's btrfs root (subvol=root); selinux=0 keeps a custom-kernel
                 // boot simple; ttyAMA0 surfaces the kernel/login banner in the console capture.
+                // systemd.zram=0: the injected test kernel has no zram module, and Fedora's
+                // zram-generator otherwise emits dev-zram0.swap, which sysinit waits 45 s for
+                // (50 s to sshd instead of 6 s, measured 2026-09-16). The token disables the
+                // generator; the image keeps its zram config, as a stock guest does.
                 cmdline: "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 \
-                          console=ttyAMA0"
+                          console=ttyAMA0 systemd.zram=0"
                     .to_string(),
             },
             vsock: None,
@@ -964,8 +968,12 @@ impl GuestConfig {
             boot: Boot::KernelDisk {
                 kernel,
                 disk,
+                // systemd.zram=0: the injected test kernel has no zram module, and Fedora's
+                // zram-generator otherwise emits dev-zram0.swap, which sysinit waits 45 s for
+                // (50 s to sshd instead of 6 s, measured 2026-09-16). The token disables the
+                // generator; the image keeps its zram config, as a stock guest does.
                 cmdline: "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 \
-                          console=ttyAMA0"
+                          console=ttyAMA0 systemd.zram=0"
                     .to_string(),
             },
             vsock: None,

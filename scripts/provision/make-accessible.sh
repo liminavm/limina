@@ -89,6 +89,18 @@ sudo glib-compile-schemas /usr/share/glib-2.0/schemas/
 echo "-- console args (GOP framebuffer + PL011 serial)"
 sudo grubby --update-kernel=ALL --args="console=tty0 console=ttyAMA0"
 
+echo "-- GRUB menu timeout 0"
+# The same step scripts/provision/trim-boot-delays.sh applies to an existing image, so a base
+# rebuilt from vanilla does not bring the delay back: a frozen golden never records
+# boot_success, so Workstation's menu auto-hide never engages and every boot sits 5 s in the
+# menu. (zram swap stays: the balloon guards are written against a stock guest that has it.)
+if grep -q '^GRUB_TIMEOUT=' /etc/default/grub; then
+    sudo sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' /etc/default/grub
+else
+    echo 'GRUB_TIMEOUT=0' | sudo tee -a /etc/default/grub >/dev/null
+fi
+sudo grub2-mkconfig -o /boot/grub2/grub.cfg
+
 echo "-- SELinux: relabel what we created + clear any stale full-relabel flag"
 # Fedora-built images boot enforcing with intact labels (no relabel LOOP like the F43 dev images),
 # but the base can still ship /.autorelabel — a request for a one-time first-boot relabel. A
