@@ -367,17 +367,15 @@ sampling once after a proxy for it.
   In the failing run the agent answered 40 s late (first probe timed out, the 30 s re-probe
   won), and the assertion sampled the log before the inventory landed. Fix: wait for
   `qga: guest is ` itself, rather than for a line that merely precedes it.
-- **`l1_edid`'s oracle accepts the first EDID that merely CHANGED, so it can latch a torn
-  read.** Failed once in the 2026-08-30 suite with `the pushed EDID has a bad checksum:
-  left: 60, right: 0`, and **passed on a standalone re-run** — so it is flaky, not a
-  regression. `wait_for_edid_change` returns as soon as the blob differs from the previous
-  one, and the identity push drives several successive reconfigures (the log shows the
-  scanout going 1024x768 → 900x650 → 1024x768-at-1280x800), so the read can land on a
-  half-written or intermediate blob. A checksum that is not zero is exactly what a torn
-  128-byte read looks like. Fix: wait for an EDID that is *valid and matches* (checksum 0
-  plus the expected vendor), with the deadline still governing, rather than for one that is
-  merely different. Same shape as the stale-capture bug fixed the same day — an oracle that
-  takes the first observation instead of a settled one.
+- **`l1_edid`'s oracle accepted the first EDID that merely CHANGED — FIXED 2026-09-16
+  (`7f1754b5`).** Two failures on record, both inside a loaded suite and never standalone: a
+  block with a bad checksum (2026-08-30) and the boot product code read back after the identity
+  push (2026-09-16). `wait_for_edid_change` returned as soon as the blob differed from the
+  previous one, and a push is observed through more than one guest re-read. Each wait now polls
+  for a whole, checksum-valid block carrying the state the push should produce (the moved
+  timing, the pushed product code, the extension block). The host applies size and identity
+  atomically under one config-change, so where the stale intermediate came from is still not
+  known; the oracle no longer cares.
 - **`venus_replay_matches_llvmpipe_reference` failed at 957 s in the same suite and passed
   standalone in 151 s.** A 6x spread on the same test points at starvation under suite
   parallelism rather than a GPU fault; it prints no assertion, which is its own problem —
@@ -1489,6 +1487,20 @@ second Apple-Silicon Mac (full runbook: `docs/dogfooding-parallels-migration.md`
   ring → panic (exit 101). The M9.3 drain removal deleted the caller that tripped it, but the unwrap is
   a live balloon-hardening item (also on the upstreaming triage list) — `Queue::len`/`is_empty` should
   fail soft on a not-ready/invalid ring.
+
+- **The suspend bracket wakes a guest that has not slept yet, then nobody wakes it when it
+  does.** `QUIESCE_TIMEOUT` is a fixed 20 s (`crates/limina-vmm/src/krun/mod.rs`); on expiry the
+  worker logs `bracket: ABORTED`, pulses the wake and re-arms. Measured 2026-09-16 on the F44
+  enhanced golden: a fresh seated GNOME session reaches PSCI SYSTEM_SUSPEND 11 s after
+  `systemctl suspend`, a *restored* one took 23.5 s — the pulse landed on a still-awake guest and
+  3.5 s later the guest went to sleep with the bracket already given up
+  (`venus_session_preserved` gen-2, "supervisor did not exit within 120s"). The abort-then-wake
+  is the questionable half: for a guest that is merely slow it turns a late suspend into a stuck
+  one, while the honest outcome of a missed budget is "not suspended, still running". The test
+  now waits for the guest to be asleep before signalling, so the suite no longer exercises the
+  race; the dogfood host-sleep path still runs bracket-first under the same 20 s. Own session:
+  decide between a longer budget, no wake on abort, or a wake only when the guest is observed
+  awake afterwards.
 
 ## Video — mesa binds a YUV→RGB matrix for an RGB→YUV post-processing pass (guest-side)
 
