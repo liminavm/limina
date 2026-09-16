@@ -24,6 +24,7 @@
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use limina_test::{Guest, GuestConfig};
@@ -36,6 +37,32 @@ const STEP: Duration = Duration::from_secs(45);
 /// fresh guest's boot loadavg still decaying underneath it — would make this test many minutes
 /// long for no extra coverage. What is under test is the loop, not the constant.
 const DWELL_SECS: u64 = 5;
+
+/// Removes every file in the temp dir whose name starts with the prefix — the preserved
+/// snapshot (under whichever name the supervisor's single-use rename left it) and disk — on
+/// every exit path. `LIMINA_KEEP_ARTIFACTS=1` keeps them so a failing restore can be re-run.
+struct RemoveTempPrefixOnDrop(String);
+
+impl Drop for RemoveTempPrefixOnDrop {
+    fn drop(&mut self) {
+        if std::env::var_os("LIMINA_KEEP_ARTIFACTS").is_some() {
+            eprintln!(
+                "keeping artifacts {}* in {:?}",
+                self.0,
+                std::env::temp_dir()
+            );
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&self.0) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
 
 /// Poll `nproc` until `want(n)` holds, or give up. Returns the last value seen either way, so a
 /// failure can say what the guest actually settled on rather than just "timed out".
@@ -207,6 +234,7 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
     let base = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg
             .with_net()
+            .with_supervisor_log()
             .with_supervisor_arg("--cpu-reclaim")
             .with_supervisor_arg("aggressive")
             .with_env("LIMINA_VCPU_DWELL_SECS", &DWELL_SECS.to_string()),
@@ -228,6 +256,9 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
          all — check the agent version in the image before reading this as a restore bug"
     );
     eprintln!("shrunk to nproc {n}; suspending through the supervisor");
+    let boot_id = g1
+        .ssh_exec_timeout("cat /proc/sys/kernel/random/boot_id", STEP)
+        .expect("reading the boot id before the suspend");
 
     // The production suspend path. The supervisor should re-online everything BEFORE it relays
     // SIGTSTP to the worker, so the snapshot below holds a 4-vCPU machine.
@@ -236,15 +267,31 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
     g1.wait_supervisor_exit(Duration::from_secs(180))
         .expect("the supervisor never finished the suspend bracket");
 
-    let snap = g1
-        .snapshot_path()
-        .expect("snapshot path configured")
-        .with_extension("kept");
+    // Preserve the snapshot AND the disk the guest suspended on OUTSIDE g1's scratch dir,
+    // which goes away when g1 drops. A snapshot left inside it is gone before the second
+    // worker starts, and that worker then cold-boots with every vCPU — a pass that proves
+    // nothing about #41. A fresh clone of the golden under the restored memory would be the
+    // other silent failure: the guest resumes over a filesystem it never wrote.
+    let pid = std::process::id();
+    let prefix = format!("limina-vcpu-policy-{pid}");
+    let snap: PathBuf = std::env::temp_dir().join(format!("{prefix}.snap"));
+    let disk: PathBuf = std::env::temp_dir().join(format!("{prefix}.raw"));
     std::fs::copy(g1.snapshot_path().expect("snapshot path configured"), &snap)
-        .expect("keeping the snapshot for the restore boot");
+        .expect("preserving the snapshot file");
+    limina_test::cow_clone(&g1.scratch_dir().join("disk.raw"), &disk)
+        .expect("preserving the suspended guest's disk");
+    let _artifacts = RemoveTempPrefixOnDrop(prefix);
     drop(g1);
 
-    let mut g2 = Guest::boot(&base.restore_from(&snap)).expect("spawning the restore supervisor");
+    let mut cfg2 = base.restore_from(&snap);
+    // A shape mismatch must fail loudly, not fall back to a fresh clone of the golden.
+    match &mut cfg2.boot {
+        limina_test::Boot::Firmware { disk: d, .. } => *d = disk.clone(),
+        other => panic!("seated EFI config built an unexpected boot {other:?}"),
+    }
+    let mut g2 = Guest::boot(&cfg2).expect("spawning the restore supervisor");
+    g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
+        .expect("the second worker cold-booted instead of restoring the snapshot");
     g2.wait_for_ssh_banner(Duration::from_secs(180))
         .expect("the restored guest never became reachable");
 
@@ -259,6 +306,13 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
         "4",
         "the restored guest came up with {nproc:?} vCPUs, not 4 — the suspend bracket is supposed \
          to bring every vCPU back BEFORE the snapshot so the restore cannot diverge (#41)"
+    );
+    let boot_id_after = g2
+        .ssh_exec_timeout("cat /proc/sys/kernel/random/boot_id", STEP)
+        .expect("reading the boot id after the restore");
+    assert_eq!(
+        boot_id_after, boot_id,
+        "boot_id changed across the restore — the guest rebooted instead of resuming"
     );
 
     let outcome = g2
