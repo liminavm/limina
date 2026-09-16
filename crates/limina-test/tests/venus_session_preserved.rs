@@ -62,6 +62,40 @@ fn ssh_retry(guest: &Guest, cmd: &str) -> String {
     panic!("ssh `{cmd}` kept failing: {last_err}");
 }
 
+/// Suspend from INSIDE the guest and return once it is asleep (SSH dark twice in a row).
+///
+/// The bracket is only signalled AFTER this returns. The worker's quiesce budget is a fixed
+/// 20 s (`QUIESCE_TIMEOUT`, limina-vmm `krun/mod.rs`) and a restored seated session can take
+/// longer than that to reach kernel suspend after `systemctl suspend` (23.5 s measured
+/// 2026-09-16 against 11 s for the fresh session): signalled early, the bracket aborts, its
+/// wake pulse lands on a guest that has not slept yet, and the guest then sleeps with nobody
+/// to wake it. A guest that is already at PSCI SYSTEM_SUSPEND passes the quiesce check at
+/// once, so ordering the two this way keeps the worker's cap out of this test's verdict.
+fn suspend_in_guest_and_wait_dark(guest: &Guest) {
+    ssh_retry(
+        guest,
+        "sudo systemd-run --on-active=2 systemctl suspend -i >/dev/null 2>&1; echo armed",
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    let mut consecutive_failures = 0;
+    loop {
+        match guest.ssh_exec_timeout("true", Duration::from_secs(8)) {
+            Err(_) => {
+                consecutive_failures += 1;
+                if consecutive_failures >= 2 {
+                    return;
+                }
+            }
+            Ok(_) => consecutive_failures = 0,
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "guest never entered s2idle (SSH kept answering for 90s after systemctl suspend)"
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
 #[test]
 fn seated_gnome_session_survives_snapshot_restore() {
     if !limina_test::require_hvf_or_skip("seated_gnome_session_survives_snapshot_restore") {
@@ -257,16 +291,13 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // --- Suspend: s2idle bracket -> quiesce -> snapshot -> worker exits 126 ---
     // The bracket's suspend-button pulse is swallowed depending on the desktop's
     // session state (observed: a fresh seated session ignores it and no device ever
-    // leaves DRIVER_OK), so trigger the s2idle from INSIDE the guest, scheduled a
-    // beat ahead and inhibitor-ignoring, then arm the bracket for quiesce+snapshot.
+    // leaves DRIVER_OK), so trigger the s2idle from INSIDE the guest, inhibitor-ignoring,
+    // wait for it to be asleep, then arm the bracket for quiesce+snapshot.
     // The bracket must NOT also pulse the button (LIMINA_BRACKET_NO_BUTTON, inherited
     // by the worker): with two suspend triggers, whichever lands after userspace
     // freezes replays on resume and re-suspends the restored guest into an
     // unwakeable sleep — the ~50% SSH-after-restore flake (run-11 MMIO trace).
-    ssh_retry(
-        &g1,
-        "sudo systemd-run --on-active=2 systemctl suspend -i >/dev/null 2>&1; echo armed",
-    );
+    suspend_in_guest_and_wait_dark(&g1);
     g1.suspend_bracket().expect("sending the suspend bracket");
     let outcome = g1
         .wait_supervisor_exit(Duration::from_secs(120))
@@ -499,10 +530,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // the worker survives the replay, SSH returns, same boot_id, same shell pid past the
     // abort window, no new cores.
     eprintln!("generation 2: suspending the restored session");
-    ssh_retry(
-        &g2,
-        "sudo systemd-run --on-active=2 systemctl suspend -i >/dev/null 2>&1; echo armed",
-    );
+    suspend_in_guest_and_wait_dark(&g2);
     g2.suspend_bracket()
         .expect("sending the gen-2 suspend bracket");
     let outcome = g2
