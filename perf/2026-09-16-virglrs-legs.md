@@ -64,16 +64,15 @@ and no Basemark run stalled.
 
 ## Two instruments learned something
 
-**vkmark under a 25k aquarium is bimodal on the GPU split, and the mode is chosen per boot, not
-per leg.** Across the nine proven boots it read either ~1300 (1295–1320, and l3's 1144–1153) or
-~1600 (1580–1628), never between. Which mode a boot fell in tracked the aquarium's own fps beside
-vkmark: 50 in every ~1300 boot (b0, l3, l5, l6), 44–46 in every ~1600 boot (l1, l2, l4, r0, r6).
-The same pin read both modes: b0 1309 / 1295, r0 1586 / 1580. So the number is how the host GPU
-was shared between two clients for that boot, and a leg's effect on contention is invisible under
-it. l3's 1144 / 1153, the one reading that looked like a step, is the ~1300 mode with a lower
-floor, between two ~1600 boots on neighbouring trees. The instrument as run cannot score leg 2;
-one that could would need the split pinned (a frame-paced client instead of an unthrottled one,
-or the two clients' fps read together) rather than more boots.
+**vkmark under a 25k aquarium clusters per boot, not per leg.** Across the nine proven boots it
+read ~1600 (1580–1628) whenever the aquarium beside it read 44–46 fps (l1, l2, l4, r0, r6) and
+~1300 (1294–1320) whenever it read 50 (b0, l5, l6), nothing between, and the same pin read both:
+b0 1309 / 1295, r0 1586 / 1580. That correlation is the finding. That the number is how the host
+GPU was shared between the two clients that boot is the lead, not a mechanism this run
+established. l3's 1144 / 1153 (aquarium at 50) sits ~12% under the 1300 cluster, between two
+~1600 boots on neighbouring trees, and is unexplained. The instrument as run cannot score leg 2;
+one that could would need the competitor pinned (a frame-paced client instead of an unthrottled
+one, or the two clients' fps read together) rather than more boots.
 *The proof capture is part of the instrument:* l0's read empty (the supervisor rewrites the dump
 in place and a plain `cp` caught it mid-write), so its 1635 / 1638 is unproven and excluded; from
 l1 on the driver waits for a new dump and a crop with a counter, as `aquarium-run.sh` does.
