@@ -54,7 +54,12 @@ def main():
     # Blank-frame guard. The counter is white-on-dark, so a frame captured before the page painted
     # (Firefox cold start is well over the settle time on the FIRST launch) has essentially no bright
     # pixels. Measuring that fraction is a cheap, OCR-free "did anything render yet".
-    px = crop.convert("L").getdata()
+    # tobytes(), not getdata(): the latter is deprecated, and its warning names this file by an
+    # ABSOLUTE path under Python 3.14 (__file__ is no longer relative). A perf run captures that
+    # warning into its committed evidence, which puts a home directory into a public repo and
+    # trips the scrub hook — so the deprecation is a leak, not just noise. Iterating bytes yields
+    # the same 0-255 ints on every Pillow.
+    px = crop.convert("L").tobytes()
     bright = sum(1 for v in px if v > 200) / max(1, len(px))
     if args.require_content and bright < 0.005:
         print(f"crop looks blank (bright_frac={bright:.4f}) — page probably had not painted yet",
