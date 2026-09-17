@@ -1,0 +1,18 @@
+=== vrend / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: c7d283902b5a4e82a74868066cffde8b
+  settling 35s…
+scripts/perf/crop-fps.py:57: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  px = crop.convert("L").getdata()
+perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-25000-fps.png: 1200x520 (from perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0526
+  wrote perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-25000.png and perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-25000-fps.png
+=== vrend / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: c7636902e5a547589d73719b3ab13a42
+  settling 35s…
+scripts/perf/crop-fps.py:57: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  px = crop.convert("L").getdata()
+perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-30000-fps.png: 1200x520 (from perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0883
+  wrote perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-30000.png and perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-25000-fps.png
+perf/virglrs-robustness-2026-09-17/evidence/b0-d833259/aquarium-r1/vrend-30000-fps.png
