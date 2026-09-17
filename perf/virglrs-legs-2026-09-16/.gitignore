@@ -1,0 +1,9 @@
+# Large, and full of host paths; kept on disk, never committed. The fps crops are the evidence
+# for the hand-read aquarium rows and are kept.
+work.noindex/
+evidence/*/worker-*.log
+evidence/*/build.log
+evidence/**/vrend-*000.png
+evidence/*/contended-load.png
+evidence/legs.log.pgid
+evidence/legs.log.status

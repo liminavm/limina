@@ -1,0 +1,3 @@
+trend l0-f0fdc66: virglrs f0fdc66 + libkrun debc082c patched with libkrun-debc082c-surface-rename.patch; host mesa bb3994fc6db; limina 1d955098
+-rwxr-xr-x@ 1 kov  staff  15236744 Sep 11 23:56 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+-rwxr-xr-x@ 1 kov  staff  21727328 Sep 11 10:50 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-26.3.0-devel.dylib

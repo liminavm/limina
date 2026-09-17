@@ -1,0 +1,29 @@
+=== vrend / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 074b68e08d2340fead53018708fbafcb
+  settling 35s…
+Traceback (most recent call last):
+  File "scripts/perf/crop-fps.py", line 72, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "scripts/perf/crop-fps.py", line 45, in main
+    im = Image.open(args.src).convert("RGB")
+         ~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/PIL/Image.py", line 3711, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-25000.png'
+  capture attempt 1 unusable, retrying…
+scripts/perf/crop-fps.py:57: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  px = crop.convert("L").getdata()
+perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-25000-fps.png: 1200x520 (from perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-25000.png 1280x800 box 0,0,300,130) bright_frac=0.1510
+  wrote perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-25000.png and perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-25000-fps.png
+=== vrend / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 5763aa2c60244f19a814e810fc06ff2e
+  settling 35s…
+scripts/perf/crop-fps.py:57: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  px = crop.convert("L").getdata()
+perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-30000-fps.png: 1200x520 (from perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0932
+  wrote perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-30000.png and perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-25000-fps.png
+perf/virglrs-legs-2026-09-16/evidence/l1-985d1da/aquarium-r1/vrend-30000-fps.png
