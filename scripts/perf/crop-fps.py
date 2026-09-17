@@ -42,7 +42,17 @@ def main():
         print(f"bad --box {args.box!r}; expected LEFT,TOP,WIDTH,HEIGHT", file=sys.stderr)
         return 2
 
-    im = Image.open(args.src).convert("RGB")
+    # A torn or empty capture is EXPECTED here, not exceptional: the supervisor rewrites the
+    # capture in place, so a reader can catch it mid-write, and every caller already retries on a
+    # nonzero exit. Letting it raise printed a traceback that — under Python 3.14, where __file__
+    # is absolute — named this file by its full path, and perf runs capture stderr into evidence
+    # that gets committed to a PUBLIC repo. So the traceback was a home-directory leak for a
+    # condition we handle by design. UnidentifiedImageError and a truncated read are both OSError.
+    try:
+        im = Image.open(args.src).convert("RGB")
+    except OSError as e:
+        print(f"capture unusable ({type(e).__name__}); retry", file=sys.stderr)
+        return 3
     # Clamp to the image so a smaller-than-expected capture crops to what exists rather than
     # throwing — a truncated counter is still readable, an exception ends the whole sweep.
     right, bottom = min(left + w, im.width), min(top + h, im.height)
