@@ -56,8 +56,9 @@ The control sat in 724–736 on every boot, so every point is readable and none 
   of the run. vk-replay is the same picture with the drift below subtracted.
 - **`gl-replay-venus` reads 56.74–56.84 everywhere**, as it has for every change ever made to
   this stack. It is in the table because it is in the ledger, not because it means anything.
-- **The aquarium spans 43–50 at 25k and 37–43 at 30k**, with no candidate run outside what the
-  three baseline boots produced (44–50, 41–43).
+- **The aquarium spans 43–50 at 25k and 37–43 at 30k.** The candidate's lowest runs sit just
+  under the baseline's floor — 43 against 44 at 25k, and 37 and 38 against 39 at 30k — one to
+  two frames on an integer counter whose documented spread is ~15%. Noise, not a step.
 
 ## Two instruments, read carefully
 
