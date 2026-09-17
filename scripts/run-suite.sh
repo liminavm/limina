@@ -47,6 +47,9 @@
 set -u
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
+# The detach mechanism (setsid-via-python3 + double fork + verification) is shared with
+# scripts/run-battery.sh; the reasoning for each half lives there.
+. "$repo/scripts/lib/detach.sh"
 
 verdict() {
     # The Summary/FAILED lines are the ONLY trustworthy readout. Missing Summary
@@ -79,93 +82,14 @@ refuse_if_live() {
 start_detached() {
     local log="$1"; shift
     refuse_if_live
-    rm -f "$log.status" "$log.pgid"
-    # macOS ships no setsid(1), so borrow setsid(2) from python3: the child leaves this
-    # shell's session and process group before exec'ing the suite, which is what makes a
-    # group-directed signal aimed at our caller miss it. execvp keeps the pid, so $! below
-    # is the suite's own shell and --wait can poll it.
-    #
-    # setsid ALONE IS NOT ENOUGH, measured 2026-09-09: a harness that reaps a background
-    # command kills the child tree as well as the process group, and on the waiting path the
-    # suite stays a CHILD of the waiter (it only reparents to init when the launcher exits,
-    # which --detach does and the default does not). A killed waiter took the suite with it.
-    # So fork twice: the intermediate exits immediately, orphaning the suite to init, which
-    # takes it out of the tree a walk can find. setsid handles the group, the double fork
-    # handles the tree, and neither substitutes for the other.
-    #
-    # The detach is VERIFIED, not assumed: the grandchild records its own pid and pgid, and
-    # we refuse to claim success unless they match (a new group leader). A swallowed setsid
-    # failure would leave the suite in our group, still killable, and still looking fine —
-    # the whole reason this mode exists would be gone with nothing on screen to say so.
-    nohup python3 -c '
-import os, sys
-mark = sys.argv[1]
-if os.fork() > 0:
-    os._exit(0)
-try:
-    os.setsid()
-except OSError as e:
-    open(mark, "w").write("setsid-failed %s\n" % e)
-    raise
-open(mark, "w").write("%d %d\n" % (os.getpid(), os.getpgid(0)))
-os.execvp(sys.argv[2], sys.argv[2:])
-' "$log.pgid" bash -c '
-cd "$1" || exit 111
-log="$2"; shift 2
-cargo xtask test "$@" >"$log" 2>&1
-echo $? >"$log.status"
-' _ "$repo" "$log" "$@" </dev/null >/dev/null 2>&1 &
-    # $! is the intermediate, which exits at once; the suite's real pid comes from the mark.
-    wait $! 2>/dev/null || true
-    # The grandchild writes the mark before exec'ing, so this settles in milliseconds; give
-    # it a couple of seconds rather than racing it.
-    local _i
-    for _i in 1 2 3 4 5 6 7 8 9 10; do
-        [ -s "$log.pgid" ] && break
-        sleep 0.2
-    done
-
-    local detached=no cpid cpgid
-    if [ -s "$log.pgid" ]; then
-        read -r cpid cpgid < "$log.pgid"
-        [ "$cpid" = "$cpgid" ] && detached=yes
-    fi
-    if [ -z "${cpid:-}" ]; then
-        echo "the detached child never reported a pid ($log.pgid absent or empty);" >&2
-        echo "cannot supervise a run we cannot name — aborting" >&2
-        exit 3
-    fi
-    SUITE_PID="$cpid"
-
-    echo "================================================================================"
-    if [ "$detached" = yes ]; then
-        echo "  SUITE DETACHED — pid $SUITE_PID (session leader, pgid $cpgid)"
-    else
-        echo "  SUITE STARTED — pid $SUITE_PID   *** NOT DETACHED ***"
-    fi
-    echo "  log: $log"
-    if [ "$detached" = yes ]; then
-        echo "  This waiter is disposable. If it is killed, THE SUITE KEEPS RUNNING."
-    else
-        echo "  setsid did not take, so the suite is in THIS SHELL'S PROCESS GROUP and a"
-        echo "  harness reaping this command WILL kill it. Mark: $(cat "$log.pgid" 2>/dev/null || echo absent)"
-    fi
-    echo "  Re-attach at any time with:"
-    echo "      scripts/run-suite.sh --wait $log $SUITE_PID"
-    echo "================================================================================"
+    detach_launch "$repo" "$log" cargo xtask test "$@" || exit 3
+    SUITE_PID="$DETACH_PID"
+    detach_banner "SUITE" "$log" "scripts/run-suite.sh --wait $log $SUITE_PID"
 }
 
 # Block until the suite at $2 exits, then print and return its real verdict.
 wait_for() {
-    local log="$1" pid="$2"
-    while kill -0 "$pid" 2>/dev/null; do sleep 20; done
-    verdict "$log"
-    local v=$?
-    # A detached run records its own exit code; --attached leaves no such file, and there
-    # the log's Summary lines are the whole story.
-    local status=0
-    [ -s "$log.status" ] && status="$(cat "$log.status")"
-    [ "$status" -eq 0 ] && [ "$v" -eq 0 ]
+    detach_wait "$1" "$2" verdict
 }
 
 default_log() { echo "/tmp/limina-suite-$(date +%Y%m%d-%H%M%S).log"; }
