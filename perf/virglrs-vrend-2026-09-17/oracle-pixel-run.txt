@@ -1,0 +1,23 @@
+vrend pixel oracles, virglrs 9041fa2 + libkrun 217ba058, 2026-09-17
+
+Run uncaptured so a self-skip could not pass as a run:
+  scripts/run-suite.sh <log> --no-capture -E 'test(=...) + test(=...) + test(=...)'
+A plain suite run CANNOT establish these: nextest captures a passing test's output and all
+three return early -- as a PASS -- when the KosmicKrisp ICD or a disk image is absent.
+No SKIPPED line appeared in this run, so all three genuinely executed.
+
+vkcube changed 262077 pixels, 0 of them pure black (0.0%)
+ALIAS OK
+CLASSICIMPORT PASS scanout
+ALIAS OK
+CLASSICIMPORT PASS rendering
+pre-suspend renderer probe: no-virgl-hits=0 gbm="Sep 17 15:51:38 fedora gnome-shell[1330]: Created gbm renderer for '/dev/dri/card0'"
+pre-suspend baseline: calc-procs=2 submits=+40 over 6 ticks
+pre-suspend pixel baseline: 471 distinct quantized colors
+post-restore pixel probe: 437 distinct quantized colors (pre 471)
+classic world survived: scanout_rejects=0 submit_rejects=0 submits=+76 errs=+0 over 6 ticks, pixel diversity 471 -> 437
+
+        PASS [  45.297s] (1/3) limina-test::l2_stock_vulkan_window stock_guest_vulkan_client_composites_its_own_pixels
+        PASS [  23.337s] (2/3) limina-test::vkr_classic_import classic_virgl_gbm_buffer_imports_into_venus
+        PASS [  77.236s] (3/3) limina-test::vrend_session_restore classic_vrend_world_survives_snapshot_restore
+     Summary [ 145.871s] 3 tests run: 3 passed, 136 skipped

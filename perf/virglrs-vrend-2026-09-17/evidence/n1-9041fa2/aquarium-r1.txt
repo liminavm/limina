@@ -1,0 +1,25 @@
+=== vrend / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 18601fe511e74d10abd8f55f75061d4f
+  settling 35s…
+Traceback (most recent call last):
+  File "scripts/perf/crop-fps.py", line 77, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "scripts/perf/crop-fps.py", line 45, in main
+    im = Image.open(args.src).convert("RGB")
+         ~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/PIL/Image.py", line 3711, in open
+    raise UnidentifiedImageError(msg)
+PIL.UnidentifiedImageError: cannot identify image file 'perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-25000.png'
+  capture attempt 1 unusable, retrying…
+perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-25000-fps.png: 1200x520 (from perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0422
+  wrote perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-25000.png and perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-25000-fps.png
+=== vrend / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 15f11c3f0d774f79bc6209ab1a7f8347
+  settling 35s…
+perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-30000-fps.png: 1200x520 (from perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-30000.png 1280x800 box 0,0,300,130) bright_frac=0.1049
+  wrote perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-30000.png and perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-25000-fps.png
+perf/virglrs-vrend-2026-09-17/evidence/n1-9041fa2/aquarium-r1/vrend-30000-fps.png
