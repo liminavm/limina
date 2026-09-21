@@ -1655,6 +1655,59 @@ confirmation (the open-loop latch delay supplies the margin)" — and the hold c
 Check after the flip: the pinned fluster verdicts and the replay corpora scores unchanged, and the
 rewrite's frame oracle exercising the parked path with no knob set.
 
+## GPU — fence-accurate present is a no-op on the Rust renderer, and the C's shape is not worth porting
+
+📋 open, booked 2026-09-21 (user's call) while fixing the venus ring fence. **Do this after the
+black-border/shadow fault** — see `spikes/stale-frame-repro/` and the memory it points at.
+
+virglrs has **no present-ring path at all**. `rg -n "PRESENT_RING|present_fence|limina_present"`
+over `third_party/virglrs/src/` returns nothing, so the fence libkrun injects on ring 63 falls
+through `Renderer::context_create_fence`'s ordinary arm and retires on arrival. Every parked frame
+is therefore released the moment it is parked: fence-accurate present is armed, reports itself
+engaged, and orders nothing. The entry above — "armed only on a windowed boot" — is about a gate
+not reaching the path; this is the path itself being absent on the renderer we now ship.
+
+**What the C does, and why it is a hack.** `vkr_context_limina_present_fence`
+(`src/venus/vkr_context.c:192`) is a two-phase barrier, and both phases are load-bearing:
+
+1. **Ring decode barrier** — register on every ring of the context, wait until each has decoded
+   past its registration point. The VMM sees `RESOURCE_FLUSH` on the virtio-gpu thread while the
+   commands that drew the frame may still be unread in the shared-memory ring, so without this the
+   phase-2 fence can be submitted *ahead* of the frame's own `vkQueueSubmit`. An ordinary ring
+   fence needs no such phase because it arrives through the ring and is already ordered behind its
+   decode.
+2. **Queue sync** — an empty fenced submit on each distinct queue (`vkr_queue_sync_submit_present`),
+   waiting for real GPU completion. Same mechanism as the ring fence fixed in virglrs `9478f9b`.
+
+The hack is the API, not the mechanism: a **host-injected** fence is smuggled in as a guest ring
+fence by squatting `VKR_LIMINA_PRESENT_RING` (63) in the guest's own `ring_idx` space. Nothing
+enforces that reservation — it holds because mesa happens to allocate low indices. And the fan-out
+waits for *all* of the context's rings and queues rather than the work that produced the flushed
+resource, which is conservative-correct but broader and slower than it needs to be.
+
+**What to build instead.** A first-class entry point on the Rust crate — shape to settle when the
+work starts, but along the lines of
+
+    Renderer::resource_present_fence(handle: ResourceHandle, fence: FenceId) -> bool
+
+— "fence the work that produced this resource", with no invented ring and no number to reserve.
+`Renderer::resource_present_waits_on` already answers the neighbouring question (which single
+context could have drawn a scanout) and is the natural place to scope phase 2 to the queues that
+matter instead of every queue the context owns. Phase 1 stays: it is about the ring being
+asynchronous, not about limina.
+
+Then the consumers: rutabaga gains the call, and `virtio_gpu.rs` stops building a `RutabagaFence`
+with `ring_idx = LIMINA_PRESENT_RING` and calls it instead. `LIMINA_PRESENT_RING` and the
+"guest fences never use it" comment both go.
+
+**Not an upstreaming task.** `docs/upstreaming/ledger/virglrenderer.md` entry **0016** already
+triaged the C version as **carry**, not upstream — "mechanism clean but the trigger/consumer is
+limina's RESOURCE_FLUSH present model". virglrs is a hard fork with no obligation to feed anything
+back (`third_party/virglrs/CLAUDE.md`), so the new API is simply ours to design well.
+
+Check when done: a parked present actually waits — the frame oracle reaching the parked path with
+no knob set (the entry above), and `PresentOrder` still clean under the seated workload.
+
 ## GPU / guest kernel — a vrend scanout flush carries no fence, so every desktop pays a copy per frame
 
 📋 open. `virtgpu_prepare_fb` (`third_party/linux/drivers/gpu/drm/virtio/virtgpu_plane.c:369`)
