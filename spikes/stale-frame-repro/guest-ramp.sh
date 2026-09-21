@@ -14,9 +14,10 @@
 # rate out of nothing, and the fixed distance is the more dangerous of the two because it reads
 # like a mechanism.
 #
-# The fix is to make the content itself a counter. Each tick burns a different amount of CPU, so no
-# two ticks in a graph's window look alike, the graph becomes a rising staircase whose steps are
-# ordered, and the burner's own row in the process table carries the same step a second time. A
+# The fix is to make the content itself a counter. Each tick burns a different amount of CPU on
+# every vCPU, so no two ticks in a graph's window look alike, the graph becomes a rising staircase
+# spanning its full height whose steps are ordered, and the burners' rows in the process table
+# carry the same step a second time. A
 # frame that matches an earlier one then cannot be a coincidence, and how far the picture fell back
 # is readable off the step.
 #
@@ -26,9 +27,20 @@ set -u
 PERIOD_MS="${RAMP_PERIOD_MS:-1000}"
 STEPS="${RAMP_STEPS:-57}"   # coprime-ish with a 60-sample graph so the window rarely aligns
 
-burn() {  # busy-loop for $1 milliseconds
-  local end=$(( $(date +%s%N) / 1000000 + $1 ))
-  while [ "$(( $(date +%s%N) / 1000000 ))" -lt "$end" ]; do :; done
+# One burner per vCPU, each pinned. A single spinner can only reach 1/ncpu of the aggregate
+# graph, which squashes the whole ramp into the bottom rows where the steps stop being
+# distinguishable -- and an oracle whose steps are not distinguishable is back to matching on
+# recurrence, which is the thing it exists to avoid.
+NCPU=$(nproc)
+burn() {  # busy-loop every vCPU for $1 milliseconds
+  local ms="$1" cpu
+  [ "$ms" -le 0 ] && return
+  for cpu in $(seq 0 $(( NCPU - 1 ))); do
+    taskset -c "$cpu" bash -c '
+      end=$(( $(date +%s%N) / 1000000 + '"$ms"' ))
+      while [ "$(( $(date +%s%N) / 1000000 ))" -lt "$end" ]; do :; done' &
+  done
+  wait
 }
 
 n=0
