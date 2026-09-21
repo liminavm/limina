@@ -43,23 +43,28 @@ the fence cannot signal before that work has completed on the GPU.
 The binding the C uses has no counterpart here either: `ring_idx` reaches the
 host in `VkDeviceQueueTimelineInfoMESA.ringIdx`, in the pNext of
 `vkGetDeviceQueue2`, and `vkr_queue_assign_ring_idx` records
-`ctx->sync_queues[ring_idx] = queue`. virglrs never reads that struct -- grep for
-`DeviceQueueTimelineInfoMESA` or `ringIdx` in `src/venus/` returns nothing -- so
+`ctx->sync_queues[ring_idx] = queue`. virglrs never reads that struct -- `rg -n "ringIdx|RingIdx|TimelineInfo|sync_queue" src/` over the whole crate returns
+only the `RingIdx` newtype and its fence plumbing -- no `ringIdx` and no queue binding -- so
 there is no ring -> VkQueue map to submit against.
 
-## Why it reads as a concurrency bug
+## The same bug was already fixed on the other branch of this function
 
-There has never been any GPU-level ordering between a venus client and the
-compositor on this host. Serial dispatch only made the window small: the
-client's fence retired early, but the compositor's next batch could not start
-until the client's had finished being *issued*, and issuing it took long enough
-that the GPU work usually landed. Once batches from two contexts overlap
-(measured: 8-17% of batches, peak 2 contexts, with a second client active), the
-compositor reads the image while the client's render is still in flight.
+`728e64c` ("vrend: finish GL work before retiring a classic fence", 2026-09-08) fixed exactly
+this on the *classic* arm of `context_create_fence`, from the same symptom: a synoik desktop
+showing other tabs' contents, on the premise that "Nothing here submits GPU work yet, so every
+fence is already satisfied". Its message states the mechanism outright -- "When it is a venus
+compositor importing the surface, Metal does not order its Vulkan queue against this renderer's
+GL queue, and it samples a buffer whose renders have not run." The venus arm of the same `match`
+still retires on arrival.
 
-That is also why the renderer-wide census re-lock scored 0/56: it reinstates
-serial dispatch, so it shrinks the window rather than closing it. It was never a
-fix.
+## Why the census re-lock scored 0/56 is NOT established
+
+Serialising dispatch takes the measured rate from 10-14% to 0/56, and it is tempting to write
+that up as "serial dispatch left no window". That chain is not verified: the guest's own
+`vkWaitRingSeqnoMESA` already orders the fence behind the client's *dispatched* submit on the
+CPU, so what serial dispatch actually delays, and why that hides an early fence, is unknown.
+Record it as an unexplained correlation. The test of the diagnosis is the fence fix measured with
+the census re-lock **off**.
 
 ## The fix
 
