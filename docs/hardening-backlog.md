@@ -1657,8 +1657,14 @@ rewrite's frame oracle exercising the parked path with no knob set.
 
 ## GPU — fence-accurate present is a no-op on the Rust renderer, and the C's shape is not worth porting
 
-📋 open, booked 2026-09-21 (user's call) while fixing the venus ring fence. **Do this after the
-black-border/shadow fault** — see `spikes/stale-frame-repro/` and the memory it points at.
+✅ SHIPPED 2026-09-21: virglrs `6cdad6e`, libkrun `4cc071f4`, pinned by limina `31d50c29`.
+`Renderer::resource_present_fence(handle, fence)` names the flushed resource and derives the
+context from what the guest attached it to; retirement goes through a new
+`FenceSink::present_fence`, which carries no context and no ring. A venus context answers it in
+the two phases below on a thread of its own, a classic one with a GL sync per queue it could have
+drawn on. libkrun marks the retirement with a host-internal `RUTABAGA_FLAG_PRESENT`;
+`LIMINA_PRESENT_RING` is gone, and so is the `present_waits_on` round trip the vrend arm made to
+ask which context to fence. The record below is kept for why the shape is what it is.
 
 virglrs has **no present-ring path at all**. `rg -n "PRESENT_RING|present_fence|limina_present"`
 over `third_party/virglrs/src/` returns nothing, so the fence libkrun injects on ring 63 falls

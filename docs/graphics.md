@@ -796,7 +796,6 @@ or commit while it runs.
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |
 | Explicit sync: only binary `SYNC_FD` external semaphores exist; timeline/`OPAQUE_FD` do not | `docs/research/venus-explicit-sync-gap.md` (and read §5–6 before chasing `OPAQUE_FD`) |
-| **Fence-accurate present is a no-op on the Rust renderer** — virglrs has no present-ring path, so the fence libkrun injects on ring 63 retires on arrival and nothing holds a parked frame. Booked to be rebuilt as a proper `resource_present_fence` entry point rather than ported as the C's reserved-ring hack | `docs/hardening-backlog.md` |
 | Ship or stop citing `~/bin/set-guest-display.py` | §7 |
 
 ## 10. Related documents
