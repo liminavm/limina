@@ -118,3 +118,37 @@ not counted as waits because they read as exports. The venus corpus recorded
 This is not the stale-frame fault -- a wait that is too long makes nothing stale
 -- but it is a renderer-wide stall of the same shape as the one `7fa5d48`
 removed, and it should go through `DriverWait` like the other four.
+
+## Measured after the fix
+
+alface, 2026-09-21, limina main + virglrs `de3687a` (both fixes), seated synoik,
+one ghost window running `btm` against `guest-ramp.sh`, `filmstrip.sh 90`, scored
+by `regressions.py`. The ordering was live and said so: both contexts logged
+`ring N fences are ordered on queue ...` (the compositor and the client), and the
+ordered-fence counter passed its first milestone.
+
+    88 frames, cpu 88 unique
+    1 regression: frame 023 == frame 022, distance 1, net+procs+disks
+    distances: [1]   rate: 1/88
+
+Against the unfixed baseline, same script and same layout:
+
+    strip-10-00-03: 6/57, distances [2, 3]
+    (and 8/59 on the arm before it, likewise 2-3)
+
+**Zero hits at the fault's distance.** Every unfixed hit sat at distance 2 or 3 --
+the 3-image swapchain's depth -- and there are none. The single distance-1 hit is
+the artefact the script exists to warn about: `cpu`, the panel carrying the ramp,
+is 88/88 unique and matches nothing, while the three panels that do match are the
+three whose own periodicity control already reports 14, 20 and 5 distance-1
+self-matches. Two consecutive frames agreeing in three low-signal boxes is
+recurrence, not content going backwards.
+
+At the unfixed rate of 10%, 88 frames with no hit has probability ~1e-4.
+
+The renderer logged nothing else: no refused empty submit, no fence retired
+unordered, no `stepped back` and no `presents at once`.
+
+**Not measured here:** which of the two fixes did it. This arm carries both, and
+taking the sync-fd exports out of the batch changes ring-thread timing as well.
+A `4f27e9b`-only control arm would settle it.
