@@ -2465,10 +2465,12 @@ threads are banded and busy at any instant, never the all-ordinary configuration
 against. A whole-system claim does not follow from a per-thread one.
 
 So: sample each vCPU thread's own share of a core (`THREAD_BASIC_INFO`) every 200 ms, arm below
-35%, disarm above 60%, one sampler thread per VM (`vcpu_sched.rs`). This is **the default** — the
-supervisor sets `LIMINA_VCPU_SCHED=rt+dyn` for the worker unless the environment names a policy
+35%, disarm above 60%, one sampler thread per VM (`vcpu_sched.rs`). The default is
+`LIMINA_VCPU_SCHED=rt+dyn#1`, set by the supervisor unless the environment names a policy
 (`worker_vcpu_sched` in `crates/limina/src/supervisor.rs`; an empty value turns it off, which is
-how an A/B arm runs).
+how an A/B arm runs). The `#1` is safety, not tuning — see *A banded guest can panic the host*
+below — and it costs about half the idle gap: 52.1 FPS against 43.6 unbanded and 58.6 with every
+vCPU eligible.
 The vCPU that needs a punctual timer wake is the idle one, which is also the one whose reservation
 costs the host nothing. The hysteresis gap matters: a policy change is the moment the present path
 can lose its core, so a thread hovering at the threshold must not switch every sample. A *static*
@@ -2480,8 +2482,9 @@ full guest occupancy costs no frame over 100 ms at any length from 250 ms to 8 s
 *or* under the static band, and the *unbanded* arm is the one that suffers (77 and 123 frames over
 33 ms at 250/500 ms bursts, against 2 and 29 banded) because it pays in the idle gaps between
 bursts. Tables in `spikes/macos-timer-wakeup/results-burst-and-contention.md`. A global cap — never
-more banded-and-busy threads than leaves the host a couple of performance cores, with asymmetric
-hysteresis, disarming fast and arming lazily — is therefore hardening rather than a prerequisite.
+more banded-and-busy threads than leaves the host a couple of cores, with asymmetric hysteresis,
+disarming fast and arming lazily — was booked here as hardening. **It is not hardening; it is
+required, and it is now implemented** (below).
 The arm direction still has a cost of its own: a vCPU that has just gone idle waits a sample plus
 hysteresis before it is punctual, which is a hitch exactly when a build finishes.
 
@@ -2492,6 +2495,49 @@ Host contention was the obvious explanation for that spread and is **not** it: o
 host threads cannot preempt a banded vCPU, and sweeping 0/4/8 of them leaves the static band's
 saturated case at 31.8 / 29.6 / 29.8 FPS. Dynamic arming beats the static band in every saturated
 cell (58.9 / 52.2 / 35.0) and ties it in every idle one at 58-60 FPS.
+
+### A banded guest can panic the host, and the guard against it could not run
+
+A wedged guest saturated its vCPUs on 2026-09-21 and took the host Mac down:
+`panic(cpu 3): watchdog timeout: no checkins from watchdogd in 94 seconds`, panicked task
+`limina-vmm`, four vCPU threads at priority 97 — above `kernel_task`'s 95 — with `CORE 0-3
+[EACC0]` online and both performance clusters offline.
+
+**The guard had a circular dependency.** `rt+dyn` disarms a saturated vCPU from an
+ordinary-priority sampler thread, and an ordinary-priority thread cannot preempt a banded one:
+`starvation-probe.sh` measured exactly that during a collapse — every other thread in the worker at
+0.0% while the vCPU threads held the band. The sampler is one of those threads, so it has to be
+scheduled to fix the condition that stops it being scheduled.
+
+**The arming state and the dangerous state are the same state.** vCPUs arm when they are *idle*,
+and macOS parks the performance clusters when the machine is idle. Peak arming therefore coincides
+with minimum online cores, which is why months of testing on a busy machine never reached it.
+
+Two fixes, because neither is sufficient alone:
+
+- **A vCPU takes itself out of the band** (`BandGuard`, checked at every exit from the guest). A
+  thread that is running is by definition scheduled, so it is the one actor that can always act. It
+  disarms after `SELF_DISARM_PERIODS` (2) declared periods of computing without parking — derived
+  from the reservation, so a custom `rt:period,...` moves it too. The kick that forces a saturated
+  guest back out to us already existed for the heartbeat and now serves both, for opposite reasons:
+  the heartbeat forces an exit so the thread can *park and keep* the band, the guard so it can
+  *give the band back*.
+- **A cap on how many vCPUs hold the band at once**, enforced every sample in both directions, so a
+  cap already exceeded walks back down instead of waiting for its holders to get busy. **It is not
+  derived from `hw.activecpu`**, which reports every configured core parked or not — measured 10 of
+  10 on an idle M1 Max while the panicking M4 Pro had 10 of 14 offline. A cap against a number that
+  cannot fall is not a cap. It is half the *efficiency* cluster, floored at one: that cluster is
+  what survives an idle machine. 1 on a 2-E-core M1 Max, 2 on a 4-E-core M4 Pro.
+
+The cap is a bound, not a tuned value. The only configuration measured clean under a saturated
+guest is a single banded vCPU, which is why the default is `#1` and stays well under the cap rather
+than relying on it.
+
+**Still open.** Why the performance clusters were parked is unexplained. `set_realtime_band`'s
+comment asserts that *"xnu does not serve a time-constraint thread on an efficiency core"* — the
+panic shows four doing exactly that, and the little-vCPU design rests on that claim, so it needs
+re-verifying. And this is worth a Radar independent of our mitigation: any unprivileged process can
+panic macOS by banding enough threads and saturating them.
 
 **The band is not a battery cost.** Measured on battery, six-minute interleaved blocks, method
 and tables in `spikes/macos-timer-wakeup/results-battery.md`: idle, the band and its 200 ms sampler

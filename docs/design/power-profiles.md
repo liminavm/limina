@@ -41,8 +41,8 @@ policy — and the levers already exist, built for EAS packing:
 | profile | little vCPUs | RT scheduling band | CPU reclaim |
 |---|---|---|---|
 | `power-saver` | `QOS_CLASS_BACKGROUND` | off | `Moderate` |
-| `balanced` | `QOS_CLASS_BACKGROUND` | `rt+dyn` (default) | off |
-| `performance` | promoted (`QOS_CLASS_UTILITY`) | `rt+dyn` | off |
+| `balanced` | `QOS_CLASS_BACKGROUND` | `rt+dyn#1` (default) | off |
+| `performance` | promoted (`QOS_CLASS_UTILITY`) | `rt+dyn#1` | off |
 
 `balanced` is today's defaults exactly, so a guest whose user never touches the toggle behaves as
 it does now. Little vCPUs are on in `balanced` too — the asymmetry is the machine's normal shape,

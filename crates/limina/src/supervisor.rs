@@ -353,7 +353,17 @@ pub fn socketpair(sock_type: libc::c_int) -> Result<(OwnedFd, OwnedFd)> {
 /// punctual timer wake is what a guest needs, and the state where the reservation costs the host
 /// nothing. Without it an idle guest's frame clock slips a whole refresh at a time
 /// (docs/hardening-backlog.md, "An idle guest misses frame deadlines").
-const DEFAULT_VCPU_SCHED: &str = "rt+dyn";
+///
+/// `#1` limits it to vCPU 0, and that suffix is doing safety work, not tuning. The band is a
+/// reservation: enough banded threads promise the machine away, and on 2026-09-21 that panicked
+/// a host — `watchdog timeout: no checkins from watchdogd in 94 seconds`, four vCPU threads at
+/// priority 97, only the efficiency cluster online. A single banded vCPU cannot own a multicore
+/// host whatever the guest does, and it is also the only configuration measured clean under a
+/// saturated guest (`spikes/macos-timer-wakeup/`, `rt#1`: 59.9 FPS saturated, 52.1 idle against
+/// 43.6 unbanded). Banding every vCPU buys the last ~6 FPS of idle smoothness and is what makes
+/// the failure reachable, so it is not the default. libkrun caps the count independently; this
+/// keeps the default well under that cap rather than relying on it.
+const DEFAULT_VCPU_SCHED: &str = "rt+dyn#1";
 
 /// What to set `LIMINA_VCPU_SCHED` to for the worker, given what the environment already carries.
 ///
@@ -901,7 +911,7 @@ mod tests {
     fn an_explicit_vcpu_policy_always_beats_the_default() {
         // The default exists to make an idle guest punctual; a run that names a policy — including
         // an empty one, which is how the band gets turned off for an A/B — must get exactly that.
-        assert_eq!(worker_vcpu_sched(None, None), Some("rt+dyn"));
+        assert_eq!(worker_vcpu_sched(None, None), Some("rt+dyn#1"));
         assert_eq!(worker_vcpu_sched(Some(OsStr::new("rt")), None), None);
         assert_eq!(worker_vcpu_sched(Some(OsStr::new("")), None), None);
         // The older spelling is explicit too: it means the static band, and silently upgrading it
