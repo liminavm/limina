@@ -1657,14 +1657,31 @@ rewrite's frame oracle exercising the parked path with no knob set.
 
 ## GPU — fence-accurate present is a no-op on the Rust renderer, and the C's shape is not worth porting
 
-✅ SHIPPED 2026-09-21: virglrs `6cdad6e`, libkrun `4cc071f4`, pinned by limina `31d50c29`.
+✅ SHIPPED 2026-09-21: virglrs `901c0d0`, libkrun `4cc071f4`.
 `Renderer::resource_present_fence(handle, fence)` names the flushed resource and derives the
 context from what the guest attached it to; retirement goes through a new
 `FenceSink::present_fence`, which carries no context and no ring. A venus context answers it in
 the two phases below on a thread of its own, a classic one with a GL sync per queue it could have
 drawn on. libkrun marks the retirement with a host-internal `RUTABAGA_FLAG_PRESENT`;
 `LIMINA_PRESENT_RING` is gone, and so is the `present_waits_on` round trip the vrend arm made to
-ask which context to fence. The record below is kept for why the shape is what it is.
+ask which context to fence.
+
+**The barrier's waits are a different type from the context stream's, and must stay that way.**
+Phase 1 waits on rings, and the obvious way to write it — reuse the `RingWaiter` the stream uses
+for `vkWaitRingSeqnoMESA` — is wrong in a way that costs the whole VM. That type treats a ring
+parked on an unpublished virtqueue seqno as a deadlock and poisons the context, which is sound
+only because `vkSubmitVirtqueueSeqnoMESA` is the stream's to send and the stream is the thing
+blocked. A present barrier runs while the stream is free, so the same state is an ordinary pause;
+`BarrierWaiter` gives up on it and the present retires unfenced. A guard is only as true as its
+premise about *who* is waiting.
+
+The C ABI exports the pair as limina extensions —
+`virgl_renderer_limina_resource_present_fence` and
+`virgl_renderer_limina_set_present_fence_callback` — so the harness layers, which drive only the
+public ABI, can reach the path. The callback is registered separately rather than added to
+`virgl_renderer_callbacks`: that table is versioned by a header we do not own.
+
+The record below is kept for why the shape is what it is.
 
 virglrs has **no present-ring path at all**. `rg -n "PRESENT_RING|present_fence|limina_present"`
 over `third_party/virglrs/src/` returns nothing, so the fence libkrun injects on ring 63 falls
