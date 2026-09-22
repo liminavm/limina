@@ -70,14 +70,49 @@ const SUSPENDING_TOO_LONG: std::time::Duration = std::time::Duration::from_secs(
 /// Where the guest is in a suspend, read off the devices we emulate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GuestSleep {
-    /// No suspend under way: devices are driver-held and none has been handed back.
+    /// No suspend under way: devices are driver-held and none has been handed back, or the
+    /// guest is taking them back (resuming).
     Awake,
-    /// A suspend under way: some devices handed back but not all, or all handed back with a
-    /// vCPU still running.
+    /// A suspend under way: the guest is handing devices back and has not finished — some
+    /// still held, or all handed back with a vCPU still running.
     Suspending,
     /// Suspended: parked in PSCI `SYSTEM_SUSPEND`, or s2idle with every device handed back
     /// and every vCPU parked.
     Asleep,
+}
+
+/// What the VMM reports about the guest, for [`classify`].
+#[derive(Debug, Clone, Copy)]
+struct GuestReport {
+    system_suspended: bool,
+    /// Some virtio device is still driver-owned ([`vmm::Vmm::quiesce_holdouts`]).
+    devices_held: bool,
+    /// Some virtio device has been reset by its driver ([`vmm::Vmm::released_devices`]).
+    devices_released: bool,
+    all_vcpus_parked: bool,
+    /// Which way the guest last moved a device ([`vmm::Vmm::last_driver_transition`]).
+    last_transition: Option<vmm::DriverTransition>,
+}
+
+/// Where the guest is in a suspend. Released and held devices together are ambiguous — a
+/// guest half-way into a suspend and one half-way out of it (drivers re-taking devices one by
+/// one) look alike — and the direction of the newest device change settles it.
+fn classify(r: GuestReport) -> GuestSleep {
+    use vmm::DriverTransition::{Released, Taken};
+    if r.system_suspended {
+        return GuestSleep::Asleep;
+    }
+    if r.devices_held && !r.devices_released {
+        return GuestSleep::Awake;
+    }
+    if !r.devices_held && r.all_vcpus_parked {
+        return GuestSleep::Asleep;
+    }
+    match r.last_transition {
+        Some(Taken) => GuestSleep::Awake,
+        // Released, or no driver has touched a device yet (early boot): not a guest to pulse.
+        Some(Released) | None => GuestSleep::Suspending,
+    }
 }
 
 /// What `willSleep` should do with the guest.
@@ -264,17 +299,13 @@ impl Bracket {
     /// Where the guest is in a suspend, right now.
     fn guest_sleep(&self) -> GuestSleep {
         let vmm = self.vmm.lock().unwrap();
-        if vmm.system_suspended() {
-            return GuestSleep::Asleep;
-        }
-        let held = !vmm.quiesce_holdouts().is_empty();
-        if held && vmm.released_devices().is_empty() {
-            GuestSleep::Awake
-        } else if !held && vmm.all_vcpus_parked() {
-            GuestSleep::Asleep
-        } else {
-            GuestSleep::Suspending
-        }
+        classify(GuestReport {
+            system_suspended: vmm.system_suspended(),
+            devices_held: !vmm.quiesce_holdouts().is_empty(),
+            devices_released: !vmm.released_devices().is_empty(),
+            all_vcpus_parked: vmm.all_vcpus_parked(),
+            last_transition: vmm.last_driver_transition(),
+        })
     }
 
     /// `willSleep`, up to (not including) releasing the host's sleep ack.
@@ -610,6 +641,83 @@ pub fn start(_vmm: Arc<Mutex<Vmm>>) {}
 mod tests {
     use super::GuestSleep::{Asleep, Awake, Suspending};
     use super::*;
+
+    fn report() -> GuestReport {
+        GuestReport {
+            system_suspended: false,
+            devices_held: true,
+            devices_released: false,
+            all_vcpus_parked: false,
+            last_transition: Some(vmm::DriverTransition::Taken),
+        }
+    }
+
+    #[test]
+    fn a_running_guest_is_awake() {
+        assert_eq!(classify(report()), Awake);
+    }
+
+    #[test]
+    fn a_guest_handing_devices_back_is_suspending() {
+        let r = GuestReport {
+            devices_released: true,
+            last_transition: Some(vmm::DriverTransition::Released),
+            ..report()
+        };
+        assert_eq!(classify(r), Suspending);
+    }
+
+    /// Half-way out of a suspend the devices look exactly as they do half-way in. Read as
+    /// Suspending, a host sleep in that window would skip the pulse and stop a running guest.
+    #[test]
+    fn a_guest_taking_devices_back_is_awake() {
+        let r = GuestReport {
+            devices_released: true,
+            last_transition: Some(vmm::DriverTransition::Taken),
+            ..report()
+        };
+        assert_eq!(classify(r), Awake);
+    }
+
+    #[test]
+    fn every_device_released_with_a_vcpu_running_is_suspending() {
+        let r = GuestReport {
+            devices_held: false,
+            devices_released: true,
+            last_transition: Some(vmm::DriverTransition::Released),
+            ..report()
+        };
+        assert_eq!(classify(r), Suspending);
+    }
+
+    #[test]
+    fn s2idle_and_system_suspend_are_asleep() {
+        let s2idle = GuestReport {
+            devices_held: false,
+            devices_released: true,
+            all_vcpus_parked: true,
+            last_transition: Some(vmm::DriverTransition::Released),
+            ..report()
+        };
+        assert_eq!(classify(s2idle), Asleep);
+        let deep = GuestReport {
+            system_suspended: true,
+            ..s2idle
+        };
+        assert_eq!(classify(deep), Asleep);
+    }
+
+    /// Before any driver has touched a device the guest is still booting: not one to pulse.
+    #[test]
+    fn a_guest_no_driver_has_touched_yet_is_not_pulsed() {
+        let r = GuestReport {
+            devices_held: false,
+            devices_released: true,
+            last_transition: None,
+            ..report()
+        };
+        assert_eq!(classify(r), Suspending);
+    }
 
     /// Arm a watch the way a slow guest does: pulsed, host slept before it got there.
     fn watching(guest_at_wake: GuestSleep) -> (HostSleepState, u64) {
