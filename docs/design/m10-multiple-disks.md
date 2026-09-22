@@ -31,7 +31,7 @@ Parallels-parity for a daily driver:
 - **Create a fresh data disk** ("add a 50 GB disk") — today impossible: limina only *attaches*
   existing images (no creation logic anywhere in the product crates).
 - **Rescue / migration pairing** — boot a rescue rootfs and attach a broken/target disk
-  (`docs/roadmap.md:855-873`; ties into the migrated-guest root-mount work, task #5).
+  (`docs/roadmap.md` §M10; ties into the migrated-guest root-mount work, task #5).
 - **Read-only ISO media** — mount an installer/data `.iso` inside the guest.
 - **Booting an installer ISO** — run an OS installer from an ISO onto a target disk.
 
@@ -453,14 +453,14 @@ the as-built note).
 - ISO/boot-order/firmware: `scripts/build-krun-efi.sh:111-243`, `scripts/prepare-efi-image.sh:77-79,90-93`.
 - Enhanced PRODUCT boots BLS `root=UUID=` (NOT no-initramfs): `scripts/provision/f44/build-kernel-rpm.sh:83,141-142,152-155`,
   `scripts/build-kernel-rpm.sh:5-12,36-37,158-162`, `scripts/provision/install-enhanced.sh:18-20,172,209-215,240-242,246-249,368-451`,
-  `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh:46-49`, `docs/images.md:60`, `docs/roadmap.md:421-426,505-511`.
+  `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh:46-49`, `docs/images.md:60`, `docs/roadmap.md` §M4–M5.
 - Dev/test no-initramfs direct-kernel path (kept, but not the product): `crates/limina-test/src/lib.rs:176-199,420,464,484-540,1007-1036`,
   `scripts/build-test-kernel.sh:56,76-78`, `scripts/run-venus-window.sh:80-84`, `scripts/run-enhanced.sh:42-46`,
   `scripts/prepare-efi-image.sh:77-79`. `--initramfs` plumbing (unused in-repo): `crates/limina/src/main.rs:39-41,234-244`,
   `crates/limina-vmm/src/main.rs:38-44,211-219`, `crates/limina-vmm/src/krun/mod.rs:241-263`.
 - Disk ordering (host-deterministic): `crates/limina-vmm/src/krun/mod.rs:132,334`, `resources.rs:356`,
   `vmm_config/block.rs:46,57`, `builder.rs:2455,2054`, `device_manager/hvf/mmio.rs:106,130`, `fdt/aarch64.rs:321,419,438`.
-- Two-tier: `CLAUDE.md:49-72`. Roadmap M10: `docs/roadmap.md:855-873`.
+- Two-tier: `CLAUDE.md:49-72`. Roadmap: `docs/roadmap.md` §M10.
 
 ## Cross-references
 - `docs/design/m9-suspend-resume.md` — snapshot/restore + clone (disk-set identity, attach-block-last, CoW).

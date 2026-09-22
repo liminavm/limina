@@ -74,7 +74,7 @@ sudo lsinitrd /boot/initramfs-$(uname -r).img | grep virtio_mmio   # confirm pre
 
 ### 1.2 Add a limina-visible console
 On limina's EFI path the kernel cmdline is **GRUB-owned**; FDT bootargs are ignored, so
-limina cannot inject `console=` (`docs/roadmap.md:222`, `scripts/prepare-efi-image.sh`). A
+limina cannot inject `console=` (`docs/roadmap.md` §M2.5, `scripts/prepare-efi-image.sh`). A
 Parallels image typically has `console=tty0`/`hvc0`, so early boot would be **silent** on
 limina. Add both the GOP framebuffer and the PL011 serial limina captures:
 ```bash

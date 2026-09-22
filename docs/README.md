@@ -72,5 +72,5 @@ Decision-oriented design docs — the founding one plus one per major feature
 
 ## Roadmap
 
-- [roadmap.md](roadmap.md) — the milestone plan and live status (M1 boot → M11
-  productization), including per-milestone as-built notes.
+- [roadmap.md](roadmap.md) — the milestone plan (M1 boot → M17 video): what each
+  milestone established and what it still owes.

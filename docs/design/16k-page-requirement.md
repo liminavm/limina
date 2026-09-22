@@ -79,11 +79,11 @@ best-effort path already implemented.**
   sub-page bitmap with an all-free mask (`(1 << (host_page / GUEST_PAGE)) - 1` = `0b1111` on
   16K/4K) and drains only host pages whose every sub-page is free. A 4 KiB guest reclaims less of
   what it frees; it does not fail.
-- **udmabuf / zero-copy video import** (`docs/roadmap.md:1825`): the roadmap says a 4 KiB guest
-  "can present 4 KiB fragments that cannot be remapped individually" and falls back. That is a
-  worst case being described as a necessity — **guest page size is the wrong variable**. See
-  § "udmabuf: the real variable is allocation granularity" below; a 4 KiB guest can stitch fully.
-- **virtiofs DAX** (`docs/roadmap.md:651`): not implemented yet — it is a listed follow-up, not a
+- **udmabuf / zero-copy video import** (`docs/roadmap.md` §M15 wave 6): a 4 KiB guest presenting
+  fragments that cannot be remapped individually is a worst case, not a necessity — **guest page
+  size is the wrong variable**. See § "udmabuf: the real variable is allocation granularity" below;
+  a 4 KiB guest can stitch fully.
+- **virtiofs DAX** (`docs/roadmap.md` §M5): not implemented yet — it is a listed follow-up, not a
   live dependency. When it lands, the degradation is "DAX doesn't engage, plain FUSE read/write
   does", which is where every non-DAX guest already lives.
 - **TLB pressure**: a perf difference, never a correctness gate — and now a *measured* one, since
@@ -243,7 +243,7 @@ What we can reason about up front, so the measurement targets the parts that are
   inflate in 16-PFN groups. Confirm our inflate/deflate path handles that grouping — it is a
   plausible place for a silent off-by-16.
 - **Userspace 64 KiB-cleanliness is unverified**, exactly as 16 KiB-cleanliness is only
-  half-verified today (`docs/roadmap.md:2197` — the toolchain is clean, Mesa and the graphics stack
+  half-verified today (`docs/roadmap.md` §M16 risk (d) — the toolchain is clean, Mesa and the graphics stack
   have not been built). A page-size move re-opens that question for the whole graphics stack.
 
 The honest prior: 64 KiB looks better on alignment, neutral-to-better on balloon *mechanics*, and
