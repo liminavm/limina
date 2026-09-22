@@ -449,6 +449,9 @@ fn hold_ack_until_safe_to_stop(vmm: &Arc<Mutex<Vmm>>, pulse_button: bool) -> Qui
         Quiesced::Parked => {
             log::info!("host sleep: guest parked; releasing the sleep ack")
         }
+        Quiesced::SystemSuspended => {
+            log::info!("host sleep: guest suspended to RAM; releasing the sleep ack")
+        }
         other => log::warn!(
             "host sleep: guest reached only {other:?} within the budget; pausing it \
              ourselves and releasing the sleep ack — the guest's wall clock will need \
