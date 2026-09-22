@@ -143,13 +143,75 @@ mod ffi {
     }
 }
 
+/// The host-sleep bracket: the ownership state machine plus what the last `willSleep`
+/// achieved, shared by the IOKit notification thread and the L2 test seam so that both drive
+/// exactly the same sleep and wake decisions.
 #[cfg(target_os = "macos")]
-struct PowerCtx {
+struct Bracket {
     vmm: Arc<Mutex<Vmm>>,
+    inner: Mutex<BracketInner>,
+}
+
+#[cfg(target_os = "macos")]
+struct BracketInner {
     state: HostSleepState,
     /// How far the guest got quiescing on the last `willSleep` — it decides which resume
     /// flavour `didWake` owes it.
     quiesced: Quiesced,
+}
+
+#[cfg(target_os = "macos")]
+impl Bracket {
+    fn new(vmm: Arc<Mutex<Vmm>>) -> Arc<Self> {
+        Arc::new(Self {
+            vmm,
+            inner: Mutex::new(BracketInner {
+                state: HostSleepState::default(),
+                quiesced: Quiesced::No,
+            }),
+        })
+    }
+
+    fn guest_quiesced(&self) -> bool {
+        self.vmm.lock().unwrap().is_quiesced()
+    }
+
+    /// `willSleep`, up to (not including) releasing the host's sleep ack.
+    fn before_host_sleep(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        // An already-suspended guest still needs its vCPUs confirmed parked and paused — it
+        // is only the sleep-button pulse it must not get again (a latched pulse re-suspends
+        // it unwakeably on wake).
+        let pulse = match inner.state.on_will_sleep(self.guest_quiesced()) {
+            SleepAction::LeaveAsleep => {
+                log::info!("host sleep: guest is already suspended; not pulsing");
+                false
+            }
+            SleepAction::PulseAndWait => true,
+        };
+        inner.quiesced = hold_ack_until_safe_to_stop(&self.vmm, pulse);
+    }
+
+    /// `didWake`: unpause, then wake the guest if its sleep was ours.
+    fn after_host_wake(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        // Unpause first: a paused guest cannot answer a wake key.
+        resume_after_host_sleep(&self.vmm, inner.quiesced);
+        match inner.state.on_did_wake(self.guest_quiesced()) {
+            WakeAction::WakeGuest => {
+                log::info!("host wake: waking the guest");
+                crate::wake::guest(&self.vmm);
+            }
+            WakeAction::LeaveAlone => {
+                log::info!("host wake: guest not ours to wake (user-suspended or never slept)");
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct PowerCtx {
+    bracket: Arc<Bracket>,
     /// The root power domain port, filled in right after registration (before the run
     /// loop starts, so before any callback can fire).
     root_port: ffi::IoConnect,
@@ -157,10 +219,6 @@ struct PowerCtx {
 
 #[cfg(target_os = "macos")]
 impl PowerCtx {
-    fn guest_quiesced(&self) -> bool {
-        self.vmm.lock().unwrap().is_quiesced()
-    }
-
     fn handle(&mut self, message_type: u32, message_argument: *mut std::ffi::c_void) {
         match message_type {
             // Idle-sleep query: never veto (a veto would keep the user's Mac awake).
@@ -168,34 +226,10 @@ impl PowerCtx {
                 unsafe { ffi::IOAllowPowerChange(self.root_port, message_argument as isize) };
             }
             ffi::K_IO_MESSAGE_SYSTEM_WILL_SLEEP => {
-                // An already-suspended guest still needs its vCPUs confirmed parked and
-                // paused — it is only the sleep-button pulse it must not get again (a
-                // latched pulse re-suspends it unwakeably on wake).
-                let pulse = match self.state.on_will_sleep(self.guest_quiesced()) {
-                    SleepAction::LeaveAsleep => {
-                        log::info!("host sleep: guest is already suspended; not pulsing");
-                        false
-                    }
-                    SleepAction::PulseAndWait => true,
-                };
-                self.quiesced = hold_ack_until_safe_to_stop(&self.vmm, pulse);
+                self.bracket.before_host_sleep();
                 unsafe { ffi::IOAllowPowerChange(self.root_port, message_argument as isize) };
             }
-            ffi::K_IO_MESSAGE_SYSTEM_HAS_POWERED_ON => {
-                // Unpause first: a paused guest cannot answer a wake key.
-                resume_after_host_sleep(&self.vmm, self.quiesced);
-                match self.state.on_did_wake(self.guest_quiesced()) {
-                    WakeAction::WakeGuest => {
-                        log::info!("host wake: waking the guest");
-                        crate::wake::guest(&self.vmm);
-                    }
-                    WakeAction::LeaveAlone => {
-                        log::info!(
-                            "host wake: guest not ours to wake (user-suspended or never slept)"
-                        );
-                    }
-                }
-            }
+            ffi::K_IO_MESSAGE_SYSTEM_HAS_POWERED_ON => self.bracket.after_host_wake(),
             _ => {}
         }
     }
@@ -272,14 +306,15 @@ fn resume_after_host_sleep(vmm: &Arc<Mutex<Vmm>>, outcome: Quiesced) {
 /// rather than some microseconds later is deliberate: it is the worst case macOS is
 /// entitled to, and it makes the race deterministic, because the rendezvous the guest
 /// still owes cannot complete while its vCPUs are frozen. The driving test sends
-/// `SIGCONT` after the gap it wants to simulate, and this thread then pulses the wake key
-/// exactly as `didWake` would.
+/// `SIGCONT` after the gap it wants to simulate, and this thread then runs the same `didWake`
+/// path the IOKit handler does — nothing the seam adds of its own, so a wake decision that
+/// strands the guest in production strands it here too.
 ///
 /// `SIGSTOP` (not [`Vmm::pause`]) is what models a host sleep: `Vmm::pause`/`resume` hide
 /// the elapsed time by advancing the vtimer offset, which is exactly what macOS does NOT
 /// do to us.
 #[cfg(target_os = "macos")]
-pub fn install_test_seam(vmm: Arc<Mutex<Vmm>>) {
+fn install_test_seam(bracket: Arc<Bracket>) {
     if std::env::var("LIMINA_HOST_SLEEP_SEAM").as_deref() != Ok("1") {
         return;
     }
@@ -303,26 +338,17 @@ pub fn install_test_seam(vmm: Arc<Mutex<Vmm>>) {
             loop {
                 if FIRED.swap(false, std::sync::atomic::Ordering::SeqCst) {
                     log::warn!("host sleep seam: simulating willSleep");
-                    let outcome = hold_ack_until_safe_to_stop(&vmm, true);
-                    log::warn!("host sleep seam: ack released ({outcome:?}) — stopping the worker");
+                    bracket.before_host_sleep();
+                    log::warn!("host sleep seam: ack released — stopping the worker");
                     unsafe { libc::raise(libc::SIGSTOP) };
-                    log::warn!("host sleep seam: continued — resuming and waking the guest");
-                    resume_after_host_sleep(&vmm, outcome);
-                    // Let the guest settle before the wake lands, or a KEY_WAKEUP pulse arrives
-                    // at a guest not yet in s2idle and is simply ignored. (A system-suspended
-                    // guest needs no such grace — it is provably parked — but the sleep is
-                    // harmless and keeps the seam one path.)
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    crate::wake::guest(&vmm);
+                    log::warn!("host sleep seam: continued — simulating didWake");
+                    bracket.after_host_wake();
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         })
         .expect("spawning the host-sleep seam thread");
 }
-
-#[cfg(not(target_os = "macos"))]
-pub fn install_test_seam(_vmm: Arc<Mutex<Vmm>>) {}
 
 #[cfg(target_os = "macos")]
 extern "C" fn power_callback(
@@ -338,15 +364,18 @@ extern "C" fn power_callback(
 
 /// Register for host sleep/wake notifications and run their delivery loop on a dedicated
 /// thread, for the life of the worker. Call once, only when `on_host_sleep = s2idle`.
+///
+/// Also installs the L2 test seam, which stands in for macOS and is a no-op unless
+/// `LIMINA_HOST_SLEEP_SEAM=1`.
 #[cfg(target_os = "macos")]
 pub fn start(vmm: Arc<Mutex<Vmm>>) {
+    let bracket = Bracket::new(vmm);
+    install_test_seam(bracket.clone());
     std::thread::Builder::new()
         .name("host-sleep".into())
         .spawn(move || {
             let ctx = Box::leak(Box::new(PowerCtx {
-                vmm,
-                state: HostSleepState::default(),
-                quiesced: Quiesced::No,
+                bracket,
                 root_port: 0,
             }));
             let mut port: ffi::IoNotificationPortRef = std::ptr::null_mut();
