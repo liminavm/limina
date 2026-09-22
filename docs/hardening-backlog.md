@@ -23,7 +23,7 @@ exists, keep identity only for the unfitted case, and say which one was used in 
 Diagnostic only: nothing in the pointer path reads the verdict.
 
 ### The captured cursor can go undrawn on the display the user is looking at
-Seen once on the dogfood Mac in a cold-booted two-display session: the pointer moved and GNOME's
+Seen once on the dogfood Mac (2026-08-24) in a cold-booted two-display session: the pointer moved and GNOME's
 overview fired, but nothing was drawn while captured; the uncaptured pointer wore the guest's shape
 throughout, and `Ctrl-Alt-F1`/`F2` fixed it for good. Excluded: the IOSurface path (0
 `building guest cursor from IOSurface … failed`), a stale per-slot `cursor.id` across a plane
@@ -37,7 +37,7 @@ slot N"). Next: when it fires, read it against `[CURSOR] slot=N hide`, then deci
 captured path gets `shape_slot`'s tolerance or the fix belongs upstream in the position.
 
 ### A cursor plane left enabled just outside a display's edge
-A dogfood log from a single-session guest showed, 31 times, `other slots also showing a cursor:
+A dogfood log from a single-session guest (2026-08-24) showed, 31 times, `other slots also showing a cursor:
 [(1, (-10, 582))]` while the pointer was legitimately at the far edge of slot 0. The neighbouring
 slot keeps a visible plane a few pixels outside its own scanout. Placement is unaffected (the echo
 names the real slot), but `shape_slot` treats it as a second cursor and it feeds the undrawn-cursor
@@ -82,7 +82,7 @@ sighting, check `window/cursor.rs` `update_capture_cursor` and `secondary.rs` fo
 ### A pointer cannot be drawn for the first ~350 ms of a Space-switch animation (parked)
 A three-finger Space switch animates for about 530 ms; `isOnActiveSpace`, key status and
 app-active all change at commit, so a captured pointer stays hidden and parked for the whole
-animation while macOS draws its cursor throughout (measured on six flicks). The only public signal
+animation while macOS draws its cursor throughout (measured 2026-08-22 on six flicks). The only public signal
 that leads the commit, `NSWindow.occlusionState` losing `.Visible`, does so 170–201 ms early —
 releasing on it would restore the pointer only for the last third. Trackpad gesture events
 (`NSEventType` 29) start ~530 ms early but fire for every gesture and miss Ctrl-arrow and Mission
@@ -112,21 +112,21 @@ before designing a fix.
 ## Input
 
 ### Clicks that neither take nor stand down the grab
-Reported once, cause unknown. Every press the tap sees logs `pointer capture: click at (x,y) —
+Reported once (2026-08-22), cause unknown. Every press the tap sees logs `pointer capture: click at (x,y) —
 grabbed=…; fullscreen=… key=… space=… on-screen=… grab-enabled=… latched=…`, and a system-disabled
 tap logs `pointer capture: the system disabled our event tap … re-enabled` — events in that gap
 reach the app untapped, which matches the reported signature. Next sighting: read those lines
 before forming a theory.
 
 ### Needs repro: the released pointer can come back invisible
-Seen once on the two-panel rig, fullscreen on both panels after a click had promoted the grab:
+Seen once on the two-panel rig (2026-08-23), fullscreen on both panels after a click had promoted the grab:
 releasing a hard grab with Ctrl-Opt left no cursor drawn; the pointer was live, and pushing it up to
 reveal the chrome brought the image back. The per-tick blank-wear check and the unhide fix
 (`64aee92`) are both in, so this is a path that skips both or a macOS unhide that did not take.
 Catch it with the poke-VM trace env on.
 
 ### Needs repro: the menu-bar reveal drops while a macOS menu is still open
-A small downward move with a menu open releases the ask and the chrome retracts under the open
+Observed on the dogfood Mac (2026-08-22): a small downward move with a menu open releases the ask and the chrome retracts under the open
 menu. The ask is slaved to `NSMenu::menuBarVisible` (`InputState::menubar_observed`) and released by
 `reveal_step`; which of the two lets go first has not been measured.
 
@@ -136,7 +136,7 @@ sits behind it. The grant path works (`InputState::menubar_observed`); the band 
 the uncaptured case is missing. Small.
 
 ### Needs repro: pointer not shown right after logout/login under synoik
-Intermittent on dogfood under synoik, not under mutter — a mutter "cannot reproduce" is a false
+Intermittent on dogfood (sighted 2026-08-22) under synoik, not under mutter — a mutter "cannot reproduce" is a false
 negative here. Chase it on a clone of `Fedora-Workstation-44.enhanced.synoik.raw`, in a loop: plane
 visibility is readable from the `[CURSOR] … visible=` trace, so many cycles can be checked
 automatically, and the guest synoik session can be asked what it saw. One clean cycle did not
@@ -195,7 +195,7 @@ event). Two faults follow when the incoming session runs no `limina-agent-sessio
    `desktop_in_range` and `range_shares` also build the captured confinement and seam shares from
    the stale report.
 
-Measured on the dogfood guest: sends landed 2452 px off, the echo warned `we sent the pointer to
+Measured 2026-08-24 on the dogfood guest: sends landed 2452 px off, the echo warned `we sent the pointer to
 slot 0 … the guest shows its cursor on [(1, …)] and none on slot 0`, and the captured pointer was
 clamped inside the other session's desktop — for exactly the windows where the other session owned
 the screen, clearing on every return (`layout_gate.poll` re-sends on inactive→active).
@@ -206,7 +206,7 @@ and tell the host when the seat's active session changes; reconsider the helper'
 treat "no helper in the active session" as a reason to distrust the held report.
 
 ### A `SUBMIT3D` error storm across a guest DRM-master handoff
-Measured on the dogfood Mac with the C renderer: about 20 s after a guest `chvt` between two seat
+Measured 2026-08-24 on the dogfood Mac with the C renderer: about 20 s after a guest `chvt` between two seat
 sessions, `ctx 25 submit_command -> Err("ErrRutabaga(ComponentError(22))")` repeated at ~4 KiB per
 command for the length of the handoff — consistent with a compositor that keeps submitting after
 losing DRM master. Owed on virglrs: reproduce with the multi-session steps above; trace the EINVAL to
@@ -280,13 +280,13 @@ After a flat-disk `limina suspend <disk>` the worker snapshots and exits 126, bu
 stays up holding its gvproxy (and SSH port) and a stale window, and `SIGTERM` does not end it. The
 next `limina suspend` on the same disk refuses with "multiple limina supervisors match"
 (`cmd_suspend_flat` `pgrep -f`s the disk path and keeps every process named `limina`). Reproduced
-on all three cycles of a synoik poke session. Decide whether a flat-run supervisor exits after a
+2026-08-29 on all three cycles of a synoik poke session. Decide whether a flat-run supervisor exits after a
 CLI-requested suspend (a windowed run parks behind the play button by design), make `SIGTERM` end a
 parked supervisor, and have `cmd_suspend_flat` skip a supervisor whose worker already suspended.
 
 ### The snapshot bracket gives up on a slow guest, wakes it, and then misses its late sleep
 The SIGTSTP bracket in `crates/limina-vmm/src/krun/mod.rs` has a fixed `QUIESCE_TIMEOUT` of 20 s;
-on expiry it logs `bracket: ABORTED`, pulses `wake::guest` and re-arms. Measured on the F44
+on expiry it logs `bracket: ABORTED`, pulses `wake::guest` and re-arms. Measured 2026-09-16 on the F44
 enhanced golden: a fresh seated GNOME session reaches PSCI SYSTEM_SUSPEND 11 s after
 `systemctl suspend`, a *restored* one took 23.5 s — the wake landed on a guest still awake, the guest
 slept 3.5 s later, and the bracket had already given up. The suite now waits for the guest to be
@@ -368,7 +368,7 @@ atomic in a device bug) refault-loops silently instead of crashing. Fix: field o
 millions (stats verb / decision trace).
 
 ### Host anonymous memory outlives a worker that died abnormally, until reboot
-Measured on the dev Mac after a day of crash arms: swap grew from ~8 GiB to 68.7 GiB. At rest, with
+Measured 2026-09-05 on the dev Mac after a day of crash arms: swap grew from ~8 GiB to 68.7 GiB. At rest, with
 no VM running, all processes summed to 10.5 GiB of footprint while the compressor held 12 GiB of RAM
 and swap 68.7 GiB, frozen; 39 IOSurfaces system-wide, so not the scanout ring. Left to accumulate it
 panicked the host (`watchdog timeout: no checkins from watchdogd in 91 seconds`, `100% of segments
@@ -384,8 +384,8 @@ clean and abnormal exits is ours. Until settled, anyone running repeated crash a
 
 ### The io give-back's `MemAvailable` guard is scaled by the balloon it gates
 `GIVEBACK_AVAIL_CEILING_PCT` (`balloon_policy.rs`, 50) compares `mem_available_kib` against
-`mem_total_kib`, the guest-visible total, which the balloon controls. In a restic ladder, balloon
-and total summed to the VM max:
+`mem_total_kib`, the guest-visible total, which the balloon controls. In a restic ladder (2026-08-14),
+balloon and total summed to the VM max:
 
 | balloon | guest total | decline threshold = total/2 |
 |---|---|---|
@@ -401,7 +401,7 @@ give-back of any episode always fires: the guard bounds a ladder but does not pr
 
 ### Re-justify or retire the `MemFree` half of the io give-back guard
 The doc comment on `GIVEBACK_FREE_CEILING` / `GIVEBACK_AVAIL_CEILING_PCT` says the free ceiling
-catches md5sum as an "accumulating" reader. Replaying the md5sum trace contradicts it: `MemFree`
+catches md5sum as an "accumulating" reader. Replaying the md5sum trace (2026-08-13) contradicts it: `MemFree`
 stayed at 461–615 MiB through nearly every step of the ladder (under the ceiling, `free_ok = true`)
 and spiked to 6.7 GiB only after the ladder ended — the comment took the endpoint for the
 trajectory. Of 103 give-backs in that trace the free guard alone fires 39 and the combined guard 17;
@@ -412,7 +412,7 @@ shape. Either show on evidence that the free half binds, or remove it and correc
 The `inelastic` verdict fires whenever inflating would dig into page cache, which covers a
 well-ballooned guest near max (the designed terminal state) and a guest whose balloon was emptied
 while the host still bills a large footprint and the balloon cannot refill because everything is
-cache. Measured: a 1.12 G balloon with the host billing 36.95 G, 24.91 G compressed; it recovered in
+cache. Measured 2026-08-13: a 1.12 G balloon with the host billing 36.95 G, 24.91 G compressed; it recovered in
 ~5 min only because the footprint pushed the host to `warn` and triggered the trickle dig — host alarm
 is a poor trigger. Today the discriminator is `actual_bytes` on the trace row. Give the stranded case
 its own verdict or label (as `AllowanceBand` and `shortfall` were split out). Inelastic runs are not
@@ -420,13 +420,13 @@ downstream of give-backs (0 of 27 long runs had one in the preceding 120 s), and
 MemFree/MemAvailable gate narrows the main path into the stranded state.
 
 ### Needs one check: allowance-path overshoot during indexing
-One evening the balloon walked to 2.25 G with 15,993 MiB free through ordinary `set` decisions
+On 2026-08-13 the balloon walked to 2.25 G with 15,993 MiB free through ordinary `set` decisions
 after `some_avg60` peaked at 2.56% (suspected trigger `localsearch-3`). The shortfall damping and
 `INFLATE_BAND_PCT` hysteresis may cover it. Settle it by checking a current dogfood
 `balloon-trace.jsonl` for a deep `set`/`shortfall` walk with multi-GiB free during an indexing pass.
 
 ### Cadence settle sweeps keep running at near-zero yield on a settled idle guest
-On an idle dogfood guest overnight the cadence sweep ran every ~30 min and debited 44–54 MiB per
+On an idle dogfood guest overnight (2026-08-14) the cadence sweep ran every ~30 min and debited 44–54 MiB per
 run, against 1,893–3,042 MiB for demand sweeps during activity. Only the demand path judges yield
 (`DemandHoldoff`); the cadence arm in `balloon_policy.rs` (`sweep_due(...)`, trace label `cadence`)
 sends unconditionally. Cheapest fix: a cadence sweep that yields under `DEMAND_SWEEP_MIN_YIELD`
@@ -442,7 +442,7 @@ settle now and then.
 ### Post-episode warm-read tax (~1.6x) after a deep balloon dig
 After a deep dig and give-back, a fully recovered guest (cache re-warmed, kswapd idle, io-some <1%,
 no swap) reads its own page cache at ~16 GB/s against ~26 GB/s pristine (192 vs 118 ms/pass on the
-S3 bench vehicle). Cause unidentified; deflate pacing is ruled out as a lever. Leading hypothesis:
+S3 bench vehicle, measured 2026-08-12). Cause unidentified; deflate pacing is ruled out as a lever. Leading hypothesis:
 page-cache folio-order collapse, where scattered 4 KiB inflates fragment the buddy lists and the
 re-warm under duress rebuilds the cache as order-0 folios. Probes: `/proc/buddyinfo` and folio-order
 stats across an episode; in the recovered state `drop_caches` then a calm re-read (back to ~118 means
@@ -458,7 +458,7 @@ Background for this section — why idle guests need a real-time band, what it c
 ships — is in `docs/design/vcpu-scheduling-band.md`.
 
 ### Re-verify "no time-constraint thread on an efficiency core", and explain the parked P-clusters
-A host panic (`watchdog timeout: no checkins from watchdogd in 94 seconds`, panicked task
+A host panic on 2026-09-21 (`watchdog timeout: no checkins from watchdogd in 94 seconds`, panicked task
 `limina-vmm`) showed four vCPU threads at priority 97 running on `CORE 0-3 [EACC0]` with both
 performance clusters offline. That contradicts the premise in `set_realtime_band`'s comment
 (libkrun `vmm/src/macos/vcpu_sched.rs`): *"xnu does not serve a time-constraint thread on an
@@ -499,7 +499,7 @@ sags as it drains), verify per block that the differential reached the guest, an
 `AppleRawCurrentCapacity` (a self-refitting estimate).
 
 ### Host-CPU cost of a busy VM is unattributed (Parallels appears cheaper)
-On similarly busy guests Parallels accrues visibly less Activity Monitor %CPU than our worker. The
+Observed on dogfood (2026-09-03): on similarly busy guests Parallels accrues visibly less Activity Monitor %CPU than our worker. The
 standing costs (guest timer exits, the display/present pipeline, the 1 s agent heartbeat, the
 virtio-net interrupt-status reads below) are itemised only at idle (`docs/perf/overhead-inventory.md`).
 Profile the worker under a representative busy desktop, attribute CPU by exit reason / device /
@@ -513,7 +513,7 @@ of a core of `online`). The constants were set against an idle desktop, a real d
 synthetic spinners; untested: a compile with a serial link step, a browser playing video, IO-heavy
 work where `busy` stays low while tasks wait. Collect traces (`spikes/vcpu-replug-trace/`), check
 grow latency and false-grow rate, and move constants only on evidence.
-Measured on the dogfood desktop over three days: grows out of 2 online fell 27.4/h → 2.2/h → 0.8/h.
+Measured on the dogfood desktop 2026-09-03..06: grows out of 2 online fell 27.4/h → 2.2/h → 0.8/h.
 The survivors carry no guest signal and at 0.12–0.18 cores busy exclude every guest path, leaving
 the host term — at 2 online its bar is 1.75 cores, which the worker's device threads (the GPU
 renderer above all) can clear with the guest idle. Confirming needs the `dynamic vCPUs: … host
@@ -549,8 +549,8 @@ on any other host driver. Fix: port the filter into the virglrs handler. The L2 
 
 ### Nothing stops a guest from submitting seconds ahead of the host's decode
 A classic (vrend) client that submits faster than the virtio-gpu worker decodes keeps the control
-queue permanently non-empty. Measured on a stock F44 guest with the webglsamples aquarium at 15k
-fish: the worker was CPU-bound in a single `process_queue` drain for up to 25 s — ~75% decoding,
+queue permanently non-empty. Measured 2026-09-12 on a stock F44 guest with the webglsamples aquarium at
+15k fish: the worker was CPU-bound in a single `process_queue` drain for up to 25 s — ~75% decoding,
 ~25% blocked in `Vrend::fence_global` → `glFenceSync` → mesa `tc_flush`/`_tc_sync` (a full
 threaded-context sync on every guest global fence) — while the page's fps counter read ~57.
 Presenting retired frames from inside the drain keeps the window live, but every input and frame
@@ -594,7 +594,7 @@ The pool in `kk_device.c` (`limina-kk`) mints on a miss and retires surplus allo
 call already served from the pool. Two ways a guest drives it without bound; only the lost-device
 case is contained (the pool refuses to mint after `vk_device_is_lost_no_report`).
 - **A client that never lets a pass complete.** Every allocator stays `in_use` and the pool mints
-  one per pass. Measured on the host (zink-on-KK) with `spikes/notification-text-corruption/glyphmimic`:
+  one per pass. Measured 2026-08-26 on the host (zink-on-KK) with `spikes/notification-text-corruption/glyphmimic`:
   100 passes → 101 live class-0 allocators, 300 → 301, 600 → 435, 930 → 510 — an unbounded
   in-flight pool, not a leak, depending only on render-pass count. Any per-frame completion or flush
   keeps it under the watermark, which is why gnome-shell (flushing every frame) never shows it. Repro:
@@ -612,7 +612,7 @@ peak, runs to thousands of lines and adds load of its own. The growth warning on
 (`watermark_warned`), so read it as a high-water mark; the clock-paced pool report gives live/peak.
 
 ### zink can begin rendering with a stale stencil attachment
-Measured on the dogfood Mac: SIGABRT after 29 h of session at `assert(!ctx->dynamic_fb.info.pStencilAttachment
+Measured 2026-09-04 on the dogfood Mac: SIGABRT after 29 h of session at `assert(!ctx->dynamic_fb.info.pStencilAttachment
 || ctx->gfx_pipeline_state.rendering_info.stencilAttachmentFormat)` (`zink_context.c`), via
 `zink_draw` → `zink_batch_rp` → `begin_rendering` on the threaded-context worker. Crash report:
 `spikes/zink-stencil-attachment-assert/`. The guest workload is unknown (the app-launched worker's
@@ -703,7 +703,7 @@ libkrun's gpu worker thread, venus reads on its own ring thread, and nothing ord
 takes two halves: guest mesa virgl flushes and waits for the bo to idle on unmap of a write map of a
 `PIPE_BIND_SHARED` resource (mesa-guest 0008), and the host finishes the upload before the virtio-gpu
 fence signals. Under the C renderer the guest half alone still failed the first write after boot in 5
-of 6 boots; both together failed 0 of 7. Owed:
+of 6 boots; both together failed 0 of 7 (measured 2026-08-14). Owed:
 - **Re-run the reproducer under virglrs.** The host half was a C-vrend change; virglrs's fence path
   syncs ctx0, where contextless transfers land (`vrend/waiter.rs` `Answer::Syncs`), which should cover
   it but is unmeasured. Reproducer: `spikes/dmabuf-cpu-coherency/probe.c` in a clone of
@@ -762,7 +762,7 @@ then fences only dumb or imported objects. A GNOME desktop scans out through vre
 tiers, so its flushes carry no fence, no `GuestFlushHold` forms, and the compositor may render into
 the buffer while it is on glass. The supervisor covers that with a Metal-blit copy of every unheld
 frame (`docs/graphics.md` §4): correct, but ~1.2 ms of added latency per frame, 4.6–6.1 ms worst case
-under a 24–33 fps WebGL load. Fix, enhanced tier only (a commit on the fork's `limina` branch): fence
+under a 24–33 fps WebGL load (measured 2026-09-12). Fix, enhanced tier only (a commit on the fork's `limina` branch): fence
 every primary-plane flush the host can hold, so the enhanced tier goes back to zero-copy and the stock
 tier keeps the copy. libkrun already reports the change (`scanout_held`). Check with
 `LIMINA_PRESENT_MUTATION_TRACE=1` (zero surfaces changed while up) and the worker's
@@ -780,7 +780,7 @@ the ring seqno). That touches the virtqueue FIFO ordering contract `CREATE_BLOB`
 needs a design, not a patch.
 
 ### A WebGL window repaints as a slideshow in the GNOME overview unless another window is hovered
-User-seen on stock Debian (GNOME 50.3, vrend) with the WebGL aquarium in one Firefox window and a
+User-seen 2026-09-12 on stock Debian (GNOME 50.3, vrend) with the WebGL aquarium in one Firefox window and a
 second page in another: with the overview open, the aquarium's thumbnail repaints as a fast slideshow
 while nothing or its own window is hovered, and at its reported frame rate while the other window is
 hovered. Outside the overview both are fine. Not measured. Start from the worker log's
@@ -790,7 +790,7 @@ otherwise.
 
 ### Direct-KMS strictly double-buffered clients run at ~30 fps
 kmscube `-A` ran at 31 fps on a 60 Hz host whatever `LIMINA_FENCE_LATCH_MS` was (8 and 35 ms both
-gave 31), measured before the virglrs present path — re-measure before acting. A client that blocks
+gave 31), measured 2026-06-23, before the virglrs present path — re-measure before acting. A client that blocks
 on flip-complete misses every other vsync because the fence-accurate present waits twice in sequence
 (GPU render complete, then the CoreAnimation latch) and the round trip exceeds one vsync. Wayland
 desktops and fullscreen apps reach 60 because mutter triple-buffers; only bare direct-KMS
@@ -821,7 +821,7 @@ worth nothing unless a current perf instrument is GPU-bound — check both befor
 ## KosmicKrisp
 
 ### AGX faults on a zeroed ComputeContext during guest texture uploads (cause unknown)
-Dogfood `limina-vmm` SIGSEGV on thread `gpu worker`, six times at uptimes from 1.4 h to 2 d 17 h:
+Dogfood `limina-vmm` SIGSEGV on thread `gpu worker`, six times 2026-08-31..09-11 at uptimes from 1.4 h to 2 d 17 h:
 guest GL texture upload → zink `zink_copy_image_buffer` → KK `kk_CmdCopyBufferToImage2` (pre_gfx
 compute slot) → AGX `prepareForEnqueue+672` (×5) / `blitCDMTextureToTexture+840` (×1), storing
 through a NULL `ComputeContext+0x918` pass-state pointer that only `beginComputePass` writes.
@@ -899,7 +899,7 @@ guest's target. Keep keying on the stream's own `use_superres`, never on the ret
 host whose bug changes shape is still caught. The refusal cannot reach the guest (the video protocol
 has no reply path), so the target keeps its old contents; the log line stays loud because superres is
 rare and would otherwise surface as "the video looks wrong". AV1 is offered only on M3+ hosts.
-The host defect, measured on M4 Pro / macOS 26.5.2 (`spikes/av1-obu-serializer/vt-oracle.c`):
+The host defect, measured 2026-08-30 on M4 Pro / macOS 26.5.2 (`spikes/av1-obu-serializer/vt-oracle.c`):
 VideoToolbox returns a superres frame at the **coded** width holding roughly the rightmost
 `coded_width` columns of the correctly upscaled picture (76.3% of pixels matching 1:1, 88.6% shifted
 one row; 6.9% against the pre-upscale picture — a plain right crop). Neither escape works: upscaling
@@ -954,7 +954,7 @@ release, redeliver.
 ### mpv's VA-API path cannot render on venus
 `mpv --hwdec=vaapi` loads the driver but libplacebo's dmabuf interop fails probing surface formats —
 `vk->MapMemory(...): VK_ERROR_MEMORY_MAP_FAILED (../src/vulkan/malloc.c:973)` — the `vo/gpu` load is
-abandoned and mpv falls back to software (F44 enhanced guest, mpv 0.41.0). Firefox's VA-API path is
+abandoned and mpv falls back to software (measured 2026-09-03, F44 enhanced guest, mpv 0.41.0). Firefox's VA-API path is
 unaffected, so it is libplacebo's map of venus memory, not decode. It matters because mpv is the
 easiest source of objective A/V-sync and dropped-frame numbers, which on this tier currently describe
 only software decode.
@@ -986,7 +986,7 @@ without underruns.
 `control.rs` accepts a peer, logs `control: peer's first message was not HELLO …; dropping`, and
 returns — no per-peer backoff and no cap on concurrent unauthenticated peers, so a
 reconnect-without-backoff guest can still spin the accept loop (measured before the muxer and helper
-fixes: 396,747 connects in 150 s). The muxer now resets connections whose proxy socket cannot be
+fixes: 396,747 connects in 150 s, 2026-08-21). The muxer now resets connections whose proxy socket cannot be
 created, so a storm no longer kills the worker. Consider a per-peer accept backoff or a cap on
 concurrent unauthenticated peers.
 
@@ -1015,7 +1015,7 @@ it. The supervisor can respawn gvproxy on the same socket path (`gateway.rs`), b
 dead until the VM restarts. Fix: a small libkrun change that reconnects to the socket path on hang-up.
 
 ### An idle guest reads virtio-net `InterruptStatus` about 2,400 times a second
-Measured on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of
+Measured 2026-08-27 on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of
 `0xa01f060` in 30 s — offset `0x060` (`InterruptStatus`) on `a01f000.virtio_mmio` → `virtio_net`.
 virtio-blk (`0xa01d060`) was a distant second at 2,896; every other device was in the tens. MMIO
 writes are not logged, so the true exit count is higher. Unknown whether this is gvproxy's normal
@@ -1065,7 +1065,7 @@ dump-super -f <dev>` should show `compat_ro` `0x3` afterwards, and the 16k kerne
 
 ### Fold `xtask bundle` into `xtask app`
 `bundle` (writes `target/Limina-smoke.app`, debug, ad-hoc) no longer earns a second command: `app`'s
-assemble + sign + dmg phase is ~25 s, the rest is the cargo build, which `cargo xtask app --debug`
+assemble + sign + dmg phase measured ~25 s (2026-08-31), the rest is the cargo build, which `cargo xtask app --debug`
 avoids, and `build-app.sh` already supports `LIMINA_ALLOW_ADHOC=1` / `LIMINA_SIGN_IDENTITY=-` and
 `LIMINA_NO_TIMESTAMP=1`. What `bundle` still has: `--open` (a LaunchServices launch booting the L1
 `limina.hold` guest — the Dock-launch path where launchd's 256-fd limit bit) and independence from
@@ -1084,7 +1084,7 @@ settle host↔guest uid mapping. Without DAX every guest gets plain FUSE read/wr
 ## Tests — flakes & coverage
 
 ### `l1_silent_agent_is_reported_and_recovers` has no timing margin
-Fails about 9% of the time run solo (1 in 11 isolated runs), so load is not the cause. It sets
+Fails about 9% of the time run solo (1 in 11 isolated runs, measured 2026-08-14), so load is not the cause. It sets
 `LIMINA_AGENT_SILENT_SECS=1` (`l1_liveness.rs`) and the liveness sweep also runs every 1 s, so
 "silent for 1.0 s" is a phase tie and the healthy seed agent `limina-init` is sometimes reported
 silent, then "heartbeating again" a second later. Fix: give the threshold margin over the sweep
@@ -1093,7 +1093,7 @@ interval (threshold ≥ 2× sweep, or a shorter sweep under test). The balloon i
 
 ### libkrun `sweep_fault_handler_fields_concurrent_touches` depends on a timing collision
 In `hvf/src/released_ram.rs`, run by `cargo test -p krun-hvf --lib` (not by `cargo xtask test`). It
-passed 2 of 5 runs on a clean tree, failing with `no toucher write collided with a sweep window in 50
+passed 2 of 5 runs on a clean tree (2026-08-27), failing with `no toucher write collided with a sweep window in 50
 sweeps`: it needs a racing write to land inside a sweep window it does not control. Make the
 collision deterministic (hold the window open until the toucher has written, or count observed
 windows and skip when there are none); do not just raise the 50.
@@ -1103,7 +1103,7 @@ Only under suite parallelism: the guest-side `eglretrace --headless` replay neve
 and the ssh bound gives up at ~956–959 s, in either `venus_replay_matches_llvmpipe_reference` or
 `venus_shell_replay_matches_llvmpipe_reference`. Signature: the venus context is created, KK shader
 work runs ~90 s, then the replay wedges at the first frame boundary and the worker log shows only a
-1 Hz `capture: configure scanout` for ~15 minutes. Three sightings, each in a suite run that took
+1 Hz `capture: configure scanout` for ~15 minutes. Three sightings (2026-08-12, 08-13, 08-27), each in a suite run that took
 3094–3343 s against ~2200 s for a green run the same day; solo reruns pass in 63–164 s. Ruled out: a
 granule effect, and the once-a-minute `vsock muxer: unexpected dgram pkt: 3` (libkrun's timesync
 datagram reset by a guest with no listener). **Next occurrence, debug it live instead of rerunning:**
@@ -1153,7 +1153,7 @@ pick a delay for the PNG encoder. After the flip: fluster verdicts and replay-co
 and the frame oracle reaching the parked path with no knob set.
 
 ### Watch `l1_real_session_helper_bridges_clipboard_via_mock_mutter` for a second failure
-Seen once: the mock log reached `CLAIMED_NAME / CREATE_SESSION / START / ENABLE_CLIPBOARD`, but
+Seen once (2026-08-04): the mock log reached `CLAIMED_NAME / CREATE_SESSION / START / ENABLE_CLIPBOARD`, but
 `PASTED sess-host-to-guest-42` never arrived (`l1_session_helper.rs`). Treated as a flake by decision,
 not analysis. If it fires again, first check whether the wait for `PASTED` is generous enough under a
 parallel nextest lane.

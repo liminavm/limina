@@ -79,8 +79,8 @@ idle host.
 (banded 128/104 mW, unbanded 111, empty-host floor 98). While presenting, the band draws +154 mW
 (+18%) for +21% frames (58.9/59.8 FPS against 47.7/49.6), so energy per frame is flat.
 
-**Host throughput** (`results-host-impact.md`): the only cost. An 8-thread host job keeps 3452–3458
-Miter/s against an idle guest under every policy. Against a saturated guest it keeps 2050 unbanded
+**Host throughput** (`results-host-impact.md`, measured 2026-08-28): the only cost. An 8-thread
+host job keeps 3452–3458 Miter/s against an idle guest under every policy. Against a saturated guest it keeps 2050 unbanded
 but only 538 with every vCPU banded (15% of solo, 9 s → 61 s). `rt+dyn` matches unbanded rep for rep,
 which is evidence the disarm is complete. Only a CPU-bound host job has been measured.
 
