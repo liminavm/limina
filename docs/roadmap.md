@@ -459,7 +459,8 @@ standalone win: serial-over-virtio-console for FTDI/CP210x boards.
 Parallels-parity suspend: freeze the guest to a file, **tear the worker down** (reclaiming host RAM,
 the GPU/Metal graph, gvproxy), and resume the same desktop later; plus snapshots. Design:
 `docs/design/m9-suspend-resume.md`, `docs/design/m9.2-quiesced-snapshot.md`,
-`docs/design/m9-freeze-trigger.md`, `docs/design/host-sleep-s2idle.md`.
+`docs/design/m9-freeze-trigger.md`, `docs/design/host-sleep-s2idle.md`,
+`docs/design/venus-snapshot-replay.md`.
 
 **Established:**
 - **Host-side VMM snapshot, not guest S4.** Pause vCPUs, quiesce virtio, serialize vCPU + in-kernel
@@ -474,16 +475,15 @@ the GPU/Metal graph, gvproxy), and resume the same desktop later; plus snapshots
 - **The production path is the s2idle bracket** (SIGTSTP): the guest quiesces virtio to INIT, the
   snapshot is taken, exit 126; the restore re-establishes the renderer from a journal. Reboot
   relaunch and suspend share the relaunch spine. Measured: 6.6 s save / 465 MiB / 2.3 s restore apply.
-- A restore must not cycle the display connector; the raw `SIGUSR1` snapshot is an L1 test vehicle
-  that dumps an unquiesced guest.
+- A restore must not cycle the display connector, and it exposes the fresh worker's device
+  defaults to a driver that never went away — the snapshot carries display config for that reason.
 - HVF has no dirty-page log, so a snapshot is a stop-the-world RAM dump — fine for suspend, a UX
   note for snapshotting a live VM (`hv_vm_protect` DIY dirty-logging is a later option).
+- The raw `SIGUSR1` seam is armed only by `LIMINA_RAW_SNAPSHOT_SEAM` (a stray signal does nothing,
+  `l1_snapshot.rs`); flat `--disk` runs arm `<disk>.limina-suspend.bin`, and a VM never boots past a
+  pending resume (`--discard-suspend` is the explicit cold boot).
 
 **Owed:**
-- **Guard the two ad-hoc footguns** (`spikes/suspend-resume-adhoc/`): restoring an unbracketed
-  (`SIGUSR1`) snapshot livelocks the guest, so the raw trigger should bracket first or the restore
-  should refuse it; and an ad-hoc `--disk` run with `--snapshot-file` resolves window close to
-  shutdown. No L2 covers a snapshot round-trip under dynamic memory + FRQ.
 - **Guest-kernel virtio-gpu PM ops (low priority):** `virtgpu_drv.c` has no `.freeze`/`.restore`, so
   every thaw takes the bus fallback (reset → renegotiate with no queue re-programming); the host-side
   leniencies cover stock guests, which a kernel fix never can. Carry the Dongwon Kim freeze/restore

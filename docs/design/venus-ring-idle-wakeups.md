@@ -48,7 +48,7 @@ That race — not blob coherency — is the real cause of the `#30` "missed noti
 - On **x86 TSO** (where upstream venus runs) a seq_cst store fences the store buffer, so
   store→acquire-load can't reorder; upstream's blocking `cnd_wait` never hangs. The bug is
   **Apple-Silicon-specific**, which is exactly when the `#30` workaround was added.
-- `#28` is a **GPU-write** SLC-beyond-PoC staleness (`docs/graphics.md`); the IDLE bit is a
+- `#28` is a **GPU-write** SLC-beyond-PoC staleness (a MoltenVK-era finding; host-visible blobs are coherent on KosmicKrisp); the IDLE bit is a
   **host-CPU** write to a Shared-MTLBuffer-backed blob, and host-CPU↔guest-CPU coherency for normal
   cacheable memory is an ARM hardware guarantee. The `#30` commit plausibly-but-wrongly attributed
   the missed notify to `#28` (a nearby scary premise) without testing the ordering angle — the exact
