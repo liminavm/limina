@@ -395,16 +395,6 @@ its own verdict or label (as `AllowanceBand` and `shortfall` were split out). In
 downstream of give-backs (0 of 27 long runs had one in the preceding 120 s), and the io give-back's
 MemFree/MemAvailable gate narrows the main path into the stranded state.
 
-### Allowance-path overshoot during indexing, with a nearly empty balloon
-On 2026-08-13 the balloon walked to 2.25 G with 15,993 MiB free through ordinary `set` decisions
-after `some_avg60` peaked at 2.56% (suspected trigger `localsearch-3`). Not reproduced with a full
-balloon: a 2G..16G guest settled at an ~11 GiB balloon, then five forced `localsearch-3` re-indexes
-of a 2.4 GB corpus (97 s CPU first pass) drew 37 `shortfall` deflates, none with more than 2 GiB
-free, each walk returned within ~30 s. The dogfood trace of 2026-09-20..22 is also clean, but held
-no real indexing pass. The uncovered shape is the original's: a nearly empty balloon with ~16 GiB
-free. Before chasing it, note that the designed emergency release (`some_avg10` ≥ 10%) also shows
-`some_avg60` ≈ 2.55%, so a sighting read from the 60 s average alone may be that release.
-
 ### Cadence settle sweeps keep running at near-zero yield on a settled idle guest
 On an idle dogfood guest overnight (2026-08-14) the cadence sweep ran every ~30 min and debited 44–54 MiB per
 run, against 1,893–3,042 MiB for demand sweeps during activity. Only the demand path judges yield
