@@ -316,6 +316,8 @@ impl Bracket {
                     .spawn(move || bracket.watch_late_suspend(id))
                 {
                     log::warn!("host wake: spawning the post-wake watch failed ({e}); waking now");
+                    // Resolve the watch as a wake, so ownership does not outlive it.
+                    inner.state.on_watch(id, GuestSleep::Asleep, true);
                     crate::wake::guest(&self.vmm);
                 }
             }
@@ -338,6 +340,10 @@ impl Bracket {
         loop {
             // Read the generation before the state, so a transition in between wakes the wait.
             let seen = watch.generation();
+            // Hold the bracket from reading the guest through to waking it, as `didWake` does. A
+            // `willSleep` in between would otherwise find our suspend finished and no longer
+            // ours, and pause the guest just before the wake reached it — the lost wake again.
+            let mut inner = self.inner.lock().unwrap();
             let raw = self.guest_sleep();
             let guest = if raw == GuestSleep::Asleep && !self.vmm.lock().unwrap().system_suspended()
             {
@@ -352,13 +358,7 @@ impl Bracket {
                 raw
             };
             let grace_over = armed.elapsed() >= LATE_SUSPEND_GRACE;
-            let action = self
-                .inner
-                .lock()
-                .unwrap()
-                .state
-                .on_watch(id, guest, grace_over);
-            match action {
+            match inner.state.on_watch(id, guest, grace_over) {
                 WatchAction::WakeGuest => {
                     log::info!(
                         "host wake: the guest finished our suspend {:.1?} after the host woke; \
@@ -378,6 +378,7 @@ impl Bracket {
                 }
                 WatchAction::Keep => {}
             }
+            drop(inner);
             if guest == GuestSleep::Suspending && !warned && armed.elapsed() >= SUSPENDING_TOO_LONG
             {
                 warned = true;

@@ -130,7 +130,9 @@ Nothing is stale on either side. Keep the world and the session survives **with 
   `INIT` on the way in, so some devices released and some still held means a suspend under way. A
   suspend under way can only complete or abort (devices back at `DRIVER_OK`), so the watch waits
   for it without a deadline; one not yet visible (still in the guest's userspace when the host
-  slept) gets a bounded grace. Pinned by `host_sleep_late_suspend`.
+  slept) gets a bounded grace. Pinned by `host_sleep_late_suspend`. The grace is the one place
+  the "only wake what we slept" rule bends: a suspend the user starts inside it, after our pulse
+  was ignored, is indistinguishable from our late one and is woken too.
 - **Clock:** three correctors, in precedence order, all idempotent (each steps only ≥1 s of error,
   so whichever ran first turns the others into no-ops):
   1. **enhanced** — `limina-agent` TimeSync, which also fires on supervisor-detected oversleep;
