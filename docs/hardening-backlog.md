@@ -61,19 +61,6 @@ the union's division, so each slot's sample count is luck (6/4 on the rig). Once
 place the remaining steps inside each slot deliberately, which also removes the corner hazard.
 Latent: ten rig sweeps landed no step near a corner.
 
-### `/sys/class/drm/card0-Virtual-1/edid` reads 0 bytes
-mutter and synoik both get the full identity and mode list from the DRM connector property, so
-nothing visible breaks, but any tool reading EDID from sysfs sees nothing. Find why the connector's
-sysfs `edid` blob is empty while the property is populated. `l1_edid.rs` checks sysfs `modes` only.
-
-### Needs one check: the host-derived EDID identity across a guest reboot
-mutter once reported `RHT krun-display 0x00000001` after `systemctl reboot` instead of the host
-panel's identity, which silently discards the user's `monitors.xml`. limina now re-announces the
-identity on every entry into the OS phase (`window/mod.rs`, around `reset_to_firmware`), a fix
-reasoned from the cold-boot race and not measured on the reboot path. Settle it: reboot a windowed
-venus guest and re-read the monitor spec (`gdbus … GetCurrentState` connector/vendor/product/serial).
-If it holds, drop this entry.
-
 ### A pointer cannot be drawn for the first ~350 ms of a Space-switch animation (parked)
 A three-finger Space switch animates for about 530 ms; `isOnActiveSpace`, key status and
 app-active all change at commit, so a captured pointer stays hidden and parked for the whole
@@ -328,19 +315,20 @@ before the guest's next frame. virglrs keeps no such unit log, so it has to be b
 keyframe interval of bitstream per live codec, and the AV1 serializer's held-frame state has to
 travel with it.
 
-### Needs one check: three restore shapes from the C-renderer era
-Each was seen under the C renderer and may be moot on virglrs; each is settled by one run.
-- **Chrome's classic context dropped 30–79 sampler-view `CREATE_OBJECT`s at every replay**
-  (`Illegal resource …`, contiguous ids — stale views or decode targets that did not come back).
-  virglrs does not emit that message. Run a Chrome video restore with `RUST_LOG=warn,…` and look for
-  replay-refused creates.
-- **A client that came back wedged and stayed broken through a resize** (Firefox Nightly), and **a
-  restored session that painted nothing until a new client arrived**. Both may have been the
-  since-fixed lookup-miss FATAL or the connector-cycle fault (`spikes/synoik-restore/RESULTS.md`).
-  One dogfood-build restore with `krun_devices=debug` settles it.
-- **Guest `RESOURCE_UNREF → 0x1203` right at resume** (the guest unrefs a resource the host lost).
-  Grep the guest dmesg of one `venus_session_preserved` restore with keep-scratch; if present,
-  restate it as a replay-coverage gap.
+### A vrend replay drops Firefox's video-decode sampler views
+A suspend/restore with Firefox playing a VP9 video logs `vrend: replay could not use 3 of 119
+retained commands` (2 `CreateObject`, 1 `SetSamplerViews`), naming `no such resource 2341` in one
+cycle and `2336` in another. That id is a 1280x720 NV12 composite target created alongside
+Firefox's `MediaPDecoder` context, and the restore log shows it being re-created just before the
+replay refuses it, so the replay and the resource table disagree about when it exists. Measured
+2026-09-22 over two cycles: playback resumed and the windows repainted, so nothing visible broke
+— the dropped views are rebuilt by the next decode. Find which table the replay looks the id up in.
+
+### Restore tests cannot see guest kernel errors
+The enhanced image's `kernel.printk` is `1 4 1 7`, so `console.log` carries only emergency
+messages and a virtio-gpu `response 0x…` error (logged at `err`) never reaches it; a restore test's
+console after resume is empty. Have the restore tests copy `journalctl -k` over ssh into scratch
+after each restore and fail on `virtio_gpu`/`[drm]` errors.
 
 ---
 
@@ -407,11 +395,15 @@ its own verdict or label (as `AllowanceBand` and `shortfall` were split out). In
 downstream of give-backs (0 of 27 long runs had one in the preceding 120 s), and the io give-back's
 MemFree/MemAvailable gate narrows the main path into the stranded state.
 
-### Needs one check: allowance-path overshoot during indexing
+### Allowance-path overshoot during indexing, with a nearly empty balloon
 On 2026-08-13 the balloon walked to 2.25 G with 15,993 MiB free through ordinary `set` decisions
-after `some_avg60` peaked at 2.56% (suspected trigger `localsearch-3`). The shortfall damping and
-`INFLATE_BAND_PCT` hysteresis may cover it. Settle it by checking a current dogfood
-`balloon-trace.jsonl` for a deep `set`/`shortfall` walk with multi-GiB free during an indexing pass.
+after `some_avg60` peaked at 2.56% (suspected trigger `localsearch-3`). Not reproduced with a full
+balloon: a 2G..16G guest settled at an ~11 GiB balloon, then five forced `localsearch-3` re-indexes
+of a 2.4 GB corpus (97 s CPU first pass) drew 37 `shortfall` deflates, none with more than 2 GiB
+free, each walk returned within ~30 s. The dogfood trace of 2026-09-20..22 is also clean, but held
+no real indexing pass. The uncovered shape is the original's: a nearly empty balloon with ~16 GiB
+free. Before chasing it, note that the designed emergency release (`some_avg10` ≥ 10%) also shows
+`some_avg60` ≈ 2.55%, so a sighting read from the 60 s average alone may be that release.
 
 ### Cadence settle sweeps keep running at near-zero yield on a settled idle guest
 On an idle dogfood guest overnight (2026-08-14) the cadence sweep ran every ~30 min and debited 44–54 MiB per
@@ -678,13 +670,6 @@ suite (a full run takes hours). Sketch: build CTS for aarch64-linux (the build c
 build guest), stage it into the test image or a virtiofs share, drive curated caselists over ssh from a
 `scripts/`/xtask runner; start with `*-main` mustpass subsets and a minutes-long smoke list, diffed
 against a known-failures baseline.
-
-### Needs one check: GLX / Xwayland GL apps on the enhanced tier
-GL now rides virgl/vrend on both tiers, so the old "GLX presents black on venus" path no longer
-exists. Run `glxgears` in the seated session and pixel-verify the window capture; if black, file an
-item against the vrend/Xwayland present path.
-
----
 
 ## GPU present & scanout
 
