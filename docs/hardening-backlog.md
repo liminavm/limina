@@ -351,13 +351,6 @@ Each was seen under the C renderer and may be moot on virglrs; each is settled b
 
 ## Memory
 
-### `Queue::len` unwraps the avail index, so a kick on a not-ready queue panics the worker
-libkrun `devices/src/virtio/queue.rs` `Queue::len` does `self.avail_idx(mem, Ordering::Acquire).unwrap()`,
-and `is_empty` goes through it. A spurious kick of a queue that is not ready panics the worker
-(exit 101) — e.g. the balloon free-page-reporting queue with `F_REPORTING` masked
-(`Balloon::process_frq → Queue::pop → Queue::len`). A guest-reachable VMM kill. Fix: `len`/`is_empty`
-report empty on a not-ready or invalid ring. Also on the upstreaming triage list.
-
 ### The settle-sweep fault handler fields every fault at a guest address
 `sweep_fault_handler` (libkrun `hvf/src/released_ram.rs`) catches any SIGBUS/SIGSEGV whose address
 falls in a guest region, forever after the first sweep. By design it ignores `SWEEP_ACTIVE` (a
@@ -537,16 +530,6 @@ virtio-gpu (89). The GL path needs its own answer: a guest's GL stream reaches z
 vrend, so hardening the Vulkan decoder does nothing for it. Decide what vrend validates before zink
 sees a command.
 
-### virglrs does not sanitize `vkCmdClearAttachments` rects
-KosmicKrisp is the only guard between a guest's clear rects and the `vk_meta_draw_rects.c` assert.
-virglrs's handler (`venus/context.rs`) and `Driver::cmd_clear_attachments` (`venus/driver.rs`) pass
-the guest's rects straight through; the C renderer dropped empty, negative-offset and overflowing
-rects with i64 math before the driver saw them, and the port did not carry that over. KK's
-`vk_meta_clear_rect_is_empty` filter (`vk_meta_clear.c`, `limina-kk`) is still in place, so this is
-lost defence in depth rather than a live abort — it matters with asserts on in a debug KK build and
-on any other host driver. Fix: port the filter into the virglrs handler. The L2 guard
-`venus_clear_rect.rs` and the probe `spikes/kk-empty-clear-rect/probe.c` already exist.
-
 ### Nothing stops a guest from submitting seconds ahead of the host's decode
 A classic (vrend) client that submits faster than the virtio-gpu worker decodes keeps the control
 queue permanently non-empty. Measured 2026-09-12 on a stock F44 guest with the webglsamples aquarium at
@@ -629,16 +612,6 @@ priority — asserts are compiled out of the shipped stack, so the likely outcom
 stale image view reaching KK is not ruled out. Fix on `limina-kk`: refresh the pointers whenever the
 formats are recomputed; worth upstreaming.
 
-### KosmicKrisp: clamp, don't assert, the render-pass attachment-count checks
-In `begin_render_pass` (`src/vulkan/runtime/vk_render_pass.c`, `limina-kk`),
-`assert(attach_begin->attachmentCount == pass->attachment_count)` and
-`assert(framebuffer->attachment_count >= pass->attachment_count)` are still plain asserts, and the
-loop `for (a = 0; a < pass->attachment_count; ++a)` then indexes `image_views[a]`. With asserts
-compiled out a guest-supplied mismatch becomes an out-of-bounds read of the attachment array. Fix:
-bound `a` by the actual array length, or skip/poison the begin on a mismatch. The neighbouring VU
-checks already went log-only (ledger `docs/upstreaming/ledger/kosmickrisp.md` 0019); these two were
-left out of that change.
-
 ### Run a ThreadSanitizer round on the virglrs + zink-on-KK host stack
 virglrs's vrend keeps the seam that produced the C-era races: a fence waiter thread makes its own
 context current in ctx0's share group and waits on syncs (`vrend/waiter.rs`), entering zink's
@@ -673,22 +646,6 @@ while waiting and a real host refusal all reach the app as one code — the mech
 of venus is never memory". Fix, guest-side and upstreamable (`limina-guest`): carry the submit's
 result into `vn_ring_submit_command` and have `vn_call_*` return it when the reply is absent. Cheap,
 and it makes the next dogfood OOM report classify itself.
-
-### virglrs's shader blitter writes the level range onto the shared source texture
-`set_tex_param` (virglrs `vrend/blitter.rs`) sets `GL_TEXTURE_BASE_LEVEL`/`MAX_LEVEL` to the blit's
-`src_level` (plus swizzle, wrap, filters and sRGB decode) on the source *texture object*, and
-`make_view` (`vrend/context/blit.rs`) hands the blitter the resource's own shared texture whenever the
-source format equals the resource format. Draws are shielded from the swizzle only because a
-non-identity sampler view mints a private GL object; they are not shielded from the level range. An
-identity-swizzle, full-range view samples the shared object, and rebinding the same view handle into
-the same slot is skipped (`holds_view(slot, h)` → `continue`), so after a blit off level N the next
-draw through that already-bound view samples level N only. Filters and wrap come from the bound
-sampler object and do not leak. Not reproduced on virglrs; the C had the same structure and its
-swizzle leak was measured by the replay harness (`harness/replay/make-sampled-corpus.py` →
-`sampled.bin`). Fix: sample through a texture the blitter owns (take the transient-view path
-unconditionally when `Feature::texture_view` is present), or restore the shared object's base/max
-level from the view state after the blit. RED first: extend the sampled corpus with a mipmapped source
-and a blit from level > 0 between two draws through the same view.
 
 ### virglrs's transfer bounds error does not say which bound failed
 `layout` in `vrend/transfer.rs` collapses its three exits (stride smaller than a row, layer stride
@@ -733,27 +690,6 @@ item against the vrend/Xwayland present path.
 ---
 
 ## GPU present & scanout
-
-### venus and vrend scanout IOSurfaces are machine-global again under virglrs
-Capability scoping (a non-global IOSurface handed over as a Mach port through `limina-surfaceport`)
-now covers only the software-2D scanout. The C renderer scoped the venus scanouts too
-(`vkr_mtl_iosurface_alloc` published each port to the same receiver, verified live against
-`SET_SCANOUT_BLOB` ids); the port to virglrs did not carry that over. virglrs mints its scanout
-IOSurfaces with `kIOSurfaceIsGlobal = true` (`third_party/virglrs/src/metal.rs`, both property
-dictionaries, commented "narrows again when the Mach-port handoff lands"), the worker forwards the
-bare id (`limina-display` `present_surface` sends `frame <id> <slot>`), and the supervisor falls back
-to `IOSurfaceLookup`. So any process running as the user can brute-force `IOSurfaceLookup` ids and
-read the guest desktop on the accelerated tiers (`spikes/venus-draw-probe/iosdump.swift` is the PoC).
-The "venus zero-copy path (still global)" doc comments in `window/present.rs` and
-`window/guestwindow.rs` predate the C fix and happen to be true again.
-Related: `republish_iosurface` in libkrun's `rutabaga_gfx/src/virgl_renderer.rs` returns
-`Unsupported` because virglrs keeps no process-wide surface registry, so a scanout the supervisor's
-bounded `SurfaceStore` dropped cannot be handed back. Fix: virglrs mints non-global surfaces and
-publishes each one's Mach port through `limina-surfaceport` (`SurfaceSender`; the worker already has
-`--surface-port-name` / `LIMINA_SURFACE_PORT_NAME`), keeping `LIMINA_GLOBAL_SCANOUT=1` as the debug
-escape hatch. RED first: extend `non_global_scanout_is_hidden_from_strangers`
-(`limina-display/src/iosurface.rs`, sw2d only today) to a venus scanout id taken from
-`SET_SCANOUT_BLOB`. This is also on the Mac App Store path (`docs/design/distribution.md` §2.1).
 
 ### vrend scanout flushes carry no fence, so every GL desktop pays a Metal copy per frame
 `virtio_gpu_plane_prepare_fb` (`drivers/gpu/drm/virtio/virtgpu_plane.c` on the linux fork's `limina`
@@ -837,6 +773,15 @@ at `<LIMINA_KK_POOL_SNAPSHOT>.dispatch.<pid>`. AGX reusing one ComputeContext ac
 encoders is normal; two live on one is the signal. If the hook names AGX, a Radar is owed. Full
 record: `spikes/kk-alloc-pool/RESULTS.md`.
 
+### A refused render-pass begin leaves the pass's later commands unaudited
+KK's runtime now refuses a render-pass begin whose attachment-view count falls short of the pass's
+(it logs, fails the command buffer at `vkEndCommandBuffer`, and `vkCmdNextSubpass2` /
+`vkCmdEndRenderPass2` return early with no active pass). What a guest's *draw* inside such a pass
+does in KK — it arrives with no render encoder, the same state as any draw outside a pass — has not
+been read or probed (`spikes/kk-attachment-count/` records no draw, because that needs a
+pipeline). Also still dereferenced in `begin_render_pass`: a
+`VK_NULL_HANDLE` framebuffer or render pass, and a NULL image view inside a correctly sized array.
+
 ### The kernel logs a shared-event fault continuously while any VM runs
 While a `limina-vmm` lives the kernel emits `IOGPUFamily … IOGPUCommandQueue::schedule_shared_event:
 Failed to find shared event reference` continuously (thousands per minute under load), stopping the
@@ -886,32 +831,13 @@ that address — it names the site.
 
 ## Video
 
-### AV1 super-resolution frames are refused before they are submitted
-`decode_av1` (virglrs `vrend/video/mod.rs`, the `if desc.use_superres` early return right after
-`FrameDesc::read`) returns `HostRefusedFrame` **before** flushing a held frame
-(`av1.obu.flush_held`) and before the frame is accumulated for submission. The frame has to be
-**submitted and decoded, with only its delivery refused**: VideoToolbox's internal reconstruction of
-superres frames is correct (non-superres frames predicting from superres references come back
-bit-identical to dav1d), so skipping the submit corrupts every later frame that references it, and
-skipping the held-frame flush drops a frame that was not superres at all.
-Fix: flush the held frame first, submit the superres frame normally, suppress only the copy into the
-guest's target. Keep keying on the stream's own `use_superres`, never on the returned width, so a
-host whose bug changes shape is still caught. The refusal cannot reach the guest (the video protocol
-has no reply path), so the target keeps its old contents; the log line stays loud because superres is
-rare and would otherwise surface as "the video looks wrong". AV1 is offered only on M3+ hosts.
-The host defect, measured 2026-08-30 on M4 Pro / macOS 26.5.2 (`spikes/av1-obu-serializer/vt-oracle.c`):
-VideoToolbox returns a superres frame at the **coded** width holding roughly the rightmost
-`coded_width` columns of the correctly upscaled picture (76.3% of pixels matching 1:1, 88.6% shifted
-one row; 6.9% against the pre-upscale picture — a plain right crop). Neither escape works: upscaling
-ourselves is impossible (about half the picture is absent), and requesting sequence-size output via
-`kCVPixelBufferWidthKey`/`HeightKey` returns the same wrong pixels stretched. Two-command Radar repro
-with no limina code, still worth filing:
-```
-ffmpeg -hwaccel videotoolbox -i superres.mp4 -pix_fmt gray -f image2 vt/%03d.pgm
-ffmpeg -c:v libdav1d          -i superres.mp4 -pix_fmt gray -f image2 sw/%03d.pgm
-```
-(dav1d per-frame mean luma 127.00..127.43; VideoToolbox 110.44..142.76, low exactly on superres
-frames.)
+### A host failure decoding a held AV1 frame drops the next frame too
+`Av1::advance` (virglrs `vrend/video/mod.rs`) submits the frame held at the eight-slot wall with
+`?`, so a VideoToolbox error on the held frame returns before the incoming frame's shape is
+recorded, and that frame is dropped at END_FRAME as well. Super-resolution frames no longer take
+this path (they decode normally), so it needs a genuine host decode failure. Fix: record the
+incoming frame's shape before the held one is submitted, or submit the held frame without `?` and
+log its failure.
 
 ### Stock-tier Firefox never gets hardware decode (virgl offers I420/YV12 as decode targets)
 `virgl_is_video_format_supported` ignores profile/entrypoint and answers with the generic sampling
@@ -1133,10 +1059,6 @@ memory-requirements-cache hit: create the same image key twice (the miss is sync
 the hit is async), inject on the second, and assert the context survives and the ghost is logged. The
 same hook would cover the reply-carrying-ghost poison (`wants_reply` → poison), which has only unit
 coverage.
-**Check first whether the test runs at all:** it skips (with `eprintln`, then returns) when the image
-lacks `/dev/udmabuf`, and a suite run showed it "PASS" in 20 s, short enough to be a self-skip. Run it
-alone (`scripts/test-boot.sh debug refused_venus_import_leaves_the_context_alive`) and look for
-`SKIPPED`, or check `/dev/udmabuf` and `uname -r` on a clone of `enhanced.test.raw`.
 
 ### Fence-accurate present is armed only on windowed boots, so no headless gate reaches a parked classic scanout
 `fence_present_policy` (libkrun `virtio_gpu.rs`) defaults on only when `LIMINA_SHOWN_ACK_FD` exists,
@@ -1228,6 +1150,9 @@ parallel nextest lane.
   whatever the fault turns out to be; it is the half of the harm we own.
 - Guest drivers turn host ring loss into `VK_ERROR_DEVICE_LOST`, never `abort()`: ring loss is a
   legitimate runtime event on a VMM that suspends.
+- A port keeps the mechanism behind a conclusion, not just the conclusion. "Refuse superres",
+  "clear rects are filtered", "scanouts reach the supervisor" each survived the C→Rust port while
+  the submit, the renderer-side filter and the Mach handoff that made them safe did not.
 - Never smuggle a host-injected operation into a guest-owned id space; give it a first-class entry point.
 - A completion wait must cover the queue that did the work. Finishing "the current context" is not a
   fence.

@@ -187,6 +187,10 @@ turned graceful. This is a *class*, and its strongest single upstream story is l
   ring → CPU pin). **0010** coexist fence routing drops an `.expect()` on renderer-init
   failure. **0013** SET_SCANOUT_BLOB (was `panic!` on mutter's first page-flip).
   **0014** scanout-readback failure (was `unwrap`).
+- **"virtio: read an unreadable avail ring as empty instead of panicking"** — `Queue::len`
+  unwrapped the avail-index load, and `is_empty`/`pop` go through it, so a kick on a queue
+  whose ring the guest never placed in its memory (the balloon FRQ with `F_REPORTING` masked)
+  killed the worker. Generic virtio code, so likely reachable upstream too — check HEAD first.
 - **0041 / virgl 0022 / virgl 0015** — resource-exhaustion class: guest context/window
   churn leaked host mmaps / IOSurfaces until ENOMEM collapsed the session. Now balanced
   on unref/teardown. (0041 & 0022 are also in Bucket A.)

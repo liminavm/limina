@@ -299,7 +299,7 @@ list of the descriptor:
 - The same threading rule as VP9: VideoToolbox's callback is ordered-synchronous but on its
   own thread, which holds no GL context. Park the picture, deliver after `DecodeFrame` returns.
 
-## Super-resolution frames are refused
+## Super-resolution frames are decoded, not delivered
 
 The one AV1 tool this backend does not deliver. VideoToolbox reconstructs
 super-resolution frames correctly — frames predicting from them come back
@@ -307,18 +307,26 @@ bit-exact — but the picture it hands out for such a frame is not that frame: i
 a coded-width buffer holding roughly the rightmost `coded_width` columns of the
 upscaled image. Neither of the two ways out survives measurement (upscaling it
 ourselves, because it is not the pre-upscale picture; requesting full-size output
-buffers, because the same wrong pixels come back stretched). Measurements and the
-disposition: `docs/hardening-backlog.md` §"AV1 super-resolution frames are refused before they
-are submitted".
+buffers, because the same wrong pixels come back stretched).
 
-So a frame declaring `use_superres` must be refused, keyed on the stream's flag rather than the
-returned width, so the refusal does not quietly stop working if the host's output bug changes shape.
-**The refusal must be of delivery, never of decode**: the host's reconstruction is correct, so the
-frame still has to be submitted or every later frame predicts from a missing reference.
+So virglrs submits a frame declaring `use_superres` like any other — the reference chain depends
+on it — and withholds only its picture: the guest's target keeps what it held, and the worker log
+says so for every such frame (the video protocol has no reply path to tell the guest). The decision
+keys on the stream's own flag, never on the returned width, so it does not quietly stop working if
+the host's output bug changes shape, and it travels with the frame, so a super-resolution frame the
+serializer holds at the eight-slot wall is still withheld when it goes out.
 
-**Owed: virglrs refuses at the wrong point.** `decode_av1` (`third_party/virglrs/src/vrend/video/mod.rs`)
-returns on `use_superres` before the frame is submitted — and before it flushes a held predecessor —
-so a super-resolution stream loses its reference chain from the first such frame.
+**The host defect, measured 2026-08-30 on M4 Pro / macOS 26.5.2** (`spikes/av1-obu-serializer/vt-oracle.c`):
+the returned superres picture matches the correctly upscaled one on 76.3% of pixels 1:1 and 88.6%
+shifted one row, against 6.9% for the pre-upscale picture — a plain right crop; requesting
+sequence-size output via `kCVPixelBufferWidthKey`/`HeightKey` returns the same wrong pixels
+stretched. A two-command Radar repro with no limina code, not yet filed:
+```
+ffmpeg -hwaccel videotoolbox -i superres.mp4 -pix_fmt gray -f image2 vt/%03d.pgm
+ffmpeg -c:v libdav1d          -i superres.mp4 -pix_fmt gray -f image2 sw/%03d.pgm
+```
+(dav1d per-frame mean luma 127.00..127.43; VideoToolbox 110.44..142.76, low exactly on superres
+frames.)
 
 **Not ported: the dav1d fallback.** The C backend this design was first built on switched a codec
 to a dav1d software decoder on its first `use_superres` frame, and used the same decoder to offer
