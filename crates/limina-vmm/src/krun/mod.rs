@@ -94,8 +94,6 @@ const VIRGLRENDERER_USE_VIDEO: u32 = 1 << 11;
 ///   on macOS epoxy routes desktop-GL calls to Apple's system OpenGL framework (→ glFlush crash with
 ///   no CGL context); GLES dlopens `libGLESv2` → resolves to our zink-on-KK Mesa. Guest GL is
 ///   unaffected — virglrenderer translates guest GL → host GLES. (Proven: `spikes/virgl-zink-kk`.)
-///   This needs a virglrenderer built with `-Dplatforms=egl` (our `third_party/virgl-prefix`) and a
-///   small patch wiring the no-GBM EGL path on macOS (`patches/virglrenderer-vrend-egl-no-gbm-macos`).
 ///   `NO_VIRGL` (0x80) was historically forced ON because Apple Silicon has no host GL; zink-on-KK
 ///   removes that constraint, so it's now OFF and vrend is enabled.
 /// - `RENDER_SERVER` (0x200): our virglrenderer is built with `render-server-mode=thread`; 1.3.0
@@ -106,10 +104,9 @@ const VIRGLRENDERER_USE_VIDEO: u32 = 1 << 11;
 ///
 /// - `USE_VIDEO` (0x800): hardware video decode. The guest's own `virtio_gpu_drv_video.so` — which
 ///   stock Fedora already ships — talks VA-API over the virgl command stream to a host backend;
-///   ours is VideoToolbox (`src/vrend/virgl_video_vt.c` in our virglrenderer fork), since upstream
-///   implements only libva. Costs nothing on a Mac without silicon for a codec: the backend then
-///   advertises no video caps and the guest driver reports no profiles, i.e. software decode, so
-///   there is nothing to gate. Needs a virglrenderer built `-Dvideo=true`.
+///   ours is VideoToolbox (virglrs `src/videotoolbox.rs`), since upstream implements only libva.
+///   Costs nothing on a Mac without silicon for a codec: the backend then advertises no video caps
+///   and the guest driver reports no profiles, i.e. software decode, so there is nothing to gate.
 ///
 /// The software-2D path still serves all 2D/scanout commands (unconditional); venus + vrend add 3D
 /// contexts on top. Two-tier safety: if renderer init fails, libkrun degrades to software-2D.

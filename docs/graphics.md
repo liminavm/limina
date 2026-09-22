@@ -433,11 +433,9 @@ selects a driver by DRM driver name — `virtio_gpu`. It talks VA-API over the *
 stream** (`VIRGL_CCMD_*_VIDEO`), so video rides vrend and is independent of which tier the
 guest's 3D is on.
 
-The host half is ours: upstream virglrenderer implements its codec backend only against libva,
-so `src/vrend/virgl_video_vt.c` in our fork implements the same `virgl_video.h` interface
-against VideoToolbox. `src/meson.build` picks one backend by host OS; they are never built
-together. Enabled by `-Dvideo=true` in the reference C build (virglrs's
-`scripts/build-reference.sh`) plus
+The host half is ours: upstream virglrenderer implements its codec backend only against libva;
+virglrs serves the same `VIRGL_CCMD_*_VIDEO` commands against VideoToolbox
+(`third_party/virglrs/src/videotoolbox.rs` + `src/vrend/video/`). Enabled by
 `VIRGLRENDERER_USE_VIDEO` in the worker's virgl flags.
 
 **Nothing gates it.** Caps are negotiated: a Mac with no silicon for a codec advertises none,
@@ -454,12 +452,10 @@ Two independent gates, and only their intersection is reachable:
   `mesa-va-drivers-freeworld`, or our own mesa RPM built `-Dvideo-codecs=all`, restores them.
 - **Host.** VideoToolbox on Apple silicon has no MPEG-2 path at all, and AV1 *hardware*
   decode needs an M3 or later. Measured matrix: `spikes/videotoolbox-caps/RESULTS.md`.
-- **Host, software.** The backend carries a dav1d decoder, but only as a repair for frames
-  AV1-capable silicon decodes correctly and then hands back wrong — super-resolution
-  (`docs/design/av1-decode.md`, `docs/radar/videotoolbox-av1-superres.md`). It is deliberately
-  *not* a decoder in its own right: a host with no AV1 silicon advertises no AV1 profile at
-  all, so the guest keeps decoding with its own dav1d, which is better tested than ours and
-  costs nothing to route through the host (`virgl_video_vt.c`, `fill_caps`).
+- **Host, software.** There is none: a host with no AV1 silicon advertises no AV1 profile at
+  all, so the guest keeps decoding with its own dav1d. Super-resolution frames, which
+  AV1-capable silicon decodes correctly and then hands back wrong, are refused
+  (`docs/design/av1-decode.md`, `docs/radar/videotoolbox-av1-superres.md`).
 
 So VP9 (and MJPEG) everywhere, and **AV1 from M3 on** — below that the guest decodes it
 itself, unaccelerated, which is what it would have done anyway. **Implemented today: VP9 profile 0, AV1 main, H.264 (Baseline/Main/High) and

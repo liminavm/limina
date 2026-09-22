@@ -29,8 +29,7 @@ series, vendor+patch imago — i.e. recreate the gitignored `third_party/` trees
 the in-repo git hooks (`fmt` + `clippy` pre-commit). Idempotent; safe to re-run. Run
 `vendor` on its own after re-cloning a `third_party/` tree.
 
-> The native deps (patched **virglrenderer** into `third_party/virgl-prefix`, the host
-> **KK/zink Mesa**, the **GOP KRUN_EFI** firmware, the guest **16 KiB kernel / Mesa /
+> The native deps (the host **KK/zink Mesa**, the **GOP KRUN_EFI** firmware, the guest **16 KiB kernel / Mesa /
 > agent** RPMs) are heavier, container/`meson`-driven builds that stay as their own
 > scripts — `vendor` only recreates the source trees + applies patches. See
 > `docs/codebases.md` for which script builds what.

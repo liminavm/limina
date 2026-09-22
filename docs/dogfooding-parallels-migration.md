@@ -190,10 +190,9 @@ cp -c Fedora-Workstation-44.migrated.raw migrated-clone.raw
 - **Reboot-loops on SELinux relabel** → inside the guest set `SELINUX=permissive` in
   `/etc/selinux/config` + `touch /.autorelabel`, boot once to relabel, confirm
   `/.autorelabel` is gone.
-- Sanity: `otool -L .../limina.app/Contents/MacOS/limina-vmm | grep virgl` must show
-  `@rpath/libvirglrenderer.1.dylib`, and `Contents/Frameworks/libvirglrenderer.1.dylib` must
-  exist (the silent software-2D degrade trap). The `third_party/virgl-prefix` absolute path is
-  the *dev* worker (`target/debug/limina-vmm`) form — never present in a bundle.
+- Sanity: the renderer is compiled into `limina-vmm`, so there is no virglrenderer dylib to
+  check; while the VM runs, `lsof -p <worker pid>` must show the KosmicKrisp ICD loaded from
+  `limina.app/Contents/Frameworks` (never `/Volumes/mesa-cs`).
 
 ---
 

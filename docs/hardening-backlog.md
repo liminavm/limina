@@ -3101,31 +3101,24 @@ two-command Radar repro that mentions no part of this stack.
   unchanged to four decimals (111.1663 vs 111.1662), while the non-superres frames
   stay bit-exact.
 
-**Disposition: decode it in software, and keep refusal as the floor.** On the
-first frame declaring `use_superres` the codec opens a dav1d decoder, replays
-every unit since the last shown key frame into it so the reference state matches,
-and stays on that decoder for the rest of the stream
-(`virgl_video_dav1d.c`, `av1_route_unit` in `virgl_video_vt.c`). Superres streams
-therefore play correctly, on both tiers, with no guest-side change.
+**Disposition: refuse delivery.** The C backend decoded such streams in software (a dav1d
+fallback); virglrs carries no software decoder, so a super-resolution frame is **refused** rather
+than delivered wrong. The refusal keys on the stream's own `use_superres`, never on the width that
+came back, so a host whose bug changes shape is still caught. A refused frame leaves the guest's
+surface untouched and the guest is not told, because the video protocol has no reply path — see
+the entry on decode errors being invisible to the guest.
 
-Where the fallback cannot start — no dav1d in the build, a 10-bit stream, or a
-frame history too long to have been kept — the frame is **refused** rather than
-delivered wrong (`submit_unit`). That refusal keys on the stream's own
-`use_superres`, never on the width that came back, so a host whose bug changes
-shape is still caught; the width mismatch is kept as a separate sanity error.
-A refused frame leaves the guest's surface untouched and the guest is not told,
-because the video protocol has no reply path — see the entry on decode errors
-being invisible to the guest.
-
-The frame is still **submitted and decoded** — only its *delivery* is refused.
+The frame must still be **submitted and decoded** — only its *delivery* is refused.
 Because this host's internal reconstruction is correct, skipping the submission
 would break the reference chain and silently corrupt every later frame. Anything
 that "simplifies" this into skipping super-resolution frames at submit time is a
-regression.
+regression. **virglrs has exactly this regression today**: `decode_av1`
+(`third_party/virglrs/src/vrend/video/mod.rs`) returns on `use_superres` before submitting the
+frame or flushing a held one. Owed.
 
 Super-resolution is rare in practice, which makes it likelier to surface as a
 mysterious "the video looks wrong" report than as a decode failure — hence the
-loud `virgl_error` and the fallback to software rather than a quiet drop. Worth an
+loud log line rather than a quiet drop. Worth an
 Apple Radar: the decoder is right and only the output copy is wrong, which is a
 small fix on their side.
 
