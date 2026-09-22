@@ -26,7 +26,7 @@ fixed dependencies.** We are willing to fork, patch, and rebuild *any* layer to 
 the behavior we want, and the design should reach for that lever whenever it's the
 right tool — not treat upstream as immutable:
 
-- **libkrun** — **fork model** (migrated 2026-08-06, task #14): `third_party/libkrun` is a clone
+- **libkrun** — **fork model**: `third_party/libkrun` is a clone
   of `github.com/liminavm/libkrun` (`limina` branch; upstream moved to
   `github.com/libkrun/libkrun`), pinned by `third_party/manifest.toml`. **The branch IS the
   delta — `patches/libkrun/` is a tombstone and `scripts/apply-libkrun-patches.sh` is gone.**
@@ -36,8 +36,7 @@ right tool — not treat upstream as immutable:
   commit on the fork's `limina` branch, push, update the manifest rev; tag before every
   branch rewrite. Audit status: `docs/upstreaming/ledger/libkrun.md`.
   - **`cargo xtask vendor`** is the one-command bootstrap: it recreates every gitignored
-    `third_party/` source tree. **Every dep is on the fork model now** (edk2 was the last
-    holdout, migrated 2026-08-06): clone our fork under github.com/liminavm and check out the
+    `third_party/` source tree. **Every dep is on the fork model**: clone our fork under github.com/liminavm and check out the
     rev pinned in the committed `third_party/manifest.toml` — the fork's `limina` branch IS the
     delta, no patch series; `main`/`master` tracks upstream; tag-before-rebase keeps every
     pinned rev reachable. The `patches/**` dirs are tombstones (exception: `patches/mesa-guest/`
@@ -45,14 +44,14 @@ right tool — not treat upstream as immutable:
     reference-only queue material). A dep marked `heavy = true` (the kernel — multi-GB, never
     built on this host) is **skipped unless `--heavy`**. Run it once after a fresh clone,
     before `cargo build` / `scripts/test-boot.sh`.
-- **edk2 (the KRUN_EFI boot firmware)** — **fork model** (migrated 2026-08-06, task #22):
+- **edk2 (the KRUN_EFI boot firmware)** — **fork model**:
   `github.com/liminavm/edk2` (`limina` branch; base is `slp/edk2@krun-support`, the tree
   krunkit's blob is built from), pinned by `[edk2]` in `third_party/manifest.toml` but **not
   vendored** — `scripts/build-krun-efi.sh` clones the pinned rev inside its container build
   volume and builds with zero build-time patching (`patches/edk2/` is a tombstone). Output:
   `target/krun-efi/KRUN_EFI.gop.fd` (RELEASE + GOP + typeable ConIn), which is also the **test
   suite's default firmware** — krunkit's `KRUN_EFI.silent.fd` is a DEBUG build whose live
-  ASSERTs end in `CpuDeadLoop` (the #14 cold-boot wedge) and remains only a loud last-resort
+  ASSERTs end in `CpuDeadLoop` and remains only a loud last-resort
   fallback (`LIMINA_FIRMWARE` overrides).
 - **imago** (libkrun's virtio-blk storage backend, a crates.io dep) — **fork model** (the pilot):
   `third_party/imago` is a clone of `github.com/liminavm/imago` (`limina` branch, default; upstream
@@ -76,14 +75,13 @@ right tool — not treat upstream as immutable:
   resource_map API.
 - **Mesa — two builds, one fork.** `github.com/liminavm/mesa` (upstream:
   `gitlab.freedesktop.org/mesa/mesa`) holds both, on separate branches:
-  - **`limina-kk`** — the **host** KosmicKrisp + zink-on-KK build (fork model since 2026-08-04;
-    `patches/kosmickrisp/` retired). Lives at `/Volumes/mesa-cs/mesa` on a case-sensitive sparse
+  - **`limina-kk`** — the **host** KosmicKrisp + zink-on-KK build (`patches/kosmickrisp/` is a
+    tombstone). Lives at `/Volumes/mesa-cs/mesa` on a case-sensitive sparse
     image (Mesa won't build on a case-insensitive FS), so it is **not** vendored by
     `cargo xtask vendor` — `third_party/manifest.toml` records which rev the checkout should be on,
     and `scripts/ensure-mesa-cs.sh` only mounts the image.
-  - **`limina-guest`** — the **guest** venus Mesa (fork model since 2026-08-05, task #11).
-    Six venus commits on base `mesa-26.1.5` (the Fedora SRPM base both RPM tracks build);
-    worktree at `/Volumes/mesa-cs/mesa-guest`. Because the RPM builds run inside a build
+  - **`limina-guest`** — the **guest** venus Mesa: our commits on the Fedora SRPM base recorded
+    as `base` in the manifest (the base both RPM tracks build); worktree at `/Volumes/mesa-cs/mesa-guest`. Because the RPM builds run inside a build
     guest/container with no access to that checkout, the branch is consumed as an **exported,
     committed series**: `scripts/export-mesa-guest-patches.sh` derives `patches/mesa-guest/`
     from the manifest pin, and both `scripts/provision/f44/build-mesa-rpm.sh` and
@@ -178,8 +176,8 @@ See `docs/research/00-overview.md` for the full picture, `docs/graphics.md` for 
 render/present stack (tier ladder, scanout, pitfalls, open items), **`docs/input-and-windows.md`
 for the whole windows/pointer/keyboard stack** (windows vs slots, the five coordinate spaces,
 captured vs uncaptured pointer, the fullscreen grab, the notch — read it before touching
-`crates/limina/src/window/`), and `docs/roadmap.md` for the milestone plan (M1 boot → M15 display
-pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing verification.
+`crates/limina/src/window/`), and `docs/roadmap.md` for the milestone plan (M1 boot → M17
+video). `docs/research/GAPS-and-verification.md` tracks claims still needing verification.
 
 ## Working conventions (learned the hard way)
 
@@ -202,20 +200,18 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
   almost nothing for boot behavior, so always run the full suite before
   declaring something works. It touches `hv_vm_*`, so it runs only outside any tool sandbox
   (`docs/claude-code.md`) and with a codesigned worker.
-  - **It takes ~28 min. THE one way to run or wait on it is `scripts/run-suite.sh`** — run
+  - **It takes ~38 min. THE one way to run or wait on it is `scripts/run-suite.sh`** — run
     `scripts/run-suite.sh <log>` as a *backgrounded task* (its completion IS the suite's, with
     the suite's real exit code, and it ends by printing the verdict lines), or attach to a run
     already live with `scripts/run-suite.sh --wait <log> [pid]`. Never `nohup cargo xtask test &`
     and never hand-roll a kill-0/grep wait: the nohup launch returns **exit 0 seconds after
     launch** (the backgrounding shell's status, not the suite's) and reads exactly like a green
-    suite — a false green nearly shipped that way on 2026-08-14. The verdict is the log's
+    suite (a false green nearly shipped that way). The verdict is the log's
     `Summary`/`FAILED` lines, which the script prints; a log with no Summary line is a failure,
     not a pass. The script also refuses to start while another run is live.
     **The suite runs detached by default** (its own session, orphaned to init), so the thing you
-    backgrounded is only a *waiter*: an agent harness that reaps it does not kill the run. One
-    did on 2026-09-09 — `stopped because the system is running low on memory` with ~10 GB free,
-    29 minutes in, and the 22 tests it never reached were the ones the run existed to answer.
-    The launch banner names the suite's pid up front; re-attach with
+    backgrounded is only a *waiter*: an agent harness that reaps it does not kill the run
+    (one reaped a run as "low on memory" with ~10 GB free, 29 minutes in). The launch banner names the suite's pid up front; re-attach with
     `scripts/run-suite.sh --wait <log> <pid>` rather than starting over. Both halves are needed
     and neither substitutes for the other: setsid defeats a process-group kill, the double fork
     defeats a walk of the child tree. `--attached` restores the old in-process behaviour.
@@ -226,7 +222,7 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
     Then wait for their hands-on verdict before starting the run: poking finds what the suite
     cannot (it is the only oracle for how a real browser or desktop behaves), and what it finds
     usually means another commit, which would invalidate the run
-    anyway. A suite started too early spends 28 minutes proving a tree we are about to change.
+    anyway. A suite started too early spends 38 minutes proving a tree we are about to change.
     Bisecting a regression later is cheap; a wasted run is not.
   - **Every `cargo xtask app` parks its image, with provenance, in `~/Projects/LiminaParkingLot`.**
     `scripts/park-bundle.sh` (called by `build-app.sh`) copies the `.dmg` there as
@@ -288,27 +284,24 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
 - **Stage files individually. NEVER `git add -A` / `git add .` / `git add -u` at the repo
   root.** The working tree routinely holds multi-gigabyte untracked disk images and their
   `.bak` snapshots, half-built spike binaries, and scratch notes — a blanket add sweeps them
-  in. On 2026-07-31 that stalled two commits for >12 minutes each trying to stage ~27 GB of
-  `*.raw.pre-vnperf.bak` (the `.gitignore` has since been broadened, but the next
-  not-yet-ignored artifact will be just as invisible). Name the paths you actually changed:
+  in (it once stalled commits for minutes staging ~27 GB of image backups), and the next
+  not-yet-ignored artifact is always invisible to `.gitignore`. Name the paths you actually changed:
   `git add crates/limina/src/window/mod.rs docs/design/foo.md`. Run `git status --short`
   first and `git diff --cached --stat` before committing — if the file count or the diff
   size surprises you, something got swept in. A scoped `git add -A <dir>` is acceptable only
   when you have just looked at `git status` for that directory and every entry belongs.
 - **When guest components change, refresh the deliverables AND the enhanced images.** Any
-  rebuild of a guest-side component (16k kernel, mesa, limina-agent, limina-agent-session —
-  guest mutter is stock since 2026-07-11 and the clipboard@limina shell extension was
-  retired 2026-08-15) must flow into
+  rebuild of a guest-side component (16k kernel, mesa, limina-agent,
+  limina-agent-session; guest mutter is stock) must flow into
   (a) the guest-tools tarball (`scripts/provision/f44/package-payload.sh`) and (b) an
   `install-enhanced.sh` pass over the enhanced-tier images (`enhanced.raw` /
   `enhanced.test.raw` / `enhanced.synoik.raw`) — `scripts/provision/deliver-payload.sh
   <payload> <image>...` does that pass (backup, boot, install, verify, poweroff) — then update
-  `docs/images.md` §Component versions. Stale images cost
-  a day on 2026-07-02: every "identical" local repro of a dogfood crash silently ran a
-  guest two deliveries behind (6.19.10 / mesa -1 vs the deployed 7.1.2 / mesa -3).
+  `docs/images.md` §Component versions. A stale image makes every "identical" local repro of a
+  dogfood crash silently run a guest deliveries behind the deployed one.
 - **Never modify the user's dogfood Mac (dogfood-mac) or its dogfood-guest guest without an
-  explicit request.** The dogfood-guest VM is the user's main Linux dev environment
-  (2026-07-02), so guest mutations (RPM installs, service/session restarts, config
+  explicit request.** The dogfood-guest VM is the user's main Linux dev environment,
+  so guest mutations (RPM installs, service/session restarts, config
   edits, reboots) count too, not just host-side changes. Read-only ssh diagnostics on
   both are fine; installing/replacing the .app, starting/stopping/rebooting the VM, or
   editing config is theirs to do unless they ask for that specific action. Mutating
@@ -321,8 +314,8 @@ pipeline). `docs/research/GAPS-and-verification.md` tracks claims still needing 
 
 ### Debugging discipline: verify premises, verify pixels, instrument what we own
 
-This earned its place the hard way on the venus/tier-2 work (#30/#31): the fixes came not from
-cleverness but from refusing to trust anything we hadn't directly observed.
+The fixes that mattered came not from cleverness but from refusing to trust anything we hadn't
+directly observed.
 
 - **Enumerate and verify premises before you deep-dive.** List the assumptions a bug "obviously"
   rests on, then prove each one empirically — don't inherit them. We twice built on false premises
@@ -335,8 +328,8 @@ cleverness but from refusing to trust anything we hadn't directly observed.
 - **"Out of memory" in the graphics stack is almost never about memory.** `VK_ERROR_OUT_OF_HOST_MEMORY`,
   `ENOMEM`, and `ResourceCreateBlob -> ComponentError(-1)` are the *one* error code the venus transport
   has for "could not get a buffer" — `vn_call_*` returns OOM whenever `vn_ring_get_command_reply` is
-  NULL, whatever the reason. Three incidents so far, three unrelated causes, no RAM shortage in any:
-  a poisoned context from a slow ring wait (2026-08-01), a host address-space leak (vm regions
+  NULL, whatever the reason. Three incidents, three unrelated causes, no RAM shortage in any:
+  a poisoned context from a slow ring wait, a host address-space leak (vm regions
   3.5k→23.6k, RSS flat), and launchd's 256-fd limit on Dock-launched apps. Note the last two shared
   an identical downstream signature, so it is a *symptom class*, never a diagnosis. Ask **what refused
   the allocation** — read the host worker log at the timestamp of the guest symptom (the cause is
@@ -345,28 +338,23 @@ cleverness but from refusing to trust anything we hadn't directly observed.
 - **Pixel-verify; proxies lie.** FPS counters, "no GL error", "18/18 scenes", exit-0 — none prove
   anything actually rendered. Read the real pixels: the IOSurface scanout via
   `spikes/venus-draw-probe/iosdump.swift` (cross-process, any global IOSurface id), or the window
-  capture (`LIMINA_WINDOW_CAPTURE`). NOT `glReadPixels` (#28 black readback). When only a human can see
+  capture (`LIMINA_WINDOW_CAPTURE`). NOT `glReadPixels` (it reads back black). When only a human can see
   the window, ask the user to eyeball — and allow that they're human and may be slow to look.
 - **Instrument the stack you own.** When behavior is opaque, a few `fprintf`s in the dependency
   (the host Vulkan driver / virglrenderer / libkrun) beat any amount of outside-in guessing. The
   instrumented host Vulkan driver, loaded into the worker via `VK_ICD_FILENAMES`, is what turned
   "venus renders black" from open theories into one fact: the vertex buffer the GPU fetches is
-  all-zero. (That oracle was an instrumented *MoltenVK* — now archived under
-  `spikes/archive/moltenvk/`; MoltenVK was **retired as a venus backend** 2026-06-13 because it
-  crashes the compositor. **KosmicKrisp (KK) is the one supported backend now** — instrument KK the
-  same way.) Keep such oracles in the repo; they pay off repeatedly.
+  all-zero. (That oracle was an instrumented MoltenVK, archived under `spikes/archive/moltenvk/`;
+  **KosmicKrisp is the one supported backend** — instrument KK the same way.) Keep such oracles in the repo; they pay off repeatedly.
 - **Isolate with a minimal vehicle, then reason to rule out the innocent explanation.** `tri.c` (a
   textureless, self-contained draw) had no confounders, so its result was decisive. And when an
   observation has a benign alternative ("the buffer's zero only because a copy hasn't run yet"), kill
   it with logic (the render is black ⟹ the GPU read zeros *at execution*) rather than assuming.
-- **Verify the fix is actually LOADED before judging it — at the path the process maps.** A half-day
-  was lost (2026-06-10) bisecting a "regression" that was really a half-installed fix: the bake put
-  `libmutter-17.so.0.0.0` in `/usr/lib64/mutter-17/`, but gnome-shell loads it from `/usr/lib64/`
-  directly — the lib holding the actual #32 mitigation sat inert while a *different* piece of the fix
-  (cogl's one-time warning) kept firing and made the install look alive. A sub-oracle proving one
-  piece is loaded proves nothing about the load-bearing piece: check the artifact itself (mtime/size
-  at the path in `/proc/PID/maps`). Guest mutter installs go through
-  `spikes/venus-draw-probe/install-mutter-fix.sh`, never by hand.
+- **Verify the fix is actually LOADED before judging it — at the path the process maps.** A
+  half-installed fix once read as a regression: the load-bearing library sat inert at a path the
+  process never mapped, while a *different* piece of the fix kept logging and made the install look
+  alive. A sub-oracle proving one piece is loaded proves nothing about the load-bearing piece: check
+  the artifact itself (mtime/size at the path in `/proc/PID/maps`).
 - **Identical A/B results across many configs mean the differential isn't reaching the system under
   test — stop toggling and re-verify the baseline.** Five "exonerations" in a row (private API, D24S8
   emu, sampler fix, clipped redraws, stock-vs-fixed mutter) all returned pixel-identical damage
@@ -378,8 +366,8 @@ cleverness but from refusing to trust anything we hadn't directly observed.
 
 ### Environment quirks
 
-- Host: macOS 26.5, Apple M1 Max, 32 GB, arm64. Full Xcode 26.4 / clang 21.
-  Rust 1.88. **16 KiB host pages.** Homebrew already has the whole VM stack
+- Host: Apple M1 Max, 32 GB, arm64, **16 KiB host pages**. Measured 2026-09-22: macOS 26.6.2,
+  Xcode 27.0 / clang 21, Rust 1.98 — check `sw_vers`/`rustc --version` rather than trusting this. Homebrew already has the whole VM stack
   (libkrun, krunkit, libkrunfw, virglrenderer, molten-vk, vulkan-loader, gvproxy,
   libusb, qemu, cmake/meson/ninja).
 - Anything touching `hv_vm_*` must be codesigned with `com.apple.security.hypervisor` (see
