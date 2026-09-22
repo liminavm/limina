@@ -64,8 +64,8 @@ pub(crate) enum AckMsg {
 
 /// Scanout/cursor IOSurfaces the worker handed us by Mach port, keyed by `IOSurfaceGetID`. The
 /// present + cursor paths resolve ids here first (the non-global, capability-scoped surfaces),
-/// falling back to `IOSurfaceLookup` only for the venus zero-copy path (still global) and the
-/// legacy no-receiver mode. Bounded and oldest-evicted: the worker only ever shows the current
+/// falling back to `IOSurfaceLookup` only for the legacy no-receiver mode, where every surface
+/// is global. Bounded and oldest-evicted: the worker only ever shows the current
 /// ring and cursor, so superseded ids are safe to drop (a stale id falls back to lookup, which
 /// fails for a freed non-global surface, so that frame is skipped rather than shown wrong).
 pub struct SurfaceStore {

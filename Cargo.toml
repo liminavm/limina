@@ -46,6 +46,9 @@ limina-input       = { path = "crates/limina-input" }
 limina-paniclog    = { path = "crates/limina-paniclog" }
 limina-proto       = { path = "crates/limina-proto" }
 limina-surfaceport = { path = "crates/limina-surfaceport" }
+# The renderer, which rutabaga already builds from this path; named here only so the worker can
+# install the publisher its surfaces are handed to.
+virglrs            = { path = "third_party/virglrs" }
 
 # --- shared third-party ---
 anyhow            = "1"

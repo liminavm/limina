@@ -22,6 +22,7 @@ mod quiesce;
 mod restart;
 mod shutdown;
 mod snapshot;
+mod surface_publisher;
 mod suspend;
 mod usb_kbd;
 mod wake;
@@ -640,13 +641,11 @@ fn main() -> Result<()> {
                 // SAFETY: still on main(); the GPU and renderer threads start below.
                 unsafe { std::env::set_var("LIMINA_SHOWN_ACK_FD", control_fd.to_string()) };
             }
-            // The venus zero-copy scanouts are created deep inside virglrenderer (in-process),
-            // which can't see our CLI args — hand it the receiver name via the environment so it
-            // creates its IOSurfaces non-global and publishes their Mach ports too (the sw2d path
-            // uses the WindowConfig below). Set before any GPU/renderer init.
+            // The renderer mints the accelerated tiers' surfaces itself, so it gets its own way to
+            // hand them to the supervisor (the sw2d ring uses the WindowConfig below). Installed
+            // before any GPU/renderer init: a surface minted without it would be global.
             if let Some(name) = cli.surface_port_name.as_deref() {
-                // SAFETY: still on main(); the GPU and renderer threads start below.
-                unsafe { std::env::set_var("LIMINA_SURFACE_PORT_NAME", name) };
+                surface_publisher::install(name);
             }
             Some(DisplaySink::Window {
                 control_fd,

@@ -89,8 +89,8 @@ fn ack_unshown(ids: &[u32], ack_tx: &SyncSender<AckMsg>) {
 ///   otherwise never touch the store and would look idle to the eviction policy — exactly
 ///   the freeze `spikes/scanout-blob-freeze/` closed.
 /// - Prefer the Mach-delivered store (the capability-scoped, non-global scanouts); fall back
-///   to a global `IOSurfaceLookup` for the venus zero-copy path (still global) and the legacy
-///   no-receiver mode.
+///   to a global `IOSurfaceLookup` only for the legacy no-receiver mode, where the worker had
+///   nowhere to hand its surfaces and minted them global.
 /// - **On failure, say WHY and ask for the surface back.** "Unresolved" alone cost days: it
 ///   reads as a rare race with a remodeset, while the observed fault is the guest presenting
 ///   an id the worker told us it released — a permanent skip, not a transient one. These

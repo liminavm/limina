@@ -290,6 +290,19 @@ impl SurfacePortSender {
         if port == MACH_PORT_NULL {
             return Err(io::Error::other("IOSurfaceCreateMachPort returned null"));
         }
+        self.send_port(ring_idx, port)
+    }
+
+    /// Hand over a surface's Mach port that someone else made, tagged with `ring_idx`.
+    ///
+    /// `port` is a send right the caller owns and gives up here: it is MOVE'd into the message,
+    /// and deallocated if the send fails, so it is consumed either way. This is how the renderer's
+    /// surfaces travel -- they are minted inside it, which keeps their `IOSurfaceRef` to itself
+    /// and hands out only the right.
+    pub fn send_port(&self, ring_idx: u32, port: mach_port_t) -> io::Result<()> {
+        if port == MACH_PORT_NULL {
+            return Err(io::Error::other("no Mach port to send"));
+        }
         let mut msg = SendMsg {
             header: MachMsgHeader {
                 // remote = COPY_SEND (keep our right to the supervisor for the next surface);

@@ -1065,8 +1065,10 @@ dependencies = [
  "limina-displayctl",
  "limina-input",
  "limina-paniclog",
+ "limina-surfaceport",
  "log",
  "tracing-appender",
+ "virglrs",
 ]
 
 [[package]]
