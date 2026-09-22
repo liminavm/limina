@@ -315,15 +315,14 @@ before the guest's next frame. virglrs keeps no such unit log, so it has to be b
 keyframe interval of bitstream per live codec, and the AV1 serializer's held-frame state has to
 travel with it.
 
-### A vrend replay drops Firefox's video-decode sampler views
-A suspend/restore with Firefox playing a VP9 video logs `vrend: replay could not use 3 of 119
-retained commands` (2 `CreateObject`, 1 `SetSamplerViews`), naming `no such resource 2341` in one
-cycle and `2336` in another. That id is a 1280x720 NV12 composite target created alongside
-Firefox's `MediaPDecoder` context, and the restore log shows it being re-created just before the
-replay refuses it, so the replay and the resource table disagree about when it exists. Measured
-2026-09-22 over two cycles: playback resumed and the windows repainted, so nothing visible broke
-— the dropped views are rebuilt by the next decode. Find which table the replay looks the id up in.
-
+### A vrend replay binds sampler views from a stale record
+A sampler view the guest destroys while it is still bound is evicted from every slot live, but the
+retained `SetSamplerViews` is the raw command and still names the dead handle. The replay refuses
+it at that handle (`ctx C replay dropped SetSamplerViews at seq S: no such object H`), so the views
+after it in the same command are never bound, and a handle already reused by a later create binds
+the new view into a slot that was empty. Seen on one context in two of three restores with Firefox
+playing video, gnome-shell included. Fix: rebuild multi-slot bindings (sampler views, sampler
+states) from the live binding table when the journal is written, instead of keeping the command.
 ### Restore tests cannot see guest kernel errors
 The enhanced image's `kernel.printk` is `1 4 1 7`, so `console.log` carries only emergency
 messages and a virtio-gpu `response 0x…` error (logged at `err`) never reaches it; a restore test's
