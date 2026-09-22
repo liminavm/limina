@@ -3,7 +3,7 @@
 Why an idle guest misses frame deadlines, the band that fixes it, what the band costs the host, and
 what ships. The mechanism is libkrun's (`third_party/libkrun/src/vmm/src/macos/vcpu_sched.rs`); the
 policy is limina's (`worker_vcpu_sched` in `crates/limina/src/supervisor.rs`). Open items on it —
-the arm cap, the efficiency-core premise, idling the sampler, efficiency beyond idle — are in
+the arm cap, the parked performance clusters, idling the sampler, efficiency beyond idle — are in
 `docs/hardening-backlog.md` §vCPU & power. Raw data: `spikes/macos-timer-wakeup/`.
 
 ## The symptom

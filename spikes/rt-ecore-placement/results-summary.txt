@@ -1,0 +1,170 @@
+== a-burst-plain2
+  r1 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=5749 P=2405 (70.5% E) | wake E=439 P=159 | late p50=4759.6 p99=10283.0 max=22074.2us
+  r1 thr=1 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=5803 P=2403 (70.7% E) | wake E=437 P=160 | late p50=4860.6 p99=10353.1 max=22383.2us
+  r1 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=99 max_late_ms=16.5 cpu:busy%/offline/stalled 0:42/0/0 1:42/0/0 2:13/0/0 3:7/0/0 4:3/0/0 5:1/0/0 6:2/0/0 7:1/0/0 8:1/0/0 9:0/0/0
+  r2 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=7942 P=194 (97.6% E) | wake E=586 P=13 | late p50=4398.1 p99=9025.3 max=13094.8us
+  r2 thr=1 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=7857 P=210 (97.4% E) | wake E=585 P=14 | late p50=4415.1 p99=8055.5 max=12640.6us
+  r2 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=99 max_late_ms=11.4 cpu:busy%/offline/stalled 0:37/0/0 1:37/0/0 2:9/0/0 3:4/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=7693 P=255 (96.8% E) | wake E=582 P=17 | late p50=4260.2 p99=7661.4 max=8564.2us
+  r3 thr=1 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=7709 P=264 (96.7% E) | wake E=582 P=17 | late p50=4360.8 p99=7799.0 max=12297.9us
+  r3 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=99 max_late_ms=14.3 cpu:busy%/offline/stalled 0:34/0/0 1:34/0/0 2:3/0/0 3:2/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== a-burst-rt1
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=6256 P=2220 (73.8% E) | ts E=0 P=0 | wake E=451 P=148 | late p50=19.2 p99=60.8 max=83.4us
+  r1 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=99 max_late_ms=20.0 cpu:busy%/offline/stalled 0:46/0/0 1:47/0/0 2:12/0/0 3:10/0/0 4:4/0/0 5:2/0/0 6:2/0/0 7:1/0/0 8:1/0/0 9:1/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=7988 P=209 (97.5% E) | ts E=0 P=0 | wake E=585 P=14 | late p50=19.0 p99=64.5 max=85.7us
+  r2 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=99 max_late_ms=11.7 cpu:busy%/offline/stalled 0:35/0/0 1:34/0/0 2:7/0/0 3:2/0/0 4:0/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=7939 P=378 (95.5% E) | ts E=0 P=0 | wake E=573 P=26 | late p50=18.6 p99=47.1 max=95.5us
+  r3 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=99 max_late_ms=11.6 cpu:busy%/offline/stalled 0:32/0/0 1:33/0/0 2:4/0/0 3:1/0/0 4:0/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== a-burst-rt2
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=8049 P=270 (96.8% E) | ts E=0 P=0 | wake E=581 P=18 | late p50=19.4 p99=61.0 max=156.5us
+  r1 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=7966 P=270 (96.7% E) | ts E=0 P=0 | wake E=581 P=18 | late p50=22.4 p99=60.3 max=72.4us
+  r1 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=99 max_late_ms=145.8 cpu:busy%/offline/stalled 0:44/0/1 1:44/0/1 2:8/0/1 3:5/0/1 4:4/0/1 5:4/0/1 6:3/0/1 7:3/0/1 8:2/0/1 9:2/0/1
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=7976 P=330 (96.0% E) | ts E=0 P=0 | wake E=577 P=22 | late p50=21.4 p99=43.1 max=92.4us
+  r2 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=8118 P=330 (96.1% E) | ts E=0 P=0 | wake E=577 P=22 | late p50=15.5 p99=63.8 max=137.9us
+  r2 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=99 max_late_ms=13.7 cpu:busy%/offline/stalled 0:33/0/0 1:34/0/0 2:5/0/0 3:1/0/0 4:0/0/0 5:1/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=8111 P=180 (97.8% E) | ts E=0 P=0 | wake E=587 P=12 | late p50=23.1 p99=40.4 max=69.3us
+  r3 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=8181 P=180 (97.8% E) | ts E=0 P=0 | wake E=587 P=12 | late p50=17.2 p99=37.0 max=78.2us
+  r3 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=99 max_late_ms=11.7 cpu:busy%/offline/stalled 0:32/0/0 1:32/0/0 2:5/0/0 3:1/0/0 4:0/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== e-burst2spin-plain1
+  r1 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=4669 P=348386 (1.3% E) | wake E=292 P=7 | late p50=4304.7 p99=9521.4 max=10660.5us
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:30/0/0 1:30/0/0 2:10/0/0 3:28/0/0 4:17/0/0 5:7/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=4712 P=348614 (1.3% E) | wake E=282 P=17 | late p50=4357.8 p99=9058.0 max=12053.2us
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=14.3 cpu:busy%/offline/stalled 0:30/0/0 1:31/0/0 2:42/0/0 3:16/0/0 4:4/0/0 5:2/0/0 6:1/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=4809 P=348586 (1.4% E) | wake E=288 P=11 | late p50=4314.0 p99=8601.1 max=9501.1us
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=10.2 cpu:busy%/offline/stalled 0:30/0/0 1:30/0/0 2:29/0/0 3:11/0/0 4:20/0/0 5:7/0/0 6:1/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== e-burst2spin-rt1
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=5210 P=348772 (1.5% E) | ts E=0 P=0 | wake E=289 P=10 | late p50=20.2 p99=48.1 max=56.3us
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:30/0/0 1:30/0/0 2:60/0/0 3:4/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=5021 P=348911 (1.4% E) | ts E=0 P=0 | wake E=290 P=9 | late p50=18.6 p99=76.2 max=127.3us
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=11.5 cpu:busy%/offline/stalled 0:29/0/0 1:28/0/0 2:59/0/0 3:2/0/0 4:0/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=5036 P=348973 (1.4% E) | ts E=0 P=0 | wake E=279 P=20 | late p50=19.9 p99=52.0 max=70.4us
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=11.1 cpu:busy%/offline/stalled 0:32/0/0 1:31/0/0 2:61/0/0 3:2/0/0 4:0/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== b-spin-plain2
+  r1 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=0 P=597973 (0.0% E)
+  r1 thr=1 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=0 P=597712 (0.0% E)
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:26/0/0 1:27/0/0 2:83/0/0 3:48/0/0 4:25/0/0 5:44/0/0 6:2/0/0 7:1/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=0 P=597979 (0.0% E)
+  r2 thr=1 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=1 P=597916 (0.0% E)
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:28/0/0 1:28/0/0 2:83/0/0 3:57/0/0 4:24/0/0 5:36/0/0 6:2/0/0 7:1/0/0 8:1/0/0 9:1/0/0
+  r3 thr=0 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=14 P=598108 (0.0% E)
+  r3 thr=1 plain pri=31..31 rtfrac=0.000 | at-RT none | ts E=0 P=598027 (0.0% E)
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:27/0/0 1:26/0/0 2:71/0/0 3:66/0/0 4:40/0/0 5:23/0/0 6:2/0/0 7:1/0/0 8:0/0/0 9:1/0/0
+== b-spin-rt1
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598469 (0.0% E) | ts E=0 P=0
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:27/0/0 1:26/0/0 2:100/0/0 3:2/0/0 4:1/0/0 5:0/0/0 6:1/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598474 (0.0% E) | ts E=0 P=0
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:27/0/0 1:27/0/0 2:100/0/0 3:2/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598468 (0.0% E) | ts E=0 P=0
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:28/0/0 1:27/0/0 2:3/0/0 3:100/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== b-spin-rt2
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598050 (0.0% E) | ts E=0 P=0
+  r1 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598034 (0.0% E) | ts E=0 P=0
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:25/0/0 1:25/0/0 2:100/0/0 3:2/0/0 4:100/0/0 5:1/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598087 (0.0% E) | ts E=0 P=0
+  r2 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=597983 (0.0% E) | ts E=0 P=0
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:27/0/0 1:27/0/0 2:78/0/0 3:100/0/0 4:25/0/0 5:1/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598063 (0.0% E) | ts E=0 P=0
+  r3 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598025 (0.0% E) | ts E=0 P=0
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:28/0/0 1:26/0/0 2:80/0/0 3:100/0/0 4:24/0/0 5:1/0/0 6:1/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== c-spin-plain2-hog8
+  r1 thr=0 plain pri=11..31 rtfrac=0.000 | at-RT none | ts E=112907 P=450460 (20.0% E)
+  r1 thr=1 plain pri=12..31 rtfrac=0.000 | at-RT none | ts E=108189 P=453983 (19.2% E)
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=27.8 cpu:busy%/offline/stalled 0:100/0/0 1:100/0/0 2:100/0/0 3:100/0/0 4:100/0/0 5:100/0/0 6:100/0/0 7:100/0/0 8:100/0/0 9:100/0/0
+  r2 thr=0 plain pri=8..31 rtfrac=0.000 | at-RT none | ts E=105933 P=463906 (18.6% E)
+  r2 thr=1 plain pri=8..31 rtfrac=0.000 | at-RT none | ts E=114381 P=450320 (20.3% E)
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=25.8 cpu:busy%/offline/stalled 0:100/0/0 1:100/0/0 2:100/0/0 3:100/0/0 4:100/0/0 5:100/0/0 6:100/0/0 7:100/0/0 8:100/0/0 9:100/0/0
+  r3 thr=0 plain pri=14..31 rtfrac=0.000 | at-RT none | ts E=101245 P=467275 (17.8% E)
+  r3 thr=1 plain pri=14..31 rtfrac=0.000 | at-RT none | ts E=101263 P=464079 (17.9% E)
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=20.7 cpu:busy%/offline/stalled 0:100/0/0 1:100/0/0 2:100/0/0 3:100/0/0 4:100/0/0 5:100/0/0 6:100/0/0 7:100/0/0 8:100/0/0 9:100/0/0
+== c-spin-rt2-hog8
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598028 (0.0% E) | ts E=0 P=0
+  r1 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598029 (0.0% E) | ts E=0 P=0
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=25.0 cpu:busy%/offline/stalled 0:100/0/0 1:100/0/0 2:100/0/0 3:100/0/0 4:100/0/0 5:100/0/0 6:100/0/0 7:100/0/0 8:100/0/0 9:100/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598031 (0.0% E) | ts E=0 P=0
+  r2 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598059 (0.0% E) | ts E=0 P=0
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=24.4 cpu:busy%/offline/stalled 0:100/0/0 1:100/0/0 2:100/0/0 3:100/0/0 4:100/0/0 5:100/0/0 6:100/0/0 7:100/0/0 8:100/0/0 9:100/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598015 (0.0% E) | ts E=0 P=0
+  r3 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598039 (0.0% E) | ts E=0 P=0
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=21.3 cpu:busy%/offline/stalled 0:100/0/0 1:100/0/0 2:100/0/0 3:100/0/0 4:100/0/0 5:100/0/0 6:100/0/0 7:100/0/0 8:100/0/0 9:100/0/0
+== d-burst-rt2-bg
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=8420 P=360 (95.9% E) | ts E=0 P=0 | wake E=575 P=24 | late p50=18.6 p99=45.5 max=115.4us
+  r1 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=8013 P=360 (95.7% E) | ts E=0 P=0 | wake E=575 P=24 | late p50=23.7 p99=54.6 max=68.3us
+  r1 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=99 max_late_ms=10.0 cpu:busy%/offline/stalled 0:32/0/0 1:32/0/0 2:6/0/0 3:2/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=7846 P=375 (95.4% E) | ts E=0 P=0 | wake E=574 P=25 | late p50=21.8 p99=56.5 max=123.8us
+  r2 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=8266 P=375 (95.7% E) | ts E=0 P=0 | wake E=574 P=25 | late p50=15.9 p99=39.9 max=61.0us
+  r2 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=99 max_late_ms=13.4 cpu:busy%/offline/stalled 0:34/0/0 1:32/0/0 2:4/0/0 3:1/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=8285 P=285 (96.7% E) | ts E=0 P=0 | wake E=580 P=19 | late p50=17.0 p99=52.0 max=88.1us
+  r3 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=7947 P=285 (96.5% E) | ts E=0 P=0 | wake E=580 P=19 | late p50=22.3 p99=44.9 max=61.7us
+  r3 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=99 max_late_ms=12.7 cpu:busy%/offline/stalled 0:33/0/0 1:33/0/0 2:5/0/0 3:1/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== d-burst-rt2-bgafter
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=8019 P=329 (96.1% E) | ts E=0 P=0 | wake E=577 P=22 | late p50=21.5 p99=37.6 max=53.4us | ret_policy=0 ret_qos=1
+  r1 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=8106 P=329 (96.1% E) | ts E=0 P=0 | wake E=577 P=22 | late p50=16.6 p99=43.9 max=101.8us | ret_policy=0 ret_qos=1
+  r1 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=99 max_late_ms=11.9 cpu:busy%/offline/stalled 0:33/0/0 1:33/0/0 2:6/0/0 3:1/0/0 4:1/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=8151 P=300 (96.5% E) | ts E=0 P=0 | wake E=579 P=20 | late p50=23.7 p99=45.5 max=136.7us | ret_policy=0 ret_qos=1
+  r2 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=8212 P=300 (96.5% E) | ts E=0 P=0 | wake E=579 P=20 | late p50=19.7 p99=56.2 max=82.5us | ret_policy=0 ret_qos=1
+  r2 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=99 max_late_ms=10.0 cpu:busy%/offline/stalled 0:36/0/0 1:37/0/0 2:8/0/0 3:3/0/0 4:2/0/0 5:0/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=8100 P=314 (96.3% E) | ts E=0 P=0 | wake E=578 P=21 | late p50=21.4 p99=48.8 max=79.6us | ret_policy=0 ret_qos=1
+  r3 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=8076 P=314 (96.3% E) | ts E=0 P=0 | wake E=578 P=21 | late p50=21.7 p99=55.3 max=82.7us | ret_policy=0 ret_qos=1
+  r3 recommended_cores full=99 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=99 max_late_ms=10.1 cpu:busy%/offline/stalled 0:34/0/0 1:35/0/0 2:6/0/0 3:3/0/0 4:1/0/0 5:1/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== d-spin-rt2-bg
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=94 P=597973 (0.0% E) | ts E=0 P=0
+  r1 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=95 P=597842 (0.0% E) | ts E=0 P=0
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:27/0/0 1:27/0/0 2:100/0/0 3:100/0/0 4:3/0/0 5:1/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=97 P=597961 (0.0% E) | ts E=0 P=0
+  r2 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=97 P=597913 (0.0% E) | ts E=0 P=0
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:27/0/0 1:26/0/0 2:100/0/0 3:100/0/0 4:4/0/0 5:1/0/0 6:1/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598069 (0.0% E) | ts E=0 P=0
+  r3 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=97 P=597895 (0.0% E) | ts E=0 P=0
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:29/0/0 1:28/0/0 2:100/0/0 3:100/0/0 4:2/0/0 5:1/0/0 6:0/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+== d-spin-rt2-bgafter
+  r1 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598063 (0.0% E) | ts E=0 P=0 | ret_policy=0 ret_qos=1
+  r1 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598002 (0.0% E) | ts E=0 P=0 | ret_policy=0 ret_qos=1
+  r1 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r1 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:28/0/0 1:28/0/0 2:100/0/0 3:4/0/0 4:100/0/0 5:1/0/0 6:1/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r2 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598054 (0.0% E) | ts E=0 P=0 | ret_policy=0 ret_qos=1
+  r2 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598002 (0.0% E) | ts E=0 P=0 | ret_policy=0 ret_qos=1
+  r2 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r2 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:26/0/0 1:27/0/0 2:3/0/0 3:100/0/0 4:100/0/0 5:1/0/0 6:1/0/0 7:0/0/0 8:0/0/0 9:0/0/0
+  r3 thr=0 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=598062 (0.0% E) | ts E=0 P=0 | ret_policy=0 ret_qos=1
+  r3 thr=1 rt    pri=97..97 rtfrac=1.000 | at-RT E=0 P=597982 (0.0% E) | ts E=0 P=0 | ret_policy=0 ret_qos=1
+  r3 recommended_cores full=119 partial=0 and=0x3ff or=0x3ff distinct: 0x3ff
+  r3 monitor intervals=119 max_late_ms=10.0 cpu:busy%/offline/stalled 0:28/0/0 1:27/0/0 2:100/0/0 3:3/0/0 4:100/0/0 5:1/0/0 6:1/0/0 7:0/0/0 8:0/0/0 9:0/0/0

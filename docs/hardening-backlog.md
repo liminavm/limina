@@ -450,15 +450,17 @@ episode.
 Background for this section — why idle guests need a real-time band, what it costs, and what
 ships — is in `docs/design/vcpu-scheduling-band.md`.
 
-### Re-verify "no time-constraint thread on an efficiency core", and explain the parked P-clusters
+### Explain the parked P-clusters behind the band panic
 A host panic on 2026-09-21 (`watchdog timeout: no checkins from watchdogd in 94 seconds`, panicked task
 `limina-vmm`) showed four vCPU threads at priority 97 running on `CORE 0-3 [EACC0]` with both
-performance clusters offline. That contradicts the premise in `set_realtime_band`'s comment
-(libkrun `vmm/src/macos/vcpu_sched.rs`): *"xnu does not serve a time-constraint thread on an
-efficiency core."* The little-vCPU design rests on that premise, so measure it again. Why the
-performance clusters were parked is unexplained. Worth a Radar independent of our mitigation — any
-unprivileged process can panic macOS by banding enough threads and saturating them — but filing is
-the user's call.
+performance clusters offline. xnu does run time-constraint threads on efficiency cores
+(`spikes/rt-ecore-placement/`), so that half is expected; what is unexplained is why the
+performance clusters were parked. On an M1 Max a saturated RT thread always moved to P and no
+non-root signal (`kern.sched_recommended_cores`, per-processor `running`, tick deltas) ever showed a
+core offline, so reproducing it needs the M4 Pro shape and a validated parking oracle;
+`kern.suspend_cluster_powerdown` is uninvestigated. Worth a Radar independent of our mitigation —
+any unprivileged process can panic macOS by banding enough threads and saturating them — but
+filing is the user's call.
 
 ### Revisit the band arm cap, which costs about 20% of venus throughput
 `arm_cap()` is half the efficiency cluster, floored at 1 (1 on an M1 Max, 2 on an M4 Pro). On
