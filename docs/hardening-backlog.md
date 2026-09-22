@@ -2517,11 +2517,24 @@ Two fixes, because neither is sufficient alone:
 
 - **A vCPU takes itself out of the band** (`BandGuard`, checked at every exit from the guest). A
   thread that is running is by definition scheduled, so it is the one actor that can always act. It
-  disarms after `SELF_DISARM_PERIODS` (2) declared periods of computing without parking — derived
-  from the reservation, so a custom `rt:period,...` moves it too. The kick that forces a saturated
-  guest back out to us already existed for the heartbeat and now serves both, for opposite reasons:
-  the heartbeat forces an exit so the thread can *park and keep* the band, the guard so it can
-  *give the band back*.
+  disarms once it has burned `SELF_DISARM_PERIODS` (2) declared periods' worth of **CPU time**, at
+  a rate of at least `SATURATED_PERCENT` (50) of the hold it burned it over — derived from the
+  reservation, so a custom `rt:period,...` moves it too. The kick that forces a saturated guest
+  back out to us already existed for the heartbeat and now serves both, for opposite reasons: the
+  heartbeat forces an exit so the thread can *park and keep* the band, the guard so it can *give
+  the band back*.
+
+  **The oracle is CPU time at a rate, and the two wrong ones are worth keeping.** *Time since the
+  last park* looks right and is not — HVF parks an idle vCPU inside `hv_vcpu_run` rather than
+  handing us the WFI trap, so nothing records the park and the timestamp ages while the thread
+  sleeps; that shipped and held the band 3.3% of the time. *An absolute quantity of CPU* is not
+  enough either: the check runs only at guest exits, so the window between two of them is
+  unbounded, and an absolute budget over an unbounded window disarms idle threads at 8.5%, 2.4%
+  and 0.0% of a core. Only the rate is scale-free. The threshold is measured from the separation —
+  real saturation runs 73.7-100%, idle false positives top out at 8.5% — and **90% would have been
+  unsafe**, missing four of eight real saturations. Missing a spin is a host panic; rejecting an
+  idle thread costs one re-arm, so the margin belongs on that side. A `thread_cpu_us` that cannot
+  be read disarms, for the same asymmetry.
 - **A cap on how many vCPUs hold the band at once**, enforced every sample in both directions, so a
   cap already exceeded walks back down instead of waiting for its holders to get busy. **It is not
   derived from `hw.activecpu`**, which reports every configured core parked or not — measured 10 of
@@ -2532,6 +2545,25 @@ Two fixes, because neither is sufficient alone:
 The cap is a bound, not a tuned value. The only configuration measured clean under a saturated
 guest is a single banded vCPU, which is why the default is `#1` and stays well under the cap rather
 than relying on it.
+
+**Booked for revisit: the cap costs ~20% of venus throughput on a 2-E-core host, and we are
+keeping it anyway (decision 2026-09-21).** `arm_cap()` is 1 on an M1 Max, against "every idle vCPU
+eligible" before it. Measured cost on `gl-replay-venus`: 44.8-49.4 under the shipped default
+against a 56.67-56.80 baseline, and the static band (all four banded, no cap) restores it exactly —
+so the whole 20% is band reach, not code. Full pass and method in `perf/2026-09-21-remeasure.md`.
+
+What a revisit would need, and why it is not obvious:
+
+- **The two band-sensitive instruments disagree in sign.** Banding all four vCPUs restores the
+  latency-bound `gl-replay-venus` and costs ~12% on `vk-replay-venus-headless`. "More band" is not
+  uniformly better, so a higher cap is a trade to measure per workload, not a win to claim.
+- **The cap's derivation was chosen for a property, not a number.** Half the efficiency cluster was
+  picked because that cluster survives an idle machine, which is what `hw.activecpu` could not
+  give. Nothing says half is right — only that it cannot be zero and must not scale with cores that
+  park. A better rule would still need that property.
+- **The panicking machine had a 4-core E-cluster and got cap 2; this one gets 1.** The cost
+  measured here is therefore the worst case of the current rule, and a 2-cap host may pay much less.
+  Measure on an M4 Pro before generalising from an M1 Max.
 
 **Still open.** Why the performance clusters were parked is unexplained. `set_realtime_band`'s
 comment asserts that *"xnu does not serve a time-constraint thread on an efficiency core"* — the
