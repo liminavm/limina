@@ -23,11 +23,19 @@
 //!   pause the vCPUs ourselves, then `IOAllowPowerChange`. A guest that will not get there
 //!   is paused anyway and resumed with the interval hidden: a wrong wall clock (which the
 //!   clock correctors fix) instead of a poisoned `CLOCK_MONOTONIC` (which nothing fixes).
-//! - `kIOMessageSystemHasPoweredOn`: pulse the wake key ([`crate::wake::pulse`]) — but
-//!   ONLY if we put the guest to sleep (or our pulse landed late and it slept while the
-//!   host slept). Never wake a guest the user suspended, and never touch the *sleep*
-//!   button here: a sleep-button pulse at an already-asleep guest is LATCHED and
+//! - `kIOMessageSystemHasPoweredOn`: unpause, then wake the guest ([`crate::wake::guest`]) —
+//!   but ONLY if we put it to sleep. Never wake a guest the user suspended, and never touch
+//!   the *sleep* button here: a sleep-button pulse at an already-asleep guest is LATCHED and
 //!   re-suspends it unwakeably on wake (the run-11 trap).
+//! - A guest slower than the `willSleep` budget is paused wherever it got to and, once
+//!   unpaused, carries on with the suspend we asked for — finishing it AFTER `didWake`. So a
+//!   wake of our own suspend is not one decision at the instant of unpausing: a post-wake
+//!   watch follows the guest (on libkrun's [`vmm::Vmm::power_watch`]) until the suspend
+//!   completes (wake it), aborts (leave it), or, if it never started, a grace runs out.
+//!
+//! Where the guest is in a suspend is read off the devices we emulate ([`GuestSleep`]):
+//! its drivers hand each virtio device back (reset it to `INIT`) on the way in, and the
+//! last vCPU parks in PSCI `SYSTEM_SUSPEND` at the end.
 //!
 //! The decision logic lives in [`HostSleepState`], a pure state machine (unit-tested
 //! below); this module's IOKit half can only be validated by a real host sleep.
@@ -47,12 +55,37 @@ const PARK_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
 /// rendezvous mid-flight, with the last vCPU briefly in a WFx wait on its way elsewhere.
 const PARK_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
+/// How long after `didWake` a guest that has not yet started our suspend may still start it
+/// and have it count as ours. It covers a pulse that landed but whose suspend was still in
+/// userspace (the logind job, `systemd-sleep` hooks) when the host slept, so no device shows
+/// it yet. A suspend that has visibly started needs no grace: it can only complete or abort.
+const LATE_SUSPEND_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+/// The post-wake watch re-reads the guest at least this often. Device and `SYSTEM_SUSPEND`
+/// transitions wake it at once; this bounds only the one it cannot hear, s2idle vCPUs parking.
+const WATCH_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+/// When a suspend under way has not finished after this long, say so once: a guest stuck
+/// mid-suspend is worth a line in the log, even though the watch keeps waiting for it.
+const SUSPENDING_TOO_LONG: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Where the guest is in a suspend, read off the devices we emulate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuestSleep {
+    /// No suspend under way: devices are driver-held and none has been handed back.
+    Awake,
+    /// A suspend under way: some devices handed back but not all, or all handed back with a
+    /// vCPU still running.
+    Suspending,
+    /// Suspended: parked in PSCI `SYSTEM_SUSPEND`, or s2idle with every device handed back
+    /// and every vCPU parked.
+    Asleep,
+}
+
 /// What `willSleep` should do with the guest.
 #[derive(Debug, PartialEq, Eq)]
 enum SleepAction {
-    /// Guest is already in s2idle (user-suspended or a previous pulse) — leave it be,
-    /// and remember it was NOT ours to wake.
-    LeaveAsleep,
+    /// The guest is already suspending or asleep — pulsing it again is the latched-button
+    /// trap. Whether that suspend is ours stays whatever it already was.
+    DontPulse,
     /// Guest is running — pulse the sleep button and wait for quiesce.
     PulseAndWait,
 }
@@ -60,39 +93,95 @@ enum SleepAction {
 /// What `didWake` should do with the guest.
 #[derive(Debug, PartialEq, Eq)]
 enum WakeAction {
-    /// We slept it (or our pulse landed late and it is asleep now) — wake it.
+    /// We slept it and it is asleep — wake it.
     WakeGuest,
-    /// Not ours to wake (user-suspended guest, or it never went to sleep).
+    /// Our suspend is not finished yet: watch the guest (watch `id`) until it is.
+    Watch(u64),
+    /// Not ours to wake (user-suspended guest, or never asked to sleep).
     LeaveAlone,
 }
 
+/// What the post-wake watch should do next.
+#[derive(Debug, PartialEq, Eq)]
+enum WatchAction {
+    /// Keep watching.
+    Keep,
+    /// Our suspend completed — wake the guest, and stop.
+    WakeGuest,
+    /// Stop without waking: the suspend aborted, never started within the grace, or a new
+    /// host sleep took over.
+    Stop,
+}
+
+/// An armed post-wake watch.
+struct Watch {
+    id: u64,
+    /// Has the guest been seen part-way into the suspend? Once it has, coming back to
+    /// `Awake` means the suspend aborted.
+    seen_suspending: bool,
+}
+
 /// The wake-ownership state machine: the one invariant is that we only ever wake a guest
-/// whose sleep WE requested. `pulsed` survives a failed quiesce wait on purpose — if our
-/// pulse lands late and the guest suspends during host sleep, `did_wake` still recovers
-/// it (quiesced-now + pulsed = ours).
+/// whose sleep WE requested. `ours` is set by our pulse and cleared only when that suspend
+/// is resolved — woken, aborted, or given up on — so it survives a failed quiesce wait, a
+/// wake that finds the guest still on its way down, and a host sleep in between.
 #[derive(Default)]
 struct HostSleepState {
-    pulsed: bool,
+    ours: bool,
+    watch: Option<Watch>,
+    next_watch_id: u64,
 }
 
 impl HostSleepState {
-    fn on_will_sleep(&mut self, guest_quiesced: bool) -> SleepAction {
-        if guest_quiesced {
-            self.pulsed = false;
-            SleepAction::LeaveAsleep
-        } else {
-            self.pulsed = true;
-            SleepAction::PulseAndWait
+    fn on_will_sleep(&mut self, guest: GuestSleep) -> SleepAction {
+        // The willSleep bracket takes over from any post-wake watch.
+        self.watch = None;
+        match guest {
+            GuestSleep::Awake => {
+                self.ours = true;
+                SleepAction::PulseAndWait
+            }
+            GuestSleep::Suspending | GuestSleep::Asleep => SleepAction::DontPulse,
         }
     }
 
-    fn on_did_wake(&mut self, guest_quiesced_now: bool) -> WakeAction {
-        let pulsed = std::mem::take(&mut self.pulsed);
-        if pulsed && guest_quiesced_now {
-            WakeAction::WakeGuest
-        } else {
-            WakeAction::LeaveAlone
+    fn on_did_wake(&mut self, guest: GuestSleep) -> WakeAction {
+        if !self.ours {
+            return WakeAction::LeaveAlone;
         }
+        if guest == GuestSleep::Asleep {
+            self.ours = false;
+            return WakeAction::WakeGuest;
+        }
+        let id = self.next_watch_id;
+        self.next_watch_id += 1;
+        self.watch = Some(Watch {
+            id,
+            seen_suspending: guest == GuestSleep::Suspending,
+        });
+        WakeAction::Watch(id)
+    }
+
+    /// One look at the guest by watch `id`. `grace_over`: [`LATE_SUSPEND_GRACE`] has passed
+    /// since the watch was armed.
+    fn on_watch(&mut self, id: u64, guest: GuestSleep, grace_over: bool) -> WatchAction {
+        let Some(watch) = self.watch.as_mut().filter(|w| w.id == id) else {
+            return WatchAction::Stop;
+        };
+        let action = match guest {
+            GuestSleep::Asleep => WatchAction::WakeGuest,
+            GuestSleep::Suspending => {
+                watch.seen_suspending = true;
+                WatchAction::Keep
+            }
+            GuestSleep::Awake if watch.seen_suspending || grace_over => WatchAction::Stop,
+            GuestSleep::Awake => WatchAction::Keep,
+        };
+        if action != WatchAction::Keep {
+            self.watch = None;
+            self.ours = false;
+        }
+        action
     }
 }
 
@@ -172,19 +261,32 @@ impl Bracket {
         })
     }
 
-    fn guest_quiesced(&self) -> bool {
-        self.vmm.lock().unwrap().is_quiesced()
+    /// Where the guest is in a suspend, right now.
+    fn guest_sleep(&self) -> GuestSleep {
+        let vmm = self.vmm.lock().unwrap();
+        if vmm.system_suspended() {
+            return GuestSleep::Asleep;
+        }
+        let held = !vmm.quiesce_holdouts().is_empty();
+        if held && vmm.released_devices().is_empty() {
+            GuestSleep::Awake
+        } else if !held && vmm.all_vcpus_parked() {
+            GuestSleep::Asleep
+        } else {
+            GuestSleep::Suspending
+        }
     }
 
     /// `willSleep`, up to (not including) releasing the host's sleep ack.
     fn before_host_sleep(&self) {
         let mut inner = self.inner.lock().unwrap();
-        // An already-suspended guest still needs its vCPUs confirmed parked and paused — it
-        // is only the sleep-button pulse it must not get again (a latched pulse re-suspends
-        // it unwakeably on wake).
-        let pulse = match inner.state.on_will_sleep(self.guest_quiesced()) {
-            SleepAction::LeaveAsleep => {
-                log::info!("host sleep: guest is already suspended; not pulsing");
+        // A guest already suspending or asleep still needs its vCPUs confirmed parked and
+        // paused — it is only the sleep-button pulse it must not get again (a latched pulse
+        // re-suspends it unwakeably on wake).
+        let guest = self.guest_sleep();
+        let pulse = match inner.state.on_will_sleep(guest) {
+            SleepAction::DontPulse => {
+                log::info!("host sleep: guest is already {guest:?}; not pulsing");
                 false
             }
             SleepAction::PulseAndWait => true,
@@ -192,19 +294,104 @@ impl Bracket {
         inner.quiesced = hold_ack_until_safe_to_stop(&self.vmm, pulse);
     }
 
-    /// `didWake`: unpause, then wake the guest if its sleep was ours.
-    fn after_host_wake(&self) {
+    /// `didWake`: unpause, then wake the guest if its sleep was ours — now, or once the
+    /// suspend it is still finishing completes.
+    fn after_host_wake(self: &Arc<Self>) {
         let mut inner = self.inner.lock().unwrap();
         // Unpause first: a paused guest cannot answer a wake key.
         resume_after_host_sleep(&self.vmm, inner.quiesced);
-        match inner.state.on_did_wake(self.guest_quiesced()) {
+        let guest = self.guest_sleep();
+        match inner.state.on_did_wake(guest) {
             WakeAction::WakeGuest => {
                 log::info!("host wake: waking the guest");
                 crate::wake::guest(&self.vmm);
             }
+            WakeAction::Watch(id) => {
+                log::info!(
+                    "host wake: our suspend is not finished (guest {guest:?}); watching for it"
+                );
+                let bracket = self.clone();
+                if let Err(e) = std::thread::Builder::new()
+                    .name("host-wake-watch".into())
+                    .spawn(move || bracket.watch_late_suspend(id))
+                {
+                    log::warn!("host wake: spawning the post-wake watch failed ({e}); waking now");
+                    crate::wake::guest(&self.vmm);
+                }
+            }
             WakeAction::LeaveAlone => {
                 log::info!("host wake: guest not ours to wake (user-suspended or never slept)");
             }
+        }
+    }
+
+    /// Follow a guest that is finishing our suspend after the host woke, and wake it when it
+    /// gets there. Runs on its own thread: the IOKit run loop must stay free for the next
+    /// `willSleep`, which cancels this watch.
+    fn watch_late_suspend(&self, id: u64) {
+        let watch = self.vmm.lock().unwrap().power_watch();
+        let armed = std::time::Instant::now();
+        let mut warned = false;
+        // s2idle has no discrete event: "every vCPU parked" must hold for PARK_SETTLE, as in
+        // the willSleep bracket, or a KEY_WAKEUP can land before the guest is in s2idle.
+        let mut asleep_since: Option<std::time::Instant> = None;
+        loop {
+            // Read the generation before the state, so a transition in between wakes the wait.
+            let seen = watch.generation();
+            let raw = self.guest_sleep();
+            let guest = if raw == GuestSleep::Asleep && !self.vmm.lock().unwrap().system_suspended()
+            {
+                let since = *asleep_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() >= PARK_SETTLE {
+                    GuestSleep::Asleep
+                } else {
+                    GuestSleep::Suspending
+                }
+            } else {
+                asleep_since = None;
+                raw
+            };
+            let grace_over = armed.elapsed() >= LATE_SUSPEND_GRACE;
+            let action = self
+                .inner
+                .lock()
+                .unwrap()
+                .state
+                .on_watch(id, guest, grace_over);
+            match action {
+                WatchAction::WakeGuest => {
+                    log::info!(
+                        "host wake: the guest finished our suspend {:.1?} after the host woke; \
+                         waking it",
+                        armed.elapsed()
+                    );
+                    crate::wake::guest(&self.vmm);
+                    return;
+                }
+                WatchAction::Stop => {
+                    log::info!(
+                        "host wake: stopped watching after {:.1?} (guest {guest:?}): the suspend \
+                         aborted, never started, or a new host sleep took over",
+                        armed.elapsed()
+                    );
+                    return;
+                }
+                WatchAction::Keep => {}
+            }
+            if guest == GuestSleep::Suspending && !warned && armed.elapsed() >= SUSPENDING_TOO_LONG
+            {
+                warned = true;
+                let (held, released) = {
+                    let vmm = self.vmm.lock().unwrap();
+                    (vmm.quiesce_holdouts(), vmm.released_devices())
+                };
+                log::warn!(
+                    "host wake: the guest has been part-way into our suspend for {:.0?} — still \
+                     waiting to wake it when it finishes (held: {held:?}; released: {released:?})",
+                    armed.elapsed()
+                );
+            }
+            watch.wait_past(seen, WATCH_POLL);
         }
     }
 }
@@ -417,47 +604,134 @@ pub fn start(_vmm: Arc<Mutex<Vmm>>) {}
 
 #[cfg(test)]
 mod tests {
+    use super::GuestSleep::{Asleep, Awake, Suspending};
     use super::*;
+
+    /// Arm a watch the way a slow guest does: pulsed, host slept before it got there.
+    fn watching(guest_at_wake: GuestSleep) -> (HostSleepState, u64) {
+        let mut s = HostSleepState::default();
+        assert_eq!(s.on_will_sleep(Awake), SleepAction::PulseAndWait);
+        match s.on_did_wake(guest_at_wake) {
+            WakeAction::Watch(id) => (s, id),
+            other => panic!("expected a watch, got {other:?}"),
+        }
+    }
 
     #[test]
     fn running_guest_is_slept_and_woken() {
         let mut s = HostSleepState::default();
-        assert_eq!(s.on_will_sleep(false), SleepAction::PulseAndWait);
-        assert_eq!(s.on_did_wake(true), WakeAction::WakeGuest);
+        assert_eq!(s.on_will_sleep(Awake), SleepAction::PulseAndWait);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::WakeGuest);
     }
 
     #[test]
     fn user_suspended_guest_is_left_alone() {
         let mut s = HostSleepState::default();
         // Asleep before the host sleeps → not ours; must NOT be woken on host wake.
-        assert_eq!(s.on_will_sleep(true), SleepAction::LeaveAsleep);
-        assert_eq!(s.on_did_wake(true), WakeAction::LeaveAlone);
+        assert_eq!(s.on_will_sleep(Asleep), SleepAction::DontPulse);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::LeaveAlone);
     }
 
+    /// The tester's wedge: paused part-way into our suspend, unpaused on wake, and finishing
+    /// it only then. The wake must follow it down, not judge it once at the unpause.
+    #[test]
+    fn a_suspend_finished_after_the_wake_is_woken() {
+        let (mut s, id) = watching(Suspending);
+        assert_eq!(s.on_watch(id, Suspending, false), WatchAction::Keep);
+        assert_eq!(s.on_watch(id, Asleep, false), WatchAction::WakeGuest);
+    }
+
+    /// A suspend that has visibly started can only complete or abort, so it is waited for
+    /// however long it takes — the grace is for suspends not yet visible.
+    #[test]
+    fn a_started_suspend_outlives_the_grace() {
+        let (mut s, id) = watching(Suspending);
+        assert_eq!(s.on_watch(id, Suspending, true), WatchAction::Keep);
+        assert_eq!(s.on_watch(id, Asleep, true), WatchAction::WakeGuest);
+    }
+
+    /// Our pulse landed but its suspend was still in userspace when the host slept: no
+    /// device shows it at the wake, then it starts and completes.
+    #[test]
+    fn a_suspend_started_after_the_wake_is_woken() {
+        let (mut s, id) = watching(Awake);
+        assert_eq!(s.on_watch(id, Awake, false), WatchAction::Keep);
+        assert_eq!(s.on_watch(id, Suspending, false), WatchAction::Keep);
+        assert_eq!(s.on_watch(id, Asleep, false), WatchAction::WakeGuest);
+    }
+
+    /// Devices coming back before `SYSTEM_SUSPEND` means the suspend aborted: stop, and do
+    /// not claim a later suspend the user starts.
+    #[test]
+    fn an_aborted_suspend_releases_ownership() {
+        let (mut s, id) = watching(Suspending);
+        assert_eq!(s.on_watch(id, Awake, false), WatchAction::Stop);
+        assert_eq!(s.on_watch(id, Asleep, false), WatchAction::Stop);
+        assert_eq!(s.on_will_sleep(Asleep), SleepAction::DontPulse);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::LeaveAlone);
+    }
+
+    /// Never quiesced (e.g. a session swallowed the sleep key) — nothing to wake once the
+    /// grace runs out.
     #[test]
     fn guest_that_ignored_the_pulse_is_not_woken() {
-        let mut s = HostSleepState::default();
-        assert_eq!(s.on_will_sleep(false), SleepAction::PulseAndWait);
-        // Never quiesced (e.g. a session swallowed the sleep key) — nothing to wake.
-        assert_eq!(s.on_did_wake(false), WakeAction::LeaveAlone);
+        let (mut s, id) = watching(Awake);
+        assert_eq!(s.on_watch(id, Awake, true), WatchAction::Stop);
+        assert_eq!(s.on_will_sleep(Asleep), SleepAction::DontPulse);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::LeaveAlone);
     }
 
     #[test]
     fn late_suspend_is_recovered_on_wake() {
         let mut s = HostSleepState::default();
-        assert_eq!(s.on_will_sleep(false), SleepAction::PulseAndWait);
+        assert_eq!(s.on_will_sleep(Awake), SleepAction::PulseAndWait);
         // The quiesce wait timed out, the host slept anyway, and our pulse landed late —
         // the guest is asleep at wake time and it was OUR pulse: wake it.
-        assert_eq!(s.on_did_wake(true), WakeAction::WakeGuest);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::WakeGuest);
+    }
+
+    /// A host sleep while our suspend is still under way: no second pulse (the latched-button
+    /// trap), and the suspend stays ours across it.
+    #[test]
+    fn a_host_sleep_mid_suspend_does_not_pulse_and_keeps_ownership() {
+        let (mut s, id) = watching(Suspending);
+        assert_eq!(s.on_will_sleep(Suspending), SleepAction::DontPulse);
+        // The new bracket cancelled the old watch...
+        assert_eq!(s.on_watch(id, Asleep, false), WatchAction::Stop);
+        // ...but not the ownership: the guest finished while the host slept.
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::WakeGuest);
+    }
+
+    /// A suspend the guest started on its own is not ours, even though it is under way when
+    /// the host sleeps and asleep when it wakes.
+    #[test]
+    fn a_guest_suspending_on_its_own_is_not_pulsed_or_woken() {
+        let mut s = HostSleepState::default();
+        assert_eq!(s.on_will_sleep(Suspending), SleepAction::DontPulse);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::LeaveAlone);
+    }
+
+    /// A watch left over from an earlier wake must not act on a later one's behalf.
+    #[test]
+    fn a_stale_watch_stops() {
+        let (mut s, old) = watching(Suspending);
+        assert_eq!(s.on_will_sleep(Suspending), SleepAction::DontPulse);
+        let new = match s.on_did_wake(Suspending) {
+            WakeAction::Watch(id) => id,
+            other => panic!("expected a watch, got {other:?}"),
+        };
+        assert_ne!(old, new);
+        assert_eq!(s.on_watch(old, Asleep, false), WatchAction::Stop);
+        assert_eq!(s.on_watch(new, Asleep, false), WatchAction::WakeGuest);
     }
 
     #[test]
     fn wake_ownership_does_not_leak_across_cycles() {
         let mut s = HostSleepState::default();
-        assert_eq!(s.on_will_sleep(false), SleepAction::PulseAndWait);
-        assert_eq!(s.on_did_wake(true), WakeAction::WakeGuest);
+        assert_eq!(s.on_will_sleep(Awake), SleepAction::PulseAndWait);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::WakeGuest);
         // Next cycle: the user suspended the guest themselves.
-        assert_eq!(s.on_will_sleep(true), SleepAction::LeaveAsleep);
-        assert_eq!(s.on_did_wake(true), WakeAction::LeaveAlone);
+        assert_eq!(s.on_will_sleep(Asleep), SleepAction::DontPulse);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::LeaveAlone);
     }
 }

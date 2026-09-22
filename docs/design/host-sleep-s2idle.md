@@ -118,9 +118,19 @@ Nothing is stale on either side. Keep the world and the session survives **with 
   `is_quiesced`, i.e. `suspend.rs` minus the save). Hold the ack until quiesce, capped (~10 s);
   on timeout release the ack anyway — the guest just experiences today's frozen-CNTVCT behavior,
   no worse. Record a `slept_by_host` flag.
-- **On host `didWake`:** pulse the wake key (`wake.rs`) **only if `slept_by_host`** — never wake a
+- **On host `didWake`:** wake the guest (`wake.rs`) **only if `slept_by_host`** — never wake a
   guest the user suspended themselves, and never pulse the *sleep* button at an asleep guest (the
-  latch trap: a latched pulse re-suspends the guest unwakeable).
+  latch trap: a latched pulse re-suspends the guest unwakeable). The same rule holds at
+  `willSleep`: a guest already part-way into a suspend is not pulsed.
+- **A suspend that finishes after the wake is still ours.** A guest slower than the ack budget is
+  paused wherever it got to and, once unpaused, completes the suspend we asked for — after
+  `didWake`. So a wake is not one decision at the unpause: a post-wake watch follows the guest on
+  libkrun's `GuestPowerWatch` and wakes it when it reaches `SYSTEM_SUSPEND` (or settles in s2idle).
+  Where the guest is comes from the devices we emulate: a driver resets its virtio device to
+  `INIT` on the way in, so some devices released and some still held means a suspend under way. A
+  suspend under way can only complete or abort (devices back at `DRIVER_OK`), so the watch waits
+  for it without a deadline; one not yet visible (still in the guest's userspace when the host
+  slept) gets a bounded grace. Pinned by `host_sleep_late_suspend`.
 - **Clock:** three correctors, in precedence order, all idempotent (each steps only ≥1 s of error,
   so whichever ran first turns the others into no-ops):
   1. **enhanced** — `limina-agent` TimeSync, which also fires on supervisor-detected oversleep;
