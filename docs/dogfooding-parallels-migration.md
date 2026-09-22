@@ -239,11 +239,7 @@ those three files into the payload alongside the RPMs.
 
 ## Weaknesses this surfaces
 
-Tracked in `docs/hardening-backlog.md` → "Dogfooding / Parallels migration". Highlights:
-1. No Parallels-import tooling — the `virtio_mmio` prep is undocumented and a footgun. *(this doc is step one)*
-2. ✅ `gvproxy` now bundled (`--net` worked only with Homebrew before).
-3. No guest-tools distribution path — `scripts/provision/f44/` now builds AND validates the full enhanced payload in-guest end-to-end (2026-06-29); the remaining gap is that `limina.app` still has no built-in channel to deliver or build it, so you assemble the payload out-of-band.
-4. ✅ Agent install folded into `install-enhanced.sh` (+ `restorecon`) — was a separate SSH flow.
-5. No payload↔guest version manifest check → ABI-mismatch risk.
-6. KK/Metal never tested cross-machine (`--gpu-software-2d` is the fallback).
-7. ✅ F44 enhanced tier validated end-to-end (2026-06-29) — was thought blocked by a GNOME 49→50 mutter/cogl regression; it did **not** reproduce on the clean stack (16k + venus + patched mutter 50.1, L2 7/7). Open limitation: GLX/Xwayland apps present black on venus (Wayland-native GL works).
+What is still open, all in `docs/hardening-backlog.md` §Guest images & delivery:
+1. No Parallels-import helper — the `virtio_mmio` prep above is manual and a footgun.
+2. No in-app guest-tools delivery — the enhanced payload is assembled out-of-band.
+3. No payload↔guest release check in the installer.

@@ -352,7 +352,7 @@ pub fn socketpair(sock_type: libc::c_int) -> Result<(OwnedFd, OwnedFd)> {
 /// vCPU thread into a real-time band only while that thread is mostly idle — the state where a
 /// punctual timer wake is what a guest needs, and the state where the reservation costs the host
 /// nothing. Without it an idle guest's frame clock slips a whole refresh at a time
-/// (docs/hardening-backlog.md, "An idle guest misses frame deadlines").
+/// (docs/design/vcpu-scheduling-band.md).
 ///
 /// `#1` limits it to vCPU 0, and that suffix is doing safety work, not tuning. The band is a
 /// reservation: enough banded threads promise the machine away, and on 2026-09-21 that panicked

@@ -2431,9 +2431,8 @@ pub fn run(
                     // sent. Forget all of it, so the plan below says the whole arrangement
                     // again. The reboot case also reaches this through the phase branches; a
                     // resume keeps its phase and would otherwise never re-assert, which is the
-                    // 2026-08-22 stuck resume (docs/hardening-backlog.md §M9 snapshot
-                    // hardening): the table went on believing a slot the restored guest was no
-                    // longer driving, so the window watched a dead slot for good.
+                    // 2026-08-22 stuck resume: the table went on believing a slot the restored
+                    // guest was no longer driving, so the window watched a dead slot for good.
                     //
                     // Held until the new worker PRESENTS, not done when the swap is announced:
                     // its display-control socket does not exist until its snapshot is loaded,

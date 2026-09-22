@@ -268,9 +268,12 @@ iosurface scanout: 2560x1440 PIPE_FORMAT_B8G8R8X8_UNORM EGL-backed (IOSurface id
 **venus presents via `SET_SCANOUT_BLOB` + `present_surface`**, importing the guest's image as an
 `MTLTexture` over the IOSurface rather than copying it.
 
-**Worker → supervisor** hands over the surface by Mach port, not as a global IOSurface id. Global
-scanout still exists as an opt-in (`LIMINA_GLOBAL_SCANOUT=1`) purely so the cross-process pixel
-oracle can find the surface; do not rely on it in normal operation.
+**Worker → supervisor** hands the software-2D scanout over by Mach port, not as a global
+IOSurface id (`LIMINA_GLOBAL_SCANOUT=1` makes it global so the cross-process pixel oracle can find
+it). **The accelerated tiers do not have that yet:** virglrs mints its scanout IOSurfaces global
+and the worker forwards the bare id, which the supervisor resolves with `IOSurfaceLookup` — any
+same-user process can read those surfaces. Owed in `docs/hardening-backlog.md` §GPU present &
+scanout.
 
 Any older statement that present is "a full-frame CPU readback per flush", that `SET_SCANOUT_BLOB`
 panics, or that "there is no zero-copy scanout of a GPU texture" describes the pre-KosmicKrisp
@@ -282,7 +285,9 @@ self-heals.** The supervisor holds Mach-published surfaces in a bounded, evictin
 recovered from that side — `IOSurfaceLookup` fails by design, and only the worker can mint a port
 for one. Two things make that safe: an id the guest is currently presenting is **never evicted**,
 and a failed resolve asks the worker to re-publish (`resurface <id>` → the registry every publish
-populates), which costs one frame. A guest therefore does **not** need to re-create swapchain
+populates), which costs one frame. (Under virglrs the accelerated tiers have no such registry —
+libkrun's `republish_iosurface` returns `Unsupported` — but their surfaces are global, so the
+`IOSurfaceLookup` fallback resolves them.) A guest therefore does **not** need to re-create swapchain
 buffers on a transition to keep its scanout alive; a compositor that does so is working around a
 bug that no longer exists. The cap is a memory bound on client transients, not a budget guests
 share. History: `spikes/scanout-blob-freeze/RESULTS.md`.

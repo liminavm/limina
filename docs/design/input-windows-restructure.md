@@ -3,8 +3,8 @@
 Status: **landed** — all four moves done (decided 2026-08-20 from the post-arc structural
 review; A/D/B landed 2026-08-20, C 2026-08-21). Companion: `docs/input-and-windows.md` — the map
 has absorbed every move's shape and is the document to read first. This one is kept as the
-rationale record while the booked follow-ups in `docs/hardening-backlog.md` §Display/window
-(the free-regrab-over-secondary gap, the hidden-seam execution fault) still work this territory;
+rationale record while the booked follow-ups in `docs/hardening-backlog.md` §Display & windows
+(the held-seam diagnosability gap among them) still work this territory;
 when those land it reduces to a short historical note or is deleted.
 
 ## The diagnosis
@@ -86,7 +86,7 @@ and a missing owner window drops. Single display is unchanged — the owner IS t
 The rig pass surfaced the free-path mirror: `free_arming` (landed right after the move) judges
 the `Free` sample's fullscreen/Space flags by the window under the pointer (key stays the
 primary's) — necessary but not yet sufficient: the rig still shows no re-grab over a secondary
-at all, booked in `docs/hardening-backlog.md` §Display/window for after the rework.
+at all. That gap has since closed (`grab_policy::free_step` clears the latch on click).
 
 **The pure predicates.** `key_loss_releases` (releases ANY capture, hard grabs included; judged
 against the primary, which owns key/keyboard routing) and `fullscreen_exit_releases` (only the
@@ -199,6 +199,6 @@ engine consumes one trustworthy geometry source. B landed and did exactly that: 
 defect was diagnosed by fixture replay rather than rig time (execution-side). C closed the arc as
 a behavior-preserving landing. Per the grab doc's own rule: a refactor of a hot file lands after
 a dogfood validation, never bundled with a behavior fix — each move was a separate,
-suite-validated landing. Still open after the rework: the booked free-regrab-over-secondary gap
-and the hidden-seam execution fault (both `docs/hardening-backlog.md` §Display/window) — the
+suite-validated landing. Still open after the rework: the held-seam diagnosability gap
+(`docs/hardening-backlog.md` §Display & windows) — the
 broker gives their diagnosis one module to read.

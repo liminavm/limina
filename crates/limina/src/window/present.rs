@@ -635,7 +635,7 @@ pub fn mark_worker_swapped(shared: &Arc<Mutex<Shared>>, resuming: bool) {
     // has been remembering as sent. On a REBOOT the phase change catches this on its way back
     // through firmware; a RESUME keeps its phase, so without this the arrangement is never said
     // again and the guest stays on the slot the device happened to boot (the 2026-08-22 stuck
-    // resume — docs/hardening-backlog.md §M9 snapshot hardening).
+    // resume).
     s.device_fresh = true;
     if !resuming {
         s.guest_driver_ready = false;

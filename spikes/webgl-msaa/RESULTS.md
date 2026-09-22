@@ -8,8 +8,7 @@ requests `{antialias:false}` for the control arm.
 **One arm, end to end:** `run-arm.sh <name>` — clones a pristine image, boots it, launches the
 page in the seated session, watches, and declares the arm VOID unless the browser exists *and* a
 multisampled blit reached vrend.
-**Backlog entry:** `docs/hardening-backlog.md` §"A guest WebGL page that requests MSAA loses the
-Vulkan device and aborts the VMM".
+**Backlog entry:** `docs/hardening-backlog.md` §"WebGL antialiasing loses the host Vulkan device".
 
 ## What happens
 

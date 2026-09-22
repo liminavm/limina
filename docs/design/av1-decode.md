@@ -184,10 +184,11 @@ So **a frame is held for one submission whenever every slot is live**, shown or 
 emitted once the following descriptor settles the question exactly. While a slot is free the
 frame goes out at once into it. Whether the frame is shown does not enter into it: a libaom
 pyramid GOP stores shown frames and fills eight slots, and emitting one with nothing refreshed
-loses every later reference to it. The cost is that a held shown frame's picture reaches its
-target a submission late, after the guest's fence has already signalled — a consumer that
-reads the target at fence time gets a stale surface (measured; booked in
-`docs/hardening-backlog.md`), a player that runs a frame ahead never notices.
+loses every later reference to it. Holding must not delay the *picture*, though: nothing makes
+the guest wait for it (`vaSyncSurface` waits on the command-stream fence), so a shown frame at the
+wall is emitted immediately with `refresh_frame_flags = 0` and re-emitted hidden on the next
+submission carrying the real refresh. The cost is decoding such a frame twice, only when the guest
+stored it.
 
 What a frame stored is read as a **set difference between consecutive reference maps**, never
 against our own slots and never per-slot. Surface ids are recycled, so a freshly reused id
@@ -307,8 +308,8 @@ a coded-width buffer holding roughly the rightmost `coded_width` columns of the
 upscaled image. Neither of the two ways out survives measurement (upscaling it
 ourselves, because it is not the pre-upscale picture; requesting full-size output
 buffers, because the same wrong pixels come back stretched). Measurements and the
-disposition: `docs/hardening-backlog.md` §"AV1: VideoToolbox does not return
-super-resolution frames".
+disposition: `docs/hardening-backlog.md` §"AV1 super-resolution frames are refused before they
+are submitted".
 
 So a frame declaring `use_superres` must be refused, keyed on the stream's flag rather than the
 returned width, so the refusal does not quietly stop working if the host's output bug changes shape.
