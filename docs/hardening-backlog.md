@@ -74,11 +74,6 @@ reasoned from the cold-boot race and not measured on the reboot path. Settle it:
 venus guest and re-read the monitor spec (`gdbus … GetCurrentState` connector/vendor/product/serial).
 If it holds, drop this entry.
 
-### Needs a sighting: a composited cursor sprite drawn at the wrong position on the right display
-Photographed only under an earlier relay that reported wrong rects; not seen since. On a fresh
-sighting, check `window/cursor.rs` `update_capture_cursor` and `secondary.rs` for a units/space mix
-(data: `spikes/pointer-units-oracle/RESULTS.md` §3). Without one, drop it.
-
 ### A pointer cannot be drawn for the first ~350 ms of a Space-switch animation (parked)
 A three-finger Space switch animates for about 530 ms; `isOnActiveSpace`, key status and
 app-active all change at commit, so a captured pointer stays hidden and parked for the whole
