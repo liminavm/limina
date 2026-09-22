@@ -45,7 +45,8 @@ pub enum Quiesced {
     /// Devices at `INIT`, but a vCPU was still executing when the budget ran out. Stopping
     /// the guest now poisons `CLOCK_MONOTONIC`.
     DevicesOnly,
-    /// Devices never reached `INIT` — the guest did not act on the suspend request.
+    /// Devices never reached `INIT` — the guest did not act on the suspend request — or reached
+    /// it and came back before the vCPUs parked: the suspend aborted and the guest is running.
     No,
 }
 
@@ -86,6 +87,34 @@ pub struct QuiesceRequest {
 
 const POLL: Duration = Duration::from_millis(50);
 
+/// What [`wait_for_quiesce`] reads off the guest — the [`Vmm`] predicates it needs, as a seam
+/// so the sequence can be driven by a scripted guest in unit tests.
+trait GuestProbe {
+    fn is_quiesced(&self) -> bool;
+    fn quiesce_holdouts(&self) -> Vec<(u32, String, u32)>;
+    fn system_suspended(&self) -> bool;
+    fn all_vcpus_parked(&self) -> bool;
+    fn park_holdouts(&self) -> Vec<u64>;
+}
+
+impl GuestProbe for Mutex<Vmm> {
+    fn is_quiesced(&self) -> bool {
+        self.lock().unwrap().is_quiesced()
+    }
+    fn quiesce_holdouts(&self) -> Vec<(u32, String, u32)> {
+        self.lock().unwrap().quiesce_holdouts()
+    }
+    fn system_suspended(&self) -> bool {
+        self.lock().unwrap().system_suspended()
+    }
+    fn all_vcpus_parked(&self) -> bool {
+        self.lock().unwrap().all_vcpus_parked()
+    }
+    fn park_holdouts(&self) -> Vec<u64> {
+        self.lock().unwrap().park_holdouts()
+    }
+}
+
 /// Pulse (optionally), wait for devices, then wait for the vCPUs to park.
 ///
 /// Does not stop the guest: the caller decides whether to [`Vmm::pause`] and, crucially,
@@ -94,9 +123,13 @@ pub fn quiesce_guest(vmm: &Arc<Mutex<Vmm>>, req: &QuiesceRequest) -> Quiesced {
     if req.pulse_button {
         crate::suspend::pulse();
     }
+    wait_for_quiesce(&**vmm, req)
+}
 
-    if !wait_until(req.device_budget, || vmm.lock().unwrap().is_quiesced()) {
-        let holdouts = vmm.lock().unwrap().quiesce_holdouts();
+/// Everything [`quiesce_guest`] does after the pulse.
+fn wait_for_quiesce(guest: &impl GuestProbe, req: &QuiesceRequest) -> Quiesced {
+    if !wait_until(req.device_budget, || guest.is_quiesced()) {
+        let holdouts = guest.quiesce_holdouts();
         log::warn!(
             "quiesce: no device quiesce within {:?} (holdouts: {holdouts:?})",
             req.device_budget
@@ -108,14 +141,25 @@ pub fn quiesce_guest(vmm: &Arc<Mutex<Vmm>>, req: &QuiesceRequest) -> Quiesced {
     let deadline = Instant::now() + req.park_budget;
     let mut seen = 0u32;
     loop {
-        if vmm.lock().unwrap().system_suspended() {
+        if guest.system_suspended() {
             log::info!("quiesce: the guest suspended itself to RAM (PSCI SYSTEM_SUSPEND)");
             return Quiesced::SystemSuspended;
         }
-        if vmm.lock().unwrap().all_vcpus_parked() {
+        // Parked vCPUs mean a finished suspend only while the devices stay quiesced. A guest
+        // whose suspend aborted takes its devices back and then idles, and an idle guest's
+        // vCPUs park too.
+        if !guest.is_quiesced() {
+            log::warn!(
+                "quiesce: devices left INIT before the vCPUs parked — the guest aborted its \
+                 suspend (holdouts: {:?})",
+                guest.quiesce_holdouts()
+            );
+            return Quiesced::No;
+        }
+        if guest.all_vcpus_parked() {
             let settled_at = Instant::now();
             let held = loop {
-                if !vmm.lock().unwrap().all_vcpus_parked() {
+                if !guest.all_vcpus_parked() || !guest.is_quiesced() {
                     break false;
                 }
                 if settled_at.elapsed() >= req.park_settle {
@@ -129,7 +173,7 @@ pub fn quiesce_guest(vmm: &Arc<Mutex<Vmm>>, req: &QuiesceRequest) -> Quiesced {
             }
         }
         if Instant::now() >= deadline {
-            let holdouts = vmm.lock().unwrap().park_holdouts();
+            let holdouts = guest.park_holdouts();
             log::warn!(
                 "quiesce: devices reached INIT but vCPUs {holdouts:?} were still executing \
                  after {:?} (saw all-parked {seen} times) — stopping the guest now would \
@@ -138,7 +182,7 @@ pub fn quiesce_guest(vmm: &Arc<Mutex<Vmm>>, req: &QuiesceRequest) -> Quiesced {
             );
             return Quiesced::DevicesOnly;
         }
-        seen += u32::from(vmm.lock().unwrap().all_vcpus_parked());
+        seen += u32::from(guest.all_vcpus_parked());
         std::thread::sleep(POLL);
     }
 }
@@ -158,7 +202,53 @@ fn wait_until(budget: Duration, mut pred: impl FnMut() -> bool) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::Quiesced;
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    use super::{GuestProbe, QuiesceRequest, Quiesced, wait_for_quiesce};
+
+    /// A guest whose devices quiesce, then come back — a suspend that aborted after
+    /// `dpm_suspend` — and which then idles with every vCPU parked.
+    struct AbortedSuspend {
+        device_reads: Cell<u32>,
+    }
+
+    impl GuestProbe for AbortedSuspend {
+        fn is_quiesced(&self) -> bool {
+            let n = self.device_reads.get();
+            self.device_reads.set(n + 1);
+            n == 0
+        }
+        fn quiesce_holdouts(&self) -> Vec<(u32, String, u32)> {
+            Vec::new()
+        }
+        fn system_suspended(&self) -> bool {
+            false
+        }
+        fn all_vcpus_parked(&self) -> bool {
+            true
+        }
+        fn park_holdouts(&self) -> Vec<u64> {
+            Vec::new()
+        }
+    }
+
+    /// Parked vCPUs prove a finished suspend only while the devices are still quiesced. Once
+    /// they are back the suspend aborted, the guest is simply idle, and a host stop lands in
+    /// its CLOCK_MONOTONIC.
+    #[test]
+    fn an_aborted_suspend_is_not_parked() {
+        let guest = AbortedSuspend {
+            device_reads: Cell::new(0),
+        };
+        let req = QuiesceRequest {
+            pulse_button: false,
+            device_budget: Duration::from_millis(200),
+            park_budget: Duration::from_millis(200),
+            park_settle: Duration::from_millis(60),
+        };
+        assert_eq!(wait_for_quiesce(&guest, &req), Quiesced::No);
+    }
 
     /// The two callers' bars are different, and conflating them is a shipped-regression
     /// shape: the snapshot bracket was given the host-sleep bracket's bar and
