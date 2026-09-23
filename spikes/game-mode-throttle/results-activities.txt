@@ -1,0 +1,301 @@
+== none
+Timestamp               Ty Process[PID:TID]
+2026-09-23 10:34:41.917 Df gamepolicyd[56602:c82745] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 10:34:42.318 Df gamepolicyd[56602:c82745] [com.apple.gamepolicyd:Common] Full screen gaming session is now active with ID 2467250169686367022.
+2026-09-23 10:34:42.318 Df gamepolicyd[56602:c82745] [com.apple.gamepolicyd:Common] Game mode is now available.
+2026-09-23 10:34:42.319 Df gamepolicyd[56602:c82745] [com.apple.gamepolicyd:Policy] Game mode enabled.
+2026-09-23 10:34:42.319 Df gamepolicyd[56602:c82745] [com.apple.gamepolicyd:Common] Game mode status is now on.
+2026-09-23 10:34:57.433 Df gamepolicyd[56602:c82a2d] [com.apple.gamepolicyd:Policy] Game mode disabled.
+2026-09-23 10:34:57.435 Df gamepolicyd[56602:c82a2d] [com.apple.gamepolicyd:Common] Full screen gaming session is now inactive with ID 0.
+2026-09-23 10:34:57.435 Df gamepolicyd[56602:c82a2d] [com.apple.gamepolicyd:Common] Game mode is now unavailable.
+2026-09-23 10:34:57.475 Df gamepolicyd[56602:c82a2d] [com.apple.gamepolicyd:Common] Game mode status is now off.
+none parent pid=34822 child pid=34826 activity=none child-activity=none
+none parent t=1 prio main=31
+none child t=1 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 10/22/22 (60) | vcpu0 late us 2533/18696/18696 (97)
+none child t=2 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 16/30/30 (61) | vcpu0 late us 2176/4793/5196 (101)
+none parent t=2 prio main=31
+none child t=3 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 16/40/40 (60) | vcpu0 late us 2224/11315/11315 (99)
+none parent t=3 prio main=31
+none child t=4 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 16/29/29 (61) | vcpu0 late us 2181/4909/4930 (101)
+none parent t=4 prio main=31
+none parent t=5 prio main=31
+none child t=5 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/24/24 (60) | vcpu0 late us 2755/11876/11876 (99)
+none parent t=6 prio main=31
+none child t=6 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/30/30 (60) | vcpu0 late us 2558/13058/13058 (97)
+none child t=7 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 14/220768/220768 (16) | vcpu0 late us 3484/227779/227779 (20)
+none parent t=7 prio main=4
+none parent t=8 prio main=4
+none child t=8 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 199158/200078/200078 (6) | vcpu0 late us 198481/199934/199934 (6)
+none parent t=9 prio main=4
+none child t=9 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 195666/199022/199022 (5) | vcpu0 late us 198549/200999/200999 (6)
+none parent t=10 prio main=4
+none child t=11 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 199633/200335/200335 (6) | vcpu0 late us 198104/200409/200409 (6)
+none parent t=11 prio main=4
+none child t=12 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 199880/249670/249670 (5) | vcpu0 late us 201706/211011/211011 (6)
+none parent t=12 prio main=4
+none child t=13 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197377/202841/202841 (6) | vcpu0 late us 195200/198419/198419 (5)
+none parent t=13 prio main=4
+none parent t=14 prio main=4
+none child t=14 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 195825/198822/198822 (6) | vcpu0 late us 194228/198090/198090 (6)
+none parent t=15 prio main=4
+none child t=15 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 199239/200122/200122 (6) | vcpu0 late us 198814/199756/199756 (6)
+none parent t=16 prio main=4
+none child t=17 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198550/199510/199510 (5) | vcpu0 late us 198490/199860/199860 (6)
+none parent t=17 prio main=4
+none child t=18 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198392/201887/201887 (6) | vcpu0 late us 199499/200235/200235 (6)
+none parent t=18 prio main=4
+none child t=19 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198949/199673/199673 (6) | vcpu0 late us 199503/199902/199902 (5)
+none parent t=19 prio main=4
+none parent t=20 prio main=4
+none child t=20 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197561/198736/198736 (5) | vcpu0 late us 197953/198932/198932 (6)
+none parent t=21 prio main=4
+none child t=21 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 193848/199582/199582 (8) | vcpu0 late us 11256/199272/199272 (13)
+none parent t=22 prio main=31
+none child t=22 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/27/27 (61) | vcpu0 late us 2302/14137/14137 (98)
+none parent t=23 prio main=31
+none child t=23 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/25/25 (60) | vcpu0 late us 2026/4730/4805 (101)
+none parent t=24 prio main=31
+none child t=24 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 12/25/25 (61) | vcpu0 late us 2478/7289/7289 (100)
+none parent t=25 prio main=31
+none child t=25 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/39/39 (60) | vcpu0 late us 2361/4578/4747 (101)
+none parent t=26 prio main=31
+none child t=26 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/21/21 (61) | vcpu0 late us 2345/5075/5331 (101)
+none parent t=27 prio main=31
+none child t=27 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/63/63 (60) | vcpu0 late us 2154/4987/5902 (101)
+none parent t=28 prio main=31
+none child t=28 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/24/24 (61) | vcpu0 late us 2358/4927/8810 (101)
+none parent t=29 prio main=31
+none child t=29 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/30/30 (60) | vcpu0 late us 2436/8126/8126 (100)
+none parent t=30 prio main=31
+none child t=30 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/21/21 (61) | vcpu0 late us 2085/6786/6818 (101)
+none parent t=31 prio main=31
+none child t=31 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/31/31 (60) | vcpu0 late us 2145/5532/6166 (101)
+none parent t=32 prio main=31
+none child t=32 prio main=31 vcpu=-1,-1,-1,-1 rt=-1 | rt late us 13/39/39 (33) | vcpu0 late us 2301/4940/4940 (55)
+none parent t=33 prio main=31
+== user
+Timestamp               Ty Process[PID:TID]
+2026-09-23 10:35:22.323 Df gamepolicyd[56602:c82ae7] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 10:35:22.528 Df gamepolicyd[56602:c82e4a] [com.apple.gamepolicyd:Common] Full screen gaming session is now active with ID 9387513541534195580.
+2026-09-23 10:35:22.528 Df gamepolicyd[56602:c82e4a] [com.apple.gamepolicyd:Common] Game mode is now available.
+2026-09-23 10:35:22.529 Df gamepolicyd[56602:c82e4a] [com.apple.gamepolicyd:Policy] Game mode enabled.
+2026-09-23 10:35:22.529 Df gamepolicyd[56602:c82e4a] [com.apple.gamepolicyd:Common] Game mode status is now on.
+2026-09-23 10:35:37.887 Df gamepolicyd[56602:c82df3] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 10:35:37.887 Df gamepolicyd[56602:c82df3] [com.apple.gamepolicyd:Policy] Game mode disabled.
+2026-09-23 10:35:37.887 Df gamepolicyd[56602:c82df3] [com.apple.gamepolicyd:Common] Game mode status is now off.
+2026-09-23 10:35:37.887 Df gamepolicyd[56602:c82df3] [com.apple.gamepolicyd:Common] Full screen gaming session is now inactive with ID 0.
+2026-09-23 10:35:37.887 Df gamepolicyd[56602:c82df3] [com.apple.gamepolicyd:Common] Game mode is now unavailable.
+user parent pid=34872 child pid=34874 activity=none child-activity=user
+user parent t=1 prio main=31
+user child t=1 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 12/33/33 (60) | vcpu0 late us 2801/5013/5013 (100)
+user child t=2 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/24/24 (60) | vcpu0 late us 2383/4759/4945 (101)
+user parent t=2 prio main=31
+user child t=3 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 16/35/35 (61) | vcpu0 late us 2116/4767/4835 (101)
+user parent t=3 prio main=31
+user child t=4 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 17/28/28 (60) | vcpu0 late us 2162/5697/6140 (101)
+user parent t=4 prio main=31
+user parent t=5 prio main=31
+user child t=5 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/33/33 (61) | vcpu0 late us 2333/5137/5137 (100)
+user parent t=6 prio main=31
+user child t=6 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 12/30/30 (60) | vcpu0 late us 2194/13887/13887 (99)
+user child t=7 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 13/198647/198647 (17) | vcpu0 late us 3408/200448/200448 (24)
+user parent t=7 prio main=4
+user parent t=8 prio main=4
+user child t=8 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 196693/200015/200015 (6) | vcpu0 late us 199523/200455/200455 (6)
+user parent t=9 prio main=4
+user child t=9 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197914/198891/198891 (6) | vcpu0 late us 196495/202134/202134 (6)
+user parent t=10 prio main=4
+user child t=11 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197063/197967/197967 (6) | vcpu0 late us 198240/199940/199940 (6)
+user parent t=11 prio main=4
+user child t=12 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198641/199556/199556 (5) | vcpu0 late us 198783/201065/201065 (6)
+user parent t=12 prio main=4
+user child t=13 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197759/202332/202332 (6) | vcpu0 late us 197818/200668/200668 (5)
+user parent t=13 prio main=4
+user parent t=14 prio main=4
+user child t=14 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 196724/198690/198690 (5) | vcpu0 late us 199160/200782/200782 (6)
+user parent t=15 prio main=4
+user child t=15 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 195329/199541/199541 (6) | vcpu0 late us 197744/198593/198593 (6)
+user parent t=16 prio main=4
+user child t=17 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197791/200131/200131 (6) | vcpu0 late us 196920/197950/197950 (6)
+user parent t=17 prio main=4
+user child t=18 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197776/200122/200122 (5) | vcpu0 late us 198862/209476/209476 (6)
+user parent t=18 prio main=4
+user child t=19 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 195573/198917/198917 (6) | vcpu0 late us 198169/199901/199901 (6)
+user parent t=19 prio main=4
+user parent t=20 prio main=4
+user child t=20 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197594/198195/198195 (6) | vcpu0 late us 198703/199451/199451 (5)
+user parent t=21 prio main=4
+user child t=21 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 196466/197421/197421 (5) | vcpu0 late us 196163/200740/200740 (6)
+user parent t=22 prio main=31
+user child t=23 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/224713/224713 (67) | vcpu0 late us 2590/200417/200417 (94)
+user parent t=23 prio main=31
+user child t=24 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/24/24 (60) | vcpu0 late us 2014/4734/4734 (100)
+user parent t=24 prio main=31
+user child t=25 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/38/38 (61) | vcpu0 late us 2116/4700/5213 (101)
+user parent t=25 prio main=31
+user child t=26 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 16/29/29 (60) | vcpu0 late us 2055/4989/6588 (101)
+user parent t=26 prio main=31
+user child t=27 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 12/21/21 (61) | vcpu0 late us 2413/4678/4827 (101)
+user parent t=27 prio main=31
+user child t=28 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/22/22 (60) | vcpu0 late us 2648/4959/5115 (101)
+user parent t=28 prio main=31
+user child t=29 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/22/22 (61) | vcpu0 late us 2194/4745/9025 (101)
+user parent t=29 prio main=31
+user child t=30 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/30/30 (60) | vcpu0 late us 2033/4875/6907 (101)
+user parent t=30 prio main=31
+user child t=31 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/21/21 (61) | vcpu0 late us 2363/4633/4633 (100)
+user parent t=31 prio main=31
+user child t=32 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/42/42 (60) | vcpu0 late us 2196/4912/7594 (101)
+user parent t=32 prio main=31
+user child t=33 prio main=31 vcpu=-1,-1,-1,-1 rt=-1 | rt late us 14/23/23 (19) | vcpu0 late us 2621/4786/4786 (32)
+user parent t=33 prio main=31
+== latency
+Timestamp               Ty Process[PID:TID]
+2026-09-23 10:36:01.791 Df gamepolicyd[56602:c82cbc] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 10:36:01.964 Df gamepolicyd[56602:c83154] [com.apple.gamepolicyd:Common] Full screen gaming session is now active with ID 15037237302805029360.
+2026-09-23 10:36:01.964 Df gamepolicyd[56602:c83154] [com.apple.gamepolicyd:Common] Game mode is now available.
+2026-09-23 10:36:01.965 Df gamepolicyd[56602:c83154] [com.apple.gamepolicyd:Policy] Game mode enabled.
+2026-09-23 10:36:01.965 Df gamepolicyd[56602:c83154] [com.apple.gamepolicyd:Common] Game mode status is now on.
+2026-09-23 10:36:17.187 Df gamepolicyd[56602:c8329b] [com.apple.gamepolicyd:Policy] Game mode disabled.
+2026-09-23 10:36:17.188 Df gamepolicyd[56602:c8329b] [com.apple.gamepolicyd:Common] Full screen gaming session is now inactive with ID 0.
+2026-09-23 10:36:17.188 Df gamepolicyd[56602:c8329b] [com.apple.gamepolicyd:Common] Game mode is now unavailable.
+2026-09-23 10:36:17.217 Df gamepolicyd[56602:c8329b] [com.apple.gamepolicyd:Common] Game mode status is now off.
+latency parent pid=34903 child pid=34905 activity=none child-activity=latency
+latency child t=1 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 12/35/35 (60) | vcpu0 late us 2292/5000/5000 (100)
+latency parent t=1 prio main=31
+latency child t=2 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/27/27 (61) | vcpu0 late us 2286/5010/5722 (101)
+latency parent t=2 prio main=31
+latency child t=3 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/28/28 (60) | vcpu0 late us 2500/5555/5783 (101)
+latency parent t=3 prio main=31
+latency parent t=4 prio main=31
+latency child t=4 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/24/24 (61) | vcpu0 late us 2010/6323/6323 (100)
+latency parent t=5 prio main=31
+latency child t=5 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/21/21 (60) | vcpu0 late us 2170/4631/5205 (101)
+latency child t=6 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/49/49 (61) | vcpu0 late us 2556/10597/10597 (100)
+latency parent t=6 prio main=31
+latency child t=7 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 14/196509/196509 (15) | vcpu0 late us 4233/195680/195680 (21)
+latency parent t=7 prio main=4
+latency parent t=8 prio main=4
+latency child t=8 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 199457/200278/200278 (6) | vcpu0 late us 196601/200560/200560 (5)
+latency parent t=9 prio main=4
+latency child t=9 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 194606/195814/195814 (6) | vcpu0 late us 196194/202851/202851 (6)
+latency parent t=10 prio main=4
+latency child t=11 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 195598/199956/199956 (5) | vcpu0 late us 198037/199646/199646 (6)
+latency parent t=11 prio main=4
+latency child t=12 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197718/199366/199366 (6) | vcpu0 late us 199712/201576/201576 (6)
+latency parent t=12 prio main=4
+latency child t=13 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197669/203389/203389 (6) | vcpu0 late us 198973/203607/203607 (6)
+latency parent t=13 prio main=4
+latency parent t=14 prio main=4
+latency child t=14 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 193347/195125/195125 (5) | vcpu0 late us 191976/199174/199174 (5)
+latency parent t=15 prio main=4
+latency child t=15 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197108/200215/200215 (6) | vcpu0 late us 197256/198355/198355 (6)
+latency parent t=16 prio main=4
+latency child t=17 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 196982/199403/199403 (6) | vcpu0 late us 197764/199194/199194 (6)
+latency parent t=17 prio main=4
+latency child t=18 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197226/200989/200989 (5) | vcpu0 late us 197146/197932/197932 (6)
+latency parent t=18 prio main=4
+latency child t=19 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198642/200285/200285 (6) | vcpu0 late us 198132/198810/198810 (6)
+latency parent t=19 prio main=4
+latency parent t=20 prio main=4
+latency child t=20 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 199202/199589/199589 (5) | vcpu0 late us 196332/198970/198970 (5)
+latency parent t=21 prio main=4
+latency child t=21 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 198997/200000/200000 (6) | vcpu0 late us 196568/199354/199354 (6)
+latency parent t=22 prio main=31
+latency child t=22 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/197833/197833 (57) | vcpu0 late us 2431/183435/183435 (98)
+latency parent t=23 prio main=31
+latency child t=23 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/29/29 (60) | vcpu0 late us 1795/12240/12240 (99)
+latency parent t=24 prio main=31
+latency child t=24 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 12/23/23 (61) | vcpu0 late us 2199/4836/5630 (101)
+latency parent t=25 prio main=31
+latency child t=25 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 12/23/23 (60) | vcpu0 late us 2300/4685/4832 (101)
+latency parent t=26 prio main=31
+latency child t=26 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/31/31 (60) | vcpu0 late us 2299/4787/4813 (101)
+latency parent t=27 prio main=31
+latency child t=27 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/26/26 (61) | vcpu0 late us 2213/5511/5511 (100)
+latency parent t=28 prio main=31
+latency child t=28 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/27/27 (61) | vcpu0 late us 2210/5461/6796 (101)
+latency parent t=29 prio main=31
+latency child t=29 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/24/24 (60) | vcpu0 late us 2082/4877/4959 (101)
+latency parent t=30 prio main=31
+latency child t=30 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/27/27 (60) | vcpu0 late us 2582/5068/5068 (100)
+latency parent t=31 prio main=31
+latency child t=32 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/25/25 (61) | vcpu0 late us 2468/6884/8276 (102)
+latency parent t=32 prio main=31
+latency child t=33 prio main=31 vcpu=-1,-1,-1,-1 rt=-1 | rt late us 17/25/25 (31) | vcpu0 late us 2576/4329/4329 (50)
+latency parent t=33 prio main=31
+== parent-latency
+Timestamp               Ty Process[PID:TID]
+2026-09-23 10:36:41.284 Df gamepolicyd[56602:c83434] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 10:36:41.477 Df gamepolicyd[56602:c83434] [com.apple.gamepolicyd:Common] Full screen gaming session is now active with ID 10840592253076978464.
+2026-09-23 10:36:41.477 Df gamepolicyd[56602:c83434] [com.apple.gamepolicyd:Common] Game mode is now available.
+2026-09-23 10:36:41.477 Df gamepolicyd[56602:c83434] [com.apple.gamepolicyd:Policy] Game mode enabled.
+2026-09-23 10:36:41.477 Df gamepolicyd[56602:c83434] [com.apple.gamepolicyd:Common] Game mode status is now on.
+2026-09-23 10:36:56.695 Df gamepolicyd[56602:c83579] [com.apple.gamepolicyd:Policy] Game mode disabled.
+2026-09-23 10:36:56.710 Df gamepolicyd[56602:c83579] [com.apple.gamepolicyd:Common] Full screen gaming session is now inactive with ID 0.
+2026-09-23 10:36:56.710 Df gamepolicyd[56602:c83579] [com.apple.gamepolicyd:Common] Game mode is now unavailable.
+2026-09-23 10:36:56.729 Df gamepolicyd[56602:c83579] [com.apple.gamepolicyd:Common] Game mode status is now off.
+parent-latency parent pid=34934 child pid=34936 activity=latency child-activity=none
+parent-latency parent t=1 prio main=31
+parent-latency child t=1 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 11/26/26 (60) | vcpu0 late us 2649/5001/5001 (100)
+parent-latency child t=2 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 17/32/32 (61) | vcpu0 late us 2212/5636/5650 (101)
+parent-latency parent t=2 prio main=31
+parent-latency child t=3 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 17/37/37 (60) | vcpu0 late us 2698/10399/10399 (99)
+parent-latency parent t=3 prio main=31
+parent-latency child t=4 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/22/22 (60) | vcpu0 late us 2511/5443/5694 (101)
+parent-latency parent t=4 prio main=31
+parent-latency parent t=5 prio main=31
+parent-latency child t=5 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/26/26 (61) | vcpu0 late us 2120/4684/5340 (101)
+parent-latency parent t=6 prio main=31
+parent-latency child t=6 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 15/31/31 (60) | vcpu0 late us 2662/27117/27117 (99)
+parent-latency child t=7 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 11/215957/215957 (19) | vcpu0 late us 3481/195184/195184 (27)
+parent-latency parent t=7 prio main=4
+parent-latency parent t=8 prio main=4
+parent-latency child t=8 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198220/198678/198678 (5) | vcpu0 late us 194926/199112/199112 (6)
+parent-latency parent t=9 prio main=4
+parent-latency child t=9 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 195502/200003/200003 (6) | vcpu0 late us 198965/199412/199412 (6)
+parent-latency parent t=10 prio main=4
+parent-latency child t=11 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198253/198755/198755 (6) | vcpu0 late us 198729/199738/199738 (6)
+parent-latency parent t=11 prio main=4
+parent-latency child t=12 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 196974/200037/200037 (5) | vcpu0 late us 197769/200617/200617 (5)
+parent-latency parent t=12 prio main=4
+parent-latency child t=13 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 199708/200697/200697 (6) | vcpu0 late us 197762/200148/200148 (6)
+parent-latency parent t=13 prio main=4
+parent-latency parent t=14 prio main=4
+parent-latency child t=14 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198753/200950/200950 (5) | vcpu0 late us 197427/200043/200043 (6)
+parent-latency parent t=15 prio main=4
+parent-latency child t=15 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 199943/200044/200044 (6) | vcpu0 late us 198582/199843/199843 (6)
+parent-latency parent t=16 prio main=4
+parent-latency child t=17 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 197674/199986/199986 (6) | vcpu0 late us 197210/199722/199722 (5)
+parent-latency parent t=17 prio main=4
+parent-latency child t=18 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 196680/199413/199413 (5) | vcpu0 late us 198474/199192/199192 (6)
+parent-latency parent t=18 prio main=4
+parent-latency child t=19 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 198165/198935/198935 (6) | vcpu0 late us 197787/200057/200057 (6)
+parent-latency parent t=19 prio main=4
+parent-latency parent t=20 prio main=4
+parent-latency child t=20 prio main=4 vcpu=4,4,4,4 rt=4 | rt late us 193606/199664/199664 (5) | vcpu0 late us 197933/198590/198590 (6)
+parent-latency parent t=21 prio main=4
+parent-latency child t=21 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 196441/199799/199799 (6) | vcpu0 late us 198682/199942/199942 (6)
+parent-latency parent t=22 prio main=31
+parent-latency child t=22 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/178398/178398 (59) | vcpu0 late us 1974/194517/194517 (85)
+parent-latency parent t=23 prio main=31
+parent-latency child t=23 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/24/24 (60) | vcpu0 late us 1995/19503/19503 (99)
+parent-latency parent t=24 prio main=31
+parent-latency child t=24 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 16/32/32 (61) | vcpu0 late us 1927/4690/4690 (100)
+parent-latency parent t=25 prio main=31
+parent-latency child t=25 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 16/43/43 (60) | vcpu0 late us 1973/5809/9102 (101)
+parent-latency parent t=26 prio main=31
+parent-latency child t=26 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/20/20 (61) | vcpu0 late us 2484/10808/10808 (100)
+parent-latency parent t=27 prio main=31
+parent-latency child t=27 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/26/26 (60) | vcpu0 late us 2198/4630/6953 (101)
+parent-latency parent t=28 prio main=31
+parent-latency child t=28 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/39/39 (61) | vcpu0 late us 2214/5249/7695 (101)
+parent-latency parent t=29 prio main=31
+parent-latency child t=29 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/27/27 (60) | vcpu0 late us 1913/4337/4366 (101)
+parent-latency parent t=30 prio main=31
+parent-latency child t=30 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 14/35/35 (61) | vcpu0 late us 2146/5228/5228 (100)
+parent-latency parent t=31 prio main=31
+parent-latency child t=31 prio main=31 vcpu=31,31,31,31 rt=97 | rt late us 13/25/25 (60) | vcpu0 late us 2200/4352/4409 (101)
+parent-latency parent t=32 prio main=31
+parent-latency child t=32 prio main=31 vcpu=-1,-1,-1,-1 rt=-1 | rt late us 15/29/29 (31) | vcpu0 late us 2058/4560/4560 (52)
+parent-latency parent t=33 prio main=31
