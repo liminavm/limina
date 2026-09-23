@@ -220,12 +220,6 @@ run allocated at every `process::exit` site (`exit_cleanup()`); a SIGKILLed supe
 harmless stray socket (binders unlink before `bind()`). **Do not add a startup sweep that reaps
 sockets whose embedded pid is dead** — pids are recycled.
 
-### Surface-port `recv` leaks a port right on a malformed message
-`SurfaceReceiver::recv` (`crates/limina-surfaceport/src/lib.rs`) returns an error on
-`descriptor_count != 1` without deallocating `msg.port.name`. Unreachable today (the only sender,
-our worker, sends 0 or 1). Fix when the file is next touched: `mach_port_deallocate` before the
-early return.
-
 ### Movable VM library and per-VM placement
 Design: `docs/design/vm-definitions.md` §8. The library location is only `$LIMINA_VM_LIBRARY` or the
 default (`vmlib/bundle.rs`); nothing persists it, and an unplugged external-volume library makes

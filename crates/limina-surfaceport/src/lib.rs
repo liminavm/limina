@@ -129,6 +129,7 @@ unsafe extern "C" {
         timeout: u32,
         notify: mach_port_t,
     ) -> i32;
+    fn mach_msg_destroy(msg: *mut MachMsgHeader);
 }
 
 fn task() -> mach_port_t {
@@ -227,10 +228,14 @@ impl SurfacePortReceiver {
         if msg.header.msgh_bits & MACH_MSGH_BITS_COMPLEX == 0 {
             return Ok(SurfaceMsg::Released(ring_idx));
         }
-        if msg.body.descriptor_count != 1 {
+        if msg.body.descriptor_count != 1 || msg.port.descriptor_type != MACH_MSG_PORT_DESCRIPTOR {
+            let (count, kind) = (msg.body.descriptor_count, msg.port.descriptor_type);
+            // The kernel already moved every right and out-of-line region the message carried
+            // into this task; refusing the message must release them all, not just the first.
+            // SAFETY: `msg` is a message the kernel just delivered, so its descriptors are valid.
+            unsafe { mach_msg_destroy(&mut msg.header) };
             return Err(io::Error::other(format!(
-                "surfaceport: expected 1 descriptor, got {}",
-                msg.body.descriptor_count
+                "surfaceport: expected 1 port descriptor, got {count} (first of type {kind})"
             )));
         }
         let port = msg.port.name;
@@ -514,5 +519,104 @@ mod tests {
             matches!(second, SurfaceMsg::Released(got) if got == id),
             "the release must come out second, and as a release"
         );
+    }
+
+    unsafe extern "C" {
+        fn mach_port_get_refs(
+            task: mach_port_t,
+            name: mach_port_t,
+            right: u32,
+            refs: *mut u32,
+        ) -> i32;
+    }
+
+    const MACH_PORT_RIGHT_SEND: u32 = 0;
+
+    fn send_refs(port: mach_port_t) -> u32 {
+        let mut refs = 0;
+        let kr = unsafe { mach_port_get_refs(task(), port, MACH_PORT_RIGHT_SEND, &mut refs) };
+        assert_eq!(kr, 0, "mach_port_get_refs");
+        refs
+    }
+
+    /// A publish carrying anything but exactly one port descriptor is refused, and every right it
+    /// brought is released with it. The rights land in this task, so a refusal that keeps them
+    /// leaks one name per message for the supervisor's life.
+    #[test]
+    fn a_refused_publish_releases_the_rights_it_carried() {
+        #[repr(C)]
+        struct TwoPorts {
+            header: MachMsgHeader,
+            body: MachMsgBody,
+            ports: [MachMsgPortDescriptor; 2],
+        }
+
+        let name = format!("eti.noronha.limina.test.bad.{}", std::process::id());
+        let rx = SurfacePortReceiver::register(&name).expect("register");
+        let tx = SurfacePortSender::lookup(&name).expect("lookup");
+
+        // A port of our own, so the rights the message carries merge into a name we can count.
+        let t = task();
+        let mut probe: mach_port_t = MACH_PORT_NULL;
+        unsafe {
+            assert_eq!(
+                mach_port_allocate(t, MACH_PORT_RIGHT_RECEIVE, &mut probe),
+                0
+            );
+            assert_eq!(
+                mach_port_insert_right(t, probe, probe, MACH_MSG_TYPE_MAKE_SEND),
+                0
+            );
+        }
+        let before = send_refs(probe);
+
+        let desc = MachMsgPortDescriptor {
+            name: probe,
+            pad1: 0,
+            pad2: 0,
+            disposition: MACH_MSG_TYPE_COPY_SEND as u8,
+            descriptor_type: MACH_MSG_PORT_DESCRIPTOR,
+        };
+        let mut msg = TwoPorts {
+            header: MachMsgHeader {
+                msgh_bits: MACH_MSG_TYPE_COPY_SEND | MACH_MSGH_BITS_COMPLEX,
+                msgh_size: std::mem::size_of::<TwoPorts>() as u32,
+                msgh_remote_port: tx.remote,
+                msgh_local_port: MACH_PORT_NULL,
+                msgh_voucher_port: MACH_PORT_NULL,
+                msgh_id: 3,
+            },
+            body: MachMsgBody {
+                descriptor_count: 2,
+            },
+            ports: [desc, desc],
+        };
+        let kr = unsafe {
+            mach_msg(
+                &mut msg.header,
+                MACH_SEND_MSG,
+                std::mem::size_of::<TwoPorts>() as u32,
+                0,
+                MACH_PORT_NULL,
+                MACH_MSG_TIMEOUT_NONE,
+                MACH_PORT_NULL,
+            )
+        };
+        assert_eq!(kr, 0, "send the two-descriptor publish");
+
+        assert!(
+            rx.recv(Some(std::time::Duration::from_secs(2))).is_err(),
+            "two descriptors is not a publish"
+        );
+        assert_eq!(
+            send_refs(probe),
+            before,
+            "the refused message's rights are released"
+        );
+
+        unsafe {
+            mach_port_mod_refs(t, probe, MACH_PORT_RIGHT_SEND, -(before as i32));
+            mach_port_mod_refs(t, probe, MACH_PORT_RIGHT_RECEIVE, -1);
+        }
     }
 }
