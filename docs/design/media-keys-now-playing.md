@@ -93,7 +93,7 @@ and they are the part of this that is genuinely new rather than better-arbitrate
 
 **Whether the VM is a player** is answered by the virtio-snd PCM lifecycle for playback stream 0,
 which libkrun handles explicitly — `VIRTIO_SND_R_PCM_START` / `STOP` / `RELEASE` in
-`third_party/libkrun/src/devices/src/virtio/snd/device.rs`. A discrete event to hang a callback
+`third_party/libkrun/src/devices/src/virtio/snd/worker.rs`. A discrete event to hang a callback
 on. Be honest about what it means: **the guest's audio device is active**, not *music is playing*.
 PipeWire keeps a sink node open across a pause and only suspends it after an idle timeout, and a
 system beep opens it for a moment. So `STOP`/`RELEASE` mean *stop being a player* rather than

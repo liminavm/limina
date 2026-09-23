@@ -929,15 +929,6 @@ descriptors only when frames are audible so the latency shows in `appl_ptr - hw_
 8192-frame (170 ms) guest buffer, so only a partial correction that cannot cover ~200 ms Bluetooth
 without underruns.
 
-### virtio-snd runs on the shared device event loop
-There is no audio thread of our own. `Snd` is a subscriber on libkrun's single event manager
-(`libkrun/src/lib.rs`, the `event_manager.run()` loop), which also services serial, vsock and the
-other MMIO devices. TX refills from the guest and the completions paced by CoreAudio's render
-callback (`snd/device.rs` `reap_completions`) wait behind whatever else that loop is handling. Give
-the device its own thread, so a busy vsock or console burst cannot delay audio. This removes
-head-of-line blocking only; under the Game Mode clamp (vCPU & power) the new thread is clamped
-like every other.
-
 ---
 
 ## Clipboard & agents
