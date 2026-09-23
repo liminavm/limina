@@ -412,6 +412,53 @@ episode.
 Background for this section — why idle guests need a real-time band, what it costs, and what
 ships — is in `docs/design/vcpu-scheduling-band.md`.
 
+### macOS Game Mode clamps every limina thread, and nothing inside the process opts out
+While a games-category app is fullscreen and frontmost (Moonlight is one: `LSSupportsGameMode=true`),
+`gamepolicyd` turns Game Mode on and every thread of the worker and the supervisor runs at priority
+4. That includes the RT-band vCPU, which drops from `97R`, and CoreAudio's render thread. On the
+dogfood Mac, guest Firefox video dropped frames and audio stuttered, worse the more the Moonlight
+stream changed, and the worker's control queue logged 100–626 ms drains. Turning Game Mode off from
+the menu bar with Moonlight still focused restored `31T`/`97R` and smooth playback (measured
+2026-09-23, M4 Pro). `spikes/game-mode-throttle/` established that no in-process lever works. Neither
+an `NSActivity` assertion (UserInitiated, LatencyCritical, in the child or the parent) nor resetting
+our own `PRIO_DARWIN_ROLE` / DARWIN_BG changes anything, because role and DARWIN_BG read back unset
+throughout. xnu applies Game Mode through the coalition thread group. It clamps almost every
+user-domain process (Finder, Safari, shells, `ssh`); only system-domain daemons and Apple's system
+UI escape.
+
+**Open question, which decides the fixes:** is the clamp *timer-wake* throttling or *CPU* denial?
+The probe's timer-sleeping threads woke 5–6 times a second, about 200 ms late, on an idle host.
+But the dogfood VM stayed smooth under Game Mode while the stream was static, which a hard 200 ms
+run quantum would not allow. The working hypothesis is that timer wakes are throttled while
+event-driven wakes and raw CPU compete on priority alone. Measure under Game Mode, in the spike:
+(a) the wake latency of a thread signalled by an unclamped process (the bait); (b) a kqueue timer
+with `NOTE_CRITICAL`, and a dispatch timer with zero leeway, against the plain sleep; (c) the CPU
+share a busy thread gets as host load rises; (d) the cadence of a real AUHAL render callback.
+
+**Candidate fixes, by what they buy:**
+1. Decouple hardware decode from the control thread (Video: *Hardware decode blocks the
+   virtio-gpu control thread*). A slow decode then costs late video frames instead of a frozen
+   desktop, which the other levers can absorb. It does not beat the clamp by itself.
+2. If (a)/(b) show timer wakes are the throttled path, move timer sleeps on latency-critical paths
+   to event wakes or strict timers. Known ones: the `gpu latch` thread's `thread::sleep` to a 35 ms
+   deadline before completing held flush fences (`virtio_gpu.rs`, `LIMINA_FENCE_LATCH_MS`), which
+   can hold guest presents about 200 ms under the clamp; and idle vCPUs waiting on the guest's
+   virtual timer. HVF parks them inside `hv_vcpu_run` on macOS 26 (`docs/design/vcpu-scheduling-band.md`), so that
+   wake is a kernel timer on a clamped thread, with no userspace lever yet. Device interrupts go
+   through the in-kernel GIC (`hv_gic_set_spi`) and wake vCPUs by event.
+3. Deeper buffers where the consumer outruns our stalls. Audio is the promising case: our ring
+   already holds 1 s and the guest buffer goes up to 8192 frames (170 ms). A deeper guest PipeWire
+   quantum lets the guest refill in bursts, but only if (d) shows CoreAudio's render thread is still
+   served on time, since a device I/O buffer tops out well under a 200 ms gap. A host-side jitter
+   buffer for video cannot create frames a stalled guest dropped; the decoded-frame queue that
+   matters is the guest player's own (Firefox `media.video-queue.default-size`).
+4. Escape the clamp: a system-domain (root) VMM is the only unclamped shape observed. That is the
+   privileged-helper question. It would be partial anyway, because the supervisor's present path
+   into the window stays in the user session.
+5. Detect and explain: our own threads at priority 4 are a direct oracle. Tell the user why the VM
+   stutters and name the game-side levers (the menu-bar toggle, which held across re-fullscreens;
+   `LSSupportsGameMode=false` in apps they build).
+
 ### Explain the parked P-clusters behind the band panic
 A host panic on 2026-09-21 (`watchdog timeout: no checkins from watchdogd in 94 seconds`, panicked task
 `limina-vmm`) showed four vCPU threads at priority 97 running on `CORE 0-3 [EACC0]` with both
@@ -871,6 +918,15 @@ component and upstream it (correct for every virtio-snd guest); (b) for stock gu
 descriptors only when frames are audible so the latency shows in `appl_ptr - hw_ptr` — bounded by the
 8192-frame (170 ms) guest buffer, so only a partial correction that cannot cover ~200 ms Bluetooth
 without underruns.
+
+### virtio-snd runs on the shared device event loop
+There is no audio thread of our own. `Snd` is a subscriber on libkrun's single event manager
+(`libkrun/src/lib.rs`, the `event_manager.run()` loop), which also services serial, vsock and the
+other MMIO devices. TX refills from the guest and the completions paced by CoreAudio's render
+callback (`snd/device.rs` `reap_completions`) wait behind whatever else that loop is handling. Give
+the device its own thread, so a busy vsock or console burst cannot delay audio. This removes
+head-of-line blocking only; under the Game Mode clamp (vCPU & power) the new thread is clamped
+like every other.
 
 ---
 

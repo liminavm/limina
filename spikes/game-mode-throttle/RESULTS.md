@@ -40,9 +40,14 @@ is in `results-activities.txt` and `results-guards.txt`.
 | guard-bg | both: clear external DARWIN_BG if set | all `4`; bg read `0`, 0 resets | 193–200 ms |
 
 Outside Game Mode every arm reads `31` / RT `97` with an RT p50 of 11–17 µs and 60 wakes a second.
-Inside it every thread wakes 5–6 times a second, about 200 ms late. That is a quantised throttle,
-not contention, because the host was idle. Priorities flip within a second of `enabled` and of
-`disabled`.
+Inside it every thread wakes 5–6 times a second, about 200 ms late, on an idle host. Priorities
+flip within a second of `enabled` and of `disabled`.
+
+What that 200 ms describes is open. Every probe thread sleeps on a timer, so it measures
+*timer-driven* wakes. The dogfood VM stayed smooth under Game Mode while the game's content was
+static, which a hard 200 ms run quantum would not allow. So event-driven wakes and raw CPU may be
+competing on priority alone. The measurements that settle it are in `docs/hardening-backlog.md`
+(vCPU & power, *macOS Game Mode clamps every limina thread*).
 
 **System-wide survey** (`ps -M -A` before and 6 s into a bait run): 317 processes had every thread
 at `4` during Game Mode, and 45 of them had none at `4` before. The 45 are ordinary user-domain
@@ -55,8 +60,9 @@ and Apple's system UI (Dock, WindowManager, ControlCenter, NotificationCenter, l
 xnu applies Game Mode through the coalition's thread group (`task_coalition_thread_group_game_mode_update`
 in `osfmk/kern/task_policy.c`), not through the task role or DARWIN_BG, and our readback shows
 both untouched. Setting a task's game-mode flag needs the private `com.apple.private.set-game-mode`
-entitlement (`proc_set_game_mode`, `bsd/kern/kern_resource.c`). An activity assertion only affects
-App Nap and timer coalescing, and neither of those is what clamps here.
+entitlement (`proc_set_game_mode`, `bsd/kern/kern_resource.c`). An activity assertion is Apple's
+lever against App Nap and timer coalescing, and it did not change the timer wakes measured here
+either.
 
 ## What is left
 
