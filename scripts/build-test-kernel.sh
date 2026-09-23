@@ -155,7 +155,10 @@ container volume create -s 24g "$VOL" >/dev/null 2>&1 || true
 
 echo "==> building Linux $KVER (arm64, $PAGESIZE pages, -j$JOBS) in an Apple container"
 echo "    build volume: $VOL (incremental across runs)"
-scripts/build-image.sh   # ensure the unified limina-build image (kernel build deps baked)
+# Sourced, not run: it both ensures the image and exports $LIMINA_BUILD_IMAGE
+# (kernel build deps baked).
+# shellcheck source=scripts/build-image.sh
+. scripts/build-image.sh
 # The kernel changes live on the liminavm/linux fork's `limina` branch, not in a committed
 # patch dir; derive the series from the pinned rev. This kernel is built at a DIFFERENT tag
 # than the fork's base (v6.12 / v7.1 test kernels vs the fork's stable base), so it applies
@@ -165,7 +168,7 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
     -v "$(pwd)/$OUT:/out" \
     -v "$(pwd)/target/linux-patches:/patches" \
     -v "$VOL:/build" \
-    limina-build:fc43 bash -euo pipefail -c "
+    "$LIMINA_BUILD_IMAGE" bash -euo pipefail -c "
         OUT_NAME='$OUT_NAME'
         # Source download cache: a BARE repo on the host bind mount (bare = no worktree →
         # safe on the case-insensitive host FS). Downloaded once per \$KVER.

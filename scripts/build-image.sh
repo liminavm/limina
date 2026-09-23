@@ -9,12 +9,23 @@
 #   scripts/build-image.sh            # build only if missing (the no-op fast path build scripts call)
 #   FORCE=1 scripts/build-image.sh    # rebuild from scratch (after editing the Containerfile)
 #
-# The image TAG is exported as LIMINA_BUILD_IMAGE for callers that `source` this; build scripts may
-# also just hardcode `limina-build:fc43`. Override the tag with LIMINA_BUILD_IMAGE in the environment.
+# Callers `source` this and then use $LIMINA_BUILD_IMAGE, so the tag is named in exactly one
+# place. (It used to be spelled `limina-build:fc43` literally in six scripts, which is how a
+# Fedora bump would have been six edits and a silent miss.) Override the release with
+# FEDORA_REL, or the whole tag with LIMINA_BUILD_IMAGE.
+#
+#   FEDORA_REL=45 FORCE=1 scripts/build-image.sh    # move the whole toolchain to F45
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# Resolve the repo root into a variable and use it absolutely, rather than `cd`-ing: this file
+# is SOURCED, so a cd here would silently move the CALLER's working directory (and several
+# callers build their bind mounts out of `$(pwd)`). BASH_SOURCE, not $0, for the same reason --
+# under `source`, $0 is the caller's path.
+_limina_build_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-export LIMINA_BUILD_IMAGE="${LIMINA_BUILD_IMAGE:-limina-build:fc43}"
+# F44 is the enhanced-tier target: the dogfood images are F44, and the RPMs must link the
+# sonames of the release they install onto.
+export FEDORA_REL="${FEDORA_REL:-44}"
+export LIMINA_BUILD_IMAGE="${LIMINA_BUILD_IMAGE:-limina-build:fc$FEDORA_REL}"
 
 command -v container >/dev/null || {
     echo "Apple 'container' not installed (brew install container)" >&2
@@ -29,5 +40,8 @@ if [ "${FORCE:-0}" != 1 ] && container image inspect "$LIMINA_BUILD_IMAGE" >/dev
 fi
 
 echo "==> building $LIMINA_BUILD_IMAGE (scripts/build-image/Containerfile) — one-time, a few minutes"
-container build -t "$LIMINA_BUILD_IMAGE" -f scripts/build-image/Containerfile scripts/build-image
+container build --build-arg "FEDORA_REL=$FEDORA_REL" \
+    -t "$LIMINA_BUILD_IMAGE" \
+    -f "$_limina_build_root/scripts/build-image/Containerfile" \
+    "$_limina_build_root/scripts/build-image"
 echo "==> $LIMINA_BUILD_IMAGE ready"

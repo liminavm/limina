@@ -6,7 +6,8 @@
 #
 # Per the "Fedora config for the most part" goal, this does NOT use a bare upstream `make
 # defconfig` (the old scripts/build-kernel-rpm.sh did). Instead it starts from THIS guest's real
-# Fedora config (/boot/config-$(uname -r)) on a matching upstream source tree, and applies the
+# Fedora config (the running kernel's, or the image's kernel-core in the build container) on a
+# matching upstream source tree, and applies the
 # single load-bearing delta — CONFIG_ARM64_16K_PAGES=y — plus a few build-hygiene flips so a
 # Fedora config builds cleanly outside Fedora's kernel.spec (neutralize the Fedora signing-cert
 # paths; keep the VM-critical drivers =y so boot never depends on initramfs contents). Packaged
@@ -47,8 +48,25 @@ fi
 # rejects the double separator at the very end of a ~40-minute build. Un-export it so only the
 # config fragment carries it. (Bit us 2026-08-03 building the no-fence probe kernel.)
 export -n LOCALVERSION 2>/dev/null || true
-# Base config: the running guest's real Fedora config.
-CONFIG_BASE="${CONFIG_BASE:-/boot/config-$(uname -r)}"
+# Base config: Fedora's own kernel config, because "Fedora config for the most part" is the
+# goal. In a guest that is the RUNNING kernel's. In the unified build container it cannot be:
+# `uname -r` there reports the container host's kernel, which is not a Fedora package and has
+# no /boot/config — so fall back to the config of whatever kernel-core the image installed,
+# which pins the base to a package version rather than to whatever a guest was booted on.
+if [ -z "${CONFIG_BASE:-}" ]; then
+    for c in "/boot/config-$(uname -r)" \
+             "$(ls -1t /boot/config-* 2>/dev/null | head -1)" \
+             "$(ls -1t /lib/modules/*/config 2>/dev/null | head -1)"; do
+        [ -n "$c" ] && [ -r "$c" ] && { CONFIG_BASE="$c"; break; }
+    done
+fi
+[ -n "${CONFIG_BASE:-}" ] && [ -r "$CONFIG_BASE" ] || {
+    echo "no Fedora kernel config found (looked at /boot/config-*, /lib/modules/*/config)." >&2
+    echo "In a guest that means no kernel-core; in a container, the image is missing it." >&2
+    echo "Point CONFIG_BASE at one explicitly to override." >&2
+    exit 1
+}
+echo "==> base config: $CONFIG_BASE"
 # Source: the liminavm/linux fork's `limina` branch at the rev pinned in
 # third_party/manifest.toml. There is no patch-apply stage any more — our kernel changes ARE
 # the commits on that branch, so what gets built is exactly what the pin names.

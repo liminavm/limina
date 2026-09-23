@@ -4,7 +4,7 @@
 # Build limina-testcomp — the small Wayland compositor test vehicle (testcomp/, GPL-3.0-only;
 # read testcomp/README.md before moving code across that boundary).
 #
-# Runs in the unified limina-build:fc43 container like every other Linux build: this emits an
+# Runs in the unified limina-build container like every other Linux build: this emits an
 # aarch64 glibc ELF that dlopens the guest's libvulkan, which the macOS host cannot produce and
 # guest/'s musl+rust-lld toolchain cannot either.
 #
@@ -13,14 +13,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${LIMINA_BUILD_IMAGE:-limina-build:fc43}"
+# build-image.sh owns the tag; sourcing it also ensures the image exists.
+# shellcheck source=scripts/build-image.sh
+. "$(dirname "${BASH_SOURCE[0]}")/build-image.sh"
+IMAGE="$LIMINA_BUILD_IMAGE"
 OUT="$ROOT/target/testcomp"
 # Cargo's registry + the build tree live in named volumes so a rebuild is incremental; the
 # source is bind-mounted read-write because cargo insists on writing Cargo.lock.
 CARGO_VOL="${LIMINA_TESTCOMP_CARGO_VOL:-limina-testcomp-cargo}"
 TARGET_VOL="${LIMINA_TESTCOMP_TARGET_VOL:-limina-testcomp-target}"
-
-"$ROOT/scripts/build-image.sh"
 
 mkdir -p "$OUT"
 

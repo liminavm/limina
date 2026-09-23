@@ -592,15 +592,20 @@ That is why the corpora are published as release assets and these images are not
 document already explains how to rebuild, against ~100 MB that cannot be rebuilt at all, because a
 recording of a guest session is not reproducible.
 
-## The unified build image (`limina-build:fc43`)
+## The unified build image (`limina-build:fc<FEDORA_REL>`, Fedora 44)
 
 Every **Linux** build runs in one container image — `scripts/build-image/Containerfile`, built on first
 use by `scripts/build-image.sh` (rebuild with `FORCE=1`). It bakes the union of all build deps
 (rpmbuild, kernel toolchain, meson/ninja + `builddep mesa`/`builddep mutter`, edk2 + nasm/acpica + a
 `-std=gnu17` ccwrap for edk2's K&R BaseTools, gfxreconstruct's cmake/xcb/X11/wayland set), so the
-per-script `dnf install` is gone and builds start instantly. Consumers: `build-krun-efi`, `build-mesa-rpm`,
-`build-mutter-rpm`, `build-kernel-rpm`, `build-test-kernel`, `build-mesa-zink`, `build-venus`,
-`build-gfxreconstruct`. Each still mounts its own persistent source/cache `container volume` (the image
+per-script `dnf install` is gone and builds start instantly. The Fedora release is the `FEDORA_REL`
+build arg, **44 by default** — it is the enhanced tier's target, so the RPMs link the sonames of the
+release they install onto. Moving the whole toolchain is `FEDORA_REL=45 FORCE=1 scripts/build-image.sh`;
+the tag is spelled once, in `build-image.sh`, and consumers source it for `$LIMINA_BUILD_IMAGE`.
+Consumers: `build-krun-efi`, `build-enhanced-rpms` (which runs `provision/f44/*` — the same scripts a
+booted guest runs), `build-test-kernel`, `build-testcomp`, `build-gfxreconstruct`. The separate F43
+pair (`build-kernel-rpm.sh`, `build-mesa-rpm.sh`) is **gone**: it existed only because this image was
+pinned to Fedora 43 and their `FEDORA_REL` knob merely picked a tag. Each still mounts its own persistent source/cache `container volume` (the image
 carries the toolchain; the volume carries source + incremental state). **Exceptions** (correctly NOT on
 this image): the macOS-native builds (`build-app`, `build-hvf-trap-probe`,
 `build-test-guest`) emit Mach-O, not Linux; and `build-dbus-guest` stays on Alpine — it extracts a *musl*
@@ -622,7 +627,7 @@ The F43 image set (`vanilla` + `.xz`, `accessible`, `stock.test`, `enhanced`, `e
 deleted on 2026-09-02 to reclaim disk; F44 has been the dev, dogfood and test family since the
 2026-08-15 default flip, and nothing in the harness or scripts names an F43 image any more
 (`LIMINA_FEDORA_REL=43` would need the set rebuilt from a fresh Fedora download, per the F44
-procedure above). The `limina-build:fc43` container image below is unrelated and still current.
+procedure above). The `limina-build` container image below is unrelated and still current.
 
 ## Credentials
 

@@ -28,9 +28,9 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
   case-insensitive filesystem. **`cargo xtask build` links `libEGL` out of that prefix**, so
   this is required to build at all, not only to run venus — see step 1.5.
 - Apple **`container`** (`brew install container`, then
-  `container system start --enable-kernel-install`) — only for the Linux/firmware builds
-  (`scripts/build-krun-efi.sh`, `scripts/build-test-kernel.sh`, the guest RPMs). The boot
-  suite's default firmware is one of its outputs.
+  `container system start --enable-kernel-install`) — for every Linux build: the firmware, the
+  test kernels, and the enhanced-tier guest RPMs. The boot suite's default firmware is one of
+  its outputs, so the suite needs this. See step 6.
 - A guest disk image (`*.raw`, gitignored). Inventory + how they're built:
   `docs/images.md`.
 
@@ -119,7 +119,27 @@ KosmicKrisp, windowed, with user-mode NAT. It tests the image exactly as it real
   shows `Virtio-GPU Venus`; over a non-login ssh shell it enumerates nothing (a false
   negative — the venus ICD is selected via `/etc/environment.d`).
 
-## 4. Validate
+## 4. Linux-side builds (firmware + the enhanced tier)
+
+Everything that has to be built *on Linux* runs in one container image —
+`limina-build:fc<FEDORA_REL>`, Fedora 44 by default (`scripts/build-image.sh`, built on first
+use). There is no second image and no second toolchain:
+
+```sh
+cargo xtask firmware               # target/krun-efi/KRUN_EFI.gop.fd — the suite's default firmware
+cargo xtask enhanced               # 16k kernel + venus mesa RPMs + agents + install-ready payload
+cargo xtask enhanced kernel        # just one component
+```
+
+`enhanced` (= `scripts/build-enhanced-rpms.sh`) runs `scripts/provision/f44/*.sh` — **the same
+scripts a booted guest runs**, not a second implementation. Those need an F44 aarch64 system,
+which is what the image is; that they once had to run inside a guest was a fact about the image
+being pinned to Fedora 43, not about containers. Run them in a guest instead when you want the
+dogfood signal of a guest building its own components — `scripts/provision/f44/README.md` has
+that path. Moving the whole toolchain to a new Fedora is `FEDORA_REL=45 FORCE=1
+scripts/build-image.sh`.
+
+## 5. Validate
 
 ```sh
 cargo xtask test                       # the whole HVF-gated boot suite
@@ -127,12 +147,13 @@ cargo xtask test -- --test venus       # one binary (forwarded to the test run)
 ```
 
 `test` (= `scripts/test-boot.sh`, `LIMINA_HVF_TESTS=1`) builds, codesigns, link-checks,
-builds the L1 guest + trap probe, and runs the boot tests against real HVF. **This is the
+builds the L1 guest + trap probe, and runs the boot tests against real HVF. Its default
+firmware is step 4's `target/krun-efi/KRUN_EFI.gop.fd` (`LIMINA_FIRMWARE` overrides). **This is the
 "did I break boot" command** — a plain `cargo test` deliberately *skips* the HVF tests
 (no codesign/sandbox), so green there means almost nothing for boot behavior. It needs
 sandbox-disabled execution (it hits `hv_vm_*`).
 
-## 5. Package
+## 6. Package
 
 ```sh
 cargo xtask app        # full self-contained target/Limina.app (the shipping deliverable)

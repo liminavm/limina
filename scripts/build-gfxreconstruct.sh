@@ -38,13 +38,16 @@ mkdir -p "$OUT"
 VOL="limina-gfxr-build"
 container volume inspect "$VOL" >/dev/null 2>&1 || container volume create "$VOL" >/dev/null
 
-scripts/build-image.sh   # ensure the unified limina-build image (cmake/xcb/X11/wayland deps baked)
+# Sourced, not run: it both ensures the image and exports $LIMINA_BUILD_IMAGE
+# (cmake/xcb/X11/wayland deps baked).
+# shellcheck source=scripts/build-image.sh
+. scripts/build-image.sh
 container run --rm \
   --cpus 8 --memory 12g \
   -v "$OUT:/out" \
   -v "$OUTROOT:/outroot" \
   -v "$VOL:/build" \
-  limina-build:fc43 bash -euxo pipefail -c '
+  "$LIMINA_BUILD_IMAGE" bash -euxo pipefail -c '
     cd /build
     if [ ! -d gfxreconstruct/.git ]; then
       git clone "'"$GFXR_GIT"'" gfxreconstruct

@@ -12,7 +12,7 @@
 #
 # Why the artifact is committed (unlike the linux export, which goes to target/): the consumers
 # are the guest-mesa RPM builds — scripts/provision/f44/build-mesa-rpm.sh runs INSIDE the F44
-# build guest and scripts/build-mesa-rpm.sh inside the fc43 container — and neither environment
+# build guest and the same script inside the unified build container — and neither environment
 # has (or should need) the /Volumes/mesa-cs checkout. They apply whatever is committed under
 # patches/mesa-guest/ via the spec (Patch9xxx lines derived from the directory listing, sorted).
 #

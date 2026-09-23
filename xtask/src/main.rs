@@ -22,6 +22,14 @@
 //!              runs once between `setup` and `build` (wraps `scripts/build-host-mesa.sh`).
 //!   `build`  — build `limina` + `limina-vmm` and codesign the worker (hypervisor entitlement).
 //!              The inner-loop "make a runnable worker" step.
+//!
+//! Linux-side builds — all of them in the ONE `limina-build` container image
+//! (`scripts/build-image.sh`, Fedora 44 by default, `FEDORA_REL` to move it):
+//!   `firmware` — the GOP `KRUN_EFI` the EFI boot path and the test suite default to
+//!              (wraps `scripts/build-krun-efi.sh`).
+//!   `enhanced` — the enhanced-tier guest RPMs + payload: 16 KiB kernel, venus mesa, agents
+//!              (wraps `scripts/build-enhanced-rpms.sh`, which runs the very same
+//!              `scripts/provision/f44/*` a booted guest runs).
 //!   `sign`   — codesign an already-built worker (just the hypervisor-entitlement step).
 //!   `test`   — build + sign + run the HVF-gated boot tests (wraps
 //!              `scripts/test-boot.sh`). The canonical "did I break boot" command.
@@ -82,6 +90,15 @@ enum Cmd {
         /// Build in release mode.
         #[arg(long)]
         release: bool,
+    },
+    /// Build the GOP KRUN_EFI firmware (the EFI boot path's, and the test suite's, default).
+    Firmware,
+    /// Build the enhanced-tier guest RPMs + payload in the unified Linux build container.
+    Enhanced {
+        /// Which half to build: `kernel`, `mesa`, or `all` (the default, which also assembles
+        /// the install-ready payload).
+        #[arg(value_name = "kernel|mesa|all")]
+        what: Option<String>,
     },
     /// Codesign the already-built worker with the hypervisor entitlement (no build).
     Sign {
@@ -146,6 +163,8 @@ fn main() -> Result<()> {
         Cmd::Vendor { heavy } => vendor(heavy),
         Cmd::Mesa { what } => mesa(what.as_deref()),
         Cmd::Build { release } => build(release),
+        Cmd::Firmware => bash_script(&repo_root(), "scripts/build-krun-efi.sh", &[] as &[&str]),
+        Cmd::Enhanced { what } => enhanced(what.as_deref()),
         Cmd::Sign { release } => sign_worker(&repo_root(), release),
         Cmd::Test { release, args } => test(release, &args),
         Cmd::Run {
@@ -394,6 +413,17 @@ fn mesa(what: Option<&str>) -> Result<()> {
     let repo = repo_root();
     let args: Vec<&str> = what.into_iter().collect();
     bash_script(&repo, "scripts/build-host-mesa.sh", &args)
+}
+
+/// Build the enhanced-tier guest RPMs in the unified Linux build container.
+///
+/// The script runs `scripts/provision/f44/*` unchanged -- the same files a booted guest runs.
+/// They need an F44 aarch64 system, which the build image now is; that they once needed a guest
+/// was a fact about the image being pinned to Fedora 43, not about containers.
+fn enhanced(what: Option<&str>) -> Result<()> {
+    let repo = repo_root();
+    let args: Vec<&str> = what.into_iter().collect();
+    bash_script(&repo, "scripts/build-enhanced-rpms.sh", &args)
 }
 
 /// Fail before the compile, in the vocabulary of the fix, when the host Mesa prefix is missing.

@@ -2,16 +2,23 @@
 #
 # One image, deps baked, used by every Linux build-*.sh via `scripts/build-image.sh` (which builds
 # it on first use). Replaces the previous per-script `container run fedora:NN … dnf install …` (slow,
-# repeated every run) AND the standalone f44-edk2-build VM (retired 2026-06-25 — see docs/images.md).
+# repeated every run) AND the standalone f44-edk2-build VM (retired 2026-06-25).
 # The per-build SOURCE/cache `container volume`s (edk2 checkout, kernel tree, mesa tree, …) are
 # unchanged and orthogonal: this image carries the toolchain, the volumes carry source + incremental
 # state. macOS-native builds (the app, virglrenderer, the hvf-trap-probe, the L1 test-guest rootfs)
 # stay on the host — they emit Mach-O, not Linux. build-dbus-guest stays on Alpine — it extracts a
 # *musl* dbus for the musl L1 guest, which a glibc image can't produce.
 #
-# Base = fedora:43 to match the enhanced-tier RPM target (mesa-*.fc43, mutter-*.fc43, kernel .fc43).
+# Base = the enhanced-tier RPM target, parameterised. This used to be a bare `FROM fedora:43`,
+# which is the whole reason the F44 enhanced-tier builds had to run inside a booted guest
+# instead: scripts/provision/f44/README.md's four reasons for in-guest (rpmbuild stamping
+# `.fc44`, linking F44 sonames, `dnf download --source` returning F44 SRPMs, aarch64-native)
+# are all properties of being an F44 aarch64 *system*, not of being a VM — there simply was no
+# F44 build environment to use. With this an argument, there is one, and the two tracks are
+# one. Bumping Fedora is now `FEDORA_REL=45 FORCE=1 scripts/build-image.sh`.
 # Rebuild after editing: `FORCE=1 scripts/build-image.sh`.
-FROM fedora:43
+ARG FEDORA_REL=44
+FROM fedora:${FEDORA_REL}
 
 # Union of every Linux build's explicit deps (dedup'd from the build-*.sh scripts):
 #   RPM tooling (mesa/mutter/kernel RPMs) … rpm-build dnf-plugins-core rpmdevtools cpio xz
@@ -22,12 +29,25 @@ FROM fedora:43
 #   gfxreconstruct ……………………………………… cmake lz4-devel libzstd-devel zlib-ng-compat-devel
 #                                          libxcb-devel libX11-devel libXrandr-devel wayland-devel
 #                                          libwayland-client xcb-util-keysyms-devel xcb-util-wm-devel
+#   enhanced tier, in-container …………… sudo kernel-core cargo rust
+#
+# The last row is what lets scripts/provision/f44/* run here as well as in a guest:
+#   - `sudo`: those scripts are written to run as an unprivileged guest user and call `sudo dnf`.
+#     As root, sudo is a pass-through, so having it present costs nothing and means the SAME
+#     script works in both places with no branching.
+#   - `kernel-core`: the kernel build starts from Fedora's real config. In a guest that is the
+#     RUNNING kernel's `/boot/config-$(uname -r)`; here `uname -r` is the container host's
+#     kernel, so the config comes from this package instead — which pins the config to a
+#     package version rather than to whatever a guest happened to be booted on.
+#   - `cargo`/`rust`: build-all.sh compiles limina-agent natively rather than dnf-installing
+#     the toolchain mid-build.
 RUN dnf -y install \
         acpica-tools bc bison cmake cpio diffutils dnf-plugins-core elfutils-libelf-devel \
         findutils flex gcc gcc-c++ git glslang-devel gzip kmod libuuid-devel libwayland-client \
         libX11-devel libXrandr-devel libxcb-devel libzstd-devel lz4-devel make meson nasm \
         ninja-build openssl-devel patch perl python3 python3-mako rpm-build rpmdevtools rsync \
         wayland-devel which xcb-util-keysyms-devel xcb-util-wm-devel xz zlib-ng-compat-devel zstd \
+        sudo kernel-core cargo rust \
  && dnf -y builddep mesa mutter \
  && dnf clean all
 
@@ -39,4 +59,4 @@ RUN mkdir -p /opt/limina-ccwrap \
  && for c in g++ c++; do printf '#!/bin/sh\nexec /usr/bin/%s "$@" -Wno-error\n' "$c" > /opt/limina-ccwrap/"$c"; done \
  && chmod +x /opt/limina-ccwrap/*
 
-LABEL org.limina.build="fedora:43 unified build image; rebuild via scripts/build-image.sh"
+LABEL org.limina.build="fedora:${FEDORA_REL} unified build image; rebuild via scripts/build-image.sh"

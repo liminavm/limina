@@ -84,8 +84,9 @@ right tool — not treat upstream as immutable:
     as `base` in the manifest (the base both RPM tracks build); worktree at `/Volumes/mesa-cs/mesa-guest`. Because the RPM builds run inside a build
     guest/container with no access to that checkout, the branch is consumed as an **exported,
     committed series**: `scripts/export-mesa-guest-patches.sh` derives `patches/mesa-guest/`
-    from the manifest pin, and both `scripts/provision/f44/build-mesa-rpm.sh` and
-    `scripts/build-mesa-rpm.sh` apply it via the spec. Never hand-edit the exported patches —
+    from the manifest pin, and `scripts/provision/f44/build-mesa-rpm.sh` applies it via the
+    spec (in the build container via `scripts/build-enhanced-rpms.sh`, or in a booted guest —
+    same script either way). Never hand-edit the exported patches —
     commit on the fork, push, bump the manifest rev, re-export. The old `patches/mesa/` pool
     is a tombstone (reference-only upstream-queue material).
 

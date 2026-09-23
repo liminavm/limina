@@ -3,7 +3,7 @@
 # Copyright © 2026 Gustavo Noronha Silva
 
 # Build the KRUN_EFI ArmVirtKrun firmware (EDK2) for limina's EFI boot path, in the unified
-# `limina-build:fc43` container image (scripts/build-image.sh) — the same host-native aarch64
+# unified `limina-build` container image (scripts/build-image.sh) — the same host-native aarch64
 # Linux build env every limina Linux build uses.
 #
 # Source: the FORK MODEL (task #22, 2026-08-06) — github.com/liminavm/edk2, branch `limina`
@@ -52,11 +52,13 @@ container volume create -s 24g "$VOL" >/dev/null 2>&1 || true
 echo "==> building KRUN_EFI ($TARGET) from $EDK2_REPO @ $EDK2_REV in an Apple container"
 echo "    build volume: $VOL (incremental across runs); output: $OUT/$OUT_NAME"
 
-scripts/build-image.sh   # ensure the unified limina-build image (edk2 deps + gnu17 ccwrap baked)
+# Source it: it ensures the image AND exports $LIMINA_BUILD_IMAGE (edk2 deps + gnu17 ccwrap baked).
+# shellcheck source=scripts/build-image.sh
+. scripts/build-image.sh
 container run --rm --cpus "$JOBS" --memory "$MEM" \
     -v "$(pwd)/$OUT:/out" \
     -v "$VOL:/build" \
-    limina-build:fc43 bash -euo pipefail -c "
+    "$LIMINA_BUILD_IMAGE" bash -euo pipefail -c "
         TARGET='$TARGET'; OUT_NAME='$OUT_NAME'; JOBS='$JOBS'; EDK2_REV='$EDK2_REV'
         # The unified image is F43, whose gcc defaults to gnu23 and miscompiles edk2's K&R
         # BaseTools ('()' becomes '(void)'). The image ships a -std=gnu17 wrapper OUT of PATH so it

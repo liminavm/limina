@@ -5,16 +5,30 @@ mutter) **natively, inside a booted basic-tier Fedora 44 guest** — no Apple `c
 Rosetta, no macOS host involved. Run them after the guest's first basic boot; then
 `install-enhanced.sh` consumes the result.
 
-## Why in-guest (not the `container` builders under `scripts/`)
+## Two places to run these, one set of scripts
 
-The macOS `container` builders (`scripts/build-{kernel,mesa,mutter}-rpm.sh`) hardcode the
-`limina-build:fc43` image (Fedora **43**); their `FEDORA_REL=44` knob is a no-op (it only picks
-the image tag). Building inside the F44 guest is what actually targets F44, and it gets the
-right things for free:
+These scripts need to run **on an F44 aarch64 system**, so that:
 - `rpmbuild` stamps `.fc44` as `%{?dist}` automatically;
 - the binaries link **F44's** sonames (`libLLVM`, `libdisplay-info`, the gnome-shell/libmutter ABI);
 - `dnf download --source` returns **F44's own** SRPMs;
 - it's aarch64-native (no Rosetta).
+
+A booted F44 guest is one such system. So is the unified build container, now that
+`scripts/build-image.sh` is parameterised on `FEDORA_REL` and defaults to 44 — which it was
+not when these scripts were written, and which is the only reason "in-guest" used to be the
+whole answer. (The old `scripts/build-{kernel,mesa}-rpm.sh` pair was pinned to an fc43 image
+with a `FEDORA_REL` knob that only picked a tag; it is gone.) Run them either way:
+
+```sh
+scripts/build-enhanced-rpms.sh [kernel|mesa|all]   # from macOS, in the build container
+scripts/provision/f44/build-all.sh                 # inside a booted guest (below)
+```
+
+Prefer the guest when you want the dogfood signal of a guest building its own components, or
+when you are debugging something guest-specific; prefer the container for a repeatable build
+from a clean checkout, and for its persistent caches. The one behavioural difference is the
+kernel's base config: in a guest it is the **running** kernel's, in the container it is the
+image's `kernel-core` (`CONFIG_BASE` overrides either).
 
 ## Source-of-truth: Fedora F44 SRPMs + a minimal limina delta
 
