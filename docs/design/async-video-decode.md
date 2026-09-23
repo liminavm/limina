@@ -123,11 +123,30 @@ guarantee 2, and the kernel's "everything at or below this id is done", is broke
 This costs nothing when nothing is pending. It is also what makes the guest fence below mean
 something.
 
+### Where venus comes in
+
+Venus is not in the decode path on either tier. VA-API always travels as `VIRGL_CCMD_*_VIDEO`
+on the virgl stream, so decode runs in a vrend context whatever the guest's 3D tier is
+(`docs/graphics.md` §4.5). The common consumers ride vrend too: guest GL goes through vrend on
+both tiers, and zink-on-venus as the guest's GL driver is unsupported (§1). Firefox's WebRender
+and gnome-shell import the exported dmabuf into a vrend context, so they meet the barriers above.
+
+The exception is a guest **Vulkan** consumer that imports the decode target, such as a
+GStreamer Vulkan sink or libplacebo. Its reads are commands on a venus ring. virglrs runs those
+on a thread per ring (`third_party/virglrs/src/venus/ring_thread.rs`), not on the control
+thread, and never parses them per resource. Venus fences also bypass the vrend fence waiter
+(`waiter.rs`, module comment). No host barrier can see such a read. Like a CPU map, it is
+ordered only by sync on the guest side. It is also possible only for a target with guest-visible
+storage: a stock target's exported dmabuf names no frame memory at all
+(`docs/design/blob-decode-targets.md`), so there is nothing for venus to import. The rule below
+therefore covers venus consumers and CPU maps together.
+
 ### Guest-visible storage: the one case that needs the guest's help
 
 With blob decode targets (`docs/design/blob-decode-targets.md`), the enhanced tier's targets are
-memory the guest can map. A consumer can read the pixels with the CPU and no host command in
-between, and no barrier catches that. Nothing orders that read today either. The guest queues
+memory the guest can reach without the vrend command stream. The guest CPU can map it, and a
+venus context can import it. Either read happens with no vrend command in between, and no barrier
+catches it. Nothing orders that read today either. The guest queues
 END_FRAME with no fence, so a mapped read can already beat the host to the submit.
 Asynchronous decode widens that window from "until the host processes the submit" to "until the
 picture lands".
@@ -136,6 +155,8 @@ picture lands".
   fence and hands it back through `picture->out_fence`, which makes `vaSyncSurface` wait. This is
   correct on any host: a synchronous host retires the fence after decoding, and this design's
   host retires it when the picture lands. It fixes the existing race whatever the host does.
+  To be verified in phase 3: a venus consumer honours the fence either through `vaSyncSurface`
+  or through implicit sync on the BO, which the fenced submit makes available.
 - **Host rule:** a target with guest-visible storage is decoded asynchronously only if its codec
   was created by a guest that fences END_FRAME. The fixed mesa says so with a flag bit in
   `CREATE_VIDEO_CODEC`. Every other guest-visible target decodes synchronously, as today.
