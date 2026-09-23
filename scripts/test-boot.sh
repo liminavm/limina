@@ -16,6 +16,17 @@ cd "$(dirname "$0")/.."
 PROFILE="${1:-debug}"
 [ $# -gt 0 ] && shift || true
 
+# This script runs `cargo build`/`cargo test` itself rather than going through
+# `cargo xtask build`, so it needs the same two things that command arranges, or the compile
+# dies in virglrs's build script:
+#   - the repo venv on PATH, because the venus/vrend generators shell out to a bare `python3`;
+#   - the host Mesa volume mounted, because virglrs links libEGL out of its prefix (macOS drops
+#     the mount on every reboot).
+# shellcheck source=scripts/ensure-venv-mesa.sh
+. scripts/ensure-venv-mesa.sh
+# shellcheck source=scripts/ensure-mesa-cs.sh
+. scripts/ensure-mesa-cs.sh
+
 CARGO_PROFILE_FLAG=()
 [ "$PROFILE" = "release" ] && CARGO_PROFILE_FLAG=(--release)
 

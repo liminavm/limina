@@ -15,13 +15,32 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
   `scripts/build-host-mesa.sh` puts them there for you but cannot install them.
   **Not `libclc`** — it is version-coupled to the Mesa rev and pinned in
   `third_party/manifest.toml` instead, fetched and digest-checked by the build (step 1.5).
-- The **L1 test guest's kernel**, one of two ways. `scripts/build-test-guest.sh` prefers a
-  custom `target/test-guest/kernel/Image` from `scripts/build-test-kernel.sh` (which you want
-  anyway — the L2 venus and multi-display tests need its `Image-16k` / `Image-16k-71` siblings
-  or they silently SKIP). Failing that it extracts one from Homebrew's `libkrunfw` dylib —
-  but that formula lives in the third-party `libkrun/krun` tap, which current Homebrew
-  **refuses to load until you trust it** (`brew trust libkrun/krun`), so the "zero-dependency
-  fallback" is no longer the zero-decision one. Building the test kernels avoids the tap.
+- **The `libkrun/krun` Homebrew tap**, for `gvproxy` and `libkrunfw` — neither is in
+  homebrew-core, and current Homebrew **refuses to load a tap until you trust it**:
+
+  ```sh
+  brew tap libkrun/krun && brew trust libkrun/krun && brew install gvproxy libkrunfw
+  ```
+
+  `gvproxy` is not optional for the suite: every test that needs guest networking dies at
+  `starting the gvproxy NAT gateway` before the VM boots (that is ~36 of them), and
+  `scripts/build-app.sh` vendors the binary into the bundle. `libkrunfw` is how
+  `scripts/build-test-guest.sh` gets the L1 guest's kernel when no custom one exists.
+- The **test kernels**, `scripts/build-test-kernel.sh`. Worth building even though
+  `libkrunfw` covers the L1 case: the L2 venus and multi-display tests want the `Image-16k` /
+  `Image-16k-71` siblings and silently SKIP without them. Note the fork's patch series is
+  based on `v7.1.8`, so it cannot apply to the script's default `KVER=v6.12` — build those
+  two with `PATCHES_OPTIONAL=1` (they are plain vehicles that do not need it) and the
+  `Image-16k-71` one at `KVER=v7.1.8`, where it applies cleanly:
+
+  ```sh
+  PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh                      # Image      (4k, L1)
+  PAGESIZE=16k PATCHES_OPTIONAL=1 scripts/build-test-kernel.sh          # Image-16k  (L2 venus)
+  KVER=v7.1.8 PAGESIZE=16k KIMAGE_NAME=Image-16k-71 scripts/build-test-kernel.sh
+  ```
+- The **L2 guest images** — `Fedora-Workstation-<REL>.stock.test.raw` and
+  `.enhanced.test.raw` in the repo root (`LIMINA_FEDORA_REL`, default 44). Gitignored and
+  multi-GB; `docs/images.md` says how they are produced. Tests that need one SKIP without it.
   (`qemu` for `qemu-img`, `glslang` for `scripts/gen-vkstill-spv.sh`, and `cargo-nextest` for
   a parallel suite are each used by one script and optional until you run it.
   `libkrun`/`krunkit`/`virglrenderer` are **not** needed — we build our own libkrun fork and
