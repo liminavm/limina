@@ -4,6 +4,10 @@
 //   probe parent --secs N [--activity A] [--child-activity B] [--label L]
 //       A Regular-policy AppKit app with a visible window (the supervisor's shape) that
 //       posix_spawns `probe child` (the worker's shape) and reports its main thread too.
+//   probe parent ... --child-exe PATH --fifo F
+//       The same parent, but it spawns `PATH --secs N --fifo F --label L --no-audio` (wake.m)
+//       instead of `probe child`: the wake probe with an AppKit app as its parent.
+//       --child-audio keeps wake.m's AUHAL measurement on.
 //   probe child --secs N [--activity A] [--label L]
 //       Windowless: four default threads that sleep 10 ms at a time (the vCPUs' shape) and one
 //       THREAD_TIME_CONSTRAINT_POLICY thread with the band's defaults (60 Hz, 1 ms, 2 ms).
@@ -50,6 +54,8 @@ static const char *g_guard = "none";
 static int g_guard_role_to = PRIO_DARWIN_ROLE_USER_INIT;
 static _Atomic int g_resets, g_errors, g_last_errno;
 static const char *g_label = "arm";
+static const char *g_child_exe = NULL, *g_fifo = NULL;
+static int g_child_audio = 0;
 static mach_timebase_info_data_t g_tb;
 static uint64_t g_end_abs;
 
@@ -258,8 +264,11 @@ static int run_parent(const char *activity, const char *child_activity, const ch
         snprintf(secs, sizeof secs, "%g", g_secs);
         char *argv[] = {(char *)self, "child", "--secs", secs, "--activity", (char *)child_activity,
                         "--label", (char *)g_label, "--guard", (char *)g_guard, NULL};
+        char *wargv[] = {(char *)g_child_exe, "--secs", secs, "--fifo", (char *)g_fifo, "--label",
+                         (char *)g_label, g_child_audio ? NULL : "--no-audio", NULL};
         pid_t pid;
-        int rc = posix_spawn(&pid, self, NULL, NULL, argv, environ);
+        int rc = g_child_exe ? posix_spawn(&pid, g_child_exe, NULL, NULL, wargv, environ)
+                             : posix_spawn(&pid, self, NULL, NULL, argv, environ);
         if (rc != 0) {
             fprintf(stderr, "posix_spawn: %s\n", strerror(rc));
             return 1;
@@ -298,12 +307,21 @@ int main(int argc, char **argv) {
         return 2;
     }
     const char *mode = argv[1], *activity = "none", *child_activity = "none";
+    for (int i = 2; i < argc; i++)
+        if (!strcmp(argv[i], "--child-audio")) {
+            g_child_audio = 1;
+            for (int j = i; j + 1 < argc; j++) argv[j] = argv[j + 1];
+            argc--;
+            break;
+        }
     for (int i = 2; i + 1 < argc; i += 2) {
         if (!strcmp(argv[i], "--secs")) g_secs = atof(argv[i + 1]);
         else if (!strcmp(argv[i], "--activity")) activity = argv[i + 1];
         else if (!strcmp(argv[i], "--child-activity")) child_activity = argv[i + 1];
         else if (!strcmp(argv[i], "--label")) g_label = argv[i + 1];
         else if (!strcmp(argv[i], "--guard")) g_guard = argv[i + 1];
+        else if (!strcmp(argv[i], "--child-exe")) g_child_exe = argv[i + 1];
+        else if (!strcmp(argv[i], "--fifo")) g_fifo = argv[i + 1];
         else {
             fprintf(stderr, "unknown flag %s\n", argv[i]);
             return 2;
@@ -315,6 +333,10 @@ int main(int argc, char **argv) {
     }
     g_end_abs = mach_absolute_time() + ns_to_abs((uint64_t)(g_secs * 1e9));
     if (!strcmp(mode, "child")) return run_child(activity);
+    if (g_child_exe && !g_fifo) {
+        fprintf(stderr, "--child-exe needs --fifo\n");
+        return 2;
+    }
     if (!strcmp(mode, "parent")) return run_parent(activity, child_activity, argv[0]);
     fprintf(stderr, "unknown mode %s\n", mode);
     return 2;

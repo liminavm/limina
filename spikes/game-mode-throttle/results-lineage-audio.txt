@@ -1,0 +1,198 @@
+== lineage-app-audio
+Timestamp               Ty Process[PID:TID]
+2026-09-23 11:16:16.581 Df gamepolicyd[71667:ca2306] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 11:16:17.061 Df gamepolicyd[71667:ca2741] [com.apple.gamepolicyd:Common] Game mode is now available.
+2026-09-23 11:16:17.062 Df gamepolicyd[71667:ca2741] [com.apple.gamepolicyd:Policy] Game mode enabled.
+2026-09-23 11:16:17.063 Df gamepolicyd[71667:ca2741] [com.apple.gamepolicyd:Common] Game mode status is now on.
+2026-09-23 11:16:31.730 Df gamepolicyd[71667:ca2a71] [com.apple.gamepolicyd:Policy] Game mode disabled.
+2026-09-23 11:16:31.736 Df gamepolicyd[71667:ca2a71] [com.apple.gamepolicyd:Common] Game mode is now unavailable.
+2026-09-23 11:16:31.764 Df gamepolicyd[71667:ca2a71] [com.apple.gamepolicyd:Common] Game mode status is now off.
+lineage-app-audio parent pid=80350 child pid=80353 activity=none child-activity=none
+lineage-app-audio parent t=1 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=1 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2537/2537(88) | kqcrit 48/66/67(107) | dstrict 57/80/80(107) | busy 107% maxgap 0.1ms | au 10666/10696/10696(93)
+lineage-app-audio parent t=2 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=2 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2507/2553/2553(82) | kqcrit 51/2644/2644(100) | dstrict 65/106/106(100) | busy 101% maxgap 0.0ms | au 10668/10709/10709(94)
+lineage-app-audio parent t=3 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=3 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2509/2553/2553(82) | kqcrit 51/71/71(100) | dstrict 62/173/173(100) | busy 100% maxgap 0.1ms | au 10668/10692/10692(94)
+lineage-app-audio parent t=4 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=4 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2516/7056/7056(81) | kqcrit 46/2665/2665(98) | dstrict 58/121/121(99) | busy 99% maxgap 1.3ms | au 10666/10729/10729(94)
+lineage-app-audio parent t=5 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=5 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2532/11953/11953(76) | kqcrit 60/14679/14679(92) | dstrict 53/89/130(101) | busy 95% maxgap 8.3ms | au 10665/10710/10710(95)
+lineage-app-audio parent t=6 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=6 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 935/17621/17621(61) | plain 3138/21899/21899(69) | kqcrit 933/26426/26426(80) | dstrict 53/103/103(100) | busy 87% maxgap 8.4ms | au 10667/10703/10703(94)
+lineage-app-audio t=11 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=4 au=4 | fifo 1325316/3094996/3125523(592) | plain 2920/3499977/3499977(40) | kqcrit 398/3449676/3449676(47) | dstrict 47/3456081/3456081(51) | busy 9% maxgap 1946.5ms | au 10669/1094058/1094058(58)
+lineage-app-audio parent t=11 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio parent t=11 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio parent t=11 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio parent t=11 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio parent t=12 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio parent t=12 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=12 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=0 au=4 | fifo 142405/1338629/1358021(398) | plain 107452/976418/976418(9) | kqcrit 1344/1029779/1029779(60) | dstrict 1348/1021669/1021669(65) | busy 15% maxgap 1361.3ms | au 10667/20178/85459(103)
+lineage-app-audio parent t=13 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=13 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=4 au=4 | fifo 217/11416/17718(181) | plain 99435/101223/101223(10) | kqcrit 413/20469/20469(99) | dstrict 371/20877/20877(98) | busy 73% maxgap 20.0ms | au 10671/11844/14749(103)
+lineage-app-audio parent t=14 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=14 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=4 au=4 | fifo 139/10937/16910(182) | plain 99179/100920/100920(10) | kqcrit 430/6699/11914(101) | dstrict 416/3720/5312(102) | busy 77% maxgap 7.0ms | au 10667/12500/12505(104)
+lineage-app-audio parent t=15 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=15 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=4 au=4 | fifo 199/9735/10330(180) | plain 100450/103036/103036(10) | kqcrit 584/8743/8743(97) | dstrict 586/9757/9757(96) | busy 68% maxgap 15.4ms | au 10670/13381/15035(103)
+lineage-app-audio parent t=16 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=16 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=4 au=4 | fifo 257/30690/36661(184) | plain 100009/111995/111995(10) | kqcrit 518/30079/30079(97) | dstrict 656/29953/29953(96) | busy 73% maxgap 37.8ms | au 10664/11823/12228(103)
+lineage-app-audio parent t=17 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=18 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=4 au=4 | fifo 1642/72760/79127(183) | plain 100795/109045/109045(10) | kqcrit 1338/71776/71776(78) | dstrict 1211/69474/69474(79) | busy 54% maxgap 77.3ms | au 10668/12821/13032(103)
+lineage-app-audio parent t=18 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=19 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=4 au=4 | fifo 158/12598/19506(184) | plain 98914/102821/102821(10) | kqcrit 506/22448/22448(99) | dstrict 492/22424/22424(99) | busy 70% maxgap 18.6ms | au 10670/12893/27383(103)
+lineage-app-audio parent t=19 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=20 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=0 au=4 | fifo 646/24638/30990(179) | plain 99624/104318/104318(10) | kqcrit 526/26599/26599(89) | dstrict 468/28896/28896(88) | busy 58% maxgap 27.6ms | au 10665/22325/22325(100)
+lineage-app-audio parent t=20 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio parent t=21 prio main=4 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=21 prio main=4 fifo=4 plain=4 kq=4 disp=4 busy=4 au=4 | fifo 908/17484/23772(144) | plain 99946/100203/100203(10) | kqcrit 195/25781/25781(95) | dstrict 238/19438/19438(96) | busy 71% maxgap 25.0ms | au 10672/13262/20337(102)
+lineage-app-audio parent t=22 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=22 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2507/100563/100563(73) | kqcrit 47/23710/42247(101) | dstrict 56/13749/42250(102) | busy 88% maxgap 41.4ms | au 10666/46038/46038(100)
+lineage-app-audio parent t=23 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=23 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2507/2541/2541(82) | kqcrit 48/76/76(100) | dstrict 61/88/88(100) | busy 100% maxgap 0.1ms | au 10665/10707/10707(94)
+lineage-app-audio parent t=24 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=24 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2506/2535/2535(82) | kqcrit 50/72/72(100) | dstrict 63/81/81(100) | busy 100% maxgap 0.2ms | au 10668/10698/10698(95)
+lineage-app-audio parent t=25 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=25 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2507/2539/2539(82) | kqcrit 48/83/83(100) | dstrict 60/125/125(99) | busy 100% maxgap 0.0ms | au 10666/10707/10707(94)
+lineage-app-audio parent t=26 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=26 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2937/11331/11331(75) | kqcrit 578/11164/11164(88) | dstrict 58/140/140(100) | busy 93% maxgap 7.1ms | au 10667/10699/10699(94)
+lineage-app-audio parent t=27 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=27 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 3011/13581/13581(73) | kqcrit 699/11931/11931(89) | dstrict 59/138/138(100) | busy 91% maxgap 8.8ms | au 10665/10707/10707(95)
+lineage-app-audio parent t=28 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=28 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 3235/14292/14292(69) | kqcrit 1587/13874/13874(79) | dstrict 57/89/132(101) | busy 86% maxgap 10.1ms | au 10666/10710/10710(94)
+lineage-app-audio parent t=29 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=29 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 3303/18909/18909(70) | kqcrit 1491/15436/15436(80) | dstrict 57/113/113(99) | busy 90% maxgap 6.1ms | au 10666/10702/10702(94)
+lineage-app-audio parent t=30 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=30 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 3172/19521/19521(70) | kqcrit 793/12899/12899(82) | dstrict 57/78/78(100) | busy 90% maxgap 8.7ms | au 10665/10691/10691(95)
+lineage-app-audio parent t=31 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=31 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2893/20491/20491(74) | kqcrit 703/24857/24857(83) | dstrict 59/99/100(101) | busy 95% maxgap 5.3ms | au 10666/10702/10702(94)
+lineage-app-audio parent t=32 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+lineage-app-audio t=32 prio main=31 fifo=31 plain=-1 kq=-1 disp=37 busy=-1 au=97 | fifo -/-/-(0) | plain 3483/10813/10813(63) | kqcrit 741/11435/11435(75) | dstrict 55/167/167(87) | busy 1842448729303760% maxgap 7.4ms | au 10666/10694/10694(94)
+lineage-app-audio parent t=33 prio main=31 | role=0 bg=0 guard=0/0(errno 0)
+== lineage-agent
+Timestamp               Ty Process[PID:TID]
+2026-09-23 11:16:55.911 Df gamepolicyd[71667:ca2a71] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 11:16:56.072 Df gamepolicyd[71667:ca2ff9] [com.apple.gamepolicyd:Common] Game mode is now available.
+2026-09-23 11:16:56.073 Df gamepolicyd[71667:ca2ff9] [com.apple.gamepolicyd:Policy] Game mode enabled.
+2026-09-23 11:16:56.073 Df gamepolicyd[71667:ca2ff9] [com.apple.gamepolicyd:Common] Game mode status is now on.
+2026-09-23 11:17:11.313 Df gamepolicyd[71667:ca3296] [com.apple.gamepolicyd:Policy] Game mode disabled.
+2026-09-23 11:17:11.313 Df gamepolicyd[71667:ca3296] [com.apple.gamepolicyd:Common] Game mode is now unavailable.
+2026-09-23 11:17:11.330 Df gamepolicyd[71667:ca3296] [com.apple.gamepolicyd:Common] Game mode status is now off.
+lineage-agent t=1 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2507/6025/6025(85) | kqcrit 48/398/6492(105) | dstrict 58/130/1184(105) | busy 105% maxgap 3.2ms | au 10665/10706/10706(93)
+lineage-agent t=2 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2532/2532(81) | kqcrit 47/117/117(100) | dstrict 53/111/111(100) | busy 99% maxgap 0.0ms | au 10667/10707/10707(94)
+lineage-agent t=3 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2532/2532(81) | kqcrit 52/68/68(100) | dstrict 59/223/223(100) | busy 100% maxgap 0.1ms | au 10667/10713/10713(94)
+lineage-agent t=4 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2534/2534(82) | kqcrit 46/141/141(100) | dstrict 54/88/88(100) | busy 100% maxgap 1.5ms | au 10665/10709/10709(95)
+lineage-agent t=5 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2532/2532(81) | kqcrit 50/100/100(100) | dstrict 60/137/137(100) | busy 100% maxgap 0.0ms | au 10667/10686/10686(94)
+lineage-agent t=6 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 29/54/54(5) | plain 2504/2530/2530(81) | kqcrit 51/81/81(100) | dstrict 50/80/80(100) | busy 100% maxgap 0.0ms | au 10666/10701/10701(94)
+lineage-agent t=7 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 37/80/176(164) | plain 2503/2548/2548(83) | kqcrit 46/145/145(100) | dstrict 39/108/108(100) | busy 100% maxgap 0.2ms | au 10668/10712/10712(94)
+lineage-agent t=8 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 53/526/1239(164) | plain 2504/2530/2530(81) | kqcrit 47/78/78(99) | dstrict 45/77/77(99) | busy 99% maxgap 0.0ms | au 10667/10710/10710(94)
+lineage-agent t=9 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 55/682/1324(155) | plain 2505/2546/2546(81) | kqcrit 50/105/105(100) | dstrict 54/215/215(100) | busy 100% maxgap 0.0ms | au 10667/10705/10705(94)
+lineage-agent t=10 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 55/131/1259(167) | plain 2504/2544/2544(81) | kqcrit 49/73/73(100) | dstrict 64/158/158(100) | busy 101% maxgap 0.0ms | au 10666/10707/10707(94)
+lineage-agent t=11 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 58/378/451(162) | plain 2505/3672/3672(82) | kqcrit 51/532/532(100) | dstrict 66/171/171(100) | busy 100% maxgap 1.5ms | au 10666/10701/10701(95)
+lineage-agent t=12 prio main=31 fifo=31 plain=31 kq=31 disp=37 busy=31 au=97 | fifo 53/2308/8714(164) | plain 2506/9034/9034(80) | kqcrit 48/6509/6509(98) | dstrict 57/157/157(99) | busy 99% maxgap 0.9ms | au 10665/10706/10706(94)
+lineage-agent t=13 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 56/4848/10604(162) | plain 2515/10111/10111(80) | kqcrit 47/6692/6692(97) | dstrict 49/80/80(100) | busy 99% maxgap 2.0ms | au 10667/10690/10690(94)
+lineage-agent t=14 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 577/12672/14918(166) | plain 2582/16105/16105(77) | kqcrit 423/14875/14875(90) | dstrict 60/112/119(101) | busy 91% maxgap 4.0ms | au 10666/10720/10720(95)
+lineage-agent t=15 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 749/8275/14254(166) | plain 2488/18080/18080(77) | kqcrit 351/8220/8220(91) | dstrict 59/120/120(99) | busy 96% maxgap 4.8ms | au 10665/10699/10699(94)
+lineage-agent t=16 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 636/11948/13619(164) | plain 2892/17800/17800(74) | kqcrit 595/16428/16428(89) | dstrict 58/375/375(100) | busy 90% maxgap 3.5ms | au 10666/10702/10702(94)
+lineage-agent t=17 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 845/14074/15984(167) | plain 2892/15832/15832(73) | kqcrit 963/16250/16250(82) | dstrict 60/129/129(100) | busy 86% maxgap 14.4ms | au 10666/10707/10707(95)
+lineage-agent t=18 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 596/17156/22685(166) | plain 2593/24855/24855(74) | kqcrit 581/22287/22287(90) | dstrict 58/86/109(102) | busy 91% maxgap 7.5ms | au 10666/10698/10698(95)
+lineage-agent t=19 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 696/10034/14466(168) | plain 2758/10664/10664(76) | kqcrit 652/11706/11706(87) | dstrict 57/182/182(99) | busy 89% maxgap 6.7ms | au 10665/10711/10711(94)
+lineage-agent t=20 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1073/13688/16924(164) | plain 3079/14705/14705(71) | kqcrit 701/16317/16317(84) | dstrict 58/89/89(100) | busy 85% maxgap 5.5ms | au 10666/10709/10709(94)
+lineage-agent t=21 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 51/5283/12392(145) | plain 2504/16901/16901(80) | kqcrit 44/6878/6878(98) | dstrict 54/93/93(100) | busy 99% maxgap 2.3ms | au 10666/10692/10692(94)
+lineage-agent t=22 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2504/3293/3293(82) | kqcrit 41/100/100(100) | dstrict 52/146/146(99) | busy 99% maxgap 1.8ms | au 10666/10694/10694(95)
+lineage-agent t=23 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2504/2531/2531(83) | kqcrit 42/110/110(100) | dstrict 51/77/77(100) | busy 100% maxgap 0.1ms | au 10666/10700/10700(94)
+lineage-agent t=24 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2543/2543(82) | kqcrit 45/67/67(100) | dstrict 53/87/87(100) | busy 99% maxgap 0.0ms | au 10666/10691/10691(94)
+lineage-agent t=25 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2851/2851(80) | kqcrit 46/91/104(101) | dstrict 56/105/105(100) | busy 101% maxgap 0.0ms | au 10667/10687/10687(94)
+lineage-agent t=26 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2538/2538(82) | kqcrit 50/76/76(100) | dstrict 60/118/118(100) | busy 100% maxgap 0.0ms | au 10667/10703/10703(94)
+lineage-agent t=27 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2504/2533/2533(81) | kqcrit 50/124/124(100) | dstrict 62/106/106(100) | busy 100% maxgap 0.1ms | au 10667/10701/10701(95)
+lineage-agent t=28 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2532/2532(82) | kqcrit 51/4127/4127(99) | dstrict 63/96/96(100) | busy 100% maxgap 0.7ms | au 10667/10709/10709(94)
+lineage-agent t=29 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2543/2543(81) | kqcrit 44/124/124(100) | dstrict 52/86/86(100) | busy 100% maxgap 0.0ms | au 10666/10711/10711(94)
+lineage-agent t=30 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2541/2541(81) | kqcrit 51/92/92(100) | dstrict 64/157/157(100) | busy 100% maxgap 0.0ms | au 10666/10721/10721(94)
+lineage-agent t=31 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2505/2548/2548(83) | kqcrit 47/76/76(100) | dstrict 60/86/86(99) | busy 99% maxgap 0.1ms | au 10667/10702/10702(94)
+lineage-agent t=32 prio main=31 fifo=31 plain=-1 kq=-1 disp=37 busy=-1 au=97 | fifo -/-/-(0) | plain 2505/2542/2542(65) | kqcrit 50/91/91(78) | dstrict 66/107/107(78) | busy 1835314304415394% maxgap 0.0ms | au 10667/10721/10721(94)
+== wake-burn0
+Timestamp               Ty Process[PID:TID]
+2026-09-23 11:17:35.926 Df gamepolicyd[71667:ca38c8] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 11:17:36.107 Df gamepolicyd[71667:ca38c8] [com.apple.gamepolicyd:Common] Full screen gaming session is now active with ID 17288907366681560597.
+2026-09-23 11:17:36.107 Df gamepolicyd[71667:ca38c8] [com.apple.gamepolicyd:Common] Game mode is now available.
+2026-09-23 11:17:36.107 Df gamepolicyd[71667:ca38c8] [com.apple.gamepolicyd:Policy] Game mode enabled.
+2026-09-23 11:17:36.107 Df gamepolicyd[71667:ca38c8] [com.apple.gamepolicyd:Common] Game mode status is now on.
+2026-09-23 11:17:51.350 Df gamepolicyd[71667:ca3a41] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 11:17:51.350 Df gamepolicyd[71667:ca3a41] [com.apple.gamepolicyd:Policy] Game mode disabled.
+2026-09-23 11:17:51.350 Df gamepolicyd[71667:ca3a41] [com.apple.gamepolicyd:Common] Game mode status is now off.
+2026-09-23 11:17:51.350 Df gamepolicyd[71667:ca3a41] [com.apple.gamepolicyd:Common] Full screen gaming session is now inactive with ID 0.
+2026-09-23 11:17:51.350 Df gamepolicyd[71667:ca3a41] [com.apple.gamepolicyd:Common] Game mode is now unavailable.
+wake-burn0 t=1 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2504/4094/4094(88) | kqcrit 47/72/106(107) | dstrict 57/136/148(107) | busy 107% maxgap 0.1ms | au 10666/10693/10693(93)
+wake-burn0 t=2 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2504/2534/2534(82) | kqcrit 48/191/191(100) | dstrict 59/140/140(100) | busy 100% maxgap 0.1ms | au 10667/10694/10694(94)
+wake-burn0 t=3 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2504/2537/2537(82) | kqcrit 50/150/150(100) | dstrict 64/88/88(100) | busy 99% maxgap 1.5ms | au 10666/10704/10704(94)
+wake-burn0 t=4 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2504/2532/2532(81) | kqcrit 51/135/135(100) | dstrict 62/1163/1163(99) | busy 100% maxgap 0.0ms | au 10666/10698/10698(95)
+wake-burn0 t=5 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 2504/2620/2620(82) | kqcrit 49/518/518(100) | dstrict 62/120/120(100) | busy 101% maxgap 0.5ms | au 10666/10696/10696(94)
+wake-burn0 t=6 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 23/41/41(7) | plain 2504/2539/2539(83) | kqcrit 50/101/101(100) | dstrict 63/103/103(100) | busy 100% maxgap 0.1ms | au 10666/10698/10698(94)
+wake-burn0 t=7 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 35/82/83(162) | plain 2504/2560/2560(83) | kqcrit 42/116/116(100) | dstrict 43/73/73(100) | busy 100% maxgap 0.1ms | au 10666/10720/10720(94)
+wake-burn0 t=8 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 54/4161/5559(164) | plain 2506/6418/6418(81) | kqcrit 48/1305/1305(100) | dstrict 56/91/91(100) | busy 100% maxgap 2.1ms | au 10667/10726/10726(94)
+wake-burn0 t=9 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 44/81/206(160) | plain 2504/2543/2543(82) | kqcrit 41/83/83(100) | dstrict 47/99/99(100) | busy 100% maxgap 0.1ms | au 10666/10707/10707(94)
+wake-burn0 t=10 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 48/524/1176(162) | plain 2506/3951/3951(82) | kqcrit 39/71/71(100) | dstrict 48/112/112(100) | busy 100% maxgap 0.0ms | au 10665/10805/10805(95)
+wake-burn0 t=11 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 49/423/711(161) | plain 2505/2527/2527(80) | kqcrit 40/160/160(100) | dstrict 47/85/85(100) | busy 100% maxgap 0.0ms | au 10664/10793/10793(94)
+wake-burn0 t=12 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 49/412/1224(163) | plain 2505/2529/2529(81) | kqcrit 39/533/533(100) | dstrict 50/136/136(100) | busy 100% maxgap 0.0ms | au 10669/10759/10759(94)
+wake-burn0 t=13 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 51/701/1261(142) | plain 5004/5072/5072(70) | kqcrit 42/162/162(100) | dstrict 48/129/129(100) | busy 100% maxgap 0.0ms | au 10666/10745/10745(94)
+wake-burn0 t=14 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 49/142/436(148) | plain 5006/5043/5043(69) | kqcrit 44/116/116(100) | dstrict 49/106/106(99) | busy 100% maxgap 0.0ms | au 10669/10730/10730(94)
+wake-burn0 t=15 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 49/1258/1324(150) | plain 5005/5033/5033(68) | kqcrit 47/103/103(100) | dstrict 54/91/103(101) | busy 100% maxgap 0.0ms | au 10665/10740/10740(95)
+wake-burn0 t=16 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 51/83/2000(146) | plain 5005/5032/5032(69) | kqcrit 46/139/139(100) | dstrict 55/74/74(100) | busy 100% maxgap 0.0ms | au 10667/10734/10734(94)
+wake-burn0 t=17 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 53/125/299(145) | plain 5005/5034/5034(69) | kqcrit 48/124/1043(101) | dstrict 56/72/72(100) | busy 100% maxgap 0.1ms | au 10667/10744/10744(95)
+wake-burn0 t=18 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 54/1703/2604(147) | plain 5005/6826/6826(69) | kqcrit 48/165/165(100) | dstrict 57/112/113(101) | busy 100% maxgap 0.0ms | au 10666/10730/10730(95)
+wake-burn0 t=19 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 55/345/781(146) | plain 5004/5032/5032(69) | kqcrit 48/96/175(101) | dstrict 57/118/118(100) | busy 100% maxgap 0.1ms | au 10667/10743/10743(94)
+wake-burn0 t=20 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 54/970/1307(148) | plain 5005/5036/5036(68) | kqcrit 57/136/136(100) | dstrict 57/134/134(100) | busy 100% maxgap 0.0ms | au 10665/10726/10726(95)
+wake-burn0 t=21 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 55/352/759(126) | plain 5005/5028/5028(69) | kqcrit 50/82/112(101) | dstrict 57/77/93(101) | busy 100% maxgap 0.1ms | au 10668/10734/10734(95)
+wake-burn0 t=22 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5005/5156/5156(71) | kqcrit 36/1562/1562(100) | dstrict 47/125/125(100) | busy 98% maxgap 3.7ms | au 10667/10760/10760(94)
+wake-burn0 t=23 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5002/5027/5027(73) | kqcrit 48/74/91(101) | dstrict 55/120/142(101) | busy 100% maxgap 0.0ms | au 10666/10702/10702(95)
+wake-burn0 t=24 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5003/5370/5370(71) | kqcrit 49/220/220(100) | dstrict 54/188/188(100) | busy 100% maxgap 0.0ms | au 10666/10705/10705(95)
+wake-burn0 t=25 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5004/5045/5045(69) | kqcrit 50/176/176(100) | dstrict 59/159/159(100) | busy 100% maxgap 0.1ms | au 10667/10721/10721(94)
+wake-burn0 t=26 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5004/5029/5029(69) | kqcrit 53/117/117(100) | dstrict 62/165/165(100) | busy 100% maxgap 0.0ms | au 10667/10702/10702(94)
+wake-burn0 t=27 prio main=31 fifo=31 plain=31 kq=31 disp=37 busy=31 au=97 | fifo -/-/-(0) | plain 5003/5033/5033(68) | kqcrit 50/137/162(101) | dstrict 58/194/194(100) | busy 100% maxgap 0.1ms | au 10667/10709/10709(95)
+wake-burn0 t=28 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5003/5143/5143(70) | kqcrit 45/1258/1258(100) | dstrict 51/141/144(101) | busy 100% maxgap 0.8ms | au 10667/10711/10711(95)
+wake-burn0 t=29 prio main=31 fifo=31 plain=31 kq=31 disp=37 busy=31 au=97 | fifo -/-/-(0) | plain 5003/5037/5037(68) | kqcrit 52/108/262(101) | dstrict 64/145/145(100) | busy 100% maxgap 0.0ms | au 10666/10708/10708(94)
+wake-burn0 t=30 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5003/5043/5043(68) | kqcrit 53/286/286(100) | dstrict 65/179/179(100) | busy 100% maxgap 0.0ms | au 10666/10705/10705(95)
+wake-burn0 t=31 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5004/5028/5028(69) | kqcrit 51/174/174(100) | dstrict 63/115/115(100) | busy 100% maxgap 0.0ms | au 10668/10709/10709(94)
+wake-burn0 t=32 prio main=31 fifo=31 plain=-1 kq=-1 disp=37 busy=-1 au=97 | fifo -/-/-(0) | plain 5003/5033/5033(50) | kqcrit 47/90/90(71) | dstrict 57/162/162(71) | busy 1837456876755932% maxgap 0.0ms | au 10666/10723/10723(94)
+== wake-burn8
+Timestamp               Ty Process[PID:TID]
+2026-09-23 11:18:14.832 Df gamepolicyd[71667:ca4468] [com.apple.gamepolicyd:Common] Game mode status is now paused.
+2026-09-23 11:18:15.422 Df gamepolicyd[71667:ca3a35] [com.apple.gamepolicyd:Common] Full screen gaming session is now active with ID 8809843249053683080.
+2026-09-23 11:18:15.422 Df gamepolicyd[71667:ca3a35] [com.apple.gamepolicyd:Common] Game mode is now available.
+2026-09-23 11:18:15.423 Df gamepolicyd[71667:ca3a35] [com.apple.gamepolicyd:Policy] Game mode enabled.
+2026-09-23 11:18:15.423 Df gamepolicyd[71667:ca3a35] [com.apple.gamepolicyd:Common] Game mode status is now on.
+2026-09-23 11:18:29.686 Df gamepolicyd[71667:ca416e] [com.apple.gamepolicyd:Policy] Game mode disabled.
+2026-09-23 11:18:29.687 Df gamepolicyd[71667:ca416e] [com.apple.gamepolicyd:Common] Full screen gaming session is now inactive with ID 0.
+2026-09-23 11:18:29.687 Df gamepolicyd[71667:ca416e] [com.apple.gamepolicyd:Common] Game mode is now unavailable.
+2026-09-23 11:18:29.697 Df gamepolicyd[71667:ca416e] [com.apple.gamepolicyd:Common] Game mode status is now off.
+wake-burn8 t=1 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 4762/5038/5038(78) | kqcrit 48/67/118(107) | dstrict 58/77/78(107) | busy 106% maxgap 0.2ms | au 10665/10724/10724(93)
+wake-burn8 t=2 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5007/8871/8871(71) | kqcrit 44/2154/2154(100) | dstrict 56/169/169(100) | busy 101% maxgap 0.1ms | au 10664/10719/10719(95)
+wake-burn8 t=3 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5014/14284/14284(67) | kqcrit 51/8381/8381(96) | dstrict 58/176/181(101) | busy 97% maxgap 3.6ms | au 10667/10716/10716(95)
+wake-burn8 t=4 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5515/21448/21448(61) | kqcrit 853/23101/23101(79) | dstrict 60/109/109(100) | busy 90% maxgap 5.6ms | au 10666/10714/10714(95)
+wake-burn8 t=5 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5672/14349/14349(63) | kqcrit 1050/9691/9691(84) | dstrict 61/151/151(100) | busy 90% maxgap 4.5ms | au 10668/10712/10712(94)
+wake-burn8 t=6 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5384/55205/55205(60) | kqcrit 1685/57557/57557(76) | dstrict 59/131/155(103) | busy 89% maxgap 10.6ms | au 10668/10705/10705(97)
+wake-burn8 t=7 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1766/10536/10536(94) | plain 5314/14868/14868(66) | kqcrit 1093/10375/10375(83) | dstrict 38/488/488(100) | busy 65% maxgap 22.8ms | au 10666/10695/10695(94)
+wake-burn8 t=8 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1901/25660/25660(69) | plain 6267/31124/31124(59) | kqcrit 1778/30865/30865(77) | dstrict 40/76/122(101) | busy 77% maxgap 17.3ms | au 10666/10697/10697(95)
+wake-burn8 t=9 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 2556/17477/17477(68) | plain 6290/21624/21624(60) | kqcrit 3015/13199/13199(74) | dstrict 42/159/159(100) | busy 83% maxgap 10.7ms | au 10665/10699/10699(95)
+wake-burn8 t=10 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 2282/17514/17514(62) | plain 7099/31692/31692(54) | kqcrit 4561/20179/20179(65) | dstrict 40/114/117(102) | busy 59% maxgap 20.1ms | au 10666/10713/10713(96)
+wake-burn8 t=11 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 2227/15726/15726(75) | plain 6594/18195/18195(60) | kqcrit 2489/14943/14943(72) | dstrict 41/121/121(100) | busy 71% maxgap 12.1ms | au 10665/10704/10704(94)
+wake-burn8 t=12 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1681/16579/16579(78) | plain 7648/15087/15087(58) | kqcrit 3040/19114/19114(72) | dstrict 40/103/103(100) | busy 83% maxgap 12.1ms | au 10665/10706/10706(95)
+wake-burn8 t=13 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1112/6827/7019(104) | plain 5416/12430/12430(65) | kqcrit 1010/8979/8979(86) | dstrict 29/52/127(101) | busy 94% maxgap 6.8ms | au 10663/10711/10711(94)
+wake-burn8 t=14 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1227/8682/8682(98) | plain 5238/14034/14034(66) | kqcrit 944/10058/10058(87) | dstrict 29/70/138(101) | busy 95% maxgap 4.8ms | au 10666/10707/10707(95)
+wake-burn8 t=15 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1276/9582/15480(105) | plain 5704/18192/18192(64) | kqcrit 889/14218/14218(86) | dstrict 29/53/53(100) | busy 93% maxgap 5.5ms | au 10665/10720/10720(95)
+wake-burn8 t=16 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1068/7899/9141(105) | plain 5224/9493/9493(65) | kqcrit 933/8160/8160(89) | dstrict 28/89/92(101) | busy 95% maxgap 7.4ms | au 10667/10710/10710(94)
+wake-burn8 t=17 prio main=31 fifo=31 plain=31 kq=31 disp=37 busy=31 au=97 | fifo 966/6859/8814(106) | plain 5639/10065/10065(65) | kqcrit 1080/7445/7445(86) | dstrict 30/75/75(100) | busy 95% maxgap 3.8ms | au 10667/10706/10706(94)
+wake-burn8 t=18 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 965/6064/9843(102) | plain 5375/13030/13030(67) | kqcrit 1265/7971/7971(85) | dstrict 29/67/83(101) | busy 96% maxgap 3.1ms | au 10665/10710/10710(95)
+wake-burn8 t=19 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1060/6807/7566(105) | plain 5671/13260/13260(64) | kqcrit 1087/8153/8153(85) | dstrict 29/74/97(101) | busy 93% maxgap 7.5ms | au 10666/10719/10719(95)
+wake-burn8 t=20 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1057/6275/6542(102) | plain 5230/11070/11070(66) | kqcrit 1166/9205/9205(85) | dstrict 29/72/91(101) | busy 96% maxgap 5.2ms | au 10665/10705/10705(95)
+wake-burn8 t=21 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo 1025/7836/7836(84) | plain 5014/11738/11738(68) | kqcrit 744/6639/6639(90) | dstrict 31/118/118(100) | busy 93% maxgap 4.5ms | au 10667/10699/10699(94)
+wake-burn8 t=22 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5003/5047/5047(72) | kqcrit 41/63/78(101) | dstrict 51/176/176(100) | busy 99% maxgap 0.5ms | au 10667/10706/10706(95)
+wake-burn8 t=23 prio main=31 fifo=31 plain=31 kq=31 disp=37 busy=31 au=97 | fifo -/-/-(0) | plain 5003/5031/5031(71) | kqcrit 44/2599/2599(100) | dstrict 55/93/93(101) | busy 99% maxgap 0.6ms | au 10667/10717/10717(95)
+wake-burn8 t=24 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5004/5035/5035(70) | kqcrit 46/109/109(100) | dstrict 52/138/138(100) | busy 101% maxgap 0.3ms | au 10666/10693/10693(94)
+wake-burn8 t=25 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5006/5037/5037(71) | kqcrit 49/145/145(100) | dstrict 56/121/121(100) | busy 99% maxgap 0.8ms | au 10666/10701/10701(95)
+wake-burn8 t=26 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5006/5041/5041(71) | kqcrit 50/62/66(101) | dstrict 58/71/71(100) | busy 100% maxgap 0.0ms | au 10665/10707/10707(94)
+wake-burn8 t=27 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5006/5038/5038(69) | kqcrit 50/109/109(100) | dstrict 58/77/186(101) | busy 100% maxgap 0.0ms | au 10667/10700/10700(95)
+wake-burn8 t=28 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5006/5033/5033(70) | kqcrit 50/69/93(101) | dstrict 58/96/96(100) | busy 99% maxgap 1.1ms | au 10666/10703/10703(95)
+wake-burn8 t=29 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5005/5041/5041(71) | kqcrit 48/96/96(100) | dstrict 56/74/92(101) | busy 100% maxgap 0.4ms | au 10666/10713/10713(94)
+wake-burn8 t=30 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5004/5038/5038(73) | kqcrit 50/113/113(100) | dstrict 57/86/86(100) | busy 100% maxgap 0.0ms | au 10665/10706/10706(95)
+wake-burn8 t=31 prio main=31 fifo=31 plain=31 kq=31 disp=47 busy=31 au=97 | fifo -/-/-(0) | plain 5005/5039/5039(70) | kqcrit 40/128/708(101) | dstrict 49/125/125(100) | busy 100% maxgap 0.0ms | au 10667/10709/10709(94)
+wake-burn8 t=32 prio main=31 fifo=31 plain=-1 kq=-1 disp=37 busy=-1 au=97 | fifo -/-/-(0) | plain 5004/5028/5028(41) | kqcrit 37/51/51(61) | dstrict 45/93/93(61) | busy 1826258417486137% maxgap 0.0ms | au 10666/10718/10718(95)

@@ -412,52 +412,60 @@ episode.
 Background for this section — why idle guests need a real-time band, what it costs, and what
 ships — is in `docs/design/vcpu-scheduling-band.md`.
 
-### macOS Game Mode clamps every limina thread, and nothing inside the process opts out
+### macOS Game Mode clamps the worker because the supervisor spawns it; launch it from launchd
 While a games-category app is fullscreen and frontmost (Moonlight is one: `LSSupportsGameMode=true`),
-`gamepolicyd` turns Game Mode on and every thread of the worker and the supervisor runs at priority
-4. That includes the RT-band vCPU, which drops from `97R`, and CoreAudio's render thread. On the
-dogfood Mac, guest Firefox video dropped frames and audio stuttered, worse the more the Moonlight
-stream changed, and the worker's control queue logged 100–626 ms drains. Turning Game Mode off from
-the menu bar with Moonlight still focused restored `31T`/`97R` and smooth playback (measured
-2026-09-23, M4 Pro). `spikes/game-mode-throttle/` established that no in-process lever works. Neither
-an `NSActivity` assertion (UserInitiated, LatencyCritical, in the child or the parent) nor resetting
-our own `PRIO_DARWIN_ROLE` / DARWIN_BG changes anything, because role and DARWIN_BG read back unset
-throughout. xnu applies Game Mode through the coalition thread group. It clamps almost every
-user-domain process (Finder, Safari, shells, `ssh`); only system-domain daemons and Apple's system
-UI escape.
+`gamepolicyd` turns Game Mode on and clamps every process in an app's process tree to priority 4.
+The supervisor is an AppKit app, and the worker is its posix_spawned child, so every worker thread is
+clamped: the RT-band vCPU (from `97R`), the GPU worker, CoreAudio's render thread. On the dogfood Mac,
+guest Firefox video dropped frames and audio stuttered, worse the more the Moonlight stream changed,
+and the worker logged 100–626 ms control-queue drains. Game Mode off restored `31T`/`97R` and smooth
+playback (measured 2026-09-23, M4 Pro).
 
-**Open question, which decides the fixes:** is the clamp *timer-wake* throttling or *CPU* denial?
-The probe's timer-sleeping threads woke 5–6 times a second, about 200 ms late, on an idle host.
-But the dogfood VM stayed smooth under Game Mode while the stream was static, which a hard 200 ms
-run quantum would not allow. The working hypothesis is that timer wakes are throttled while
-event-driven wakes and raw CPU compete on priority alone. Measure under Game Mode, in the spike:
-(a) the wake latency of a thread signalled by an unclamped process (the bait); (b) a kqueue timer
-with `NOTE_CRITICAL`, and a dispatch timer with zero leeway, against the plain sleep; (c) the CPU
-share a busy thread gets as host load rises; (d) the cadence of a real AUHAL render callback.
+Established by `spikes/game-mode-throttle/` (RESULTS.md, dev Mac):
+- **The clamp is two mechanisms.** Timer coalescing stretches plain sleeps to ~100 ms. CPU is also
+  denied: a busy thread got 55% of wall time and went up to 93 ms off-CPU on a nearly idle host, and
+  an AUHAL render callback (10.67 ms nominal) went 1.09 s without running. Strict timers
+  (`NOTE_CRITICAL`, `DISPATCH_TIMER_STRICT`) and event wakes avoid the first (about 1.2 ms p50) but
+  not the second (about 40 ms p99).
+- **Nothing inside a clamped process lifts it**: not `NSActivity` assertions (UserInitiated,
+  LatencyCritical, in child or parent), and not resetting `PRIO_DARWIN_ROLE` or DARWIN_BG, which read
+  back unset throughout. xnu applies it through the coalition thread group.
+- **Lineage decides it.** The same worker-shaped process run as a gui-domain LaunchAgent with
+  `ProcessType=Interactive` stayed at priority 31 through Game Mode, with the audio callback at
+  10.67 / 10.72 ms (p50 / worst p99) and the busy thread at 94%. A process descended from a non-app
+  launchd job was never clamped either. A `launchctl submit` job escapes too, but its default job
+  type runs at priority 20 with plain timers ~40 ms late, so `ProcessType=Interactive` is required.
 
-**Candidate fixes, by what they buy:**
-1. Decouple hardware decode from the control thread (Video: *Hardware decode blocks the
-   virtio-gpu control thread*). A slow decode then costs late video frames instead of a frozen
-   desktop, which the other levers can absorb. It does not beat the clamp by itself.
-2. If (a)/(b) show timer wakes are the throttled path, move timer sleeps on latency-critical paths
-   to event wakes or strict timers. Known ones: the `gpu latch` thread's `thread::sleep` to a 35 ms
-   deadline before completing held flush fences (`virtio_gpu.rs`, `LIMINA_FENCE_LATCH_MS`), which
-   can hold guest presents about 200 ms under the clamp; and idle vCPUs waiting on the guest's
-   virtual timer. HVF parks them inside `hv_vcpu_run` on macOS 26 (`docs/design/vcpu-scheduling-band.md`), so that
-   wake is a kernel timer on a clamped thread, with no userspace lever yet. Device interrupts go
-   through the in-kernel GIC (`hv_gic_set_spi`) and wake vCPUs by event.
-3. Deeper buffers where the consumer outruns our stalls. Audio is the promising case: our ring
-   already holds 1 s and the guest buffer goes up to 8192 frames (170 ms). A deeper guest PipeWire
-   quantum lets the guest refill in bursts, but only if (d) shows CoreAudio's render thread is still
-   served on time, since a device I/O buffer tops out well under a 200 ms gap. A host-side jitter
-   buffer for video cannot create frames a stalled guest dropped; the decoded-frame queue that
-   matters is the guest player's own (Firefox `media.video-queue.default-size`).
-4. Escape the clamp: a system-domain (root) VMM is the only unclamped shape observed. That is the
-   privileged-helper question. It would be partial anyway, because the supervisor's present path
-   into the window stays in the user session.
-5. Detect and explain: our own threads at priority 4 are a direct oracle. Tell the user why the VM
-   stutters and name the game-side levers (the menu-bar toggle, which held across re-fullscreens;
+**The fix: launch the worker from launchd, outside the app's tree.** A per-VM LaunchAgent (or a job
+submitted at start), `ProcessType=Interactive`, instead of posix_spawn from the supervisor. What it
+takes:
+- **fd passing.** launchd passes no file descriptors, and today the worker inherits its control,
+  input, spice and qga socketpairs. It needs a rendezvous where the supervisor hands them over
+  (SCM_RIGHTS over a Unix socket the job connects to, or Mach ports; see *Move the supervisor⇄worker
+  control sockets to Mach ports*).
+- **Lifecycle.** The supervisor stops being the worker's parent: death detection, the reap-gateway
+  and the run lock must not assume `waitpid` on a child.
+- **Registration.** `SMAppService.agent` shows a Login Items / background-activity approval. An
+  unregistered transient job avoids it; measure which submission path keeps
+  `ProcessType=Interactive`.
+- **Identity.** TCC (mic, camera, Accessibility) attributes to the worker's own code identity rather
+  than to Limina.app. Recheck every grant the worker relies on (the signing rules are in
+  `docs/design/distribution.md`).
+- **The supervisor stays clamped** (it owns the window), so its present path into the window still
+  runs late under Game Mode. Measure what that alone costs once the worker is out.
+
+Independent of the move, and still worth doing:
+1. Decouple hardware decode from the control thread (Video: *Hardware decode blocks the virtio-gpu
+   control thread*), so one slow decode does not freeze the desktop.
+2. Move latency-critical timer sleeps to strict timers or event wakes: the `gpu latch` thread's
+   `thread::sleep` to its 35 ms deadline (`virtio_gpu.rs`, `LIMINA_FENCE_LATCH_MS`), and anything else
+   on the present or audio path. This takes ~100 ms off the clamped case but does not fix it.
+3. Detect and explain: our own threads at priority 4 are a direct oracle. Tell the user, and name the
+   game-side levers (the menu-bar toggle, which held across re-fullscreens;
    `LSSupportsGameMode=false` in apps they build).
+
+Deeper audio buffers are not a lever while the worker is clamped: the render callback itself
+stalls for up to a second.
 
 ### Explain the parked P-clusters behind the band panic
 A host panic on 2026-09-21 (`watchdog timeout: no checkins from watchdogd in 94 seconds`, panicked task

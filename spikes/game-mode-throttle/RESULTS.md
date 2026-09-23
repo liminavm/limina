@@ -1,82 +1,113 @@
-# Game Mode throttle: can limina keep its worker out of it?
+# Game Mode throttle: what it clamps, and how a worker escapes it
 
 **Question.** While macOS Game Mode is on (a games-category app fullscreen and frontmost; on the
 dogfood Mac that app is Moonlight), every thread of `limina-vmm` sits at priority 4 and guest
-video and audio stutter. Can the worker or the supervisor opt out: with an `NSProcessInfo` activity
-assertion, or by undoing the demotion itself?
+video and audio stutter. What exactly is throttled, and can limina keep its worker out of it?
 
-**Answer: no, not from inside a user-domain process.** Game Mode clamps almost every user process
-on the Mac: Finder, Safari, terminal shells, `ssh`, Tailscale and our control center all go to
-priority 4 with it. No activity option lifted the clamp. The process's darwin role and its
-external DARWIN_BG flag both read back as unset throughout, so there was no demotion for the
-guards to undo. The levers left are on the game's side or outside the user domain (below).
+**Answer.** Game Mode clamps **processes that belong to an app's process tree**, and it clamps them
+hard. A process that launchd starts outside any app is not touched. The worker is spawned by the
+supervisor, an AppKit app, so it inherits the clamp. The same code run as a gui-domain LaunchAgent
+(`ProcessType=Interactive`) stays at priority 31 throughout Game Mode, with an unbroken CoreAudio
+render cadence. Nothing done *inside* a clamped process lifts the clamp.
 
 ## Vehicle
 
 - `bait.swift` + `Info.plist`: a stand-in game (`public.app-category.games`,
-  `LSSupportsGameMode=true`, the same keys Moonlight's Info.plist carries). It goes
-  native-fullscreen, draws with Metal, and quits by itself after 15 s. `gamepolicyd` logs
-  `Game mode enabled` about 0.4 s after launch every time.
-- `probe.m`: the supervisor's shape (a Regular-policy AppKit app with a visible, non-key window)
-  posix_spawns the worker's shape: a windowless child with four 10 ms sleeper threads (the
-  vCPUs) and one `THREAD_TIME_CONSTRAINT_POLICY` thread with the band's defaults (60 Hz, 1 ms,
-  2 ms). Once a second each process reports every thread's `pth_curpri`, the RT thread's and a
-  sleeper's wake lateness, and `getpriority(PRIO_DARWIN_ROLE)` / `getpriority(PRIO_DARWIN_PROCESS)`.
-- `run.sh <outdir> [arm...]`: per arm, 6 s baseline, then 15 s of bait, then about 11 s after.
-  It warns if a boot suite or a `limina-vmm` is running, because Game Mode clamps those too.
+  `LSSupportsGameMode=true`, the keys Moonlight's Info.plist carries). It goes native-fullscreen,
+  draws with Metal, and quits by itself (`bait [secs] [burn N] [fifo PATH]`). `burn N` spins N
+  game-side threads, and `fifo` writes `mach_absolute_time` into a FIFO every 5 ms.
+  `gamepolicyd` logs `Game mode enabled` within about 0.4 s of launch every time.
+- `probe.m`: a Regular-policy AppKit parent with a visible window (the supervisor's shape) that
+  posix_spawns a windowless child (the worker's shape): four 10 ms sleepers and one
+  `THREAD_TIME_CONSTRAINT_POLICY` thread with the band's defaults. With `--child-exe` it spawns
+  `wake` instead. It reports thread priorities (`pth_curpri`), the darwin role and DARWIN_BG, and
+  can hold `NSActivity` assertions or run guards that reset role/DARWIN_BG.
+- `wake.m`: a windowless process that measures every way a thread can be woken or run. `fifo` is an
+  event wake from the bait (recv − sent). `plain` is `mach_wait_until`, 10 ms. `kqcrit` is a kqueue
+  timer with `NOTE_CRITICAL`. `dstrict` is a dispatch timer with `DISPATCH_TIMER_STRICT` and zero
+  leeway. `busy` is a spinning thread's CPU share and its longest stretch off-CPU. `au` is the
+  interval between AUHAL render callbacks, playing silence.
+- `run.sh <outdir> [arm...]`: 6 s baseline, 15 s of bait, then the tail. `summarize-wake.py`
+  reduces a `wake` log to Game-Mode-window (t = 8–20 s) vs outside: the median of per-second p50s
+  and the worst per-second p99, in µs.
 
-Measured 2026-09-23 on the dev Mac (M1 Max, macOS 26.6.2) with the host otherwise idle; raw output
-is in `results-activities.txt` and `results-guards.txt`.
+Measured 2026-09-23 on the dev Mac (M1 Max, macOS 26.6.2). Raw output: `results-activities.txt`,
+`results-guards.txt` (probe arms), `results-lineage.txt`, `results-lineage-audio.txt` (wake arms).
 
 ## Results
 
-| arm | what the processes hold | threads while Game Mode is on | RT wake late, p50 (steady) |
+**1. Nothing in-process lifts the clamp** (probe arms). With no assertion, with
+`NSActivityUserInitiated` or `UserInitiated|LatencyCritical` in the child or the parent, and with
+guards resetting the darwin role or DARWIN_BG, every thread of parent and child went to priority
+4 within a second of `Game mode enabled` (the RT thread from `97`). Role and DARWIN_BG read back
+unset throughout, so the guards never fired. xnu applies Game Mode through the coalition's thread
+group (`task_coalition_thread_group_game_mode_update`, `osfmk/kern/task_policy.c`). Setting a
+task's game-mode flag needs the private `com.apple.private.set-game-mode` entitlement
+(`proc_set_game_mode`, `bsd/kern/kern_resource.c`).
+
+**2. What the clamp does** (`wake`, spawned by an AppKit parent, Game Mode on, no game load):
+
+| wake kind | clamped: p50 / worst p99 | started from the shell, Game Mode on (unclamped) |
+|---|---|---|
+| plain `mach_wait_until` | 100 ms / 127 ms late | 2.5 ms / 2.5 ms |
+| event (FIFO) | 1.1 ms / 40 ms | 0.05 ms / 1.1 ms |
+| kqueue `NOTE_CRITICAL` | 1.3 ms / 43 ms | 0.05 ms / 3.4 ms |
+| dispatch strict, 0 leeway | 1.2 ms / 41 ms | 0.06 ms / 0.2 ms |
+| busy thread | 55% CPU, 93 ms off-CPU at worst | 100%, 3.5 ms |
+
+Two mechanisms, then. Timer coalescing stretches plain sleeps to about 100 ms
+(`kern.timer_coalesce_bg_ns_max` is 100 ms), and strict/critical timers or event wakes avoid that.
+On top of it the process is denied CPU, which no wake style avoids. With AUHAL on in the clamped
+process, the render callback (10.67 ms nominal) went **1.09 s** without running at worst, and the busy
+thread went 1.9 s. Audio buffering on our side cannot bridge that. (The first probe arms saw
+threads wake ~200 ms late at 5–6 wakes a second; that was the same clamp, measured on plain timers.)
+
+**3. Lineage decides who is clamped** (Game Mode on in every row):
+
+| how `wake` was started | priority | busy CPU | audio callback p50 / worst p99 |
 |---|---|---|---|
-| none | nothing | parent + child all `4` (RT thread `97` → `4`) | 193–200 ms |
-| user | child: `NSActivityUserInitiated` | all `4` | 193–200 ms |
-| latency | child: `UserInitiated \| LatencyCritical` | all `4` | 193–200 ms |
-| parent-latency | parent: `UserInitiated \| LatencyCritical` | all `4` | 193–200 ms |
-| guard-role | both: reset own darwin role if it reads DARWIN_BG | all `4`; role read `0`, 0 resets | 193–200 ms |
-| guard-bg | both: clear external DARWIN_BG if set | all `4`; bg read `0`, 0 resets | 193–200 ms |
+| spawned by an AppKit app (the worker's shape) | 4 | 55% | 10.67 ms / **1094 ms** |
+| gui-domain LaunchAgent, `ProcessType=Interactive` | 31 | 94% | 10.67 ms / 10.72 ms |
+| from a shell whose tree descends from a launchd job, not an app | 31 | 100% | 10.67 ms / 10.81 ms |
+| `launchctl submit` job | 20, with or without Game Mode | 100% | (not measured) |
 
-Outside Game Mode every arm reads `31` / RT `97` with an RT p50 of 11–17 µs and 60 wakes a second.
-Inside it every thread wakes 5–6 times a second, about 200 ms late, on an idle host. Priorities
-flip within a second of `enabled` and of `disabled`.
+The `launchctl submit` job is never clamped, but it runs at priority 20 with plain timers ~40 ms
+late all the time: the default job type is not an interactive one. Declaring
+`ProcessType=Interactive` is what makes the LaunchAgent row normal.
 
-What that 200 ms describes is open. Every probe thread sleeps on a timer, so it measures
-*timer-driven* wakes. The dogfood VM stayed smooth under Game Mode while the game's content was
-static, which a hard 200 ms run quantum would not allow. So event-driven wakes and raw CPU may be
-competing on priority alone. The measurements that settle it are in `docs/hardening-backlog.md`
-(vCPU & power, *macOS Game Mode clamps every limina thread*).
+A system-wide `ps -M -A` survey during Game Mode agrees: Finder, Safari, Spotlight,
+SystemUIServer, Tailscale, the Limina control center, and the `login`/`fish`/`ssh` processes
+under a terminal app all went to 4. System daemons, Apple's system UI (Dock, WindowManager,
+ControlCenter, NotificationCenter, loginwindow), and processes descended from non-app launchd jobs
+did not.
 
-**System-wide survey** (`ps -M -A` before and 6 s into a bait run): 317 processes had every thread
-at `4` during Game Mode, and 45 of them had none at `4` before. The 45 are ordinary user-domain
-processes: Finder, Safari, Spotlight, SystemUIServer, Tailscale, terminal `login`/`fish`, `ssh`, a
-third-party app and its server, and the Limina control center. Unclamped: system-domain daemons,
-and Apple's system UI (Dock, WindowManager, ControlCenter, NotificationCenter, loginwindow).
+**4. Game-side load then competes on priority alone.** Unclamped, with the bait spinning 8 threads
+on this 10-core host, the worker's event wakes went to 1.2 ms p50 / 26 ms p99 and the busy thread
+to 87% CPU. That is ordinary contention, and the audio callback stayed at 10.67 / 10.72 ms.
 
-## Why nothing in the process can undo it
+## What this means for limina
 
-xnu applies Game Mode through the coalition's thread group (`task_coalition_thread_group_game_mode_update`
-in `osfmk/kern/task_policy.c`), not through the task role or DARWIN_BG, and our readback shows
-both untouched. Setting a task's game-mode flag needs the private `com.apple.private.set-game-mode`
-entitlement (`proc_set_game_mode`, `bsd/kern/kern_resource.c`). An activity assertion is Apple's
-lever against App Nap and timer coalescing, and it did not change the timer wakes measured here
-either.
-
-## What is left
-
-1. **The game's side (works today):** turn Game Mode off from the menu-bar icon while the game
-   is fullscreen (on the dogfood Mac the choice held when Moonlight went fullscreen again), or
-   build Moonlight with `LSSupportsGameMode=false`. Neither is a limina change.
-2. **Out of the user domain (untested):** system-domain daemons were not clamped. A root-launched
-   VMM is the privileged-helper question, not something to take on for this alone.
-3. **Degrade knowingly:** detect Game Mode (priority 4 on our own threads is a direct oracle) and
-   tell the user why the VM stutters, instead of leaving it unexplained.
+- **The fix is where the worker runs, not what it does.** Launch the worker as a LaunchAgent (or
+  anything launchd starts outside the app's tree) with `ProcessType=Interactive`, rather than
+  posix_spawning it from the supervisor. Costs to weigh: launchd does not pass file descriptors, so
+  the supervisor⇄worker channels need a rendezvous (booked separately as moving the control sockets
+  to Mach ports). Registering an agent via `SMAppService` shows the user a Login Items/background
+  approval. TCC attribution (mic, camera) moves to the worker's own identity.
+- **The supervisor stays clamped** under Game Mode, because it is the app with the window. Its
+  present path into that window will still run late. Measure how much that alone costs once
+  the worker is out.
+- Short of that: strict or critical timers remove the ~100 ms timer slack but not the CPU denial,
+  so they help while the clamp lasts and do not fix it.
+- The game-side levers still work: the menu-bar Game Mode toggle (it held across re-fullscreens on
+  the dogfood Mac), or `LSSupportsGameMode=false` in apps the user builds.
 
 ## Traps
 
-- Game Mode clamps **the terminal and `ssh` sessions too**, so a probe driven over ssh while a game
-  is fullscreen is itself throttled. Take measurements from threads that record their own
-  timestamps (as the probe does), not from a poller.
-- A boot suite running during a bait run is throttled with everything else. `run.sh` checks for one.
+- Game Mode clamps **terminal sessions and `ssh`** too, so a probe driven from a terminal app is
+  itself clamped. The measurements here come from a shell outside any app's tree, and every
+  number is self-timed by the thread it describes.
+- A `launchctl submit` job is `KeepAlive` by default and restarts when it exits; remove it by
+  label (`run.sh` does).
+- A host under memory pressure distorts every number here. Check `vm.swapusage` and
+  `memory_pressure` before a run; one batch was discarded for that reason.
+- A boot suite running during a bait run is clamped with everything else. `run.sh` warns.
