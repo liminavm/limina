@@ -4,16 +4,20 @@
 //! Host battery mirror for the guest's virtio-i2c SBS battery.
 //!
 //! The worker hands libkrun a callback ([`devices::virtio::BatteryProvider`])
-//! that snapshots the Mac's battery via the IOKit power-sources API on every
-//! guest register read — the guest's own UPower polling cadence drives
-//! freshness, no timers or notification plumbing on our side.
+//! that returns a snapshot of the Mac's battery. A background thread refreshes
+//! the snapshot from the IOKit power-sources API every [`REFRESH`]; the callback
+//! itself only copies it. libkrun answers the guest's register reads on the vCPU
+//! that asked, so the callback must not block, and an IOKit round-trip per read
+//! is time the guest's transfer spends in flight for no gain: battery state does
+//! not move on that timescale.
 //!
 //! `LIMINA_BATTERY_FAKE="<percent>,<charging|discharging|ac|full>[,tte_min,ttf_min]"`
 //! substitutes a fixed state, which is both the L2-test hook and a way to demo
 //! the guest battery on a desktop Mac.
 
 use std::ffi::{CStr, c_char, c_void};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use devices::virtio::{BatteryProvider, BatteryState};
 
@@ -52,6 +56,9 @@ unsafe extern "C" {
     fn IOPSCopyPowerSourcesList(blob: CFTypeRef) -> CFTypeRef;
     fn IOPSGetPowerSourceDescription(blob: CFTypeRef, ps: CFTypeRef) -> CFTypeRef;
 }
+
+/// How often the host battery is re-read. UPower polls well below this rate.
+const REFRESH: Duration = Duration::from_secs(2);
 
 const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 const K_CF_NUMBER_SINT32_TYPE: CFIndex = 3;
@@ -209,12 +216,26 @@ pub fn provider() -> Option<BatteryProvider> {
         let state = parse_fake(&spec)?;
         return Some(Arc::new(move || state));
     }
-    // Probe once at startup to decide whether the device exists; afterwards the
-    // provider re-reads on every guest poll. A transient IOKit failure mid-run
-    // reads as an empty (0%, unplugged) battery for that poll — harmless and
-    // self-correcting on the next one.
-    read_host_battery()?;
-    Some(Arc::new(|| read_host_battery().unwrap_or_default()))
+    // Probe once at startup to decide whether the device exists. A transient
+    // IOKit failure later keeps the last good snapshot.
+    let snapshot = Arc::new(Mutex::new(read_host_battery()?));
+    let writer = Arc::clone(&snapshot);
+    let spawned = std::thread::Builder::new()
+        .name("battery refresh".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(REFRESH);
+                if let Some(state) = read_host_battery() {
+                    *writer.lock().unwrap_or_else(|e| e.into_inner()) = state;
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("battery: no refresh thread ({e}); the guest sees the state at boot");
+    }
+    Some(Arc::new(move || {
+        *snapshot.lock().unwrap_or_else(|e| e.into_inner())
+    }))
 }
 
 #[cfg(test)]

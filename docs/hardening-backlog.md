@@ -977,6 +977,16 @@ rerunning the count with `--no-net`, and against a guest with no NAT traffic.
 
 ## Guest images & delivery
 
+### The stock guest's i2c-virtio driver can panic at switch-root (host mitigated, guest unfixed)
+The driver's interruptible wait frees in-flight requests. If systemd SIGKILLs the initrd's udev
+while it reads the SBS battery's sysfs, the completion interrupt then calls `complete()` on freed
+memory and the kernel panics. That happened in 2 of 53 stock boots, and in none of 60 without the
+battery device (`spikes/snd-boot-stall/RESULTS.md`). The host mitigation handles the virtio-i2c
+kick on the vCPU that made it, from a cached battery snapshot. That shrinks the window to interrupt
+delivery but does not close it. Owed: carry one of the posted guest fixes on our kernel fork's
+`limina` branch for the enhanced tier (the kref or virtqueue-reset patch, not the uninterruptible
+wait). The stock tier waits for Fedora to ship a fixed kernel.
+
 ### Guest tools cannot be installed from the app alone
 The enhanced payload (kernel + mesa RPMs + agents + installer) is not bundled, and a second Mac has no
 RPMs and no toolchain. The qga bootstrap kit delivers limina-agent through the stock guest agent, but
