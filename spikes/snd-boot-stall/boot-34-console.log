@@ -1,0 +1,147 @@
+UEFI firmware (version  built at 11:57:40 on Jul 18 2026)
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI Misc Device" from VenHw(837DCA9E-E874-4D82-B29A-23FE0E23D1E2,0090010A00000000)
+BdsDxe: starting Boot0001 "UEFI Misc Device" from VenHw(837DCA9E-E874-4D82-B29A-23FE0E23D1E2,0090010A00000000)
+error: ../../grub-core/commands/bli.c:set_loader_device_part_uuid:123:unable to
+determine partition UUID of boot device.
+[0m[30m[40m[2J[01;01H[0m[37m[40m[0m[30m[40m[2J[01;01H[0m[37m[40m  Booting `Fedora Linux (6.19.10-300.fc44.aarch64) 44 (Workstation Edition)'
+
+P+q6E616D65\[6n[32766;32766H[6n[!p]104\[0m[?7h[1G[0J]3008;start=079426d898d84a0d972660c72d875fc4;user=root;hostname=fedora;machineid=7fff141efa3c4eacb8d575ad488d01b4;bootid=4f16ff12aad54a7f855dffe806fd6127;pid=1;pidfdid=2;comm=systemd;type=boot\[[0;32m  OK  [0m] Created slice [0;1;39msystem-modprobe.slice[0m - Slice /system/modprobe.
+[[0;32m  OK  [0m] Started [0;1;39mplymouth-start.service[0m - Show Plymouth Boot Screen.
+[[0;32m  OK  [0m] Started [0;1;39msystemd-ask-password-plymo…[0mquests to Plymouth Directory Watch.
+[[0;32m  OK  [0m] Reached target [0;1;39mcryptsetup.target[0m - Local Encrypted Volumes.
+[[0;32m  OK  [0m] Reached target [0;1;39mpaths.target[0m - Path Units.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-vconsole-setup.service[0m - Virtual Console Setup.
+         Stopping [0;1;39msystemd-vconsole-setup.service[0m - Virtual Console Setup...
+         Starting [0;1;39msystemd-vconsole-setup.service[0m - Virtual Console Setup...
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-vconsole-setup.service[0m - Virtual Console Setup.
+         Mounting [0;1;39msys-kernel-config.mount[0m - Kernel Configuration File System...
+[[0;32m  OK  [0m] Mounted [0;1;39msys-kernel-config.mount[0m - Kernel Configuration File System.
+[[0;32m  OK  [0m] Reached target [0;1;39msysinit.target[0m - System Initialization.
+[[0;32m  OK  [0m] Reached target [0;1;39mbasic.target[0m - Basic System.
+[[0;32m  OK  [0m] Found device [0;1;39mdev-disk-by\x2duuid-1…[0md4c818-0a3c-4612-8239-a5e317fa424f.
+[[0;32m  OK  [0m] Reached target [0;1;39minitrd-root-device.target[0m - Initrd Root Device.
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[[0;32m  OK  [0m] Finished [0;1;39mdracut-initqueue.service[0m - dracut initqueue hook.
+[[0;32m  OK  [0m] Reached target [0;1;39mremote-fs-pre.targe…[0mreparation for Remote File Systems.
+[[0;32m  OK  [0m] Reached target [0;1;39mremote-cryptsetup.target[0m - Remote Encrypted Volumes.
+[[0;32m  OK  [0m] Reached target [0;1;39mremote-fs.target[0m - Remote File Systems.
+         Starting [0;1;39mdracut-pre-mount.service[0m - dracut pre-mount hook...
+[[0;32m  OK  [0m] Finished [0;1;39mdracut-pre-mount.service[0m - dracut pre-mount hook.
+         Starting [0;1;39msystemd-fsck-root.service[0m…c818-0a3c-4612-8239-a5e317fa424f...
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[[0;32m  OK  [0m] Finished [0;1;39msystemd-fsck-root.service[0m…d4c818-0a3c-4612-8239-a5e317fa424f.
+         Mounting [0;1;39msysroot.mount[0m - /sysroot...
+[[0;32m  OK  [0m] Mounted [0;1;39msysroot.mount[0m - /sysroot.
+[[0;32m  OK  [0m] Reached target [0;1;39minitrd-root-fs.target[0m - Initrd Root File System.
+         Starting [0;1;39minitrd-parse-etc.service[0m …ints Configured in the Real Root...
+[[0;32m  OK  [0m] Finished [0;1;39minitrd-parse-etc.service[0m …points Configured in the Real Root.
+[[0;32m  OK  [0m] Reached target [0;1;39minitrd-fs.target[0m - Initrd File Systems.
+[[0;32m  OK  [0m] Reached target [0;1;39minitrd.target[0m - Initrd Default Target.
+         Starting [0;1;39mdracut-pre-pivot.service[0m …racut pre-pivot and cleanup hook...
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[[0;32m  OK  [0m] Finished [0;1;39mdracut-pre-pivot.service[0m - dracut pre-pivot and cleanup hook.
+         Starting [0;1;39minitrd-cleanup.service[0m - …ing Up and Shutting Down Daemons...
+[[0;32m  OK  [0m] Stopped target [0;1;39mremote-cryptsetup.target[0m - Remote Encrypted Volumes.
+[[0;32m  OK  [0m] Stopped target [0;1;39mtimers.target[0m - Timer Units.
+[[0;32m  OK  [0m] Stopped [0;1;39mdracut-pre-pivot.service[0m - dracut pre-pivot and cleanup hook.
+[[0;32m  OK  [0m] Stopped target [0;1;39minitrd.target[0m - Initrd Default Target.
+[[0;32m  OK  [0m] Stopped target [0;1;39mbasic.target[0m - Basic System.
+[[0;32m  OK  [0m] Stopped target [0;1;39minitrd-root-device.target[0m - Initrd Root Device.
+[[0;32m  OK  [0m] Stopped target [0;1;39minitrd-usr-fs.target[0m - Initrd /usr File System.
+[[0;32m  OK  [0m] Stopped target [0;1;39mpaths.target[0m - Path Units.
+[[0;32m  OK  [0m] Stopped target [0;1;39mremote-fs.target[0m - Remote File Systems.
+[[0;32m  OK  [0m] Stopped target [0;1;39mremote-fs-pre.targe…[0mreparation for Remote File Systems.
+[[0;32m  OK  [0m] Stopped target [0;1;39mslices.target[0m - Slice Units.
+[[0;32m  OK  [0m] Stopped target [0;1;39msockets.target[0m - Socket Units.
+[[0;32m  OK  [0m] Stopped target [0;1;39msysinit.target[0m - System Initialization.
+[[0;32m  OK  [0m] Stopped target [0;1;39mswap.target[0m - Swaps.
+[[0;32m  OK  [0m] Stopped [0;1;39mdracut-pre-mount.service[0m - dracut pre-mount hook.
+[[0;32m  OK  [0m] Stopped target [0;1;39mcryptsetup.target[0m - Local Encrypted Volumes.
+[[0;32m  OK  [0m] Stopped [0;1;39mdracut-initqueue.service[0m - dracut initqueue hook.
+         Starting [0;1;39mplymouth-switch-root.serv…e[0m - Plymouth switch root service...
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-sysctl.service[0m - Apply Kernel Variables.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-modules-load.service[0m - Load Kernel Modules.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-tmpfiles-setup.ser…[0mreate System Files and Directories.
+[[0;32m  OK  [0m] Stopped target [0;1;39mlocal-fs.target[0m - Local File Systems.
+[[0;32m  OK  [0m] Stopped target [0;1;39mlocal-fs-pre.target[0m…Preparation for Local File Systems.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-udev-trigger.service[0m - Coldplug All udev Devices.
+[[0;32m  OK  [0m] Stopped [0;1;39mdracut-pre-trigger.service[0m - dracut pre-trigger hook.
+         Stopping [0;1;39msystemd-udevd.service[0m - R…ager for Device Events and Files...
+[[0;32m  OK  [0m] Finished [0;1;39minitrd-cleanup.service[0m - …aning Up and Shutting Down Daemons.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-udevd.service[0m - Ru…anager for Device Events and Files.
+[[0;32m  OK  [0m] Closed [0;1;39msystemd-udevd-control.socket[0m - udev Control Socket.
+[[0;32m  OK  [0m] Stopped [0;1;39mdracut-pre-udev.service[0m - dracut pre-udev hook.
+[[0;32m  OK  [0m] Stopped [0;1;39mdracut-cmdline.service[0m - dracut cmdline hook.
+[[0;32m  OK  [0m] Stopped [0;1;39mdracut-cmdline-ask.service[0m… for additional cmdline parameters.
+         Starting [0;1;39minitrd-udevadm-cleanup-db.service[0m - Cleanup udev Database...
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-tmpfiles-setup-dev…[0mCreate Static Device Nodes in /dev.
+[[0;32m  OK  [0m] Stopped [0;1;39msystemd-tmpfiles-setup-dev…[0mic Device Nodes in /dev gracefully.
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[[0;32m  OK  [0m] Stopped [0;1;39mkmod-static-nodes.service[0m …Create List of Static Device Nodes.
+[[0;32m  OK  [0m] Finished [0;1;39mplymouth-switch-root.service[0m - Plymouth switch root service.
+[[0;32m  OK  [0m] Finished [0;1;39minitrd-udevadm-cleanup-db.service[0m - Cleanup udev Database.
+[[0;32m  OK  [0m] Reached target [0;1;39minitrd-switch-root.target[0m - Switch Root.
+         Starting [0;1;39minitrd-switch-root.service[0m - Switch Root...
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[0;21;31mpower_supply sbs-0-000b: driver failed to report `time_to_empty_now' property: -5[0m
+[    4.991282] Unable to handle kernel paging request at virtual address fffffffffffffff8
+[    4.991289] Mem abort info:
+[    4.991290]   ESR = 0x0000000096000006
+[    4.991290]   EC = 0x25: DABT (current EL), IL = 32 bits
+[    4.991292]   SET = 0, FnV = 0
+[    4.991292]   EA = 0, S1PTW = 0
+[    4.991292]   FSC = 0x06: level 2 translation fault
+[    4.991293] Data abort info:
+[    4.991293]   ISV = 0, ISS = 0x00000006, ISS2 = 0x00000000
+[    4.991294]   CM = 0, WnR = 0, TnD = 0, TagAccess = 0
+[    4.991294]   GCS = 0, Overlay = 0, DirtyBit = 0, Xs = 0
+[    4.991295] swapper pgtable: 4k pages, 48-bit VAs, pgdp=00000000e7d46000
+[    4.991296] [fffffffffffffff8] pgd=00000000e9197403, p4d=00000000e9197403, pud=00000000e9198403, pmd=0000000000000000
+[    4.991300] Internal error: Oops: 0000000096000006 [#1]  SMP
+[    4.998302] Modules linked in: sbs_battery i2c_virtio xhci_plat_hcd ghash_ce gpio_keys virtio_mmio fuse i2c_dev qemu_fw_cfg
+[    4.999357] CPU: 0 UID: 0 PID: 238 Comm: systemd-journal Not tainted 6.19.10-300.fc44.aarch64 #1 PREEMPT(voluntary) 
+[    5.000345] Hardware name: Limina KVM Virtual Machine (Limina, libkrun), BIOS 0 01/05/2024
+[    5.001107] pstate: 014000c5 (nzcv daIF +PAN -UAO -TCO +DIT -SSBS BTYPE=--)
+[    5.001750] pc : complete+0x60/0xb0
+[    5.002081] lr : complete+0x2c/0xb0
+[    5.002422] sp : ffff800080003e10
+[    5.002740] x29: ffff800080003e10 x28: ffff0000d4370000 x27: 0000000000000000
+[    5.003400] x26: ffffbe58704f7000 x25: ffff0000c02f5c00 x24: ffffbe5871bc0260
+[    5.004054] x23: 0000000000000018 x22: 0000000000000018 x21: 00000000000000c0
+[    5.004713] x20: ffff0000c24bc908 x19: 0000000000000000 x18: 0000000000000000
+[    5.005390] x17: ffff41a88e33b000 x16: ffffbe586e54ffa8 x15: 0000000000000000
+[    5.006052] x14: 0000000000000000 x13: 0000000000000000 x12: 0000000000000000
+[    5.006725] x11: 0000000000000000 x10: 0000000000000040 x9 : ffffbe586e54ffd4
+[    5.007389] x8 : 0000000000000000 x7 : 0000000000000025 x6 : ffff0000c0401940
+[    5.008045] x5 : ffff0000c24bc900 x4 : ffff0000c08e0d00 x3 : 00000000000000c0
+[    5.008707] x2 : 0000000000000000 x1 : 0000000000000003 x0 : ffff0000c24bc910
+[    5.009379] Call trace:
+[    5.009626]  complete+0x60/0xb0 (P)
+[    5.009956]  virtio_i2c_msg_done+0x3c/0x88 [i2c_virtio]
+[    5.010446]  vring_interrupt+0x78/0x128
+[    5.010817]  vm_interrupt+0x74/0xc0 [virtio_mmio]
+[    5.011253]  __handle_irq_event_percpu+0x68/0x2c0
+[    5.011713]  handle_irq_event+0x4c/0xd0
+[    5.012070]  handle_fasteoi_irq+0xfc/0x1a8
+[    5.012460]  handle_irq_desc+0x3c/0x68
+[    5.012818]  generic_handle_domain_irq+0x20/0x40
+[    5.013245]  __gic_handle_irq_from_irqson.isra.0+0x124/0x280
+[    5.013785]  gic_handle_irq+0x5c/0xa0
+[    5.014126]  call_on_irq_stack+0x30/0x48
+[    5.014503]  do_interrupt_handler+0x88/0x98
+[    5.014919]  el0_interrupt+0x4c/0x190
+[    5.015264]  __el0_irq_handler_common+0x18/0x28
+[    5.015706]  el0t_64_irq_handler+0x10/0x20
+[    5.016096]  el0t_64_irq+0x1b0/0x1b8
+[    5.016442] Code: 540001c0 f9400a73 52800002 52800061 (f85f8260) 
+[    5.017020] ---[ end trace 0000000000000000 ]---
+[    5.017454] Kernel panic - not syncing: Oops: Fatal exception in interrupt
+[    5.018084] SMP: stopping secondary CPUs
+[    5.024211] Kernel Offset: 0x3e57ee3a0000 from 0xffff800080000000
+[    5.024902] PHYS_OFFSET: 0x40000000
+[    5.025239] CPU features: 0x000000,00018001,44484501,9407f723
+[    5.025791] Memory Limit: none
+[    5.026090] ---[ end Kernel panic - not syncing: Oops: Fatal exception in interrupt ]---
