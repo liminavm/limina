@@ -40,17 +40,19 @@ silently fails to find them:
   ``PATH``. KK **requires** it (``with_kosmickrisp_vk`` pulls CLC → LLVM, plus ``libclc``,
   ``spirv-llvm-translator``, ``spirv-tools``). Prepend ``$(brew --prefix llvm)/bin`` to ``PATH``.
   Known-good: the reference machine builds the pinned rev with **LLVM 22.1.8**.
-- **libclc is version-coupled to the Mesa rev, and Homebrew's current one does not match.**
-  Mesa locates libclc *only* through pkg-config (``meson.build``'s ``dependency('libclc')``),
-  then bakes that file's ``libexecdir`` into ``DYNAMIC_LIBCLC_PATH`` and **mmaps
-  ``spirv64-mesa3d-.spv`` from it at run time** — ``static-libclc`` is empty by default, so
-  the SPIR-V is not embedded. **libclc 22.x** ships both the ``.pc`` and those filenames;
-  **23.x dropped the ``.pc``** and renamed the payload to ``<target>/libclc.spv``. So a 23.x
-  install does not merely fail to configure: hand it a written-by-hand ``.pc`` and it will
-  configure, compile, and then fail the first time a guest reaches CLC.
-  ``scripts/build-host-mesa.sh`` checks the *shape* (the ``.pc`` **and** both ``.spv`` names)
-  rather than the presence, and takes ``LIBCLC_PC_DIR`` to point at a libclc obtained some
-  other way. There is no ``libclc@22`` formula.
+- **libclc is version-coupled to the Mesa rev, so it is pinned, not installed.**
+  ``src/kosmickrisp/libkk/*.cl`` (tessellation, geometry, draws, queries) are compiled **at
+  build time** by ``mesa_clc`` against libclc's SPIR-V, so this data ends up inside the driver
+  we ship — it is not a configure-time gate. Mesa locates libclc *only* through pkg-config
+  (``meson.build``'s ``dependency('libclc')``), then takes ``spirv64-mesa3d-.spv`` from that
+  file's ``libexecdir``. **libclc 22.x** ships both the ``.pc`` and those filenames; **23.x
+  dropped the ``.pc``** and renamed the payload to ``<target>/libclc.spv``, and there is no
+  ``libclc@22`` formula — so ``brew install libclc`` gives you the wrong thing, and a
+  hand-written ``.pc`` over it would configure, compile, and yield kernels built against the
+  wrong standard library. ``third_party/manifest.toml``'s ``[libclc]`` pins the 22.1.3 bottle
+  by blob digest plus the digests of the two ``.spv`` we actually use;
+  ``scripts/build-host-mesa.sh`` fetches it into ``third_party/libclc/``, verifies both, and
+  writes its own ``.pc``. ``LIBCLC_PC_DIR`` overrides the whole thing.
 - **A non-Apple ``ld`` earlier on ``PATH`` breaks the build**, and only once LLVM is prepended:
   that also shadows Apple's ``clang`` with Homebrew's, which (unlike Apple's) resolves ``ld``
   through ``PATH``. A ``~/.local/bin/ld -> mold`` shim — a common Rust setup — then gets Mach-O

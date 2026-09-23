@@ -81,6 +81,34 @@ repo = "https://github.com/liminavm/virglrs.git"
 branch = "main"
 rev = "59e8b86a0e6566414b8d2444ce493898856bcb4f"
 
+# The OpenCL C standard library KosmicKrisp's kernels are compiled against. NOT a source
+# checkout and not merely a configure-time gate: `src/kosmickrisp/libkk/*.cl` (tessellation,
+# geometry, draws, queries) are compiled AT BUILD TIME by mesa_clc against these SPIR-V blobs,
+# so what is pinned here ends up inside the driver we ship.
+#
+# Pinned as a Homebrew bottle rather than a git rev because the payload is prebuilt,
+# target-independent data: pinning the source would drag in a matching LLVM to build it with,
+# which is a far heavier coupling to carry for two data files.
+#
+# The version is load-bearing and is NOT what `brew install libclc` gives you any more.
+# Mesa locates libclc only through pkg-config, then bakes that file's `libexecdir` into
+# DYNAMIC_LIBCLC_PATH and reads `spirv64-mesa3d-.spv` from it. libclc 22.x ships both the .pc
+# and those filenames; 23.x dropped the .pc and renamed the payload to `<target>/libclc.spv`,
+# and there is no `libclc@22` formula. A hand-written .pc over a 23.x install would therefore
+# configure, compile, and produce a driver whose kernels were built against the wrong thing.
+#
+# `blob` is the bottle layer, fetched straight from ghcr by scripts/build-host-mesa.sh and
+# checked against `blob_sha256`; `spirv*_sha256` then check the two files we actually use, so
+# a bottle for a different platform tag cannot substitute silently. The arm64_tahoe bottle is
+# pinned for every host: the payload is OS-independent data, and the file digests prove it.
+[libclc]
+version = "22.1.3"
+bottle_tag = "arm64_tahoe"
+blob = "https://ghcr.io/v2/homebrew/core/libclc/blobs/sha256:ade860b92b5326a59d9c439be0b26a5efe3b5036b4ae5ad1369ba02c6269dfe8"
+blob_sha256 = "ade860b92b5326a59d9c439be0b26a5efe3b5036b4ae5ad1369ba02c6269dfe8"
+spirv_sha256 = "f44305b94e884049d35d3934416a75571eb7bb0085e3593f8c04480956c02e30"
+spirv64_sha256 = "f725856fffbfe6dfbe6149a6a49cac407ab3a1c2eee9a7326c3dcdbd8987ee84"
+
 [linux]
 repo = "https://github.com/liminavm/linux.git"
 upstream = "https://github.com/gregkh/linux.git"

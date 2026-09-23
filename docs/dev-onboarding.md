@@ -9,12 +9,12 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
 
 - macOS on Apple Silicon (developed on macOS 26.5, M1 Max, 16 KiB host pages).
 - Rust (stable), full Xcode + command-line tools (codesign, otool).
-- Homebrew: `molten-vk vulkan-loader gvproxy libusb cmake meson ninja llvm libclc
+- Homebrew: `molten-vk vulkan-loader gvproxy libusb cmake meson ninja llvm
   spirv-llvm-translator spirv-tools bison`. The keg-only ones (`llvm`, `bison`, and `expat`
   where it exists) are what the host Mesa build needs on `PATH` / `PKG_CONFIG_PATH`;
   `scripts/build-host-mesa.sh` puts them there for you but cannot install them.
-  **`libclc` is version-coupled**: the pinned Mesa rev needs 22.x's layout, and Homebrew now
-  ships 23.x, which dropped the pkg-config file Mesa locates it by — see step 1.5. (`qemu` for `qemu-img`, `glslang` for `scripts/gen-vkstill-spv.sh`, and
+  **Not `libclc`** — it is version-coupled to the Mesa rev and pinned in
+  `third_party/manifest.toml` instead, fetched and digest-checked by the build (step 1.5). (`qemu` for `qemu-img`, `glslang` for `scripts/gen-vkstill-spv.sh`, and
   `cargo-nextest` for a parallel suite are each used by one script and optional until you
   run it. `libkrun`/`libkrunfw`/`krunkit`/`virglrenderer` are **not** needed — we build our
   own forks, and the C virglrenderer is no longer loaded at runtime at all.)

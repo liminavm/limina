@@ -27,9 +27,10 @@
 #   NDEBUG=true|false     override the assert decision on its own
 #   JOBS=N                ninja parallelism (default: ninja's own)
 #   MESA_CS_SIZE=80g      max size of a freshly created sparse image (sparse: grows on demand)
-#   LIBCLC_PC_DIR=<dir>   a directory holding libclc.pc, searched before Homebrew's -- for a
-#                         host whose packaged libclc no longer matches the pinned Mesa rev
-# Prereqs: brew install llvm bison expat molten-vk meson ninja; network on the first run.
+#   LIBCLC_PC_DIR=<dir>   use this libclc instead of the manifest-pinned one (must still have
+#                         the 22.x shape: a .pc whose libexecdir holds spirv*-mesa3d-.spv)
+# Prereqs: brew install llvm spirv-llvm-translator bison molten-vk meson ninja;
+#          network on the first run (clones Mesa, fetches the pinned libclc).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
@@ -54,14 +55,14 @@ fi
 
 # ---- toolchain ------------------------------------------------------------------------------
 command -v brew >/dev/null || { echo "Homebrew is required to locate the keg-only toolchain" >&2; exit 1; }
-# KosmicKrisp compiles OpenCL C to SPIR-V to MSL, so it needs the whole CLC path, not just
-# llvm-config: libclc and spirv-llvm-translator are separate formulae and meson only says
-# "Dependency libclc not found" when one is absent. bison is for zink's GLSL glcpp grammar,
-# molten-vk for the headers zink's darwin path compiles against.
+# KosmicKrisp compiles OpenCL C to SPIR-V to MSL, so it needs the CLC path, not just
+# llvm-config. libclc itself is NOT here: it is version-coupled to the Mesa rev and comes from
+# the manifest pin below, not from Homebrew. bison is for zink's GLSL glcpp grammar, molten-vk
+# for the headers zink's darwin path compiles against.
 # expat is deliberately NOT here: it is keg-only when present but the build does not require
 # it (the reference machine has no expat formula at all), so it only joins PKG_CONFIG_PATH
 # below, where a missing directory is ignored.
-for f in llvm libclc spirv-llvm-translator bison molten-vk; do
+for f in llvm spirv-llvm-translator bison molten-vk; do
   [ -d "$(brew --prefix "$f")" ] || { echo "missing Homebrew $f (brew install $f)" >&2; exit 1; }
 done
 for t in meson ninja; do
@@ -99,24 +100,62 @@ fi
 # `<target>/libclc.spv`. So a newer libclc does not merely fail to configure -- with a
 # hand-written .pc it would configure, compile, and then fail when the guest first reaches
 # CLC. Check the shape, not the presence.
-# A machine whose Homebrew no longer offers a compatible libclc can point at one it has
-# some other way (an extracted keg, a source build); it joins the search path ahead of brew's.
-[ -n "${LIBCLC_PC_DIR:-}" ] && export PKG_CONFIG_PATH="$LIBCLC_PC_DIR:$PKG_CONFIG_PATH"
-if ! pkg-config --exists libclc 2>/dev/null; then
-  echo "libclc has no pkg-config file — Mesa locates it only that way." >&2
-  echo "Homebrew's libclc 23.x dropped it (22.x shipped share/pkgconfig/libclc.pc); the Mesa" >&2
-  echo "rev pinned in third_party/manifest.toml needs the 22.x layout. Install a libclc whose" >&2
-  echo "libexecdir holds spirv-mesa3d-.spv and spirv64-mesa3d-.spv." >&2
-  exit 1
+# libclc comes from the manifest pin, not from whatever Homebrew currently calls `libclc`.
+# LIBCLC_PC_DIR overrides it for a host that has a compatible one some other way.
+clc_pin() { awk -v k="$1" '/^\[libclc\]/{f=1;next} /^\[/{f=0} f && $1==k {gsub(/"/,"",$3); print $3; exit}' third_party/manifest.toml; }
+if [ -z "${LIBCLC_PC_DIR:-}" ]; then
+  CLC_VER="$(clc_pin version)"; CLC_BLOB="$(clc_pin blob)"; CLC_BLOB_SHA="$(clc_pin blob_sha256)"
+  CLC_SPIRV_SHA="$(clc_pin spirv_sha256)"; CLC_SPIRV64_SHA="$(clc_pin spirv64_sha256)"
+  [ -n "$CLC_VER" ] && [ -n "$CLC_BLOB" ] && [ -n "$CLC_BLOB_SHA" ] \
+    || { echo "incomplete [libclc] entry in third_party/manifest.toml" >&2; exit 1; }
+
+  CLC_ROOT="$ROOT/third_party/libclc"
+  CLC_BASEDIR="$CLC_ROOT/share/clc"
+  # Re-verify every run, not just on a cache miss: this data ends up compiled into the driver,
+  # so "the directory is already there" is not the question worth answering.
+  clc_ok() {
+    [ -e "$CLC_BASEDIR/spirv-mesa3d-.spv" ] && [ -e "$CLC_BASEDIR/spirv64-mesa3d-.spv" ] &&
+      echo "$CLC_SPIRV_SHA  $CLC_BASEDIR/spirv-mesa3d-.spv" | shasum -a 256 -c --status - &&
+      echo "$CLC_SPIRV64_SHA  $CLC_BASEDIR/spirv64-mesa3d-.spv" | shasum -a 256 -c --status -
+  }
+
+  if ! clc_ok; then
+    echo "==> fetching pinned libclc $CLC_VER ($(clc_pin bottle_tag))"
+    tarball="$ROOT/target/host-mesa/libclc-$CLC_VER.tar.gz"
+    mkdir -p "$(dirname "$tarball")"
+    # Homebrew's registry serves bottle blobs to an anonymous bearer token.
+    curl -fsSL -H "Authorization: Bearer QQ==" "$CLC_BLOB" -o "$tarball"
+    echo "$CLC_BLOB_SHA  $tarball" | shasum -a 256 -c --status - \
+      || { echo "libclc bottle digest mismatch — refusing it (expected $CLC_BLOB_SHA)" >&2; exit 1; }
+    rm -rf "$CLC_ROOT"; mkdir -p "$CLC_ROOT"
+    # The bottle is laid out as libclc/<version>/..., so strip both.
+    tar xzf "$tarball" -C "$CLC_ROOT" --strip-components 2
+    clc_ok || { echo "libclc payload digest mismatch after extracting $tarball" >&2; exit 1; }
+  fi
+
+  # Write our own .pc: the bottle's points libexecdir at the Homebrew prefix it was built for.
+  LIBCLC_PC_DIR="$CLC_ROOT/share/pkgconfig"
+  mkdir -p "$LIBCLC_PC_DIR"
+  printf 'libexecdir=%s\n\nName: libclc\nDescription: Library requirements of the OpenCL C programming language\nVersion: %s\nLibs: -L${libexecdir}\n' \
+    "$CLC_BASEDIR" "$CLC_VER" > "$LIBCLC_PC_DIR/libclc.pc"
 fi
+export PKG_CONFIG_PATH="$LIBCLC_PC_DIR:$PKG_CONFIG_PATH"
+
+# Whatever provided it -- the pin or an override -- it has to have the 22.x shape. Mesa finds
+# libclc only through pkg-config, and mesa_clc then compiles src/kosmickrisp/libkk/*.cl against
+# `spirv64-mesa3d-.spv` from its libexecdir. libclc 23.x dropped the .pc and renamed the
+# payload, so a newer one does not fail loudly here -- it would build a driver whose kernels
+# were compiled against the wrong thing. Check the shape, not the presence.
+pkg-config --exists libclc 2>/dev/null \
+  || { echo "no libclc.pc on PKG_CONFIG_PATH ($LIBCLC_PC_DIR) — Mesa locates libclc only that way" >&2; exit 1; }
 CLC_BASEDIR="$(pkg-config --variable=libexecdir libclc)"
 for f in spirv-mesa3d-.spv spirv64-mesa3d-.spv; do
   [ -e "$CLC_BASEDIR/$f" ] && continue
-  echo "libclc at $CLC_BASEDIR is missing $f — Mesa mmaps it at runtime (DYNAMIC_LIBCLC_PATH)," >&2
-  echo "so this build would link and then fail the first time the guest reaches CLC." >&2
-  echo "That is libclc 23.x's layout (<target>/libclc.spv); the pinned Mesa rev needs 22.x's." >&2
+  echo "libclc at $CLC_BASEDIR is missing $f — that is libclc 23.x's layout" >&2
+  echo "(<target>/libclc.spv); the Mesa rev pinned in third_party/manifest.toml needs 22.x's." >&2
   exit 1
 done
+echo "==> libclc: $CLC_BASEDIR"
 
 # Mesa's codegen is mako-driven; the venv also carries what virglrs's generators need.
 # shellcheck source=scripts/ensure-venv-mesa.sh
