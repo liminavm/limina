@@ -825,6 +825,26 @@ for the rest of its life, silently dropping every later submission. Fix: move (o
 sampler lookup into `virgl_resource_create_front` on `limina-guest`, re-export, bump the mesa RPM
 release, redeliver.
 
+### Hardware decode blocks the virtio-gpu control thread for the length of every frame
+`Session::decode` (virglrs `src/videotoolbox.rs`) calls `VTDecompressionSessionDecodeFrame`
+without `kVTDecodeFrame_EnableAsynchronousDecompression` and returns only once the output callback
+has run. `Video::end_frame` (`src/vrend/video/mod.rs`) calls it inline, so the wait runs on the
+libkrun gpu worker thread that serves the whole control queue. Every other context's submits,
+flushes, `SET_SCANOUT`, cursor and fence processing queue behind one frame's hardware decode. A stack
+sample of a dogfood worker playing 640x368 video in Firefox while a Moonlight stream also used
+the media engine (measured 2026-09-23, M4 Pro) showed that thread spending 1094 of 4485 samples in `Session::decode`
+(896 in `FigSemaphoreWaitRelative`, 179 in a synchronous XPC reply from `VTDecoderXPCService`). The
+same run logged `control queue drain ran 100–626 ms` warnings. That run had the worker clamped to
+priority 4 by macOS Game Mode, which inflated the waits (with the clamp gone they fell to 229/3834),
+but the coupling is independent of the clamp: any slow decode (a
+contended media engine, a large AV1 frame) stalls the desktop's present with it. Fix shape: move
+decode onto a per-session decode thread (or VT's asynchronous mode), and retire the END_FRAME's
+fence when its picture lands, not when the command is processed. Delivery into the target must stay
+on the thread that holds the GL context (the VT callback thread has none, `docs/graphics.md` §4.5).
+It also has to keep the per-codec frame ordering and the restore journal's view of which frames were
+decoded. Check: the same stack sample shows no `Session::decode` under `Worker::process_gpu_command`, and
+`LIMINA_GPU_TRACE` flush-to-present latency on a seated desktop does not move when a video starts.
+
 ### mpv's VA-API path cannot render on venus
 `mpv --hwdec=vaapi` loads the driver but libplacebo's dmabuf interop fails probing surface formats —
 `vk->MapMemory(...): VK_ERROR_MEMORY_MAP_FAILED (../src/vulkan/malloc.c:973)` — the `vo/gpu` load is
