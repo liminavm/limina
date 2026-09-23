@@ -882,25 +882,24 @@ for the rest of its life, silently dropping every later submission. Fix: move (o
 sampler lookup into `virgl_resource_create_front` on `limina-guest`, re-export, bump the mesa RPM
 release, redeliver.
 
-### Hardware decode blocks the virtio-gpu control thread for the length of every frame
-`Session::decode` (virglrs `src/videotoolbox.rs`) calls `VTDecompressionSessionDecodeFrame`
-without `kVTDecodeFrame_EnableAsynchronousDecompression` and returns only once the output callback
-has run. `Video::end_frame` (`src/vrend/video/mod.rs`) calls it inline, so the wait runs on the
-libkrun gpu worker thread that serves the whole control queue. Every other context's submits,
-flushes, `SET_SCANOUT`, cursor and fence processing queue behind one frame's hardware decode. A stack
-sample of a dogfood worker playing 640x368 video in Firefox while a Moonlight stream also used
-the media engine (measured 2026-09-23, M4 Pro) showed that thread spending 1094 of 4485 samples in `Session::decode`
-(896 in `FigSemaphoreWaitRelative`, 179 in a synchronous XPC reply from `VTDecoderXPCService`). The
-same run logged `control queue drain ran 100–626 ms` warnings. That run had the worker clamped to
-priority 4 by macOS Game Mode, which inflated the waits (with the clamp gone they fell to 229/3834),
-but the coupling is independent of the clamp: any slow decode (a
-contended media engine, a large AV1 frame) stalls the desktop's present with it. Fix shape: move
-decode onto a per-session decode thread (or VT's asynchronous mode), and retire the END_FRAME's
-fence when its picture lands, not when the command is processed. Delivery into the target must stay
-on the thread that holds the GL context (the VT callback thread has none, `docs/graphics.md` §4.5).
-It also has to keep the per-codec frame ordering and the restore journal's view of which frames were
-decoded. Check: the same stack sample shows no `Session::decode` under `Worker::process_gpu_command`, and
-`LIMINA_GPU_TRACE` flush-to-present latency on a seated desktop does not move when a video starts.
+### Hardware decode: what is still synchronous, and the waits nothing counts
+VA-API decodes run on a thread per codec and every read of a target waits for its picture
+(`docs/design/async-video-decode.md`). What remains:
+- **A target lent to a venus context decodes synchronously.** A Vulkan read passes no host barrier,
+  so a composite target whose surface was ever imported into venus keeps the old stall. Lifting it
+  needs the guest to fence END_FRAME (mesa-guest, design phase 3) and the host to trust that per
+  codec (phase 4). The same guest fence closes the existing race for a decode already queued when
+  the lend happens.
+- **Per-plane uploads still run on the control thread.** Only the VideoToolbox wait left it; the
+  `glTexSubImage2D` of each plane happens when a reader settles the target. Cheap next to the decode,
+  but not free for large frames.
+- **Two waits on the control thread are not counted.** END_FRAME blocks when the codec's decode
+  queue is full, and a second decode into a target nothing has read waits for the first picture.
+  Neither shows in `VIRGLRS_SUBMIT_STATS`, whose `reads waited for a picture` line counts only
+  reads. Measured 2026-09-23 on Firefox playing VP9 at 25 fps: END_FRAME cost 0.03 ms a frame, the
+  worst video command 0.2 ms, and no read waited. Under the macOS Game Mode clamp the same playback
+  rose to 2-15 ms a frame (worst 327 ms), with the whole worker starved; the stats cannot say how
+  much of that was these two waits and how much plain CPU denial. Counting both would.
 
 ### mpv's VA-API path cannot render on venus
 `mpv --hwdec=vaapi` loads the driver but libplacebo's dmabuf interop fails probing surface formats —
