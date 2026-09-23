@@ -5,7 +5,7 @@
 # Build the limina enhanced-tier 16 KiB-page kernel as a Fedora RPM, NATIVELY INSIDE an F44 guest.
 #
 # Per the "Fedora config for the most part" goal, this does NOT use a bare upstream `make
-# defconfig` (the old scripts/build-kernel-rpm.sh did). Instead it starts from THIS guest's real
+# defconfig` (the retired F43 builder did). Instead it starts from the real
 # Fedora config (the running kernel's, or the image's kernel-core in the build container) on a
 # matching upstream source tree, and applies the
 # single load-bearing delta — CONFIG_ARM64_16K_PAGES=y — plus a few build-hygiene flips so a
@@ -19,8 +19,8 @@
 # series any more — see that file and guest/virtio-gpu-dkms/README.md for what moved where).
 #
 # THE INTRICATE ONE — most likely to need an in-guest tweak. Knobs: KREV (fork rev override),
-# CONFIG_BASE (base config). If the Fedora-config build fights you, the validated fallback is the
-# old upstream-defconfig recipe in scripts/build-kernel-rpm.sh.
+# CONFIG_BASE (base config). If the Fedora-config build fights you, the validated fallback is
+# the upstream-defconfig recipe of the retired F43 builder (`git log -- scripts/build-kernel-rpm.sh`).
 #
 # Usage (in the guest):  scripts/provision/f44/build-kernel-rpm.sh
 # Output: $OUT/limina-kernel-16k-*.rpm  (default ~/limina-build/kernel)

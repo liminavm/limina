@@ -7,7 +7,7 @@
 # Source-of-truth = THIS guest's OWN mesa SRPM (F44 ships mesa 26.0.x), + our venus patches +
 # a Release bump. Because we rebuild the SAME version Fedora ships (not a jump to upstream 26.2),
 # the megadriver soname is unchanged, so `dnf install` swaps stock -> ours cleanly with NO ABI
-# blend — that is the whole reason the F44 SRPM path is simpler than scripts/build-mesa-rpm.sh,
+# blend — that is the whole reason the F44 SRPM path is simpler than the retired F43 builder,
 # which had to manage a 25.x->26.2 soname swap on F43. The installer (install-enhanced.sh) then
 # `dnf versionlock`s it so an update can't revert venus.
 #

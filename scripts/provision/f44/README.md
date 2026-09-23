@@ -41,9 +41,9 @@ fork:
 | mutter | F44 **mutter SRPM** (50.x) | `patches/mutter/0001-0003` rebased onto 50.x | NOT locked (tracks gnome-shell) |
 
 Because the mesa/mutter builds rebuild the **same version** Fedora ships (just `+.limina`
-Release + our patches), they replace stock cleanly — no soname mismatch. (Contrast the older
-`scripts/build-mesa-rpm.sh`, which jumped to upstream 26.2 on an F43 that shipped 25.x and so
-*had* to manage a soname swap.)
+Release + our patches), they replace stock cleanly — no soname mismatch. (Contrast the retired F43 builder,
+which jumped to upstream 26.2 on an F43 that shipped 25.x and so *had* to manage a soname
+swap — `git log -- scripts/build-mesa-rpm.sh` if you need it.)
 
 ## Prerequisites in the guest
 - The limina **repo present in the guest** (these scripts read `patches/` relative to
