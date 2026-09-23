@@ -1,5 +1,5 @@
-/* Begin a render pass with fewer attachment image views than the pass
- * declares, then end it and the command buffer.
+/* Begin a 2-attachment render pass the ways a guest can get wrong, then end
+ * it and the command buffer.
  *
  *   rp_attach_count imageless   imageless framebuffer, VkRenderPassAttachmentBeginInfo
  *                               carrying 1 view for a 2-attachment pass
@@ -7,7 +7,21 @@
  *                               2-attachment pass
  *   rp_attach_count nobegin     imageless framebuffer begun WITHOUT
  *                               VkRenderPassAttachmentBeginInfo (0 views)
+ *   rp_attach_count nullrp      renderPass = VK_NULL_HANDLE
+ *   rp_attach_count nullfb      framebuffer = VK_NULL_HANDLE
+ *   rp_attach_count nullfb-il   framebuffer = VK_NULL_HANDLE, but 2 views
+ *                               supplied by VkRenderPassAttachmentBeginInfo
+ *   rp_attach_count nullview    imageless, 2 views supplied, the second NULL
+ *   rp_attach_count nullfbview  regular framebuffer created with 2 views,
+ *                               the second NULL
+ *   rp_attach_count draw        the "imageless" begin, then a draw
+ *   rp_attach_count drawnopass  a draw with no render pass begun at all
  *   rp_attach_count ok          valid control: 2 views, 2 attachments
+ *   rp_attach_count drawok      valid control, with a draw
+ *
+ * The draw modes bind a pipeline built from tri.vert.spv / tri.frag.spv (in
+ * the working directory) and exit 3 if it cannot be built, so a missing
+ * pipeline never reads as a survived draw.
  *
  * Run against a chosen ICD with VK_ICD_FILENAMES=<icd.json>.  Exit 0 and a
  * "RESULT" line means the process survived; the EndCommandBuffer result is
@@ -68,13 +82,125 @@ find_mem(VkPhysicalDevice pd, uint32_t bits)
    return 0;
 }
 
+static VkShaderModule
+load_shader(VkDevice dev, const char *path)
+{
+   FILE *f = fopen(path, "rb");
+   if (!f) {
+      fprintf(stderr, "cannot open %s\n", path);
+      exit(3);
+   }
+   static uint32_t code[4096];
+   size_t n = fread(code, 1, sizeof(code), f);
+   fclose(f);
+   VkShaderModuleCreateInfo ci = {
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .codeSize = n,
+      .pCode = code,
+   };
+   VkShaderModule m;
+   if (vkCreateShaderModule(dev, &ci, NULL, &m) != VK_SUCCESS) {
+      fprintf(stderr, "vkCreateShaderModule(%s) failed\n", path);
+      exit(3);
+   }
+   return m;
+}
+
+/* A full-screen triangle writing both colour attachments of subpass 0. */
+static VkPipeline
+make_pipeline(VkDevice dev, VkRenderPass rp)
+{
+   VkPipelineShaderStageCreateInfo stages[2] = {
+      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+       .stage = VK_SHADER_STAGE_VERTEX_BIT,
+       .module = load_shader(dev, "tri.vert.spv"),
+       .pName = "main"},
+      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+       .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+       .module = load_shader(dev, "tri.frag.spv"),
+       .pName = "main"},
+   };
+   VkPipelineVertexInputStateCreateInfo vi = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+   };
+   VkPipelineInputAssemblyStateCreateInfo ia = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+   };
+   VkViewport vp = {0, 0, 64, 64, 0, 1};
+   VkRect2D sc = {{0, 0}, {64, 64}};
+   VkPipelineViewportStateCreateInfo vps = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+      .viewportCount = 1,
+      .pViewports = &vp,
+      .scissorCount = 1,
+      .pScissors = &sc,
+   };
+   VkPipelineRasterizationStateCreateInfo rs = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+      .polygonMode = VK_POLYGON_MODE_FILL,
+      .cullMode = VK_CULL_MODE_NONE,
+      .lineWidth = 1.0f,
+   };
+   VkPipelineMultisampleStateCreateInfo ms = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+   };
+   VkPipelineColorBlendAttachmentState cba[2] = {
+      {.colorWriteMask = 0xf},
+      {.colorWriteMask = 0xf},
+   };
+   VkPipelineColorBlendStateCreateInfo cb = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+      .attachmentCount = 2,
+      .pAttachments = cba,
+   };
+   VkPipelineLayoutCreateInfo plci = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+   };
+   VkPipelineLayout layout;
+   if (vkCreatePipelineLayout(dev, &plci, NULL, &layout) != VK_SUCCESS) {
+      fprintf(stderr, "vkCreatePipelineLayout failed\n");
+      exit(3);
+   }
+   VkGraphicsPipelineCreateInfo gci = {
+      .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+      .stageCount = 2,
+      .pStages = stages,
+      .pVertexInputState = &vi,
+      .pInputAssemblyState = &ia,
+      .pViewportState = &vps,
+      .pRasterizationState = &rs,
+      .pMultisampleState = &ms,
+      .pColorBlendState = &cb,
+      .layout = layout,
+      .renderPass = rp,
+      .subpass = 0,
+   };
+   VkPipeline p;
+   VkResult r = vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &gci, NULL, &p);
+   if (r != VK_SUCCESS) {
+      fprintf(stderr, "vkCreateGraphicsPipelines failed: %d\n", r);
+      exit(3);
+   }
+   return p;
+}
+
 int
 main(int argc, char **argv)
 {
    const char *mode = argc > 1 ? argv[1] : "imageless";
-   int nobegin = !strcmp(mode, "nobegin");
-   int imageless = !strcmp(mode, "imageless") || nobegin;
-   int valid = !strcmp(mode, "ok");
+#define IS(m) (!strcmp(mode, m))
+   int nobegin = IS("nobegin");
+   int drawok = IS("drawok");
+   int drawnopass = IS("drawnopass");
+   int draw = IS("draw") || drawok || drawnopass;
+   int nullrp = IS("nullrp");
+   int nullfb = IS("nullfb") || IS("nullfb-il");
+   int nullview = IS("nullview");
+   int nullfbview = IS("nullfbview");
+   int imageless = IS("imageless") || IS("draw") || nobegin || IS("nullfb-il") || nullview;
+   int valid = !(IS("imageless") || IS("fb") || IS("draw") || nobegin);
 
    const char *inst_ext[] = {VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME};
    VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -190,6 +316,10 @@ main(int argc, char **argv)
    };
    VkRenderPass rp;
    CHECK(vkCreateRenderPass(dev, &rpci, NULL, &rp));
+   VkPipeline pipe = draw ? make_pipeline(dev, rp) : VK_NULL_HANDLE;
+
+   /* The views the framebuffer or the begin info hands over. */
+   VkImageView given[2] = {view[0], (nullview || nullfbview) ? VK_NULL_HANDLE : view[1]};
 
    /* The framebuffer carries 1 attachment (invalid) unless mode "ok". */
    uint32_t supplied = valid ? 2 : nobegin ? 0 : 1;
@@ -216,7 +346,7 @@ main(int argc, char **argv)
       .flags = imageless ? VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT : 0,
       .renderPass = rp,
       .attachmentCount = imageless ? 2 : supplied,
-      .pAttachments = imageless ? NULL : view,
+      .pAttachments = imageless ? NULL : given,
       .width = 64,
       .height = 64,
       .layers = 1,
@@ -246,29 +376,54 @@ main(int argc, char **argv)
    VkRenderPassAttachmentBeginInfo rabi = {
       .sType = VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO,
       .attachmentCount = supplied,
-      .pAttachments = view,
+      .pAttachments = given,
    };
    VkClearValue clears[2] = {0};
    VkRenderPassBeginInfo rpbi = {
       .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
       .pNext = imageless && !nobegin ? &rabi : NULL,
-      .renderPass = rp,
-      .framebuffer = fb,
+      .renderPass = nullrp ? VK_NULL_HANDLE : rp,
+      .framebuffer = nullfb ? VK_NULL_HANDLE : fb,
       .renderArea = {{0, 0}, {64, 64}},
       .clearValueCount = 2,
       .pClearValues = clears,
    };
-   printf("mode=%s: beginning a 2-attachment render pass with %u view(s)\n",
-          mode, supplied);
-   fflush(stdout);
-   vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
-   printf("begin returned\n");
-   fflush(stdout);
-   vkCmdEndRenderPass(cb);
-   printf("end render pass returned\n");
-   fflush(stdout);
+   if (!drawnopass) {
+      printf("mode=%s: beginning a 2-attachment render pass with %u view(s)\n",
+             mode, supplied);
+      fflush(stdout);
+      vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+      printf("begin returned\n");
+      fflush(stdout);
+   } else {
+      printf("mode=%s: no render pass begun\n", mode);
+   }
+   if (draw) {
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+      vkCmdDraw(cb, 3, 1, 0, 0);
+      printf("draw returned\n");
+      fflush(stdout);
+   }
+   if (!drawnopass) {
+      vkCmdEndRenderPass(cb);
+      printf("end render pass returned\n");
+      fflush(stdout);
+   }
    VkResult r = vkEndCommandBuffer(cb);
    printf("RESULT: vkEndCommandBuffer = %d\n", r);
+   if (r == VK_SUCCESS) {
+      /* A recorded buffer can still fault when it runs; submit what ended. */
+      VkQueue q;
+      vkGetDeviceQueue(dev, 0, 0, &q);
+      VkSubmitInfo si = {
+         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+         .commandBufferCount = 1,
+         .pCommandBuffers = &cb,
+      };
+      VkResult sr = vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE);
+      VkResult wr = sr == VK_SUCCESS ? vkQueueWaitIdle(q) : sr;
+      printf("RESULT: submit = %d, wait = %d\n", sr, wr);
+   }
 
    vkDestroyCommandPool(dev, pool, NULL);
    vkDestroyFramebuffer(dev, fb, &scribble);

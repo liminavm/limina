@@ -730,15 +730,6 @@ at `<LIMINA_KK_POOL_SNAPSHOT>.dispatch.<pid>`. AGX reusing one ComputeContext ac
 encoders is normal; two live on one is the signal. If the hook names AGX, a Radar is owed. Full
 record: `spikes/kk-alloc-pool/RESULTS.md`.
 
-### A refused render-pass begin leaves the pass's later commands unaudited
-KK's runtime now refuses a render-pass begin whose attachment-view count falls short of the pass's
-(it logs, fails the command buffer at `vkEndCommandBuffer`, and `vkCmdNextSubpass2` /
-`vkCmdEndRenderPass2` return early with no active pass). What a guest's *draw* inside such a pass
-does in KK — it arrives with no render encoder, the same state as any draw outside a pass — has not
-been read or probed (`spikes/kk-attachment-count/` records no draw, because that needs a
-pipeline). Also still dereferenced in `begin_render_pass`: a
-`VK_NULL_HANDLE` framebuffer or render pass, and a NULL image view inside a correctly sized array.
-
 ### The kernel logs a shared-event fault continuously while any VM runs
 While a `limina-vmm` lives the kernel emits `IOGPUFamily … IOGPUCommandQueue::schedule_shared_event:
 Failed to find shared event reference` continuously (thousands per minute under load), stopping the
