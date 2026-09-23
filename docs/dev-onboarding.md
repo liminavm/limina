@@ -14,10 +14,18 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
   where it exists) are what the host Mesa build needs on `PATH` / `PKG_CONFIG_PATH`;
   `scripts/build-host-mesa.sh` puts them there for you but cannot install them.
   **Not `libclc`** — it is version-coupled to the Mesa rev and pinned in
-  `third_party/manifest.toml` instead, fetched and digest-checked by the build (step 1.5). (`qemu` for `qemu-img`, `glslang` for `scripts/gen-vkstill-spv.sh`, and
-  `cargo-nextest` for a parallel suite are each used by one script and optional until you
-  run it. `libkrun`/`libkrunfw`/`krunkit`/`virglrenderer` are **not** needed — we build our
-  own forks, and the C virglrenderer is no longer loaded at runtime at all.)
+  `third_party/manifest.toml` instead, fetched and digest-checked by the build (step 1.5).
+- The **L1 test guest's kernel**, one of two ways. `scripts/build-test-guest.sh` prefers a
+  custom `target/test-guest/kernel/Image` from `scripts/build-test-kernel.sh` (which you want
+  anyway — the L2 venus and multi-display tests need its `Image-16k` / `Image-16k-71` siblings
+  or they silently SKIP). Failing that it extracts one from Homebrew's `libkrunfw` dylib —
+  but that formula lives in the third-party `libkrun/krun` tap, which current Homebrew
+  **refuses to load until you trust it** (`brew trust libkrun/krun`), so the "zero-dependency
+  fallback" is no longer the zero-decision one. Building the test kernels avoids the tap.
+  (`qemu` for `qemu-img`, `glslang` for `scripts/gen-vkstill-spv.sh`, and `cargo-nextest` for
+  a parallel suite are each used by one script and optional until you run it.
+  `libkrun`/`krunkit`/`virglrenderer` are **not** needed — we build our own libkrun fork and
+  our own firmware, and the C virglrenderer is no longer loaded at runtime at all.)
 - **`python3`** — virglrs's build script generates the venus wire and the vrend format
   tables at compile time through a bare `python3`, so this is a *build* dependency of the
   workspace, not just of Mesa. The modules it imports (mako, pyyaml) come from

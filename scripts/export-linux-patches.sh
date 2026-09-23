@@ -34,6 +34,7 @@ manifest_field() {
     ' "$MANIFEST"
 }
 REPO_URL="$(manifest_field repo)"
+UPSTREAM_URL="$(manifest_field upstream)"
 BRANCH="$(manifest_field branch)"
 REV="$(manifest_field rev)"
 BASE="$(manifest_field base)"
@@ -51,8 +52,26 @@ if ! git -C "$TREE" cat-file -e "${REV}^{commit}" 2>/dev/null; then
     git -C "$TREE" fetch origin --tags
 fi
 
+# The base is an UPSTREAM tag (v7.1.8), and a GitHub fork does not receive tags pushed upstream
+# after it was created — so `git fetch origin --tags` on our fork will never produce it. Fetch
+# it from the upstream the manifest names. Without this the check below fails on every fresh
+# clone, and says the wrong thing when it does.
+if ! git -C "$TREE" rev-parse --verify --quiet "${BASE}^{commit}" >/dev/null; then
+    [ -n "$UPSTREAM_URL" ] || {
+        echo "ERROR: base $BASE is not in $REPO_URL and [linux] names no upstream to get it from" >&2
+        exit 1
+    }
+    echo "==> base $BASE absent from the fork; fetching the tag from upstream ($UPSTREAM_URL)"
+    git -C "$TREE" fetch --filter=blob:none "$UPSTREAM_URL" "refs/tags/$BASE:refs/tags/$BASE" \
+        || { echo "ERROR: could not fetch tag $BASE from $UPSTREAM_URL" >&2; exit 1; }
+fi
+
 # Verify the pin really sits on top of the recorded base — a mismatch means the manifest and the
 # fork have drifted, and every consumer of this series would silently build something else.
+# Resolve first and report separately: an unresolvable base is a MISSING ref, not a drifted
+# branch, and conflating the two sends you to edit a manifest that was right all along.
+git -C "$TREE" rev-parse --verify --quiet "${BASE}^{commit}" >/dev/null \
+    || { echo "ERROR: base $BASE does not resolve in $TREE (missing tag/ref, not a drifted pin)" >&2; exit 1; }
 git -C "$TREE" merge-base --is-ancestor "$BASE" "$REV" 2>/dev/null \
     || { echo "ERROR: manifest base $BASE is not an ancestor of rev $REV — fix $MANIFEST" >&2; exit 1; }
 
