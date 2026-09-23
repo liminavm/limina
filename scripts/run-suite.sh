@@ -52,16 +52,40 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 . "$repo/scripts/lib/detach.sh"
 
 verdict() {
-    # The Summary/FAILED lines are the ONLY trustworthy readout. Missing Summary
-    # means the run died before nextest reported — that is a failure, not a pass.
+    # The recorded readout is the ONLY trustworthy signal, and it comes in two shapes,
+    # because scripts/test-boot.sh has two paths: nextest, which ends in a `Summary` line,
+    # and — when cargo-nextest is not installed — a serial `cargo test` fallback whose
+    # libtest `test result:` lines never include a Summary at all. A log with neither shape
+    # means the run died before reporting, which is a failure, not a pass.
+    #
+    # scripts/tests/run-suite-verdict.sh pins all of this against synthetic logs.
     local log="$1"
     echo "== verdict ($log) =="
-    if ! grep -E "^ *Summary|test result:|FAILED|error\[|error:" "$log"; then
-        echo "no Summary line in the log — the run died before reporting; NOT green"
+    grep -E "^ *Summary|^ *test result:|FAILED|^error: test run failed|error\[|^error:" "$log"
+
+    # Red in either shape. libtest says FAILED; nextest says it in the captured stdout it
+    # replays for a failing test, and always emits `error: test run failed`.
+    if grep -q "FAILED" "$log" || grep -qE "^error: test run failed" "$log"; then
+        echo "a failing test is reported in the log — NOT green"
         return 1
     fi
-    grep -qE "^ *Summary" "$log" || { echo "no Summary line — NOT green"; return 1; }
-    ! grep -q "FAILED" "$log"
+    # nextest omits the word entirely when nothing failed, so any NONZERO count is red.
+    # This closes a false GREEN: a test killed by a signal makes nextest print `SIGABRT`
+    # and count it only here — the whole log contains "FAILED" zero times (verified against
+    # cargo-nextest 0.9.146, 2026-09-23), so a verdict keyed on that string passed it. The
+    # worker builds panic = "abort", so that is the shape a panicking HVF test takes.
+    if grep -E "^ *Summary" "$log" | grep -qE "[1-9][0-9]* (failed|timed out)"; then
+        echo "the Summary line counts failures — NOT green"
+        return 1
+    fi
+    grep -qE "^ *Summary" "$log" && return 0
+    # The fallback path reports per binary and never produces an overall Summary, so
+    # demanding one made EVERY fallback run read NOT green whatever the tests did — a false
+    # RED, the mirror of the false green this script exists to prevent (2026-09-23: a
+    # 144-passed/0-failed run reported as failed on a host without cargo-nextest).
+    grep -qE "^ *test result:" "$log" && return 0
+    echo "no Summary or 'test result:' line — the run died before reporting; NOT green"
+    return 1
 }
 
 live_suite_pids() {
@@ -95,6 +119,12 @@ wait_for() {
 default_log() { echo "/tmp/limina-suite-$(date +%Y%m%d-%H%M%S).log"; }
 
 case "${1:-}" in
+--verdict)
+    # Read an existing log and report only. The seam scripts/tests/run-suite-verdict.sh
+    # drives; also handy for judging a log someone else's run left behind.
+    verdict "${2:?usage: run-suite.sh --verdict <logfile>}"
+    exit $?
+    ;;
 --wait)
     log="${2:?usage: run-suite.sh --wait <logfile> [pid]}"
     pid="${3:-}"

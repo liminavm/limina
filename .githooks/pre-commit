@@ -27,6 +27,13 @@ if [ -x "$local_hook" ]; then
     "$local_hook" || fail "local pre-commit check ($local_hook)"
 fi
 
+# --- Shell-script tests: sub-second, and they guard the thing that decides whether a
+# 38-minute suite counts as green. Also run before the cargo passes.
+if [ -x scripts/tests/run-suite-verdict.sh ]; then
+    echo "pre-commit: scripts/tests/run-suite-verdict.sh"
+    scripts/tests/run-suite-verdict.sh || fail "run-suite verdict tests"
+fi
+
 # --- The clippy pass below builds the workspace, and virglrs's build script generates the
 # venus wire through a bare `python3`. `cargo xtask build` puts the repo venv on PATH for
 # exactly this reason; a hook invoked by git inherits no such thing, so it would fail with
