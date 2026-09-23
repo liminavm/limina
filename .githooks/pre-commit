@@ -27,6 +27,16 @@ if [ -x "$local_hook" ]; then
     "$local_hook" || fail "local pre-commit check ($local_hook)"
 fi
 
+# --- The clippy pass below builds the workspace, and virglrs's build script generates the
+# venus wire through a bare `python3`. `cargo xtask build` puts the repo venv on PATH for
+# exactly this reason; a hook invoked by git inherits no such thing, so it would fail with
+# `ModuleNotFoundError: No module named 'mako'` on any machine whose system Python happens
+# not to carry it -- a commit blocked by something that is not about the commit.
+if [ -x scripts/ensure-venv-mesa.sh ]; then
+    # shellcheck source=scripts/ensure-venv-mesa.sh
+    . scripts/ensure-venv-mesa.sh
+fi
+
 # --- rustfmt: build-free and fast, so check every workspace we own. ---
 echo "pre-commit: cargo fmt --check (all crates)"
 cargo fmt --check || fail "rustfmt — run 'cargo fmt'"

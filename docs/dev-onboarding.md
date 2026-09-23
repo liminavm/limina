@@ -9,12 +9,28 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
 
 - macOS on Apple Silicon (developed on macOS 26.5, M1 Max, 16 KiB host pages).
 - Rust (stable), full Xcode + command-line tools (codesign, otool).
-- Homebrew VM stack: `libkrun krunkit libkrunfw virglrenderer molten-vk vulkan-loader
-  gvproxy libusb qemu cmake meson ninja`.
+- Homebrew: `molten-vk vulkan-loader gvproxy libusb cmake meson ninja llvm libclc
+  spirv-llvm-translator spirv-tools bison`. The keg-only ones (`llvm`, `bison`, and `expat`
+  where it exists) are what the host Mesa build needs on `PATH` / `PKG_CONFIG_PATH`;
+  `scripts/build-host-mesa.sh` puts them there for you but cannot install them.
+  **`libclc` is version-coupled**: the pinned Mesa rev needs 22.x's layout, and Homebrew now
+  ships 23.x, which dropped the pkg-config file Mesa locates it by — see step 1.5. (`qemu` for `qemu-img`, `glslang` for `scripts/gen-vkstill-spv.sh`, and
+  `cargo-nextest` for a parallel suite are each used by one script and optional until you
+  run it. `libkrun`/`libkrunfw`/`krunkit`/`virglrenderer` are **not** needed — we build our
+  own forks, and the C virglrenderer is no longer loaded at runtime at all.)
+- **`python3`** — virglrs's build script generates the venus wire and the vrend format
+  tables at compile time through a bare `python3`, so this is a *build* dependency of the
+  workspace, not just of Mesa. The modules it imports (mako, pyyaml) come from
+  `third_party/venv-mesa`, which `cargo xtask vendor` creates and `cargo xtask build`
+  puts on the child's `PATH` — nothing is installed into the host's Python.
 - The host **KosmicKrisp / zink-on-KK Mesa builds** live on `third_party/mesa-cs.sparseimage`
-  (mounted at `/Volumes/mesa-cs`), not in the repo — needed for venus. `cargo xtask run`
-  and the venus tests auto-mount it (`scripts/ensure-mesa-cs.sh`); see `docs/codebases.md`
-  for how it's produced.
+  (mounted at `/Volumes/mesa-cs`), not in the repo, because Mesa will not check out on a
+  case-insensitive filesystem. **`cargo xtask build` links `libEGL` out of that prefix**, so
+  this is required to build at all, not only to run venus — see step 1.5.
+- Apple **`container`** (`brew install container`, then
+  `container system start --enable-kernel-install`) — only for the Linux/firmware builds
+  (`scripts/build-krun-efi.sh`, `scripts/build-test-kernel.sh`, the guest RPMs). The boot
+  suite's default firmware is one of its outputs.
 - A guest disk image (`*.raw`, gitignored). Inventory + how they're built:
   `docs/images.md`.
 
@@ -24,27 +40,58 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
 cargo xtask setup
 ```
 
-`setup` = `vendor` (clone libkrun + virglrenderer if absent, apply every committed patch
-series, vendor+patch imago — i.e. recreate the gitignored `third_party/` trees) + enable
-the in-repo git hooks (`fmt` + `clippy` pre-commit). Idempotent; safe to re-run. Run
-`vendor` on its own after re-cloning a `third_party/` tree.
+`setup` = `vendor` + enable the in-repo git hooks (`fmt` + `clippy` pre-commit).
+`vendor` clones the fork-model deps (libkrun, virglrs, imago) from github.com/liminavm at
+the rev `third_party/manifest.toml` pins — the fork's branch **is** the delta, so there is
+no patch series to apply — lets virglrs vendor its own dependencies (the C virglrenderer
+it generates tables from, and the venus-protocol), and creates `third_party/venv-mesa`.
+Idempotent; safe to re-run, and the way to repair a `third_party/` tree you deleted.
 
-> The native deps (the host **KK/zink Mesa**, the **GOP KRUN_EFI** firmware, the guest **16 KiB kernel / Mesa /
-> agent** RPMs) are heavier, container/`meson`-driven builds that stay as their own
-> scripts — `vendor` only recreates the source trees + applies patches. See
+> The native deps (the host **KK/zink Mesa**, the **GOP KRUN_EFI** firmware, the guest
+> **16 KiB kernel / Mesa / agent** RPMs) are heavier, container/`meson`-driven builds that
+> stay as their own scripts — `vendor` only materializes source trees. See
 > `docs/codebases.md` for which script builds what.
+
+## 1.5. Host Mesa (once per machine)
+
+```sh
+cargo xtask mesa                 # KosmicKrisp + zink-on-KK; both halves
+cargo xtask mesa kk              # just the ICD, e.g. after a KK-only change
+```
+
+`mesa` (= `scripts/build-host-mesa.sh`) creates the case-sensitive sparse image, mounts it,
+clones `liminavm/mesa` at the `[kosmickrisp]` pin and builds **both** halves, because two
+different consumers need one each:
+
+| Output | Who opens it |
+|---|---|
+| `/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/` (dylib + devenv ICD json) | `VK_ICD_FILENAMES` for every boot script; `build-app.sh`'s `KK_DRIVER` |
+| `/Volumes/mesa-cs/zink-kk-prefix/lib/` (`libEGL` + `libgallium`) | virglrs's `build.rs` links `libEGL`; `build-app.sh` bundles both |
+
+It is a long build the first time and incremental after that. Skip it only if you already
+have the volume, or if you point `EGL_LIB_DIR` at a Mesa prefix of your own — `cargo xtask
+build` checks for the prefix up front and says so rather than failing deep in a build
+script. Asserts are compiled out by default (`-Db_ndebug=true`): a Mesa assert reached from
+the guest `SIGABRT`s the worker and takes the VM down, so `BUILDTYPE=debug` is for active
+Mesa debugging and never for a bundle. Background + toolchain traps:
+`docs/drivers/kosmickrisp.rst`.
 
 ## 2. Inner loop
 
 ```sh
-cargo xtask build          # cargo build limina + limina-vmm, codesign the worker, virgl link-check
+cargo xtask build          # cargo build limina + limina-vmm, then codesign the worker
 cargo xtask sign           # just re-codesign the worker (after a plain `cargo build`)
 ```
 
-`build` produces a runnable, codesigned worker. The trap it guards for you:
+`build` produces a runnable, codesigned worker. The traps it guards for you:
 
 - **The worker needs the `com.apple.security.hypervisor` entitlement** (for `hv_vm_*`) —
-  `build`/`sign` codesign it (`crates/limina-vmm/sign.sh`).
+  `build`/`sign` codesign it (`crates/limina-vmm/sign.sh`). Anything that relinks the
+  worker strips it again, so a plain `cargo build` is always followed by `sign`.
+- **The host Mesa prefix and the Python venv** have to be there before `cargo` starts —
+  `build` checks the first (and remounts the volume macOS drops on reboot) and puts the
+  second on the child's `PATH`. Without them the failure would otherwise surface as a
+  panic inside virglrs's build script, hundreds of crates in.
 
 ## 3. Run it
 

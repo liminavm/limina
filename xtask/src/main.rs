@@ -10,15 +10,20 @@
 //! Bootstrap / build loop:
 //!   `setup`  — one-command fresh-clone bootstrap: `vendor` + enable the git hooks.
 //!   `vendor` — materialize the gitignored `third_party/` source trees: fork-model deps
-//!              (libkrun, virglrenderer, imago, linux) clone from github.com/liminavm at the rev
+//!              (libkrun, virglrs, imago, linux) clone from github.com/liminavm at the rev
 //!              pinned in `third_party/manifest.toml` — the fork's `limina` branch IS the delta,
-//!              nothing to apply. `heavy = true` deps (the kernel) are skipped unless
-//!              `--heavy` — nothing on this host builds them. Run it first.
-//!   `build`  — build `limina` + `limina-vmm`, verify the worker links our virglrenderer (the
-//!              venus link trap), and codesign the worker (hypervisor entitlement). The inner-loop
-//!              "make a runnable worker" step.
+//!              nothing to apply. It also creates `third_party/venv-mesa`, which is what the
+//!              bare `python3` in virglrs's code generators has to resolve to. `heavy = true`
+//!              deps (the kernel) are skipped unless `--heavy` — nothing on this host builds
+//!              them. Run it first.
+//!   `mesa`   — build the HOST Mesa (KosmicKrisp + zink-on-KK), creating the case-sensitive
+//!              volume and cloning the tree when they do not exist yet. `build` links libEGL
+//!              out of its prefix, so on a machine that has never been handed that volume this
+//!              runs once between `setup` and `build` (wraps `scripts/build-host-mesa.sh`).
+//!   `build`  — build `limina` + `limina-vmm` and codesign the worker (hypervisor entitlement).
+//!              The inner-loop "make a runnable worker" step.
 //!   `sign`   — codesign an already-built worker (just the hypervisor-entitlement step).
-//!   `test`   — build + sign + link-check + run the HVF-gated boot tests (wraps
+//!   `test`   — build + sign + run the HVF-gated boot tests (wraps
 //!              `scripts/test-boot.sh`). The canonical "did I break boot" command.
 //!
 //! Run / package:
@@ -65,7 +70,14 @@ enum Cmd {
         #[arg(long)]
         heavy: bool,
     },
-    /// Build `limina` + `limina-vmm`, verify the virgl link, and codesign the worker.
+    /// Build the host Mesa (KosmicKrisp + zink-on-KK) that `build` and `run` need, creating
+    /// the case-sensitive volume and cloning the tree if absent. Run once per machine.
+    Mesa {
+        /// Which half to build: `kk`, `zink`, or `both` (the default).
+        #[arg(value_name = "kk|zink|both")]
+        what: Option<String>,
+    },
+    /// Build `limina` + `limina-vmm` and codesign the worker (hypervisor entitlement).
     Build {
         /// Build in release mode.
         #[arg(long)]
@@ -77,7 +89,7 @@ enum Cmd {
         #[arg(long)]
         release: bool,
     },
-    /// Build + sign + link-check, then run the HVF-gated boot tests (wraps scripts/test-boot.sh).
+    /// Build + sign, then run the HVF-gated boot tests (wraps scripts/test-boot.sh).
     Test {
         /// Test in release mode.
         #[arg(long)]
@@ -132,6 +144,7 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Setup => setup(),
         Cmd::Vendor { heavy } => vendor(heavy),
+        Cmd::Mesa { what } => mesa(what.as_deref()),
         Cmd::Build { release } => build(release),
         Cmd::Sign { release } => sign_worker(&repo_root(), release),
         Cmd::Test { release, args } => test(release, &args),
@@ -183,7 +196,7 @@ fn setup() -> Result<()> {
     vendor(false)?;
     eprintln!("==> enabling git hooks (core.hooksPath = .githooks)");
     bash_script(&repo_root(), "scripts/setup-hooks.sh", &[] as &[&str])?;
-    eprintln!("==> setup complete — `cargo xtask build` / `cargo xtask test` are ready");
+    eprintln!("==> setup complete");
     Ok(())
 }
 
@@ -197,6 +210,12 @@ fn setup() -> Result<()> {
 /// Idempotent — re-running resets/refreshes each tree.
 fn vendor(heavy: bool) -> Result<()> {
     let repo = repo_root();
+
+    // The generators virglrs's build.rs runs (venus-gen, vrend-gen) import mako and yaml
+    // through a bare `python3`. Materialize the venv that provides them here, so a fresh clone
+    // builds without anything having been installed into the host's own Python -- which is
+    // what "it builds on my machine" turned out to mean.
+    bash_script(&repo, "scripts/ensure-venv-mesa.sh", &[] as &[&str])?;
 
     // libkrun: the VMM library. limina consumes its crates by path ([workspace.dependencies]),
     // so the checkout is the build input directly — fork model (task #14).
@@ -224,7 +243,16 @@ fn vendor(heavy: bool) -> Result<()> {
         vendor_fork(&repo, "linux")?;
     }
 
-    eprintln!("==> vendor complete — `cargo xtask build` / `cargo xtask test` are ready");
+    eprintln!("==> vendor complete");
+    // Vendoring is not the whole bootstrap: `build` links libEGL out of the host Mesa prefix,
+    // which lives on a volume this repo cannot carry. Name the step that is actually next
+    // rather than declaring a readiness we have not checked.
+    if host_mesa_egl().exists() {
+        eprintln!("    next: `cargo xtask build` / `cargo xtask test`");
+    } else {
+        eprintln!("    next: `cargo xtask mesa` — the host Mesa prefix `build` links libEGL");
+        eprintln!("          from is absent or unmounted");
+    }
     Ok(())
 }
 
@@ -351,6 +379,69 @@ fn manifest_entry(repo: &Path, name: &str) -> Result<ForkPin> {
     })
 }
 
+/// The one file whose presence decides whether the workspace can link: virglrs links `libEGL`
+/// from the zink-on-KosmicKrisp prefix, and that prefix lives on a case-sensitive sparse image
+/// (Mesa does not check out on APFS), so it can never be carried by the repo.
+fn host_mesa_egl() -> PathBuf {
+    PathBuf::from("/Volumes/mesa-cs/zink-kk-prefix/lib/libEGL.dylib")
+}
+
+/// Build the host Mesa: the KosmicKrisp ICD venus renders through, and the zink-on-KK prefix
+/// `build` links `libEGL` from. The script creates the case-sensitive volume and clones the
+/// tree at its manifest pin when they are absent -- the bootstrap step that used to exist only
+/// in one developer's home directory.
+fn mesa(what: Option<&str>) -> Result<()> {
+    let repo = repo_root();
+    let args: Vec<&str> = what.into_iter().collect();
+    bash_script(&repo, "scripts/build-host-mesa.sh", &args)
+}
+
+/// Fail before the compile, in the vocabulary of the fix, when the host Mesa prefix is missing.
+///
+/// Without it `cargo build` dies in virglrs's build script several hundred crates in, naming a
+/// `/Volumes/…` path the reader has no way to produce and no script in the tree ever created.
+/// `EGL_LIB_DIR` and `MESA_PREFIX` are build.rs's own escapes, so anyone who set one is left
+/// alone; macOS drops the mount on every reboot, so try remounting before judging it absent.
+fn ensure_host_mesa(repo: &Path) -> Result<()> {
+    if std::env::var_os("EGL_LIB_DIR").is_some() || std::env::var_os("MESA_PREFIX").is_some() {
+        return Ok(());
+    }
+    if !host_mesa_egl().exists() {
+        let _ = bash_script(repo, "scripts/ensure-mesa-cs.sh", &[] as &[&str]);
+    }
+    if host_mesa_egl().exists() {
+        return Ok(());
+    }
+    bail!(
+        "the host Mesa prefix is missing: no {}\n\
+         virglrs links libEGL from there, so the workspace cannot link without it.\n\
+         Run `cargo xtask mesa` once on this machine — it creates the case-sensitive volume,\n\
+         clones Mesa at its manifest pin and builds KosmicKrisp + zink-on-KK.\n\
+         (Or point EGL_LIB_DIR at a Mesa prefix you already have.)",
+        host_mesa_egl().display()
+    )
+}
+
+/// Put `third_party/venv-mesa` at the front of a child's `PATH`.
+///
+/// virglrs's build script runs its venus and vrend generators through a bare `python3`, so mako
+/// and yaml have to be importable from whatever `python3` resolves to *in the build script's*
+/// environment -- not in the shell someone typed `cargo` into. Prepending the repo venv is what
+/// makes that true without installing into the host's Python.
+fn with_venv_mesa(repo: &Path, cmd: &mut Command) {
+    let bin = repo.join("third_party/venv-mesa/bin");
+    if !bin.is_dir() {
+        return;
+    }
+    let mut dirs = vec![bin];
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    if let Ok(joined) = std::env::join_paths(dirs) {
+        cmd.env("PATH", joined);
+    }
+}
+
 // --- build loop --------------------------------------------------------------------------------
 
 fn cargo_build_binaries(repo: &Path, release: bool) -> Result<()> {
@@ -361,6 +452,7 @@ fn cargo_build_binaries(repo: &Path, release: bool) -> Result<()> {
     let mut c = Command::new("cargo");
     c.current_dir(repo)
         .args(["build", "-p", "limina", "-p", "limina-vmm"]);
+    with_venv_mesa(repo, &mut c);
     if release {
         c.arg("--release");
     }
@@ -378,6 +470,7 @@ fn sign_worker(repo: &Path, release: bool) -> Result<()> {
 /// `cargo xtask run` / a manual boot needs, minus the tests.
 fn build(release: bool) -> Result<()> {
     let repo = repo_root();
+    ensure_host_mesa(&repo)?;
     cargo_build_binaries(&repo, release)?;
     sign_worker(&repo, release)?;
     eprintln!(

@@ -9,6 +9,10 @@
 # /Volumes/mesa-cs (build-app.sh, the venus tests, …) fail with
 # a missing-file error that looks like a lost build. Re-attach it instead.
 #
+# This only ATTACHES an image that exists. Creating one, cloning Mesa into it and building
+# both halves is scripts/build-host-mesa.sh (`cargo xtask mesa`) — which is the answer when
+# the message below is what you got.
+#
 # Source it (`. scripts/ensure-mesa-cs.sh`) or run it standalone; idempotent either way.
 set -euo pipefail
 
@@ -17,7 +21,8 @@ MESA_CS_IMAGE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/third_party/mesa
 
 if [ ! -d "$MESA_CS_MOUNT" ]; then
   if [ ! -e "$MESA_CS_IMAGE" ]; then
-    echo "MISSING $MESA_CS_IMAGE — the host KK/zink Mesa builds live there; see docs/codebases.md" >&2
+    echo "MISSING $MESA_CS_IMAGE — the host KK/zink Mesa builds live there." >&2
+    echo "Run \`cargo xtask mesa\` to create the volume and build them (docs/codebases.md)." >&2
     exit 1
   fi
   echo "==> $MESA_CS_MOUNT not mounted; attaching $(basename "$MESA_CS_IMAGE")"

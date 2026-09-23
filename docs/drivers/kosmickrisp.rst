@@ -36,9 +36,26 @@ meson/ninja/glslang/cmake come from Homebrew. The traps — all because the need
 **keg-only** (installed but *not* on ``PATH``/``PKG_CONFIG_PATH``), and a stock ``meson setup``
 silently fails to find them:
 
-- **LLVM** (``brew install llvm``, currently 22.x) is keg-only → its ``llvm-config`` is not on
+- **LLVM** (``brew install llvm``) is keg-only → its ``llvm-config`` is not on
   ``PATH``. KK **requires** it (``with_kosmickrisp_vk`` pulls CLC → LLVM, plus ``libclc``,
   ``spirv-llvm-translator``, ``spirv-tools``). Prepend ``$(brew --prefix llvm)/bin`` to ``PATH``.
+  Known-good: the reference machine builds the pinned rev with **LLVM 22.1.8**.
+- **libclc is version-coupled to the Mesa rev, and Homebrew's current one does not match.**
+  Mesa locates libclc *only* through pkg-config (``meson.build``'s ``dependency('libclc')``),
+  then bakes that file's ``libexecdir`` into ``DYNAMIC_LIBCLC_PATH`` and **mmaps
+  ``spirv64-mesa3d-.spv`` from it at run time** — ``static-libclc`` is empty by default, so
+  the SPIR-V is not embedded. **libclc 22.x** ships both the ``.pc`` and those filenames;
+  **23.x dropped the ``.pc``** and renamed the payload to ``<target>/libclc.spv``. So a 23.x
+  install does not merely fail to configure: hand it a written-by-hand ``.pc`` and it will
+  configure, compile, and then fail the first time a guest reaches CLC.
+  ``scripts/build-host-mesa.sh`` checks the *shape* (the ``.pc`` **and** both ``.spv`` names)
+  rather than the presence, and takes ``LIBCLC_PC_DIR`` to point at a libclc obtained some
+  other way. There is no ``libclc@22`` formula.
+- **A non-Apple ``ld`` earlier on ``PATH`` breaks the build**, and only once LLVM is prepended:
+  that also shadows Apple's ``clang`` with Homebrew's, which (unlike Apple's) resolves ``ld``
+  through ``PATH``. A ``~/.local/bin/ld -> mold`` shim — a common Rust setup — then gets Mach-O
+  options it cannot parse and meson dies at linker detection on ``-dynamic``.
+  ``scripts/build-host-mesa.sh`` shims ``xcrun -f ld`` in front for the build only.
 - **expat** is keg-only → add ``$(brew --prefix expat)/lib/pkgconfig`` to ``PKG_CONFIG_PATH``
   (the EGL/dri driconf parser needs it; only matters once you build the GL frontend — see below).
 - **bison**: Apple's ``/usr/bin/bison`` is 2.3 (2008); Mesa's GLSL ``glcpp`` grammar needs > 2.3.
@@ -49,6 +66,10 @@ silently fails to find them:
 
 KK-only build (the canonical host driver)
 -----------------------------------------
+
+``scripts/build-host-mesa.sh`` (``cargo xtask mesa``) does all of the below, including
+creating the sparse image and cloning the tree; the explicit recipe is kept here because it is
+what you reach for when debugging the build itself.
 
 The meson line that produces the venus backend (Vulkan only, no GL frontend)::
 
