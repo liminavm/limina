@@ -445,9 +445,11 @@ takes:
   control sockets to Mach ports*).
 - **Lifecycle.** The supervisor stops being the worker's parent: death detection, the reap-gateway
   and the run lock must not assume `waitpid` on a child.
-- **Registration.** `SMAppService.agent` shows a Login Items / background-activity approval. An
-  unregistered transient job avoids it; measure which submission path keeps
-  `ProcessType=Interactive`.
+- **Registration.** A transient job needs no `SMAppService`: the spike's `lineage-agent` arm loaded
+  a plist with `launchctl bootstrap gui/<uid>` and kept `ProcessType=Interactive` at priority 31.
+  backgroundtaskmanagement logged nothing for it. RunningBoard tracks such a job as an `osservice`
+  that is "not role managed", and that is why Game Mode leaves it alone. `SMAppService.agent`
+  would instead show a Login Items / background-activity approval.
 - **Identity.** TCC (mic, camera, Accessibility) attributes to the worker's own code identity rather
   than to Limina.app. Recheck every grant the worker relies on (the signing rules are in
   `docs/design/distribution.md`).
