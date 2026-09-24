@@ -1,0 +1,89 @@
+######## s0-r1 23:33:30
+[23:37:00] s0-r1: SETTLED up=204s load=0.17
+Running as unit: ff-clip.service; invocation ID: 28ef847f8d9f4a90932475f44dc0117b
+[23:37:57] s0-r1: overruns 0
+[23:38:08] s0-r1: 27 decode windows
+s0-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7519     1.99     7.02    12.94    29.58     38
+  SUBMIT_3D                4528     2.48     7.97    13.57    29.58     27
+  SET_SCANOUT               663     0.34     2.62     7.49    14.84      0
+  RESOURCE_FLUSH            663     0.33     2.61     7.48    14.84      0
+######## a0-r1 23:38:09
+[23:41:51] a0-r1: SETTLED up=218s load=0.23
+Running as unit: ff-clip.service; invocation ID: 2f141679e488428c9a85a633e6e84e5f
+[23:42:47] a0-r1: overruns 0
+[23:42:56] a0-r1: 27 decode windows
+a0-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7843     1.42     6.15    10.78    19.38      1
+  SUBMIT_3D                4696     2.08     7.51    11.78    19.38      1
+  SET_SCANOUT               702     0.34     1.02     2.77     9.49      0
+  RESOURCE_FLUSH            702     0.33     1.01     2.76     9.49      0
+######## s15-r1 23:42:57
+[23:46:23] s15-r1: SETTLED up=202s load=0.27
+Running as unit: ff-clip.service; invocation ID: 1f013bcb8b9a45559c8f9408820a0746
+[23:47:19] s15-r1: overruns 0
+[23:47:28] s15-r1: 27 decode windows
+s15-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7696    21.43    46.29    58.90   100.12   5239
+  SUBMIT_3D                4528    22.77    45.59    58.91    76.32   3298
+  SET_SCANOUT               658    12.98    42.71    56.51    99.56    265
+  RESOURCE_FLUSH            658    12.98    44.29    58.75    99.56    264
+######## a15-r1 23:47:29
+[23:50:55] a15-r1: SETTLED up=203s load=0.23
+Running as unit: ff-clip.service; invocation ID: af114f0f19ab47ec8e82e0123f42e3fe
+[23:51:52] a15-r1: overruns 0
+[23:52:01] a15-r1: 27 decode windows
+a15-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7404     2.01    28.65    48.37    63.47   2225
+  SUBMIT_3D                4424    15.48    33.99    50.82    63.47   2174
+  SET_SCANOUT               631     0.32     2.16     5.06     9.47      0
+  RESOURCE_FLUSH            631     0.32     2.16     5.05     9.46      0
+######## s0-r2 23:52:01
+[23:55:28] s0-r2: SETTLED up=203s load=0.27
+Running as unit: ff-clip.service; invocation ID: 179310b37931469ebf697aeca8f27ec1
+[23:56:24] s0-r2: overruns 0
+[23:56:33] s0-r2: 27 decode windows
+s0-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7519     2.35     5.86     9.53    14.43      0
+  SUBMIT_3D                4462     2.66     6.74    11.28    14.43      0
+  SET_SCANOUT               644     0.32     2.35     5.01     7.36      0
+  RESOURCE_FLUSH            644     0.32     2.36     5.01     7.34      0
+######## a0-r2 23:56:34
+[23:59:59] a0-r2: SETTLED up=203s load=0.22
+Running as unit: ff-clip.service; invocation ID: ea3a77e244e3464a9c112bbf3443a2f9
+[00:00:55] a0-r2: overruns 0
+[00:01:05] a0-r2: 27 decode windows
+a0-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7709     1.67     5.29     8.81    16.50      1
+  SUBMIT_3D                4608     2.39     5.96     9.28    16.50      1
+  SET_SCANOUT               680     0.32     1.97     4.70    10.27      0
+  RESOURCE_FLUSH            680     0.31     1.96     4.69    10.26      0
+######## s15-r2 00:01:05
+[00:04:32] s15-r2: SETTLED up=203s load=0.07
+Running as unit: ff-clip.service; invocation ID: 07c5c445219b4a1bb5f3179d333b3cff
+[00:05:28] s15-r2: overruns 0
+[00:05:37] s15-r2: 27 decode windows
+s15-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7682    21.23    48.34    60.22    83.23   5286
+  SUBMIT_3D                4509    22.35    47.34    58.94    73.00   3263
+  SET_SCANOUT               654    12.82    45.56    59.55    75.41    276
+  RESOURCE_FLUSH            654    12.82    46.42    62.88    83.23    279
+######## a15-r2 00:05:38
+[00:09:03] a15-r2: SETTLED up=203s load=0.10
+Running as unit: ff-clip.service; invocation ID: d9450f5774ac49b6ba7943508ea96327
+[00:09:59] a15-r2: overruns 0
+[00:10:08] a15-r2: 27 decode windows
+a15-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7537     1.91    28.62    47.63    87.50   2290
+  SUBMIT_3D                4494    15.89    32.92    49.66    87.50   2235
+  SET_SCANOUT               652     0.34     1.68     4.50     8.93      0
+  RESOURCE_FLUSH            652     0.33     1.68     4.50     8.93      0
+######## done 00:10:09

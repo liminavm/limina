@@ -1,0 +1,6 @@
+a0-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7709     1.67     5.29     8.81    16.50      1
+  SUBMIT_3D                4608     2.39     5.96     9.28    16.50      1
+  SET_SCANOUT               680     0.32     1.97     4.70    10.27      0
+  RESOURCE_FLUSH            680     0.31     1.96     4.69    10.26      0

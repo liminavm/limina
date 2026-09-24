@@ -882,7 +882,7 @@ for the rest of its life, silently dropping every later submission. Fix: move (o
 sampler lookup into `virgl_resource_create_front` on `limina-guest`, re-export, bump the mesa RPM
 release, redeliver.
 
-### Hardware decode: what is still synchronous, and the waits nothing counts
+### Hardware decode: what is still synchronous
 VA-API decodes run on a thread per codec and every read of a target waits for its picture
 (`docs/design/async-video-decode.md`). What remains:
 - **A target lent to a venus context decodes synchronously.** A Vulkan read passes no host barrier,
@@ -893,13 +893,25 @@ VA-API decodes run on a thread per codec and every read of a target waits for it
 - **Per-plane uploads still run on the control thread.** Only the VideoToolbox wait left it; the
   `glTexSubImage2D` of each plane happens when a reader settles the target. Cheap next to the decode,
   but not free for large frames.
-- **Two waits on the control thread are not counted.** END_FRAME blocks when the codec's decode
-  queue is full, and a second decode into a target nothing has read waits for the first picture.
-  Neither shows in `VIRGLRS_SUBMIT_STATS`, whose `reads waited for a picture` line counts only
-  reads. Measured 2026-09-23 on Firefox playing VP9 at 25 fps: END_FRAME cost 0.03 ms a frame, the
-  worst video command 0.2 ms, and no read waited. Under the macOS Game Mode clamp the same playback
-  rose to 2-15 ms a frame (worst 327 ms), with the whole worker starved; the stats cannot say how
-  much of that was these two waits and how much plain CPU denial. Counting both would.
+- **Under the macOS Game Mode clamp the decode thread falls behind.** Measured 2026-09-23: Firefox's
+  VP9 playback went from 0.03 ms to 2-15 ms a frame in END_FRAME (worst 327 ms) with the whole
+  worker starved. `VIRGLRS_SUBMIT_STATS` now counts the two waits that can cost END_FRAME -- a full
+  decode queue, and a decode into a target whose previous picture has not landed -- on their own
+  `vrend video:` lines, so the next clamped run can split them from plain CPU denial.
+
+### One fence waiting for a picture holds back every other context's fences
+Classic fences retire through a single waiter thread in FIFO order (`third_party/virglrs/src/vrend/waiter.rs`),
+and a fence taken while its context decodes waits there for the picture to land. Every fence
+queued behind it waits too, whatever context it belongs to. Measured with every decode made 15 ms
+late (`spikes/flush-latency/RESULTS.md`): gnome-shell's fenced submits went from p50 2.3 / p95 5.5 ms
+to 4.3 / 27 ms, and Firefox's renderer's to 19 / 37 ms, while neither decodes anything.
+Synchronous decode was worse for both (gnome-shell p50 19 ms), and at real decode speed the effect
+is inside the instrument's spread, so this bounds what a slow decode can cost rather than
+describing today's playback. The FIFO is load-bearing: an `Ordered` fence retires behind the work
+queued before it only because the queue is in order, so the fix is a design change, not a reorder.
+Two shapes: park a job with pictures outside the queue and push it when its last picture lands,
+which needs an `Ordered` fence behind it to wait for it too; or give each context its own queue,
+which needs `Ordered` fences re-specified per context.
 
 ### mpv's VA-API path cannot render on venus
 `mpv --hwdec=vaapi` loads the driver but libplacebo's dmabuf interop fails probing surface formats —

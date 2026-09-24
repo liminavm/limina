@@ -1,0 +1,5 @@
+s15-r2
+  ctx   2 fenced   n= 1310  p50  18.67  p95  36.75  max  63.63
+  ctx   9 fenced   n= 1310  p50  22.44  p95  49.36  max  73.00
+  ctx  11 unfenced n=  944  p50  20.71  p95  33.51  max  56.24
+  ctx  11 fenced   n=  945  p50  25.75  p95  53.26  max  72.11

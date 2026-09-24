@@ -1,8 +1,8 @@
 # Asynchronous hardware video decode
 
 Status: **phases 1 and 2 implemented; 3 and 4 proposed** · Scope: virglrs (the decode), libkrun
-(snapshot drain), mesa-guest (one fence) · Backlog: *Hardware decode: what is still synchronous,
-and the waits nothing counts* (`docs/hardening-backlog.md`, Video)
+(snapshot drain), mesa-guest (one fence) · Backlog: *Hardware decode: what is still synchronous*
+(`docs/hardening-backlog.md`, Video)
 
 ## The problem
 
@@ -239,10 +239,12 @@ Following the repo's RED-first convention:
      calls `vaSyncSurface`, maps the exported dmabuf and checks a pixel. Run it with the delay knob.
    - RED on current mesa-guest: the read beats the picture.
    - GREEN with the fence fix, on the synchronous host and on the asynchronous one.
-5. **The backlog's own check.**
-   - A stack sample during playback shows no `Session::decode` under `process_gpu_command`.
-   - `LIMINA_GPU_TRACE` flush-to-present latency on a seated desktop does not move when a video
-     starts.
+5. **The desktop does not wait for video.**
+   - END_FRAME's own cost during real playback stays far below a decode's.
+   - A desktop flush's trip through the control queue does not move when a video plays, measured
+     from the guest's `virtio_gpu_cmd_queue`/`_response` tracepoints (`spikes/flush-latency/`). A
+     host-side timer cannot see this: the host learns of a flush only when it dequeues it, after
+     any wait behind END_FRAME.
 
 ## Phases
 
@@ -250,9 +252,11 @@ Following the repo's RED-first convention:
 2. virglrs + libkrun: decode threads, tickets, read barriers, fence gating, drains, the lend
    mark, and the `settle_video` call from the snapshot path. This covers every target not lent to
    venus: the whole stock tier, and the enhanced tier's targets that only vrend reads, which is
-   the dogfood Firefox case. Items 2 and 3 are green. Item 5's first half holds on real playback:
-   Firefox playing VP9 at 25 fps spent 0.03 ms a frame in END_FRAME (worst command 0.2 ms), which
-   no decode fits inside (measured 2026-09-23). The flush-to-present half is not measured.
+   the dogfood Firefox case. Items 2, 3 and 5 are green. On real playback END_FRAME cost 0.03 ms
+   a frame. With every decode made 15 ms late, synchronous decode pushed the median desktop flush
+   to 13 ms and 40% of flushes past a 60 Hz frame; asynchronous decode kept them at their
+   real-speed 0.3 ms median and 5 ms p99 (`spikes/flush-latency/RESULTS.md`). What it does not
+   isolate is other contexts' **fences**: see the backlog's fence-waiter entry.
 3. mesa-guest: END_FRAME emits a fence and sets the codec flag. It goes through the usual
    delivery chain (`scripts/export-mesa-guest-patches.sh` → RPM → `deliver-payload.sh`) and is
    an upstream candidate. Item 4 goes green.
