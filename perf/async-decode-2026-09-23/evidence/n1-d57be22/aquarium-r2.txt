@@ -1,0 +1,16 @@
+=== vrend / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 7ff1962e991d4ddb992dad948e71e8cd
+  settling 35s…
+perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-25000-fps.png: 1200x520 (from perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0940
+  wrote perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-25000.png and perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-25000-fps.png
+=== vrend / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 7e6434d297644c16bec4f98443001eb0
+  settling 35s…
+capture unusable (UnidentifiedImageError); retry
+  capture attempt 1 unusable, retrying…
+perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-30000-fps.png: 1200x520 (from perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0375
+  wrote perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-30000.png and perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-25000-fps.png
+perf/async-decode-2026-09-23/evidence/n1-d57be22/aquarium-r2/vrend-30000-fps.png
