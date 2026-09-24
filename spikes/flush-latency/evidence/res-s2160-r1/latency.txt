@@ -1,0 +1,6 @@
+res-s2160-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7607     4.37    11.87    15.68    44.78     68
+  SUBMIT_3D                4498     7.43    12.33    16.28    44.78     53
+  SET_SCANOUT               672     0.34     8.15    12.38    17.36      2
+  RESOURCE_FLUSH            672     0.34     8.15    12.83    17.36      2

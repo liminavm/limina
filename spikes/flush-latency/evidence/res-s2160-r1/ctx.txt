@@ -1,0 +1,5 @@
+res-s2160-r1
+  ctx   2 fenced   n= 1344  p50   2.51  p95  10.62  max  16.12
+  ctx   9 fenced   n= 1340  p50   4.14  p95  11.90  max  23.45
+  ctx  11 unfenced n=  907  p50   8.52  p95  13.16  max  44.78
+  ctx  11 fenced   n=  907  p50   8.70  p95  13.92  max  44.68

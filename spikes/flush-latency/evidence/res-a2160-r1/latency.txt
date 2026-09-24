@@ -1,0 +1,6 @@
+res-a2160-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7345     2.46     9.78    13.95    22.60     33
+  SUBMIT_3D                4406     2.97    11.13    15.09    22.60     33
+  SET_SCANOUT               646     0.32     1.60     3.85     8.34      0
+  RESOURCE_FLUSH            646     0.32     1.60     3.84     8.33      0

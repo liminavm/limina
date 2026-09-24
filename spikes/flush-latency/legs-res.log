@@ -1,0 +1,89 @@
+######## res-a720-r1 07:33:09
+[07:36:37] res-a720-r1: SETTLED up=202s load=0.21
+Running as unit: ff-clip.service; invocation ID: 76bb894ba1454e8aaf005758ac2772eb
+[07:37:33] res-a720-r1: overruns 0
+[07:37:42] res-a720-r1: 27 decode windows
+res-a720-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              8278     1.58     5.31     8.68    13.90      0
+  SUBMIT_3D                4876     2.40     6.02     8.94    13.15      0
+  SET_SCANOUT               746     0.31     1.31     3.01     7.97      0
+  RESOURCE_FLUSH            746     0.31     1.31     3.00     7.97      0
+######## res-a1080-r1 07:37:43
+[07:41:10] res-a1080-r1: SETTLED up=203s load=0.19
+Running as unit: ff-clip.service; invocation ID: 8e2387c47eb947a1a90fdebb557c2357
+[07:42:06] res-a1080-r1: overruns 0
+[07:42:15] res-a1080-r1: 27 decode windows
+res-a1080-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              8189     1.66     5.13     7.94    27.65      2
+  SUBMIT_3D                4764     2.44     5.76     8.43    27.65      2
+  SET_SCANOUT               727     0.30     1.42     2.64    12.22      0
+  RESOURCE_FLUSH            727     0.30     1.42     2.63    12.22      0
+######## res-a2160-r1 07:42:16
+[07:45:42] res-a2160-r1: SETTLED up=203s load=0.26
+Running as unit: ff-clip.service; invocation ID: 61402470e35641db90af9dc79c8fc5d7
+[07:46:38] res-a2160-r1: overruns 0
+[07:46:47] res-a2160-r1: 27 decode windows
+res-a2160-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7345     2.46     9.78    13.95    22.60     33
+  SUBMIT_3D                4406     2.97    11.13    15.09    22.60     33
+  SET_SCANOUT               646     0.32     1.60     3.85     8.34      0
+  RESOURCE_FLUSH            646     0.32     1.60     3.84     8.33      0
+######## res-s2160-r1 07:46:48
+[07:50:16] res-s2160-r1: SETTLED up=202s load=0.18
+Running as unit: ff-clip.service; invocation ID: c7c993c03ffd4f86a72644e166466113
+[07:51:12] res-s2160-r1: overruns 0
+[07:51:21] res-s2160-r1: 27 decode windows
+res-s2160-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7607     4.37    11.87    15.68    44.78     68
+  SUBMIT_3D                4498     7.43    12.33    16.28    44.78     53
+  SET_SCANOUT               672     0.34     8.15    12.38    17.36      2
+  RESOURCE_FLUSH            672     0.34     8.15    12.83    17.36      2
+######## res-a720-r2 07:51:22
+[07:54:48] res-a720-r2: SETTLED up=203s load=0.24
+Running as unit: ff-clip.service; invocation ID: 62e249bac7d0441694638099f9aaecf3
+[07:55:44] res-a720-r2: overruns 0
+[07:55:53] res-a720-r2: 27 decode windows
+res-a720-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              8132     1.58     5.62     8.57    18.23      6
+  SUBMIT_3D                4816     2.34     6.26     8.83    18.23      5
+  SET_SCANOUT               730     0.30     1.45     3.68     5.07      0
+  RESOURCE_FLUSH            730     0.29     1.44     3.67     5.07      0
+######## res-a1080-r2 07:55:54
+[07:59:20] res-a1080-r2: SETTLED up=203s load=0.18
+Running as unit: ff-clip.service; invocation ID: aea29f8a160d4d0e97cd1e1e6d459584
+[08:00:16] res-a1080-r2: overruns 0
+[08:00:25] res-a1080-r2: 27 decode windows
+res-a1080-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7918     1.77     6.37     9.39    17.18      1
+  SUBMIT_3D                4642     2.47     6.99     9.99    17.18      1
+  SET_SCANOUT               696     0.31     1.20     2.64    10.87      0
+  RESOURCE_FLUSH            696     0.31     1.19     2.61    10.86      0
+######## res-a2160-r2 08:00:26
+[08:03:52] res-a2160-r2: SETTLED up=203s load=0.16
+Running as unit: ff-clip.service; invocation ID: 9ca0ae4517aa48fd95e42baaab8818ca
+[08:04:49] res-a2160-r2: overruns 0
+[08:04:58] res-a2160-r2: 27 decode windows
+res-a2160-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7541     2.40     9.38    13.07    23.12     28
+  SUBMIT_3D                4492     2.92    10.77    14.18    23.12     26
+  SET_SCANOUT               669     0.33     2.27     5.39    16.85      1
+  RESOURCE_FLUSH            669     0.33     2.23     5.38    16.84      1
+######## res-s2160-r2 08:04:58
+[08:08:25] res-s2160-r2: SETTLED up=202s load=0.29
+Running as unit: ff-clip.service; invocation ID: 93378fadf6e04deaa98626d23f51f775
+[08:09:22] res-s2160-r2: overruns 0
+[08:09:31] res-s2160-r2: 27 decode windows
+res-s2160-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7919     5.00    11.88    15.77    26.68     70
+  SUBMIT_3D                4646     7.22    12.75    16.46    26.68     57
+  SET_SCANOUT               708     0.35     7.46    11.84    14.68      0
+  RESOURCE_FLUSH            708     0.35     7.67    11.84    14.68      0
+######## done 08:09:32

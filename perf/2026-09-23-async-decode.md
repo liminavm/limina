@@ -10,8 +10,8 @@ No arm decodes video. What the battery can see is the cost of the barriers when 
 flight -- one atomic load per resource lookup, draw, transfer and fence -- on the instruments that
 enter vrend (Basemark on the stock guest, the WebGL aquarium) and, as collateral, on the
 zink->venus arms. The decode win itself is measured elsewhere: `l2_video_decode_off_thread`, and
-the poke run's `vrend video:` lines (0.03 ms/frame and 0.2 ms worst command at 25 fps VP9, 0 reads
-waited).
+the poke run's `vrend video:` lines (0.03 ms/frame and 0.2 ms worst command at 25 fps VP9), and
+`spikes/flush-latency/RESULTS.md`.
 
 **The host was not quiet.** Other builds ran during the sweep. The `gl-replay-llvmpipe` control is
 in its band (717-757) at b0, n0 and b1, low at n1 (667, 684, 724) and far out at b2 (719, 370,

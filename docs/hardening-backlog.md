@@ -899,19 +899,27 @@ VA-API decodes run on a thread per codec and every read of a target waits for it
   decode queue, and a decode into a target whose previous picture has not landed -- on their own
   `vrend video:` lines, so the next clamped run can split them from plain CPU denial.
 
-### One fence waiting for a picture holds back every other context's fences
+### One context's decode holds back every other context's fences
 Classic fences retire through a single waiter thread in FIFO order (`third_party/virglrs/src/vrend/waiter.rs`),
-and a fence taken while its context decodes waits there for the picture to land. Every fence
-queued behind it waits too, whatever context it belongs to. Measured with every decode made 15 ms
-late (`spikes/flush-latency/RESULTS.md`): gnome-shell's fenced submits went from p50 2.3 / p95 5.5 ms
-to 4.3 / 27 ms, and Firefox's renderer's to 19 / 37 ms, while neither decodes anything.
-Synchronous decode was worse for both (gnome-shell p50 19 ms), and at real decode speed the effect
-is inside the instrument's spread, so this bounds what a slow decode can cost rather than
-describing today's playback. The FIFO is load-bearing: an `Ordered` fence retires behind the work
-queued before it only because the queue is in order, so the fix is a design change, not a reorder.
-Two shapes: park a job with pictures outside the queue and push it when its last picture lands,
-which needs an `Ordered` fence behind it to wait for it too; or give each context its own queue,
-which needs `Ordered` fences re-specified per context.
+and a fence taken while its context decodes waits there for the picture to land, so every fence
+queued behind it waits too. **The order is the guest's, not the waiter's:** stock guest Mesa's virgl
+winsys never sets `VIRTGPU_EXECBUF_RING_IDX`, so every classic fence from every process sits on the
+device-wide dma-fence context, with one id sequence interleaved across contexts, and the guest kernel
+signals every older fence on that context when a newer one is delivered
+(`virtio_gpu_fence_event_process`). Retiring gnome-shell's fence ahead of a decoding context's older
+one would signal the decoder's early. No host-side reordering is correct.
+
+What it costs, bounded by one decode (VideoToolbox time plus the plane write), measured at real speed
+(`spikes/flush-latency/RESULTS.md`): about 2.2 ms a decode at 720p, 3.0 at 1080p and 6.3 at 4K VP9.
+gnome-shell's fenced submits keep their ~2.4 ms median at every size; their p95 goes from ~4 ms to
+7-9 ms at 4K (synchronous decode: 10.6). The plane write is ~11% of a 4K decode and time queued ~8%,
+so neither faster copies nor a higher-priority decode thread would move this measurably.
+
+The only way out is a timeline per context: the virgl winsys asks for one ring at context init and
+submits with `RING_IDX`, after which the host can order classic context fences per context rather
+than globally. That is a mesa-guest change for the enhanced tier (stock guests keep the shared
+timeline, correct and slower), and it would ride the same delivery as the END_FRAME fence of the
+async-decode design's phase 3.
 
 ### mpv's VA-API path cannot render on venus
 `mpv --hwdec=vaapi` loads the driver but libplacebo's dmabuf interop fails probing surface formats —

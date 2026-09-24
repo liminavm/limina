@@ -1,0 +1,6 @@
+res-a1080-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7918     1.77     6.37     9.39    17.18      1
+  SUBMIT_3D                4642     2.47     6.99     9.99    17.18      1
+  SET_SCANOUT               696     0.31     1.20     2.64    10.87      0
+  RESOURCE_FLUSH            696     0.31     1.19     2.61    10.86      0

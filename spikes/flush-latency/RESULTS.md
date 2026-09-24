@@ -39,7 +39,9 @@ the decode is short enough that the difference is in the tail only (p95/p99), an
 between-boot spread.
 
 END_FRAME's own cost, from `VIRGLRS_SUBMIT_STATS`: 22-23 ms a frame synchronous at 15 ms, 0.03 ms
-asynchronous, with no read, replacement or queue wait counted.
+asynchronous. The stats' decoder counters were not connected at these points (virglrs before
+`b900066` dropped them after the first 2 s window), so this pass says nothing about how often a read
+waited for a picture.
 
 ## Fences: other contexts wait behind the decoder's, through the waiter
 
@@ -59,3 +61,48 @@ goes from 5.5 to 27 ms. **Every classic fence retires through one waiter thread 
 a fence parked on a landing holds back every fence queued after it, whoever's it is. Asynchronous
 decode still beats synchronous for them (gnome-shell p50 4.3 against 19.0), but it does not
 isolate them. At real decode speed the effect is below this instrument's spread.
+
+The FIFO is not the waiter's choice. Every classic fence in these traces carries flags `0x1` and
+never `0x2` (`INFO_RING_IDX`), and fence ids form one sequence interleaved across contexts: stock
+Mesa's virgl winsys puts every GL context on the guest's device-wide fence timeline, where
+delivering a fence signals every older one. Retiring another context's fence first would signal the
+decoder's early.
+
+## Across frame sizes, at real decode speed
+
+`legs-res.sh`: the same vehicle with 720p, 1080p and 4K VP9 clips (30 fps), no delay. Asynchronous
+decode at virglrs `b900066`, whose stats report the decode thread's phases and the render thread's
+waits for the decoder; synchronous decode (`1dd26d3`) at 4K for contrast. Two rounds each, one
+boot per point. Every point decoded in hardware at 30 fps.
+
+Per decode, frame-weighted mean (worst), ms:
+
+| clip | queued | VideoToolbox | plane write | reads that waited, per 30 s run |
+|---|---|---|---|---|
+| 720p | 0.28-0.44 (58) | 2.10-2.19 (10.9) | 0.10-0.11 (1.9) | 1 and 1 (12, 38 ms) |
+| 1080p | 0.24-0.34 (53) | 2.77-2.85 (10.6) | 0.22-0.23 (2.9) | 0 and 1 (14 ms) |
+| 4K | 0.38-0.56 (59) | 5.60-5.63 (22.8) | 0.63-0.70 (8.8) | 0 and 0 |
+
+No decode waited for room in the queue or to replace an unread picture.
+
+The desktop, same points (ms); the synchronous row is from the same vehicle's first pass
+(`evidence/res-s2160-r*`):
+
+| clip | flush p50 | flush p99 | gnome-shell fence p50 | gnome-shell fence p95 |
+|---|---|---|---|---|
+| 720p async | 0.29-0.30 | 3.03-3.07 | 2.35-2.39 | 4.67-5.07 |
+| 1080p async | 0.30 | 2.75-2.85 | 2.41-2.43 | 3.60-3.61 |
+| 4K async | 0.31-0.33 | 2.36-5.91 | 2.53-2.70 | 7.04-8.97 |
+| 4K sync | 0.34-0.35 | 11.84-12.83 | 2.51-2.55 | 10.57-10.62 |
+
+**What bounds another context's fence:** one decode, which is VideoToolbox time plus the plane
+write. At 4K that is about 6.3 ms a frame, and gnome-shell's fence p95 rises from ~4 ms to 7-9 ms;
+its median does not move. Of that decode, the plane write is ~11% and the time queued ~8%; the rest
+is the hardware decode. Removing the plane write entirely would take at most ~0.7 ms off a 4K
+decode, and raising the decode thread's priority can only act on the queued share, whose mean is
+under 0.6 ms. Neither changes the picture at any size measured here.
+
+**Reads that outran the decoder are rare but not free:** at most one per 30 s run, each blocking
+the render thread 12-38 ms -- a read that reached a target while its picture was still decoding.
+Nothing in the design rules them out; they are timing.
+

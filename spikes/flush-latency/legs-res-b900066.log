@@ -1,0 +1,67 @@
+######## res-a720-r1-b900066 08:14:32
+[08:18:14] res-a720-r1-b900066: SETTLED up=217s load=0.29
+Running as unit: ff-clip.service; invocation ID: e3075074e45b4b87b9f1928566a08e45
+[08:19:10] res-a720-r1-b900066: overruns 0
+[08:19:20] res-a720-r1-b900066: 27 decode windows
+res-a720-r1-b900066
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7999     1.51     5.52     9.07    25.28      8
+  SUBMIT_3D                4738     2.30     6.23    10.11    25.28      6
+  SET_SCANOUT               710     0.30     1.39     4.15    11.37      0
+  RESOURCE_FLUSH            710     0.30     1.39     3.07    11.37      0
+######## res-a1080-r1-b900066 08:19:20
+[08:22:48] res-a1080-r1-b900066: SETTLED up=202s load=0.17
+Running as unit: ff-clip.service; invocation ID: 1859751cc6d94ec0bd10fbf4deb8dca3
+[08:23:44] res-a1080-r1-b900066: overruns 0
+[08:23:53] res-a1080-r1-b900066: 27 decode windows
+res-a1080-r1-b900066
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7614     1.88     6.02     9.40    17.05      3
+  SUBMIT_3D                4538     2.45     6.81    10.43    17.05      3
+  SET_SCANOUT               669     0.30     1.14     2.75     8.44      0
+  RESOURCE_FLUSH            669     0.30     1.13     2.75     8.44      0
+######## res-a2160-r1-b900066 08:23:54
+[08:27:20] res-a2160-r1-b900066: SETTLED up=203s load=0.29
+Running as unit: ff-clip.service; invocation ID: 90038a9f94b54ec78168add1c4ac9eb1
+[08:28:17] res-a2160-r1-b900066: overruns 0
+[08:28:26] res-a2160-r1-b900066: 27 decode windows
+res-a2160-r1-b900066
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              8081     2.01     9.75    15.29    49.06     70
+  SUBMIT_3D                4721     3.02    11.09    16.74    49.06     61
+  SET_SCANOUT               726     0.34     1.54     5.91    16.47      1
+  RESOURCE_FLUSH            726     0.33     1.54     5.91    16.47      1
+######## res-a720-r2-b900066 08:28:27
+[08:32:08] res-a720-r2-b900066: SETTLED up=218s load=0.25
+Running as unit: ff-clip.service; invocation ID: 545ec787ca224204a04b483878428f6d
+[08:33:04] res-a720-r2-b900066: overruns 0
+[08:33:13] res-a720-r2-b900066: 27 decode windows
+res-a720-r2-b900066
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              8227     1.60     5.20     8.26    14.56      0
+  SUBMIT_3D                4836     2.34     5.91     9.00    14.56      0
+  SET_SCANOUT               735     0.30     1.21     3.04    10.71      0
+  RESOURCE_FLUSH            735     0.29     1.21     3.03    10.70      0
+######## res-a1080-r2-b900066 08:33:14
+[08:36:40] res-a1080-r2-b900066: SETTLED up=203s load=0.15
+Running as unit: ff-clip.service; invocation ID: 1f64ddeeac6142f7b7c8622926288f60
+[08:37:36] res-a1080-r2-b900066: overruns 0
+[08:37:45] res-a1080-r2-b900066: 27 decode windows
+res-a1080-r2-b900066
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7657     1.85     6.39     9.73    18.59      2
+  SUBMIT_3D                4596     2.45     7.20    10.38    18.59      2
+  SET_SCANOUT               683     0.30     1.36     2.85    10.94      0
+  RESOURCE_FLUSH            683     0.30     1.33     2.85    10.93      0
+######## res-a2160-r2-b900066 08:37:46
+[08:41:12] res-a2160-r2-b900066: SETTLED up=203s load=0.26
+Running as unit: ff-clip.service; invocation ID: 29915f4825194de195ad5987e4f5282c
+[08:42:09] res-a2160-r2-b900066: overruns 0
+[08:42:18] res-a2160-r2-b900066: 27 decode windows
+res-a2160-r2-b900066
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              7495     1.76     9.25    12.78    23.28     23
+  SUBMIT_3D                4442     2.97    10.21    14.33    23.28     23
+  SET_SCANOUT               657     0.31     1.19     2.36    12.46      0
+  RESOURCE_FLUSH            657     0.31     1.18     2.36    12.46      0
+######## done 08:42:19

@@ -1,0 +1,6 @@
+res-a720-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              8132     1.58     5.62     8.57    18.23      6
+  SUBMIT_3D                4816     2.34     6.26     8.83    18.23      5
+  SET_SCANOUT               730     0.30     1.45     3.68     5.07      0
+  RESOURCE_FLUSH            730     0.29     1.44     3.67     5.07      0

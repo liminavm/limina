@@ -18,15 +18,20 @@ mkdir -p "$EV" "$WORK"
 TRACE_SECS="${TRACE_SECS:-30}"
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 CLONE="$WORK/flush-enh.raw"
-CLIP="$WORK/clip-720p30-vp9.webm"
+# CLIP_RES picks the clip: 1280x720 (default), 1920x1080 or 3840x2160, bitrate scaled to match.
+CLIP_RES="${CLIP_RES:-1280x720}"
+case "$CLIP_RES" in 1280x720) RATE=3M ;; 1920x1080) RATE=6M ;; 3840x2160) RATE=20M ;; *) RATE=6M ;; esac
+CLIP="$WORK/clip-${CLIP_RES}p30-vp9.webm"
 
 [ -f "$CLIP" ] || ffmpeg -hide_banner -loglevel error -f lavfi \
-  -i testsrc2=size=1280x720:rate=30:duration=150 \
-  -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -b:v 3M -y "$CLIP" || { log "ABORT: clip"; exit 1; }
+  -i "testsrc2=size=$CLIP_RES:rate=30:duration=150" \
+  -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -row-mt 1 -b:v "$RATE" -y "$CLIP" ||
+  { log "ABORT: clip"; exit 1; }
 
-rm -f "$WORK/flush-enh.raw"
+# A fixed name, so nothing here deletes a computed path.
+rm -f spikes/flush-latency/work.noindex/flush-enh.raw
 cp -c Fedora-Workstation-44.enhanced.raw "$CLONE" || { log "ABORT: clone"; exit 1; }
-{ echo "label=$LABEL worker=$WDIR delay=${DELAY}ms mode=$MODE"; ls -l "$WDIR"; } > "$EV/provenance.txt"
+{ echo "label=$LABEL worker=$WDIR delay=${DELAY}ms mode=$MODE clip=$CLIP_RES"; ls -l "$WDIR"; } > "$EV/provenance.txt"
 
 env LIMINA_BIN="$WDIR/limina" LIMINA_VMM_BIN="$WDIR/limina-vmm" \
   LIMINA_CPUS=4 LIMINA_RAM_MIB=4096 LIMINA_NET=1 LIMINA_EXTRA_ARGS="--display-resolution 1280x800" \
@@ -77,5 +82,6 @@ fi
 cp "$WLOG" "$EV/worker.log"
 grep -E 'vrend video:|DECODE_DELAY' "$EV/worker.log" > "$EV/video-lines.txt"
 log "$LABEL: $(grep -c 'frames' "$EV/video-lines.txt") decode windows"
-rm -f "$WORK/flush-enh.raw"
+rm -f spikes/flush-latency/work.noindex/flush-enh.raw
 python3 "$D/parse.py" "$EV/vgtrace.txt" "$LABEL" | tee "$EV/latency.txt"
+python3 "$D/ctx.py" "$EV/vgtrace.txt" "$LABEL" > "$EV/ctx.txt"

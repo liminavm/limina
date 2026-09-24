@@ -1,0 +1,5 @@
+res-a720-r2-b900066
+  ctx   2 fenced   n= 1470  p50   2.39  p95   4.67  max  11.86
+  ctx   9 fenced   n= 1470  p50   2.18  p95   6.39  max  12.88
+  ctx  11 unfenced n=  948  p50   0.63  p95   4.35  max   8.60
+  ctx  11 fenced   n=  948  p50   2.89  p95   7.35  max  14.56
