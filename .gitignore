@@ -73,6 +73,9 @@ spikes/virgl-zink-kk/timerprobe
 # Debug bundles are always build output, wherever clang leaves them.
 *.dSYM/
 
+# spikes/ssh-staging-race run logs (repro.sh's default outdir; sources + RESULTS.md kept)
+spikes/ssh-staging-race/runs/
+
 # spikes/venus-ring-fatal-timeout build artifacts
 spikes/venus-ring-fatal-timeout/probe
 spikes/venus-ring-fatal-timeout/probe.dSYM/
