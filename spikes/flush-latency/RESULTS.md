@@ -163,3 +163,11 @@ phase in order (`evidence/stock-session-create`, `evidence/stock-session-idle`):
 Neither a new frame size nor fifteen minutes of idle brings it back, so it is the process's first
 session, not the media engine waking. What stays after it is gst-va's start-up burst: 5-8 decodes
 wait for room in a queue four deep, 8-10 ms in all, about 4 ms each.
+
+**Warming VideoToolbox at renderer start removes it.** The first session warms VideoToolbox as a
+whole, not one decoder: `third_party/virglrs/examples/first-session.rs`, in fresh processes, builds
+the first of any codec in 47-54 ms and every later one, of any codec, in 2.5-4.7 ms. So virglrs
+builds and drops one VP9 session on a thread of its own right after probing decode support. Same
+vehicle, same image (`evidence/stock-session-warm`): the worker's first playback now builds its
+session in **2.6 ms**, and its longest queue wait is 7.3 ms (was 68-72); the later plays are
+unchanged at 2.3-2.4 ms. The start-up burst's few-millisecond waits remain.

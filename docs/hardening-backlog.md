@@ -891,8 +891,14 @@ VA-API decodes run on a thread per codec and every read of a target waits for it
   codec (phase 4). The same guest fence closes the existing race for a decode already queued when
   the lend happens.
 - **Per-plane uploads still run on the control thread.** Only the VideoToolbox wait left it; the
-  `glTexSubImage2D` of each plane happens when a reader settles the target. Cheap next to the decode,
-  but not free for large frames.
+  `glTexSubImage2D` of each plane happens when a reader settles the target. Measured on the stock
+  tier, whose targets are all per-plane (`spikes/flush-latency/RESULTS.md`, "The stock tier"):
+  0.15-0.46 ms a plane, ~0.9 ms a frame and 2.7% of the render thread at 4K VP9. Moving them off
+  (unpack buffers, or a decode-thread GL context) can save no more than that.
+- **A playback's first frames still wait a few ms each for room in the queue.** gst-va submits
+  frames ahead at start-up, and 4-8 decodes wait for a four-deep queue, ~4 ms each and 8-10 ms in
+  all. A deeper queue would remove it at the cost of more undelivered pictures holding the
+  decoder's pool.
 - **Under the macOS Game Mode clamp the decode thread falls behind.** Measured 2026-09-23: Firefox's
   VP9 playback went from 0.03 ms to 2-15 ms a frame in END_FRAME (worst 327 ms) with the whole
   worker starved. `VIRGLRS_SUBMIT_STATS` now counts the two waits that can cost END_FRAME -- a full

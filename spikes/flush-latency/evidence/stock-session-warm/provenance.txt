@@ -1,0 +1,5 @@
+label=stock-session-warm worker=target/lat-stock image=stock.test player=showtime
+total 124032
+-rwxr-xr-x@ 1 kov  staff  26779848 Sep 24 12:33 limina
+-rwxr-xr-x@ 1 kov  staff  36718160 Sep 24 12:33 limina-vmm
+plays=1920x1080:0 1920x1080:0 1920x1080:0 1280x720:0
