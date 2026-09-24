@@ -24,14 +24,31 @@
 //! `failed to open: Permission denied` while the guest's real filesystems trim fine beside
 //! it. Test on the filesystem production trims, with the labels production has.
 //!
+//! # Why the desktop is quieted first
+//!
+//! The host can only hand back blocks that are **still free when the trim runs**. A seated
+//! F44 guest stages a full offline system update within minutes of login — `/var/lib/dnf`
+//! grew 4708 → 5707 MiB inside this test's own trim window — and btrfs puts that gigabyte
+//! straight back into the block group the deleted payload just vacated. The host then cannot
+//! return those blocks, and from the host side that is indistinguishable from a discard path
+//! that does not work. It made this test a coin flip: six measured runs recovered between
+//! 1007 and 1083 MiB against a 1024 MiB bar, passing and failing on tens of MiB.
+//!
+//! [`quiesce_desktop`](limina_test::quiesce_desktop) stops it, and oracle 4 below asserts
+//! that it worked — so if the update machinery changes shape again, the test says *that*
+//! instead of blaming the discard path. `spikes/qga-fstrim/RESULTS.md` has the measurements.
+//!
 //! Oracles, in order:
 //! 1. Writing into the guest's filesystem grows the host image.
 //! 2. Deleting it inside the guest does **not** shrink the host image.
 //! 3. The supervisor's periodic trim fires and says what it did.
-//! 4. …and now the host image has shrunk back.
+//! 4. The guest did not spend the freed space again while we waited.
+//! 5. …and now the host image has shrunk back.
 //!
 //! Host allocation is read as `st_blocks`, never `fstrim -v`'s own number: the agent reports
 //! the size of the ranges it *walked*, which was 25.7 GiB in a run that recovered 958 MiB.
+//! The guest's own consumption is read with `df`, which is a different kind of number — what
+//! the filesystem holds, not what a trim claims to have walked.
 
 use limina_test::{Guest, GuestConfig};
 use std::os::unix::fs::MetadataExt;
@@ -72,6 +89,18 @@ fn allocated_mib(path: &Path) -> u64 {
     let md = std::fs::metadata(path)
         .unwrap_or_else(|e| panic!("stat-ing the data disk {}: {e}", path.display()));
     md.blocks() * 512 / (1024 * 1024)
+}
+
+/// What the guest itself is using on the filesystem the payload lives on, in MiB.
+///
+/// Read at the delete and again after the trim, this is what separates "the discard path is
+/// broken" from "the guest spent the payload's space again before we asked for it back" —
+/// two situations the host file's allocation alone cannot tell apart.
+fn guest_used_mib(guest: &Guest) -> u64 {
+    let out = ssh_soft(guest, "df -B1048576 --output=used / | tail -1");
+    out.trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("reading the guest's used space from {out:?}: {e}"))
 }
 
 /// How many trims the supervisor has completed so far.
@@ -134,6 +163,10 @@ fn a_periodic_guest_trim_returns_free_blocks_to_the_host_image() {
          this test's host-side oracle is reading nothing",
         disk.display()
     );
+
+    // Before ANY measurement: a fresh desktop's update machinery would otherwise download a
+    // gigabyte into the very space this test is about to free. See the module doc.
+    limina_test::quiesce_desktop(&guest);
 
     let rpm = ssh_soft(&guest, "rpm -q qemu-guest-agent");
     if !rpm.contains("qemu-guest-agent-") {
@@ -203,6 +236,7 @@ fn a_periodic_guest_trim_returns_free_blocks_to_the_host_image() {
          new vehicle"
     );
     eprintln!("host allocation after delete: {deleted} MiB (still held, as intended)");
+    let used_at_delete = guest_used_mib(&guest);
 
     // --- Oracle 3: the supervisor's periodic trim runs ---
     let before = trims_logged(&guest);
@@ -221,8 +255,6 @@ fn a_periodic_guest_trim_returns_free_blocks_to_the_host_image() {
         qga_lines(&guest)
     );
 
-    // --- Oracle 4: …and the blocks came back ---
-    //
     // The punch-hole is issued as the agent walks the free extents, so the shrink can trail
     // the log line slightly.
     let mut trimmed = allocated_mib(&disk);
@@ -232,11 +264,34 @@ fn a_periodic_guest_trim_returns_free_blocks_to_the_host_image() {
         trimmed = allocated_mib(&disk);
     }
     eprintln!("host allocation after the trim: {trimmed} MiB");
+
+    // --- Oracle 4: the guest did not spend the freed space again ---
+    //
+    // The control for oracle 5, and the reason this test stopped being a coin flip. Without
+    // it, a guest that re-used the payload's extents reads as a broken discard path.
+    let respent = guest_used_mib(&guest).saturating_sub(used_at_delete);
+    eprintln!("guest re-used {respent} MiB of its own while we waited for the trim");
+    assert!(
+        respent < PAYLOAD_MIB / 4,
+        "the guest allocated {respent} MiB of its own between the delete and the trim, so the \
+         payload's space was taken back before it could be returned and this run cannot \
+         measure the discard path at all. Something the guest does in the background is no \
+         longer being stopped by limina_test::quiesce_desktop — as of 2026-09-24 that was \
+         gnome-software staging an offline dnf5 update, ~1 GiB into /var/lib/dnf. Find the \
+         new one with `du -xsm /var/* /var/lib/*` either side of the wait; \
+         spikes/qga-fstrim/RESULTS.md has the method."
+    );
+
+    // --- Oracle 5: …and the blocks came back ---
     assert!(
         trimmed < deleted - PAYLOAD_MIB / 2,
-        "the trim ran but the host image still holds {trimmed} MiB (was {deleted} before it, \
-         floor {floor}). The discard is not reaching the backing file — check virtio-blk's \
-         VIRTIO_BLK_T_DISCARD arm and imago's punch-hole. qga log lines:\n{}",
+        "the trim ran but the host image gave back only {} MiB of the {PAYLOAD_MIB} MiB \
+         payload (holds {trimmed} MiB, was {deleted} before the trim, floor {floor}), and \
+         the guest re-used only {respent} MiB meanwhile — so the space really was free and \
+         really was not returned. Check virtio-blk's VIRTIO_BLK_T_DISCARD arm and imago's \
+         punch-hole; `spikes/qga-fstrim/second-trim-probe.sh` reproduces the path without \
+         the supervisor. qga log lines:\n{}",
+        deleted.saturating_sub(trimmed),
         qga_lines(&guest)
     );
 

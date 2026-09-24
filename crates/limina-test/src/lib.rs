@@ -3005,42 +3005,50 @@ fn mkfifo(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Convenience: assert that a captured console contains all of `needles`, with a
-/// helpful message naming the first missing one.
-/// Venus rings that stopped consuming, in the worker's own words.
+/// Quiet the things a fresh desktop does on its own, so a test measures its own workload
+/// rather than the machine's background life.
 ///
-/// A vkr ring that goes FATAL stops draining its command stream, and the guest's
-/// `vn_ring_wait_seqno` then waits for a seqno that will never arrive. A compositor that hits
-/// this while allocating a buffer parks there forever: the desktop freezes with every process
-/// alive, nothing drawing, and no error anywhere in the guest. Before it was contained, one
-/// stale reference in a restored context did exactly that to a whole synoik session.
+/// The update machinery is both the loudest and the hungriest of them, and it has now
+/// produced two failures that looked like something else entirely:
 ///
-/// The host notices the stall and says so; that line is the oracle. It is worth asserting
-/// separately from any pixel comparison, because a frozen desktop still holds a *correct*
-/// picture — the last frame presented before the ring died — so a landmark diff can pass on a
-/// session that is comprehensively dead.
-/// Quiet the things a desktop does on its own, so a test comparing two captures is
-/// comparing its own workload rather than the machine's background life.
+/// - **A rendering bug.** An update check ends in a notification banner drawn over the
+///   desktop, at the top of the screen, between two captures a landmark test is comparing.
+/// - **A broken discard path.** On F44 the daemon is `dnf5daemon-server` (PackageKit is
+///   gone), and a seated guest stages a full *offline system update* within minutes of
+///   login: `/var/lib/dnf` grew **4708 -> 5707 MiB in four minutes** in the window
+///   `l2_qga_fstrim` spends waiting for a trim. btrfs put that gigabyte straight back into
+///   the block group the test's deleted payload had just vacated, so the host file could not
+///   return those blocks and the trim read as broken. Measured 2026-09-24;
+///   `spikes/qga-fstrim/RESULTS.md` has the numbers.
 ///
-/// Two sources, both of which have produced a failure that looks exactly like a rendering
-/// bug: PackageKit waking up to check for updates, which ends in a notification banner drawn
-/// over the desktop, and the shell's own notification banners generally. Both appear at the
-/// top of the screen, both are transient, and neither has anything to do with what these
-/// tests measure.
+/// Hence the order below: kill the asker (`gnome-software`) first, then stop **and mask**
+/// each daemon, because they are socket-, timer- and D-Bus-activated and a stop alone just
+/// invites the next request to start them again mid-test.
 ///
-/// The commands are best-effort on purpose. A guest without PackageKit, or with no GNOME
+/// The commands are best-effort on purpose. A guest without these services, or with no GNOME
 /// session behind the compositor under test, should not fail here -- the point is to remove
-/// a disturbance where one exists, not to require it.
+/// a disturbance where one exists, not to require it. Masking touches only the booted COW
+/// clone, which is discarded at teardown.
 ///
 /// This does NOT stop a clock. A panel clock advancing between two captures is a *correct*
 /// desktop, and a test whose landmarks cover the panel has to account for that itself.
 pub fn quiesce_desktop(guest: &Guest) {
     let cmds = [
-        // Stopping alone is not enough: the service is socket- and timer-activated, so the
-        // next update check would start it again mid-test.
+        // The asker goes first, so nothing re-requests a download between stop and mask.
+        // `-x` (exact process name), NOT `-f`: a full-command-line match also matches the
+        // shell sshd started to run this very command, so `pkill -f` would kill its own
+        // parent before reporting anything.
+        "pkill -x gnome-software 2>/dev/null || true",
+        // F44's package daemon. Without this the guest quietly downloads ~1 GiB.
+        "sudo systemctl stop dnf5daemon-server.service 2>/dev/null || true",
+        "sudo systemctl mask dnf5daemon-server.service 2>/dev/null || true",
+        // Its predecessor, for older images.
         "sudo systemctl stop packagekit.service packagekit-offline-update.service 2>/dev/null || true",
         "sudo systemctl mask packagekit.service 2>/dev/null || true",
         "sudo systemctl stop dnf-makecache.timer 2>/dev/null || true",
+        // The other downloader a desktop drives on its own.
+        "sudo systemctl stop flatpak-system-helper.service 2>/dev/null || true",
+        "sudo systemctl mask flatpak-system-helper.service 2>/dev/null || true",
         // Do Not Disturb, for a session that has a GNOME shell to listen.
         "export XDG_RUNTIME_DIR=/run/user/1000          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus;          gsettings set org.gnome.desktop.notifications show-banners false 2>/dev/null || true",
         "export XDG_RUNTIME_DIR=/run/user/1000          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus;          gsettings set org.gnome.desktop.screensaver idle-activation-enabled false 2>/dev/null || true",
