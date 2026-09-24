@@ -1,0 +1,4 @@
+label=stock-session-create worker=target/lat-stock image=stock.test player=showtime
+total 124024
+-rwxr-xr-x@ 1 kov  staff  26779848 Sep 24 11:47 limina
+-rwxr-xr-x@ 1 kov  staff  36715968 Sep 24 11:47 limina-vmm

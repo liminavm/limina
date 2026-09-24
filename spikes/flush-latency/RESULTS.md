@@ -147,3 +147,19 @@ longest 62-66 ms, which is END_FRAME holding every context's commands. The confi
 the decode thread, **66.6 ms**, while gst-va submits frames ahead into a queue four deep. Firefox
 on the enhanced image pays the same creation (the 53-59 ms worst queued times above) but submits
 fewer frames ahead, so its queue did not fill.
+
+**The ~65 ms is paid once per worker, not once per playback.** `session-create.sh` plays in one
+boot, each a new Showtime process (so a new codec and a new session), read back from the `create`
+phase in order (`evidence/stock-session-create`, `evidence/stock-session-idle`):
+
+| play | idle before it | session creation | longest queue wait |
+|---|---|---|---|
+| first in the worker | -- | 67.0 / 64.3 ms | 71.6 / 68.2 ms |
+| later, 1080p | 0 s | 2.4-2.5 ms (one 22.0, in a window whose decodes were slow too) | 4.7-14.1 ms |
+| later, 720p (a new frame size) | 0 s | 2.5 ms | 4.2 ms |
+| later | 3 min | 2.3 ms | 4.0 ms |
+| later | 15 min | 2.6 ms | 3.9 ms |
+
+Neither a new frame size nor fifteen minutes of idle brings it back, so it is the process's first
+session, not the media engine waking. What stays after it is gst-va's start-up burst: 5-8 decodes
+wait for room in a queue four deep, 8-10 ms in all, about 4 ms each.
