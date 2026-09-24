@@ -112,6 +112,26 @@ fn runaway_guest_allocation_kills_the_client_not_the_vm() {
         .expect("running the vkbudget hog in the guest");
     eprintln!("--- vkbudget hog ---\n{out}");
 
+    // Wait for the refusal before reading, because the guest finishing is NOT the host
+    // finishing. venus returns VK_SUCCESS as soon as `vkAllocateMemory` is on the ring (see
+    // the module doc), and the hog issues no round-trip afterwards -- so `ALLOCATED 32` and
+    // process exit say only that 32 commands were *queued*. Reading the log once, here,
+    // asserted on a host-side event with no wait at all.
+    //
+    // It bit once in the 3-wide suite of 2026-09-24: the guest reported all 32 chunks while
+    // the worker had processed 7 (`80% watermark crossed — 1.8 GiB live of 2.0 GiB cap` was
+    // the last budget line), and the test called a budget that was one allocation from
+    // firing "not being enforced". Measured either side of that: the refusal is normally
+    // already in the log when we get here — 11 runs, solo and 3-wide, all under 300 µs — so
+    // this wait costs microseconds in the normal case and only spends its timeout on a run
+    // that would otherwise have failed.
+    //
+    // The wait's own error is deliberately dropped: if enforcement is genuinely broken, the
+    // assertions below carry the message worth reading, and a bare "timed out waiting for
+    // needle" would shadow it. What the wait buys there is a much stronger claim — a
+    // refusal still absent after 60 s is a real bug, not a late log line.
+    let _ = guest.wait_for_supervisor_log("limina GPU budget: REFUSING", Duration::from_secs(60));
+
     let log = guest.supervisor_log();
     // Echo the host side of the story. The guest's own output is nearly content-free here
     // (it cannot see the refusal), so these lines are what anyone debugging this test — or
