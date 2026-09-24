@@ -1,0 +1,4 @@
+label=stock-create-1080 worker=target/lat-stock delay=0ms mode=video clip=1920x1080 image=Fedora-Workstation-44.stock.test.raw player=showtime
+total 124024
+-rwxr-xr-x@ 1 kov  staff  26779848 Sep 24 10:37 limina
+-rwxr-xr-x@ 1 kov  staff  36715600 Sep 24 10:37 limina-vmm

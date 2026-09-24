@@ -22,6 +22,8 @@ CLONE="$WORK/flush-enh.raw"
 CLIP_RES="${CLIP_RES:-1280x720}"
 case "$CLIP_RES" in 1280x720) RATE=3M ;; 1920x1080) RATE=6M ;; 3840x2160) RATE=20M ;; *) RATE=6M ;; esac
 CLIP="$WORK/clip-${CLIP_RES}p30-vp9.webm"
+# IMAGE picks the guest: the enhanced image (default) or the stock tier's freeworld-VA image.
+IMAGE="${IMAGE:-Fedora-Workstation-44.enhanced.raw}"
 
 [ -f "$CLIP" ] || ffmpeg -hide_banner -loglevel error -f lavfi \
   -i "testsrc2=size=$CLIP_RES:rate=30:duration=150" \
@@ -30,8 +32,8 @@ CLIP="$WORK/clip-${CLIP_RES}p30-vp9.webm"
 
 # A fixed name, so nothing here deletes a computed path.
 rm -f spikes/flush-latency/work.noindex/flush-enh.raw
-cp -c Fedora-Workstation-44.enhanced.raw "$CLONE" || { log "ABORT: clone"; exit 1; }
-{ echo "label=$LABEL worker=$WDIR delay=${DELAY}ms mode=$MODE clip=$CLIP_RES"; ls -l "$WDIR"; } > "$EV/provenance.txt"
+cp -c "$IMAGE" "$CLONE" || { log "ABORT: clone"; exit 1; }
+{ echo "label=$LABEL worker=$WDIR delay=${DELAY}ms mode=$MODE clip=$CLIP_RES image=$IMAGE player=${PLAYER:-firefox}"; ls -l "$WDIR"; } > "$EV/provenance.txt"
 
 env LIMINA_BIN="$WDIR/limina" LIMINA_VMM_BIN="$WDIR/limina-vmm" \
   LIMINA_CPUS=4 LIMINA_RAM_MIB=4096 LIMINA_NET=1 LIMINA_EXTRA_ARGS="--display-resolution 1280x800" \
@@ -54,9 +56,20 @@ log "$LABEL: $(head -n 1 "$EV/settle.txt")"
 if [ "$MODE" = video ]; then
   scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -q \
     "$CLIP" claude@127.0.0.1:/tmp/clip.webm
+  # PLAYER picks what plays it: firefox (default; stock Firefox decodes in software on the stock
+  # tier), showtime (GNOME's player, GStreamer's own decoder choice) or gst (playbin, no UI).
+  case "${PLAYER:-firefox}" in
+    firefox) PLAY='/usr/bin/firefox --kiosk file:///tmp/clip.webm' ;;
+    showtime) PLAY='/usr/bin/showtime /tmp/clip.webm' ;;
+    gst) PLAY='/usr/bin/gst-play-1.0 --no-interactive /tmp/clip.webm' ;;
+    *) log "ABORT: PLAYER"; exit 1 ;;
+  esac
   "${SSH[@]}" "export XDG_RUNTIME_DIR=/run/user/1000
     systemd-run --user --unit=ff-clip --setenv=WAYLAND_DISPLAY=wayland-0 --setenv=MOZ_ENABLE_WAYLAND=1 \
-      --setenv=XDG_RUNTIME_DIR=/run/user/1000 /usr/bin/firefox --kiosk file:///tmp/clip.webm >/dev/null"
+      --setenv=XDG_RUNTIME_DIR=/run/user/1000 --setenv=GST_DEBUG=2 $PLAY >/dev/null
+    sleep 10; journalctl --user -u ff-clip --no-pager -o cat > /tmp/player.log 2>&1; ls /usr/bin/showtime /usr/bin/gst-play-1.0 >> /tmp/player.log 2>&1"
+  scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -q \
+    claude@127.0.0.1:/tmp/player.log "$EV/player.txt"
   sleep 25
 fi
 

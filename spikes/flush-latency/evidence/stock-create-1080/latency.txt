@@ -1,0 +1,6 @@
+stock-create-1080
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             15176     1.65     5.89     8.58    22.78     23
+  SUBMIT_3D                5396     3.22     6.81     9.51    22.78      7
+  SET_SCANOUT               886     0.33     2.33     6.30     9.63      0
+  RESOURCE_FLUSH            886     0.33     2.40     6.30     9.63      0

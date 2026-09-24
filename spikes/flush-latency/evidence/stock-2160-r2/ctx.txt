@@ -1,0 +1,5 @@
+stock-2160-r2
+  ctx   2 fenced   n= 1786  p50   2.43  p95   8.16  max  18.12
+  ctx   8 fenced   n= 1784  p50  10.25  p95  13.79  max  20.34
+  ctx  10 unfenced n=  907  p50   4.25  p95   7.63  max  14.06
+  ctx  10 fenced   n=  907  p50   9.79  p95  12.68  max  22.11

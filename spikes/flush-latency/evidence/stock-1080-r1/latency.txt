@@ -1,0 +1,6 @@
+stock-1080-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             15277     1.59     6.03     8.47    18.35      7
+  SUBMIT_3D                5422     3.42     7.13     9.27    17.08      5
+  SET_SCANOUT               892     0.32     3.84     6.78    18.35      1
+  RESOURCE_FLUSH            892     0.31     4.19     6.78    18.35      1

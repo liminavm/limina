@@ -1,0 +1,87 @@
+######## stock-idle-r1 09:51:11
+[09:54:37] stock-idle-r1: SETTLED up=201s load=0.20
+[09:55:07] stock-idle-r1: overruns 0
+[09:55:17] stock-idle-r1: 0 decode windows
+stock-idle-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control                32     1.80     3.52    55.85    55.85      2
+  SUBMIT_3D                   2    55.70    55.85    55.85    55.85      2
+  SET_SCANOUT                 1     0.26     0.26     0.26     0.26      0
+  RESOURCE_FLUSH              1     0.25     0.25     0.25     0.25      0
+######## stock-720-r1 09:55:17
+[09:58:43] stock-720-r1: SETTLED up=201s load=0.26
+Running as unit: ff-clip.service; invocation ID: cbb36e9ed48c491d8a8cb6aca420af3a
+[09:59:49] stock-720-r1: overruns 0
+[09:59:58] stock-720-r1: 32 decode windows
+stock-720-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             15219     1.90     5.46     8.41    17.44      1
+  SUBMIT_3D                5422     2.78     6.09     9.25    17.44      1
+  SET_SCANOUT               890     0.38     3.04     4.78     9.35      0
+  RESOURCE_FLUSH            890     0.38     3.04     4.78     9.35      0
+######## stock-1080-r1 09:59:59
+[10:04:02] stock-1080-r1: SETTLED up=239s load=0.23
+Running as unit: ff-clip.service; invocation ID: 0aee3226cbc347cd8df6869d1e133c46
+[10:05:09] stock-1080-r1: overruns 0
+[10:05:18] stock-1080-r1: 32 decode windows
+stock-1080-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             15277     1.59     6.03     8.47    18.35      7
+  SUBMIT_3D                5422     3.42     7.13     9.27    17.08      5
+  SET_SCANOUT               892     0.32     3.84     6.78    18.35      1
+  RESOURCE_FLUSH            892     0.31     4.19     6.78    18.35      1
+######## stock-2160-r1 10:05:18
+[10:08:45] stock-2160-r1: SETTLED up=202s load=0.29
+Running as unit: ff-clip.service; invocation ID: a8820cc2d6124d609842149e011859ed
+[10:09:51] stock-2160-r1: overruns 0
+[10:10:01] stock-2160-r1: 32 decode windows
+stock-2160-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             19696     1.99    10.52    13.23    20.26     25
+  SUBMIT_3D                5390     7.17    12.47    14.91    20.26     23
+  SET_SCANOUT               894     0.31     3.38     7.31    10.66      0
+  RESOURCE_FLUSH            894     0.30     3.37     7.31    10.65      0
+######## stock-idle-r2 10:10:01
+[10:13:43] stock-idle-r2: SETTLED up=217s load=0.25
+[10:14:13] stock-idle-r2: overruns 0
+[10:14:22] stock-idle-r2: 0 decode windows
+stock-idle-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control                32     8.24    20.00    52.63    52.63      7
+  SUBMIT_3D                   2    52.52    52.63    52.63    52.63      2
+  SET_SCANOUT                 1     0.22     0.22     0.22     0.22      0
+  RESOURCE_FLUSH              1     0.22     0.22     0.22     0.22      0
+######## stock-720-r2 10:14:23
+[10:17:49] stock-720-r2: SETTLED up=202s load=0.22
+Running as unit: ff-clip.service; invocation ID: 8610d168a9de425b82196a766408fb2a
+[10:18:55] stock-720-r2: overruns 0
+[10:19:05] stock-720-r2: 32 decode windows
+stock-720-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             15184     1.58     6.02     8.36    17.82      2
+  SUBMIT_3D                5414     2.67     6.85     9.39    17.82      2
+  SET_SCANOUT               888     0.30     3.35     5.52    10.83      0
+  RESOURCE_FLUSH            888     0.30     3.35     5.51    10.82      0
+######## stock-1080-r2 10:19:05
+[10:22:31] stock-1080-r2: SETTLED up=202s load=0.21
+Running as unit: ff-clip.service; invocation ID: edf30e2cd9b84e518a1acd1f263befd1
+[10:23:37] stock-1080-r2: overruns 0
+[10:23:47] stock-1080-r2: 32 decode windows
+stock-1080-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             15180     1.64     6.36     9.29    16.35      2
+  SUBMIT_3D                5410     3.40     7.26    10.41    16.35      2
+  SET_SCANOUT               888     0.30     3.30     6.38    15.08      0
+  RESOURCE_FLUSH            888     0.29     3.29     6.37    15.08      0
+######## stock-2160-r2 10:23:47
+[10:27:14] stock-2160-r2: SETTLED up=202s load=0.26
+Running as unit: ff-clip.service; invocation ID: 2ddcf70d2f9444bfa0320371ca408553
+[10:28:21] stock-2160-r2: overruns 0
+[10:28:30] stock-2160-r2: 33 decode windows
+stock-2160-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             19703     2.00    10.49    13.06    22.11     27
+  SUBMIT_3D                5384     7.37    12.50    14.57    22.11     23
+  SET_SCANOUT               894     0.28     2.92     6.76     9.92      0
+  RESOURCE_FLUSH            894     0.28     2.92     6.76     9.92      0
+######## done 10:28:30

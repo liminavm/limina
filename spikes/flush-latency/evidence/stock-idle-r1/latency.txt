@@ -1,0 +1,6 @@
+stock-idle-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control                32     1.80     3.52    55.85    55.85      2
+  SUBMIT_3D                   2    55.70    55.85    55.85    55.85      2
+  SET_SCANOUT                 1     0.26     0.26     0.26     0.26      0
+  RESOURCE_FLUSH              1     0.25     0.25     0.25     0.25      0

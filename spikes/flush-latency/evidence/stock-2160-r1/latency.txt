@@ -1,0 +1,6 @@
+stock-2160-r1
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             19696     1.99    10.52    13.23    20.26     25
+  SUBMIT_3D                5390     7.17    12.47    14.91    20.26     23
+  SET_SCANOUT               894     0.31     3.38     7.31    10.66      0
+  RESOURCE_FLUSH            894     0.30     3.37     7.31    10.65      0

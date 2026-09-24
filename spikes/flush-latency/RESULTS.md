@@ -106,3 +106,44 @@ under 0.6 ms. Neither changes the picture at any size measured here.
 the render thread 12-38 ms -- a read that reached a target while its picture was still decoding.
 Nothing in the design rules them out; they are timing.
 
+## The stock tier
+
+`legs-stock.sh`: `Fedora-Workstation-44.stock.test.raw` (stock kernel and mesa, plus RPM Fusion's
+freeworld VA driver), the same clips, played by **Showtime**, GNOME's player. Stock Firefox is no
+vehicle here: it decodes in software on this image (one host decode in a 30 s run,
+`evidence/stock-pilot-a1080`). A stock guest decodes into per-plane targets, whose planes upload
+with `glTexSubImage2D` on the render thread when they are read; virglrs times those uploads
+("plane uploads on the render thread") and, in the confirming point, VideoToolbox session
+creation. Two rounds, one boot per point, 2026-09-24.
+
+Per plane, mean (worst), ms; two planes a frame at 30 fps:
+
+| clip | render-thread upload | VideoToolbox decode | END_FRAME per frame |
+|---|---|---|---|
+| 720p | 0.15-0.17 (5.6) | 2.3-2.4 | 0.37-0.44 |
+| 1080p | 0.25-0.26 (6.0) | 3.0-3.1 | 0.59-0.63 |
+| 4K | 0.45-0.46 (5.3) | 5.9 | 1.02-1.05 |
+
+**The uploads are not where the stock tier's time goes.** At 4K they are ~0.9 ms a frame, 2.7% of
+the render thread's wall. Moving them off it -- unpack buffers, or a decode-thread GL context -- can
+save at most that.
+
+The desktop (ms):
+
+| clip | flush p50 | flush p95 | flush p99 | gnome-shell fence p50 / p95 | Showtime fence p50 / p95 |
+|---|---|---|---|---|---|
+| 720p | 0.30-0.38 | 3.04-3.35 | 4.78-5.51 | 2.34 / 4.6-5.2 | 2.8-3.3 / 6.7-6.9 |
+| 1080p | 0.29-0.31 | 3.29-4.19 | 6.37-6.78 | 2.3-2.5 / 4.2-5.5 | 3.7 / 7.2-7.7 |
+| 4K | 0.28-0.30 | 2.92-3.37 | 6.76-7.31 | 2.4-2.5 / 8.2-8.8 | 10.1-10.3 / 13.8-14.1 |
+
+The idle points have no floor to offer: the stock desktop sends almost nothing when nothing moves
+(one flush in 30 s). What the uploads do not explain is Showtime's own fences at 4K, a 10 ms
+median.
+
+**Every playback starts with the control thread blocked for ~65 ms.** In every run, and only in
+the first stats window: 4-7 decodes waited for room in the codec's queue, 66-78 ms in all, the
+longest 62-66 ms, which is END_FRAME holding every context's commands. The confirming point
+(`evidence/stock-create-1080`) names the cause: the first frame builds the VideoToolbox session on
+the decode thread, **66.6 ms**, while gst-va submits frames ahead into a queue four deep. Firefox
+on the enhanced image pays the same creation (the 53-59 ms worst queued times above) but submits
+fewer frames ahead, so its queue did not fill.

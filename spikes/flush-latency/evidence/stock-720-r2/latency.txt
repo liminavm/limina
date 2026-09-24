@@ -1,0 +1,6 @@
+stock-720-r2
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control             15184     1.58     6.02     8.36    17.82      2
+  SUBMIT_3D                5414     2.67     6.85     9.39    17.82      2
+  SET_SCANOUT               888     0.30     3.35     5.52    10.83      0
+  RESOURCE_FLUSH            888     0.30     3.35     5.51    10.82      0

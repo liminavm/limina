@@ -1,0 +1,6 @@
+stock-pilot-a1080
+  command                     n   p50 ms   p95 ms   p99 ms   max ms  >16ms
+  all control              9866     0.87     2.23     3.40     7.41      0
+  SUBMIT_3D                3444     1.82     3.00     3.77     7.41      0
+  SET_SCANOUT               862     0.13     0.28     0.39     4.39      0
+  RESOURCE_FLUSH            862     0.13     0.28     0.39     4.39      0

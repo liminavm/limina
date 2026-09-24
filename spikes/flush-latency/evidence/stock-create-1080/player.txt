@@ -1,0 +1,80 @@
+Started ff-clip.service - [systemd-run] /usr/bin/showtime /tmp/clip.webm.
+DEBUG: showtime:54 Starting org.gnome.Showtime v50.0 (release)
+DEBUG: showtime:55 Python version: 3.14.3 (main, Mar 26 2026, 00:00:00) [GCC 16.0.1 20260321 (Red Hat 16.0.1-0)]
+DEBUG: showtime:56 GStreamer version: 1.28.1.0
+MESA: info: could not get caps: Invalid argument
+could not connect vdrm
+Error opening virtio-gpu device for Asahi native context
+DEBUG: showtime:312 Playing video: file:///tmp/clip.webm
+0:00:00.228278806 [35m      2836[00m       2836 [31;01mERROR  [00m [00m            gst-play gstplay.c:3721:gst_play_set_subtitle_track:<play0>[00m invalid subtitle stream index 0
+DEBUG: showtime:360 Video paused
+INFO: showtime:422 Cannot restore play positon, no playback history file
+DEBUG: showtime:355 Video unpaused
+DEBUG: showtime:319 No previous play position
+0:00:00.260530977 [35m      2836[00m       2855 [33;01mWARN   [00m [00m       matroskademux matroska-demux.c:1671:gst_matroska_demux_parse_stream:[00m Unknown TrackEntry subelement 0xec - ignoring
+0:00:00.439613851 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vafilter gstvafilter.c:1787:gst_va_filter_has_compose:<vafilter0>[00m VPP does not support alpha blending
+0:00:00.501587417 [35m      2836[00m       2861 [33;01mWARN   [00m [00m          video-info video-info.c:198:validate_colorimetry:[00m Need to specify a color matrix when using YUV format (NV12)
+0:00:00.501620834 [35m      2836[00m       2861 [33;01mWARN   [00m [00m          video-info video-info.c:565:gst_video_info_from_caps:[00m invalid colorimetry, using default
+0:00:00.501778044 [35m      2836[00m       2861 [33;01mWARN   [00m [00m          video-info video-info.c:198:validate_colorimetry:[00m Need to specify a color matrix when using YUV format (NV12)
+0:00:00.501781502 [35m      2836[00m       2861 [33;01mWARN   [00m [00m          video-info video-info.c:565:gst_video_info_from_caps:[00m invalid colorimetry, using default
+0:00:00.501912837 [35m      2836[00m       2857 [33;01mWARN   [00m [00m          video-info video-info.c:198:validate_colorimetry:[00m Need to specify a color matrix when using YUV format (NV12)
+0:00:00.501969504 [35m      2836[00m       2857 [33;01mWARN   [00m [00m          video-info video-info.c:565:gst_video_info_from_caps:[00m invalid colorimetry, using default
+0:00:00.502074047 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502087130 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502153381 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502162548 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502189423 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502197673 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502218215 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502221507 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502243173 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502253632 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502279382 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502283216 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502302424 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502305924 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502326549 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502330341 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502354675 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502358466 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator0>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502502009 [35m      2836[00m       2857 [33;01mWARN   [00m [00m          video-info video-info.c:198:validate_colorimetry:[00m Need to specify a color matrix when using YUV format (NV12)
+0:00:00.502522510 [35m      2836[00m       2857 [33;01mWARN   [00m [00m          video-info video-info.c:565:gst_video_info_from_caps:[00m invalid colorimetry, using default
+0:00:00.502573469 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502579177 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502676678 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502688470 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502714512 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502719845 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502960514 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.502972931 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.503213142 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.503226975 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.503336268 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.503348935 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.503576104 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.503588062 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.503784690 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.503807565 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.504016359 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.504030359 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+DEBUG: showtime:707 Seeked to 5202138
+DEBUG: showtime:438 Resizing window…
+DEBUG: showtime:524 Resized window to 1207x679
+DEBUG: showtime:524 Resized window to 1207x679
+0:00:00.679967575 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:00.712760793 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:00.713098380 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.713134047 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.745638054 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:00.779743994 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:00.813275387 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:00.847870874 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:00.884086378 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:00.884406006 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.884423840 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:00.914250277 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:00.950464948 [35m      2836[00m       2861 [33;01mWARN   [00m [00m   gtk4paintablesink src/sink/imp.rs:841:<gstgtk4::sink::imp::PaintableSink as gstreamer_video::subclass::video_sink::VideoSinkImpl>::show_frame:<sink>[00m Have too many pending frames
+0:00:01.282529965 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+0:00:01.282549506 [35m      2836[00m       2857 [33;01mWARN   [00m [00m            vamemory gstvaallocator.c:726:gst_va_dmabuf_allocator_setup_buffer_full:<vadmabufallocator1>[00m driver bug: fd size (4096) is bigger than object descriptor size (0)
+ls: cannot access '/usr/bin/gst-play-1.0': No such file or directory
+/usr/bin/showtime
