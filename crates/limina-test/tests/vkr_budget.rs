@@ -91,7 +91,7 @@ fn runaway_guest_allocation_kills_the_client_not_the_vm() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 
@@ -327,7 +327,7 @@ fn the_guest_sees_our_cap_through_vk_ext_memory_budget() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 

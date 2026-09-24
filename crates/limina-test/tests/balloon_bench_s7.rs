@@ -257,7 +257,7 @@ fn s7_out_of_puff_chase() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable");
     let stamp = verify_tier(&guest, &cfg).expect("tier positive control");
     if sz.swapoff {

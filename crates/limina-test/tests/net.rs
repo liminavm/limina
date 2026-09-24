@@ -54,7 +54,7 @@ fn fedora_gets_nat_dhcp_and_outbound() {
     // Inbound NAT: gvproxy's default port-forward reaches the guest's sshd — the path that
     // makes `ssh -p 2222 user@127.0.0.1` work (what the M3 SSH goal is for).
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(30))
+        .wait_for_ssh(Duration::from_secs(30))
         .expect("guest SSH not reachable through the gvproxy forward");
     eprintln!("guest SSH reachable: {banner}");
 
@@ -117,10 +117,10 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
 
     // The headline: both guests answer SSH on their OWN forward port, simultaneously.
     let banner_a = a
-        .wait_for_ssh_banner(Duration::from_secs(60))
+        .wait_for_ssh(Duration::from_secs(60))
         .unwrap_or_else(|e| panic!("VM A SSH not reachable on port {}: {e}", a.ssh_port()));
     let banner_b = b
-        .wait_for_ssh_banner(Duration::from_secs(60))
+        .wait_for_ssh(Duration::from_secs(60))
         .unwrap_or_else(|e| panic!("VM B SSH not reachable on port {}: {e}", b.ssh_port()));
     eprintln!("VM A SSH (port {}): {banner_a}", a.ssh_port());
     eprintln!("VM B SSH (port {}): {banner_b}", b.ssh_port());
@@ -198,7 +198,7 @@ fn custom_guest_mac_keeps_the_static_lease_and_ssh_forward() {
     );
 
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(30))
+        .wait_for_ssh(Duration::from_secs(30))
         .expect("SSH forward broken with a custom MAC (config-mode forward missing?)");
     eprintln!("guest SSH reachable with custom MAC: {banner}");
 

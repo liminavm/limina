@@ -144,7 +144,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
     eprintln!("booting the seated enhanced venus desktop (snapshot-armed)");
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     let banner = g1
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
     g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
@@ -363,7 +363,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
             panic!("restore worker never entered the restore path: {e}");
         });
     let banner = g2
-        .wait_for_ssh_banner(Duration::from_secs(120))
+        .wait_for_ssh(Duration::from_secs(120))
         .unwrap_or_else(|e| {
             // Liveness forensics: the console tail shows whether the guest thaw
             // completed (vs a wedged resume), and a present frame proves the
@@ -570,7 +570,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
     }
     let mut g3 = Guest::boot(&cfg3).expect("spawning the gen-2 restoring supervisor");
     let banner = g3
-        .wait_for_ssh_banner(Duration::from_secs(120))
+        .wait_for_ssh(Duration::from_secs(120))
         .unwrap_or_else(|e| {
             eprintln!("--- gen-2 restore supervisor log tail ---");
             let slog = g3.supervisor_log();

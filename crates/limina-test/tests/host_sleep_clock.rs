@@ -96,7 +96,7 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable");
     eprintln!("guest SSH up: {banner}");
 

@@ -42,7 +42,7 @@ fn guest_reboot_relaunches_the_worker() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(180))
+        .wait_for_ssh(Duration::from_secs(180))
         .expect("guest did not reach sshd");
 
     let boot_id_1 = guest

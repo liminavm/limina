@@ -89,7 +89,7 @@ fn lost_context_fence_still_signals_its_sync_file() {
     eprintln!("booting the enhanced golden headless (fence-failure seam armed)");
     let mut g = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = g
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 

@@ -127,7 +127,7 @@ fn fedora_stock_image_efi_boots_to_userspace() {
     // image were back in the SELinux autorelabel reboot loop, the VM would reboot (and limina
     // would tear down) long before sshd starts, so this call fails instead of hanging forever.
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("stock Fedora did not reach sshd over the EFI path (SELinux relabel loop?)");
     eprintln!("guest sshd banner: {banner}");
     assert!(
@@ -298,7 +298,7 @@ fn fedora_stock_image_renders_graphical_desktop() {
 
     // sshd comes up first; the autologin graphical session follows.
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest never reached sshd over the EFI path");
     assert!(
         banner.starts_with("SSH-"),
@@ -383,7 +383,7 @@ fn fedora_stock_image_software_2d_floor_renders_desktop() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest never reached sshd over the EFI path");
 
     // Oracle 1 — the graphical session initialized (autologin session or GDM greeter).

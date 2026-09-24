@@ -68,7 +68,7 @@ fn s0_enhanced_smoke() {
     let t_boot = Instant::now();
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable");
     let boot_to_ssh_ms = t_boot.elapsed().as_millis() as u64;
     let t_ssh = now_ms();

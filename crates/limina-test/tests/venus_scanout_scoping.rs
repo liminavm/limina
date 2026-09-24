@@ -201,7 +201,7 @@ fn stranger_view_of_live_scanouts(
 
     let mut guest = Guest::boot(&cfg).expect("booting the seated enhanced guest windowed");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd came up");
 
     // The presenter needs DRM master, which the session compositor holds.

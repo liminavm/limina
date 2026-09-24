@@ -90,7 +90,7 @@ fn virgl_global_fences_retire_through_virglrenderer() {
     // proves the virglrenderer path signals fences back to the guest. A parked-forever
     // Global fence wedges the desktop and times these out.
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy (fences wedged post-flip?)");
     eprintln!("guest SSH up: {banner}");
     guest

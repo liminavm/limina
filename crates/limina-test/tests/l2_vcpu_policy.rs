@@ -110,7 +110,7 @@ fn an_idle_guest_sheds_vcpus_and_a_busy_one_gets_them_back() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(180))
+        .wait_for_ssh(Duration::from_secs(180))
         .expect("guest sshd never became reachable through gvproxy");
 
     // Which tier is actually under test? A failure below reads completely differently depending
@@ -245,7 +245,7 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
     };
 
     let mut g1 = Guest::boot(&base.clone().with_snapshot()).expect("spawning the supervisor");
-    g1.wait_for_ssh_banner(Duration::from_secs(180))
+    g1.wait_for_ssh(Duration::from_secs(180))
         .expect("guest sshd never became reachable");
 
     // Get it shrunk first, or the test proves nothing about the mitigation.
@@ -292,7 +292,7 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
     let mut g2 = Guest::boot(&cfg2).expect("spawning the restore supervisor");
     g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
         .expect("the second worker cold-booted instead of restoring the snapshot");
-    g2.wait_for_ssh_banner(Duration::from_secs(180))
+    g2.wait_for_ssh(Duration::from_secs(180))
         .expect("the restored guest never became reachable");
 
     // Immediately after restore the guest must have every vCPU. Read it before the policy has had

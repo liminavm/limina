@@ -358,7 +358,7 @@ fn synoik_desktop_survives_snapshot_restore() {
         .with_snapshot();
     eprintln!("EFI-booting the synoik enhanced image (snapshot-armed)");
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
-    g1.wait_for_ssh_banner(Duration::from_secs(300))
+    g1.wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy");
 
     // The compositor has to be serving before anything else means anything. A synoik guest can
@@ -520,7 +520,7 @@ fn synoik_desktop_survives_snapshot_restore() {
             cleanup();
             panic!("restore worker never entered the restore path: {e}");
         });
-    g2.wait_for_ssh_banner(Duration::from_secs(180))
+    g2.wait_for_ssh(Duration::from_secs(180))
         .unwrap_or_else(|e| {
             cleanup();
             panic!("restored guest never became reachable over SSH: {e}");

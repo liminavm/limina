@@ -58,7 +58,7 @@ fn second_disk_is_vdb_read_write_and_durable() {
 
     // Full stock userspace boot (firmware → GRUB → kernel → systemd → NM → sshd) is slow.
     guest
-        .wait_for_ssh_banner(Duration::from_secs(180))
+        .wait_for_ssh(Duration::from_secs(180))
         .expect("guest did not reach sshd");
 
     // The data disk is attached at boot; udev may settle a beat after sshd, so poll for it.
@@ -259,7 +259,7 @@ fn qcow2_data_disk_reads_writes_and_survives_reboot() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(180))
+        .wait_for_ssh(Duration::from_secs(180))
         .expect("guest did not reach sshd");
     guest
         .ssh_poll("test -b /dev/vdb && echo ok", Duration::from_secs(30))

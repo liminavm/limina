@@ -132,7 +132,7 @@ fn hardware_decode_in_flight_survives_restore() {
     g1.wait_for_supervisor_log("software_2d = false", Duration::from_secs(60))
         .expect("coexist GPU did not come up (degraded to software-2D?)");
     let banner = g1
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 
@@ -253,7 +253,7 @@ fn hardware_decode_in_flight_survives_restore() {
             cleanup();
             panic!("restore worker never entered the restore path: {e}");
         });
-    g2.wait_for_ssh_banner(Duration::from_secs(120))
+    g2.wait_for_ssh(Duration::from_secs(120))
         .unwrap_or_else(|e| {
             eprintln!("--- restore supervisor log tail ---");
             let slog = g2.supervisor_log();

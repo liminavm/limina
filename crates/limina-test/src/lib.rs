@@ -111,6 +111,33 @@ fn fedora_image(role: &str) -> PathBuf {
 /// Loopback host gvproxy binds its inbound SSH forward on (`<host>:<ssh_port> → 192.168.127.2:22`;
 /// with the well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd).
 const FORWARDED_SSH_HOST: &str = "127.0.0.1";
+
+/// The SSH options every harness invocation shares — `ssh` and `scp` alike. Key auth as the
+/// in-image `claude` user, no host-key state (a per-VM forward reuses `127.0.0.1:<port>` across
+/// boots, so the key legitimately changes), and BatchMode so a missing key fails fast instead
+/// of prompting.
+///
+/// `LogLevel=INFO`, not ERROR, because ERROR suppresses the only line that explains the
+/// failures we actually hit. A connection that is ACCEPTED and then dropped before the key
+/// exchange completes exits 255 with a COMPLETELY EMPTY stderr at ERROR; `Connection closed
+/// by <host> port N` and the server's own refusal text are INFO-level (measured against
+/// OpenSSH 10.x, 2026-09-23 — of the connection-level failures only `connect …: Connection
+/// refused` survives at ERROR). That is the difference between "the forward is not listening"
+/// and "it listened, dialed, and the guest refused the login", and one suite log held ten
+/// bare 255s that recorded nothing about themselves. stderr is read ONLY when a command
+/// fails, so the noisier level costs nothing on the happy path: it just puts ssh's
+/// known-hosts warning into messages that were already errors. See
+/// `spikes/ssh-staging-race/`.
+const SSH_SHARED_OPTS: [&str; 8] = [
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "LogLevel=INFO",
+];
 /// gvproxy's default inbound SSH-forward host port; per-VM overridable via `--ssh-port` so several
 /// VMs can run in parallel without colliding (see [`GuestConfig::with_ssh_port`]).
 const DEFAULT_SSH_PORT: u16 = 2222;
@@ -922,7 +949,7 @@ impl GuestConfig {
     /// Like [`with_net`](GuestConfig::with_net) but pin gvproxy's inbound SSH forward to a specific
     /// host `port` (`--ssh-port`) instead of the default 2222. Give two concurrent VMs distinct
     /// ports so they can run in parallel without colliding on the host port;
-    /// [`Guest::wait_for_ssh_banner`]/[`Guest::ssh_exec`] then target that VM's own port.
+    /// [`Guest::wait_for_ssh`]/[`Guest::ssh_exec`] then target that VM's own port.
     pub fn with_ssh_port(mut self, port: u16) -> GuestConfig {
         self.net = true;
         self.ssh_port = Some(port);
@@ -1343,7 +1370,7 @@ pub struct Guest {
     gateway_log: Option<PathBuf>,
     /// Host port of gvproxy's inbound `127.0.0.1:<port> → guest:22` forward (the `--ssh-port`
     /// the supervisor was launched with; default [`DEFAULT_SSH_PORT`]). Distinct per VM lets
-    /// several run in parallel; [`Guest::wait_for_ssh_banner`]/[`Guest::ssh_exec`] target it.
+    /// several run in parallel; [`Guest::wait_for_ssh`]/[`Guest::ssh_exec`] target it.
     ssh_port: u16,
     /// Path to the captured supervisor stderr (inside `scratch`), if enabled.
     supervisor_log: Option<PathBuf>,
@@ -2272,35 +2299,117 @@ impl Guest {
         self.ssh_port
     }
 
-    /// Block until the guest's SSH server answers through gvproxy's inbound port-forward
-    /// (`127.0.0.1:<ssh_port> → guest:22`, where `ssh_port` is this VM's [`GuestConfig::with_ssh_port`]
-    /// or 2222), returning its banner (e.g. `SSH-2.0-OpenSSH_10.0`).
-    /// Proves the inbound NAT path end-to-end (host → gvproxy forward → guest sshd) — what
-    /// makes `ssh -p 2222 user@127.0.0.1` work. Requires [`GuestConfig::with_net`] and a guest
-    /// running sshd. gvproxy listens on 2222 immediately but only yields a banner once it can
-    /// dial the guest, so an empty/short read just means "not ready yet" — keep polling.
-    pub fn wait_for_ssh_banner(&mut self, timeout: Duration) -> Result<String> {
+    /// Block until the guest's SSH is **usable** — not merely answering — through gvproxy's
+    /// inbound port-forward (`127.0.0.1:<ssh_port> → guest:22`, this VM's
+    /// [`GuestConfig::with_ssh_port`] or 2222). Returns the banner it saw
+    /// (e.g. `SSH-2.0-OpenSSH_10.0`), so it still reads as proof of the inbound NAT path
+    /// end to end (host → gvproxy forward → guest sshd) — what makes
+    /// `ssh -p 2222 user@127.0.0.1` work. Requires [`GuestConfig::with_net`].
+    ///
+    /// **The banner is not readiness**, which is what this used to assume. sshd sends it the
+    /// moment it listens, but `pam_nologin` refuses every unprivileged login until
+    /// `systemd-user-sessions.service` has removed `/run/nologin`, and nothing orders sshd
+    /// after that. A login inside the gap gets
+    /// `"System is booting up. Unprivileged users are not permitted to log in yet."` and ssh
+    /// exits 255. Measured on the F44 test image, 2026-09-23
+    /// (`spikes/ssh-staging-race/window-probe.py`, three guests resident): the banner lands at
+    /// ~3.2 s and the gap is **0 s on five boots in eight and ~1.0-1.14 s on the other three**.
+    /// Every networked test runs its first `ssh_exec` straight after this call, so landing in
+    /// that gap is a red suite — `venus_clear_rect` did exactly that, and the failure was
+    /// unreadable because ssh at `LogLevel=ERROR` prints nothing for it (see
+    /// [`SSH_SHARED_OPTS`]).
+    ///
+    /// So: wait for the banner, then keep going until a real session can actually be
+    /// established. The second stage costs about a second on the boots that need it and
+    /// nothing on the rest.
+    pub fn wait_for_ssh(&mut self, timeout: Duration) -> Result<String> {
+        let port = self.ssh_port;
+        let child = &mut self.child;
+        Self::wait_for_ssh_ready(port, timeout, || {
+            Ok(child
+                .try_wait()
+                .context("polling supervisor")?
+                .map(|status| status.to_string()))
+        })
+    }
+
+    /// The two-stage wait behind [`Guest::wait_for_ssh`], taking the port and a liveness
+    /// probe rather than a `Guest` so it can be tested against a fake sshd without a VM.
+    fn wait_for_ssh_ready(
+        port: u16,
+        timeout: Duration,
+        mut supervisor_exited: impl FnMut() -> Result<Option<String>>,
+    ) -> Result<String> {
         let deadline = Instant::now() + timeout;
-        let forward = format!("{FORWARDED_SSH_HOST}:{}", self.ssh_port);
+        let forward = format!("{FORWARDED_SSH_HOST}:{port}");
         let addr: std::net::SocketAddr = forward.parse().expect("valid forward addr");
-        loop {
+
+        // Stage 1 — a banner. gvproxy accepts on the forward immediately and only yields a
+        // banner once it can dial the guest, so an empty/short read means "not yet".
+        let banner = loop {
             if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
                 stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
                 let mut buf = [0u8; 128];
                 if let Ok(n) = stream.read(&mut buf) {
                     let banner = String::from_utf8_lossy(&buf[..n]).trim().to_string();
                     if banner.starts_with("SSH-") {
-                        return Ok(banner);
+                        break banner;
                     }
                 }
             }
-            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+            if let Some(status) = supervisor_exited()? {
                 bail!("supervisor exited ({status}) before SSH was reachable");
             }
             if Instant::now() >= deadline {
                 bail!("no SSH banner from {forward} within {timeout:?}");
             }
             std::thread::sleep(Duration::from_millis(500));
+        };
+
+        // Stage 2 — a session, which is what every caller actually wants. See the doc
+        // comment on [`Guest::wait_for_ssh`] for why the banner does not imply one.
+        loop {
+            let last = match Self::ssh_session_ready(port) {
+                Ok(()) => return Ok(banner),
+                Err(why) => why,
+            };
+            if let Some(status) = supervisor_exited()? {
+                bail!("supervisor exited ({status}) after answering {banner} on {forward}");
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "{forward} answered {banner} but no SSH session could be established \
+                     within {timeout:?}; last ssh error: {last}"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    /// Can a real SSH **session** be established on `port`? `true` is the cheapest remote
+    /// command that still runs the whole ladder — transport, key auth, and PAM's account
+    /// stage, which is the part the banner says nothing about. Returns ssh's own explanation
+    /// on failure, flattened to one line.
+    fn ssh_session_ready(port: u16) -> std::result::Result<(), String> {
+        let port = port.to_string();
+        let login = format!("claude@{FORWARDED_SSH_HOST}");
+        let mut cmd = Command::new("ssh");
+        cmd.args(["-p", &port]);
+        cmd.args(SSH_SHARED_OPTS);
+        // Short, because this is a poll: a probe that outlives what it polls for is just a
+        // slower poll.
+        cmd.args(["-o", "ConnectTimeout=5"]);
+        cmd.args([login.as_str(), "true"]);
+        match run_capped(cmd, Duration::from_secs(30)) {
+            Ok(out) if out.status.success() => Ok(()),
+            Ok(out) => Err(format!(
+                "{} ({})",
+                String::from_utf8_lossy(&out.stderr)
+                    .trim()
+                    .replace('\n', " | "),
+                out.status
+            )),
+            Err(e) => Err(format!("{e:#}")),
         }
     }
 
@@ -2309,7 +2418,7 @@ impl Guest {
     /// the in-image `claude` user via the host's default key (passwordless — see memory
     /// `limina-fedora-access`); host-key checks are disabled (the per-VM forward reuses
     /// `127.0.0.1:<ssh_port>` across boots). Requires [`GuestConfig::with_net`] and a booted guest
-    /// running sshd — call [`Guest::wait_for_ssh_banner`] first. Errors if ssh exits non-zero
+    /// running sshd — call [`Guest::wait_for_ssh`] first. Errors if ssh exits non-zero
     /// (stderr is included in the message).
     pub fn ssh_exec(&self, remote_cmd: &str) -> Result<String> {
         self.ssh_exec_timeout(remote_cmd, SSH_CMD_TIMEOUT)
@@ -2323,22 +2432,10 @@ impl Guest {
         let port = self.ssh_port.to_string();
         let login = format!("claude@{FORWARDED_SSH_HOST}");
         let mut cmd = Command::new("ssh");
-        cmd.args([
-            "-p",
-            &port,
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "LogLevel=ERROR",
-            &login,
-            remote_cmd,
-        ]);
+        cmd.args(["-p", &port]);
+        cmd.args(SSH_SHARED_OPTS);
+        cmd.args(["-o", "ConnectTimeout=10"]);
+        cmd.args([login.as_str(), remote_cmd]);
         let out = run_capped(cmd, timeout).with_context(|| {
             format!("ssh `{remote_cmd}` to the guest ({FORWARDED_SSH_HOST}:{port})")
         })?;
@@ -2531,21 +2628,10 @@ impl Guest {
     /// (scp's port flag is `-P`, capitalized). Built per-guest so a multi-VM test copies to the
     /// right VM instead of always 2222.
     fn scp_opts(&self) -> Vec<String> {
-        [
-            "-P",
-            &self.ssh_port.to_string(),
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "LogLevel=ERROR",
-            "-q",
-        ]
-        .map(String::from)
-        .to_vec()
+        let mut v = vec!["-P".to_string(), self.ssh_port.to_string()];
+        v.extend(SSH_SHARED_OPTS.iter().map(|o| (*o).to_string()));
+        v.push("-q".to_string());
+        v
     }
 
     /// Copy a local file into the guest at `remote_path` via scp (same forward and login
@@ -3135,6 +3221,88 @@ content restored (2 contexts, 0 failed), 1 scanout flips\n";
         assert!(
             ring_stalls(healthy).is_empty(),
             "false positive on a clean restore"
+        );
+    }
+
+    /// A guest that answers the banner and refuses every session. That is not a contrivance:
+    /// it is exactly the state a real guest is in between sshd starting to listen and
+    /// `systemd-user-sessions.service` removing `/run/nologin`, and it is the state the
+    /// banner-only wait used to call "ready" (measured ~1.0-1.14 s wide on three boots in
+    /// eight -- `spikes/ssh-staging-race/`).
+    fn banner_only_sshd() -> (u16, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("binding a fake sshd");
+        let port = listener.local_addr().expect("fake sshd addr").port();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&stop);
+        std::thread::spawn(move || {
+            listener.set_nonblocking(true).ok();
+            while !flag.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    // Greet and hang up, over and over: every probe sees a healthy banner and
+                    // no session, however many times it asks.
+                    Ok((mut c, _)) => {
+                        let _ = c.write_all(b"SSH-2.0-OpenSSH_10.2\r\n");
+                    }
+                    Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                }
+            }
+        });
+        (port, stop)
+    }
+
+    fn a_closed_port() -> u16 {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probing a free port");
+        let port = l.local_addr().expect("probed addr").port();
+        drop(l);
+        port
+    }
+
+    /// The bug `venus_clear_rect` died of: the wait returned on the banner, the caller ran its
+    /// first command, and the guest refused it with `pam_nologin`.
+    #[test]
+    fn a_banner_alone_is_not_readiness() {
+        let (port, stop) = banner_only_sshd();
+        let started = Instant::now();
+        let err = Guest::wait_for_ssh_ready(port, Duration::from_secs(4), || Ok(None))
+            .expect_err("a guest that only answers banners must NOT count as ready");
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let msg = err.to_string();
+        // It saw the banner -- so this is the second stage failing, not the first.
+        assert!(msg.contains("SSH-2.0-OpenSSH_10.2"), "{msg}");
+        assert!(msg.contains("no SSH session could be established"), "{msg}");
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the wait ran far past its own timeout: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The first stage still has to be able to fail on its own, and say which one it was.
+    #[test]
+    fn a_forward_that_never_answers_fails_at_the_banner() {
+        let err = Guest::wait_for_ssh_ready(a_closed_port(), Duration::from_secs(2), || Ok(None))
+            .expect_err("nothing is listening");
+        assert!(err.to_string().contains("no SSH banner"), "{err}");
+    }
+
+    /// A supervisor that died must end the wait now, not at the timeout -- the whole point of
+    /// polling it. Generous timeout, so a wait that ignored it would blow the assertion.
+    #[test]
+    fn a_dead_supervisor_ends_the_wait_immediately() {
+        let started = Instant::now();
+        let err = Guest::wait_for_ssh_ready(a_closed_port(), Duration::from_secs(120), || {
+            Ok(Some("exit status: 1".to_string()))
+        })
+        .expect_err("the supervisor is gone");
+        assert!(err.to_string().contains("supervisor exited"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "waited {:?} for a supervisor that was already gone",
+            started.elapsed()
         );
     }
 

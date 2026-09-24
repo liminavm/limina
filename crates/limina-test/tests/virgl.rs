@@ -77,7 +77,7 @@ fn virgl_readback_does_not_wedge_the_gpu() {
     // A stock software-2D first boot is slow; the inbound forward only yields a banner once
     // sshd is reachable, and the autologin Xwayland session comes up well after that.
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
     guest

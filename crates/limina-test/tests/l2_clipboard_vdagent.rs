@@ -120,7 +120,7 @@ fn a_seated_guest_shares_the_clipboard_through_spice_vdagent() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 

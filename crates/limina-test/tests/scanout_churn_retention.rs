@@ -172,7 +172,7 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
 
     let mut guest = Guest::boot(&cfg).expect("booting the seated enhanced guest windowed");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd came up");
 
     // Evict the session compositor: it holds DRM master, and the presenter needs it. The

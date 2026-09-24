@@ -104,7 +104,7 @@ fn snd_playback_is_paced_by_the_host_across_a_device_reset() {
         .with_env("RUST_LOG", "warn,krun_devices::virtio::snd=debug");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(180))
+        .wait_for_ssh(Duration::from_secs(180))
         .expect("guest did not reach sshd");
 
     let have_aplay = guest

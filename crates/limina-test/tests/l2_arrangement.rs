@@ -172,7 +172,7 @@ fn suggested_positions_apply_at_seat_but_never_rearrange_a_live_session() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
     wait_for_seated_session(&guest);

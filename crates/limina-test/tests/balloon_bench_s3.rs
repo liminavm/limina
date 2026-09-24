@@ -130,7 +130,7 @@ fn run_point(run: &BenchRun, label: &str, mode: &str, dig_under_warn: bool) -> P
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable");
     std::thread::sleep(Duration::from_secs(5));
     let sampler = GuestSampler::start(&guest, 250).expect("starting the guest sampler");

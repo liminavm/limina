@@ -442,9 +442,15 @@ directly observed.
   vehicle names (`/tmp/limina-worker-<disk>.log`), not the boot script's stdout.
   **THE one way to wait for a networked boot — for ANY purpose — is
   `port=$(scripts/wait-guest-ssh.sh <worker-log> [timeout] [boot-pid])`.** This applies whether you framed
-  the wait as "waiting for ssh", "waiting for the window", or "is it booted yet": sshd answering
-  its banner is the readiness oracle for all of them, the script blocks until that actually
-  happens and prints the port (nonzero + log tail on timeout). Never hand-roll a
+  the wait as "waiting for ssh", "waiting for the window", or "is it booted yet": a guest that
+  **accepts a real ssh session** is the readiness oracle for all of them, the script blocks until
+  that actually happens and prints the port (nonzero + log tail on timeout). **The banner alone is
+  NOT that oracle** — sshd sends it the moment it listens, while `pam_nologin` still refuses every
+  login until `systemd-user-sessions.service` removes `/run/nologin`, and nothing orders sshd after
+  that. Measured on the F44 test image: the banner lands at ~3.2 s and the gap behind it is 0 s on
+  five boots in eight and ~1.0–1.14 s on the other three (`spikes/ssh-staging-race/`). Both waiters
+  — this script and `Guest::wait_for_ssh` — therefore wait for the banner and then for a login;
+  don't write a new one that stops at the banner. Never hand-roll a
   grep/sleep-until loop over the logs — that re-invents this script badly (it has been done and
   called out; don't repeat it). Full recipe + the test images' credentials: `docs/images.md`
   §SSH access; design in `docs/research/07-networking.md`, `docs/design/multi-vm-networking.md`

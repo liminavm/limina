@@ -78,7 +78,7 @@ fn share_mounts_and_round_trips_on_71_kernel() {
 
     // Full Fedora userspace boot (firmware → GRUB → systemd → NM → sshd) takes a while.
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(180))
+        .wait_for_ssh(Duration::from_secs(180))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 

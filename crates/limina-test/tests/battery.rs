@@ -38,7 +38,7 @@ fn host_battery_mirrors_into_the_guest_as_a_power_supply() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     guest
-        .wait_for_ssh_banner(Duration::from_secs(180))
+        .wait_for_ssh(Duration::from_secs(180))
         .expect("guest did not reach sshd");
 
     // i2c-virtio + sbs-battery are modules; udev autoload may settle after sshd, so poll.

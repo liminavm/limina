@@ -9,10 +9,23 @@
 # WORKER_LOG is the log the boot vehicle points the supervisor at (the
 # `limina pid=… (worker log /tmp/limina-worker-….log, …)` line names it) — that is
 # where the supervisor prints `guest SSH forward ready: ssh -p N <user>@127.0.0.1`,
-# NOT the boot script's own stdout. This script waits for that line, then keeps
-# probing the port until sshd actually answers with an SSH banner (gvproxy listens
-# on the forward immediately, long before it can dial the guest), and only then
-# prints the port on stdout. Nonzero exit + diagnostics on stderr on timeout.
+# NOT the boot script's own stdout. This script waits for that line, then for an SSH
+# banner (gvproxy listens on the forward immediately, long before it can dial the
+# guest), and THEN for a login that actually succeeds. Only then does it print the
+# port on stdout. Nonzero exit + diagnostics on stderr on timeout.
+#
+# The last stage is not belt-and-braces. sshd sends its banner the moment it listens,
+# but `pam_nologin` refuses every unprivileged login until systemd-user-sessions.service
+# removes /run/nologin, and nothing orders sshd after that: a login in the gap is told
+# "System is booting up. Unprivileged users are not permitted to log in yet." and ssh
+# exits 255. Measured on the F44 test image (spikes/ssh-staging-race/): the banner lands
+# at ~3.2 s and the gap is 0 s on five boots in eight, ~1.0-1.14 s on the other three.
+# Callers ssh the instant this returns, so returning on the banner hands them that gap —
+# which is how one suite lost a test to an ssh 255 with an empty stderr.
+#
+# WAIT_SSH_USER names the login to test with (default `claude`, the test images' user —
+# docs/images.md §SSH access). Set it EMPTY to stop after the banner, for a guest this
+# host has no credentials on; you then get the old, weaker guarantee.
 #
 # BOOT_PID is optional and is the boot vehicle's pid. Pass it whenever you have it:
 # a vehicle that dies before it ever prints the line (a missing worker binary, a bad
@@ -60,6 +73,26 @@ while :; do
         SSH-*) break ;;
     esac
     sleep 2
+done
+
+user="${WAIT_SSH_USER-claude}"
+last="(never ran)"
+while [ -n "$user" ]; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "wait-guest-ssh: port $port answered an SSH banner but no session could be" >&2
+        echo "  established as $user within ${timeout}s. Last ssh error:" >&2
+        echo "$last" | sed 's/^/    /' >&2
+        exit 1
+    fi
+    # LogLevel=INFO on purpose: at ERROR, a connection that is accepted and then dropped
+    # mid-handshake exits 255 with NOTHING on stderr, and the guest's own refusal text
+    # (the pam_nologin line) is INFO too -- so ERROR hides exactly the diagnosis.
+    if last=$(ssh -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                  -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=INFO \
+                  "$user@127.0.0.1" true 2>&1); then
+        break
+    fi
+    sleep 1
 done
 
 echo "$port"

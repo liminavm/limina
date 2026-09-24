@@ -57,7 +57,7 @@ fn venus_enumerates_on_16k_kernel() {
     // Full Fedora userspace boot on a custom kernel (no initramfs → systemd → NM → sshd)
     // takes a while; the inbound forward only yields a banner once sshd is reachable.
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(180))
+        .wait_for_ssh(Duration::from_secs(180))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 
@@ -143,7 +143,7 @@ fn our_mesa_venus_renders_seated_desktop() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 
@@ -240,7 +240,7 @@ fn venus_desktop_pixel_verifies_through_host_capture() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     // The seated session must be up and actively presenting before we read the host capture.
     guest

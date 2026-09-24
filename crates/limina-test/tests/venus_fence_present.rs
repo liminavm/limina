@@ -77,7 +77,7 @@ fn fence_present_chain_presents_and_never_wedges() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 

@@ -92,7 +92,7 @@ fn stock_guest_survives_inplace_s2idle_with_correct_clock() {
     eprintln!("booting the stock Fedora image via EFI (in-place s2idle vehicle)");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable");
     eprintln!("guest SSH up: {banner}");
 
@@ -341,7 +341,7 @@ fn usb_device_survives_inplace_s2idle() {
     eprintln!("booting the stock Fedora image with the fingerprint gadget attached");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable");
     eprintln!("guest SSH up: {banner}");
 
@@ -443,7 +443,7 @@ fn venus_session_survives_inplace_s2idle() {
     eprintln!("booting the seated enhanced venus desktop (in-place s2idle vehicle)");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable");
     eprintln!("guest SSH up: {banner}");
     guest

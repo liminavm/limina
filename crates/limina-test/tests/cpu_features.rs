@@ -65,7 +65,7 @@ fn sme_is_not_advertised_to_the_guest() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
 
     // The kernel prints one Features line per CPU, built from the ID registers

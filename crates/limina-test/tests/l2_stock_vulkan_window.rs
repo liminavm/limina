@@ -85,7 +85,7 @@ fn stock_guest_vulkan_client_composites_its_own_pixels() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest never reached sshd over the EFI path");
 
     guest

@@ -73,7 +73,7 @@ fn free_page_reporting_returns_memory_to_the_host() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 
@@ -223,7 +223,7 @@ fn released_pages_heal_when_the_guest_reuses_them() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
-        .wait_for_ssh_banner(Duration::from_secs(300))
+        .wait_for_ssh(Duration::from_secs(300))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
 

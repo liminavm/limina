@@ -103,7 +103,7 @@ fn busy_seated_session_parks_across_reset() {
     eprintln!("booting the seated enhanced venus desktop (fence-present forced)");
     let mut g = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = g
-        .wait_for_ssh_banner(Duration::from_secs(240))
+        .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
     g.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))

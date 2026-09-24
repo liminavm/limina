@@ -125,7 +125,7 @@ fn poke_seated_desktop() {
 
     eprintln!("POKE booting the seated desktop (this is the landmarks test's guest 1)");
     let mut g = Guest::boot(&cfg).expect("spawning the limina supervisor");
-    g.wait_for_ssh_banner(Duration::from_secs(240))
+    g.wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     g.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .expect("gnome-shell never appeared — the seated session didn't come up");
