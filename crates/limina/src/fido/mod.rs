@@ -22,6 +22,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 pub mod ctap2;
+mod request;
 pub mod store;
 pub mod usb;
 

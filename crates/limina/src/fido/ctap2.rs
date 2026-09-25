@@ -13,31 +13,18 @@
 //! own key) — no X.509, which every consumer treats as self-attestation, and the
 //! registration signature is what triggers Touch ID at credential creation time.
 
-use ciborium::value::Value;
 use sha2::{Digest, Sha256};
 
+use super::request::{self, ALG_ES256, GetAssertion, MakeCredential, Request};
 use super::store::{Credential, FidoStore};
 use crate::sep::SepKey;
 
-// CTAP2 command bytes.
-const CMD_MAKE_CREDENTIAL: u8 = 0x01;
-const CMD_GET_ASSERTION: u8 = 0x02;
-const CMD_GET_INFO: u8 = 0x04;
-
-// CTAP2 status codes (subset).
+// CTAP2 status codes this module answers with; the ones that refuse a malformed request are
+// decided by `request`.
 const CTAP2_OK: u8 = 0x00;
-const CTAP1_ERR_INVALID_COMMAND: u8 = 0x01;
-const CTAP1_ERR_INVALID_LENGTH: u8 = 0x03;
 const CTAP2_ERR_OPERATION_DENIED: u8 = 0x27;
-const CTAP2_ERR_INVALID_CBOR: u8 = 0x12;
-const CTAP2_ERR_MISSING_PARAMETER: u8 = 0x14;
-const CTAP2_ERR_UNSUPPORTED_ALGORITHM: u8 = 0x26;
 const CTAP2_ERR_NO_CREDENTIALS: u8 = 0x2E;
 const CTAP2_ERR_CREDENTIAL_EXCLUDED: u8 = 0x19;
-const CTAP2_ERR_INVALID_OPTION: u8 = 0x2C;
-
-/// ES256 COSE algorithm id.
-const ALG_ES256: i64 = -7;
 
 /// Our AAGUID: `c2852a39-665e-4017-aef0-21d709f98b1d`, this authenticator model's public identity.
 ///
@@ -64,16 +51,15 @@ const FLAG_AT: u8 = 0x40; // attested credential data included
 
 /// Handle one CTAP2 message (`payload[0]` = command, rest = CBOR). Returns the full
 /// response body: a status byte, followed by response CBOR on success.
+///
+/// The request is parsed whole by [`request::parse`] before anything here reads the store or
+/// the enclave, so a malformed request is refused without a lookup, a key or a Touch ID sheet.
 pub fn handle(store: &FidoStore, payload: &[u8]) -> Vec<u8> {
-    let Some((&cmd, cbor)) = payload.split_first() else {
-        return vec![CTAP1_ERR_INVALID_LENGTH];
-    };
-    let result = match cmd {
-        CMD_GET_INFO => Ok(get_info()),
-        CMD_MAKE_CREDENTIAL => make_credential(store, cbor),
-        CMD_GET_ASSERTION => get_assertion(store, cbor),
-        _ => Err(CTAP1_ERR_INVALID_COMMAND),
-    };
+    let result = request::parse(payload).and_then(|req| match req {
+        Request::GetInfo => Ok(get_info()),
+        Request::MakeCredential(req) => register(store, &req),
+        Request::GetAssertion(req) => authenticate(store, &req),
+    });
     match result {
         Ok(body) => {
             let mut out = Vec::with_capacity(body.len() + 1);
@@ -113,27 +99,12 @@ fn get_info() -> Vec<u8> {
     w.finish()
 }
 
-/// The `options` map (`makeCredential` key 7, `getAssertion` key 5) as far as we care about it:
-/// the `up` value, if the platform sent one. `None` means "not specified", which CTAP2 defines as
-/// `up: true` — the ordinary consent-required ceremony.
-fn requested_up(root: &[(Value, Value)], options_key: i128) -> Option<bool> {
-    map_get(root, options_key)
-        .and_then(as_map)
-        .and_then(|opts| text_key(opts, "up"))
-        .and_then(|v| match v {
-            Value::Bool(b) => Some(*b),
-            _ => None,
-        })
-}
-
-/// Does `list` (a CTAP credential-descriptor array) name a credential we hold for `rp_id`?
+/// Does `ids` (the ids of a CTAP credential-descriptor array) name a credential we hold for `rp_id`?
 /// Used for `makeCredential`'s excludeList — the RP saying "this account already has a passkey
 /// on some authenticator; if it is you, refuse". Without this a repeat registration mints a
 /// second credential for the same account, and the site only ever learns about the newest.
-fn holds_any(store: &FidoStore, rp_id: &str, list: &[Value]) -> bool {
-    list.iter()
-        .filter_map(|d| as_map(d).and_then(|m| text_key_bytes(m, "id")))
-        .any(|id| store.find(rp_id, id).is_some())
+fn holds_any(store: &FidoStore, rp_id: &str, ids: &[Vec<u8>]) -> bool {
+    ids.iter().any(|id| store.find(rp_id, id).is_some())
 }
 
 /// Put a Touch ID sheet up purely for consent — no signature, no enclave key involved. This is
@@ -147,46 +118,18 @@ fn user_presence(reason: &str) -> bool {
     crate::sep::sep_verify(crate::sep::next_token(), reason) == crate::sep::VerifyOutcome::Matched
 }
 
+#[cfg(test)]
 fn make_credential(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
-    let root = parse_map(cbor)?;
-    let client_data_hash = map_bytes(&root, 1).ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
-    let rp = map_get(&root, 2)
-        .and_then(as_map)
-        .ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
-    let rp_id = text_key_text(rp, "id").ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
-    let user = map_get(&root, 3)
-        .and_then(as_map)
-        .ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
-    let user_handle = text_key_bytes(user, "id").ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
-    let user_name = text_key_text(user, "name").unwrap_or("").to_string();
+    register(store, &request::parse_make_credential(cbor)?)
+}
 
-    // pubKeyCredParams (key 4): require ES256 among the offered algorithms.
-    let params = map_get(&root, 4)
-        .and_then(as_array)
-        .ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
-    let wants_es256 = params.iter().any(|p| {
-        as_map(p)
-            .and_then(|m| text_key_int(m, "alg"))
-            .map(|alg| alg == ALG_ES256)
-            .unwrap_or(false)
-    });
-    if !wants_es256 {
-        return Err(CTAP2_ERR_UNSUPPORTED_ALGORITHM);
-    }
-
-    // `up: false` is meaningless for registration — a credential nobody consented to is not a
-    // credential — and CTAP2.1 spells the answer out: end the operation with CTAP2_ERR_INVALID_OPTION.
-    if requested_up(&root, 7) == Some(false) {
-        return Err(CTAP2_ERR_INVALID_OPTION);
-    }
-
+fn register(store: &FidoStore, req: &MakeCredential) -> Result<Vec<u8>, u8> {
+    let rp_id = req.rp_id.as_str();
     // excludeList (key 5): consent first, then admit we hold one. Doing it in this order is the
     // spec's, and the reason is privacy — the error itself reveals that this account has a passkey
     // here, so the human authorizes the disclosure. Checked before minting anything, so a refused
     // registration leaves no key behind.
-    if let Some(list) = map_get(&root, 5).and_then(as_array)
-        && holds_any(store, rp_id, list)
-    {
+    if holds_any(store, rp_id, &req.exclude) {
         if !user_presence(&format!("{rp_id} already has a passkey on this Mac")) {
             return Err(CTAP2_ERR_OPERATION_DENIED);
         }
@@ -211,7 +154,7 @@ fn make_credential(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     // Packed self-attestation: sign authData || clientDataHash with the new key.
     // This IS the Touch ID moment at registration.
     let mut signed = auth_data.clone();
-    signed.extend_from_slice(client_data_hash);
+    signed.extend_from_slice(&req.client_data_hash);
     let reason = format!("Register a passkey for {rp_id}");
     let sig = key
         .sign(&signed, &reason)
@@ -220,8 +163,8 @@ fn make_credential(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     store.add(Credential {
         cred_id: cred_id.clone(),
         rp_id: rp_id.to_string(),
-        user_handle: user_handle.to_vec(),
-        user_name,
+        user_handle: req.user_handle.clone(),
+        user_name: req.user_name.clone(),
         blob: key.blob().to_vec(),
         sign_count: 0,
     });
@@ -242,27 +185,26 @@ fn make_credential(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     Ok(w.finish())
 }
 
+#[cfg(test)]
 fn get_assertion(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
-    let root = parse_map(cbor)?;
-    let rp_id = map_text(&root, 1).ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
-    let client_data_hash = map_bytes(&root, 2).ok_or(CTAP2_ERR_MISSING_PARAMETER)?;
+    authenticate(store, &request::parse_get_assertion(cbor)?)
+}
+
+fn authenticate(store: &FidoStore, req: &GetAssertion) -> Result<Vec<u8>, u8> {
+    let rp_id = req.rp_id.as_str();
 
     // Select a credential: allow-list (key 3) first entry we hold, else the newest
     // resident credential for this RP.
-    let allow = map_get(&root, 3).and_then(as_array);
-    let cred = match allow {
-        Some(list) if !list.is_empty() => list
-            .iter()
-            .filter_map(|d| as_map(d).and_then(|m| text_key_bytes(m, "id")))
-            .find_map(|id| store.find(rp_id, id)),
-        _ => store.for_rp(rp_id).into_iter().next(),
+    let cred = match &req.allow {
+        Some(ids) => ids.iter().find_map(|id| store.find(rp_id, id)),
+        None => store.for_rp(rp_id).into_iter().next(),
     }
     .ok_or(CTAP2_ERR_NO_CREDENTIALS)?;
 
     // A CTAP2 "pre-flight" carries `up: false`: the client asks *silently* which of an allow-list's
     // credentials this authenticator holds, then re-runs the ceremony for real against the one that
     // matched. Answering it with a full signature is what made signing in cost an extra Touch ID.
-    if requested_up(&root, 5) == Some(false) {
+    if req.up == Some(false) {
         return Ok(silent_assertion(rp_id, &cred));
     }
 
@@ -273,7 +215,7 @@ fn get_assertion(store: &FidoStore, cbor: &[u8]) -> Result<Vec<u8>, u8> {
     // authenticatorData (no attested credential data on assertions).
     let auth_data = build_auth_data(rp_id, FLAG_UP | FLAG_UV, count, None);
     let mut signed = auth_data.clone();
-    signed.extend_from_slice(client_data_hash);
+    signed.extend_from_slice(&req.client_data_hash);
     let reason = format!("Sign in to {rp_id}");
     let key = SepKey::from_blob(cred.blob.clone());
     let sig = key
@@ -380,78 +322,6 @@ fn random_bytes(n: usize) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-// --- CBOR request parsing (ciborium Value helpers) -------------------------
-
-fn parse_map(cbor: &[u8]) -> Result<Vec<(Value, Value)>, u8> {
-    let v: Value = ciborium::from_reader(cbor).map_err(|_| CTAP2_ERR_INVALID_CBOR)?;
-    match v {
-        Value::Map(m) => Ok(m),
-        _ => Err(CTAP2_ERR_INVALID_CBOR),
-    }
-}
-
-fn as_int(v: &Value) -> Option<i128> {
-    match v {
-        Value::Integer(i) => Some((*i).into()),
-        _ => None,
-    }
-}
-fn as_bytes(v: &Value) -> Option<&[u8]> {
-    match v {
-        Value::Bytes(b) => Some(b),
-        _ => None,
-    }
-}
-fn as_text(v: &Value) -> Option<&str> {
-    match v {
-        Value::Text(t) => Some(t),
-        _ => None,
-    }
-}
-fn as_map(v: &Value) -> Option<&[(Value, Value)]> {
-    match v {
-        Value::Map(m) => Some(m),
-        _ => None,
-    }
-}
-fn as_array(v: &Value) -> Option<&[Value]> {
-    match v {
-        Value::Array(a) => Some(a),
-        _ => None,
-    }
-}
-
-/// Look up an integer-keyed entry (CTAP2 request top level).
-fn map_get(m: &[(Value, Value)], key: i128) -> Option<&Value> {
-    m.iter()
-        .find(|(k, _)| as_int(k) == Some(key))
-        .map(|(_, v)| v)
-}
-fn map_bytes(m: &[(Value, Value)], key: i128) -> Option<&[u8]> {
-    map_get(m, key).and_then(as_bytes)
-}
-fn map_text(m: &[(Value, Value)], key: i128) -> Option<&str> {
-    map_get(m, key).and_then(as_text)
-}
-
-/// Look up a text-keyed entry (nested maps: rp, user, pubKeyCredParams items).
-fn text_key<'a>(m: &'a [(Value, Value)], key: &str) -> Option<&'a Value> {
-    m.iter()
-        .find(|(k, _)| as_text(k) == Some(key))
-        .map(|(_, v)| v)
-}
-fn text_key_bytes<'a>(m: &'a [(Value, Value)], key: &str) -> Option<&'a [u8]> {
-    text_key(m, key).and_then(as_bytes)
-}
-fn text_key_text<'a>(m: &'a [(Value, Value)], key: &str) -> Option<&'a str> {
-    text_key(m, key).and_then(as_text)
-}
-fn text_key_int(m: &[(Value, Value)], key: &str) -> Option<i64> {
-    text_key(m, key)
-        .and_then(as_int)
-        .and_then(|i| i64::try_from(i).ok())
-}
-
 // --- minimal canonical CBOR writer -----------------------------------------
 
 struct CborWriter {
@@ -515,6 +385,8 @@ impl CborWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fido::request::*;
+    use ciborium::value::Value;
 
     #[test]
     fn cbor_writer_canonical_shapes() {
@@ -749,17 +621,8 @@ mod tests {
     fn exclude_list_recognises_our_own_credentials() {
         let store = FidoStore::in_memory();
         stored(&store, "webauthn.io", b"cred-1");
-        let descriptor = |id: &[u8]| {
-            let mut w = CborWriter::new();
-            w.map_header(2);
-            w.text("id");
-            w.bytes(id);
-            w.text("type");
-            w.text("public-key");
-            ciborium::from_reader(&w.finish()[..]).unwrap()
-        };
-        let ours: Vec<Value> = vec![descriptor(b"cred-1")];
-        let theirs: Vec<Value> = vec![descriptor(b"cred-9")];
+        let ours = vec![b"cred-1".to_vec()];
+        let theirs = vec![b"cred-9".to_vec()];
         assert!(holds_any(&store, "webauthn.io", &ours));
         assert!(!holds_any(&store, "webauthn.io", &theirs));
         // Same credential id, different RP: not ours to exclude.
