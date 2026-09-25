@@ -2305,6 +2305,158 @@ fn decide(p: &MemPressure, i: &DecideInputs) -> Decision {
     }
 }
 
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// Any report a guest can send. Every field is guest-controlled: the agent fills them from
+    /// its own `/proc`, and nothing on the host checks them before [`decide`] reads them.
+    fn any_report() -> MemPressure {
+        MemPressure {
+            some_avg10: kani::any(),
+            some_avg60: kani::any(),
+            full_avg10: kani::any(),
+            full_avg60: kani::any(),
+            mem_available_kib: kani::any(),
+            mem_total_kib: kani::any(),
+            mem_free_kib: kani::any(),
+            io_full_avg10: kani::any(),
+            io_full_avg60: kani::any(),
+        }
+    }
+
+    /// Stands in for `Instant::now`, whose `clock_gettime` Kani cannot model. `Instant` has no
+    /// public constructor, so this spells out its layout on this target (`Timespec`: seconds,
+    /// then nanoseconds), which the `size_of` assertion pins.
+    fn fixed_now() -> Instant {
+        const _: () = assert!(std::mem::size_of::<Instant>() == 16);
+        #[repr(C)]
+        struct Timespec {
+            sec: i64,
+            nsec: u32,
+            pad: u32,
+        }
+        // SAFETY: proof-only; the layout is asserted above and `nsec` is below one second.
+        unsafe {
+            std::mem::transmute(Timespec {
+                sec: 1 << 20,
+                nsec: 0,
+                pad: 0,
+            })
+        }
+    }
+
+    /// Stands in for `Instant::duration_since`, answering any elapsed time. The real one
+    /// normalizes through `Duration::new`, whose division by 10^9 is where every harness with a
+    /// symbolic clock spent its solver time: the state with its time fields cleared proves in a
+    /// second, and with them set, no variant finished in 10 minutes. None of the properties
+    /// below depends on how long ago anything happened, so proving them for every elapsed time
+    /// proves them for the real clock.
+    fn any_elapsed(_now: &Instant, _earlier: Instant) -> Duration {
+        Duration::from_secs(kani::any::<u32>() as u64)
+    }
+
+    /// An instant some whole number of seconds after `fixed_now`. Whole seconds, because a
+    /// sub-second part would bring the normalizing division back.
+    fn any_instant() -> Instant {
+        fixed_now() + Duration::from_secs(kani::any::<u32>() as u64)
+    }
+
+    /// Any state the policy can be in: the balloon within its room, the room within the VM, and
+    /// every mode the policy is constructed for (`Disabled` never builds one).
+    fn any_inputs() -> DecideInputs {
+        let mode = match kani::any::<u8>() % 3 {
+            0 => ReclaimMode::Light,
+            1 => ReclaimMode::Moderate,
+            _ => ReclaimMode::Aggressive,
+        };
+        let host = match kani::any::<u8>() % 3 {
+            0 => HostPressure::Normal,
+            1 => HostPressure::Warn,
+            _ => HostPressure::Critical,
+        };
+        let (current, room, max_pages): (u32, u32, u32) = (kani::any(), kani::any(), kani::any());
+        kani::assume(current <= room && room <= max_pages);
+        DecideInputs {
+            mode,
+            host,
+            current,
+            actual_pages: kani::any(),
+            room,
+            max_pages,
+            last_change: kani::any::<bool>().then(any_instant),
+            cooldown_until: kani::any::<bool>().then(any_instant),
+            inelastic: kani::any(),
+            giveback_streak: kani::any(),
+            free_settled_for: kani::any::<bool>()
+                .then(|| Duration::from_secs(kani::any::<u32>() as u64)),
+            shortfall_damped: kani::any(),
+            now: any_instant(),
+        }
+    }
+
+    /// No report and no state commands a balloon larger than the room `max - min` leaves it.
+    #[kani::proof]
+    #[kani::stub(std::time::Instant::duration_since, any_elapsed)]
+    fn a_target_never_leaves_the_room() {
+        let (p, i) = (any_report(), any_inputs());
+        if let Some(t) = decide(&p, &i).target() {
+            assert!(t <= i.room, "a target past the room");
+        }
+    }
+
+    /// A guest under acute pressure, or starved of cache, only ever gets memory back.
+    #[kani::proof]
+    #[kani::stub(std::time::Instant::duration_since, any_elapsed)]
+    fn acute_pressure_only_releases() {
+        let (p, i) = (any_report(), any_inputs());
+        kani::assume(p.some_avg10 >= PRESSURE_HIGH || guest_starved(&p));
+        let d = decide(&p, &i);
+        assert!(
+            d.target().is_none_or(|t| t == 0),
+            "acute pressure kept a balloon"
+        );
+    }
+
+    /// The balloon grows only from a sustainedly calm guest, and never by more than one step.
+    #[kani::proof]
+    #[kani::stub(std::time::Instant::duration_since, any_elapsed)]
+    fn inflation_needs_calm_and_moves_one_step() {
+        let (p, i) = (any_report(), any_inputs());
+        if let Some(t) = decide(&p, &i).target()
+            && t > i.current
+        {
+            assert!(
+                p.some_avg10 <= PRESSURE_LOW && p.some_avg60 <= PRESSURE_LOW,
+                "inflated a guest that is not calm"
+            );
+            assert!(
+                t - i.current <= INFLATE_STEP_PAGES,
+                "inflated by more than a step"
+            );
+        }
+    }
+
+    /// While the host does not need the memory, an inflation step takes only what the guest's
+    /// free list holds past the mode's margin, measured from what the driver actually holds: the
+    /// balloon never forces the guest to reclaim cache for memory nobody is asking for.
+    #[kani::proof]
+    #[kani::stub(std::time::Instant::duration_since, any_elapsed)]
+    fn at_host_normal_inflation_stays_within_the_free_margin() {
+        let (p, i) = (any_report(), any_inputs());
+        kani::assume(i.host == HostPressure::Normal && i.mode != ReclaimMode::Aggressive);
+        kani::assume(p.mem_free_kib != 0);
+        if let Some(t) = decide(&p, &i).target()
+            && t > i.current
+        {
+            let free_pages = (p.mem_free_kib / 4).min(u32::MAX as u64) as u32;
+            let headroom = free_pages.saturating_sub(free_margin_pages(i.mode));
+            let cap = i.actual_pages.unwrap_or(i.current).saturating_add(headroom);
+            assert!(t <= cap, "an inflation step dug past the free margin");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

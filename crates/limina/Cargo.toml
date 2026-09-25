@@ -193,3 +193,7 @@ objc2-core-graphics = { version = "0.3", features = [
 ] }
 # Diagnostic: dump the rendered layer to a PNG (LIMINA_WINDOW_CAPTURE) without screen-record.
 png = { workspace = true }
+
+# `cfg(kani)` gates the proofs `cargo kani` runs (docs/design/in-crate-checkers.md).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
