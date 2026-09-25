@@ -263,6 +263,52 @@ SABOTAGES = [
         'third_party/libkrun/src/devices',
         'kani:usb::xhci::trb::proofs::a_step_returns_only_a_published_work_trb',
     ),
+    (
+        'Disable Slot leaves the slot in the table',
+        'third_party/libkrun/src/devices/src/usb/xhci/engine.rs',
+        """                if let Some(s) = self.slots.get_mut(slot as usize) {
+                    *s = None;""",
+        """                if let Some(s) = self.slots.get_mut(slot as usize) {
+                    let _ = s;""",
+        'third_party/libkrun/src/devices',
+        'every_slot_command_sequence_matches_the_model',
+    ),
+    (
+        'Enable Slot hands out a slot already in use',
+        'third_party/libkrun/src/devices/src/usb/xhci/engine.rs',
+        """            if self.slots[id].is_none() {""",
+        """            if id <= 2 {""",
+        'third_party/libkrun/src/devices',
+        'every_slot_command_sequence_matches_the_model',
+    ),
+    (
+        'Address Device ignores Block Set Address Request',
+        'third_party/libkrun/src/devices/src/usb/xhci/engine.rs',
+        """            let new_state = if bsr { ss::DEFAULT } else { ss::ADDRESSED };""",
+        """            let new_state = if bsr { ss::ADDRESSED } else { ss::ADDRESSED };""",
+        'third_party/libkrun/src/devices',
+        'every_slot_command_sequence_matches_the_model',
+    ),
+    (
+        'Reset Device keeps the data endpoints',
+        'third_party/libkrun/src/devices/src/usb/xhci/engine.rs',
+        """                    // Data endpoints are torn down; any late completion finds no ring.
+                    s.eps.clear();""",
+        """                    // Data endpoints are torn down; any late completion finds no ring.
+                    let _ = &s.eps;""",
+        'third_party/libkrun/src/devices',
+        'every_slot_command_sequence_matches_the_model',
+    ),
+    (
+        'deconfiguring keeps the data endpoints',
+        'third_party/libkrun/src/devices/src/usb/xhci/engine.rs',
+        """                s.state = ss::ADDRESSED;
+                s.eps.clear();""",
+        """                s.state = ss::ADDRESSED;
+                let _ = &s.eps;""",
+        'third_party/libkrun/src/devices',
+        'every_slot_command_sequence_matches_the_model',
+    ),
 ]
 
 
