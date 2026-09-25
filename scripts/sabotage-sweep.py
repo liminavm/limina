@@ -545,6 +545,100 @@ SABOTAGES = [
         'crates/limina-input',
         'every_keyboard_sequence_keeps_the_guest_in_step',
     ),
+    (
+        'the grab is taken over a Space that is not on screen',
+        'crates/limina/src/window/grab_policy.rs',
+        """    let duties = fit::edge_duties(s.fullscreen_and_key && s.space_visible, s.grab_enabled);""",
+        """    let duties = fit::edge_duties(s.fullscreen_and_key, s.grab_enabled);""",
+        'crates/limina',
+        'every_free_pointer_sequence_grabs_exactly_when_the_rules_say',
+    ),
+    (
+        'a click that closes a menu takes the grab',
+        'crates/limina/src/window/grab_policy.rs',
+        """        if s.menu_open {
+            return out;
+        }""",
+        """        if false {
+            return out;
+        }""",
+        'crates/limina',
+        'every_free_pointer_sequence_grabs_exactly_when_the_rules_say',
+    ),
+    (
+        'a click off the guest does not stand the re-grab down',
+        'crates/limina/src/window/grab_policy.rs',
+        """            st.user_released = true;""",
+        """            st.user_released = false;""",
+        'crates/limina',
+        'every_free_pointer_sequence_grabs_exactly_when_the_rules_say',
+    ),
+    (
+        'leaving the picture never ends an explicit release',
+        'crates/limina/src/window/grab_policy.rs',
+        """    if !fit::point_in_fit(s.pos.0, s.pos.1, s.fit) && st.rearm() {""",
+        """    if !fit::point_in_fit(s.pos.0, s.pos.1, s.fit) && false {""",
+        'crates/limina',
+        'every_free_pointer_sequence_grabs_exactly_when_the_rules_say',
+    ),
+    (
+        'the dwell ignores the explicit-release latch',
+        'crates/limina/src/window/grab_policy.rs',
+        """    if !st.user_released
+        && !s.menu_open""",
+        """    if !s.menu_open""",
+        'crates/limina',
+        'every_free_pointer_sequence_grabs_exactly_when_the_rules_say',
+    ),
+    (
+        'the dwell retakes the pointer under an open menu',
+        'crates/limina/src/window/grab_policy.rs',
+        """        && !s.menu_open
+        && fit::may_regrab""",
+        """        && fit::may_regrab""",
+        'crates/limina',
+        'every_free_pointer_sequence_grabs_exactly_when_the_rules_say',
+    ),
+    (
+        'a drag against an edge releases the grab',
+        'crates/limina/src/window/grab_policy.rs',
+        """    if s.buttons_down {""",
+        """    if false {""",
+        'crates/limina',
+        'every_edge_press_sequence_releases_exactly_when_the_rules_say',
+    ),
+    (
+        'an edge press releases a hard grab',
+        'crates/limina/src/window/grab_policy.rs',
+        """    if !matches!(mode, GrabMode::Auto) || s.hold <= 0.0 || !s.fullscreen {""",
+        """    if !matches!(mode, GrabMode::Auto | GrabMode::Hard) || s.hold <= 0.0 || !s.fullscreen {""",
+        'crates/limina',
+        'every_edge_press_sequence_releases_exactly_when_the_rules_say',
+    ),
+    (
+        'a press on a new edge inherits the old charge',
+        'crates/limina/src/window/grab_policy.rs',
+        """    if st.edge.replace(edge) != Some(edge) {""",
+        """    if st.edge.replace(edge).is_none() {""",
+        'crates/limina',
+        'every_edge_press_sequence_releases_exactly_when_the_rules_say',
+    ),
+    (
+        'a side press releases onto no display',
+        'crates/limina/src/window/grab_policy.rs',
+        """            reachable(p).then_some(Release::Out(p))""",
+        """            Some(Release::Out(p))""",
+        'crates/limina',
+        'every_edge_press_sequence_releases_exactly_when_the_rules_say',
+    ),
+    (
+        'a dead edge keeps its full charge',
+        'crates/limina/src/window/grab_policy.rs',
+        """        None => st.charge.lapse(),""",
+        """        None => {}""",
+        'crates/limina',
+        'every_edge_press_sequence_releases_exactly_when_the_rules_say',
+    ),
 ]
 
 
