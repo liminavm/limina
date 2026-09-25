@@ -43,6 +43,12 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Arguments a crate's tests need beyond `cargo test`. Without them a witness can be compiled out,
+# and a filter that matches no test passes -- which the sweep would report as a hole it is not.
+TEST_ARGS = {
+    'third_party/libkrun/src/devices': ['--features', 'usb'],
+}
+
 # (name, file to edit, what to replace, what with, crate directory, witness)
 SABOTAGES = [
     (
@@ -170,6 +176,22 @@ SABOTAGES = [
         'kani:virtio::balloon::device::proofs::every_marked_page_lies_inside_its_run_at_its_gpa',
     ),
     (
+        'Address Device takes any slot the guest names',
+        'third_party/libkrun/src/devices/src/usb/xhci/engine.rs',
+        """        if slot_id == 0 || !matches!(self.slots.get(slot_id as usize), Some(Some(_))) {""",
+        """        if slot_id == 0 {""",
+        'third_party/libkrun/src/devices',
+        'address_device_refuses_a_slot_it_never_enabled',
+    ),
+    (
+        'an event ring segment may run past the top of memory',
+        'third_party/libkrun/src/devices/src/usb/xhci/engine.rs',
+        """        if !EventRing::fits(base, size) {""",
+        """        if base == 1 {""",
+        'third_party/libkrun/src/devices',
+        'an_event_segment_past_the_top_of_memory_is_refused',
+    ),
+    (
         'a registration asking for no user presence is served',
         'crates/limina/src/fido/request.rs',
         """    if requested_up(&root, 7) == Some(false) {""",
@@ -222,7 +244,7 @@ def run(cmd, cwd=ROOT, timeout=None, env=None):
     return SimpleNamespace(returncode=proc.returncode, stdout=out, stderr=err, timed_out=False)
 
 
-def command(filt):
+def command(filt, crate):
     """What runs an entry's witness, as `(argv, env)`: one Kani proof, one loom model, the
     doctests, or `cargo test` under a filter. `env` is None where the sweep's own is used."""
     if filt.startswith('kani:'):
@@ -235,7 +257,7 @@ def command(filt):
         return ['cargo', 'test', '--lib', filt[len('loom:'):]], env
     if filt.startswith('doc:'):
         return ['cargo', 'test', '--doc', filt[len('doc:'):]], None
-    return ['cargo', 'test'] + ([filt] if filt else []), None
+    return ['cargo', 'test'] + TEST_ARGS.get(crate, []) + ([filt] if filt else []), None
 
 
 def separate(filt):
@@ -276,14 +298,14 @@ def main():
     budget = {}
     for crate in sorted({c for *_, c, f in chosen if not separate(f)}):
         began = time.monotonic()
-        if run(['cargo', 'test'], cwd=ROOT / crate).returncode != 0:
+        if run(['cargo', 'test'] + TEST_ARGS.get(crate, []), cwd=ROOT / crate).returncode != 0:
             sys.exit('the tests in %s do not pass before any sabotage; fix that first' % crate)
         budget[crate, None] = max(180.0, (time.monotonic() - began) * 8)
     # A proof or a model is its own baseline: `cargo test` never runs it, so one already failing
     # on the clean tree would read every sabotage aimed at it as caught. It is its own clock too.
     for crate, filt in sorted({(c, f) for *_, c, f in chosen if separate(f)}):
         began = time.monotonic()
-        argv, env = command(filt)
+        argv, env = command(filt, crate)
         if run(argv, cwd=ROOT / crate, env=env).returncode != 0:
             sys.exit('%s in %s does not pass before any sabotage; fix that first' % (filt, crate))
         budget[crate, filt] = max(180.0, (time.monotonic() - began) * 3)
@@ -295,7 +317,7 @@ def main():
         assert old in original, 'sabotage %r no longer matches %s' % (name, rel)
         path.write_text(original.replace(old, new, 1))
         try:
-            argv, env = command(filt)
+            argv, env = command(filt, crate)
             clock = budget[crate, filt if separate(filt) else None]
             r = run(argv, cwd=ROOT / crate, timeout=clock, env=env)
         finally:

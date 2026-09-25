@@ -15,8 +15,8 @@ Kani runs each proof under `--harness-timeout`, which stops `cbmc` itself: a `ti
 Every proof must finish well inside the limit; one that needs longer is the wrong shape for Kani
 (see the design doc) rather than a reason to raise it.
 
-Fuzzing runs each target for a fixed time with libFuzzer's own memory cap, and names the crash
-file it wrote. A crash is committed as a failing unit test before it is fixed.
+Fuzzing runs each target, limina's and the libkrun fork's, for a fixed time with libFuzzer's own
+memory cap and a per-input timeout, and names where the crash inputs were written. A crash is committed as a failing unit test before it is fixed.
 """
 
 import argparse
@@ -29,6 +29,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KANI_HARNESS_TIMEOUT = '10m'
 FUZZ_RSS_LIMIT_MB = 4096
+# Seconds one input may take before libFuzzer calls it a hang: every target here answers an input in
+# milliseconds, so a hang is a loop the guest's bytes can drive, not a slow input.
+FUZZ_TIMEOUT_S = 10
+# limina's fuzz workspace, and the libkrun fork's.
+FUZZ_DIRS = ('fuzz', 'third_party/libkrun/fuzz')
 
 
 def kani_crates():
@@ -74,23 +79,37 @@ def kani(crates):
     return 0
 
 
-def fuzz(targets, seconds):
-    fuzz_dir = ROOT / 'fuzz'
-    if not targets:
-        out = subprocess.run(['cargo', '+nightly', 'fuzz', 'list'], cwd=fuzz_dir,
+def fuzz_targets():
+    """Every fuzz target, as `(name, workspace directory)`."""
+    found = []
+    for d in FUZZ_DIRS:
+        out = subprocess.run(['cargo', '+nightly', 'fuzz', 'list'], cwd=ROOT / d,
                              capture_output=True, text=True, check=True).stdout
-        targets = out.split()
-    crashed = []
-    for t in targets:
-        argv = ['cargo', '+nightly', 'fuzz', 'run', t, '--',
-                '-max_total_time=%d' % seconds, '-rss_limit_mb=%d' % FUZZ_RSS_LIMIT_MB]
-        if run(argv, fuzz_dir) != 0:
-            crashed.append(t)
-    if crashed:
-        print('\nfuzz: crashes in %s; the inputs are under fuzz/artifacts/<target>/'
-              % ', '.join(crashed))
+        found += [(t, ROOT / d) for t in out.split()]
+    return found
+
+
+def fuzz(targets, seconds):
+    known = fuzz_targets()
+    chosen = [(t, d) for t, d in known if not targets or t in targets]
+    unknown = set(targets) - {t for t, _ in known}
+    if unknown:
+        print('fuzz: no such target: %s' % ', '.join(sorted(unknown)))
         return 1
-    print('\nfuzz: %d target(s) ran %ds each with no crash' % (len(targets), seconds))
+    crashed = []
+    for t, d in chosen:
+        argv = ['cargo', '+nightly', 'fuzz', 'run', t, '--',
+                '-max_total_time=%d' % seconds, '-rss_limit_mb=%d' % FUZZ_RSS_LIMIT_MB,
+                '-timeout=%d' % FUZZ_TIMEOUT_S]
+        if run(argv, d) != 0:
+            crashed.append('%s (inputs under %s)'
+                           % (t, os.path.relpath(d / 'artifacts' / t, ROOT)))
+    subprocess.run(['git', 'checkout', '--quiet', 'Cargo.lock'], cwd=ROOT / 'third_party/libkrun',
+                   stderr=subprocess.DEVNULL)
+    if crashed:
+        print('\nfuzz: crashes in %s' % ', '.join(crashed))
+        return 1
+    print('\nfuzz: %d target(s) ran %ds each with no crash' % (len(chosen), seconds))
     return 0
 
 
