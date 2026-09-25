@@ -98,9 +98,12 @@ write or a version skew, and a panic mid-restore loses the VM.
   free, and unaligned fringes round inward. It keeps a `HashMap`, so the whole thing is an
   enumeration target: every sequence of `add` runs over a few host pages at sub-page
   granularity, checked against a bitmap of what was reported, with `take_full_pages` (`:143`)
-  never emitting a page the bitmap does not fully cover. The per-run arithmetic in `add` (round
-  up, round down, the ordered `gpa_base` expression) is also a Kani target on its own: no
-  overflow or underflow for any `addr`, `gpa` and `len`.
+  never emitting a page the bitmap does not fully cover. The per-run arithmetic in `add` is
+  proved with Kani (see *Measured so far*). A guest can make `add` walk up to a million pages
+  per descriptor, since `len` is its own 32-bit figure and only the run's start is checked
+  against guest memory. That costs only the guest's own device thread, and a run overhanging
+  guest RAM releases nothing outside it, because `ReleasedRam::release` refuses a range that
+  crosses its region's end.
 - **Released RAM.** `third_party/libkrun/src/hvf/src/released_ram.rs` says "the released set
   must be exact", because `hv_vm_map` fails on any overlap. That calls for enumeration of
   `release` (`:199`) and `handle_fault` (`:270`) sequences against a model of which pages are
@@ -188,11 +191,25 @@ cargo-fuzz 0.13.2.
   report with concrete state, 0.45 s; symbolic state with its time fields cleared, 1.1 s. The
   proofs stub `duration_since` to answer any elapsed time, which is sound because none of the
   properties depends on time.
+- **Balloon coalescer** (libkrun fork, `src/devices/src/virtio/balloon/device.rs`). `add`'s
+  arithmetic is split into `inward` and `locate`, unchanged, because the coalescer's `HashMap`
+  seeds its hasher from the OS, which Kani cannot model. One proof covers every run a guest can
+  report and every host page from 4 KiB to 256 KiB. Every page `add` marks free is a whole guest
+  page inside the run, filed in the host page and slot that hold it, at the right GPA. One page
+  Kani picks stands for all of them, so nothing is unrolled; it proves in under a second. Its
+  one assumption is load-bearing: the run's host address and GPA must sit at the same offset
+  into their host pages, and without it `locate` underflows. It holds because guest RAM starts
+  at 1 or 2 GiB (`src/arch/src/aarch64/layout.rs`) with page-rounded sizes and page-aligned host
+  mappings. The first version of the harness picked any aligned page in the run rather than the
+  pages `add` walks, so a start that was never rounded went unseen; writing the sweep entry
+  exposed it. Two entries were first caught by an overflow in the harness's own arithmetic,
+  not by the assertion about the broken code, so the assertions are now written so they cannot
+  overflow themselves.
 - **Fuzzing.** `control_frame` (every frame `read_message` accepts round-trips) ran 7.4 M
   inputs in 60 s with no crash. `vdagent_stream` (pushing a stream whole or split gives the same
   messages) ran 5.1 M in 60 s with no crash, and caught a planted bug (refusing a chunk whose
   body had not fully arrived) within seconds.
-- **The sweep.** Eight entries, eight caught, each by the assertion written for it.
+- **The sweep.** Thirteen entries, thirteen caught, each by the assertion written for it.
 
 The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
 arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
@@ -203,9 +220,8 @@ expensive call with an over-approximation the property does not depend on.
 
 1. **Infrastructure and the cheap proofs.** Landed: the toolchains, the root `fuzz/` workspace,
    the sabotage sweep, `cargo xtask check`, the control-plane header proofs, the balloon policy
-   proofs, and the `control_frame` and `vdagent_stream` fuzz targets. Still owed:
-   - Kani on the balloon coalescer's `add` arithmetic, which is a commit on the libkrun fork and
-     brings the fork its own `cfg(kani)` lint and sweep entries.
+   proofs, the balloon coalescer proof on the libkrun fork, and the `control_frame` and
+   `vdagent_stream` fuzz targets. Still owed:
    - Fuzzing `ctap2::handle`, which first needs its CBOR parsing split from the Touch ID and
      Secure Enclave ceremony it calls mid-request (`crates/limina/src/fido/ctap2.rs:143`).
 2. **xHCI.** The fuzz harness needs a way to stand the engine up without a libusb backend.
