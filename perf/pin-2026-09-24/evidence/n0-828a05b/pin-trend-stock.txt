@@ -1,0 +1,2 @@
+wrote /home/claude/.config/monitors.xml: Virtual-1 1280x800@59.810 scale=1 (applies at next session start)
+verify OK: Virtual-1 1280x800@59.810 scale=1.0

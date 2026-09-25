@@ -1,0 +1,247 @@
+######## b0-b900066 10:39:22
+[10:39:22] build trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4
+[10:40:16] enhanced boot
+[10:41:13] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=220s load=0.28
+final: up=220s load=0.28 0.24 0.10
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[10:46:03] aquarium r1 exit=0 
+[10:47:23] aquarium r2 exit=0 
+[10:49:14] perf-ledger run 1 exit=0 
+gl-replay-venus,46.3147
+gl-replay-llvmpipe,724.1
+vk-replay-venus-headless,1638.470743
+glmark2-wayland-venus,2411
+[10:51:05] perf-ledger run 2 exit=0 
+gl-replay-venus,46.1768
+gl-replay-llvmpipe,705.98
+vk-replay-venus-headless,1410.502310
+glmark2-wayland-venus,2420
+[10:52:57] perf-ledger run 3 exit=0 
+gl-replay-venus,45.462
+gl-replay-llvmpipe,704.03
+vk-replay-venus-headless,1614.542181
+glmark2-wayland-venus,2424
+[10:55:07] vkmark run 1: 2281 
+[10:57:18] vkmark run 2: 2288 
+[10:59:28] vkmark run 3: 2298 
+Running as unit: ff-bench.service; invocation ID: 94a732ccf46e445eb0667561daa742ea
+[11:02:18] vkmark under aquarium-25k run 1: 1161 
+[11:04:29] vkmark under aquarium-25k run 2: 1158 
+[11:04:39] worker-enh: 0 poisoned-context lines
+[11:04:39] stock boot
+[11:05:37] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=206s load=0.15
+final: up=206s load=0.15 0.14 0.06
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[11:27:08] basemark exit=0
+1790345335.597435492 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+REFUSING to report: run 2 yielded no scores either
+[11:27:18] worker-stock: 0 poisoned-context lines
+[11:27:18] point b0-b900066 done; read perf/pin-2026-09-24/evidence/b0-b900066/aquarium-r*/*-fps.png
+######## n0-828a05b 11:27:18
+[11:27:18] build trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4
+[11:28:15] enhanced boot
+[11:29:10] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=204s load=0.29
+final: up=204s load=0.29 0.33 0.15
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[11:33:46] aquarium r1 exit=0 
+[11:35:06] aquarium r2 exit=0 
+[11:36:58] perf-ledger run 1 exit=0 
+gl-replay-venus,45.6956
+gl-replay-llvmpipe,720.029
+vk-replay-venus-headless,1760.008203
+glmark2-wayland-venus,2425
+[11:38:49] perf-ledger run 2 exit=0 
+gl-replay-venus,46.0261
+gl-replay-llvmpipe,727.429
+vk-replay-venus-headless,1628.817031
+glmark2-wayland-venus,2416
+[11:40:40] perf-ledger run 3 exit=0 
+gl-replay-venus,46.0428
+gl-replay-llvmpipe,726.734
+vk-replay-venus-headless,1622.919966
+glmark2-wayland-venus,2421
+[11:42:51] vkmark run 1: 2294 
+[11:45:01] vkmark run 2: 2280 
+[11:47:11] vkmark run 3: 2303 
+Running as unit: ff-bench.service; invocation ID: a4009c0bd33f4ed6868b2438a678df56
+[11:50:02] vkmark under aquarium-25k run 1: 775 
+[11:52:12] vkmark under aquarium-25k run 2: 799 
+[11:52:22] worker-enh: 0 poisoned-context lines
+[11:52:22] stock boot
+[11:53:20] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=205s load=0.09
+final: up=205s load=0.09 0.14 0.07
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[12:00:58] basemark exit=0
+1790348197.620153252 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[12:00:58] basemark WebGL 1.0.2 Test 3540.41 
+[12:00:58] basemark WebGL 2.0 Test 3884.21 
+[12:00:58] basemark Shader Pipeline Test 1494.02 
+[12:00:58] basemark Draw-call Stress Test 77.58 
+[12:00:58] basemark Geometry Stress Test 1729.94 
+[12:00:58] basemark Canvas Test 1136.78 
+[12:00:58] basemark SVG Test 993.44 
+[12:01:08] worker-stock: 0 poisoned-context lines
+[12:01:08] point n0-828a05b done; read perf/pin-2026-09-24/evidence/n0-828a05b/aquarium-r*/*-fps.png
+######## b1-b900066 12:01:08
+[12:01:08] build trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4
+[12:02:08] enhanced boot
+[12:03:03] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=205s load=0.19
+final: up=205s load=0.19 0.22 0.10
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[12:07:39] aquarium r1 exit=0 
+[12:09:00] aquarium r2 exit=0 
+[12:10:51] perf-ledger run 1 exit=0 
+gl-replay-venus,46.0041
+gl-replay-llvmpipe,713.495
+vk-replay-venus-headless,1598.397332
+glmark2-wayland-venus,2408
+[12:12:42] perf-ledger run 2 exit=0 
+gl-replay-venus,45.9323
+gl-replay-llvmpipe,725.852
+vk-replay-venus-headless,1591.804854
+glmark2-wayland-venus,2427
+[12:14:33] perf-ledger run 3 exit=0 
+gl-replay-venus,46.0903
+gl-replay-llvmpipe,732.144
+vk-replay-venus-headless,1627.837095
+glmark2-wayland-venus,2411
+[12:16:43] vkmark run 1: 2291 
+[12:18:54] vkmark run 2: 2294 
+[12:21:04] vkmark run 3: 2288 
+Running as unit: ff-bench.service; invocation ID: 95a998cae7ff4eb5b0044cb1b47248cf
+[12:23:55] vkmark under aquarium-25k run 1: 560 
+[12:26:05] vkmark under aquarium-25k run 2: 535 
+[12:26:15] worker-enh: 0 poisoned-context lines
+[12:26:15] stock boot
+[12:27:14] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=206s load=0.17
+final: up=206s load=0.17 0.20 0.09
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[12:34:22] basemark exit=0
+1790350231.707650569 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[12:34:22] basemark WebGL 1.0.2 Test 3288.86 
+[12:34:22] basemark WebGL 2.0 Test 3965.58 
+[12:34:22] basemark Shader Pipeline Test 1654.26 
+[12:34:22] basemark Draw-call Stress Test 79.94 
+[12:34:22] basemark Geometry Stress Test 1734.09 
+[12:34:22] basemark Canvas Test 1150.57 
+[12:34:22] basemark SVG Test 1000.45 
+[12:34:32] worker-stock: 0 poisoned-context lines
+[12:34:32] point b1-b900066 done; read perf/pin-2026-09-24/evidence/b1-b900066/aquarium-r*/*-fps.png
+######## n1-828a05b 12:34:32
+[12:34:32] build trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4
+[12:35:29] enhanced boot
+[12:36:25] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=219s load=0.28
+final: up=219s load=0.28 0.33 0.15
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[12:41:23] aquarium r1 exit=0 
+[12:42:43] aquarium r2 exit=0 
+[12:44:35] perf-ledger run 1 exit=0 
+gl-replay-venus,45.8582
+gl-replay-llvmpipe,716.074
+vk-replay-venus-headless,1608.504162
+glmark2-wayland-venus,2399
+[12:46:26] perf-ledger run 2 exit=0 
+gl-replay-venus,46.0359
+gl-replay-llvmpipe,722.29
+vk-replay-venus-headless,1668.742736
+glmark2-wayland-venus,2419
+[12:48:17] perf-ledger run 3 exit=0 
+gl-replay-venus,45.8918
+gl-replay-llvmpipe,730.072
+vk-replay-venus-headless,1661.066906
+glmark2-wayland-venus,2419
+[12:50:27] vkmark run 1: 2286 
+[12:52:38] vkmark run 2: 2300 
+[12:54:48] vkmark run 3: 2306 
+Running as unit: ff-bench.service; invocation ID: 5b762360cdf543028624926643db5bc4
+[12:57:38] vkmark under aquarium-25k run 1: 1137 
+[12:59:49] vkmark under aquarium-25k run 2: 1135 
+[12:59:59] worker-enh: 0 poisoned-context lines
+[12:59:59] stock boot
+[13:00:56] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=206s load=0.05
+final: up=206s load=0.05 0.12 0.06
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[13:09:02] basemark exit=0
+1790352254.626299979 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[13:09:02] basemark WebGL 1.0.2 Test 3237.63 
+[13:09:02] basemark WebGL 2.0 Test 3980.47 
+[13:09:02] basemark Shader Pipeline Test 1502.58 
+[13:09:02] basemark Draw-call Stress Test 78.50 
+[13:09:02] basemark Geometry Stress Test 1718.99 
+[13:09:02] basemark Canvas Test 1154.25 
+[13:09:02] basemark SVG Test 991.30 
+[13:09:12] worker-stock: 0 poisoned-context lines
+[13:09:12] point n1-828a05b done; read perf/pin-2026-09-24/evidence/n1-828a05b/aquarium-r*/*-fps.png
+######## b2-b900066 13:09:12
+[13:09:12] build trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4
+[13:10:14] enhanced boot
+[13:11:11] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=205s load=0.18
+final: up=205s load=0.18 0.15 0.06
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[13:15:47] aquarium r1 exit=0 
+[13:17:07] aquarium r2 exit=0 
+[13:18:59] perf-ledger run 1 exit=0 
+gl-replay-venus,45.6716
+gl-replay-llvmpipe,709.236
+vk-replay-venus-headless,1769.677891
+glmark2-wayland-venus,2401
+[13:20:50] perf-ledger run 2 exit=0 
+gl-replay-venus,46.1307
+gl-replay-llvmpipe,724.552
+vk-replay-venus-headless,1663.719332
+glmark2-wayland-venus,2409
+[13:22:41] perf-ledger run 3 exit=0 
+gl-replay-venus,45.9857
+gl-replay-llvmpipe,724.89
+vk-replay-venus-headless,1782.594745
+glmark2-wayland-venus,2404
+[13:24:52] vkmark run 1: 2279 
+[13:27:02] vkmark run 2: 2278 
+[13:29:12] vkmark run 3: 2291 
+Running as unit: ff-bench.service; invocation ID: c0d6edc919744ec896b1b81c75c6ac52
+[13:32:09] vkmark under aquarium-25k run 1: 910 
+[13:34:19] vkmark under aquarium-25k run 2: 892 
+[13:34:29] worker-enh: 0 poisoned-context lines
+[13:34:29] stock boot
+[13:35:28] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=206s load=0.03
+final: up=206s load=0.03 0.06 0.02
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[13:43:37] basemark exit=0
+1790354325.511316225 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[13:43:37] basemark WebGL 1.0.2 Test 3433.75 
+[13:43:37] basemark WebGL 2.0 Test 3752.21 
+[13:43:37] basemark Shader Pipeline Test 1593.92 
+[13:43:38] basemark Draw-call Stress Test 83.39 
+[13:43:38] basemark Geometry Stress Test 1714.39 
+[13:43:38] basemark Canvas Test 1150.15 
+[13:43:38] basemark SVG Test 999.34 
+[13:43:48] worker-stock: 0 poisoned-context lines
+[13:43:48] point b2-b900066 done; read perf/pin-2026-09-24/evidence/b2-b900066/aquarium-r*/*-fps.png
+virglrs restored to 828a05b
+libkrun restored to 26450d76
+######## legs done 13:43:48

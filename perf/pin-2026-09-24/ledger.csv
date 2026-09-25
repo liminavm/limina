@@ -1,0 +1,134 @@
+date,commit,workload,metric,value,notes
+2026-09-25,87d241c4,gl-replay-venus,fps,46.3147,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,724.1,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1638.470743,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2411,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,46.1768,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,705.98,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1410.502310,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2420,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,45.462,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,704.03,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1614.542181,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2424,trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vkmark-default-venus,score,2281,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2288,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2298,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,1161,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2  "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,1158,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2  "
+2026-09-25,87d241c4,gl-replay-venus,fps,45.6956,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,720.029,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1760.008203,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2425,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,46.0261,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,727.429,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1628.817031,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2416,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,46.0428,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,726.734,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1622.919966,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2421,trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vkmark-default-venus,score,2294,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2280,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2303,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,775,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/2  "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,799,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/2  "
+2026-09-25,87d241c4,basemark-webgl102-vrend,score,3540.41,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-webgl20-vrend,score,3884.21,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-shader-pipeline-vrend,score,1494.02,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-drawcall-stress-vrend,score,77.58,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-geometry-stress-vrend,score,1729.94,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-canvas-vrend,score,1136.78,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-svg-vrend,score,993.44,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,gl-replay-venus,fps,46.0041,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,713.495,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1598.397332,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2408,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,45.9323,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,725.852,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1591.804854,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2427,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,46.0903,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,732.144,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1627.837095,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2411,trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vkmark-default-venus,score,2291,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2294,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2288,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,560,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2  "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,535,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2  "
+2026-09-25,87d241c4,basemark-webgl102-vrend,score,3288.86,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-webgl20-vrend,score,3965.58,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-shader-pipeline-vrend,score,1654.26,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-drawcall-stress-vrend,score,79.94,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-geometry-stress-vrend,score,1734.09,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-canvas-vrend,score,1150.57,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-svg-vrend,score,1000.45,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,gl-replay-venus,fps,45.8582,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,716.074,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1608.504162,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2399,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,46.0359,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,722.29,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1668.742736,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2419,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,45.8918,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,730.072,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1661.066906,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2419,trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vkmark-default-venus,score,2286,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2300,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2306,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 3/3 "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,1137,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/2  "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,1135,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/2  "
+2026-09-25,87d241c4,basemark-webgl102-vrend,score,3237.63,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-webgl20-vrend,score,3980.47,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-shader-pipeline-vrend,score,1502.58,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-drawcall-stress-vrend,score,78.50,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-geometry-stress-vrend,score,1718.99,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-canvas-vrend,score,1154.25,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-svg-vrend,score,991.30,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,44,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,38,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,45,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,38,"trend b0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,45,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,39,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,44,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,41,"trend n0-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,50,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,38,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,48,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,42,"trend b1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,44,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,37,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,46,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,42,"trend n1-828a05b: virglrs 828a05b + libkrun 26450d76; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,gl-replay-venus,fps,45.6716,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,709.236,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1769.677891,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2401,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,46.1307,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,724.552,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1663.719332,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2409,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 
+2026-09-25,87d241c4,gl-replay-venus,fps,45.9857,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,gl-replay-llvmpipe,fps,724.89,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vk-replay-venus-headless,fps,1782.594745,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,glmark2-wayland-venus,score,2404,trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 
+2026-09-25,87d241c4,vkmark-default-venus,score,2279,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2278,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/3 "
+2026-09-25,87d241c4,vkmark-default-venus,score,2291,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 3/3 "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,910,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2  "
+2026-09-25,87d241c4,vkmark-under-aquarium25k-venus,score,892,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2  "
+2026-09-25,87d241c4,basemark-webgl102-vrend,score,3433.75,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-webgl20-vrend,score,3752.21,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-shader-pipeline-vrend,score,1593.92,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-drawcall-stress-vrend,score,83.39,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-geometry-stress-vrend,score,1714.39,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-canvas-vrend,score,1150.15,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,basemark-svg-vrend,score,999.34,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; stock guest; second suite run scored "
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,50,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,39,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 1/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-25k-vrend,fps,45,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
+2026-09-25,87d241c4,aquarium-30k-vrend,fps,37,"trend b2-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 87d241c4; run 2/2; read off the fps crop"
