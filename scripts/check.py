@@ -32,11 +32,14 @@ FUZZ_RSS_LIMIT_MB = 4096
 
 
 def kani_crates():
-    """The crate directories holding at least one Kani proof."""
+    """The crate directories holding at least one Kani proof: limina's own, and the libkrun
+    fork's (on its `limina` branch, beside the code they prove)."""
     found = set()
-    for src in sorted(ROOT.glob('crates/*/src/**/*.rs')):
-        if '#[cfg(kani)]' in src.read_text():
-            found.add(src.relative_to(ROOT).parts[:2])
+    for pattern in ('crates/*/src/**/*.rs', 'third_party/libkrun/src/*/src/**/*.rs'):
+        for src in sorted(ROOT.glob(pattern)):
+            if '#[cfg(kani)]' in src.read_text(errors='replace'):
+                rel = src.relative_to(ROOT).parts
+                found.add(rel[:rel.index('src')])
     return [ROOT.joinpath(*p) for p in sorted(found)]
 
 
@@ -61,6 +64,9 @@ def kani(crates):
                 '--harness-timeout', KANI_HARNESS_TIMEOUT]
         if run(argv, d) != 0:
             failed.append(os.path.relpath(d, ROOT))
+    # Kani re-resolves libkrun's lockfile against its own workspace; keep the fork's tree clean.
+    subprocess.run(['git', 'checkout', '--quiet', 'Cargo.lock'], cwd=ROOT / 'third_party/libkrun',
+                   stderr=subprocess.DEVNULL)
     if failed:
         print('\nkani: proofs failed or did not finish in: %s' % ', '.join(failed))
         return 1

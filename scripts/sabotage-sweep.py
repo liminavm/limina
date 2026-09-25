@@ -129,6 +129,46 @@ SABOTAGES = [
         'crates/limina',
         'kani:balloon_policy::proofs::at_host_normal_inflation_stays_within_the_free_margin',
     ),
+    (
+        "a reported run's start is not rounded up to a whole guest page",
+        'third_party/libkrun/src/devices/src/virtio/balloon/device.rs',
+        """    let start = (addr + GUEST_PAGE - 1) & !(GUEST_PAGE - 1); // round up""",
+        """    let start = addr; // round up""",
+        'third_party/libkrun/src/devices',
+        'kani:virtio::balloon::device::proofs::every_marked_page_lies_inside_its_run_at_its_gpa',
+    ),
+    (
+        "a reported run's end is rounded up, taking a partly covered page",
+        'third_party/libkrun/src/devices/src/virtio/balloon/device.rs',
+        """    let end = (addr + len) & !(GUEST_PAGE - 1); // round down""",
+        """    let end = (addr + len) | (GUEST_PAGE - 1); // round down""",
+        'third_party/libkrun/src/devices',
+        'kani:virtio::balloon::device::proofs::every_marked_page_lies_inside_its_run_at_its_gpa',
+    ),
+    (
+        "a guest page is filed under its own base, not its host page's",
+        'third_party/libkrun/src/devices/src/virtio/balloon/device.rs',
+        """    let base = p & !(host_page - 1);""",
+        """    let base = p & !(GUEST_PAGE - 1);""",
+        'third_party/libkrun/src/devices',
+        'kani:virtio::balloon::device::proofs::every_marked_page_lies_inside_its_run_at_its_gpa',
+    ),
+    (
+        'a guest page is filed in the slot of its offset into the run',
+        'third_party/libkrun/src/devices/src/virtio/balloon/device.rs',
+        """    let sub = (p - base) / GUEST_PAGE;""",
+        """    let sub = (p - addr) / GUEST_PAGE;""",
+        'third_party/libkrun/src/devices',
+        'kani:virtio::balloon::device::proofs::every_marked_page_lies_inside_its_run_at_its_gpa',
+    ),
+    (
+        "a host page is filed under the GPA of the run's first page",
+        'third_party/libkrun/src/devices/src/virtio/balloon/device.rs',
+        """    let gpa_base = gpa + (p - addr) as u64 - (p - base) as u64;""",
+        """    let gpa_base = gpa + (p - addr) as u64;""",
+        'third_party/libkrun/src/devices',
+        'kani:virtio::balloon::device::proofs::every_marked_page_lies_inside_its_run_at_its_gpa',
+    ),
 ]
 
 
