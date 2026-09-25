@@ -41,6 +41,9 @@ limina-display     = { path = "crates/limina-display" }
 # (which applies). Dependency-free on purpose — see the crate docs.
 limina-displayctl  = { path = "crates/limina-displayctl" }
 limina-input       = { path = "crates/limina-input" }
+# Starts the worker from launchd (outside the app's process tree, where Game Mode clamps) and
+# hands it its fds over Mach; the supervisor and the worker's launcher mode share it.
+limina-launch      = { path = "crates/limina-launch" }
 # The panic sink both host binaries install: a Dock-launched app has no stderr, so without
 # this the message our loud assertions exist to print is simply lost.
 limina-paniclog    = { path = "crates/limina-paniclog" }

@@ -103,7 +103,7 @@ pub fn unpack_size(packed: u64) -> (u32, u32) {
 /// the window's [`window::WorkerConn`] so the same NSWindow keeps showing whichever worker is
 /// current.
 struct WindowedWorker {
-    child: std::process::Child,
+    child: supervisor::WorkerHandle,
     /// Worker→supervisor scanout control channel; handed to `spawn_reader`, which owns it and
     /// closes it on EOF.
     sup: OwnedFd,

@@ -1,0 +1,9 @@
+[package]
+name = "limina-launch"
+description = "Start the VM worker from launchd, outside the app's process tree, handing its fds over Mach"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = { workspace = true }

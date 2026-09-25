@@ -529,6 +529,13 @@ fn main() -> Result<()> {
     // append to the same log; each record names its own binary and pid.
     limina_paniclog::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
+    // Started by launchd as the worker's launcher (crates/limina-launch): not a VM, and no clap,
+    // whose required flags it does not carry.
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if limina_launch::is_launcher_invocation(argv.get(1).map(|a| a.as_os_str())) {
+        std::process::exit(limina_launch::launcher_main(&argv));
+    }
+
     init_worker_logging();
 
     // Upstream KosmicKrisp gates its VK_EXT_custom_border_color (+ border_color_swizzle)
