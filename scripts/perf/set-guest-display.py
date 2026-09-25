@@ -22,6 +22,7 @@ Usage (in the guest, inside the seated session's bus):
     ./set-guest-display.py --show                      # print current mode/scale, exit 0
     ./set-guest-display.py --verify 1280x800 1.0       # exit 0 only if that is ALREADY current
     ./set-guest-display.py --write-config 1280x800 1.0 # write monitors.xml; applies on next boot
+    ./set-guest-display.py --write-config 1280x800 1.0 60  # ... at the mode nearest 60 Hz
     ./set-guest-display.py 1280x800 1.0                # live D-Bus apply — PROMPTS, see below
 
 THE DIALOG TRAP (learned 2026-07-26, the hard way). The live apply path pops GNOME's
@@ -40,6 +41,13 @@ the host screen. Reserve the live apply for interactive poking with a human at t
 
 Exits nonzero (and changes nothing) if the requested mode does not support the requested scale, so a
 caller can never silently benchmark a display it did not ask for.
+
+THE REFRESH. The supervisor's EDID carries the host screen's refresh, so on a ProMotion panel the
+preferred mode is 120 Hz while an external monitor gives 60, and a compositor repainting twice as
+often is a different workload. `--write-config` and `--verify` take an optional third argument, a
+rate in Hz: the mode picked (or required) is the one of that size within 1 Hz of it. The guest's
+kernel infers fixed-rate modes from the EDID's range limits, so 1280x800 has one near 60 Hz
+(59.81) on either host screen.
 """
 
 import sys
@@ -82,13 +90,18 @@ def describe(state):
     return "\n".join(out)
 
 
-def find_mode(monitors, want_w, want_h, want_scale):
+def near(refresh, want_hz):
+    return want_hz is None or abs(refresh - want_hz) < 1.0
+
+
+def find_mode(monitors, want_w, want_h, want_scale, want_hz=None):
     """-> (monitorspec, mode, matched_scale) or raises SystemExit with a loud message."""
     for spec, modes, _mprops in monitors:
-        for mode in modes:
+        sized = [m for m in modes if (m[1], m[2]) == (want_w, want_h)]
+        if want_hz is not None:
+            sized = sorted((m for m in sized if near(m[3], want_hz)), key=lambda m: abs(m[3] - want_hz))
+        for mode in sized:
             _mode_id, w, h, _refresh, _pref, supported_scales, _mp = mode
-            if (w, h) != (want_w, want_h):
-                continue
             # Float compare against the compositor's own advertised list — mutter rejects a scale it
             # did not advertise, and a near-miss (1.0 vs 0.9999) fails opaquely at ApplyMonitorsConfig.
             match = next((s for s in supported_scales if abs(s - want_scale) < 1e-3), None)
@@ -97,18 +110,19 @@ def find_mode(monitors, want_w, want_h, want_scale):
                       f"supported: {[round(s, 4) for s in supported_scales]}", file=sys.stderr)
                 raise SystemExit(1)
             return spec, mode, match
-    have = sorted({f"{m[1]}x{m[2]}" for _mi, modes, _mp in monitors for m in modes})
-    print(f"no mode {want_w}x{want_h}; available: {' '.join(have)}", file=sys.stderr)
+    have = sorted({f"{m[1]}x{m[2]}@{m[3]:.2f}" for _mi, modes, _mp in monitors for m in modes})
+    rate = "" if want_hz is None else f" near {want_hz} Hz"
+    print(f"no mode {want_w}x{want_h}{rate}; available: {' '.join(have)}", file=sys.stderr)
     raise SystemExit(1)
 
 
-def write_config(state, want_w, want_h, want_scale):
+def write_config(state, want_w, want_h, want_scale, want_hz=None):
     """Write ~/.config/monitors.xml — the DIALOG-FREE pin. Applied at next compositor startup."""
     import os
     from xml.sax.saxutils import escape
 
     _serial, monitors, _logicals, _props = state
-    spec, mode, scale = find_mode(monitors, want_w, want_h, want_scale)
+    spec, mode, scale = find_mode(monitors, want_w, want_h, want_scale, want_hz)
     connector, vendor, product, mserial = spec
     _mode_id, w, h, refresh, _pref, _ss, _mp = mode
 
@@ -145,7 +159,8 @@ def write_config(state, want_w, want_h, want_scale):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(xml)
-    print(f"wrote {path}: {connector} {w}x{h} scale={scale_s} (applies at next session start)")
+    print(f"wrote {path}: {connector} {w}x{h}@{refresh:.3f} scale={scale_s} "
+          f"(applies at next session start)")
     return 0
 
 
@@ -161,19 +176,22 @@ def main():
         cmd = argv[0]
         want = argv[1] if len(argv) > 1 else "1280x800"
         want_scale = float(argv[2]) if len(argv) > 2 else 1.0
+        want_hz = float(argv[3]) if len(argv) > 3 else None
         want_w, want_h = (int(v) for v in want.lower().split("x"))
         state = current_state(p)
         if cmd == "--write-config":
-            return write_config(state, want_w, want_h, want_scale)
+            return write_config(state, want_w, want_h, want_scale, want_hz)
         # --verify: read-only assertion, never prompts. This is what benchmark runners call.
         _serial, monitors, logicals, _props = state
         for spec, modes, _mprops in monitors:
             cur = next((m for m in modes if m[6].get("is-current")), None)
             scale = next((lm[2] for lm in logicals if any(c[0] == spec[0] for c in lm[5])), None)
-            if cur and (cur[1], cur[2]) == (want_w, want_h) and abs(scale - want_scale) < 1e-3:
-                print(f"verify OK: {spec[0]} {cur[1]}x{cur[2]} scale={scale}")
+            if (cur and (cur[1], cur[2]) == (want_w, want_h) and abs(scale - want_scale) < 1e-3
+                    and near(cur[3], want_hz)):
+                print(f"verify OK: {spec[0]} {cur[1]}x{cur[2]}@{cur[3]:.3f} scale={scale}")
                 return 0
-        print(f"verify FAILED: wanted {want_w}x{want_h}@{want_scale}, have:\n{describe(state)}",
+        rate = "" if want_hz is None else f" near {want_hz} Hz"
+        print(f"verify FAILED: wanted {want_w}x{want_h} scale {want_scale}{rate}, have:\n{describe(state)}",
               file=sys.stderr)
         return 1
 

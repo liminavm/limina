@@ -58,10 +58,13 @@ SCP=(scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null 
 # measurement geometry, which is what the historical ledger rows were taken at.
 PERF_MODE="${LIMINA_PERF_MODE:-1280x800}"
 PERF_SCALE="${LIMINA_PERF_SCALE:-1.0}"
+# LIMINA_PERF_RATE (Hz) also requires the refresh: the EDID follows the host screen, so a ProMotion
+# panel gives the guest 120 Hz where an external monitor gives 60.
+PERF_RATE="${LIMINA_PERF_RATE:-}"
 "${SSH[@]}" "export XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
               chmod +x /tmp/set-guest-display.py
-              /tmp/set-guest-display.py --verify $PERF_MODE $PERF_SCALE" >&2 || {
-  echo "ABORT: guest display is not pinned to $PERF_MODE @ $PERF_SCALE — see the note above." >&2
+              /tmp/set-guest-display.py --verify $PERF_MODE $PERF_SCALE $PERF_RATE" >&2 || {
+  echo "ABORT: guest display is not pinned to $PERF_MODE @ $PERF_SCALE ${PERF_RATE:+at $PERF_RATE Hz }— see the note above." >&2
   exit 1
 }
 
