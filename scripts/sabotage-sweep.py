@@ -169,6 +169,32 @@ SABOTAGES = [
         'third_party/libkrun/src/devices',
         'kani:virtio::balloon::device::proofs::every_marked_page_lies_inside_its_run_at_its_gpa',
     ),
+    (
+        'a registration asking for no user presence is served',
+        'crates/limina/src/fido/request.rs',
+        """    if requested_up(&root, 7) == Some(false) {""",
+        """    if requested_up(&root, 7) == Some(true) && false {""",
+        'crates/limina',
+        'registration_refuses_up_false',
+    ),
+    (
+        'an empty allowList is read as a list naming nothing',
+        'crates/limina/src/fido/request.rs',
+        """        Some(list) if !list.is_empty() => Some(descriptor_ids(list)),""",
+        """        Some(list) => Some(descriptor_ids(list)),""",
+        'crates/limina',
+        'an_allow_list_without_ids_is_not_an_absent_one',
+    ),
+    (
+        'a registration without ES256 on offer is served',
+        'crates/limina/src/fido/request.rs',
+        """    if !wants_es256 {
+        return Err(CTAP2_ERR_UNSUPPORTED_ALGORITHM);""",
+        """    if !wants_es256 && false {
+        return Err(CTAP2_ERR_UNSUPPORTED_ALGORITHM);""",
+        'crates/limina',
+        'a_registration_must_offer_es256',
+    ),
 ]
 
 
