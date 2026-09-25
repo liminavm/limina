@@ -21,6 +21,8 @@
 # ENH_ONLY=1 runs the enhanced guest alone.
 # ARMS=contended runs the enhanced guest with one perf-ledger run (the control) and the contended
 #   vkmark arm only -- the short vehicle for repeating that instrument across boots.
+# PIN=session applies the display pin by restarting the seated session instead of rebooting the
+#   guest, so the worker measured is the one the first boot started.
 # LIBKRUN_PATCH=<file> applies a patch to libkrun for the build only; it is reverted right after.
 # Leaves third_party/virglrs and third_party/libkrun checked out (detached) at the given revs.
 set -uo pipefail
@@ -93,6 +95,15 @@ pin_display() { # <tag>
   timeout 300 "${SSH[@]}" "$bus; chmod +x /tmp/set-guest-display.py; sudo systemctl isolate graphical.target
     for i in \$(seq 1 60); do /tmp/set-guest-display.py --show >/dev/null 2>&1 && break; sleep 5; done
     /tmp/set-guest-display.py --write-config 1280x800 1.0 60" > "$EV/pin-$1.txt" 2>&1 || return 1
+  if [ "${PIN:-reboot}" = session ]; then
+    # Restart only the seated session: the worker, and the guest kernel, stay those of the first boot.
+    timeout 120 "${SSH[@]}" "$bus; sudo systemctl isolate multi-user.target; sleep 5
+      sudo systemctl isolate graphical.target
+      for i in \$(seq 1 60); do sleep 5; /tmp/set-guest-display.py --show >/dev/null 2>&1 && break; done
+      /tmp/set-guest-display.py --verify 1280x800 1.0 60" >> "$EV/pin-$1.txt" 2>&1 || return 1
+    log "display pinned on $1 by a session restart: $(tail -n 1 "$EV/pin-$1.txt")"
+    return 0
+  fi
   timeout 30 "${SSH[@]}" 'sudo systemctl reboot' >/dev/null 2>&1
   # Down first, so the login the waiter tests is the new boot's and not the old one's.
   for _ in $(seq 1 60); do

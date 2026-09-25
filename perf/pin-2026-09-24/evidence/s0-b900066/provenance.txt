@@ -1,0 +1,3 @@
+trend s0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 172d783d
+-rwxr-xr-x@ 1 kov  staff  15253960 Sep 23 09:44 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+-rwxr-xr-x@ 1 kov  staff  21728224 Sep 23 09:46 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-26.3.0-devel.dylib
