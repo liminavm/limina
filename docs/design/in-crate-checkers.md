@@ -1,6 +1,6 @@
 # In-crate checkers: Kani, loom, Miri, cargo-fuzz and the sabotage sweep
 
-Status: **phase 1 landed, phase 2 in progress**; phases 3–4 proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
+Status: **phases 1 and 2 landed**; phases 3–4 proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
 the libkrun fork's `limina` branch · Model: virglrs (`third_party/virglrs/docs/design.md`, *Owed,
 and waiting on work → In-crate checkers*; `third_party/virglrs/harness/sabotage/sweep.py`)
 
@@ -241,7 +241,25 @@ cargo-fuzz 0.13.2.
   corpus it left, 336 addressed a device and 321 configured an endpoint. The fuzz build checks
   overflow and a release build does not, so a fuzz overflow is also a wrap in the shipped binary,
   and worth reading for what the wrap does.
-- **The sweep.** Eighteen entries, eighteen caught, each by the assertion or test written for it.
+- **xHCI ring walker** (libkrun fork, `usb/xhci/trb.rs`). The walk moved into `next_from`
+  over any TRB source, unchanged, because guest memory is an mmap. The proof gives every read an
+  arbitrary TRB or a failed access, independently, which stands for every ring and for a guest
+  rewriting its ring mid-walk. One step returns only a work TRB read with a matching cycle bit
+  and leaves the walker past it, parks on the producer boundary, keeps the pointer aligned,
+  tracks Toggle Cycle, and reports a link loop only after 64 links. About a minute, with the
+  loop unwound 66 times.
+- **xHCI slot commands** (libkrun fork, `usb/xhci/engine.rs`, `every_sequence`). Every
+  sequence of 25 slot commands over two slots the walk can enable and one it never can, to depth
+  four: 390,625 sequences, 11 s in a debug build, each step checked against a model of the slot
+  table. The model is the spec's for the states commands leave slots in, and records two
+  deliberate departures: a command on a slot that is not enabled completes with nothing changed
+  (the guest's teardown of a slot a restore dropped must complete), except Address Device; and a
+  command in the wrong state is accepted rather than refused. It found nothing new.
+- **Crate features.** `krun-devices` compiles its USB code only with `--features usb`. Without
+  it, a proof is compiled out and Kani reports the crate verified with nothing checked, and a
+  test filter matching no test passes. `check.py` and the sweep pass the features per crate.
+- **The sweep.** Twenty-eight entries, twenty-eight caught, each by the assertion or test written
+  for it.
 
 The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
 arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
@@ -257,8 +275,8 @@ expensive call with an over-approximation the property does not depend on.
    with its two fuzz targets. Nothing booked for phase 1 is still owed.
 2. **xHCI.** Landed: the `xhci_guest` fuzz target with its seeds and depth oracle, and the two
    fixes it led to. The hardware-free seam was already there (`UsbDeviceModel`, with the mock and
-   HID gadgets). Still owed: Kani on `RingWalker::next`'s link-TRB and cycle-bit walk, and an
-   enumeration of the slot and endpoint state transitions against the spec's tables.
+   HID gadgets). Also landed: the Kani proof of the ring walker's step, and the enumeration of
+   slot command sequences. Nothing booked for phase 2 is still owed.
 3. **Snapshots and memory.** Fuzz the snapshot decoders with a round trip; enumerate the
    coalescer and `released_ram` against their models; add the loom model of `released_ram`.
 4. **Input and grab enumeration**, then the Tier C loom models.
