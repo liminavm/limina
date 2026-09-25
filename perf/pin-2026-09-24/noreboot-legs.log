@@ -1,0 +1,102 @@
+######## s0-b900066 15:42:59
+[15:43:00] build trend s0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 172d783d
+[15:43:17] enhanced boot
+[15:43:44] display pinned on trend-enh by a session restart: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=217s load=0.24
+final: up=217s load=0.24 0.24 0.10
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[15:48:25] aquarium r1 exit=0 
+[15:49:45] aquarium r2 exit=0 
+[15:51:37] perf-ledger run 1 exit=0 
+gl-replay-venus,45.7074
+gl-replay-llvmpipe,718.724
+vk-replay-venus-headless,1747.147685
+glmark2-wayland-venus,2419
+[15:53:29] perf-ledger run 2 exit=0 
+gl-replay-venus,45.5379
+gl-replay-llvmpipe,720.854
+vk-replay-venus-headless,1728.172812
+glmark2-wayland-venus,2414
+[15:55:21] perf-ledger run 3 exit=0 
+gl-replay-venus,45.6452
+gl-replay-llvmpipe,725.771
+vk-replay-venus-headless,1859.845174
+glmark2-wayland-venus,2424
+[15:57:32] vkmark run 1: 2287 
+[15:59:42] vkmark run 2: 2291 
+[16:01:52] vkmark run 3: 2181 
+Running as unit: ff-bench.service; invocation ID: 5456808dbd27442b82456e05e658f753
+[16:05:01] vkmark under aquarium-25k run 1: 392 
+[16:07:22] vkmark under aquarium-25k run 2: 480 
+[16:07:35] worker-enh: 0 poisoned-context lines
+[16:07:35] point s0-b900066 done; read perf/pin-2026-09-24/evidence/s0-b900066/aquarium-r*/*-fps.png
+######## r0-b900066 16:07:35
+[16:07:35] build trend r0-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 172d783d
+[16:07:37] enhanced boot
+[16:08:32] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=235s load=0.25
+final: up=235s load=0.25 0.33 0.16
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[16:13:47] aquarium r1 exit=0 
+[16:15:07] aquarium r2 exit=0 
+[16:16:58] perf-ledger run 1 exit=0 
+gl-replay-venus,46.2586
+gl-replay-llvmpipe,721.15
+vk-replay-venus-headless,1604.460400
+glmark2-wayland-venus,2403
+[16:18:48] perf-ledger run 2 exit=0 
+gl-replay-venus,46.2185
+gl-replay-llvmpipe,724.951
+vk-replay-venus-headless,1709.949156
+glmark2-wayland-venus,2391
+[16:20:38] perf-ledger run 3 exit=0 
+gl-replay-venus,46.4686
+gl-replay-llvmpipe,726.67
+vk-replay-venus-headless,1764.903131
+glmark2-wayland-venus,2424
+[16:22:49] vkmark run 1: 2284 
+[16:24:59] vkmark run 2: 2295 
+[16:27:10] vkmark run 3: 2282 
+Running as unit: ff-bench.service; invocation ID: bca76ff294024d9eaf14680c4464192f
+[16:30:00] vkmark under aquarium-25k run 1: 1133 
+[16:32:11] vkmark under aquarium-25k run 2: 1161 
+[16:32:21] worker-enh: 0 poisoned-context lines
+[16:32:21] point r0-b900066 done; read perf/pin-2026-09-24/evidence/r0-b900066/aquarium-r*/*-fps.png
+######## s1-b900066 16:32:21
+[16:32:21] build trend s1-b900066: virglrs b900066 + libkrun 32cc3776; host mesa f3a220f279c; limina 172d783d
+[16:32:23] enhanced boot
+[16:32:49] display pinned on trend-enh by a session restart: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=247s load=0.23
+final: up=247s load=0.23 0.20 0.09
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[16:37:54] aquarium r1 exit=0 
+[16:39:15] aquarium r2 exit=0 
+[16:41:07] perf-ledger run 1 exit=0 
+gl-replay-venus,45.7693
+gl-replay-llvmpipe,704.961
+vk-replay-venus-headless,1894.362450
+glmark2-wayland-venus,2413
+[16:42:57] perf-ledger run 2 exit=0 
+gl-replay-venus,46.0118
+gl-replay-llvmpipe,727.955
+vk-replay-venus-headless,1900.707063
+glmark2-wayland-venus,2414
+[16:44:49] perf-ledger run 3 exit=0 
+gl-replay-venus,45.6793
+gl-replay-llvmpipe,728.751
+vk-replay-venus-headless,1613.346688
+glmark2-wayland-venus,2428
+[16:47:00] vkmark run 1: 2286 
+[16:49:10] vkmark run 2: 2289 
+[16:51:20] vkmark run 3: 2293 
+Running as unit: ff-bench.service; invocation ID: fc27fa6665b14c85b4e2758b0fb51c6d
+[16:54:11] vkmark under aquarium-25k run 1: 713 
+[16:56:22] vkmark under aquarium-25k run 2: 773 
+[16:56:31] worker-enh: 0 poisoned-context lines
+[16:56:31] point s1-b900066 done; read perf/pin-2026-09-24/evidence/s1-b900066/aquarium-r*/*-fps.png
+virglrs restored to 828a05b
+libkrun restored to 26450d76
+######## legs done 16:56:32
