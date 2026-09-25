@@ -53,7 +53,7 @@ SABOTAGES = [
         """        if h.len > MAX_PAYLOAD + 1 {
             return Err(HeaderFault::TooLong(h.len));""",
         'crates/limina-proto',
-        'kani:parse_accepts_exactly_the_bounded_headers',
+        'kani:proofs::parse_accepts_exactly_the_bounded_headers',
     ),
     (
         'a control-plane header is accepted without its magic',
@@ -63,7 +63,7 @@ SABOTAGES = [
         """        if b[0..3] != MAGIC[0..3] {
             return Err(HeaderFault::Magic);""",
         'crates/limina-proto',
-        'kani:parse_accepts_exactly_the_bounded_headers',
+        'kani:proofs::parse_accepts_exactly_the_bounded_headers',
     ),
     (
         'a control-plane header decodes its channel from the wrong bytes',
@@ -79,7 +79,55 @@ SABOTAGES = [
         if h.len > MAX_PAYLOAD {
             return Err(HeaderFault::TooLong""",
         'crates/limina-proto',
-        'kani:every_bounded_header_round_trips',
+        'kani:proofs::every_bounded_header_round_trips',
+    ),
+    (
+        'the balloon may grow past the room it was given',
+        'crates/limina/src/balloon_policy.rs',
+        """                i.current.saturating_add(avail_pages - bound).min(i.room)""",
+        """                i.current.saturating_add(avail_pages - bound)""",
+        'crates/limina',
+        'kani:balloon_policy::proofs::a_target_never_leaves_the_room',
+    ),
+    (
+        'a guest starved of cache is not released',
+        'crates/limina/src/balloon_policy.rs',
+        """    if p.some_avg10 >= PRESSURE_HIGH || guest_starved(p) {""",
+        """    if p.some_avg10 >= PRESSURE_HIGH {""",
+        'crates/limina',
+        'kani:balloon_policy::proofs::acute_pressure_only_releases',
+    ),
+    (
+        'inflation ignores the guest\'s sustained pressure',
+        'crates/limina/src/balloon_policy.rs',
+        """        if p.some_avg10 > PRESSURE_LOW || p.some_avg60 > PRESSURE_LOW {
+            return Decision::Hold(Hold::NotCalm);""",
+        """        if p.some_avg10 > PRESSURE_LOW {
+            return Decision::Hold(Hold::NotCalm);""",
+        'crates/limina',
+        'kani:balloon_policy::proofs::inflation_needs_calm_and_moves_one_step',
+    ),
+    (
+        'an old agent\'s guest is inflated by two steps at once',
+        'crates/limina/src/balloon_policy.rs',
+        """        let step = if p.mem_free_kib == 0 {
+            INFLATE_STEP_PAGES""",
+        """        let step = if p.mem_free_kib == 0 {
+            2 * INFLATE_STEP_PAGES""",
+        'crates/limina',
+        'kani:balloon_policy::proofs::inflation_needs_calm_and_moves_one_step',
+    ),
+    (
+        'the pacing clamp forgets the free-list margin',
+        'crates/limina/src/balloon_policy.rs',
+        """            let headroom = free_pages.saturating_sub(free_margin_pages(i.mode));
+            let cap = i.actual_pages.unwrap_or(i.current).saturating_add(headroom);
+            let cap_step""",
+        """            let headroom = free_pages.saturating_sub(free_margin_pages(i.mode));
+            let cap = i.actual_pages.unwrap_or(i.current).saturating_add(free_pages);
+            let cap_step""",
+        'crates/limina',
+        'kani:balloon_policy::proofs::at_host_normal_inflation_stays_within_the_free_margin',
     ),
 ]
 
@@ -112,7 +160,10 @@ def command(filt):
     """What runs an entry's witness, as `(argv, env)`: one Kani proof, one loom model, the
     doctests, or `cargo test` under a filter. `env` is None where the sweep's own is used."""
     if filt.startswith('kani:'):
-        return ['cargo', 'kani', '--harness', filt[len('kani:'):]], None
+        # `--exact`, or a harness named as a prefix of another would run both. Stubbing on,
+        # because proofs stand in for what Kani cannot model (`Instant::now`, for one).
+        return ['cargo', 'kani', '-Z', 'stubbing', '-Z', 'unstable-options',
+                '--harness-timeout', '10m', '--exact', '--harness', filt[len('kani:'):]], None
     if filt.startswith('loom:'):
         env = dict(os.environ, RUSTFLAGS='--cfg loom', CARGO_TARGET_DIR=str(ROOT / 'target/loom'))
         return ['cargo', 'test', '--lib', filt[len('loom:'):]], env

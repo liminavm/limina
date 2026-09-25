@@ -57,7 +57,7 @@ def kani(crates):
     dirs = [ROOT / c for c in crates] if crates else kani_crates()
     failed = []
     for d in dirs:
-        argv = ['cargo', 'kani', '-Z', 'unstable-options',
+        argv = ['cargo', 'kani', '-Z', 'stubbing', '-Z', 'unstable-options',
                 '--harness-timeout', KANI_HARNESS_TIMEOUT]
         if run(argv, d) != 0:
             failed.append(os.path.relpath(d, ROOT))
