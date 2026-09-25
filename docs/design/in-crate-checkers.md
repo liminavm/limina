@@ -1,6 +1,6 @@
 # In-crate checkers: Kani, loom, Miri, cargo-fuzz and the sabotage sweep
 
-Status: **phases 1 and 2 landed**; phases 3–4 proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
+Status: **phases 1–3 landed**; phase 4 proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
 the libkrun fork's `limina` branch · Model: virglrs (`third_party/virglrs/docs/design.md`, *Owed,
 and waiting on work → In-crate checkers*; `third_party/virglrs/harness/sabotage/sweep.py`)
 
@@ -136,7 +136,8 @@ what snapshots stand on); the frame handoff in `crates/limina/src/window/present
 ## Layout and commands
 
 - **limina's own checkers.** Kani proofs live in `#[cfg(kani)]` modules beside the code, loom
-  models in `cfg(all(test, loom))` modules beside the code, and enumeration in `every_sequence`
+  models in `loom_model` modules under `cfg(all(test, loom))` beside the code, with the code's
+  locks switched to loom's under `cfg(loom)` and its ordinary test modules compiled out, and enumeration in `every_sequence`
   test modules. Fuzz targets live in a root `fuzz/` directory that is its own workspace, excluded
   from the main one like `xtask/`. Each crate with a proof declares `cfg(kani)` (and later
   `cfg(loom)`) under `unexpected_cfgs` in its own `[lints.rust]`, as virglrs does in its
@@ -152,8 +153,9 @@ what snapshots stand on); the frame handoff in `crates/limina/src/window/present
   the files it edits must be clean, because this tree always holds untracked images and scratch.
 - **Commands.** `cargo xtask check kani [crate-dir ...]`, `cargo xtask check fuzz [target ...]
   [--seconds N]` and `cargo xtask check sabotage [pattern ...]` wrap `scripts/check.py`, which
-  remains the source of truth, following the one-command convention (`xtask/src/main.rs`). Loom
-  and Miri get their subcommands when their first model or sweep lands. Kani runs on its own
+  remains the source of truth, following the one-command convention (`xtask/src/main.rs`).
+  `cargo xtask check loom [crate-dir ...]` runs every `loom_model` module under `--cfg loom` in
+  `target/loom`. Miri gets its subcommand when its first sweep lands. Kani runs on its own
   pinned toolchain (`cargo install --locked kani-verifier && cargo kani setup`), and fuzzing on
   nightly (`cargo install --locked cargo-fuzz`). None of this needs HVF or codesigning.
 - **Stopping Kani.** Proofs run under `-Z unstable-options --harness-timeout 10m`, which stops
@@ -258,8 +260,70 @@ cargo-fuzz 0.13.2.
 - **Crate features.** `krun-devices` compiles its USB code only with `--features usb`. Without
   it, a proof is compiled out and Kani reports the crate verified with nothing checked, and a
   test filter matching no test passes. `check.py` and the sweep pass the features per crate.
-- **The sweep.** Twenty-eight entries, twenty-eight caught, each by the assertion or test written
-  for it.
+- **Released RAM** (libkrun fork, `src/hvf/src/released_ram.rs`). The module says its
+  released set "must be exact", but `release`, `handle_fault` and `reclaim` called `hv_vm_*` and
+  `madvise` directly. They now go through a `Stage2` trait, which `ReleasedRam` takes as a type
+  parameter defaulting to HVF, so no caller changed. Modelling it raised a premise nobody had
+  measured: what `hv_vm_unmap` does to a page already unmapped, which a page released twice
+  reaches. `spikes/hv-unmap-semantics` measured it: unmap is page-wise and idempotent, map refuses
+  any overlap. The enumeration walks every sequence of 33 operations (releases, reclaims, guest
+  touches, raw faults, injected unmap and map failures) to depth four over two GPA-adjacent
+  regions and a page that is not RAM: 1,185,921 sequences, 13 s in a debug build. After every step
+  the set and a stand-in for stage 2 must both equal a page-level model. It found three ways for
+  the set to stop being exact, each now fixed with a named test:
+  - a release repeating an earlier one, whose unmap then failed, rolled back and erased the
+    earlier release, leaving its pages unmapped with no record;
+  - a reclaim or heal whose map failed dropped the ranges after it from the set;
+  - two releases on each side of a region boundary coalesced into one range, which the heal
+    mapped from the first region's host base, putting host memory that belongs to neither region
+    into the guest. Latent: no RAM layout has GPA-adjacent regions today.
+
+  It also found the heal window running a chunk past a clipped start, against its comment. That
+  was harmless, since RAM regions start chunk-aligned, but it is fixed. The loom model has three
+  races over one two-page region: a release racing a heal of its window, two vCPUs faulting on one
+  page, and a reclaim racing a heal. They check what `release`'s comment asks for: with the
+  discard moved outside the lock, a heal lands between the unmap and the discard and leaves a live
+  page marked reusable. Each model runs in about 0.01 s, and the loom build takes 20 s. loom brings
+  a second `syn` major into the fork's lockfile, as a dev-dependency under `cfg(loom)` only.
+- **Balloon coalescer, enumerated** (libkrun fork). Every sequence of three reported runs, each
+  starting at any half guest page and 1, 2, 3 or 8 halves long, over three host pages in two
+  regions, through `take_full_pages` and `merge_runs`: 438,976 sequences in under a second.
+  Each is checked against a model that frees a guest page only when one run covers it and
+  releases a host page exactly when all its guest pages are free. It found nothing in the code.
+  The sweep found a hole in the test: its check that no two merged runs could merge again only
+  compared neighbours, so an unsorted merge went unseen. It now compares every pair.
+- **Snapshots** (libkrun fork, `src/vmm/src/snapshot.rs`, `fuzz/`). The reader parses from a
+  file streaming in on a thread; under `cfg(fuzzing)` it also parses bytes already in memory, and
+  the head and frame CRCs are computed but not enforced, since a fuzzer cannot forge them.
+  `snapshot_head` reads a head and requires a write, read and write again to give the same bytes.
+  `snapshot_ram` applies a whole file's frames into 8 MiB + 64 KiB of guest memory.
+  `snapshot-seeds` writes the seeds from a real snapshot's head (3.7 GB, an F44 enhanced desktop
+  from `spikes/suspend-perf`), without its GPU section. Found and fixed, each RED first:
+  - the head's vCPU, register, device and queue counts sized `Vec::with_capacity` before the
+    head CRC is checked; a fuzzed head asked for 22.9 GB within seconds. They go through
+    `bounded_count` now, as the xHCI section's did;
+  - a region's chunk size sizes every worker's frame buffer, and a zero frame costs nine bytes,
+    so a 4 GiB chunk had a worker zero-fill 4.3 GB before the write into guest RAM refused it.
+    Every readable version writes 4 MiB chunks, so anything larger is refused;
+  - a region near the top of the address space overflowed a frame's address: a panic in debug,
+    a wrapped address in release.
+
+  The fuzzer found only the first. The other two need a region's length, chunk and frame count
+  changed together, which `snapshot_ram` did not manage in 107 k inputs; they came from reading
+  the walk it exercises. After the count fix `snapshot_head` ran 3.6 M inputs in five minutes
+  clean (1,697 edges), and after all three `snapshot_ram` ran 118 k in two. The sweep then found that no test enforced the
+  head CRC: the test for it corrupted the vCPU count, which the parse refuses before the CRC
+  matters. It now corrupts the GIC blob.
+  `GpuSnapshotPayload::from_bytes` (`virtio/gpu/journal.rs`) is not fuzzed. It needs the `gpu`
+  feature, which would bring rutabaga and virglrs into the fuzz build, and it runs only on a
+  payload the head CRC has vouched for. It also sizes `with_capacity` from a count in its bytes,
+  so a writer bug or a version skew would reach that.
+- **Timing under load.** The fork's `sweep_fault_handler_fields_concurrent_touches` gave up after
+  50 sweeps without a collision; beside the 13 s enumeration, on battery, its toucher thread
+  managed one pass in those 50. It now sweeps for up to 10 s.
+- **The sweep.** Forty-five entries, each caught by the assertion, test or model written for it,
+  after two holes found by the sweep itself were closed (the coalescer's merge check and the head
+  CRC). Each phase-3 entry was run as it was added; the full sweep was not re-run end to end.
 
 The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
 arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
@@ -277,8 +341,10 @@ expensive call with an over-approximation the property does not depend on.
    fixes it led to. The hardware-free seam was already there (`UsbDeviceModel`, with the mock and
    HID gadgets). Also landed: the Kani proof of the ring walker's step, and the enumeration of
    slot command sequences. Nothing booked for phase 2 is still owed.
-3. **Snapshots and memory.** Fuzz the snapshot decoders with a round trip; enumerate the
-   coalescer and `released_ram` against their models; add the loom model of `released_ram`.
+3. **Snapshots and memory.** Landed: the snapshot fuzz targets, seeded from a real snapshot, and
+   the three reader fixes; the `released_ram` seam, enumeration and loom model, and the three
+   bookkeeping fixes; the coalescer enumeration; `cargo xtask check loom`. Left, and why: the GPU
+   payload decoder (see *Measured so far*).
 4. **Input and grab enumeration**, then the Tier C loom models.
 
 Every phase ends with this document updated: what each tool now covers, with measured time and
