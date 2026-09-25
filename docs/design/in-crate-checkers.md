@@ -1,6 +1,6 @@
 # In-crate checkers: Kani, loom, Miri, cargo-fuzz and the sabotage sweep
 
-Status: **phase 1 landed**; phases 2–4 proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
+Status: **phase 1 landed, phase 2 in progress**; phases 3–4 proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
 the libkrun fork's `limina` branch · Model: virglrs (`third_party/virglrs/docs/design.md`, *Owed,
 and waiting on work → In-crate checkers*; `third_party/virglrs/harness/sabotage/sweep.py`)
 
@@ -218,7 +218,30 @@ cargo-fuzz 0.13.2.
   fields the fuzzer picks and checks `parse` against a model of the rules. It ran 700 k in 60 s
   with no crash, and caught a planted bug (an empty allowList read as present) within seconds.
   The sweep found that no test noticed the ES256 requirement being removed; one does now.
-- **The sweep.** Sixteen entries, sixteen caught, each by the assertion or test written for it.
+- **xHCI** (libkrun fork, `fuzz/`). `xhci_guest` drives the controller only as a guest can:
+  register reads and writes, pointers into its RAM, TRBs and contexts planted there, worker
+  passes through `run_pass` (the worker thread's own loop body, public under `cfg(fuzzing)`),
+  and snapshots that must restore to the same state on a controller with the same gadgets.
+  The first five-minute run, with inputs from an `Arbitrary` derive, was clean and worth nothing:
+  `xhci-depth`, which replays a corpus and counts the stages each input reached, found none of
+  472 inputs had built an event ring. Random bytes do not point four registers at rings laid out
+  in RAM. So inputs became a byte format of the harness's own, and `xhci-seeds` writes a whole
+  driver bring-up (reset, rings, two slots enabled and addressed, a descriptor fetch, an
+  interrupt endpoint configured and fed, snapshot, stop, reposition, disable) as every prefix.
+  Seeded, the target found two guest-triggerable panics of the ring worker, each while it held
+  the controller lock, which poisons it for every later MMIO access:
+  - Address Device indexed the 9-entry slot table with the slot id from the command TRB,
+    unchecked; slot 255 panicked, and a vacant slot in range was created instead of refused.
+    Found in 6 k inputs.
+  - The event segment's base comes from the guest's ERST entry, and its end overflowed the
+    address space; debug builds panicked, release builds wrapped. Found in 11 k inputs.
+
+  Both are fixed on the fork with regression tests. A 15-minute run after the fixes executed
+  546 k sessions clean, and coverage went from 998 edges (unseeded) to 2006; of the 2160-input
+  corpus it left, 336 addressed a device and 321 configured an endpoint. The fuzz build checks
+  overflow and a release build does not, so a fuzz overflow is also a wrap in the shipped binary,
+  and worth reading for what the wrap does.
+- **The sweep.** Eighteen entries, eighteen caught, each by the assertion or test written for it.
 
 The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
 arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
@@ -232,8 +255,10 @@ expensive call with an over-approximation the property does not depend on.
    proofs, the balloon coalescer proof on the libkrun fork, and the `control_frame` and
    `vdagent_stream` fuzz targets, and the CTAP2 request parser split out of the FIDO ceremony
    with its two fuzz targets. Nothing booked for phase 1 is still owed.
-2. **xHCI.** The fuzz harness needs a way to stand the engine up without a libusb backend.
-   Whether that seam exists has not been checked yet.
+2. **xHCI.** Landed: the `xhci_guest` fuzz target with its seeds and depth oracle, and the two
+   fixes it led to. The hardware-free seam was already there (`UsbDeviceModel`, with the mock and
+   HID gadgets). Still owed: Kani on `RingWalker::next`'s link-TRB and cycle-bit walk, and an
+   enumeration of the slot and endpoint state transitions against the spec's tables.
 3. **Snapshots and memory.** Fuzz the snapshot decoders with a round trip; enumerate the
    coalescer and `released_ram` against their models; add the loom model of `released_ram`.
 4. **Input and grab enumeration**, then the Tier C loom models.
