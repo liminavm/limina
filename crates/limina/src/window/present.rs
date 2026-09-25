@@ -461,6 +461,10 @@ pub struct SlotPresent {
     /// The surface id the worker wants shown right now (alternates between its double
     /// buffer so the layer's contents object changes and Core Animation re-reads).
     pub(crate) show_id: Option<u32>,
+    /// The last surface this slot showed, kept across `scanoutgone`. A suspending guest turns
+    /// its display off on the way into s2idle, so by the time the worker exits `show_id` is
+    /// gone — but that final frame is exactly the restore splash, and the window still holds it.
+    pub(crate) last_shown: Option<u32>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     /// Bumped on any update (new surface geometry or a new frame) — the timer re-applies.
@@ -684,6 +688,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                         let mut s = shared.lock().unwrap();
                         let slot = &mut s.slots[slot];
                         slot.show_id = Some(id0);
+                        slot.last_shown = Some(id0);
                         slot.width = w;
                         slot.height = h;
                         slot.cursor.log.record("scanout", w);
@@ -700,6 +705,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                         let mut s = shared.lock().unwrap();
                         let slot = &mut s.slots[slot];
                         slot.show_id = Some(id);
+                        slot.last_shown = Some(id);
                         slot.generation += 1;
                         slot.frames += 1;
                         drop(s);
@@ -708,6 +714,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
                 }
                 Some("scanoutgone") => {
                     // scanoutgone <scanout> — the slot has no scanout any more.
+                    log::info!("window: <- {line}");
                     if let Some(slot) = parse_slot(parts.next()) {
                         super::echo::publish_scanout(slot, 0, 0);
                         let mut s = shared.lock().unwrap();
@@ -928,7 +935,8 @@ mod tests {
     };
 
     use super::{
-        CFRetained, FRAME_CACHE_CAP, GoneReason, IOSurfaceRef, SurfaceStore, parse_cursor_coord,
+        Arc, CFRetained, FRAME_CACHE_CAP, GoneReason, IOSurfaceRef, Mutex, OwnedFd, Shared,
+        SurfaceMap, SurfaceStore, parse_cursor_coord, spawn_reader,
     };
 
     fn cfnum(v: i32) -> CFRetained<CFNumber> {
@@ -975,6 +983,37 @@ mod tests {
             .unwrap();
             IOSurfaceCreate(&dict).expect("create surface")
         }
+    }
+
+    /// A suspend's splash is the frame on glass as the guest froze, but s2idle entry disables the
+    /// scanout first — the window must still know which surface that was.
+    #[test]
+    fn a_suspending_guest_turning_its_display_off_keeps_the_splash_frame() {
+        use std::io::Write as _;
+        let (mut worker, window) = std::os::unix::net::UnixStream::pair().unwrap();
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let map: SurfaceMap = Arc::new(Mutex::new(SurfaceStore::default()));
+        spawn_reader(OwnedFd::from(window), shared.clone(), map);
+        // The desktop is up, presents a frame, and then s2idle entry disables the scanout.
+        worker
+            .write_all(b"surface 53 55 2048 1284 0\nframe 55 0\nscanoutgone 0\n")
+            .unwrap();
+        drop(worker);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while shared.lock().unwrap().slots[0].generation < 3 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reader never consumed the lines"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let s = shared.lock().unwrap();
+        assert_eq!(s.slots[0].show_id, None, "a gone scanout presents nothing");
+        assert_eq!(
+            s.slots[0].last_shown,
+            Some(55),
+            "but its final frame is the splash"
+        );
     }
 
     /// The 8.6 GB bug (spikes/venus-churn-retention §0.3): a compositor that mints a fresh

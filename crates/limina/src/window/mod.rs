@@ -3060,12 +3060,22 @@ pub fn run(
             media_session.borrow_mut().set_playing(playing);
         }
 
-        let (exited, worker_suspended, show_id, frames, worker_epoch, resume_dead, restore_refused) = {
+        let (
+            exited,
+            worker_suspended,
+            last_shown,
+            frames,
+            worker_epoch,
+            resume_dead,
+            restore_refused,
+        ) = {
             let s = shared.lock().unwrap();
             (
                 s.worker_exited,
                 s.worker_suspended,
-                s.slots[timer_primary_slot.get() as usize].show_id,
+                // The splash source: what was last on glass, even if the guest has since
+                // turned the display off (it does, entering s2idle).
+                s.slots[timer_primary_slot.get() as usize].last_shown,
                 s.slots[timer_primary_slot.get() as usize].frames,
                 s.worker_epoch,
                 s.resume_dead,
@@ -3106,7 +3116,7 @@ pub fn run(
             // splash (M9.4 felt-resume) — the IOSurface outlives the dead worker in our
             // mapping, so the grab still reads the final content.
             if worker_suspended {
-                if let (Some(path), Some(id)) = (splash_save_path.as_deref(), show_id) {
+                if let (Some(path), Some(id)) = (splash_save_path.as_deref(), last_shown) {
                     let resolved = timer_surface_map
                         .lock()
                         .unwrap()
@@ -3118,6 +3128,14 @@ pub fn run(
                         }
                         None => log::warn!("splash save: surface {id} unresolved; skipping"),
                     }
+                } else {
+                    // Without this the next resume only says the splash is unreadable, long
+                    // after the one moment that could have explained why it was never written.
+                    log::warn!(
+                        "splash save: skipped (save path {splash_save_path:?}, last shown \
+                         surface {last_shown:?} on slot {})",
+                        timer_primary_slot.get()
+                    );
                 }
                 // Park instead of quitting (task #18): a menu/CLI suspend keeps the window
                 // up — final frame under a scrim, play glyph in the middle — so the VM is
