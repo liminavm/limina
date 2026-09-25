@@ -54,6 +54,8 @@ Decision-oriented design docs — the founding one plus one per major feature
   ls/stop/rm`, bare `limina` opens the VM library window).
 - [Distribution & updates](design/distribution.md) — signing, notarization,
   updates, guest-tools delivery.
+- [In-crate checkers](design/in-crate-checkers.md) — Kani, loom, Miri, cargo-fuzz and a
+  sabotage sweep for what the HVF suite cannot state; proposal, phase 1 in progress.
 
 ## Reviews
 
