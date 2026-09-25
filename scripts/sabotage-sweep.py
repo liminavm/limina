@@ -456,6 +456,95 @@ SABOTAGES = [
         'third_party/libkrun/src/vmm',
         'snapshot_rejects_frame_corruption',
     ),
+    (
+        'normalization flips without draining what it pressed',
+        'crates/limina-input/src/ledger.rs',
+        """        self.release_all_held(out);
+        self.remap.normalize = on;""",
+        """        self.remap.normalize = on;""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
+    (
+        'a key press goes out unhealed',
+        'crates/limina-input/src/ledger.rs',
+        """        if down {
+            self.sync_modifiers(flags, None, out);
+        }
+        self.sync_capslock(flags, out);
+        self.emit_key(macos_keycode, down, out);""",
+        """        self.sync_capslock(flags, out);
+        self.emit_key(macos_keycode, down, out);""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
+    (
+        'a modifier is healed in the fixed order, ahead of the ones it is pressed under',
+        'crates/limina-input/src/ledger.rs',
+        """        self.sync_modifiers(flags, Some(macos_keycode), out);""",
+        """        self.sync_modifiers(flags, None, out);""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
+    (
+        'Caps Lock is tapped before the modifiers heal',
+        'crates/limina-input/src/ledger.rs',
+        """        self.sync_modifiers(flags, Some(macos_keycode), out);
+        self.sync_capslock(flags, out);""",
+        """        self.sync_capslock(flags, out);
+        self.sync_modifiers(flags, Some(macos_keycode), out);""",
+        'crates/limina-input',
+        'a_caps_lock_tap_waits_for_the_modifiers_to_heal',
+    ),
+    (
+        'a focus loss forgets the held keys without releasing them',
+        'crates/limina-input/src/ledger.rs',
+        """        for &macos_keycode in self.mods.iter().chain(self.keys.iter()) {""",
+        """        for &macos_keycode in self.mods.iter() {""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
+    (
+        'the end of a capture keeps believing its modifiers',
+        'crates/limina-input/src/ledger.rs',
+        """        self.mods.clear();
+        self.flush_aux(out);""",
+        """        self.flush_aux(out);""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
+    (
+        'an aux press is not tracked',
+        'crates/limina-input/src/ledger.rs',
+        """            self.aux.insert(code);""",
+        """            let _ = code;""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
+    (
+        'Option normalizes to Alt',
+        'crates/limina-input/src/keymap.rs',
+        """            HID_LEFT_OPTION => KEY_LEFTMETA,""",
+        """            HID_LEFT_OPTION => KEY_LEFTALT,""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
+    (
+        "macOS's modifier setting is read back uninverted",
+        'crates/limina-input/src/keymap.rs',
+        """            map.physical[to] = src;""",
+        """            map.physical[to] = dst;""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
+    (
+        'Caps Lock is tapped on every event',
+        'crates/limina-input/src/keymap.rs',
+        """        if led_on == self.guest_on {""",
+        """        if false {""",
+        'crates/limina-input',
+        'every_keyboard_sequence_keeps_the_guest_in_step',
+    ),
 ]
 
 
