@@ -4,6 +4,7 @@
 """Run the in-crate checkers: Kani proofs, fuzz targets, or the sabotage sweep.
 
     scripts/check.py kani [crate-dir ...]         every proof, or those in the named crates
+    scripts/check.py loom [crate-dir ...]         every loom model, or those in the named crates
     scripts/check.py fuzz [target ...] [--seconds N]
     scripts/check.py sabotage [pattern ...]
 
@@ -14,6 +15,9 @@ Kani runs each proof under `--harness-timeout`, which stops `cbmc` itself: a `ti
 `cargo kani` does not, and a `cbmc` that has lost its way holds gigabytes with no verdict in sight.
 Every proof must finish well inside the limit; one that needs longer is the wrong shape for Kani
 (see the design doc) rather than a reason to raise it.
+
+loom models live in `loom_model` modules under `cfg(all(test, loom))`. They build with `--cfg loom`
+in their own target directory, so switching between loom and ordinary builds rebuilds neither.
 
 Fuzzing runs each target, limina's and the libkrun fork's, for a fixed time with libFuzzer's own
 memory cap and a per-input timeout, and names where the crash inputs were written. A crash is committed as a failing unit test before it is fixed.
@@ -41,13 +45,13 @@ KANI_ARGS = {
 FUZZ_DIRS = ('fuzz', 'third_party/libkrun/fuzz')
 
 
-def kani_crates():
-    """The crate directories holding at least one Kani proof: limina's own, and the libkrun
-    fork's (on its `limina` branch, beside the code they prove)."""
+def crates_with(marker):
+    """The crate directories whose sources hold `marker`: limina's own, and the libkrun fork's
+    (on its `limina` branch, beside the code they check)."""
     found = set()
     for pattern in ('crates/*/src/**/*.rs', 'third_party/libkrun/src/*/src/**/*.rs'):
         for src in sorted(ROOT.glob(pattern)):
-            if '#[cfg(kani)]' in src.read_text(errors='replace'):
+            if marker in src.read_text(errors='replace'):
                 crate = src.parent
                 while not (crate / 'Cargo.toml').exists():
                     crate = crate.parent
@@ -55,10 +59,10 @@ def kani_crates():
     return sorted(found)
 
 
-def run(argv, cwd):
+def run(argv, cwd, env_extra=None):
     """Run a command in its own process group, so an interrupted run takes its children too."""
     print('==> %s  (in %s)' % (' '.join(argv), os.path.relpath(cwd, ROOT)), flush=True)
-    env = dict(os.environ)
+    env = dict(os.environ, **(env_extra or {}))
     env.pop('LIMINA_HVF_TESTS', None)
     proc = subprocess.Popen(argv, cwd=cwd, env=env, start_new_session=True)
     try:
@@ -69,7 +73,7 @@ def run(argv, cwd):
 
 
 def kani(crates):
-    dirs = [ROOT / c for c in crates] if crates else kani_crates()
+    dirs = [ROOT / c for c in crates] if crates else crates_with('#[cfg(kani)]')
     failed = []
     for d in dirs:
         argv = ['cargo', 'kani'] + KANI_ARGS.get(os.path.relpath(d, ROOT), []) + [
@@ -83,6 +87,23 @@ def kani(crates):
         print('\nkani: proofs failed or did not finish in: %s' % ', '.join(failed))
         return 1
     print('\nkani: every proof verified in %d crate(s)' % len(dirs))
+    return 0
+
+
+def loom(crates):
+    dirs = [ROOT / c for c in crates] if crates else crates_with('#[cfg(all(test, loom))]')
+    failed = []
+    env_extra = {'RUSTFLAGS': '--cfg loom', 'CARGO_TARGET_DIR': str(ROOT / 'target/loom')}
+    for d in dirs:
+        argv = ['cargo', 'test', '--release', '--lib', 'loom_model']
+        if run(argv, d, env_extra) != 0:
+            failed.append(os.path.relpath(d, ROOT))
+    subprocess.run(['git', 'checkout', '--quiet', 'Cargo.lock'], cwd=ROOT / 'third_party/libkrun',
+                   stderr=subprocess.DEVNULL)
+    if failed:
+        print('\nloom: models failed in: %s' % ', '.join(failed))
+        return 1
+    print('\nloom: every model passed in %d crate(s)' % len(dirs))
     return 0
 
 
@@ -125,6 +146,8 @@ def main():
     sub = ap.add_subparsers(dest='tool', required=True)
     k = sub.add_parser('kani', help='run the Kani proofs')
     k.add_argument('crates', nargs='*', help='crate directories, relative to the repo root')
+    lo = sub.add_parser('loom', help='run the loom models')
+    lo.add_argument('crates', nargs='*', help='crate directories, relative to the repo root')
     f = sub.add_parser('fuzz', help='run the fuzz targets for a fixed time each')
     f.add_argument('targets', nargs='*')
     f.add_argument('--seconds', type=int, default=60)
@@ -134,6 +157,8 @@ def main():
 
     if a.tool == 'kani':
         return kani(a.crates)
+    if a.tool == 'loom':
+        return loom(a.crates)
     if a.tool == 'fuzz':
         return fuzz(a.targets, a.seconds)
     return run([sys.executable, str(ROOT / 'scripts/sabotage-sweep.py')] + a.patterns, ROOT)

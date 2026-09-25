@@ -309,6 +309,153 @@ SABOTAGES = [
         'third_party/libkrun/src/devices',
         'every_slot_command_sequence_matches_the_model',
     ),
+    (
+        'a failed release rolls back pages released before it',
+        'third_party/libkrun/src/hvf/src/released_ram.rs',
+        """            error!("released-ram: hv_vm_unmap(gpa={gpa:#x}, len={len:#x}) failed: {ret:#x}");
+            return false;""",
+        """            error!("released-ram: hv_vm_unmap(gpa={gpa:#x}, len={len:#x}) failed: {ret:#x}");
+            remove_overlaps(&mut released, gpa, gpa + len);
+            return false;""",
+        'third_party/libkrun/src/hvf',
+        'a_failed_release_keeps_the_pages_released_before_it',
+    ),
+    (
+        'a failed map forgets the ranges after it',
+        'third_party/libkrun/src/hvf/src/released_ram.rs',
+        """                for &(s, l) in &ranges[i + 1..] {
+                    insert_range(released, s, l);
+                }""",
+        """                let _ = i;""",
+        'third_party/libkrun/src/hvf',
+        'a_failed_reclaim_keeps_the_ranges_it_did_not_reach',
+    ),
+    (
+        'a heal maps a coalesced range from one region\'s host',
+        'third_party/libkrun/src/hvf/src/released_ram.rs',
+        """                    let e = (start + len).min(r.gpa + r.len);""",
+        """                    let e = start + len;""",
+        'third_party/libkrun/src/hvf',
+        'a_heal_across_adjacent_regions_maps_each_from_its_own_host',
+    ),
+    (
+        'the heal window runs a chunk past a clipped start',
+        'third_party/libkrun/src/hvf/src/released_ram.rs',
+        """        let window_end = (aligned + self.chunk).min(region.gpa + region.len);""",
+        """        let window_end = (window_start + self.chunk).min(region.gpa + region.len);""",
+        'third_party/libkrun/src/hvf',
+        'every_release_and_heal_sequence_matches_the_model',
+    ),
+    (
+        'a split range loses its tail',
+        'third_party/libkrun/src/hvf/src/released_ram.rs',
+        """        if e > end {
+            map.insert(end, e - end);
+        }""",
+        """        let _ = e > end;""",
+        'third_party/libkrun/src/hvf',
+        'every_release_and_heal_sequence_matches_the_model',
+    ),
+    (
+        'a heal forgets to take the pages out of the reusable state',
+        'third_party/libkrun/src/hvf/src/released_ram.rs',
+        """        if let Err(e) = self.stage2.reuse(host, len) {""",
+        """        if let Err(e) = Ok::<(), std::io::Error>(()) {""",
+        'third_party/libkrun/src/hvf',
+        'every_release_and_heal_sequence_matches_the_model',
+    ),
+    (
+        'a release discards its pages after letting the lock go',
+        'third_party/libkrun/src/hvf/src/released_ram.rs',
+        """        insert_range(&mut released, gpa, len);
+        let host = Self::host_of(region, gpa);""",
+        """        insert_range(&mut released, gpa, len);
+        drop(released);
+        let host = Self::host_of(region, gpa);""",
+        'third_party/libkrun/src/hvf',
+        'loom:released_ram::loom_model::a_release_races_a_heal_of_its_window',
+    ),
+    (
+        'a vCPU that lost the heal race falls through to MMIO',
+        'third_party/libkrun/src/hvf/src/released_ram.rs',
+        """            return FaultOutcome::Retry;""",
+        """            return FaultOutcome::NotHandled;""",
+        'third_party/libkrun/src/hvf',
+        'loom:released_ram::loom_model::two_vcpus_fault_on_one_page',
+    ),
+    (
+        'a partly reported host page is released',
+        'third_party/libkrun/src/devices/src/virtio/balloon/device.rs',
+        """            if mask == full {""",
+        """            if mask != 0 {""",
+        'third_party/libkrun/src/devices',
+        'every_run_sequence_releases_exactly_the_whole_free_host_pages',
+    ),
+    (
+        'runs merge across a GPA break',
+        'third_party/libkrun/src/devices/src/virtio/balloon/device.rs',
+        """            Some(last) if last.0 + last.2 == host && last.1 + last.2 as u64 == gpa => {""",
+        """            Some(last) if last.0 + last.2 == host => {""",
+        'third_party/libkrun/src/devices',
+        'every_run_sequence_releases_exactly_the_whole_free_host_pages',
+    ),
+    (
+        'pages come out of the merge unsorted',
+        'third_party/libkrun/src/devices/src/virtio/balloon/device.rs',
+        """    pages.sort_unstable();
+    let mut out: Vec<(usize, u64, usize)> = Vec::new();""",
+        """    let mut out: Vec<(usize, u64, usize)> = Vec::new();""",
+        'third_party/libkrun/src/devices',
+        'every_run_sequence_releases_exactly_the_whole_free_host_pages',
+    ),
+    (
+        'a register count sizes its own allocation',
+        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        """    let n = bounded_count(r, MAX_VCPU_REGS, "register")?;""",
+        """    let n = r.u32()? as usize;""",
+        'third_party/libkrun/src/vmm',
+        'head_counts_are_bounded_before_they_allocate',
+    ),
+    (
+        'a queue count sizes its own allocation',
+        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        """        let q_count = bounded_count(&mut r, MAX_QUEUES, "queue")?;""",
+        """        let q_count = r.u32()? as usize;""",
+        'third_party/libkrun/src/vmm',
+        'head_counts_are_bounded_before_they_allocate',
+    ),
+    (
+        'a snapshot chunk sizes the frame buffers unchecked',
+        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        """                    if chunk == 0 || chunk > CHUNK_SIZE as u64 {""",
+        """                    if chunk == 0 {""",
+        'third_party/libkrun/src/vmm',
+        'a_chunk_past_the_writers_is_refused_before_it_sizes_a_frame',
+    ),
+    (
+        'a snapshot region may wrap the address space',
+        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        """                    if gpa.checked_add(len).is_none() {""",
+        """                    if gpa.checked_add(len).is_none() && false {""",
+        'third_party/libkrun/src/vmm',
+        'a_region_past_the_top_of_the_address_space_is_refused',
+    ),
+    (
+        'the head CRC is not enforced',
+        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        """    if crc32(raw.slice(0, head_end)) != stored && !cfg!(fuzzing) {""",
+        """    if crc32(raw.slice(0, head_end)) != stored && cfg!(fuzzing) {""",
+        'third_party/libkrun/src/vmm',
+        'snapshot_rejects_head_corruption',
+    ),
+    (
+        'a frame CRC is not enforced',
+        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        """                            if crc32(data) != f.crc && !cfg!(fuzzing) {""",
+        """                            if crc32(data) != f.crc && cfg!(fuzzing) {""",
+        'third_party/libkrun/src/vmm',
+        'snapshot_rejects_frame_corruption',
+    ),
 ]
 
 
