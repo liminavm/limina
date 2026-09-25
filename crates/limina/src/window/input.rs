@@ -17,7 +17,6 @@
 //! inside (macOS capture semantics), with coordinates clamped to the view.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
 use std::os::fd::RawFd;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -35,10 +34,8 @@ use limina_input::constants::{
     ABS_MAX, ABS_X, ABS_Y, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_ABS, EV_KEY, EV_REL, REL_HWHEEL,
     REL_HWHEEL_HI_RES, REL_WHEEL, REL_WHEEL_HI_RES, REL_X, REL_Y,
 };
-use limina_input::keymap::{
-    CapsLockSync, KeyRemap, MACOS_KC_CAPSLOCK, MODIFIER_KEYCODES, ModEmit, capslock_on,
-    macos_keycode_to_linux_remapped, modifier_emit, reconcile_modifiers,
-};
+use limina_input::keymap::{KeyRemap, MACOS_KC_CAPSLOCK, MODIFIER_KEYCODES};
+use limina_input::ledger::{Edge, EdgeKind, KeyLedger};
 
 // CoreGraphics (already linked): display geometry only. The pointer-capture / mouselook
 // primitives (`CGWarpMouseCursorPosition`, `CGAssociateMouseAndMouseCursorPosition`) are
@@ -610,19 +607,11 @@ impl ScrollAxis {
 pub struct InputState {
     /// The current worker's input sink fds (swapped on a reboot relaunch). Read fresh per event.
     conn: Arc<WorkerConn>,
-    /// macOS keycodes of *held* modifiers believed to be down (toggled on each flagsChanged).
-    pressed_mods: RefCell<HashSet<u16>>,
-    /// macOS keycodes of *held* non-modifier keys we forwarded as down but not yet up. Tracked
-    /// so a focus loss mid-press (Cmd-Tab) can release them — the local monitor stops delivering
-    /// events the instant focus leaves, so the key-up would be lost and the key would stick down.
-    pressed_keys: RefCell<HashSet<u16>>,
-    /// evdev codes of *held* aux keys (media/volume — see [`InputState::tap_aux_key`]). Kept
-    /// apart from `pressed_keys` because those are macOS virtual keycodes that get mapped on
-    /// release; these are already-resolved evdev codes from a different namespace.
-    pressed_aux: RefCell<HashSet<u16>>,
-    /// Caps Lock is a *lock* key, not a held modifier: kept in sync with the host LED on every
-    /// event (see [`InputState::sync_capslock`]), separate from `pressed_mods`.
-    caps: RefCell<CapsLockSync>,
+    /// What the guest has been told is held (modifiers, keys, aux keys, the Caps Lock state)
+    /// and the remap it was told through. Every keyboard edge comes out of it; see
+    /// [`limina_input::ledger`]. The Input menu's normalization toggle is the only thing that
+    /// changes its remap while the VM runs ([`InputState::set_normalize`]).
+    keys: RefCell<KeyLedger>,
     /// Bitmask of mouse buttons whose *press* we forwarded to the guest. Releases and
     /// drags are forwarded only while set, so a click that started on the title bar (or
     /// outside the window) never reaches the guest in any form.
@@ -649,10 +638,6 @@ pub struct InputState {
     /// When the hand last did so — a sweep waits for a gap in the user's own movement
     /// ([`super::absfit::PROBE_QUIET`]) rather than interrupting a stroke.
     hand_send_at: Cell<Option<std::time::Instant>>,
-    /// Keyboard remap policy (modifier normalization + macOS's own modifier map), applied to
-    /// every key and modifier. A `Cell` because the Input menu can flip normalization while the
-    /// VM runs — see [`InputState::set_normalize`], which is the only thing allowed to write it.
-    remap: Cell<KeyRemap>,
     /// Pointer-capture mode: when set, the host cursor is grabbed (frozen and hidden) and the
     /// macOS-accelerated motion deltas integrate into a *virtual* cursor position
     /// ([`InputState::capture_pos`]) that drives the same absolute tablet as uncaptured mode —
@@ -930,15 +915,11 @@ impl InputState {
             probe_rested: Cell::new(None),
             hand_sends: Cell::new(0),
             hand_send_at: Cell::new(None),
-            pressed_mods: RefCell::new(HashSet::new()),
-            pressed_keys: RefCell::new(HashSet::new()),
-            pressed_aux: RefCell::new(HashSet::new()),
-            caps: RefCell::new(CapsLockSync::new()),
+            keys: RefCell::new(KeyLedger::new(remap)),
             buttons: Cell::new(ButtonLedger::default()),
             primary_slot,
             pointer_slot,
             host_cursor,
-            remap: Cell::new(remap),
             captured,
             ungrab_armed: Cell::new(false),
             ungrab_withheld: RefCell::new(Vec::new()),
@@ -1398,8 +1379,9 @@ impl InputState {
     fn release_all_modifiers(&self, why: &str) {
         if input_trace() {
             let names: Vec<&str> = self
-                .pressed_mods
+                .keys
                 .borrow()
+                .held_modifiers()
                 .iter()
                 .map(|&kc| mod_name(kc))
                 .collect();
@@ -1409,43 +1391,61 @@ impl InputState {
                 names.join(","),
             );
         }
-        for &kc in &MODIFIER_KEYCODES {
-            if let Some(code) = macos_keycode_to_linux_remapped(kc, &self.remap.get()) {
-                self.send_kbd(InputEvent::new(EV_KEY, code, 0));
-                self.send_kbd(InputEvent::syn());
-            }
-        }
-        self.pressed_mods.borrow_mut().clear();
-        self.release_all_aux();
+        self.with_keys(|k, out| k.release_all_modifiers(out));
     }
 
-    /// Release every aux key we forwarded as held, and forget them.
-    fn release_all_aux(&self) {
-        let mut aux = self.pressed_aux.borrow_mut();
-        for &code in aux.iter() {
-            self.send_kbd(InputEvent::new(EV_KEY, code, 0));
+    /// Run one ledger operation and send the edges it produced. The ledger's borrow ends before
+    /// anything is sent.
+    fn with_keys(&self, f: impl FnOnce(&mut KeyLedger, &mut Vec<Edge>)) {
+        let mut out = Vec::new();
+        f(&mut self.keys.borrow_mut(), &mut out);
+        self.send_edges(&out);
+    }
+
+    /// Send the ledger's edges, each as a key event and a report, tracing the modifier ones.
+    fn send_edges(&self, edges: &[Edge]) {
+        for e in edges {
+            if input_trace()
+                && let Some(kc) = e.macos_keycode
+                && matches!(e.kind, EdgeKind::Modifier | EdgeKind::Resync)
+            {
+                let dir = if e.down { "DOWN" } else { "UP" };
+                if e.kind == EdgeKind::Resync {
+                    eprintln!(
+                        "[INP] t={:.1}   RESYNC {} {dir}",
+                        super::capture_tap::trace_ms(),
+                        mod_name(kc),
+                    );
+                }
+                eprintln!(
+                    "[INP] t={:.1}   -> guest mod {} evdev={} {dir}",
+                    super::capture_tap::trace_ms(),
+                    mod_name(kc),
+                    e.code,
+                );
+            }
+            self.send_kbd(InputEvent::new(EV_KEY, e.code, e.down as i32));
             self.send_kbd(InputEvent::syn());
         }
-        aux.clear();
     }
 
     /// Whether we've forwarded a press for this aux evdev code that hasn't been released —
     /// the tap's "a release always follows its press" check.
     pub(crate) fn is_aux_pressed(&self, code: u16) -> bool {
-        self.pressed_aux.borrow().contains(&code)
+        self.keys.borrow().is_aux_pressed(code)
     }
 
     /// Whether this macOS keycode has any guest equivalent at all. The tap uses it to decide
     /// between consuming a key and handing it back to macOS: a key we cannot express in the
     /// guest is not ours to swallow.
     pub(crate) fn maps_to_guest(&self, macos_keycode: u16) -> bool {
-        macos_keycode_to_linux_remapped(macos_keycode, &self.remap.get()).is_some()
+        self.keys.borrow().maps_to_guest(macos_keycode)
     }
 
     /// Whether *any* aux key is held. Lets the tap skip the NSEvent bridge entirely for the
     /// common ungrabbed-and-nothing-held event.
     pub(crate) fn any_aux_pressed(&self) -> bool {
-        !self.pressed_aux.borrow().is_empty()
+        self.keys.borrow().any_aux_pressed()
     }
 
     /// Tap-side key forwarding: same bookkeeping as the local monitor (caps-lock sync,
@@ -1453,13 +1453,10 @@ impl InputState {
     /// The tap calls this for keyDown/keyUp it consumes (captured or soft-grab mode).
     pub(crate) fn tap_key(&self, macos_keycode: u16, down: bool, flags: u64) {
         self.trace_key("TAP-key", macos_keycode, down, flags);
-        self.sync_capslock(flags);
-        // A key press must arrive wearing the modifiers the user is actually holding, so heal
-        // before it goes out — the caller has already cancelled (and replayed) any armed chord.
-        if down {
-            self.sync_modifiers(flags, None);
-        }
-        self.emit_key(macos_keycode, down);
+        // A key press must arrive wearing the modifiers the user is actually holding, so the
+        // ledger heals before it goes out — the caller has already cancelled (and replayed) any
+        // armed chord.
+        self.with_keys(|k, out| k.key(macos_keycode, down, flags, out));
     }
 
     /// `LIMINA_INPUT_TRACE`: a non-modifier key crossing into the guest, with the modifier
@@ -1485,23 +1482,15 @@ impl InputState {
     /// flush releases them too (a media key held across a Cmd-Tab would otherwise stick down
     /// in the guest, and its key-up is never delivered to us).
     pub(crate) fn tap_aux_key(&self, code: u16, down: bool) {
-        self.send_kbd(InputEvent::new(EV_KEY, code, i32::from(down)));
-        self.send_kbd(InputEvent::syn());
-        if down {
-            self.pressed_aux.borrow_mut().insert(code);
-        } else {
-            self.pressed_aux.borrow_mut().remove(&code);
-        }
+        self.with_keys(|k, out| k.aux(code, down, out));
     }
 
     /// Tap-side `flagsChanged` forwarding — the modifier twin of [`InputState::tap_key`].
     pub(crate) fn tap_flags(&self, macos_keycode: u16, flags: u64) {
         self.trace_mods("TAP-flags", Some(macos_keycode), flags);
-        self.sync_capslock(flags);
         // Only reached on `UngrabAction::Forward` (the caller returns on Fire/Withhold), so the
         // chord's withheld edges stay withheld.
-        self.sync_modifiers(flags, Some(macos_keycode));
-        self.emit_modifier(macos_keycode, flags);
+        self.with_keys(|k, out| k.flags_changed(macos_keycode, flags, out));
     }
 
     /// Exit the SOFT keyboard grab (Ctrl+Option while focused but not captured): flush the
@@ -1619,15 +1608,17 @@ impl InputState {
                 self.cancel_ungrab_chord();
                 // The guest kernel autorepeats from key-down state; drop macOS repeats.
                 if !event.isARepeat() {
-                    // Heal the modifiers first (after the chord replay above), so the key lands
-                    // wearing what the user is holding rather than what we last happened to see.
-                    self.sync_modifiers(event.modifierFlags().0 as u64, None);
-                    self.emit_key(event.keyCode(), true);
+                    // The ledger heals the modifiers first (after the chord replay above), so
+                    // the key lands wearing what the user is holding rather than what we last
+                    // happened to see.
+                    let flags = event.modifierFlags().0 as u64;
+                    self.with_keys(|k, out| k.key(event.keyCode(), true, flags, out));
                 }
                 true
             }
             NSEventType::KeyUp => {
-                self.emit_key(event.keyCode(), false);
+                let flags = event.modifierFlags().0 as u64;
+                self.with_keys(|k, out| k.key(event.keyCode(), false, flags, out));
                 true
             }
             NSEventType::FlagsChanged => {
@@ -1648,8 +1639,7 @@ impl InputState {
                 }
                 // After the chord has had its say: a `Withhold`/`Fire` returns above, so this
                 // never leaks the edges the chord is holding back.
-                self.sync_modifiers(flags, Some(event.keyCode()));
-                self.emit_modifier(event.keyCode(), flags);
+                self.with_keys(|k, out| k.flags_changed(event.keyCode(), flags, out));
                 true
             }
             NSEventType::MouseMoved => {
@@ -1823,19 +1813,6 @@ impl InputState {
         }
     }
 
-    fn emit_key(&self, macos_keycode: u16, down: bool) {
-        if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap.get()) {
-            self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
-            self.send_kbd(InputEvent::syn());
-            // Track the held key so a focus loss mid-press can release it (see `release_all_held`).
-            if down {
-                self.pressed_keys.borrow_mut().insert(macos_keycode);
-            } else {
-                self.pressed_keys.borrow_mut().remove(&macos_keycode);
-            }
-        }
-    }
-
     /// Turn modifier normalization on or off while the VM is running (the Input menu).
     ///
     /// **Releases everything held first, through the map that pressed it.** A modifier's press
@@ -1845,14 +1822,12 @@ impl InputState {
     /// mid-chord; the pressed sets are re-learned from the next event either way, which is
     /// exactly what `release_all_held` is already documented to rely on.
     pub fn set_normalize(&self, on: bool) {
-        let current = self.remap.get();
-        if current.normalize == on {
+        if self.keys.borrow().remap().normalize == on {
             return;
         }
-        self.release_all_held("modifier normalization toggled");
-        self.remap.set(KeyRemap {
-            normalize: on,
-            ..current
+        self.trace_release("modifier normalization toggled");
+        self.with_keys(|k, out| {
+            k.set_normalize(on, out);
         });
         log::info!(
             "keyboard: modifier normalization {} — the Option position is {}",
@@ -1873,88 +1848,48 @@ impl InputState {
     /// and idempotent when nothing is held. State is re-learned once focus returns (modifiers from
     /// the next `flagsChanged`, keys from the next key-down), so over-releasing here is safe.
     pub fn release_all_held(&self, why: &str) {
-        let mut mods = self.pressed_mods.borrow_mut();
-        let mut keys = self.pressed_keys.borrow_mut();
-        let mut aux = self.pressed_aux.borrow_mut();
-        if mods.is_empty() && keys.is_empty() && aux.is_empty() {
-            if input_trace() {
-                eprintln!(
-                    "[INP] t={:.1} release_all_held({why}) — nothing held",
-                    super::capture_tap::trace_ms(),
-                );
-            }
-            return;
-        }
-        if input_trace() {
-            let names: Vec<&str> = mods.iter().map(|&kc| mod_name(kc)).collect();
-            eprintln!(
-                "[INP] t={:.1} release_all_held({why}) mods=[{}] keys={} aux={}",
-                super::capture_tap::trace_ms(),
-                names.join(","),
-                keys.len(),
-                aux.len(),
+        let (mods, keys, aux) = self.keys.borrow().held_counts();
+        self.trace_release(why);
+        self.with_keys(|k, out| k.release_all_held(out));
+        if mods + keys + aux > 0 {
+            log::debug!(
+                "input: released {} held key(s) on focus loss",
+                mods + keys + aux
             );
         }
-        for &macos_keycode in mods.iter().chain(keys.iter()) {
-            if let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap.get()) {
-                self.send_kbd(InputEvent::new(EV_KEY, code, 0));
-                self.send_kbd(InputEvent::syn());
-            }
-        }
-        // Aux keys are already evdev codes (no keycode map, no remap — normalization has
-        // nothing to say about a media key).
-        for &code in aux.iter() {
-            self.send_kbd(InputEvent::new(EV_KEY, code, 0));
-            self.send_kbd(InputEvent::syn());
-        }
-        log::debug!(
-            "input: released {} held key(s) on focus loss",
-            mods.len() + keys.len() + aux.len()
-        );
-        mods.clear();
-        keys.clear();
-        aux.clear();
     }
 
-    /// `flagsChanged` reports which modifier key changed but not the direction. [`modifier_emit`]
-    /// reads the modifier's *actual* state from the event's flag bitmask rather than toggling a
-    /// guess — a single dropped `flagsChanged` (macOS suppresses events while Command is held,
-    /// and across focus changes) can't then wedge a modifier "down" in the guest, which would
-    /// make the compositor eat every later key. We keep a pressed-set to de-duplicate held
-    /// modifiers (one press/one release per change). Lock keys (Caps Lock) instead emit a full
-    /// press+release tap per toggle — the guest toggles its own lock on press, so an edge would
-    /// stick it (see [`ModEmit::Tap`]); they're not tracked in the pressed-set.
-    fn emit_modifier(&self, macos_keycode: u16, raw_flags: u64) {
-        // The remap changes which evdev code we emit; `modifier_emit` stays keyed on the keycode
-        // macOS DELIVERED, whose flag bits agree with it. Caps Lock
-        // returns `None` here — it's a lock key handled by `sync_capslock`, not a held modifier.
-        let Some(code) = macos_keycode_to_linux_remapped(macos_keycode, &self.remap.get()) else {
+    /// `LIMINA_INPUT_TRACE`: what a release of everything held is about to release.
+    fn trace_release(&self, why: &str) {
+        if !input_trace() {
             return;
-        };
-        let was = self.pressed_mods.borrow().contains(&macos_keycode);
-        let Some(emit) = modifier_emit(macos_keycode, raw_flags, was) else {
-            return;
-        };
-        match emit {
-            ModEmit::None => {}
-            ModEmit::Edge(down) => {
-                if down {
-                    self.pressed_mods.borrow_mut().insert(macos_keycode);
-                } else {
-                    self.pressed_mods.borrow_mut().remove(&macos_keycode);
-                }
-                self.send_kbd(InputEvent::new(EV_KEY, code, down as i32));
-                self.send_kbd(InputEvent::syn());
-                if input_trace() {
-                    eprintln!(
-                        "[INP] t={:.1}   -> guest mod {} evdev={code} {}",
-                        super::capture_tap::trace_ms(),
-                        mod_name(macos_keycode),
-                        if down { "DOWN" } else { "UP" },
-                    );
-                }
-            }
         }
+        let k = self.keys.borrow();
+        let (mods, keys, aux) = k.held_counts();
+        if mods + keys + aux == 0 {
+            eprintln!(
+                "[INP] t={:.1} release_all_held({why}) — nothing held",
+                super::capture_tap::trace_ms(),
+            );
+            return;
+        }
+        let names: Vec<&str> = k.held_modifiers().iter().map(|&kc| mod_name(kc)).collect();
+        eprintln!(
+            "[INP] t={:.1} release_all_held({why}) mods=[{}] keys={keys} aux={aux}",
+            super::capture_tap::trace_ms(),
+            names.join(","),
+        );
+    }
+
+    /// `flagsChanged` reports which modifier key changed but not the direction.
+    /// [`limina_input::keymap::modifier_emit`] reads the modifier's *actual* state from the
+    /// event's flag bitmask rather than toggling a guess — a single dropped `flagsChanged` (macOS
+    /// suppresses events while Command is held, and across focus changes) can't then wedge a
+    /// modifier "down" in the guest, which would make the compositor eat every later key. The
+    /// ledger's pressed-set de-duplicates held modifiers (one press/one release per change). Caps
+    /// Lock is not a held modifier; it is kept in step by [`InputState::sync_capslock`].
+    fn emit_modifier(&self, macos_keycode: u16, raw_flags: u64) {
+        self.with_keys(|k, out| k.emit_modifier(macos_keycode, raw_flags, out));
     }
 
     /// `LIMINA_INPUT_TRACE`: one line comparing what the host bitmask says every modifier is
@@ -1968,7 +1903,8 @@ impl InputState {
         if !input_trace() {
             return;
         }
-        let believed = self.pressed_mods.borrow();
+        let keys = self.keys.borrow();
+        let believed = keys.held_modifiers();
         let mut host = Vec::new();
         let mut guest = Vec::new();
         let mut drift = Vec::new();
@@ -2003,56 +1939,13 @@ impl InputState {
         );
     }
 
-    /// Align the guest's **held** modifiers with the host bitmask, emitting whatever edges the
-    /// two disagree about. The held-modifier twin of [`InputState::sync_capslock`], and it heals
-    /// the same blind spot: a modifier that goes down (or up) while our window isn't receiving
-    /// events is never mentioned again, because macOS sends no reconciling `flagsChanged` on
-    /// refocus and the key does not move until it is released.
-    ///
-    /// The case that motivated it (2026-08-09, `spikes/modifier-drift/`): Control held through a
-    /// Space switch. Leaving the Space correctly releases it in the guest; coming back restores
-    /// nothing, so the next key arrives unmodified — a bare Super, which GNOME reads as "open the
-    /// overview". Every bitmask in between carried the Control bit; nothing read it.
-    ///
-    /// `except` is the modifier the caller is about to emit itself — see
-    /// [`reconcile_modifiers`], where excluding it is what keeps Control ahead of Super.
-    ///
-    /// Called from the `flagsChanged` and key-down paths only, both of which carry
-    /// device-dependent bits. Pointer events are deliberately left out: they would heal at class
-    /// granularity at best, and [`reconcile_modifiers`] refuses to press on that evidence anyway,
-    /// so all they could add is a release we will get from the next key event regardless.
-    fn sync_modifiers(&self, raw_flags: u64, except: Option<u16>) {
-        let edges = reconcile_modifiers(raw_flags, &self.pressed_mods.borrow(), except);
-        for (macos_keycode, down) in edges {
-            if input_trace() {
-                eprintln!(
-                    "[INP] t={:.1}   RESYNC {} {}",
-                    super::capture_tap::trace_ms(),
-                    mod_name(macos_keycode),
-                    if down { "DOWN" } else { "UP" },
-                );
-            }
-            // Through `emit_modifier` rather than straight to the socket, so the pressed-set
-            // bookkeeping, the remap and the trace all stay in one place.
-            self.emit_modifier(macos_keycode, raw_flags);
-        }
-    }
-
     /// Align the guest's caps-lock with the host caps LED (carried by every event's modifier
     /// flags). Emits a press+release tap only when the host LED differs from the believed guest
-    /// state ([`CapsLockSync`]), so it both applies deliberate toggles and heals drift from a
+    /// state ([`limina_input::keymap::CapsLockSync`]), so it both applies deliberate toggles and heals drift from a
     /// caps toggle done while the VM was unfocused — the monitor gets no event for that and
     /// macOS sends no reconciling flagsChanged on refocus, so the next event here re-syncs.
     fn sync_capslock(&self, raw_flags: u64) {
-        if self.caps.borrow_mut().observe(capslock_on(raw_flags))
-            && let Some(code) =
-                macos_keycode_to_linux_remapped(MACOS_KC_CAPSLOCK, &self.remap.get())
-        {
-            self.send_kbd(InputEvent::new(EV_KEY, code, 1));
-            self.send_kbd(InputEvent::syn());
-            self.send_kbd(InputEvent::new(EV_KEY, code, 0));
-            self.send_kbd(InputEvent::syn());
-        }
+        self.with_keys(|k, out| k.sync_capslock(raw_flags, out));
     }
 
     /// Forward a button press if it lands inside the guest view; remember it so the
