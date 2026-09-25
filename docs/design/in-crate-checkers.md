@@ -1,6 +1,6 @@
 # In-crate checkers: Kani, loom, Miri, cargo-fuzz and the sabotage sweep
 
-Status: **proposed; phase 1 in progress** · Scope: limina's own crates, the guest workspace, and
+Status: **phase 1 partly landed** (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
 the libkrun fork's `limina` branch · Model: virglrs (`third_party/virglrs/docs/design.md`, *Owed,
 and waiting on work → In-crate checkers*; `third_party/virglrs/harness/sabotage/sweep.py`)
 
@@ -78,11 +78,15 @@ bound is worse.
 | Target | Tool | Property |
 |---|---|---|
 | libkrun xHCI: `RingWalker::next` (`third_party/libkrun/src/devices/src/usb/xhci/trb.rs:209`), `EventRing` (`:237`), `usb/xhci/engine.rs` | Kani on the ring cursor's link-TRB and cycle-bit walk; fuzz TRB streams over plain-mmap guest memory; enumerate slot and endpoint state transitions | A walk never leaves its segment; no guest TRB sequence panics or reaches a state the spec forbids |
-| `limina-usbip` (`crates/limina-usbip/src/proto.rs`: `decode_op_header` `:241`, `decode_import_busid` `:261`, `SubmitCmd::decode` `:332`, `UnlinkCmd::decode` `:424`, `UsbDevice::decode` `:172`) | Kani on the fixed-size decoders; fuzz the rest | No panic; every length is bounded before it sizes anything |
 | FIDO: `ctap2::handle` (`crates/limina/src/fido/ctap2.rs:67`), guest CBOR reaching the host authenticator | fuzz | No panic, no unbounded allocation. Highest consequence in the table. |
 | Control plane: `FrameHeader::decode` (`crates/limina-proto/src/lib.rs:865`), `read_message` (`:915`) | Kani on the header (16 bytes, exhaustively provable); fuzz `read_message` with a round trip | `MAX_PAYLOAD` holds; an unknown type decodes to `Message::Unknown` and is never a stream error |
 | vdagent: `decode` (`crates/limina/src/vdagent/codec.rs:235`), `Reassembler::push` (`:345`) | fuzz, plus enumeration of split points | **Any split of the same bytes yields the same messages**, which is what `push`'s doc promises |
 | Snapshots: the decoders in `third_party/libkrun/src/vmm/src/snapshot.rs` (`decode_vcpu` `:715`, `decode_usb` `:1127`, …), `GpuSnapshotPayload::from_bytes` (`third_party/libkrun/src/devices/src/virtio/gpu/journal.rs:827`) | fuzz with a round trip, seeded from real snapshots | A corrupt snapshot is refused before restore starts, never a panic halfway through |
+
+`limina-usbip` is left out on purpose. Only `limina-test` uses it; the shipped USB path is
+libkrun's xHCI. If it ever ships, note first that `serve_urbs`
+(`crates/limina-usbip/src/server.rs:85`) sizes a buffer from the guest's 32-bit
+`transfer_buffer_length` with no cap, so one URB can ask the host for 4 GiB.
 
 The snapshot file is not guest input, but it is read back from disk after a crash, a partial
 write or a version skew, and a panic mid-restore loses the VM.
@@ -131,16 +135,28 @@ what snapshots stand on); the frame handoff in `crates/limina/src/window/present
 - **limina's own checkers.** Kani proofs live in `#[cfg(kani)]` modules beside the code, loom
   models in `cfg(all(test, loom))` modules beside the code, and enumeration in `every_sequence`
   test modules. Fuzz targets live in a root `fuzz/` directory that is its own workspace, excluded
-  from the main one like `xtask/`. `unexpected_cfgs` declares `cfg(kani)` and `cfg(loom)` in the
-  workspace lints, as virglrs does in its `Cargo.toml`.
+  from the main one like `xtask/`. Each crate with a proof declares `cfg(kani)` (and later
+  `cfg(loom)`) under `unexpected_cfgs` in its own `[lints.rust]`, as virglrs does in its
+  `Cargo.toml`; the workspace has no shared lint table to put it in.
 - **libkrun's checkers** go on the fork's `limina` branch beside the code they check, with a
   `fuzz/` directory of their own. They follow the fork model like every other libkrun change.
-- **The sabotage sweep** is `scripts/sabotage-sweep.py`, a port of virglrs's. It can target
-  either tree: an entry names its repository root along with its file.
-- **Commands.** `cargo xtask check <kani|loom|miri|fuzz|sabotage> [filter]` wraps the scripts,
-  which remain the source of truth, following the one-command convention (`xtask/src/main.rs`).
-  Kani runs on its own pinned toolchain, installed by `cargo kani setup`. Fuzz and Miri run on
-  nightly. None of this needs HVF or codesigning.
+- **Modules of the `limina` binary.** `limina` has no library target, so a fuzz target reaches
+  one of its modules by compiling it in from its own source file (`fuzz/src/lib.rs`). That works
+  only for a module that names nothing else in the crate, such as `vdagent/codec.rs`. A module
+  that does needs a seam first.
+- **The sabotage sweep** is `scripts/sabotage-sweep.py`, a port of virglrs's. An entry names the
+  file it edits and the crate directory its witness runs in, so it can target either tree. Only
+  the files it edits must be clean, because this tree always holds untracked images and scratch.
+- **Commands.** `cargo xtask check kani [crate-dir ...]`, `cargo xtask check fuzz [target ...]
+  [--seconds N]` and `cargo xtask check sabotage [pattern ...]` wrap `scripts/check.py`, which
+  remains the source of truth, following the one-command convention (`xtask/src/main.rs`). Loom
+  and Miri get their subcommands when their first model or sweep lands. Kani runs on its own
+  pinned toolchain (`cargo install --locked kani-verifier && cargo kani setup`), and fuzzing on
+  nightly (`cargo install --locked cargo-fuzz`). None of this needs HVF or codesigning.
+- **Stopping Kani.** Proofs run under `-Z unstable-options --harness-timeout 10m`, which stops
+  `cbmc` itself. A `timeout` around `cargo kani` does not stop it, and neither does killing
+  `cargo kani`; kill its process group. A proof that needs longer than the limit is the wrong
+  shape for Kani, not a reason to raise the limit.
 - **Cadence.** None of these join the pre-commit hook or the 38-minute HVF suite. Enumeration
   tests are ordinary `cargo test` tests and run wherever those do. Kani, loom and the sabotage
   sweep run on demand and before a change to the code they cover lands. Fuzzing is time-boxed:
@@ -149,14 +165,49 @@ what snapshots stand on); the frame handoff in `crates/limina/src/window/present
   test before the fix, per the RED-first rule in `CLAUDE.md`. Corpora are not committed; the
   seeding scripts that rebuild them from real captures are.
 
+## Measured so far
+
+Measured 2026-09-25 on the dogfood Mac (M4 Pro, on battery), Kani 0.68.0 / CBMC 6.11.0,
+cargo-fuzz 0.13.2.
+
+- **Control-plane header.** `FrameHeader::parse` (`crates/limina-proto/src/lib.rs`) accepts
+  exactly the headers with the magic and a payload within `MAX_PAYLOAD`, for every one of the
+  2^128 headers, and every bounded header round-trips. Each proof takes under a second. The
+  first attempt, a proof of `decode` itself, ran 10 minutes to 2.3 GB with no verdict: its
+  refusal formats an `io::Error` message, and Kani models the allocation even on paths the proof
+  never takes. `decode` now wraps an allocation-free `parse`, and the proofs are of `parse`.
+- **Balloon policy.** Four proofs over every guest report and every policy state
+  (`crates/limina/src/balloon_policy.rs`): a target never exceeds the room; acute pressure or
+  starvation only releases; inflation needs a calm guest and moves at most one step; at host
+  Normal an inflation step never digs past the free-list margin. Each takes 1 to 3 seconds. The
+  clock was the whole cost. `Instant::now` reaches `clock_gettime`, which Kani does not model,
+  so the proofs build their instants from a fixed one. `Instant::duration_since` normalizes
+  through `Duration::new`, whose division by 10^9 kept every harness with a symbolic clock past
+  10 minutes and 3 GB, under CaDiCaL and Z3 alike. A second division, of one guest figure by
+  another in `io_pain_can_be_ours`, turned out to cost nothing. Found by bisecting: symbolic
+  report with concrete state, 0.45 s; symbolic state with its time fields cleared, 1.1 s. The
+  proofs stub `duration_since` to answer any elapsed time, which is sound because none of the
+  properties depends on time.
+- **Fuzzing.** `control_frame` (every frame `read_message` accepts round-trips) ran 7.4 M
+  inputs in 60 s with no crash. `vdagent_stream` (pushing a stream whole or split gives the same
+  messages) ran 5.1 M in 60 s with no crash, and caught a planted bug (refusing a chunk whose
+  body had not fully arrived) within seconds.
+- **The sweep.** Eight entries, eight caught, each by the assertion written for it.
+
+The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
+arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
+which inputs are symbolic, then prove the property on an allocation-free core, or stub the
+expensive call with an over-approximation the property does not depend on.
+
 ## Phases
 
-1. **Infrastructure and the cheap proofs.** Pin the toolchains. Add the workspace lints, the root
-   `fuzz/` workspace, the sabotage sweep and the `xtask check` subcommand. Then land the first
-   gates, each with its sabotage entry:
-   - Kani: `FrameHeader::decode`, the usbip fixed-size decoders, the coalescer's `add`
-     arithmetic, and the `balloon_policy` clamps.
-   - Fuzz: `read_message`, `Reassembler::push`, usbip, and `ctap2::handle`.
+1. **Infrastructure and the cheap proofs.** Landed: the toolchains, the root `fuzz/` workspace,
+   the sabotage sweep, `cargo xtask check`, the control-plane header proofs, the balloon policy
+   proofs, and the `control_frame` and `vdagent_stream` fuzz targets. Still owed:
+   - Kani on the balloon coalescer's `add` arithmetic, which is a commit on the libkrun fork and
+     brings the fork its own `cfg(kani)` lint and sweep entries.
+   - Fuzzing `ctap2::handle`, which first needs its CBOR parsing split from the Touch ID and
+     Secure Enclave ceremony it calls mid-request (`crates/limina/src/fido/ctap2.rs:143`).
 2. **xHCI.** The fuzz harness needs a way to stand the engine up without a libusb backend.
    Whether that seam exists has not been checked yet.
 3. **Snapshots and memory.** Fuzz the snapshot decoders with a round trip; enumerate the
