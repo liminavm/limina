@@ -1,6 +1,6 @@
 # In-crate checkers: Kani, loom, Miri, cargo-fuzz and the sabotage sweep
 
-Status: **phase 1 partly landed** (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
+Status: **phase 1 landed**; phases 2–4 proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
 the libkrun fork's `limina` branch · Model: virglrs (`third_party/virglrs/docs/design.md`, *Owed,
 and waiting on work → In-crate checkers*; `third_party/virglrs/harness/sabotage/sweep.py`)
 
@@ -78,7 +78,7 @@ bound is worse.
 | Target | Tool | Property |
 |---|---|---|
 | libkrun xHCI: `RingWalker::next` (`third_party/libkrun/src/devices/src/usb/xhci/trb.rs:209`), `EventRing` (`:237`), `usb/xhci/engine.rs` | Kani on the ring cursor's link-TRB and cycle-bit walk; fuzz TRB streams over plain-mmap guest memory; enumerate slot and endpoint state transitions | A walk never leaves its segment; no guest TRB sequence panics or reaches a state the spec forbids |
-| FIDO: `ctap2::handle` (`crates/limina/src/fido/ctap2.rs:67`), guest CBOR reaching the host authenticator | fuzz | No panic, no unbounded allocation. Highest consequence in the table. |
+| FIDO: `request::parse` (`crates/limina/src/fido/request.rs`), guest CBOR reaching the host authenticator | fuzz, raw and against a model of the rules | No panic, no unbounded allocation, and the rules as CTAP2 states them. Highest consequence in the table. |
 | Control plane: `FrameHeader::decode` (`crates/limina-proto/src/lib.rs:865`), `read_message` (`:915`) | Kani on the header (16 bytes, exhaustively provable); fuzz `read_message` with a round trip | `MAX_PAYLOAD` holds; an unknown type decodes to `Message::Unknown` and is never a stream error |
 | vdagent: `decode` (`crates/limina/src/vdagent/codec.rs:235`), `Reassembler::push` (`:345`) | fuzz, plus enumeration of split points | **Any split of the same bytes yields the same messages**, which is what `push`'s doc promises |
 | Snapshots: the decoders in `third_party/libkrun/src/vmm/src/snapshot.rs` (`decode_vcpu` `:715`, `decode_usb` `:1127`, …), `GpuSnapshotPayload::from_bytes` (`third_party/libkrun/src/devices/src/virtio/gpu/journal.rs:827`) | fuzz with a round trip, seeded from real snapshots | A corrupt snapshot is refused before restore starts, never a panic halfway through |
@@ -209,7 +209,16 @@ cargo-fuzz 0.13.2.
   inputs in 60 s with no crash. `vdagent_stream` (pushing a stream whole or split gives the same
   messages) ran 5.1 M in 60 s with no crash, and caught a planted bug (refusing a chunk whose
   body had not fully arrived) within seconds.
-- **The sweep.** Thirteen entries, thirteen caught, each by the assertion written for it.
+- **FIDO requests.** `ctap2::handle` parsed each request in the middle of the ceremony it
+  asked for, so it could not be exercised without the enclave. `fido/request.rs` now parses a
+  message whole into a typed request before `ctap2` touches the store, the enclave or Touch ID;
+  every refusal and its order are unchanged. `ctap2_request` (any bytes) ran 2.8 M inputs in
+  60 s with no crash, and 4.2 M more under a 32 MB per-allocation cap found no declared length
+  that becomes a large host allocation. `ctap2_roundtrip` builds well-formed requests from
+  fields the fuzzer picks and checks `parse` against a model of the rules. It ran 700 k in 60 s
+  with no crash, and caught a planted bug (an empty allowList read as present) within seconds.
+  The sweep found that no test noticed the ES256 requirement being removed; one does now.
+- **The sweep.** Sixteen entries, sixteen caught, each by the assertion or test written for it.
 
 The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
 arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
@@ -221,9 +230,8 @@ expensive call with an over-approximation the property does not depend on.
 1. **Infrastructure and the cheap proofs.** Landed: the toolchains, the root `fuzz/` workspace,
    the sabotage sweep, `cargo xtask check`, the control-plane header proofs, the balloon policy
    proofs, the balloon coalescer proof on the libkrun fork, and the `control_frame` and
-   `vdagent_stream` fuzz targets. Still owed:
-   - Fuzzing `ctap2::handle`, which first needs its CBOR parsing split from the Touch ID and
-     Secure Enclave ceremony it calls mid-request (`crates/limina/src/fido/ctap2.rs:143`).
+   `vdagent_stream` fuzz targets, and the CTAP2 request parser split out of the FIDO ceremony
+   with its two fuzz targets. Nothing booked for phase 1 is still owed.
 2. **xHCI.** The fuzz harness needs a way to stand the engine up without a libusb backend.
    Whether that seam exists has not been checked yet.
 3. **Snapshots and memory.** Fuzz the snapshot decoders with a round trip; enumerate the
