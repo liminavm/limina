@@ -293,6 +293,38 @@ mod tests {
         );
     }
 
+    fn registration(algs: &[i64]) -> Vec<u8> {
+        let params = algs
+            .iter()
+            .map(|&alg| Value::Map(vec![(text("alg"), int(alg))]))
+            .collect();
+        cbor(Value::Map(vec![
+            (int(1), Value::Bytes(vec![0; 32])),
+            (int(2), Value::Map(vec![(text("id"), text("example.com"))])),
+            (
+                int(3),
+                Value::Map(vec![(text("id"), Value::Bytes(vec![7]))]),
+            ),
+            (int(4), Value::Array(params)),
+        ]))
+    }
+
+    /// Every key here is ES256 in the enclave, so a registration that does not offer it is
+    /// refused rather than answered with a key of a kind the relying party never asked for.
+    #[test]
+    fn a_registration_must_offer_es256() {
+        const RS256: i64 = -257;
+        assert_eq!(
+            parse_make_credential(&registration(&[RS256])),
+            Err(CTAP2_ERR_UNSUPPORTED_ALGORITHM)
+        );
+        assert_eq!(
+            parse_make_credential(&registration(&[])),
+            Err(CTAP2_ERR_UNSUPPORTED_ALGORITHM)
+        );
+        assert!(parse_make_credential(&registration(&[RS256, ALG_ES256])).is_ok());
+    }
+
     #[test]
     fn a_request_refuses_before_it_is_parsed_further() {
         assert_eq!(parse(&[]), Err(CTAP1_ERR_INVALID_LENGTH));
