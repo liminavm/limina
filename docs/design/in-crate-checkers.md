@@ -1,6 +1,6 @@
 # In-crate checkers: Kani, loom, Miri, cargo-fuzz and the sabotage sweep
 
-Status: **phases 1–3 landed**; phase 4 proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
+Status: **phases 1–3 landed**; phase 4's input and grab half landed, its loom half proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
 the libkrun fork's `limina` branch · Model: virglrs (`third_party/virglrs/docs/design.md`, *Owed,
 and waiting on work → In-crate checkers*; `third_party/virglrs/harness/sabotage/sweep.py`)
 
@@ -321,9 +321,33 @@ cargo-fuzz 0.13.2.
 - **Timing under load.** The fork's `sweep_fault_handler_fields_concurrent_touches` gave up after
   50 sweeps without a collision; beside the 13 s enumeration, on battery, its toucher thread
   managed one pass in those 50. It now sweeps for up to 10 s.
-- **The sweep.** Forty-five entries, each caught by the assertion, test or model written for it,
+- **Keyboard** (`crates/limina-input/src/ledger.rs`). The held-key bookkeeping lived in
+  `InputState` beside AppKit types and sent each edge as it decided it. It is now `KeyLedger`,
+  which returns the edges; `InputState` sends them, and the monitor and the tap call the same two
+  entry points. The walk drives it from a model keyboard through macOS's Modifier Keys setting
+  (none, Control↔Command, Option↔Command), with keys that change unseen, focus losses, the end of a
+  capture and normalization flips, into a model guest with evdev's semantics. 32 operations to
+  depth four under each setting: 3,145,728 sequences, 24 s. It checks that the guest holds exactly
+  what the ledger believes; that a flush leaves nothing held; that healed modifiers are the ones
+  the user holds (by position under normalization, from a table written apart from `KeyRemap`);
+  that Caps Lock matches the LED; and that an event's own press lands with every other held
+  modifier already down. Checked only after each step, it passed. Checked edge by edge it found one
+  ordering bug: a Caps Lock tap went out before the heal, so after Control was released unseen,
+  Caps Lock reached the guest as Control+Caps Lock. Fixed in the ledger and in `handle()`, which
+  had synced Caps Lock ahead of everything.
+- **Grab policy** (`crates/limina/src/window/grab_policy.rs`). Two walks through `GrabState`
+  against the rules the module states. The free path runs 15 operations to depth five (759,375
+  sequences): key status, Space, menus, screenshot sessions, macOS in front, buttons, pointer
+  positions, clicks, the dwell, and the grab's transitions. Every sample must grab exactly when the
+  model does, and the explicit-release latch must match it. The edge presses run 11 operations to
+  depth six (1,771,561 sequences) at the Light hold. A release must come exactly when the model's
+  charge earns it. Both run in under a second and found nothing. What the booked property named,
+  no grab held with no owner window, is decided by two one-line predicates (`must_drop_grab`,
+  `key_loss_releases`) that the window tick and the tap compose through AppKit. Enumerating that
+  composition needs a seam in front of the tick and the tap, which is left for when it earns it.
+- **The sweep.** Sixty-six entries, each caught by the assertion, test or model written for it,
   after two holes found by the sweep itself were closed (the coalescer's merge check and the head
-  CRC). Each phase-3 entry was run as it was added; the full sweep was not re-run end to end.
+  CRC). Each entry since phase 3 was run as it was added; the full sweep was not re-run end to end.
 
 The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
 arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
@@ -345,7 +369,9 @@ expensive call with an over-approximation the property does not depend on.
    the three reader fixes; the `released_ram` seam, enumeration and loom model, and the three
    bookkeeping fixes; the coalescer enumeration; `cargo xtask check loom`. Left, and why: the GPU
    payload decoder (see *Measured so far*).
-4. **Input and grab enumeration**, then the Tier C loom models.
+4. **Input and grab enumeration**, then the Tier C loom models. Landed: the keyboard ledger and
+   its walk, with the Caps Lock ordering fix; the grab policy's free-path and edge-press walks.
+   Left: the tick and tap's composition of the ownership predicates, and the Tier C loom models.
 
 Every phase ends with this document updated: what each tool now covers, with measured time and
 memory, and what was tried and did not fit, with the numbers.
