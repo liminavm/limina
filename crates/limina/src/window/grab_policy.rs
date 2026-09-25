@@ -2034,3 +2034,495 @@ mod tests {
         );
     }
 }
+
+/// Every sequence of pointer events and grab transitions through the grab policy, against a model
+/// of the rules this module states. Two walks, because the free path and the grabbed path never
+/// run on the same event.
+///
+/// **The free path**, to depth five: the window's key status and Space, an open menu, a
+/// screenshot session, macOS putting something over the guest, a held button; the pointer deep in
+/// the picture, near its edge, or on the letterbox; a click on the picture or the letterbox; a
+/// quarter-second wait; and the grab being taken by a screen gain, released with Cmd-Ctrl-G, or
+/// released by an edge press. Every sample must grab exactly when the model does: a click on the
+/// picture always, unless a menu or a screenshot session owns it; the dwell only after a quarter
+/// second deep inside with no button held, never while the explicit-release latch stands, and
+/// never with anything of macOS's in front. Nothing grabs over a Space that is not on screen or
+/// without key status. The latch is set by Cmd-Ctrl-G and by a click off the guest, and cleared
+/// by the pointer leaving the picture, a click on it, or a screen gain.
+///
+/// **The grabbed path**, to depth six, from a policy grab: pushes against the right edge, the top
+/// edge and a corner, a push with a button held, a move inside, waits of half a second and a
+/// second, a promotion to a hard grab, leaving fullscreen, whether a display lies beyond the right
+/// edge, and retaking the grab after a release. A release must come exactly when the model's
+/// charge earns it: only in the policy's own grab in fullscreen, never mid-drag or at a corner,
+/// never on a gesture's first push, the top in place for the chrome, a side only onto a display.
+#[cfg(test)]
+mod every_sequence {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    const FIT: fit::FitRect = fit::FitRect {
+        x: 100.0,
+        y: 0.0,
+        w: 1000.0,
+        h: 800.0,
+    };
+    const DEEP: (f64, f64) = (600.0, 400.0);
+    const SHALLOW: (f64, f64) = (120.0, 400.0);
+    const LETTERBOX: (f64, f64) = (50.0, 400.0);
+
+    #[derive(Clone, Copy, Debug)]
+    enum FreeOp {
+        Key,
+        Space,
+        Menu,
+        Screenshot,
+        MacosInFront,
+        Button,
+        Move((f64, f64)),
+        Click((f64, f64)),
+        Wait,
+        ScreenGain,
+        UserRelease,
+        EdgeRelease,
+    }
+
+    fn free_ops() -> Vec<FreeOp> {
+        use FreeOp::*;
+        vec![
+            Key,
+            Space,
+            Menu,
+            Screenshot,
+            MacosInFront,
+            Button,
+            Move(DEEP),
+            Move(SHALLOW),
+            Move(LETTERBOX),
+            Click(DEEP),
+            Click(LETTERBOX),
+            Wait,
+            ScreenGain,
+            UserRelease,
+            EdgeRelease,
+        ]
+    }
+
+    struct FreeWorld {
+        t0: Instant,
+        t: Duration,
+        pos: (f64, f64),
+        key: bool,
+        space: bool,
+        menu: bool,
+        screenshot: bool,
+        macos_in_front: bool,
+        button: bool,
+        captured: bool,
+        st: GrabState,
+        // The model.
+        latch: bool,
+        deep_since: Option<Duration>,
+    }
+
+    impl FreeWorld {
+        fn new() -> Self {
+            FreeWorld {
+                t0: Instant::now(),
+                t: Duration::ZERO,
+                pos: LETTERBOX,
+                key: true,
+                space: true,
+                menu: false,
+                screenshot: false,
+                macos_in_front: false,
+                button: false,
+                captured: false,
+                st: GrabState::default(),
+                latch: false,
+                deep_since: None,
+            }
+        }
+
+        /// What the model says a sample at `pos` does: whether it grabs.
+        fn predict(&mut self, pos: (f64, f64), click: bool) -> bool {
+            let in_fit = fit::point_in_fit(pos.0, pos.1, FIT);
+            if !(self.key && self.space) {
+                self.deep_since = None;
+                return false;
+            }
+            if click {
+                if self.menu || self.screenshot {
+                    return false;
+                }
+                if self.macos_in_front {
+                    self.latch = true;
+                    self.deep_since = None;
+                    return false;
+                }
+                if in_fit {
+                    self.latch = false;
+                    self.deep_since = None;
+                    return true;
+                }
+                return false;
+            }
+            if fit::deep_inside(pos, FIT) {
+                self.deep_since.get_or_insert(self.t);
+            } else {
+                self.deep_since = None;
+            }
+            if !in_fit {
+                self.latch = false;
+            }
+            let dwelt = self
+                .deep_since
+                .is_some_and(|since| self.t - since >= fit::REGRAB_DWELL);
+            let grab = !self.latch
+                && !self.menu
+                && !self.button
+                && !self.macos_in_front
+                && !self.screenshot
+                && dwelt;
+            if grab {
+                self.deep_since = None;
+            }
+            grab
+        }
+
+        fn sample(&mut self, click: bool) -> Result<(), String> {
+            if self.captured {
+                return Ok(());
+            }
+            let want = self.predict(self.pos, click);
+            let s = Free {
+                now: self.t0 + self.t,
+                pos: self.pos,
+                fit: FIT,
+                fullscreen_and_key: self.key,
+                space_visible: self.space,
+                grab_enabled: true,
+                buttons_down: self.button,
+                click,
+                menu_open: self.menu,
+            };
+            let (in_front, screenshot) = (self.macos_in_front, self.screenshot);
+            let got = free_step(&mut self.st, &s, || !in_front, || screenshot).grab;
+            if got != want {
+                return Err(format!("the sample grabbed: {got}, the model says {want}"));
+            }
+            if got {
+                self.captured = true;
+            }
+            Ok(())
+        }
+
+        fn step(&mut self, op: FreeOp) -> Result<(), String> {
+            self.t += Duration::from_millis(10);
+            match op {
+                FreeOp::Key => self.key = !self.key,
+                FreeOp::Space => self.space = !self.space,
+                FreeOp::Menu => self.menu = !self.menu,
+                FreeOp::Screenshot => self.screenshot = !self.screenshot,
+                FreeOp::MacosInFront => self.macos_in_front = !self.macos_in_front,
+                FreeOp::Button => self.button = !self.button,
+                FreeOp::Move(p) => {
+                    self.pos = p;
+                    self.sample(false)?;
+                }
+                FreeOp::Click(p) => {
+                    self.pos = p;
+                    self.sample(true)?;
+                }
+                FreeOp::Wait => {
+                    self.t += fit::REGRAB_DWELL;
+                    self.sample(false)?;
+                }
+                FreeOp::ScreenGain if !self.captured => {
+                    self.st.take_by_policy();
+                    self.latch = false;
+                    self.deep_since = None;
+                    self.captured = true;
+                }
+                FreeOp::UserRelease if self.captured => {
+                    self.st.release_by_user(true);
+                    self.latch = true;
+                    self.deep_since = None;
+                    self.captured = false;
+                }
+                FreeOp::EdgeRelease if self.captured => {
+                    self.st.stop_holding();
+                    self.deep_since = None;
+                    self.captured = false;
+                }
+                FreeOp::ScreenGain | FreeOp::UserRelease | FreeOp::EdgeRelease => {}
+            }
+            if self.st.user_released() != self.latch {
+                return Err(format!(
+                    "the latch is {}, the model says {}",
+                    self.st.user_released(),
+                    self.latch
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum PressOp {
+        Right,
+        Top,
+        Corner,
+        Dragging,
+        Inside,
+        ShortWait,
+        LongWait,
+        Promote,
+        LeaveFullscreen,
+        DisplayBeyond,
+        Retake,
+    }
+
+    const PRESS_OPS: [PressOp; 11] = [
+        PressOp::Right,
+        PressOp::Top,
+        PressOp::Corner,
+        PressOp::Dragging,
+        PressOp::Inside,
+        PressOp::ShortWait,
+        PressOp::LongWait,
+        PressOp::Promote,
+        PressOp::LeaveFullscreen,
+        PressOp::DisplayBeyond,
+        PressOp::Retake,
+    ];
+
+    const HOLD: f64 = 0.15; // `[display] edge-hold = "light"`.
+    const PUSH: f64 = 30.0;
+    const STEP_MS: u64 = 50;
+
+    struct PressWorld {
+        t0: Instant,
+        t_ms: u64,
+        st: GrabState,
+        captured: bool,
+        fullscreen: bool,
+        beyond: bool,
+        // The model's gesture: which edge, the charge earned in milliseconds, when it last pushed.
+        edge: Option<fit::Edge>,
+        charge_ms: u64,
+        last_ms: Option<u64>,
+    }
+
+    impl PressWorld {
+        fn new() -> Self {
+            let mut st = GrabState::default();
+            st.hold();
+            PressWorld {
+                t0: Instant::now(),
+                t_ms: 0,
+                st,
+                captured: true,
+                fullscreen: true,
+                beyond: true,
+                edge: None,
+                charge_ms: 0,
+                last_ms: None,
+            }
+        }
+
+        fn lapse(&mut self) {
+            self.charge_ms = 0;
+            self.last_ms = None;
+        }
+
+        /// The model's verdict for one pushing event against `edge` (`None` for a sample that is
+        /// not a push at an edge, `drag` for one with a button held).
+        fn predict(&mut self, edge: Option<fit::Edge>, drag: bool) -> Option<Release> {
+            let auto = self.captured && self.st.holding();
+            if !auto || !self.fullscreen {
+                return None;
+            }
+            let Some(edge) = edge.filter(|_| !drag) else {
+                self.lapse();
+                return None;
+            };
+            if self.edge.replace(edge) != Some(edge) {
+                self.lapse();
+            }
+            let (hold_ms, decay_ms) = match edge {
+                fit::Edge::Top => ((HOLD * 1000.0) as u64, 400),
+                _ => ((HOLD * fit::SIDE_HOLD_FACTOR * 1000.0).round() as u64, 900),
+            };
+            match self.last_ms.map(|l| self.t_ms - l) {
+                Some(idle) if idle <= decay_ms => self.charge_ms += idle.min(50),
+                _ => self.charge_ms = 0,
+            }
+            self.last_ms = Some(self.t_ms);
+            if self.charge_ms < hold_ms {
+                return None;
+            }
+            match edge {
+                fit::Edge::Top => Some(Release::InPlaceForChrome),
+                _ if self.beyond => Some(Release::Out(fit::release_point(
+                    (FIT.x + FIT.w, 400.0),
+                    edge,
+                    FIT,
+                ))),
+                _ => {
+                    self.lapse();
+                    None
+                }
+            }
+        }
+
+        fn sample(&mut self, pos: (f64, f64), delta: (f64, f64), drag: bool) -> Result<(), String> {
+            self.t_ms += STEP_MS;
+            let edge = fit::pressed_edge(pos, delta.0, delta.1, FIT);
+            let want = self.predict(edge, drag);
+            let s = Press {
+                now: self.t0 + Duration::from_millis(self.t_ms),
+                pos,
+                delta,
+                fit: FIT,
+                buttons_down: drag,
+                hold: HOLD,
+                side: fit::SideTuning::default(),
+                fullscreen: self.fullscreen,
+            };
+            let beyond = self.beyond;
+            let mode = capture_tier(self.captured, &self.st);
+            let got = press_step(&mut self.st, mode, &s, |_| beyond)
+                .release
+                .map(|(_, r)| r);
+            if got != want {
+                return Err(format!(
+                    "the press released {got:?}, the model says {want:?}"
+                ));
+            }
+            if got.is_some() {
+                // The tap lets the pointer go.
+                self.st.stop_holding();
+                self.captured = false;
+                self.lapse();
+            }
+            Ok(())
+        }
+
+        fn step(&mut self, op: PressOp) -> Result<(), String> {
+            let right = (FIT.x + FIT.w, 400.0);
+            let top = (600.0, FIT.y + FIT.h);
+            match op {
+                PressOp::Right => self.sample(right, (PUSH, 0.0), false),
+                PressOp::Top => self.sample(top, (0.0, -PUSH), false),
+                PressOp::Corner => {
+                    self.sample((FIT.x + FIT.w, FIT.y + FIT.h), (PUSH, -PUSH), false)
+                }
+                PressOp::Dragging => self.sample(right, (PUSH, 0.0), true),
+                PressOp::Inside => self.sample(DEEP, (PUSH, 0.0), false),
+                PressOp::ShortWait => {
+                    self.t_ms += 500;
+                    Ok(())
+                }
+                PressOp::LongWait => {
+                    self.t_ms += 1000;
+                    Ok(())
+                }
+                PressOp::Promote => {
+                    if self.captured && self.st.holding() {
+                        self.st.release_by_user(false);
+                        self.lapse();
+                    }
+                    Ok(())
+                }
+                PressOp::LeaveFullscreen => {
+                    self.fullscreen = !self.fullscreen;
+                    Ok(())
+                }
+                PressOp::DisplayBeyond => {
+                    self.beyond = !self.beyond;
+                    Ok(())
+                }
+                PressOp::Retake => {
+                    if !self.captured {
+                        self.st.take_by_policy();
+                        self.captured = true;
+                        self.lapse();
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    fn walk<O: Copy + std::fmt::Debug>(
+        ops: &[O],
+        depth: usize,
+        seq: &mut Vec<O>,
+        run: &dyn Fn(&[O]) -> Result<(), String>,
+        walked: &mut u64,
+    ) {
+        if seq.len() == depth {
+            *walked += 1;
+            if let Err(m) = run(seq) {
+                panic!("{m}");
+            }
+            return;
+        }
+        for &op in ops {
+            seq.push(op);
+            walk(ops, depth, seq, run, walked);
+            seq.pop();
+        }
+    }
+
+    fn run_free(seq: &[FreeOp]) -> Result<(), String> {
+        let mut w = FreeWorld::new();
+        for (i, &op) in seq.iter().enumerate() {
+            w.step(op)
+                .map_err(|m| format!("{:?}, at step {}: {m}", &seq[..=i], i + 1))?;
+        }
+        Ok(())
+    }
+
+    fn run_press(seq: &[PressOp]) -> Result<(), String> {
+        let mut w = PressWorld::new();
+        for (i, &op) in seq.iter().enumerate() {
+            w.step(op)
+                .map_err(|m| format!("{:?}, at step {}: {m}", &seq[..=i], i + 1))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_free_pointer_sequence_grabs_exactly_when_the_rules_say() {
+        let ops = free_ops();
+        let mut walked = 0;
+        walk(&ops, 5, &mut Vec::new(), &run_free, &mut walked);
+        assert_eq!(walked, (ops.len() as u64).pow(5));
+        // The walk reaches both grabs: a dwell deep inside, and a click on the picture.
+        for seq in [
+            &[FreeOp::Move(DEEP), FreeOp::Wait][..],
+            &[FreeOp::Click(DEEP)][..],
+        ] {
+            let mut w = FreeWorld::new();
+            seq.iter().for_each(|&op| w.step(op).unwrap());
+            assert!(w.captured, "{seq:?} did not grab");
+        }
+    }
+
+    #[test]
+    fn every_edge_press_sequence_releases_exactly_when_the_rules_say() {
+        let mut walked = 0;
+        walk(&PRESS_OPS, 6, &mut Vec::new(), &run_press, &mut walked);
+        assert_eq!(walked, (PRESS_OPS.len() as u64).pow(6));
+        // The walk reaches releases: four top pushes earn the chrome, three right ones the
+        // display beyond.
+        for seq in [&[PressOp::Top; 4][..], &[PressOp::Right; 3][..]] {
+            let mut w = PressWorld::new();
+            seq.iter().for_each(|&op| w.step(op).unwrap());
+            assert!(!w.captured, "{seq:?} did not release");
+        }
+    }
+}
