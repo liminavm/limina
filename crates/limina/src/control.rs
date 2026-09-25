@@ -156,6 +156,10 @@ struct Inner {
     /// driving this?". While it is fresh the QGA poller stands down — the agent's signal is
     /// richer and pushed rather than polled, so a guest that has one should not also be polled.
     agent_cpu_report_at: Mutex<Option<Instant>>,
+    /// The online count of the last `CpuTarget` sent to the enhanced agent, `None` if none ever
+    /// was. Lets [`ControlPlane::restore_all_vcpus`] tell "all online and nothing asked of the
+    /// guest since" (no wait needed) from "a shrink may still be in flight".
+    last_cpu_target: Mutex<Option<u32>>,
     /// Consecutive QGA vCPU failures. Fedora leaves every RPC enabled and gates the agent in
     /// SELinux instead (`virt_qemu_ga_t`), so a `guest-set-vcpus` that is refused looks like a
     /// normal error reply — and would otherwise be retried every tick forever. After
@@ -203,6 +207,7 @@ impl ControlPlane {
             balloon_policy,
             vcpu_policy,
             guest_vcpus_online: Mutex::new(None),
+            last_cpu_target: Mutex::new(None),
             agent_cpu_report_at: Mutex::new(None),
             qga_vcpu_failures: AtomicU64::new(0),
             fido_store,
@@ -373,16 +378,39 @@ impl ControlPlane {
             return true; // no policy, so nothing was ever offlined by us
         };
         let target = policy.max_target();
-        let asked = Instant::now();
-        if self
+        // What the guest last told us, and whether a shrink of ours could still be in flight
+        // behind it — the guest applies a target AFTER the report it answers, so an "all online"
+        // report can predate a shrink we sent in reply to it.
+        let all_online = self
             .inner
-            .send_to_capable("vcpu", &Message::CpuTarget(target), CHANNEL_CONTROL)
-            .is_empty()
-        {
+            .guest_vcpus_online
+            .lock()
+            .unwrap()
+            .is_some_and(|(_, online)| online >= target.online);
+        let nothing_outstanding = self
+            .inner
+            .last_cpu_target
+            .lock()
+            .unwrap()
+            .is_none_or(|t| t >= target.online);
+        let asked = Instant::now();
+        let sent_to =
+            self.inner
+                .send_to_capable("vcpu", &Message::CpuTarget(target), CHANNEL_CONTROL);
+        if sent_to.is_empty() {
             // No enhanced agent. The stock tier may still have offlined vCPUs through QGA, and it
             // is driven by a poll rather than a push — so ask it directly rather than waiting for
             // a report nothing is going to send.
             return self.restore_all_vcpus_via_qga(target.online);
+        }
+        *self.inner.last_cpu_target.lock().unwrap() = Some(target.online);
+        // Enhanced tier only: `last_cpu_target` tracks what the agent was sent, not what QGA did.
+        if all_online && nothing_outstanding {
+            log::info!(
+                "suspend: all {} vCPUs already online and no shrink outstanding; not waiting (#41)",
+                target.online
+            );
+            return true;
         }
         log::info!(
             "suspend: asking the guest for all {} vCPUs before the snapshot (#41)",
@@ -395,6 +423,11 @@ impl ControlPlane {
                 && at > asked
                 && online >= target.online
             {
+                log::info!(
+                    "suspend: the guest confirmed all {} vCPUs online after {:?}",
+                    target.online,
+                    asked.elapsed()
+                );
                 return true;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -1114,6 +1147,7 @@ fn serve_loop(
                     && let Some(target) = policy.on_pressure(&p)
                 {
                     reply(&Message::CpuTarget(target), CHANNEL_CONTROL)?;
+                    *inner.last_cpu_target.lock().unwrap() = Some(target.online);
                 }
             }
             // The guest desktop's power profile. The guest needs no limina components to have
@@ -1124,6 +1158,7 @@ fn serve_loop(
                 let profile = crate::power_profile::PowerProfile::from_wire(p.profile);
                 if let Some(target) = inner.apply_power_profile(profile) {
                     reply(&Message::CpuTarget(target), CHANNEL_CONTROL)?;
+                    *inner.last_cpu_target.lock().unwrap() = Some(target.online);
                 }
             }
             // M15: the guest's own monitor arrangement, which the host cannot infer — an
@@ -1430,6 +1465,91 @@ mod tests {
             "a guest with more runnable tasks than CPUs must get the whole machine back"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A guest that already has every vCPU online, and that the host has never asked to shrink,
+    /// has nothing to confirm: the bracket must not sit out the agent's report tick waiting for
+    /// a fresh "all online" (that wait was ~1 s of every suspend of a busy guest).
+    #[test]
+    fn a_guest_at_full_strength_does_not_hold_up_the_snapshot() {
+        let path = std::env::temp_dir().join(format!(
+            "limina-ctl-fullvcpu-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let policy =
+            crate::vcpu_policy::VcpuPolicy::new(10, crate::vcpu_policy::CpuReclaim::Disabled);
+        let plane = ControlPlane::start(&path, None, policy, None, false).unwrap();
+        let mut agent = vcpu_agent(&path);
+        report_online(&plane, &mut agent, 10);
+
+        let started = Instant::now();
+        assert!(plane.restore_all_vcpus(Duration::from_secs(3)));
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "a guest with nothing offline must not wait for a report ({:?})",
+            started.elapsed()
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// ...but a shrink the host sent may not have been applied yet — the guest acts on a target
+    /// AFTER the report it answered, so an "all online" report can predate it. Then the bracket
+    /// must still wait for a report made after its own ask.
+    #[test]
+    fn an_outstanding_shrink_still_waits_for_the_guest() {
+        let path = std::env::temp_dir().join(format!(
+            "limina-ctl-shrinkvcpu-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let policy =
+            crate::vcpu_policy::VcpuPolicy::new(10, crate::vcpu_policy::CpuReclaim::Disabled);
+        let plane = ControlPlane::start(&path, None, policy, None, false).unwrap();
+        let mut agent = vcpu_agent(&path);
+        report_online(&plane, &mut agent, 10);
+        *plane.inner.last_cpu_target.lock().unwrap() = Some(4);
+
+        let started = Instant::now();
+        assert!(!plane.restore_all_vcpus(Duration::from_millis(400)));
+        assert!(started.elapsed() >= Duration::from_millis(400));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Connect a fake enhanced agent that negotiates the `vcpu` capability.
+    fn vcpu_agent(path: &std::path::Path) -> UnixStream {
+        let mut agent = UnixStream::connect(path).unwrap();
+        write_message(
+            &mut agent,
+            CHANNEL_CONTROL,
+            &Message::Hello(Hello {
+                agent: "test-agent/0".into(),
+                caps: vec!["vcpu".into()],
+                pagesize: 16384,
+            }),
+        )
+        .unwrap();
+        let (_, _welcome) = read_message(&mut agent).unwrap();
+        agent
+    }
+
+    /// Send an idle `CpuPressure` with `online` vCPUs and wait until the plane has recorded it.
+    fn report_online(plane: &ControlPlane, agent: &mut UnixStream, online: u32) {
+        write_message(
+            agent,
+            CHANNEL_CONTROL,
+            &Message::CpuPressure(limina_proto::CpuPressure {
+                online,
+                present: online,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while plane.inner.guest_vcpus_online.lock().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the report never landed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// The #41 mitigation must never be able to hold up a snapshot. With no policy (or no guest)
