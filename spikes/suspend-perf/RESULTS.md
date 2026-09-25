@@ -119,16 +119,27 @@ The save and apply now log a phase split (libkrun 22f7fb31), and the bench print
   A fresh APFS clone (`cp -c`) of the file reads at SSD speed (0.55 s vs 0.19 s cached), so a clone
   is an honest cold run without `purge`.
 
+### Streamed restore (libkrun 3da68ffe) and the state it leaves
+
+A thread streams the file into memory and publishes how much has landed; the head parse and the
+frame walk each wait only for the bytes they need, and the walk hands frames to the apply pool as
+they arrive, so the IO overlaps the GPU section's decompress and the RAM apply.
+
+- Bench, read + apply: cold **1.48 → 0.95 s**, warm **1.27 → 0.90 s**. The pool's decode time cold
+  (~3.7 s summed) now matches warm: the IO is hidden.
+- Production, 3 cycles on AC with a quiet host (libkrun c33afce4, virglrs 828a05bd): head 0.3 s,
+  apply 0.6–0.7 s, replay 0.29–0.33 s, **first frame 1.3–1.8 s after the window opens**; suspend
+  write 1.1–1.3 s (head encode 0.2 s + writer ~0.9 s ≈ pool ~0.85 s).
+- A run while a game was loading the host (swap 6.4 GB used) took 18 s to suspend and 9–10 s to
+  resume: the pool is CPU-bound and has no priority over what else the user is doing.
+
 ### What is left
 
-1. **Overlap the restore's file read with its apply.** Cold, the read (~0.55 s of IO + ~0.3 s
-   serial head work) and the apply (0.65 s) run back to back; streaming frames to the pool as
-   they land could bring read + apply from ~1.5 s to ~1.0 s.
-2. The ~0.3 s of serial head work on restore is mostly the 598 MB GPU section's decompress,
-   which nothing needs until replay staging; the save's 0.2 s head encode is its compress.
-3. First-touch faults: storing into fresh guest RAM is about half of the apply pool's summed time
-   in the bench, less in the worker (1.1–2.7 s summed vs 4 s).
-4. Replay (~0.45 s) and quiesce (~0.2 s) are untouched.
+1. Save: head encode 0.2 s is serial (the GPU section's single lz4 block); the writer and the pool
+   are now balanced at ~0.85 s each.
+2. Restore: storing into fresh guest RAM (first-touch faults) is about half the apply pool's time.
+3. Quiesce (~0.2 s) and replay (~0.3 s) are untouched.
+4. Under host contention both paths degrade badly; nothing here is prioritised.
 
 `cycle.sh` runs the click-free suspend/resume cycles; `sample-resume.sh` is the resume-sampling
 watcher used for the baseline profile.
