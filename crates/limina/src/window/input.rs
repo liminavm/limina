@@ -1595,9 +1595,17 @@ impl InputState {
         // the live caps bit). This applies deliberate toggles and, crucially, heals drift from
         // a caps toggle done while the VM was unfocused — the monitor sees no event for that and
         // macOS sends no reconciling flagsChanged on refocus, so the next key/pointer event here
-        // is what re-syncs the guest. See [`InputState::sync_capslock`].
-        self.sync_capslock(event.modifierFlags().0 as u64);
-        match event.r#type() {
+        // is what re-syncs the guest. See [`InputState::sync_capslock`]. Keyboard events the
+        // guest receives are aligned by the ledger itself, after it heals the modifiers, so a
+        // Caps Lock tap never goes out wearing a modifier the user already let go of.
+        let ty = event.r#type();
+        if !matches!(
+            ty,
+            NSEventType::KeyDown | NSEventType::KeyUp | NSEventType::FlagsChanged
+        ) {
+            self.sync_capslock(event.modifierFlags().0 as u64);
+        }
+        match ty {
             NSEventType::KeyDown => {
                 self.trace_key(
                     "MON-key",
