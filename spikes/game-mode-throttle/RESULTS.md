@@ -85,14 +85,33 @@ did not.
 on this 10-core host, the worker's event wakes went to 1.2 ms p50 / 26 ms p99 and the busy thread
 to 87% CPU. That is ordinary contention, and the audio callback stayed at 10.67 / 10.72 ms.
 
+**5. A supervisor can hand file descriptors to a launchd job by bootstrap name.** `rendezvous.c`
+wraps one end of a socketpair in a fileport (`fileport_makeport`), passes it in a Mach message to
+a transient gui-domain job (`launchctl bootstrap gui/<uid>`, `ProcessType=Interactive`), and the job
+turns it back into an fd (`fileport_makefd`) and writes one line through it. Both directions of the
+name work, from this shell and with the supervisor run as a LaunchServices-launched `.app`
+(`build/RdvSup.app`, `open -n`); the job runs with ppid 1 in every case:
+
+| arm | name owner | job side | supervisor side |
+|---|---|---|---|
+| A | supervisor, `bootstrap_register` (deprecated) | `bootstrap_look_up`, request with a reply port | answers with the fileport |
+| B | the job's plist, `MachServices` | `bootstrap_check_in` | `bootstrap_look_up` straight after `bootstrap`, sends |
+
+In arm B launchd holds the name from load, so the supervisor's lookup and send never race the job
+starting: the message waits in the queue until the job checks in. It needs no deprecated call.
+Both `fileport_*` and `bootstrap_check_in` are declared in the public SDK (`sys/fileport.h`,
+`servers/bootstrap.h`).
+
 ## What this means for limina
 
 - **The fix is where the worker runs, not what it does.** Launch the worker as a LaunchAgent (or
   anything launchd starts outside the app's tree) with `ProcessType=Interactive`, rather than
-  posix_spawning it from the supervisor. Costs to weigh: launchd does not pass file descriptors, so
-  the supervisor⇄worker channels need a rendezvous (booked separately as moving the control sockets
-  to Mach ports). Registering an agent via `SMAppService` shows the user a Login Items/background
-  approval. TCC attribution (mic, camera) moves to the worker's own identity.
+  posix_spawning it from the supervisor. launchd passes no file descriptors, so the supervisor
+  meets the job by a `MachServices` name (result 5, arm B) and sends every fd as a fileport. Any
+  same-user process can look that name up too, so the job must accept only a message whose audit
+  token names the supervisor's pid. Registering an agent via `SMAppService` would show the user a
+  Login Items/background approval; a transient `launchctl bootstrap` job does not. TCC attribution
+  (mic, camera) moves to the worker's own identity.
 - **The supervisor stays clamped** under Game Mode, because it is the app with the window. Its
   present path into that window will still run late. Measure how much that alone costs once
   the worker is out.
