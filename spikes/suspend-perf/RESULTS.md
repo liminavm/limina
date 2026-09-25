@@ -88,17 +88,46 @@ Host noise (a 10-vCPU dogfood VM alongside) is large; compare minimums.
 - Rejected, **measured no gain**: compressing/decompressing in place from the guest mapping
   (dropping the `read_slice` bounce copy): 1.10 vs 1.12 s save, 0.62 vs 0.64 s apply. Once the
   CRC was fast, the pool became lz4-bound and the memcpy stopped mattering.
-- restore read: `fs::read` 0.60 s warm / 0.85 s cold → mmap 0.33 s / 0.36 s, apply unchanged
-  (~0.65 s) even cold, so the page-in hides behind the decompress.
+- ~~restore read: `fs::read` → mmap, apply unchanged even cold~~ **Wrong, and reverted.** The bench ran
+  a single-thread CRC pass over the whole file *before* `apply_ram`, which faulted the mapping in,
+  so the apply never paid the page-in. See "Correction" below.
+
+## Correction and second pass (2026-09-25, later)
+
+Two of the "after" numbers above were taken **on battery in Low Power Mode** (the dogfood Mac was
+unplugged at 22%), which roughly halves the snapshot pool's speed: the null-sink save measured
+1.8 s on battery vs 0.9 s on AC for the same code. **Compare timings only within one power state,
+and check `pmset -g batt` before a run.** On AC the production save is 1.1 s (1.5 s once), not 1.9 s.
+
+The save and apply now log a phase split (libkrun 22f7fb31), and the bench prints the same:
+
+- **Save, AC:** head encode 0.2 s (serial: the GPU section's lz4) + max(pool ~0.8 s, writer ~0.8 s
+  in `write`, 4.4 GB/s). The writer rarely holds the pool up; the earlier lead "the file write is
+  the difference" came from comparing runs across power states.
+- **Restore, AC, corrected bench** (CRC pass moved after the apply), read + apply of the 3.5 GB file:
+
+  | read strategy | cold | warm |
+  |---|---|---|
+  | `fs::read` | **1.48 s** | 1.27 s |
+  | mmap (shipped in fabcc2e9) | 1.87 s | 0.97 s |
+  | mmap + `MADV_WILLNEED` | 2.29 s | 1.04 s |
+  | parallel 8 MiB `pread`s | 1.51 s | 1.15 s |
+
+  A mapped file is faulted in by the apply pool with small synchronous reads: +0.4 s on the cold
+  read a real resume usually is. `WILLNEED` reads the whole file synchronously at ~2.3 GB/s.
+  Parallel preads read at the same rate as `fs::read`. **Reverted to `fs::read`** (5d368dea).
+  A fresh APFS clone (`cp -c`) of the file reads at SSD speed (0.55 s vs 0.19 s cached), so a clone
+  is an honest cold run without `purge`.
 
 ### What is left
 
-1. The production write (1.9 s) is still ~2x the bench's null-sink compute; the file write is
-   the difference. F_NOCACHE or preallocation are candidates; measure first.
-2. The production apply (0.9–1.1 s) is ~1.5x the bench's (0.65 s): first-touch faults on
-   HVF-mapped guest memory are the suspect, unmeasured.
-3. The ~0.3 s left in restore `read` is mostly the serial decompress of the 598 MB GPU
-   section; the save compresses it serially too.
+1. **Overlap the restore's file read with its apply.** Cold, the read (~0.55 s of IO + ~0.3 s
+   serial head work) and the apply (0.65 s) run back to back; streaming frames to the pool as
+   they land could bring read + apply from ~1.5 s to ~1.0 s.
+2. The ~0.3 s of serial head work on restore is mostly the 598 MB GPU section's decompress,
+   which nothing needs until replay staging; the save's 0.2 s head encode is its compress.
+3. First-touch faults: storing into fresh guest RAM is about half of the apply pool's summed time
+   in the bench, less in the worker (1.1–2.7 s summed vs 4 s).
 4. Replay (~0.45 s) and quiesce (~0.2 s) are untouched.
 
 `cycle.sh` runs the click-free suspend/resume cycles; `sample-resume.sh` is the resume-sampling
