@@ -32,6 +32,11 @@ FUZZ_RSS_LIMIT_MB = 4096
 # Seconds one input may take before libFuzzer calls it a hang: every target here answers an input in
 # milliseconds, so a hang is a loop the guest's bytes can drive, not a slow input.
 FUZZ_TIMEOUT_S = 10
+# Arguments a crate's proofs need beyond `cargo kani`. Without them a proof can be compiled out,
+# and Kani reports the crate verified having checked nothing in it.
+KANI_ARGS = {
+    'third_party/libkrun/src/devices': ['--features', 'usb'],
+}
 # limina's fuzz workspace, and the libkrun fork's.
 FUZZ_DIRS = ('fuzz', 'third_party/libkrun/fuzz')
 
@@ -43,9 +48,11 @@ def kani_crates():
     for pattern in ('crates/*/src/**/*.rs', 'third_party/libkrun/src/*/src/**/*.rs'):
         for src in sorted(ROOT.glob(pattern)):
             if '#[cfg(kani)]' in src.read_text(errors='replace'):
-                rel = src.relative_to(ROOT).parts
-                found.add(rel[:rel.index('src')])
-    return [ROOT.joinpath(*p) for p in sorted(found)]
+                crate = src.parent
+                while not (crate / 'Cargo.toml').exists():
+                    crate = crate.parent
+                found.add(crate)
+    return sorted(found)
 
 
 def run(argv, cwd):
@@ -65,8 +72,8 @@ def kani(crates):
     dirs = [ROOT / c for c in crates] if crates else kani_crates()
     failed = []
     for d in dirs:
-        argv = ['cargo', 'kani', '-Z', 'stubbing', '-Z', 'unstable-options',
-                '--harness-timeout', KANI_HARNESS_TIMEOUT]
+        argv = ['cargo', 'kani'] + KANI_ARGS.get(os.path.relpath(d, ROOT), []) + [
+            '-Z', 'stubbing', '-Z', 'unstable-options', '--harness-timeout', KANI_HARNESS_TIMEOUT]
         if run(argv, d) != 0:
             failed.append(os.path.relpath(d, ROOT))
     # Kani re-resolves libkrun's lockfile against its own workspace; keep the fork's tree clean.

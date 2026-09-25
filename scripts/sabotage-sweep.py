@@ -43,7 +43,7 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Arguments a crate's tests need beyond `cargo test`. Without them a witness can be compiled out,
+# Arguments a crate's tests and proofs need beyond `cargo test` / `cargo kani`. Without them a witness can be compiled out,
 # and a filter that matches no test passes -- which the sweep would report as a hole it is not.
 TEST_ARGS = {
     'third_party/libkrun/src/devices': ['--features', 'usb'],
@@ -217,6 +217,52 @@ SABOTAGES = [
         'crates/limina',
         'a_registration_must_offer_es256',
     ),
+    (
+        'the ring walker returns a Link TRB as work',
+        'third_party/libkrun/src/devices/src/usb/xhci/trb.rs',
+        """            if trb.trb_type() == trb_type::LINK {""",
+        """            if trb.trb_type() == trb_type::LINK && trb.status == 0 {""",
+        'third_party/libkrun/src/devices',
+        'kani:usb::xhci::trb::proofs::a_step_returns_only_a_published_work_trb',
+    ),
+    (
+        "the ring walker ignores a Link's Toggle Cycle",
+        'third_party/libkrun/src/devices/src/usb/xhci/trb.rs',
+        """                if trb.toggle_cycle() {
+                    self.ccs = !self.ccs;""",
+        """                if trb.toggle_cycle() && trb.status == 0 {
+                    self.ccs = !self.ccs;""",
+        'third_party/libkrun/src/devices',
+        'kani:usb::xhci::trb::proofs::a_step_returns_only_a_published_work_trb',
+    ),
+    (
+        'the ring walker skips a TRB after each one it returns',
+        'third_party/libkrun/src/devices/src/usb/xhci/trb.rs',
+        """            self.ptr = addr.wrapping_add(16);
+            return Ok(Some((addr, trb)));""",
+        """            self.ptr = addr.wrapping_add(32);
+            return Ok(Some((addr, trb)));""",
+        'third_party/libkrun/src/devices',
+        'kani:usb::xhci::trb::proofs::a_step_returns_only_a_published_work_trb',
+    ),
+    (
+        'the ring walker consumes a TRB the producer has not published',
+        'third_party/libkrun/src/devices/src/usb/xhci/trb.rs',
+        """            if trb.cycle() != self.ccs {
+                // Producer hasn't published""",
+        """            if trb.cycle() != self.ccs && trb.status == 0 {
+                // Producer hasn't published""",
+        'third_party/libkrun/src/devices',
+        'kani:usb::xhci::trb::proofs::a_step_returns_only_a_published_work_trb',
+    ),
+    (
+        'the ring walker follows a Link to an unaligned target',
+        'third_party/libkrun/src/devices/src/usb/xhci/trb.rs',
+        """                self.ptr = trb.link_target();""",
+        """                self.ptr = trb.parameter;""",
+        'third_party/libkrun/src/devices',
+        'kani:usb::xhci::trb::proofs::a_step_returns_only_a_published_work_trb',
+    ),
 ]
 
 
@@ -250,8 +296,9 @@ def command(filt, crate):
     if filt.startswith('kani:'):
         # `--exact`, or a harness named as a prefix of another would run both. Stubbing on,
         # because proofs stand in for what Kani cannot model (`Instant::now`, for one).
-        return ['cargo', 'kani', '-Z', 'stubbing', '-Z', 'unstable-options',
-                '--harness-timeout', '10m', '--exact', '--harness', filt[len('kani:'):]], None
+        return ['cargo', 'kani'] + TEST_ARGS.get(crate, []) + [
+            '-Z', 'stubbing', '-Z', 'unstable-options', '--harness-timeout', '10m', '--exact',
+            '--harness', filt[len('kani:'):]], None
     if filt.startswith('loom:'):
         env = dict(os.environ, RUSTFLAGS='--cfg loom', CARGO_TARGET_DIR=str(ROOT / 'target/loom'))
         return ['cargo', 'test', '--lib', filt[len('loom:'):]], env
