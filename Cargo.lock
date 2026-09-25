@@ -854,6 +854,7 @@ name = "krun-vmm"
 version = "0.1.0-2.0.0-dev"
 dependencies = [
  "bzip2",
+ "crc32fast",
  "crossbeam-channel",
  "flate2",
  "krun-arch",
