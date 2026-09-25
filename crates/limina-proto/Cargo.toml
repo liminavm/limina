@@ -15,3 +15,7 @@ license.workspace = true
 # CBOR payloads (roadmap M5: 16-byte frame header + CBOR). minicbor: small, no_std-capable,
 # derive-based — suits the static musl guest binary.
 minicbor = { version = "2", features = ["alloc", "derive"] }
+
+# `cfg(kani)` gates the proofs `cargo kani` runs (docs/design/in-crate-checkers.md).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

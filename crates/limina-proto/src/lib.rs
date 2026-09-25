@@ -863,11 +863,24 @@ impl FrameHeader {
     }
 
     pub fn decode(b: &[u8; HEADER_LEN]) -> io::Result<FrameHeader> {
-        if b[0..4] != MAGIC {
-            return Err(io::Error::new(
+        Self::parse(b).map_err(|fault| match fault {
+            HeaderFault::Magic => io::Error::new(
                 io::ErrorKind::InvalidData,
                 "bad frame magic (not a limina control stream?)",
-            ));
+            ),
+            HeaderFault::TooLong(len) => io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("frame payload {len} exceeds MAX_PAYLOAD {MAX_PAYLOAD}"),
+            ),
+        })
+    }
+
+    /// The header rules on their own, with nothing allocated on either path, so the rules can be
+    /// proved for every header (`proofs` below). `decode` only turns a refusal into an
+    /// `io::Error`, whose message allocates.
+    fn parse(b: &[u8; HEADER_LEN]) -> Result<FrameHeader, HeaderFault> {
+        if b[0..4] != MAGIC {
+            return Err(HeaderFault::Magic);
         }
         let h = FrameHeader {
             version: b[4],
@@ -877,13 +890,17 @@ impl FrameHeader {
             len: u32::from_le_bytes([b[12], b[13], b[14], b[15]]),
         };
         if h.len > MAX_PAYLOAD {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("frame payload {} exceeds MAX_PAYLOAD {MAX_PAYLOAD}", h.len),
-            ));
+            return Err(HeaderFault::TooLong(h.len));
         }
         Ok(h)
     }
+}
+
+/// Why [`FrameHeader::parse`] refused a header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeaderFault {
+    Magic,
+    TooLong(u32),
 }
 
 /// Write one message as a frame. A frame is written with a single `write_all` of the
@@ -920,6 +937,52 @@ pub fn read_message(r: &mut impl Read) -> io::Result<(u32, Message)> {
     r.read_exact(&mut payload)?;
     let msg = Message::decode_payload(header.msg_type, payload)?;
     Ok((header.channel, msg))
+}
+
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// `parse` accepts exactly the headers that carry the magic and a payload within
+    /// `MAX_PAYLOAD`, and `encode` gives back the very bytes it accepted. Every one of the 2^128
+    /// headers a guest can send is covered, so no header panics the reader or sizes a payload
+    /// past the bound. (`decode` itself is not the subject: its refusal allocates a message, and
+    /// Kani's model of the allocator does not finish.)
+    #[kani::proof]
+    fn parse_accepts_exactly_the_bounded_headers() {
+        let b: [u8; HEADER_LEN] = kani::any();
+        let len = u32::from_le_bytes([b[12], b[13], b[14], b[15]]);
+        let wanted = b[0..4] == MAGIC && len <= MAX_PAYLOAD;
+        match FrameHeader::parse(&b) {
+            Ok(h) => {
+                assert!(wanted, "parse accepted a header the rules refuse");
+                assert!(
+                    h.len <= MAX_PAYLOAD,
+                    "an accepted header sizes past MAX_PAYLOAD"
+                );
+                assert!(
+                    h.encode() == b,
+                    "encode does not give back the accepted bytes"
+                );
+            }
+            Err(_) => assert!(!wanted, "parse refused a header the rules accept"),
+        }
+    }
+
+    /// Every header `write_message` can produce decodes back to itself.
+    #[kani::proof]
+    fn every_bounded_header_round_trips() {
+        let h = FrameHeader {
+            version: kani::any(),
+            msg_type: kani::any(),
+            flags: kani::any(),
+            channel: kani::any(),
+            len: kani::any(),
+        };
+        kani::assume(h.len <= MAX_PAYLOAD);
+        let back = FrameHeader::parse(&h.encode());
+        assert!(back == Ok(h), "a header does not survive encode and decode");
+    }
 }
 
 #[cfg(test)]
