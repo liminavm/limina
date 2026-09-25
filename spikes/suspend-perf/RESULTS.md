@@ -55,14 +55,51 @@ apply pool threads spend most of their time in closure self-time: the same byte-
 verifying every frame before `decompress_into`. The main thread `fs::read`s the whole 3–3.6 GB file
 before any apply starts, which accounts for the ~1 s "read + validated" line.
 
-## Candidate levers (not yet tried)
+## After (same guest and disk, 2026-09-25): suspend ~2.6 s, resume 2.2 s to first frame
 
-1. Hardware CRC32 (ARMv8 `crc32` instructions, e.g. the `crc32fast` crate): fixes the byte-wise
-   CRC's cost on both save and restore.
-2. Compress/zero-check straight from the guest mapping (drop the `read_slice` copy).
-3. Revisit the 8-worker cap (the pool is CPU-bound).
-4. Restore: mmap / streamed read so IO overlaps apply, instead of `fs::read` of the whole file.
-5. The ~1 s vCPU re-online step before the bracket.
-6. The missing splash on flat `--disk` runs (perceived latency, not real latency).
+Measured with `cycle.sh` (below): launch → auto-restore → ssh login → SIGTSTP → park, five
+cycles over two builds. The baseline above ran libkrun one commit behind its manifest pin (the
+vendored tree had drifted); `cargo xtask vendor` fixed that before these numbers.
 
-`sample-resume.sh` is the resume-sampling watcher used here.
+| phase | before | after | change |
+|---|---|---|---|
+| vCPU confirm wait (#41) | ~1–1.6 s | 0 (skipped: all online, no shrink outstanding) | limina `control.rs` |
+| guest s2idle quiesce | 0.2–0.3 s | 0.17–0.28 s | — |
+| GPU capture | 0.3–0.6 s | 0.3–0.4 s | — |
+| RAM write | 3.7 s | **1.9 s** | libkrun: hardware CRC32, pool uncapped |
+| restore read + validate | 1.0–1.1 s | **0.5 s** | libkrun: mmap instead of `fs::read` |
+| restore RAM apply | 2.5–3.0 s | **0.9–1.1 s** (2.0 s once, cold file) | libkrun: hardware CRC32 |
+| GPU replay | 0.47–0.54 s | 0.41–0.48 s | — |
+| restore: first frame | 4.5–5.5 s (from click, parked) | **2.2 s** (from window open) | + splash now shown |
+
+The restore splash was never saved on a guest-driven suspend: s2idle entry disables the scanout,
+and the window's `scanoutgone` handling cleared the surface id the save needed. Fixed, and the
+saved PNG was pixel-checked to be the desktop as suspended.
+
+### bench_real_snapshot (libkrun `snapshot::tests`, ignored; the gen-3 snapshot as fixture)
+
+`LIMINA_SNAPSHOT_BENCH=<file> [LIMINA_SNAPSHOT_BENCH_SINK=null] cargo test --release -p krun-vmm
+--lib snapshot::tests::bench_real_snapshot -- --ignored --nocapture` in `third_party/libkrun`.
+Host noise (a 10-vCPU dogfood VM alongside) is large; compare minimums.
+
+- crc32 on one core: 0.5 GB/s (table) → 11 GB/s (`crc32fast`), with the checksum unchanged.
+- apply_ram: 1.5 s → 0.8 s (CRC). write_streaming to a real file: min 2.3 s → 1.2 s (CRC).
+- write_streaming to /dev/null by pool width: 8 workers 1.13 s, 11 workers 0.92 s, 14 workers 0.87 s.
+- Rejected, **measured no gain**: compressing/decompressing in place from the guest mapping
+  (dropping the `read_slice` bounce copy): 1.10 vs 1.12 s save, 0.62 vs 0.64 s apply. Once the
+  CRC was fast, the pool became lz4-bound and the memcpy stopped mattering.
+- restore read: `fs::read` 0.60 s warm / 0.85 s cold → mmap 0.33 s / 0.36 s, apply unchanged
+  (~0.65 s) even cold, so the page-in hides behind the decompress.
+
+### What is left
+
+1. The production write (1.9 s) is still ~2x the bench's null-sink compute; the file write is
+   the difference. F_NOCACHE or preallocation are candidates; measure first.
+2. The production apply (0.9–1.1 s) is ~1.5x the bench's (0.65 s): first-touch faults on
+   HVF-mapped guest memory are the suspect, unmeasured.
+3. The ~0.3 s left in restore `read` is mostly the serial decompress of the 598 MB GPU
+   section; the save compresses it serially too.
+4. Replay (~0.45 s) and quiesce (~0.2 s) are untouched.
+
+`cycle.sh` runs the click-free suspend/resume cycles; `sample-resume.sh` is the resume-sampling
+watcher used for the baseline profile.
