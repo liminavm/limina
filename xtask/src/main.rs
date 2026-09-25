@@ -145,6 +145,14 @@ enum Cmd {
         #[arg(long)]
         debug: bool,
     },
+    /// Run the in-crate checkers (wraps scripts/check.py): `kani [crate-dir ...]`,
+    /// `fuzz [target ...] [--seconds N]`, or `sabotage [pattern ...]`. No HVF, no signing; see
+    /// docs/design/in-crate-checkers.md.
+    Check {
+        /// `kani`, `fuzz` or `sabotage`, then that tool's arguments, forwarded verbatim.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        args: Vec<String>,
+    },
     /// Build + assemble + codesign a minimal `target/Limina-smoke.app` (launch-path smoke test).
     Bundle {
         /// Build in release mode.
@@ -176,6 +184,13 @@ fn main() -> Result<()> {
         } => run_vm(disk, no_net, cpus, ram_mib, &extra),
         Cmd::App { debug } => app(!debug),
         Cmd::Bundle { release, open } => bundle(release, open),
+        Cmd::Check { args } => {
+            let repo = repo_root();
+            run(Command::new("python3")
+                .current_dir(&repo)
+                .arg(repo.join("scripts/check.py"))
+                .args(&args))
+        }
     }
 }
 

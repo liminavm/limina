@@ -127,3 +127,8 @@ archive/
 # comparison against a current build (it still carries the C libvirglrenderer).
 payload/
 reference/
+# cargo-fuzz's build, generated corpora and crash inputs (fuzz/ is its own workspace).
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/coverage

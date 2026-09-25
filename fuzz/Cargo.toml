@@ -1,0 +1,36 @@
+# limina's cargo-fuzz targets (docs/design/in-crate-checkers.md). Its own workspace, so
+# `cargo fuzz` builds it with its own flags and the main build never sees libFuzzer; excluded
+# from the root workspace like `xtask/`.
+#
+#   cargo +nightly fuzz run <target> -- -max_total_time=<seconds>
+[package]
+name = "limina-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+anyhow = "1"
+libfuzzer-sys = "0.4"
+limina-proto = { path = "../crates/limina-proto" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "control_frame"
+path = "fuzz_targets/control_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vdagent_stream"
+path = "fuzz_targets/vdagent_stream.rs"
+test = false
+doc = false
+bench = false
