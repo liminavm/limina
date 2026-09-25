@@ -15,6 +15,8 @@ cargo-fuzz = true
 
 [dependencies]
 anyhow = "1"
+arbitrary = { version = "1", features = ["derive"] }
+ciborium = "0.2"
 libfuzzer-sys = "0.4"
 limina-proto = { path = "../crates/limina-proto" }
 
@@ -31,6 +33,20 @@ bench = false
 [[bin]]
 name = "vdagent_stream"
 path = "fuzz_targets/vdagent_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ctap2_request"
+path = "fuzz_targets/ctap2_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ctap2_roundtrip"
+path = "fuzz_targets/ctap2_roundtrip.rs"
 test = false
 doc = false
 bench = false

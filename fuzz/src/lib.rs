@@ -12,3 +12,6 @@
 
 #[path = "../../crates/limina/src/vdagent/codec.rs"]
 pub mod vdagent_codec;
+
+#[path = "../../crates/limina/src/fido/request.rs"]
+pub mod ctap2_request;
