@@ -213,7 +213,9 @@ mode `srwxr-xr-x`, so any same-user process can connect. That matters most for F
 SEP-backed passkey store) and MOC (Touch-ID-gated fingerprint protocol). A bootstrap-registered
 receive right would make the gate a capability and die with the process. Prior art:
 `crates/limina-surfaceport` registers a per-process bootstrap name, survives worker relaunches and
-falls back when registration fails. Check first: is a same-user bootstrap lookup actually harder to
+falls back when registration fails; `crates/limina-launch` meets the launchd-started worker by a
+`MachServices` name its plist declares and accepts only the supervisor's audit-token pid, which is
+the shape a same-user gate needs. Check first: is a same-user bootstrap lookup actually harder to
 reach than a socket path; how the test harness would drive a port; whether death/relaunch semantics
 survive the worker's `libc::_exit` on every guest power-off. Meanwhile `tmpsock.rs` removes what a
 run allocated at every `process::exit` site (`exit_cleanup()`); a SIGKILLed supervisor leaves a
@@ -412,62 +414,35 @@ episode.
 Background for this section — why idle guests need a real-time band, what it costs, and what
 ships — is in `docs/design/vcpu-scheduling-band.md`.
 
-### macOS Game Mode clamps the worker because the supervisor spawns it; launch it from launchd
+### What is left of the Game Mode clamp now that the worker is out of the app's tree
 While a games-category app is fullscreen and frontmost (Moonlight is one: `LSSupportsGameMode=true`),
-`gamepolicyd` turns Game Mode on and clamps every process in an app's process tree to priority 4.
-The supervisor is an AppKit app, and the worker is its posix_spawned child, so every worker thread is
-clamped: the RT-band vCPU (from `97R`), the GPU worker, CoreAudio's render thread. On the dogfood Mac,
-guest Firefox video dropped frames and audio stuttered, worse the more the Moonlight stream changed,
-and the worker logged 100–626 ms control-queue drains. Game Mode off restored `31T`/`97R` and smooth
-playback (measured 2026-09-23, M4 Pro).
-
-Established by `spikes/game-mode-throttle/` (RESULTS.md, dev Mac):
-- **The clamp is two mechanisms.** Timer coalescing stretches plain sleeps to ~100 ms. CPU is also
-  denied: a busy thread got 55% of wall time and went up to 93 ms off-CPU on a nearly idle host, and
-  an AUHAL render callback (10.67 ms nominal) went 1.09 s without running. Strict timers
-  (`NOTE_CRITICAL`, `DISPATCH_TIMER_STRICT`) and event wakes avoid the first (about 1.2 ms p50) but
-  not the second (about 40 ms p99).
-- **Nothing inside a clamped process lifts it**: not `NSActivity` assertions (UserInitiated,
-  LatencyCritical, in child or parent), and not resetting `PRIO_DARWIN_ROLE` or DARWIN_BG, which read
-  back unset throughout. xnu applies it through the coalition thread group.
-- **Lineage decides it.** The same worker-shaped process run as a gui-domain LaunchAgent with
-  `ProcessType=Interactive` stayed at priority 31 through Game Mode, with the audio callback at
-  10.67 / 10.72 ms (p50 / worst p99) and the busy thread at 94%. A process descended from a non-app
-  launchd job was never clamped either. A `launchctl submit` job escapes too, but its default job
-  type runs at priority 20 with plain timers ~40 ms late, so `ProcessType=Interactive` is required.
-
-**The fix: launch the worker from launchd, outside the app's tree.** A per-VM LaunchAgent (or a job
-submitted at start), `ProcessType=Interactive`, instead of posix_spawn from the supervisor. What it
-takes:
-- **fd passing.** launchd passes no file descriptors, and today the worker inherits its control,
-  input, spice and qga socketpairs. It needs a rendezvous where the supervisor hands them over
-  (SCM_RIGHTS over a Unix socket the job connects to, or Mach ports; see *Move the supervisor⇄worker
-  control sockets to Mach ports*).
-- **Lifecycle.** The supervisor stops being the worker's parent: death detection, the reap-gateway
-  and the run lock must not assume `waitpid` on a child.
-- **Registration.** A transient job needs no `SMAppService`: the spike's `lineage-agent` arm loaded
-  a plist with `launchctl bootstrap gui/<uid>` and kept `ProcessType=Interactive` at priority 31.
-  backgroundtaskmanagement logged nothing for it. RunningBoard tracks such a job as an `osservice`
-  that is "not role managed", and that is why Game Mode leaves it alone. `SMAppService.agent`
-  would instead show a Login Items / background-activity approval.
-- **Identity.** TCC (mic, camera, Accessibility) attributes to the worker's own code identity rather
-  than to Limina.app. Recheck every grant the worker relies on (the signing rules are in
-  `docs/design/distribution.md`).
+`gamepolicyd` turns Game Mode on and clamps every process in an app's process tree to priority 4:
+timers ~100 ms late, CPU denied, CoreAudio callbacks stalled for up to a second
+(`spikes/game-mode-throttle/RESULTS.md`). The worker is no longer in that tree: a transient launchd
+job (`ProcessType=Interactive`) starts it and the supervisor hands it its fds over Mach
+(`crates/limina-launch`; `l1_worker_lineage` asserts the lineage). What remains:
+- **Confirm it on the dogfood Mac.** The suite cannot turn Game Mode on. The oracle is `ps -M -p
+  <worker>` reading 31 (and `97R` for the banded vCPU) while `gamepolicyd` logs `Game mode status is
+  now on`, with smooth guest video and audio beside a fullscreen Moonlight.
 - **The supervisor stays clamped** (it owns the window), so its present path into the window still
-  runs late under Game Mode. Measure what that alone costs once the worker is out.
+  runs late under Game Mode. Measure what that alone costs.
+- **Identity.** TCC attributes mic and camera use to the process responsible for it, now the
+  launcher job rather than Limina.app. The worker is signed as `eti.noronha.limina` with the app's
+  Info.plist, so grants should land on the same identity; recheck audio capture from a
+  Dock-launched app.
+- **Move the channels themselves to Mach** (see *Move the supervisor⇄worker control sockets to
+  Mach ports*): the handoff already rides a Mach message, but the control line protocol and the
+  input datagrams are still socketpairs carried across as fileports.
+- **Strict timers on the present and audio paths**: the `gpu latch` thread's `thread::sleep` to its
+  35 ms deadline (`virtio_gpu.rs`, `LIMINA_FENCE_LATCH_MS`), and anything else there. Still worth it
+  for the supervisor's side, which stays clamped.
+- **Detect and explain**: our own threads at priority 4 are a direct oracle. Tell the user, and
+  name the game-side levers (the menu-bar toggle, which held across re-fullscreens;
+  `LSSupportsGameMode=false` in apps they build).
 
-Independent of the move, and still worth doing:
-1. Decouple hardware decode from the control thread (Video: *Hardware decode blocks the virtio-gpu
-   control thread*), so one slow decode does not freeze the desktop.
-2. Move latency-critical timer sleeps to strict timers or event wakes: the `gpu latch` thread's
-   `thread::sleep` to its 35 ms deadline (`virtio_gpu.rs`, `LIMINA_FENCE_LATCH_MS`), and anything else
-   on the present or audio path. This takes ~100 ms off the clamped case but does not fix it.
-3. Detect and explain: our own threads at priority 4 are a direct oracle. Tell the user, and name the
-   game-side levers (the menu-bar toggle, which held across re-fullscreens;
-   `LSSupportsGameMode=false` in apps they build).
-
-Deeper audio buffers are not a lever while the worker is clamped: the render callback itself
-stalls for up to a second.
+When launchd cannot be used (no gui domain, `launchctl` refusing), the supervisor posix_spawns
+the worker as before and logs that Game Mode will clamp it. `LIMINA_WORKER_LAUNCH=spawn` forces
+that path.
 
 ### Explain the parked P-clusters behind the band panic
 A host panic on 2026-09-21 (`watchdog timeout: no checkins from watchdogd in 94 seconds`, panicked task
