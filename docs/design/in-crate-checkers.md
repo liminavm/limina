@@ -397,16 +397,28 @@ cargo-fuzz 0.13.2.
   coordinator's contract at every site. Routed through a table that kept the old behaviour, the
   test failed at the WFx wait. That is the RED this fix has; nothing on today's hosts reaches the
   site, so no HVF test can fail there. The L1 snapshot tests pass on the fix.
-- **Host-sleep bracket** (`crates/limina-vmm/src/power.rs`). Not loom's: `willSleep`, `didWake` and
-  each step of the post-wake watch run whole under the bracket's one lock, so the threads reduce
-  to a sequence of atomic steps interleaved with the guest's transitions. That is an enumeration
-  of `HostSleepState` against guest transitions, which needs a seam for the watch's clock; the
-  primitive the watch waits on is the power watch above.
+- **Host-sleep bracket** (`crates/limina-vmm/src/power.rs`, `every_sequence`). Not loom's:
+  `willSleep`, `didWake` and each step of the post-wake watch run whole under the bracket's one
+  lock, so the threads reduce to a sequence of atomic steps interleaved with the guest's
+  transitions. The walk drives `HostSleepState` as the bracket does, against a model guest that
+  knows whose request each suspend answers. The steps: the guest suspends on our pulse or its
+  user's request, starts or swallows a pulse, and finishes or aborts; the host sleeps, pauses and
+  wakes; a watch ticks, current or stale, before or after the grace, and may see an s2idle guest
+  as still suspending until it settles. The grace and the settle are tick variants, so no clock
+  seam was needed. 2,410,966 sequences to depth 12 in 0.14 s (release), and 45.7 M to depth 14 in
+  2.6 s. Checks: no wake lands on a suspend its user started; no pulse lands on a guest with one of
+  ours pending; with the host awake, a suspend of ours is always still ours and watched. It found
+  one bug: a pulse still in userspace at `didWake` shows no device, and a second host sleep before
+  it showed pulsed the guest again, the latched-button trap. Fixed: while a pulse of ours is
+  unresolved, `willSleep` does not pulse. Two costs of not seeing into the guest are counted
+  rather than failed, and the walk asserts it reaches both. A pulse is re-sent after the grace has
+  given up on an earlier one as swallowed. A user's own suspend is woken if it began while ours was
+  outstanding, since from the host it is indistinguishable from ours.
 - **Frame handoff** (`crates/limina/src/window/present.rs`). Not loom's either: the reader and the
   surface-port receiver each change one store under one lock, and the hazards are the orders in
   which the control lines and the Mach messages arrive, for a consumer on the AppKit main thread.
   An enumeration of arrival orders fits, once the store is generic over the surface type.
-- **The sweep.** Seventy-five entries, each caught by the assertion, test or model written for it,
+- **The sweep.** Seventy-nine entries, each caught by the assertion, test or model written for it,
   after two holes found by the sweep itself were closed (the coalescer's merge check and the head
   CRC). One more hole was in an entry and not in a model: registering a peer after its greeting
   survived the first clipboard model, which cannot reach the gap once serials are reused, and is
@@ -448,11 +460,8 @@ expensive call with an over-approximation the property does not depend on.
       witness, none by the compiler or a hang. Until then each entry had been run only as it was
       added. `cargo xtask check sabotage`, every entry, and each `SURVIVED`
       closed or retired with the reason recorded.
-   2. [ ] **The host-sleep bracket, enumerated** (`crates/limina-vmm/src/power.rs`).
-      `HostSleepState` walked against guest transitions: a suspend starting, finishing or
-      aborting, a late suspend after the host wakes, a second host sleep mid-watch. It checks
-      the invariant the module states: we only ever wake a guest whose sleep we asked for, and
-      that wake is never lost. Needs a seam for the watch's clock.
+   2. [x] **The host-sleep bracket, enumerated** (`crates/limina-vmm/src/power.rs`). Done
+      2026-09-26; what it covers and found is under *Measured so far*.
    3. [ ] **The frame handoff, enumerated** (`crates/limina/src/window/present.rs`). Every
       arrival order of control lines and surface-port messages, a worker swap included,
       against "no presented frame freezes". Needs `SurfaceStore` generic over the surface type.

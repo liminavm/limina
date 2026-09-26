@@ -738,6 +738,58 @@ SABOTAGES = [
         'third_party/libkrun/src/vmm',
         'macos::vstate::tests::every_park_site_answers_the_coordinator',
     ),
+    (
+        'a host sleep pulses a guest whose earlier pulse is unresolved',
+        'crates/limina-vmm/src/power.rs',
+        """            GuestSleep::Awake if self.ours => SleepAction::DontPulse,
+""",
+        """""",
+        'crates/limina-vmm',
+        'every_host_sleep_sequence_wakes_exactly_our_suspends',
+    ),
+    (
+        'a guest still suspending at the wake is left unwatched',
+        'crates/limina-vmm/src/power.rs',
+        """        if !self.ours {
+            return WakeAction::LeaveAlone;""",
+        """        if !self.ours || guest == GuestSleep::Suspending {
+            return WakeAction::LeaveAlone;""",
+        'crates/limina-vmm',
+        'every_host_sleep_sequence_wakes_exactly_our_suspends',
+    ),
+    (
+        'a watch stops on a suspend still under way',
+        'crates/limina-vmm/src/power.rs',
+        """            GuestSleep::Suspending => {
+                watch.seen_suspending = true;
+                WatchAction::Keep
+            }""",
+        """            GuestSleep::Suspending => {
+                watch.seen_suspending = true;
+                WatchAction::Stop
+            }""",
+        'crates/limina-vmm',
+        'every_host_sleep_sequence_wakes_exactly_our_suspends',
+    ),
+    (
+        "a host sleep claims the user's own suspend",
+        'crates/limina-vmm/src/power.rs',
+        """            GuestSleep::Suspending | GuestSleep::Asleep => SleepAction::DontPulse,
+        }
+    }
+
+    fn on_did_wake""",
+        """            GuestSleep::Suspending | GuestSleep::Asleep => {
+                self.ours = true;
+                SleepAction::DontPulse
+            }
+        }
+    }
+
+    fn on_did_wake""",
+        'crates/limina-vmm',
+        'every_host_sleep_sequence_wakes_exactly_our_suspends',
+    ),
 ]
 
 
