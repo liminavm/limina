@@ -149,6 +149,7 @@ enum WatchAction {
 }
 
 /// An armed post-wake watch.
+#[derive(Clone)]
 struct Watch {
     id: u64,
     /// Has the guest been seen part-way into the suspend? Once it has, coming back to
@@ -160,7 +161,7 @@ struct Watch {
 /// whose sleep WE requested. `ours` is set by our pulse and cleared only when that suspend
 /// is resolved — woken, aborted, or given up on — so it survives a failed quiesce wait, a
 /// wake that finds the guest still on its way down, and a host sleep in between.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct HostSleepState {
     ours: bool,
     watch: Option<Watch>,
@@ -172,6 +173,12 @@ impl HostSleepState {
         // The willSleep bracket takes over from any post-wake watch.
         self.watch = None;
         match guest {
+            // A guest that looks awake while a pulse of ours is still unresolved has that
+            // suspend pending in userspace (or swallowed, which the host cannot tell apart). A
+            // second pulse is the latched-button trap: it replays after the first suspend and
+            // re-suspends the guest with nobody left to wake it. The host sleeps with the guest
+            // paused instead, and the suspend stays ours (found by `every_sequence`).
+            GuestSleep::Awake if self.ours => SleepAction::DontPulse,
             GuestSleep::Awake => {
                 self.ours = true;
                 SleepAction::PulseAndWait
@@ -316,6 +323,13 @@ impl Bracket {
         // re-suspends it unwakeably on wake).
         let guest = self.guest_sleep();
         let pulse = match inner.state.on_will_sleep(guest) {
+            SleepAction::DontPulse if guest == GuestSleep::Awake => {
+                log::info!(
+                    "host sleep: our last sleep request has not shown in the guest yet; not \
+                     pulsing it again"
+                );
+                false
+            }
             SleepAction::DontPulse => {
                 log::info!("host sleep: guest is already {guest:?}; not pulsing");
                 false
@@ -837,6 +851,16 @@ mod tests {
         assert_eq!(s.on_watch(new, Asleep, false), WatchAction::WakeGuest);
     }
 
+    /// Our pulse was still in userspace at the wake, and the host sleeps again before the guest
+    /// shows it. A second pulse would replay after the first suspend and re-suspend the guest;
+    /// the suspend stays ours instead, and is woken once it completes.
+    #[test]
+    fn a_host_sleep_before_our_suspend_shows_does_not_pulse_again() {
+        let (mut s, _) = watching(Awake);
+        assert_eq!(s.on_will_sleep(Awake), SleepAction::DontPulse);
+        assert_eq!(s.on_did_wake(Asleep), WakeAction::WakeGuest);
+    }
+
     #[test]
     fn wake_ownership_does_not_leak_across_cycles() {
         let mut s = HostSleepState::default();
@@ -845,5 +869,333 @@ mod tests {
         // Next cycle: the user suspended the guest themselves.
         assert_eq!(s.on_will_sleep(Asleep), SleepAction::DontPulse);
         assert_eq!(s.on_did_wake(Asleep), WakeAction::LeaveAlone);
+    }
+}
+
+/// Every sequence of host sleeps, guest suspends and watch ticks, to a fixed depth, against a
+/// model guest that knows whose request each suspend answers.
+///
+/// [`HostSleepState`] is driven exactly as [`Bracket`] drives it: `willSleep` classifies the guest
+/// and pulses it if told to, then the guest may move while the bracket waits for it to quiesce,
+/// then the host pauses it; `didWake` classifies it and wakes it or arms a watch; a watch thread
+/// ticks with its own id, a stale one included, before or after the grace, and may see an s2idle
+/// guest as still suspending until it has settled. The guest suspends on our pulse or on its user's
+/// request, starts or swallows a pulse, and finishes or aborts a suspend.
+///
+/// After every step: no wake lands on a suspend the user started; no pulse lands on a guest that
+/// already has one of ours outstanding (the latched-button trap: the second request replays after
+/// the first suspend and re-suspends the guest with nobody left to wake it); and, with the host
+/// awake, a suspend of ours is always still ours and watched, so its wake cannot be lost.
+#[cfg(test)]
+mod every_sequence {
+    use super::{GuestSleep, HostSleepState, SleepAction, WakeAction, WatchAction};
+
+    /// Who asked for the suspend a guest is in, or has pending.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Owner {
+        Us,
+        /// Ours, but the watch gave up on it: the documented cost of the grace.
+        Abandoned,
+        User,
+        /// The user's, started while a request of ours was outstanding: from the host it looks
+        /// exactly like ours, and nothing the host can see tells them apart.
+        UserWhileOurs,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Guest {
+        Awake,
+        /// Our pulse landed and its suspend is still in userspace: no device shows it yet.
+        Requested(Owner),
+        Suspending(Owner),
+        Asleep(Owner),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Host {
+        Awake,
+        /// `willSleep` is holding the ack while the guest quiesces.
+        Quiescing,
+        Asleep,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Op {
+        UserSuspends,
+        PulseStarts,
+        PulseSwallowed,
+        Finishes,
+        Aborts,
+        WillSleep,
+        Pause,
+        DidWake,
+        /// A tick of the newest (`true`) or oldest live watch thread, after the grace or not.
+        Tick {
+            newest: bool,
+            grace_over: bool,
+        },
+        /// The newest watch sees an s2idle guest before it has settled.
+        TickUnsettled,
+    }
+
+    const OPS: [Op; 13] = [
+        Op::UserSuspends,
+        Op::PulseStarts,
+        Op::PulseSwallowed,
+        Op::Finishes,
+        Op::Aborts,
+        Op::WillSleep,
+        Op::Pause,
+        Op::DidWake,
+        Op::Tick {
+            newest: true,
+            grace_over: false,
+        },
+        Op::Tick {
+            newest: true,
+            grace_over: true,
+        },
+        Op::Tick {
+            newest: false,
+            grace_over: false,
+        },
+        Op::Tick {
+            newest: false,
+            grace_over: true,
+        },
+        Op::TickUnsettled,
+    ];
+
+    #[derive(Clone)]
+    struct World {
+        state: HostSleepState,
+        guest: Guest,
+        host: Host,
+        /// Watch threads still running, by id, oldest first.
+        watches: Vec<u64>,
+        /// A pulse went to a guest whose earlier pulse the watch had given up on.
+        repulsed_after_grace: bool,
+        /// A wake went to a user's suspend the host could not tell from ours.
+        woke_ambiguous: bool,
+    }
+
+    fn classify(g: Guest) -> GuestSleep {
+        match g {
+            Guest::Awake | Guest::Requested(_) => GuestSleep::Awake,
+            Guest::Suspending(_) => GuestSleep::Suspending,
+            Guest::Asleep(_) => GuestSleep::Asleep,
+        }
+    }
+
+    impl World {
+        fn new() -> World {
+            World {
+                state: HostSleepState::default(),
+                guest: Guest::Awake,
+                host: Host::Awake,
+                watches: Vec::new(),
+                repulsed_after_grace: false,
+                woke_ambiguous: false,
+            }
+        }
+
+        fn wake(&mut self) -> Result<(), String> {
+            if let Guest::Asleep(owner) = self.guest {
+                match owner {
+                    Owner::User => return Err("woke a guest its user suspended".into()),
+                    Owner::UserWhileOurs => self.woke_ambiguous = true,
+                    Owner::Us | Owner::Abandoned => {}
+                }
+                self.guest = Guest::Awake;
+            }
+            Ok(())
+        }
+
+        fn tick(&mut self, id: u64, seen: GuestSleep, grace_over: bool) -> Result<(), String> {
+            match self.state.on_watch(id, seen, grace_over) {
+                WatchAction::Keep => {}
+                WatchAction::WakeGuest => {
+                    self.watches.retain(|w| *w != id);
+                    self.wake()?;
+                }
+                WatchAction::Stop => {
+                    self.watches.retain(|w| *w != id);
+                    // A pulse still pending when the bracket lets go of it is the grace's cost.
+                    if self.guest == Guest::Requested(Owner::Us) && !self.state.ours {
+                        self.guest = Guest::Requested(Owner::Abandoned);
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        /// Apply `op`; `None` when it cannot happen here.
+        fn step(&mut self, op: Op) -> Option<Result<(), String>> {
+            let guest_may_move = self.host != Host::Asleep;
+            let watch_may_run = self.host == Host::Awake;
+            match op {
+                Op::UserSuspends if guest_may_move && self.guest == Guest::Awake => {
+                    self.guest = Guest::Suspending(if self.state.ours {
+                        Owner::UserWhileOurs
+                    } else {
+                        Owner::User
+                    });
+                }
+                Op::PulseStarts if guest_may_move => match self.guest {
+                    Guest::Requested(o) => self.guest = Guest::Suspending(o),
+                    _ => return None,
+                },
+                Op::PulseSwallowed if guest_may_move => match self.guest {
+                    Guest::Requested(_) => self.guest = Guest::Awake,
+                    _ => return None,
+                },
+                Op::Finishes if guest_may_move => match self.guest {
+                    Guest::Suspending(o) => self.guest = Guest::Asleep(o),
+                    _ => return None,
+                },
+                Op::Aborts if guest_may_move => match self.guest {
+                    Guest::Suspending(_) => self.guest = Guest::Awake,
+                    _ => return None,
+                },
+                Op::WillSleep if self.host == Host::Awake => {
+                    self.host = Host::Quiescing;
+                    if self.state.on_will_sleep(classify(self.guest)) == SleepAction::PulseAndWait {
+                        match self.guest {
+                            Guest::Awake => self.guest = Guest::Requested(Owner::Us),
+                            // The grace's cost: a pulse the watch gave up on as swallowed may in
+                            // fact still be pending. Counted, so the walk shows it is reachable.
+                            Guest::Requested(Owner::Abandoned) => {
+                                self.guest = Guest::Requested(Owner::Us);
+                                self.repulsed_after_grace = true;
+                            }
+                            Guest::Requested(_) => {
+                                return Some(Err(
+                                    "pulsed a guest that already had a request of ours pending"
+                                        .into(),
+                                ));
+                            }
+                            other => return Some(Err(format!("pulsed a guest {other:?}"))),
+                        }
+                    }
+                }
+                Op::Pause if self.host == Host::Quiescing => self.host = Host::Asleep,
+                Op::DidWake if self.host == Host::Asleep => {
+                    self.host = Host::Awake;
+                    match self.state.on_did_wake(classify(self.guest)) {
+                        WakeAction::WakeGuest => return Some(self.wake()),
+                        WakeAction::Watch(id) => self.watches.push(id),
+                        WakeAction::LeaveAlone => {}
+                    }
+                }
+                Op::Tick { newest, grace_over } if watch_may_run => {
+                    let id = if newest {
+                        *self.watches.last()?
+                    } else {
+                        *self.watches.first()?
+                    };
+                    return Some(self.tick(id, classify(self.guest), grace_over));
+                }
+                Op::TickUnsettled if watch_may_run && matches!(self.guest, Guest::Asleep(_)) => {
+                    let id = *self.watches.last()?;
+                    return Some(self.tick(id, GuestSleep::Suspending, false));
+                }
+                _ => return None,
+            }
+            Some(Ok(()))
+        }
+
+        /// With the host awake, a suspend of ours must still be ours and watched, or nothing will
+        /// ever wake it.
+        fn check(&self) -> Result<(), String> {
+            let ours_in_flight = matches!(
+                self.guest,
+                Guest::Requested(Owner::Us)
+                    | Guest::Suspending(Owner::Us)
+                    | Guest::Asleep(Owner::Us)
+            );
+            if self.host == Host::Awake && ours_in_flight && self.state.watch.is_none() {
+                return Err(format!(
+                    "our suspend ({:?}) is no longer watched: its wake is lost",
+                    self.guest
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    struct Walk {
+        sequences: u64,
+        wakes: u64,
+        pulses_pending_at_sleep: u64,
+        repulsed_after_grace: u64,
+        woke_ambiguous: u64,
+    }
+
+    fn walk(world: &World, path: &mut Vec<Op>, depth: usize, w: &mut Walk) {
+        w.sequences += 1;
+        if let Err(e) = world.check() {
+            panic!("{e}, after {path:?}");
+        }
+        if matches!(world.guest, Guest::Requested(Owner::Us)) && world.host == Host::Asleep {
+            w.pulses_pending_at_sleep += 1;
+        }
+        if world.repulsed_after_grace {
+            w.repulsed_after_grace += 1;
+        }
+        if world.woke_ambiguous {
+            w.woke_ambiguous += 1;
+        }
+        if depth == 0 {
+            return;
+        }
+        for op in OPS {
+            let mut next = world.clone();
+            let before = next.guest;
+            match next.step(op) {
+                None => continue,
+                Some(Err(e)) => {
+                    path.push(op);
+                    panic!("{e}, after {path:?}");
+                }
+                Some(Ok(())) => {}
+            }
+            if matches!(before, Guest::Asleep(_)) && next.guest == Guest::Awake {
+                w.wakes += 1;
+            }
+            path.push(op);
+            walk(&next, path, depth - 1, w);
+            path.pop();
+        }
+    }
+
+    #[test]
+    fn every_host_sleep_sequence_wakes_exactly_our_suspends() {
+        let mut w = Walk {
+            sequences: 0,
+            wakes: 0,
+            pulses_pending_at_sleep: 0,
+            repulsed_after_grace: 0,
+            woke_ambiguous: 0,
+        };
+        walk(&World::new(), &mut Vec::new(), 12, &mut w);
+        eprintln!(
+            "{} sequences, {} wakes, {} with our pulse pending across a host sleep, {} pulsed \
+             again after the grace gave up, {} waking a user's suspend begun while ours was out",
+            w.sequences,
+            w.wakes,
+            w.pulses_pending_at_sleep,
+            w.repulsed_after_grace,
+            w.woke_ambiguous
+        );
+        assert!(w.wakes > 0, "the walk never woke a guest");
+        assert!(
+            w.pulses_pending_at_sleep > 0,
+            "the walk never slept the host with our pulse still in userspace"
+        );
+        // The two costs of not being able to see into the guest, which the walk must reach to
+        // say so: a pulse re-sent after the grace gave up, and a user's suspend woken because
+        // it began while ours was outstanding.
+        assert!(w.repulsed_after_grace > 0);
+        assert!(w.woke_ambiguous > 0);
     }
 }
