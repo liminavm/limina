@@ -26,8 +26,12 @@
 //! Tests point this at a private NAMED pasteboard via `LIMINA_PASTEBOARD` (the general
 //! pasteboard is the product default) — see `crates/limina-test/tests/l1_clipboard.rs`.
 
+// The locks are loom's under `--cfg loom`, so the control plane's model can interleave a host
+// copy, the poller and an agent joining (`crate::control::loom_model`).
+#[cfg(loom)]
+use loom::sync::Mutex;
+#[cfg(not(loom))]
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use limina_proto::{ClipData, ClipOffer, ClipRequest, Message};
 use objc2::rc::Retained;
@@ -53,23 +57,47 @@ pub(crate) fn copy_to_pasteboard(text: &str) {
 pub const TEXT_MIME: &str = "text/plain;charset=utf-8";
 
 /// Host clipboard-bridge state, owned by the control plane's `Inner`.
-pub struct Clipboard {
+///
+/// Generic over the pasteboard itself only so the control plane's loom model can stand in for
+/// NSPasteboard; everything else is [`NsPasteboard`].
+pub struct Clipboard<S: PasteboardServer = NsPasteboard> {
     /// All NSPasteboard access is serialized here (AppKit doesn't promise thread-safety;
     /// the poller and peer serve threads all funnel through this lock).
-    pasteboard: Mutex<Pasteboard>,
-    /// Serial of the host's current outstanding offer (0 = none yet).
-    host_serial: AtomicU64,
-    /// The text backing the host's current offer, served on peer REQUESTs.
-    host_text: Mutex<Option<String>>,
+    pasteboard: Mutex<Pasteboard<S>>,
+    /// The host's current offer. Taken before `pasteboard` wherever both are held.
+    host: Mutex<HostOffer>,
+}
+
+/// The host's current outstanding offer: its serial (0 = none yet) and the text served on peer
+/// REQUESTs for it. One lock for both, so a REQUEST is never answered with another serial's text.
+#[derive(Default)]
+struct HostOffer {
+    serial: u64,
+    text: Option<String>,
+}
+
+impl HostOffer {
+    /// Offer `text`, under a new serial only if it is not what the current one already offers.
+    ///
+    /// A new serial retires the old one: every peer holding it has its REQUEST refused, and
+    /// nothing re-offers it. That is right when the content changed — the new offer goes to them
+    /// too — but a late joiner's greeting offers only to itself, so re-minting the same text
+    /// there stranded every other guest mid-exchange (found by `crate::control::loom_model`).
+    fn offer(&mut self, text: String) -> Message {
+        if self.text.as_deref() != Some(text.as_str()) {
+            self.serial += 1;
+            self.text = Some(text);
+        }
+        Message::ClipOffer(ClipOffer {
+            serial: self.serial,
+            mime_types: vec![TEXT_MIME.to_string(), "text/plain".to_string()],
+        })
+    }
 }
 
 impl Clipboard {
     pub fn new() -> Clipboard {
-        Clipboard {
-            pasteboard: Mutex::new(Pasteboard::new()),
-            host_serial: AtomicU64::new(0),
-            host_text: Mutex::new(None),
-        }
+        Clipboard::with_server(NsPasteboard::from_env())
     }
 
     /// The poll cadence (`LIMINA_CLIP_POLL_MS`, default 500 ms).
@@ -79,6 +107,15 @@ impl Clipboard {
             .and_then(|v| v.parse().ok())
             .unwrap_or(500);
         std::time::Duration::from_millis(ms)
+    }
+}
+
+impl<S: PasteboardServer> Clipboard<S> {
+    pub fn with_server(server: S) -> Clipboard<S> {
+        Clipboard {
+            pasteboard: Mutex::new(Pasteboard::new(server)),
+            host: Mutex::new(HostOffer::default()),
+        }
     }
 
     /// One poller tick: the new host clipboard text if the pasteboard changed since the
@@ -93,12 +130,19 @@ impl Clipboard {
         self.pasteboard.lock().unwrap().take_changed_text()
     }
 
-    /// The host's current content as a fresh offer for a newly-connected peer (None if
-    /// the pasteboard is empty). Late joiners need the current clipboard, not the next.
+    /// The host's current content as an offer for a newly-connected peer (None if the
+    /// pasteboard is empty). Late joiners need the current clipboard, not the next.
+    ///
+    /// The pasteboard is read with the offer held, so the serial order is the order the
+    /// content was read in. Read first and offered after, a poller offering a newer copy in
+    /// between was outranked by this older text, which then answered every peer's REQUEST
+    /// while the pasteboard held the newer one — and the poller, having consumed the change,
+    /// never offered it again.
     pub fn initial_offer(&self) -> Option<Message> {
+        let mut host = self.host.lock().unwrap();
         // No change-count bump involved: read whatever is there right now.
         let text = self.pasteboard.lock().unwrap().current_text()?;
-        Some(self.make_offer(text))
+        Some(host.offer(text))
     }
 
     /// Put guest-sourced text on the host pasteboard, whichever transport carried it.
@@ -116,15 +160,10 @@ impl Clipboard {
         self.pasteboard.lock().unwrap().current_text()
     }
 
-    /// Wrap host text as a control-plane OFFER, bumping the host serial and caching the
-    /// content behind it for the REQUESTs that follow.
+    /// Wrap host text as a control-plane OFFER, caching the content behind it for the
+    /// REQUESTs that follow ([`HostOffer::offer`]).
     pub fn make_offer(&self, text: String) -> Message {
-        let serial = self.host_serial.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.host_text.lock().unwrap() = Some(text);
-        Message::ClipOffer(ClipOffer {
-            serial,
-            mime_types: vec![TEXT_MIME.to_string(), "text/plain".to_string()],
-        })
+        self.host.lock().unwrap().offer(text)
     }
 
     /// A peer announced new guest clipboard content: request the text (if it has a
@@ -155,10 +194,13 @@ impl Clipboard {
 
     /// A peer wants the data behind the host's offer `serial`.
     pub fn on_request(&self, req: ClipRequest) -> Option<Message> {
-        if req.serial != self.host_serial.load(Ordering::Relaxed) {
-            return None; // stale: they'll get a fresh offer soon enough
-        }
-        let text = self.host_text.lock().unwrap().clone()?;
+        let text = {
+            let host = self.host.lock().unwrap();
+            if req.serial != host.serial {
+                return None; // stale: they'll get a fresh offer soon enough
+            }
+            host.text.clone()?
+        };
         // Content a frame can't carry gets an explicit error, not a doomed write that
         // would kill the peer's serve thread (and never silent truncation). The guest
         // keeps its current clipboard; chunking is the future fix.
@@ -194,33 +236,68 @@ impl Clipboard {
     }
 }
 
-/// The NSPasteboard wrapper: a named pasteboard for tests (`LIMINA_PASTEBOARD`) or the
-/// general (real) one, plus the change-count bookkeeping that both detects app copies
-/// and suppresses our own writes.
-struct Pasteboard {
-    pb: Retained<NSPasteboard>,
-    /// The change count as of our last look (or our last write — which is what keeps
-    /// guest-sourced content from echoing back to the guest).
-    last_count: isize,
+/// What the bridge needs from a pasteboard: the three calls it makes on NSPasteboard. A seam so
+/// the control plane's loom model can play the pasteboard server, whose change count other
+/// apps move under us.
+pub trait PasteboardServer: Send {
+    fn change_count(&self) -> isize;
+    fn text(&self) -> Option<String>;
+    /// `clearContents` then `setString`: AppKit bumps the change count on the first only.
+    fn replace(&self, text: &str);
 }
+
+/// The real pasteboard: a named one for tests (`LIMINA_PASTEBOARD`) or the general one.
+pub struct NsPasteboard(Retained<NSPasteboard>);
 
 // SAFETY: NSPasteboard messages funnel to the pasteboard server; the class itself is
 // documented thread-agnostic (no main-thread requirement), and all our access is
 // additionally serialized behind the owning Mutex.
-unsafe impl Send for Pasteboard {}
+unsafe impl Send for NsPasteboard {}
 
-impl Pasteboard {
-    fn new() -> Pasteboard {
-        let pb = match std::env::var("LIMINA_PASTEBOARD") {
+impl NsPasteboard {
+    fn from_env() -> NsPasteboard {
+        NsPasteboard(match std::env::var("LIMINA_PASTEBOARD") {
             Ok(name) if !name.is_empty() => {
                 log::info!("clipboard: using named pasteboard {name:?} (LIMINA_PASTEBOARD)");
                 NSPasteboard::pasteboardWithName(&NSString::from_str(&name))
             }
             _ => NSPasteboard::generalPasteboard(),
-        };
+        })
+    }
+}
+
+impl PasteboardServer for NsPasteboard {
+    fn change_count(&self) -> isize {
+        self.0.changeCount()
+    }
+
+    fn text(&self) -> Option<String> {
+        unsafe { self.0.stringForType(NSPasteboardTypeString) }.map(|s| s.to_string())
+    }
+
+    fn replace(&self, text: &str) {
+        unsafe {
+            self.0.clearContents();
+            self.0
+                .setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+        }
+    }
+}
+
+/// The pasteboard plus the change-count bookkeeping that both detects app copies and
+/// suppresses our own writes.
+struct Pasteboard<S> {
+    server: S,
+    /// The change count as of our last look (or our last write — which is what keeps
+    /// guest-sourced content from echoing back to the guest).
+    last_count: isize,
+}
+
+impl<S: PasteboardServer> Pasteboard<S> {
+    fn new(server: S) -> Pasteboard<S> {
         // Pre-existing content is not a "change"; late joiners get it via initial_offer.
-        let last_count = pb.changeCount();
-        Pasteboard { pb, last_count }
+        let last_count = server.change_count();
+        Pasteboard { server, last_count }
     }
 
     /// The text content if the pasteboard changed since the last look (consumes the
@@ -236,7 +313,7 @@ impl Pasteboard {
     /// genuinely text-less change (image copy, bare clear) just re-reads on each poll and
     /// never offers, which is the correct behavior for it anyway.
     fn take_changed_text(&mut self) -> Option<String> {
-        let count = self.pb.changeCount();
+        let count = self.server.change_count();
         if count == self.last_count {
             return None;
         }
@@ -246,17 +323,13 @@ impl Pasteboard {
     }
 
     fn current_text(&self) -> Option<String> {
-        unsafe { self.pb.stringForType(NSPasteboardTypeString) }.map(|s| s.to_string())
+        self.server.text()
     }
 
     /// Replace the pasteboard content, recording the resulting change count so the
     /// poller doesn't treat our own write as a fresh host copy.
     fn set_text(&mut self, text: &str) {
-        unsafe {
-            self.pb.clearContents();
-            self.pb
-                .setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
-            self.last_count = self.pb.changeCount();
-        }
+        self.server.replace(text);
+        self.last_count = self.server.change_count();
     }
 }

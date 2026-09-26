@@ -20,12 +20,21 @@
 //! every caller falls back to the pre-existing teardown ladder. Agents may also
 //! reconnect (guest reboot), so the accept loop runs for the supervisor's lifetime.
 
+use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+// The peer registry and each peer's write half are loom's locks under `--cfg loom`, so
+// `loom_model` can interleave an agent joining with a host copy being offered.
+#[cfg(loom)]
+use loom::sync::Mutex as PeerMutex;
+#[cfg(not(loom))]
+use std::sync::Mutex as PeerMutex;
+
+use crate::clipboard::{Clipboard, PasteboardServer};
 use anyhow::{Context, Result};
 use limina_proto::{
     CHANNEL_CLIPBOARD, CHANNEL_CONTROL, Message, Shutdown, Welcome, read_message, write_message,
@@ -60,11 +69,13 @@ pub struct ControlPlane {
 /// and broadcasters (the clipboard poller, shutdown requests). `write_message` is two
 /// `write_all`s, so unsynchronized writers could interleave mid-frame and corrupt the
 /// stream.
-struct Peer {
+///
+/// Generic over the write half only so `loom_model` can read back what each peer was sent.
+struct Peer<W = UnixStream> {
     id: u64,
     agent: String,
     caps: Vec<String>,
-    stream: Arc<Mutex<UnixStream>>,
+    stream: Arc<PeerMutex<W>>,
     /// When the peer last said anything (updated by its serve loop on every inbound
     /// message — heartbeats included). The liveness monitor reads this.
     last_seen: Arc<Mutex<Instant>>,
@@ -73,7 +84,7 @@ struct Peer {
     silent: Arc<AtomicBool>,
 }
 
-impl Peer {
+impl<W: Write> Peer<W> {
     fn has_cap(&self, cap: &str) -> bool {
         self.caps.iter().any(|c| c == cap)
     }
@@ -118,7 +129,7 @@ struct QgaSlot {
 }
 
 struct Inner {
-    peers: Mutex<Vec<Arc<Peer>>>,
+    peers: Peers,
     next_id: AtomicU64,
     /// The one pasteboard owner, shared with the vdagent transport (M12 #37): both the
     /// control plane's peers and `spice-vdagent` feed the same clipboard state.
@@ -197,7 +208,7 @@ impl ControlPlane {
         *CLEANUP_PATH.lock().unwrap() = Some(socket_path.to_path_buf());
 
         let inner = Arc::new(Inner {
-            peers: Mutex::new(Vec::new()),
+            peers: PeerMutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
             power_policy: Mutex::new(crate::power_profile::PowerProfile::default().policy()),
             clipboard: Arc::new(crate::clipboard::Clipboard::new()),
@@ -239,8 +250,7 @@ impl ControlPlane {
                     if let Some(vdagent) = poll_inner.vdagent.lock().unwrap().clone() {
                         vdagent.host_copy(text.clone());
                     }
-                    let offer = poll_inner.clipboard.make_offer(text);
-                    poll_inner.broadcast_clipboard(&offer);
+                    offer_host_copy(&poll_inner.peers, &poll_inner.clipboard, text);
                 }
             })
             .context("spawning the clipboard poll thread")?;
@@ -624,47 +634,10 @@ impl Inner {
         grow
     }
 
-    /// Send a clipboard message to every clipboard-capable peer, dropping any whose
-    /// send fails (dead connection).
-    fn broadcast_clipboard(&self, msg: &Message) {
-        self.send_to_capable("clipboard", msg, CHANNEL_CLIPBOARD);
-    }
-
     /// Send `msg` to every peer with `cap`, returning the agents that took it and
-    /// dropping any whose send fails (dead or wedged connection).
-    ///
-    /// Sends happen on a SNAPSHOT of the registry, never while holding the peers lock:
-    /// each peer's socket has a write timeout ([`write_timeout`]) rather than blocking
-    /// forever, but even a bounded stall must not serialize registration, the liveness
-    /// sweep, and the shutdown ladder behind one slow peer. (Snapshotting is what makes
-    /// this safe: a peer that deregisters concurrently just gets a failed send here.)
+    /// dropping any whose send fails (dead or wedged connection). See [`send_to_capable`].
     fn send_to_capable(&self, cap: &str, msg: &Message, channel: u32) -> Vec<String> {
-        let targets: Vec<Arc<Peer>> = self
-            .peers
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|p| p.has_cap(cap))
-            .cloned()
-            .collect();
-        let mut delivered = Vec::new();
-        let mut failed = Vec::new();
-        for peer in targets {
-            match peer.send(msg, channel) {
-                Ok(()) => delivered.push(peer.agent.clone()),
-                Err(e) => {
-                    log::warn!("control: send to {} failed ({e}); dropping it", peer.agent);
-                    failed.push(peer.id);
-                }
-            }
-        }
-        if !failed.is_empty() {
-            self.peers
-                .lock()
-                .unwrap()
-                .retain(|p| !failed.contains(&p.id));
-        }
-        delivered
+        send_to_capable(&self.peers, cap, msg, channel)
     }
 
     /// Deliver a bootstrap kit into a guest that has no `limina-agent` (`crate::qga::bootstrap`).
@@ -943,6 +916,88 @@ impl Inner {
 
 /// Accept connections forever, one serve thread per peer (agents are independent: the
 /// root daemon and per-session helpers must be able to talk concurrently).
+/// The connected agents. A type of its own so the functions below, which are everything that
+/// reads or changes the registry, can be driven by `loom_model` over an in-memory write half.
+type Peers<W = UnixStream> = PeerMutex<Vec<Arc<Peer<W>>>>;
+
+/// Send `msg` to every peer with `cap`, returning the agents that took it and
+/// dropping any whose send fails (dead or wedged connection).
+///
+/// Sends happen on a SNAPSHOT of the registry, never while holding the peers lock:
+/// each peer's socket has a write timeout ([`write_timeout`]) rather than blocking
+/// forever, but even a bounded stall must not serialize registration, the liveness
+/// sweep, and the shutdown ladder behind one slow peer. (Snapshotting is what makes
+/// this safe: a peer that deregisters concurrently just gets a failed send here.)
+fn send_to_capable<W: Write>(
+    peers: &Peers<W>,
+    cap: &str,
+    msg: &Message,
+    channel: u32,
+) -> Vec<String> {
+    let targets: Vec<Arc<Peer<W>>> = peers
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|p| p.has_cap(cap))
+        .cloned()
+        .collect();
+    let mut delivered = Vec::new();
+    let mut failed = Vec::new();
+    for peer in targets {
+        match peer.send(msg, channel) {
+            Ok(()) => delivered.push(peer.agent.clone()),
+            Err(e) => {
+                log::warn!("control: send to {} failed ({e}); dropping it", peer.agent);
+                failed.push(peer.id);
+            }
+        }
+    }
+    if !failed.is_empty() {
+        peers.lock().unwrap().retain(|p| !failed.contains(&p.id));
+    }
+    delivered
+}
+
+/// The poller saw a host copy: offer it to every clipboard-capable peer.
+fn offer_host_copy<W: Write, S: PasteboardServer>(
+    peers: &Peers<W>,
+    clipboard: &Clipboard<S>,
+    text: String,
+) {
+    let offer = clipboard.make_offer(text);
+    send_to_capable(peers, "clipboard", &offer, CHANNEL_CLIPBOARD);
+}
+
+/// Bring a handshaken peer into the registry, and greet it with what a late joiner needs: the
+/// host's current clipboard, and the host clock (`time_sync`, for a `timesync` peer).
+///
+/// Registered FIRST, then greeted. The greeting reads the clipboard as it is at that moment, so
+/// a host copy offered between the read and the registration reached every peer but this one,
+/// and the poller never offers the same copy twice: that guest kept the older clipboard until
+/// the next host copy (found by `loom_model`). Registered first, a copy offered at any point is
+/// either broadcast to it or already on the pasteboard the greeting reads. A broadcast that
+/// overtakes the greeting on the wire is harmless: the guest ignores an offer older than the
+/// newest it has seen.
+fn admit<W: Write, S: PasteboardServer>(
+    peers: &Peers<W>,
+    peer: Arc<Peer<W>>,
+    clipboard: &Clipboard<S>,
+    time_sync: impl FnOnce() -> Message,
+) {
+    peers.lock().unwrap().push(peer.clone());
+    // A late joiner needs the CURRENT host clipboard, not just the next change.
+    if peer.has_cap("clipboard")
+        && let Some(offer) = clipboard.initial_offer()
+    {
+        let _ = peer.send(&offer, CHANNEL_CLIPBOARD);
+    }
+    // Seed the guest clock immediately: the agent (re)connects at boot AND right after a
+    // snapshot restore — exactly the moments the guest's CNTVCT-anchored clock is stale.
+    if peer.has_cap("timesync") {
+        let _ = peer.send(&time_sync(), CHANNEL_CONTROL);
+    }
+}
+
 fn accept_loop(listener: UnixListener, inner: Arc<Inner>) {
     for stream in listener.incoming() {
         match stream {
@@ -1030,7 +1085,7 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
     )?;
 
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
-    let writer = Arc::new(Mutex::new(stream.try_clone()?));
+    let writer = Arc::new(PeerMutex::new(stream.try_clone()?));
     let last_seen = Arc::new(Mutex::new(Instant::now()));
     let peer = Arc::new(Peer {
         id,
@@ -1040,18 +1095,7 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         last_seen: last_seen.clone(),
         silent: Arc::new(AtomicBool::new(false)),
     });
-    // A late joiner needs the CURRENT host clipboard, not just the next change.
-    if peer.has_cap("clipboard")
-        && let Some(offer) = inner.clipboard.initial_offer()
-    {
-        let _ = peer.send(&offer, CHANNEL_CLIPBOARD);
-    }
-    // Seed the guest clock immediately: the agent (re)connects at boot AND right after a
-    // snapshot restore — exactly the moments the guest's CNTVCT-anchored clock is stale.
-    if peer.has_cap("timesync") {
-        let _ = peer.send(&time_sync_now(), CHANNEL_CONTROL);
-    }
-    inner.peers.lock().unwrap().push(peer);
+    admit(&inner.peers, peer, &inner.clipboard, time_sync_now);
 
     // Per-peer CTAPHID state: the agent creates one uhid FIDO device per connection,
     // so channel ids and reassembly are connection-scoped by construction; the passkey
@@ -1071,7 +1115,7 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
 /// mutex — never the raw read stream — because broadcasters write concurrently.
 fn serve_loop(
     stream: &mut UnixStream,
-    writer: &Mutex<UnixStream>,
+    writer: &PeerMutex<UnixStream>,
     inner: &Inner,
     last_seen: &Mutex<Instant>,
     fido: &mut Option<crate::fido::FidoAuthenticator>,
@@ -1255,7 +1299,7 @@ fn set_nosigpipe(stream: &UnixStream) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use limina_proto::Hello;
@@ -1605,5 +1649,212 @@ mod tests {
         assert!(!plane.request_shutdown(Duration::from_secs(0)));
         drop(wedged);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// loom models of an agent joining while the host clipboard changes: the poller offering a
+/// host copy races [`admit`] greeting a new peer with the current clipboard.
+///
+/// Run with `cargo xtask check loom crates/limina`. The registry, each peer's write half, the
+/// clipboard's locks and its serial are loom's, and so is the lock of the stand-in pasteboard
+/// server, which another app writes to as AppKit does: `clearContents` (which bumps the change
+/// count) and then `setString` (which does not).
+///
+/// After each run the poller is ticked until it has nothing left to offer, as it would be within
+/// half a second, and then every peer is asked what its guest ends up with. A guest keeps the
+/// newest host offer it has seen (`limina-agent-session` ignores an older serial) and requests
+/// its data; the host must serve that request, with what is on the pasteboard now. The request
+/// is made last, which is the latest the guest can be: a request is answered from the host's
+/// state when it arrives, and nothing bounds how long it takes to get there.
+#[cfg(all(test, loom))]
+mod loom_model {
+    use std::io::Cursor;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Instant;
+
+    use limina_proto::{ClipRequest, Message, read_message};
+    use loom::sync::Mutex;
+    use loom::thread;
+
+    use super::{Peer, PeerMutex, Peers, admit, offer_host_copy, time_sync_now};
+    use crate::clipboard::{Clipboard, PasteboardServer, TEXT_MIME};
+
+    /// The pasteboard server: its change count and the text on it.
+    #[derive(Clone)]
+    struct Server(Arc<Mutex<(isize, Option<String>)>>);
+
+    impl Server {
+        fn holding(text: &str) -> Server {
+            Server(Arc::new(Mutex::new((1, Some(text.into())))))
+        }
+        /// Another app copies `text`: two calls, and a poll can land between them.
+        fn copy(&self, text: &str) {
+            self.clear();
+            self.0.lock().unwrap().1 = Some(text.into());
+        }
+        fn clear(&self) {
+            let mut s = self.0.lock().unwrap();
+            s.0 += 1;
+            s.1 = None;
+        }
+    }
+
+    impl PasteboardServer for Server {
+        fn change_count(&self) -> isize {
+            self.0.lock().unwrap().0
+        }
+        fn text(&self) -> Option<String> {
+            self.0.lock().unwrap().1.clone()
+        }
+        fn replace(&self, text: &str) {
+            self.copy(text);
+        }
+    }
+
+    type Wire = Arc<PeerMutex<Vec<u8>>>;
+
+    fn peer(id: u64) -> (Arc<Peer<Vec<u8>>>, Wire) {
+        let wire: Wire = Arc::new(PeerMutex::new(Vec::new()));
+        let peer = Arc::new(Peer {
+            id,
+            agent: format!("session-{id}"),
+            caps: vec!["clipboard".into()],
+            stream: wire.clone(),
+            last_seen: Arc::new(std::sync::Mutex::new(Instant::now())),
+            silent: Arc::new(AtomicBool::new(false)),
+        });
+        (peer, wire)
+    }
+
+    /// One poller tick, as `ControlPlane::start`'s poll thread runs it.
+    fn poll(peers: &Peers<Vec<u8>>, clipboard: &Clipboard<Server>) -> bool {
+        match clipboard.poll_local_change() {
+            Some(text) => {
+                offer_host_copy(peers, clipboard, text);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Settle, then check what each guest ends up with.
+    fn check(
+        peers: &Peers<Vec<u8>>,
+        clipboard: &Clipboard<Server>,
+        server: &Server,
+        wires: &[&Wire],
+    ) {
+        while poll(peers, clipboard) {}
+        let want = server.text();
+        assert_eq!(
+            peers.lock().unwrap().len(),
+            wires.len(),
+            "every peer is registered"
+        );
+        for (i, wire) in wires.iter().enumerate() {
+            let bytes = wire.lock().unwrap().clone();
+            let mut cursor = Cursor::new(bytes.as_slice());
+            let mut newest = None;
+            while let Ok((_, msg)) = read_message(&mut cursor) {
+                if let Message::ClipOffer(o) = msg {
+                    newest = newest.max(Some(o.serial));
+                }
+            }
+            let Some(serial) = newest else {
+                panic!("peer {i} was never offered the host clipboard ({want:?})");
+            };
+            let answer = clipboard.on_request(ClipRequest {
+                serial,
+                mime_type: TEXT_MIME.into(),
+            });
+            let got = match answer {
+                Some(Message::ClipData(d)) => Some(String::from_utf8(d.data).unwrap()),
+                Some(other) => panic!("peer {i}'s request for {serial} was answered {other:?}"),
+                None => None,
+            };
+            assert_eq!(
+                got, want,
+                "peer {i} holds offer {serial}; its guest must be served the host clipboard"
+            );
+        }
+    }
+
+    /// Someone copied on the host, and before the poller offers it an agent connects: the
+    /// poller's tick races the new peer's greeting. An agent already connected holds the
+    /// offer of what was there before.
+    #[test]
+    fn an_agent_joins_as_a_host_copy_is_offered() {
+        loom::model(|| {
+            let server = Server::holding("before");
+            let clipboard = Arc::new(Clipboard::with_server(server.clone()));
+            let peers: Arc<Peers<Vec<u8>>> = Arc::new(PeerMutex::new(Vec::new()));
+            let (a, wire_a) = peer(1);
+            admit(&peers, a, &clipboard, time_sync_now);
+            server.copy("copied");
+
+            let poller = {
+                let (peers, clipboard) = (peers.clone(), clipboard.clone());
+                thread::spawn(move || {
+                    poll(&peers, &clipboard);
+                })
+            };
+            let (b, wire_b) = peer(2);
+            admit(&peers, b, &clipboard, time_sync_now);
+            poller.join().unwrap();
+            check(&peers, &clipboard, &server, &[&wire_a, &wire_b]);
+        });
+    }
+
+    /// All three at once: another app copies while the poller ticks and an agent connects. The
+    /// poller can take the copy before the greeting reads the pasteboard and offer it after,
+    /// or the other way round.
+    #[test]
+    fn an_agent_joins_as_a_host_copy_lands_and_is_offered() {
+        loom::model(|| {
+            let server = Server::holding("before");
+            let clipboard = Arc::new(Clipboard::with_server(server.clone()));
+            let peers: Arc<Peers<Vec<u8>>> = Arc::new(PeerMutex::new(Vec::new()));
+            let (a, wire_a) = peer(1);
+            admit(&peers, a, &clipboard, time_sync_now);
+
+            let copier = {
+                let server = server.clone();
+                thread::spawn(move || server.copy("copied"))
+            };
+            let poller = {
+                let (peers, clipboard) = (peers.clone(), clipboard.clone());
+                thread::spawn(move || {
+                    poll(&peers, &clipboard);
+                })
+            };
+            let (b, wire_b) = peer(2);
+            admit(&peers, b, &clipboard, time_sync_now);
+            copier.join().unwrap();
+            poller.join().unwrap();
+            check(&peers, &clipboard, &server, &[&wire_a, &wire_b]);
+        });
+    }
+
+    /// An agent connects while another app is copying: its greeting reads a pasteboard that is
+    /// changing under it.
+    #[test]
+    fn an_agent_joins_during_a_host_copy() {
+        loom::model(|| {
+            let server = Server::holding("before");
+            let clipboard = Arc::new(Clipboard::with_server(server.clone()));
+            let peers: Arc<Peers<Vec<u8>>> = Arc::new(PeerMutex::new(Vec::new()));
+            let (a, wire_a) = peer(1);
+            admit(&peers, a, &clipboard, time_sync_now);
+
+            let copier = {
+                let server = server.clone();
+                thread::spawn(move || server.copy("copied"))
+            };
+            let (b, wire_b) = peer(2);
+            admit(&peers, b, &clipboard, time_sync_now);
+            copier.join().unwrap();
+            check(&peers, &clipboard, &server, &[&wire_a, &wire_b]);
+        });
     }
 }

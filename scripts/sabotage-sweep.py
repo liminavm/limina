@@ -639,6 +639,46 @@ SABOTAGES = [
         'crates/limina',
         'every_edge_press_sequence_releases_exactly_when_the_rules_say',
     ),
+    (
+        'an agent is registered only after its greeting',
+        'crates/limina/src/control.rs',
+        """    peers.lock().unwrap().push(peer.clone());
+    // A late joiner needs the CURRENT host clipboard, not just the next change.
+    if peer.has_cap("clipboard")
+        && let Some(offer) = clipboard.initial_offer()
+    {
+        let _ = peer.send(&offer, CHANNEL_CLIPBOARD);
+    }""",
+        """    // A late joiner needs the CURRENT host clipboard, not just the next change.
+    if peer.has_cap("clipboard")
+        && let Some(offer) = clipboard.initial_offer()
+    {
+        let _ = peer.send(&offer, CHANNEL_CLIPBOARD);
+    }
+    peers.lock().unwrap().push(peer.clone());""",
+        'crates/limina',
+        'loom:control::loom_model::an_agent_joins_as_a_host_copy_lands_and_is_offered',
+    ),
+    (
+        'a greeting reads the pasteboard before taking the offer',
+        'crates/limina/src/clipboard.rs',
+        """        let mut host = self.host.lock().unwrap();
+        // No change-count bump involved: read whatever is there right now.
+        let text = self.pasteboard.lock().unwrap().current_text()?;""",
+        """        // No change-count bump involved: read whatever is there right now.
+        let text = self.pasteboard.lock().unwrap().current_text()?;
+        let mut host = self.host.lock().unwrap();""",
+        'crates/limina',
+        'loom:control::loom_model::an_agent_joins_as_a_host_copy_lands_and_is_offered',
+    ),
+    (
+        'an offer of unchanged text retires the serial peers hold',
+        'crates/limina/src/clipboard.rs',
+        """        if self.text.as_deref() != Some(text.as_str()) {""",
+        """        if true {""",
+        'crates/limina',
+        'loom:control::loom_model::an_agent_joins_as_a_host_copy_is_offered',
+    ),
 ]
 
 
@@ -677,7 +717,9 @@ def command(filt, crate):
             '--harness', filt[len('kani:'):]], None
     if filt.startswith('loom:'):
         env = dict(os.environ, RUSTFLAGS='--cfg loom', CARGO_TARGET_DIR=str(ROOT / 'target/loom'))
-        return ['cargo', 'test', '--lib', filt[len('loom:'):]], env
+        # A crate with no library target (limina itself) keeps its models in the binary.
+        target = '--lib' if (ROOT / crate / 'src/lib.rs').exists() else '--bins'
+        return ['cargo', 'test', target, filt[len('loom:'):]], env
     if filt.startswith('doc:'):
         return ['cargo', 'test', '--doc', filt[len('doc:'):]], None
     return ['cargo', 'test'] + TEST_ARGS.get(crate, []) + ([filt] if filt else []), None

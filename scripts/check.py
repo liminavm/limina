@@ -95,7 +95,9 @@ def loom(crates):
     failed = []
     env_extra = {'RUSTFLAGS': '--cfg loom', 'CARGO_TARGET_DIR': str(ROOT / 'target/loom')}
     for d in dirs:
-        argv = ['cargo', 'test', '--release', '--lib', 'loom_model']
+        # A crate with no library target (limina itself) keeps its models in the binary.
+        target = '--lib' if (d / 'src/lib.rs').exists() else '--bins'
+        argv = ['cargo', 'test', '--release', target, 'loom_model']
         if run(argv, d, env_extra) != 0:
             failed.append(os.path.relpath(d, ROOT))
     subprocess.run(['git', 'checkout', '--quiet', 'Cargo.lock'], cwd=ROOT / 'third_party/libkrun',
