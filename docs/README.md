@@ -55,7 +55,7 @@ Decision-oriented design docs — the founding one plus one per major feature
 - [Distribution & updates](design/distribution.md) — signing, notarization,
   updates, guest-tools delivery.
 - [In-crate checkers](design/in-crate-checkers.md) — Kani, loom, Miri, cargo-fuzz and a
-  sabotage sweep for what the HVF suite cannot state; phases 1–3 landed, 4 proposed.
+  sabotage sweep for what the HVF suite cannot state; phases 1–4 landed.
 
 ## Reviews
 

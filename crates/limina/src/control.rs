@@ -27,11 +27,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-// The peer registry and each peer's write half are loom's locks under `--cfg loom`, so
-// `loom_model` can interleave an agent joining with a host copy being offered.
-#[cfg(loom)]
+// The peer registry and each peer's write half are loom's locks in this crate's own tests under
+// `--cfg loom`, so `loom_model` can interleave an agent joining with a host copy being offered.
+#[cfg(all(test, loom))]
 use loom::sync::Mutex as PeerMutex;
-#[cfg(not(loom))]
+#[cfg(not(all(test, loom)))]
 use std::sync::Mutex as PeerMutex;
 
 use crate::clipboard::{Clipboard, PasteboardServer};

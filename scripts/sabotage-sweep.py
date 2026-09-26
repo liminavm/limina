@@ -679,6 +679,48 @@ SABOTAGES = [
         'crates/limina',
         'loom:control::loom_model::an_agent_joins_as_a_host_copy_is_offered',
     ),
+    (
+        'a band disarm does not claim the move first',
+        'third_party/libkrun/src/vmm/src/macos/vcpu_sched.rs',
+        """        if self
+            .word
+            .compare_exchange(seen, hold | DISARMING, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return false;
+        }
+        if os.set_timeshare(port) {""",
+        """        if os.set_timeshare(port) {""",
+        'third_party/libkrun/src/vmm',
+        'loom:macos::vcpu_sched::loom_model::the_sampler_and_the_guard_decide_at_once',
+    ),
+    (
+        'a band disarm acts on the hold it finds, not the one it judged',
+        'third_party/libkrun/src/vmm/src/macos/vcpu_sched.rs',
+        """    fn disarm<O: BandOs>(&self, os: &O, port: u32, seen: u64) -> bool {
+        if seen & PHASE != IN {""",
+        """    fn disarm<O: BandOs>(&self, os: &O, port: u32, _seen: u64) -> bool {
+        let seen = self.load();
+        if seen & PHASE != IN {""",
+        'third_party/libkrun/src/vmm',
+        'loom:macos::vcpu_sched::loom_model::the_sampler_and_the_guard_decide_at_once',
+    ),
+    (
+        'a new band hold is not told apart from the last',
+        'third_party/libkrun/src/vmm/src/macos/vcpu_sched.rs',
+        """        let hold = (seen & !PHASE) + (PHASE + 1);""",
+        """        let hold = seen & !PHASE;""",
+        'third_party/libkrun/src/vmm',
+        'loom:macos::vcpu_sched::loom_model::the_sampler_and_the_guard_decide_at_once',
+    ),
+    (
+        'a power transition wakes its waiters without recording itself',
+        'third_party/libkrun/src/devices/src/legacy/power_watch.rs',
+        """        *generation = generation.wrapping_add(1);""",
+        """        let _ = generation.wrapping_add(1);""",
+        'third_party/libkrun/src/devices',
+        'loom:legacy::power_watch::loom_model::a_transition_is_never_slept_through',
+    ),
 ]
 
 

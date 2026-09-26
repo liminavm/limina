@@ -1,7 +1,8 @@
 # In-crate checkers: Kani, loom, Miri, cargo-fuzz and the sabotage sweep
 
-Status: **phases 1–3 landed**; phase 4's input and grab half landed, its loom half proposed (see *Measured so far*) · Scope: limina's own crates, the guest workspace, and
-the libkrun fork's `limina` branch · Model: virglrs (`third_party/virglrs/docs/design.md`, *Owed,
+Status: **phases 1–4 landed** (see *Measured so far*; what each phase left, and why, is under
+*Phases*) · Scope: limina's own crates, the guest workspace, and the libkrun fork's `limina`
+branch · Model: virglrs (`third_party/virglrs/docs/design.md`, *Owed,
 and waiting on work → In-crate checkers*; `third_party/virglrs/harness/sabotage/sweep.py`)
 
 ## The problem
@@ -43,7 +44,9 @@ nothing:
   `Arc`, `Mutex`, `Condvar` and thread from loom under `cfg(all(test, loom))`. Its models build
   with `RUSTFLAGS="--cfg loom"` in their own `CARGO_TARGET_DIR`, so the two builds do not evict
   each other. loom weakens `SeqCst` loads to acquire/release and cannot see atomics that are not
-  its own, so a handshake built on either stays with the std tests.
+  its own, so a handshake built on either stays with the std tests. It has no `select` either, so
+  a handshake built on crossbeam's stays out of reach too. Its timed waits never time out, which
+  turns a lost wakeup into a deadlock loom reports.
 - **Miri** runs the unit tests that make no foreign call and checks the aliasing rules Kani does
   not. A foreign call ends the whole run, so a sweep script reruns with `--skip` past each test
   Miri stops on and records what actually ran.
@@ -127,21 +130,26 @@ write or a version skew, and a panic mid-restore loses the VM.
 
 ### Tier C: concurrency
 
-loom candidates are `crates/limina/src/control.rs` (connect, reconnect, the shutdown
+loom candidates were `crates/limina/src/control.rs` (connect, reconnect, the shutdown
 handshake); `crates/limina-vmm/src/power.rs`, `quiesce.rs` and `wake.rs` (quiescing vCPUs is
 what snapshots stand on); the frame handoff in `crates/limina/src/window/present.rs`; and
 `third_party/libkrun/src/vmm/src/macos/vcpu_sched.rs`. Each needs its sync primitives behind a
-`cfg(loom)` shim first. Anything that crosses HVF, AppKit or guest memory stays with the HVF suite.
+`cfg(all(test, loom))` shim first. Anything that crosses HVF, AppKit or guest memory stays with
+the HVF suite. Reading them sorted them into three: the control plane's clipboard greeting, the
+band sampler against a vCPU's guard, and the power watch are loom's, and have models. The
+host-sleep bracket and the frame handoff are not, for the reasons under *Measured so far*.
 
 ## Layout and commands
 
 - **limina's own checkers.** Kani proofs live in `#[cfg(kani)]` modules beside the code, loom
-  models in `loom_model` modules under `cfg(all(test, loom))` beside the code, with the code's
-  locks switched to loom's under `cfg(loom)` and its ordinary test modules compiled out, and enumeration in `every_sequence`
-  test modules. Fuzz targets live in a root `fuzz/` directory that is its own workspace, excluded
-  from the main one like `xtask/`. Each crate with a proof declares `cfg(kani)` (and later
-  `cfg(loom)`) under `unexpected_cfgs` in its own `[lints.rust]`, as virglrs does in its
-  `Cargo.toml`; the workspace has no shared lint table to put it in.
+  models in `loom_model` modules under `cfg(all(test, loom))` beside the code, and enumeration in
+  `every_sequence` test modules. A module with a model takes its locks from loom under
+  `cfg(all(test, loom))` and compiles its ordinary tests out there. The shim keys on `test` as well
+  as `loom` because loom is a dev-dependency: a crate built as a dependency of another crate's loom
+  run has no loom to use, and keeps std's. Fuzz targets live in a root `fuzz/` directory that is
+  its own workspace, excluded from the main one like `xtask/`. Each crate with a proof or a model
+  declares `cfg(kani)` and `cfg(loom)` under `unexpected_cfgs` in its own `[lints.rust]`, as
+  virglrs does in its `Cargo.toml`; the workspace has no shared lint table to put it in.
 - **libkrun's checkers** go on the fork's `limina` branch beside the code they check, with a
   `fuzz/` directory of their own. They follow the fork model like every other libkrun change.
 - **Modules of the `limina` binary.** `limina` has no library target, so a fuzz target reaches
@@ -155,7 +163,7 @@ what snapshots stand on); the frame handoff in `crates/limina/src/window/present
   [--seconds N]` and `cargo xtask check sabotage [pattern ...]` wrap `scripts/check.py`, which
   remains the source of truth, following the one-command convention (`xtask/src/main.rs`).
   `cargo xtask check loom [crate-dir ...]` runs every `loom_model` module under `--cfg loom` in
-  `target/loom`. Miri gets its subcommand when its first sweep lands. Kani runs on its own
+  `target/loom`, from the library target, or from the binary for a crate without one (`limina`). Miri gets its subcommand when its first sweep lands. Kani runs on its own
   pinned toolchain (`cargo install --locked kani-verifier && cargo kani setup`), and fuzzing on
   nightly (`cargo install --locked cargo-fuzz`). None of this needs HVF or codesigning.
 - **Stopping Kani.** Proofs run under `-Z unstable-options --harness-timeout 10m`, which stops
@@ -345,9 +353,59 @@ cargo-fuzz 0.13.2.
   no grab held with no owner window, is decided by two one-line predicates (`must_drop_grab`,
   `key_loss_releases`) that the window tick and the tap compose through AppKit. Enumerating that
   composition needs a seam in front of the tick and the tap, which is left for when it earns it.
-- **The sweep.** Sixty-six entries, each caught by the assertion, test or model written for it,
+- **Clipboard greeting** (`crates/limina/src/control.rs`, `loom_model`). The poller offering a host
+  copy raced `admit` greeting an agent that had just connected, with a stand-in pasteboard server
+  that another app writes to as AppKit does (`clearContents`, which bumps the change count, then
+  `setString`). After each run the poller is ticked until it has nothing left to offer and every
+  guest requests the newest offer it holds, last, as late as a guest can: the host must serve it,
+  with what is on the pasteboard. Three models, 0.12 s together; the first loom build of `limina`
+  took 45 s. They found three ways a guest kept an older clipboard until the next host copy, each
+  shown by the model and fixed in turn: a peer registered only after its greeting missed a copy
+  offered in between; a greeting re-minted a serial for the text already on offer, which retired
+  the serial the other peers held, so their requests were refused and nothing re-offered it; and a
+  greeting read the pasteboard before taking its serial, so a poller's newer copy was outranked by
+  older text. Seams: `PasteboardServer` in front of NSPasteboard, a `Peer` generic over its write
+  half, and the registry's send, admit and host-copy steps as free functions.
+- **vCPU band** (libkrun fork, `src/vmm/src/macos/vcpu_sched.rs`, `loom_model`). The band sampler
+  and a vCPU's own `BandGuard` both want the band back from a thread that computed flat out, and
+  the sampler then hands it over again. The stand-in kernel records which hold each party took
+  back. One model, 0.03 s. Against the code as it was it ended with the thread banded and the flag
+  everyone reads saying otherwise: the guard, preempted across the sampler's two moves, cleared
+  the flag after the new hold's kernel call. Nothing takes such a thread back out, and the shipped
+  default (`rt+dyn#1`) runs this on vCPU 0. A move is now claimed by a compare-and-swap on one word
+  that also counts the holds, and finished by whoever claimed it. The word publishes each hold's
+  baseline with release/acquire, where the flag and the baseline had been `Relaxed`. That half is
+  argued, not witnessed: weakening the publish to `Relaxed` survived the model, which never showed
+  the guard a stale baseline behind a new hold.
+- **Power watch** (libkrun fork, `src/devices/src/legacy/power_watch.rs`, `loom_model`). The waiter
+  protocol `generation()` documents (read the generation, then the state, and wait past the
+  generation only if the state is not yet what it wants) raced against a transition. loom's timed
+  wait never times out, so a transition slept through would be a deadlock. It found nothing.
+- **vCPU event handshake** (libkrun fork, `src/vmm/src/macos/vstate.rs`). Out of loom's reach: the
+  park sites wait in crossbeam `select`. Reading them for a model found one site out of line.
+  `wait_for_event`'s event arm handles `Pause` and treats every other event as an IRQ wake, so a
+  `Snapshot` arriving there would be consumed and its reply channel dropped, and `snapshot_vcpus`
+  would fail at once. A blocked crossbeam select takes the event arm every time when the event is
+  sent before the kick (2,000 of 2,000 in a standalone probe), and `snapshot_vcpus` sends the event
+  first. It is latent: HVF parks an idle vCPU inside `hv_vcpu_run` and does not hand over the WFI
+  trap (as `vcpu_sched.rs` notes), and a probe in `wait_for_event` recorded no block at all during
+  `l1_snapshot_save_writes_file_and_exits_126`, both vCPUs taking the `Snapshot` at the top of
+  their run loop. Every other park site services `Snapshot`. Not fixed yet.
+- **Host-sleep bracket** (`crates/limina-vmm/src/power.rs`). Not loom's: `willSleep`, `didWake` and
+  each step of the post-wake watch run whole under the bracket's one lock, so the threads reduce
+  to a sequence of atomic steps interleaved with the guest's transitions. That is an enumeration
+  of `HostSleepState` against guest transitions, which needs a seam for the watch's clock; the
+  primitive the watch waits on is the power watch above.
+- **Frame handoff** (`crates/limina/src/window/present.rs`). Not loom's either: the reader and the
+  surface-port receiver each change one store under one lock, and the hazards are the orders in
+  which the control lines and the Mach messages arrive, for a consumer on the AppKit main thread.
+  An enumeration of arrival orders fits, once the store is generic over the surface type.
+- **The sweep.** Seventy-three entries, each caught by the assertion, test or model written for it,
   after two holes found by the sweep itself were closed (the coalescer's merge check and the head
-  CRC). Each entry since phase 3 was run as it was added; the full sweep was not re-run end to end.
+  CRC). One more hole was in an entry and not in a model: registering a peer after its greeting
+  survived the first clipboard model, which cannot reach the gap once serials are reused, and is
+  caught by the three-thread one. The baseline publish above was tried and retired. Each entry
+  since phase 3 was run as it was added; the full sweep was not re-run end to end.
 
 The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
 arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
@@ -370,8 +428,12 @@ expensive call with an over-approximation the property does not depend on.
    bookkeeping fixes; the coalescer enumeration; `cargo xtask check loom`. Left, and why: the GPU
    payload decoder (see *Measured so far*).
 4. **Input and grab enumeration**, then the Tier C loom models. Landed: the keyboard ledger and
-   its walk, with the Caps Lock ordering fix; the grab policy's free-path and edge-press walks.
-   Left: the tick and tap's composition of the ownership predicates, and the Tier C loom models.
+   its walk, with the Caps Lock ordering fix; the grab policy's free-path and edge-press walks;
+   the clipboard greeting model and its three fixes; the vCPU band model and its fix; the power
+   watch model. Left, and why: the tick and tap's composition of the ownership predicates (it
+   needs a seam in front of both); the host-sleep bracket and the frame handoff, which are
+   enumeration work, not loom's; and the `Snapshot` a vCPU's WFx wait would drop, found by
+   reading and not yet fixed (see *Measured so far*).
 
 Every phase ends with this document updated: what each tool now covers, with measured time and
 memory, and what was tried and did not fit, with the numbers.

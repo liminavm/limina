@@ -26,11 +26,11 @@
 //! Tests point this at a private NAMED pasteboard via `LIMINA_PASTEBOARD` (the general
 //! pasteboard is the product default) — see `crates/limina-test/tests/l1_clipboard.rs`.
 
-// The locks are loom's under `--cfg loom`, so the control plane's model can interleave a host
-// copy, the poller and an agent joining (`crate::control::loom_model`).
-#[cfg(loom)]
+// The locks are loom's in this crate's own tests under `--cfg loom`, so the control plane's model
+// can interleave a host copy, the poller and an agent joining (`crate::control::loom_model`).
+#[cfg(all(test, loom))]
 use loom::sync::Mutex;
-#[cfg(not(loom))]
+#[cfg(not(all(test, loom)))]
 use std::sync::Mutex;
 
 use limina_proto::{ClipData, ClipOffer, ClipRequest, Message};
