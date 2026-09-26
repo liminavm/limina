@@ -404,6 +404,11 @@ impl<S: Clone> SurfaceStore<S> {
     pub(crate) fn len(&self) -> usize {
         self.map.len()
     }
+
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> impl Iterator<Item = &S> {
+        self.map.values()
+    }
 }
 
 /// Shared handle to the [`SurfaceStore`] (worker recv thread writes, main-thread present reads).
@@ -1355,7 +1360,7 @@ mod tests {
 /// After every sequence everything still in flight is delivered and the window applies, answers
 /// and re-applies until nothing moves. It must then show exactly the surface the current worker's
 /// guest last presented: a skipped frame there is a frozen window, and another surface is wrong
-/// pixels.
+/// pixels. And its frame cache must hold nothing a dead worker made.
 #[cfg(test)]
 mod handoff_sequence {
     use std::cell::RefCell;
@@ -1650,6 +1655,12 @@ mod handoff_sequence {
                 Some(want),
                 "the window does not show what the guest presents, after {path:?}"
             );
+        }
+        // Every entry in the frame cache is a whole framebuffer; one the dead worker made is
+        // one nothing will ever show again.
+        let cache = settled.cache.borrow();
+        if let Some(dead) = cache.held().find(|s| s.id < settled.base) {
+            panic!("the frame cache still holds the dead worker's {dead:?}, after {path:?}");
         }
         if depth == 0 {
             return;
