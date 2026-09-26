@@ -595,7 +595,7 @@ pub(crate) fn tick_release(
 
 /// Why the event tap hands a held grab back, per event: the keyboard left the VM
 /// ([`key_loss_releases`]), or the policy's own grab left fullscreen
-/// ([`fullscreen_exit_releases`]). The policy stops holding in either case.
+/// ([`fullscreen_exit_releases`]). The release itself ends the policy's hold ([`toggled`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TapRelease {
     FocusLost,
@@ -604,18 +604,16 @@ pub(crate) enum TapRelease {
 
 pub(crate) fn tap_release(
     captured: bool,
-    st: &mut GrabState,
+    st: &GrabState,
     facts: &[WindowFacts],
 ) -> Option<TapRelease> {
-    let why = if key_loss_releases(captured, facts) {
-        TapRelease::FocusLost
+    if key_loss_releases(captured, facts) {
+        Some(TapRelease::FocusLost)
     } else if fullscreen_exit_releases(capture_tier(captured, st), &primary_facts(facts)) {
-        TapRelease::FullscreenExit
+        Some(TapRelease::FullscreenExit)
     } else {
-        return None;
-    };
-    st.stop_holding();
-    Some(why)
+        None
+    }
 }
 
 /// What Cmd-Ctrl-G does, as the tap sees it.
@@ -2756,6 +2754,11 @@ mod ownership_sequence {
                         ComboAction::Promote => seen.promoted += 1,
                         ComboAction::Toggle => self.toggle(false, "Cmd-Ctrl-G")?,
                     }
+                    if !was && self.captured && !is_key {
+                        return Err(
+                            "Cmd-Ctrl-G took the pointer while another app has the keyboard".into(),
+                        );
+                    }
                     if !was
                         && self.captured
                         && capture_tier(self.captured, &self.st) != GrabMode::Hard
@@ -2806,7 +2809,7 @@ mod ownership_sequence {
                     }
                 }
                 Op::TapEvent => {
-                    match tap_release(self.captured, &mut self.st, &self.facts) {
+                    match tap_release(self.captured, &self.st, &self.facts) {
                         Some(TapRelease::FocusLost) => {
                             seen.tap_focus += 1;
                             self.toggle(true, "the tap")?;

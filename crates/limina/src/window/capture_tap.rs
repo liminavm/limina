@@ -303,7 +303,7 @@ extern "C" fn tap_callback(
     // — see `grab_policy::fullscreen_exit_releases`; an explicit Cmd-Ctrl-G grab is the user's
     // and survives.
     let captured = ctx.captured.load(Ordering::Acquire);
-    if let Some(why) = ctx.with_grab(|st| grab_policy::tap_release(captured, st, &facts)) {
+    if let Some(why) = grab_policy::tap_release(captured, &ctx.input.grab_state(), &facts) {
         match why {
             grab_policy::TapRelease::FocusLost => {
                 log::info!("pointer capture: released — the window lost focus")
