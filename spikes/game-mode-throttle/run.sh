@@ -11,6 +11,7 @@
 #             shell / spawned by an AppKit parent / as a `launchctl submit` job)
 #             lineage-app-audio (spawned by an AppKit parent, AUHAL on)
 #             lineage-agent (a gui-domain LaunchAgent with ProcessType=Interactive, AUHAL on)
+# rendezvous.c (built and run by hand, see RESULTS.md 5): fds to a launchd job over Mach.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 out="${1:?outdir}"

@@ -956,6 +956,7 @@ dependencies = [
  "libc",
  "limina-displayctl",
  "limina-input",
+ "limina-launch",
  "limina-paniclog",
  "limina-proto",
  "limina-surfaceport",
@@ -1001,6 +1002,13 @@ dependencies = [
  "krun-input",
  "libc",
  "log",
+]
+
+[[package]]
+name = "limina-launch"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -1065,6 +1073,7 @@ dependencies = [
  "limina-display",
  "limina-displayctl",
  "limina-input",
+ "limina-launch",
  "limina-paniclog",
  "limina-surfaceport",
  "log",

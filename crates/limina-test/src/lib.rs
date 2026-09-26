@@ -71,6 +71,102 @@ fn default_firmware() -> PathBuf {
     PathBuf::from(KRUNKIT_FALLBACK_FIRMWARE)
 }
 
+/// The launchd label prefix of the worker jobs a supervisor starts; the supervisor's pid and a
+/// per-spawn counter follow it. Mirrors `crates/limina/src/launcher.rs`.
+pub const WORKER_JOB_PREFIX: &str = "eti.noronha.limina.worker.";
+
+/// The direct children of `pid` (empty when it has none, or is gone).
+pub fn child_pids(pid: libc::pid_t) -> Vec<libc::pid_t> {
+    // Size, then fill; a child can appear in between, so leave headroom.
+    let cap = unsafe { libc::proc_listchildpids(pid, std::ptr::null_mut(), 0) };
+    if cap <= 0 {
+        return Vec::new();
+    }
+    let mut pids = vec![0i32; cap as usize + 16];
+    let n = unsafe {
+        libc::proc_listchildpids(
+            pid,
+            pids.as_mut_ptr() as *mut libc::c_void,
+            std::mem::size_of_val(pids.as_slice()) as libc::c_int,
+        )
+    };
+    pids.truncate(n.max(0) as usize);
+    pids.retain(|&p| p > 0);
+    pids
+}
+
+/// The canonical executable path of `pid`, or `None` if it is gone or unreadable.
+pub fn pid_path(pid: libc::pid_t) -> Option<PathBuf> {
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let len =
+        unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut libc::c_void, buf.len() as u32) };
+    if len <= 0 {
+        return None;
+    }
+    buf.truncate(len as usize);
+    let path = PathBuf::from(String::from_utf8_lossy(&buf).into_owned());
+    Some(path.canonicalize().unwrap_or(path))
+}
+
+/// The parent pid of `pid`, or `None` if it is gone.
+pub fn parent_pid(pid: libc::pid_t) -> Option<libc::pid_t> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut libc::proc_bsdinfo as *mut libc::c_void,
+            size,
+        )
+    };
+    (n == size).then_some(info.pbi_ppid as libc::pid_t)
+}
+
+/// The argv of a same-user process, read with `KERN_PROCARGS2`: an `argc`, the executable path,
+/// NUL padding, then `argc` NUL-terminated strings (the environment follows).
+pub fn proc_argv(pid: libc::pid_t) -> Option<Vec<String>> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size: libc::size_t = 0;
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 || size < 4 {
+        return None;
+    }
+    let mut buf = vec![0u8; size];
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    buf.truncate(size);
+    let argc = i32::from_ne_bytes(buf[..4].try_into().ok()?) as usize;
+    let rest = &buf[4..];
+    let exe_end = rest.iter().position(|&b| b == 0)?;
+    let mut strings = rest[exe_end..]
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned());
+    Some((0..argc).map_while(|_| strings.next()).collect())
+}
+
 /// Default EFI-bootable aarch64 installer ISO for the M10 Phase 3a boot-from-media test
 /// ([`GuestConfig::iso_boot_from_env`]). Gitignored & large (~1.1 GB) like the `.raw` images, so the
 /// test SKIPs when it (or `LIMINA_TEST_ISO`) is absent. Fetch from dl.fedoraproject.org.
@@ -2475,53 +2571,46 @@ impl Guest {
         self.pid
     }
 
-    /// The pid of the `limina-vmm` worker — the supervisor's child whose executable is
-    /// [`vmm_bin`](GuestConfig::vmm_bin). With `--net` the supervisor also has gvproxy + a reaper
-    /// child, so we match on the executable path rather than taking the first child.
+    /// The pid of the `limina-vmm` worker, a process whose executable is
+    /// [`vmm_bin`](GuestConfig::vmm_bin). The supervisor normally has launchd start it, through a
+    /// `limina-vmm --launcher <job label>` whose label carries the supervisor's pid, so the worker
+    /// is that launcher's child. When the launchd path is unavailable (or `LIMINA_WORKER_LAUNCH=
+    /// spawn`) it is the supervisor's own child. With `--net` the supervisor also has gvproxy and
+    /// a reaper child, so both matches go by the executable path, not the first child.
     pub fn worker_pid(&self) -> Result<libc::pid_t> {
-        // Size the buffer, then enumerate the supervisor's direct children.
-        let cap = unsafe { libc::proc_listchildpids(self.pid, std::ptr::null_mut(), 0) };
-        anyhow::ensure!(
-            cap > 0,
-            "supervisor {} reports no children yet (worker not up?)",
-            self.pid
-        );
-        let mut pids = vec![0i32; cap as usize];
-        let n = unsafe {
-            libc::proc_listchildpids(
-                self.pid,
-                pids.as_mut_ptr() as *mut libc::c_void,
-                std::mem::size_of_val(pids.as_slice()) as libc::c_int,
-            )
-        };
-        anyhow::ensure!(
-            n > 0,
-            "proc_listchildpids(supervisor={}) returned {n}",
-            self.pid
-        );
-        pids.truncate(n as usize);
-
         let want = self
             .vmm_bin
             .canonicalize()
             .unwrap_or_else(|_| self.vmm_bin.clone());
-        for &pid in pids.iter().filter(|&&p| p > 0) {
-            let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-            let len = unsafe {
-                libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut libc::c_void, buf.len() as u32)
-            };
-            if len <= 0 {
-                continue; // process already gone, or path unreadable
-            }
-            buf.truncate(len as usize);
-            let path = PathBuf::from(String::from_utf8_lossy(&buf).into_owned());
-            let path = path.canonicalize().unwrap_or(path);
-            if path == want {
+        let children = child_pids(self.pid);
+        if let Some(&pid) = children
+            .iter()
+            .find(|&&p| pid_path(p).as_ref() == Some(&want))
+        {
+            return Ok(pid);
+        }
+        let label = format!("{WORKER_JOB_PREFIX}{}.", self.pid);
+        let launchers: Vec<_> = child_pids(1)
+            .into_iter()
+            .filter(|&p| pid_path(p).as_ref() == Some(&want))
+            .filter(|&p| {
+                proc_argv(p).is_some_and(|a| {
+                    a.get(1).map(String::as_str) == Some("--launcher")
+                        && a.get(2).is_some_and(|l| l.starts_with(&label))
+                })
+            })
+            .collect();
+        for launcher in &launchers {
+            if let Some(&pid) = child_pids(*launcher)
+                .iter()
+                .find(|&&p| pid_path(p).as_ref() == Some(&want))
+            {
                 return Ok(pid);
             }
         }
         bail!(
-            "no child of supervisor {} has path {want:?} (children: {pids:?})",
+            "no worker {want:?} under supervisor {} (its children: {children:?}; its launchers: \
+             {launchers:?})",
             self.pid
         )
     }

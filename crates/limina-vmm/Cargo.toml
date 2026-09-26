@@ -29,6 +29,7 @@ limina-displayctl = { workspace = true }
 limina-input   = { workspace = true, features = ["backends"] }
 # The worker inherits the supervisor's stderr, so a Dock-launched app silences its panics too.
 limina-paniclog = { workspace = true }
+limina-launch = { workspace = true }
 
 anyhow            = { workspace = true }
 clap              = { workspace = true }

@@ -54,10 +54,11 @@ First milestone: boot `~/Projects/limina/Fedora-Workstation-43.raw` (a
                                        +-------------------+
 ```
 
-Process model: the **VMM runs in a dedicated child process** (krunkit-style),
+Process model: the **VMM runs in a dedicated process** (krunkit-style),
 because `krun_start_enter` loops forever and the guest's PSCI SYSTEM_OFF tears
 the *whole process* down. The limina UI process supervises it and talks over the
-vsock control plane + a shutdown eventfd.
+vsock control plane + a shutdown eventfd. launchd starts it rather than the UI, because
+macOS Game Mode clamps an app's whole process tree (`crates/limina-launch`).
 
 ---
 
@@ -89,7 +90,7 @@ vsock control plane + a shutdown eventfd.
 
 2. **The process dies on guest shutdown.** `krun_start_enter` never returns
    normally; guest PSCI SYSTEM_OFF -> `exit_evt` -> process teardown. limina must
-   run the VMM as a child process and drive it via vsock + shutdown eventfd.
+   run the VMM as a separate process and drive it via vsock + shutdown eventfd.
    See [01](01-libkrun-internals-and-api.md), [02](02-macos-hvf.md).
 
 3. **Build our own libkrun.** The Homebrew 1.17.4 bottle works for spikes (gpu/
@@ -181,7 +182,7 @@ vsock control plane + a shutdown eventfd.
 
 | Decision | One-line rationale |
 |---|---|
-| Run the VMM in a dedicated **child process** | `krun_start_enter` loops forever and guest shutdown tears the process down; the UI must survive and supervise. |
+| Run the VMM in a dedicated **process**, started by launchd | `krun_start_enter` loops forever and guest shutdown tears the process down; the UI must survive and supervise. Not the UI's child: Game Mode clamps an app's process tree. |
 | **Build libkrun from `third_party`** (gpu,input,net,blk,vhost-user) | Brew bottle lacks 1.18 APIs and every differentiator needs patches. |
 | Keep **raw HVF via libkrun**, reject Virtualization.framework | Vz is closed and forbids the custom devices, USB, ballooning, and agents that are limina's whole point. |
 | **Native AppKit UI** (NSWindow/CAMetalLayer/NSEvent), not GTK/SDL examples | Foreign event loops fight AppKit; examples are milestone-1 crutches only. |

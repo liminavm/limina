@@ -23,7 +23,7 @@
 //! fresh boot) on reboot, while the supervisor — and the resources it owns (gvproxy, the
 //! control plane) — survive. A boot-loop guard stops endless relaunches.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
@@ -378,9 +378,57 @@ fn worker_vcpu_sched(sched: Option<&OsStr>, legacy_rt: Option<&OsStr>) -> Option
     }
 }
 
+/// The running worker, however it was started: through launchd (the default, outside the app's
+/// process tree so Game Mode does not clamp it) or posix_spawned as our own child.
+pub enum WorkerHandle {
+    Launched(limina_launch::Launched),
+    Spawned(std::process::Child),
+}
+
+impl WorkerHandle {
+    /// The worker's pid, the leader of its own process group.
+    pub fn id(&self) -> u32 {
+        match self {
+            WorkerHandle::Launched(l) => l.id(),
+            WorkerHandle::Spawned(c) => c.id(),
+        }
+    }
+
+    pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        match self {
+            WorkerHandle::Launched(l) => l.try_wait(),
+            WorkerHandle::Spawned(c) => c.try_wait(),
+        }
+    }
+
+    pub fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        match self {
+            WorkerHandle::Launched(l) => l.wait(),
+            WorkerHandle::Spawned(c) => c.wait(),
+        }
+    }
+
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        match self {
+            WorkerHandle::Launched(l) => l.kill(),
+            WorkerHandle::Spawned(c) => c.kill(),
+        }
+    }
+}
+
+/// How long to wait for launchd's launcher to report the worker. The first exec of a freshly
+/// built or installed binary can spend a minute and more in the system's scan before `main`.
+const LAUNCH_START_TIMEOUT: Duration = Duration::from_secs(240);
+
+/// Should this spawn go through launchd? `LIMINA_WORKER_LAUNCH=spawn` keeps the worker our own
+/// child; anything else (or nothing) takes the launchd path.
+fn launch_through_launchd(setting: Option<&OsStr>) -> bool {
+    setting != Some(OsStr::new("spawn"))
+}
+
 /// A spawned worker, plus the host ends of the channels this function created for it.
 pub struct Spawned {
-    pub child: std::process::Child,
+    pub child: WorkerHandle,
     /// Host end of the guest's `com.redhat.spice.0` port — hand it to
     /// [`crate::control::ControlPlane::attach_vdagent`] to get a clipboard.
     pub spice_host: OwnedFd,
@@ -403,27 +451,30 @@ pub struct Spawned {
 pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     install_signal_handlers()?;
     install_panic_kill_hook();
-    let mut cmd = Command::new(&spec.vmm_bin);
-    cmd.args(&spec.args).process_group(0);
+    let mut args: Vec<OsString> = spec.args.iter().map(OsString::from).collect();
+    // What the worker's environment adds to ours; applied the same way on either path.
+    let mut env: Vec<(OsString, OsString)> = Vec::new();
 
     if let Some(sched) = worker_vcpu_sched(
         std::env::var_os("LIMINA_VCPU_SCHED").as_deref(),
         std::env::var_os("LIMINA_VCPU_RT").as_deref(),
     ) {
-        cmd.env("LIMINA_VCPU_SCHED", sched);
+        env.push(("LIMINA_VCPU_SCHED".into(), sched.into()));
     }
 
     let (spice_host, spice_worker) = socketpair(libc::SOCK_STREAM)?;
-    cmd.arg("--spice-fd")
-        .arg(spice_worker.as_raw_fd().to_string());
+    args.push("--spice-fd".into());
+    args.push(spice_worker.as_raw_fd().to_string().into());
     let (qga_host, qga_worker) = socketpair(libc::SOCK_STREAM)?;
-    cmd.arg("--qga-fd").arg(qga_worker.as_raw_fd().to_string());
+    args.push("--qga-fd".into());
+    args.push(qga_worker.as_raw_fd().to_string().into());
     // Auto-resume (M9.4): decided HERE, per spawn, never via spec.args — see
     // `take_pending_resume` for why (a reboot relaunch must cold-boot, not re-restore).
     if let Some(snap) = &spec.snapshot_file
         && let Some(pending) = take_pending_resume(snap, spec.suspend_state_file.as_deref())
     {
-        cmd.arg("--restore").arg(&pending);
+        args.push("--restore".into());
+        args.push(pending.into_os_string());
     }
 
     // When running from an assembled limina.app, hand the worker the bundle-relative venus
@@ -438,7 +489,7 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
             envs.len()
         );
         for (k, v) in envs {
-            cmd.env(k, v);
+            env.push((k.into(), v.into()));
         }
     }
     // KosmicKrisp's allocator-pool snapshot. The driver writes its current state to this path
@@ -454,34 +505,66 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
             .map(|bundle| bundle.join("logs"))
             .filter(|logs| logs.is_dir());
         if let Some(logs) = logs {
-            cmd.env("LIMINA_KK_POOL_SNAPSHOT", logs.join("kk-pool.txt"));
+            env.push((
+                "LIMINA_KK_POOL_SNAPSHOT".into(),
+                logs.join("kk-pool.txt").into_os_string(),
+            ));
         }
     }
 
-    {
-        let mut fds = inherit_fds.to_vec();
-        fds.push(spice_worker.as_raw_fd());
-        fds.push(qga_worker.as_raw_fd());
-        // SAFETY: only async-signal-safe fcntl calls between fork and exec.
-        unsafe {
-            cmd.pre_exec(move || {
-                for &fd in &fds {
-                    let flags = libc::fcntl(fd, libc::F_GETFD);
-                    if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
-                Ok(())
-            });
+    let mut fds = inherit_fds.to_vec();
+    fds.push(spice_worker.as_raw_fd());
+    fds.push(qga_worker.as_raw_fd());
+
+    let mut launched = None;
+    if launch_through_launchd(std::env::var_os("LIMINA_WORKER_LAUNCH").as_deref()) {
+        match launch_worker(spec, &args, &env, &fds) {
+            Ok(l) => launched = Some(l),
+            Err(limina_launch::LaunchError::Unavailable(e)) => log::warn!(
+                "could not start the worker through launchd ({e}); spawning it as our child, \
+                 where macOS Game Mode will clamp it with this app"
+            ),
+            Err(e @ limina_launch::LaunchError::Failed(_)) => {
+                return Err(anyhow::anyhow!(e)).context("starting the VM worker");
+            }
         }
     }
-    let child = cmd
-        .spawn()
-        .with_context(|| format!("spawning worker {:?}", spec.vmm_bin))?;
-    log::info!(
-        "VM worker started (pid {}); Ctrl-C to power off",
-        child.id()
-    );
+    let child = match launched {
+        Some(l) => {
+            log::info!(
+                "VM worker started through launchd (pid {}, job {}); Ctrl-C to power off",
+                l.id(),
+                l.label()
+            );
+            WorkerHandle::Launched(l)
+        }
+        None => {
+            let mut cmd = Command::new(&spec.vmm_bin);
+            cmd.args(&args).envs(env).process_group(0);
+            // SAFETY: only async-signal-safe fcntl calls between fork and exec.
+            unsafe {
+                cmd.pre_exec(move || {
+                    for &fd in &fds {
+                        let flags = libc::fcntl(fd, libc::F_GETFD);
+                        if flags < 0
+                            || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
+            let child = cmd
+                .spawn()
+                .with_context(|| format!("spawning worker {:?}", spec.vmm_bin))?;
+            log::info!(
+                "VM worker started (pid {}); Ctrl-C to power off",
+                child.id()
+            );
+            WorkerHandle::Spawned(child)
+        }
+    };
     // The worker holds its own copy now; dropping ours means the broker's reader sees EOF
     // when the worker exits, which is how a reboot relaunch unblocks the old reader thread.
     drop(spice_worker);
@@ -491,6 +574,38 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         child,
         spice_host,
         qga_host,
+    })
+}
+
+/// Start the worker through launchd with what a posix_spawn would have given it: our environment
+/// with `overrides` applied, our cwd, our stdio, and `fds` at their own numbers.
+fn launch_worker(
+    spec: &WorkerSpec,
+    args: &[OsString],
+    overrides: &[(OsString, OsString)],
+    fds: &[i32],
+) -> std::result::Result<limina_launch::Launched, limina_launch::LaunchError> {
+    let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
+        .filter(|(k, _)| !overrides.iter().any(|(o, _)| o == k))
+        .collect();
+    env.extend(overrides.iter().cloned());
+    // A closed stdio slot stays closed in the worker, as it would across posix_spawn.
+    // SAFETY: F_GETFD only reads the descriptor's flags.
+    let open = |fd: i32| unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0;
+    let pass = (0..=2)
+        .filter(|&fd| open(fd))
+        .chain(fds.iter().copied())
+        .map(|fd| (fd, fd))
+        .collect();
+    limina_launch::launch(limina_launch::LaunchSpec {
+        program: &spec.vmm_bin,
+        args: args.to_vec(),
+        env,
+        cwd: std::env::current_dir().unwrap_or_else(|_| "/".into()),
+        fds: pass,
+        // One directory for every run: each plist is uniquely named and gone once loaded.
+        plist_dir: &std::env::temp_dir().join("limina-launch"),
+        start_timeout: LAUNCH_START_TIMEOUT,
     })
 }
 
@@ -565,7 +680,7 @@ fn qga_rung_due(elapsed: Duration, grace: Duration) -> bool {
 /// Force Stop in the window's menu. A stop that killed on a timer would cost the user unsaved
 /// work they never agreed to risk.
 pub fn monitor(
-    mut child: std::process::Child,
+    mut child: WorkerHandle,
     grace: Duration,
     control: Option<&crate::control::ControlPlane>,
 ) -> Result<i32> {

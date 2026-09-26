@@ -162,9 +162,11 @@ Two refinements that are easy to forget:
 
 - **Raw HVF via libkrun, NOT Apple Virtualization.framework.** Vz is a black box
   and forbids the custom devices/USB/ballooning/agents that are limina's whole point.
-- **The VMM runs in a dedicated child process.** `krun_start_enter` loops forever
-  and the guest's PSCI SYSTEM_OFF tears the *whole process* down; the AppKit UI
-  process must survive and supervise it (over vsock + the shutdown eventfd).
+- **The VMM runs in a dedicated process, started by launchd.** `krun_start_enter` loops
+  forever and the guest's PSCI SYSTEM_OFF tears the *whole process* down; the AppKit UI
+  process must survive and supervise it (over vsock + the shutdown eventfd). It is *not* the
+  UI's child: macOS Game Mode clamps an app's whole process tree, so the supervisor has a
+  launchd job start it and hands its fds over Mach (`crates/limina-launch`).
 - **Native AppKit/Metal front-end** (NSWindow + CAMetalLayer, NSEvent → evdev),
   not the GTK/SDL example backends (those are milestone crutches only).
 - **Mechanism in libkrun, policy in limina.** Keep our libkrun patches small and
