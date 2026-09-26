@@ -436,7 +436,23 @@ cargo-fuzz 0.13.2.
   `clear_for_new_worker`, and stays until the cap evicts it. Nothing shows it (the gate keeps its
   id off every slot), the port is drained continuously while a relaunch takes a firmware boot,
   and the message names no worker the store could check.
-- **The sweep.** Eighty-four entries, each caught by the assertion, test or model written for it,
+- **Grab ownership** (`crates/limina/src/window/grab_policy.rs`, `ownership_sequence`). The
+  window tick and the event tap each judge a held grab, and four other owners take or drop it:
+  the policy on a screen gain, Cmd-Ctrl-G through the tap or, tap-less, through the local
+  monitor, the Ctrl-Opt chord, and parking. Their decisions now sit behind one seam
+  (`tick_release`, `tap_release`, `capture_combo`, `toggled`), and the tick, the tap and
+  `InputState::toggle_capture_full` call it. The walk moves the world under them: focus to
+  either window or out of the VM, either window's Space, the secondary's screen, the primary's
+  fullscreen, the pointer between the windows. 286 M sequences to depth 7 in 13–21 s (debug).
+  Checks: the policy never holds a grab that is not captured; Cmd-Ctrl-G takes a hard grab from a
+  free pointer with key status, promotes a policy grab in place, releases a hard one, and grabs
+  nothing without key status; no release path captures; after a tick a held grab has a key window
+  and its own window on screen; after a tap event no policy grab is outside fullscreen. It found
+  one bug: only the tap's releases ended the policy's hold. The tick's backstops, the chord and
+  parking left `holding` set, and the next Cmd-Ctrl-G through the monitor took a grab that read
+  as the policy's, which leaving fullscreen then dropped. Fixed in `toggled`: every release ends
+  the hold.
+- **The sweep.** Eighty-nine entries, each caught by the assertion, test or model written for it,
   after two holes found by the sweep itself were closed (the coalescer's merge check and the head
   CRC). One more hole was in an entry and not in a model: registering a peer after its greeting
   survived the first clipboard model, which cannot reach the gap once serials are reused, and is
@@ -482,8 +498,8 @@ expensive call with an over-approximation the property does not depend on.
       2026-09-26; what it covers and found is under *Measured so far*.
    3. [x] **The frame handoff, enumerated** (`crates/limina/src/window/present.rs`). Done
       2026-09-26; what it covers and found is under *Measured so far*.
-   4. [ ] **The grab's ownership seam**: the window tick and the event tap composing
-      `must_drop_grab` and `key_loss_releases`.
+   4. [x] **The grab's ownership seam**: the window tick and the event tap composing
+      `must_drop_grab` and `key_loss_releases`. Done 2026-09-26; see *Measured so far*.
    5. [ ] **Miri**, its first sweep over the unit tests that make no foreign call.
    6. [ ] **Loose ends**: the GPU payload decoder fuzz target (needs the `gpu` feature), and
       the `function_casts_as_integer` warning at `third_party/libkrun/src/hvf/src/released_ram.rs:643`,

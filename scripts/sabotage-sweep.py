@@ -835,6 +835,53 @@ SABOTAGES = [
         'crates/limina',
         'every_handoff_order_shows_what_the_guest_presents',
     ),
+    (
+        "a capture release leaves the policy holding",
+        'crates/limina/src/window/grab_policy.rs',
+        """    if captured {
+        st.stop_holding();
+    }
+    !captured""",
+        """    !captured""",
+        'crates/limina',
+        'every_ownership_sequence_keeps_the_grab_terms_straight',
+    ),
+    (
+        'the tick keeps a grab whose window left the screen',
+        'crates/limina/src/window/grab_policy.rs',
+        """    if must_drop_grab(captured, capture_owner(facts, capture_slot)) {""",
+        """    if false && must_drop_grab(captured, capture_owner(facts, capture_slot)) {""",
+        'crates/limina',
+        'every_ownership_sequence_keeps_the_grab_terms_straight',
+    ),
+    (
+        'the tap keeps a policy grab outside fullscreen',
+        'crates/limina/src/window/grab_policy.rs',
+        """    } else if fullscreen_exit_releases(capture_tier(captured, st), &primary_facts(facts)) {""",
+        """    } else if false && fullscreen_exit_releases(capture_tier(captured, st), &primary_facts(facts)) {""",
+        'crates/limina',
+        'every_ownership_sequence_keeps_the_grab_terms_straight',
+    ),
+    (
+        'Cmd-Ctrl-G grabs while another app has the keyboard',
+        'crates/limina/src/window/grab_policy.rs',
+        """    if !hard && !is_key {
+        return ComboAction::PassThrough;""",
+        """    if false && !hard && !is_key {
+        return ComboAction::PassThrough;""",
+        'crates/limina',
+        'every_ownership_sequence_keeps_the_grab_terms_straight',
+    ),
+    (
+        'a promotion is taken as a toggle',
+        'crates/limina/src/window/grab_policy.rs',
+        """    if captured != hard {
+        ComboAction::Promote""",
+        """    if captured == hard {
+        ComboAction::Promote""",
+        'crates/limina',
+        'every_ownership_sequence_keeps_the_grab_terms_straight',
+    ),
 ]
 
 
