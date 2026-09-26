@@ -2748,11 +2748,23 @@ mod ownership_sequence {
                 }
                 Op::TapCombo => {
                     let was = self.captured;
+                    let before = capture_tier(was, &self.st);
                     let is_key = self.is_key();
                     match capture_combo(self.captured, &mut self.st, is_key) {
                         ComboAction::PassThrough => {}
                         ComboAction::Promote => seen.promoted += 1,
                         ComboAction::Toggle => self.toggle(false, "Cmd-Ctrl-G")?,
+                    }
+                    let after = capture_tier(self.captured, &self.st);
+                    let want = match before {
+                        GrabMode::Hard => GrabMode::None,
+                        _ if is_key => GrabMode::Hard,
+                        other => other,
+                    };
+                    if after != want {
+                        return Err(format!(
+                            "Cmd-Ctrl-G from {before:?} with key={is_key} left {after:?}, not {want:?}"
+                        ));
                     }
                     if !was && self.captured && !is_key {
                         return Err(
