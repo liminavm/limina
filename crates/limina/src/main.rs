@@ -25,7 +25,6 @@ mod qga;
 mod sep;
 mod session;
 mod supervisor;
-mod tmpsock;
 mod vcpu_policy;
 mod vdagent;
 mod venus_env;
@@ -37,6 +36,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use limina_launch::connect::{Connector, Endpoint};
 
 use crate::supervisor::WorkerSpec;
 
@@ -1234,7 +1234,6 @@ fn cli_from_definition(
 fn exit_cleanup() {
     gateway::cleanup();
     control::cleanup();
-    tmpsock::cleanup();
 }
 
 fn run_vm(mut cli: Cli) -> Result<()> {
@@ -1273,15 +1272,18 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     let mem_range = cli.memory.as_deref().map(parse_memory_range).transpose()?;
     let ram_mib = mem_range.map(|(_, max)| max).unwrap_or(cli.ram_mib);
 
-    // Balloon control socket (M6): explicit flag wins; else auto-allocate when --memory is given.
-    let balloon_socket = cli.balloon_control_socket.clone().or_else(|| {
-        mem_range.is_some().then(|| {
-            let path =
-                std::env::temp_dir().join(format!("limina-balloon-{}.sock", std::process::id()));
-            tmpsock::own(&path);
-            path
-        })
-    });
+    // The worker listeners the supervisor drives itself go over a link, not a path, so no other
+    // process can reach them (`limina_launch::connect`). Each spawn arms the links listed here.
+    let mut links: Vec<(&'static str, Connector)> = Vec::new();
+
+    // Balloon control (M6): an explicit socket path wins (the harness drives it); else a link
+    // when --memory is given.
+    let balloon_socket = match &cli.balloon_control_socket {
+        Some(path) => Some(Endpoint::Path(path.clone())),
+        None => mem_range
+            .is_some()
+            .then(|| worker_link(&mut links, "--balloon-control-fd")),
+    };
 
     // The PSI autoballoon policy runs in the supervisor when a range + socket both exist (and
     // reclaim isn't disabled): it consumes guest MemPressure over the control plane, samples
@@ -1467,10 +1469,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         None
     } else {
         let socket = cli.control_socket.clone().unwrap_or_else(|| {
-            let path =
-                std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()));
-            tmpsock::own(&path);
-            path
+            std::env::temp_dir().join(format!("limina-ctrl-{}.sock", std::process::id()))
         });
         match control::ControlPlane::start(
             &socket,
@@ -1550,30 +1549,20 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     if usb {
         args.push("--usb".into());
         // Stock-tier FIDO USB gadget (M14 Stage C): only when we can back it with a passkey
-        // store (SEP present, or the test knob). Hand the worker a socket to bind for the
-        // gadget; the supervisor serves CTAPHID on it with an authenticator sharing `fido_store`.
-        // The path rides `args`/`base_args`, so a reboot relaunch re-binds it and our serve
-        // thread reconnects. Additive: the uhid/agent path is untouched.
+        // store (SEP present, or the test knob). The worker takes our connection over its link
+        // and we serve CTAPHID on it with an authenticator sharing `fido_store`. Every spawn
+        // re-arms the link, so a reboot relaunch is reconnected by the serve thread. Additive:
+        // the uhid/agent path is untouched.
         if let Some(store) = &fido_store {
-            let fido_socket =
-                std::env::temp_dir().join(format!("limina-fido-usb-{}.sock", std::process::id()));
-            tmpsock::own(&fido_socket);
-            args.push("--fido-socket".into());
-            args.push(path_arg(&fido_socket)?);
-            fido::usb::serve(fido_socket, store.clone());
+            fido::usb::serve(worker_link(&mut links, "--fido-fd"), store.clone());
         }
     }
     // Stock-tier fingerprint reader gadget (M14 wave 3): the same proxy shape as FIDO. Gated on a
-    // usable Touch ID sensor (or the test knob) via `moc_store`. The worker binds the socket and
-    // presents the elanmoc identity; the supervisor runs the protocol + Touch ID here.
+    // usable Touch ID sensor (or the test knob) via `moc_store`. The worker presents the elanmoc
+    // identity and takes our connection over its link; the supervisor runs the protocol + Touch ID.
     if fingerprint && let Some(store) = &moc_store {
-        let moc_socket =
-            std::env::temp_dir().join(format!("limina-moc-usb-{}.sock", std::process::id()));
-        tmpsock::own(&moc_socket);
-        args.push("--moc-socket".into());
-        args.push(path_arg(&moc_socket)?);
         moc::usb::serve(
-            moc_socket,
+            worker_link(&mut links, "--moc-fd"),
             store.clone(),
             fingerprint_vm_label(cli.window_title.as_deref()),
         );
@@ -1583,25 +1572,23 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push(policy.clone());
     }
 
-    // Runtime display-resize control socket: forwarded to the worker (which binds it). Used by
-    // the windowed resize gesture and any external controller (e.g. the test harness). For a
-    // windowed boot we auto-allocate one if not given, so dragging the window Just Works.
-    let resize_socket = cli.display_control_socket.clone().or_else(|| {
-        cli.window.then(|| {
-            let path =
-                std::env::temp_dir().join(format!("limina-resize-{}.sock", std::process::id()));
-            tmpsock::own(&path);
-            path
-        })
-    });
-    if let Some(path) = &resize_socket {
+    // Runtime display-resize control: the windowed resize gesture drives it. An explicit socket
+    // path is forwarded for the worker to bind (the test harness connects there too); a windowed
+    // boot without one gets a link, so dragging the window Just Works.
+    let resize_socket = match &cli.display_control_socket {
+        Some(path) => Some(Endpoint::Path(path.clone())),
+        None => cli
+            .window
+            .then(|| worker_link(&mut links, "--display-control-fd")),
+    };
+    if let Some(Endpoint::Path(path)) = &resize_socket {
         args.push("--display-control-socket".into());
         args.push(path_arg(path)?);
     }
 
-    // Runtime balloon control socket (M6): forwarded to the worker (which binds it). The path was
-    // resolved above (explicit flag, else auto-allocated under --memory) and shared with the policy.
-    if let Some(path) = &balloon_socket {
+    // Runtime balloon control (M6): an explicit path is forwarded for the worker to bind; a link
+    // travels with each spawn instead. Resolved above and shared with the policy.
+    if let Some(Endpoint::Path(path)) = &balloon_socket {
         args.push("--balloon-control-socket".into());
         args.push(path_arg(path)?);
     }
@@ -1755,6 +1742,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             edge_resistance,
             vmm_bin,
             base_args: args,
+            links,
             grace,
             width,
             height,
@@ -1819,6 +1807,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         shutdown_grace: grace,
         snapshot_file: cli.snapshot_file.clone(),
         suspend_state_file: cli.suspend_state_file.clone(),
+        links,
     };
 
     let code = supervisor::run(&spec, control.as_ref(), gateway.as_ref())?;
@@ -2016,6 +2005,14 @@ fn parse_mac_arg(s: &str) -> Result<String, String> {
 
 /// Parse a `MIN..MAX` dynamic-memory range (M6) into `(min_mib, max_mib)`. Each bound is a size with
 /// an optional `G`/`M` suffix (case-insensitive); a bare number is MiB. e.g. `2G..12G`, `2048..12288`.
+/// A worker listener reached over a link (`limina_launch::connect`): record it for every spawn to
+/// arm under `flag`, and return the endpoint the supervisor connects through.
+fn worker_link(links: &mut Vec<(&'static str, Connector)>, flag: &'static str) -> Endpoint {
+    let connector = Connector::new();
+    links.push((flag, connector.clone()));
+    Endpoint::Link(connector)
+}
+
 fn parse_memory_range(s: &str) -> Result<(usize, usize)> {
     let (min_s, max_s) = s
         .split_once("..")

@@ -27,6 +27,8 @@
 //! **Cleanup.** The supervisor deletes the plist once launchd has loaded it, and the launcher
 //! unloads its own job as its last act. The supervisor cannot do it: it often leaves through
 //! `process::exit`, which runs no destructor.
+//!
+//! The worker's listeners reach it the same way, without a path: see [`connect`].
 
 #![allow(deprecated)] // libc deprecates mach_task_self in favour of the mach2 crate.
 
@@ -43,6 +45,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 pub use libc::mach_port_t;
+
+pub mod connect;
 
 /// Labels (and Mach service names) of worker jobs: this prefix, the supervisor's pid, a dot and a
 /// per-spawn counter. The test harness finds the launcher by it.
@@ -453,6 +457,16 @@ fn plist_for(label: &str, program: &Path, supervisor: u32) -> io::Result<String>
     ))
 }
 
+/// The program as the job must name it. launchd starts a job from `/`, so a relative path is
+/// resolved against the cwd the worker is given, which is where posix_spawn would have found it.
+fn job_program(program: &Path, cwd: &Path) -> PathBuf {
+    if program.is_relative() {
+        cwd.join(program)
+    } else {
+        program.to_path_buf()
+    }
+}
+
 fn gui_domain() -> String {
     // SAFETY: getuid cannot fail.
     format!("gui/{}", unsafe { libc::getuid() })
@@ -479,6 +493,7 @@ pub fn launch(spec: LaunchSpec<'_>) -> Result<Launched, LaunchError> {
         }
     }
     let supervisor = std::process::id();
+    let program = job_program(spec.program, &spec.cwd);
     let label = format!(
         "{JOB_PREFIX}{supervisor}.{}",
         SPAWNS.fetch_add(1, Ordering::Relaxed)
@@ -503,7 +518,7 @@ pub fn launch(spec: LaunchSpec<'_>) -> Result<Launched, LaunchError> {
     let plist = spec.plist_dir.join(format!("{label}.plist"));
     std::fs::write(
         &plist,
-        plist_for(&label, spec.program, supervisor).map_err(Unavailable)?,
+        plist_for(&label, &program, supervisor).map_err(Unavailable)?,
     )
     .map_err(Unavailable)?;
     let out = Command::new("/bin/launchctl")
@@ -546,7 +561,7 @@ pub fn launch(spec: LaunchSpec<'_>) -> Result<Launched, LaunchError> {
             targets.push(LIFELINE);
             let handoff = Handoff {
                 targets,
-                program: spec.program.to_path_buf(),
+                program: program.clone(),
                 args: spec.args.clone(),
                 env: spec.env.clone(),
                 cwd: spec.cwd.clone(),
@@ -978,6 +993,27 @@ mod tests {
         );
         // SAFETY: ours to drop.
         unsafe { mach_port_mod_refs(t, port, MACH_PORT_RIGHT_RECEIVE, -1) };
+    }
+
+    /// launchd starts a job from `/`, so a relative program (`--vmm-bin target/debug/limina-vmm`,
+    /// as `cargo xtask run` passes it) must be resolved where posix_spawn would have resolved it:
+    /// against the cwd the worker is given.
+    #[test]
+    fn a_relative_program_is_resolved_against_the_cwd() {
+        assert_eq!(
+            job_program(
+                Path::new("target/debug/limina-vmm"),
+                Path::new("/src/limina")
+            ),
+            Path::new("/src/limina/target/debug/limina-vmm")
+        );
+        assert_eq!(
+            job_program(
+                Path::new("/Applications/L.app/limina-vmm"),
+                Path::new("/src")
+            ),
+            Path::new("/Applications/L.app/limina-vmm")
+        );
     }
 
     #[test]

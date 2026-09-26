@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use limina_launch::connect::Connector;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 /// Worker process exit code meaning "the guest rebooted" (PSCI `SYSTEM_RESET`) — mirrors
@@ -244,6 +245,10 @@ pub struct WorkerSpec {
     /// Managed-VM `state.toml` whose `[suspended]` record is cleared when a pending resume
     /// is consumed (the record is UI status; the snapshot file is the source of truth).
     pub suspend_state_file: Option<PathBuf>,
+    /// Worker listeners reached over a link instead of a path (`limina_launch::connect`), as
+    /// `(worker flag, connector)`. Every spawn arms a fresh link for each and passes its end as
+    /// `<flag> <fd>`, so a relaunched worker is reachable through the same connector.
+    pub links: Vec<(&'static str, Connector)>,
 }
 
 /// Borrowed view of the suspend/auto-resume paths, for handing a spawn site both halves of
@@ -468,6 +473,15 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     let (qga_host, qga_worker) = socketpair(libc::SOCK_STREAM)?;
     args.push("--qga-fd".into());
     args.push(qga_worker.as_raw_fd().to_string().into());
+    let mut link_ends = Vec::with_capacity(spec.links.len());
+    for (flag, connector) in &spec.links {
+        let end = connector
+            .arm()
+            .with_context(|| format!("making the worker's {flag} link"))?;
+        args.push((*flag).into());
+        args.push(end.as_raw_fd().to_string().into());
+        link_ends.push(end);
+    }
     // Auto-resume (M9.4): decided HERE, per spawn, never via spec.args — see
     // `take_pending_resume` for why (a reboot relaunch must cold-boot, not re-restore).
     if let Some(snap) = &spec.snapshot_file
@@ -515,6 +529,7 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     let mut fds = inherit_fds.to_vec();
     fds.push(spice_worker.as_raw_fd());
     fds.push(qga_worker.as_raw_fd());
+    fds.extend(link_ends.iter().map(|end| end.as_raw_fd()));
 
     let mut launched = None;
     if launch_through_launchd(std::env::var_os("LIMINA_WORKER_LAUNCH").as_deref()) {
@@ -569,6 +584,7 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     // when the worker exits, which is how a reboot relaunch unblocks the old reader thread.
     drop(spice_worker);
     drop(qga_worker);
+    drop(link_ends);
     WORKER_PID.store(child.id() as i32, Ordering::Release);
     Ok(Spawned {
         child,

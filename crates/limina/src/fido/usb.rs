@@ -3,8 +3,9 @@
 
 //! Supervisor side of the stock-tier FIDO **USB** transport (M14 Stage C).
 //!
-//! The worker cold-plugs a HID report-pipe gadget with the FIDO identity and binds a UNIX
-//! listener (`--fido-socket`); here we connect to it and shuttle raw 64-byte CTAPHID frames
+//! The worker cold-plugs a HID report-pipe gadget with the FIDO identity and takes connections
+//! over the link we hand it (`--fido-fd`, `limina_launch::connect`); here we connect over that
+//! link and shuttle raw 64-byte CTAPHID frames
 //! through a [`FidoAuthenticator`] — the *same* authenticator, store, and keepalive engine
 //! the uhid/agent path uses ([`crate::fido::pump`]). This is the design-doc-consistent proxy
 //! split: mechanism (USB bus + report pipe) in the worker, policy (CTAP2 + Secure Enclave +
@@ -12,33 +13,34 @@
 //! enclave. A guest with the agent gets uhid; a stock guest gets USB; a guest with both gets
 //! both (two authenticators sharing one concurrency-safe store).
 //!
-//! The socket path is stable across a worker reboot relaunch, so we simply reconnect: one
+//! Every spawn re-arms the link, so across a worker reboot relaunch we simply reconnect: one
 //! [`FidoAuthenticator`] per connection (per worker life), which repeated hidraw opens
 //! re-INIT and allocate channels on — exactly as one uhid device serves repeated opens.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use limina_launch::connect::Endpoint;
 
 use super::store::FidoStore;
 use super::{FidoAuthenticator, REPORT_SIZE, pump};
 
-/// Spawn the FIDO USB serve thread: connect to the worker's gadget socket and bridge CTAPHID
-/// to an authenticator backed by `store`. Reconnects across worker relaunches; runs for the
+/// Spawn the FIDO USB serve thread: connect to the worker's gadget and bridge CTAPHID to an
+/// authenticator backed by `store`. Reconnects across worker relaunches; runs for the
 /// supervisor's lifetime. Call only when the `fido` capability is available (a store exists).
-pub fn serve(socket_path: PathBuf, store: Arc<FidoStore>) {
+pub fn serve(gadget: Endpoint, store: Arc<FidoStore>) {
     std::thread::Builder::new()
         .name("limina-fido-usb-sup".into())
-        .spawn(move || serve_loop(&socket_path, store))
+        .spawn(move || serve_loop(&gadget, store))
         .ok();
 }
 
-fn serve_loop(socket_path: &Path, store: Arc<FidoStore>) {
+fn serve_loop(gadget: &Endpoint, store: Arc<FidoStore>) {
     loop {
-        if let Ok(stream) = UnixStream::connect(socket_path) {
-            log::info!("fido-usb: connected to the worker gadget at {socket_path:?}");
+        if let Ok(stream) = gadget.connect() {
+            log::info!("fido-usb: connected to the worker gadget at {gadget:?}");
             serve_conn(stream, &store);
             log::info!("fido-usb: worker gadget connection ended; retrying");
         }

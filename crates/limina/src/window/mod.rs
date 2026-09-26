@@ -80,6 +80,7 @@ use lifecycle::{kill_worker_group, should_initiate_quit};
 use present::register_apply_hook;
 
 use limina_displayctl::DisplayCommand;
+use limina_launch::connect::Endpoint;
 
 use crate::vmlib::schema::DisplayResolution;
 use crate::vmlib::state::WindowState;
@@ -87,7 +88,7 @@ use crate::vmlib::state::WindowState;
 /// Everything `run` needs beyond the live worker channels: display policy, remembered
 /// window state, and the resize plumbing. Groups what used to be positional arguments.
 pub struct WindowOptions {
-    pub resize_socket: Option<PathBuf>,
+    pub resize_socket: Option<Endpoint>,
     pub remap: limina_input::keymap::KeyRemap,
     /// Soft keyboard grab: while the window is key, the tap consumes keyboard input (system
     /// combos included) for the guest, mouse left free. `--no-soft-kbd-grab` opts out.
@@ -467,7 +468,7 @@ fn ask_close_action(
 }
 
 /// Push a window-resize to the worker over its display-control socket.
-fn send_resize(path: &Path, slot: u32, width: u32, height: u32) {
+fn send_resize(path: &Endpoint, slot: u32, width: u32, height: u32) {
     // `Resize` is the short form for connector 0. A window on a panel that owns another slot
     // must not use it — it would modeset whichever connector happens to be slot 0, which in a
     // two-panel arrangement is a display the user is not resizing.
@@ -486,7 +487,7 @@ fn send_resize(path: &Path, slot: u32, width: u32, height: u32) {
 /// Push a display command to the worker over its display-control socket (off the AppKit main
 /// thread — a brief connect/write must never beachball the UI). Best-effort: a failure just
 /// means this gesture's update is dropped; the next one retries.
-fn send_display_command(path: &Path, command: DisplayCommand) {
+fn send_display_command(path: &Endpoint, command: DisplayCommand) {
     send_display_commands(path, vec![command]);
 }
 
@@ -525,11 +526,11 @@ const CURSOR_FAULT_SETTLE: std::time::Duration = std::time::Duration::from_secs(
 /// its own eventfd while any remain, so each command still reaches the guest as its own
 /// config-change event (`third_party/libkrun/src/devices/src/virtio/gpu/{device,worker}.rs`) —
 /// we owe it order, and [`CONNECTOR_DOWN_SETTLE`] after an unplug.
-fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
+fn send_display_commands(path: &Endpoint, commands: Vec<DisplayCommand>) {
     if commands.is_empty() {
         return;
     }
-    type Batch = (PathBuf, Vec<DisplayCommand>);
+    type Batch = (Endpoint, Vec<DisplayCommand>);
     static SENDER: std::sync::OnceLock<std::sync::mpsc::Sender<Batch>> = std::sync::OnceLock::new();
     let tx = SENDER.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<Batch>();
@@ -540,7 +541,7 @@ fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
         });
         tx
     });
-    if tx.send((path.to_path_buf(), commands)).is_err() {
+    if tx.send((path.clone(), commands)).is_err() {
         log::error!("display-control: the sender thread is gone; commands dropped");
     }
 }
@@ -549,7 +550,7 @@ fn send_display_commands(path: &Path, commands: Vec<DisplayCommand>) {
 /// unplug, and the bring-the-connector-back recovery if the cycle dies half-way. Runs only on
 /// [`send_display_commands`]'s single sender thread — an early return abandons this batch, not
 /// the queue.
-fn run_display_batch(path: &Path, commands: &[DisplayCommand]) {
+fn run_display_batch(path: &Endpoint, commands: &[DisplayCommand]) {
     {
         use std::io::Write;
         // Which connector this batch has taken down and not yet brought back, so the recovery
@@ -557,7 +558,7 @@ fn run_display_batch(path: &Path, commands: &[DisplayCommand]) {
         let mut left_disconnected: Option<u32> = None;
         for command in commands {
             let line = command.to_wire();
-            let sent = match std::os::unix::net::UnixStream::connect(path) {
+            let sent = match path.connect() {
                 Ok(mut stream) => match writeln!(stream, "{line}") {
                     Ok(()) => {
                         log::info!("display-control: pushed {line:?} to the guest");
@@ -588,7 +589,7 @@ fn run_display_batch(path: &Path, commands: &[DisplayCommand]) {
                         connected: Some(true),
                         ..Default::default()
                     });
-                    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) {
+                    if let Ok(mut stream) = path.connect() {
                         let _ = writeln!(stream, "{}", bare.to_wire());
                     }
                 }
@@ -3970,8 +3971,9 @@ mod tests {
         let (a1, a2, b1) = (cyc(0, false), cyc(0, true), cyc(1, true));
         let expected = [a1.to_wire(), a2.to_wire(), b1.to_wire()];
         // Batch A parks in the unplug settle; batch B is submitted while A sleeps.
-        super::send_display_commands(&path, vec![a1, a2]);
-        super::send_display_commands(&path, vec![b1]);
+        let endpoint = Endpoint::Path(path.clone());
+        super::send_display_commands(&endpoint, vec![a1, a2]);
+        super::send_display_commands(&endpoint, vec![b1]);
         let mut lines = Vec::new();
         for _ in 0..3 {
             let (mut conn, _) = listener.accept().unwrap();
@@ -4036,7 +4038,7 @@ mod tests {
             },
         };
         send_display_commands(
-            &path,
+            &Endpoint::Path(path.clone()),
             hostdisplay::migration_commands(&host, true, hostdisplay::HotplugPolicy::Cycle, 0),
         );
 

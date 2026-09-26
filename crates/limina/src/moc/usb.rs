@@ -3,9 +3,9 @@
 
 //! Supervisor side of the impersonated MOC fingerprint reader (M14 wave 3).
 //!
-//! The worker cold-plugs the elanmoc USB identity (a libkrun `BulkPipe`) and binds a UNIX listener
-//! (`--moc-socket`); here we connect to it and run the [`Engine`] — the elanmoc protocol + Touch ID
-//! verify + per-VM template store — over the socket. This is the FIDO Stage-C proxy split reused:
+//! The worker cold-plugs the elanmoc USB identity (a libkrun `BulkPipe`) and takes connections over
+//! the link we hand it (`--moc-fd`, `limina_launch::connect`); here we connect over that link and
+//! run the [`Engine`] — the elanmoc protocol + Touch ID verify + per-VM template store — over it. This is the FIDO Stage-C proxy split reused:
 //! mechanism (USB bus) in the worker, policy (protocol + Secure Enclave) in the Apple-Development-
 //! signed supervisor, where `LAContext` works.
 //!
@@ -14,15 +14,16 @@
 //! most one reply — `{ep: 0x83|0x84, kind: DATA}` bytes, `{ep, kind: STALL}` to fail a held read, or
 //! nothing (a zero-length command, which posts no read). The worker also pushes
 //! `{ep, kind: CANCEL}` when the *guest* abandons an endpoint's read, which is how we learn to
-//! take a Touch ID sheet down. The socket path is stable across a worker reboot relaunch, so we
+//! take a Touch ID sheet down. Every spawn re-arms the link, so across a worker reboot relaunch we
 //! simply reconnect.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
+
+use limina_launch::connect::Endpoint;
 
 use super::store::MocStore;
 use super::{AlwaysApprove, EP_MOC_IN, Engine, PromptCanceller, Reply, SepVerifier, Verifier};
@@ -85,18 +86,18 @@ impl ReplyGate {
     }
 }
 
-/// Spawn the fingerprint serve thread: connect to the worker's gadget socket and run the elanmoc
+/// Spawn the fingerprint serve thread: connect to the worker's gadget and run the elanmoc
 /// engine backed by `store`, prompting Touch ID (labelled with `vm_label`) on verify/enroll.
 /// Reconnects across worker relaunches; runs for the supervisor's lifetime. Call only when the
 /// `fingerprint` capability is available (a usable Touch ID sensor, or the test-approve knob).
-pub fn serve(socket_path: PathBuf, store: Arc<MocStore>, vm_label: String) {
+pub fn serve(gadget: Endpoint, store: Arc<MocStore>, vm_label: String) {
     std::thread::Builder::new()
         .name("limina-moc-usb-sup".into())
-        .spawn(move || serve_loop(&socket_path, store, vm_label))
+        .spawn(move || serve_loop(&gadget, store, vm_label))
         .ok();
 }
 
-fn serve_loop(socket_path: &Path, store: Arc<MocStore>, vm_label: String) {
+fn serve_loop(gadget: &Endpoint, store: Arc<MocStore>, vm_label: String) {
     // Pick the verifier once: the real biometric prompt, or CI's unconditional approve. The
     // canceller shares the verifier's in-flight cell, so it can dismiss a live sheet from the
     // reader thread; with `AlwaysApprove` nothing is ever in flight and it is a no-op.
@@ -110,8 +111,8 @@ fn serve_loop(socket_path: &Path, store: Arc<MocStore>, vm_label: String) {
     let canceller = PromptCanceller::new(inflight);
     let engine = Engine::new(store, vm_label);
     loop {
-        if let Ok(stream) = UnixStream::connect(socket_path) {
-            log::info!("moc: connected to the worker gadget at {socket_path:?}");
+        if let Ok(stream) = gadget.connect() {
+            log::info!("moc: connected to the worker gadget at {gadget:?}");
             serve_conn(
                 stream,
                 &engine,

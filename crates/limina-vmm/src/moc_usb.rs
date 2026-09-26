@@ -8,7 +8,7 @@
 //! Secure-Enclave / `LAContext` path works from, and it owns the per-VM `moc-templates.json`. The
 //! worker only carries the emulated USB bus, so here we present the **elanmoc USB identity** (a
 //! generic libkrun [`BulkPipe`] with the byte-exact `04f3:0c7d` descriptors — 8 bulk endpoints, a
-//! vendor-class interface) and shuttle raw bulk packets to the supervisor over a UNIX socket. This
+//! vendor-class interface) and shuttle raw bulk packets to the supervisor over a UNIX stream. This
 //! mirrors the FIDO Stage-C proxy exactly (`fido_usb.rs`): mechanism (USB bus) in the worker,
 //! policy (protocol + enclave) in the supervisor.
 //!
@@ -16,18 +16,19 @@
 //! `[ep: u8][kind: u8][len: u16 LE][payload]`. Guest→host: each bulk-OUT packet on EP `0x01` goes
 //! out as `{ep: 0x01, kind: DATA}`. Host→guest: the supervisor sends `{ep: 0x83|0x84, kind: DATA}`
 //! for a reply (completing that endpoint's held read) or `{ep, kind: STALL}` to fail it (an enroll
-//! decline / protocol error). The worker **binds** the listener (`--moc-socket`, stable across a
-//! reboot relaunch) and the supervisor connects (and reconnects across relaunches).
+//! decline / protocol error). The supervisor connects over the link it hands each worker
+//! (`--moc-fd`, `limina_launch::connect`: no path, so no other process can drive the reader) and
+//! reconnects after every relaunch.
 
 use std::io::{Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use devices::usb::{
     BulkCancelSink, BulkPipe, BulkSink, DeviceDescriptors, UsbDeviceModel, UsbSpeed,
 };
+use limina_launch::connect::{ListenAt, Listener};
 
 /// Elan match-on-chip identity libfprint's `elanmoc` binds (VID/PID matched exactly). `0x0c7d`
 /// takes the default 9 enroll stages and is NOT in fwupd's `elanfp` quirk today (dodge PID).
@@ -40,14 +41,14 @@ const KIND_STALL: u8 = 1;
 /// Host-ward only: the guest cancelled `ep`'s outstanding read (xHCI Stop Endpoint). No payload.
 const KIND_CANCEL: u8 = 2;
 
-/// Build the fingerprint reader gadget: a [`BulkPipe`] with the elanmoc descriptors wired to
-/// `socket_path`, where the supervisor runs the protocol. Binds the listener and spawns the pump
-/// thread; returns the gadget to cold-plug onto the controller (`vmr.usb_devices`).
-pub fn build(socket_path: &Path) -> Result<Arc<dyn UsbDeviceModel>> {
-    // Bind the listener the supervisor connects to (unlink a stale one first, like the FIDO gadget).
-    let _ = std::fs::remove_file(socket_path);
-    let listener = UnixListener::bind(socket_path)
-        .with_context(|| format!("binding fingerprint USB socket {socket_path:?}"))?;
+/// Build the fingerprint reader gadget: a [`BulkPipe`] with the elanmoc descriptors wired to `at`,
+/// where the supervisor runs the protocol. Starts the listener and the pump thread; returns the
+/// gadget to cold-plug onto the controller (`vmr.usb_devices`).
+pub fn build(at: &ListenAt) -> Result<Arc<dyn UsbDeviceModel>> {
+    let listener = at
+        .clone()
+        .listen()
+        .with_context(|| format!("listening for the fingerprint USB gadget at {at}"))?;
 
     // The current supervisor connection's write half, published on accept. The gadget's out-sink
     // writes guest→host command frames here; None before the supervisor connects (a stray early
@@ -96,7 +97,7 @@ pub fn build(socket_path: &Path) -> Result<Arc<dyn UsbDeviceModel>> {
 
 /// Accept the supervisor's connection(s) and pump host→guest frames into the gadget. One connection
 /// at a time; on EOF (supervisor relaunch/exit) loop back to accept the next.
-fn pump(listener: UnixListener, pipe: Arc<BulkPipe>, conn: Arc<Mutex<Option<UnixStream>>>) {
+fn pump(listener: Listener, pipe: Arc<BulkPipe>, conn: Arc<Mutex<Option<UnixStream>>>) {
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,

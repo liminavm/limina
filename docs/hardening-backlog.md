@@ -206,21 +206,18 @@ check and the cheap-depth pre-flight behind `VmRow::blocked` (`docs/design/vm-st
 §3.6). A dead network mount can block a `stat()` for seconds and freeze the UI. Fix: snapshot on a
 background thread and hand the finished rows to the main thread.
 
-### Move the supervisor⇄worker control sockets to Mach ports
-Five UNIX sockets carry the control plane (`limina-ctrl`, `limina-resize`, `limina-balloon`,
-`limina-fido-usb`, `limina-moc-usb`) at the predictable path `$TMPDIR/limina-<kind>-<pid>.sock`,
-mode `srwxr-xr-x`, so any same-user process can connect. That matters most for FIDO (CTAPHID for the
-SEP-backed passkey store) and MOC (Touch-ID-gated fingerprint protocol). A bootstrap-registered
-receive right would make the gate a capability and die with the process. Prior art:
-`crates/limina-surfaceport` registers a per-process bootstrap name, survives worker relaunches and
-falls back when registration fails; `crates/limina-launch` meets the launchd-started worker by a
-`MachServices` name its plist declares and accepts only the supervisor's audit-token pid, which is
-the shape a same-user gate needs. Check first: is a same-user bootstrap lookup actually harder to
-reach than a socket path; how the test harness would drive a port; whether death/relaunch semantics
-survive the worker's `libc::_exit` on every guest power-off. Meanwhile `tmpsock.rs` removes what a
-run allocated at every `process::exit` site (`exit_cleanup()`); a SIGKILLed supervisor leaves a
-harmless stray socket (binders unlink before `bind()`). **Do not add a startup sweep that reaps
-sockets whose embedded pid is dead** — pids are recycled.
+### Take the control-plane socket off its `$TMPDIR` path
+The worker's own listeners (balloon, display control, the FIDO and fingerprint gadgets) have no
+path: each spawn hands the worker a link socketpair and the supervisor connects by passing it one
+end of a fresh stream (`crates/limina-launch/src/connect.rs`; `l1_no_socket_paths` pins it). One
+supervisor-owned socket is left at a predictable path, `$TMPDIR/limina-ctrl-<pid>.sock`
+(`srwxr-xr-x`), where any same-user process can pose as the guest agent. It stays because libkrun's
+vsock proxy **connects to a path** for every guest connection (`--vsock-socket`), so the fix is a
+libkrun change: let a vsock port take a connector (an inherited link fd) instead of a path, with the
+same accept acknowledgement (`spikes/scm-rights-inflight/`). A bootstrap name would not help: a name
+in `gui/<uid>` is as reachable as a path. `control::cleanup` removes the socket at every
+`process::exit`; a SIGKILLed supervisor leaves a stray one that the next bind unlinks. **Do not add a
+startup sweep that reaps sockets whose embedded pid is dead** — pids are recycled.
 
 ### Movable VM library and per-VM placement
 Design: `docs/design/vm-definitions.md` §8. The library location is only `$LIMINA_VM_LIBRARY` or the
@@ -430,9 +427,12 @@ job (`ProcessType=Interactive`) starts it and the supervisor hands it its fds ov
   launcher job rather than Limina.app. The worker is signed as `eti.noronha.limina` with the app's
   Info.plist, so grants should land on the same identity; recheck audio capture from a
   Dock-launched app.
-- **Move the channels themselves to Mach** (see *Move the supervisor⇄worker control sockets to
-  Mach ports*): the handoff already rides a Mach message, but the control line protocol and the
-  input datagrams are still socketpairs carried across as fileports.
+- **Native Mach channels are not owed for reach.** The control line protocol and the input
+  datagrams are unnamed socketpairs carried across as fileports, so nothing else can reach them.
+  Their consumers sit inside libkrun (the virtio-input backends poll an fd, the shown-ack reader in
+  `virtio_gpu.rs` reads `LIMINA_SHOWN_ACK_FD`), so moving them to Mach messages means teaching
+  libkrun's event loop to wait on ports (`EVFILT_MACHPORT`); it would buy whole-message writes and
+  fewer fds, nothing more.
 - **Strict timers on the present and audio paths**: the `gpu latch` thread's `thread::sleep` to its
   35 ms deadline (`virtio_gpu.rs`, `LIMINA_FENCE_LATCH_MS`), and anything else there. Still worth it
   for the supervisor's side, which stays clamped.

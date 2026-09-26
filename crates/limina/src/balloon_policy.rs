@@ -26,10 +26,11 @@
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use limina_launch::connect::Endpoint;
 use limina_proto::MemPressure;
 
 use crate::vmlib::logrot::{GENERATIONS as TRACE_GENERATIONS, rotate as rotate_trace};
@@ -460,8 +461,8 @@ pub struct BalloonPolicy {
     max_pages: u32,
     /// How hard to claw back (see [`ReclaimMode`]).
     mode: ReclaimMode,
-    /// The worker's balloon control socket (`target <bytes>` / `stats`).
-    socket: PathBuf,
+    /// The worker's balloon control listener (`target <bytes>` / `stats`).
+    socket: Endpoint,
     /// `LIMINA_BALLOON_SCRUB=0` kill-switch for the scrub cycle (field safety valve).
     scrub_enabled: bool,
     /// `LIMINA_LEDGER_SWEEP=0` kill-switch for the ledger settle sweep (field safety valve).
@@ -693,7 +694,7 @@ impl BalloonPolicy {
         min_pages: u32,
         max_pages: u32,
         mode: ReclaimMode,
-        socket: PathBuf,
+        socket: Endpoint,
         default_trace: Option<PathBuf>,
     ) -> Self {
         // The bench's decision journal (docs/design/balloon-bench.md §3): every consumed
@@ -1273,7 +1274,7 @@ impl BalloonPolicy {
     fn query_stats(&self, st: &mut State) -> Option<WorkerStats> {
         use std::io::BufRead;
         if st.conn.is_none() {
-            st.conn = UnixStream::connect(&self.socket).ok();
+            st.conn = self.socket.connect().ok();
         }
         let conn = st.conn.as_mut()?;
         if writeln!(conn, "stats").and_then(|()| conn.flush()).is_err() {
@@ -1335,11 +1336,11 @@ impl BalloonPolicy {
 /// Write `target <bytes>` to the balloon socket, reconnecting once on failure. Returns whether
 /// the command went out. A free function (not a method) so the scrub watchdog thread, which only
 /// holds the state `Arc` and the socket path, can call it too.
-fn send_target(socket: &Path, st: &mut State, pages: u32) -> bool {
+fn send_target(socket: &Endpoint, st: &mut State, pages: u32) -> bool {
     let bytes = (pages as u64) << 12;
     for attempt in 0..2 {
         if st.conn.is_none() {
-            match UnixStream::connect(socket) {
+            match socket.connect() {
                 Ok(c) => st.conn = Some(c),
                 Err(e) => {
                     if attempt == 1 {
@@ -1363,10 +1364,10 @@ fn send_target(socket: &Path, st: &mut State, pages: u32) -> bool {
 
 /// Write `settle` (run a ledger settle sweep; no reply) to the balloon socket, reconnecting
 /// once on failure. Returns whether the command went out. Same shape as [`send_target`].
-fn send_settle(socket: &Path, st: &mut State) -> bool {
+fn send_settle(socket: &Endpoint, st: &mut State) -> bool {
     for attempt in 0..2 {
         if st.conn.is_none() {
-            match UnixStream::connect(socket) {
+            match socket.connect() {
                 Ok(c) => st.conn = Some(c),
                 Err(e) => {
                     if attempt == 1 {
@@ -3854,7 +3855,13 @@ mod tests {
             }
         });
 
-        let pol = BalloonPolicy::new(GIB_PAGES, MAX, ReclaimMode::Moderate, sock.clone(), None);
+        let pol = BalloonPolicy::new(
+            GIB_PAGES,
+            MAX,
+            ReclaimMode::Moderate,
+            sock.clone().into(),
+            None,
+        );
         let guest_size = (MAX as u64) << 12;
         let fat = guest_size + DEMAND_SWEEP_GAP + (1 << 30);
         let p = report_pages(0, MAX / 2, MAX);
@@ -4216,7 +4223,13 @@ mod tests {
             }
         });
 
-        let pol = BalloonPolicy::new(GIB_PAGES, MAX, ReclaimMode::Moderate, sock.clone(), None);
+        let pol = BalloonPolicy::new(
+            GIB_PAGES,
+            MAX,
+            ReclaimMode::Moderate,
+            sock.clone().into(),
+            None,
+        );
         {
             let mut st = pol.state.lock().unwrap();
             st.last_scrub_end = backdated;
@@ -4452,7 +4465,7 @@ mod tests {
     fn free_settling_resets_on_any_report_that_falls_short() {
         let sock = std::env::temp_dir().join(format!("limina-settle-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&sock);
-        let pol = BalloonPolicy::new(GIB_PAGES, MAX, ReclaimMode::Moderate, sock, None);
+        let pol = BalloonPolicy::new(GIB_PAGES, MAX, ReclaimMode::Moderate, sock.into(), None);
         let plenty = 5 * GIB_PAGES as u64 * 4; // 5 GiB free, well past SETTLED_FREE_MIN
         let scarce = 100 * PAGES_PER_MIB as u64 * 4; // under the margin: nothing capturable
 
