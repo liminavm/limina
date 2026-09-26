@@ -163,7 +163,7 @@ host-sleep bracket and the frame handoff are not; both are enumerated instead (*
   [--seconds N]` and `cargo xtask check sabotage [pattern ...]` wrap `scripts/check.py`, which
   remains the source of truth, following the one-command convention (`xtask/src/main.rs`).
   `cargo xtask check loom [crate-dir ...]` runs every `loom_model` module under `--cfg loom` in
-  `target/loom`, from the library target, or from the binary for a crate without one (`limina`). Miri gets its subcommand when its first sweep lands. Kani runs on its own
+  `target/loom`, from the library target, or from the binary for a crate without one (`limina`). `cargo xtask check miri [crate-dir ...]` runs the Miri sweep (every crate under `crates/` by default) in `target/miri`. Kani runs on its own
   pinned toolchain (`cargo install --locked kani-verifier && cargo kani setup`), and fuzzing on
   nightly (`cargo install --locked cargo-fuzz`). None of this needs HVF or codesigning.
 - **Stopping Kani.** Proofs run under `-Z unstable-options --harness-timeout 10m`, which stops
@@ -322,10 +322,16 @@ cargo-fuzz 0.13.2.
   clean (1,697 edges), and after all three `snapshot_ram` ran 118 k in two. The sweep then found that no test enforced the
   head CRC: the test for it corrupted the vCPU count, which the parse refuses before the CRC
   matters. It now corrupts the GIC blob.
-  `GpuSnapshotPayload::from_bytes` (`virtio/gpu/journal.rs`) is not fuzzed. It needs the `gpu`
-  feature, which would bring rutabaga and virglrs into the fuzz build, and it runs only on a
-  payload the head CRC has vouched for. It also sizes `with_capacity` from a count in its bytes,
-  so a writer bug or a version skew would reach that.
+  `GpuSnapshotPayload::from_bytes` is fuzzed by `gpu_snapshot`. Its codec moved out of
+  `virtio/gpu/journal.rs` into `virtio/gpu_snapshot.rs`, which builds without the `gpu` feature
+  (under `cfg(fuzzing)` and in every test build), so the target needs neither rutabaga nor
+  virglrs. It reads a payload as a restore does and round-trips what it accepts. It runs only on
+  a payload the head CRC has vouched for, but a writer bug or a version skew reaches it all the
+  same. Its first minute found a backing count sizing `Vec::with_capacity` before any entry was
+  read, 38.8 GB; reading the reader found `take` adding a 64-bit length from the payload to its
+  position. Each count is now held to what the remaining bytes can hold, and the end is checked,
+  not added. Then 12 M inputs in five minutes clean (1,886 edges), unseeded: it finds the magic
+  itself.
 - **Timing under load.** The fork's `sweep_fault_handler_fields_concurrent_touches` gave up after
   50 sweeps without a collision; beside the 13 s enumeration, on battery, its toucher thread
   managed one pass in those 50. It now sweeps for up to 10 s.
@@ -452,7 +458,19 @@ cargo-fuzz 0.13.2.
   parking left `holding` set, and the next Cmd-Ctrl-G through the monitor took a grab that read
   as the policy's, which leaving fullscreen then dropped. Fixed in `toggled`: every release ends
   the hold.
-- **The sweep.** Eighty-nine entries, each caught by the assertion, test or model written for it,
+- **Miri** (`scripts/check.py miri`, every crate under `crates/`). Each crate's unit tests run one
+  at a time; a stop is classed and the run resumes past it by exact name. The enumeration walks
+  are skipped (millions of sequences, hours interpreted). Isolation is off so the host clock and
+  file system are reachable, lints are capped (imago denies warnings, and nightly deprecates
+  what it uses), and the repo venv is on `PATH` for virglrs's generators. First sweep,
+  2026-09-26: 792 tests passed, no undefined behaviour anywhere. `limina` 621 of 710 (63 foreign
+  calls, 20 walks, 2 stalls), `limina-vmm` 40 of 44, `limina-input` 46 of 55, and the small
+  crates all or nearly all, the rest stopping at IOSurface, Mach, sockets, `proc_pid_rusage` or a
+  child process. The two stalls are tests slow under interpretation (the QGA codec's unbounded
+  line, the diagnostics encoder's offer), not hangs. One failure, in a test, not the code: the
+  warp landing test compared a `hypot` result bit for bit, which std does not promise and Miri
+  perturbs on purpose; it compares within dust now. The fork's crates are not in the sweep yet.
+- **The sweep.** Ninety-two entries, each caught by the assertion, test or model written for it,
   after two holes found by the sweep itself were closed (the coalescer's merge check and the head
   CRC). One more hole was in an entry and not in a model: registering a peer after its greeting
   survived the first clipboard model, which cannot reach the gap once serials are reused, and is
@@ -500,10 +518,15 @@ expensive call with an over-approximation the property does not depend on.
       2026-09-26; what it covers and found is under *Measured so far*.
    4. [x] **The grab's ownership seam**: the window tick and the event tap composing
       `must_drop_grab` and `key_loss_releases`. Done 2026-09-26; see *Measured so far*.
-   5. [ ] **Miri**, its first sweep over the unit tests that make no foreign call.
-   6. [ ] **Loose ends**: the GPU payload decoder fuzz target (needs the `gpu` feature), and
+   5. [x] **Miri**, its first sweep over the unit tests that make no foreign call. Done
+      2026-09-26; see *Measured so far*.
+   6. [x] **Loose ends**: the GPU payload decoder fuzz target (needs the `gpu` feature), and
       the `function_casts_as_integer` warning at `third_party/libkrun/src/hvf/src/released_ram.rs:643`,
       and the never-read `status_ioc` at `third_party/libkrun/src/devices/src/usb/xhci/engine.rs:78`.
+      Done 2026-09-26. The fuzz target and its two fixes are under *Measured so far*. The cast
+      goes through a pointer. `status_ioc` was a bug, not dead code: every control TD posted its
+      Status event whether the guest set IOC or not (Linux always sets it, so nothing showed).
+      Now only with IOC, RED first.
 
 Every phase ends with this document updated: what each tool now covers, with measured time and
 memory, and what was tried and did not fit, with the numbers.

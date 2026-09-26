@@ -667,7 +667,10 @@ mod tests {
             landing_verdict(NSPoint::new(1746.9, 259.8), NSPoint::new(1746.0, 259.0)),
             Ok(())
         );
-        assert_eq!(landing_verdict(aimed, NSPoint::new(2519.5, 42.0)), Err(2.0));
+        // `hypot` promises no exact result (Miri perturbs it on purpose), so the miss is compared
+        // within dust rather than bit for bit.
+        let miss = landing_verdict(aimed, NSPoint::new(2519.5, 42.0)).unwrap_err();
+        assert!((miss - 2.0).abs() < 1e-9, "miss {miss}");
         assert!(landing_verdict(aimed, NSPoint::new(-1500.0, 900.0)).is_err());
     }
 }
