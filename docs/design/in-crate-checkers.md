@@ -441,6 +441,25 @@ expensive call with an over-approximation the property does not depend on.
    enumeration work, not loom's. Found by reading on the way, and fixed: the `Snapshot` a vCPU's
    WFx wait dropped (see *Measured so far*).
 
+5. **What phase 4 left, in this order** (agreed 2026-09-26). Each item is ticked here when it
+   lands:
+   1. [ ] **The whole sweep, end to end.** It has never been run in one pass; each entry was run
+      only as it was added. `cargo xtask check sabotage`, every entry, and each `SURVIVED`
+      closed or retired with the reason recorded.
+   2. [ ] **The host-sleep bracket, enumerated** (`crates/limina-vmm/src/power.rs`).
+      `HostSleepState` walked against guest transitions: a suspend starting, finishing or
+      aborting, a late suspend after the host wakes, a second host sleep mid-watch. It checks
+      the invariant the module states: we only ever wake a guest whose sleep we asked for, and
+      that wake is never lost. Needs a seam for the watch's clock.
+   3. [ ] **The frame handoff, enumerated** (`crates/limina/src/window/present.rs`). Every
+      arrival order of control lines and surface-port messages, a worker swap included,
+      against "no presented frame freezes". Needs `SurfaceStore` generic over the surface type.
+   4. [ ] **The grab's ownership seam**: the window tick and the event tap composing
+      `must_drop_grab` and `key_loss_releases`.
+   5. [ ] **Miri**, its first sweep over the unit tests that make no foreign call.
+   6. [ ] **Loose ends**: the GPU payload decoder fuzz target (needs the `gpu` feature), and
+      the `function_casts_as_integer` warning at `third_party/libkrun/src/hvf/src/released_ram.rs:643`.
+
 Every phase ends with this document updated: what each tool now covers, with measured time and
 memory, and what was tried and did not fit, with the numbers.
 
