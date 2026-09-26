@@ -93,8 +93,8 @@ guest (stock, zero components):
   xhci-plat → USB core → libusb → libfprint elanmoc driver → fprintd → GNOME/GDM/PAM
         │ bulk EP0x01 (cmd OUT), EP0x83 (reply IN), EP0x84 (finger-wait IN)
 libkrun (third_party):   BulkPipe  ← generic multi-endpoint bulk gadget (MECHANISM, new)
-        │ EP-tagged frames over a UNIX socket (--moc-socket)
-limina-vmm (worker):     moc_usb.rs ← elanmoc descriptors/identity, binds the socket
+        │ EP-tagged frames over a UNIX stream on a pathless link (--moc-fd)
+limina-vmm (worker):     moc_usb.rs ← elanmoc descriptors/identity, accepts on the link
         │
 limina (supervisor):     moc/ ← elanmoc protocol state machine + slot store + Touch ID (POLICY)
                                └ sep::verify()  → LAContext biometric evaluatePolicy
@@ -491,9 +491,9 @@ presents.* Never ship a state where `40 19` is unanswered.
   whose prompt can never succeed. A `LIMINA_FP_TEST_APPROVE` knob forces the capability on (and
   makes `sep::verify` return match without a sheet) for CI. No usable sensor → no reader advertised,
   graceful degrade, exactly like the FIDO capability.
-- Supervisor plumbing mirrors FIDO Stage C: allocate a `--moc-socket` path (stable across a reboot
-  relaunch), pass it to the worker (which binds), and `moc::serve(socket, store)` connects and
-  reconnects.
+- Supervisor plumbing mirrors FIDO Stage C: every spawn hands the worker a fresh link
+  (`--moc-fd`, `limina_launch::connect`, no filesystem path), and `moc::usb::serve(endpoint, store,
+  label)` connects over it and reconnects after a relaunch.
 
 ## 8. Testing (RED-first, `crates/limina-test`)
 
@@ -532,8 +532,8 @@ already work — no new kernel symbols. PAM integration is stock `authselect wit
 1. **`BulkPipe` mechanism** in libkrun + unit tests (multi-endpoint held-IN, variable-length).
    Oracle: a stock/test guest enumerates a vendor-class bulk device; `lsusb -v` shows the faithful
    8-endpoint elanmoc descriptor.
-2. **Protocol engine + identity + Touch ID.** `moc_usb.rs` (descriptors, socket bind/pump) +
-   supervisor `moc/` (state machine, slot store, `sep::verify` shim) + `--fingerprint`/`--moc-socket`
+2. **Protocol engine + identity + Touch ID.** `moc_usb.rs` (descriptors, link accept/pump) +
+   supervisor `moc/` (state machine, slot store, `sep::verify` shim) + `--fingerprint`/`--moc-fd`
    wiring. Oracle: **pcapng replay unit test green**, and a stock guest binds `elanmoc`
    (`fprintd-list` runs, empty).
 3. **End-to-end Touch ID.** `LIMINA_FP_TEST_APPROVE` L2 (enroll+verify+list+delete via fprintd),

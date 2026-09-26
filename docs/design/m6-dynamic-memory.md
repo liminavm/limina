@@ -526,7 +526,9 @@ fn get_stats(&self) -> BalloonStats { actual_pages: u32, reclaimed_bytes: u64 }
 ```
 
 **limina-vmm ↔ supervisor/harness — control socket** (newline text, mirrors the
-display-control socket): the worker binds `--balloon-control-socket <path>` and accepts:
+display-control socket): the supervisor's policy connects over a pathless link
+(`--balloon-control-fd`, `limina_launch::connect`); an explicit `--balloon-control-socket <path>`
+makes the worker bind that path instead (the test harness). Either way it accepts:
 - `target <bytes>\n`  → `handle.set_target_pages(bytes >> 12)`
 - `stats\n`           → replies `actual=<bytes> target=<bytes> reclaimed=<bytes>\n`
 

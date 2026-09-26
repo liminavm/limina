@@ -245,7 +245,8 @@ trait is deliberately the same shape as `limina-usbip::UsbDevice`.
 2. **FIDO gadget** — ✅ **done (2026-07-24, Stage C).** libkrun carries a generic
    `HidReportPipe` gadget (mechanism, patch 0098); limina wires it to the CTAPHID/SEP
    authenticator (policy). Chosen split is the **proxy** (option a): the worker's gadget is a
-   thin transport shuttling 64-byte CTAPHID frames over a UNIX socket (`--fido-socket`) to the
+   thin transport shuttling 64-byte CTAPHID frames over a UNIX stream on a pathless link
+   (`--fido-fd`, `limina_launch::connect`) to the
    supervisor's `FidoAuthenticator` — one authenticator, one store, one keepalive engine
    (`crate::fido::pump`), shared with the uhid path. Gated on `sep::available()` + store, cold-
    plugged at VM start. Oracle = `l1_xhci_fido_authenticator` (hidraw usage page 0xF1D0 →

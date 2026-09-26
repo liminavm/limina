@@ -15,11 +15,12 @@ All four layers landed and the L1 sysfs test is GREEN (host resize → guest con
 verified with a non-standard 900×650). Windowed human-verification: pending. As-built deltas from the
 original plan below (the plan's *flow* held; the *transport* got simpler):
 
-- **Transport = a dedicated UNIX socket, NOT the display socketpair.** The worker binds
-  `--display-control-socket <path>` and reads newline `resize <w> <h>` (libkrun-vmm
-  `install_resize_listener`). Decoupled from the present/ack channel (whose reader is renderer-gated
-  and present-path-coupled — wrong seam). The supervisor forwards/auto-allocates the path; both the
-  NSWindow gesture and the test harness connect to it.
+- **Transport = a dedicated UNIX stream, NOT the display socketpair.** The worker reads newline
+  `resize <w> <h>` (libkrun-vmm `install_resize_listener`) from each connection. Decoupled from the
+  present/ack channel (whose reader is renderer-gated and present-path-coupled — wrong seam). A
+  windowed supervisor reaches it over a pathless link (`--display-control-fd`,
+  `limina_launch::connect`); an explicit `--display-control-socket <path>` makes the worker bind
+  that path instead, which is how the test harness connects.
 - **Host reaches the handle via a Vmm accessor, NOT a bus-device downcast.** `attach_gpu_device`
   captures the handle onto `Vmm` (`Vmm::gpu_resize_handle()`); limina-vmm just calls it. (The
   `AsAny` downcast fought a `'static` bound and had no precedent — see commit history.) libkrun's only
