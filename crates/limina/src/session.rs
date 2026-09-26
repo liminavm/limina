@@ -17,6 +17,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use limina_launch::connect::{Connector, Endpoint};
+
 use crate::supervisor::{self, WorkerSpec};
 use crate::window;
 use crate::{control, gateway};
@@ -29,12 +31,15 @@ use crate::{control, gateway};
 pub struct SessionConfig {
     pub vmm_bin: PathBuf,
     pub base_args: Vec<String>,
+    /// The worker listeners reached over a link, re-armed at every spawn (see
+    /// [`WorkerSpec::links`]).
+    pub links: Vec<(&'static str, Connector)>,
     pub grace: Duration,
     pub width: u32,
     pub height: u32,
     pub gateway: Option<gateway::Gateway>,
     pub control: Option<control::ControlPlane>,
-    pub resize_socket: Option<PathBuf>,
+    pub resize_socket: Option<Endpoint>,
     pub remap: limina_input::keymap::KeyRemap,
     /// Soft keyboard grab policy (window::WindowOptions::soft_kbd_grab).
     pub soft_kbd_grab: bool,
@@ -120,12 +125,18 @@ struct WindowedWorker {
     qga_host: OwnedFd,
 }
 
+/// What every spawn of a session's worker shares: the binary, its args *without* the windowed
+/// fd flags (added per spawn, with the new fd numbers), and the listener links to re-arm.
+struct WorkerBase {
+    vmm_bin: PathBuf,
+    args: Vec<String>,
+    links: Vec<(&'static str, Connector)>,
+}
+
 /// Spawn a worker in `--display-window` mode and wire fresh scanout/input/ack socketpairs to
-/// it. `base_args` are the worker args *without* the windowed fd flags (added here, with the
-/// new fd numbers), so this can be called again to relaunch after a guest reboot.
+/// it. Called again to relaunch after a guest reboot.
 fn spawn_windowed_worker(
-    vmm_bin: &std::path::Path,
-    base_args: &[String],
+    base: &WorkerBase,
     grace: Duration,
     width: u32,
     height: u32,
@@ -165,7 +176,7 @@ fn spawn_windowed_worker(
     set_nonblocking(ptr_sup.as_raw_fd());
     set_nonblocking(rel_ptr_sup.as_raw_fd());
 
-    let mut args = base_args.to_vec();
+    let mut args = base.args.clone();
     args.push("--display-window".into());
     args.push("--control-fd".into());
     args.push(worker_fd.as_raw_fd().to_string());
@@ -185,7 +196,7 @@ fn spawn_windowed_worker(
     }
 
     let spec = WorkerSpec {
-        vmm_bin: vmm_bin.to_path_buf(),
+        vmm_bin: base.vmm_bin.clone(),
         args,
         shutdown_grace: grace,
         // Auto-resume is decided inside spawn_worker per spawn (M9.4): the first spawn of a
@@ -193,6 +204,7 @@ fn spawn_windowed_worker(
         // and cold-boots.
         snapshot_file: resume.snapshot_file.map(|p| p.to_path_buf()),
         suspend_state_file: resume.suspend_state_file.map(|p| p.to_path_buf()),
+        links: base.links.clone(),
     };
     let spawned = supervisor::spawn_worker(
         &spec,
@@ -236,7 +248,7 @@ pub struct WindowedSession {
     shared: Arc<Mutex<window::Shared>>,
     surface_map: window::SurfaceMap,
     control: Option<control::ControlPlane>,
-    resize_socket: Option<PathBuf>,
+    resize_socket: Option<Endpoint>,
     remap: limina_input::keymap::KeyRemap,
     soft_kbd_grab: bool,
     title: String,
@@ -267,6 +279,7 @@ impl WindowedSession {
         let SessionConfig {
             vmm_bin,
             base_args,
+            links,
             grace,
             width,
             height,
@@ -293,6 +306,11 @@ impl WindowedSession {
             edge_resistance,
             display_pool,
         } = config;
+        let base = WorkerBase {
+            vmm_bin,
+            args: base_args,
+            links,
+        };
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
         // worker; without both (flat-CLI runs) the policy degrades to the power-off ladder.
@@ -343,8 +361,7 @@ impl WindowedSession {
             spice_host,
             qga_host,
         } = spawn_windowed_worker(
-            &vmm_bin,
-            &base_args,
+            &base,
             grace,
             width,
             height,
@@ -461,8 +478,7 @@ impl WindowedSession {
                 // not the original one (see `pack_size`).
                 let (width, height) = unpack_size(monitor_desired.load(Ordering::Relaxed));
                 let next = match spawn_windowed_worker(
-                    &vmm_bin,
-                    &base_args,
+                    &base,
                     grace,
                     width,
                     height,

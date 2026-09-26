@@ -40,6 +40,11 @@ pub const AGENT_GRACE: Duration = Duration::from_secs(5);
 static CLEANUP_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Remove the control socket file (idempotent; safe from any exit path).
+///
+/// A SIGKILLed supervisor still leaves its socket behind; that is harmless, because the next
+/// bind unlinks the path first. **Do not reap other runs' leftovers by testing whether the pid
+/// in the name is alive**: pids are recycled, and a sweep of 6450 accumulated sockets that way
+/// found five "live" ones that all belonged to unrelated system daemons.
 pub fn cleanup() {
     if let Some(path) = CLEANUP_PATH.lock().unwrap().take() {
         let _ = std::fs::remove_file(path);

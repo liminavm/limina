@@ -8,24 +8,24 @@
 //! path works from, and it owns the per-VM `fido-credentials.json`. The worker only carries
 //! the emulated USB bus, so here we present a plain HID **report pipe** gadget (libkrun
 //! mechanism, [`devices::usb::HidReportPipe`]) with the FIDO identity/report descriptor and
-//! shuttle its 64-byte CTAPHID frames verbatim to the supervisor over a UNIX socket. This
+//! shuttle its 64-byte CTAPHID frames verbatim to the supervisor over a UNIX stream. This
 //! mirrors the agent/uhid transport exactly (which shuttles the same frames over guest
 //! vsock) — one authenticator, one store, one keepalive engine, two transports.
 //!
 //! Wire protocol: raw fixed-size (64-byte) CTAPHID report frames, both directions, no
-//! header. The worker **binds** the listener (path from `--fido-socket`, stable across a
-//! reboot relaunch — the balloon/display-control-socket precedent) and the supervisor
-//! connects (and reconnects across relaunches). Guest→host reports (interrupt-OUT /
+//! header. The supervisor connects over the link it hands each worker (`--fido-fd`,
+//! `limina_launch::connect`: no path, so no other process can reach the authenticator) and
+//! reconnects after every relaunch. Guest→host reports (interrupt-OUT /
 //! SET_REPORT) go out the socket; host→guest reports (INIT/CBOR responses, KEEPALIVE) come
 //! back in and complete a held interrupt-IN.
 
 use std::io::{Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use devices::usb::{HidReportPipe, ReportSink, UsbDeviceModel};
+use limina_launch::connect::{ListenAt, Listener};
 
 /// Vendor-neutral FIDO identity, byte-identical to the uhid device so fido-id/udev/browsers
 /// need nothing to discover it (`0x1d6b` = "Linux Foundation", `0x0f1d` our FIDO product).
@@ -61,14 +61,14 @@ fn fido_report_descriptor() -> Vec<u8> {
     ]
 }
 
-/// Build the FIDO USB gadget: a HID report pipe wired to `socket_path`, where the supervisor
-/// serves CTAPHID. Binds the listener and spawns the pump thread; returns the gadget to
-/// cold-plug onto the emulated controller (`vmr.usb_devices`).
-pub fn build(socket_path: &Path) -> Result<Arc<dyn UsbDeviceModel>> {
-    // Bind the listener the supervisor connects to (unlink a stale one first, like gvproxy).
-    let _ = std::fs::remove_file(socket_path);
-    let listener = UnixListener::bind(socket_path)
-        .with_context(|| format!("binding FIDO USB socket {socket_path:?}"))?;
+/// Build the FIDO USB gadget: a HID report pipe wired to `at`, where the supervisor serves
+/// CTAPHID. Starts the listener and the pump thread; returns the gadget to cold-plug onto the
+/// emulated controller (`vmr.usb_devices`).
+pub fn build(at: &ListenAt) -> Result<Arc<dyn UsbDeviceModel>> {
+    let listener = at
+        .clone()
+        .listen()
+        .with_context(|| format!("listening for the FIDO USB gadget at {at}"))?;
 
     // The current supervisor connection's write half, published on accept. The gadget's
     // out-sink writes guest→host frames here; None before the supervisor connects (a stray
@@ -112,7 +112,7 @@ pub fn build(socket_path: &Path) -> Result<Arc<dyn UsbDeviceModel>> {
 
 /// Accept the supervisor's connection(s) and pump host→guest frames into the gadget. One
 /// connection at a time; on EOF (supervisor relaunch/exit) loop back to accept the next.
-fn pump(listener: UnixListener, pipe: Arc<HidReportPipe>, conn: Arc<Mutex<Option<UnixStream>>>) {
+fn pump(listener: Listener, pipe: Arc<HidReportPipe>, conn: Arc<Mutex<Option<UnixStream>>>) {
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,

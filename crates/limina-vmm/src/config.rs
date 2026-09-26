@@ -10,6 +10,8 @@
 
 use std::path::PathBuf;
 
+use limina_launch::connect::ListenAt;
+
 /// A disk to attach to the guest. Presented as virtio-blk (`vdaN`, in order).
 #[derive(Debug, Clone)]
 pub struct DiskSpec {
@@ -126,7 +128,7 @@ pub struct DisplaySpec {
     /// live virtio-gpu via the libkrun [`DisplayResizeHandle`] — the guest then re-modesets.
     /// The supervisor's window-resize gesture and the test harness both connect here. This is
     /// decoupled from the present/ack channel on purpose. See docs/design/runtime-display-resize.md.
-    pub control_socket: Option<PathBuf>,
+    pub control_socket: Option<ListenAt>,
 }
 
 /// Where the host sends presented guest frames.
@@ -213,9 +215,9 @@ pub struct VmSpec {
     /// the guest sees; the supervisor's balloon policy shrinks effective RAM toward its min via the
     /// control socket (the worker is mechanism-only and doesn't know the min).
     pub ram_mib: usize,
-    /// Where the worker binds the balloon control socket (newline `target <bytes>` / `stats`),
-    /// driven by the supervisor's dynamic-memory policy (M6). `None` = no runtime balloon control.
-    pub balloon_control_socket: Option<PathBuf>,
+    /// Where the worker listens for balloon control (newline `target <bytes>` / `stats`), driven by
+    /// the supervisor's dynamic-memory policy (M6). `None` = no runtime balloon control.
+    pub balloon_control_socket: Option<ListenAt>,
     /// How the guest boots (EFI firmware or a direct kernel).
     pub boot: BootSource,
     /// Disks to attach, in order.
@@ -263,15 +265,16 @@ pub struct VmSpec {
     /// How many of the vCPUs are "little" (the last N). See the worker's `--little-vcpus`.
     /// Ignored unless `cpufreq` is on.
     pub little_vcpus: u32,
-    /// UNIX-socket path for the stock-tier FIDO USB gadget (M14 Stage C). When set (and
-    /// `usb` is true) the worker cold-plugs a HID report-pipe gadget with the FIDO identity
-    /// and bridges its CTAPHID frames to the supervisor's authenticator over this socket.
+    /// Where the stock-tier FIDO USB gadget (M14 Stage C) takes the supervisor's connection. When
+    /// set (and `usb` is true) the worker cold-plugs a HID report-pipe gadget with the FIDO
+    /// identity and bridges its CTAPHID frames to the supervisor's authenticator over it.
     /// `None` = no FIDO gadget (the controller still comes up).
-    pub fido_socket: Option<PathBuf>,
-    /// UNIX-socket path for the stock-tier fingerprint reader gadget (M14 wave 3). When set (and
-    /// `usb` is true) the worker cold-plugs a bulk-pipe gadget with the elanmoc identity and bridges
-    /// its bulk packets to the supervisor's protocol engine over this socket. `None` = no reader.
-    pub moc_socket: Option<PathBuf>,
+    pub fido_socket: Option<ListenAt>,
+    /// Where the stock-tier fingerprint reader gadget (M14 wave 3) takes the supervisor's
+    /// connection. When set (and `usb` is true) the worker cold-plugs a bulk-pipe gadget with the
+    /// elanmoc identity and bridges its bulk packets to the supervisor's protocol engine over it.
+    /// `None` = no reader.
+    pub moc_socket: Option<ListenAt>,
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest. **Default false**: a
     /// stock Linux guest with page-reporting enabled crashes on suspend-to-idle (upstream
     /// `virtballoon_freeze` frees the reporting vq while its worker is still live). Enable only for

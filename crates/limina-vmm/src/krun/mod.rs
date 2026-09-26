@@ -21,6 +21,7 @@ use devices::virtio::block::{CacheType, ImageType, SyncMode};
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use limina_display::{CaptureConfig, WindowConfig};
 use limina_displayctl::DisplayCommand;
+use limina_launch::connect::ListenAt;
 use polly::event_manager::EventManager;
 use vmm::resources::VmResources;
 use vmm::vmm_config::block::BlockDeviceConfig;
@@ -280,7 +281,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
             match crate::fido_usb::build(socket) {
                 Ok(gadget) => {
                     vmr.usb_devices.push(gadget);
-                    log::info!("USB: cold-plugging the FIDO authenticator gadget ({socket:?})");
+                    log::info!("USB: cold-plugging the FIDO authenticator gadget ({socket})");
                 }
                 Err(e) => log::warn!("USB: FIDO gadget disabled: {e:#}"),
             }
@@ -293,7 +294,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
             match crate::moc_usb::build(socket) {
                 Ok(gadget) => {
                     vmr.usb_devices.push(gadget);
-                    log::info!("USB: cold-plugging the fingerprint reader gadget ({socket:?})");
+                    log::info!("USB: cold-plugging the fingerprint reader gadget ({socket})");
                 }
                 Err(e) => log::warn!("USB: fingerprint gadget disabled: {e:#}"),
             }
@@ -687,33 +688,33 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         log::info!("restoring from snapshot {path:?}");
     }
 
-    // Runtime display resize: if a control socket was requested, wire it to the live virtio-gpu
-    // device's resize handle. This is a dedicated UNIX socket, decoupled from the present/ack
+    // Runtime display resize: if a control listener was requested, wire it to the live virtio-gpu
+    // device's resize handle. This is a dedicated UNIX stream, decoupled from the present/ack
     // control channel on purpose (see docs/design/runtime-display-resize.md).
-    if let Some(path) = spec
+    if let Some(at) = spec
         .display
         .as_ref()
         .and_then(|d| d.control_socket.as_ref())
     {
         match vmm.lock().unwrap().gpu_resize_handle() {
-            Some(handle) => install_resize_listener(path.clone(), handle)
+            Some(handle) => install_resize_listener(at.clone(), handle)
                 .context("installing the display-resize listener")?,
             None => log::error!(
-                "--display-control-socket set but the GPU resize handle is unavailable; \
+                "display control requested but the GPU resize handle is unavailable; \
                  runtime display resize is disabled"
             ),
         }
     }
 
-    // Runtime balloon control (M6 dynamic memory): if a control socket was requested, wire it to
-    // the live virtio-balloon's control handle. A dedicated UNIX socket, mirroring the display
+    // Runtime balloon control (M6 dynamic memory): if a control listener was requested, wire it to
+    // the live virtio-balloon's control handle. A dedicated UNIX stream, mirroring the display
     // resize one. libkrun stays mechanism-only; the target policy lives in the supervisor.
-    if let Some(path) = spec.balloon_control_socket.as_ref() {
+    if let Some(at) = spec.balloon_control_socket.as_ref() {
         match vmm.lock().unwrap().balloon_control_handle() {
-            Some(handle) => install_balloon_listener(path.clone(), handle)
+            Some(handle) => install_balloon_listener(at.clone(), handle)
                 .context("installing the balloon control listener")?,
             None => log::error!(
-                "--balloon-control-socket set but the balloon control handle is unavailable; \
+                "balloon control requested but the balloon control handle is unavailable; \
                  dynamic memory is disabled"
             ),
         }
@@ -951,7 +952,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     }
 }
 
-/// Bind a UNIX-socket listener that applies newline-delimited display commands to the live GPU
+/// Listen (at a path or on the supervisor's link) for newline-delimited display commands for the live GPU
 /// via `handle`: `resize <w> <h>` (display 0) and the general `display id=… …` form carrying
 /// identity, mode list, refresh range and connection state. Each accepted connection is read to
 /// EOF; both the supervisor and the test harness connect per command, so a migration cycle
@@ -959,15 +960,14 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
 /// Runs on a detached thread for the VMM's lifetime. The wire format lives in
 /// `limina-displayctl`. See docs/design/runtime-display-resize.md and
 /// docs/design/stable-edid-hotplug.md.
-fn install_resize_listener(path: std::path::PathBuf, handle: DisplayResizeHandle) -> Result<()> {
+fn install_resize_listener(at: ListenAt, handle: DisplayResizeHandle) -> Result<()> {
     use std::io::BufRead;
-    use std::os::unix::net::UnixListener;
 
-    // A stale socket from a previous run (or a relaunched worker) blocks bind(); clear it first.
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)
-        .with_context(|| format!("bind display-control socket {path:?}"))?;
-    log::info!("display-resize: listening on {path:?}");
+    let place = at.to_string();
+    let listener = at
+        .listen()
+        .with_context(|| format!("listening for display control at {place}"))?;
+    log::info!("display-resize: listening at {place}");
     std::thread::Builder::new()
         .name("display-resize".into())
         .spawn(move || {
@@ -999,7 +999,7 @@ fn install_resize_listener(path: std::path::PathBuf, handle: DisplayResizeHandle
     Ok(())
 }
 
-/// Bind a UNIX-socket listener that drives the live virtio-balloon via `handle` (M6 dynamic
+/// Listen (at a path or on the supervisor's link) for commands that drive the live virtio-balloon via `handle` (M6 dynamic
 /// memory). Newline-delimited commands:
 /// - `target <bytes>` → set the balloon target (rounded to 4 KiB pages); the guest inflates/deflates.
 /// - `stats`          → reply `target=<bytes> actual=<bytes> reclaimed=<bytes>` (the last commanded
@@ -1007,14 +1007,12 @@ fn install_resize_listener(path: std::path::PathBuf, handle: DisplayResizeHandle
 ///
 /// Runs on a detached thread for the VMM's lifetime; the supervisor policy and the test harness
 /// connect to it. Mirrors [`install_resize_listener`].
-fn install_balloon_listener(path: std::path::PathBuf, handle: BalloonControlHandle) -> Result<()> {
-    use std::os::unix::net::UnixListener;
-
-    // A stale socket from a previous run (or a relaunched worker) blocks bind(); clear it first.
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)
-        .with_context(|| format!("bind balloon-control socket {path:?}"))?;
-    log::info!("balloon: control socket listening on {path:?}");
+fn install_balloon_listener(at: ListenAt, handle: BalloonControlHandle) -> Result<()> {
+    let place = at.to_string();
+    let listener = at
+        .listen()
+        .with_context(|| format!("listening for balloon control at {place}"))?;
+    log::info!("balloon: control listening at {place}");
     // The last commanded target (bytes), shared across connections so `stats` can report it.
     // Targets only ever arrive through this socket, so this is authoritative.
     let target_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));

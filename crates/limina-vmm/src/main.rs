@@ -31,6 +31,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use limina_launch::connect::ListenAt;
 
 use crate::config::{
     BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec,
@@ -175,9 +176,15 @@ struct Cli {
 
     /// UNIX-socket path for runtime display-resize requests. The worker binds a listener
     /// here and applies newline-delimited `resize <w> <h>` commands to the live virtio-gpu
-    /// (the guest re-modesets). The supervisor window and the test harness connect to it.
-    #[arg(long)]
+    /// (the guest re-modesets). For the test harness and other tools; the supervisor's own
+    /// window uses `--display-control-fd`.
+    #[arg(long, conflicts_with = "display_control_fd")]
     display_control_socket: Option<PathBuf>,
+
+    /// The display-resize listener without a path: an inherited link the supervisor connects
+    /// over (`limina_launch::connect`), so no other process can reach it.
+    #[arg(long)]
+    display_control_fd: Option<i32>,
 
     /// Stage-2 translation granule for the VM (macOS 26+). Omitted keeps the host default,
     /// which is the host page size -- 16 KiB on Apple silicon. `4k` is what lets a 4 KiB-page
@@ -193,10 +200,15 @@ struct Cli {
 
     /// UNIX-socket path for runtime balloon control (M6). The worker binds a listener here and
     /// applies newline-delimited `target <bytes>` commands to the live virtio-balloon (replying to
-    /// `stats` with `actual=<bytes> reclaimed=<bytes>`). The supervisor policy and the test harness
-    /// connect to it.
-    #[arg(long)]
+    /// `stats` with `actual=<bytes> reclaimed=<bytes>`). For the test harness and other tools; the
+    /// supervisor's own policy uses `--balloon-control-fd`.
+    #[arg(long, conflicts_with = "balloon_control_fd")]
     balloon_control_socket: Option<PathBuf>,
+
+    /// The balloon-control listener without a path: an inherited link the supervisor connects
+    /// over (`limina_launch::connect`).
+    #[arg(long)]
+    balloon_control_fd: Option<i32>,
 
     /// Do NOT mirror the host battery into the guest. By default a virtio-i2c SBS
     /// battery mirroring the host's is attached when the host has one (or
@@ -240,19 +252,19 @@ struct Cli {
     #[arg(long, default_value_t = 0)]
     little_vcpus: u32,
 
-    /// UNIX-socket path the worker binds for the stock-tier FIDO USB gadget (M14 Stage C).
-    /// The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
-    /// CTAPHID frames over this socket to the supervisor's authenticator (SEP/Touch ID lives
-    /// there). Only meaningful with `--usb`; absent → no FIDO gadget.
+    /// Inherited link (`limina_launch::connect`) for the stock-tier FIDO USB gadget (M14 Stage
+    /// C). The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
+    /// CTAPHID frames over a connection on this link to the supervisor's authenticator
+    /// (SEP/Touch ID lives there). Only meaningful with `--usb`; absent → no FIDO gadget.
     #[arg(long, requires = "usb")]
-    fido_socket: Option<PathBuf>,
+    fido_fd: Option<i32>,
 
-    /// UNIX-socket path the worker binds for the stock-tier fingerprint reader gadget (M14 wave 3).
-    /// The worker cold-plugs a bulk-pipe gadget with the elanmoc identity and shuttles bulk packets
-    /// over this socket to the supervisor's protocol engine (Touch ID / template store live there).
-    /// Only meaningful with `--usb`; absent → no fingerprint gadget.
+    /// Inherited link (`limina_launch::connect`) for the stock-tier fingerprint reader gadget (M14
+    /// wave 3). The worker cold-plugs a bulk-pipe gadget with the elanmoc identity and shuttles
+    /// bulk packets over a connection on this link to the supervisor's protocol engine (Touch ID /
+    /// template store live there). Only meaningful with `--usb`; absent → no fingerprint gadget.
     #[arg(long, requires = "usb")]
-    moc_socket: Option<PathBuf>,
+    moc_fd: Option<i32>,
 
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (free-page-reporting fast reclaim) to the guest.
     /// OFF by default: a stock Linux guest with page-reporting enabled crashes on suspend-to-idle
@@ -318,6 +330,11 @@ struct Cli {
 }
 
 /// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
+/// A listener's place from its path flag or its link flag (clap keeps them exclusive).
+fn listen_at(path: Option<PathBuf>, link: Option<i32>) -> Option<ListenAt> {
+    path.map(ListenAt::Path).or(link.map(ListenAt::Link))
+}
+
 fn parse_display_size(s: &str) -> Result<(u32, u32)> {
     let (w, h) = s
         .split_once(['x', 'X'])
@@ -670,7 +687,7 @@ fn main() -> Result<()> {
                     pool: cli.display_pool,
                     sink,
                     software_2d: cli.gpu_software_2d,
-                    control_socket: cli.display_control_socket,
+                    control_socket: listen_at(cli.display_control_socket, cli.display_control_fd),
                 })
             }
             None => None,
@@ -702,7 +719,7 @@ fn main() -> Result<()> {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
         ipa_granule: cli.ipa_granule,
-        balloon_control_socket: cli.balloon_control_socket,
+        balloon_control_socket: listen_at(cli.balloon_control_socket, cli.balloon_control_fd),
         boot,
         disks,
         shares,
@@ -730,8 +747,8 @@ fn main() -> Result<()> {
         usb: cli.usb,
         cpufreq: cli.cpufreq,
         little_vcpus: cli.little_vcpus,
-        fido_socket: cli.fido_socket,
-        moc_socket: cli.moc_socket,
+        fido_socket: cli.fido_fd.map(ListenAt::Link),
+        moc_socket: cli.moc_fd.map(ListenAt::Link),
         free_page_reporting: cli.balloon_free_page_reporting,
         deflate_on_oom: cli.balloon_deflate_on_oom,
         snapshot_file: cli.snapshot_file,
