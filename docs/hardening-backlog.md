@@ -1061,11 +1061,15 @@ windows and skip when there are none); do not just raise the 50.
 
 ### Seated venus replay stalls under suite load
 Only under suite parallelism: the guest-side `eglretrace --headless` replay never prints `Rendered`
-and the ssh bound gives up at ~956–959 s, in either `venus_replay_matches_llvmpipe_reference` or
+and the ssh bound gives up (now `REPLAY_DEADLINE`, 300 s), in either `venus_replay_matches_llvmpipe_reference` or
 `venus_shell_replay_matches_llvmpipe_reference`. Signature: the venus context is created, KK shader
 work runs ~90 s, then the replay wedges at the first frame boundary and the worker log shows only a
-1 Hz `capture: configure scanout` for ~15 minutes. Three sightings (2026-08-12, 08-13, 08-27), each in a suite run that took
-3094–3343 s against ~2200 s for a green run the same day; solo reruns pass in 63–164 s. Ruled out: a
+1 Hz `capture: configure scanout` for ~15 minutes. Four sightings (2026-08-12, 08-13, 08-27, 09-26).
+The first three came in suite runs of 3094–3343 s against ~2200 s for a green run the same day. The
+09-26 one (virglrs `c76b2c7`) came in a 2802 s run against 2385 s for the last green one, and the
+renderer refused nothing. Solo reruns pass in 43–164 s. The test's supervisor log sits in the guest
+scratch dir, which is deleted on drop, so a failed suite run keeps no worker log: catching this live
+means keeping that log on failure first. Ruled out: a
 granule effect, and the once-a-minute `vsock muxer: unexpected dgram pkt: 3` (libkrun's timesync
 datagram reset by a guest with no listener). **Next occurrence, debug it live instead of rerunning:**
 is `eglretrace` starved of GPU progress (read the worker log at the stall timestamps) or of vCPU time
