@@ -104,21 +104,39 @@ pub(crate) fn resolve_presented(
     ack_tx: &SyncSender<AckMsg>,
     id: u32,
 ) -> Option<CFRetained<IOSurfaceRef>> {
+    resolve_stored(
+        cache,
+        surface_map,
+        |id| IOSurfaceLookup(id).map(SendSurface::new),
+        |id| {
+            let _ = ack_tx.try_send(AckMsg::Resurface(id));
+        },
+        id,
+    )
+    .map(SendSurface::into_inner)
+}
+
+/// [`resolve_presented`] over whatever the stores hold, with the global lookup and the
+/// re-publish request passed in, so `handoff_sequence` can walk the rule without IOSurfaces.
+pub(crate) fn resolve_stored<S: Clone>(
+    cache: &RefCell<SurfaceStore<S>>,
+    surface_map: &std::sync::Mutex<SurfaceStore<S>>,
+    lookup: impl FnOnce(u32) -> Option<S>,
+    ask_resurface: impl FnOnce(u32),
+    id: u32,
+) -> Option<S> {
     surface_map.lock().unwrap().pin_presented(id);
     let mut cache = cache.borrow_mut();
-    let Some(surface) = cache.get_or_insert_with(id, || {
-        surface_map
-            .lock()
-            .unwrap()
-            .get(id)
-            .or_else(|| IOSurfaceLookup(id))
+    let Some(surface) = cache.get_or_insert_stored(id, || {
+        let held = surface_map.lock().unwrap().get_stored(id);
+        held.or_else(|| lookup(id))
     }) else {
         let (why, ask) = {
             let mut map = surface_map.lock().unwrap();
             (map.why_gone(id), map.request_resurface(id))
         };
         if ask {
-            let _ = ack_tx.try_send(AckMsg::Resurface(id));
+            ask_resurface(id);
         }
         match why {
             Some(present::GoneReason::Released) => log::warn!(

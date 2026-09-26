@@ -39,6 +39,9 @@ impl SendSurface {
     pub(crate) fn new(surface: CFRetained<IOSurfaceRef>) -> Self {
         Self(surface)
     }
+    pub(crate) fn into_inner(self) -> CFRetained<IOSurfaceRef> {
+        self.0
+    }
     /// Whether any process (here: the window server compositing it) holds the surface in use.
     pub(crate) fn is_in_use(&self) -> bool {
         self.0.is_in_use()
@@ -68,8 +71,12 @@ pub(crate) enum AckMsg {
 /// is global. Bounded and oldest-evicted: the worker only ever shows the current
 /// ring and cursor, so superseded ids are safe to drop (a stale id falls back to lookup, which
 /// fails for a freed non-global surface, so that frame is skipped rather than shown wrong).
-pub struct SurfaceStore {
-    map: std::collections::HashMap<u32, SendSurface>,
+///
+/// Generic over what it holds only so `handoff_sequence` can walk the store with plain values
+/// standing in for IOSurfaces; the app holds [`SendSurface`].
+#[cfg_attr(test, derive(Clone))]
+pub struct SurfaceStore<S = SendSurface> {
+    map: std::collections::HashMap<u32, S>,
     order: VecDeque<u32>,
     cap: usize,
     /// Ids the worker has released, waiting for the main thread to drop them from its own frame
@@ -114,6 +121,9 @@ pub struct SurfaceStore {
     /// that is not ours — an IOSurface id is reusable the moment its surface dies, and the
     /// release path carries the id the guest's resource was created with.
     cursors: [Option<u32>; MAX_SCANOUTS],
+    /// How long a re-publish request is considered in flight ([`RESURFACE_RETRY`]; zero in the
+    /// walk, which has no clock).
+    resurface_retry: std::time::Duration,
 }
 
 /// Why an id left the store. See [`SurfaceStore::gone`].
@@ -140,19 +150,19 @@ const SURFACE_STORE_CAP: usize = 32;
 /// that a request lost to a worker relaunch is retried within a few frames rather than never.
 const RESURFACE_RETRY: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Cap for the main-thread frame-apply cache (see [`SurfaceStore::get_or_insert_with`]). Smaller
+/// Cap for the main-thread frame-apply cache (see [`SurfaceStore::get_or_insert_stored`]). Smaller
 /// than the store's: the cache only saves a mutex + lookup per frame, a miss costs a re-resolve,
 /// and the hot set is the guest's buffer ring (2–4 ids). Every retained entry is a whole
 /// framebuffer — 14 MiB at 1440p — so the cap is what bounds the supervisor's hold on host memory.
 pub(crate) const FRAME_CACHE_CAP: usize = 8;
 
-impl Default for SurfaceStore {
+impl<S> Default for SurfaceStore<S> {
     fn default() -> Self {
         Self::with_cap(SURFACE_STORE_CAP)
     }
 }
 
-impl SurfaceStore {
+impl<S> SurfaceStore<S> {
     pub(crate) fn with_cap(cap: usize) -> Self {
         Self {
             map: std::collections::HashMap::new(),
@@ -163,14 +173,38 @@ impl SurfaceStore {
             pinned: VecDeque::new(),
             pending_resurface: std::collections::HashMap::new(),
             cursors: [None; MAX_SCANOUTS],
+            resurface_retry: RESURFACE_RETRY,
         }
     }
+}
 
+impl SurfaceStore<SendSurface> {
     pub(crate) fn insert(&mut self, id: u32, surface: CFRetained<IOSurfaceRef>) {
+        self.insert_stored(id, SendSurface(surface));
+    }
+
+    pub(crate) fn get(&self, id: u32) -> Option<CFRetained<IOSurfaceRef>> {
+        self.get_stored(id).map(|s| s.0)
+    }
+
+    /// [`SurfaceStore::get_or_insert_stored`], for the tests that hold real IOSurfaces.
+    #[cfg(test)]
+    pub(crate) fn get_or_insert_with(
+        &mut self,
+        id: u32,
+        resolve: impl FnOnce() -> Option<CFRetained<IOSurfaceRef>>,
+    ) -> Option<CFRetained<IOSurfaceRef>> {
+        self.get_or_insert_stored(id, || resolve().map(SendSurface))
+            .map(|s| s.0)
+    }
+}
+
+impl<S: Clone> SurfaceStore<S> {
+    pub(crate) fn insert_stored(&mut self, id: u32, surface: S) {
         // Whatever brought this surface in — a fresh publish or an answer to our request — the
         // id is resolvable again, so any request we were holding down is finished.
         self.pending_resurface.remove(&id);
-        if self.map.insert(id, SendSurface(surface)).is_none() {
+        if self.map.insert(id, surface).is_none() {
             log::debug!(
                 "surface store: published surface {id} ({} held)",
                 self.map.len()
@@ -218,7 +252,7 @@ impl SurfaceStore {
     pub(crate) fn request_resurface(&mut self, id: u32) -> bool {
         let now = std::time::Instant::now();
         match self.pending_resurface.get(&id) {
-            Some(asked) if now.duration_since(*asked) < RESURFACE_RETRY => false,
+            Some(asked) if now.duration_since(*asked) < self.resurface_retry => false,
             _ => {
                 self.pending_resurface.insert(id, now);
                 true
@@ -321,8 +355,8 @@ impl SurfaceStore {
         std::mem::take(&mut self.released)
     }
 
-    pub(crate) fn get(&self, id: u32) -> Option<CFRetained<IOSurfaceRef>> {
-        self.map.get(&id).map(|s| s.0.clone())
+    pub(crate) fn get_stored(&self, id: u32) -> Option<S> {
+        self.map.get(&id).cloned()
     }
 
     /// Resolve `id`, caching the result; `resolve` runs only on a miss.
@@ -334,16 +368,16 @@ impl SurfaceStore {
     /// resulting unbounded retention showed up as 8.6 GB of `owned unmapped` in the WORKER while
     /// the references sat here, which is why every worker-side ledger came back balanced. See
     /// `spikes/venus-churn-retention/RESULTS.md` §0.3.
-    pub(crate) fn get_or_insert_with(
+    pub(crate) fn get_or_insert_stored(
         &mut self,
         id: u32,
-        resolve: impl FnOnce() -> Option<CFRetained<IOSurfaceRef>>,
-    ) -> Option<CFRetained<IOSurfaceRef>> {
-        if let Some(surface) = self.get(id) {
+        resolve: impl FnOnce() -> Option<S>,
+    ) -> Option<S> {
+        if let Some(surface) = self.get_stored(id) {
             return Some(surface);
         }
         let surface = resolve()?;
-        self.insert(id, surface.clone());
+        self.insert_stored(id, surface.clone());
         Some(surface)
     }
 
@@ -457,6 +491,7 @@ pub(crate) fn register_apply_hook(hook: std::rc::Rc<dyn Fn()>) {
 /// connectors are independent displays, and a frame arriving for slot 1 must not disturb the
 /// window presenting slot 0.
 #[derive(Default)]
+#[cfg_attr(test, derive(Clone))]
 pub struct SlotPresent {
     /// The surface id the worker wants shown right now (alternates between its double
     /// buffer so the layer's contents object changes and Core Animation re-reads).
@@ -545,6 +580,7 @@ pub struct CursorState {
 /// State shared between the control-channel reader thread, the worker monitor, and the
 /// main-thread render timer. Only `Send` data — never AppKit objects.
 #[derive(Default)]
+#[cfg_attr(test, derive(Clone))]
 pub struct Shared {
     /// Per-scanout present state, indexed by pool slot. Slot 0 is the display every VM has;
     /// the rest are live only while their connector is.
@@ -582,11 +618,30 @@ pub struct Shared {
     /// by the window tick, which re-asserts the arrangement (`DisplayTable::reset_connectors_to_boot`)
     /// and forgets what it thinks the device has been sent.
     pub(crate) device_fresh: bool,
+    /// Which worker's control reader may still change this state: bumped by every swap, and
+    /// captured by each reader as it starts (see [`deliver_line`]).
+    pub(crate) reader_epoch: u64,
 }
 
 impl Shared {
     pub fn new() -> Arc<Mutex<Shared>> {
         Arc::new(Mutex::new(Shared::default()))
+    }
+
+    /// The part of [`mark_worker_swapped`] that lives in this state.
+    fn swap_worker(&mut self, resuming: bool) {
+        self.slots = Default::default();
+        // The connectors are the same story as the slots above, one layer up: the fresh device
+        // has only slot 0 up, and it was never told any of the identities, modes or positions
+        // the host has been remembering as sent. On a REBOOT the phase change catches this on
+        // its way back through firmware; a RESUME keeps its phase, so without this the
+        // arrangement is never said again and the guest stays on the slot the device happened
+        // to boot (the 2026-08-22 stuck resume).
+        self.device_fresh = true;
+        if !resuming {
+            self.guest_driver_ready = false;
+        }
+        self.reader_epoch += 1;
     }
 }
 
@@ -632,17 +687,8 @@ pub fn mark_restore_refused(shared: &Arc<Mutex<Shared>>) {
 /// resume restores a guest whose driver is already up: no second `GET_EDID` is coming, so
 /// clearing the phase there would strand the arrangement at "firmware" for the rest of the run.
 pub fn mark_worker_swapped(shared: &Arc<Mutex<Shared>>, resuming: bool) {
-    let mut s = shared.lock().unwrap();
-    s.slots = Default::default();
-    // The connectors are the same story as the slots above, one layer up: the fresh device has
-    // only slot 0 up, and it was never told any of the identities, modes or positions the host
-    // has been remembering as sent. On a REBOOT the phase change catches this on its way back
-    // through firmware; a RESUME keeps its phase, so without this the arrangement is never said
-    // again and the guest stays on the slot the device happened to boot (the 2026-08-22 stuck
-    // resume).
-    s.device_fresh = true;
+    shared.lock().unwrap().swap_worker(resuming);
     if !resuming {
-        s.guest_driver_ready = false;
         // A reboot is a different guest session: its compositor will report an arrangement of
         // its own, and until it does, keeping the old one would map the pointer through a
         // layout nothing is displaying.
@@ -669,180 +715,19 @@ pub fn mark_resume_dead(shared: &Arc<Mutex<Shared>>) {
 /// Read the control channel on a background thread, updating `shared`. Consumes (owns) `fd` —
 /// the supervisor's end of the control socketpair — and closes it when the reader hits EOF.
 pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: SurfaceMap) {
+    // Before the thread starts: `mark_worker_swapped` for this worker has already run.
+    let epoch = shared.lock().unwrap().reader_epoch;
     std::thread::spawn(move || {
         let reader = BufReader::new(File::from(fd));
         for line in reader.lines() {
             let Ok(line) = line else { break };
-            let mut parts = line.split_whitespace();
-            match parts.next() {
-                Some("surface") => {
-                    log::info!("window: <- {line}");
-                    // surface <id0> <id1> <w> <h> [<scanout>] — geometry + the initial buffer.
-                    let id0 = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let _id1 = parts.next();
-                    let w = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let h = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let slot = parse_slot(parts.next());
-                    if let (Some(id0), Some(w), Some(h), Some(slot)) = (id0, w, h, slot) {
-                        super::echo::publish_scanout(slot, w, h);
-                        let mut s = shared.lock().unwrap();
-                        let slot = &mut s.slots[slot];
-                        slot.show_id = Some(id0);
-                        slot.last_shown = Some(id0);
-                        slot.width = w;
-                        slot.height = h;
-                        slot.cursor.log.record("scanout", w);
-                        slot.generation += 1;
-                        drop(s);
-                        wake_main_apply();
-                    }
+            match deliver_line(&shared, epoch, &surface_map, &line) {
+                Some(true) => wake_main_apply(),
+                Some(false) => {}
+                None => {
+                    log::info!("window: a swapped-out worker's reader stops");
+                    return;
                 }
-                Some("frame") => {
-                    // frame <id> [<scanout>] — the buffer to show now, on that slot.
-                    let id = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let slot = parse_slot(parts.next());
-                    if let (Some(id), Some(slot)) = (id, slot) {
-                        let mut s = shared.lock().unwrap();
-                        let slot = &mut s.slots[slot];
-                        slot.show_id = Some(id);
-                        slot.last_shown = Some(id);
-                        slot.generation += 1;
-                        slot.frames += 1;
-                        drop(s);
-                        wake_main_apply();
-                    }
-                }
-                Some("scanoutgone") => {
-                    // scanoutgone <scanout> — the slot has no scanout any more.
-                    log::info!("window: <- {line}");
-                    if let Some(slot) = parse_slot(parts.next()) {
-                        super::echo::publish_scanout(slot, 0, 0);
-                        let mut s = shared.lock().unwrap();
-                        let slot = &mut s.slots[slot];
-                        slot.show_id = None;
-                        slot.width = 0;
-                        slot.height = 0;
-                        slot.generation += 1;
-                        slot.cursor.log.record("scanoutgone", 0);
-                        drop(s);
-                        wake_main_apply();
-                    }
-                }
-                Some("audio") => {
-                    // audio <stream> <prepare|start|stop|release|audible|silent> — the guest
-                    // moved a virtio-snd PCM stream, or what that stream carries changed. What
-                    // either means for the VM's media session is main-thread policy; the reader
-                    // only queues it.
-                    let stream = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let event = parts
-                        .next()
-                        .and_then(super::media_policy::AudioEvent::parse);
-                    if let (Some(stream), Some(event)) = (stream, event) {
-                        log::info!("window: <- {line}");
-                        shared.lock().unwrap().audio_events.push((stream, event));
-                        wake_main_apply();
-                    }
-                }
-                Some("held") => {
-                    // held <scanout> <0|1> — whether the guest is held off the buffers this
-                    // scanout presents. Takes effect on the slot's next frame.
-                    log::info!("window: <- {line}");
-                    let slot = parse_slot(parts.next());
-                    let held = parts.next().and_then(|s| s.parse::<u8>().ok());
-                    if let (Some(slot), Some(held)) = (slot, held) {
-                        shared.lock().unwrap().slots[slot].held = Some(held != 0);
-                    }
-                }
-                Some("guestdriver") => {
-                    // The guest's OS driver took the device over from boot firmware. Until this
-                    // arrives, slot 0 is the only scanout anything paints (EDK2's GOP driver
-                    // programs head 0 and no other), so display arrangement waits for it.
-                    log::info!("window: <- {line}");
-                    let mut s = shared.lock().unwrap();
-                    s.guest_driver_ready = true;
-                    drop(s);
-                    wake_main_apply();
-                }
-                Some("cursor") => {
-                    // cursor <id> <w> <h> <hot_x> <hot_y> [<scanout>] — image + hotspot.
-                    let id = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let w = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let h = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let hx = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let hy = parts.next().and_then(|s| s.parse::<u32>().ok());
-                    let slot = parse_slot(parts.next());
-                    if let (Some(id), Some(w), Some(h), Some(hx), Some(hy), Some(slot)) =
-                        (id, w, h, hx, hy, slot)
-                    {
-                        let mut s = shared.lock().unwrap();
-                        let c = &mut s.slots[slot].cursor;
-                        c.id = Some(id);
-                        c.w = w;
-                        c.h = h;
-                        c.hot_x = hx;
-                        c.hot_y = hy;
-                        c.visible = true;
-                        c.generation += 1;
-                        c.log.record("shape", id);
-                        // Protect the surface for as long as it is the shape being worn: the
-                        // guest may not change cursor again for minutes, and this is the only
-                        // moment we learn which id that is. See `SurfaceStore::cursors`.
-                        surface_map.lock().unwrap().pin_cursor(slot, id);
-                        if super::capture_tap::edge_trace() {
-                            eprintln!(
-                                "[CURSOR] t={:.1} slot={slot} shape id={id} {w}x{h} hot=({hx},{hy}) pos=({},{})",
-                                super::capture_tap::trace_ms(),
-                                c.pos_x,
-                                c.pos_y,
-                            );
-                        }
-                        publish_echo(&s, slot);
-                    }
-                }
-                Some("cursormove") => {
-                    // cursormove <x> <y> — the guest's cursor position (guest scanout pixels).
-                    // In the absolute path this only echoes our own input back with a round-trip
-                    // of lag, so the present path ignores it. But in pointer-CAPTURE mode the
-                    // guest drives its own cursor (mouselook / warps) and the host cursor is
-                    // grabbed away, so this *is* the only source of truth for where to draw the
-                    // guest cursor — store it for `update_capture_cursor`.
-                    let x = parts.next().and_then(parse_cursor_coord);
-                    let y = parts.next().and_then(parse_cursor_coord);
-                    let slot = parse_slot(parts.next());
-                    if let (Some(x), Some(y), Some(slot)) = (x, y, slot) {
-                        let mut s = shared.lock().unwrap();
-                        let c = &mut s.slots[slot].cursor;
-                        c.pos_x = x;
-                        c.pos_y = y;
-                        let visible = c.visible;
-                        publish_echo(&s, slot);
-                        drop(s);
-                        if super::capture_tap::edge_trace() {
-                            eprintln!(
-                                "[CURSOR] t={:.1} slot={slot} move ({x},{y}) visible={visible}",
-                                super::capture_tap::trace_ms(),
-                            );
-                        }
-                    }
-                }
-                Some("cursorhide") => {
-                    if let Some(slot) = parse_slot(parts.next()) {
-                        let mut s = shared.lock().unwrap();
-                        let c = &mut s.slots[slot].cursor;
-                        c.visible = false;
-                        c.generation += 1;
-                        c.log.record("hide", 0);
-                        publish_echo(&s, slot);
-                        drop(s);
-                        if super::capture_tap::edge_trace() {
-                            eprintln!(
-                                "[CURSOR] t={:.1} slot={slot} hide",
-                                super::capture_tap::trace_ms(),
-                            );
-                        }
-                    }
-                }
-                _ => {}
             }
         }
         // The control channel closed: this worker is gone. Do NOT set worker_exited here — the
@@ -851,6 +736,185 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
         // a relaunch a fresh reader is spawned on the new channel; this thread just ends.
         log::info!("window: control channel closed (worker gone)");
     });
+}
+
+/// Apply one control-channel line from the reader of the worker that was current at `epoch`, and
+/// say whether the main thread should apply. `None` once that worker has been swapped out: what
+/// it had written before it died can still be in its pipe, and it describes connectors and
+/// surfaces the fresh worker never had. Read after the swap, a `frame` line would point a slot
+/// at a dead surface, and a window on a static screen would stay there. The check and the
+/// change are under one lock, so a swap cannot fall between them.
+fn deliver_line<S: Clone>(
+    shared: &Mutex<Shared>,
+    epoch: u64,
+    surface_map: &Mutex<SurfaceStore<S>>,
+    line: &str,
+) -> Option<bool> {
+    let mut guard = shared.lock().unwrap();
+    let s = &mut *guard;
+    if s.reader_epoch != epoch {
+        return None;
+    }
+    let mut wake = false;
+    let mut parts = line.split_whitespace();
+    match parts.next() {
+        Some("surface") => {
+            log::info!("window: <- {line}");
+            // surface <id0> <id1> <w> <h> [<scanout>] — geometry + the initial buffer.
+            let id0 = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let _id1 = parts.next();
+            let w = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let h = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let slot = parse_slot(parts.next());
+            if let (Some(id0), Some(w), Some(h), Some(slot)) = (id0, w, h, slot) {
+                super::echo::publish_scanout(slot, w, h);
+                let slot = &mut s.slots[slot];
+                slot.show_id = Some(id0);
+                slot.last_shown = Some(id0);
+                slot.width = w;
+                slot.height = h;
+                slot.cursor.log.record("scanout", w);
+                slot.generation += 1;
+                wake = true;
+            }
+        }
+        Some("frame") => {
+            // frame <id> [<scanout>] — the buffer to show now, on that slot.
+            let id = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let slot = parse_slot(parts.next());
+            if let (Some(id), Some(slot)) = (id, slot) {
+                let slot = &mut s.slots[slot];
+                slot.show_id = Some(id);
+                slot.last_shown = Some(id);
+                slot.generation += 1;
+                slot.frames += 1;
+                wake = true;
+            }
+        }
+        Some("scanoutgone") => {
+            // scanoutgone <scanout> — the slot has no scanout any more.
+            log::info!("window: <- {line}");
+            if let Some(slot) = parse_slot(parts.next()) {
+                super::echo::publish_scanout(slot, 0, 0);
+                let slot = &mut s.slots[slot];
+                slot.show_id = None;
+                slot.width = 0;
+                slot.height = 0;
+                slot.generation += 1;
+                slot.cursor.log.record("scanoutgone", 0);
+                wake = true;
+            }
+        }
+        Some("audio") => {
+            // audio <stream> <prepare|start|stop|release|audible|silent> — the guest
+            // moved a virtio-snd PCM stream, or what that stream carries changed. What
+            // either means for the VM's media session is main-thread policy; the reader
+            // only queues it.
+            let stream = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let event = parts
+                .next()
+                .and_then(super::media_policy::AudioEvent::parse);
+            if let (Some(stream), Some(event)) = (stream, event) {
+                log::info!("window: <- {line}");
+                s.audio_events.push((stream, event));
+                wake = true;
+            }
+        }
+        Some("held") => {
+            // held <scanout> <0|1> — whether the guest is held off the buffers this
+            // scanout presents. Takes effect on the slot's next frame.
+            log::info!("window: <- {line}");
+            let slot = parse_slot(parts.next());
+            let held = parts.next().and_then(|s| s.parse::<u8>().ok());
+            if let (Some(slot), Some(held)) = (slot, held) {
+                s.slots[slot].held = Some(held != 0);
+            }
+        }
+        Some("guestdriver") => {
+            // The guest's OS driver took the device over from boot firmware. Until this
+            // arrives, slot 0 is the only scanout anything paints (EDK2's GOP driver
+            // programs head 0 and no other), so display arrangement waits for it.
+            log::info!("window: <- {line}");
+            s.guest_driver_ready = true;
+            wake = true;
+        }
+        Some("cursor") => {
+            // cursor <id> <w> <h> <hot_x> <hot_y> [<scanout>] — image + hotspot.
+            let id = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let w = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let h = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let hx = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let hy = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let slot = parse_slot(parts.next());
+            if let (Some(id), Some(w), Some(h), Some(hx), Some(hy), Some(slot)) =
+                (id, w, h, hx, hy, slot)
+            {
+                let c = &mut s.slots[slot].cursor;
+                c.id = Some(id);
+                c.w = w;
+                c.h = h;
+                c.hot_x = hx;
+                c.hot_y = hy;
+                c.visible = true;
+                c.generation += 1;
+                c.log.record("shape", id);
+                // Protect the surface for as long as it is the shape being worn: the
+                // guest may not change cursor again for minutes, and this is the only
+                // moment we learn which id that is. See `SurfaceStore::cursors`.
+                surface_map.lock().unwrap().pin_cursor(slot, id);
+                if super::capture_tap::edge_trace() {
+                    eprintln!(
+                        "[CURSOR] t={:.1} slot={slot} shape id={id} {w}x{h} hot=({hx},{hy}) pos=({},{})",
+                        super::capture_tap::trace_ms(),
+                        c.pos_x,
+                        c.pos_y,
+                    );
+                }
+                publish_echo(s, slot);
+            }
+        }
+        Some("cursormove") => {
+            // cursormove <x> <y> — the guest's cursor position (guest scanout pixels).
+            // In the absolute path this only echoes our own input back with a round-trip
+            // of lag, so the present path ignores it. But in pointer-CAPTURE mode the
+            // guest drives its own cursor (mouselook / warps) and the host cursor is
+            // grabbed away, so this *is* the only source of truth for where to draw the
+            // guest cursor — store it for `update_capture_cursor`.
+            let x = parts.next().and_then(parse_cursor_coord);
+            let y = parts.next().and_then(parse_cursor_coord);
+            let slot = parse_slot(parts.next());
+            if let (Some(x), Some(y), Some(slot)) = (x, y, slot) {
+                let c = &mut s.slots[slot].cursor;
+                c.pos_x = x;
+                c.pos_y = y;
+                let visible = c.visible;
+                publish_echo(s, slot);
+                if super::capture_tap::edge_trace() {
+                    eprintln!(
+                        "[CURSOR] t={:.1} slot={slot} move ({x},{y}) visible={visible}",
+                        super::capture_tap::trace_ms(),
+                    );
+                }
+            }
+        }
+        Some("cursorhide") => {
+            if let Some(slot) = parse_slot(parts.next()) {
+                let c = &mut s.slots[slot].cursor;
+                c.visible = false;
+                c.generation += 1;
+                c.log.record("hide", 0);
+                publish_echo(s, slot);
+                if super::capture_tap::edge_trace() {
+                    eprintln!(
+                        "[CURSOR] t={:.1} slot={slot} hide",
+                        super::capture_tap::trace_ms(),
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+    Some(wake)
 }
 
 /// Hand one slot's cursor state to the pointer stack's oracle (`window/echo.rs`).
@@ -1184,7 +1248,7 @@ mod tests {
     /// land or fail.
     #[test]
     fn resurface_requests_are_throttled_per_id() {
-        let mut store = SurfaceStore::with_cap(2);
+        let mut store: SurfaceStore = SurfaceStore::with_cap(2);
         assert!(store.request_resurface(9), "the first miss must ask");
         assert!(
             !store.request_resurface(9),
@@ -1274,5 +1338,346 @@ mod tests {
     fn cursor_coord_garbage_is_rejected() {
         assert_eq!(parse_cursor_coord("nope"), None);
         assert_eq!(parse_cursor_coord("184467440737095516150"), None);
+    }
+}
+
+/// Every order in which a worker's surfaces, its frame lines and the window's own work can land,
+/// to a fixed depth, through the real [`SurfaceStore`] and the real resolve rule
+/// ([`super::guestwindow::resolve_stored`]).
+///
+/// A model worker creates, presents and releases surfaces from a pool of two ids, so ids are
+/// recycled, and answers re-publish requests with what it still holds. Surfaces reach the store
+/// over one FIFO queue (the Mach port), `frame` lines over each worker's own control channel, read
+/// by that worker's own reader thread. A worker can be replaced by a fresh one, as a reboot or a
+/// resume does; the old reader may still deliver what the dead worker had written. The window
+/// drains releases from its frame cache and resolves the slot's `show_id`, as `apply` does.
+///
+/// After every sequence everything still in flight is delivered and the window applies, answers
+/// and re-applies until nothing moves. It must then show exactly the surface the current worker's
+/// guest last presented: a skipped frame there is a frozen window, and another surface is wrong
+/// pixels.
+#[cfg(test)]
+mod handoff_sequence {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    use super::super::guestwindow::resolve_stored;
+    use super::{Shared, SurfaceStore, deliver_line};
+
+    /// A surface: its IOSurface id, and which surface object behind that id it is.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Surface {
+        id: u32,
+        generation: u32,
+    }
+
+    #[derive(Clone, Debug)]
+    enum Mach {
+        Published(Surface),
+        Released(u32),
+    }
+
+    /// `Create`, `Present` and `Release` name one of the current worker's two ids. IOSurface ids
+    /// are the kernel's, so a fresh worker's are not the dead one's; within one worker an id is
+    /// reused as soon as it is free, which is harsher than the kernel is.
+    #[derive(Clone, Copy, Debug)]
+    enum Op {
+        Create(u32),
+        Present(u32),
+        Release(u32),
+        DeliverMach,
+        /// The current worker's reader (`false`) or the dead one's (`true`) reads a line.
+        DeliverFrame {
+            old: bool,
+        },
+        Apply,
+        AnswerResurface,
+        SwapWorker,
+    }
+
+    const OPS: [Op; 12] = [
+        Op::Create(0),
+        Op::Create(1),
+        Op::Present(0),
+        Op::Present(1),
+        Op::Release(0),
+        Op::Release(1),
+        Op::DeliverMach,
+        Op::DeliverFrame { old: false },
+        Op::DeliverFrame { old: true },
+        Op::Apply,
+        Op::AnswerResurface,
+        Op::SwapWorker,
+    ];
+
+    struct World {
+        shared: Mutex<Shared>,
+        store: Mutex<SurfaceStore<Surface>>,
+        cache: RefCell<SurfaceStore<Surface>>,
+        /// The current worker's first id, its surfaces, and the one its guest last presented.
+        base: u32,
+        live: Vec<Surface>,
+        presented: Option<Surface>,
+        generation: u32,
+        mach: VecDeque<Mach>,
+        /// Each worker's control lines not yet read, with the epoch its reader started at.
+        frames: VecDeque<u32>,
+        epoch: u64,
+        old_frames: VecDeque<u32>,
+        old_epoch: u64,
+        asks: VecDeque<u32>,
+        /// What the window last put on glass.
+        shown: Option<Surface>,
+        /// An id of the current worker's that it has let go of, so that a `Create` reuses it.
+        freed: Vec<u32>,
+    }
+
+    /// How often the walk reached the cases it exists for.
+    #[derive(Default)]
+    struct Seen {
+        sequences: u64,
+        /// A dead worker's line arrived after the swap and was refused.
+        refused: u64,
+        /// The worker re-published a surface the window asked for.
+        republished: u64,
+        /// A worker reused one of its own ids for a new surface.
+        reused: u64,
+    }
+
+    fn store(cap: usize) -> SurfaceStore<Surface> {
+        let mut s = SurfaceStore::with_cap(cap);
+        s.resurface_retry = std::time::Duration::ZERO;
+        s
+    }
+
+    impl Clone for World {
+        fn clone(&self) -> World {
+            World {
+                shared: Mutex::new(self.shared.lock().unwrap().clone()),
+                store: Mutex::new(self.store.lock().unwrap().clone()),
+                cache: RefCell::new(self.cache.borrow().clone()),
+                base: self.base,
+                live: self.live.clone(),
+                presented: self.presented,
+                generation: self.generation,
+                mach: self.mach.clone(),
+                frames: self.frames.clone(),
+                epoch: self.epoch,
+                old_frames: self.old_frames.clone(),
+                old_epoch: self.old_epoch,
+                asks: self.asks.clone(),
+                shown: self.shown,
+                freed: self.freed.clone(),
+            }
+        }
+    }
+
+    impl World {
+        fn new() -> World {
+            World {
+                shared: Mutex::new(Shared::default()),
+                store: Mutex::new(store(super::SURFACE_STORE_CAP)),
+                cache: RefCell::new(store(super::FRAME_CACHE_CAP)),
+                base: 1,
+                live: Vec::new(),
+                presented: None,
+                generation: 0,
+                mach: VecDeque::new(),
+                frames: VecDeque::new(),
+                epoch: 0,
+                old_frames: VecDeque::new(),
+                old_epoch: 0,
+                asks: VecDeque::new(),
+                shown: None,
+                freed: Vec::new(),
+            }
+        }
+
+        fn swapped(&self) -> bool {
+            self.base != 1
+        }
+
+        fn live(&self, id: u32) -> Option<Surface> {
+            self.live.iter().copied().find(|s| s.id == id)
+        }
+
+        fn apply(&mut self) {
+            // `Windows::drain_releases`, then slot 0's present.
+            let released = self.store.lock().unwrap().take_released();
+            for id in released {
+                self.cache.borrow_mut().remove(id);
+            }
+            let Some(id) = self.shared.lock().unwrap().slots[0].show_id else {
+                return;
+            };
+            let asks = &mut self.asks;
+            if let Some(s) = resolve_stored(
+                &self.cache,
+                &self.store,
+                |_| None,
+                |id| asks.push_back(id),
+                id,
+            ) {
+                self.shown = Some(s);
+            }
+        }
+
+        fn answer(&mut self, id: u32) -> bool {
+            let Some(s) = self.live(id) else {
+                return false;
+            };
+            self.mach.push_back(Mach::Published(s));
+            true
+        }
+
+        fn deliver_mach(&mut self) -> bool {
+            let Some(m) = self.mach.pop_front() else {
+                return false;
+            };
+            let mut store = self.store.lock().unwrap();
+            match m {
+                Mach::Published(s) => store.insert_stored(s.id, s),
+                Mach::Released(id) => store.note_released(id),
+            }
+            true
+        }
+
+        fn step(&mut self, op: Op, seen: &mut Seen) -> bool {
+            match op {
+                Op::Create(k) if self.live(self.base + k).is_none() => {
+                    if self.freed.contains(&(self.base + k)) {
+                        seen.reused += 1;
+                    }
+                    self.generation += 1;
+                    let s = Surface {
+                        id: self.base + k,
+                        generation: self.generation,
+                    };
+                    self.live.push(s);
+                    self.mach.push_back(Mach::Published(s));
+                }
+                Op::Present(k) => {
+                    let Some(s) = self.live(self.base + k) else {
+                        return false;
+                    };
+                    self.presented = Some(s);
+                    self.frames.push_back(s.id);
+                }
+                // The guest lets go of a surface it is no longer presenting.
+                Op::Release(k) => {
+                    let id = self.base + k;
+                    if self.live(id).is_none() || self.presented.map(|p| p.id) == Some(id) {
+                        return false;
+                    }
+                    self.live.retain(|s| s.id != id);
+                    self.freed.push(id);
+                    self.mach.push_back(Mach::Released(id));
+                }
+                Op::DeliverMach => return self.deliver_mach(),
+                Op::DeliverFrame { old } => {
+                    let (q, epoch) = if old {
+                        (&mut self.old_frames, self.old_epoch)
+                    } else {
+                        (&mut self.frames, self.epoch)
+                    };
+                    let Some(id) = q.pop_front() else {
+                        return false;
+                    };
+                    let line = format!("frame {id} 0");
+                    if deliver_line(&self.shared, epoch, &self.store, &line).is_none() {
+                        // That reader stops.
+                        q.clear();
+                        seen.refused += 1;
+                    }
+                }
+                Op::Apply => self.apply(),
+                Op::AnswerResurface => {
+                    let Some(id) = self.asks.pop_front() else {
+                        return false;
+                    };
+                    if self.answer(id) {
+                        seen.republished += 1;
+                    }
+                }
+                // The worker is gone and a fresh one takes over, as `session.rs` does it: the
+                // store lets go of the old surfaces, the slots are reset, and a new reader starts.
+                // The fresh worker has nothing yet. What the old one had queued on the Mach port
+                // is still in the queue, and its reader may still have lines to read.
+                Op::SwapWorker if !self.swapped() => {
+                    self.store.lock().unwrap().clear_for_new_worker();
+                    self.shared.lock().unwrap().swap_worker(false);
+                    self.old_frames = std::mem::take(&mut self.frames);
+                    self.old_epoch = self.epoch;
+                    self.epoch = self.shared.lock().unwrap().reader_epoch;
+                    self.base = 3;
+                    self.live.clear();
+                    self.freed.clear();
+                    self.presented = None;
+                }
+                _ => return false,
+            }
+            true
+        }
+
+        /// Read every line and message in flight and let the window apply and ask until nothing
+        /// moves. A request the worker cannot answer (it no longer has the id) ends there.
+        fn settle(&mut self, seen: &mut Seen) {
+            while self.step(Op::DeliverFrame { old: true }, seen) {}
+            while self.step(Op::DeliverFrame { old: false }, seen) {}
+            loop {
+                while self.deliver_mach() {}
+                self.apply();
+                while let Some(id) = self.asks.pop_front() {
+                    if self.answer(id) {
+                        seen.republished += 1;
+                    }
+                }
+                if self.mach.is_empty() {
+                    return;
+                }
+            }
+        }
+    }
+
+    fn walk(world: &World, path: &mut Vec<Op>, depth: usize, seen: &mut Seen) {
+        seen.sequences += 1;
+        let mut settled = world.clone();
+        settled.settle(seen);
+        if let Some(want) = settled.presented {
+            assert_eq!(
+                settled.shown,
+                Some(want),
+                "the window does not show what the guest presents, after {path:?}"
+            );
+        }
+        if depth == 0 {
+            return;
+        }
+        for op in OPS {
+            let mut next = world.clone();
+            if !next.step(op, seen) {
+                continue;
+            }
+            path.push(op);
+            walk(&next, path, depth - 1, seen);
+            path.pop();
+        }
+    }
+
+    #[test]
+    fn every_handoff_order_shows_what_the_guest_presents() {
+        let mut seen = Seen::default();
+        walk(&World::new(), &mut Vec::new(), 8, &mut seen);
+        eprintln!(
+            "{} sequences: {} dead-worker lines refused, {} re-published, {} ids reused",
+            seen.sequences, seen.refused, seen.republished, seen.reused
+        );
+        assert!(
+            seen.refused > 0,
+            "no dead worker's line arrived after a swap"
+        );
+        assert!(seen.republished > 0, "no surface was ever asked for again");
+        assert!(seen.reused > 0, "no worker ever reused an id");
     }
 }
