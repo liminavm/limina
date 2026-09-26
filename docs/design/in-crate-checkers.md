@@ -410,8 +410,9 @@ cargo-fuzz 0.13.2.
   after two holes found by the sweep itself were closed (the coalescer's merge check and the head
   CRC). One more hole was in an entry and not in a model: registering a peer after its greeting
   survived the first clipboard model, which cannot reach the gap once serials are reused, and is
-  caught by the three-thread one. The baseline publish above was tried and retired. Each entry
-  since phase 3 was run as it was added; the full sweep was not re-run end to end.
+  caught by the three-thread one. The baseline publish above was tried and retired. The whole
+  sweep was then run in one pass on the pushed tree (limina `d0cc6465`, libkrun `70e1df16`): 75
+  of 75 caught, each by its own witness.
 
 The rule for Kani, sharpened from virglrs's: it needs code that neither allocates nor does
 arithmetic on time, on any path the harness can reach, taken or not. Find the cost by bisecting
@@ -443,8 +444,9 @@ expensive call with an over-approximation the property does not depend on.
 
 5. **What phase 4 left, in this order** (agreed 2026-09-26). Each item is ticked here when it
    lands:
-   1. [ ] **The whole sweep, end to end.** It has never been run in one pass; each entry was run
-      only as it was added. `cargo xtask check sabotage`, every entry, and each `SURVIVED`
+   1. [x] **The whole sweep, end to end.** Done 2026-09-26: 75 of 75 caught, every one by its own
+      witness, none by the compiler or a hang. Until then each entry had been run only as it was
+      added. `cargo xtask check sabotage`, every entry, and each `SURVIVED`
       closed or retired with the reason recorded.
    2. [ ] **The host-sleep bracket, enumerated** (`crates/limina-vmm/src/power.rs`).
       `HostSleepState` walked against guest transitions: a suspend starting, finishing or
