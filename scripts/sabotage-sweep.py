@@ -790,6 +790,51 @@ SABOTAGES = [
         'crates/limina-vmm',
         'every_host_sleep_sequence_wakes_exactly_our_suspends',
     ),
+    (
+        "a swapped-out worker's reader still moves the slots",
+        'crates/limina/src/window/present.rs',
+        """    if s.reader_epoch != epoch {""",
+        """    if s.reader_epoch < epoch {""",
+        'crates/limina',
+        'every_handoff_order_shows_what_the_guest_presents',
+    ),
+    (
+        'a swap leaves every reader current',
+        'crates/limina/src/window/present.rs',
+        """        self.reader_epoch += 1;
+""",
+        """""",
+        'crates/limina',
+        'every_handoff_order_shows_what_the_guest_presents',
+    ),
+    (
+        'a released id stays in the frame cache',
+        'crates/limina/src/window/present.rs',
+        """        self.released.push(id);
+""",
+        """""",
+        'crates/limina',
+        'every_handoff_order_shows_what_the_guest_presents',
+    ),
+    (
+        'a swap leaves the dead worker in the frame cache',
+        'crates/limina/src/window/present.rs',
+        """        self.released.extend(self.map.keys().copied());
+""",
+        """""",
+        'crates/limina',
+        'every_handoff_order_shows_what_the_guest_presents',
+    ),
+    (
+        'a frame that misses never asks for its surface again',
+        'crates/limina/src/window/guestwindow.rs',
+        """        if ask {
+            ask_resurface(id);""",
+        """        if false && ask {
+            ask_resurface(id);""",
+        'crates/limina',
+        'every_handoff_order_shows_what_the_guest_presents',
+    ),
 ]
 
 

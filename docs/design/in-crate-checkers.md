@@ -137,7 +137,7 @@ what snapshots stand on); the frame handoff in `crates/limina/src/window/present
 `cfg(all(test, loom))` shim first. Anything that crosses HVF, AppKit or guest memory stays with
 the HVF suite. Reading them sorted them into three: the control plane's clipboard greeting, the
 band sampler against a vCPU's guard, and the power watch are loom's, and have models. The
-host-sleep bracket and the frame handoff are not, for the reasons under *Measured so far*.
+host-sleep bracket and the frame handoff are not; both are enumerated instead (*Measured so far*).
 
 ## Layout and commands
 
@@ -414,11 +414,29 @@ cargo-fuzz 0.13.2.
   rather than failed, and the walk asserts it reaches both. A pulse is re-sent after the grace has
   given up on an earlier one as swallowed. A user's own suspend is woken if it began while ours was
   outstanding, since from the host it is indistinguishable from ours.
-- **Frame handoff** (`crates/limina/src/window/present.rs`). Not loom's either: the reader and the
-  surface-port receiver each change one store under one lock, and the hazards are the orders in
-  which the control lines and the Mach messages arrive, for a consumer on the AppKit main thread.
-  An enumeration of arrival orders fits, once the store is generic over the surface type.
-- **The sweep.** Seventy-nine entries, each caught by the assertion, test or model written for it,
+- **Frame handoff** (`crates/limina/src/window/present.rs`, `handoff_sequence`). Not loom's: the
+  reader and the surface-port receiver each change one store under one lock, and the hazards are
+  the orders in which control lines and Mach messages arrive for a consumer on the main thread.
+  `SurfaceStore` is generic over what it holds, so the walk drives the real store, the real
+  resolve rule (`guestwindow::resolve_stored`) and the real line handling (`deliver_line`) with
+  plain values standing in for IOSurfaces. A worker creates, presents and releases surfaces over
+  two ids, reused as soon as they are free; surfaces travel one FIFO (the port) and frame lines
+  each worker's own reader; the window drains releases and resolves `show_id`; a request for a
+  missing surface is answered with what the worker still holds; and the worker can be swapped for
+  a fresh one, as a reboot or resume does, with the dead one's port messages and reader lines
+  still in flight. After every sequence everything is delivered and the window applies and asks
+  until nothing moves. It must then show exactly what the current guest presents, and its frame
+  cache must hold nothing a dead worker made. 564,053 sequences to depth 8 in 10 s (debug), and
+  the walk asserts it reached a refused dead-worker line, a re-publish and a reused id. It found
+  one bug: the dead worker's reader was never retired, so a line it read after the swap pointed
+  slot 0 back at a dead surface, and a static screen stayed on the dead worker's frame. Fixed: each
+  reader captures the swap epoch it started under and a line applies only while that epoch is
+  current, checked under the lock that makes the change. Argued rather than witnessed: a surface
+  the dead worker queued on the port before it exited can still land in the store after
+  `clear_for_new_worker`, and stays until the cap evicts it. Nothing shows it (the gate keeps its
+  id off every slot), the port is drained continuously while a relaunch takes a firmware boot,
+  and the message names no worker the store could check.
+- **The sweep.** Eighty-four entries, each caught by the assertion, test or model written for it,
   after two holes found by the sweep itself were closed (the coalescer's merge check and the head
   CRC). One more hole was in an entry and not in a model: registering a peer after its greeting
   survived the first clipboard model, which cannot reach the gap once serials are reused, and is
@@ -462,14 +480,14 @@ expensive call with an over-approximation the property does not depend on.
       closed or retired with the reason recorded.
    2. [x] **The host-sleep bracket, enumerated** (`crates/limina-vmm/src/power.rs`). Done
       2026-09-26; what it covers and found is under *Measured so far*.
-   3. [ ] **The frame handoff, enumerated** (`crates/limina/src/window/present.rs`). Every
-      arrival order of control lines and surface-port messages, a worker swap included,
-      against "no presented frame freezes". Needs `SurfaceStore` generic over the surface type.
+   3. [x] **The frame handoff, enumerated** (`crates/limina/src/window/present.rs`). Done
+      2026-09-26; what it covers and found is under *Measured so far*.
    4. [ ] **The grab's ownership seam**: the window tick and the event tap composing
       `must_drop_grab` and `key_loss_releases`.
    5. [ ] **Miri**, its first sweep over the unit tests that make no foreign call.
    6. [ ] **Loose ends**: the GPU payload decoder fuzz target (needs the `gpu` feature), and
-      the `function_casts_as_integer` warning at `third_party/libkrun/src/hvf/src/released_ram.rs:643`.
+      the `function_casts_as_integer` warning at `third_party/libkrun/src/hvf/src/released_ram.rs:643`,
+      and the never-read `status_ioc` at `third_party/libkrun/src/devices/src/usb/xhci/engine.rs:78`.
 
 Every phase ends with this document updated: what each tool now covers, with measured time and
 memory, and what was tried and did not fit, with the numbers.
