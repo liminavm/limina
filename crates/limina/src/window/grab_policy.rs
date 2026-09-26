@@ -569,6 +569,100 @@ pub(crate) fn capture_owner(facts: &[WindowFacts], capture_slot: usize) -> Optio
     facts.iter().find(|f| f.slot == capture_slot)
 }
 
+/// Why the window tick hands a held grab back. The tick composes the two ownership questions a
+/// grab has to keep answering, in the order the handback cares about: a window gone from the
+/// screen gives the pointer back with no warp ([`must_drop_grab`]), and otherwise a keyboard gone
+/// from the VM gives it back where the user can see it ([`key_loss_releases`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TickRelease {
+    Gone,
+    FocusLost,
+}
+
+pub(crate) fn tick_release(
+    captured: bool,
+    capture_slot: usize,
+    facts: &[WindowFacts],
+) -> Option<TickRelease> {
+    if must_drop_grab(captured, capture_owner(facts, capture_slot)) {
+        Some(TickRelease::Gone)
+    } else if key_loss_releases(captured, facts) {
+        Some(TickRelease::FocusLost)
+    } else {
+        None
+    }
+}
+
+/// Why the event tap hands a held grab back, per event: the keyboard left the VM
+/// ([`key_loss_releases`]), or the policy's own grab left fullscreen
+/// ([`fullscreen_exit_releases`]). The policy stops holding in either case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TapRelease {
+    FocusLost,
+    FullscreenExit,
+}
+
+pub(crate) fn tap_release(
+    captured: bool,
+    st: &mut GrabState,
+    facts: &[WindowFacts],
+) -> Option<TapRelease> {
+    let why = if key_loss_releases(captured, facts) {
+        TapRelease::FocusLost
+    } else if fullscreen_exit_releases(capture_tier(captured, st), &primary_facts(facts)) {
+        TapRelease::FullscreenExit
+    } else {
+        return None;
+    };
+    st.stop_holding();
+    Some(why)
+}
+
+/// What Cmd-Ctrl-G does, as the tap sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ComboAction {
+    /// Not ours: another app has the keyboard, and grabbing would steal its pointer.
+    PassThrough,
+    /// The policy's grab becomes the user's, with no capture transition.
+    Promote,
+    /// Take a hard grab, or let one go.
+    Toggle,
+}
+
+/// Cmd-Ctrl-G means "hard grab / no grab": from a free pointer or a policy grab it becomes a
+/// hard grab, and from a hard grab it lets go. Grabbing needs key status, because this is a
+/// session tap and sees the combo while another app is focused; releasing does not, because
+/// the escape hatch must always work. The user is the other owner of the capture, so a release
+/// latches the policy off until the user asks again, and a promotion latches nothing.
+pub(crate) fn capture_combo(captured: bool, st: &mut GrabState, is_key: bool) -> ComboAction {
+    let hard = matches!(capture_tier(captured, st), GrabMode::Hard);
+    if !hard && !is_key {
+        return ComboAction::PassThrough;
+    }
+    st.release_by_user(hard);
+    if captured != hard {
+        ComboAction::Promote
+    } else {
+        ComboAction::Toggle
+    }
+}
+
+/// The policy's half of a capture toggle, whichever path asked for it; returns the new captured
+/// state.
+///
+/// A release always ends the policy's hold. [`grab_mode`] reads `holding` only together with
+/// `captured`, so a hold left behind is invisible while the pointer is free, and then becomes the
+/// terms of whatever takes the pointer next. Several paths release without asking the policy: the
+/// tick's backstops, the tap-less chord, parking. After one of them, Cmd-Ctrl-G through the local
+/// monitor took a grab that read as the policy's, and leaving fullscreen then dropped it — a hard
+/// grab is exactly the one that must survive that.
+pub(crate) fn toggled(captured: bool, st: &mut GrabState) -> bool {
+    if captured {
+        st.stop_holding();
+    }
+    !captured
+}
+
 /// The [`Free`] sample's arming flags — `(fullscreen_and_key, space_visible)` — judged against
 /// the guest window the free pointer is over (`hit_slot`), not the primary.
 ///
@@ -2524,5 +2618,250 @@ mod every_sequence {
             seq.iter().for_each(|&op| w.step(op).unwrap());
             assert!(!w.captured, "{seq:?} did not release");
         }
+    }
+}
+
+/// Every order in which the window tick, the event tap and the other owners of the capture can
+/// act on one grab, composed through the real predicates, to depth seven.
+///
+/// Two guest windows, the primary on slot 0 and a secondary on slot 1. The world moves: the
+/// keyboard goes to either window or away from the VM, either window's Space leaves and returns,
+/// the secondary loses its screen and gets it back, the primary leaves fullscreen and returns, the
+/// pointer moves between the windows. The owners act: the policy takes the grab on a screen gain
+/// ([`GrabState::take_by_policy`]), Cmd-Ctrl-G through the tap ([`capture_combo`]) or through the
+/// local monitor when the tap is missing, the tap-less Ctrl-Opt chord, parking the window, a tick
+/// ([`tick_release`]) and a tap event ([`tap_release`]). Every capture transition goes through
+/// [`toggled`], as `InputState::toggle_capture_full` does.
+///
+/// Checks, after every step: the policy never holds a grab that is not captured, so no later
+/// capture inherits its terms; a grab the user takes by name is hard; no release path ever
+/// captures. After a tick, a held grab has a key window and its own window on screen; after a tap
+/// event, a policy grab is in fullscreen.
+#[cfg(test)]
+mod ownership_sequence {
+    use super::*;
+
+    #[derive(Clone, Copy, Debug)]
+    enum Op {
+        Focus(Option<usize>),
+        Space(usize),
+        Screen,
+        Fullscreen,
+        Pointer(usize),
+        PolicyTake,
+        TapCombo,
+        MonitorCombo,
+        Chord,
+        Park,
+        Tick,
+        TapEvent,
+    }
+
+    const OPS: [Op; 15] = [
+        Op::Focus(Some(0)),
+        Op::Focus(Some(1)),
+        Op::Focus(None),
+        Op::Space(0),
+        Op::Space(1),
+        Op::Screen,
+        Op::Fullscreen,
+        Op::Pointer(1),
+        Op::Pointer(0),
+        Op::PolicyTake,
+        Op::TapCombo,
+        Op::MonitorCombo,
+        Op::Chord,
+        Op::Park,
+        Op::Tick,
+    ];
+
+    #[derive(Clone, Copy)]
+    struct World {
+        facts: [WindowFacts; 2],
+        st: GrabState,
+        captured: bool,
+        capture_slot: usize,
+        pointer: usize,
+    }
+
+    #[derive(Default)]
+    struct Seen {
+        sequences: u64,
+        gone: u64,
+        tick_focus: u64,
+        tap_focus: u64,
+        fullscreen_exit: u64,
+        promoted: u64,
+    }
+
+    impl World {
+        fn new() -> World {
+            let w = |slot| WindowFacts {
+                slot,
+                primary: slot == 0,
+                key: slot == 0,
+                on_active_space: true,
+                has_screen: true,
+                fullscreen: true,
+            };
+            World {
+                facts: [w(0), w(1)],
+                st: GrabState::default(),
+                captured: false,
+                capture_slot: 0,
+                pointer: 0,
+            }
+        }
+
+        fn is_key(&self) -> bool {
+            self.facts.iter().any(|f| f.key)
+        }
+
+        /// A capture transition, from `path`; releases never capture.
+        fn toggle(&mut self, release_only: bool, path: &str) -> Result<(), String> {
+            let was = self.captured;
+            self.captured = toggled(was, &mut self.st);
+            if release_only && self.captured {
+                return Err(format!("{path} captured the pointer"));
+            }
+            if self.captured {
+                self.capture_slot = self.pointer;
+            }
+            Ok(())
+        }
+
+        fn step(&mut self, op: Op, seen: &mut Seen) -> Result<(), String> {
+            match op {
+                Op::Focus(k) => {
+                    for f in &mut self.facts {
+                        f.key = Some(f.slot) == k;
+                    }
+                }
+                Op::Space(i) => self.facts[i].on_active_space ^= true,
+                Op::Screen => self.facts[1].has_screen ^= true,
+                Op::Fullscreen => self.facts[0].fullscreen ^= true,
+                Op::Pointer(i) => self.pointer = i,
+                // `InputState::grab_on_screen_gain`: never over a grab already held.
+                Op::PolicyTake => {
+                    if !self.captured {
+                        self.st.take_by_policy();
+                        self.toggle(false, "a screen gain")?;
+                    }
+                }
+                Op::TapCombo => {
+                    let was = self.captured;
+                    let is_key = self.is_key();
+                    match capture_combo(self.captured, &mut self.st, is_key) {
+                        ComboAction::PassThrough => {}
+                        ComboAction::Promote => seen.promoted += 1,
+                        ComboAction::Toggle => self.toggle(false, "Cmd-Ctrl-G")?,
+                    }
+                    if !was
+                        && self.captured
+                        && capture_tier(self.captured, &self.st) != GrabMode::Hard
+                    {
+                        return Err(
+                            "Cmd-Ctrl-G through the tap took a grab that is not hard".into()
+                        );
+                    }
+                }
+                // The tap is missing, so the local monitor toggles the capture itself.
+                Op::MonitorCombo => {
+                    let was = self.captured;
+                    self.toggle(false, "Cmd-Ctrl-G through the monitor")?;
+                    if !was && capture_tier(self.captured, &self.st) != GrabMode::Hard {
+                        return Err(
+                            "Cmd-Ctrl-G through the monitor took a grab that is not hard".into(),
+                        );
+                    }
+                }
+                // The tap-less Ctrl-Opt chord (`InputState` on flagsChanged).
+                Op::Chord => {
+                    if self.captured {
+                        self.toggle(true, "the Ctrl-Opt chord")?;
+                    }
+                }
+                // `InputState::release_capture`, for the parked window.
+                Op::Park => {
+                    if self.captured {
+                        self.toggle(true, "parking")?;
+                    }
+                }
+                Op::Tick => {
+                    match tick_release(self.captured, self.capture_slot, &self.facts) {
+                        Some(TickRelease::Gone) => seen.gone += 1,
+                        Some(TickRelease::FocusLost) => seen.tick_focus += 1,
+                        None => {}
+                    }
+                    if tick_release(self.captured, self.capture_slot, &self.facts).is_some() {
+                        self.toggle(true, "the tick")?;
+                    }
+                    if self.captured {
+                        let owner = capture_owner(&self.facts, self.capture_slot);
+                        if !self.is_key()
+                            || !owner.is_some_and(|w| w.on_active_space && w.has_screen)
+                        {
+                            return Err("a tick left a grab its window cannot explain".into());
+                        }
+                    }
+                }
+                Op::TapEvent => {
+                    match tap_release(self.captured, &mut self.st, &self.facts) {
+                        Some(TapRelease::FocusLost) => {
+                            seen.tap_focus += 1;
+                            self.toggle(true, "the tap")?;
+                        }
+                        Some(TapRelease::FullscreenExit) => {
+                            seen.fullscreen_exit += 1;
+                            self.toggle(true, "the tap")?;
+                        }
+                        None => {}
+                    }
+                    if capture_tier(self.captured, &self.st) == GrabMode::Auto
+                        && !self.facts[0].fullscreen
+                    {
+                        return Err("a tap event left a policy grab outside fullscreen".into());
+                    }
+                }
+            }
+            if !self.captured && self.st.holding() {
+                return Err("the policy holds a grab that is not captured".into());
+            }
+            Ok(())
+        }
+    }
+
+    fn walk(world: World, path: &mut Vec<Op>, depth: usize, seen: &mut Seen) {
+        seen.sequences += 1;
+        if depth == 0 {
+            return;
+        }
+        for op in OPS.iter().copied().chain([Op::TapEvent]) {
+            let mut next = world;
+            path.push(op);
+            if let Err(m) = next.step(op, seen) {
+                panic!("{m}, after {path:?}");
+            }
+            walk(next, path, depth - 1, seen);
+            path.pop();
+        }
+    }
+
+    #[test]
+    fn every_ownership_sequence_keeps_the_grab_terms_straight() {
+        let mut seen = Seen::default();
+        walk(World::new(), &mut Vec::new(), 7, &mut seen);
+        eprintln!(
+            "{} sequences: {} gone, {} focus lost at a tick, {} at the tap, {} fullscreen exits, \
+             {} promotions",
+            seen.sequences,
+            seen.gone,
+            seen.tick_focus,
+            seen.tap_focus,
+            seen.fullscreen_exit,
+            seen.promoted
+        );
+        assert!(seen.gone > 0 && seen.tick_focus > 0 && seen.tap_focus > 0);
+        assert!(seen.fullscreen_exit > 0 && seen.promoted > 0);
     }
 }

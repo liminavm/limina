@@ -294,28 +294,24 @@ extern "C" fn tap_callback(
     }
     if !is_key {
         ctx.was_key.set(false);
-        // Losing key ALWAYS hands the pointer back — see `grab_policy::key_loss_releases`.
-        // The tap consumes every mouse event regardless of key state, and this per-event check
-        // is the low-latency consumer (the window tick is the backstop). (An earlier draft of
-        // the design claimed this was already handled. It was not.)
-        if grab_policy::key_loss_releases(ctx.captured.load(Ordering::Acquire), &facts) {
-            log::info!("pointer capture: released — the window lost focus");
-            ctx.with_grab(|st| st.stop_holding());
-            ctx.input.toggle_capture(&ctx.view);
-        }
     }
 
-    // A POLICY grab lives only in fullscreen — see `grab_policy::fullscreen_exit_releases`.
-    // An explicit Cmd-Ctrl-G grab is the user's and survives.
-    if grab_policy::fullscreen_exit_releases(
-        grab_policy::capture_tier(
-            ctx.captured.load(Ordering::Acquire),
-            &ctx.input.grab_state(),
-        ),
-        &pf,
-    ) {
-        log::info!("pointer capture: released — no longer fullscreen");
-        ctx.with_grab(|st| st.stop_holding());
+    // Losing key ALWAYS hands the pointer back — see `grab_policy::key_loss_releases`. The tap
+    // consumes every mouse event regardless of key state, and this per-event check is the
+    // low-latency consumer (the window tick is the backstop). (An earlier draft of the design
+    // claimed this was already handled. It was not.) And a POLICY grab lives only in fullscreen
+    // — see `grab_policy::fullscreen_exit_releases`; an explicit Cmd-Ctrl-G grab is the user's
+    // and survives.
+    let captured = ctx.captured.load(Ordering::Acquire);
+    if let Some(why) = ctx.with_grab(|st| grab_policy::tap_release(captured, st, &facts)) {
+        match why {
+            grab_policy::TapRelease::FocusLost => {
+                log::info!("pointer capture: released — the window lost focus")
+            }
+            grab_policy::TapRelease::FullscreenExit => {
+                log::info!("pointer capture: released — no longer fullscreen")
+            }
+        }
         ctx.input.toggle_capture(&ctx.view);
     }
 
@@ -340,32 +336,24 @@ extern "C" fn tap_callback(
             // hard grab was unreachable. Making the combo mean "hard grab / no grab" gives each
             // press one meaning: from soft or policy-held it becomes a hard grab, from a hard grab
             // it lets go. (Ctrl-Opt still always releases.)
+            //
+            // See `grab_policy::capture_combo` for the rest: grabbing needs key status (this is a
+            // SESSION tap — passing the combo through lets the focused party, possibly another
+            // VM's key-gated tap, handle it), releasing never does, and the user is the other
+            // owner of `captured`, so a release latches the policy off. Without the latch a
+            // level-triggered fullscreen policy would simply re-grab on the next event — the
+            // state the review flagged as two owners of one flag.
             let held = ctx.captured.load(Ordering::Acquire);
-            let hard = matches!(
-                grab_policy::capture_tier(held, &ctx.input.grab_state()),
-                GrabMode::Hard
-            );
-            // GRAB only when our window is key: this is a SESSION tap, so it sees the combo
-            // even while another app (or another VM) is focused — grabbing then steals the
-            // user's mouse out from under whatever they were doing. Pass the combo through
-            // instead so the focused party (possibly another VM's key-gated tap) handles it.
-            // RELEASE is deliberately not gated — the escape hatch must always work.
-            if !hard && !is_key {
-                return event;
-            }
-            // The user is the other owner of `captured`. Without the latch a level-triggered
-            // fullscreen policy would simply re-grab on the next event — the state the review
-            // flagged as two owners of one flag. A *promotion* latches nothing: the pointer stays
-            // held, the policy just stops owning it.
-            ctx.with_grab(|st| st.release_by_user(hard));
-            if held != hard {
+            match ctx.with_grab(|st| grab_policy::capture_combo(held, st, is_key)) {
+                grab_policy::ComboAction::PassThrough => return event,
                 // Already held, but by the policy: promote it in place. No capture transition —
                 // the pointer does not move, the guest sees nothing, only the terms change.
-                log::info!(
+                grab_policy::ComboAction::Promote => log::info!(
                     "pointer capture: promoted to a hard grab (Ctrl-Opt or Cmd-Ctrl-G to release)"
-                );
-            } else {
-                ctx.input.toggle_capture(&ctx.view);
+                ),
+                grab_policy::ComboAction::Toggle => {
+                    ctx.input.toggle_capture(&ctx.view);
+                }
             }
             return std::ptr::null_mut(); // consume — the toggle never reaches macOS or the guest
         }

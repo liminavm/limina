@@ -1221,7 +1221,9 @@ impl InputState {
         release_to: Option<(NSPoint, super::warp::Aim)>,
         handback: super::warp::Handback,
     ) -> bool {
-        let now = !self.is_captured();
+        // Every path's release ends the policy's hold here, not at each caller — see
+        // `grab_policy::toggled`.
+        let now = self.with_grab(|st| super::grab_policy::toggled(self.is_captured(), st));
         let release_to = if now {
             None
         } else {

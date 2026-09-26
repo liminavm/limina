@@ -3362,21 +3362,26 @@ pub fn run(
             );
         }
         was_on_space.set(on_active_space);
-        if grab_policy::must_drop_grab(
+        //
+        // The focus half is the backstop for the tap's per-event key-loss release: without the
+        // tap (no Accessibility grant) the local monitor stops seeing events the instant focus
+        // leaves, so nothing event-driven can hand a captured pointer back. The tap remains the
+        // low-latency consumer of the same predicate; this only changes when the release lands
+        // in event-free windows.
+        match grab_policy::tick_release(
             timer_input.captured_flag(),
-            grab_policy::capture_owner(&facts, timer_input.capture_slot()),
+            timer_input.capture_slot(),
+            &facts,
         ) {
-            log::debug!("pointer grab released: the cursor's window is not on screen");
-            timer_input.release_capture_gone(&timer_view);
-        }
-        // Backstop for the tap's per-event key-loss release: without the tap (no Accessibility
-        // grant) the local monitor stops seeing events the instant focus leaves, so nothing
-        // event-driven can hand a captured pointer back. The tap remains the low-latency
-        // consumer of the same predicate; this only changes when the release lands in
-        // event-free windows.
-        if grab_policy::key_loss_releases(timer_input.captured_flag(), &facts) {
-            log::info!("pointer capture: released — the window lost focus (tick backstop)");
-            timer_input.release_capture(&timer_view);
+            Some(grab_policy::TickRelease::Gone) => {
+                log::debug!("pointer grab released: the cursor's window is not on screen");
+                timer_input.release_capture_gone(&timer_view);
+            }
+            Some(grab_policy::TickRelease::FocusLost) => {
+                log::info!("pointer capture: released — the window lost focus (tick backstop)");
+                timer_input.release_capture(&timer_view);
+            }
+            None => {}
         }
 
         // `LIMINA_EDGE_TRACE`: every bit that could tell us a live pointer grab has lost its
