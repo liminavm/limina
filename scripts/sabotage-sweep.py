@@ -721,6 +721,23 @@ SABOTAGES = [
         'third_party/libkrun/src/devices',
         'loom:legacy::power_watch::loom_model::a_transition_is_never_slept_through',
     ),
+    (
+        'a vCPU in a WFx wait drops a Snapshot',
+        'third_party/libkrun/src/vmm/src/macos/vstate.rs',
+        """        (VcpuEvent::Snapshot(_), P::Parked) => A::Snapshot,""",
+        """        (VcpuEvent::Snapshot(_), P::Parked) => A::Snapshot,
+        (VcpuEvent::Snapshot(_), P::WfxWait) => A::Ignore,""",
+        'third_party/libkrun/src/vmm',
+        'macos::vstate::tests::every_park_site_answers_the_coordinator',
+    ),
+    (
+        'a paused vCPU parks again for a Snapshot',
+        'third_party/libkrun/src/vmm/src/macos/vstate.rs',
+        """        (VcpuEvent::Snapshot(_), P::Parked) => A::Snapshot,""",
+        """        (VcpuEvent::Snapshot(_), P::Parked) => A::SnapshotAndPark,""",
+        'third_party/libkrun/src/vmm',
+        'macos::vstate::tests::every_park_site_answers_the_coordinator',
+    ),
 ]
 
 

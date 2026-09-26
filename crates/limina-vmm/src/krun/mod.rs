@@ -723,8 +723,9 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     // SIGUSR1 handler + a trigger thread. On signal it locks the Vmm, quiesces the vCPUs, writes
     // the snapshot, and exits 126 ("snapshotted") — the supervisor reports the VM suspended and,
     // unlike a reboot, does NOT relaunch. `save_snapshot` self-quiesces (the per-vCPU Snapshot
-    // event saves-then-parks each vCPU), so we do NOT pause first — pausing would make the vCPUs
-    // discard the Snapshot event and time out. A FAILED save is now recoverable: the parked vCPUs are
+    // event saves-then-parks each vCPU), so there is no pause first. None is needed, and one would
+    // no longer hurt: a paused vCPU answers the Snapshot where it stands (it used to discard it
+    // and time the save out). A FAILED save is now recoverable: the parked vCPUs are
     // resumed (`resume_parked_vcpus`) and the guest woken, so the VM lives on (only if that resume
     // itself fails is it fatal, exit 1).
     // The raw SIGUSR1 seam dumps a RUNNING (unquiesced) guest — an L1 test vehicle, never a

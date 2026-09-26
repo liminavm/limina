@@ -390,7 +390,13 @@ cargo-fuzz 0.13.2.
   first. It is latent: HVF parks an idle vCPU inside `hv_vcpu_run` and does not hand over the WFI
   trap (as `vcpu_sched.rs` notes), and a probe in `wait_for_event` recorded no block at all during
   `l1_snapshot_save_writes_file_and_exits_126`, both vCPUs taking the `Snapshot` at the top of
-  their run loop. Every other park site services `Snapshot`. Not fixed yet.
+  their run loop. A paused vCPU ignored a `Snapshot` too, so a paused VM could not be snapshotted.
+  Fixed structurally rather than by a seventh hand-written `match`: what each park site does with
+  each event is one table (`event_action`), every site hands what it takes off the channel to
+  `Vcpu::service`, and `every_park_site_answers_the_coordinator` checks the table against the
+  coordinator's contract at every site. Routed through a table that kept the old behaviour, the
+  test failed at the WFx wait. That is the RED this fix has; nothing on today's hosts reaches the
+  site, so no HVF test can fail there. The L1 snapshot tests pass on the fix.
 - **Host-sleep bracket** (`crates/limina-vmm/src/power.rs`). Not loom's: `willSleep`, `didWake` and
   each step of the post-wake watch run whole under the bracket's one lock, so the threads reduce
   to a sequence of atomic steps interleaved with the guest's transitions. That is an enumeration
@@ -400,7 +406,7 @@ cargo-fuzz 0.13.2.
   surface-port receiver each change one store under one lock, and the hazards are the orders in
   which the control lines and the Mach messages arrive, for a consumer on the AppKit main thread.
   An enumeration of arrival orders fits, once the store is generic over the surface type.
-- **The sweep.** Seventy-three entries, each caught by the assertion, test or model written for it,
+- **The sweep.** Seventy-five entries, each caught by the assertion, test or model written for it,
   after two holes found by the sweep itself were closed (the coalescer's merge check and the head
   CRC). One more hole was in an entry and not in a model: registering a peer after its greeting
   survived the first clipboard model, which cannot reach the gap once serials are reused, and is
@@ -432,8 +438,8 @@ expensive call with an over-approximation the property does not depend on.
    the clipboard greeting model and its three fixes; the vCPU band model and its fix; the power
    watch model. Left, and why: the tick and tap's composition of the ownership predicates (it
    needs a seam in front of both); the host-sleep bracket and the frame handoff, which are
-   enumeration work, not loom's; and the `Snapshot` a vCPU's WFx wait would drop, found by
-   reading and not yet fixed (see *Measured so far*).
+   enumeration work, not loom's. Found by reading on the way, and fixed: the `Snapshot` a vCPU's
+   WFx wait dropped (see *Measured so far*).
 
 Every phase ends with this document updated: what each tool now covers, with measured time and
 memory, and what was tried and did not fit, with the numbers.
