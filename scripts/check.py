@@ -6,6 +6,7 @@
     scripts/check.py kani [crate-dir ...]         every proof, or those in the named crates
     scripts/check.py loom [crate-dir ...]         every loom model, or those in the named crates
     scripts/check.py fuzz [target ...] [--seconds N]
+    scripts/check.py miri [crate-dir ...] [--stall N]
     scripts/check.py sabotage [pattern ...]
 
 `cargo xtask check` wraps this. What each tool is for, and what it cannot do, is in
@@ -21,13 +22,22 @@ in their own target directory, so switching between loom and ordinary builds reb
 
 Fuzzing runs each target, limina's and the libkrun fork's, for a fixed time with libFuzzer's own
 memory cap and a per-input timeout, and names where the crash inputs were written. A crash is committed as a failing unit test before it is fixed.
+
+Miri runs each crate's unit tests one at a time. A test that reaches a foreign call ends the whole
+run, so the sweep reruns past it with `--skip` and says, per crate, what ran and why each of the
+others did not: a foreign call, undefined behaviour, a failure, or a stall (no progress for
+`--stall` seconds). Only undefined behaviour and failures fail the sweep. The enumeration walks
+are skipped up front: they run millions of sequences, which under Miri is hours.
 """
 
 import argparse
 import os
 import re
+import select
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +51,12 @@ FUZZ_TIMEOUT_S = 10
 KANI_ARGS = {
     'third_party/libkrun/src/devices': ['--features', 'usb'],
 }
+# Tests Miri is not asked to run, by substring: the enumeration walks (`every_sequence` modules and
+# the like), whose millions of sequences are hours in the interpreter.
+MIRI_SKIP = ('every_', 'handoff_sequence', 'ownership_sequence')
+# The interpreter's clock and file system are the host's: tests that read either still run, and
+# isolation would stop them at the first `Instant::now` with a file behind it.
+MIRI_FLAGS = '-Zmiri-disable-isolation'
 # limina's fuzz workspace, and the libkrun fork's.
 FUZZ_DIRS = ('fuzz', 'third_party/libkrun/fuzz')
 
@@ -143,6 +159,121 @@ def fuzz(targets, seconds):
     return 0
 
 
+def miri_env():
+    # Lints capped: Miri is on nightly, whose new deprecations a dependency that denies warnings
+    # (imago) turns into errors, and linting is not what this run is for. The repo venv on PATH,
+    # as `cargo xtask` puts it: virglrs's build script runs its generators through `python3`.
+    env = dict(os.environ, MIRIFLAGS=MIRI_FLAGS, CARGO_TARGET_DIR=str(ROOT / 'target/miri'),
+               RUSTFLAGS='--cap-lints=warn')
+    venv = ROOT / 'third_party/venv-mesa/bin'
+    if venv.is_dir():
+        env['PATH'] = '%s:%s' % (venv, env.get('PATH', ''))
+    env.pop('LIMINA_HVF_TESTS', None)
+    return env
+
+
+def miri_tests(d):
+    """Every unit test in `d`, by its exact name."""
+    target = '--lib' if (d / 'src/lib.rs').exists() else '--bins'
+    out = subprocess.run(['cargo', '+nightly', 'miri', 'test', target, '--', '--list'],
+                         cwd=d, env=miri_env(), capture_output=True, text=True).stdout
+    return re.findall(r'^(\S+): test$', out, re.M)
+
+
+def miri_run(d, skips, stall):
+    """One `cargo miri test` over `d`'s unit tests, one at a time, past `skips`. Returns the
+    exit code (None for a stall), the test running when it ended, and the output."""
+    target = '--lib' if (d / 'src/lib.rs').exists() else '--bins'
+    argv = ['cargo', '+nightly', 'miri', 'test', target, '--', '--test-threads=1', '--exact']
+    for skip in sorted(skips):
+        argv += ['--skip', skip]
+    proc = subprocess.Popen(argv, cwd=d, env=miri_env(), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, start_new_session=True)
+    out = b''
+    last = time.monotonic()
+    code = None
+    while True:
+        ready, _, _ = select.select([proc.stdout], [], [], 5)
+        if ready:
+            chunk = os.read(proc.stdout.fileno(), 65536)
+            if not chunk:
+                code = proc.wait()
+                break
+            out += chunk
+            last = time.monotonic()
+        # Compiling is slow and silent too; only a test in flight can stall.
+        elif re.search(rb'test \S+ \.\.\. $', out) and time.monotonic() - last > stall:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait()
+            break
+    text = out.decode(errors='replace')
+    # With one thread the harness names each test before it runs it, and completes the line after.
+    started = re.findall(r'^test (\S+) \.\.\. ', text, re.M)
+    finished = set(re.findall(r'^test (\S+) \.\.\. (?:ok|FAILED|ignored)', text, re.M))
+    running = next((t for t in reversed(started) if t not in finished), None)
+    return code, running, text
+
+
+def miri(crates, stall):
+    dirs = [ROOT / c for c in crates] if crates else sorted(
+        p.parent for p in ROOT.glob('crates/*/Cargo.toml'))
+    bad = []
+    for d in dirs:
+        rel = os.path.relpath(d, ROOT)
+        print('==> miri: %s' % rel, flush=True)
+        tests = miri_tests(d)
+        # Exact names throughout, and each rerun skips what already ran: a substring skip would
+        # take tests whose names merely contain it, and rerunning the passes is quadratic.
+        walks = {t for t in tests if any(w in t for w in MIRI_SKIP)}
+        skips = set(walks)
+        stops = {'foreign call': [], 'undefined behaviour': [], 'failed': [], 'stalled': []}
+        passed = set()
+        while True:
+            code, running, text = miri_run(d, skips, stall)
+            ran = set(re.findall(r'^test (\S+) \.\.\. ok', text, re.M))
+            passed |= ran
+            failed = re.findall(r'^test (\S+) \.\.\. FAILED', text, re.M)
+            skips |= ran | set(failed)
+            stops['failed'] += failed
+            if code == 0 and running is None:
+                break
+            if code is not None and running is None and not failed:
+                if 'error: could not compile' in text or 'error[E' in text:
+                    print(text[-4000:])
+                    stops['failed'].append('(the crate does not build under Miri)')
+                else:
+                    print(text[-4000:])
+                    stops['failed'].append('(the run ended with no test in flight)')
+                break
+            if running is None:
+                # The run finished, with ordinary test failures.
+                break
+            if code is None:
+                kind = 'stalled'
+            elif 'Undefined Behavior' in text:
+                kind = 'undefined behaviour'
+                print(text[text.index('Undefined Behavior') - 200:][:3000])
+            elif 'unsupported operation' in text or 'can\'t call foreign function' in text:
+                kind = 'foreign call'
+            else:
+                kind = 'failed'
+                print(text[-3000:])
+            stops[kind].append(running)
+            skips.add(running)
+        print('miri: %s: %d of %d passed, %d walks not run' % (rel, len(passed), len(tests),
+                                                               len(walks)))
+        for kind, tests in stops.items():
+            if tests:
+                print('  %s (%d): %s' % (kind, len(tests), ', '.join(tests)))
+        if stops['undefined behaviour'] or stops['failed']:
+            bad.append(rel)
+    if bad:
+        print('\nmiri: undefined behaviour or failures in: %s' % ', '.join(bad))
+        return 1
+    print('\nmiri: nothing undefined in %d crate(s)' % len(dirs))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     sub = ap.add_subparsers(dest='tool', required=True)
@@ -153,6 +284,10 @@ def main():
     f = sub.add_parser('fuzz', help='run the fuzz targets for a fixed time each')
     f.add_argument('targets', nargs='*')
     f.add_argument('--seconds', type=int, default=60)
+    m = sub.add_parser('miri', help='run the unit tests under Miri, past each foreign call')
+    m.add_argument('crates', nargs='*', help='crate directories, relative to the repo root')
+    m.add_argument('--stall', type=int, default=300,
+                   help='seconds a test may go without output before it is called stalled')
     s = sub.add_parser('sabotage', help='run the sabotage sweep')
     s.add_argument('patterns', nargs='*')
     a = ap.parse_args()
@@ -163,6 +298,8 @@ def main():
         return loom(a.crates)
     if a.tool == 'fuzz':
         return fuzz(a.targets, a.seconds)
+    if a.tool == 'miri':
+        return miri(a.crates, a.stall)
     return run([sys.executable, str(ROOT / 'scripts/sabotage-sweep.py')] + a.patterns, ROOT)
 
 

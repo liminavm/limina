@@ -146,10 +146,12 @@ enum Cmd {
         debug: bool,
     },
     /// Run the in-crate checkers (wraps scripts/check.py): `kani [crate-dir ...]`,
-    /// `fuzz [target ...] [--seconds N]`, or `sabotage [pattern ...]`. No HVF, no signing; see
+    /// `loom [crate-dir ...]`, `miri [crate-dir ...] [--stall N]`, `fuzz [target ...]
+    /// [--seconds N]`, or `sabotage [pattern ...]`. No HVF, no signing; see
     /// docs/design/in-crate-checkers.md.
     Check {
-        /// `kani`, `fuzz` or `sabotage`, then that tool's arguments, forwarded verbatim.
+        /// `kani`, `loom`, `miri`, `fuzz` or `sabotage`, then that tool's arguments, forwarded
+        /// verbatim.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         args: Vec<String>,
     },

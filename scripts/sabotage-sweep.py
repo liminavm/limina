@@ -882,6 +882,30 @@ SABOTAGES = [
         'crates/limina',
         'every_ownership_sequence_keeps_the_grab_terms_straight',
     ),
+    (
+        'a control TD posts a Status event nobody asked for',
+        'third_party/libkrun/src/devices/src/usb/xhci/engine.rs',
+        """                if ev.status_ioc {""",
+        """                if true || ev.status_ioc {""",
+        'third_party/libkrun/src/devices',
+        'ep0_status_without_ioc_posts_no_event',
+    ),
+    (
+        'a GPU payload trusts a backing count past its end',
+        'third_party/libkrun/src/devices/src/virtio/gpu_snapshot.rs',
+        """        (n <= (self.data.len() - self.pos) / each).then_some(n)""",
+        """        Some(n)""",
+        'third_party/libkrun/src/devices',
+        'gpu_snapshot_payload_refuses_counts_and_lengths_past_its_end',
+    ),
+    (
+        'a GPU payload adds a length to its position unchecked',
+        'third_party/libkrun/src/devices/src/virtio/gpu_snapshot.rs',
+        """        let s = self.data.get(self.pos..self.pos.checked_add(n)?)?;""",
+        """        let s = self.data.get(self.pos..self.pos + n)?;""",
+        'third_party/libkrun/src/devices',
+        'gpu_snapshot_payload_refuses_counts_and_lengths_past_its_end',
+    ),
 ]
 
 
