@@ -27,6 +27,8 @@
 //! **Cleanup.** The supervisor deletes the plist once launchd has loaded it, and the launcher
 //! unloads its own job as its last act. The supervisor cannot do it: it often leaves through
 //! `process::exit`, which runs no destructor.
+//!
+//! The worker's listeners reach it the same way, without a path: see [`connect`].
 
 #![allow(deprecated)] // libc deprecates mach_task_self in favour of the mach2 crate.
 
@@ -43,6 +45,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 pub use libc::mach_port_t;
+
+pub mod connect;
 
 /// Labels (and Mach service names) of worker jobs: this prefix, the supervisor's pid, a dot and a
 /// per-spawn counter. The test harness finds the launcher by it.
