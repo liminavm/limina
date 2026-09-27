@@ -49,7 +49,10 @@ stop="$work/STOP"
 
 echo "loop: LANES=$LANES ITER=$ITER limina $(git -C "$repo" rev-parse --short HEAD) \
 virglrs $(git -C "$repo/third_party/virglrs" rev-parse --short HEAD) work $work"
-"$repo/scripts/test-boot.sh" debug --test venus_replay --no-run > "$work/build.log" 2>&1 ||
+# `cargo xtask build` builds and signs the worker; test-boot.sh cannot build without running,
+# because nextest refuses its --no-fail-fast beside --no-run.
+{ (cd "$repo" && cargo xtask build && cargo test -p limina-test --test venus_replay --no-run); } \
+    > "$work/build.log" 2>&1 ||
     { echo "loop: build failed, see $work/build.log"; exit 2; }
 bin=$(ls -t "$repo"/target/debug/deps/venus_replay-* | grep -v '\.d$' | head -n 1)
 echo "loop: binary $bin"
