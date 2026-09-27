@@ -251,7 +251,21 @@ pub const SSH_CMD_TIMEOUT: Duration = Duration::from_secs(900);
 /// threads (so a chatty child can't block on a full pipe), poll for exit, and on expiry
 /// kill the child and fail with whatever output it produced. The `Command::output()`
 /// shape, minus the ability to hang forever.
-fn run_capped(mut cmd: Command, timeout: Duration) -> Result<std::process::Output> {
+fn run_capped(cmd: Command, timeout: Duration) -> Result<std::process::Output> {
+    run_capped_or(cmd, timeout, || {})
+}
+
+/// [`run_capped`], calling `at_expiry` when the deadline passes and *before* the child is killed.
+///
+/// The ordering is the point. Killing a local `ssh` hangs up its remote command, so a guest
+/// process that was wedged is gone by the time anything could look at it; this is the one moment
+/// it is still there to be asked why.
+fn run_capped_or(
+    mut cmd: Command,
+    timeout: Duration,
+    at_expiry: impl FnOnce(),
+) -> Result<std::process::Output> {
+    let mut at_expiry = Some(at_expiry);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -272,6 +286,9 @@ fn run_capped(mut cmd: Command, timeout: Duration) -> Result<std::process::Outpu
         match child.try_wait().context("waiting for the command")? {
             Some(status) => break Some(status),
             None if Instant::now() >= deadline => {
+                if let Some(f) = at_expiry.take() {
+                    f();
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -2525,6 +2542,18 @@ impl Guest {
     /// the remote command may keep running in the guest (fine for tests — the VM is torn
     /// down with the `Guest`).
     pub fn ssh_exec_timeout(&self, remote_cmd: &str, timeout: Duration) -> Result<String> {
+        self.ssh_exec_timeout_or(remote_cmd, timeout, || {})
+    }
+
+    /// [`Guest::ssh_exec_timeout`], calling `at_expiry` when the deadline passes while the remote
+    /// command is still running — the moment to take [`Guest::forensics`], since the kill that
+    /// follows hangs the command up.
+    pub fn ssh_exec_timeout_or(
+        &self,
+        remote_cmd: &str,
+        timeout: Duration,
+        at_expiry: impl FnOnce(),
+    ) -> Result<String> {
         let port = self.ssh_port.to_string();
         let login = format!("claude@{FORWARDED_SSH_HOST}");
         let mut cmd = Command::new("ssh");
@@ -2532,7 +2561,7 @@ impl Guest {
         cmd.args(SSH_SHARED_OPTS);
         cmd.args(["-o", "ConnectTimeout=10"]);
         cmd.args([login.as_str(), remote_cmd]);
-        let out = run_capped(cmd, timeout).with_context(|| {
+        let out = run_capped_or(cmd, timeout, at_expiry).with_context(|| {
             format!("ssh `{remote_cmd}` to the guest ({FORWARDED_SSH_HOST}:{port})")
         })?;
         if !out.status.success() {
@@ -2763,6 +2792,116 @@ impl Guest {
     /// artifacts like pulled snapshot frames.
     pub fn scratch_dir(&self) -> &Path {
         &self.scratch
+    }
+
+    /// Record what a guest-side step that never came back was doing, while the guest is still up
+    /// to be asked, and return the directory it went to.
+    ///
+    /// A wedged step fails as a timeout, and the evidence that would explain it dies with the VM:
+    /// Drop removes the scratch dir and its supervisor log, and nothing ever looked inside the
+    /// guest. So this keeps, under `target/test-forensics/`, the supervisor and console logs, the
+    /// last captured scanout, a `sample` of the worker, and — for every guest process named
+    /// `process` — each thread's state, `wchan` and blocked syscall plus an `eu-stack` of the whole
+    /// process. Those are what tell a guest driver waiting on itself from a guest waiting on the
+    /// host. Best effort throughout: a step that fails writes why into its file and the rest go on.
+    ///
+    /// `LIMINA_TEST_HOLD_ON_FAIL=1` then keeps the VM up for live debugging, until the `HOLD` file
+    /// the message names is removed (or four hours pass).
+    pub fn forensics(&self, what: &str, process: &str) -> PathBuf {
+        let test = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .replace("::", "-");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let dir = repo_root()
+            .join("target/test-forensics")
+            .join(format!("{test}-{stamp}-{}", self.pid));
+        if let Err(e) = fs::create_dir_all(&dir) {
+            eprintln!("forensics: cannot create {dir:?}: {e}");
+            return dir;
+        }
+        let note = |name: &str, body: &str| {
+            let _ = fs::write(dir.join(name), body);
+        };
+        note("what.txt", &format!("{what}\nguest process: {process}\n"));
+
+        for (src, name) in [
+            (self.supervisor_log.as_ref(), "supervisor.log"),
+            (Some(&self.console_path), "console.log"),
+            (self.capture_png.as_ref(), "scanout.png"),
+        ] {
+            if let Some(src) = src
+                && let Err(e) = fs::copy(src, dir.join(name))
+            {
+                note(&format!("{name}.missing"), &format!("{src:?}: {e}\n"));
+            }
+        }
+
+        // The guest first: it is the side a wedge usually leaves something to read on, and a
+        // `sample` of a busy worker takes seconds the guest may not have.
+        let dump = format!(
+            "for p in $(pgrep -x {process}); do \
+               echo \"=== pid $p: $(tr '\\0' ' ' < /proc/$p/cmdline)\"; \
+               for t in /proc/$p/task/*; do \
+                 echo \"--- tid ${{t##*/}} $(cat $t/comm) state=$(awk '/^State:/{{print $2}}' $t/status) \
+                       wchan=$(cat $t/wchan) syscall=$(cat $t/syscall 2>&1)\"; \
+               done; \
+               if command -v eu-stack >/dev/null; then \
+                 sudo -n eu-stack -p $p 2>&1 || eu-stack -p $p 2>&1; \
+               else echo '(no eu-stack in this guest: dnf install elfutils)'; fi; \
+             done; \
+             echo '=== uptime'; uptime; \
+             echo '=== pressure'; grep -H . /proc/pressure/* 2>&1; \
+             echo '=== ps'; ps -eo pid,stat,wchan:24,pcpu,etime,comm --sort=-pcpu; \
+             echo '=== dmesg'; sudo -n dmesg 2>&1 | tail -n 80"
+        );
+        match self.ssh_exec_timeout(&dump, Duration::from_secs(90)) {
+            Ok(out) => note("guest.txt", &out),
+            Err(e) => note(
+                "guest.txt",
+                &format!("the guest could not be asked: {e:#}\n"),
+            ),
+        }
+
+        match self.worker_pid() {
+            Ok(pid) => {
+                let out = dir.join("worker-sample.txt");
+                let mut cmd = Command::new("sample");
+                cmd.arg(pid.to_string()).arg("3").arg("-file").arg(&out);
+                if let Err(e) = run_capped(cmd, Duration::from_secs(60)) {
+                    note("worker-sample.missing", &format!("{e:#}\n"));
+                }
+            }
+            Err(e) => note("worker-sample.missing", &format!("{e:#}\n")),
+        }
+
+        eprintln!("forensics for {what}: {}", dir.display());
+        if std::env::var_os("LIMINA_TEST_HOLD_ON_FAIL").is_some() {
+            let hold = dir.join("HOLD");
+            note(
+                "HOLD",
+                &format!(
+                    "ssh -p {} claude@{FORWARDED_SSH_HOST}\nworker pid: {:?}\nrm this file to let \
+                     the test finish\n",
+                    self.ssh_port,
+                    self.worker_pid().ok()
+                ),
+            );
+            eprintln!(
+                "HOLDING the VM for live debugging: ssh -p {} claude@{FORWARDED_SSH_HOST}; \
+                 rm {} to release it",
+                self.ssh_port,
+                hold.display()
+            );
+            let until = Instant::now() + Duration::from_secs(4 * 3600);
+            while hold.exists() && Instant::now() < until {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        }
+        dir
     }
 
     /// Feed `line` (a newline is appended) to the guest serial console input. Requires

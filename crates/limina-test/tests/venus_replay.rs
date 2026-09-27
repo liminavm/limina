@@ -126,10 +126,18 @@ const REPLAY_DEADLINE: Duration = Duration::from_secs(300);
 /// `VK_ERROR_OUT_OF_HOST_MEMORY`, then a heap allocation failure, then a deadlock in `futex_wait`
 /// on a fence nothing will signal), so what a test sees is a timeout with no exit code and no
 /// crash. Folding [`renderer::refusals`] into the panic turns that into the name of the command.
-fn run_in_guest(guest: &Guest, cmd: &str, deadline: Duration, when: &str) -> String {
-    match guest.ssh_exec_timeout(cmd, deadline) {
+///
+/// `process` is the guest process the command runs, by name: on failure its threads' stacks are
+/// recorded (see [`Guest::forensics`]) before the panic tears the VM down, because a stall's cause
+/// is in the guest and in the worker at that moment and in neither a minute later.
+fn run_in_guest(guest: &Guest, cmd: &str, deadline: Duration, when: &str, process: &str) -> String {
+    let mut kept = None;
+    match guest.ssh_exec_timeout_or(cmd, deadline, || {
+        kept = Some(guest.forensics(when, process))
+    }) {
         Ok(out) => out,
         Err(e) => {
+            let kept = kept.unwrap_or_else(|| guest.forensics(when, process));
             let log = guest.supervisor_log();
             let refused = limina_test::renderer::refusals(&log);
             let why = if refused.is_empty() {
@@ -145,7 +153,7 @@ fn run_in_guest(guest: &Guest, cmd: &str, deadline: Duration, when: &str) -> Str
                         .collect::<String>()
                 )
             };
-            panic!("{when} failed: {e}\n{why}");
+            panic!("{when} failed: {e}\n{why}\nforensics: {}", kept.display());
         }
     }
 }
@@ -170,6 +178,7 @@ fn assert_gl_probe_rendered(guest: &Guest, x11: &str) {
         ),
         PROBE_DEADLINE,
         "the X11 GL probe",
+        "glmark2-es2",
     );
     eprintln!("X11 GL probe:\n{}", probe.trim());
     assert!(
@@ -338,6 +347,7 @@ fn venus_replay_matches_llvmpipe_reference() {
             ),
             REPLAY_DEADLINE,
             &format!("the {name} replay"),
+            "eglretrace",
         );
         eprintln!("{name} replay: {}", out.trim());
         assert!(
@@ -421,6 +431,7 @@ fn venus_shell_replay_matches_llvmpipe_reference() {
             ),
             REPLAY_DEADLINE,
             &format!("the {name} shell replay"),
+            "eglretrace",
         );
         eprintln!("{name} shell replay: {}", out.trim());
         assert!(
@@ -498,6 +509,7 @@ fn venus_vk_replay_matches_lavapipe_reference() {
          vulkaninfo --summary 2>/dev/null | grep deviceName | head -1",
         PROBE_DEADLINE,
         "the venus enumeration probe",
+        "vulkaninfo",
     );
     eprintln!("venus probe: {}", probe.trim());
     assert!(
@@ -531,6 +543,7 @@ fn venus_vk_replay_matches_lavapipe_reference() {
             ),
             REPLAY_DEADLINE,
             &format!("the {name} vk replay"),
+            "gfxrecon-replay",
         );
         eprintln!("{name} vk replay: {}", out.trim());
         assert!(
