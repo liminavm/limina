@@ -37,8 +37,8 @@ Samplers: `guest-mon.sh` (in the guest, 1 Hz: PSI, meminfo, `top -H`), `host-mon
 
    | | Run 1 | Run 2 | Run 3 (`LIMINA_ZINK_NO_FANS=1`) |
    |---|---|---|---|
-   | Pool peak, render / compute | 1,224 / 996 | 656 (class 0) | 789 / **23** |
-   | Worker footprint peak | **22.4 GB** (5.1 GB idle) | — | 10.0 GB |
+   | Pool peak, render / compute | 1,224 / 996 | 656 / 631 | 789 / **23** |
+   | Worker footprint peak | **22.4 GB** (5.1 GB idle) | 13.3 GB (10 s samples) | 10.0 GB |
    | Longest control-queue drain | 8.5 s | **31.0 s**, then 23.6 s | 4.1 s |
    | Host swap-outs (16 KiB pages) | — | +61,760 | +188,400 |
 
@@ -46,8 +46,10 @@ Samplers: `guest-mon.sh` (in the guest, 1 Hz: PSI, meminfo, `top -H`), `host-mon
    virtio-gpu worker thread is blocked in host zink `tc_sync`, reached from vrend's
    `TexSubImage2D` transfer writes, fence creation and batch flushes, and "nothing else on the
    worker ran meanwhile". So gnome-shell's frames stop too, and the desktop freezes.
-5. **Recovery is slow, and incomplete.** Closing the tab (or quitting Firefox) stops new work,
-   but the backlog of submitted command buffers still has to drain. Surplus allocators are then
+5. **Recovery is slow, and incomplete.** With only one tab open, closing it quits Firefox. The
+   guest journal shows a clean scope exit each time, with no coredump and no OOM kill. The
+   contexts are destroyed at that moment and new work stops, but the backlog of submitted command
+   buffers still has to drain. Surplus allocators are then
    retired at most one per `acquire`, after a 2 s decay. After run 1 recovered, with Firefox
    gone, the worker still had a **13.9 GB footprint and 37,518 `IOAccelerator (graphics)` regions**
    (4,722 regions in total before the page). No `teardown` pool report ever printed, so Firefox's
@@ -64,9 +66,13 @@ still outruns completion.
 
 ## Open
 
-- **GPU-bound or host-encode-bound for the render half?** The per-allocator lines of
-  `LIMINA_KK_POOL_SNAPSHOT` (`in_use` vs `draining`/`pending`) answer this, but the snapshots on
-  disk were written after recovery. A snapshot taken during the runaway is still owed.
+- **Why the render half costs the GPU so much more here than under Safari.** In run 2 the
+  runaway was both completion-bound (Metal submits blocked in the kernel) and encode-heavy (zink
+  driver thread about 71% busy). The run-3 sample at pool 200 showed no CPU saturation: the zink
+  driver thread was 81% idle and submit was blocked for only 639 of 5,659 samples. So without fans
+  the remaining runaway looks GPU-bound. The number to compare against native is render passes per
+  frame. A `LIMINA_KK_POOL_SNAPSHOT` taken *during* the runaway (per-allocator `in_use` against
+  `draining`/`pending`) would confirm it. The snapshots on disk were written after recovery.
 - Why the page needs about 2,000 render passes per second through vrend/zink. It may be ping-pong
   FBO painting that the guest virgl driver splits further. A `LIMINA_TRACE_SUBMIT3D` count per
   context against the host pass count would tell.
