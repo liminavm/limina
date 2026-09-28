@@ -94,6 +94,28 @@ guest submits per second at peak, against about 2,000 KK render command buffers 
   `EGL_CONTEXT_RELEASE_BEHAVIOR_NONE`.
 - `take_fence` makes a sync, with a flush, on every sub-context plus ctx0 for each guest fence.
 
+## A bound on fences in flight (virglrs `26e91e1`)
+
+Each vrend context counts the fences the waiter holds. A batch for a context with
+`VIRGLRS_CLASSIC_FENCE_DEPTH` (default 16) or more waits for one to retire. It gives up after 2 s.
+
+Measured 2026-09-28. The host compressor started at 11.4–13.6 GB in every run.
+
+| | Run 2 | Run 4 | Run 5 | Run 6 |
+|---|---|---|---|---|
+| Fans | GPU unroll | static | static | GPU unroll (`LIMINA_KK_NO_FAN_STATIC=1`) |
+| Fence bound | none | none | 16 | 16 |
+| Host swap-outs | +61,760 | +87,636 | 0 | 0 |
+| Longest drain | 31.0 s | 13.0 s | 1.5 s | 2.8 s |
+| Footprint peak | 13.3 GB | 13.1 GB | 11.6 GB | 10.8 GB |
+| What the user saw | freeze | "smooth, short stalls" | desktop responsive | short hitches |
+
+The bound held only 1 batch in run 5 and 7 in run 6, about 44 ms in all. Every run with it had
+no swap and no drain over 3 s, and every run without it had both. That is one run per arm, so it
+is consistent with the bound doing the work, not proof. In run 5, Firefox's GL ran 230–350 fences
+per second at about 4.5 syncs each, and its fences retired promptly: once fans are cheap, the GPU
+keeps up.
+
 Host-side parking of one context's submits is unsafe. The guest's virgl contexts share one Global
 fence timeline, so retiring a later fence signals the parked one early.
 
