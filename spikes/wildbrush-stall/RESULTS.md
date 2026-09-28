@@ -205,13 +205,23 @@ at every tc batch rollover and flush, not only at framebuffer changes (`u_thread
 depth draws reports depth/stencil as unused. zink then rebuilds the pass without the depth
 attachment, and a resumed pass follows.
 
+**Keeping depth/stencil attached for the rest of a pass did not help.** Once a pass had
+depth/stencil attached, zink was made to report it used until the pass ended, so the attachment
+was never dropped and the pass never restarted. `rttprobe depth` passed, with the "unused"
+restarts gone. In run 16 (measured 2026-09-28), resumed passes fell from 10% to 1.7% and zink
+passes per draw to 0.118. But the user saw no performance gain, possibly a little worse, and some
+rendering they suspected came from the change, so it was withdrawn before being described. The
+probe's depth mode stays as a pixel and pass-count check.
+
 ## Open
 
-- **Keep depth/stencil attached for the rest of a pass.** Once a pass has the attachment, dropping
-  it saves nothing: it was already loaded, and it would be stored at the pass end either way. The
-  exception is a depth buffer that is also sampled (a feedback loop). The pipelines' rendering
-  formats have to stay consistent with the pass, so the state that is kept belongs in
-  `zink_update_rendering_info`.
+- **Why fewer passes did not feel faster in run 16**, and what the suspect rendering was. Pass
+  count alone is not the cost model: the probe shows a cliff in the cost of a single long pass
+  (below).
+- **The long-pass cliff.** In `rttprobe depth`, with no depth toggles, one pass of 1000 draws costs
+  about 1 ms per round and one of 2000 about 2.3 ms. The first thing to look at is the
+  `LIMINA-ALLOC-POOL` growth and high-water lines while the probe runs, since an encoder outgrowing
+  its allocator would be O(draws per pass).
 - **Why the render half costs the GPU so much more here than under Safari.** In run 2 the
   runaway was both completion-bound (Metal submits blocked in the kernel) and encode-heavy (zink
   driver thread about 71% busy). The run-3 sample at pool 200 showed no CPU saturation: the zink

@@ -1,7 +1,13 @@
 #!/bin/sh
-# Build and run the render-to-texture split probe on host zink-on-KosmicKrisp, with the eager
-# end-of-pass barrier (default) and without it. Needs no VM. Prints the pixel verdict and the
-# [LIMINA-ZINK-RP] resume counts of each arm.
+# Build and run the render-pass split probes on host zink-on-KosmicKrisp: ping-pong with and
+# without the eager end-of-pass barrier, and a depth pass whose depth/stencil goes in and out of
+# use. Needs no VM. Prints the pixel verdict and the [LIMINA-ZINK-RP] resume counts of each
+# arm.
+#
+# The round counts are NOT a throughput measure. Every round ends in a synchronous glReadPixels,
+# so they measure a round trip, and they are non-monotonic in draws per pass: one pass of 1000
+# draws costs ~1 ms per round, one of 2000 ~2.3 ms. Judge performance on a real workload. This
+# probe is the pixel and pass-count oracle.
 set -e
 cd "$(dirname "$0")"
 OUT=${OUT:-/tmp/rttprobe}
@@ -15,7 +21,10 @@ export DYLD_LIBRARY_PATH="$PREFIX/vulkan-rpath"
 export MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink LIBGL_DRIVERS_PATH="$PREFIX/lib"
 export EGL_PLATFORM=surfaceless LIMINA_ZINK_RP_STATS=1
 cd "$OUT"
-echo "== eager end-of-pass barrier (default)"
-./rttprobe 2>&1 | grep -E "renderer|rounds|wrong|LIMINA-ZINK-RP\] ctx|resume|split" || true
-echo "== without it (LIMINA_ZINK_NO_EAGER_RP_BARRIER=1)"
-LIMINA_ZINK_NO_EAGER_RP_BARRIER=1 ./rttprobe 2>&1 | grep -E "renderer|rounds|wrong|LIMINA-ZINK-RP\] ctx|resume|split" || true
+F='renderer|rounds|wrong|LIMINA-ZINK-RP\] ctx|resume|split'
+echo "== ping-pong, eager end-of-pass barrier (default)"
+./rttprobe 2>&1 | grep -E "$F" || true
+echo "== ping-pong, without it (LIMINA_ZINK_NO_EAGER_RP_BARRIER=1)"
+LIMINA_ZINK_NO_EAGER_RP_BARRIER=1 ./rttprobe 2>&1 | grep -E "$F" || true
+echo "== depth/stencil going in and out of use within a pass"
+./rttprobe depth 2>&1 | grep -E "$F" || true
