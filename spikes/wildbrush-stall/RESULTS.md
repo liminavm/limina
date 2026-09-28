@@ -89,10 +89,8 @@ Run 4 (measured 2026-09-28): the user saw "smooth for the most part, a bit slow 
 
 The render half still runs away. Run 2's `LIMINA_TRACE_SUBMIT3D` puts all contexts at 150–250
 guest submits per second at peak, against about 2,000 KK render command buffers per second: roughly
-**ten Metal command buffers per guest submit**. The vrend path explains the multiplier:
-- Host Mesa flushes the outgoing context on every `make_current`. virglrs never sets
-  `EGL_CONTEXT_RELEASE_BEHAVIOR_NONE`.
-- `take_fence` makes a sync, with a flush, on every sub-context plus ctx0 for each guest fence.
+**ten Metal command buffers per guest submit**. What splits them is in *What ends a render pass*
+below.
 
 ## A bound on fences in flight (virglrs `26e91e1`)
 
@@ -119,7 +117,55 @@ keeps up.
 Host-side parking of one context's submits is unsafe. The guest's virgl contexts share one Global
 fence timeline, so retiring a later fence signals the parked one early.
 
+## What ends a render pass
+
+KK begins one Metal command buffer per render pass (`cs_start_render`), so the multiplier is zink's
+passes per guest batch. limina-kk's `LIMINA_ZINK_RP_STATS=1` counts, per zink context, every pass
+begin, pass end and batch submit by call site. The copy, upload, bind and clear entry points are
+wrapped so that a pass one of them ends is charged to it. The tag is per thread:
+threaded_context maps unsynchronized buffers on the application thread while the driver thread
+runs the same context's queued calls.
+
+Measured 2026-09-28, runs 7–11. Each run is the default stack (static fans, fence bound 16) with
+about a minute of painting, and the user saw short hitches in every one.
+
+| | Run 7 | Run 9 | Run 10 | Run 11 (`ZINK_DEBUG=nogeneral`) |
+|---|---|---|---|---|
+| zink passes per guest batch | 9.4 | 8.6 | 9.7 | 11.2 |
+| zink passes per draw | 0.164 | 0.160 | 0.150 | 0.192 |
+
+In run 10, where every entry point was wrapped, passes ended at:
+
+| Where the pass ended | Share |
+|---|---|
+| `set_sampler_views` | **61.6%** |
+| `zink_set_framebuffer_state`, the guest's own FBO switches | 25.1% |
+| `blit` | 4.1% |
+| `zink_flush` with a fence / without one | 3.9% / 0.9% |
+| render-pass layout change (`begin_rendering`) | 2.3% |
+| flushing pending clears | 2.0% |
+
+- **Flushes are not the multiplier.** Every flush put together, fenced (glFenceSync) or not (the
+  `make_current` release flush, or a glFlush), ends under 5% of passes. zink submits about one
+  batch per guest fence.
+- **Texture binds are.** KK reports unified image layouts, so zink runs with `general_layout` and
+  `set_sampler_views` sends each newly bound texture through `zink_resource_image_barrier_general`
+  → `zink_resource_memory_barrier`. On the ordered path, that barrier is skipped only when the
+  resource has no recorded access in the batch at all (`can_skip_ordered = !res->obj->access`).
+  A texture that was already read in this batch therefore gets a barrier on the ordered command
+  buffer, and that ends the pass that is open. Rebinding a texture in the middle of a pass, with
+  the framebuffer unchanged, splits the pass in two.
+- **`ZINK_DEBUG=nogeneral` is not the fix.** It removes the bind-time ends, but the same splits
+  reappear at draw time in the layout-tracking barrier (`zink_synchronization.cpp:379`, 24% of
+  ends), and passes per draw do not drop. The user rated run 11 "better", but it was one short
+  session (15 busy 5 s windows, against 68–91), at the same draw rate.
+
 ## Open
+
+- **Which bind-time barriers are needed.** A read-after-read barrier guards nothing. A read after
+  a write earlier in the batch needs a barrier, but one that could be emitted before the current
+  pass began rather than in the middle of it. The next count is the bind-time barriers split by
+  whether the previous access was a write.
 
 - **Why the render half costs the GPU so much more here than under Safari.** In run 2 the
   runaway was both completion-bound (Metal submits blocked in the kernel) and encode-heavy (zink
@@ -128,8 +174,5 @@ fence timeline, so retiring a later fence signals the parked one early.
   the remaining runaway looks GPU-bound. The number to compare against native is render passes per
   frame. A `LIMINA_KK_POOL_SNAPSHOT` taken *during* the runaway (per-allocator `in_use` against
   `draining`/`pending`) would confirm it. The snapshots on disk were written after recovery.
-- Why the page needs about 2,000 render passes per second through vrend/zink. It may be ping-pong
-  FBO painting that the guest virgl driver splits further. A `LIMINA_TRACE_SUBMIT3D` count per
-  context against the host pass count would tell.
 - The retained 13.9 GB and 37k regions after Firefox quit: is the shared device's pool simply
   never shrinking (no `acquire` traffic), or is something leaking?
