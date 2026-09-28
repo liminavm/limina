@@ -64,6 +64,39 @@ reached 4 s. So fan unrolling roughly doubles the encoder churn, but it is not t
 Plain render-pass volume (65,480 `render_pass_starts` in run 3), combined with the unbounded depth,
 still outruns completion.
 
+## Fans: fixed in KK
+
+Upstream has no fix. The only candidate, draft mesa!39602, draws fans natively through Metal's
+private "OpenGL mode". `mtl4-fan-probe.m` shows that mode exists only on the Metal 3 classes:
+`MTL4RenderPassDescriptor` has no `openGLModeEnabled`, and the `_mtlnext` render context has no
+`setPrimitiveRestartEnabled:`. Merged upstream `0126f4388a5` ("One MTL4CommandBuffer per
+VkCommandBuffer") makes an unroll split the render pass mid-pass, which would make this page worse.
+
+limina-kk `e2313ad7dfb` draws direct, non-indexed fans as indexed triangle lists from one static
+index buffer, with no GPU unroll. `fanprobe/` checks it pixel by pixel against the unroll
+(`LIMINA_KK_NO_FAN_STATIC=1`).
+
+Run 4 (measured 2026-09-28): the user saw "smooth for the most part, a bit slow and short stalls".
+
+| | Run 4 |
+|---|---|
+| Fan unrolls / fans on the static path | 0 / 63,479 |
+| Compute pool peak | 21 |
+| Render pool peak | **1,088** |
+| Worker footprint peak | 13.1 GB |
+| Host swap-outs | +87,636 |
+| Longest drain | 13.0 s (next 2.4 s) |
+
+The render half still runs away. Run 2's `LIMINA_TRACE_SUBMIT3D` puts all contexts at 150–250
+guest submits per second at peak, against about 2,000 KK render command buffers per second: roughly
+**ten Metal command buffers per guest submit**. The vrend path explains the multiplier:
+- Host Mesa flushes the outgoing context on every `make_current`. virglrs never sets
+  `EGL_CONTEXT_RELEASE_BEHAVIOR_NONE`.
+- `take_fence` makes a sync, with a flush, on every sub-context plus ctx0 for each guest fence.
+
+Host-side parking of one context's submits is unsafe. The guest's virgl contexts share one Global
+fence timeline, so retiring a later fence signals the parked one early.
+
 ## Open
 
 - **Why the render half costs the GPU so much more here than under Safari.** In run 2 the
