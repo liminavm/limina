@@ -79,7 +79,7 @@ base = "mesa-26.1.7"
 [virglrs]
 repo = "https://github.com/liminavm/virglrs.git"
 branch = "main"
-rev = "c76b2c79def106bd38426f80d0b017e7eb0a0f1d"
+rev = "c3f6e4b562f00ffdfef48e5c5eded1fa44da2bbc"
 
 # The OpenCL C standard library KosmicKrisp's kernels are compiled against. NOT a source
 # checkout and not merely a configure-time gate: `src/kosmickrisp/libkk/*.cl` (tessellation,
