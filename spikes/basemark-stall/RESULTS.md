@@ -50,10 +50,17 @@ Run 3 of one boot stalled on `shader_pipeline_test`.
 
 ## The fix
 
-The fix belongs in the harness, not the stack: stop sending Esc while the suite can be navigating.
-One way is to tap Esc before launching `/run/`, if the overview is already up by then. Another is
-to leave the overview some other way than a key Firefox also handles. Until then, a stalled run in
-a perf pass is this race, not a renderer regression.
+virglrs `c82e6c2` fixes the harness. It leaves the overview once, while the only page is the static
+probe, and only if GNOME Shell reports `OverviewActive`; the property is read again afterwards to
+confirm. Verified on the stock guest (measured 2026-09-28): the overview was left, both suites
+scored, and run 2 passed through Shader Pipeline. A perf pass on an older harness can still hit the
+stall, and there it is this race, not a renderer regression.
+
+**Draw-call Stress may have been under-scored too.** That validation run scored it 171, against
+79-81 in every scored run of the 09-26..09-28 passes. In those passes' healthy run 2s the old tap
+landed during Draw-call Stress itself ("now at: draw-call_stress_test"). This is one sample, so
+Draw-call rows taken with the old harness should be read as suspect until a pass on `c82e6c2`
+confirms or refutes it.
 
 ## The vehicle
 
