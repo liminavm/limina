@@ -1,0 +1,127 @@
+date,commit,workload,metric,value,notes
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.2463,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,734.644,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1834.675131,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2725,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.0998,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,738.149,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1835.985301,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2712,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.4074,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,738.926,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1852.815419,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2718,eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vkmark-default-venus,score,2629,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2631,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2634,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1371,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2  "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1369,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2  "
+2026-09-28,7deda6ac,basemark-webgl102-vrend,score,3683.11,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-webgl20-vrend,score,4270.75,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-shader-pipeline-vrend,score,1511.24,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-drawcall-stress-vrend,score,79.79,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-geometry-stress-vrend,score,1718.33,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-canvas-vrend,score,1337.14,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-svg-vrend,score,990.14,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.259,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,729.145,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1805.587158,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2734,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.1724,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,710.012,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1832.158976,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2723,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.1775,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,733.871,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1756.073351,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2727,eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vkmark-default-venus,score,2630,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2623,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2626,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1428,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2  "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1429,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2  "
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.2271,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,736.812,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1837.832711,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2724,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,47.2595,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,696.688,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1840.809128,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2639,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,47.1885,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,725.821,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1690.471792,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2730,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vkmark-default-venus,score,2564,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2627,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2626,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1430,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2  "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1426,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2  "
+2026-09-28,7deda6ac,basemark-webgl102-vrend,score,3733.71,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-webgl20-vrend,score,4087.93,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-shader-pipeline-vrend,score,1546.90,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-drawcall-stress-vrend,score,81.13,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-geometry-stress-vrend,score,1729.21,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-canvas-vrend,score,1349.57,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-svg-vrend,score,989.38,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.632,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,728.669,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1819.179605,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2727,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,45.8736,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,736.068,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1770.541504,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2722,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.1245,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,739.151,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1789.132807,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2722,eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vkmark-default-venus,score,2625,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2637,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2630,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1163,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2  "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1166,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2  "
+2026-09-28,7deda6ac,basemark-webgl102-vrend,score,3911.44,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-webgl20-vrend,score,4677.85,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-shader-pipeline-vrend,score,1520.00,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-drawcall-stress-vrend,score,78.65,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-geometry-stress-vrend,score,1743.72,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-canvas-vrend,score,1341.23,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,basemark-svg-vrend,score,992.20,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; stock guest; second suite run scored "
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.3523,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,726.93,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1769.501763,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2701,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.6196,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,732.828,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1836.642867,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2738,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.7089,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,737.304,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1819.429914,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2730,eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 
+2026-09-28,7deda6ac,vkmark-default-venus,score,2630,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2633,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/3 "
+2026-09-28,7deda6ac,vkmark-default-venus,score,2639,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 3/3 "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1164,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2  "
+2026-09-28,7deda6ac,vkmark-under-aquarium25k-venus,score,1140,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2  "
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,49,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,38,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,45,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,40,"eager-barrier b0-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,45,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,38,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,45,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,43,"eager-barrier n0-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,47,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,40,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,45,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,38,"eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,51,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,38,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,49,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,38,"eager-barrier n1-on: arm on; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,50,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,42,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-25k-vrend,fps,49,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"
+2026-09-28,7deda6ac,aquarium-30k-vrend,fps,43,"eager-barrier b2-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 2/2; read off the fps crop"

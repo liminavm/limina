@@ -1,0 +1,14 @@
+=== vrend / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: f6976a57b88f4fb7bf2c0228cb5fdb52
+  settling 35s…
+perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-25000-fps.png: 1200x520 (from perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0456
+  wrote perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-25000.png and perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-25000-fps.png
+=== vrend / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 843eed5df52944ac8a006117a4fa8275
+  settling 35s…
+perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-30000-fps.png: 1200x520 (from perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0844
+  wrote perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-30000.png and perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-25000-fps.png
+perf/eager-barrier-2026-09-28/evidence/b2-off/aquarium-r2/vrend-30000-fps.png

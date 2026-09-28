@@ -1,0 +1,7 @@
+verify OK: Virtual-1 1280x800@59.974 scale=1.0
+PROVENANCE: kernel=7.1.8-limina16k.4 pagesize=16384 mesa=26.1.8-11.limina.fc44 vnperf=<unset> vcpus=4 ram=3940MiB display=Virtual-1: 1280x800@59.974 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/eager-barrier-2026-09-28/ledger.csv:
+2026-09-28,7deda6ac,gl-replay-venus,fps,46.2271,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,gl-replay-llvmpipe,fps,736.812,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,vk-replay-venus-headless,fps,1837.832711,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 
+2026-09-28,7deda6ac,glmark2-wayland-venus,score,2724,eager-barrier b1-off: arm off; host mesa 07d6cad3274; virglrs 26e91e1 + libkrun b68f3686; limina 7deda6ac; run 1/3 

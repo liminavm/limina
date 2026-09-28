@@ -1,0 +1,2 @@
+enh arm=on resumes-after-texture-bind=2
+stock arm=on resumes-after-texture-bind=214

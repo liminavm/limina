@@ -197,6 +197,12 @@ Measured 2026-09-28:
 
 The user saw fewer hitches in run 14 and correct rendering.
 
+**The perf battery sees no change in either direction** (`perf/2026-09-28-eager-barrier.md`),
+measured on one build with the barrier toggled at five alternating points. The aquarium and the
+venus controls overlap across the arms. Basemark scored on only one on-arm point, too few to
+resolve. The aquarium's passes end at flushes (about 1.04 per submit), so there was little for
+the barrier to remove.
+
 **What is left is depth/stencil going in and out of use.** In run 15, 89% of the remaining resumes
 follow a `begin_rendering` restart in which depth/stencil became unused (76%) or used (13%).
 threaded_context records whether depth/stencil is used per render-pass info. It starts a new info
@@ -215,6 +221,11 @@ probe's depth mode stays as a pixel and pass-count check.
 
 ## Open
 
+- **An untagged read-after-write split dominates the stock tier.** One Basemark context runs about
+  20,000 passes a second, about 455 per submit, each ended at `zink_synchronization.cpp:676` and
+  classed "other, attachment: read after write". The rate is the same with the eager barrier on or
+  off (`perf/2026-09-28-eager-barrier.md`). Its caller is not one of the wrapped pipe entry
+  points, so the first step is to tag it.
 - **Why fewer passes did not feel faster in run 16**, and what the suspect rendering was. Pass
   count alone is not the cost model: the probe shows a cliff in the cost of a single long pass
   (below).
