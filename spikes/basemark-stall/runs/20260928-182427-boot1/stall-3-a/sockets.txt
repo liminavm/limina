@@ -1,0 +1,11 @@
+State Recv-Q Send-Q Local Address:Port    Peer Address:Port Process                             
+ESTAB 0      0      192.168.127.2:54940     20.50.2.25:443   users:(("firefox",pid=2857,fd=174))
+ESTAB 0      0      192.168.127.2:54946     20.50.2.25:443   users:(("firefox",pid=2857,fd=177))
+ESTAB 0      0      192.168.127.2:54952     20.50.2.25:443   users:(("firefox",pid=2857,fd=178))
+ESTAB 0      0      192.168.127.2:45714  20.105.224.10:443   users:(("firefox",pid=2857,fd=40)) 
+ESTAB 0      0      192.168.127.2:45730  20.105.224.10:443   users:(("firefox",pid=2857,fd=108))
+ESTAB 0      0      192.168.127.2:45748  20.105.224.10:443   users:(("firefox",pid=2857,fd=133))
+ESTAB 0      0      192.168.127.2:45758  20.105.224.10:443   users:(("firefox",pid=2857,fd=144))
+ESTAB 0      0      192.168.127.2:22     192.168.127.1:33499                                    
+ESTAB 0      0      192.168.127.2:56500 172.217.30.142:443   users:(("firefox",pid=2857,fd=189))
+ESTAB 0      0      192.168.127.2:56504 172.217.30.142:443   users:(("firefox",pid=2857,fd=199))
