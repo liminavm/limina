@@ -126,13 +126,13 @@ wrapped so that a pass one of them ends is charged to it. The tag is per thread:
 threaded_context maps unsynchronized buffers on the application thread while the driver thread
 runs the same context's queued calls.
 
-Measured 2026-09-28, runs 7–11. Each run is the default stack (static fans, fence bound 16) with
+Measured 2026-09-28, runs 7–13. Each run is the default stack (static fans, fence bound 16) with
 about a minute of painting, and the user saw short hitches in every one.
 
-| | Run 7 | Run 9 | Run 10 | Run 11 (`ZINK_DEBUG=nogeneral`) |
-|---|---|---|---|---|
-| zink passes per guest batch | 9.4 | 8.6 | 9.7 | 11.2 |
-| zink passes per draw | 0.164 | 0.160 | 0.150 | 0.192 |
+| | Run 7 | Run 9 | Run 10 | Run 11 (`ZINK_DEBUG=nogeneral`) | Run 12 | Run 13 |
+|---|---|---|---|---|---|---|
+| zink passes per guest batch | 9.4 | 8.6 | 9.7 | 11.2 | 10.5 | 10.5 |
+| zink passes per draw | 0.164 | 0.160 | 0.150 | 0.192 | 0.184 | 0.182 |
 
 In run 10, where every entry point was wrapped, passes ended at:
 
@@ -148,13 +148,26 @@ In run 10, where every entry point was wrapped, passes ended at:
 - **Flushes are not the multiplier.** Every flush put together, fenced (glFenceSync) or not (the
   `make_current` release flush, or a glFlush), ends under 5% of passes. zink submits about one
   batch per guest fence.
-- **Texture binds are.** KK reports unified image layouts, so zink runs with `general_layout` and
-  `set_sampler_views` sends each newly bound texture through `zink_resource_image_barrier_general`
-  → `zink_resource_memory_barrier`. On the ordered path, that barrier is skipped only when the
-  resource has no recorded access in the batch at all (`can_skip_ordered = !res->obj->access`).
-  A texture that was already read in this batch therefore gets a barrier on the ordered command
-  buffer, and that ends the pass that is open. Rebinding a texture in the middle of a pass, with
-  the framebuffer unchanged, splits the pass in two.
+- **Texture binds are where passes end.** KK reports unified image layouts, so zink runs with
+  `general_layout`, and `set_sampler_views` sends each newly bound texture through
+  `zink_resource_image_barrier_general` → `zink_resource_memory_barrier`. A barrier on the ordered
+  command buffer cannot sit inside a render pass, so it ends the pass that is open.
+- **Those barriers are needed.** Run 12 classified every barrier that ended a pass. 99.8% guard a
+  read after a write; read-after-read barriers are 42 of 145,000. Of the bind-time splits, 54%
+  sample a texture that is still an attachment of the open framebuffer, which the guest is about
+  to switch away from, so that pass was ending anyway. The other 46% sample a texture written by
+  an earlier pass of the batch, while a different pass is open.
+- **30% of passes are wasted splits.** Run 13 counted passes that begin on the same attachments as
+  the pass just before them: 76,410 of 253,840. Without them zink would run 7.3 passes per guest
+  batch instead of 10.5. What ended the pass before each resumed one:
+
+  | What ended the pass before | Share of resumed passes |
+  |---|---|
+  | a texture bind's read-after-write barrier | 79.3% |
+  | a render-pass state change on the same attachments (`begin_rendering`) | 18.0% |
+  | a flush | 2.1% |
+
+  The 7.3 that remain are the guest's own framebuffer switches.
 - **`ZINK_DEBUG=nogeneral` is not the fix.** It removes the bind-time ends, but the same splits
   reappear at draw time in the layout-tracking barrier (`zink_synchronization.cpp:379`, 24% of
   ends), and passes per draw do not drop. The user rated run 11 "better", but it was one short
@@ -162,10 +175,13 @@ In run 10, where every entry point was wrapped, passes ended at:
 
 ## Open
 
-- **Which bind-time barriers are needed.** A read-after-read barrier guards nothing. A read after
-  a write earlier in the batch needs a barrier, but one that could be emitted before the current
-  pass began rather than in the middle of it. The next count is the bind-time barriers split by
-  whether the previous access was a write.
+- **Moving the read-after-write barrier out of the pass.** The write it guards was made by a pass
+  that has already ended, so the barrier could be placed at that pass's end or before the current
+  pass began, instead of splitting the current one. zink does not know at the earlier pass's end
+  that the texture will be sampled. A candidate is an eager attachment-write → shader-read barrier
+  at every pass end, recorded in the resource's access state so the later bind finds nothing to do.
+  It adds a barrier per pass for attachments that are never sampled.
+- **The 18% `begin_rendering` restarts**: which render-pass state changes on unchanged attachments.
 
 - **Why the render half costs the GPU so much more here than under Safari.** In run 2 the
   runaway was both completion-bound (Metal submits blocked in the kernel) and encode-heavy (zink
