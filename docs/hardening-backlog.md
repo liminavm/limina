@@ -1059,22 +1059,6 @@ sweeps`: it needs a racing write to land inside a sweep window it does not contr
 collision deterministic (hold the window open until the toucher has written, or count observed
 windows and skip when there are none); do not just raise the 50.
 
-### Seated venus replay stalls under suite load
-Only under suite parallelism: the guest-side `eglretrace --headless` replay never prints `Rendered`
-and the ssh bound gives up (now `REPLAY_DEADLINE`, 300 s), in either `venus_replay_matches_llvmpipe_reference` or
-`venus_shell_replay_matches_llvmpipe_reference`. Signature: the venus context is created, KK shader
-work runs ~90 s, then the replay wedges at the first frame boundary and the worker log shows only a
-1 Hz `capture: configure scanout` for ~15 minutes. Four sightings (2026-08-12, 08-13, 08-27, 09-26).
-The first three came in suite runs of 3094–3343 s against ~2200 s for a green run the same day. The
-09-26 one (virglrs `c76b2c7`) came in a 2802 s run against 2385 s for the last green one, and the
-renderer refused nothing. Solo reruns pass in 43–164 s. The test's supervisor log sits in the guest
-scratch dir, which is deleted on drop, so a failed suite run keeps no worker log: catching this live
-means keeping that log on failure first. Ruled out: a
-granule effect, and the once-a-minute `vsock muxer: unexpected dgram pkt: 3` (libkrun's timesync
-datagram reset by a guest with no listener). **Next occurrence, debug it live instead of rerunning:**
-is `eglretrace` starved of GPU progress (read the worker log at the stall timestamps) or of vCPU time
-(the harness runs several VMs at once)?
-
 ### `synoik_desktop_survives_snapshot_restore` has an intermittent trigger that was never isolated
 Both observed failures gave byte-identical numbers: 36/1000 landmarks moved against a 1% budget, rows
 {0:17, 1:19}, colours 233 → 235, confined to rows 0–52 at full width, max channel delta 54, dy = 0 —
@@ -1132,6 +1116,10 @@ parallel nextest lane.
 - A test that drives the GPU must name the refused command when it fails: fold the renderer's refusal
   log into the panic, and size each leg's deadline to its work. A silent timeout forces a re-run just
   to learn anything.
+- A step that fails by timing out must be examined before the deadline's kill, not after: killing the
+  local `ssh` hangs up the stalled guest process, and the VM goes with the test. Take the stacks at the
+  deadline (`Guest::forensics`, `ssh_exec_timeout_or`) and, to chase one, loop the test with the VM
+  held on failure (`LIMINA_TEST_HOLD_ON_FAIL`). A rerun that passes explains nothing.
 - A comparison between two builds needs N runs per arm when the failure is intermittent. When a
   failure is stochastic, repeat an arm before believing it.
 - Never change two variables to make an arm cheaper, and never run an arm without a capture.
@@ -1195,6 +1183,10 @@ parallel nextest lane.
 - Never smuggle a host-injected operation into a guest-owned id space; give it a first-class entry point.
 - A completion wait must cover the queue that did the work. Finishing "the current context" is not a
   fence.
+- A guest's rate limit on its own notifications is a promise the host must keep. Mesa rings a venus
+  ring's doorbell at most once per idle timeout, so a doorbell that arrives while the ring is awake
+  still restarts the ring's idle clock; discarding it lets the ring park inside the guest's window
+  with the guest forbidden to ring.
 - A bound and the access it guards are derived from one description of the format, never two.
 - Host-initiated transfers and readbacks are never charged to a guest context; the failure's type
   decides whether it poisons, not the ctx id or call site.
