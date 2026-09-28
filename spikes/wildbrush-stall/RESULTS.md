@@ -173,16 +173,45 @@ In run 10, where every entry point was wrapped, passes ended at:
   ends), and passes per draw do not drop. The user rated run 11 "better", but it was one short
   session (15 busy 5 s windows, against 68–91), at the same draw rate.
 
+## The eager end-of-pass barrier (limina-kk `d84192b397e`)
+
+When a pass ends, zink now issues the attachment-write → shader-read barrier for each attachment
+the pass wrote, while no pass is open. The access that barrier records is what lets the later
+texture bind find nothing to do. It is only on under `general_layout`, and
+`LIMINA_ZINK_NO_EAGER_RP_BARRIER=1` turns it off.
+
+`rttprobe/` is the host oracle. It runs a ping-pong accumulation on zink-on-KK in which every
+sampling bind lands in an open pass, and checks every pixel. With the barrier, resumes after a
+texture bind go from about 41,000 per 5 s to 0, and the probe runs 891 rounds in 11 s instead of
+466. Pixels are correct in both arms. The probe has not been shown to fail when a barrier is
+missing, so a pass there is evidence about synchronization, not proof.
+
+Measured 2026-09-28:
+
+| | Run 13 (before) | Run 14 | Run 15 |
+|---|---|---|---|
+| Passes resumed on the same attachments | 30.1% | 10.8% | 10.4% |
+| … after a texture bind | 60,561 | 245 | 170 |
+| zink passes per guest batch | 10.15 | 8.63 | 8.60 |
+| zink passes per draw | 0.177 | 0.149 | 0.151 |
+
+The user saw fewer hitches in run 14 and correct rendering.
+
+**What is left is depth/stencil going in and out of use.** In run 15, 89% of the remaining resumes
+follow a `begin_rendering` restart in which depth/stencil became unused (76%) or used (13%).
+threaded_context records whether depth/stencil is used per render-pass info. It starts a new info
+at every tc batch rollover and flush, not only at framebuffer changes (`u_threaded_context.c`:
+"always increment renderpass info on batch flush"). An info that begins mid-pass and sees no
+depth draws reports depth/stencil as unused. zink then rebuilds the pass without the depth
+attachment, and a resumed pass follows.
+
 ## Open
 
-- **Moving the read-after-write barrier out of the pass.** The write it guards was made by a pass
-  that has already ended, so the barrier could be placed at that pass's end or before the current
-  pass began, instead of splitting the current one. zink does not know at the earlier pass's end
-  that the texture will be sampled. A candidate is an eager attachment-write → shader-read barrier
-  at every pass end, recorded in the resource's access state so the later bind finds nothing to do.
-  It adds a barrier per pass for attachments that are never sampled.
-- **The 18% `begin_rendering` restarts**: which render-pass state changes on unchanged attachments.
-
+- **Keep depth/stencil attached for the rest of a pass.** Once a pass has the attachment, dropping
+  it saves nothing: it was already loaded, and it would be stored at the pass end either way. The
+  exception is a depth buffer that is also sampled (a feedback loop). The pipelines' rendering
+  formats have to stay consistent with the pass, so the state that is kept belongs in
+  `zink_update_rendering_info`.
 - **Why the render half costs the GPU so much more here than under Safari.** In run 2 the
   runaway was both completion-bound (Metal submits blocked in the kernel) and encode-heavy (zink
   driver thread about 71% busy). The run-3 sample at pool 200 showed no CPU saturation: the zink
