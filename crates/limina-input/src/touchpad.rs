@@ -110,6 +110,11 @@ impl Touchpad {
         self.slots.iter().flatten().count()
     }
 
+    /// Whether the guest holds the host finger `id` as a contact.
+    pub fn holds(&self, id: u64) -> bool {
+        self.slot_of(id).is_some()
+    }
+
     /// Report the full set of contacts down now. Contacts no longer present are lifted, new
     /// ones get a free slot and a fresh tracking id, and moved ones report their new position.
     /// Contacts beyond [`MAX_SLOTS`] are ignored. Returns the events for one frame, ending in

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::WorkerConn;
-use super::trackpad::{ClickRoute, TouchSample, TrackpadSeq};
+use super::trackpad::{Recorded, TouchSample, TrackpadSeq};
 
 use objc2::Message;
 use objc2::rc::Retained;
@@ -716,8 +716,12 @@ pub struct InputState {
     /// Which trackpad touch sequences the guest's multitouch touchpad owns, and the contacts
     /// it was told about. See [`super::trackpad`].
     trackpad: RefCell<TrackpadSeq>,
-    /// The local touch count the last `[TOUCH]` trace line reported (it logs changes only).
-    touch_trace_count: Cell<usize>,
+    /// The local touch and resting counts the last `[TOUCH]` trace line reported (it logs
+    /// changes only).
+    touch_trace_count: Cell<(usize, usize)>,
+    /// `LIMINA_TRACKPAD_RECORD`: every input the trackpad policy consumes, as a replayable
+    /// recording ([`super::trackpad::Recorded`]).
+    trackpad_record: RefCell<Option<TrackpadRecorder>>,
     /// Whether the guest is hosted in the is hosted in the `notch = extend` overlay, and the flag that asks for it
     /// to stand down so the menu bar and the window's controls are reachable. See
     /// [`InputState::reveal_step`].
@@ -948,7 +952,8 @@ impl InputState {
             scroll_y: Cell::new(ScrollAxis::default()),
             scroll_x: Cell::new(ScrollAxis::default()),
             trackpad: RefCell::new(TrackpadSeq::new(crate::hosttrackpad::geometry())),
-            touch_trace_count: Cell::new(0),
+            touch_trace_count: Cell::new((0, 0)),
+            trackpad_record: RefCell::new(TrackpadRecorder::from_env()),
             overlay_active,
             reveal_chrome,
             reveal: Cell::new(super::grab_policy::RevealState::default()),
@@ -1697,20 +1702,22 @@ impl InputState {
                 }
                 false
             }
-            NSEventType::LeftMouseDown | NSEventType::RightMouseDown
-                if self.touchpad_takes_click(event, true) =>
-            {
-                false
+            NSEventType::LeftMouseDown => {
+                self.record_trackpad_click(event, true);
+                self.emit_press(event, view, BTN_LEFT)
             }
-            NSEventType::LeftMouseUp | NSEventType::RightMouseUp
-                if self.touchpad_takes_click(event, false) =>
-            {
-                false
+            NSEventType::LeftMouseUp => {
+                self.record_trackpad_click(event, false);
+                self.emit_release(BTN_LEFT)
             }
-            NSEventType::LeftMouseDown => self.emit_press(event, view, BTN_LEFT),
-            NSEventType::LeftMouseUp => self.emit_release(BTN_LEFT),
-            NSEventType::RightMouseDown => self.emit_press(event, view, BTN_RIGHT),
-            NSEventType::RightMouseUp => self.emit_release(BTN_RIGHT),
+            NSEventType::RightMouseDown => {
+                self.record_trackpad_click(event, true);
+                self.emit_press(event, view, BTN_RIGHT)
+            }
+            NSEventType::RightMouseUp => {
+                self.record_trackpad_click(event, false);
+                self.emit_release(BTN_RIGHT)
+            }
             NSEventType::OtherMouseDown => self.emit_other_button(event, view, true),
             NSEventType::OtherMouseUp => self.emit_other_button(event, view, false),
             NSEventType::Gesture => {
@@ -3303,14 +3310,14 @@ impl InputState {
     /// Only **local** touches count. A trackpad on another Mac, used over Universal Control,
     /// delivers touches with no device and no readable position (reading one does not return
     /// normally — `spikes/mt-raw-capture/RESULTS.md`), so they are skipped before anything
-    /// else is asked of them, and their gestures stay the host's. Resting fingers (a thumb on
-    /// the surface) are skipped the way macOS's own recognizer skips them.
+    /// else is asked of them, and their gestures stay the host's. Whether a finger is resting
+    /// travels with it; [`TrackpadSeq`] decides what a resting finger counts for.
     fn on_gesture(&self, event: &NSEvent, view: &NSView) {
         let touches: Vec<TouchSample> = event
             .allTouches()
             .iter()
             .filter(|t| t.device().is_some())
-            .filter(|t| t.phase().intersects(NSTouchPhase::Touching) && !t.isResting())
+            .filter(|t| t.phase().intersects(NSTouchPhase::Touching))
             .map(|t| {
                 let p = t.normalizedPosition();
                 TouchSample {
@@ -3325,49 +3332,63 @@ impl InputState {
                     x: p.x,
                     // AppKit's origin is bottom-left; the device's is top-left.
                     y: 1.0 - p.y,
+                    resting: t.isResting(),
                 }
             })
             .collect();
         let in_view = self.is_captured() || self.target_of(event, view).inside;
-        if wire_trace() && self.touch_trace_count.replace(touches.len()) != touches.len() {
+        let resting = touches.iter().filter(|t| t.resting).count();
+        let shape = (touches.len(), resting);
+        if wire_trace() && self.touch_trace_count.replace(shape) != shape {
             let all = event.allTouches();
             eprintln!(
-                "[TOUCH] t={} all={} local={} in_view={in_view}",
+                "[TOUCH] t={} all={} local={} resting={resting} in_view={in_view}",
                 wire_now_us(),
                 all.count(),
                 touches.len(),
             );
         }
-        let events =
-            self.trackpad
-                .borrow_mut()
-                .on_touches(&touches, in_view, std::time::Instant::now());
+        let now = std::time::Instant::now();
+        self.record_trackpad(now, |t_us| Recorded::Touches {
+            t_us,
+            in_view,
+            touches: touches.clone(),
+        });
+        let events = self
+            .trackpad
+            .borrow_mut()
+            .on_touches(&touches, in_view, now);
         self.send_touchpad(&events);
     }
 
-    /// Whether a trackpad click belongs to the guest touchpad ([`TrackpadSeq::click`]) rather
-    /// than the tablet: sent as the touchpad's own button, or dropped because the guest already
-    /// read it from the contacts. A click from a mouse is never the touchpad's.
-    pub(crate) fn touchpad_takes_click(&self, event: &NSEvent, down: bool) -> bool {
-        if event.subtype() != NSEventSubtype::Touch {
-            return false;
+    fn record_trackpad(&self, now: std::time::Instant, record: impl FnOnce(u64) -> Recorded) {
+        if let Some(r) = self.trackpad_record.borrow_mut().as_mut() {
+            r.write(now, record);
         }
-        let route = self.trackpad.borrow_mut().click(
-            down,
-            matches!(
-                event.r#type(),
-                NSEventType::RightMouseDown | NSEventType::RightMouseUp
-            ),
-            std::time::Instant::now(),
+    }
+
+    /// Whether `LIMINA_TRACKPAD_RECORD` is recording.
+    pub(crate) fn recording_trackpad(&self) -> bool {
+        self.trackpad_record.borrow().is_some()
+    }
+
+    /// Record a trackpad click for `LIMINA_TRACKPAD_RECORD`. Clicks themselves are always the
+    /// host's — macOS's recognition of a tap or click is the one the guest gets, through the
+    /// tablet ([`TrackpadSeq`]) — but a recording needs them: they are the ground truth for
+    /// what the user meant.
+    pub(crate) fn record_trackpad_click(&self, event: &NSEvent, down: bool) {
+        if !self.recording_trackpad() || event.subtype() != NSEventSubtype::Touch {
+            return;
+        }
+        let secondary = matches!(
+            event.r#type(),
+            NSEventType::RightMouseDown | NSEventType::RightMouseUp
         );
-        match route {
-            ClickRoute::Host => false,
-            ClickRoute::Drop => true,
-            ClickRoute::Touchpad(events) => {
-                self.send_touchpad(&events);
-                true
-            }
-        }
+        self.record_trackpad(std::time::Instant::now(), |t_us| Recorded::Click {
+            t_us,
+            down,
+            secondary,
+        });
     }
 
     /// The guest touchpad's periodic work ([`TrackpadSeq::tick`]): paced-back motion, lifts
@@ -3441,7 +3462,7 @@ pub(crate) fn wire_trace() -> bool {
     *ON.get_or_init(|| std::env::var_os("LIMINA_POINTER_WIRE_TRACE").is_some_and(|v| v != "0"))
 }
 
-fn wire_now_us() -> u128 {
+pub(crate) fn wire_now_us() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros())
@@ -3615,6 +3636,41 @@ pub(crate) fn send_event(fd: RawFd, ev: InputEvent) {
                 log::warn!("input: dropped event {ev:?} — worker socket full (worker stalled?)")
             }
             _ => log::trace!("input send failed: {err}"),
+        }
+    }
+}
+
+/// Writes `LIMINA_TRACKPAD_RECORD`'s recording: one JSON line per input, stamped in
+/// microseconds from the first. Replay it with `super::trackpad::replay`.
+struct TrackpadRecorder {
+    out: std::io::LineWriter<std::fs::File>,
+    base: Option<std::time::Instant>,
+}
+
+impl TrackpadRecorder {
+    fn from_env() -> Option<Self> {
+        let path = std::env::var_os("LIMINA_TRACKPAD_RECORD")?;
+        match std::fs::File::create(&path) {
+            Ok(f) => {
+                log::info!("trackpad: recording inputs to {}", path.to_string_lossy());
+                Some(Self {
+                    out: std::io::LineWriter::new(f),
+                    base: None,
+                })
+            }
+            Err(e) => {
+                log::warn!("trackpad: cannot record to {}: {e}", path.to_string_lossy());
+                None
+            }
+        }
+    }
+
+    fn write(&mut self, now: std::time::Instant, record: impl FnOnce(u64) -> Recorded) {
+        use std::io::Write;
+        let base = *self.base.get_or_insert(now);
+        let t_us = now.duration_since(base).as_micros() as u64;
+        if let Ok(line) = serde_json::to_string(&record(t_us)) {
+            let _ = writeln!(self.out, "{line}");
         }
     }
 }

@@ -535,7 +535,18 @@ extern "C" fn tap_callback(
     // no-tap path, so the tap and the monitor cannot map differently by construction.
     let io = ctx.conn.io();
     let fd: RawFd = io.ptr_fd();
-    let send = |ev: InputEvent| send_event(fd, ev);
+    let send = |ev: InputEvent| {
+        if super::input::wire_trace() {
+            eprintln!(
+                "[WIRE] t={} dev=abs type={} code={} value={} (tap)",
+                super::input::wire_now_us(),
+                ev.type_,
+                ev.code,
+                ev.value
+            );
+        }
+        send_event(fd, ev)
+    };
     // A press re-sends the position first — same staleness guard as the uncaptured path.
     // Buttons also disarm the ungrab chord (clicking mid-chord = interacting, not ungrabbing).
     let send_click = |btn: u16, down: bool| {
@@ -621,16 +632,20 @@ extern "C" fn tap_callback(
                 release_grab(ctx, s, edge, release);
             }
         }
-        // A trackpad click on fingers the guest touchpad holds is the touchpad's, captured or
-        // not: the same seam the local monitor asks (`InputState::touchpad_takes_click`), via
-        // the same NSEvent bridge scroll uses below.
-        LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP
-            if NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) }).is_some_and(
-                |ns| {
-                    ctx.input
-                        .touchpad_takes_click(&ns, matches!(etype, LMB_DOWN | RMB_DOWN))
-                },
-            ) => {}
+        LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP if ctx.input.recording_trackpad() => {
+            // `LIMINA_TRACKPAD_RECORD` wants captured trackpad clicks too; the click itself
+            // goes to the tablet as always.
+            let down = matches!(etype, LMB_DOWN | RMB_DOWN);
+            if let Some(ns) = NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) }) {
+                ctx.input.record_trackpad_click(&ns, down);
+            }
+            let btn = if matches!(etype, LMB_DOWN | LMB_UP) {
+                BTN_LEFT
+            } else {
+                BTN_RIGHT
+            };
+            send_click(btn, down);
+        }
         LMB_DOWN => send_click(BTN_LEFT, true),
         LMB_UP => send_click(BTN_LEFT, false),
         RMB_DOWN => send_click(BTN_RIGHT, true),

@@ -78,7 +78,16 @@ gesture suppression). With it, the partition is:
   `allowedTouchTypes = .indirect` (`guestwindow.rs`); without it every gesture event arrived
   empty.
 - **The policy** — `window/trackpad.rs`, pure and unit-tested: sequence ownership, the scroll
-  dedupe, click routing, and the three timing rules in §Dedupe and teardown.
+  dedupe, and the timing rules in §Dedupe and teardown.
+- **The recordings** — `LIMINA_TRACKPAD_RECORD=<file>` writes every input the policy consumes
+  (each gesture event's local touches, each trackpad click) as JSON lines. Recorded batteries
+  of real hands live in `crates/limina/testdata/trackpad/` and are the policy's fixtures:
+  `window::trackpad::recordings` replays each through the policy and checks, against
+  libinput's tap rules (180 ms, 1.3 mm), that every click macOS recognised reaches the guest
+  once and the touchpad adds none. `scripts/trackpad-oracle.sh <recording> <ssh-port>` judges
+  the same replay with the **real** libinput in a booted guest (uinput clones of both devices,
+  events at their recorded times). The two agree: immediate forwarding fails both with the
+  same 71 guest taps on `battery-1`.
 - **Diagnostics** — `LIMINA_POINTER_WIRE_TRACE` adds `dev=touchpad` writes, a `[TOUCH]` line
   per gesture event (all/local counts, in-view) and `[CLICKSRC]` per forwarded press.
   `spikes/mt-raw-capture/guest-evdev-log.py` logs the guest device's raw stream in wallclock
@@ -138,18 +147,25 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   timestamps from us (its kernel stamps on arrival), so libinput read real motion over that
   near-zero interval as `kernel bug: Touch jump detected and discarded`. Landings and lifts are
   never held back.
-- **Wait 50 ms before telling the guest fingers lifted** (`THIN_GRACE`), and never while the
-  touchpad button is held. AppKit's count flickers mid-gesture (2→1→2, 2→0→2 within a frame)
-  and reads zero while the pad is pressed down. Each dip passed on looked to the guest like a
-  fresh short two-finger touch, which libinput reads as a **tap**: a stray context menu when
-  fingers land for the next pinch, or a second right-click after a physical one.
-- **Clicks** (`ClickRoute`). A host click on fingers the guest holds becomes the touchpad's own
-  `BTN_LEFT`: the guest's click method decides (GNOME's default `fingers` makes two fingers one
-  right-click), and libinput drops the tap it would otherwise also read. macOS's own
-  tap-to-click right-click lands **~255–275 ms after the guest's sequence ended**, so a
-  *secondary* click within 500 ms of a guest sequence (`CLICK_TAIL`) is dropped: the guest
-  already produced it from its own tap. Primary clicks after a gesture stay the host's. The
-  guest's tap-to-click setting therefore governs two-finger taps over the VM.
+- **Taps and clicks are macOS's alone; the guest never sees a touch it could read as a
+  tap.** Two recognizers see the same fingers: macOS turns taps and clicks into mouse clicks,
+  and libinput would read its own taps from the contacts. Their events arrive on separate,
+  unordered streams — a click can reach limina 3–5 ms *before* the touches it belongs to,
+  touches vanish while the pad is pressed and reappear after, and macOS's tap click lands
+  287–310 ms after the fingers lift (it waits out the double-tap window; measured on
+  `battery-1`). Routing each click to one recognizer was therefore a race, and lost it
+  visibly (a menu opened and closed by two right-clicks). Instead a guest-owned sequence's
+  contacts reach the guest only once it **commits**: a finger moved ≥ 3 mm (`COMMIT_MOVE_MM`;
+  the guest then gets the landing positions first and the motion after, past libinput's
+  1.3 mm tap threshold), or two fingers stayed down 200 ms (`COMMIT_HOLD`; the guest then
+  holds the touch at least 200 ms, `TAP_GUARD`, past libinput's 180 ms tap timeout). Every
+  click goes to the tablet exactly as macOS recognised it, so the Mac's tap-to-click setting
+  governs two-finger taps over the VM, as it does one-finger ones.
+- **Wait 50 ms before telling the guest fingers lifted** (`THIN_GRACE`). AppKit's count
+  flickers mid-gesture (2→1→2, 2→0→2 within a frame); each dip passed on would show the guest
+  a lift and a fresh landing. A resting finger (macOS's reading of a thumb) does not start or
+  widen a sequence, but one the guest already holds keeps counting: macOS also marks fingers
+  resting when they merely hold still.
 - **Three fingers need the HID tap.** When macOS claims a three-finger swipe (the default
   setting), AppKit stops attaching touches to the app's gesture events: of ~8 000 gesture
   events in one poke, 57 carried three touches. The guest cannot see the swipe until the
