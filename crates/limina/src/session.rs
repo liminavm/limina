@@ -157,6 +157,9 @@ fn spawn_windowed_worker(
     // absolute tablet (native feel); this device carries only the edge-clamped overflow as
     // pressure (mutter barriers / GNOME hot corner), and seeds a future explicit mouselook mode.
     let (rel_ptr_sup, rel_ptr_worker_fd) = supervisor::socketpair(libc::SOCK_DGRAM)?;
+    // The multitouch touchpad the guest runs its own gestures on (two- and three-finger
+    // sequences; `docs/design/trackpad-gestures.md`) — same datagram model.
+    let (touchpad_sup, touchpad_worker_fd) = supervisor::socketpair(libc::SOCK_DGRAM)?;
     // Input events are tiny (8 bytes) but bursty (a key chord, a fast drag). Give the
     // datagram pipes a deep buffer (~32k events) so a momentary worker lag never drops
     // input, and make the supervisor *send* ends non-blocking so a pathological full
@@ -169,12 +172,15 @@ fn spawn_windowed_worker(
         &ptr_worker_fd,
         &rel_ptr_sup,
         &rel_ptr_worker_fd,
+        &touchpad_sup,
+        &touchpad_worker_fd,
     ] {
         set_socket_buffer(fd.as_raw_fd(), 256 * 1024);
     }
     set_nonblocking(kbd_sup.as_raw_fd());
     set_nonblocking(ptr_sup.as_raw_fd());
     set_nonblocking(rel_ptr_sup.as_raw_fd());
+    set_nonblocking(touchpad_sup.as_raw_fd());
 
     let mut args = base.args.clone();
     args.push("--display-window".into());
@@ -188,6 +194,10 @@ fn spawn_windowed_worker(
     args.push(ptr_worker_fd.as_raw_fd().to_string());
     args.push("--input-rel-ptr-fd".into());
     args.push(rel_ptr_worker_fd.as_raw_fd().to_string());
+    args.push("--input-touchpad-fd".into());
+    args.push(touchpad_worker_fd.as_raw_fd().to_string());
+    args.push("--input-touchpad-size".into());
+    args.push(crate::hosttrackpad::geometry().to_arg());
     if let Some(name) = surface_port_name {
         // Scoped scanouts: the worker hands its (non-global) IOSurfaces to our surface-port
         // receiver by Mach port instead of making them globally lookup-able.
@@ -213,6 +223,7 @@ fn spawn_windowed_worker(
             kbd_worker_fd.as_raw_fd(),
             ptr_worker_fd.as_raw_fd(),
             rel_ptr_worker_fd.as_raw_fd(),
+            touchpad_worker_fd.as_raw_fd(),
         ],
     )?;
     let child = spawned.child;
@@ -223,6 +234,7 @@ fn spawn_windowed_worker(
     drop(kbd_worker_fd);
     drop(ptr_worker_fd);
     drop(rel_ptr_worker_fd);
+    drop(touchpad_worker_fd);
     // Shown-ack write half (#8 leg 2): a dup of the control socketpair end. NOTE: a dup
     // shares the open file description — setting O_NONBLOCK here would make the reader
     // thread's blocking reads on `sup` fail too. The ack writes use MSG_DONTWAIT per send.
@@ -232,7 +244,7 @@ fn spawn_windowed_worker(
     Ok(WindowedWorker {
         child,
         sup,
-        io: window::WorkerIo::new(pid, kbd_sup, ptr_sup, rel_ptr_sup, ack),
+        io: window::WorkerIo::new(pid, kbd_sup, ptr_sup, rel_ptr_sup, touchpad_sup, ack),
         spice_host: spawned.spice_host,
         qga_host: spawned.qga_host,
     })

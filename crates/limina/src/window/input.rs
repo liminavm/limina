@@ -23,10 +23,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::WorkerConn;
+use super::trackpad::{ClickRoute, TouchSample, TrackpadSeq};
 
 use objc2::Message;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSCursor, NSEvent, NSEventType, NSView, NSWindow, NSWindowStyleMask};
+use objc2_app_kit::{
+    NSCursor, NSEvent, NSEventPhase, NSEventSubtype, NSEventType, NSTouchPhase, NSView, NSWindow,
+    NSWindowStyleMask,
+};
 use objc2_foundation::{NSPoint, NSRect};
 
 use limina_input::InputEvent;
@@ -709,7 +713,10 @@ pub struct InputState {
     /// Hi-res scroll accumulators (vertical, horizontal) — see [`ScrollAxis`].
     scroll_y: Cell<ScrollAxis>,
     scroll_x: Cell<ScrollAxis>,
-    /// Whether the guest is hosted in the `notch = extend` overlay, and the flag that asks for it
+    /// Which trackpad touch sequences the guest's multitouch touchpad owns, and the contacts
+    /// it was told about. See [`super::trackpad`].
+    trackpad: RefCell<TrackpadSeq>,
+    /// Whether the guest is hosted in the is hosted in the `notch = extend` overlay, and the flag that asks for it
     /// to stand down so the menu bar and the window's controls are reachable. See
     /// [`InputState::reveal_step`].
     overlay_active: Arc<AtomicBool>,
@@ -938,6 +945,7 @@ impl InputState {
             park: Cell::new(None),
             scroll_y: Cell::new(ScrollAxis::default()),
             scroll_x: Cell::new(ScrollAxis::default()),
+            trackpad: RefCell::new(TrackpadSeq::new(crate::hosttrackpad::geometry())),
             overlay_active,
             reveal_chrome,
             reveal: Cell::new(super::grab_policy::RevealState::default()),
@@ -1363,6 +1371,7 @@ impl InputState {
         if now {
             self.release_all_held("grab-on");
         } else {
+            self.cancel_touchpad();
             self.release_all_modifiers("grab-off");
         }
         now
@@ -1685,12 +1694,26 @@ impl InputState {
                 }
                 false
             }
+            NSEventType::LeftMouseDown | NSEventType::RightMouseDown
+                if self.touchpad_takes_click(event, true) =>
+            {
+                false
+            }
+            NSEventType::LeftMouseUp | NSEventType::RightMouseUp
+                if self.touchpad_takes_click(event, false) =>
+            {
+                false
+            }
             NSEventType::LeftMouseDown => self.emit_press(event, view, BTN_LEFT),
             NSEventType::LeftMouseUp => self.emit_release(BTN_LEFT),
             NSEventType::RightMouseDown => self.emit_press(event, view, BTN_RIGHT),
             NSEventType::RightMouseUp => self.emit_release(BTN_RIGHT),
             NSEventType::OtherMouseDown => self.emit_other_button(event, view, true),
             NSEventType::OtherMouseUp => self.emit_other_button(event, view, false),
+            NSEventType::Gesture => {
+                self.on_gesture(event, view);
+                false
+            }
             NSEventType::ScrollWheel => {
                 // Scroll rides the guest's core pointer wherever that pointer is, so it must be
                 // accepted from whichever display the wheel happened over — measured in
@@ -1858,6 +1881,7 @@ impl InputState {
     /// and idempotent when nothing is held. State is re-learned once focus returns (modifiers from
     /// the next `flagsChanged`, keys from the next key-down), so over-releasing here is safe.
     pub fn release_all_held(&self, why: &str) {
+        self.cancel_touchpad();
         let (mods, keys, aux) = self.keys.borrow().held_counts();
         self.trace_release(why);
         self.with_keys(|k, out| k.release_all_held(out));
@@ -1986,6 +2010,18 @@ impl InputState {
 
     fn emit_press(&self, event: &NSEvent, view: &NSView, btn: u16) -> bool {
         self.cancel_ungrab_chord();
+        if wire_trace() {
+            // What separates a tap-to-click from a physical click, for the touchpad's dedupe.
+            // Only accessors valid on every mouse event: `stage` raises on a plain mouse-down,
+            // and an exception here drops the click before AppKit sees it.
+            eprintln!(
+                "[CLICKSRC] t={} btn={btn} subtype={} pressure={} clicks={}",
+                wire_now_us(),
+                event.subtype().0,
+                event.pressure(),
+                event.clickCount(),
+            );
+        }
         if self.is_captured() {
             // Captured: no view gate — the virtual cursor is always over the content. Re-send
             // its position with the press (same staleness guard as the uncaptured path below).
@@ -3211,6 +3247,14 @@ impl InputState {
     /// different translations.
     pub(crate) fn emit_scroll(&self, event: &NSEvent) {
         self.cancel_ungrab_chord();
+        // A trackpad gesture's cooked scroll (it carries a gesture or momentum phase; a wheel
+        // carries neither) is dropped while the guest touchpad owns that gesture: the guest
+        // scrolls from the contacts, and would otherwise scroll twice.
+        let gesture_scroll =
+            event.phase() != NSEventPhase::None || event.momentumPhase() != NSEventPhase::None;
+        if gesture_scroll && self.trackpad.borrow().swallows_scroll() {
+            return;
+        }
         // Trackpads and Magic Mice report precise point deltas (momentum-phase events
         // included, so guest kinetic decay comes free); those flow through the v120
         // accumulators for pixel-smooth guest scrolling. Physical wheels don't, and keep
@@ -3248,6 +3292,114 @@ impl InputState {
             self.send_ptr(InputEvent::new(EV_REL, detent_code, detents));
         }
         v120 != 0 || detents != 0
+    }
+
+    /// One gesture event from the local trackpad: the fingers down now feed the guest
+    /// touchpad when the sequence is the guest's ([`TrackpadSeq`]).
+    ///
+    /// Only **local** touches count. A trackpad on another Mac, used over Universal Control,
+    /// delivers touches with no device and no readable position (reading one does not return
+    /// normally — `spikes/mt-raw-capture/RESULTS.md`), so they are skipped before anything
+    /// else is asked of them, and their gestures stay the host's. Resting fingers (a thumb on
+    /// the surface) are skipped the way macOS's own recognizer skips them.
+    fn on_gesture(&self, event: &NSEvent, view: &NSView) {
+        let touches: Vec<TouchSample> = event
+            .allTouches()
+            .iter()
+            .filter(|t| t.device().is_some())
+            .filter(|t| t.phase().intersects(NSTouchPhase::Touching) && !t.isResting())
+            .map(|t| {
+                let p = t.normalizedPosition();
+                TouchSample {
+                    // `identity` is an opaque NSCopying object whose equality (and so its
+                    // hash) is stable for as long as the finger stays down.
+                    id: {
+                        let identity = t.identity();
+                        // SAFETY: `hash` is NSObjectProtocol, which `identity` conforms to.
+                        let hash: usize = unsafe { objc2::msg_send![&*identity, hash] };
+                        hash as u64
+                    },
+                    x: p.x,
+                    // AppKit's origin is bottom-left; the device's is top-left.
+                    y: 1.0 - p.y,
+                }
+            })
+            .collect();
+        let in_view = self.is_captured() || self.target_of(event, view).inside;
+        if wire_trace() {
+            let all = event.allTouches();
+            eprintln!(
+                "[TOUCH] t={} all={} local={} in_view={in_view}",
+                wire_now_us(),
+                all.count(),
+                touches.len(),
+            );
+        }
+        let events =
+            self.trackpad
+                .borrow_mut()
+                .on_touches(&touches, in_view, std::time::Instant::now());
+        self.send_touchpad(&events);
+    }
+
+    /// Whether a trackpad click belongs to the guest touchpad ([`TrackpadSeq::click`]) rather
+    /// than the tablet: sent as the touchpad's own button, or dropped because the guest already
+    /// read it from the contacts. A click from a mouse is never the touchpad's.
+    fn touchpad_takes_click(&self, event: &NSEvent, down: bool) -> bool {
+        if event.subtype() != NSEventSubtype::Touch {
+            return false;
+        }
+        let route = self.trackpad.borrow_mut().click(
+            down,
+            matches!(
+                event.r#type(),
+                NSEventType::RightMouseDown | NSEventType::RightMouseUp
+            ),
+            std::time::Instant::now(),
+        );
+        match route {
+            ClickRoute::Host => false,
+            ClickRoute::Drop => true,
+            ClickRoute::Touchpad(events) => {
+                self.send_touchpad(&events);
+                true
+            }
+        }
+    }
+
+    /// The guest touchpad's periodic work ([`TrackpadSeq::tick`]): paced-back motion, lifts
+    /// past the flicker grace, and a lift if the touch stream went silent (focus moved away
+    /// mid-gesture, so the lift never arrived). Called from the render tick.
+    pub fn touchpad_watchdog(&self) {
+        let events = self.trackpad.borrow_mut().tick(std::time::Instant::now());
+        self.send_touchpad(&events);
+    }
+
+    /// Lift the guest touchpad's fingers and give the rest of the sequence to the host — a
+    /// transition (focus loss, capture toggling, a park) that the guest must not see a stuck
+    /// finger across.
+    fn cancel_touchpad(&self) {
+        let events = self.trackpad.borrow_mut().cancel();
+        self.send_touchpad(&events);
+    }
+
+    fn send_touchpad(&self, events: &[InputEvent]) {
+        if events.is_empty() {
+            return;
+        }
+        let io = self.conn.io();
+        for &ev in events {
+            if wire_trace() {
+                eprintln!(
+                    "[WIRE] t={} dev=touchpad type={} code={} value={}",
+                    wire_now_us(),
+                    ev.type_,
+                    ev.code,
+                    ev.value
+                );
+            }
+            send_event(io.touchpad_fd(), ev);
+        }
     }
 
     fn send_kbd(&self, ev: InputEvent) {

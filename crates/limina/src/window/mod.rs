@@ -61,6 +61,7 @@ mod media_session;
 mod overlay;
 mod present;
 mod seams;
+mod trackpad;
 mod warp;
 mod windows;
 
@@ -3809,6 +3810,7 @@ pub fn run(
             // for the user to cross the seam by accident. Grabbed or not: the mapping is the
             // uncaptured pointer's, so it should be known before the pointer first needs it.
             timer_input.probe_mapping(&timer_view);
+            timer_input.touchpad_watchdog();
         }
 
         // Frame apply: normally event-driven (dispatch from the reader thread); this is
@@ -3939,7 +3941,9 @@ pub fn run(
         | NSEventMask::OtherMouseDown
         | NSEventMask::OtherMouseUp
         | NSEventMask::OtherMouseDragged
-        | NSEventMask::ScrollWheel;
+        | NSEventMask::ScrollWheel
+        // The trackpad's touches ride gesture events (`input::InputState::on_gesture`).
+        | NSEventMask::Gesture;
     // Keep the monitor alive for the app's lifetime (dropping it removes the monitor).
     let _monitor =
         unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(input_mask, &input_block) };

@@ -27,7 +27,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
 use objc2::rc::Retained;
-use objc2_app_kit::{NSColor, NSView, NSViewLayerContentsRedrawPolicy, NSWindow};
+use objc2_app_kit::{NSColor, NSTouchTypeMask, NSView, NSViewLayerContentsRedrawPolicy, NSWindow};
 use objc2_core_foundation::CFRetained;
 use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
 use objc2_quartz_core::CALayer;
@@ -176,6 +176,9 @@ impl GuestWindow {
     /// - **Black window background**: the letterbox bars ARE the window background, and
     ///   black is what makes them read as bars.
     /// - A hidden capture-cursor sublayer, positioned/shown by `update_capture_cursor`.
+    /// - **Indirect touches allowed**: AppKit attaches the trackpad's per-finger touches to
+    ///   the gesture events it delivers only when a view opts in, and those touches feed the
+    ///   guest's multitouch touchpad (`input::InputState::on_gesture`).
     pub(crate) fn wire(window: Retained<NSWindow>) -> Self {
         let view: Retained<NSView> = window.contentView().expect("content view");
         let layer = CALayer::new();
@@ -186,6 +189,7 @@ impl GuestWindow {
         view.setLayer(Some(&layer));
         view.setWantsLayer(true);
         view.setLayerContentsRedrawPolicy(NSViewLayerContentsRedrawPolicy::Never);
+        view.setAllowedTouchTypes(NSTouchTypeMask::Indirect);
         window.setBackgroundColor(Some(&NSColor::blackColor()));
         GuestWindow {
             window,

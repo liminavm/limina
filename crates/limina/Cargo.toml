@@ -81,6 +81,9 @@ objc2-foundation = { version = "0.3", features = [
     "NSValue",
     # The grab's screen-capture gate: the CG window list, read through its NSArray bridge.
     "NSArray",
+    # NSEvent.allTouches (the trackpad's per-finger touches).
+    "NSSet",
+    "NSEnumerator",
 ] }
 # The VM's media session: announce it to macOS as a player while the guest holds its
 # virtio-snd stream open, so the transport keys, the Control Center buttons and the
@@ -100,6 +103,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSView",
     "NSResponder",
     "NSEvent",
+    # The trackpad's per-finger touches, forwarded to the guest's multitouch touchpad.
+    "NSTouch",
     # Control center (src/center): the VM-library window — stack-view rows with
     # per-row buttons, import via NSOpenPanel, configure via an NSAlert sheet.
     "NSAlert",

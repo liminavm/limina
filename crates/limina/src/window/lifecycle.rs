@@ -20,16 +20,25 @@ pub struct WorkerIo {
     kbd: OwnedFd,
     ptr: OwnedFd,
     rel_ptr: OwnedFd,
+    touchpad: OwnedFd,
     ack: OwnedFd,
 }
 
 impl WorkerIo {
-    pub fn new(pid: i32, kbd: OwnedFd, ptr: OwnedFd, rel_ptr: OwnedFd, ack: OwnedFd) -> Self {
+    pub fn new(
+        pid: i32,
+        kbd: OwnedFd,
+        ptr: OwnedFd,
+        rel_ptr: OwnedFd,
+        touchpad: OwnedFd,
+        ack: OwnedFd,
+    ) -> Self {
         Self {
             pid,
             kbd,
             ptr,
             rel_ptr,
+            touchpad,
             ack,
         }
     }
@@ -49,6 +58,11 @@ impl WorkerIo {
     /// see `input::send_edge_overflow`). Also the seed of a future explicit mouselook mode.
     pub fn rel_ptr_fd(&self) -> RawFd {
         self.rel_ptr.as_raw_fd()
+    }
+    /// The multitouch touchpad sink fd: two- and three-finger contacts the guest runs its own
+    /// gestures on (`limina_input::touchpad`).
+    pub fn touchpad_fd(&self) -> RawFd {
+        self.touchpad.as_raw_fd()
     }
     pub fn ack_fd(&self) -> RawFd {
         self.ack.as_raw_fd()
@@ -188,15 +202,22 @@ mod tests {
             .into()
     }
 
-    fn test_io(pid: i32) -> (WorkerIo, [RawFd; 4]) {
-        let (kbd, ptr, rel_ptr, ack) = (devnull_fd(), devnull_fd(), devnull_fd(), devnull_fd());
+    fn test_io(pid: i32) -> (WorkerIo, [RawFd; 5]) {
+        let (kbd, ptr, rel_ptr, touchpad, ack) = (
+            devnull_fd(),
+            devnull_fd(),
+            devnull_fd(),
+            devnull_fd(),
+            devnull_fd(),
+        );
         let raws = [
             kbd.as_raw_fd(),
             ptr.as_raw_fd(),
             rel_ptr.as_raw_fd(),
+            touchpad.as_raw_fd(),
             ack.as_raw_fd(),
         ];
-        (WorkerIo::new(pid, kbd, ptr, rel_ptr, ack), raws)
+        (WorkerIo::new(pid, kbd, ptr, rel_ptr, touchpad, ack), raws)
     }
 
     #[test]
@@ -214,9 +235,10 @@ mod tests {
                 snap.kbd_fd(),
                 snap.ptr_fd(),
                 snap.rel_ptr_fd(),
+                snap.touchpad_fd(),
                 snap.ack_fd()
             ),
-            (100, raws1[0], raws1[1], raws1[2], raws1[3])
+            (100, raws1[0], raws1[1], raws1[2], raws1[3], raws1[4])
         );
         drop(snap);
 
@@ -229,9 +251,10 @@ mod tests {
                 snap.kbd_fd(),
                 snap.ptr_fd(),
                 snap.rel_ptr_fd(),
+                snap.touchpad_fd(),
                 snap.ack_fd()
             ),
-            (200, raws2[0], raws2[1], raws2[2], raws2[3]),
+            (200, raws2[0], raws2[1], raws2[2], raws2[3], raws2[4]),
             "relaunch must retarget pid + all input/ack fds to the new worker"
         );
     }
@@ -249,7 +272,14 @@ mod tests {
         // actually closed is reuse-proof.
         let (ours, theirs) = std::os::unix::net::UnixStream::pair().expect("socketpair");
         ours.set_nonblocking(true).expect("nonblocking");
-        let io1 = WorkerIo::new(1, theirs.into(), devnull_fd(), devnull_fd(), devnull_fd());
+        let io1 = WorkerIo::new(
+            1,
+            theirs.into(),
+            devnull_fd(),
+            devnull_fd(),
+            devnull_fd(),
+            devnull_fd(),
+        );
         let conn = WorkerConn::new(io1);
 
         let held = conn.io();
