@@ -2,8 +2,8 @@
 
 Status: DESIGN. MT device not implemented. The companion quick win SHIPPED 2026-07-28:
 hi-res scroll (f1a8e56) — see §Independent quick win. **Host gesture suppression is
-measured to work**: an HID-level event tap makes 3- and 4-finger system gestures inert
-without touching pointer, scroll, clicks or haptics. That falsifies the premise behind the
+measured to work** for the 3- and 4-finger swipes (Spaces, Mission Control): an
+HID-level event tap makes them inert without touching pointer, scroll, clicks or haptics. That falsifies the premise behind the
 ownership rule, and what the rule becomes is an open decision — see §Raw multitouch
 capture and gesture suppression.
 
@@ -176,7 +176,8 @@ Two independent findings, both measured on the dev Mac (M1 Max built-in trackpad
     (`crates/limina/src/window/capture_tap.rs`). The spike ran from a terminal, so TCC
     attributed it there; confirm in the app.
   - This does not contradict the M8 finding (`docs/roadmap.md`): that was about a
-    *session* tap, which sits downstream of the recognizer.
+    *session* tap. That the session tap sits downstream of the recognizer is inferred from
+    the two results, not measured side by side.
 - **parser-off works too but is rejected.**
   - It is a kernel-driver request (message 0x11 via `MTDeviceIssueDriverRequest`, read off
     the disassembly), so it is device-global.
@@ -299,6 +300,14 @@ Space-change notification plus the Dock's window layers.
 - Whether libinput's size-based thumb/palm heuristics behave on the synthetic device;
   pick sane fuzz/flat. (The `res` derivation itself is answered if we take the raw path:
   `MTDeviceGetSensorSurfaceDimensions` — see §Raw multitouch capture.)
+- HID-tap coverage beyond the swipes exercised: 4/5-finger pinch (Launchpad, show
+  desktop), the two-finger right-edge swipe (Notification Center), and App Exposé opened
+  from a neutral state. Every 3-finger swipe down in the runs closed Mission Control
+  rather than opening App Exposé.
+- Whether a per-sequence swallow (the "seamless too" option) can engage in time. Every
+  measured run had the tap live before the fingers landed. A tap that turns on only once
+  the contact count is known has to beat the recognizer, whose Dock transition windows
+  appeared ~180–280 ms after touchdown in the control run.
 - Which of the swallowed event types actually matter to the HID-tap suppression: the spike
   swallowed seven, and type 29 (`NSEventTypeGesture`) streams at ~90/s under *any*
   contact, one finger included.
