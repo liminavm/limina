@@ -10,7 +10,10 @@
 // Mission Control / App Exposé are consumed by the Dock and never reach an
 // event monitor — a human eye answers those.
 //
-// Only the `baseline` arm (no lever) exists so far; see README.md for the rest.
+// Arms: baseline, parser-off, stop, power-off, hidtap, restore (see README.md).
+// A lever engages 5 s after start and releases 5 s before the end, and on
+// SIGINT/SIGTERM. The parser and power levers are kernel-driver requests, so
+// a crash could leave them engaged: `--arm restore` forces both back on.
 
 import AppKit
 import Foundation
@@ -63,6 +66,15 @@ let MTRegisterContactFrameCallback = need("MTRegisterContactFrameCallback",
                                           (@convention(c) (MTDeviceRef, FrameCallback) -> Void).self)
 let MTDeviceStart = need("MTDeviceStart", (@convention(c) (MTDeviceRef, Int32) -> Int32).self)
 let MTDeviceStop = need("MTDeviceStop", (@convention(c) (MTDeviceRef) -> Int32).self)
+// Signatures read off the disassembly (macOS 26.6.2): both send a driver
+// request (ids 0x11/0x12) through MTDeviceIssueDriverRequest; the bool is
+// stored as one byte. PowerSetEnabled maps true/false onto PowerSetState(2/0).
+let MTDeviceSetParserEnabled = need("MTDeviceSetParserEnabled", (@convention(c) (MTDeviceRef, Bool) -> Int32).self)
+let MTDeviceGetParserEnabled = need("MTDeviceGetParserEnabled",
+                                    (@convention(c) (MTDeviceRef, UnsafeMutablePointer<Bool>) -> Int32).self)
+let MTDevicePowerSetEnabled = need("MTDevicePowerSetEnabled", (@convention(c) (MTDeviceRef, Bool) -> Int32).self)
+let MTDevicePowerGetEnabled = need("MTDevicePowerGetEnabled",
+                                   (@convention(c) (MTDeviceRef, UnsafeMutablePointer<Bool>) -> Int32).self)
 let MTDeviceIsBuiltIn = sym("MTDeviceIsBuiltIn", (@convention(c) (MTDeviceRef) -> Bool).self)
 let MTDeviceIsOpaqueSurface = sym("MTDeviceIsOpaqueSurface", (@convention(c) (MTDeviceRef) -> Bool).self)
 let MTDeviceGetSensorSurfaceDimensions = sym("MTDeviceGetSensorSurfaceDimensions",
@@ -98,7 +110,8 @@ while let a = argv.next() {
     default: fatalError("unknown argument \(a)")
     }
 }
-guard arm == "baseline" else { fatalError("arm \(arm) not implemented; only baseline") }
+let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "restore"]
+guard arms.contains(arm) else { fatalError("unknown arm \(arm); one of \(arms)") }
 
 // MARK: - Raw frames
 
@@ -159,6 +172,7 @@ for domain in ["com.apple.AppleMultitouchTrackpad", "com.apple.driver.AppleBluet
 }
 
 var devices: [MTDeviceRef] = []
+var signalSources: [DispatchSourceSignal] = []
 guard let list = MTDeviceCreateList()?.takeRetainedValue() else { fatalError("MTDeviceCreateList returned NULL") }
 for i in 0..<CFArrayGetCount(list) {
     let dev = UnsafeMutableRawPointer(mutating: CFArrayGetValueAtIndex(list, i)!)
@@ -177,6 +191,113 @@ for i in 0..<CFArrayGetCount(list) {
     let rc = MTDeviceStart(dev, 0)
     log("DEV", String(format: "dev%lx start rc=%d", UInt(bitPattern: dev) & 0xffff, rc))
     devices.append(dev)
+}
+
+// MARK: - Levers
+
+func leverState(_ dev: MTDeviceRef) -> String {
+    var parser = false, power = false
+    let rp = MTDeviceGetParserEnabled(dev, &parser)
+    let rw = MTDevicePowerGetEnabled(dev, &power)
+    return "parser=\(parser) (rc \(rp)) power=\(power) (rc \(rw))"
+}
+
+var hidTap: CFMachPort?
+var hidSwallowed = 0
+var engaged = false
+
+// Gesture-ish CGEvent types: rotate 18, begin 19, end 20, gesture 29,
+// magnify 30, swipe 31, smart magnify 32. Scroll (22) passes, so the log
+// still shows whether cooked scroll survives.
+let hidTypes: [UInt32] = [18, 19, 20, 29, 30, 31, 32]
+let hidCallback: CGEventTapCallBack = { _, type, event, _ in
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        if let t = hidTap {
+            CGEvent.tapEnable(tap: t, enable: true)
+            log("LEVER", "hid tap re-enabled after \(type.rawValue)")
+        }
+        return Unmanaged.passUnretained(event)
+    }
+    if engaged && hidTypes.contains(type.rawValue) {
+        hidSwallowed += 1
+        if hidSwallowed % 20 == 1 { log("LEVER", "hid tap swallowed type \(type.rawValue) (#\(hidSwallowed))") }
+        return nil
+    }
+    return Unmanaged.passUnretained(event)
+}
+
+func engage() {
+    engaged = true
+    for dev in devices {
+        let d = String(format: "dev%lx", UInt(bitPattern: dev) & 0xffff)
+        switch arm {
+        case "parser-off": log("LEVER", "\(d) SetParserEnabled(false) rc=\(MTDeviceSetParserEnabled(dev, false))")
+        case "stop": log("LEVER", "\(d) MTDeviceStop rc=\(MTDeviceStop(dev))")
+        case "power-off": log("LEVER", "\(d) PowerSetEnabled(false) rc=\(MTDevicePowerSetEnabled(dev, false))")
+        default: break
+        }
+        log("LEVER", "\(d) engaged: \(leverState(dev))")
+    }
+    if arm == "hidtap" {
+        let mask = hidTypes.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << CGEventMask($1)) }
+        hidTap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                   eventsOfInterest: mask, callback: hidCallback, userInfo: nil)
+        if let t = hidTap {
+            CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, t, 0), .commonModes)
+            CGEvent.tapEnable(tap: t, enable: true)
+            log("LEVER", "hid tap installed")
+        } else {
+            log("LEVER", "hid tap creation FAILED (TCC: Accessibility for the responsible process?)")
+        }
+    }
+    log("LEVER", ">>> ENGAGED — gesture now")
+}
+
+func release() {
+    guard engaged else { return }
+    engaged = false
+    for dev in devices {
+        let d = String(format: "dev%lx", UInt(bitPattern: dev) & 0xffff)
+        switch arm {
+        case "parser-off": log("LEVER", "\(d) SetParserEnabled(true) rc=\(MTDeviceSetParserEnabled(dev, true))")
+        case "stop": log("LEVER", "\(d) MTDeviceStart rc=\(MTDeviceStart(dev, 0))")
+        case "power-off": log("LEVER", "\(d) PowerSetEnabled(true) rc=\(MTDevicePowerSetEnabled(dev, true))")
+        default: break
+        }
+        log("LEVER", "\(d) released: \(leverState(dev))")
+    }
+    // Clear hidTap first: disabling delivers tapDisabledByUserInput to the
+    // callback, which would otherwise re-enable the tap.
+    if let t = hidTap { hidTap = nil; CGEvent.tapEnable(tap: t, enable: false) }
+    log("LEVER", "<<< RELEASED")
+}
+
+for s in [SIGINT, SIGTERM] {
+    signal(s, SIG_IGN)
+    let src = DispatchSource.makeSignalSource(signal: s, queue: .main)
+    src.setEventHandler { log("INFO", "signal \(s)"); release(); exit(1) }
+    src.resume()
+    signalSources.append(src)
+}
+
+for dev in devices {
+    log("LEVER", String(format: "dev%lx initial: ", UInt(bitPattern: dev) & 0xffff) + leverState(dev))
+}
+
+if arm == "restore" {
+    for dev in devices {
+        let d = String(format: "dev%lx", UInt(bitPattern: dev) & 0xffff)
+        log("LEVER", "\(d) restore parser rc=\(MTDeviceSetParserEnabled(dev, true)) power rc=\(MTDevicePowerSetEnabled(dev, true))")
+        log("LEVER", "\(d) now: \(leverState(dev))")
+        _ = MTDeviceStop(dev)
+    }
+    exit(0)
+}
+
+if arm != "baseline" {
+    precondition(seconds >= 20, "lever arms need --seconds >= 20")
+    Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { _ in engage() }
+    Timer.scheduledTimer(withTimeInterval: seconds - 5, repeats: false) { _ in release() }
 }
 
 // MARK: - Cooked events and host actions
@@ -225,6 +346,7 @@ Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
 }
 
 Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in
+    release()
     for dev in devices { _ = MTDeviceStop(dev) }
     log("INFO", "done; contacts outside [0,1]: \(outOfRange)")
     exit(0)

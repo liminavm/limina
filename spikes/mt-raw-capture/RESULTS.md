@@ -1,8 +1,9 @@
 # Results: raw multitouch capture
 
 Measured 2026-09-29 on the dev Mac (M1 Max built-in trackpad, macOS 26.6.2), with
-`mtprobe.swift`, arm `baseline`. Only Arm 0 (the settings path) has been run; the
-private-API suppression arms have not.
+`mtprobe.swift`, launched from a terminal. **Verdict: an HID-level event tap suppresses
+the host's 3- and 4-finger gestures and leaves pointer, scroll, clicks and haptics alone;
+it is the lever.** The private-API parser lever works too, but it is unusable.
 
 ## Arm 0: give macOS four fingers, take three — WORKS, with one catch
 
@@ -73,7 +74,59 @@ The probe can see the host act without a human watching:
 In the control run this oracle matched every gesture the user performed, which makes it
 usable for automated checks of the private-API arms.
 
-## Not yet run
+## Suppression arms
 
-The suppression arms (`parser-off`, `stop`, `power-off`, `gestureconf`, `hidtap`) and
-the host-sleep behavior of the MT device handle.
+Every lever run lasts 45 s. The lever engages at 5 s and releases at 40 s. The gestures
+under it were a one-finger move, a two-finger scroll, 3-finger swipes and 4-finger swipes,
+plus clicks where noted. The verdicts come from the automatic oracle, and the user
+confirmed each one by eye.
+
+### `hidtap` — WORKS, and is the lever
+
+`CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, …)` over
+types 18, 19, 20, 29, 30, 31, 32, returning NULL for those while engaged.
+
+- **macOS on "four fingers":** the 4-finger horizontal and vertical swipes did nothing (no
+  Space change, no Dock window change). The pointer moved and 2-finger scroll worked. The
+  3-finger swipes still became cooked scroll, because the tap lets scroll through.
+- **macOS on "three or four fingers"** (the out-of-the-box setting): six 3-finger swipes
+  and two 4-finger swipes did nothing. No cooked scroll appeared either, because the host
+  still claims those counts and its gesture events were swallowed. A 3-finger swipe done
+  just *before* the tap engaged started a Space transition, which is the control.
+- **Physical click, force click and haptics** worked normally under the tap (user).
+- **Type 29 (`NSEventTypeGesture`) streams continuously** under any contact, one finger
+  included: ~2960 swallowed in ~31 s, ~94/s. Type 30 (magnify) appeared only around the
+  4-finger swipes. Which types are load-bearing for the suppression is not isolated.
+- **Tap creation succeeded** (Accessibility, attributed to the terminal). The tap dies
+  with the process, so nothing can leak.
+- Probe bug fixed after the first run: disabling the tap delivers
+  `tapDisabledByUserInput` to the callback, and the callback re-enabled the tap. Clear the
+  handle before disabling it.
+
+### `parser-off` — suppresses everything, leaks, rejected
+
+`MTDeviceSetParserEnabled(dev, Bool) -> OSStatus` and `MTDeviceGetParserEnabled(dev,
+Bool*)`: the signatures were read off the disassembly (driver requests 0x11/0x12 through
+`MTDeviceIssueDriverRequest`, the bool stored as one byte).
+
+- While engaged: raw frames kept arriving (1–5 contacts, all phases), and there were no
+  cooked events, no Space change and no Mission Control. The host cursor never moved from
+  a trackpad contact (user: "dead"). Clicks did nothing in macOS, and there was no haptic
+  feedback.
+- **The state is device-global kernel state and survives the process.** After the probe
+  was killed with SIGALRM (no cleanup) under the lever, a fresh process read
+  `parser=false`, and the trackpad stayed dead until `--arm restore` set it back.
+- Raw pressure during the lever: ~20–50 resting, ~300–400 on a physical click, ~650 on a
+  force click. Clicks are visible in the raw stream even when macOS ignores them.
+
+### `power-off` — unsupported
+
+`MTDevicePowerSetEnabled`/`GetEnabled` return `0xE00002C7` (`kIOReturnUnsupported`) on this
+trackpad. `PowerSetEnabled(dev, b)` is a thin wrapper over `PowerSetState(dev, b ? 2 : 0)`.
+
+### Not run
+
+`stop` and `gestureconf` are moot once the HID tap works; `gestureconf` would also be
+global persistent state. Also not run: the host-sleep behavior of the MT device handle, the
+`MTPath_*` accessor cross-check, and TCC attribution from inside the app rather than a
+terminal.

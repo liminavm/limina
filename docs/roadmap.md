@@ -504,7 +504,8 @@ standalone win: serial-over-virtio-console for FTDI/CP210x boards.
   All of it is described in `docs/input-and-windows.md` and the design docs it points to. Scanout
   IOSurfaces go to the supervisor by Mach port (`limina-surfaceport`), not as global IOSurfaces.
 - Multi-finger trackpad gestures are consumed by the WindowServer upstream of any session tap;
-  options are in `docs/design/trackpad-gestures.md`.
+  an HID-level tap swallowing gesture event types suppresses them (measured), and
+  `docs/design/trackpad-gestures.md` holds the design and the open ownership decision.
 
 **Owed:**
 - **x86 binaries: guest-side FEX-Emu** (primary) + `qemu-user-static` via `binfmt_misc` — Rosetta for

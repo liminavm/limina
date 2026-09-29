@@ -1,10 +1,11 @@
 # Trackpad gestures: a guest-side multitouch device with strict contact ownership
 
 Status: DESIGN. MT device not implemented. The companion quick win SHIPPED 2026-07-28:
-hi-res scroll (f1a8e56) — see §Independent quick win. A raw-multitouch alternative that
-would reopen the ownership rule under capture is under evaluation — see §Alternative: raw
-multitouch capture. Its settings path (macOS on four fingers, three for the guest) is
-**measured to work** — see §The cheap unlock.
+hi-res scroll (f1a8e56) — see §Independent quick win. **Host gesture suppression is
+measured to work**: an HID-level event tap makes 3- and 4-finger system gestures inert
+without touching pointer, scroll, clicks or haptics. That falsifies the premise behind the
+ownership rule, and what the rule becomes is an open decision — see §Raw multitouch
+capture and gesture suppression.
 
 ## Why
 
@@ -27,10 +28,12 @@ virtio_input + libinput; pure additive, two-tier clean).
 ## The ownership rule (the load-bearing decision)
 
 macOS's WindowServer recognizes 3+-finger gestures (Mission Control, Spaces, Launchpad)
-at the system level and **cannot be suppressed per-app** — the app still receives the
-touches, but the host acts too. Any forwarding of those contacts guarantees
-double-interpretation. So contact groups are partitioned crisply, and the partition is
-the design:
+at the system level and acts on them whichever app receives the touches. The session-level
+tap limina uses for capture cannot see them, so forwarding those contacts without further
+measures guarantees double-interpretation. An **HID-level** tap can suppress them
+(measured — §Raw multitouch capture and gesture suppression). The partition below is the
+round-one design written before that was known; it holds only as long as limina does not
+suppress:
 
 | physical contacts | owner | delivered to guest as |
 |---|---|---|
@@ -38,9 +41,6 @@ the design:
 | 2 fingers | **guest** (scroll + pinch) | real MT contact pair on the new device |
 | 2 fingers + Fn held | **guest** | fully **synthetic 3-finger** group (see below) |
 | 3+ physical fingers | **host, forever** | nothing — never forwarded |
-
-**This premise is reopened for the captured case** — see §Alternative: raw multitouch
-capture. It stands unchanged for seamless mode.
 
 Single-finger sequences are never forwarded, so the MT device never drives the guest
 cursor and cannot fight the tablet for it — that restriction is what makes a
@@ -145,197 +145,151 @@ in both rates. Momentum-phase events flow through the same path, so guest kineti
 comes free. (The MT device supersedes this for trackpad scrolls but hi-res still serves
 mice and any swallowed-path fallback.)
 
-## Alternative: raw multitouch capture (UNVERIFIED)
+## Raw multitouch capture and gesture suppression
 
-macOS's private `MultitouchSupport.framework` publishes the trackpad's **raw contact
-stream** — every finger's position, ellipse geometry, pressure and density, at sensor
-rate — to any userland client that registers a callback. That is strictly richer than
-AppKit `NSTouch`, and it is the source a guest-side MT touchpad actually wants.
+Two independent findings, both measured on the dev Mac (M1 Max built-in trackpad, macOS
+26.6.2; `spikes/mt-raw-capture/RESULTS.md`):
 
-The open question is whether reading it can also be made to **stop macOS from
-recognizing gestures on the same contacts**. If it can, the ownership rule collapses to
-"under capture, every contact belongs to the guest": no Fn chord, no synthetic phantom
-fingers, real 3- and 4-finger swipes with real geometry, guest-native palm rejection and
-tap-and-drag. If it cannot, the raw stream is still worth taking as a better *source*
-under the ownership rule as written — that outcome is a landing point, not a failure.
+1. **A better touch source.** macOS's private `MultitouchSupport.framework` publishes the
+   trackpad's raw contact stream (every finger's position, ellipse, pressure and density,
+   at ~124 Hz) to any unsandboxed client. That is strictly richer than AppKit `NSTouch`.
+2. **Host gestures can be suppressed**, by a public API: an HID-level `CGEventTap` that
+   swallows gesture event types. Reading raw contacts suppresses nothing by itself.
+
+### Suppression levers (measured 2026-09-29)
+
+| lever | host 3/4-finger gestures | pointer, scroll, clicks, haptics | outlives a crash? |
+|---|---|---|---|
+| **HID tap** swallowing gesture types | **inert** | **unaffected** | no — dies with the process |
+| `MTDeviceSetParserEnabled(false)` | inert | **all dead** (no haptics either) | **yes** — device-global driver state |
+| `MTDevicePowerSetEnabled` | — | — | `kIOReturnUnsupported` on this trackpad |
+| `MTDeviceStop`, `_mthid_*GestureConfiguration` | not run — moot after the HID tap; the latter is global persistent state anyway | | |
+
+- **The HID tap is the lever.** It is `CGEventTapCreate(kCGHIDEventTap, head, default, …)`
+  over event types 18, 19, 20, 29, 30, 31, 32 (rotate, begin/end gesture, gesture, magnify,
+  swipe, smart magnify), returning NULL for them. With it active:
+  - Spaces, Mission Control and App Exposé swipes did nothing, both with macOS on "three
+    or four fingers" (3- and 4-finger swipes inert) and on "four" (4-finger inert).
+  - Pointer motion, cooked two-finger scroll, physical click, force click and haptics all
+    kept working.
+  - It needs Accessibility, the same grant as limina's existing session-level capture tap
+    (`crates/limina/src/window/capture_tap.rs`). The spike ran from a terminal, so TCC
+    attributed it there; confirm in the app.
+  - This does not contradict the M8 finding (`docs/roadmap.md`): that was about a
+    *session* tap, which sits downstream of the recognizer.
+- **parser-off works too but is rejected.**
+  - It is a kernel-driver request (message 0x11 via `MTDeviceIssueDriverRequest`, read off
+    the disassembly), so it is device-global.
+  - It survived an unclean kill: a fresh process read `parser=false` until explicitly
+    restored.
+  - It kills host pointer, clicks and haptics along with the gestures.
+  - Raw frames keep flowing under it. The spike's `--arm restore` is the repair tool if a
+    probe ever leaks it again.
+- **Clicks are visible in the raw stream.** Contact pressure reads ~20–50 when resting,
+  ~300–400 on a physical click and ~650 on a force click. So a guest `BTN_LEFT` can come
+  from the raw source if that is ever wanted. Under the HID tap the host's own click path
+  keeps working anyway.
+
+### Decision owed: what the ownership rule becomes
+
+The measured lever removes the reason for "3+ physical fingers are the host's forever".
+The choice between the following is not yet made:
+
+- **Capture-only.** Suppress while the pointer is captured / fullscreen, mirroring the
+  keyboard grab.
+  - Under capture, every contact forwards: `QUADTAP`, enough slots for real hands, and
+    libinput palm rejection fed by real ellipse and pressure data.
+  - Seamless mode keeps the ownership table and the Fn chord as designed.
+- **Seamless too.** While a sequence the guest owns is in flight over the VM view, swallow
+  its gesture events.
+  - 3- and 4-finger swipes then go to the guest in ordinary windowed use, and the Fn chord
+    and synthetic contacts become unnecessary.
+  - The cost is that the host's own swipes do nothing while the cursor is over the VM.
+
+Either way, the tap must be released on every teardown transition in §Dedupe and teardown.
+A per-sequence swallow is naturally leak-free, because nothing persists past the process.
 
 ### The cheap unlock: give macOS four fingers, take three
 
-There is a path to 3-finger guest gestures that needs **no suppression, no private API and
-no code**: macOS's Mission Control / Spaces / App Exposé swipes are individually
-configurable to three *or* four fingers. Set them to four, and three-finger contacts are
-no longer claimed by the host at all — which is exactly the count GNOME ≥40 binds
-everything to. This is what BetterTouchTool asks its users to do, arrived at
-independently as the pragmatic answer.
+macOS's Mission Control / Spaces / App Exposé swipes are individually configurable to three
+*or* four fingers. Set them to four, and three-finger contacts are no longer claimed by
+the host. Three fingers is exactly the count GNOME ≥40 binds everything to. With the HID
+tap this is no longer required, but it remains the path that needs no Accessibility grant.
 
 The relevant defaults, in `com.apple.AppleMultitouchTrackpad` (built-in) and
 `com.apple.driver.AppleBluetoothMultitouch.trackpad` (external Magic Trackpad) — `2` is
 enabled, `0` disabled:
 
-    TrackpadThreeFingerHorizSwipeGesture   ← set 0 to free 3-finger horizontal
-    TrackpadThreeFingerVertSwipeGesture    ← set 0 to free 3-finger vertical
-    TrackpadFourFingerHorizSwipeGesture    ← leave 2; macOS keeps four
-    TrackpadFourFingerVertSwipeGesture     ← leave 2
+    TrackpadThreeFingerHorizSwipeGesture   ← 0 when macOS is on four fingers
+    TrackpadThreeFingerVertSwipeGesture    ← 0 when macOS is on four fingers
+    TrackpadFourFingerHorizSwipeGesture    ← 2; macOS keeps four
+    TrackpadFourFingerVertSwipeGesture     ← 2
     TrackpadThreeFingerDrag                ← must be 0, or Accessibility claims 3 fingers
     TrackpadThreeFingerTapGesture          ← must be 0
 
-Two things follow for the design. First, **limina should read these, not write them**:
-they are global, persistent user settings, they belong to the user, and the settings
-daemon does not reliably pick up a `defaults write` anyway. Detect the state and *tell*
-the user which counts the host has claimed — a first-run/preferences hint, not a mutation
-we own and could leak. Second, the forwarding path must be **configurable by finger
-count** rather than hardcoding "2 is ours, 3+ is theirs", because which counts are free
-is now a per-machine fact we can query.
+- **limina reads these and never writes them.** They are global, persistent user settings.
+  Detect the state and tell the user which counts the host has claimed; make forwarding
+  configurable by finger count.
+- **They are a live oracle.** `UserDefaults(suiteName:)` reads the new values right after
+  a change in System Settings, with no logout, and the behavior has already changed.
+  "Four" writes `ThreeFinger*Swipe = 0` and leaves `FourFinger*Swipe = 2`; "three or
+  four" is both at `2`.
+- **Freed three-finger contacts become ordinary cooked scroll, momentum included**, in the
+  app under the cursor. A forwarded 3-finger group therefore needs the same scroll swallow
+  as the 2-finger pair (§Dedupe and teardown).
+  - The cooked event carries no finger count, so only the touch source's contact count
+    can tell a 3-finger scroll from a 2-finger one.
+  - When the HID tap swallowed gesture types and the host still claimed three fingers, no
+    such scroll appeared.
 
-This does not make the suppression question moot — it is opt-in per user, it cannot be
-the out-of-the-box experience, and it buys nothing for 4-finger guest gestures. But it is
-available today, it is how the reference implementation in this space actually ships, and
-it should be the first thing tried.
+### Raw stream: what is established
 
-**Measured (2026-09-29, `spikes/mt-raw-capture/RESULTS.md`):** with Mission Control,
-Spaces and App Exposé set to four fingers, 3-finger swipes trigger no host action. 4-finger
-swipes still switch Spaces and open Mission Control. The prefs above read back live through
-`UserDefaults(suiteName:)` right after the user changes them, with no logout. Setting
-"four" writes `ThreeFinger*Swipe = 0` and leaves `FourFinger*Swipe = 2`; "three or four"
-is both at `2`. **The catch: freed three-finger contacts become ordinary cooked scroll,
-momentum included**, in the app under the cursor. So a forwarded 3-finger group needs the
-same scroll swallow as the 2-finger pair (§Dedupe and teardown). The cooked event carries
-no finger count, so only the touch source's contact count can tell a 3-finger scroll
-from a 2-finger one.
-
-### What is established
-
-- **Reading raw contacts works, from an ordinary app, no kext and no daemon.**
-  `MTDeviceCreateList` → `MTRegisterContactFrameCallback` → `MTDeviceStart`, all via
-  `dlopen`/`dlsym` on
-  `/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport`.
-  Three reference implementations, cloned under `~/Projects/`:
-  **`OpenMultitouchSupport`** (Kyome22, MIT) is the one to read — maintained (May 2026,
-  macOS 15+), and its `Framework/OpenMultitouchSupportXCF/OpenMTInternal.h` is the best
-  available declaration of the private API: the `MTTouch` layout, the named `MTTouchState`
-  enum, and the device-property calls. **`M5MultitouchSupport`** (MIT, 2015) is its
-  ancestor, same data model, worth reading only for its listener/threading design.
-  **`GutchinTouchTool`** is the Swift/`dlopen` reference — the binding *mechanics* to copy,
-  though its data model is wrong (below). None of the three attempts suppression.
-  Both ObjC libraries *link* the private framework at build time; we should keep
-  `dlopen`/`dlsym`, which degrades gracefully when a symbol goes away.
+- **Reading raw contacts works from an ordinary unsandboxed binary**, with no kext, no
+  daemon and no TCC prompt observed. The sequence is `MTDeviceCreateList` →
+  `MTRegisterContactFrameCallback` → `MTDeviceStart(dev, 0)`, all via `dlopen`/`dlsym` on
+  `/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport`; keep
+  `dlopen` so a vanished symbol degrades gracefully.
+- **Reference implementations**, under `~/Projects/`:
+  - **`OpenMultitouchSupport`** (Kyome22, MIT) is the one to read. It is maintained, and
+    `Framework/OpenMultitouchSupportXCF/OpenMTInternal.h` is the best declaration of the
+    private API.
+  - **`M5MultitouchSupport`** is its 2015 ancestor.
+  - **`GutchinTouchTool`** is the Swift/`dlopen` reference for binding *mechanics*; its
+    data model is wrong past offset 40.
 - **Delivery is device-global, not window-scoped.** The callback fires for every touch
-  on the machine regardless of focus, key window, or cursor location. Focus gating is
-  entirely ours to impose — the same gate the capture tap already applies.
-- **Reading does not suppress anything.** GutchinTouchTool's README claims the raw path
-  "bypass[es] the system gesture recognizer entirely"; its code does not. Its swipes come
-  from `NSEvent` `scrollWheel`/`magnify` global monitors — the *cooked* stream — and raw
-  frames feed only taps, TipTaps, circles and the visualizer. Its sole suppression is a
-  session `CGEventTap` eating mouse clicks and moves. The raw stream runs **in parallel**
-  with system recognition; nothing in that project disables it.
-- **No shipping app has demonstrated suppressing the 3-finger Mission Control swipe.**
-  BetterTouchTool — the reference implementation of this whole technique — instructs users
-  to uncheck the gesture in System Settings before binding it. That is the strongest
-  available evidence that the plain userland levers do not reach WindowServer's
-  recognizer, and it is why everything below is a hypothesis list rather than a plan.
-- **The `MTTouch` layout is 96 bytes, and the popular Swift binding gets it wrong.** Both
-  MIT libraries declare `normalizedPosition` as an `MTVector` — position *and* velocity,
-  four floats — followed by `total` (capacitance) and `pressure`. That puts `majorAxis` at
-  offset 60 and `density` at 92, for a 96-byte stride. GutchinTouchTool instead declares
-  `normalizedPosition` as two bare floats, which shifts everything after offset 40 by 8:
-  it reads "majorAxis" at 52, where the real field is `pressure`. Its runtime stride
-  auto-detection (candidates 80…128) lands on the true 96 anyway, so position survives and
-  the contact *geometry* it feeds its visualizer does not. **Take
-  `OpenMultitouchSupport`'s header as the layout reference** — it is MIT, it is
-  maintained against current macOS, and it agrees with the 2015 lineage.
-  Better still where they suffice, prefer the framework's **opaque-handle accessors**
-  (`MTRegisterPathCallbackWithRefcon` + `MTPath_getPosition`/`getForce`/`getVelocity`/
-  `isTouching`/`wasRejected`, and `MTContact_getEllipse*`), which cannot be shifted by a
-  layout change at all. A struct that has to be stride-detected at runtime is the argument
-  for both.
-- **The device answers the `abs_info.res` question directly.**
-  `MTDeviceGetSensorSurfaceDimensions` returns the physical surface size (and
-  `_mthid_kMTHIDPropertySurfaceWidth_mm` / `SurfaceHeight_mm` the same in millimetres), so
-  the units/mm resolution libinput *requires* to classify our virtio device as a touchpad
-  comes from the real hardware rather than a points→mm guess off AppKit's `deviceSize`.
-  `MTDeviceGetGUID` / `GetDeviceID` / `GetFamilyID` likewise give a stable device identity
-  to key a guest device on, and `MTDeviceCreateList` (not the `CreateDefault` the ObjC
-  libraries use) covers an external Magic Trackpad alongside the built-in.
-- **The MT device must be torn down across host sleep.** `OpenMultitouchSupport` stops the
-  device on `NSWorkspaceWillSleepNotification` and restarts it on `NSWorkspaceDidWake` —
-  a maintained library carrying that code is evidence the handle does not survive a sleep
-  cycle. limina already has host-sleep plumbing (`docs/design/host-sleep-s2idle.md`); the
-  MT teardown hangs off the same seam, and it must also release every guest contact slot,
-  or the guest wakes with stuck fingers.
-- **Probably no new TCC prompt; App Sandbox must be off.** `OpenMultitouchSupport`'s demo
-  app ships an **empty** entitlements dict and its README's only requirement is that the
-  App Sandbox be disabled — no Accessibility, no Input Monitoring. limina is already
-  unsandboxed (it needs the hypervisor entitlement), so this may cost nothing. Which
-  prompt, if any, actually appears is still a spike measurement; if one does, an ad-hoc
-  signature is fatal to it (see `limina-tcc-adhoc-accessibility`).
-
-### Suppression hypotheses, in order of plausibility
-
-Each is a private-API lever whose *scope* — per-client connection or device-global — is
-unknown and cannot be reasoned out; only the spike discriminates.
-
-1. **`MTDeviceSetParserEnabled(dev, false)`** (with `MTDeviceGetParserEnabled` /
-   `GetParserType` / `GetParserOptions`). The "parser" is the stage that turns contact
-   frames into paths and gestures. The most direct candidate, and the one most likely to
-   be per-connection — in which case it disables nothing for anyone else.
-2. **`MTDeviceStop` / `MTDevicePowerSetEnabled(false)`.** Kills the device outright,
-   which is semantically *close to what capture wants anyway* (under a grab the host has
-   no business acting on the trackpad). Only useful if raw frames keep reaching our client
-   while stopped — otherwise we have merely turned the trackpad off. The framework also
-   exports the re-injection side (`MTDeviceDispatchScrollWheelEvent`,
-   `DispatchRelativeMouseEvent`, `DispatchButtonEvent`, `DispatchMomentumScrollEvent`),
-   which is what a full take-over would need to keep the *host* usable.
-3. **Gesture configuration** — `_mthid_createGestureConfiguration`,
-   `_mthid_appendBehaviorToGestureConfiguration`, `_mthid_serializeGestureConfiguration`,
-   `MTSetGenericParameterValue`. Plausibly the programmatic form of the System Settings
-   checkboxes, i.e. the thing BTT tells users to do by hand. Attractive because it is the
-   one lever with public evidence of *working*; unattractive because it is global and
-   persistent — flipping a user's system preference on grab and restoring it on release is
-   a state we would own and could leak on a crash.
-4. **A `.cghidEventTap`-location `CGEventTap` consuming gesture events.** We have
-   *measured* that a session tap cannot see them (`docs/roadmap.md`, M8 polish); whether an
-   HID-location tap sits upstream of WindowServer's recognizer is unmeasured. Zero private
-   API if it works.
-
-### If suppression works: what changes
-
-Scope it to **captured / fullscreen mode only**, mirroring the keyboard grab — while
-suppression is live the host loses its own trackpad gestures, which is acceptable only
-under an explicit grab and must be released on every teardown transition the state
-machine already handles. Then, under capture: all contacts forward, the Fn chord and the
-whole synthetic-contact mechanism become unnecessary (keep them for seamless mode), the
-MT device advertises `QUADTAP` and enough slots for real hands, and the guest gets true
-pinch/rotate/swipe plus libinput's own palm rejection fed by real ellipse and pressure
-data. Seamless mode keeps the ownership rule and the tablet exactly as designed.
-
-### If suppression does not work
-
-Take the raw stream as the *source* for the 2-finger contact pair anyway — richer and
-lower-latency than `NSTouch`, and it answers the doc's open question about `NSTouch`
-delivery to non-key windows by sidestepping it entirely (raw delivery is unconditional).
-Ownership rule, Fn chord and synthesis all stand as written.
+  regardless of focus, key window or cursor location; the gate is ours to impose.
+- **`MTTouch` is 96 bytes** with `normalizedPosition` as an `MTVector` (position +
+  velocity). This was measured: stride 96, and every position fell in [0,1]. Where they
+  suffice, prefer the opaque-handle accessors (`MTRegisterPathCallbackWithRefcon` +
+  `MTPath_*`, `MTContact_getEllipse*`), which a layout change cannot shift. That
+  cross-check was not run.
+- **The device answers `abs_info.res`.** `MTDeviceGetSensorSurfaceDimensions` gives
+  12480 × 7680 in 0.01 mm (124.8 × 76.8 mm) on the built-in trackpad → report positions
+  in 0.01 mm with `res` = 100 units/mm. Sensor grid is 24 × 18, family 0x6c.
+  `MTDeviceCreateList` also covers an external Magic Trackpad.
+- **Tear the MT device down across host sleep.** `OpenMultitouchSupport` recreates it
+  around `NSWorkspaceWillSleep`/`DidWake`. Hang it off limina's host-sleep seam
+  (`docs/design/host-sleep-s2idle.md`) and release every guest contact slot there. This is
+  unmeasured.
 
 ### Sequencing: the device and the source are independent
 
-Nothing above blocks building the MT device. The **guest-side half** — the new
-virtio-input touchpad, its slots and tracking IDs, `INPUT_PROP_BUTTONPAD`, the
-`abs_info.res` the libkrun vtable already carries, the teardown state machine — can be
-built and validated with AppKit `NSTouch` as its source, and it holds all the real risk:
-whether libinput classifies the device as a clickpad, whether contacts release cleanly on
-every transition, whether the result feels right in the guest.
-
-The raw contact stream then swaps in underneath as a better **source** without changing
-the device, and the suppression question only decides **how many fingers the device is
-allowed to carry** — two, or everything under capture. Build the device first; the spike
-decides how good it gets, not whether it works.
+Nothing above blocks building the MT device.
+- **The guest-side half holds all the real risk**: the new virtio-input touchpad, its
+  slots and tracking IDs, `INPUT_PROP_BUTTONPAD`, the `abs_info.res` the libkrun vtable
+  already carries, and the teardown state machine. It can be built and validated with
+  either source. The risk is whether libinput classifies the device as a clickpad, whether
+  contacts release cleanly on every transition, and whether the result feels right.
+- **The source swaps in underneath without changing the device.**
+- **The ownership decision above only decides how many fingers the device carries, and
+  when.**
 
 ### Spike
 
-`spikes/mt-raw-capture/` holds the probe and the measurement plan. Arm 0 (settings path)
-has been run (`RESULTS.md`), and so have the device facts the MT device needs: the built-in
-surface is 124.8 × 76.8 mm → `res` = 100 units/mm at 0.01 mm units, and it reports at ~124 Hz.
-The run also found an automatic oracle for host gesture actions (Space-change notification
-+ Dock window layers). The suppression arms have not been run.
+`spikes/mt-raw-capture/`: `mtprobe.swift` (arms `baseline`, `parser-off`, `stop`,
+`power-off`, `hidtap`, `restore`), the measurement plan in `README.md` and the numbers in
+`RESULTS.md`. The probe detects host gesture actions without a human watching: the
+Space-change notification plus the Dock's window layers.
 
 ## Open questions / verification list
 
@@ -344,7 +298,10 @@ The run also found an automatic oracle for host gesture actions (Space-change no
   forwarding effectively gains a key-window gate in practice.
 - Whether libinput's size-based thumb/palm heuristics behave on the synthetic device;
   pick sane fuzz/flat. (The `res` derivation itself is answered if we take the raw path:
-  `MTDeviceGetSensorSurfaceDimensions` — see §Alternative.)
+  `MTDeviceGetSensorSurfaceDimensions` — see §Raw multitouch capture.)
+- Which of the swallowed event types actually matter to the HID-tap suppression: the spike
+  swallowed seven, and type 29 (`NSEventTypeGesture`) streams at ~90/s under *any*
+  contact, one finger included.
 - Host tap-to-click click synthesis timing vs our swallow window (does the click arrive
   after the touch sequence ends?).
 - Whether momentum-phase scroll events reliably carry a marker tying them to the
