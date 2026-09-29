@@ -175,6 +175,12 @@ Two independent findings, both measured on the dev Mac (M1 Max built-in trackpad
   - It needs Accessibility, the same grant as limina's existing session-level capture tap
     (`crates/limina/src/window/capture_tap.rs`). The spike ran from a terminal, so TCC
     attributed it there; confirm in the app.
+  - **It can be selective.** Kept installed and filtering per event on the raw stream's live
+    contact count, swallowing only while exactly three fingers are down and the sequence
+    never reached four, it made 3-finger swipes inert. With the default "three or four"
+    setting, 4-finger Space and Mission Control swipes kept working, including slowly
+    landed ones (`RESULTS.md` §hidtap-3). So the guest can get three fingers with no change
+    to the user's settings.
   - This does not contradict the M8 finding (`docs/roadmap.md`): that was about a
     *session* tap. That the session tap sits downstream of the recognizer is inferred from
     the two results, not measured side by side.
@@ -201,11 +207,13 @@ The choice between the following is not yet made:
   - Under capture, every contact forwards: `QUADTAP`, enough slots for real hands, and
     libinput palm rejection fed by real ellipse and pressure data.
   - Seamless mode keeps the ownership table and the Fn chord as designed.
-- **Seamless too.** While a sequence the guest owns is in flight over the VM view, swallow
-  its gesture events.
+- **Seamless too.** Keep the tap installed while the cursor is over the VM view, and swallow
+  gesture events for the finger counts the guest owns (the live raw count decides per
+  event, as measured with three fingers).
   - 3- and 4-finger swipes then go to the guest in ordinary windowed use, and the Fn chord
     and synthetic contacts become unnecessary.
-  - The cost is that the host's own swipes do nothing while the cursor is over the VM.
+  - The cost is that the host's swipes *at the guest's finger counts* do nothing while the
+    cursor is over the VM. Four-finger host gestures can stay the host's.
 
 Either way, the tap must be released on every teardown transition in §Dedupe and teardown.
 A per-sequence swallow is naturally leak-free, because nothing persists past the process.
@@ -304,10 +312,9 @@ Space-change notification plus the Dock's window layers.
   desktop), the two-finger right-edge swipe (Notification Center), and App Exposé opened
   from a neutral state. Every 3-finger swipe down in the runs closed Mission Control
   rather than opening App Exposé.
-- Whether a per-sequence swallow (the "seamless too" option) can engage in time. Every
-  measured run had the tap live before the fingers landed. A tap that turns on only once
-  the contact count is known has to beat the recognizer, whose Dock transition windows
-  appeared ~180–280 ms after touchdown in the control run.
+- Only a tap that is already installed and filters per event on the live count is
+  measured. A tap *installed* at count determination would have to beat the recognizer
+  (Dock transition windows appeared ~180–280 ms after touchdown), so don't build that one.
 - Which of the swallowed event types actually matter to the HID-tap suppression: the spike
   swallowed seven, and type 29 (`NSEventTypeGesture`) streams at ~90/s under *any*
   contact, one finger included.

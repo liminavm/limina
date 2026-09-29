@@ -2,8 +2,9 @@
 
 Measured 2026-09-29 on the dev Mac (M1 Max built-in trackpad, macOS 26.6.2), with
 `mtprobe.swift`, launched from a terminal. **Verdict: an HID-level event tap suppresses
-the host's 3- and 4-finger gestures and leaves pointer, scroll, clicks and haptics alone;
-it is the lever.** The private-API parser lever works too, but it is unusable.
+the host's 3- and 4-finger swipes and leaves pointer, scroll, clicks and haptics alone;
+it is the lever. Filtered on the live contact count, it takes three fingers and leaves
+four to macOS, with the default settings.** The private-API parser lever works too, but it is unusable.
 
 ## Arm 0: give macOS four fingers, take three — WORKS, with one catch
 
@@ -102,6 +103,25 @@ types 18, 19, 20, 29, 30, 31, 32, returning NULL for those while engaged.
 - Probe bug fixed after the first run: disabling the tap delivers
   `tapDisabledByUserInput` to the callback, and the callback re-enabled the tap. Clear the
   handle before disabling it.
+
+### `hidtap-3` — suppress three fingers, leave four to macOS: WORKS
+
+The same tap, installed for the whole lever window, swallows gesture events only while the
+raw stream shows exactly three contacts *and* the touch sequence has never reached four.
+The count is read per event from the frame callback, so no tap engage has to race the
+recognizer. Setting: "three or four fingers" (the default).
+
+- 3-finger left/right/up/down: inert.
+- Normally landed 4-finger swipes: Space switch ×2, Mission Control open/close. All
+  worked.
+- Deliberately slow 4-finger landings (0.2–1.5 s at fewer than four contacts): 4 of 7
+  clean.
+  - One did nothing, and one became a horizontal cooked scroll. The user attributes these
+    to their own input: an accidental click, and moving the first two fingers before the
+    rest landed (a scroll macOS would have started anyway).
+  - One started a Space transition that did not complete.
+  - User verdict: "putting the fingers normally - even if a bit slow - never felt like I
+    was struggling to do the 4 finger gesture".
 
 ### `parser-off` — suppresses everything, leaks, rejected
 

@@ -110,7 +110,7 @@ while let a = argv.next() {
     default: fatalError("unknown argument \(a)")
     }
 }
-let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "restore"]
+let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "hidtap-3", "restore"]
 guard arms.contains(arm) else { fatalError("unknown arm \(arm); one of \(arms)") }
 
 // MARK: - Raw frames
@@ -120,6 +120,10 @@ var lastCount: [UInt: Int32] = [:]
 var lastSample: [UInt: Double] = [:]
 var outOfRange = 0
 var cursorAtTouchdown = NSPoint.zero
+// hidtap-3: current contact count and the sequence's peak, written by the frame
+// callback and read by the tap callback (a torn read only costs one event).
+var liveCount: Int32 = 0
+var sequencePeak: Int32 = 0
 
 func describe(_ touches: UnsafeMutablePointer<MTTouch>, _ n: Int32) -> String {
     (0..<Int(n)).map { i in
@@ -140,6 +144,8 @@ let frameCallback: FrameCallback = { dev, touches, n, ts, frame in
     let prev = lastCount[key] ?? 0
     let body = touches.map { describe($0.assumingMemoryBound(to: MTTouch.self), n) } ?? ""
     let cursor = NSEvent.mouseLocation
+    liveCount = n
+    sequencePeak = n == 0 ? 0 : max(sequencePeak, n)
     if n != prev {
         lastCount[key] = n
         if prev == 0 { cursorAtTouchdown = cursor }
@@ -218,7 +224,10 @@ let hidCallback: CGEventTapCallBack = { _, type, event, _ in
         }
         return Unmanaged.passUnretained(event)
     }
-    if engaged && hidTypes.contains(type.rawValue) {
+    // hidtap-3 swallows only while exactly three fingers are down and the
+    // sequence never reached four: four-finger gestures must still reach macOS.
+    let wanted = arm != "hidtap-3" || (liveCount == 3 && sequencePeak == 3)
+    if engaged && wanted && hidTypes.contains(type.rawValue) {
         hidSwallowed += 1
         if hidSwallowed % 20 == 1 { log("LEVER", "hid tap swallowed type \(type.rawValue) (#\(hidSwallowed))") }
         return nil
@@ -238,7 +247,7 @@ func engage() {
         }
         log("LEVER", "\(d) engaged: \(leverState(dev))")
     }
-    if arm == "hidtap" {
+    if arm.hasPrefix("hidtap") {
         let mask = hidTypes.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << CGEventMask($1)) }
         hidTap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap, options: .defaultTap,
                                    eventsOfInterest: mask, callback: hidCallback, userInfo: nil)
