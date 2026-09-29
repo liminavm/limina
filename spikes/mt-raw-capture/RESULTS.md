@@ -214,6 +214,27 @@ events: every touch's identity, phase, normalized position, device and device si
   (touches with a device, or the local raw count). `hidtap-3ns` as run counted remote
   touches too, and in limina that would swallow remote gestures that nothing forwards.
 
+### `hidtap-2` — two-finger system gestures: suppressible
+
+The same per-event tap, swallowing gesture types only while exactly two local contacts are
+down and the sequence never exceeded two. `--engage-at 20` made the first 20 s a control.
+Everything was done on the local trackpad, over Safari.
+
+| gesture | control (0–20 s) | tap (20–55 s) |
+|---|---|---|
+| Notification Center, two fingers in from the right edge | opened / closed | **suppressed** |
+| Smart zoom, two-finger double tap | zoomed / unzoomed | **suppressed**, except right after a scroll |
+
+- **The edge swipe shows up in the raw stream as one contact at x = 1.000.** The second
+  finger only lands on the surface later. Under the tap it produced a stream of type-31
+  (swipe) events, a type no other run showed.
+- **The gap:** a two-finger double tap done very quickly after a scroll still zoomed
+  (user). Likely cause: the filter swallows only while two contacts are down at the moment
+  the event arrives, so a recognition delivered just after lift passes. A hold of a few
+  hundred ms after the sequence ends should cover it (unmeasured).
+- **The window oracle saw nothing for Notification Center:** no on-screen windows owned
+  by `NotificationCenter` changed. The verdict is the user's.
+
 ### `parser-off` — suppresses everything, leaks, rejected
 
 `MTDeviceSetParserEnabled(dev, Bool) -> OSStatus` and `MTDeviceGetParserEnabled(dev,

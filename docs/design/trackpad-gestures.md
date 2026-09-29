@@ -93,9 +93,11 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
 (measured).
 
 - **The HID tap swallows the host's gesture events** (types 18, 19, 20, 29, 30, 31, 32)
-  for the sequence. That stops system-level recognition: Spaces and Mission Control at
-  three fingers are measured; the right-edge two-finger swipe is not yet (§Open
-  questions).
+  for the sequence, plus the momentum tail and a short double-tap window after it. That
+  stops system-level recognition. Measured:
+  - Spaces and Mission Control at three fingers.
+  - Notification Center's right-edge swipe and smart zoom at two fingers, except a smart
+    zoom right after a scroll (`RESULTS.md` §hidtap-2).
 - **limina's own view drops what reaches it**: cooked `ScrollWheel`, magnify and
   tap-generated clicks (e.g. host two-finger-tap right-click). Suppress `emit_scroll`
   entirely for trackpad-sourced scrolls while the MT device owns the sequence; otherwise
@@ -279,9 +281,9 @@ Space-change notification plus the Dock's window layers.
 
 ## Open questions / verification list
 
-- Does the HID tap stop two-finger system gestures (the right-edge Notification Center
-  swipe, smart zoom, Look Up) when swallowing at count 2? Only 3- and 4-finger swipes are
-  measured.
+- Does holding the swallow a few hundred ms past the end of a sequence close the
+  smart-zoom gap? A two-finger double tap right after a scroll still zoomed under the
+  count-2 tap (`RESULTS.md` §hidtap-2).
 
 - Does AppKit deliver indirect `NSTouch` events to a non-key window under the cursor,
   the way it delivers scroll events? Don't assume — probe empirically. If not, MT

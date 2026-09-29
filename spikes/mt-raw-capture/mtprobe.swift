@@ -102,15 +102,17 @@ func log(_ tag: String, _ msg: String) {
 
 var arm = "baseline"
 var seconds = 60.0
+var engageAt = 5.0
 var argv = CommandLine.arguments.dropFirst().makeIterator()
 while let a = argv.next() {
     switch a {
     case "--arm": arm = argv.next() ?? arm
     case "--seconds": seconds = Double(argv.next() ?? "") ?? seconds
+    case "--engage-at": engageAt = Double(argv.next() ?? "") ?? engageAt
     default: fatalError("unknown argument \(a)")
     }
 }
-let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "hidtap-3", "hidtap-3ns", "hidwatch", "restore"]
+let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "hidtap-2", "hidtap-3", "hidtap-3ns", "hidwatch", "restore"]
 guard arms.contains(arm) else { fatalError("unknown arm \(arm); one of \(arms)") }
 
 // MARK: - Raw frames
@@ -277,6 +279,7 @@ let hidCallback: CGEventTapCallBack = { _, type, event, _ in
     noteTouches(type, event)
     let wanted: Bool
     switch arm {
+    case "hidtap-2": wanted = liveCount == 2 && sequencePeak == 2
     case "hidtap-3": wanted = liveCount == 3 && sequencePeak == 3
     case "hidtap-3ns": wanted = nsPeak == 3
     default: wanted = true
@@ -412,8 +415,8 @@ if arm == "restore" {
 }
 
 if arm != "baseline" {
-    precondition(seconds >= 20, "lever arms need --seconds >= 20")
-    Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { _ in engage() }
+    precondition(seconds >= engageAt + 15, "lever arms need --seconds >= engage-at + 15")
+    Timer.scheduledTimer(withTimeInterval: engageAt, repeats: false) { _ in engage() }
     Timer.scheduledTimer(withTimeInterval: seconds - 5, repeats: false) { _ in release() }
 }
 
@@ -451,14 +454,17 @@ NSWorkspace.shared.notificationCenter.addObserver(
 // Dock windows appear/disappear when Mission Control / App Exposé open. A
 // heuristic only (owner + layer need no Screen Recording grant); the human
 // confirms.
-var lastDock = ""
+// Notification Center's panel is its own process's window, watched the same way.
+var lastWindows: [String: String] = [:]
 Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
     let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-    let dock = info.filter { ($0[kCGWindowOwnerName as String] as? String) == "Dock" }
-        .map { "L\($0[kCGWindowLayer as String] ?? "?")" }.sorted().joined(separator: ",")
-    if dock != lastDock {
-        log("HOST", "Dock windows: [\(dock)]")
-        lastDock = dock
+    for owner in ["Dock", "NotificationCenter"] {
+        let layers = info.filter { ($0[kCGWindowOwnerName as String] as? String) == owner }
+            .map { "L\($0[kCGWindowLayer as String] ?? "?")" }.sorted().joined(separator: ",")
+        if layers != lastWindows[owner] {
+            log("HOST", "\(owner) windows: [\(layers)]")
+            lastWindows[owner] = layers
+        }
     }
 }
 
