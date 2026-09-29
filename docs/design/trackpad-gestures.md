@@ -3,7 +3,8 @@
 Status: DESIGN. MT device not implemented. The companion quick win SHIPPED 2026-07-28:
 hi-res scroll (f1a8e56) — see §Independent quick win. A raw-multitouch alternative that
 would reopen the ownership rule under capture is under evaluation — see §Alternative: raw
-multitouch capture.
+multitouch capture. Its settings path (macOS on four fingers, three for the guest) is
+**measured to work** — see §The cheap unlock.
 
 ## Why
 
@@ -99,7 +100,10 @@ synthetic contact group.
 
 ## Dedupe and teardown (the state machine)
 
-While a forwarded 2-finger sequence (plus its momentum tail) is in flight:
+While a forwarded sequence (plus its momentum tail) is in flight — the 2-finger pair, or
+a physical 3-finger group on a host whose prefs leave three fingers free, which macOS
+otherwise turns into ordinary scroll (measured; momentum-end events land up to ~1 s after
+the last finger lifts):
 
 - **Swallow** host-synthesized `ScrollWheel`, magnify, and tap-generated clicks (e.g.
   host two-finger-tap right-click) — otherwise the guest gets the gesture twice. The
@@ -187,6 +191,17 @@ This does not make the suppression question moot — it is opt-in per user, it c
 the out-of-the-box experience, and it buys nothing for 4-finger guest gestures. But it is
 available today, it is how the reference implementation in this space actually ships, and
 it should be the first thing tried.
+
+**Measured (2026-09-29, `spikes/mt-raw-capture/RESULTS.md`):** with Mission Control,
+Spaces and App Exposé set to four fingers, 3-finger swipes trigger no host action. 4-finger
+swipes still switch Spaces and open Mission Control. The prefs above read back live through
+`UserDefaults(suiteName:)` right after the user changes them, with no logout. Setting
+"four" writes `ThreeFinger*Swipe = 0` and leaves `FourFinger*Swipe = 2`; "three or four"
+is both at `2`. **The catch: freed three-finger contacts become ordinary cooked scroll,
+momentum included**, in the app under the cursor. So a forwarded 3-finger group needs the
+same scroll swallow as the 2-finger pair (§Dedupe and teardown). The cooked event carries
+no finger count, so only the touch source's contact count can tell a 3-finger scroll
+from a 2-finger one.
 
 ### What is established
 
@@ -316,7 +331,11 @@ decides how good it gets, not whether it works.
 
 ### Spike
 
-`spikes/mt-raw-capture/` holds the measurement plan. Not yet run.
+`spikes/mt-raw-capture/` holds the probe and the measurement plan. Arm 0 (settings path)
+has been run (`RESULTS.md`), and so have the device facts the MT device needs: the built-in
+surface is 124.8 × 76.8 mm → `res` = 100 units/mm at 0.01 mm units, and it reports at ~124 Hz.
+The run also found an automatic oracle for host gesture actions (Space-change notification
++ Dock window layers). The suppression arms have not been run.
 
 ## Open questions / verification list
 

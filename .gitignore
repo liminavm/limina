@@ -132,3 +132,6 @@ reference/
 /fuzz/corpus
 /fuzz/artifacts
 /fuzz/coverage
+
+# spikes/mt-raw-capture build artifact (source + RESULTS.md are kept)
+spikes/mt-raw-capture/mtprobe

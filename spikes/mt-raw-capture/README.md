@@ -1,6 +1,7 @@
 # Spike: raw multitouch capture and gesture suppression
 
-**Status: PLANNED, not run.** Design context and the hypothesis list:
+**Status: Arm 0 run (see `RESULTS.md`); the suppression arms are not run.** Probe: `mtprobe.swift`
+(only the `baseline` arm is implemented). Design context and the hypothesis list:
 `docs/design/trackpad-gestures.md` §Alternative: raw multitouch capture.
 
 ## The question
