@@ -110,7 +110,7 @@ while let a = argv.next() {
     default: fatalError("unknown argument \(a)")
     }
 }
-let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "hidtap-3", "hidwatch", "restore"]
+let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "hidtap-3", "hidtap-3ns", "hidwatch", "restore"]
 guard arms.contains(arm) else { fatalError("unknown arm \(arm); one of \(arms)") }
 
 // MARK: - Raw frames
@@ -213,9 +213,18 @@ var hidTap: CFMachPort?
 // count/allTouches count" → occurrences; logged once a second. Answers
 // whether a forwarded (Universal Control) gesture event carries its fingers.
 var touchHist: [String: Int] = [:]
+// hidtap-3ns: the sequence's peak AppKit touch count. Counts of 0–2
+// interleave while fingers land and lift, so a sequence ends only after
+// 150 ms without a nonzero count.
+var nsPeak = 0
+var nsLastNonzero = 0.0
 func noteTouches(_ type: CGEventType, _ event: CGEvent) {
     guard type.rawValue == 29, let ns = NSEvent(cgEvent: event) else { return }
-    touchHist["raw\(liveCount)/ns\(ns.allTouches().count)", default: 0] += 1
+    let n = ns.allTouches().count
+    touchHist["raw\(liveCount)/ns\(n)", default: 0] += 1
+    let now = ProcessInfo.processInfo.systemUptime
+    if now - nsLastNonzero > 0.15 { nsPeak = 0 }
+    if n > 0 { nsLastNonzero = now; nsPeak = max(nsPeak, n) }
 }
 var hidSwallowed = 0
 var engaged = false
@@ -234,8 +243,13 @@ let hidCallback: CGEventTapCallBack = { _, type, event, _ in
     }
     // hidtap-3 swallows only while exactly three fingers are down and the
     // sequence never reached four: four-finger gestures must still reach macOS.
-    let wanted = arm != "hidtap-3" || (liveCount == 3 && sequencePeak == 3)
     noteTouches(type, event)
+    let wanted: Bool
+    switch arm {
+    case "hidtap-3": wanted = liveCount == 3 && sequencePeak == 3
+    case "hidtap-3ns": wanted = nsPeak == 3
+    default: wanted = true
+    }
     if engaged && wanted && hidTypes.contains(type.rawValue) {
         hidSwallowed += 1
         if hidSwallowed % 20 == 1 { log("LEVER", "hid tap swallowed type \(type.rawValue) (#\(hidSwallowed))") }

@@ -3,8 +3,9 @@
 Measured 2026-09-29 on the dev Mac (M1 Max built-in trackpad, macOS 26.6.2), with
 `mtprobe.swift`, launched from a terminal. **Verdict: an HID-level event tap suppresses
 the host's 3- and 4-finger swipes and leaves pointer, scroll, clicks and haptics alone;
-it is the lever. Filtered on the live contact count, it takes three fingers and leaves
-four to macOS, with the default settings.** The private-API parser lever works too, but it is unusable.
+it is the lever. Filtered on AppKit's per-event touch count, it takes three fingers and
+leaves four to macOS with the default settings, for local and Universal Control
+trackpads alike.** The private-API parser lever works too, but it is unusable.
 
 ## Arm 0: give macOS four fingers, take three — WORKS, with one catch
 
@@ -165,7 +166,29 @@ The swallowing `hidtap` arm (all gesture types, 5–55 s). Each gesture (type 29
 - The local calibration had no 4-finger swipe (user forgot), so AppKit 4 ↔ raw 4 is
   unconfirmed locally; the remote 4 stands on its own.
 - Consequence: a count-keyed selective tap can key on `allTouches()` instead of the raw
-  stream, and then covers remote trackpads too. Not yet run as a selective arm.
+  stream, and then covers remote trackpads too (next section).
+
+### `hidtap-3ns` — selective suppression keyed on AppKit's count: WORKS, local and remote
+
+Like `hidtap-3`, but the decision reads `allTouches().count` on gesture (type 29) events,
+which also exist for remote input, instead of the local raw count.
+- It swallows every gesture-type event while the sequence's peak count is exactly 3.
+- The count is updated *before* the decision, so the first event that reaches three
+  counts.
+- Counts of 0–2 interleave while fingers land and lift, so a sequence ends only after
+  150 ms without a nonzero count.
+- Setting: "three or four fingers" (the default).
+
+| source | 3 fingers | 4 fingers |
+|---|---|---|
+| local trackpad | 4 swipes, all inert | Space ×2, Mission Control open/close |
+| remote Magic Trackpad (Bluetooth, other Mac) | all inert | Mission Control open/close (done by accident, user) |
+| other Mac's built-in trackpad | — | Mission Control open/close, Space ×4 |
+
+The user confirmed that every 3-finger swipe, local and remote, was inert and every
+4-finger one acted. The raw multitouch stream is therefore not needed for the
+*suppression* decision; it is still what feeds the guest MT device, for local trackpads
+only.
 
 ### `parser-off` — suppresses everything, leaks, rejected
 

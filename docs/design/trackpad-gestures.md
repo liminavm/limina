@@ -181,6 +181,12 @@ Two independent findings, both measured on the dev Mac (M1 Max built-in trackpad
     setting, 4-finger Space and Mission Control swipes kept working, including slowly
     landed ones (`RESULTS.md` §hidtap-3). So the guest can get three fingers with no change
     to the user's settings.
+  - **Keying on AppKit's count works too, and reaches remote trackpads.** Deciding on
+    `NSEvent(cgEvent:).allTouches().count` of the gesture events gave the same split for
+    the local trackpad and for trackpads on another Mac over Universal Control. It uses the
+    sequence peak, with a sequence ending after 150 ms of zero counts
+    (`RESULTS.md` §hidtap-3ns). Suppression therefore does not need the private framework;
+    only the guest MT device does.
   - This does not contradict the M8 finding (`docs/roadmap.md`): that was about a
     *session* tap. That the session tap sits downstream of the recognizer is inferred from
     the two results, not measured side by side.
@@ -316,9 +322,9 @@ Space-change notification plus the Dock's window layers.
   already-recognized gesture/scroll/magnify events with no raw contacts. The host Dock
   acts on them, and they carry pid 0 like local input (`RESULTS.md` §hidwatch). The
   swallowing tap suppresses them too, and `NSEvent(cgEvent:).allTouches().count` reports
-  their finger count (3 and 4 measured). A selective tap keyed on that count, instead of
-  the local raw count, would cover remote trackpads; that selective variant is unmeasured.
-  The MT device cannot serve remote input, which has no contacts.
+  their finger count (3 and 4 measured). A selective tap keyed on that count covers remote
+  trackpads too (measured, `RESULTS.md` §hidtap-3ns). The MT device cannot serve remote
+  input, which has no contacts.
 - Only a tap that is already installed and filters per event on the live count is
   measured. A tap *installed* at count determination would have to beat the recognizer
   (Dock transition windows appeared ~180–280 ms after touchdown), so don't build that one.
