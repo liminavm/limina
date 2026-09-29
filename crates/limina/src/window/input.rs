@@ -716,6 +716,8 @@ pub struct InputState {
     /// Which trackpad touch sequences the guest's multitouch touchpad owns, and the contacts
     /// it was told about. See [`super::trackpad`].
     trackpad: RefCell<TrackpadSeq>,
+    /// The local touch count the last `[TOUCH]` trace line reported (it logs changes only).
+    touch_trace_count: Cell<usize>,
     /// Whether the guest is hosted in the is hosted in the `notch = extend` overlay, and the flag that asks for it
     /// to stand down so the menu bar and the window's controls are reachable. See
     /// [`InputState::reveal_step`].
@@ -946,6 +948,7 @@ impl InputState {
             scroll_y: Cell::new(ScrollAxis::default()),
             scroll_x: Cell::new(ScrollAxis::default()),
             trackpad: RefCell::new(TrackpadSeq::new(crate::hosttrackpad::geometry())),
+            touch_trace_count: Cell::new(0),
             overlay_active,
             reveal_chrome,
             reveal: Cell::new(super::grab_policy::RevealState::default()),
@@ -3326,7 +3329,7 @@ impl InputState {
             })
             .collect();
         let in_view = self.is_captured() || self.target_of(event, view).inside;
-        if wire_trace() {
+        if wire_trace() && self.touch_trace_count.replace(touches.len()) != touches.len() {
             let all = event.allTouches();
             eprintln!(
                 "[TOUCH] t={} all={} local={} in_view={in_view}",
@@ -3345,7 +3348,7 @@ impl InputState {
     /// Whether a trackpad click belongs to the guest touchpad ([`TrackpadSeq::click`]) rather
     /// than the tablet: sent as the touchpad's own button, or dropped because the guest already
     /// read it from the contacts. A click from a mouse is never the touchpad's.
-    fn touchpad_takes_click(&self, event: &NSEvent, down: bool) -> bool {
+    pub(crate) fn touchpad_takes_click(&self, event: &NSEvent, down: bool) -> bool {
         if event.subtype() != NSEventSubtype::Touch {
             return false;
         }

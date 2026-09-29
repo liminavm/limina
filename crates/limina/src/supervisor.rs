@@ -56,7 +56,8 @@ pub const WORKER_EXIT_RESTORE_REFUSED: i32 = 124;
 
 /// What a refused resume tells the user, in the log, the window and the control center alike.
 pub const RESTORE_REFUSED_ADVICE: &str = "This VM was suspended with a different set of devices \
-    than it has now — for example, suspended with a window and started without one. Resuming it \
+    than it has now — for example, suspended with a window and started without one, or suspended \
+    on a limina build older than the one resuming it (a new device moves the others). Resuming it \
     would leave the guest talking to hardware that is no longer where it expects, so it was not \
     resumed, and the suspended session is kept. Start the VM the way it was suspended to resume \
     it, or start it with --discard-suspend to throw the suspended session away and boot fresh.";

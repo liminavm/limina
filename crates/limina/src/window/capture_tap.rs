@@ -621,6 +621,16 @@ extern "C" fn tap_callback(
                 release_grab(ctx, s, edge, release);
             }
         }
+        // A trackpad click on fingers the guest touchpad holds is the touchpad's, captured or
+        // not: the same seam the local monitor asks (`InputState::touchpad_takes_click`), via
+        // the same NSEvent bridge scroll uses below.
+        LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP
+            if NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) }).is_some_and(
+                |ns| {
+                    ctx.input
+                        .touchpad_takes_click(&ns, matches!(etype, LMB_DOWN | RMB_DOWN))
+                },
+            ) => {}
         LMB_DOWN => send_click(BTN_LEFT, true),
         LMB_UP => send_click(BTN_LEFT, false),
         RMB_DOWN => send_click(BTN_RIGHT, true),
