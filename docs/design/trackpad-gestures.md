@@ -93,11 +93,15 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
 (measured).
 
 - **The HID tap swallows the host's gesture events** (types 18, 19, 20, 29, 30, 31, 32)
-  for the sequence, plus the momentum tail and a short double-tap window after it. That
-  stops system-level recognition. Measured:
+  for the whole sequence: from the first contact down until the last contact lifts, plus
+  the momentum tail. That stops system-level recognition. Measured:
   - Spaces and Mission Control at three fingers.
-  - Notification Center's right-edge swipe and smart zoom at two fingers, except a smart
-    zoom right after a scroll (`RESULTS.md` §hidtap-2).
+  - Notification Center's right-edge swipe and smart zoom at two fingers
+    (`RESULTS.md` §hidtap-2).
+  - **Own the sequence, not the instant.** The probe's rule — swallow while exactly N
+    contacts are down *now* — passed 1–2 gesture events whenever fingers lifted a few ms
+    apart. A smart zoom right after a scroll leaked once and did not reproduce in 12
+    instrumented tries, and the staggered lift was the only leak visible.
 - **limina's own view drops what reaches it**: cooked `ScrollWheel`, magnify and
   tap-generated clicks (e.g. host two-finger-tap right-click). Suppress `emit_scroll`
   entirely for trackpad-sourced scrolls while the MT device owns the sequence; otherwise
@@ -281,9 +285,8 @@ Space-change notification plus the Dock's window layers.
 
 ## Open questions / verification list
 
-- Does holding the swallow a few hundred ms past the end of a sequence close the
-  smart-zoom gap? A two-finger double tap right after a scroll still zoomed under the
-  count-2 tap (`RESULTS.md` §hidtap-2).
+- The smart zoom that once leaked right after a scroll (`RESULTS.md` §hidtap-2): cause
+  unknown, not reproduced. Re-test once the tap owns whole sequences.
 
 - Does AppKit deliver indirect `NSTouch` events to a non-key window under the cursor,
   the way it delivers scroll events? Don't assume — probe empirically. If not, MT

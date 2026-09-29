@@ -228,12 +228,29 @@ Everything was done on the local trackpad, over Safari.
 - **The edge swipe shows up in the raw stream as one contact at x = 1.000.** The second
   finger only lands on the surface later. Under the tap it produced a stream of type-31
   (swipe) events, a type no other run showed.
-- **The gap:** a two-finger double tap done very quickly after a scroll still zoomed
-  (user). Likely cause: the filter swallows only while two contacts are down at the moment
-  the event arrives, so a recognition delivered just after lift passes. A hold of a few
-  hundred ms after the sequence ends should cover it (unmeasured).
+- **The gap:** in this run, a two-finger double tap done very quickly after a scroll
+  still zoomed (user). It did not reproduce in the instrumented rerun below; the cause is
+  unknown.
 - **The window oracle saw nothing for Notification Center:** no on-screen windows owned
   by `NotificationCenter` changed. The verdict is the user's.
+
+**Instrumented rerun (smart-zoom gap).** `hidtap-2` logged every gesture-type event
+with its decision, the local contact count, the time since the last lift and the scroll
+momentum phase. Scroll events were added to the tap's mask, always passed, only to track
+momentum; that is one difference from the run that leaked. The user did 12
+scroll-then-immediately-double-tap pairs and 2 plain double taps.
+
+- **None zoomed** (user). The gap did not reproduce.
+- **After a scroll, the double tap's first touch lands on the live momentum and ends it**:
+  momentum phase continue → end within ~10 ms of that touchdown, every time.
+- **Only gesture events (type 29) appeared**, and no smart-magnify type. During each tap,
+  ~8–10 events were swallowed while both contacts were down. 1–2 passed while a single
+  contact remained during the staggered lift (2 → 1 → 0, a few ms apart). This was the
+  same for after-scroll and plain double taps.
+- Large pass blocks (60–87 events) were one-finger touches (pointer motion), correctly
+  left to the host.
+- The only visible leak is therefore the staggered lift. The probe's rule ("exactly two
+  contacts down *now*") lets it through; sequence-level ownership would not.
 
 ### `parser-off` — suppresses everything, leaks, rejected
 

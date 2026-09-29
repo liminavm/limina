@@ -126,6 +126,11 @@ var cursorAtTouchdown = NSPoint.zero
 // callback and read by the tap callback (a torn read only costs one event).
 var liveCount: Int32 = 0
 var sequencePeak: Int32 = 0
+// hidtap-2 diagnostics: when the last contact lifted, and the latest
+// momentum-scroll state seen by the tap.
+var lastLift = 0.0
+var lastMomentum = 0.0
+var momentumPhase: Int64 = 0
 
 func describe(_ touches: UnsafeMutablePointer<MTTouch>, _ n: Int32) -> String {
     (0..<Int(n)).map { i in
@@ -146,6 +151,7 @@ let frameCallback: FrameCallback = { dev, touches, n, ts, frame in
     let prev = lastCount[key] ?? 0
     let body = touches.map { describe($0.assumingMemoryBound(to: MTTouch.self), n) } ?? ""
     let cursor = NSEvent.mouseLocation
+    if n == 0 && liveCount > 0 { lastLift = ProcessInfo.processInfo.systemUptime }
     liveCount = n
     sequencePeak = n == 0 ? 0 : max(sequencePeak, n)
     if n != prev {
@@ -284,6 +290,22 @@ let hidCallback: CGEventTapCallBack = { _, type, event, _ in
     case "hidtap-3ns": wanted = nsPeak == 3
     default: wanted = true
     }
+    let now = ProcessInfo.processInfo.systemUptime
+    if type == .scrollWheel {
+        let mp = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
+        if mp != 0 { lastMomentum = now }
+        if mp != momentumPhase && arm == "hidtap-2" && engaged {
+            log("DIAG", "scroll momentum phase \(momentumPhase) -> \(mp)")
+        }
+        momentumPhase = mp
+        return Unmanaged.passUnretained(event)
+    }
+    if arm == "hidtap-2" && engaged && hidTypes.contains(type.rawValue) {
+        let touching = liveCount > 0 ? "down" : String(format: "lifted %.0f ms ago", (now - lastLift) * 1000)
+        log("DIAG", String(format: "%@ type %u raw%d peak%d %@, momentum phase %lld (last %.0f ms ago)",
+                           wanted ? "SWALLOW" : "PASS", type.rawValue, liveCount, sequencePeak, touching,
+                           momentumPhase, (now - lastMomentum) * 1000))
+    }
     if engaged && wanted && hidTypes.contains(type.rawValue) {
         hidSwallowed += 1
         if hidSwallowed % 20 == 1 { log("LEVER", "hid tap swallowed type \(type.rawValue) (#\(hidSwallowed))") }
@@ -359,7 +381,8 @@ func engage() {
         }
     }
     if arm.hasPrefix("hidtap") {
-        let mask = hidTypes.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << CGEventMask($1)) }
+        // Scroll (22) is in the mask only so hidtap-2 can see momentum; it always passes.
+        let mask = (hidTypes + [22]).reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << CGEventMask($1)) }
         hidTap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap, options: .defaultTap,
                                    eventsOfInterest: mask, callback: hidCallback, userInfo: nil)
         if let t = hidTap {
