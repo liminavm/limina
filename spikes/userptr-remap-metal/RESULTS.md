@@ -77,7 +77,7 @@ macOS 26.6.2:
 | process | page size seen | scattered 4 KiB `mach_vm_remap` | lone 4 KiB remap | no-copy `MTLBuffer` over 4 KiB-scattered pages | plain 16 KiB-aligned control |
 |---|---|---|---|---|---|
 | native arm64 | 16384 | truncated to the 16 KiB boundary | whole 16 KiB page | nil | a buffer |
-| native arm64 with `_POSIX_SPAWN_FORCE_4K_PAGES` | — | — | — | — | — |
+| native arm64 with `_POSIX_SPAWN_FORCE_4K_PAGES` | spawn fails, `EBADMACHO` | spawn fails | spawn fails | spawn fails | spawn fails |
 | x86_64 under Rosetta | 4096 (`vm_kernel_page_size` 16384) | lands exactly, coherent with the source | a 4096-byte region at a 4 KiB offset | **nil**, even with the alias 16 KiB-aligned and 16 KiB long | a buffer |
 
 - **A 4 KiB address space is real on the shipping kernel, but only for Rosetta processes.** Every
@@ -87,12 +87,16 @@ macOS 26.6.2:
   marked `Disabled` (rdar://133462123), and the sysctl its launcher checks,
   `debug.vm_mixed_pagesize_supported`, exists only on DEVELOPMENT/DEBUG kernels
   (`bsd/vm/vm_unix.c:2491`).
-- **Even there, Metal refuses GPU access to 4 KiB-granular backing.** The Rosetta process builds a
+- **Even there, Metal refuses GPU access to 4 KiB-scattered backing.** The Rosetta process builds a
   correct 4 KiB-scattered alias, and `newBufferWithBytesNoCopy` returns nil for it however it is
-  aligned, while the plain control is accepted. The limit is below the address space. That is
-  consistent with the GPU's IOMMU working in 16 KiB pages, which Asahi Linux reports as the reason
-  M1 cannot run 4 KiB-page Linux with a working IOMMU. So no host-side remapping trick can present
-  4 KiB-scattered guest pages to the GPU.
+  aligned, while the plain control is accepted. It is the *backing* that is refused, not remapping
+  or 4 KiB map entries. One 16 KiB-aligned block remapped as four in-order 4 KiB entries is
+  accepted, and so is the same block remapped whole. Four scattered 4 KiB pages are refused. So the
+  limit is below the address space. That fits the M1's GPU IOMMU: Asahi Linux reports that "its
+  DART IOMMU hardware only supports 16K pages" and that "only Rosetta apps end up in 4K mode"
+  ([progress report, September 2021](https://asahilinux.org/2021/10/progress-report-september-2021/)).
+  That is an explanation, not a measurement; the refusal itself is the measured fact. Either way,
+  no host-side remapping trick can present 4 KiB-scattered guest pages to the GPU.
 - **`hv_vm_map` with the 4 KiB IPA granule accepts host addresses that are 4 KiB- but not
   16 KiB-aligned.** Three consecutive 4 KiB pieces of one host buffer mapped at scattered guest
   addresses (`% 16K` = 0x1000, 0x2000, 0x3000) all returned `HV_SUCCESS`. This was checked at map

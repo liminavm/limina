@@ -148,6 +148,41 @@ int main(void) {
             printf("  4 scattered 4 KiB pages in a 16 KiB-aligned alias at 0x%llx (remaps %s) -> %s\n",
                    a16, ok ? "landed" : "FAILED", b ? "a buffer" : "nil");
             b = nil;
+            /* Separate "scattered" from "remapped": one 16 KiB-aligned source block, remapped 4 KiB
+             * at a time, in order, into a 16 KiB-aligned alias — contiguous backing, 4 KiB-granular
+             * map entries. */
+            mach_vm_address_t blk = 0, a16c = 0;
+            mach_vm_map(mach_task_self(), &blk, 16384, 16383, VM_FLAGS_ANYWHERE, MACH_PORT_NULL, 0,
+                        FALSE, VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+            memset((void *)blk, 0x5a, 16384);
+            mach_vm_map(mach_task_self(), &a16c, 16384, 16383, VM_FLAGS_ANYWHERE, MACH_PORT_NULL, 0,
+                        FALSE, VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+            ok = true;
+            for (int i = 0; i < 4; i++) {
+                mach_vm_address_t dst = a16c + i * K4;
+                vm_prot_t c, m;
+                ok &= mach_vm_remap(mach_task_self(), &dst, K4, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                                    mach_task_self(), blk + i * K4, FALSE, &c, &m,
+                                    VM_INHERIT_NONE) == KERN_SUCCESS && dst == a16c + i * K4;
+            }
+            b = ok ? [dev newBufferWithBytesNoCopy:(void *)a16c length:16384
+                                           options:MTLResourceStorageModeShared
+                                       deallocator:nil]
+                   : nil;
+            printf("  one 16 KiB block remapped 4 KiB at a time, in order (remaps %s) -> %s\n",
+                   ok ? "landed" : "FAILED", b ? "a buffer" : "nil");
+            b = nil;
+            /* And the same block remapped whole, as one 16 KiB entry. */
+            mach_vm_address_t whole = 0;
+            vm_prot_t c, m;
+            k = mach_vm_remap(mach_task_self(), &whole, 16384, 16383, VM_FLAGS_ANYWHERE,
+                              mach_task_self(), blk, FALSE, &c, &m, VM_INHERIT_NONE);
+            b = k == KERN_SUCCESS ? [dev newBufferWithBytesNoCopy:(void *)whole length:16384
+                                                           options:MTLResourceStorageModeShared
+                                                       deallocator:nil]
+                                  : nil;
+            printf("  the same block remapped whole (%s) -> %s\n", kr(k), b ? "a buffer" : "nil");
+            b = nil;
         }
         id<MTLBuffer> buf = remapped ? [dev newBufferWithBytesNoCopy:(void *)alias length:n * K4
                                                              options:MTLResourceStorageModeShared
