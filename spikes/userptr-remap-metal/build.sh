@@ -21,6 +21,14 @@ clang -O1 -g -Wall -Wextra -fobjc-arc -o probe probe.m \
 codesign --entitlements hv.entitlements -s - --force probe
 echo "==> probe built + signed"
 
+clang -O1 -g -Wall -Wextra -fobjc-arc -o fourk-probe fourk-probe.m \
+    -framework Hypervisor -framework Metal -framework Foundation
+codesign --entitlements hv.entitlements -s - --force fourk-probe
+clang -arch x86_64 -O1 -g -Wall -Wextra -fobjc-arc -o fourk-probe-x86 fourk-probe.m \
+    -framework Metal -framework Foundation
+clang -O1 -Wall -o fourk-spawn fourk-spawn.c
+echo "==> fourk-probe (arm64 + x86_64) and fourk-spawn built"
+
 if [ "${1:-}" != "build-only" ]; then
     ./probe payload.bin "$@"
 fi

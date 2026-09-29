@@ -2,3 +2,7 @@ probe
 payload.bin
 *.o
 *.dSYM
+fourk-probe
+fourk-probe-x86
+fourk-spawn
+*.out

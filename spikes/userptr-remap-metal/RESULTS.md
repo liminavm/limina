@@ -58,12 +58,45 @@ Metal warm-up, not a per-import leak.
     the guest pages word for word, including across the page boundary into the next alias page.
   - `newBufferWithBytesNoCopy(alias, 4 KiB)` returns a 4096-byte buffer that also reads back
     correctly.
-- So Metal is **not** what forces 16 KiB. KosmicKrisp's
-  `minImportedHostPointerAlignment = os_page_size` (`kk_physical_device.c:789`) is stricter than
-  Metal needs.
-- `mach_vm_remap` is what forces 16 KiB. Remapping 4 KiB that starts 4 KiB into a guest page
-  returns a host-page-aligned address, and the new mapping exposes **the whole 16 KiB page**
-  (2048/2048 words match the guest page).
+  Both are sub-ranges of whole 16 KiB pages, so this says nothing about 4 KiB-granular *backing*;
+  see below.
+- In a normal (16 KiB) process `mach_vm_remap` works in whole 16 KiB pages. Remapping 4 KiB that
+  starts 4 KiB into a guest page returns a host-page-aligned address, and the new mapping exposes
+  **the whole 16 KiB page** (2048/2048 words match the guest page).
+
+### 4 KiB address spaces exist, and the GPU still refuses 4 KiB-scattered backing
+
+`fourk-probe.m` asks the same questions at 4 KiB granularity. It runs as a native arm64 process,
+as an x86_64 process under Rosetta, and under `fourk-spawn.c`. `fourk-spawn` launches a program
+with the private `_POSIX_SPAWN_FORCE_4K_PAGES` flag (xnu `bsd/sys/spawn.h:69`), which asks
+`load_machfile` for a 4 KiB pmap and a page-shift-12 `vm_map` (`bsd/kern/mach_loader.c:732-765`).
+The kernel support is compiled for every Apple SoC header in the tree, H13 (M1) to H16
+(`__ARM_MIXED_PAGE_SIZE__`, `pexpert/pexpert/arm64/H13.h:82`). Measured 2026-09-29 on the M1 Max,
+macOS 26.6.2:
+
+| process | page size seen | scattered 4 KiB `mach_vm_remap` | lone 4 KiB remap | no-copy `MTLBuffer` over 4 KiB-scattered pages | plain 16 KiB-aligned control |
+|---|---|---|---|---|---|
+| native arm64 | 16384 | truncated to the 16 KiB boundary | whole 16 KiB page | nil | a buffer |
+| native arm64 with `_POSIX_SPAWN_FORCE_4K_PAGES` | — | — | — | — | — |
+| x86_64 under Rosetta | 4096 (`vm_kernel_page_size` 16384) | lands exactly, coherent with the source | a 4096-byte region at a 4 KiB offset | **nil**, even with the alias 16 KiB-aligned and 16 KiB long | a buffer |
+
+- **A 4 KiB address space is real on the shipping kernel, but only for Rosetta processes.** Every
+  native arm64 binary spawned with the flag fails with errno 88 (`EBADMACHO`), including
+  `/usr/bin/true`, a trivial program, and one code-signed with 4 KiB hash pages. An x86_64 binary
+  spawned with the flag runs. Apple's own test of the flag (`tests/vm/mixed_pagesize.plist`) is
+  marked `Disabled` (rdar://133462123), and the sysctl its launcher checks,
+  `debug.vm_mixed_pagesize_supported`, exists only on DEVELOPMENT/DEBUG kernels
+  (`bsd/vm/vm_unix.c:2491`).
+- **Even there, Metal refuses GPU access to 4 KiB-granular backing.** The Rosetta process builds a
+  correct 4 KiB-scattered alias, and `newBufferWithBytesNoCopy` returns nil for it however it is
+  aligned, while the plain control is accepted. The limit is below the address space. That is
+  consistent with the GPU's IOMMU working in 16 KiB pages, which Asahi Linux reports as the reason
+  M1 cannot run 4 KiB-page Linux with a working IOMMU. So no host-side remapping trick can present
+  4 KiB-scattered guest pages to the GPU.
+- **`hv_vm_map` with the 4 KiB IPA granule accepts host addresses that are 4 KiB- but not
+  16 KiB-aligned.** Three consecutive 4 KiB pieces of one host buffer mapped at scattered guest
+  addresses (`% 16K` = 0x1000, 0x2000, 0x3000) all returned `HV_SUCCESS`. This was checked at map
+  time only: no vCPU read through those mappings.
 
 ## Conclusions
 
@@ -72,12 +105,29 @@ Metal warm-up, not a per-import leak.
   pages were faulted in before the remap. Metal wiring the alias does not privatise it. Guest
   stores, GPU stores and host CPU reads through either mapping all agree, round after round, on
   the same buffer. The guest stays unharmed after teardown.
-- **A 4 KiB guest cannot have this, because of the remap rather than Metal.** An alias is built out
-  of whole 16 KiB host pages, so scattered 4 KiB guest pages cannot sit side by side in one. A
-  4 KiB userptr would also expose the other 12 KiB of its host page to the GPU, and that memory is
-  unrelated guest memory. The feature stays on the 16 KiB enhanced tier. The guest must report a
-  16 KiB `minImportedHostPointerAlignment`, and the host must refuse any page list that is not
-  16 KiB-aligned.
+- **Aliasing only serves 16 KiB guests, and the floor is the GPU, not just the remap.** The
+  worker's address space has 16 KiB pages, so an alias is built out of whole host pages and
+  scattered 4 KiB guest pages cannot sit side by side in one. A 4 KiB userptr would also expose the
+  other 12 KiB of its host page to the GPU, and that memory is unrelated guest memory. A 4 KiB
+  address space would not rescue it: native arm64 cannot get one, and where one exists (Rosetta)
+  Metal still refuses 4 KiB-scattered backing. The stage-2 IPA granule does not change this either:
+  it governs `hv_vm_map` (guest-physical → host), not the host task's own mappings or the GPU's.
+  So the alias route needs the guest to report a 16 KiB `minImportedHostPointerAlignment`, and the
+  host must refuse any page list that is not 16 KiB-aligned.
+- **A 4 KiB guest has a different candidate route: migrate instead of alias.** It needs the 4 KiB
+  stage-2 granule (`spikes/hv-ipa-granule/`, limina's default). The host allocates one contiguous
+  buffer, `hv_vm_unmap`s the guest's 4 KiB pages, copies them in, and `hv_vm_map`s each 4 KiB
+  piece of the buffer back at the original guest addresses. The guest's pages then *are* the
+  buffer, which is 16 KiB-granular backing the GPU accepts. Only the `hv_vm_map` step is measured
+  here, and three things stand in the way:
+  - libkrun's devices reach guest memory through a fixed linear guest → host map
+    (`GuestMemoryMmap`), so device DMA into migrated pages would land in the old host pages. The
+    memory model would need redirection for them.
+  - vCPUs touching the pages mid-migration must wait, as the balloon's heal path does, and freeing
+    the import has to reverse everything.
+  - `hv_vm_map` accepts the 4 KiB-aligned host addresses that consecutive pieces of one buffer
+    need, but only map-time acceptance is measured. A running guest has not yet read or written
+    through such a mapping.
 - **The cost is one VM map entry per non-contiguous run.** It is not per byte. A fully scattered
   128 MiB import takes 8191 entries, a 9 ms remap and 2.7 ms to wrap in a buffer. The same size in
   runs of 64 takes 128 entries and 0.2 ms. Coalescing runs is mandatory, and so is budgeting
