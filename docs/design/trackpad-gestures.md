@@ -160,12 +160,18 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   1.3 mm tap threshold), or two fingers stayed down 200 ms (`COMMIT_HOLD`; the guest then
   holds the touch at least 200 ms, `TAP_GUARD`, past libinput's 180 ms tap timeout). Every
   click goes to the tablet exactly as macOS recognised it, so the Mac's tap-to-click setting
-  governs two-finger taps over the VM, as it does one-finger ones.
-- **Wait 50 ms before telling the guest fingers lifted** (`THIN_GRACE`). AppKit's count
-  flickers mid-gesture (2→1→2, 2→0→2 within a frame); each dip passed on would show the guest
-  a lift and a fresh landing. A resting finger (macOS's reading of a thumb) does not start or
-  widen a sequence, but one the guest already holds keeps counting: macOS also marks fingers
-  resting when they merely hold still.
+  governs two-finger taps over the VM, as it does one-finger ones. That includes its latency:
+  macOS delivered each one-finger tap's click 220–250 ms after the lift (`battery-2`, with
+  tap-to-drag on), and limina forwards it as it arrives.
+- **Lift the moment every finger is up; wait 50 ms on a drop to one** (`THIN_GRACE`). A
+  kinetic scroll's velocity is read from the motion just before the lift, so fingers held
+  still in the guest past the real lift read as a stop and kill the momentum. AppKit's count
+  does flicker mid-gesture, but in the recordings only to one finger (dips of 0.4–155 ms),
+  never to none — so a drop to one waits out the grace and a drop to none lifts at once. The
+  motion the pacing held back goes out before the lift: dropped, a flick that loses a finger
+  just after committing shows the guest a still touch, which is a tap. A resting finger
+  (macOS's reading of a thumb) does not start or widen a sequence, but one the guest already
+  holds keeps counting: macOS also marks fingers resting when they merely hold still.
 - **Three fingers need the HID tap.** When macOS claims a three-finger swipe (the default
   setting), AppKit stops attaching touches to the app's gesture events: of ~8 000 gesture
   events in one poke, 57 carried three touches. The guest cannot see the swipe until the

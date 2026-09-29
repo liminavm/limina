@@ -101,8 +101,9 @@ pub struct TrackpadSeq {
     peak: usize,
     /// A guest-owned sequence not yet shown to the guest.
     uncommitted: Option<Uncommitted>,
-    /// When the guest's current touch committed ([`TAP_GUARD`]).
-    committed_at: Option<Instant>,
+    /// When the guest's current touch committed by holding still ([`TAP_GUARD`]). A touch
+    /// committed by moving can never be a tap, and lifts when the fingers do.
+    held_at: Option<Instant>,
     /// Whether the last *finished* sequence was the guest's — its momentum scroll keeps
     /// arriving after the fingers lift, and belongs to it.
     momentum_guest: bool,
@@ -123,7 +124,7 @@ impl TrackpadSeq {
             owner: None,
             peak: 0,
             uncommitted: None,
-            committed_at: None,
+            held_at: None,
             momentum_guest: false,
             last_touch: None,
             last_frame: None,
@@ -153,17 +154,18 @@ impl TrackpadSeq {
             .collect();
         let touches = touches.as_slice();
         self.last_touch = Some(now);
-        self.pending = None;
         let n = touches.len();
 
         if self.owner == Some(Owner::Guest) && n < 2 {
-            // Hold the guest's fingers where they are; [`Self::tick`] lifts them if this is a
-            // real lift rather than a flicker.
+            // Hold the guest's fingers where they are — the motion held back by the pacing
+            // still goes out, it is where they last were — and let [`Self::lift`] decide
+            // whether this is a real lift rather than a flicker.
             let since = self.thin.map_or(now, |(since, _)| since);
             self.thin = Some((since, n));
-            return Vec::new();
+            return self.lift(now);
         }
         self.thin = None;
+        self.pending = None;
 
         if n == 0 {
             self.end_sequence();
@@ -248,7 +250,6 @@ impl TrackpadSeq {
             return Vec::new();
         }
         let unc = self.uncommitted.take().expect("just inserted");
-        self.committed_at = Some(now);
         if moved {
             let landing: Vec<Contact> = contacts
                 .iter()
@@ -258,6 +259,7 @@ impl TrackpadSeq {
             self.pending = Some(contacts);
             events
         } else {
+            self.held_at = Some(now);
             self.send_frame(&contacts, now)
         }
     }
@@ -269,6 +271,7 @@ impl TrackpadSeq {
             self.peak = 0;
         }
         self.uncommitted = None;
+        self.held_at = None;
     }
 
     fn send_frame(&mut self, contacts: &[Contact], now: Instant) -> Vec<InputEvent> {
@@ -279,10 +282,45 @@ impl TrackpadSeq {
         events
     }
 
+    /// A guest-owned sequence down to fewer than two fingers: send the motion still held back
+    /// by the pacing once it is due — the guest must see the fingers move before they lift,
+    /// or a quick flick reads as a tap — then lift the guest's fingers, never inside the tap
+    /// guard. With every finger up that is at once: in the recordings a drop to none has
+    /// never been a flicker, and a kinetic scroll's velocity is read from the motion just
+    /// before the lift, so any wait reads as the fingers stopping. With one finger left it
+    /// waits out [`THIN_GRACE`], after which the sequence ends if none are down.
+    fn lift(&mut self, now: Instant) -> Vec<InputEvent> {
+        let Some((since, n)) = self.thin else {
+            return Vec::new();
+        };
+        let mut events = Vec::new();
+        if let Some(contacts) = self.pending.take() {
+            let due = self
+                .last_frame
+                .is_none_or(|t| now.duration_since(t) >= MIN_FRAME_INTERVAL);
+            if !due {
+                self.pending = Some(contacts);
+                return events;
+            }
+            events = self.send_frame(&contacts, now);
+        }
+        let graced = now.duration_since(since) >= THIN_GRACE;
+        if (n == 0 || graced) && (self.touchpad.active() == 0 || self.guarded(now)) {
+            events.extend(self.touchpad.release_all());
+            if graced {
+                self.thin = None;
+                if n == 0 {
+                    self.end_sequence();
+                }
+            }
+        }
+        events
+    }
+
     /// Whether the guest's touch has been down long enough that lifting it cannot read as a
     /// tap ([`TAP_GUARD`]).
     fn guarded(&self, now: Instant) -> bool {
-        self.committed_at
+        self.held_at
             .is_none_or(|t| now.duration_since(t) >= TAP_GUARD)
     }
 
@@ -290,16 +328,8 @@ impl TrackpadSeq {
     /// [`THIN_GRACE`] (and the tap guard), lift everything if the touch stream went silent
     /// ([`TOUCH_SILENCE`]), and send the motion held back by [`MIN_FRAME_INTERVAL`].
     pub fn tick(&mut self, now: Instant) -> Vec<InputEvent> {
-        if let Some((since, n)) = self.thin
-            && now.duration_since(since) >= THIN_GRACE
-            && (self.touchpad.active() == 0 || self.guarded(now))
-        {
-            self.thin = None;
-            self.pending = None;
-            if n == 0 {
-                self.end_sequence();
-            }
-            return self.touchpad.release_all();
+        if self.thin.is_some() {
+            return self.lift(now);
         }
         if let Some(t) = self.last_touch
             && self.touchpad.active() > 0
@@ -335,6 +365,7 @@ impl TrackpadSeq {
         self.pending = None;
         self.thin = None;
         self.uncommitted = None;
+        self.held_at = None;
         if self.owner.is_some() {
             self.owner = Some(Owner::Host);
         }
@@ -475,6 +506,8 @@ mod recordings {
     const TAP_MOVE_UNITS: i32 = 130; // 1.3 mm at 100 units/mm
 
     const BATTERY_1: &str = include_str!("../../testdata/trackpad/battery-1.jsonl");
+    /// Scrolls, flicks, pinches, and one- and two-finger taps and clicks, captured and not.
+    const BATTERY_2: &str = include_str!("../../testdata/trackpad/battery-2.jsonl");
 
     fn geometry() -> TouchpadGeometry {
         TouchpadGeometry::BUILT_IN
@@ -563,6 +596,11 @@ mod recordings {
     #[test]
     fn battery_1_gives_one_click_per_intended_click() {
         check(BATTERY_1);
+    }
+
+    #[test]
+    fn battery_2_gives_one_click_per_intended_click() {
+        check(BATTERY_2);
     }
 
     /// Not a check: writes a recording's replay for the guest-side libinput oracle
@@ -738,6 +776,7 @@ mod tests {
         let mut s = seq();
         let now = Instant::now();
         committed(&mut s, now);
+        s.tick(now + MIN_FRAME_INTERVAL);
         let later = now + TAP_GUARD;
         assert!(s.on_touches(&[t(2, 0.25, 0.2)], true, later).is_empty());
         assert!(lifted(&s.tick(later + THIN_GRACE)));
@@ -750,8 +789,8 @@ mod tests {
         let now = Instant::now();
         committed(&mut s, now);
         let up = now + TAP_GUARD;
-        s.on_touches(&[], true, up);
-        assert!(lifted(&s.tick(up + THIN_GRACE)));
+        assert!(lifted(&s.on_touches(&[], true, up)));
+        s.tick(up + THIN_GRACE);
         assert!(s.swallows_scroll(), "the momentum tail is the guest's");
         s.on_touches(&[t(3, 0.1, 0.1)], true, up + THIN_GRACE * 2);
         assert!(!s.swallows_scroll(), "a new touch ends the old momentum");
@@ -816,12 +855,52 @@ mod tests {
     }
 
     #[test]
+    fn a_flick_lifts_the_moment_the_fingers_do() {
+        // A kinetic scroll's velocity is read from the last motion before the lift; fingers
+        // held still in the guest past that read as a stop. A moved commit can never be a
+        // tap, so nothing is held back — including the motion still waiting on the pacing.
+        let mut s = seq();
+        let now = Instant::now();
+        committed(&mut s, now);
+        let up = now + MIN_FRAME_INTERVAL / 2;
+        assert!(
+            s.on_touches(&[], true, up).is_empty(),
+            "the motion is not due"
+        );
+        let ev = s.tick(now + MIN_FRAME_INTERVAL);
+        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 1500)));
+        assert!(lifted(&ev));
+        assert!(s.tick(up + THIN_GRACE).is_empty(), "lifted once");
+        assert!(s.swallows_scroll(), "the momentum tail is the guest's");
+        // After a lift with no motion held back, nothing waits at all.
+        let mut s = seq();
+        committed(&mut s, now);
+        s.tick(now + MIN_FRAME_INTERVAL);
+        assert!(lifted(&s.on_touches(&[], true, now + MIN_FRAME_INTERVAL)));
+    }
+
+    #[test]
+    fn a_flick_losing_a_finger_at_the_commit_still_shows_its_motion() {
+        // battery-2 at 171.67 s: the commit's motion was still held by the pacing when one
+        // finger lifted. Dropped, the guest saw a still touch lift 63 ms later — a tap.
+        let mut s = seq();
+        let now = Instant::now();
+        committed(&mut s, now);
+        assert!(s.on_touches(&[t(2, 0.25, 0.2)], true, now).is_empty());
+        let ev = s.tick(now + MIN_FRAME_INTERVAL);
+        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 1500)));
+        assert!(!lifted(&ev));
+        assert!(lifted(&s.tick(now + THIN_GRACE)));
+    }
+
+    #[test]
     fn a_count_flicker_does_not_lift_the_guests_fingers() {
         let mut s = seq();
         let now = Instant::now();
         committed(&mut s, now);
+        s.tick(now + MIN_FRAME_INTERVAL);
         let blip = now + TAP_GUARD;
-        assert!(s.on_touches(&[], true, blip).is_empty());
+        assert!(s.on_touches(&[t(2, 0.25, 0.2)], true, blip).is_empty());
         assert!(s.tick(blip).is_empty());
         let ev = s.on_touches(
             &[t(1, 0.15, 0.1), t(2, 0.26, 0.2)],

@@ -20,6 +20,7 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_RELBIT, UI_SET_ABSBIT = (
@@ -74,6 +75,9 @@ def main():
     events = [line.split() for line in lines[1:] if line and not line.startswith("#")]
 
     launched = time.monotonic()
+    # To a file, not a pipe: nothing reads a pipe until the replay ends, and once its buffer
+    # fills libinput blocks and every later event is lost.
+    capture = tempfile.TemporaryFile("w+")
     libinput = subprocess.Popen(
         [
             "stdbuf",
@@ -83,7 +87,7 @@ def main():
             "--enable-tap",
             "--set-click-method=clickfinger",
         ],
-        stdout=subprocess.PIPE,
+        stdout=capture,
         stderr=subprocess.STDOUT,
         text=True,
     )
@@ -127,7 +131,9 @@ def main():
         os.close(fd)
     time.sleep(0.5)
     libinput.terminate()
-    out = libinput.communicate()[0]
+    libinput.wait()
+    capture.seek(0)
+    out = capture.read()
     # Kept for a closer look: libinput's own times are seconds since it started, and the
     # replay's first event went out `offset` seconds after that.
     with open("/tmp/trackpad-oracle-libinput.log", "w") as f:
