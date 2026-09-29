@@ -55,10 +55,11 @@ gesture suppression). With it, the partition is:
 - **Four-finger guest gestures** (KDE Plasma binds some) are out of scope. If they are
   ever wanted, a chord (e.g. Fn) that maps a physical 3-finger sequence to four
   synthetic contacts is the route; the host keeps its physical four.
-- **Remote trackpads** (another Mac's, over Universal Control) carry no contacts, so they
-  cannot feed the device. Their gestures stay on the host path. See the open question on
-  their `NSTouch` data before deciding otherwise, because swallowing a remote gesture
-  that nothing forwards just loses it.
+- **Remote trackpads** (another Mac's, over Universal Control) cannot feed the device.
+  They produce no raw contacts, and their forwarded `NSTouch`es have no device and no
+  readable position (measured). Their gestures therefore stay on the host path: the swallow
+  must count **local touches only** (touches with a device, or the local raw count), or a
+  remote gesture that nothing forwards is simply lost.
 
 ## Host side: touch source and device config
 
@@ -68,6 +69,9 @@ gesture suppression). With it, the partition is:
   - **AppKit indirect touches** — `NSView.allowedTouchTypes = .indirect`, then
     `touchesBegan/Moved/Ended`. Per finger: normalized `[0,1]` position, stable
     identity, phase, plus `deviceSize` in points.
+  - The same `NSTouch` data can be read from the HID tap's gesture events with
+    `NSEvent(cgEvent:).allTouches()`, whatever window is under the cursor. For local
+    trackpads it matches the raw stream to ~0.001 (measured).
 - **Device config (round one):** `EV_ABS` with `ABS_MT_SLOT` (3 slots),
   `ABS_MT_TRACKING_ID`, `ABS_MT_POSITION_X/Y` + legacy `ABS_X/Y`; `EV_KEY` with
   `BTN_TOUCH`, `BTN_TOOL_FINGER`, `BTN_TOOL_DOUBLETAP`, `BTN_TOOL_TRIPLETAP`,
@@ -278,9 +282,6 @@ Space-change notification plus the Dock's window layers.
 - Does the HID tap stop two-finger system gestures (the right-edge Notification Center
   swipe, smart zoom, Look Up) when swallowing at count 2? Only 3- and 4-finger swipes are
   measured.
-- Do the `NSTouch`es on Universal Control-forwarded gesture events carry positions? If so,
-  remote trackpads could feed the device too, and swallowing their 2/3-finger gestures
-  would stop losing them.
 
 - Does AppKit deliver indirect `NSTouch` events to a non-key window under the cursor,
   the way it delivers scroll events? Don't assume — probe empirically. If not, MT
@@ -297,8 +298,9 @@ Space-change notification plus the Dock's window layers.
   acts on them, and they carry pid 0 like local input (`RESULTS.md` §hidwatch). The
   swallowing tap suppresses them too, and `NSEvent(cgEvent:).allTouches().count` reports
   their finger count (3 and 4 measured). A selective tap keyed on that count covers remote
-  trackpads too (measured, `RESULTS.md` §hidtap-3ns). The MT device cannot serve remote
-  input, which has no contacts.
+  trackpads too (measured, `RESULTS.md` §hidtap-3ns). But the MT device cannot serve
+  remote input — no contacts, and its `NSTouch`es carry no device or position — so limina
+  must *not* swallow remote gestures.
 - Only a tap that is already installed and filters per event on the live count is
   measured. A tap *installed* at count determination would have to beat the recognizer
   (Dock transition windows appeared ~180–280 ms after touchdown), so don't build that one.
