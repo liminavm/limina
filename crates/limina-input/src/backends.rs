@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! Worker-side virtio-input backends (keyboard + absolute pointer).
+//! Worker-side virtio-input backends (keyboard, absolute and relative pointers, touchpad).
 //!
 //! Each device is a `(config, events)` pair registered with libkrun via the safe Rust
 //! `IntoInput*` wrappers (decision D2.1 — no hand-written `repr(C)` vtables). The *config*
@@ -29,6 +29,7 @@ use krun_input::{
 use crate::WIRE_LEN;
 use crate::constants::*;
 use crate::router::{self, HidReportSink};
+use crate::touchpad::{MAX_SLOTS, MAX_TRACKING_ID, TOUCHPAD_RES, TouchpadGeometry};
 
 /// Userdata carrying the read socket for a device's event stream, plus (for the keyboard) the
 /// flag published while the guest holds the device. `RawFd` is `Copy + Sync` and `Arc<Atomic*>`
@@ -294,6 +295,109 @@ impl InputQueryConfig for RelPointerConfig {
     }
 }
 
+/// Touchpad config: a multitouch clickpad (protocol B, [`MAX_SLOTS`] slots) that the guest's
+/// libinput classifies as a touchpad and runs its own gestures on. `abs_info.res` is set on
+/// every position axis — libinput needs the physical size to classify and tune a touchpad.
+/// The host-side encoder is [`crate::touchpad::Touchpad`].
+pub struct TouchpadConfig {
+    geometry: TouchpadGeometry,
+}
+
+impl ObjectNew<TouchpadGeometry> for TouchpadConfig {
+    fn new(userdata: Option<&TouchpadGeometry>) -> Self {
+        Self {
+            geometry: userdata.copied().unwrap_or_default(),
+        }
+    }
+}
+
+impl InputQueryConfig for TouchpadConfig {
+    fn query_device_name(&self, name_buf: &mut [u8]) -> Result<u8, InputBackendError> {
+        Ok(copy_name(TOUCHPAD_DEVICE_NAME, name_buf))
+    }
+
+    fn query_serial_name(&self, name_buf: &mut [u8]) -> Result<u8, InputBackendError> {
+        Ok(copy_name(TOUCHPAD_SERIAL_NAME, name_buf))
+    }
+
+    fn query_device_ids(&self, ids: &mut InputDeviceIds) -> Result<(), InputBackendError> {
+        *ids = InputDeviceIds {
+            bustype: BUS_VIRTUAL,
+            vendor: LIMINA_VENDOR_ID,
+            product: TOUCHPAD_PRODUCT_ID,
+            version: 1,
+        };
+        Ok(())
+    }
+
+    fn query_event_capabilities(
+        &self,
+        event_type: u8,
+        bitmap_buf: &mut [u8],
+    ) -> Result<u8, InputBackendError> {
+        Ok(match event_type as u16 {
+            EV_KEY => write_bitmap(
+                bitmap_buf,
+                &[
+                    BTN_LEFT,
+                    BTN_TOOL_FINGER,
+                    BTN_TOUCH,
+                    BTN_TOOL_DOUBLETAP,
+                    BTN_TOOL_TRIPLETAP,
+                ],
+            ),
+            EV_ABS => write_bitmap(
+                bitmap_buf,
+                &[
+                    ABS_X,
+                    ABS_Y,
+                    ABS_MT_SLOT,
+                    ABS_MT_POSITION_X,
+                    ABS_MT_POSITION_Y,
+                    ABS_MT_TRACKING_ID,
+                ],
+            ),
+            _ => 0,
+        })
+    }
+
+    fn query_abs_info(
+        &self,
+        abs_axis: u8,
+        abs_info: &mut InputAbsInfo,
+    ) -> Result<(), InputBackendError> {
+        let position = |max: u32| InputAbsInfo {
+            min: 0,
+            max,
+            fuzz: 0,
+            flat: 0,
+            res: TOUCHPAD_RES,
+        };
+        let range = |max: u32| InputAbsInfo {
+            min: 0,
+            max,
+            fuzz: 0,
+            flat: 0,
+            res: 0,
+        };
+        match abs_axis as u16 {
+            ABS_X | ABS_MT_POSITION_X => *abs_info = position(self.geometry.width),
+            ABS_Y | ABS_MT_POSITION_Y => *abs_info = position(self.geometry.height),
+            ABS_MT_SLOT => *abs_info = range(MAX_SLOTS as u32 - 1),
+            ABS_MT_TRACKING_ID => *abs_info = range(MAX_TRACKING_ID as u32),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn query_properties(&self, bitmap: &mut [u8]) -> Result<u8, InputBackendError> {
+        Ok(write_bitmap(
+            bitmap,
+            &[INPUT_PROP_POINTER, INPUT_PROP_BUTTONPAD],
+        ))
+    }
+}
+
 fn copy_name(name: &[u8], buf: &mut [u8]) -> u8 {
     let n = name.len().min(buf.len());
     buf[..n].copy_from_slice(&name[..n]);
@@ -365,6 +469,26 @@ pub fn rel_pointer_backends(
     }));
     (
         RelPointerConfig::into_input_config(None),
+        FdEvents::into_input_events(Some(cfg)),
+    )
+}
+
+/// Build the multitouch touchpad backend pair. `fd` is the worker's read end of the touchpad
+/// event socket (inherited from the supervisor); `geometry` is the host trackpad's surface.
+pub fn touchpad_backends(
+    fd: RawFd,
+    geometry: TouchpadGeometry,
+) -> (
+    InputConfigBackend<'static>,
+    InputEventProviderBackend<'static>,
+) {
+    let cfg: &'static FdConfig = Box::leak(Box::new(FdConfig {
+        fd,
+        activated: None,
+    }));
+    let geometry: &'static TouchpadGeometry = Box::leak(Box::new(geometry));
+    (
+        TouchpadConfig::into_input_config(Some(geometry)),
         FdEvents::into_input_events(Some(cfg)),
     )
 }

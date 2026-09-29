@@ -30,6 +30,12 @@ pub const REL_HWHEEL_HI_RES: u16 = 0x0c;
 pub const ABS_X: u16 = 0x00;
 pub const ABS_Y: u16 = 0x01;
 
+// EV_ABS multitouch codes (the touchpad; protocol B — slots + tracking ids).
+pub const ABS_MT_SLOT: u16 = 0x2f;
+pub const ABS_MT_POSITION_X: u16 = 0x35;
+pub const ABS_MT_POSITION_Y: u16 = 0x36;
+pub const ABS_MT_TRACKING_ID: u16 = 0x39;
+
 /// Logical range limina advertises for the absolute pointer on each axis. The supervisor
 /// scales window-local cursor coordinates into `0..=ABS_MAX`, so the device geometry is
 /// independent of the (resizable) window size.
@@ -40,9 +46,18 @@ pub const BTN_LEFT: u16 = 0x110;
 pub const BTN_RIGHT: u16 = 0x111;
 pub const BTN_MIDDLE: u16 = 0x112;
 
+// Touchpad contact keys (EV_KEY). BTN_TOUCH is "at least one finger down"; exactly one
+// BTN_TOOL_* is down at a time and names how many.
+pub const BTN_TOOL_FINGER: u16 = 0x145;
+pub const BTN_TOUCH: u16 = 0x14a;
+pub const BTN_TOOL_DOUBLETAP: u16 = 0x14d;
+pub const BTN_TOOL_TRIPLETAP: u16 = 0x14e;
+
 // Input device properties (INPUT_PROP_*).
 /// Marks the absolute device as a pointer (cursor follows it), not a direct touchscreen.
 pub const INPUT_PROP_POINTER: u16 = 0x00;
+/// A clickpad: the whole surface is the button (BTN_LEFT), no separate physical buttons.
+pub const INPUT_PROP_BUTTONPAD: u16 = 0x02;
 
 /// Bus type reported in the device IDs (`BUS_VIRTUAL`).
 pub const BUS_VIRTUAL: u16 = 0x06;
@@ -52,6 +67,7 @@ pub const LIMINA_VENDOR_ID: u16 = u16::from_le_bytes(*b"GK");
 pub const KEYBOARD_PRODUCT_ID: u16 = 0x0001;
 pub const POINTER_PRODUCT_ID: u16 = 0x0002;
 pub const REL_POINTER_PRODUCT_ID: u16 = 0x0003;
+pub const TOUCHPAD_PRODUCT_ID: u16 = 0x0004;
 
 pub const KEYBOARD_DEVICE_NAME: &[u8] = b"limina Virtual Keyboard";
 pub const KEYBOARD_SERIAL_NAME: &[u8] = b"LIMINA-KBD";
@@ -59,6 +75,8 @@ pub const POINTER_DEVICE_NAME: &[u8] = b"limina Virtual Pointer";
 pub const POINTER_SERIAL_NAME: &[u8] = b"LIMINA-PTR";
 pub const REL_POINTER_DEVICE_NAME: &[u8] = b"limina Virtual Mouse";
 pub const REL_POINTER_SERIAL_NAME: &[u8] = b"LIMINA-REL";
+pub const TOUCHPAD_DEVICE_NAME: &[u8] = b"limina Virtual Touchpad";
+pub const TOUCHPAD_SERIAL_NAME: &[u8] = b"LIMINA-TPD";
 
 // Keyboard keys (KEY_*). Numbering matches the kernel; see SUPPORTED_KEYBOARD_KEYS.
 pub const KEY_ESC: u16 = 1;

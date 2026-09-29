@@ -447,7 +447,8 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec, disks: &[DiskSpec])
     Ok(())
 }
 
-/// Attach a virtio-keyboard and a virtio-absolute-pointer. Each reads evdev events the
+/// Attach a virtio-keyboard and a virtio-absolute-pointer, plus the optional relative mouse
+/// and multitouch touchpad. Each reads evdev events the
 /// supervisor writes (as 8-byte datagrams) to an inherited socket fd; we register the
 /// native Rust backends (D2.1) on those fds. libkrun attaches the devices iff
 /// `input_backends` is non-empty.
@@ -462,10 +463,12 @@ fn add_input(
     hid_sink: Option<limina_input::router::HidReportSink>,
 ) {
     log::info!(
-        "virtio-input: keyboard fd={}, pointer fd={}, rel-pointer fd={}",
+        "virtio-input: keyboard fd={}, pointer fd={}, rel-pointer fd={}, touchpad fd={} ({:?})",
         input.kbd_fd,
         input.ptr_fd,
-        input.rel_ptr_fd
+        input.rel_ptr_fd,
+        input.touchpad_fd,
+        input.touchpad_geometry
     );
     vmr.input_backends
         .push(limina_input::backends::keyboard_backends(
@@ -479,6 +482,13 @@ fn add_input(
         vmr.input_backends
             .push(limina_input::backends::rel_pointer_backends(
                 input.rel_ptr_fd,
+            ));
+    }
+    if input.touchpad_fd >= 0 {
+        vmr.input_backends
+            .push(limina_input::backends::touchpad_backends(
+                input.touchpad_fd,
+                input.touchpad_geometry,
             ));
     }
 }

@@ -31,6 +31,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use limina_input::touchpad::TouchpadGeometry;
 use limina_launch::connect::ListenAt;
 
 use crate::config::{
@@ -307,6 +308,16 @@ struct Cli {
     #[arg(long, requires = "input_ptr_fd")]
     input_rel_ptr_fd: Option<i32>,
 
+    /// fd of the touchpad event socket (supervisor→worker). Enables the virtio multitouch
+    /// touchpad the guest runs its own gestures on. Optional; requires the pointer pair.
+    #[arg(long, requires = "input_ptr_fd")]
+    input_touchpad_fd: Option<i32>,
+
+    /// The touchpad's surface in 0.01 mm, `WxH` (the host trackpad's real size; libinput reads
+    /// it once at probe). Defaults to the built-in 124.8 × 76.8 mm.
+    #[arg(long, value_parser = parse_touchpad_size, requires = "input_touchpad_fd")]
+    input_touchpad_size: Option<TouchpadGeometry>,
+
     /// Write a VM snapshot to this path on a SIGUSR1 suspend trigger (M9 suspend/resume). When set,
     /// the worker installs a SIGUSR1 handler; on signal it quiesces the vCPUs, serializes
     /// vCPU+GIC+RAM to the file, and exits 126 ("snapshotted"). The supervisor drives the trigger
@@ -348,6 +359,12 @@ fn parse_display_size(s: &str) -> Result<(u32, u32)> {
         .parse::<u32>()
         .map_err(|e| anyhow::anyhow!("invalid display height {h:?}: {e}"))?;
     Ok((width, height))
+}
+
+fn parse_touchpad_size(s: &str) -> Result<TouchpadGeometry> {
+    TouchpadGeometry::parse(s).ok_or_else(|| {
+        anyhow::anyhow!("touchpad size must be WIDTHxHEIGHT in 0.01 mm, both nonzero, got {s:?}")
+    })
 }
 
 /// Parse a `--share TAG=PATH[:ro]` spec. The `=` split is first-match so the path may
@@ -699,6 +716,8 @@ fn main() -> Result<()> {
             kbd_fd,
             ptr_fd,
             rel_ptr_fd: cli.input_rel_ptr_fd.unwrap_or(-1),
+            touchpad_fd: cli.input_touchpad_fd.unwrap_or(-1),
+            touchpad_geometry: cli.input_touchpad_size.unwrap_or_default(),
         }),
         _ => None,
     };

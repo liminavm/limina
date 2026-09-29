@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use limina_input::touchpad::TouchpadGeometry;
 use limina_launch::connect::ListenAt;
 
 /// A disk to attach to the guest. Presented as virtio-blk (`vdaN`, in order).
@@ -180,6 +181,10 @@ pub struct InputSpec {
     /// tablet; this device carries the edge-clamped overflow as pressure (mutter barriers /
     /// GNOME hot corner) and seeds a future explicit mouselook mode.
     pub rel_ptr_fd: i32,
+    /// Read end of the multitouch touchpad event socket, or `-1` if no touchpad is attached.
+    pub touchpad_fd: i32,
+    /// The touchpad's surface, as the guest is told it at probe.
+    pub touchpad_geometry: TouchpadGeometry,
 }
 
 /// How the guest boots.
