@@ -126,9 +126,11 @@ recognizer. Setting: "three or four fingers" (the default).
 ### `hidwatch` — a remote trackpad over Universal Control
 
 A listen-only HID tap over every event type, logging each event's type and
-`kCGEventSourceUnixProcessID`. For 60 s the user drove this Mac from the *other* Mac's
-trackpad through Universal Control (move, click, two-finger scroll, pinch, 3- and
-4-finger swipes), then did a two-finger scroll on the local trackpad for comparison.
+`kCGEventSourceUnixProcessID`. For 60 s the user drove this Mac from the *other*
+Mac through Universal Control, using two remote devices: a Bluetooth Magic Trackpad
+paired with the other Mac (move, click, two-finger scroll, pinch, 3-finger swipes), then
+the other Mac's built-in trackpad (4-finger swipes). A two-finger scroll on the local
+trackpad followed, for comparison. Both remote devices behaved the same.
 
 - **The remote trackpad produces no raw contacts here.** MultitouchSupport enumerates
   local devices only. The run's only raw frames were the local comparison scroll.
