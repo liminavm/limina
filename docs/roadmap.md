@@ -259,6 +259,33 @@ same device through vrend → zink-on-KosmicKrisp. **`docs/graphics.md` is the a
 **Owed:** guest-tools distribution from the app (M5); the upstream queue
 (`docs/upstreaming/ledger/`); the open graphics items in `docs/graphics.md`.
 
+### `VK_EXT_external_memory_host` for venus guests
+
+Lets a guest app hand Vulkan its own memory (rusticl `CL_MEM_USE_HOST_PTR`, `GL_AMD_pinned_memory`
+through guest zink, ffmpeg, DXVK/vkd3d-proton). Nothing offers it today. The host driver has it
+(`kk_physical_device.c:180`), but venus-protocol does not carry `VkImportMemoryHostPointerInfoEXT`:
+the extension is absent from the generated venus table, so virglrs never offers it and guest venus
+never implements it. It needs four pieces:
+
+- **Guest kernel: a userptr blob.** Pin the range and send its page list as a guest-memory blob.
+  This is AMD's virtio-gpu userptr series, driven by ROCm. As of 2026-09-29 it is an RFC (v9
+  posted to dri-devel 2026-09-24) with no maintainer ack, and its UAPI flags have changed between
+  versions. Carry its shape on the `limina` kernel branch behind our own probe, and rebase when it
+  lands.
+- **Guest mesa (`limina-guest`, `src/virtio/vulkan`): the extension itself, translated rather than
+  forwarded.** Advertise it, answer `vkGetMemoryHostPointerPropertiesEXT` locally with the
+  host-visible types, and turn an import into "create a userptr blob, then import it as a resource"
+  (`VkImportMemoryResourceInfoMESA`, which the protocol already has). Report a 16 KiB
+  `minImportedHostPointerAlignment` wherever the host can only alias.
+- **virglrs: make a guest-memory blob importable.** Today it is creatable but not importable
+  (`src/renderer.rs:249`). Stitch its pages into one host range, import that through the
+  host-pointer path venus allocations already use, and say in the capset that it can.
+- **Host granularity.** Aliasing needs 16 KiB-contiguous backing (`spikes/userptr-remap-metal/`).
+  Anything finer needs the migration mechanism (M6 §Guest-memory migration).
+
+Done test: a guest imports a `malloc`'d buffer, the GPU reads and writes it, and a CPU check in the
+guest agrees, on a 16 KiB guest and on a 4 KiB one.
+
 ---
 
 ## Milestone 5 — Control plane, clipboard, virtiofs, guest agent
@@ -335,6 +362,37 @@ Tests: `balloon.rs` (FRQ reclaim drops `phys_footprint`), `balloon_inflate.rs`, 
 
 **Owed:** virtio-mem (absent from libkrun; large) stays deferred; a host-page-aware
 `mm/page_reporting.c` is cheap to carry if the stock-tier coalescing waste proves material.
+
+### Guest-memory migration — choosing the host memory behind guest pages
+
+One generic mechanism: move live guest pages onto host memory the host chooses, without the guest
+noticing. Unmap the pages at stage-2, copy them, and map the new memory at the same guest-physical
+addresses. With the 4 KiB IPA granule this works at 4 KiB. Consumers:
+
+- **GPU imports finer than 16 KiB.** This covers the 4 KiB-scattered pages of a userptr (M4
+  §`VK_EXT_external_memory_host`) and the ragged remainder of a udmabuf (M15 Wave 6). Migrate the
+  pages into one 16 KiB-contiguous buffer and let the GPU take the buffer. This replaces the
+  `memcpy` snapshot and stays coherent. No host-side remap can serve these instead: Metal refuses
+  4 KiB-scattered backing even inside a real 4 KiB address space.
+- **Defragmenting a highly ballooned guest.** Consolidate what long balloon churn leaves scattered.
+  Measure first what that scatter actually costs: stage-2 mapping count, host VM regions, TLB
+  reach, `phys_footprint`.
+
+Established (`spikes/userptr-remap-metal/`, measured 2026-09-29): with the 4 KiB granule,
+`hv_vm_map` accepts consecutive 4 KiB pieces of one host buffer at scattered guest addresses,
+including host addresses that are 4 KiB- but not 16 KiB-aligned. That is map-time only; no guest
+has read or written through such a mapping yet.
+
+**Owed, in order:**
+1. **A guest that runs through migrated pages.** Before building anything: a bare-metal guest
+   reads and writes across a migration, with a vCPU racing it.
+2. **libkrun's memory model.** Devices reach guest RAM through `GuestMemoryMmap`'s fixed linear
+   guest → host map, so device DMA into a migrated page would land in the old host memory. It needs
+   a redirection layer that virtio queues, blob iovecs, snapshot and the balloon all read.
+3. **The migration itself.** A vCPU touching a page mid-migration waits, like the balloon's heal
+   path in `released_ram.rs`. The reverse path runs when the consumer goes away. The balloon must
+   never release a migrated page under a live import: a release is `MADV_FREE_REUSABLE` on the
+   backing, so it would silently hand the GPU reclaimed pages.
 
 ### Dynamic vCPU offlining — the CPU sibling of ballooning
 
@@ -795,12 +853,16 @@ host-side copy**. The naming symptom of a break is `Illegal resource`.
 - **Phase 2 — venus imports an iov-backed resource.** The pages are visible in the worker; what is
   missing is contiguity. Stitch them into one host VA with `mach_vm_remap` (share, don't copy) and
   import through the host-pointer route (`VK_EXT_external_memory_host` → KK →
-  `newBufferWithBytesNoCopy`).
+  `newBufferWithBytesNoCopy`). The host half is measured in `spikes/userptr-remap-metal/`: the
+  alias stays coherent both ways across GPU and guest writes, and costs one VM map entry per
+  non-contiguous run. The KK import itself is not yet exercised.
 - **Phase 3 — pinning and granularity.** A remap needs each 16 KiB-aligned buffer offset on 16 KiB
   aligned, contiguous backing — **guest page size is the wrong variable**: a 16k guest satisfies it,
   but so do buddy-order-2 allocations and THP/hugetlb memfds on a stock 4 KiB guest. Make the
   granularity a hint, and have the host remap qualifying slots and `memcpy` only the ragged remainder,
-  so degradation is proportional (a copied slot is a snapshot — fine for write-once frames). Pages
+  so degradation is proportional (a copied slot is a snapshot — fine for write-once frames).
+  Migrating the ragged slots instead of copying them (M6 §Guest-memory migration) would make them
+  zero-copy and coherent too. Pages
   Metal has wired must be pinned against the balloon/FRQ path for the resource's lifetime — reconcile
   with `docs/design/m6-dynamic-memory.md` before writing phase 2. Rationale:
   `docs/design/16k-page-requirement.md`.

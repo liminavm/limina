@@ -117,7 +117,10 @@ macOS 26.6.2:
   Metal still refuses 4 KiB-scattered backing. The stage-2 IPA granule does not change this either:
   it governs `hv_vm_map` (guest-physical → host), not the host task's own mappings or the GPU's.
   So the alias route needs the guest to report a 16 KiB `minImportedHostPointerAlignment`, and the
-  host must refuse any page list that is not 16 KiB-aligned.
+  host must refuse any page list that is not 16 KiB-aligned. Strictly, the requirement is
+  16 KiB-contiguous backing for every 16 KiB slot, not a 16 KiB guest. A 16 KiB guest always meets
+  it. A 4 KiB guest meets it only where its allocator happened to hand out aligned, contiguous
+  16 KiB (buddy order ≥ 2, THP), as the Rosetta in-order block shows.
 - **A 4 KiB guest has a different candidate route: migrate instead of alias.** It needs the 4 KiB
   stage-2 granule (`spikes/hv-ipa-granule/`, limina's default). The host allocates one contiguous
   buffer, `hv_vm_unmap`s the guest's 4 KiB pages, copies them in, and `hv_vm_map`s each 4 KiB
