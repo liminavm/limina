@@ -213,6 +213,35 @@ var hidTap: CFMachPort?
 // count/allTouches count" → occurrences; logged once a second. Answers
 // whether a forwarded (Universal Control) gesture event carries its fingers.
 var touchHist: [String: Int] = [:]
+// hidwatch: sample the NSTouch data on gesture events (every 10th event with
+// touches, plus every count change): does a Universal Control-forwarded event
+// carry positions, identities and a device size the guest MT device could use?
+var touchEvents = 0
+var lastLoggedCount = 0
+var touchIdentities: [String: Int] = [:]
+func logTouches(_ touches: Set<NSTouch>, _ n: Int) {
+    touchEvents += 1
+    guard n != lastLoggedCount || touchEvents % 10 == 0 else { return }
+    lastLoggedCount = n
+    // Touches forwarded by Universal Control have no device, a 0x0 deviceSize,
+    // and normalizedPosition does not return normally for them: never read a
+    // position without a device.
+    if touches.contains(where: { $0.device == nil }) {
+        let phases = touches.map { "\($0.phase.rawValue)" }.joined(separator: ",")
+        log("NSTCH", "raw\(liveCount) ns\(n) NO DEVICE (phases \(phases))")
+        return
+    }
+    let body = touches.sorted { $0.normalizedPosition.x < $1.normalizedPosition.x }.map { t -> String in
+        let key = "\(t.identity.hash)"
+        let id = touchIdentities[key] ?? { let v = touchIdentities.count; touchIdentities[key] = v; return v }()
+        return String(format: "[t%d ph%lu (%.3f,%.3f) %@]", id, t.phase.rawValue,
+                      t.normalizedPosition.x, t.normalizedPosition.y, t.isResting ? "rest" : "")
+    }.joined(separator: " ")
+    let size = touches.first.map { String(format: "%.0fx%.0f pt", $0.deviceSize.width, $0.deviceSize.height) } ?? "-"
+    let dev = touches.first.map { "\(ObjectIdentifier($0.device as AnyObject).hashValue & 0xffff)" } ?? "-"
+    log("NSTCH", "raw\(liveCount) ns\(n) dev\(dev) size \(size) " + body)
+}
+
 // hidtap-3ns: the sequence's peak AppKit touch count. Counts of 0–2
 // interleave while fingers land and lift, so a sequence ends only after
 // 150 ms without a nonzero count.
@@ -220,7 +249,9 @@ var nsPeak = 0
 var nsLastNonzero = 0.0
 func noteTouches(_ type: CGEventType, _ event: CGEvent) {
     guard type.rawValue == 29, let ns = NSEvent(cgEvent: event) else { return }
-    let n = ns.allTouches().count
+    let touches = ns.allTouches()
+    let n = touches.count
+    if arm == "hidwatch" && n > 0 { logTouches(touches, n) }
     touchHist["raw\(liveCount)/ns\(n)", default: 0] += 1
     let now = ProcessInfo.processInfo.systemUptime
     if now - nsLastNonzero > 0.15 { nsPeak = 0 }

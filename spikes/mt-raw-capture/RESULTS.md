@@ -190,6 +190,30 @@ The user confirmed that every 3-finger swipe, local and remote, was inert and ev
 *suppression* decision; it is still what feeds the guest MT device, for local trackpads
 only.
 
+### `NSTouch` data on gesture events — local complete, remote hollow
+
+The listen-only `hidwatch` arm logged `NSEvent(cgEvent:).allTouches()` on gesture (type 29)
+events: every touch's identity, phase, normalized position, device and device size.
+
+- **Local trackpad: complete.**
+  - Positions match the raw stream to ~0.001 (e.g. NSTouch (0.364, 0.421) vs raw
+    (0.365, 0.421)).
+  - Identities are stable across a sequence, and phases run began → moved/stationary →
+    ended.
+  - `deviceSize` is 351 × 215 pt.
+  - This is available from the HID tap for any local gesture, whatever window is under
+    the cursor.
+- **Remote trackpad (Universal Control): hollow.**
+  - `device` is nil and `deviceSize` is 0 × 0. Identity and phase are present, and so is
+    the count.
+  - `normalizedPosition` does not return normally: the probe's logging stopped at that
+    call on every remote event, with nothing printed.
+  - The probe now checks for a device before reading a position.
+- **Consequence: remote trackpads cannot feed the guest MT device.** Their 2/3-finger
+  gestures must stay the host's, so the swallow decision has to count only local touches
+  (touches with a device, or the local raw count). `hidtap-3ns` as run counted remote
+  touches too, and in limina that would swallow remote gestures that nothing forwards.
+
 ### `parser-off` — suppresses everything, leaks, rejected
 
 `MTDeviceSetParserEnabled(dev, Bool) -> OSStatus` and `MTDeviceGetParserEnabled(dev,
