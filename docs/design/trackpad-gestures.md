@@ -1,11 +1,10 @@
 # Trackpad gestures: a guest-side multitouch device with strict contact ownership
 
 Status: DESIGN. MT device not implemented. The companion quick win SHIPPED 2026-07-28:
-hi-res scroll (f1a8e56) — see §Independent quick win. **Host gesture suppression is
-measured to work** for the 3- and 4-finger swipes (Spaces, Mission Control): an
-HID-level event tap makes them inert without touching pointer, scroll, clicks or haptics. That falsifies the premise behind the
-ownership rule, and what the rule becomes is an open decision — see §Raw multitouch
-capture and gesture suppression.
+hi-res scroll (f1a8e56) — see §Independent quick win. Ownership decided (§The ownership
+rule): the guest owns 2- and 3-finger sequences in seamless mode and under capture alike,
+made possible by a measured HID-level event tap that suppresses the host's gestures per
+finger count (§Raw multitouch capture and gesture suppression).
 
 ## Why
 
@@ -27,93 +26,81 @@ virtio_input + libinput; pure additive, two-tier clean).
 
 ## The ownership rule (the load-bearing decision)
 
-macOS's WindowServer recognizes 3+-finger gestures (Mission Control, Spaces, Launchpad)
-at the system level and acts on them whichever app receives the touches. The session-level
-tap limina uses for capture cannot see them, so forwarding those contacts without further
-measures guarantees double-interpretation. An **HID-level** tap can suppress them
-(measured — §Raw multitouch capture and gesture suppression). The partition below is the
-round-one design written before that was known; it holds only as long as limina does not
-suppress:
+macOS's WindowServer recognizes multi-finger gestures (Spaces, Mission Control, App
+Exposé, Launchpad) at the system level and acts on them whichever app receives the
+touches. Unclaimed multi-finger contacts become ordinary cooked scroll. Forwarding
+contacts to the guest therefore also needs a way to stop the host from acting on them. An
+**HID-level event tap** does that per finger count (measured — §Raw multitouch capture and
+gesture suppression). With it, the partition is:
 
 | physical contacts | owner | delivered to guest as |
 |---|---|---|
 | 1 finger | **host** (tablet, host pointer ballistics) | `ABS_X/Y` tablet motion, as today |
-| 2 fingers | **guest** (scroll + pinch) | real MT contact pair on the new device |
-| 2 fingers + Fn held | **guest** | fully **synthetic 3-finger** group (see below) |
-| 3+ physical fingers | **host, forever** | nothing — never forwarded |
+| 2 fingers | **guest** — scroll, pinch, rotate | real MT contacts on the new device |
+| 3 fingers | **guest** — swipes (GNOME ≥40 binds everything to 3) | real MT contacts on the new device |
+| 4+ fingers | **host** — Spaces, Mission Control stay usable | nothing |
 
-Single-finger sequences are never forwarded, so the MT device never drives the guest
-cursor and cannot fight the tablet for it — that restriction is what makes a
-guest-side touchpad compatible with the seamless host-cursor=guest-cursor model. Full MT
-forwarding (1-finger motion included) is a possible *hard-capture* refinement later; it
-is explicitly out of scope for round one, and the 3+-finger ignore rule stays global
-(capture included) because host gesture recognition fires regardless of our capture
-state.
+- **It applies in seamless mode and under capture alike**, gated on the cursor being over
+  the VM view.
+  - The cost is that host gestures at 2 and 3 fingers (three-finger Spaces swipes on the
+    default "three or four" setting, the right-edge Notification Center swipe) do nothing
+    over the VM.
+  - Four fingers stay the host's, so every host gesture remains reachable. Revisit if this
+    causes friction in use.
+- **Single-finger sequences are never forwarded**, so the MT device never drives the guest
+  cursor and cannot fight the tablet for it. That restriction is what makes a guest-side
+  touchpad compatible with the seamless host-cursor = guest-cursor model.
+  - Full MT forwarding (1-finger motion included) is a possible *hard-capture* refinement
+    later.
+- **Four-finger guest gestures** (KDE Plasma binds some) are out of scope. If they are
+  ever wanted, a chord (e.g. Fn) that maps a physical 3-finger sequence to four
+  synthetic contacts is the route; the host keeps its physical four.
+- **Remote trackpads** (another Mac's, over Universal Control) carry no contacts, so they
+  cannot feed the device. Their gestures stay on the host path. See the open question on
+  their `NSTouch` data before deciding otherwise, because swallowing a remote gesture
+  that nothing forwards just loses it.
 
 ## Host side: touch source and device config
 
-- **Source:** AppKit indirect touches — `NSView.allowedTouchTypes = .indirect`, then
-  `touchesBegan/Moved/Ended`. Per finger: normalized `[0,1]` position, stable identity,
-  phase, plus `deviceSize` in points. Not raw HID, but exactly the shape a Linux MT
-  touchpad reports.
+- **Source:** either will do; the device does not care which.
+  - **The raw multitouch stream** (§Raw stream) gives positions, ellipses and pressure
+    at ~124 Hz, device-global, plus the real surface size.
+  - **AppKit indirect touches** — `NSView.allowedTouchTypes = .indirect`, then
+    `touchesBegan/Moved/Ended`. Per finger: normalized `[0,1]` position, stable
+    identity, phase, plus `deviceSize` in points.
 - **Device config (round one):** `EV_ABS` with `ABS_MT_SLOT` (3 slots),
   `ABS_MT_TRACKING_ID`, `ABS_MT_POSITION_X/Y` + legacy `ABS_X/Y`; `EV_KEY` with
   `BTN_TOUCH`, `BTN_TOOL_FINGER`, `BTN_TOOL_DOUBLETAP`, `BTN_TOOL_TRIPLETAP`,
   `BTN_LEFT`; `INPUT_PROP_POINTER` + `INPUT_PROP_BUTTONPAD`. **`abs_info.res`
   (units/mm) is mandatory** — libinput refuses/degrades touchpads without resolution;
-  derive it from `deviceSize`. The libkrun vtable already carries `res`
+  take it from `MTDeviceGetSensorSurfaceDimensions` (124.8 × 76.8 mm on the built-in →
+  100 units/mm at 0.01 mm units), or derive it from `deviceSize`. The libkrun vtable already carries `res`
   (`third_party/libkrun/include/libkrun_input.h:103-109`), so this may need no libkrun
-  change beyond the new config backend. No `QUADTAP`, no 4th slot until the 4-finger
-  synth ships — advertise only what can actually arrive.
+  change beyond the new config backend. No `QUADTAP`, no 4th slot: four fingers are the
+  host's, and the device advertises only what can actually arrive.
 - **Gating:** forwarding gates on **cursor over the VM view** (like scroll routing), not
   on key-window status — orthogonal to the soft *keyboard* grab, which stays
   key-gated. Applies in soft/seamless mode and capture alike.
 
-## Fn chord: synthetic 3-finger gestures
-
-3+-finger gestures are recovered without ever violating the ownership rule: the physical
-count stays at 2 (WindowServer sees nothing it wants), and the guest receives a fully
-synthetic contact group.
-
-- **Chord = Fn (Globe).** Bare Shift/Ctrl are disqualified: Shift+scroll (horizontal
-  scroll) and Ctrl+scroll (zoom) are established guest semantics that must not morph
-  into workspace swipes. Fn has no guest scroll meaning, typically isn't forwarded as a
-  guest modifier at all (no leakage into the guest key stream), and "Globe = input
-  magic" is Apple's own trained mental model. Chord should end up in the customizable
-  keybindings config eventually.
-- **Sample at second-finger touchdown, lock per sequence** (momentum tail included).
-  Mid-gesture modifier changes must not morph finger count — libinput treats count
-  changes as gesture cancellation. Chord pressed mid-scroll takes effect next sequence.
-  Fn-down with no second finger does nothing — a lone Fn tap keeps its host binding
-  (emoji picker et al.) untouched.
-- **Synthesize the whole group, don't augment.** Generate all 3 phantom contacts (neat
-  row around the real centroid, driven by the measured average delta; scale contact
-  spread by the real pinch ratio for pinch). Fully synthetic contacts are perfectly
-  coherent for libinput's swipe detection; mixing real geometry with a fake finger
-  invites edge-clipping and coherence edge cases. The real touches are just puppet
-  strings.
-- **Round-one scope: 3 fingers only.** GNOME ≥40 binds everything to 3 fingers
-  (horizontal = workspace switch, vertical = overview/app grid); 4-finger is unbound by
-  default (KDE Plasma uses it — deliberately not our problem). 4-finger later = second
-  chord (e.g. Fn+Shift) + `QUADTAP` + one more slot; the synthesis path is
-  finger-count-parameterized from the start.
-
 ## Dedupe and teardown (the state machine)
 
-While a forwarded sequence (plus its momentum tail) is in flight — the 2-finger pair, or
-a physical 3-finger group on a host whose prefs leave three fingers free, which macOS
-otherwise turns into ordinary scroll (measured; momentum-end events land up to ~1 s after
-the last finger lifts):
+While a forwarded 2- or 3-finger sequence (plus its momentum tail) is in flight, the host
+must not also act on it. Momentum-end events land up to ~1 s after the last finger lifts
+(measured).
 
-- **Swallow** host-synthesized `ScrollWheel`, magnify, and tap-generated clicks (e.g.
-  host two-finger-tap right-click) — otherwise the guest gets the gesture twice. The
-  capture tap tracks "MT sequence in flight" and swallows there.
-- **Suppress `emit_scroll` entirely** for trackpad-sourced scrolls when the MT device is
-  active for the sequence.
+- **The HID tap swallows the host's gesture events** (types 18, 19, 20, 29, 30, 31, 32)
+  for the sequence. That stops system-level recognition: Spaces and Mission Control at
+  three fingers are measured; the right-edge two-finger swipe is not yet (§Open
+  questions).
+- **limina's own view drops what reaches it**: cooked `ScrollWheel`, magnify and
+  tap-generated clicks (e.g. host two-finger-tap right-click). Suppress `emit_scroll`
+  entirely for trackpad-sourced scrolls while the MT device owns the sequence; otherwise
+  the guest gets the gesture twice.
+- **Deciding the count:** use the sequence's *peak* count. Counts ramp while fingers land,
+  and a sequence that ever reaches four is the host's from then on.
 
 Teardown: on *any* transition — cursor leaves the view, window loses key, capture
-toggles, a third physical finger lands (host is taking over), or one finger of the pair
-lifts — release every guest slot cleanly (`tracking_id` −1, `BTN_TOUCH` up, SYN) so the
+toggles, a fourth physical finger lands (the host is taking over), or the fingers lift — release every guest slot cleanly (`tracking_id` −1, `BTN_TOUCH` up, SYN) so the
 guest never sees stuck fingers. Same discipline as the soft-grab modifier flush
 (`InputState::exit_soft_grab`).
 
@@ -128,8 +115,9 @@ tablet is a generic pointer and can never engage it. The answer is layered by mo
   the guest sees one unbroken `BTN_LEFT` through the tablet. Works today, zero code;
   document it.
 - **Hard capture (future full-MT):** guest libinput provides tap-and-drag natively.
-- macOS *three-finger drag* is fine under the ownership rule: 3 physical fingers are
-  never forwarded, and the host-synthesized button+motion flows through the tablet.
+- macOS *three-finger drag* (an Accessibility setting, `TrackpadThreeFingerDrag`) claims
+  three fingers that the guest now owns. When it is on, limina should leave three fingers
+  to the host rather than take them: read the setting, as with the swipe prefs.
 
 ## Independent quick win: hi-res scroll (SHIPPED f1a8e56, 2026-07-28)
 
@@ -203,33 +191,13 @@ Two independent findings, both measured on the dev Mac (M1 Max built-in trackpad
   from the raw source if that is ever wanted. Under the HID tap the host's own click path
   keeps working anyway.
 
-### Decision owed: what the ownership rule becomes
-
-The measured lever removes the reason for "3+ physical fingers are the host's forever".
-The choice between the following is not yet made:
-
-- **Capture-only.** Suppress while the pointer is captured / fullscreen, mirroring the
-  keyboard grab.
-  - Under capture, every contact forwards: `QUADTAP`, enough slots for real hands, and
-    libinput palm rejection fed by real ellipse and pressure data.
-  - Seamless mode keeps the ownership table and the Fn chord as designed.
-- **Seamless too.** Keep the tap installed while the cursor is over the VM view, and swallow
-  gesture events for the finger counts the guest owns (the live raw count decides per
-  event, as measured with three fingers).
-  - 3- and 4-finger swipes then go to the guest in ordinary windowed use, and the Fn chord
-    and synthetic contacts become unnecessary.
-  - The cost is that the host's swipes *at the guest's finger counts* do nothing while the
-    cursor is over the VM. Four-finger host gestures can stay the host's.
-
-Either way, the tap must be released on every teardown transition in §Dedupe and teardown.
-A per-sequence swallow is naturally leak-free, because nothing persists past the process.
-
 ### The cheap unlock: give macOS four fingers, take three
 
 macOS's Mission Control / Spaces / App Exposé swipes are individually configurable to three
 *or* four fingers. Set them to four, and three-finger contacts are no longer claimed by
 the host. Three fingers is exactly the count GNOME ≥40 binds everything to. With the HID
-tap this is no longer required, but it remains the path that needs no Accessibility grant.
+tap this is no longer required. It remains the path that needs no Accessibility grant
+(three fingers only; two-finger scroll still needs limina's in-view swallow).
 
 The relevant defaults, in `com.apple.AppleMultitouchTrackpad` (built-in) and
 `com.apple.driver.AppleBluetoothMultitouch.trackpad` (external Magic Trackpad) — `2` is
@@ -296,8 +264,7 @@ Nothing above blocks building the MT device.
   either source. The risk is whether libinput classifies the device as a clickpad, whether
   contacts release cleanly on every transition, and whether the result feels right.
 - **The source swaps in underneath without changing the device.**
-- **The ownership decision above only decides how many fingers the device carries, and
-  when.**
+- **The device carries two or three contacts** (§The ownership rule).
 
 ### Spike
 
@@ -307,6 +274,13 @@ Nothing above blocks building the MT device.
 Space-change notification plus the Dock's window layers.
 
 ## Open questions / verification list
+
+- Does the HID tap stop two-finger system gestures (the right-edge Notification Center
+  swipe, smart zoom, Look Up) when swallowing at count 2? Only 3- and 4-finger swipes are
+  measured.
+- Do the `NSTouch`es on Universal Control-forwarded gesture events carry positions? If so,
+  remote trackpads could feed the device too, and swallowing their 2/3-finger gestures
+  would stop losing them.
 
 - Does AppKit deliver indirect `NSTouch` events to a non-key window under the cursor,
   the way it delivers scroll events? Don't assume — probe empirically. If not, MT
