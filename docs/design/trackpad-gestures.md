@@ -100,8 +100,7 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
     (`RESULTS.md` §hidtap-2).
   - **Own the sequence, not the instant.** The probe's rule — swallow while exactly N
     contacts are down *now* — passed 1–2 gesture events whenever fingers lifted a few ms
-    apart. A smart zoom right after a scroll leaked once and did not reproduce in 12
-    instrumented tries, and the staggered lift was the only leak visible.
+    apart; owning the whole sequence closes that.
 - **limina's own view drops what reaches it**: cooked `ScrollWheel`, magnify and
   tap-generated clicks (e.g. host two-finger-tap right-click). Suppress `emit_scroll`
   entirely for trackpad-sourced scrolls while the MT device owns the sequence; otherwise
@@ -285,8 +284,6 @@ Space-change notification plus the Dock's window layers.
 
 ## Open questions / verification list
 
-- The smart zoom that once leaked right after a scroll (`RESULTS.md` §hidtap-2): cause
-  unknown, not reproduced. Re-test once the tap owns whole sequences.
 
 - Does AppKit deliver indirect `NSTouch` events to a non-key window under the cursor,
   the way it delivers scroll events? Don't assume — probe empirically. If not, MT
