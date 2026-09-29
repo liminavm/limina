@@ -9,13 +9,20 @@
  * RAM GiB Normal write-back cacheable — the shape a Linux guest has), then runs
  * a host-driven command loop over a list of guest pages.
  *
- * Control block at RAM_BASE + 0x3000, written by the host before it resumes:
+ * Each vCPU is entered with x0 = the guest-physical address of its own control
+ * block, written by the host before it resumes the vCPU:
  *   +0x00 cmd    1 FILL, 2 CHECK, 4 RACE, anything else DONE
  *   +0x08 salt
  *   +0x10 n      number of pages
  *   +0x18 page   page size in bytes (multiple of 16)
  *   +0x20 iters  RACE: iterations
- * Page list at RAM_BASE + 0x4000: n guest-physical addresses.
+ *   +0x28 start  first byte of each page this vCPU owns (multiple of 16)
+ *   +0x30 step   bytes between the 16-byte units it owns (multiple of 16)
+ * Page list at control + 0x1000: n guest-physical addresses.
+ *
+ * start/step let several vCPUs share every page, each owning its own 16-byte
+ * units (start = 16k, step = 16 * vCPUs), so every page is live in every
+ * vCPU's TLB; start 0 / step 16 is a vCPU owning whole pages.
  *
  * The word at guest-physical address a is  a ^ (salt << 48).
  *
@@ -33,6 +40,7 @@
 .text
 .global _start
 _start:
+    mov  x24, x0                    // this vCPU's control block
     movz x20, #0x1000, lsl #16      // MMIO base 0x10000000
     movz x19, #0x8000, lsl #16      // RAM base
 
@@ -69,13 +77,14 @@ _start:
 
 cmdloop:
     str  xzr, [x20, #0x00]          // READY: the host writes the control block
-    add  x0, x19, #0x3000
-    ldr  x1, [x0, #0]               // cmd
-    ldr  x15, [x0, #8]              // salt
-    ldr  x2, [x0, #16]              // n
-    ldr  x14, [x0, #24]             // page size
-    ldr  x16, [x0, #32]             // iters
-    add  x3, x19, #0x4000           // page list
+    ldr  x1, [x24, #0]              // cmd
+    ldr  x15, [x24, #8]             // salt
+    ldr  x2, [x24, #16]             // n
+    ldr  x14, [x24, #24]            // page size
+    ldr  x16, [x24, #32]            // iters
+    ldr  x21, [x24, #40]            // start
+    ldr  x22, [x24, #48]            // step
+    add  x3, x24, #0x1000           // page list
     cmp  x1, #1
     b.eq do_fill
     cmp  x1, #2
@@ -112,19 +121,19 @@ do_race:
     str  x18, [x20, #0x08]          // REPORT
     b    cmdloop
 
-// fill: every word of every listed page := addr ^ x9. Clobbers x4-x8, x10, x11.
+// fill: every owned word of every listed page := addr ^ x9. Clobbers x4-x8, x10, x11.
 fill:
     mov  x4, #0
 1:  cmp  x4, x2
     b.ge 3f
     ldr  x5, [x3, x4, lsl #3]
-    mov  x6, #0
+    mov  x6, x21
 2:  add  x7, x5, x6
     eor  x10, x7, x9
     add  x8, x7, #8
     eor  x11, x8, x9
     stp  x10, x11, [x7]
-    add  x6, x6, #16
+    add  x6, x6, x22
     cmp  x6, x14
     b.lt 2b
     add  x4, x4, #1
@@ -132,14 +141,14 @@ fill:
 3:  dsb  sy
     ret
 
-// check: x12 := words of the listed pages not holding addr ^ x9. Clobbers x4-x8, x10, x11, x13.
+// check: x12 := owned words of the listed pages not holding addr ^ x9. Clobbers x4-x8, x10, x11, x13.
 check:
     mov  x4, #0
     mov  x12, #0
 1:  cmp  x4, x2
     b.ge 3f
     ldr  x5, [x3, x4, lsl #3]
-    mov  x6, #0
+    mov  x6, x21
 2:  add  x7, x5, x6
     ldp  x10, x11, [x7]
     eor  x13, x7, x9
@@ -149,7 +158,7 @@ check:
     eor  x13, x8, x9
     cmp  x11, x13
     cinc x12, x12, ne
-    add  x6, x6, #16
+    add  x6, x6, x22
     cmp  x6, x14
     b.lt 2b
     add  x4, x4, #1

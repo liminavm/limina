@@ -9,7 +9,13 @@ Metal takes as a no-copy buffer. No host-side remap can do that (`spikes/userptr
 
 The vehicle is a bare-metal guest (`payload.S`). It runs with the MMU on, and guest RAM is mapped
 Normal write-back cacheable, which is the shape a Linux guest has. It fills and checks a host-chosen
-list of scattered 4 KiB pages with an address-keyed pattern (`gpa ^ salt<<48`). Guest RAM is one
+list of scattered 4 KiB pages with an address-keyed pattern (`gpa ^ salt<<48`). It runs on 1–4
+vCPUs, each on its own host thread with its own control block (`--vcpus`, `--mode`):
+
+- **`disjoint`:** each vCPU owns whole pages.
+- **`interleaved`:** every vCPU works on every page, each owning every *N*-th 16-byte unit. Each
+  page is then live in every vCPU's TLB at once. A move must invalidate all of them, and a vCPU
+  that HVF missed would store into the old page, which its next check would catch. Guest RAM is one
 `MAP_ANON|MAP_PRIVATE` mapping, `hv_vm_map`'d whole at a 4 KiB IPA granule, as vm-memory and
 limina set it up. No two pages in the list are adjacent, and about three quarters are not
 16 KiB-aligned. The host (`probe.m`) moves pages with `migrate()`: take a lock, unmap, `memcpy`,
@@ -23,15 +29,18 @@ The steps are:
 2. Every page migrates into one contiguous buffer B.
 3. The GPU checks and writes B through a no-copy `MTLBuffer`.
 4. The pages migrate back onto their original backing.
-5. The race: the guest runs *R* rounds of fill-then-check with no exit, each round with a new
+5. The race: every vCPU runs *R* rounds of fill-then-check with no exit, each round with a new
    salt. Meanwhile a host thread ping-pongs every page between its original backing and B, in a
    random order each pass, as fast as it can. A store lost across a move, or a copy taken before
    a store landed, shows up as a stale word in a later check.
 
+The positive control is `--sabotage`. It takes each race move's copy *before* the unmap, the
+realistic ordering bug, and so proves the checkers can see a lost store.
+
 ## Measured
 
 Measured 2026-09-29 on an M1 Max with macOS 26.6.2 (`./build.sh`, sandbox off). Every run passed
-every check.
+every check, except that the `--sabotage` runs fail exactly the stale-word check, as designed.
 
 - **The guest sees the copy and really moves.** After migrating into B the guest reads its old
   pattern. Its next fill lands in B, and the original backing still holds the old pattern.
@@ -41,10 +50,12 @@ every check.
 - **Moving back works onto host addresses that are 4 KiB- but not 16 KiB-aligned.** Those are the
   original backing of each unaligned guest page. The guest reads and writes through those mappings
   correctly afterwards.
-- **No store is lost in the race.** Across every run, millions of moves took place while the
-  guest filled and checked. There were stage-2 faults mid-move, at most 3 in a row on one page,
-  and every round's check saw zero stale words. The host read the last round's pattern at each
-  page's final backing.
+- **No store is lost in the race, on any vCPU.** Across every run, up to millions of moves took
+  place while the vCPUs filled and checked. Every vCPU took stage-2 faults mid-move, at most 3 in a
+  row on one page, and every round's check on every vCPU saw zero stale words. The host read the
+  last round's pattern at each page's final backing.
+- **The checkers do catch a lost store.** With `--sabotage`, every vCPU reports tens of thousands
+  of stale words in every mode.
 - **Migration adds no host VM map entries.** It changes stage-2 only. The count is flat across the
   migration and settles about +10 after the race, the same at every size, so that is the migrator
   thread and Metal rather than the pages. Aliasing, by contrast, costs one entry per
@@ -61,7 +72,27 @@ every check.
 
 "Cost per move in the race" covers unmap + copy + map, with the lock held and warm. "Cold" is
 the first migration of every page, lock included, splitting the one big RAM mapping for the first
-time.
+time. All rows above are 1 vCPU.
+
+### Several vCPUs
+
+Every run is 4000 rounds unless noted.
+
+| vCPUs | mode | pages | page moves | faults healed per vCPU | stale words, correct migration | stale words, `--sabotage` | cost per move |
+|---|---|---|---|---|---|---|---|
+| 1 | — | 256 | 1.3M (500 rounds) | 448 | 0 | — | 1.85 µs |
+| 2 | disjoint | 256 | 737k | 1269–1332 | 0 on each | 28–34k on each (500 rounds) | 2.38 µs |
+| 2 | interleaved | 256 | 1.38M | 2403–2494 | 0 on each | 25–27k on each (500 rounds) | 2.52 µs |
+| 4 | disjoint | 256 | 132k | 477–535 | 0 on each | — | 3.00 µs |
+| 4 | interleaved | 256 | 274k | 2450–2590 | 0 on each | 23–27k on each (1000 rounds) | 4.54 µs |
+| 4 | interleaved | 1024 | 251k (1000 rounds) | 660–774 | 0 on each | — | 3.98 µs |
+
+- **HVF invalidates a moved page on every vCPU before `hv_vm_unmap` returns.** In interleaved mode
+  all four vCPUs hold every page live and store to it throughout, and no store reached an old
+  backing.
+- **A move costs more the more vCPUs run.** With the same 256 pages, cost rises from 1.85 µs with 1
+  vCPU to 3.0 µs with 4 disjoint and 4.5 µs with 4 interleaved. That is consistent with the
+  invalidation having to reach every running vCPU, but that cause is inferred, not measured.
 
 ### Stage-2 fragmentation has a price
 
@@ -86,21 +117,21 @@ The consequences:
 
 - **The HVF half of guest-memory migration works.** It holds at 4 KiB granularity, onto
   16 KiB-aligned buffers and back onto 4 KiB-aligned host addresses. The guest, the GPU and the
-  host stay coherent, and it survives a vCPU writing to the pages throughout. HVF's `hv_vm_unmap`
-  takes effect for a running vCPU on another core before it returns: nothing stored after the
+  host stay coherent, and it survives up to four vCPUs writing to the same pages throughout. HVF's
+  `hv_vm_unmap` takes effect on every running vCPU before it returns: nothing stored after the
   unmap reached the old page.
 - **It gives a 4 KiB guest what aliasing cannot.** Scattered 4 KiB pages become one no-copy Metal
   buffer, with no host VM entries spent.
-- **The cost is stage-2 mapping count, and it compounds.** Coalesce runs into single `hv_vm_map`
-  calls wherever guest pages are contiguous. Budget scattered mappings per VM. Treat consolidation
-  (re-merging stage-2 mappings) as a first-class operation, not an afterthought.
+- **The cost is stage-2 mapping count, and it compounds.** It grows further with running vCPUs.
+  Coalesce runs into single `hv_vm_map` calls wherever guest pages are contiguous. Budget scattered
+  mappings per VM. Treat consolidation (re-merging stage-2 mappings) as a first-class operation,
+  not an afterthought.
 - **What remains is libkrun's memory model, not HVF.** Roadmap M6 lists it.
 
 ## Scope of the race (measurement boundaries)
 
-- **One vCPU.** It runs on its own thread against a migrator on another, so cross-core invalidation
-  is exercised. HVF's invalidation across *several* vCPUs is not; a second vCPU racing a disjoint
-  page list is the next variant.
+- **Up to four vCPUs, one migrator thread.** Two hosts migrating at once, or migration racing the
+  balloon's own unmap/map, is not exercised.
 - **STP stores only.** `spikes/hv-stage2-write-loss/` covered `DC ZVA` and SIMD stores against
   `hv_vm_protect`, not against unmap/map.
 - **Data pages only, never code.**
