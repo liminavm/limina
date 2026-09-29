@@ -278,9 +278,8 @@ static void metal_init(void) {
 
 /* ---- the 4 KiB questions ------------------------------------------------------ */
 
-/* Copy `words` words out of `buf` on the GPU and count those that do not match what guest-physical
- * address `gpa0 + 8*w` should hold (crossing into g_list[1] past the first page's end). */
-static uint64_t gpu_readback(id<MTLBuffer> buf, uint64_t words, uint64_t gpa0, uint64_t salt) {
+/* Copy `words` words out of `buf` on the GPU into a fresh buffer. */
+static id<MTLBuffer> gpu_copy(id<MTLBuffer> buf, uint64_t words) {
     id<MTLBuffer> out = [g_dev newBufferWithLength:words * 8 options:MTLResourceStorageModeShared];
     id<MTLCommandBuffer> cb = [g_queue commandBuffer];
     id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
@@ -291,7 +290,15 @@ static uint64_t gpu_readback(id<MTLBuffer> buf, uint64_t words, uint64_t gpa0, u
     [enc endEncoding];
     [cb commit];
     [cb waitUntilCompleted];
-    if (cb.error) { printf("    command buffer error: %s\n", cb.error.description.UTF8String); return words; }
+    if (cb.error) { printf("    command buffer error: %s\n", cb.error.description.UTF8String); return nil; }
+    return out;
+}
+
+/* Words of a GPU copy of `buf` that do not match what guest-physical address `gpa0 + 8*w` should
+ * hold (crossing into g_list[1] past the first page's end). */
+static uint64_t gpu_readback(id<MTLBuffer> buf, uint64_t words, uint64_t gpa0, uint64_t salt) {
+    id<MTLBuffer> out = gpu_copy(buf, words);
+    if (!out) return words;
     const uint64_t *o = out.contents;
     uint64_t page_end = (gpa0 & ~(PAGE - 1)) + PAGE, mism = 0;
     for (uint64_t w = 0; w < words; w++) {
@@ -302,9 +309,45 @@ static uint64_t gpu_readback(id<MTLBuffer> buf, uint64_t words, uint64_t gpa0, u
     return mism;
 }
 
+/* The same two sub-page shapes on freshly allocated memory no MTLBuffer has ever covered, so an
+ * acceptance cannot come from a page some other buffer already registered. */
+static void four_k_fresh(void) {
+    struct { uint64_t off, len; const char *name; } shapes[] = {
+        {4096, PAGE, "fresh + 4096, 16 KiB"},
+        {0, 4096, "fresh, 4 KiB"},
+    };
+    for (int i = 0; i < 2; i++) {
+        @autoreleasepool {
+            mach_vm_address_t fresh = 0;
+            KCHECK(mach_vm_allocate(mach_task_self(), &fresh, 2 * PAGE, VM_FLAGS_ANYWHERE));
+            uint64_t *p = (uint64_t *)fresh;
+            for (uint64_t w = 0; w < 2 * PAGE / 8; w++) p[w] = (0xF00DULL << 48) | (w * 8);
+            id<MTLBuffer> b = [g_dev newBufferWithBytesNoCopy:(void *)(fresh + shapes[i].off)
+                                                       length:shapes[i].len
+                                                      options:MTLResourceStorageModeShared
+                                                  deallocator:nil];
+            printf("  newBufferWithBytesNoCopy(%s) -> %s", shapes[i].name, b ? "a buffer" : "nil");
+            if (b) {
+                uint64_t words = shapes[i].len / 8, mism = 0;
+                id<MTLBuffer> out = gpu_copy(b, words);
+                const uint64_t *o = out ? out.contents : NULL;
+                for (uint64_t w = 0; w < words; w++)
+                    if (!o || o[w] != ((0xF00DULL << 48) | (shapes[i].off + w * 8))) mism++;
+                printf(", length %lu, GPU read-back %llu of %llu words wrong", (unsigned long)b.length,
+                       mism, words);
+            }
+            printf("\n");
+            b = nil;
+            KCHECK(mach_vm_deallocate(mach_task_self(), fresh, 2 * PAGE));
+        }
+    }
+}
+
 /* What a stock 4 KiB guest would need: a pointer or a length that is not a whole host page. */
 static void four_k_questions(mach_vm_address_t alias, uint64_t salt) {
-    printf("\n== 4 KiB questions (host page %lu) ==\n", (unsigned long)vm_page_size);
+    printf("\n== 4 KiB questions (host page %lu), before any other buffer covers the alias ==\n",
+           (unsigned long)vm_page_size);
+    four_k_fresh();
     id<MTLBuffer> b = [g_dev newBufferWithBytesNoCopy:(void *)(alias + 4096) length:PAGE
                                               options:MTLResourceStorageModeShared
                                           deallocator:nil];
@@ -381,7 +424,7 @@ static void pick_pages(uint64_t run) {
 int main(int argc, char **argv) {
     @autoreleasepool {
         const char *payload_path = "payload.bin";
-        uint64_t run = 1, rounds = 4;
+        uint64_t run = 1, rounds = 4, cycles = 0;
         bool untouched = false, shared = false;
         g_npages = 256;
         for (int i = 1; i < argc; i++) {
@@ -389,6 +432,7 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[i], "--run") && i + 1 < argc) run = strtoull(argv[++i], 0, 0);
             else if (!strcmp(argv[i], "--rounds") && i + 1 < argc) rounds = strtoull(argv[++i], 0, 0);
             else if (!strcmp(argv[i], "--seed") && i + 1 < argc) rng_state = strtoull(argv[++i], 0, 0) | 1;
+            else if (!strcmp(argv[i], "--cycles") && i + 1 < argc) cycles = strtoull(argv[++i], 0, 0);
             else if (!strcmp(argv[i], "--untouched")) untouched = true;
             else if (!strcmp(argv[i], "--shared")) shared = true;
             else payload_path = argv[i];
@@ -450,6 +494,8 @@ int main(int argc, char **argv) {
                t_remap / 1e6, regions_before, regions_after, (int)regions_after - (int)regions_before);
         expect(cpu_check_alias((const volatile uint64_t *)alias, 1) == 0, "host reads salt 1 through the alias");
 
+        four_k_questions(alias, 1);
+
         uint64_t t0 = now_ns();
         id<MTLBuffer> buf = [g_dev newBufferWithBytesNoCopy:(void *)alias length:g_npages * PAGE
                                                     options:MTLResourceStorageModeShared
@@ -476,7 +522,6 @@ int main(int argc, char **argv) {
                    "host reads the guest's words through the alias");
         }
 
-        four_k_questions(alias, rounds ? 1 + 2 * rounds : 1);
 
         printf("\n== teardown ==\n");
         buf = nil;
@@ -485,6 +530,24 @@ int main(int argc, char **argv) {
         guest_cmd(CMD_FILL, 100);
         expect(guest_cmd(CMD_CHECK, 100) == 0, "guest FILL/CHECK after the alias is gone");
         expect(cpu_check_ram(100) == 0, "host reads it through the VMM's mapping");
+
+        if (cycles) printf("\n== %llu import cycles: remap, buffer, GPU check, teardown ==\n", cycles);
+        uint64_t cycle_mism = 0;
+        for (uint64_t c = 0; c < cycles; c++) {
+            @autoreleasepool {
+                mach_vm_address_t a = make_alias();
+                id<MTLBuffer> cb = [g_dev newBufferWithBytesNoCopy:(void *)a length:g_npages * PAGE
+                                                           options:MTLResourceStorageModeShared
+                                                       deallocator:nil];
+                if (!cb) { printf("  cycle %llu: nil buffer\n", c); g_failures++; break; }
+                cycle_mism += gpu_pass(cb, 100, 0);
+                cb = nil;
+                KCHECK(mach_vm_deallocate(mach_task_self(), a, g_npages * PAGE));
+            }
+            if (c < 4 || (c + 1) % (cycles / 8 ? cycles / 8 : 1) == 0)
+                printf("  after cycle %llu: VM regions %u\n", c + 1, count_regions());
+        }
+        if (cycles) expect(cycle_mism == 0, "every cycle's GPU check read the guest's words");
 
     out:
         guest_cmd(CMD_DONE, 0);

@@ -41,14 +41,19 @@ every check, with 0 mismatching words in any direction.
 | `--pages 8192 --run 64` | 128 MiB | runs of 64 | 0.17 ms | +128 | 0.17 ms | 5.1 ms |
 | `--seed 7 --rounds 8` | 4 MiB | scattered, 8 write/fill rounds | 0.27 ms | +256 | 0.10 ms | 2.3 ms |
 
-After teardown (drop the buffer, `mach_vm_deallocate` the alias), the region count returns to
-within +13..+14 of the pre-alias count. That residue is the same for 256 and 8192 pages, so it is
-Metal's own allocations and not the alias. The guest's pages then fill and check correctly through
-both the guest and the VMM's mapping.
+After teardown (drop the buffer, `mach_vm_deallocate` the alias), the guest's pages fill and check
+correctly through both the guest and the VMM's mapping. The region count settles 13 above the
+pre-alias count, and it then stays flat under repeated imports. `--cycles` repeats remap, buffer,
+GPU check and teardown: 200 cycles at 4 MiB stayed at 120 regions, and 40 cycles of the fully
+scattered 128 MiB import stayed at 119. Every cycle's GPU check passed. The residue is a one-time
+Metal warm-up, not a per-import leak.
 
 ### The 4 KiB questions
 
 - Metal on this OS accepts pointers and lengths finer than the host page, and reads them correctly.
+  The same holds on freshly allocated memory that no `MTLBuffer` has ever covered. These probes run
+  before any other buffer exists over the alias, so an acceptance cannot come from pages another
+  buffer had already wired.
   - `newBufferWithBytesNoCopy(alias + 4096, 16 KiB)` returns a buffer, and a GPU read-back matches
     the guest pages word for word, including across the page boundary into the next alias page.
   - `newBufferWithBytesNoCopy(alias, 4 KiB)` returns a 4096-byte buffer that also reads back
@@ -86,10 +91,13 @@ both the guest and the VMM's mapping.
 - **The KosmicKrisp import itself.** That means `vkGetMemoryHostPointerPropertiesEXT` and
   `vkAllocateMemory` with `VkImportMemoryHostPointerInfoEXT` on an alias, plus the
   heap-less-tiled-image issue (KK patch 0004). This is the phase-2 spike.
-- **The balloon.** libkrun's `released_ram` replaces released ranges with fresh
-  `MAP_FIXED|MAP_ANON` mappings. An alias taken before such a replacement keeps the *old* pages, so
-  the guest and the GPU would silently diverge. A pinned guest page should never be reported free,
-  so this should not happen, but the host must enforce it rather than trust it. The settle sweep's
-  `mprotect` of the original mapping does not reach the alias, which has its own protection.
+- **The balloon.** Releasing a range means `hv_vm_unmap`, then optionally zeroing it, then
+  `MADV_FREE_REUSABLE` on the original host range (`third_party/libkrun/src/hvf/src/released_ram.rs:96-134`).
+  The alias shares those pages. A release under a live import would therefore hand the GPU pages
+  the host may already have reclaimed, so the GPU reads zeros or stale bytes. Nothing would
+  diverge; the import would silently decay. A pinned guest page should never be reported free, so
+  this should not happen, but the host must enforce it by refusing a release that overlaps an
+  import rather than trust it. Not tested either way: whether the settle sweep's `mprotect` of the
+  original mapping reaches the alias.
 - **Snapshot/restore.** An import would have to be journalled and re-remapped against the restored
   RAM mapping.
