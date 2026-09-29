@@ -209,6 +209,14 @@ func leverState(_ dev: MTDeviceRef) -> String {
 }
 
 var hidTap: CFMachPort?
+// Touch counts AppKit reports on gesture (type 29) events, as "local raw
+// count/allTouches count" → occurrences; logged once a second. Answers
+// whether a forwarded (Universal Control) gesture event carries its fingers.
+var touchHist: [String: Int] = [:]
+func noteTouches(_ type: CGEventType, _ event: CGEvent) {
+    guard type.rawValue == 29, let ns = NSEvent(cgEvent: event) else { return }
+    touchHist["raw\(liveCount)/ns\(ns.allTouches().count)", default: 0] += 1
+}
 var hidSwallowed = 0
 var engaged = false
 
@@ -227,6 +235,7 @@ let hidCallback: CGEventTapCallBack = { _, type, event, _ in
     // hidtap-3 swallows only while exactly three fingers are down and the
     // sequence never reached four: four-finger gestures must still reach macOS.
     let wanted = arm != "hidtap-3" || (liveCount == 3 && sequencePeak == 3)
+    noteTouches(type, event)
     if engaged && wanted && hidTypes.contains(type.rawValue) {
         hidSwallowed += 1
         if hidSwallowed % 20 == 1 { log("LEVER", "hid tap swallowed type \(type.rawValue) (#\(hidSwallowed))") }
@@ -251,6 +260,7 @@ let watchCallback: CGEventTapCallBack = { _, type, event, _ in
         if let t = hidTap { CGEvent.tapEnable(tap: t, enable: true) }
         return Unmanaged.passUnretained(event)
     }
+    noteTouches(type, event)
     let pid = event.getIntegerValueField(.eventSourceUnixProcessID)
     let key = "type \(type.rawValue) from \(procName(pid))[\(pid)]"
     watchCounts[key, default: 0] += 1
@@ -291,6 +301,13 @@ func engage() {
             guard !watchCounts.isEmpty else { return }
             log("WATCH", watchCounts.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "; "))
             watchCounts.removeAll()
+        }
+    }
+    if arm.hasPrefix("hid") {
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            guard !touchHist.isEmpty else { return }
+            log("TOUCH", touchHist.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: " "))
+            touchHist.removeAll()
         }
     }
     if arm.hasPrefix("hidtap") {

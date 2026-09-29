@@ -147,8 +147,25 @@ trackpad followed, for comparison. Both remote devices behaved the same.
     contacts. That input stays on the tablet + cooked hi-res scroll path.
   - A tap filtering on the local raw count (`hidtap-3`) never swallows remote gestures,
     so they stay the host's. Remote input degrades gracefully rather than breaking.
-  - Not tested: whether `NSEvent(cgEvent:)` on a forwarded gesture event exposes touches
-    (`allTouches()`), which would recover a finger count for remote input.
+
+### `hidtap` with remote trackpads — remote gestures are suppressible, and carry their finger count
+
+The swallowing `hidtap` arm (all gesture types, 5–55 s). Each gesture (type 29) event's
+`NSEvent(cgEvent:).allTouches().count` was logged against the local raw count.
+
+- Local 3-finger swipes, then the remote Magic Trackpad's 3-finger swipes and pinch, then
+  the other Mac's trackpad's 4-finger swipes. **Nothing acted on this Mac** (oracle and
+  user). The swallowing tap covers Universal Control input as well.
+- **`allTouches()` reports the finger count for forwarded events too.**
+  - Local: raw 3 ↔ AppKit 3.
+  - Remote, with raw 0 throughout: AppKit 3 during the Magic Trackpad's 3-finger swipes,
+    4 during the other Mac's 4-finger swipes, and 2 during a remote two-finger scroll.
+  - Lower counts (0–2) interleave while fingers land and lift, so a filter keyed on it
+    needs the per-sequence peak, as `hidtap-3` does with the raw count.
+- The local calibration had no 4-finger swipe (user forgot), so AppKit 4 ↔ raw 4 is
+  unconfirmed locally; the remote 4 stands on its own.
+- Consequence: a count-keyed selective tap can key on `allTouches()` instead of the raw
+  stream, and then covers remote trackpads too. Not yet run as a selective arm.
 
 ### `parser-off` — suppresses everything, leaks, rejected
 

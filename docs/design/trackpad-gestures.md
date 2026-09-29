@@ -314,10 +314,11 @@ Space-change notification plus the Dock's window layers.
   rather than opening App Exposé.
 - A trackpad on another Mac, used over Universal Control, reaches this Mac as
   already-recognized gesture/scroll/magnify events with no raw contacts. The host Dock
-  acts on them, and they carry pid 0 like local input (`RESULTS.md` §hidwatch). A
-  count-keyed tap therefore leaves remote gestures to the host, and the MT device cannot
-  serve them. Open: whether `NSEvent.allTouches()` on those forwarded events recovers a
-  finger count.
+  acts on them, and they carry pid 0 like local input (`RESULTS.md` §hidwatch). The
+  swallowing tap suppresses them too, and `NSEvent(cgEvent:).allTouches().count` reports
+  their finger count (3 and 4 measured). A selective tap keyed on that count, instead of
+  the local raw count, would cover remote trackpads; that selective variant is unmeasured.
+  The MT device cannot serve remote input, which has no contacts.
 - Only a tap that is already installed and filters per event on the live count is
   measured. A tap *installed* at count determination would have to beat the recognizer
   (Dock transition windows appeared ~180–280 ms after touchdown), so don't build that one.
