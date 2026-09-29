@@ -374,25 +374,34 @@ addresses. With the 4 KiB IPA granule this works at 4 KiB. Consumers:
   pages into one 16 KiB-contiguous buffer and let the GPU take the buffer. This replaces the
   `memcpy` snapshot and stays coherent. No host-side remap can serve these instead: Metal refuses
   4 KiB-scattered backing even inside a real 4 KiB address space.
-- **Defragmenting a highly ballooned guest.** Consolidate what long balloon churn leaves scattered.
-  Measure first what that scatter actually costs: stage-2 mapping count, host VM regions, TLB
-  reach, `phys_footprint`.
+- **Defragmenting a highly ballooned guest.** Consolidate what long balloon churn leaves scattered,
+  both the host backing and the stage-2 mappings. Scattered stage-2 mappings have a measured price
+  (below). The guest-side costs are unmeasured: TLB reach and `phys_footprint`.
 
-Established (`spikes/userptr-remap-metal/`, measured 2026-09-29): with the 4 KiB granule,
-`hv_vm_map` accepts consecutive 4 KiB pieces of one host buffer at scattered guest addresses,
-including host addresses that are 4 KiB- but not 16 KiB-aligned. That is map-time only; no guest
-has read or written through such a mapping yet.
+Established (`spikes/guest-mem-migration/`, measured 2026-09-29, one vCPU):
+- A bare-metal guest's scattered 4 KiB pages move into one contiguous 16 KiB-aligned buffer and
+  back, onto host addresses that are 4 KiB- but not 16 KiB-aligned. The guest, a no-copy
+  `MTLBuffer` over the buffer and the host all stay coherent.
+- A vCPU filling and checking the pages while a host thread moves them millions of times loses no
+  store. It heals mid-move stage-2 faults by waiting and retrying.
+- Migration spends no host VM map entries.
+- **Every stage-2 map/unmap gets slower as the VM's mapping count grows.** One 4 KiB move costs
+  1.85 µs with 256 scattered mappings, 5.2 µs with 4096 and 13.6 µs with 16384. So scattered
+  mappings tax the balloon's own release/heal too. Coalesce contiguous runs into one
+  `hv_vm_map`, and treat re-merging as part of the mechanism.
 
 **Owed, in order:**
-1. **A guest that runs through migrated pages.** Before building anything: a bare-metal guest
-   reads and writes across a migration, with a vCPU racing it.
+1. **Several vCPUs.** Race a second vCPU on a disjoint page list before relying on HVF's
+   invalidation across vCPUs. Cheap: an extension of `spikes/guest-mem-migration/`.
 2. **libkrun's memory model.** Devices reach guest RAM through `GuestMemoryMmap`'s fixed linear
    guest → host map, so device DMA into a migrated page would land in the old host memory. It needs
    a redirection layer that virtio queues, blob iovecs, snapshot and the balloon all read.
 3. **The migration itself.** A vCPU touching a page mid-migration waits, like the balloon's heal
    path in `released_ram.rs`. The reverse path runs when the consumer goes away. The balloon must
    never release a migrated page under a live import: a release is `MADV_FREE_REUSABLE` on the
-   backing, so it would silently hand the GPU reclaimed pages.
+   backing, so it would silently hand the GPU reclaimed pages. `released_ram` must also learn
+   about migrated pages: its heal maps the *original* backing back, which would silently revert a
+   migrated page to stale contents.
 
 ### Dynamic vCPU offlining — the CPU sibling of ballooning
 

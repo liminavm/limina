@@ -99,8 +99,8 @@ macOS 26.6.2:
   no host-side remapping trick can present 4 KiB-scattered guest pages to the GPU.
 - **`hv_vm_map` with the 4 KiB IPA granule accepts host addresses that are 4 KiB- but not
   16 KiB-aligned.** Three consecutive 4 KiB pieces of one host buffer mapped at scattered guest
-  addresses (`% 16K` = 0x1000, 0x2000, 0x3000) all returned `HV_SUCCESS`. This was checked at map
-  time only: no vCPU read through those mappings.
+  addresses (`% 16K` = 0x1000, 0x2000, 0x3000) all returned `HV_SUCCESS`. A running guest reads
+  and writes correctly through such mappings (`spikes/guest-mem-migration/`).
 
 ## Conclusions
 
@@ -125,16 +125,14 @@ macOS 26.6.2:
   stage-2 granule (`spikes/hv-ipa-granule/`, limina's default). The host allocates one contiguous
   buffer, `hv_vm_unmap`s the guest's 4 KiB pages, copies them in, and `hv_vm_map`s each 4 KiB
   piece of the buffer back at the original guest addresses. The guest's pages then *are* the
-  buffer, which is 16 KiB-granular backing the GPU accepts. Only the `hv_vm_map` step is measured
-  here, and three things stand in the way:
+  buffer, which is 16 KiB-granular backing the GPU accepts. The HVF half is measured in
+  `spikes/guest-mem-migration/`: coherent through guest, GPU and host, and no store lost under a
+  racing vCPU. Two things stand in the way:
   - libkrun's devices reach guest memory through a fixed linear guest → host map
     (`GuestMemoryMmap`), so device DMA into migrated pages would land in the old host pages. The
     memory model would need redirection for them.
   - vCPUs touching the pages mid-migration must wait, as the balloon's heal path does, and freeing
     the import has to reverse everything.
-  - `hv_vm_map` accepts the 4 KiB-aligned host addresses that consecutive pieces of one buffer
-    need, but only map-time acceptance is measured. A running guest has not yet read or written
-    through such a mapping.
 - **The cost is one VM map entry per non-contiguous run.** It is not per byte. A fully scattered
   128 MiB import takes 8191 entries, a 9 ms remap and 2.7 ms to wrap in a buffer. The same size in
   runs of 64 takes 128 entries and 0.2 ms. Coalescing runs is mandatory, and so is budgeting
