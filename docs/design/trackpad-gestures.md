@@ -1,10 +1,13 @@
 # Trackpad gestures: a guest-side multitouch device with strict contact ownership
 
-Status: DESIGN. MT device not implemented. The companion quick win SHIPPED 2026-07-28:
-hi-res scroll (f1a8e56) — see §Independent quick win. Ownership decided (§The ownership
-rule): the guest owns 2- and 3-finger sequences in seamless mode and under capture alike,
-made possible by a measured HID-level event tap that suppresses the host's gestures per
-finger count (§Raw multitouch capture and gesture suppression).
+Status: the guest touchpad and its `NSTouch` feed are BUILT (§What is built); two-finger
+scroll, pinch, taps and clicks work on the stock tier. The HID-level gesture tap is NOT built,
+so macOS still acts on the gestures it claims: three-finger swipes on the default "three or
+four" setting never reach the guest. Ownership decided (§The ownership rule): the guest owns 2-
+and 3-finger sequences in seamless mode and under capture alike, made possible by a measured
+HID-level event tap that suppresses the host's gestures per finger count (§Raw multitouch
+capture and gesture suppression). The companion quick win SHIPPED 2026-07-28: hi-res scroll
+(f1a8e56) — see §Independent quick win.
 
 ## Why
 
@@ -61,9 +64,29 @@ gesture suppression). With it, the partition is:
   must count **local touches only** (touches with a device, or the local raw count), or a
   remote gesture that nothing forwards is simply lost.
 
+## What is built
+
+- **The device** — `limina_input::backends::TouchpadConfig` (worker) and the encoder
+  `limina_input::touchpad::Touchpad` (host). Stock Fedora 44 (kernel 6.19.10, libinput 1.31)
+  lists it as `Size: 125x77mm`, `Capabilities: pointer gesture`, `PROP=5`.
+- **The size** — `crates/limina/src/hosttrackpad.rs` reads the default trackpad's surface
+  (`MTDeviceGetSensorSurfaceDimensions`, `dlopen`ed) once per process and passes it to the
+  worker as `--input-touchpad-size`.
+- **The feed** — the local event monitor takes `NSEventMask::Gesture`, and
+  `InputState::on_gesture` reads `allTouches()` (local, non-resting, touching). AppKit attaches
+  touches to those events **only when a view opts in**: the guest views set
+  `allowedTouchTypes = .indirect` (`guestwindow.rs`); without it every gesture event arrived
+  empty.
+- **The policy** — `window/trackpad.rs`, pure and unit-tested: sequence ownership, the scroll
+  dedupe, click routing, and the three timing rules in §Dedupe and teardown.
+- **Diagnostics** — `LIMINA_POINTER_WIRE_TRACE` adds `dev=touchpad` writes, a `[TOUCH]` line
+  per gesture event (all/local counts, in-view) and `[CLICKSRC]` per forwarded press.
+  `spikes/mt-raw-capture/guest-evdev-log.py` logs the guest device's raw stream in wallclock
+  microseconds that match the host's `[WIRE] t=` stamps event for event.
+
 ## Host side: touch source and device config
 
-- **Source:** either will do; the device does not care which.
+- **Source:** either will do; the device does not care which. `NSTouch` is what is built.
   - **The raw multitouch stream** (§Raw stream) gives positions, ellipses and pressure
     at ~124 Hz, device-global, plus the real surface size.
   - **AppKit indirect touches** — `NSView.allowedTouchTypes = .indirect`, then
@@ -107,6 +130,30 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   the guest gets the gesture twice.
 - **Deciding the count:** use the sequence's *peak* count. Counts ramp while fingers land,
   and a sequence that ever reaches four is the host's from then on.
+
+**Timing rules, each measured on the stock tier:**
+
+- **Pace motion frames ≥ 10 ms apart** (`MIN_FRAME_INTERVAL`). AppKit delivers the trackpad's
+  samples as gesture events in back-to-back pairs ~0.3 ms apart, at ~60 Hz. The guest has no
+  timestamps from us (its kernel stamps on arrival), so libinput read real motion over that
+  near-zero interval as `kernel bug: Touch jump detected and discarded`. Landings and lifts are
+  never held back.
+- **Wait 50 ms before telling the guest fingers lifted** (`THIN_GRACE`), and never while the
+  touchpad button is held. AppKit's count flickers mid-gesture (2→1→2, 2→0→2 within a frame)
+  and reads zero while the pad is pressed down. Each dip passed on looked to the guest like a
+  fresh short two-finger touch, which libinput reads as a **tap**: a stray context menu when
+  fingers land for the next pinch, or a second right-click after a physical one.
+- **Clicks** (`ClickRoute`). A host click on fingers the guest holds becomes the touchpad's own
+  `BTN_LEFT`: the guest's click method decides (GNOME's default `fingers` makes two fingers one
+  right-click), and libinput drops the tap it would otherwise also read. macOS's own
+  tap-to-click right-click lands **~255–275 ms after the guest's sequence ended**, so a
+  *secondary* click within 500 ms of a guest sequence (`CLICK_TAIL`) is dropped: the guest
+  already produced it from its own tap. Primary clicks after a gesture stay the host's. The
+  guest's tap-to-click setting therefore governs two-finger taps over the VM.
+- **Three fingers need the HID tap.** When macOS claims a three-finger swipe (the default
+  setting), AppKit stops attaching touches to the app's gesture events: of ~8 000 gesture
+  events in one poke, 57 carried three touches. The guest cannot see the swipe until the
+  host's recognizer is suppressed.
 
 Teardown: on *any* transition — cursor leaves the view, window loses key, capture
 toggles, a fourth physical finger lands (the host is taking over), or the fingers lift — release every guest slot cleanly (`tracking_id` −1, `BTN_TOUCH` up, SYN) so the
@@ -309,8 +356,6 @@ Space-change notification plus the Dock's window layers.
 - Which of the swallowed event types actually matter to the HID-tap suppression: the spike
   swallowed seven, and type 29 (`NSEventTypeGesture`) streams at ~90/s under *any*
   contact, one finger included.
-- Host tap-to-click click synthesis timing vs our swallow window (does the click arrive
-  after the touch sequence ends?).
 - Whether momentum-phase scroll events reliably carry a marker tying them to the
   originating touch sequence (needed for the swallow window's tail).
 - Guest libinput behavior when contacts always begin as a simultaneous pair (expected

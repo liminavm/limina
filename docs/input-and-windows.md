@@ -25,6 +25,7 @@ somewhere far from the change.
 | `window/arrangement.rs` | the arrangement relay's geometry, and the guest's own layout **report** — the absolute device's mapping and the edge-pressure filter read it |
 | `window/input.rs` | `NSEvent` → evdev; the host cursor's shape; the capture toggle |
 | `window/capture_tap.rs` | the session-level `CGEventTap` that makes capture reliable |
+| `window/trackpad.rs` | *policy*: which trackpad touch sequences the guest's multitouch touchpad owns, and the scroll/click dedupe that follows (`docs/design/trackpad-gestures.md`) |
 | `window/grab_policy.rs` | *policy*: the grab, its releases, the chrome reveal, `WindowFacts` — pure, unit-tested, no AppKit |
 | `window/warp.rs` | the **warp broker**: the one owner of cursor warps, each asserted to land where it aimed |
 | `window/cursor.rs` | the guest cursor, in both of its two presentations |
@@ -543,6 +544,11 @@ configuration back (`crates/limina/src/hostmods.rs`, the ByHost global domain vi
   configuration can even distinguish the two models. Two panels at the same scale make a
   logical-units model and a pixel-units model *proportionally identical*, so a rig like that cannot
   falsify either.
+- **An `NSEvent` accessor can raise, and a raise in the local monitor drops the event.**
+  `-[NSEvent stage]` throws "Invalid message sent to event" on a plain mouse-down; called from
+  a trace in `emit_press`, it dropped every click before AppKit saw it, so the window never
+  became key. The exception only shows in the system log (`log show --predicate 'process ==
+  "limina"'`). Read only accessors documented for the event's type.
 - **Synthetic events are a poor oracle here.** A cursor warp opens a suppression window, and posting
   synthetic events needs Accessibility for the posting process; both show up as "the fix does not
   work" against working code. For anything the user must perceive, ask them.
