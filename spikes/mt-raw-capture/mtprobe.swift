@@ -110,7 +110,7 @@ while let a = argv.next() {
     default: fatalError("unknown argument \(a)")
     }
 }
-let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "hidtap-3", "restore"]
+let arms = ["baseline", "parser-off", "stop", "power-off", "hidtap", "hidtap-3", "hidwatch", "restore"]
 guard arms.contains(arm) else { fatalError("unknown arm \(arm); one of \(arms)") }
 
 // MARK: - Raw frames
@@ -235,6 +235,36 @@ let hidCallback: CGEventTapCallBack = { _, type, event, _ in
     return Unmanaged.passUnretained(event)
 }
 
+// hidwatch: a listen-only HID tap over every event type, logging which types
+// arrive from which source process (Universal Control injects remote input,
+// so its pid tells remote from local). New (type, pid) pairs log at once;
+// counts per pair log once a second.
+var watchCounts: [String: Int] = [:]
+var watchSeen = Set<String>()
+func procName(_ pid: Int64) -> String {
+    if pid == 0 { return "kernel/HID" }
+    var buf = [CChar](repeating: 0, count: 256)
+    return proc_name(Int32(pid), &buf, 256) > 0 ? String(cString: buf) : "?"
+}
+let watchCallback: CGEventTapCallBack = { _, type, event, _ in
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        if let t = hidTap { CGEvent.tapEnable(tap: t, enable: true) }
+        return Unmanaged.passUnretained(event)
+    }
+    let pid = event.getIntegerValueField(.eventSourceUnixProcessID)
+    let key = "type \(type.rawValue) from \(procName(pid))[\(pid)]"
+    watchCounts[key, default: 0] += 1
+    if watchSeen.insert(key).inserted {
+        var extra = ""
+        if type == .scrollWheel {
+            extra = String(format: " dy=%.1f dx=%.1f", event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1),
+                           event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2))
+        }
+        log("WATCH", "first \(key)\(extra)")
+    }
+    return Unmanaged.passUnretained(event)
+}
+
 func engage() {
     engaged = true
     for dev in devices {
@@ -246,6 +276,22 @@ func engage() {
         default: break
         }
         log("LEVER", "\(d) engaged: \(leverState(dev))")
+    }
+    if arm == "hidwatch" {
+        hidTap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap, options: .listenOnly,
+                                   eventsOfInterest: ~CGEventMask(0), callback: watchCallback, userInfo: nil)
+        if let t = hidTap {
+            CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, t, 0), .commonModes)
+            CGEvent.tapEnable(tap: t, enable: true)
+            log("LEVER", "hid watch tap installed (listen-only)")
+        } else {
+            log("LEVER", "hid watch tap creation FAILED")
+        }
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            guard !watchCounts.isEmpty else { return }
+            log("WATCH", watchCounts.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "; "))
+            watchCounts.removeAll()
+        }
     }
     if arm.hasPrefix("hidtap") {
         let mask = hidTypes.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << CGEventMask($1)) }

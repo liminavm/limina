@@ -123,6 +123,31 @@ recognizer. Setting: "three or four fingers" (the default).
   - User verdict: "putting the fingers normally - even if a bit slow - never felt like I
     was struggling to do the 4 finger gesture".
 
+### `hidwatch` — a remote trackpad over Universal Control
+
+A listen-only HID tap over every event type, logging each event's type and
+`kCGEventSourceUnixProcessID`. For 60 s the user drove this Mac from the *other* Mac's
+trackpad through Universal Control (move, click, two-finger scroll, pinch, 3- and
+4-finger swipes), then did a two-finger scroll on the local trackpad for comparison.
+
+- **The remote trackpad produces no raw contacts here.** MultitouchSupport enumerates
+  local devices only. The run's only raw frames were the local comparison scroll.
+- **Its input arrives already recognized**, at this Mac's HID tap: gesture (29), magnify
+  (30), scroll (22), mouse moved/dragged/down/up (5, 6, 1, 2) and system-defined (14)
+  events. **This Mac's Dock acted on them**: six Space switches, plus several appearances
+  of the full-screen Dock overlay (layer 18) around the pinch and the vertical swipes. The
+  other Mac did nothing (user).
+- **Source pid does not tell remote from local.** Remote and local events alike carry
+  pid 0. What does tell them apart: gesture events flowing while the local raw stream
+  shows no contacts.
+- Consequences for limina:
+  - The guest MT touchpad cannot be fed from a remote trackpad, because there are no
+    contacts. That input stays on the tablet + cooked hi-res scroll path.
+  - A tap filtering on the local raw count (`hidtap-3`) never swallows remote gestures,
+    so they stay the host's. Remote input degrades gracefully rather than breaking.
+  - Not tested: whether `NSEvent(cgEvent:)` on a forwarded gesture event exposes touches
+    (`allTouches()`), which would recover a finger count for remote input.
+
 ### `parser-off` — suppresses everything, leaks, rejected
 
 `MTDeviceSetParserEnabled(dev, Bool) -> OSStatus` and `MTDeviceGetParserEnabled(dev,

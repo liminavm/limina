@@ -312,6 +312,12 @@ Space-change notification plus the Dock's window layers.
   desktop), the two-finger right-edge swipe (Notification Center), and App Exposé opened
   from a neutral state. Every 3-finger swipe down in the runs closed Mission Control
   rather than opening App Exposé.
+- A trackpad on another Mac, used over Universal Control, reaches this Mac as
+  already-recognized gesture/scroll/magnify events with no raw contacts. The host Dock
+  acts on them, and they carry pid 0 like local input (`RESULTS.md` §hidwatch). A
+  count-keyed tap therefore leaves remote gestures to the host, and the MT device cannot
+  serve them. Open: whether `NSEvent.allTouches()` on those forwarded events recovers a
+  finger count.
 - Only a tap that is already installed and filters per event on the live count is
   measured. A tap *installed* at count determination would have to beat the recognizer
   (Dock transition windows appeared ~180–280 ms after touchdown), so don't build that one.
