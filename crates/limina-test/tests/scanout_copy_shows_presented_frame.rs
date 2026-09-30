@@ -62,6 +62,9 @@ struct Traced {
     id: u32,
     arrived: u32,
     shown: u32,
+    /// How many copy surfaces some process held in use when this one was picked, where the
+    /// renderer says.
+    in_use: Option<u32>,
 }
 
 /// The frame number a `bgra` pixel (bytes in memory order) carries: red, green, blue are its bits
@@ -82,10 +85,15 @@ fn traced(log: &str) -> Vec<Traced> {
             let hex = |w: &str, key: &str| u32::from_str_radix(w.strip_prefix(key)?, 16).ok();
             let (_, arrived) = (words.next()?, hex(words.next()?, "bgra=")?);
             let (_, shown) = (words.next()?, hex(words.next()?, "bgra=")?);
+            let in_use = words
+                .next()
+                .and_then(|w| w.strip_prefix("in_use="))
+                .and_then(|n| n.parse().ok());
             Some(Traced {
                 id,
                 arrived: stamp(arrived),
                 shown: stamp(shown),
+                in_use,
             })
         })
         .filter(|t| (1..=FRAMES).contains(&t.arrived))
@@ -201,6 +209,16 @@ fn run(name: &str, delay: &str) {
     );
 
     let wrong: Vec<&Traced> = copies.iter().filter(|t| t.shown != t.arrived).collect();
+    // Reported, not asserted: whether the window server marks a surface it composites as in use
+    // is what keeps the renderer from copying into one on glass, and this is where to see it.
+    let with_in_use = copies
+        .iter()
+        .filter(|t| t.in_use.is_some_and(|n| n > 0))
+        .count();
+    eprintln!(
+        "{with_in_use} of {} copies found another copy surface in use when picked",
+        copies.len()
+    );
     eprintln!(
         "{} traced copies, {} showing a frame other than the one presented; first: {:?}",
         copies.len(),
