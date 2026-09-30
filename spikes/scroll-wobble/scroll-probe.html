@@ -1,0 +1,122 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception -->
+<!-- Copyright © 2026 Gustavo Noronha Silva -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scroll probe</title>
+<style>
+  :root { --bg: #fff; --fg: #111; --muted: #666; --pos: #1565c0; --wheel: #c62828; --rev: #f9a825; --panel: #f4f4f4; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121212; --fg: #eee; --muted: #999; --pos: #64b5f6; --wheel: #ef5350; --rev: #ffd54f; --panel: #1e1e1e; }
+  }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  #hud { position: fixed; inset: 0 0 auto 0; z-index: 1; background: var(--panel); padding: 8px 16px;
+         border-bottom: 1px solid var(--muted); }
+  #hud button { margin-right: 6px; }
+  #stats { color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  canvas { display: block; width: 100%; height: 220px; margin-top: 6px; }
+  #content { padding: 320px 16px 16px; }
+  .row { height: 48px; border-bottom: 1px solid var(--panel); display: flex; align-items: center; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <button id="clear">Clear</button>
+  <button id="save">Save JSON</button>
+  <span>Scroll the page with two fingers, then stop. Blue: scroll position per frame; red: wheel deltas; yellow: a reversal.</span>
+  <div id="stats"></div>
+  <canvas id="plot"></canvas>
+</div>
+<div id="content"></div>
+<script>
+// What Firefox does with the scroll it gets: every `wheel` event (delta, mode, wall-clock time)
+// and the page's scroll position on every animation frame. A wobble shows as the position
+// reversing direction during or right after a scroll; the log is stamped in wall-clock ms
+// (performance.timeOrigin + timeStamp) so it lines up with the host recorder and the guest's
+// evdev log, whose clocks are anchored to the host's.
+const content = document.getElementById('content');
+for (let i = 0; i < 2000; i++) {
+  const d = document.createElement('div');
+  d.className = 'row';
+  d.textContent = `row ${i}`;
+  content.appendChild(d);
+}
+
+const wall = (ts) => performance.timeOrigin + ts;
+let log = { wheel: [], frames: [], reversals: [] };
+
+addEventListener('wheel', (e) => {
+  log.wheel.push({ t: wall(e.timeStamp), dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode });
+}, { passive: true });
+
+// Reversal detection on the per-frame position: a direction change of more than a pixel,
+// after at least a pixel of travel the other way.
+let lastY = scrollY, dir = 0;
+function frame(ts) {
+  const y = scrollY;
+  const t = wall(ts);
+  if (y !== lastY) {
+    log.frames.push({ t, y });
+    const d = Math.sign(y - lastY);
+    if (dir && d && d !== dir && Math.abs(y - lastY) > 1) {
+      log.reversals.push({ t, y, from: dir, to: d });
+    }
+    if (d) dir = d;
+    lastY = y;
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+const canvas = document.getElementById('plot');
+const ctx = canvas.getContext('2d');
+const stats = document.getElementById('stats');
+const WINDOW_MS = 4000;
+function draw() {
+  const dpr = devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const now = wall(performance.now());
+  const x = (t) => w - (now - t) / WINDOW_MS * w;
+  const css = getComputedStyle(document.documentElement);
+  const frames = log.frames.filter((f) => now - f.t < WINDOW_MS);
+  if (frames.length > 1) {
+    const ys = frames.map((f) => f.y);
+    const lo = Math.min(...ys), hi = Math.max(...ys), span = Math.max(hi - lo, 1);
+    ctx.strokeStyle = css.getPropertyValue('--pos');
+    ctx.beginPath();
+    frames.forEach((f, i) => {
+      const py = 10 + (f.y - lo) / span * (h / 2 - 20);
+      i ? ctx.lineTo(x(f.t), py) : ctx.moveTo(x(f.t), py);
+    });
+    ctx.stroke();
+  }
+  ctx.fillStyle = css.getPropertyValue('--wheel');
+  for (const e of log.wheel) {
+    if (now - e.t >= WINDOW_MS) continue;
+    const len = Math.max(-h / 4, Math.min(h / 4, e.dy));
+    ctx.fillRect(x(e.t), h * 0.75, 2, -len);
+  }
+  ctx.fillStyle = css.getPropertyValue('--rev');
+  for (const r of log.reversals) {
+    if (now - r.t < WINDOW_MS) ctx.fillRect(x(r.t) - 1, 0, 3, h);
+  }
+  stats.textContent = `wheel events ${log.wheel.length} · frames ${log.frames.length} · reversals ${log.reversals.length}`;
+}
+
+document.getElementById('clear').onclick = () => { log = { wheel: [], frames: [], reversals: [] }; };
+document.getElementById('save').onclick = () => {
+  const blob = new Blob([JSON.stringify({ ua: navigator.userAgent, ...log })], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `scroll-probe-${Date.now()}.json`;
+  a.click();
+};
+</script>
+</body>
+</html>
