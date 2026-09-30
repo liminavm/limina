@@ -57,6 +57,9 @@ pub struct VmState {
     /// never touched, as with [`Self::modifier_normalize`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub three_finger_gestures: Option<bool>,
+    /// The Input menu's "Raw Trackpad While Captured" switch. Default off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub raw_trackpad: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -193,6 +196,16 @@ pub fn set_three_finger_gestures(path: &Path, on: bool) -> std::io::Result<()> {
     save(path, &state)
 }
 
+/// Merge-save the raw trackpad switch, leaving everything else alone.
+pub fn set_raw_trackpad(path: &Path, on: bool) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.raw_trackpad == on {
+        return Ok(());
+    }
+    state.raw_trackpad = on;
+    save(path, &state)
+}
+
 /// Atomic save (tmp + rename, the `VmBundle::save` pattern). Best-effort at the
 /// call sites — losing a window-placement save is not worth failing anything.
 pub fn save(path: &Path, state: &VmState) -> std::io::Result<()> {
@@ -237,6 +250,7 @@ mod tests {
             fullscreen_all_displays: true,
             modifier_normalize: None,
             three_finger_gestures: None,
+            raw_trackpad: false,
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));
@@ -264,6 +278,7 @@ mod tests {
             fullscreen_all_displays: false,
             modifier_normalize: None,
             three_finger_gestures: None,
+            raw_trackpad: false,
         };
         save(&path, &state).expect("a top-bit identity key must be persistable");
         assert_eq!(load(&path), Some(state));
@@ -332,6 +347,7 @@ mod tests {
                 fullscreen_all_displays: false,
                 modifier_normalize: None,
                 three_finger_gestures: None,
+                raw_trackpad: false,
             },
         )
         .unwrap();
@@ -416,6 +432,21 @@ mod tests {
         assert_eq!(back.display_slots, vec![(7, 1)], "merged, not clobbered");
         set_modifier_normalize(&path, true).unwrap();
         assert_eq!(load(&path).unwrap().modifier_normalize, Some(true));
+    }
+
+    #[test]
+    fn the_raw_trackpad_switch_remembers_on() {
+        let dir = scratch("rawtrackpad");
+        let path = dir.join("state.toml");
+        set_display_slots(&path, vec![(7, 1)]).unwrap();
+        assert!(!load(&path).unwrap().raw_trackpad);
+        set_raw_trackpad(&path, true).unwrap();
+        let back = load(&path).unwrap();
+        assert!(back.raw_trackpad, "on must persist");
+        assert_eq!(back.display_slots, vec![(7, 1)], "merged, not clobbered");
+        set_raw_trackpad(&path, false).unwrap();
+        assert!(!load(&path).unwrap().raw_trackpad);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

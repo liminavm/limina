@@ -136,6 +136,10 @@ const DISABLED_USERINPUT: u32 = 0xFFFF_FFFF;
 
 // CGEventField values (CGEventTypes.h).
 const FIELD_BUTTON_NUMBER: u32 = 3;
+/// `kCGMouseEventSubtype`: 3 (touch) on the trackpad's pointer events, 0 on a mouse's
+/// (measured, `spikes/raw-trackpad/`).
+const FIELD_MOUSE_SUBTYPE: u32 = 7;
+const MOUSE_SUBTYPE_TOUCH: i64 = 3;
 const FIELD_DELTA_X: u32 = 4;
 const FIELD_DELTA_Y: u32 = 5;
 const FIELD_KEYBOARD_AUTOREPEAT: u32 = 8;
@@ -557,7 +561,22 @@ extern "C" fn tap_callback(
         send(InputEvent::new(EV_KEY, btn, i32::from(down)));
         send(InputEvent::syn());
     };
+    let from_trackpad = geti(FIELD_MOUSE_SUBTYPE) == MOUSE_SUBTYPE_TOUCH;
     match etype {
+        // Raw trackpad mode: the guest touchpad drives the pointer and reads the clicks; the
+        // hidden host cursor only stays parked.
+        MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG
+            if ctx.input.raw_trackpad_owns(from_trackpad) =>
+        {
+            ctx.input.repin_park(&ctx.view);
+        }
+        LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP if ctx.input.raw_trackpad_owns(from_trackpad) => {
+            let down = matches!(etype, LMB_DOWN | RMB_DOWN);
+            if let Some(ns) = NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) }) {
+                ctx.input.record_trackpad_click(&ns, down);
+            }
+            ctx.input.raw_trackpad_click(down);
+        }
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG => {
             // The deltas carry the pointer-ballistics-processed motion the macOS cursor would
             // have made, so integrating them moves the virtual cursor exactly like the host

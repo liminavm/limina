@@ -19,6 +19,7 @@
 use std::time::{Duration, Instant};
 
 use limina_input::InputEvent;
+use limina_input::constants::{BTN_LEFT, EV_KEY};
 use limina_input::touchpad::{Contact, MAX_SLOTS, TOUCHPAD_RES, Touchpad, TouchpadGeometry};
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +69,12 @@ pub const COMMIT_HOLD: Duration = Duration::from_millis(200);
 /// [`TAP_MOVE_MM`]: past libinput's 180 ms tap timeout, so a touch the guest sees can never
 /// end as a tap.
 pub const TAP_GUARD: Duration = Duration::from_millis(200);
+
+/// In raw mode, how recently a finger must have been on the pad for a trackpad click to be a
+/// physical press. macOS's tap-to-click is delivered after the fingers lift — 220–340 ms after
+/// in the recordings and the probe (`spikes/raw-trackpad/`), physical clicks 0–30 ms from a
+/// touch — and in raw mode the guest reads that tap itself.
+pub const TAP_CLICK_GAP: Duration = Duration::from_millis(100);
 
 /// One local finger, as AppKit reports it: a stable identity, a position normalized to the
 /// surface (**top-left** origin), and whether macOS considers it resting.
@@ -140,6 +147,14 @@ pub struct TrackpadSeq {
     /// Whether three-finger sequences are the guest's (the Input menu's switch). Off, they are
     /// the host's like four.
     three_fingers: bool,
+    /// **Raw mode** (the Input menu's "Raw Trackpad While Captured", while captured): every
+    /// sequence of up to three fingers is the guest's from its first finger, with no commit —
+    /// the guest drives the pointer, and reads taps, clicks and gestures itself.
+    raw: bool,
+    /// When a finger was last on the pad, resting or not ([`TAP_CLICK_GAP`]).
+    last_contact: Option<Instant>,
+    /// Whether the guest touchpad's button is down (raw mode).
+    pad_button: bool,
 }
 
 impl TrackpadSeq {
@@ -160,7 +175,63 @@ impl TrackpadSeq {
             speeds_sent: Vec::new(),
             thin: None,
             three_fingers: true,
+            raw: false,
+            last_contact: None,
+            pad_button: false,
         }
+    }
+
+    /// Whether raw mode is on.
+    pub fn raw(&self) -> bool {
+        self.raw
+    }
+
+    /// Enter or leave raw mode. A sequence in flight goes to the host, and a pressed button
+    /// is released.
+    pub fn set_raw(&mut self, on: bool) -> Vec<InputEvent> {
+        if self.raw == on {
+            return Vec::new();
+        }
+        self.raw = on;
+        let mut events = self.release_button();
+        events.extend(self.cancel());
+        events
+    }
+
+    /// A trackpad click in raw mode. A press with a finger on the pad, or one just off it, is
+    /// the physical button: the guest touchpad's own, whose meaning (left, right by finger
+    /// count or area) the guest decides. Any other press is macOS's tap-to-click, which the
+    /// guest has already read from the contacts, and is dropped.
+    pub fn on_click(&mut self, down: bool, now: Instant) -> Vec<InputEvent> {
+        if !self.raw {
+            return Vec::new();
+        }
+        if !down {
+            let mut events = self.release_button();
+            if !events.is_empty() && matches!(self.thin, Some((_, 0))) {
+                // The fingers left while the pad was pressed: they lift with the button.
+                events.extend(self.touchpad.release_all());
+                self.thin = None;
+                self.end_sequence();
+            }
+            return events;
+        }
+        let physical = self.touchpad.active() > 0
+            || self
+                .last_contact
+                .is_some_and(|t| now.duration_since(t) <= TAP_CLICK_GAP);
+        if self.pad_button || !physical {
+            return Vec::new();
+        }
+        self.pad_button = true;
+        vec![InputEvent::new(EV_KEY, BTN_LEFT, 1), InputEvent::syn()]
+    }
+
+    fn release_button(&mut self) -> Vec<InputEvent> {
+        if !std::mem::take(&mut self.pad_button) {
+            return Vec::new();
+        }
+        vec![InputEvent::new(EV_KEY, BTN_LEFT, 0), InputEvent::syn()]
     }
 
     /// Give three-finger sequences to the guest, or leave them to macOS. A guest-owned
@@ -194,6 +265,9 @@ impl TrackpadSeq {
         in_view: bool,
         now: Instant,
     ) -> Vec<InputEvent> {
+        if !touches.is_empty() {
+            self.last_contact = Some(now);
+        }
         let guest = self.owner == Some(Owner::Guest);
         let touches: Vec<TouchSample> = touches
             .iter()
@@ -204,7 +278,9 @@ impl TrackpadSeq {
         self.last_touch = Some(now);
         let n = touches.len();
 
-        if self.owner == Some(Owner::Guest) && n < 2 {
+        // Raw, one finger is a sequence of its own; otherwise one finger is the tablet's.
+        let fewest = if self.raw { 1 } else { 2 };
+        if self.owner == Some(Owner::Guest) && n < fewest {
             // Hold the guest's fingers where they are — the motion held back by the pacing
             // still goes out, it is where they last were — and let [`Self::lift`] decide
             // whether this is a real lift rather than a flicker.
@@ -230,7 +306,7 @@ impl TrackpadSeq {
 
         let owner = match owner {
             _ if self.peak > self.guest_max() => Owner::Host,
-            Owner::Pending if self.peak >= 2 => {
+            Owner::Pending if self.peak >= fewest => {
                 if in_view {
                     Owner::Guest
                 } else {
@@ -308,6 +384,11 @@ impl TrackpadSeq {
     /// (paced) frame; held still long enough → the current positions. Either way it is held
     /// ([`TAP_GUARD`]) until the guest sees it move too far to be a tap.
     fn try_commit(&mut self, contacts: Vec<Contact>, now: Instant) -> Vec<InputEvent> {
+        if self.raw {
+            // The guest reads its own taps: it sees every touch as it lands.
+            self.uncommitted = None;
+            return self.send_frame(&contacts, now);
+        }
         let unc = self.uncommitted.get_or_insert_with(|| Uncommitted {
             since: now,
             landing: Vec::new(),
@@ -446,6 +527,11 @@ impl TrackpadSeq {
             }
             events = self.send_frame(&contacts, now);
         }
+        if self.pad_button {
+            // Touches can vanish while the pad is pressed; a click-drag must not lift. The
+            // release lifts them ([`Self::on_click`]).
+            return events;
+        }
         let graced = now.duration_since(since) >= THIN_GRACE;
         if (n == 0 || graced) && (self.touchpad.active() == 0 || self.guarded(now)) {
             events.extend(self.touchpad.release_all());
@@ -503,9 +589,10 @@ impl TrackpadSeq {
     /// three-finger sequence and must not reach macOS — which would otherwise switch Spaces
     /// or open Mission Control under the guest's swipe. For the whole sequence, not the
     /// instant: a staggered lift passes the last fingers' events on a per-instant count.
-    /// Two-finger sequences stay macOS's to recognise: their taps are the guest's clicks.
+    /// Two-finger sequences stay macOS's to recognise: their taps are the guest's clicks —
+    /// except in raw mode, where the guest reads its own taps.
     pub fn swallows_gestures(&self) -> bool {
-        self.owner == Some(Owner::Guest) && self.peak >= 3
+        self.owner == Some(Owner::Guest) && (self.peak >= 3 || (self.raw && self.peak >= 2))
     }
 
     /// A transition that ends forwarding for the rest of this sequence (focus loss, capture
@@ -1419,5 +1506,116 @@ mod tests {
             s.on_touches(&[t(1, 0.15, 0.1), t(2, 0.25, 0.2)], true, now)
                 .is_empty()
         );
+    }
+
+    fn raw() -> TrackpadSeq {
+        let mut s = seq();
+        assert!(s.set_raw(true).is_empty());
+        s
+    }
+
+    fn button(ev: &[InputEvent], down: bool) -> bool {
+        ev.contains(&InputEvent::new(EV_KEY, BTN_LEFT, i32::from(down)))
+    }
+
+    #[test]
+    fn raw_one_finger_reaches_the_guest_at_once() {
+        let mut s = raw();
+        let now = Instant::now();
+        assert_eq!(
+            slots_down(&s.on_touches(&[t(1, 0.1, 0.1)], true, now)),
+            1,
+            "no commit: the guest drives the pointer"
+        );
+        assert!(
+            !s.swallows_gestures(),
+            "no gesture to take from macOS for one finger"
+        );
+    }
+
+    #[test]
+    fn raw_a_quick_tap_reaches_the_guest_and_lifts_at_once() {
+        // The guest recognises its own taps: nothing is held back and nothing is held down.
+        let mut s = raw();
+        let now = Instant::now();
+        let ev = s.on_touches(&[t(1, 0.1, 0.1), t(2, 0.2, 0.2)], true, now);
+        assert_eq!(slots_down(&ev), 2);
+        assert!(
+            s.swallows_gestures(),
+            "macOS's two-finger gestures are the guest's too"
+        );
+        let up = now + Duration::from_millis(60);
+        assert!(lifted(&s.on_touches(&[], true, up)));
+    }
+
+    #[test]
+    fn raw_a_click_with_a_finger_down_is_the_touchpads_button() {
+        let mut s = raw();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.1, 0.1)], true, now);
+        let press = now + Duration::from_millis(5);
+        let ev = s.on_click(true, press);
+        assert!(button(&ev, true));
+        assert!(button(
+            &s.on_click(false, press + Duration::from_millis(90)),
+            false
+        ));
+    }
+
+    #[test]
+    fn raw_macos_tap_click_is_dropped() {
+        // macOS's tap-to-click lands 220-340 ms after the fingers lift; the guest has read the
+        // tap itself by then.
+        let mut s = raw();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.1, 0.1)], true, now);
+        let up = now + Duration::from_millis(60);
+        s.on_touches(&[], true, up);
+        let click = up + Duration::from_millis(230);
+        assert!(s.on_click(true, click).is_empty());
+        assert!(s.on_click(false, click).is_empty());
+    }
+
+    #[test]
+    fn raw_fingers_stay_down_while_the_pad_is_pressed() {
+        // Touches can vanish while the pad is pressed: a click-drag must not lift.
+        let mut s = raw();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.1, 0.1)], true, now);
+        assert!(button(&s.on_click(true, now), true));
+        let gap = now + Duration::from_millis(20);
+        assert!(!lifted(&s.on_touches(&[], true, gap)));
+        assert!(!lifted(&s.tick(gap + THIN_GRACE)));
+        // Back after the gap: the same finger, moved.
+        let back = gap + THIN_GRACE + Duration::from_millis(10);
+        let mut ev = s.on_touches(&[t(1, 0.12, 0.1)], true, back);
+        assert!(!lifted(&ev));
+        ev.extend(s.tick(back + MIN_FRAME_INTERVAL));
+        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 1200)));
+        // Released with the fingers gone: the button and the fingers lift.
+        let lift = back + Duration::from_millis(100);
+        s.on_touches(&[], true, lift);
+        let ev = s.on_click(false, lift);
+        assert!(button(&ev, false));
+        assert!(lifted(&ev));
+    }
+
+    #[test]
+    fn leaving_raw_lifts_the_fingers_and_the_button() {
+        let mut s = raw();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.1, 0.1)], true, now);
+        s.on_click(true, now);
+        let ev = s.set_raw(false);
+        assert!(button(&ev, false));
+        assert!(lifted(&ev));
+        assert!(
+            s.on_click(false, now).is_empty(),
+            "the release was already sent"
+        );
+        // Back to the ordinary rule: one finger is the host's.
+        let later = now + Duration::from_secs(1);
+        s.on_touches(&[], true, later);
+        assert!(s.on_touches(&[t(1, 0.1, 0.1)], true, later).is_empty());
     }
 }

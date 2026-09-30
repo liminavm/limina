@@ -228,6 +228,21 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   setting), AppKit stops attaching touches to the app's gesture events: of ~8 000 gesture
   events in one poke, 57 carried three touches. The guest cannot see the swipe until the
   host's recognizer is suppressed.
+- **Raw mode** (Input ▸ "Raw Trackpad While Captured", per VM, default off) hands the guest
+  everything up to three fingers while the pointer is captured, for users who prefer the
+  guest's own pointer acceleration and tap and click settings. Every sequence of one to three
+  fingers is the guest's from its first finger, with no commit and no tap guard; macOS's
+  gestures are taken from two fingers up. Captured only: the host cursor is hidden and parked
+  then, so the guest's pointer is the only one. The capture tap tells the trackpad's pointer
+  events by their mouse subtype (3, touch; a mouse's, a Universal Control mouse's included,
+  is 0) and stops them driving the tablet. A trackpad click with a finger on the pad, or off
+  it for at most 100 ms (`TAP_CLICK_GAP`), is the physical button and becomes the guest
+  touchpad's `BTN_LEFT` (the guest's click method decides left or right); anything later is
+  macOS's tap-to-click — 220–340 ms after the lift, against 0–30 ms for a physical click
+  (`spikes/raw-trackpad/`, the recordings) — and is dropped, the guest having read the tap
+  itself. While the pad is pressed the guest's fingers never lift, since touches can vanish
+  mid-press; the release lifts them. A trackpad push against the capture window's edge no
+  longer releases the grab (the guest's pointer is not the tablet's); the ungrab chord does.
 
 Teardown: on *any* transition — cursor leaves the view, window loses key, capture
 toggles, a fourth physical finger lands (the host is taking over), or the fingers lift — release every guest slot cleanly (`tracking_id` −1, `BTN_TOUCH` up, SYN) so the

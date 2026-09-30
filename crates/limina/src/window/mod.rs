@@ -426,6 +426,14 @@ fn save_three_finger_gestures(path: Option<&Path>, on: bool) {
     }
 }
 
+/// The Input menu's raw trackpad switch, saved beside the display state.
+fn save_raw_trackpad(path: Option<&Path>, on: bool) {
+    let Some(path) = path else { return };
+    if let Err(e) = crate::vmlib::state::set_raw_trackpad(path, on) {
+        log::warn!("raw trackpad save failed: {e}");
+    }
+}
+
 /// The set of displays the user has switched off, saved beside the assignment.
 fn save_display_disabled(path: Option<&Path>, disabled: Vec<u64>) {
     let Some(path) = path else { return };
@@ -670,6 +678,13 @@ thread_local! {
     /// persists it.
     static THREE_FINGER_GESTURES: Cell<bool> = const { Cell::new(true) };
 
+    /// The Input menu's "Raw Trackpad While Captured" switch: while the pointer is captured,
+    /// the guest's touchpad gets every sequence of up to three fingers from the first finger —
+    /// pointer, taps, clicks and gestures, with the guest's own acceleration. Off by default,
+    /// overridden by a remembered menu choice; the render timer hands each change to the input
+    /// translator and persists it.
+    static RAW_TRACKPAD: Cell<bool> = const { Cell::new(false) };
+
     /// Whether the tick has made its one quiet attempt at the gesture tap. Retrying every tick
     /// without Accessibility would ask TCC sixty times a second; the menu retries on demand.
     static GESTURE_TAP_TRIED: Cell<bool> = const { Cell::new(false) };
@@ -876,6 +891,18 @@ define_class!(
             }
         }
 
+        // Input ▸ Raw Trackpad While Captured: whether the guest's touchpad takes everything
+        // up to three fingers while the pointer is captured. The render timer adopts it.
+        #[unsafe(method(toggleRawTrackpad:))]
+        fn toggle_raw_trackpad(&self, _sender: &NSMenuItem) {
+            let on = !RAW_TRACKPAD.with(|f| f.get());
+            RAW_TRACKPAD.with(|f| f.set(on));
+            log::info!(
+                "menu: raw trackpad while captured {}",
+                if on { "on" } else { "off" }
+            );
+        }
+
         // Show in Finder: reveal the .liminavm bundle.
         #[unsafe(method(revealVm:))]
         fn reveal_vm(&self, _sender: &NSMenuItem) {
@@ -1042,6 +1069,22 @@ fn populate_input_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
         )
     };
     item.setState(if THREE_FINGER_GESTURES.with(|f| f.get()) {
+        objc2_app_kit::NSControlStateValueOn
+    } else {
+        objc2_app_kit::NSControlStateValueOff
+    });
+    unsafe { item.setTarget(Some(actions)) };
+    menu.addItem(&item);
+
+    let item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Raw Trackpad While Captured"),
+            Some(objc2::sel!(toggleRawTrackpad:)),
+            &NSString::from_str(""),
+        )
+    };
+    item.setState(if RAW_TRACKPAD.with(|f| f.get()) {
         objc2_app_kit::NSControlStateValueOn
     } else {
         objc2_app_kit::NSControlStateValueOff
@@ -2410,6 +2453,7 @@ pub fn run(
             if let Some(on) = saved.three_finger_gestures {
                 THREE_FINGER_GESTURES.with(|f| f.set(on));
             }
+            RAW_TRACKPAD.with(|f| f.set(saved.raw_trackpad));
         }
         std::rc::Rc::new(RefCell::new(table))
     };
@@ -2427,6 +2471,7 @@ pub fn run(
         // real change and not the startup value written back over the file.
         let normalize_saved: Cell<bool> = Cell::new(MODIFIER_NORMALIZE.with(|f| f.get()));
         let three_saved: Cell<bool> = Cell::new(THREE_FINGER_GESTURES.with(|f| f.get()));
+        let raw_saved: Cell<bool> = Cell::new(RAW_TRACKPAD.with(|f| f.get()));
         let panel_names: RefCell<Vec<(u64, String)>> = RefCell::new(Vec::new());
         let window = window.clone();
         let ack_tx = ack_tx.clone();
@@ -2604,6 +2649,11 @@ pub fn run(
                     if three_saved.get() != three {
                         save_three_finger_gestures(slots_state_path.as_deref(), three);
                         three_saved.set(three);
+                    }
+                    let raw = RAW_TRACKPAD.with(|f| f.get());
+                    if raw_saved.get() != raw {
+                        save_raw_trackpad(slots_state_path.as_deref(), raw);
+                        raw_saved.set(raw);
                     }
                 }
 
@@ -3397,6 +3447,7 @@ pub fn run(
             gesture_tap::ensure();
         }
         timer_input.set_three_fingers(three);
+        timer_input.set_raw_trackpad(RAW_TRACKPAD.with(|f| f.get()));
         let facts = timer_input.window_facts(&timer_view);
         let pf = grab_policy::primary_facts(&facts);
         // App-level, like every other key question here: focus moving from the primary to a
