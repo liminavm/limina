@@ -3313,9 +3313,45 @@ impl InputState {
     /// else is asked of them, and their gestures stay the host's. Whether a finger is resting
     /// travels with it; [`TrackpadSeq`] decides what a resting finger counts for.
     fn on_gesture(&self, event: &NSEvent, view: &NSView) {
+        // With the gesture tap installed it is the touch source, for every gesture event —
+        // the ones it takes from macOS never reach this monitor, and feeding the ones it
+        // passes a second time here would double every sample.
+        if super::gesture_tap::installed() {
+            return;
+        }
+        let in_view = self.is_captured() || self.target_of(event, view).inside;
+        self.feed_touches(event, in_view);
+    }
+
+    /// The gesture tap's half of [`Self::on_gesture`]: one gesture event seen at the HID
+    /// level, wherever the pointer is, at `loc` (CG global). Feeds the policy, then answers
+    /// whether macOS must not see the event — a guest-owned three-finger sequence's.
+    pub(crate) fn on_tap_gesture(&self, event: &NSEvent, loc: NSPoint, view: &NSView) -> bool {
+        let in_view = self.is_captured()
+            || (self.guest_surface_at_global(loc, view).is_some()
+                && self.guest_is_topmost_at(loc, view).ours);
+        self.feed_touches(event, in_view);
+        self.trackpad.borrow().swallows_gestures()
+    }
+
+    /// Whether the host's gesture events belong to the guest right now (see
+    /// [`TrackpadSeq::swallows_gestures`]) — for the gesture types that carry no touches.
+    pub(crate) fn swallows_gestures(&self) -> bool {
+        self.trackpad.borrow().swallows_gestures()
+    }
+
+    /// The Input menu's three-finger switch, adopted by the render tick.
+    pub(crate) fn set_three_fingers(&self, on: bool) {
+        let events = self.trackpad.borrow_mut().set_three_fingers(on);
+        self.send_touchpad(&events);
+    }
+
+    fn feed_touches(&self, event: &NSEvent, in_view: bool) {
         let touches: Vec<TouchSample> = event
             .allTouches()
             .iter()
+            // Local touches only: a Universal Control trackpad's have no device, no size and
+            // no readable position (`spikes/mt-raw-capture/RESULTS.md`), and stay the host's.
             .filter(|t| t.device().is_some())
             .filter(|t| t.phase().intersects(NSTouchPhase::Touching))
             .map(|t| {
@@ -3336,7 +3372,6 @@ impl InputState {
                 }
             })
             .collect();
-        let in_view = self.is_captured() || self.target_of(event, view).inside;
         let resting = touches.iter().filter(|t| t.resting).count();
         let shape = (touches.len(), resting);
         if wire_trace() && self.touch_trace_count.replace(shape) != shape {

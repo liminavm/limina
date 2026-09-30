@@ -53,6 +53,10 @@ pub struct VmState {
     /// later and more specific instruction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modifier_normalize: Option<bool>,
+    /// The Input menu's "Three-Finger Gestures in the VM" switch. Default on, so absent means
+    /// never touched, as with [`Self::modifier_normalize`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub three_finger_gestures: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -179,6 +183,16 @@ pub fn set_modifier_normalize(path: &Path, on: bool) -> std::io::Result<()> {
     save(path, &state)
 }
 
+/// Merge-save the three-finger gestures switch, leaving everything else alone.
+pub fn set_three_finger_gestures(path: &Path, on: bool) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.three_finger_gestures == Some(on) {
+        return Ok(());
+    }
+    state.three_finger_gestures = Some(on);
+    save(path, &state)
+}
+
 /// Atomic save (tmp + rename, the `VmBundle::save` pattern). Best-effort at the
 /// call sites — losing a window-placement save is not worth failing anything.
 pub fn save(path: &Path, state: &VmState) -> std::io::Result<()> {
@@ -222,6 +236,7 @@ mod tests {
             display_disabled: Vec::new(),
             fullscreen_all_displays: true,
             modifier_normalize: None,
+            three_finger_gestures: None,
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));
@@ -248,6 +263,7 @@ mod tests {
             display_disabled: Vec::new(),
             fullscreen_all_displays: false,
             modifier_normalize: None,
+            three_finger_gestures: None,
         };
         save(&path, &state).expect("a top-bit identity key must be persistable");
         assert_eq!(load(&path), Some(state));
@@ -315,6 +331,7 @@ mod tests {
                 display_disabled: Vec::new(),
                 fullscreen_all_displays: false,
                 modifier_normalize: None,
+                three_finger_gestures: None,
             },
         )
         .unwrap();
@@ -399,6 +416,21 @@ mod tests {
         assert_eq!(back.display_slots, vec![(7, 1)], "merged, not clobbered");
         set_modifier_normalize(&path, true).unwrap();
         assert_eq!(load(&path).unwrap().modifier_normalize, Some(true));
+    }
+
+    #[test]
+    fn the_three_finger_switch_remembers_off_and_absence() {
+        let dir = scratch("threefinger");
+        let path = dir.join("state.toml");
+        set_display_slots(&path, vec![(7, 1)]).unwrap();
+        assert_eq!(load(&path).unwrap().three_finger_gestures, None);
+        set_three_finger_gestures(&path, false).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!(back.three_finger_gestures, Some(false), "off must persist");
+        assert_eq!(back.display_slots, vec![(7, 1)], "merged, not clobbered");
+        set_three_finger_gestures(&path, true).unwrap();
+        assert_eq!(load(&path).unwrap().three_finger_gestures, Some(true));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

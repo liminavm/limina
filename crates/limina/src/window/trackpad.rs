@@ -114,6 +114,9 @@ pub struct TrackpadSeq {
     /// Since when a guest-owned sequence has had fewer than two fingers, and how many
     /// ([`THIN_GRACE`]).
     thin: Option<(Instant, usize)>,
+    /// Whether three-finger sequences are the guest's (the Input menu's switch). Off, they are
+    /// the host's like four.
+    three_fingers: bool,
 }
 
 impl TrackpadSeq {
@@ -130,7 +133,26 @@ impl TrackpadSeq {
             last_frame: None,
             pending: None,
             thin: None,
+            three_fingers: true,
         }
+    }
+
+    /// Give three-finger sequences to the guest, or leave them to macOS. A guest-owned
+    /// three-finger sequence in flight goes to the host.
+    pub fn set_three_fingers(&mut self, on: bool) -> Vec<InputEvent> {
+        if self.three_fingers == on {
+            return Vec::new();
+        }
+        self.three_fingers = on;
+        if !on && self.owner == Some(Owner::Guest) && self.peak >= 3 {
+            return self.cancel();
+        }
+        Vec::new()
+    }
+
+    /// The most fingers a guest-owned sequence may reach.
+    fn guest_max(&self) -> usize {
+        if self.three_fingers { MAX_SLOTS } else { 2 }
     }
 
     /// The local fingers down now, from one gesture event. `in_view` is whether the pointer
@@ -181,7 +203,7 @@ impl TrackpadSeq {
         self.peak = self.peak.max(n);
 
         let owner = match owner {
-            _ if self.peak > MAX_SLOTS => Owner::Host,
+            _ if self.peak > self.guest_max() => Owner::Host,
             Owner::Pending if self.peak >= 2 => {
                 if in_view {
                     Owner::Guest
@@ -357,6 +379,15 @@ impl TrackpadSeq {
             Some(_) => false,
             None => self.momentum_guest,
         }
+    }
+
+    /// Whether the host's own gesture events (swipe, magnify, rotate, …) belong to a guest
+    /// three-finger sequence and must not reach macOS — which would otherwise switch Spaces
+    /// or open Mission Control under the guest's swipe. For the whole sequence, not the
+    /// instant: a staggered lift passes the last fingers' events on a per-instant count.
+    /// Two-finger sequences stay macOS's to recognise: their taps are the guest's clicks.
+    pub fn swallows_gestures(&self) -> bool {
+        self.owner == Some(Owner::Guest) && self.peak >= 3
     }
 
     /// A transition that ends forwarding for the rest of this sequence (focus loss, capture
@@ -752,6 +783,72 @@ mod tests {
                 .is_empty()
         );
         assert!(!s.swallows_scroll());
+    }
+
+    #[test]
+    fn a_guest_three_finger_sequence_takes_the_hosts_gestures_until_it_ends() {
+        let mut s = seq();
+        let now = Instant::now();
+        committed(&mut s, now);
+        assert!(
+            !s.swallows_gestures(),
+            "two fingers stay macOS's to recognise"
+        );
+        let three = [t(1, 0.15, 0.1), t(2, 0.25, 0.2), t(3, 0.3, 0.3)];
+        s.on_touches(&three, true, now);
+        assert!(s.swallows_gestures(), "from the event that reaches three");
+        // Through the staggered lift, down to none, until the sequence ends.
+        let up = now + TAP_GUARD;
+        s.on_touches(&three[..1], true, up);
+        assert!(s.swallows_gestures());
+        s.on_touches(&[], true, up);
+        s.tick(up);
+        assert!(
+            s.swallows_gestures(),
+            "the lift grace is still the sequence"
+        );
+        s.tick(up + THIN_GRACE);
+        assert!(!s.swallows_gestures(), "ended");
+    }
+
+    #[test]
+    fn a_three_finger_sequence_begun_outside_the_vm_is_left_to_macos() {
+        let mut s = seq();
+        let now = Instant::now();
+        let three = [t(1, 0.1, 0.1), t(2, 0.2, 0.2), t(3, 0.3, 0.3)];
+        s.on_touches(&three, false, now);
+        s.on_touches(&three, true, now);
+        assert!(!s.swallows_gestures());
+    }
+
+    #[test]
+    fn with_three_fingers_off_a_third_finger_is_the_hosts() {
+        let mut s = seq();
+        s.set_three_fingers(false);
+        let now = Instant::now();
+        committed(&mut s, now);
+        let three = [t(1, 0.15, 0.1), t(2, 0.25, 0.2), t(3, 0.3, 0.3)];
+        assert!(lifted(&s.on_touches(&three, true, now)));
+        assert!(!s.swallows_gestures());
+        assert!(
+            !s.swallows_scroll(),
+            "the host's gesture, the host's scroll"
+        );
+    }
+
+    #[test]
+    fn turning_three_fingers_off_mid_sequence_hands_it_to_the_host() {
+        let mut s = seq();
+        let now = Instant::now();
+        committed(&mut s, now);
+        let three = [t(1, 0.15, 0.1), t(2, 0.25, 0.2), t(3, 0.3, 0.3)];
+        s.on_touches(&three, true, now);
+        assert!(lifted(&s.set_three_fingers(false)));
+        assert!(!s.swallows_gestures());
+        assert!(
+            s.set_three_fingers(false).is_empty(),
+            "unchanged: nothing to do"
+        );
     }
 
     #[test]

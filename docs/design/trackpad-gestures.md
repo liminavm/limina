@@ -1,9 +1,9 @@
 # Trackpad gestures: a guest-side multitouch device with strict contact ownership
 
-Status: the guest touchpad and its `NSTouch` feed are BUILT (§What is built); two-finger
-scroll, pinch, taps and clicks work on the stock tier. The HID-level gesture tap is NOT built,
-so macOS still acts on the gestures it claims: three-finger swipes on the default "three or
-four" setting never reach the guest. Ownership decided (§The ownership rule): the guest owns 2-
+Status: the guest touchpad, its `NSTouch` feed and the HID-level gesture tap are BUILT
+(§What is built); two-finger scroll, pinch, taps and clicks work on the stock tier. The tap
+takes guest three-finger sequences from macOS; it is untried by hand. Two-finger system
+gestures (smart zoom, the right-edge Notification Center swipe) are not taken. Ownership decided (§The ownership rule): the guest owns 2-
 and 3-finger sequences in seamless mode and under capture alike, made possible by a measured
 HID-level event tap that suppresses the host's gestures per finger count (§Raw multitouch
 capture and gesture suppression). The companion quick win SHIPPED 2026-07-28: hi-res scroll
@@ -72,6 +72,16 @@ gesture suppression). With it, the partition is:
 - **The size** — `crates/limina/src/hosttrackpad.rs` reads the default trackpad's surface
   (`MTDeviceGetSensorSurfaceDimensions`, `dlopen`ed) once per process and passes it to the
   worker as `--input-touchpad-size`.
+- **The gesture tap** — `window/gesture_tap.rs`, an HID-level `CGEventTap` over the gesture
+  types (18, 19, 20, 29, 30, 31, 32) that returns NULL while the policy says a guest-owned
+  sequence reached three fingers (`TrackpadSeq::swallows_gestures`), for the whole sequence.
+  An event it takes never reaches the app, so **while it is installed it is the touch source**
+  (`InputState::on_tap_gesture`, the pointer's position hit-tested against the guest windows)
+  and the local monitor ignores gesture events. Two fingers are left to macOS on purpose: its
+  two-finger tap is the guest's right-click, and whether that survives the swallow was never
+  measured. The Input menu's **Three-Finger Gestures in the VM** (on by default, remembered per
+  VM) switches three fingers between the guest and macOS; the tap is created on the first tick
+  with the switch on, needs Accessibility, and a menu toggle-on without it raises the prompt.
 - **The feed** — the local event monitor takes `NSEventMask::Gesture`, and
   `InputState::on_gesture` reads `allTouches()` (local, non-resting, touching). AppKit attaches
   touches to those events **only when a view opts in**: the guest views set

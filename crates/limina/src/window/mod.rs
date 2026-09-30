@@ -48,6 +48,7 @@ mod diag;
 mod displays;
 mod echo;
 pub(crate) mod fit;
+mod gesture_tap;
 /// Recorded-gesture replay for the grab policy (`LIMINA_EDGE_TRACE` fixtures).
 #[cfg(test)]
 mod grab_fixture;
@@ -417,6 +418,14 @@ fn save_modifier_normalize(path: Option<&Path>, on: bool) {
     }
 }
 
+/// The Input menu's three-finger gestures switch, saved beside the display state.
+fn save_three_finger_gestures(path: Option<&Path>, on: bool) {
+    let Some(path) = path else { return };
+    if let Err(e) = crate::vmlib::state::set_three_finger_gestures(path, on) {
+        log::warn!("three-finger gestures save failed: {e}");
+    }
+}
+
 /// The set of displays the user has switched off, saved beside the assignment.
 fn save_display_disabled(path: Option<&Path>, disabled: Vec<u64>) {
     let Some(path) = path else { return };
@@ -653,6 +662,17 @@ thread_local! {
     /// input translator — which drains the keyboard through the old mapping before adopting the
     /// new one — and persists it beside the display switches.
     static MODIFIER_NORMALIZE: Cell<bool> = const { Cell::new(true) };
+
+    /// The Input menu's "Three-Finger Gestures in the VM" switch: whether three-finger
+    /// sequences over the VM are the guest's, taken from macOS by the gesture tap. On by
+    /// default (the ownership rule in `docs/design/trackpad-gestures.md`), overridden by a
+    /// remembered menu choice; the render timer hands each change to the trackpad policy and
+    /// persists it.
+    static THREE_FINGER_GESTURES: Cell<bool> = const { Cell::new(true) };
+
+    /// Whether the tick has made its one quiet attempt at the gesture tap. Retrying every tick
+    /// without Accessibility would ask TCC sixty times a second; the menu retries on demand.
+    static GESTURE_TAP_TRIED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Find the menu row a clicked item names. The item's tag is the row's PANEL KEY (bit-cast),
@@ -840,6 +860,22 @@ define_class!(
             MODIFIER_NORMALIZE.with(|f| f.set(on));
         }
 
+        // Input ▸ Three-Finger Gestures in the VM: whether three-finger swipes over the VM are
+        // the guest's or macOS's. Turning it on is the moment to ask for Accessibility — the
+        // user just asked for the thing that needs it.
+        #[unsafe(method(toggleThreeFingerGestures:))]
+        fn toggle_three_finger_gestures(&self, _sender: &NSMenuItem) {
+            let on = !THREE_FINGER_GESTURES.with(|f| f.get());
+            THREE_FINGER_GESTURES.with(|f| f.set(on));
+            log::info!(
+                "menu: three-finger gestures go to {}",
+                if on { "the VM" } else { "macOS" }
+            );
+            if on && !gesture_tap::ensure() {
+                capture_tap::prompt_accessibility_once();
+            }
+        }
+
         // Show in Finder: reveal the .liminavm bundle.
         #[unsafe(method(revealVm:))]
         fn reveal_vm(&self, _sender: &NSMenuItem) {
@@ -990,6 +1026,22 @@ fn populate_input_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
         )
     };
     item.setState(if MODIFIER_NORMALIZE.with(|f| f.get()) {
+        objc2_app_kit::NSControlStateValueOn
+    } else {
+        objc2_app_kit::NSControlStateValueOff
+    });
+    unsafe { item.setTarget(Some(actions)) };
+    menu.addItem(&item);
+
+    let item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Three-Finger Gestures in the VM"),
+            Some(objc2::sel!(toggleThreeFingerGestures:)),
+            &NSString::from_str(""),
+        )
+    };
+    item.setState(if THREE_FINGER_GESTURES.with(|f| f.get()) {
         objc2_app_kit::NSControlStateValueOn
     } else {
         objc2_app_kit::NSControlStateValueOff
@@ -2164,6 +2216,10 @@ pub fn run(
         overlay_flag,
         media_policy.clone(),
     );
+    // The gesture tap is created only when the switch wants it (it needs Accessibility, and a
+    // VM whose user turned three-finger gestures off has no use for it). The switch's saved
+    // value is loaded further down, so the first tick does the creating.
+    gesture_tap::prepare(input_state.clone(), view.clone());
 
     // Shown-ack channel (#8 leg 2): after Core Animation latches a frame, tell the worker
     // "shown <id>" so it can complete the guest's held flush fence. The blocking send is done on
@@ -2351,6 +2407,9 @@ pub fn run(
             if let Some(on) = saved.modifier_normalize {
                 MODIFIER_NORMALIZE.with(|f| f.set(on));
             }
+            if let Some(on) = saved.three_finger_gestures {
+                THREE_FINGER_GESTURES.with(|f| f.set(on));
+            }
         }
         std::rc::Rc::new(RefCell::new(table))
     };
@@ -2367,6 +2426,7 @@ pub fn run(
         // Same seeding rule: start from whatever the restore left in place, so the first save is a
         // real change and not the startup value written back over the file.
         let normalize_saved: Cell<bool> = Cell::new(MODIFIER_NORMALIZE.with(|f| f.get()));
+        let three_saved: Cell<bool> = Cell::new(THREE_FINGER_GESTURES.with(|f| f.get()));
         let panel_names: RefCell<Vec<(u64, String)>> = RefCell::new(Vec::new());
         let window = window.clone();
         let ack_tx = ack_tx.clone();
@@ -2539,6 +2599,11 @@ pub fn run(
                     if normalize_saved.get() != normalize {
                         save_modifier_normalize(slots_state_path.as_deref(), normalize);
                         normalize_saved.set(normalize);
+                    }
+                    let three = THREE_FINGER_GESTURES.with(|f| f.get());
+                    if three_saved.get() != three {
+                        save_three_finger_gestures(slots_state_path.as_deref(), three);
+                        three_saved.set(three);
                     }
                 }
 
@@ -3327,6 +3392,11 @@ pub fn run(
         // translator has to drain the keyboard through the old mapping first and that must not
         // happen inside a menu click. Idempotent, so an unchanged switch costs a comparison.
         timer_input.set_normalize(MODIFIER_NORMALIZE.with(|f| f.get()));
+        let three = THREE_FINGER_GESTURES.with(|f| f.get());
+        if three && !GESTURE_TAP_TRIED.with(|t| t.replace(true)) {
+            gesture_tap::ensure();
+        }
+        timer_input.set_three_fingers(three);
         let facts = timer_input.window_facts(&timer_view);
         let pf = grab_policy::primary_facts(&facts);
         // App-level, like every other key question here: focus moving from the primary to a

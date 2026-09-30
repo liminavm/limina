@@ -25,6 +25,7 @@ somewhere far from the change.
 | `window/arrangement.rs` | the arrangement relay's geometry, and the guest's own layout **report** — the absolute device's mapping and the edge-pressure filter read it |
 | `window/input.rs` | `NSEvent` → evdev; the host cursor's shape; the capture toggle |
 | `window/capture_tap.rs` | the session-level `CGEventTap` that makes capture reliable |
+| `window/gesture_tap.rs` | the HID-level `CGEventTap` that takes guest three-finger gestures from macOS; while installed, the trackpad's touch source |
 | `window/trackpad.rs` | *policy*: which trackpad touch sequences the guest's multitouch touchpad owns, and the scroll/click dedupe that follows (`docs/design/trackpad-gestures.md`) |
 | `window/grab_policy.rs` | *policy*: the grab, its releases, the chrome reveal, `WindowFacts` — pure, unit-tested, no AppKit |
 | `window/warp.rs` | the **warp broker**: the one owner of cursor warps, each asserted to land where it aimed |
