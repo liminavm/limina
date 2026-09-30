@@ -309,6 +309,19 @@ pointer). A held slot stays zero-copy. `LIMINA_PRESENT_COPY=1` forces the copy; 
 each zero-copy surface as it goes up and again as it is replaced, and logs the ones that changed in
 between — the direct test for this race.
 
+**An unfenced venus scanout is copied by the renderer, in order.** The supervisor's copy reads the
+guest's surface whenever its blit runs, which under load is after the guest has drawn its next
+frame into it (synoik showed this as translucent surfaces dropping out for a frame). So for venus
+the copy is taken by virglrs on the rendering context's queue, behind the frame's work and ahead
+of what the guest submits after it (`venus/present_copy.rs`, `Renderer::resource_present_copy`),
+and libkrun presents that copy and reports the scanout held (`ScanoutCopies`); the worker logs
+`presents copies taken on the guest's own queue`. The ordering against later submits rests on
+KosmicKrisp ending every encoder with an all-stages queue barrier, and it covers one queue only:
+a context with several falls back to the supervisor's copy. It cannot order the copy ahead of
+guest work the ring thread already submitted when the flush is handled late -- the flush and the
+ring arrive on different host threads -- and only a guest flush fence closes that. Guard:
+`scanout_copy_shows_presented_frame`, whose ignored twin documents the open case.
+
 ### More than one display
 
 The guest may have several connectors, so every line of the worker→supervisor present protocol

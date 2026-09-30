@@ -1,36 +1,39 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! Regression guard: a window showing a copy of a guest scanout must show the frame that was
-//! presented, not whatever the guest drew into the buffer afterwards.
+//! Regression guard: a copy of a guest scanout on glass must show the frame that was presented,
+//! not whatever the guest drew into the buffer afterwards.
 //!
 //! A guest whose scanout flushes carry no fence is never held off the buffers it flips: its flip
 //! completes on its own vblank timer, and a double-buffering compositor starts drawing its next
-//! frame into the buffer the flip released. The window shows such a slot through a private copy
-//! (`crates/limina/src/window/copy.rs`), but that copy reads the guest's surface when the blit
-//! runs, not when the frame arrived, and nothing orders the read before the guest's next frame.
-//! Under load the read lands late. A synoik desktop showed it as translucent surfaces dropping
-//! out for a frame, and as frame counters stepping back, only on a host-side recording.
+//! frame into the buffer the flip released. Such a scanout is shown through a copy, and a copy
+//! made whenever the host gets round to it reads whatever the guest has drawn since. A synoik
+//! desktop showed that as translucent surfaces dropping out for a frame, and as frame counters
+//! stepping back, only on a host-side recording.
+//!
+//! For a venus scanout the copy is taken by the renderer on the guest's own queue, behind the
+//! frame's work and ahead of what the guest submits after it (virglrs `venus/present_copy.rs`),
+//! and the window shows that copy as it is.
 //!
 //! **Vehicle.** `guest/kmschurn.py stamp-vk` flips two venus scanout buffers the way synoik
 //! does: allocated in venus, unfenced flushes, the next frame drawn into the buffer the flip
 //! released. Each frame first clears its buffer to a colour that is the frame number, waits for
 //! it on a fence, then flips.
 //!
-//! **Forcing the late read.** `LIMINA_TEST_COPY_DELAY_MS` holds every copy back before it reads
-//! the guest's surface, standing in for a busy supervisor main thread or GPU. The delay spans
-//! several guest frames, so a copy that reads the guest's surface at blit time reads it after the
-//! guest has drawn into it again, every time rather than when the host happens to be loaded.
-//! Holding back the *showing* of a frame is harmless; holding back the *read* of it must be too.
+//! **Oracle.** `LIMINA_PRESENT_COPY_TRACE` logs, per copy, the guest scanout's first pixel as the
+//! flush was handled and the copy's first pixel once it was made. Every copy must hold the frame
+//! number its flush arrived with.
 //!
-//! **Oracle.** `LIMINA_PRESENT_COPY_TRACE` logs, per copy shown, the guest surface's first pixel
-//! when the frame arrived and the copy's first pixel when it went up. Every shown copy must hold
-//! the frame number its frame arrived with.
+//! **The two delays.** `LIMINA_TEST_COPY_DELAY_MS` holds back the supervisor, which once made the
+//! copy itself when it got round to it: lateness there must now only delay the frame, never
+//! change it. `LIMINA_TEST_PRESENT_COPY_DELAY_MS` holds back the renderer's copy submission, which
+//! lets the guest's next frame reach the queue first. That is the case an unfenced guest leaves
+//! open -- the flush and the guest's rendering arrive on different host threads -- and only a
+//! flush fence closes it, so that test is ignored and documents the gap.
 //!
 //! Same prereqs as the other venus L2 tests: seated EFI enhanced image + KosmicKrisp; SKIPs
 //! cleanly if missing. Gated behind `LIMINA_HVF_TESTS`; run via `scripts/test-boot.sh`. It opens
-//! a real NSWindow (the copy path lives in the window), so it is in the EXCLUSIVE set in
-//! `.config/nextest.toml`.
+//! a real NSWindow, so it is in the EXCLUSIVE set in `.config/nextest.toml`.
 
 use std::time::Duration;
 
@@ -46,8 +49,8 @@ const VENUS_ENV: &str = "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarc
 /// About fifteen seconds of flips at 60 Hz.
 const FRAMES: u32 = 900;
 
-/// How long each copy is held back before it reads the guest's surface: three frames at 60 Hz.
-const COPY_DELAY_MS: &str = "50";
+/// How long a delay holds its step back: three frames at 60 Hz.
+const DELAY_MS: &str = "50";
 
 /// Traced copies needed before the verdict means anything.
 const MIN_TRACED: usize = 50;
@@ -91,23 +94,40 @@ fn traced(log: &str) -> Vec<Traced> {
 
 #[test]
 fn a_copied_scanout_shows_the_frame_that_was_presented() {
-    const NAME: &str = "a_copied_scanout_shows_the_frame_that_was_presented";
-    if !limina_test::require_hvf_or_skip(NAME) {
+    run(
+        "a_copied_scanout_shows_the_frame_that_was_presented",
+        "LIMINA_TEST_COPY_DELAY_MS",
+    );
+}
+
+#[test]
+#[ignore = "known open: a copy submitted after the guest's next frame reaches the queue reads \
+            that frame; only a guest flush fence orders it"]
+fn a_copy_submitted_late_still_shows_the_frame_that_was_presented() {
+    run(
+        "a_copy_submitted_late_still_shows_the_frame_that_was_presented",
+        "LIMINA_TEST_PRESENT_COPY_DELAY_MS",
+    );
+}
+
+/// Present the stamped frames with `delay` holding its step back, and check every copy.
+fn run(name: &str, delay: &str) {
+    if !limina_test::require_hvf_or_skip(name) {
         return;
     }
     if limina_test::kosmickrisp_icd().is_none() {
-        eprintln!("SKIPPED {NAME}: no KosmicKrisp ICD — venus unavailable");
+        eprintln!("SKIPPED {name}: no KosmicKrisp ICD — venus unavailable");
         return;
     }
     let cfg = match GuestConfig::seated_efi_fedora_from_env() {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("SKIPPED {NAME}: {e:#}");
+            eprintln!("SKIPPED {name}: {e:#}");
             return;
         }
     };
-    // The bare `warn` keeps every other crate at warn. The copy module logs the trace; the
-    // virtio-gpu module says whether the vehicle's flushes are fenced.
+    // The bare `warn` keeps every other crate at warn. The virtio-gpu module says how the
+    // vehicle's scanout is kept from it; the renderer's trace goes to stderr regardless.
     let cfg = cfg
         .with_windowed_coexist_display(DISPLAY.0, DISPLAY.1)
         .with_net()
@@ -117,7 +137,7 @@ fn a_copied_scanout_shows_the_frame_that_was_presented() {
             "warn,limina::window::copy=info,krun_devices::virtio::gpu::virtio_gpu=info",
         )
         .with_env("LIMINA_PRESENT_COPY_TRACE", "1")
-        .with_env("LIMINA_TEST_COPY_DELAY_MS", COPY_DELAY_MS);
+        .with_env(delay, DELAY_MS);
 
     let mut guest = Guest::boot(&cfg).expect("booting the seated enhanced guest windowed");
     guest
@@ -162,16 +182,21 @@ fn a_copied_scanout_shows_the_frame_that_was_presented() {
     let run = log.get(offset..).unwrap_or("");
 
     assert!(
-        log.contains("flushes carry no fence; nothing holds the guest off buffers on glass"),
-        "the worker never reported an unfenced scanout, so the window may not be copying at all \
-         and this vehicle does not reach the race it guards"
+        log.contains("flushes carry no fence"),
+        "the worker never reported an unfenced scanout, so this vehicle does not reach the race \
+         it guards"
+    );
+    assert!(
+        log.contains("presents copies taken on the guest's own queue"),
+        "the worker never said it presents the scanout as copies taken on the guest's queue, so \
+         whatever copies are traced below are not the ordered ones this guards"
     );
     let copies = traced(run);
     assert!(
         copies.len() >= MIN_TRACED,
-        "only {} traced copies of the presenter's frames (need {MIN_TRACED}): either the window \
-         is not showing this slot through a copy, or the trace (LIMINA_PRESENT_COPY_TRACE) no \
-         longer logs at limina::window::copy=info",
+        "only {} traced copies of the presenter's frames (need {MIN_TRACED}): either this slot \
+         is not presented through a copy, or the trace (LIMINA_PRESENT_COPY_TRACE) no longer \
+         logs",
         copies.len()
     );
 
