@@ -24,9 +24,10 @@ pub const MAX_SLOTS: usize = 3;
 pub const TOUCHPAD_RES: u32 = 100;
 
 /// The position axes' fuzz, in device units (0.16 mm): the finger noise a still or stopping
-/// contact reports. libinput turns a touchpad's fuzz into its own hysteresis, which holds a
-/// contact still until it moves past it; with none, a finger coming to rest scrolls the
-/// content back and forth by fractions of a pixel. Measured with the libinput oracle
+/// contact reports. libinput turns a touchpad's fuzz into its own hysteresis, whose output
+/// trails the finger by the margin, so a reversal smaller than it is absorbed; with none, a
+/// finger coming to rest scrolled the content back and forth by fractions of a pixel. A creep
+/// in the same direction still passes. Measured with the libinput oracle
 /// (`spikes/scroll-wobble/README.md`).
 pub const TOUCHPAD_FUZZ: u32 = 16;
 

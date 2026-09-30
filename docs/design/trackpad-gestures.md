@@ -177,8 +177,11 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
     third finger landing 2–6 ms after a motion frame otherwise carried the others' 4–5 mm
     with it, and three-finger swipes lost their start.
 - **The position axes declare fuzz 16 (0.16 mm, `TOUCHPAD_FUZZ`).** libinput turns a
-  touchpad's fuzz into its own hysteresis. With none, a finger coming to rest scrolled the
-  content back and forth by fractions of a pixel (`spikes/scroll-wobble/`).
+  touchpad's fuzz into its own hysteresis, whose output trails the finger by the margin: a
+  reversal smaller than it is absorbed. With none, a finger coming to rest scrolled the
+  content back and forth by fractions of a pixel (`spikes/scroll-wobble/`). A finger that
+  creeps on in the same direction after stopping still moves the content, in small nudges
+  after a pause.
 - **Taps and clicks are macOS's alone; the guest never sees a touch it could read as a
   tap.** Two recognizers see the same fingers: macOS turns taps and clicks into mouse clicks,
   and libinput would read its own taps from the contacts. Their events arrive on separate,
