@@ -693,6 +693,27 @@ tier keeps the copy. libkrun already reports the change (`scanout_held`). Check 
 `LIMINA_PRESENT_MUTATION_TRACE=1` (zero surfaces changed while up) and the worker's
 `scanout N flushes are fenced` line.
 
+### A venus scanout occasionally shows an older complete frame after a newer one
+With the ordered present copies in place, a host-side screen recording of a stressed two-output
+synoik desktop with frame stamps on showed 9 of 1075 recorded frames older than one already on
+screen (measured 2026-09-30; 66 before the copies). Each is a complete frame, one or two stamps
+back, never a run. Two shapes: *late* (an older frame never recorded before its successor, 6 of 9)
+and *repeated* (`A B A`, 3 of 9). synoik's write-up is `LIMINA-scanout-shows-older-frame.md` in
+its repo. A one-frame jitter, not corruption. The unfenced-flush race `docs/graphics.md` §4 leaves
+open cannot produce this: it shows a newer or partly drawn frame, never an older finished one.
+
+Established from the worker log over the same session: the worker's order check
+(`scanout N stepped back`) logged nothing, and no frame was dropped for a busy ring until after the
+recording. The copy rings grew to 5 and 6 surfaces per output under the load. So the worker handed
+frames on in flush order, unless that check does not cover parked copies. Confirm that first.
+Then the candidates are downstream of the worker: the supervisor presenting or re-presenting
+surfaces out of order, the window server showing a reused copy surface's earlier content, or the
+recorder itself. Next: reproduce on a dev-Mac clone with synoik, its runtime frame stamp
+(`synoik msg action debug-toggle-frame-stamp`) and draw ledger, and log, per scanout, the order the
+supervisor hands surfaces to the layer, to compare with the recording. Also extend `kmschurn.py
+stamp2-vk` so that the stamp each output shows can never decrease, under a forced host delay and
+CPU load. That is a check without a recording.
+
 ### `vkWaitRingSeqnoMESA` blocks the virtio-gpu control thread behind one client's ring
 libkrun's `submit_all` (`rutabaga_gfx/src/virgl_renderer.rs`) releases the renderer lock before a
 ring wait but still calls `waiter.wait()` on the control-queue thread, so a ring in the middle of
