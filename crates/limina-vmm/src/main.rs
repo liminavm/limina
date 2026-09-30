@@ -485,6 +485,19 @@ fn raise_fd_limit() {
 /// channel) by a watcher thread, so a lossy capture is always self-identifying.
 /// `LIMINA_LOG_BLOCKING=1` restores the plain synchronous logger for the runs where
 /// every line matters more than pacing.
+/// The non-blocking logger's guard: dropping it drains the channel to stderr.
+static LOG_GUARD: std::sync::Mutex<Option<tracing_appender::non_blocking::WorkerGuard>> =
+    std::sync::Mutex::new(None);
+
+/// Exit the worker with `code` once the log lines already emitted have reached stderr. A
+/// plain `process::exit` right after a log line races the logger's writer thread, and the
+/// line that explains the exit is the one lost (a refused restore's device difference).
+pub(crate) fn exit_flushing_logs(code: i32) -> ! {
+    let guard = LOG_GUARD.lock().ok().and_then(|mut g| g.take());
+    drop(guard);
+    std::process::exit(code)
+}
+
 fn init_worker_logging() {
     let env = env_logger::Env::default().default_filter_or("warn");
     if std::env::var_os("LIMINA_LOG_BLOCKING").is_some() {
@@ -499,10 +512,11 @@ fn init_worker_logging() {
         .lossy(true)
         .buffered_lines_limit(128_000)
         .finish(std::io::stderr());
-    // Worker-lifetime logger: the guard's Drop would flush the channel tail at exit,
-    // but the worker's exit paths are process-terminal (PSCI teardown / exec) and a
-    // static guard is simpler than threading it through. Tail lines at exit may drop.
-    std::mem::forget(guard);
+    // Worker-lifetime logger. Most exits are process-terminal (PSCI teardown / exec) and may
+    // drop the tail; an exit the worker decides on goes through `exit_flushing_logs`.
+    if let Ok(mut slot) = LOG_GUARD.lock() {
+        *slot = Some(guard);
+    }
     let errors = writer.error_counter();
     let _ = std::thread::Builder::new()
         .name("log-drop-watch".into())

@@ -687,10 +687,11 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         spec.restore_file.clone(),
     ) {
         Ok(vmm) => vmm,
-        // libkrun has already logged how the devices differ. Nothing is running yet, so a plain
-        // exit is enough; the distinct code tells the supervisor to keep the snapshot.
+        // libkrun has already logged how the devices differ, and that line must reach the log
+        // before the exit. Nothing is running yet, so no other teardown is needed; the
+        // distinct code tells the supervisor to keep the snapshot.
         Err(vmm::builder::StartMicrovmError::Internal(vmm::Error::RestoreRefused(_))) => {
-            std::process::exit(WORKER_EXIT_RESTORE_REFUSED)
+            crate::exit_flushing_logs(WORKER_EXIT_RESTORE_REFUSED)
         }
         Err(e) => return Err(anyhow!("build_microvm: {e:?}")),
     };
