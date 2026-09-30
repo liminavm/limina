@@ -115,6 +115,15 @@ impl Touchpad {
         self.slot_of(id).is_some()
     }
 
+    /// Where the guest last saw the host finger `id`, if it holds it.
+    pub fn position(&self, id: u64) -> Option<(i32, i32)> {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|s| s.host_id == id)
+            .map(|s| (s.x, s.y))
+    }
+
     /// Report the full set of contacts down now. Contacts no longer present are lifted, new
     /// ones get a free slot and a fresh tracking id, and moved ones report their new position.
     /// Contacts beyond [`MAX_SLOTS`] are ignored. Returns the events for one frame, ending in

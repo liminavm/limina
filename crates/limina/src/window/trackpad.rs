@@ -40,6 +40,13 @@ pub const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(10);
 /// frame); passing each dip on would show the guest a lift and a fresh landing.
 pub const THIN_GRACE: Duration = Duration::from_millis(50);
 
+/// The fastest a frame may move a finger, from rest, as a distance per 12 ms: a frame past
+/// libinput's 7 mm is discarded as a touch jump. Only the frame after a moved commit's landing
+/// comes near it — it carries the whole distance moved before the commit at once — so that
+/// frame carries the committing sample, never a newer one further on, spaced by its distance
+/// and at least [`MIN_FRAME_INTERVAL`].
+pub const COMMIT_SPEED_MM_PER_12MS: f64 = 6.0;
+
 /// How far any finger must move before a guest-owned sequence **commits** — before the guest
 /// sees its contacts at all. Past libinput's 1.3 mm tap threshold, with margin: the guest gets
 /// the landing positions first and the motion after, so it can never read the gesture as a
@@ -111,6 +118,10 @@ pub struct TrackpadSeq {
     /// When the last frame went to the guest, and the newest motion held back since.
     last_frame: Option<Instant>,
     pending: Option<Vec<Contact>>,
+    /// The earliest the held motion may go out, when a moved commit has spaced it by its
+    /// distance ([`COMMIT_SPEED_MM_PER_12MS`]). Until then the held motion is the committing
+    /// sample itself, not replaced by newer ones.
+    not_before: Option<Instant>,
     /// Since when a guest-owned sequence has had fewer than two fingers, and how many
     /// ([`THIN_GRACE`]).
     thin: Option<(Instant, usize)>,
@@ -132,6 +143,7 @@ impl TrackpadSeq {
             last_touch: None,
             last_frame: None,
             pending: None,
+            not_before: None,
             thin: None,
             three_fingers: true,
         }
@@ -187,7 +199,7 @@ impl TrackpadSeq {
             return self.lift(now);
         }
         self.thin = None;
-        self.pending = None;
+        let held = self.pending.take();
 
         if n == 0 {
             self.end_sequence();
@@ -237,12 +249,39 @@ impl TrackpadSeq {
         }
 
         let motion_only = contacts.len() == self.touchpad.active();
-        let too_soon = self
-            .last_frame
-            .is_some_and(|t| now.duration_since(t) < MIN_FRAME_INTERVAL);
-        if motion_only && too_soon {
+        if motion_only && self.not_before.is_some() {
+            if !self.due(now) {
+                self.pending = held;
+                return Vec::new();
+            }
+            if let Some(held) = held {
+                // The committing sample goes out first; the newest waits the usual spacing.
+                let events = self.send_frame(&held, now);
+                self.pending = Some(contacts);
+                return events;
+            }
+        }
+        if motion_only && !self.due(now) {
             self.pending = Some(contacts);
             return Vec::new();
+        }
+        if !self.due(now) {
+            // A finger landing or lifting cannot wait, but the fingers already down stay where
+            // the guest last saw them: moved in a frame so close to the last one, libinput
+            // reads their motion as a touch jump and discards it. Their motion follows at the
+            // usual spacing.
+            let frame: Vec<Contact> = contacts
+                .iter()
+                .map(|c| match self.touchpad.position(c.id) {
+                    Some((x, y)) => Contact { x, y, ..*c },
+                    None => *c,
+                })
+                .collect();
+            let not_before = self.not_before;
+            let events = self.send_frame(&frame, now);
+            self.not_before = not_before;
+            self.pending = Some(contacts);
+            return events;
         }
         self.send_frame(&contacts, now)
     }
@@ -278,6 +317,14 @@ impl TrackpadSeq {
                 .map(|c| *unc.landing.iter().find(|l| l.id == c.id).unwrap_or(c))
                 .collect();
             let events = self.send_frame(&landing, now);
+            let far = contacts
+                .iter()
+                .zip(&landing)
+                .map(|(c, l)| f64::from(c.x - l.x).hypot(f64::from(c.y - l.y)))
+                .fold(0.0, f64::max)
+                / TOUCHPAD_RES as f64;
+            let gap = Duration::from_secs_f64(0.012 * far / COMMIT_SPEED_MM_PER_12MS);
+            self.not_before = Some(now + gap.max(MIN_FRAME_INTERVAL));
             self.pending = Some(contacts);
             events
         } else {
@@ -294,9 +341,19 @@ impl TrackpadSeq {
         }
         self.uncommitted = None;
         self.held_at = None;
+        self.not_before = None;
+    }
+
+    /// Whether held motion may go out now: [`MIN_FRAME_INTERVAL`] after the last frame, and
+    /// not before a spaced commit's frame is due.
+    fn due(&self, now: Instant) -> bool {
+        self.last_frame
+            .is_none_or(|t| now.duration_since(t) >= MIN_FRAME_INTERVAL)
+            && self.not_before.is_none_or(|t| now >= t)
     }
 
     fn send_frame(&mut self, contacts: &[Contact], now: Instant) -> Vec<InputEvent> {
+        self.not_before = None;
         let events = self.touchpad.frame(contacts);
         if !events.is_empty() {
             self.last_frame = Some(now);
@@ -317,10 +374,7 @@ impl TrackpadSeq {
         };
         let mut events = Vec::new();
         if let Some(contacts) = self.pending.take() {
-            let due = self
-                .last_frame
-                .is_none_or(|t| now.duration_since(t) >= MIN_FRAME_INTERVAL);
-            if !due {
+            if !self.due(now) {
                 self.pending = Some(contacts);
                 return events;
             }
@@ -359,9 +413,7 @@ impl TrackpadSeq {
         {
             return self.cancel();
         }
-        let due = self
-            .last_frame
-            .is_none_or(|t| now.duration_since(t) >= MIN_FRAME_INTERVAL);
+        let due = self.due(now);
         match self.pending.take() {
             Some(contacts) if due => self.send_frame(&contacts, now),
             held => {
@@ -394,6 +446,7 @@ impl TrackpadSeq {
     /// toggling, the VM parking): lift the guest's fingers and give the sequence to the host.
     pub fn cancel(&mut self) -> Vec<InputEvent> {
         self.pending = None;
+        self.not_before = None;
         self.thin = None;
         self.uncommitted = None;
         self.held_at = None;
@@ -539,6 +592,9 @@ mod recordings {
     const BATTERY_1: &str = include_str!("../../testdata/trackpad/battery-1.jsonl");
     /// Scrolls, flicks, pinches, and one- and two-finger taps and clicks, captured and not.
     const BATTERY_2: &str = include_str!("../../testdata/trackpad/battery-2.jsonl");
+    /// Through the HID gesture tap: two-finger flicks, slow scrolls that stop before the lift,
+    /// and three-finger swipes.
+    const BATTERY_3: &str = include_str!("../../testdata/trackpad/battery-3.jsonl");
 
     fn geometry() -> TouchpadGeometry {
         TouchpadGeometry::BUILT_IN
@@ -632,6 +688,78 @@ mod recordings {
     #[test]
     fn battery_2_gives_one_click_per_intended_click() {
         check(BATTERY_2);
+    }
+
+    #[test]
+    fn battery_3_gives_one_click_per_intended_click() {
+        check(BATTERY_3);
+    }
+
+    /// The frames libinput would discard as a touch jump (`tp_detect_jumps` in
+    /// `evdev-mt-touchpad.c`): a contact moving more than 20 mm, or 7 mm more than in its last
+    /// frame, per 12 ms, between frames up to 30 ms apart. Returns (t_us, slot, mm).
+    fn jumps(out: &[Delivered]) -> Vec<(u64, usize, f64)> {
+        let mut found = Vec::new();
+        let mut slot = 0usize;
+        let mut down = [false; MAX_SLOTS];
+        let mut pos = [(0i32, 0i32); MAX_SLOTS];
+        let mut moved = [false; MAX_SLOTS];
+        // Per slot: the last frame's time, position, and normalized speed.
+        type Last = Option<(u64, (i32, i32), f64)>;
+        let mut last: [Last; MAX_SLOTS] = [None; MAX_SLOTS];
+        for d in out.iter().filter(|d| d.dev == Dev::Touchpad) {
+            let e = d.ev;
+            match (e.type_, e.code) {
+                (EV_ABS, ABS_MT_SLOT) => slot = e.value as usize,
+                (EV_ABS, ABS_MT_TRACKING_ID) => {
+                    down[slot] = e.value >= 0;
+                    last[slot] = None;
+                }
+                (EV_ABS, ABS_MT_POSITION_X) => {
+                    pos[slot].0 = e.value;
+                    moved[slot] = true;
+                }
+                (EV_ABS, ABS_MT_POSITION_Y) => {
+                    pos[slot].1 = e.value;
+                    moved[slot] = true;
+                }
+                (EV_SYN, _) => {
+                    for s in (0..MAX_SLOTS).filter(|&s| down[s] && moved[s]) {
+                        let mut speed = 0.0;
+                        if let Some((t, (x, y), prev)) = last[s] {
+                            let dt_ms = (d.t_us - t) as f64 / 1000.0;
+                            let mm = f64::from((pos[s].0 - x).pow(2) + (pos[s].1 - y).pow(2))
+                                .sqrt()
+                                / TOUCHPAD_RES as f64;
+                            if dt_ms > 0.0 && dt_ms <= 30.0 {
+                                speed = mm * 12.0 / dt_ms;
+                                if speed > 20.0 || speed - prev > 7.0 {
+                                    found.push((d.t_us, s, mm));
+                                }
+                            }
+                        }
+                        last[s] = Some((d.t_us, pos[s], speed));
+                    }
+                    moved = [false; MAX_SLOTS];
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn no_battery_shows_the_guest_a_touch_jump() {
+        for (name, battery) in [("1", BATTERY_1), ("2", BATTERY_2), ("3", BATTERY_3)] {
+            let records = parse_recording(battery).expect("recording parses");
+            let found = jumps(&replay(geometry(), &records));
+            assert!(
+                found.is_empty(),
+                "battery-{name}: {} frame(s) libinput would discard as a touch jump \
+                 (t_us, slot, mm): {found:?}",
+                found.len()
+            );
+        }
     }
 
     /// Not a check: writes a recording's replay for the guest-side libinput oracle
@@ -915,14 +1043,17 @@ mod tests {
             s.on_touches(&[t(1, 0.15, 0.1), t(2, 0.3, 0.2)], true, soon)
                 .is_empty()
         );
-        // A third finger landing is not held back, and carries the newest positions…
+        // A third finger landing is not held back, but the fingers already down stay where
+        // the guest last saw them: moved in the same frame, so soon after the last, libinput
+        // would read their motion as a touch jump and discard it.
         let ev = s.on_touches(
             &[t(1, 0.15, 0.1), t(2, 0.4, 0.2), t(3, 0.5, 0.5)],
             true,
             soon,
         );
-        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 4000)));
         assert!(ev.contains(&InputEvent::new(EV_KEY, BTN_TOOL_TRIPLETAP, 1)));
+        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 5000)));
+        assert!(!ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 4000)));
         // …and held motion goes out once the spacing has passed.
         s.on_touches(
             &[t(1, 0.15, 0.1), t(2, 0.4, 0.2), t(3, 0.6, 0.5)],
@@ -930,6 +1061,7 @@ mod tests {
             soon + MIN_FRAME_INTERVAL / 2,
         );
         let ev = s.tick(soon + MIN_FRAME_INTERVAL);
+        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 4000)));
         assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 6000)));
     }
 
@@ -949,6 +1081,28 @@ mod tests {
         let still = [resting(1, 0.15, 0.1), resting(2, 0.25, 0.2)];
         s.on_touches(&still, true, now);
         assert!(!lifted(&s.tick(now + TAP_GUARD * 2)), "no lift");
+    }
+
+    /// A fast flick is well past the commit distance by the time it commits, and the guest
+    /// sees that whole distance in the frame after the landing. libinput discards a frame
+    /// that moves more than 7 mm per 12 ms from rest as a touch jump — and with it the start
+    /// of the scroll — so that frame is spaced by its distance.
+    #[test]
+    fn a_fast_commit_is_spaced_so_the_guest_does_not_read_a_jump() {
+        let mut s = seq();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.10, 0.10), t(2, 0.20, 0.20)], true, now);
+        let ev = s.on_touches(&[t(1, 0.18, 0.10), t(2, 0.28, 0.20)], true, now);
+        assert_eq!(slots_down(&ev), 2, "the landing goes out at once");
+        // A newer sample does not replace the committing one, which is still not due.
+        let later = now + MIN_FRAME_INTERVAL;
+        assert!(
+            s.on_touches(&[t(1, 0.19, 0.10), t(2, 0.29, 0.20)], true, later)
+                .is_empty()
+        );
+        assert!(s.tick(later).is_empty());
+        let ev = s.tick(now + Duration::from_millis(16));
+        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 1800)));
     }
 
     #[test]
