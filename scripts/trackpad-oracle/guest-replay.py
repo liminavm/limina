@@ -210,10 +210,20 @@ def main():
     start = time.monotonic()
     offset = start - launched
     t0 = int(events[0][0]) if events else 0
+    # A frame written late lands closer to the next one than it was sent, which libinput can
+    # read as a touch jump: the count of late frames says whether the timing held.
+    late, worst = 0, 0.0
     for t_us, dev, type_, code, value in events:
-        delay = start + (int(t_us) - t0) / 1e6 - time.monotonic()
-        if delay > 0:
-            time.sleep(delay)
+        due = start + (int(t_us) - t0) / 1e6
+        delay = due - time.monotonic()
+        if delay > 0.002:
+            time.sleep(delay - 0.002)
+        while time.monotonic() < due:  # sleep overshoots by a millisecond or more
+            pass
+        delay = due - time.monotonic()
+        if int(type_) == 0 and dev == "touchpad":
+            worst = max(worst, -delay)
+            late += -delay > 0.002
         write(pad if dev == "touchpad" else ptr, int(type_), int(code), int(value))
     time.sleep(1.0)
     for fd in (pad, ptr):
@@ -240,6 +250,9 @@ def main():
     left = counts.get(("limina replay pointer", "BTN_LEFT"), 0)
     pad_clicks = sum(v for (n, _), v in counts.items() if n == "limina replay touchpad")
     ok = right == int(intended["right"]) and left == int(intended["left"]) and pad_clicks == 0
+    jumps = out.count("Touch jump detected")
+    print(f"TIMING: {late} touchpad frames written over 2 ms late (worst {worst * 1000:.1f} ms); "
+          f"libinput touch jumps {jumps} (it logs at most 5 a day)")
     pad_node = next((n for n, name in names.items() if name == "limina replay touchpad"), None)
     report_scroll(out, pad_node)
     print(

@@ -29,3 +29,33 @@ instruments. Copy it into the guest and open it as a `file://` URL.
   (−0.2 to −0.7 px) in their last few events.
 - **Steady scrolls are uneven**: ~5 px per event with an 11–16 px event every few frames, about
   twice the step.
+
+## Measured with the libinput oracle (2026-09-30)
+
+`scripts/trackpad-oracle.sh <recording> <port> [fuzz]` replays a recording through the policy
+into uinput clones in a stock F44 guest and measures libinput's finger scroll. On
+`battery-3` (HID-tap path: 12 flicks, 12 slow scrolls that stop before the lift):
+
+| fuzz | wrong-way deltas | slow scrolls with a wrong-way delta | scrolls with no GTK velocity at the stop |
+|---|---|---|---|
+| 0 | 18 | 11 of 12 | 6 |
+| 4 | 5 | 5 | 8 |
+| 8 | 2 | 2 | 11 |
+| 16 | 0 | 0 | 11 |
+
+- **The wobble is finger noise at rest.** The wrong-way deltas are 0.2–0.9 px in the last
+  events of a scroll, one or two device units (0.01 mm). A fuzz turns libinput's hysteresis
+  on (`hysteresis enabled` in its verbose log); at 16 none are left, and the slow scrolls end
+  with zero velocity, so they do not coast.
+- **Flicks reach GTK with enough history to coast.** A flick moves slowly for ~80 ms, then
+  accelerates and lifts at its fastest: libinput sends 2–4 events over 15–55 ms, and GTK's
+  `scroll_history_finish` (GTK 3 and 4) computes 2 600–8 600 px/s from them. An app that
+  implements kinetic scrolling coasts on them. By their source, ghost (winit, whose Wayland
+  backend reports no momentum) and gnome-terminal 3.60 do not: VTE scrolls its history itself
+  and consumes the event (`Terminal::widget_mouse_scroll`, fallback scrolling on), so the
+  GtkScrolledWindow around it never runs its kinetic scrolling. Both coasted in limina when
+  macOS's momentum reached the guest as wheel events.
+- **Back-to-back sample pairs each carry half a step** on the local-monitor path
+  (`battery-2`: −15 and −13.7 against −30 to −50 for single samples), so merging a pair into
+  one frame is right; sending each as its own frame made the steps less even.
+

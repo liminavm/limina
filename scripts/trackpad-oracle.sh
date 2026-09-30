@@ -30,6 +30,7 @@ replay="$root/target/trackpad-replay.txt"
 ssh_opts=(-p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 ssh "${ssh_opts[@]}" claude@127.0.0.1 'cat > /tmp/trackpad-replay.txt' < "$replay"
 ssh "${ssh_opts[@]}" claude@127.0.0.1 'cat > /tmp/guest-replay.py' < "$here/trackpad-oracle/guest-replay.py"
-# The built-in trackpad's surface, as limina advertises it (0.01 mm units).
+# At real-time priority: a frame written late reads to libinput as a jump. The built-in
+# trackpad's surface, as limina advertises it (0.01 mm units).
 ssh "${ssh_opts[@]}" claude@127.0.0.1 \
-    "sudo python3 /tmp/guest-replay.py /tmp/trackpad-replay.txt 12480 7680 $*"
+    "sudo chrt -f 50 python3 /tmp/guest-replay.py /tmp/trackpad-replay.txt 12480 7680 $*"
