@@ -64,7 +64,11 @@ resident pages, and the retention oracle counts bytes.
 Requires DRM master, so: run as root, with nothing else holding the card
 (`systemctl isolate multi-user.target` is enough to evict a session compositor).
 
-Usage: kmschurn.py probe|churn|static[-vk]|stamp-vk [frames] [live] [width] [height]
+Usage: kmschurn.py probe|churn|static[-vk]|stamp-vk|stamp2-vk [frames] [live] [width] [height]
+
+`stamp2-vk` stamps and flips the first two connected outputs in turn, each at its own mode
+and from the same Vulkan device, as a desktop with two monitors does; width and height are
+ignored. Output k's frame i is stamped 2*i + k + 1.
 
 Output (greppable, one fact per line):
     KMS DEV <path> master=<0|1>
@@ -858,6 +862,16 @@ def first_memory_type(bits):
 
 def pick_output(drm, fd):
     """The first connected connector with a mode, and a CRTC that can drive it."""
+    outputs = pick_outputs(drm, fd)
+    if not outputs:
+        fail("pick_output", "no connected connector with a usable crtc")
+    return outputs[0]
+
+
+def pick_outputs(drm, fd):
+    """Every connected connector with a mode, each with a CRTC of its own that can drive it."""
+    outputs = []
+    taken = set()
     res = drm.drmModeGetResources(fd)
     if not res:
         fail("drmModeGetResources", "null")
@@ -879,6 +893,8 @@ def pick_output(drm, fd):
             if eptr:
                 crtc = eptr.contents.crtc_id
                 drm.drmModeFreeEncoder(eptr)
+        if crtc in taken:
+            crtc = 0
         if not crtc:
             # No encoder bound yet: take the first CRTC any of our encoders can drive.
             for j in range(conn.count_encoders):
@@ -888,7 +904,7 @@ def pick_output(drm, fd):
                 mask = eptr.contents.possible_crtcs
                 drm.drmModeFreeEncoder(eptr)
                 for k in range(r.count_crtcs):
-                    if mask & (1 << k):
+                    if mask & (1 << k) and r.crtcs[k] not in taken:
                         crtc = r.crtcs[k]
                         break
                 if crtc:
@@ -896,8 +912,9 @@ def pick_output(drm, fd):
         cid = conn.connector_id
         drm.drmModeFreeConnector(cptr)
         if crtc:
-            return cid, crtc, mode
-    fail("pick_output", "no connected connector with a usable crtc")
+            taken.add(crtc)
+            outputs.append((cid, crtc, mode))
+    return outputs
 
 
 def await_flip(fd):
@@ -913,6 +930,19 @@ def await_flip(fd):
             return True
         data = data[length:]
     return False
+
+
+def await_flips(fd, n):
+    """Consume `n` page-flip completions, however many each read returns."""
+    seen = 0
+    while seen < n:
+        data = os.read(fd, 4096)
+        while data:
+            etype, length = struct.unpack_from("=II", data, 0)
+            if etype == DRM_EVENT_FLIP_COMPLETE:
+                seen += 1
+            data = data[length:]
+    return seen
 
 
 # ------------------------------------------------------------------------------------
@@ -1067,6 +1097,56 @@ def mem_churn(mode_name, rounds):
           f"handles={created} elapsed={elapsed:.1f}", flush=True)
 
 
+def stamp_pair(mode_name, frames, live):
+    """Stamp and flip two outputs in turn from one Vulkan device, each at its own mode."""
+    drm = load_drm()
+    fd = os.open(CARD, os.O_RDWR | os.O_CLOEXEC)
+    drm.drmSetMaster(fd)
+    print(f"KMS DEV {CARD} master={drm.drmIsMaster(fd)}", flush=True)
+    for var in ENV_OF_RECORD:
+        print(f"KMS ENV {var}={os.environ.get(var, 'UNSET')}", flush=True)
+    outputs = pick_outputs(drm, fd)
+    if len(outputs) < 2:
+        fail("pick_outputs", f"{len(outputs)} connected outputs, need 2")
+    outputs = outputs[:2]
+
+    vk = load_vk()
+    vkdev, get_fd, _phys = make_vk_device(vk)
+    ctx = (vk, vkdev, get_fd, Recorder(vk, vkdev))
+    rings = []
+    for cid, crtc, mode in outputs:
+        w, h = mode.hdisplay, mode.vdisplay
+        print(f"KMS MODE {mode.name.decode()} {w}x{h}@{mode.vrefresh} CRTC {crtc}", flush=True)
+        ring = [VkBuffer(drm, ctx, fd, None, w, h) for _ in range(live)]
+        print(ring[0].describe(w, h), flush=True)
+        conns = (C.c_uint32 * 1)(cid)
+        rc = drm.drmModeSetCrtc(fd, crtc, ring[0].fb, 0, 0, conns, 1, C.byref(mode))
+        if rc:
+            fail("drmModeSetCrtc", f"crtc={crtc} rc={rc}")
+        rings.append((crtc, ring))
+
+    print(f"CHURN START {mode_name} frames={frames} live={live} outputs=2", flush=True)
+    print("STAMP FIRST 1", flush=True)
+    flips = 0
+    started = time.monotonic()
+    for i in range(frames):
+        for k, (crtc, ring) in enumerate(rings):
+            nxt = ring[i % live]
+            ctx[3].clear(nxt.img, i, rgb=stamp_rgb(2 * i + k + 1))
+            if drm.drmModePageFlip(fd, crtc, nxt.fb, DRM_MODE_PAGE_FLIP_EVENT, None):
+                fail("drmModePageFlip", f"frame={i} output={k}")
+        # One completion per output, in whichever order and however batched they come.
+        flips += await_flips(fd, len(rings))
+        if (i + 1) % 100 == 0:
+            print(f"CHURN PROGRESS {flips} created={2 * live}", flush=True)
+    for _, ring in rings:
+        for b in ring:
+            b.release()
+    elapsed = time.monotonic() - started
+    print(f"CHURN DONE {mode_name} flips={flips} created={2 * live} "
+          f"handles={2 * live} elapsed={elapsed:.1f}", flush=True)
+
+
 def main():
     mode_name = sys.argv[1] if len(sys.argv) > 1 else "probe"
     frames = int(sys.argv[2]) if len(sys.argv) > 2 else 300
@@ -1084,8 +1164,13 @@ def main():
 
     vulkan = mode_name.endswith("-vk")
     base_mode = mode_name[:-3] if vulkan else mode_name
-    if base_mode not in ("probe", "churn", "static", "stamp"):
+    if base_mode not in ("probe", "churn", "static", "stamp", "stamp2"):
         fail("usage", f"unknown mode {mode_name}")
+    if base_mode == "stamp2":
+        if not vulkan:
+            fail("usage", "stamp2 needs the -vk allocator: it writes every frame")
+        stamp_pair(mode_name, frames, live)
+        return
     stamp = base_mode == "stamp"
     if stamp and not vulkan:
         fail("usage", "stamp needs the -vk allocator: it writes every frame")

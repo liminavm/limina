@@ -319,8 +319,12 @@ and libkrun presents that copy and reports the scanout held (`ScanoutCopies`); t
 KosmicKrisp ending every encoder with an all-stages queue barrier, and it covers one queue only:
 a context with several falls back to the supervisor's copy. It cannot order the copy ahead of
 guest work the ring thread already submitted when the flush is handled late -- the flush and the
-ring arrive on different host threads -- and only a guest flush fence closes that. Guard:
-`scanout_copy_shows_presented_frame`, whose ignored twin documents the open case.
+ring arrive on different host threads -- and only a guest flush fence closes that. The copies
+land in a few surfaces kept **per scanout**, each owning its Vulkan import: one ring per context
+made a two-monitor desktop mint a surface per present and leak them all. Every mint is logged
+(`present copy: scanout N: minted surface`), so a log that keeps printing it is a ring not reusing
+its surfaces. Guard: `scanout_copy_shows_presented_frame`, whose ignored twin documents the open
+case and whose two-output test bounds the surfaces.
 
 ### More than one display
 
