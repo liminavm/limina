@@ -17,8 +17,9 @@ It also measures the touchpad's two-finger scroll, as a client would see it: for
 (libinput's finger scroll events up to its stop), the event count and span, the velocity GTK's
 kinetic scrolling would compute at the stop (`scroll_history_finish` in GTK 3 and 4: the deltas
 of the last 150 ms over their time span, the stop included), the deltas against the scroll's
-direction (a wobble), and the steps more than 1.7 times as fast as both neighbours (a double step). `fuzz`
-sets the clone's MT position fuzz (0.01 mm units); `--verbose` runs libinput verbosely, which
+direction (a wobble), the steps more than 1.7 times as fast as both neighbours (a double step),
+and the deltas after a pause of 50 ms or more before the stop (a nudge: the content had come
+to rest and moves again). `fuzz` sets the clone's MT position fuzz (0.01 mm units); `--verbose` runs libinput verbosely, which
 logs its gesture state machine.
 """
 
@@ -85,6 +86,7 @@ SCROLL = re.compile(
     re.M,
 )
 GTK_WINDOW_MS = 150
+NUDGE_GAP_MS = 50
 
 
 def scrolls(out, node):
@@ -123,7 +125,12 @@ def measure(events, stop):
         for i in range(1, len(speeds) - 1)
         if speeds[i] > 1.7 * speeds[i - 1] and speeds[i] > 1.7 * speeds[i + 1] and speeds[i - 1] > 0
     )
+    # A delta after a pause of 50 ms or more, before the stop: the content had come to rest
+    # and moves again — a finger creeping after it stopped.
+    nudges = [d for (p, _), (t, d) in zip(events, events[1:]) if t - p >= NUDGE_GAP_MS]
     return {
+        "nudges": len(nudges),
+        "nudge_sum": sum(abs(d) for d in nudges),
         "n": len(events),
         "span": events[-1][0] - events[0][0],
         "total": total,
@@ -137,11 +144,12 @@ def measure(events, stop):
 def report_scroll(out, node):
     rows = [measure(e, s) for e, s in scrolls(out, node)]
     with open("/tmp/trackpad-oracle-scroll.txt", "w") as f:
-        f.write("n span_ms total gtk_velocity wrong wrong_sum doubles\n")
+        f.write("n span_ms total gtk_velocity wrong wrong_sum doubles nudges nudge_sum\n")
         for r in rows:
             f.write(
                 f"{r['n']} {r['span']} {r['total']:.1f} {r['velocity']:.0f} "
-                f"{r['wrong']} {r['wrong_sum']:.2f} {r['doubles']}\n"
+                f"{r['wrong']} {r['wrong_sum']:.2f} {r['doubles']} {r['nudges']} "
+                f"{r['nudge_sum']:.2f}\n"
             )
     short = [r for r in rows if r["n"] <= 4]
     still = sum(1 for r in rows if r["velocity"] == 0)
@@ -149,7 +157,9 @@ def report_scroll(out, node):
         f"SCROLL: {len(rows)} scrolls, {len(short)} of at most 4 events, {still} with no GTK "
         f"velocity; wrong-way deltas {sum(r['wrong'] for r in rows)} in "
         f"{sum(1 for r in rows if r['wrong'])} scrolls; double steps "
-        f"{sum(r['doubles'] for r in rows)} of {sum(r['n'] for r in rows)} events"
+        f"{sum(r['doubles'] for r in rows)} of {sum(r['n'] for r in rows)} events; nudges after "
+        f"a pause {sum(r['nudges'] for r in rows)} in {sum(1 for r in rows if r['nudges'])} "
+        f"scrolls ({sum(r['nudge_sum'] for r in rows):.1f} units)"
     )
 
 
