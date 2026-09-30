@@ -94,8 +94,9 @@ gesture suppression). With it, the partition is:
   (each gesture event's local touches, each trackpad click) as JSON lines. Recorded batteries
   of real hands live in `crates/limina/testdata/trackpad/` and are the policy's fixtures:
   `window::trackpad::recordings` replays each through the policy and checks, against
-  libinput's tap rules (180 ms, 1.3 mm), that every click macOS recognised reaches the guest
-  once and the touchpad adds none. `scripts/trackpad-oracle.sh <recording> <ssh-port>` judges
+  libinput's tap rules (180 ms, 1.3 mm behind its hysteresis), that every click macOS
+  recognised reaches the guest once and the touchpad adds none, and that the small quick
+  flicks of `battery-5` scroll. `scripts/trackpad-oracle.sh <recording> <ssh-port>` judges
   the same replay with the **real** libinput in a booted guest (uinput clones of both devices,
   events at their recorded times). The two agree: immediate forwarding fails both with the
   same 71 guest taps on `battery-1`. The oracle also measures the touchpad's two-finger
@@ -173,8 +174,8 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
     or 16 ms.
   - **The frame after a moved commit's landing carries the committing sample**, never a
     newer one, spaced by its distance at 6 mm per 12 ms (`COMMIT_SPEED_MM_PER_12MS`) and at
-    least the pacing. It holds the whole distance moved before the commit — 3–8 mm on a
-    flick — and a newer sample, or a shorter gap, read as a jump and cost the flick its start.
+    least the pacing. It holds the whole distance moved before the commit, and a newer
+    sample, or a shorter gap, read as a jump and cost the flick its start.
   - **A finger landing or lifting is never held back, but the fingers already down stay
     where the guest last saw them** in that frame; their motion follows at the pacing. A
     third finger landing 2–6 ms after a motion frame otherwise carried the others' 4–5 mm
@@ -193,10 +194,19 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   287–310 ms after the fingers lift (it waits out the double-tap window; measured on
   `battery-1`). Routing each click to one recognizer was therefore a race, and lost it
   visibly (a menu opened and closed by two right-clicks). Instead a guest-owned sequence's
-  contacts reach the guest only once it **commits**: a finger moved ≥ 3 mm (`COMMIT_MOVE_MM`;
-  the guest then gets the landing positions first and the motion after, past libinput's
-  1.3 mm tap threshold), or two fingers stayed down 200 ms (`COMMIT_HOLD`; the guest then
-  holds the touch at least 200 ms, `TAP_GUARD`, past libinput's 180 ms tap timeout). Every
+  contacts reach the guest only once it **commits**: a finger moved ≥ 1 mm (`COMMIT_MOVE_MM`;
+  the guest gets the landing positions first and the motion after), or two fingers stayed
+  down 200 ms (`COMMIT_HOLD`). Either way the guest holds the touch at least 200 ms
+  (`TAP_GUARD`, past libinput's 180 ms tap timeout) until it has seen a finger move 1.6 mm
+  (`TAP_MOVE_MM`: libinput's 1.3 mm tap threshold, measured behind its 0.16 mm hysteresis,
+  with margin); from then on the touch lifts with the fingers. The commit distance sits
+  above the most a two-finger tap wiggles in the recordings (0.5 mm) and as low as that
+  allows, because what the guest does not see is gone from the scroll: libinput tells a
+  two-finger scroll once both fingers are 1.5 mm from where it saw them land, and scrolls
+  nothing in that frame (`tp_gesture_handle_state_scroll_start`), so a quick flick needs
+  a motion frame after that one before the lift. Committing at 3 mm lost 4 of the 13 small
+  flicks of `battery-5`; at 1 mm one is lost, and libinput would not scroll that one from
+  the trackpad's own frames either. Every
   click goes to the tablet exactly as macOS recognised it, so the Mac's tap-to-click setting
   governs two-finger taps over the VM, as it does one-finger ones. That includes its latency:
   macOS delivered each one-finger tap's click 220–250 ms after the lift (`battery-2`, with

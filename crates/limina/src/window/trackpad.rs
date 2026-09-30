@@ -48,18 +48,25 @@ pub const THIN_GRACE: Duration = Duration::from_millis(50);
 pub const COMMIT_SPEED_MM_PER_12MS: f64 = 6.0;
 
 /// How far any finger must move before a guest-owned sequence **commits** — before the guest
-/// sees its contacts at all. Past libinput's 1.3 mm tap threshold, with margin: the guest gets
-/// the landing positions first and the motion after, so it can never read the gesture as a
-/// tap.
-pub const COMMIT_MOVE_MM: f64 = 3.0;
+/// sees its contacts at all. Past the most a two-finger tap wiggles in the recordings
+/// (0.5 mm), and well short of libinput's own 1.5 mm for telling a scroll: every millimetre
+/// the guest does not see is gone from the start of the scroll, and a small quick flick is
+/// over a frame or two after it commits. A touch committed short of [`TAP_MOVE_MM`] is held
+/// ([`TAP_GUARD`]).
+pub const COMMIT_MOVE_MM: f64 = 1.0;
+
+/// How far the guest must see a finger move from where it landed before its touch can no
+/// longer be a tap: libinput's 1.3 mm, behind its hysteresis (`TOUCHPAD_FUZZ`, 0.16 mm), with
+/// margin.
+pub const TAP_MOVE_MM: f64 = 1.6;
 
 /// How long a still two-finger touch waits before it commits anyway (so a resting hold still
-/// reaches the guest, e.g. to stop a kinetic scroll). A touch committed this way is then held
-/// down for at least [`TAP_GUARD`] in the guest, whatever the fingers do.
+/// reaches the guest, e.g. to stop a kinetic scroll).
 pub const COMMIT_HOLD: Duration = Duration::from_millis(200);
 
-/// The least time the guest holds a committed touch: past libinput's 180 ms tap timeout, so
-/// a touch the guest sees can never end as a tap.
+/// The least time the guest holds a committed touch until it has seen a finger move past
+/// [`TAP_MOVE_MM`]: past libinput's 180 ms tap timeout, so a touch the guest sees can never
+/// end as a tap.
 pub const TAP_GUARD: Duration = Duration::from_millis(200);
 
 /// One local finger, as AppKit reports it: a stable identity, a position normalized to the
@@ -108,9 +115,11 @@ pub struct TrackpadSeq {
     peak: usize,
     /// A guest-owned sequence not yet shown to the guest.
     uncommitted: Option<Uncommitted>,
-    /// When the guest's current touch committed by holding still ([`TAP_GUARD`]). A touch
-    /// committed by moving can never be a tap, and lifts when the fingers do.
+    /// When the guest's current touch committed, until the guest has seen it move too far to
+    /// be a tap ([`TAP_GUARD`]); from then on it lifts when the fingers do.
     held_at: Option<Instant>,
+    /// Where the guest saw each of its fingers land ([`TAP_MOVE_MM`]).
+    guest_landing: Vec<Contact>,
     /// Whether the last *finished* sequence was the guest's — its momentum scroll keeps
     /// arriving after the fingers lift, and belongs to it.
     momentum_guest: bool,
@@ -142,6 +151,7 @@ impl TrackpadSeq {
             peak: 0,
             uncommitted: None,
             held_at: None,
+            guest_landing: Vec::new(),
             momentum_guest: false,
             last_touch: None,
             last_frame: None,
@@ -295,7 +305,8 @@ impl TrackpadSeq {
 
     /// A guest-owned sequence the guest has not seen yet: show it once it is clearly a
     /// gesture. Moved far enough → the landing positions now and the current ones as the next
-    /// (paced) frame; held still long enough → the current positions.
+    /// (paced) frame; held still long enough → the current positions. Either way it is held
+    /// ([`TAP_GUARD`]) until the guest sees it move too far to be a tap.
     fn try_commit(&mut self, contacts: Vec<Contact>, now: Instant) -> Vec<InputEvent> {
         let unc = self.uncommitted.get_or_insert_with(|| Uncommitted {
             since: now,
@@ -318,6 +329,8 @@ impl TrackpadSeq {
             return Vec::new();
         }
         let unc = self.uncommitted.take().expect("just inserted");
+        self.held_at = Some(now);
+        self.guest_landing.clear();
         if moved {
             let landing: Vec<Contact> = contacts
                 .iter()
@@ -335,7 +348,6 @@ impl TrackpadSeq {
             self.pending = Some(contacts);
             events
         } else {
-            self.held_at = Some(now);
             self.send_frame(&contacts, now)
         }
     }
@@ -401,6 +413,16 @@ impl TrackpadSeq {
         if !events.is_empty() {
             self.last_frame = Some(now);
             self.speeds_sent = speeds;
+        }
+        let tap_move = (TAP_MOVE_MM * TOUCHPAD_RES as f64) as i32;
+        for c in contacts {
+            match self.guest_landing.iter().find(|l| l.id == c.id) {
+                Some(l) if (c.x - l.x).abs().max((c.y - l.y).abs()) >= tap_move => {
+                    self.held_at = None
+                }
+                Some(_) => {}
+                None => self.guest_landing.push(*c),
+            }
         }
         events
     }
@@ -627,11 +649,17 @@ mod recordings {
     use super::replay::*;
     use super::*;
     use limina_input::constants::*;
+    use limina_input::touchpad::TOUCHPAD_FUZZ;
 
     /// libinput's tap window and motion threshold (`evdev-mt-touchpad-tap.c`): a touch that
-    /// lifts within this long of landing, having moved less than this far, is a tap.
+    /// lifts within this long of landing, having moved no further than this, is a tap. The
+    /// distance is the one libinput sees, behind its hysteresis ([`TOUCHPAD_FUZZ`]).
     const TAP_TIMEOUT_US: u64 = 180_000;
     const TAP_MOVE_UNITS: i32 = 130; // 1.3 mm at 100 units/mm
+
+    /// libinput's two-finger gesture threshold (`tp_gesture_detect_motion_gestures`): it tells
+    /// a scroll once both fingers have moved this far from where they landed.
+    const SCROLL_MOVE_UNITS: i32 = 150; // 1.5 mm
 
     const BATTERY_1: &str = include_str!("../../testdata/trackpad/battery-1.jsonl");
     /// Scrolls, flicks, pinches, and one- and two-finger taps and clicks, captured and not.
@@ -642,13 +670,17 @@ mod recordings {
     /// Through the HID gesture tap: slow scrolls that stop and creep on before the lift (the
     /// oracle's nudges, `spikes/scroll-wobble/README.md`), flicks, and clicks.
     const BATTERY_4: &str = include_str!("../../testdata/trackpad/battery-4.jsonl");
+    /// Through the HID gesture tap: small quick two-finger flicks, flicks added to a coasting
+    /// scroll, and ordinary scrolls.
+    const BATTERY_5: &str = include_str!("../../testdata/trackpad/battery-5.jsonl");
 
     fn geometry() -> TouchpadGeometry {
         TouchpadGeometry::BUILT_IN
     }
 
     /// Each touch episode the guest touchpad saw (BTN_TOUCH down → up): its duration, and
-    /// the largest distance any contact moved from where it landed.
+    /// the largest distance any contact moved from where it landed, as libinput sees it
+    /// (behind its hysteresis).
     fn episodes(out: &[Delivered]) -> Vec<(u64, u64, i32)> {
         let mut eps = Vec::new();
         let mut start = None;
@@ -678,7 +710,8 @@ mod recordings {
                         match landed[s] {
                             Some((-1, -1)) => landed[s] = Some(pos[s]),
                             Some((x, y)) => {
-                                moved = moved.max((pos[s].0 - x).abs().max((pos[s].1 - y).abs()))
+                                let d = f64::from(pos[s].0 - x).hypot(f64::from(pos[s].1 - y));
+                                moved = moved.max(d as i32 - TOUCHPAD_FUZZ as i32)
                             }
                             None => {}
                         }
@@ -716,7 +749,7 @@ mod recordings {
         assert_eq!(presses(&out, Dev::Touchpad, BTN_LEFT), 0, "touchpad button");
         let taps: Vec<_> = episodes(&out)
             .into_iter()
-            .filter(|&(_, dur, moved)| dur < TAP_TIMEOUT_US && moved < TAP_MOVE_UNITS)
+            .filter(|&(_, dur, moved)| dur < TAP_TIMEOUT_US && moved <= TAP_MOVE_UNITS)
             .collect();
         assert!(
             taps.is_empty(),
@@ -745,6 +778,96 @@ mod recordings {
     #[test]
     fn battery_4_gives_one_click_per_intended_click() {
         check(BATTERY_4);
+    }
+
+    #[test]
+    fn battery_5_gives_one_click_per_intended_click() {
+        check(BATTERY_5);
+    }
+
+    /// When each two-finger touch episode began, and whether libinput scrolls it: it
+    /// recognises the scroll in the frame where both fingers are [`SCROLL_MOVE_UNITS`] from
+    /// where they landed (behind its hysteresis) and scrolls nothing in that frame, so a
+    /// scroll needs a frame with motion after it, before the lift.
+    fn scrolls(out: &[Delivered]) -> Vec<(u64, bool)> {
+        let mut eps = Vec::new();
+        let mut slot = 0usize;
+        let mut landed: [Option<(i32, i32)>; MAX_SLOTS] = [None; MAX_SLOTS];
+        let mut pos = [(0i32, 0i32); MAX_SLOTS];
+        let mut moved = false;
+        let mut new = [false; MAX_SLOTS];
+        // The episode's start, and whether libinput has recognised it / scrolled it yet.
+        let mut ep: Option<(u64, bool, bool)> = None;
+        for d in out.iter().filter(|d| d.dev == Dev::Touchpad) {
+            let e = d.ev;
+            match (e.type_, e.code) {
+                (EV_ABS, ABS_MT_SLOT) => slot = e.value as usize,
+                (EV_ABS, ABS_MT_TRACKING_ID) if e.value < 0 => landed[slot] = None,
+                (EV_ABS, ABS_MT_TRACKING_ID) => new[slot] = true,
+                (EV_ABS, ABS_MT_POSITION_X) => {
+                    pos[slot].0 = e.value;
+                    moved = true;
+                }
+                (EV_ABS, ABS_MT_POSITION_Y) => {
+                    pos[slot].1 = e.value;
+                    moved = true;
+                }
+                (EV_KEY, BTN_TOUCH) if e.value == 1 => ep = Some((d.t_us, false, false)),
+                (EV_KEY, BTN_TOUCH) => {
+                    if let Some((t, _, scrolled)) = ep.take() {
+                        eps.push((t, scrolled));
+                    }
+                }
+                (EV_SYN, _) => {
+                    for s in 0..MAX_SLOTS {
+                        if std::mem::take(&mut new[s]) {
+                            landed[s] = Some(pos[s]);
+                        }
+                    }
+                    if let Some((_, recognised, scrolled)) = ep.as_mut() {
+                        if *recognised {
+                            *scrolled |= moved;
+                        }
+                        let down: Vec<_> = (0..MAX_SLOTS)
+                            .filter_map(|s| Some((s, landed[s]?)))
+                            .collect();
+                        *recognised |= down.len() == 2
+                            && down.iter().all(|&(s, (x, y))| {
+                                let d = f64::from(pos[s].0 - x).hypot(f64::from(pos[s].1 - y));
+                                d as i32 - TOUCHPAD_FUZZ as i32 >= SCROLL_MOVE_UNITS
+                            });
+                    }
+                    moved = false;
+                }
+                _ => {}
+            }
+        }
+        eps
+    }
+
+    #[test]
+    fn a_small_quick_flick_scrolls_the_guest() {
+        // battery-5 opens with thirteen small quick flicks, 3.5–6 mm in about 100 ms, the
+        // fingers slow at first: all but one must scroll. That one's second finger is past
+        // libinput's 1.5 mm only in its last two-finger sample, so libinput would not scroll
+        // it from the trackpad's own frames either.
+        let records = parse_recording(BATTERY_5).expect("recording parses");
+        let out = replay(geometry(), &records);
+        let flicks: Vec<_> = scrolls(&out)
+            .into_iter()
+            .filter(|&(t, _)| (10_000_000..27_000_000).contains(&t))
+            .collect();
+        assert_eq!(
+            flicks.len(),
+            13,
+            "flicks that reached the guest: {flicks:?}"
+        );
+        let lost: Vec<u64> = flicks.iter().filter(|f| !f.1).map(|f| f.0).collect();
+        assert!(
+            lost.iter().all(|t| (11_100_000..11_200_000).contains(t)) && lost.len() <= 1,
+            "{} flick(s) libinput would not scroll (start_us): {lost:?}",
+            lost.len()
+        );
     }
 
     /// The frames libinput would discard as a touch jump (`tp_detect_jumps` in
@@ -807,6 +930,7 @@ mod recordings {
             ("2", BATTERY_2),
             ("3", BATTERY_3),
             ("4", BATTERY_4),
+            ("5", BATTERY_5),
         ] {
             let records = parse_recording(battery).expect("recording parses");
             let found = jumps(&replay(geometry(), &records));
@@ -929,18 +1053,35 @@ mod tests {
         let mut s = seq();
         let now = Instant::now();
         s.on_touches(&[t(1, 0.10, 0.10), t(2, 0.20, 0.20)], true, now);
-        // 2 mm: not yet.
+        // 0.5 mm: not yet.
         assert!(
-            s.on_touches(&[t(1, 0.12, 0.10), t(2, 0.22, 0.20)], true, now)
+            s.on_touches(&[t(1, 0.105, 0.10), t(2, 0.205, 0.20)], true, now)
                 .is_empty()
         );
-        // 4 mm: the guest gets the landing now…
-        let ev = s.on_touches(&[t(1, 0.14, 0.10), t(2, 0.24, 0.20)], true, now);
+        // 2 mm: the guest gets the landing now…
+        let ev = s.on_touches(&[t(1, 0.12, 0.10), t(2, 0.22, 0.20)], true, now);
         assert_eq!(slots_down(&ev), 2);
         assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 1000)));
         // …and the motion as the next paced frame.
         let ev = s.tick(now + MIN_FRAME_INTERVAL);
-        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 1400)));
+        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 1200)));
+    }
+
+    #[test]
+    fn a_touch_committed_short_of_the_tap_distance_is_held_past_the_tap_timeout() {
+        // 1.2 mm commits, but the guest could still read it as a tap: lifted now, its fingers
+        // stay down in the guest until the guard has passed.
+        let mut s = seq();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.10, 0.10), t(2, 0.20, 0.20)], true, now);
+        let ev = s.on_touches(&[t(1, 0.112, 0.10), t(2, 0.212, 0.20)], true, now);
+        assert_eq!(slots_down(&ev), 2);
+        let up = now + MIN_FRAME_INTERVAL;
+        let ev = s.on_touches(&[], true, up);
+        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 1120)));
+        assert!(!lifted(&ev), "not before the guard");
+        assert!(s.tick(up + THIN_GRACE).is_empty());
+        assert!(lifted(&s.tick(now + TAP_GUARD)));
     }
 
     #[test]

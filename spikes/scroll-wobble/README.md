@@ -68,3 +68,34 @@ into uinput clones in a stock F44 guest and measures libinput's finger scroll. O
   (`battery-2`: −15 and −13.7 against −30 to −50 for single samples), so merging a pair into
   one frame is right; sending each as its own frame made the steps less even.
 
+
+## Small quick flicks (measured 2026-09-30)
+
+`battery-5` (HID-tap path): 13 small quick flicks, flicks added to a coasting scroll, and
+ordinary scrolls. The small flicks move 3.5–6 mm in about 100 ms, slowly at first: a 3 mm
+commit came 60–140 ms in, with 0–50 ms of the flick left. libinput tells a two-finger scroll
+in the frame where both fingers are 1.5 mm from where they landed and scrolls nothing in that
+frame, so a flick whose landing and commit were its only frames never scrolled. Oracle, fuzz
+16, whole recording (two runs each, equal):
+
+| commit | scrolls | events |
+|---|---|---|
+| 3 mm (before) | 20 | 57 |
+| 1.8 mm | 29 | 87 |
+| 1.6 mm | 30 | 95 |
+| 1 mm + tap guard until 1.6 mm seen (built) | 33 | 111 |
+| 0.01 mm, no guard (the ceiling; leaks taps) | 35 | 114 |
+
+The same change on batteries 1–4: no tap reaches the guest; scroll events 284 → 317,
+566 → 630, 1 398 → 1 571; short scrolls (≤ 4 events) 7 → 2, 12 → 2, 18 → 5.
+
+- **Replaying the samples before the commit does not help.** Showing the guest the three
+  samples before the committing one, in order and paced, gave 25 scrolls, worse than the
+  single step: the lag it adds makes the next live frame a touch jump on fast starts, and a
+  limiter that splits such frames keeps it jump-free but not better (29).
+- **A finger lifting first ends the scroll.** Flicks end with one finger up 12–20 ms before
+  the other; libinput ends a two-finger scroll when a finger lifts, so the last finger's
+  motion is not a scroll on a native touchpad either.
+- **An added flick stops the coast and starts its own.** GTK's kinetic scrolling is not
+  additive: a new scroll stops the running one, and its velocity comes only from its own last
+  150 ms of deltas.
