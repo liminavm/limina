@@ -3347,6 +3347,14 @@ impl InputState {
     }
 
     fn feed_touches(&self, event: &NSEvent, in_view: bool) {
+        // A gesture event with no touches at all says nothing about the fingers. At the HID
+        // level every other event of a two-finger scroll is one (measured: 1754 of 3763);
+        // read as "every finger is up", each lifted the guest's fingers and landed them anew,
+        // and no scroll ever moved far enough to commit. A real lift still carries its
+        // touches, in the ended phase.
+        if event.allTouches().count() == 0 {
+            return;
+        }
         let touches: Vec<TouchSample> = event
             .allTouches()
             .iter()
