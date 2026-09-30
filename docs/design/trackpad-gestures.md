@@ -2,7 +2,8 @@
 
 Status: the guest touchpad, its `NSTouch` feed and the HID-level gesture tap are BUILT
 (§What is built); two-finger scroll, pinch, taps and clicks work on the stock tier. The tap
-takes guest three-finger sequences from macOS; it is untried by hand. Two-finger system
+takes guest three-finger sequences from macOS while four fingers stay macOS's (user-poked on
+the default "three or four" setting). Two-finger system
 gestures (smart zoom, the right-edge Notification Center swipe) are not taken. Ownership decided (§The ownership rule): the guest owns 2-
 and 3-finger sequences in seamless mode and under capture alike, made possible by a measured
 HID-level event tap that suppresses the host's gestures per finger count (§Raw multitouch
@@ -182,6 +183,10 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   just after committing shows the guest a still touch, which is a tap. A resting finger
   (macOS's reading of a thumb) does not start or widen a sequence, but one the guest already
   holds keeps counting: macOS also marks fingers resting when they merely hold still.
+- **A gesture event with no touches at all says nothing about the fingers.** At the HID level
+  every other gesture event of a two-finger scroll carries none (1754 of 3763 in one poke;
+  the local monitor saw one in a session). Read as a lift, each one lifted and re-landed the
+  guest's fingers, and no scroll ever committed. A real lift carries its touches, ended.
 - **Three fingers need the HID tap.** When macOS claims a three-finger swipe (the default
   setting), AppKit stops attaching touches to the app's gesture events: of ~8 000 gesture
   events in one poke, 57 carried three touches. The guest cannot see the swipe until the
