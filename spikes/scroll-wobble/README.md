@@ -55,6 +55,15 @@ into uinput clones in a stock F44 guest and measures libinput's finger scroll. O
   and consumes the event (`Terminal::widget_mouse_scroll`, fallback scrolling on), so the
   GtkScrolledWindow around it never runs its kinetic scrolling. Both coasted in limina when
   macOS's momentum reached the guest as wheel events.
+- **What is left is creep, not noise.** With fuzz 16 the slow scrolls no longer reverse,
+  but they still jitter at the end (poke on the dev Mac, scroll probe in Firefox): the
+  fingers creep on 0.03–0.16 mm after they stop, in isolated samples 30–70 ms apart, and
+  each reaches Firefox as a 3–9 px nudge after a 50–170 ms pause. The oracle's nudge count
+  on that recording (64 scrolls) is 63 in 36 scrolls at fuzz 0 and 50 in 36 at fuzz 16:
+  libinput's hysteresis trails the finger by its margin (`evdev_hysteresis`), so a creep
+  in the same direction passes. macOS never flags these fingers resting (0 of 3 185
+  two-finger samples). Removing the nudges means filtering real finger motion — a stop
+  filter that keeps stopped fingers still until they move ~0.5 mm — and is not done.
 - **Back-to-back sample pairs each carry half a step** on the local-monitor path
   (`battery-2`: −15 and −13.7 against −30 to −50 for single samples), so merging a pair into
   one frame is right; sending each as its own frame made the steps less even.
