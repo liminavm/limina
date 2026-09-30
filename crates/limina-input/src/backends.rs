@@ -29,7 +29,7 @@ use krun_input::{
 use crate::WIRE_LEN;
 use crate::constants::*;
 use crate::router::{self, HidReportSink};
-use crate::touchpad::{MAX_SLOTS, MAX_TRACKING_ID, TOUCHPAD_RES, TouchpadGeometry};
+use crate::touchpad::{MAX_SLOTS, MAX_TRACKING_ID, TOUCHPAD_FUZZ, TOUCHPAD_RES, TouchpadGeometry};
 
 /// Userdata carrying the read socket for a device's event stream, plus (for the keyboard) the
 /// flag published while the guest holds the device. `RawFd` is `Copy + Sync` and `Arc<Atomic*>`
@@ -369,7 +369,7 @@ impl InputQueryConfig for TouchpadConfig {
         let position = |max: u32| InputAbsInfo {
             min: 0,
             max,
-            fuzz: 0,
+            fuzz: TOUCHPAD_FUZZ,
             flat: 0,
             res: TOUCHPAD_RES,
         };
@@ -491,4 +491,31 @@ pub fn touchpad_backends(
         TouchpadConfig::into_input_config(Some(geometry)),
         FdEvents::into_input_events(Some(cfg)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fuzz on the positions only: libinput reads it as the touchpad's hysteresis margin.
+    #[test]
+    fn the_touchpad_declares_its_finger_noise_on_the_position_axes() {
+        let cfg = TouchpadConfig::new(Some(&TouchpadGeometry::BUILT_IN));
+        let fuzz = |axis: u16| {
+            let mut info = InputAbsInfo {
+                min: 0,
+                max: 0,
+                fuzz: u32::MAX,
+                flat: 0,
+                res: 0,
+            };
+            cfg.query_abs_info(axis as u8, &mut info).unwrap();
+            info.fuzz
+        };
+        for axis in [ABS_X, ABS_Y, ABS_MT_POSITION_X, ABS_MT_POSITION_Y] {
+            assert_eq!(fuzz(axis), TOUCHPAD_FUZZ, "axis {axis:#x}");
+        }
+        assert_eq!(fuzz(ABS_MT_SLOT), 0);
+        assert_eq!(fuzz(ABS_MT_TRACKING_ID), 0);
+    }
 }

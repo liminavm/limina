@@ -23,6 +23,13 @@ pub const MAX_SLOTS: usize = 3;
 /// unit `MTDeviceGetSensorSurfaceDimensions` answers in.
 pub const TOUCHPAD_RES: u32 = 100;
 
+/// The position axes' fuzz, in device units (0.16 mm): the finger noise a still or stopping
+/// contact reports. libinput turns a touchpad's fuzz into its own hysteresis, which holds a
+/// contact still until it moves past it; with none, a finger coming to rest scrolls the
+/// content back and forth by fractions of a pixel. Measured with the libinput oracle
+/// (`spikes/scroll-wobble/README.md`).
+pub const TOUCHPAD_FUZZ: u32 = 16;
+
 /// Largest tracking id the device advertises; ids wrap below it.
 pub const MAX_TRACKING_ID: i32 = 0xffff;
 

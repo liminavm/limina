@@ -98,7 +98,11 @@ gesture suppression). With it, the partition is:
   once and the touchpad adds none. `scripts/trackpad-oracle.sh <recording> <ssh-port>` judges
   the same replay with the **real** libinput in a booted guest (uinput clones of both devices,
   events at their recorded times). The two agree: immediate forwarding fails both with the
-  same 71 guest taps on `battery-1`.
+  same 71 guest taps on `battery-1`. The oracle also measures the touchpad's two-finger
+  scrolls as a client sees them (events per scroll, the velocity GTK's kinetic scrolling
+  computes at the stop, deltas against the scroll's direction). Its guest-side replay runs
+  late by up to ~20 ms at times, so its jump and step counts are noisy; the unit tests apply
+  libinput's rules exactly.
 - **Diagnostics** — `LIMINA_POINTER_WIRE_TRACE` adds `dev=touchpad` writes, a `[TOUCH]` line
   per gesture event (all/local counts, in-view) and `[CLICKSRC]` per forwarded press.
   `spikes/mt-raw-capture/guest-evdev-log.py` logs the guest device's raw stream in wallclock
@@ -118,7 +122,8 @@ gesture suppression). With it, the partition is:
 - **Device config (round one):** `EV_ABS` with `ABS_MT_SLOT` (3 slots),
   `ABS_MT_TRACKING_ID`, `ABS_MT_POSITION_X/Y` + legacy `ABS_X/Y`; `EV_KEY` with
   `BTN_TOUCH`, `BTN_TOOL_FINGER`, `BTN_TOOL_DOUBLETAP`, `BTN_TOOL_TRIPLETAP`,
-  `BTN_LEFT`; `INPUT_PROP_POINTER` + `INPUT_PROP_BUTTONPAD`. **`abs_info.res`
+  `BTN_LEFT`; `INPUT_PROP_POINTER` + `INPUT_PROP_BUTTONPAD`; fuzz on the position axes
+  (§Dedupe and teardown). **`abs_info.res`
   (units/mm) is mandatory** — libinput refuses/degrades touchpads without resolution;
   take it from `MTDeviceGetSensorSurfaceDimensions` (124.8 × 76.8 mm on the built-in →
   100 units/mm at 0.01 mm units), or derive it from `deviceSize`. The libkrun vtable already carries `res`
@@ -153,11 +158,27 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
 
 **Timing rules, each measured on the stock tier:**
 
-- **Pace motion frames ≥ 10 ms apart** (`MIN_FRAME_INTERVAL`). AppKit delivers the trackpad's
-  samples as gesture events in back-to-back pairs ~0.3 ms apart, at ~60 Hz. The guest has no
-  timestamps from us (its kernel stamps on arrival), so libinput read real motion over that
-  near-zero interval as `kernel bug: Touch jump detected and discarded`. Landings and lifts are
-  never held back.
+- **Never show libinput a touch jump.** The guest has no timestamps from us (its kernel stamps
+  each frame on arrival), and libinput discards a frame whose contact moves more than 20 mm,
+  or 7 mm more than in its last frame, per 12 ms (`tp_detect_jumps`) — logging `kernel bug:
+  Touch jump detected and discarded`, and losing that motion from the gesture. Three rules
+  keep every frame under it, and `no_battery_shows_the_guest_a_touch_jump` checks them against
+  that rule on every recording:
+  - **Motion frames are paced ≥ 10 ms apart** (`MIN_FRAME_INTERVAL`), the newest sample
+    going out. Samples arrive every ~16 ms through the local monitor, some in back-to-back
+    pairs ~0.3 ms apart that each carry half a step; through the HID tap every 7–8 ms or
+    16 ms.
+  - **The frame after a moved commit's landing carries the committing sample**, never a
+    newer one, spaced by its distance at 6 mm per 12 ms (`COMMIT_SPEED_MM_PER_12MS`) and at
+    least the pacing. It holds the whole distance moved before the commit — 3–8 mm on a
+    flick — and a newer sample, or a shorter gap, read as a jump and cost the flick its start.
+  - **A finger landing or lifting is never held back, but the fingers already down stay
+    where the guest last saw them** in that frame; their motion follows at the pacing. A
+    third finger landing 2–6 ms after a motion frame otherwise carried the others' 4–5 mm
+    with it, and three-finger swipes lost their start.
+- **The position axes declare fuzz 16 (0.16 mm, `TOUCHPAD_FUZZ`).** libinput turns a
+  touchpad's fuzz into its own hysteresis. With none, a finger coming to rest scrolled the
+  content back and forth by fractions of a pixel (`spikes/scroll-wobble/`).
 - **Taps and clicks are macOS's alone; the guest never sees a touch it could read as a
   tap.** Two recognizers see the same fingers: macOS turns taps and clicks into mouse clicks,
   and libinput would read its own taps from the contacts. Their events arrive on separate,
@@ -372,8 +393,8 @@ Space-change notification plus the Dock's window layers.
 - Does AppKit deliver indirect `NSTouch` events to a non-key window under the cursor,
   the way it delivers scroll events? Don't assume — probe empirically. If not, MT
   forwarding effectively gains a key-window gate in practice.
-- Whether libinput's size-based thumb/palm heuristics behave on the synthetic device;
-  pick sane fuzz/flat. (The `res` derivation itself is answered if we take the raw path:
+- Whether libinput's size-based thumb/palm heuristics behave on the synthetic device.
+  (The `res` derivation itself is answered if we take the raw path:
   `MTDeviceGetSensorSurfaceDimensions` — see §Raw multitouch capture.)
 - HID-tap coverage beyond the swipes exercised: 4/5-finger pinch (Launchpad, show
   desktop), the two-finger right-edge swipe (Notification Center), and App Exposé opened
