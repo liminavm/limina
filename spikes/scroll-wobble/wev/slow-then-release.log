@@ -1,0 +1,771 @@
+[         9:         wl_seat] name: seat0
+[         9:         wl_seat] capabilities: pointer keyboard 
+[        11:    xdg_toplevel] configure: width: 0; height: 0
+[        10:     xdg_surface] configure: serial: 4883
+[        16:     wl_keyboard] keymap: format: 1 (xkb v1), size: 36803
+[        16:     wl_keyboard] repeat_info: rate: 33 keys/sec; delay: 500 ms
+[        16:     wl_keyboard] enter: serial: 4884; surface: 3
+                      sym: Home         (65360), utf8: ''
+                      sym: Return       (65293), utf8: '\r'
+                      sym: Super_L      (65515), utf8: ''
+[        16:     wl_keyboard] modifiers: serial: 4884; group: 0
+                      depressed: 00000000
+                      latched: 00000000
+                      locked: 00000000
+[        12:  wl_data_device] selection: (cleared)
+[        11:    xdg_toplevel] configure: width: 0; height: 0
+                      activated 
+[        10:     xdg_surface] configure: serial: 4885
+[        16:     wl_keyboard] key: serial: 4887; time: 2863939; key: 36; state: 0 (released)
+                      sym: Return       (65293), utf8: ''
+[        16:     wl_keyboard] key: serial: 4888; time: 2863939; key: 110; state: 0 (released)
+                      sym: Home         (65360), utf8: ''
+[        15:      wl_pointer] enter: serial: 4932; surface: 3, x, y: 243.218750, 16.753906
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865830; x, y: 236.812500, 58.359375
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865847; x, y: 233.531250, 86.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865864; x, y: 231.968750, 111.199219
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865880; x, y: 231.187500, 123.960938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865897; x, y: 231.187500, 137.566406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865914; x, y: 231.187500, 143.156250
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865930; x, y: 231.187500, 148.800781
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865947; x, y: 231.187500, 150.382812
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865964; x, y: 231.187500, 151.171875
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] motion: time: 2865980; x, y: 231.187500, 151.964844
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] button: serial: 4943; time: 2866905; button: 272 (left), state: 1 (pressed)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] button: serial: 4944; time: 2866965; button: 272 (left), state: 0 (released)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867650; axis: 0 (vertical), value: 5.835938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867666; axis: 0 (vertical), value: 6.046875
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867683; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867701; axis: 0 (vertical), value: 3.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867718; axis: 0 (vertical), value: 11.144531
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867735; axis: 0 (vertical), value: 5.570312
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867751; axis: 0 (vertical), value: 6.253906
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867768; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867785; axis: 0 (vertical), value: 5.308594
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867801; axis: 0 (vertical), value: 4.414062
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867818; axis: 0 (vertical), value: 3.996094
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867835; axis: 0 (vertical), value: 4.625000
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867851; axis: 0 (vertical), value: 5.835938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867868; axis: 0 (vertical), value: 11.617188
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867885; axis: 0 (vertical), value: 5.046875
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867901; axis: 0 (vertical), value: 3.996094
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867918; axis: 0 (vertical), value: 2.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867935; axis: 0 (vertical), value: 0.890625
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867951; axis: 0 (vertical), value: 0.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867968; axis: 0 (vertical), value: 0.734375
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867985; axis: 0 (vertical), value: 0.839844
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2867999; axis: 0 (vertical), value: 0.472656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2868018; axis: 0 (vertical), value: -0.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2868035; axis: 0 (vertical), value: 0.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2868060; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2868060; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869316; axis: 0 (vertical), value: 6.992188
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869333; axis: 0 (vertical), value: 8.359375
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869349; axis: 0 (vertical), value: 7.886719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869366; axis: 0 (vertical), value: 12.984375
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869383; axis: 0 (vertical), value: 5.625000
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869400; axis: 0 (vertical), value: 6.730469
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869419; axis: 0 (vertical), value: 5.046875
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869435; axis: 0 (vertical), value: 11.671875
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869451; axis: 0 (vertical), value: 5.308594
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869468; axis: 0 (vertical), value: 4.414062
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869485; axis: 0 (vertical), value: 3.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869501; axis: 0 (vertical), value: 8.621094
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869518; axis: 0 (vertical), value: 5.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869535; axis: 0 (vertical), value: 5.519531
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869551; axis: 0 (vertical), value: 3.996094
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869568; axis: 0 (vertical), value: 2.785156
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869585; axis: 0 (vertical), value: 2.574219
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869601; axis: 0 (vertical), value: 0.890625
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869618; axis: 0 (vertical), value: 0.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869635; axis: 0 (vertical), value: 0.945312
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869650; axis: 0 (vertical), value: -0.261719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869665; axis: 0 (vertical), value: 0.734375
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869683; axis: 0 (vertical), value: 0.890625
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869694; axis: 0 (vertical), value: 0.945312
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869716; axis: 0 (vertical), value: -0.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869733; axis: 0 (vertical), value: 0.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869754; axis: 0 (vertical), value: 0.472656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869815; axis: 0 (vertical), value: 0.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2869868; axis: 0 (vertical), value: -0.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2869885; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2869885; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871099; axis: 0 (vertical), value: 6.308594
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871116; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871132; axis: 0 (vertical), value: 5.625000
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871149; axis: 0 (vertical), value: 4.835938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871166; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871183; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871199; axis: 0 (vertical), value: 11.410156
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871216; axis: 0 (vertical), value: 6.046875
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871233; axis: 0 (vertical), value: 4.625000
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871249; axis: 0 (vertical), value: 4.625000
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871266; axis: 0 (vertical), value: 4.203125
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871282; axis: 0 (vertical), value: 3.730469
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871299; axis: 0 (vertical), value: 3.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871315; axis: 0 (vertical), value: 9.726562
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871332; axis: 0 (vertical), value: 5.152344
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871349; axis: 0 (vertical), value: 4.152344
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871368; axis: 0 (vertical), value: 3.046875
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871385; axis: 0 (vertical), value: 3.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871401; axis: 0 (vertical), value: 1.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871418; axis: 0 (vertical), value: 1.628906
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871435; axis: 0 (vertical), value: 2.574219
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871451; axis: 0 (vertical), value: 2.101562
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871468; axis: 0 (vertical), value: 2.046875
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871485; axis: 0 (vertical), value: 1.890625
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871501; axis: 0 (vertical), value: 0.734375
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871527; axis: 0 (vertical), value: 0.417969
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871568; axis: 0 (vertical), value: 0.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2871582; axis: 0 (vertical), value: 0.472656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2871651; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2871651; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872802; axis: 0 (vertical), value: 5.570312
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872818; axis: 0 (vertical), value: 16.035156
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872835; axis: 0 (vertical), value: 5.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872852; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872868; axis: 0 (vertical), value: 5.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872885; axis: 0 (vertical), value: 5.992188
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872902; axis: 0 (vertical), value: 5.835938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872918; axis: 0 (vertical), value: 4.835938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872935; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872952; axis: 0 (vertical), value: 9.093750
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872968; axis: 0 (vertical), value: 3.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2872985; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873001; axis: 0 (vertical), value: 5.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873018; axis: 0 (vertical), value: 4.886719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873035; axis: 0 (vertical), value: 5.308594
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873052; axis: 0 (vertical), value: 4.414062
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873068; axis: 0 (vertical), value: 3.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873085; axis: 0 (vertical), value: 3.257812
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873102; axis: 0 (vertical), value: 3.257812
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873118; axis: 0 (vertical), value: 3.468750
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873136; axis: 0 (vertical), value: 4.886719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873152; axis: 0 (vertical), value: 4.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873168; axis: 0 (vertical), value: 4.203125
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873185; axis: 0 (vertical), value: 5.570312
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873202; axis: 0 (vertical), value: 1.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873218; axis: 0 (vertical), value: 0.890625
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873235; axis: 0 (vertical), value: 0.472656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873264; axis: 0 (vertical), value: 0.472656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873285; axis: 0 (vertical), value: 0.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873325; axis: 0 (vertical), value: 0.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873354; axis: 0 (vertical), value: 0.261719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2873399; axis: 0 (vertical), value: -0.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2873430; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2873430; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874583; axis: 0 (vertical), value: 3.730469
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874600; axis: 0 (vertical), value: 4.203125
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874616; axis: 0 (vertical), value: 9.726562
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874633; axis: 0 (vertical), value: 4.835938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874649; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874666; axis: 0 (vertical), value: 4.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874683; axis: 0 (vertical), value: 4.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874700; axis: 0 (vertical), value: 3.996094
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874716; axis: 0 (vertical), value: 4.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874733; axis: 0 (vertical), value: 4.886719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874749; axis: 0 (vertical), value: 4.886719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874766; axis: 0 (vertical), value: 10.460938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874782; axis: 0 (vertical), value: 4.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874799; axis: 0 (vertical), value: 4.152344
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874815; axis: 0 (vertical), value: 3.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874832; axis: 0 (vertical), value: 3.519531
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874849; axis: 0 (vertical), value: 3.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874866; axis: 0 (vertical), value: 3.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874883; axis: 0 (vertical), value: 4.203125
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874898; axis: 0 (vertical), value: 3.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874916; axis: 0 (vertical), value: 7.675781
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874933; axis: 0 (vertical), value: 3.257812
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874949; axis: 0 (vertical), value: 2.574219
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874966; axis: 0 (vertical), value: 1.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2874982; axis: 0 (vertical), value: 1.156250
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2875000; axis: 0 (vertical), value: 0.890625
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2875016; axis: 0 (vertical), value: 0.472656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2875033; axis: 0 (vertical), value: 0.945312
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2875050; axis: 0 (vertical), value: 1.207031
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2875085; axis: 0 (vertical), value: 0.628906
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2875110; axis: 0 (vertical), value: 0.472656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2875185; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2875185; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876283; axis: 0 (vertical), value: 5.835938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876299; axis: 0 (vertical), value: 6.675781
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876316; axis: 0 (vertical), value: 4.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876333; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876350; axis: 0 (vertical), value: 4.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876366; axis: 0 (vertical), value: 4.152344
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876382; axis: 0 (vertical), value: 3.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876399; axis: 0 (vertical), value: 3.941406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876416; axis: 0 (vertical), value: 8.410156
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876432; axis: 0 (vertical), value: 3.890625
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876449; axis: 0 (vertical), value: 4.152344
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876466; axis: 0 (vertical), value: 4.679688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876482; axis: 0 (vertical), value: 4.886719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876499; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876516; axis: 0 (vertical), value: 5.152344
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876532; axis: 0 (vertical), value: 4.625000
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876549; axis: 0 (vertical), value: 5.097656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876565; axis: 0 (vertical), value: 9.726562
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876583; axis: 0 (vertical), value: 4.468750
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876599; axis: 0 (vertical), value: 3.468750
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876616; axis: 0 (vertical), value: 2.730469
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876632; axis: 0 (vertical), value: 1.890625
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876650; axis: 0 (vertical), value: 1.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876666; axis: 0 (vertical), value: 0.945312
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876683; axis: 0 (vertical), value: 1.363281
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876699; axis: 0 (vertical), value: 0.734375
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876714; axis: 0 (vertical), value: 1.156250
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876744; axis: 0 (vertical), value: 0.417969
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2876785; axis: 0 (vertical), value: 0.261719
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2876802; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2876802; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        16:     wl_keyboard] key: serial: 4945; time: 2877415; key: 64; state: 1 (pressed)
+                      sym: Alt_L        (65513), utf8: ''
+[        16:     wl_keyboard] modifiers: serial: 4945; group: 0
+                      depressed: 00000008: Mod1 
+                      latched: 00000000
+                      locked: 00000000
+[        11:    xdg_toplevel] close

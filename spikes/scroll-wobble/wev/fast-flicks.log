@@ -1,0 +1,143 @@
+[         9:         wl_seat] name: seat0
+[         9:         wl_seat] capabilities: pointer keyboard 
+[        11:    xdg_toplevel] configure: width: 0; height: 0
+[        10:     xdg_surface] configure: serial: 5004
+[        16:     wl_keyboard] keymap: format: 1 (xkb v1), size: 36803
+[        16:     wl_keyboard] repeat_info: rate: 33 keys/sec; delay: 500 ms
+[        16:     wl_keyboard] enter: serial: 5005; surface: 3
+                      sym: Super_L      (65515), utf8: ''
+[        16:     wl_keyboard] modifiers: serial: 5005; group: 0
+                      depressed: 00000000
+                      latched: 00000000
+                      locked: 00000000
+[        12:  wl_data_device] selection: (cleared)
+[        11:    xdg_toplevel] configure: width: 0; height: 0
+                      activated 
+[        10:     xdg_surface] configure: serial: 5006
+[        15:      wl_pointer] enter: serial: 5008; surface: 3, x, y: 231.187500, 151.964844
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2889482; axis: 0 (vertical), value: 49.742188
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2889499; axis: 0 (vertical), value: 42.539062
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2889510; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2889510; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2890833; axis: 0 (vertical), value: 38.960938
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2890849; axis: 0 (vertical), value: 37.175781
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2890866; axis: 0 (vertical), value: 37.648438
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2890869; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2890869; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2892315; axis: 0 (vertical), value: 95.699219
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2892329; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2892329; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2893599; axis: 0 (vertical), value: -27.605469
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2893615; axis: 0 (vertical), value: -33.914062
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2893633; axis: 0 (vertical), value: -51.054688
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2893649; axis: 0 (vertical), value: -47.902344
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2893649; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2893649; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2894882; axis: 0 (vertical), value: -60.101562
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2894900; axis: 0 (vertical), value: -71.617188
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2894920; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2894920; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2896116; axis: 0 (vertical), value: -46.847656
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_relative_direction: axis: 0 (vertical), direction: 1
+[        15:      wl_pointer] axis: time: 2896133; axis: 0 (vertical), value: -73.191406
+[        15:      wl_pointer] frame
+[        15:      wl_pointer] axis_source: 1 (finger)
+[        15:      wl_pointer] axis_stop: time: 2896139; axis: 1 (horizontal)
+[        15:      wl_pointer] axis_stop: time: 2896139; axis: 0 (vertical)
+[        15:      wl_pointer] frame
+[        16:     wl_keyboard] key: serial: 5009; time: 2898210; key: 64; state: 1 (pressed)
+                      sym: Alt_L        (65513), utf8: ''
+[        16:     wl_keyboard] modifiers: serial: 5009; group: 0
+                      depressed: 00000008: Mod1 
+                      latched: 00000000
+                      locked: 00000000
+[        16:     wl_keyboard] leave: serial: 5011; surface: 3
+[        15:      wl_pointer] leave: surface: 3
+[        15:      wl_pointer] frame
+[        16:     wl_keyboard] enter: serial: 5014; surface: 3
+                      sym: Alt_L        (65513), utf8: ''
+                      sym: Super_L      (65515), utf8: ''
+[        16:     wl_keyboard] modifiers: serial: 5014; group: 0
+                      depressed: 00000000
+                      latched: 00000000
+                      locked: 00000000
+[        16:     wl_keyboard] leave: serial: 5015; surface: 3
+[        11:    xdg_toplevel] configure: width: 640; height: 480
+[        10:     xdg_surface] configure: serial: 5017
+[        16:     wl_keyboard] enter: serial: 5026; surface: 3
+                      sym: Alt_L        (65513), utf8: ''
+                      sym: Super_L      (65515), utf8: ''
+[        16:     wl_keyboard] modifiers: serial: 5026; group: 0
+                      depressed: 00000000
+                      latched: 00000000
+                      locked: 00000000
+[        12:  wl_data_device] selection: (cleared)
+[        11:    xdg_toplevel] configure: width: 640; height: 480
+                      activated 
+[        10:     xdg_surface] configure: serial: 5027
+[        15:      wl_pointer] enter: serial: 5029; surface: 3, x, y: 231.187500, 151.964844
+[        15:      wl_pointer] frame
+[        16:     wl_keyboard] key: serial: 5024; time: 2898996; key: 64; state: 0 (released)
+                      sym: Alt_L        (65513), utf8: ''
+[        16:     wl_keyboard] modifiers: serial: 5024; group: 0
+                      depressed: 00000000
+                      latched: 00000000
+                      locked: 00000000
+[        16:     wl_keyboard] key: serial: 5031; time: 2899342; key: 64; state: 1 (pressed)
+                      sym: Alt_L        (65513), utf8: ''
+[        16:     wl_keyboard] modifiers: serial: 5031; group: 0
+                      depressed: 00000008: Mod1 
+                      latched: 00000000
+                      locked: 00000000
+[        11:    xdg_toplevel] close

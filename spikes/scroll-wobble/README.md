@@ -16,3 +16,16 @@ wall-clock time, and the guest clock is anchored to the host's, so their logs li
 animation frame. It plots the last 4 s and marks each direction reversal of the scroll
 position in yellow. **Save JSON** downloads the full log for correlating with the other
 instruments. Copy it into the guest and open it as a `file://` URL.
+
+## Evidence
+
+`wev/` holds `wev` logs of two-finger scrolls on the dogfood guest, running build
+`Limina-2026-09-29-0`, scrolling over `wev`'s own window: `fast-flicks.log` (six flicks) and
+`slow-then-release.log` (six slow scrolls). Measured from them:
+
+- **Flicks reach the client as 1–4 axis events** (17–50 ms of scroll, then `axis_stop`), and
+  none coasted. With one event GTK has no time span to compute a velocity from.
+- **Slow scrolls end in sub-pixel reversals**: 3 of 6 carry 1–3 deltas of the wrong sign
+  (−0.2 to −0.7 px) in their last few events.
+- **Steady scrolls are uneven**: ~5 px per event with an 11–16 px event every few frames, about
+  twice the step.
