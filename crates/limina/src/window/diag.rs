@@ -340,6 +340,26 @@ fn sample_surface(surface: &CFRetained<IOSurfaceRef>) -> u64 {
     h.finish()
 }
 
+/// The surface's first pixel, as its four bytes in memory order, read under a ReadOnly lock so
+/// in-flight GPU writes land first.
+pub(crate) fn first_pixel(surface: &CFRetained<IOSurfaceRef>) -> u32 {
+    unsafe {
+        IOSurfaceLock(
+            surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+        let base = IOSurfaceGetBaseAddress(surface).as_ptr() as *const u8;
+        let bytes = std::ptr::read_unaligned(base as *const [u8; 4]);
+        IOSurfaceUnlock(
+            surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+        u32::from_be_bytes(bytes)
+    }
+}
+
 type OnGlass = (CFRetained<IOSurfaceRef>, u32, u64, Instant);
 
 /// `LIMINA_PRESENT_MUTATION_TRACE`: fingerprint each surface as it goes on glass and again as

@@ -50,6 +50,11 @@ Modes:
           variable is whether each flip carries a scanout id the host has seen before.
           `churn` grows the host and `static` does not, or the vehicle is not measuring
           what it claims to.
+  stamp   `static`, but every frame first clears its buffer to a colour that IS the frame
+          number (red, green, blue = its bits 23-16, 15-8, 7-0), waited on a fence before the
+          flip, as a compositor does. The next frame goes into the buffer the flip released,
+          so a host that reads a buffer after the guest got it back shows a number other
+          than the one flipped. `-vk` only: gbm buffers are never written here.
 
 Each mode takes a `-vk` suffix (`churn-vk`, `static-vk`, `probe-vk`) that allocates in
 venus instead of gbm. Unlike the gbm modes these also WRITE each buffer (a GPU clear,
@@ -59,7 +64,7 @@ resident pages, and the retention oracle counts bytes.
 Requires DRM master, so: run as root, with nothing else holding the card
 (`systemctl isolate multi-user.target` is enough to evict a session compositor).
 
-Usage: kmschurn.py probe|churn|static[-vk] [frames] [live] [width] [height]
+Usage: kmschurn.py probe|churn|static[-vk]|stamp-vk [frames] [live] [width] [height]
 
 Output (greppable, one fact per line):
     KMS DEV <path> master=<0|1>
@@ -71,6 +76,7 @@ Output (greppable, one fact per line):
     KMS BUFFER <w>x<h> mod=<0x..> stride=<n> handle=<n> planes=<n>
     CHURN START <mode> frames=<n> live=<n> <w>x<h>
     CHURN PROGRESS <i> created=<n>
+    STAMP FIRST <n>                                (stamp-vk: the first frame number)
     CHURN DONE <mode> flips=<n> created=<n> handles=<n> elapsed=<s>
     CHURN FAIL <stage> <detail>
 
@@ -672,7 +678,7 @@ class Recorder:
             fail("vkCreateFence")
         self.fence = fence.value
 
-    def clear(self, img, frame):
+    def clear(self, img, frame, rgb=None):
         vk, cmd = self.vk, self.cmd
         bi = CommandBufferBeginInfo()
         bi.sType = ST_COMMAND_BUFFER_BEGIN_INFO
@@ -694,7 +700,8 @@ class Recorder:
                                 0, None, 0, None, 1, C.byref(bar))
         col = ClearColorValue()
         # Vary the colour so a captured frame shows the flips actually landing.
-        col.float32 = (C.c_float * 4)(0.1, ((frame % 32) / 32.0), 0.9, 1.0)
+        r, g, b = rgb or (0.1, ((frame % 32) / 32.0), 0.9)
+        col.float32 = (C.c_float * 4)(r, g, b, 1.0)
         vk.vkCmdClearColorImage(cmd, img, LAYOUT_GENERAL, C.byref(col), 1, C.byref(rng))
         if vk.vkEndCommandBuffer(cmd):
             fail("vkEndCommandBuffer", f"frame={frame}")
@@ -835,6 +842,11 @@ class VkBuffer:
     def describe(self, w, h):
         return (f"KMS BUFFER {w}x{h} mod=0x{self.modifier:x} stride={self.stride} "
                 f"handle={self.handle} planes={self.planes}")
+
+
+def stamp_rgb(n):
+    """Frame `n` as a clear colour: k/255 converts to exactly k in an 8-bit UNORM channel."""
+    return tuple(((n >> shift) & 0xFF) / 255.0 for shift in (16, 8, 0))
 
 
 def first_memory_type(bits):
@@ -1072,8 +1084,11 @@ def main():
 
     vulkan = mode_name.endswith("-vk")
     base_mode = mode_name[:-3] if vulkan else mode_name
-    if base_mode not in ("probe", "churn", "static"):
+    if base_mode not in ("probe", "churn", "static", "stamp"):
         fail("usage", f"unknown mode {mode_name}")
+    stamp = base_mode == "stamp"
+    if stamp and not vulkan:
+        fail("usage", "stamp needs the -vk allocator: it writes every frame")
     if live < 2:
         fail("usage", "live must be >= 2 (one buffer on screen, one being built)")
 
@@ -1129,15 +1144,20 @@ def main():
     flips = 0
     started = time.monotonic()
 
-    if base_mode == "static":
+    if base_mode in ("static", "stamp"):
         # Allocate the whole live set once, then cycle it. Every flip after the first
         # `live` carries a handle the host has already seen.
         ring = [first] + [make_buffer(drm, ctx, fd, dev, w, h) for _ in range(live - 1)]
         for b in ring:
             handles.add(b.handle)
             created += 1
+        if stamp:
+            print("STAMP FIRST 1", flush=True)
         for i in range(frames):
             nxt = ring[i % live]
+            if stamp:
+                # Frame numbers start at 1 and stay within 24 bits for any run this is used for.
+                ctx[3].clear(nxt.img, i, rgb=stamp_rgb(i + 1))
             if drm.drmModePageFlip(fd, crtc_id, nxt.fb, DRM_MODE_PAGE_FLIP_EVENT, None):
                 fail("drmModePageFlip", f"frame={i}")
             await_flip(fd)

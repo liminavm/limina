@@ -18,9 +18,18 @@
 //! behind it, and a newer one replaces it, so the window shows the newest frame and never an older
 //! one after it. The CPU copy (`diag::copy_surface`) is the fallback when Metal cannot take the
 //! surfaces, and runs at once.
+//!
+//! **The copy reads the guest's surface when the blit runs, not when the frame arrived.** Nothing
+//! holds an unfenced guest off the surface in between, so a copy that runs late shows whatever the
+//! guest has drawn into it since. Two seams make that observable in a test:
+//! `LIMINA_TEST_COPY_DELAY_MS` holds every copy back by that long before it reads the guest's
+//! surface, standing in for a busy main thread or GPU, and `LIMINA_PRESENT_COPY_TRACE` logs the
+//! first pixel of each frame as it arrives and again as its copy goes up. A difference between
+//! the two is a copy that did not show the frame it was made for.
 
 use std::cell::OnceCell;
 use std::ptr::NonNull;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use block2::RcBlock;
@@ -51,12 +60,64 @@ pub(crate) enum Submitted {
     Unavailable,
 }
 
-/// A blit on the GPU for frame `id`.
+/// The copy of frame `id`, from the moment it is started until it goes up.
 struct InFlight {
     id: u32,
+    /// The guest surface's first pixel when the frame arrived, under `LIMINA_PRESENT_COPY_TRACE`.
+    arrived: Option<u32>,
     dst: CFRetained<IOSurfaceRef>,
-    commands: Commands,
+    stage: Stage,
     started: Instant,
+}
+
+enum Stage {
+    /// Held back by `LIMINA_TEST_COPY_DELAY_MS`: nothing has read the guest's surface yet.
+    Deferred {
+        src: CFRetained<IOSurfaceRef>,
+        due: Instant,
+    },
+    /// On the GPU.
+    Blit(Commands),
+    /// Done at once on the CPU, which only a deferred copy that Metal refused ends up as.
+    OnCpu,
+}
+
+/// `LIMINA_TEST_COPY_DELAY_MS`: how long to hold each copy back before it reads the guest's
+/// surface. A test seam only.
+fn test_copy_delay() -> Option<Duration> {
+    static DELAY: OnceLock<Option<Duration>> = OnceLock::new();
+    *DELAY.get_or_init(|| {
+        let ms = std::env::var("LIMINA_TEST_COPY_DELAY_MS")
+            .ok()?
+            .parse::<u64>()
+            .ok()?;
+        log::warn!("window: TEST SEAM: every guest frame copy is held back {ms} ms");
+        Some(Duration::from_millis(ms))
+    })
+}
+
+/// `LIMINA_PRESENT_COPY_TRACE`: log the first pixel of each frame as it arrives and as its copy
+/// goes up.
+fn copy_trace() -> bool {
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var_os("LIMINA_PRESENT_COPY_TRACE").is_some())
+}
+
+/// The guest surface's first pixel as frame `id` arrives, when tracing.
+fn arrival(src: &CFRetained<IOSurfaceRef>) -> Option<u32> {
+    copy_trace().then(|| super::diag::first_pixel(src))
+}
+
+/// Log what the copy of frame `id` holds against what the guest's surface held when the frame
+/// arrived, as `bgra` bytes in memory order. They differ when the copy read the surface after the
+/// guest had drawn into it again.
+fn trace_shown(id: u32, arrived: Option<u32>, copy: &CFRetained<IOSurfaceRef>) {
+    if let Some(arrived) = arrived {
+        log::info!(
+            "copy trace: frame {id} arrived bgra={arrived:08x} shown bgra={:08x}",
+            super::diag::first_pixel(copy)
+        );
+    }
 }
 
 /// One window's copies, remade whenever the guest's surfaces change size.
@@ -66,8 +127,8 @@ pub(crate) struct CopyRing {
     geom: (usize, usize),
     next: usize,
     in_flight: Option<InFlight>,
-    /// The newest frame that arrived while a blit was in flight.
-    waiting: Option<(u32, CFRetained<IOSurfaceRef>)>,
+    /// The newest frame that arrived while a blit was in flight, with its [`arrival`] pixel.
+    waiting: Option<(u32, CFRetained<IOSurfaceRef>, Option<u32>)>,
     cost: CopyCost,
 }
 
@@ -80,6 +141,7 @@ impl CopyRing {
         src: &CFRetained<IOSurfaceRef>,
         dropped: &mut Vec<u32>,
     ) -> Submitted {
+        let arrived = arrival(src);
         let geom = (src.width(), src.height());
         if self.geom != geom {
             self.cancel(dropped);
@@ -92,12 +154,12 @@ impl CopyRing {
             return Submitted::Unavailable;
         }
         if self.in_flight.is_some() {
-            if let Some((old, _)) = self.waiting.replace((id, src.clone())) {
+            if let Some((old, ..)) = self.waiting.replace((id, src.clone(), arrived)) {
                 dropped.push(old);
             }
             return Submitted::Pending;
         }
-        match self.start(id, src) {
+        match self.start(id, src, arrived) {
             Some(dst) => Submitted::Show(dst),
             None => Submitted::Pending,
         }
@@ -109,14 +171,37 @@ impl CopyRing {
         &mut self,
         dropped: &mut Vec<u32>,
     ) -> Option<(u32, CFRetained<IOSurfaceRef>)> {
-        let status = self.in_flight.as_ref()?.commands.status();
-        if status != MTLCommandBufferStatus::Completed && status != MTLCommandBufferStatus::Error {
-            return None;
+        let flight = self.in_flight.as_mut()?;
+        if let Stage::Deferred { src, due } = &flight.stage {
+            if Instant::now() < *due {
+                return None;
+            }
+            let src = src.clone();
+            flight.stage = match gpu_copy(&src, &flight.dst) {
+                Some(commands) => Stage::Blit(commands),
+                None => {
+                    super::diag::copy_surface(&src, &flight.dst);
+                    Stage::OnCpu
+                }
+            };
         }
+        let failed = match &flight.stage {
+            Stage::Blit(commands) => match commands.status() {
+                MTLCommandBufferStatus::Completed => false,
+                MTLCommandBufferStatus::Error => true,
+                _ => return None,
+            },
+            Stage::OnCpu => false,
+            Stage::Deferred { .. } => unreachable!("started above"),
+        };
         let done = self.in_flight.take()?;
-        self.cost.record(true, done.started.elapsed());
+        self.cost
+            .record(matches!(done.stage, Stage::Blit(_)), done.started.elapsed());
         let mut ready = Some((done.id, done.dst));
-        if status == MTLCommandBufferStatus::Error {
+        if !failed && let Some((id, dst)) = &ready {
+            trace_shown(*id, done.arrived, dst);
+        }
+        if failed {
             log::warn!(
                 "window: the GPU copy of frame {} failed; skipping it",
                 done.id
@@ -124,8 +209,8 @@ impl CopyRing {
             dropped.push(done.id);
             ready = None;
         }
-        if let Some((id, src)) = self.waiting.take()
-            && let Some(dst) = self.start(id, &src)
+        if let Some((id, src, arrived)) = self.waiting.take()
+            && let Some(dst) = self.start(id, &src, arrived)
         {
             // Copied at once on the CPU, so it is up before the one just finished could be.
             dropped.extend(ready.map(|(old, _)| old));
@@ -138,7 +223,7 @@ impl CopyRing {
     /// still finishes, into a surface nothing will show.
     pub(crate) fn cancel(&mut self, dropped: &mut Vec<u32>) {
         dropped.extend(self.in_flight.take().map(|f| f.id));
-        dropped.extend(self.waiting.take().map(|(id, _)| id));
+        dropped.extend(self.waiting.take().map(|(id, ..)| id));
     }
 
     /// Begin copying frame `id` into the next surface of the ring: `Some` when it is already
@@ -147,21 +232,42 @@ impl CopyRing {
         &mut self,
         id: u32,
         src: &CFRetained<IOSurfaceRef>,
+        arrived: Option<u32>,
     ) -> Option<CFRetained<IOSurfaceRef>> {
         let dst = self.ring[self.next % RING].clone();
         self.next = self.next.wrapping_add(1);
         let started = Instant::now();
+        if let Some(delay) = test_copy_delay() {
+            self.in_flight = Some(InFlight {
+                id,
+                arrived,
+                dst,
+                stage: Stage::Deferred {
+                    src: src.clone(),
+                    due: started + delay,
+                },
+                started,
+            });
+            // Nothing else is due to wake the main queue when the delay is up.
+            std::thread::spawn(move || {
+                std::thread::sleep(delay);
+                super::present::wake_main_apply();
+            });
+            return None;
+        }
         if let Some(commands) = gpu_copy(src, &dst) {
             self.in_flight = Some(InFlight {
                 id,
+                arrived,
                 dst,
-                commands,
+                stage: Stage::Blit(commands),
                 started,
             });
             return None;
         }
         super::diag::copy_surface(src, &dst);
         self.cost.record(false, started.elapsed());
+        trace_shown(id, arrived, &dst);
         Some(dst)
     }
 }
@@ -286,8 +392,12 @@ mod tests {
     impl CopyRing {
         /// Block until the blit in flight, if any, is done.
         fn wait(&self) {
-            if let Some(f) = &self.in_flight {
-                f.commands.waitUntilCompleted();
+            if let Some(InFlight {
+                stage: Stage::Blit(commands),
+                ..
+            }) = &self.in_flight
+            {
+                commands.waitUntilCompleted();
             }
         }
 
