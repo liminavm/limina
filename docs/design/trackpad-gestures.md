@@ -165,9 +165,12 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   keep every frame under it, and `no_battery_shows_the_guest_a_touch_jump` checks them against
   that rule on every recording:
   - **Motion frames are paced ≥ 10 ms apart** (`MIN_FRAME_INTERVAL`), the newest sample
-    going out. Samples arrive every ~16 ms through the local monitor, some in back-to-back
-    pairs ~0.3 ms apart that each carry half a step; through the HID tap every 7–8 ms or
-    16 ms.
+    going out — unless folding the held sample into it would make a frame libinput reads
+    as a jump (the policy keeps each contact's last speed and applies the rule with 6 mm
+    of margin), in which case the held sample goes first and the newest follows. Samples
+    arrive every ~16 ms through the local monitor, some in back-to-back pairs ~0.3 ms apart
+    that each carry half a step (merging them is right); through the HID tap every 7–8 ms
+    or 16 ms.
   - **The frame after a moved commit's landing carries the committing sample**, never a
     newer one, spaced by its distance at 6 mm per 12 ms (`COMMIT_SPEED_MM_PER_12MS`) and at
     least the pacing. It holds the whole distance moved before the commit — 3–8 mm on a
