@@ -1,0 +1,25 @@
+=======================================================
+    vkmark 2025.01
+=======================================================
+    Vendor ID:      0x106B
+    Device ID:      0x64
+    Device Name:    Virtio-GPU Venus (Apple M1 Max)
+    Driver Version: 109056008
+    Device UUID:    63b0a13c2bdc393b3efa69401178060d
+=======================================================
+[vertex] device-local=true: FPS: 2457 FrameTime: 0.407 ms
+[vertex] device-local=false: FPS: 2524 FrameTime: 0.396 ms
+[texture] anisotropy=0: FPS: 2525 FrameTime: 0.396 ms
+[texture] anisotropy=16: FPS: 2527 FrameTime: 0.396 ms
+[shading] shading=gouraud: FPS: 2444 FrameTime: 0.409 ms
+[shading] shading=blinn-phong-inf: FPS: 2481 FrameTime: 0.403 ms
+[shading] shading=phong: FPS: 2412 FrameTime: 0.415 ms
+[shading] shading=cel: FPS: 2416 FrameTime: 0.414 ms
+[effect2d] kernel=edge: FPS: 2407 FrameTime: 0.415 ms
+[effect2d] kernel=blur: FPS: 2121 FrameTime: 0.471 ms
+[desktop] <default>: FPS: 2492 FrameTime: 0.401 ms
+[cube] <default>: FPS: 2504 FrameTime: 0.399 ms
+[clear] <default>: FPS: 2496 FrameTime: 0.401 ms
+=======================================================
+                                   vkmark Score: 2446
+=======================================================

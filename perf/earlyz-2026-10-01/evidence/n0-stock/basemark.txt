@@ -1,0 +1,479 @@
+compositor pid=1461 (gnome-shell)
+  inherited: XDG_RUNTIME_DIR=/run/user/1000
+WAYLAND_DISPLAY=wayland-0
+=== one Firefox for the whole run
+1790878726.608379580 restorecon: SELinux: Could not get canonical path for /home/claude/.config/mozilla/firefox/*/gmp-widevinecdm/* restorecon: No such file or directory.
+1790878727.200800217 1790878727200	Marionette	INFO	Listening on port 2828
+1790878728.053716882 GetShaderInfoLog() ->
+1790878728.054375054 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878728.054927392 
+1790878728.055614772 GetShaderSource() ->
+1790878728.056247736 
+1790878728.056899283 #extension GL_EXT_shader_texture_lod: require
+1790878728.057480746 void main() {}
+1790878728.057980917 
+1790878728.058535463 JavaScript warning: file:///tmp/basemark-probe.html, line 3: WEBGL_debug_renderer_info is deprecated in Firefox and will be removed. Please use RENDERER.
+1790878728.059089842 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+1790878729.196964354 console.warn: RSLoader: Recipe new-tab-157020260831183837-to-release-155-addondeployment not returned from collection nimbus-secure-experiments because it does not contain at least one required feature ID.
+1790878729.197605127 console.warn: RSLoader: Recipe new-tab-158020260913220257-to-release-156 not returned from collection nimbus-secure-experiments because it does not contain at least one required feature ID.
+1790878729.198136854 console.warn: RSLoader: Recipe new-tab-158120260920214645-to-release-156 not returned from collection nimbus-secure-experiments because it does not contain at least one required feature ID.
+1790878729.198709000 console.warn: RSLoader: Recipe new-tab-159020260925223456-to-release-157 not returned from collection nimbus-secure-experiments because it does not contain at least one required feature ID.
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+=== configuring: community mode and the graphics suite, in the same session
+1790878753.707749859 console.info: "* Basemark Web 3.0"
+1790878753.709442320 console.info: "* Copyright (C) Basemark 2015. All rights reserved."
+1790878753.711050532 console.info: "* Current configuration:"
+1790878753.712604076 console.info: "    Battery: OFF"
+1790878753.714234871 console.info: "    Conformance: OFF"
+1790878753.715731249 console.info: "    Database: Unavailable"
+1790878753.717293461 console.info: "    High Resolution Timer: ON"
+1790878753.718892005 console.info: "    Mode: community"
+1790878753.720330008 console.info: "    Save: Public save"
+1790878753.721605052 console.info: "    Suite: Graphics Suite 1.0"
+1790878753.723308931 console.info: "* Detection details:"
+1790878753.725041476 console.info: "   Browser: Firefox 150.0"
+1790878753.726405020 console.info: "   Engine: Gecko 150.0"
+1790878753.728000190 console.info: "   OS: Linux "
+1790878753.729332234 console.info: "   Resolution: 1280x800"
+1790878753.730715070 console.info: "   Device: null (desktop)"
+1790878753.731760322 console.info: "* Battery:"
+1790878753.733054449 console.info: "Change battery to ON: https://web.gpuscore.com/?battery=1"
+1790878753.734494327 console.info: "* Conformance:"
+1790878753.735720246 console.info: "Change conformance to ON: https://web.gpuscore.com/?conformance=1"
+1790878753.736769790 console.info: "* Suite options:"
+1790878753.737850584 console.info: "Select All suites: https://web.gpuscore.com/?suite=0"
+1790878753.738964461 console.info: "Select Core Suite 1.0: https://web.gpuscore.com/?suite=1"
+1790878753.740417839 console.info: "Select Generic Suite 1.0: https://web.gpuscore.com/?suite=3"
+1790878753.742120300 console.info: "* *** *"
+1790878753.743214302 console.info: "By executing the Basemark Web 3.0 you accept Terms of Service https://web.gpuscore.com/tos/"
+1790878753.744241388 console.info: "* *** *"
+1790878753.745403307 console.info: "To launch benchmark, use URL https://web.gpuscore.com/run/"
+--- reported configuration:
+"    Battery: OFF"
+"   Browser: Firefox 150.0"
+"Change battery to ON: https://web.gpuscore.com/?battery=1"
+"Change conformance to ON: https://web.gpuscore.com/?conformance=1"
+"    Conformance: OFF"
+"    Database: Unavailable"
+"   Device: null (desktop)"
+"   Engine: Gecko 150.0"
+"    High Resolution Timer: ON"
+"    Mode: community"
+"   OS: Linux "
+"   Resolution: 1280x800"
+"    Save: Public save"
+"Select All suites: https://web.gpuscore.com/?suite=0"
+"    Suite: Graphics Suite 1.0"
+=== launching the suite in that same session (run 1)
+1790878771.281535122 GetShaderInfoLog() ->
+1790878771.282417666 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878771.283096792 
+1790878771.283666960 GetShaderSource() ->
+1790878771.284236919 
+1790878771.284816004 #extension GL_EXT_shader_texture_lod: require
+1790878771.285327046 void main() {}
+1790878771.285889839 
+1790878771.286723716 GetShaderInfoLog() ->
+1790878771.287483551 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878771.288170635 
+1790878771.288828970 GetShaderSource() ->
+1790878771.289665805 
+1790878771.290241348 #extension GL_EXT_shader_texture_lod: require
+1790878771.290755932 void main() {}
+1790878771.291368517 
+1790878782.606825292 GetShaderInfoLog() ->
+1790878782.607952586 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878782.608641838 
+1790878782.609456172 GetShaderSource() ->
+1790878782.610186674 
+1790878782.610920884 #extension GL_EXT_shader_texture_lod: require
+1790878782.611665968 void main() {}
+1790878782.612333178 
+tapped esc
+1790878785.687027587 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.687877089 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.688526924 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.689094966 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.690098343 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.690608136 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.691555055 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.694491852 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.695149061 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.695705688 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.696204022 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.696732898 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.697247607 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.697675358 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.698181817 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.698970111 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.699694612 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.700308238 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.700981448 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.701607741 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.702150533 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.702676159 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.703163452 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.703678578 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.704217496 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.704696288 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.705169831 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.705626123 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.706144958 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.706652834 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.707272752 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878785.707868586 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878785.708382420 JavaScript warning: , line 0: After reporting 32, no further warnings will be reported for this WebGL context.
+start control: "NONE"
+note: no Start control matched; /run/ normally starts by itself
+now at: "/run/tests/30/graphics_suite/webgl_20_test/"
+=== suite 1 running; sample the host vmm now
+=== host side: sample $(pgrep -f '[l]imina-vmm --cpus') 5 -f prof.txt
+=== waiting for /result/ (suite 1)
+1790878788.700675337 GetShaderInfoLog() ->
+1790878788.702645174 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878788.703610343 
+1790878788.704712761 GetShaderSource() ->
+1790878788.705893222 
+1790878788.706766765 #extension GL_EXT_shader_texture_lod: require
+1790878788.707838684 void main() {}
+1790878788.708682061 
+1790878790.090454027 GetShaderInfoLog() ->
+1790878790.092290822 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878790.093917659 
+1790878790.095300328 GetShaderSource() ->
+1790878790.096780872 
+1790878790.098483542 #extension GL_EXT_shader_texture_lod: require
+1790878790.099859253 void main() {}
+1790878790.100901839 
+1790878795.093381850 GetShaderInfoLog() ->
+1790878795.095718480 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878795.097227108 
+1790878795.098605861 GetShaderSource() ->
+1790878795.099969030 
+1790878795.100979574 #extension GL_EXT_shader_texture_lod: require
+1790878795.101964493 void main() {}
+1790878795.103668413 
+1790878795.632255700 GetShaderInfoLog() ->
+1790878795.633139952 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878795.633876203 
+1790878795.634529830 GetShaderSource() ->
+1790878795.635165873 
+1790878795.635746416 #extension GL_EXT_shader_texture_lod: require
+1790878795.636337292 void main() {}
+1790878795.636874876 
+1790878850.169547010 GetShaderInfoLog() ->
+1790878850.170516512 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878850.171409555 
+1790878850.172218307 GetShaderSource() ->
+1790878850.173412684 
+1790878850.174422520 #extension GL_EXT_shader_texture_lod: require
+1790878850.175443105 void main() {}
+1790878850.176312066 
+1790878850.651895490 GetShaderInfoLog() ->
+1790878850.652668867 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878850.653300910 
+1790878850.653985661 GetShaderSource() ->
+1790878850.654691496 
+1790878850.655345414 #extension GL_EXT_shader_texture_lod: require
+1790878850.655870915 void main() {}
+1790878850.656443833 
+1790878918.487917926 console.log: "55IF5JRD"
+1790878919.521133267 JavaScript error: , line 0: SyntaxError: JSON.parse: expected double-quoted property name at line 1 column 153 of the JSON data
+1790878919.556028190 JavaScript error: , line 0: SyntaxError: JSON.parse: expected double-quoted property name at line 1 column 153 of the JSON data
+1790878921.055423657 console.error: "Hydration completed but contains mismatches."
+1790878921.598003556 JavaScript error: , line 0: SyntaxError: JSON.parse: expected double-quoted property name at line 1 column 153 of the JSON data
+1790878922.283767383 JavaScript error: , line 0: SyntaxError: JSON.parse: expected double-quoted property name at line 1 column 153 of the JSON data
+--- scores (run 1):
+Powerboard is moving to
+powerboard.gpuscore.com
+Redirects start 28.05.2026
+Visit new domain
+x
+Get Benchmarks
+F.A.Q.
+FASTEST HARDWARE
+SYSTEM COMPARISON
+Cross-Platform
+Basemark GPU
+Cross-Platform
+Basemark Web
+
+Check other free benchmarks here:
+gpuscore.com
+
+RESULT
+Basemark Web 3.0
+Gecko 150.0
+1 Oct 2026
+3:21:59 PM
+0
+WebGL 1.0.2 Test
+2501.77
+WebGL 2.0 Test
+4103.76
+Shader Pipeline Test
+1034.32
+Draw-call Stress Test
+107.88
+Geometry Stress Test
+1379.35
+Canvas Test
+1328.62
+SVG Test
+997.94
+ADD TO COMPARISON
+SYSTEM
+Category:
+Computers
+System name:
+Generic Desktop Devices
+Operating system:
+Linux
+Display resolution:
+1280x800
+SHOW ALL RESULTS FROM THIS SYSTEM
+© Basemark Oy 2024. All rights reserved. Basemark and GPUScore are registered trademarks of Basemark Oy. All other names and brands may be property of their respective owners.
+Privacy Policy
+We value your privacy
+On Powerboard 4.0 website we use first or third-party tools that store small files (cookie) on your device. Cookies are normally used to allow the site to run properly (technical cookies), to generate navigation usage reports (statistics cookies) and to suitable advertise our services/products (profiling cookies). We can directly use technical cookies, but you have the right to choose whether or not to enable statistical and profiling cookies. Enabling these cookies, you help us to offer you a better experience. Privacy Policy
+EnableKeep disabled
+=== configuring: community mode and the graphics suite, in the same session
+1790878924.559141607 console.info: "* Basemark Web 3.0"
+1790878924.560635320 console.info: "* Copyright (C) Basemark 2015. All rights reserved."
+1790878924.563083453 console.info: "* Current configuration:"
+1790878924.564351248 console.info: "    Battery: OFF"
+1790878924.565307502 console.info: "    Conformance: OFF"
+1790878924.566297380 console.info: "    Database: Unavailable"
+1790878924.567495134 console.info: "    High Resolution Timer: ON"
+1790878924.568741804 console.info: "    Mode: community"
+1790878924.569720849 console.info: "    Save: Public save"
+1790878924.570966603 console.info: "    Suite: Graphics Suite 1.0"
+1790878924.572176524 console.info: "* Detection details:"
+1790878924.573001568 console.info: "   Browser: Firefox 150.0"
+1790878924.573907862 console.info: "   Engine: Gecko 150.0"
+1790878924.574807282 console.info: "   OS: Linux "
+1790878924.575970619 console.info: "   Resolution: 1280x800"
+1790878924.576950164 console.info: "   Device: null (desktop)"
+1790878924.578367418 console.info: "* Battery:"
+1790878924.579628381 console.info: "Change battery to ON: https://web.gpuscore.com/?battery=1"
+1790878924.580621426 console.info: "* Conformance:"
+1790878924.581395887 console.info: "Change conformance to ON: https://web.gpuscore.com/?conformance=1"
+1790878924.582365806 console.info: "* Suite options:"
+1790878924.583429810 console.info: "Select All suites: https://web.gpuscore.com/?suite=0"
+1790878924.584494896 console.info: "Select Core Suite 1.0: https://web.gpuscore.com/?suite=1"
+1790878924.585510941 console.info: "Select Generic Suite 1.0: https://web.gpuscore.com/?suite=3"
+1790878924.586378403 console.info: "* *** *"
+1790878924.587279114 console.info: "By executing the Basemark Web 3.0 you accept Terms of Service https://web.gpuscore.com/tos/"
+1790878924.588023699 console.info: "* *** *"
+1790878924.588861452 console.info: "To launch benchmark, use URL https://web.gpuscore.com/run/"
+1790878926.424067345 console.info: "* Basemark Web 3.0"
+1790878926.425987268 console.info: "* Copyright (C) Basemark 2015. All rights reserved."
+1790878926.428274359 console.info: "* Current configuration:"
+1790878926.429832489 console.info: "    Battery: OFF"
+1790878926.431104326 console.info: "    Conformance: OFF"
+1790878926.432854707 console.info: "    Database: Unavailable"
+1790878926.434196961 console.info: "    High Resolution Timer: ON"
+1790878926.435260756 console.info: "    Mode: community"
+1790878926.436359218 console.info: "    Save: Public save"
+1790878926.437451305 console.info: "    Suite: Graphics Suite 1.0"
+1790878926.438482600 console.info: "* Detection details:"
+1790878926.439512520 console.info: "   Browser: Firefox 150.0"
+1790878926.440581149 console.info: "   Engine: Gecko 150.0"
+1790878926.441614193 console.info: "   OS: Linux "
+1790878926.442535280 console.info: "   Resolution: 1280x800"
+1790878926.443559950 console.info: "   Device: null (desktop)"
+1790878926.444823787 console.info: "* Battery:"
+1790878926.446190458 console.info: "Change battery to ON: https://web.gpuscore.com/?battery=1"
+1790878926.447313170 console.info: "* Conformance:"
+1790878926.448470841 console.info: "Change conformance to ON: https://web.gpuscore.com/?conformance=1"
+1790878926.449567386 console.info: "* Suite options:"
+1790878926.450929182 console.info: "Select All suites: https://web.gpuscore.com/?suite=0"
+1790878926.451957102 console.info: "Select Core Suite 1.0: https://web.gpuscore.com/?suite=1"
+1790878926.452856646 console.info: "Select Generic Suite 1.0: https://web.gpuscore.com/?suite=3"
+1790878926.453753899 console.info: "* *** *"
+1790878926.455028570 console.info: "By executing the Basemark Web 3.0 you accept Terms of Service https://web.gpuscore.com/tos/"
+1790878926.455980281 console.info: "* *** *"
+1790878926.456767159 console.info: "To launch benchmark, use URL https://web.gpuscore.com/run/"
+--- reported configuration:
+"    Battery: OFF"
+"   Browser: Firefox 150.0"
+"Change battery to ON: https://web.gpuscore.com/?battery=1"
+"Change conformance to ON: https://web.gpuscore.com/?conformance=1"
+"    Conformance: OFF"
+"    Database: Unavailable"
+"   Device: null (desktop)"
+"   Engine: Gecko 150.0"
+"    High Resolution Timer: ON"
+"    Mode: community"
+"   OS: Linux "
+"   Resolution: 1280x800"
+"    Save: Public save"
+"Select All suites: https://web.gpuscore.com/?suite=0"
+"    Suite: Graphics Suite 1.0"
+=== launching the suite in that same session (run 2)
+1790878944.218600030 GetShaderInfoLog() ->
+1790878944.219196490 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878944.219820617 
+1790878944.220321827 GetShaderSource() ->
+1790878944.220913746 
+1790878944.221469831 #extension GL_EXT_shader_texture_lod: require
+1790878944.222068000 void main() {}
+1790878944.222578293 
+1790878944.223583713 GetShaderInfoLog() ->
+1790878944.224226090 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878944.224719716 
+1790878944.225198593 GetShaderSource() ->
+1790878944.225898429 
+1790878944.226466972 #extension GL_EXT_shader_texture_lod: require
+1790878944.226940807 void main() {}
+1790878944.227413767 
+1790878949.245883049 GetShaderInfoLog() ->
+1790878949.246855469 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878949.247643555 
+1790878949.248428349 GetShaderSource() ->
+1790878949.249233810 
+1790878949.249979104 #extension GL_EXT_shader_texture_lod: require
+1790878949.250524272 void main() {}
+1790878949.251146066 
+1790878950.451287753 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.452049881 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.452578132 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.453416552 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.453972887 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.454422680 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.454897723 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.455450683 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.456409186 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.457058689 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.457600940 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.458732402 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.459666364 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.460289741 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.460899243 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.461377661 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.461903454 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.462519623 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.463192042 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.463771752 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.464312045 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.464901089 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.465656258 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.466619553 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.467357180 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.468186224 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.469002935 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.469699271 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.470399190 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.471012108 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.471509068 JavaScript warning: , line 0: WebGL warning: drawArraysInstanced: TEXTURE_2D at unit 1 is of type UINT, but the shader samples as FLOAT.
+1790878950.472074403 JavaScript warning: , line 0: WebGL warning: clear: Color draw buffers must be floating-point or fixed-point. (normalized (u)ints)
+1790878950.472679947 JavaScript warning: , line 0: After reporting 32, no further warnings will be reported for this WebGL context.
+1790878953.439387974 GetShaderInfoLog() ->
+1790878953.440299060 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878953.440960479 
+1790878953.441809523 GetShaderSource() ->
+1790878953.442475192 
+1790878953.443039027 #extension GL_EXT_shader_texture_lod: require
+1790878953.443689904 void main() {}
+1790878953.444205489 
+1790878953.467852482 GetShaderInfoLog() ->
+1790878953.469138986 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878953.469958447 
+1790878953.470538949 GetShaderSource() ->
+1790878953.471356702 
+1790878953.472271496 #extension GL_EXT_shader_texture_lod: require
+1790878953.473014540 void main() {}
+1790878953.473527125 
+1790878956.820102705 GetShaderInfoLog() ->
+1790878956.820981416 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878956.821908878 
+1790878956.822717880 GetShaderSource() ->
+1790878956.823455174 
+1790878956.824102843 #extension GL_EXT_shader_texture_lod: require
+1790878956.827534271 void main() {}
+1790878956.828190481 
+1790878956.870049574 GetShaderInfoLog() ->
+1790878956.870779743 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878956.871550496 
+1790878956.872184956 GetShaderSource() ->
+1790878956.872683957 
+1790878956.873205667 #extension GL_EXT_shader_texture_lod: require
+1790878956.873712169 void main() {}
+1790878956.874236046 
+tapped esc
+start control: "NONE"
+note: no Start control matched; /run/ normally starts by itself
+now at: "/run/tests/30/graphics_suite/draw-call_stress_test/"
+=== suite 2 running; sample the host vmm now
+=== host side: sample $(pgrep -f '[l]imina-vmm --cpus') 5 -f prof.txt
+=== waiting for /result/ (suite 2)
+1790878989.725410248 GetShaderInfoLog() ->
+1790878989.726159750 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878989.726885044 
+1790878989.727630088 GetShaderSource() ->
+1790878989.728456966 
+1790878989.729102051 #extension GL_EXT_shader_texture_lod: require
+1790878989.729765970 void main() {}
+1790878989.733302815 
+1790878989.847027805 GetShaderInfoLog() ->
+1790878989.847629682 0:2(12): error: extension `GL_EXT_shader_texture_lod' unsupported in fragment shader
+1790878989.848418768 
+1790878989.848983186 GetShaderSource() ->
+1790878989.849542563 
+1790878989.850139274 #extension GL_EXT_shader_texture_lod: require
+1790878989.850776567 void main() {}
+1790878989.851390986 
+1790879027.609007611 console.log: "55IFCYgd"
+1790879028.451401357 JavaScript error: , line 0: SyntaxError: JSON.parse: expected double-quoted property name at line 1 column 153 of the JSON data
+1790879030.235382503 console.error: "Hydration completed but contains mismatches."
+--- scores (run 2):
+Powerboard is moving to
+powerboard.gpuscore.com
+Redirects start 28.05.2026
+Visit new domain
+x
+Get Benchmarks
+F.A.Q.
+FASTEST HARDWARE
+SYSTEM COMPARISON
+Cross-Platform
+Basemark GPU
+Cross-Platform
+Basemark Web
+
+Check other free benchmarks here:
+gpuscore.com
+
+RESULT
+Basemark Web 3.0
+Gecko 150.0
+1 Oct 2026
+3:23:48 PM
+0
+WebGL 1.0.2 Test
+3695.96
+WebGL 2.0 Test
+5098.61
+Shader Pipeline Test
+1489.77
+Draw-call Stress Test
+81.07
+Geometry Stress Test
+1513.28
+Canvas Test
+1331.12
+SVG Test
+993.30
+ADD TO COMPARISON
+SYSTEM
+Category:
+Computers
+System name:
+Generic Desktop Devices
+Operating system:
+Linux
+Display resolution:
+1280x800
+SHOW ALL RESULTS FROM THIS SYSTEM
+© Basemark Oy 2024. All rights reserved. Basemark and GPUScore are registered trademarks of Basemark Oy. All other names and brands may be property of their respective owners.
+Privacy Policy

@@ -1,0 +1,2 @@
+enh arm=ours stock-lowering-announcements=0
+stock arm=ours stock-lowering-announcements=0

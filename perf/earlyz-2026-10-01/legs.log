@@ -1,0 +1,261 @@
+######## b0-ours 14:16:41
+[14:16:41] build earlyz b0-ours: arm ours; host mesa 503b79ff61d; virglrs 79fccb5 + libkrun 53522ebd; limina e2d02a9c
+[14:16:49] enhanced boot
+[14:17:47] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.14
+final: up=205s load=0.14 0.16 0.07
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[14:22:24] aquarium r1 exit=0 
+[14:23:44] aquarium r2 exit=0 
+[14:25:36] perf-ledger run 1 exit=0 
+gl-replay-venus,45.6006
+gl-replay-llvmpipe,708.954
+vk-replay-venus-headless,949.943894
+glmark2-wayland-venus,2578
+[14:27:29] perf-ledger run 2 exit=0 
+gl-replay-venus,45.6351
+gl-replay-llvmpipe,667.348
+vk-replay-venus-headless,1926.088752
+glmark2-wayland-venus,2511
+[14:29:22] perf-ledger run 3 exit=0 
+gl-replay-venus,45.5356
+gl-replay-llvmpipe,668.188
+vk-replay-venus-headless,1858.057558
+glmark2-wayland-venus,2506
+[14:31:32] vkmark run 1: 2376 
+[14:33:43] vkmark run 2: 2390 
+[14:35:53] vkmark run 3: 2382 
+Running as unit: ff-bench.service; invocation ID: f96966f597004c0e9e2cac52f3e66952
+[14:38:44] vkmark under aquarium-25k run 1: 1101 
+[14:40:57] vkmark under aquarium-25k run 2: 1248 
+[14:41:08] worker-enh: 0 poisoned-context lines
+[14:41:08] arm check enh: arm ours, stock lowering announced 0 time(s) (expect 0 for ours, >0 for stock)
+[14:41:08] stock boot
+[14:42:07] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=221s load=0.25
+final: up=221s load=0.25 0.17 0.07
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[14:49:55] basemark exit=0
+1790876739.897687994 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[14:49:55] basemark WebGL 1.0.2 Test 3692.09 
+[14:49:55] basemark WebGL 2.0 Test 5145.63 
+[14:49:55] basemark Shader Pipeline Test 1520.00 
+[14:49:55] basemark Draw-call Stress Test 81.58 
+[14:49:55] basemark Geometry Stress Test 1494.33 
+[14:49:55] basemark Canvas Test 1330.80 
+[14:49:55] basemark SVG Test 994.27 
+[14:50:05] worker-stock: 0 poisoned-context lines
+[14:50:05] arm check stock: arm ours, stock lowering announced 0 time(s) (expect 0 for ours, >0 for stock)
+[14:50:05] point b0-ours done; read perf/earlyz-2026-10-01/evidence/b0-ours/aquarium-r*/*-fps.png
+######## n0-stock 14:50:05
+[14:50:05] build earlyz n0-stock: arm stock; host mesa 503b79ff61d; virglrs 79fccb5 + libkrun 53522ebd; limina e2d02a9c
+[14:50:07] enhanced boot
+[14:51:05] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=206s load=0.26
+final: up=206s load=0.26 0.34 0.16
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[14:55:49] aquarium r1 exit=0 
+[14:57:09] aquarium r2 exit=0 
+[14:59:03] perf-ledger run 1 exit=0 
+gl-replay-venus,45.2896
+gl-replay-llvmpipe,673.696
+vk-replay-venus-headless,977.068410
+glmark2-wayland-venus,2510
+[15:00:54] perf-ledger run 2 exit=0 
+gl-replay-venus,46.0008
+gl-replay-llvmpipe,669.12
+vk-replay-venus-headless,1741.966174
+glmark2-wayland-venus,2487
+[15:02:47] perf-ledger run 3 exit=0 
+gl-replay-venus,45.4737
+gl-replay-llvmpipe,659.661
+vk-replay-venus-headless,1879.095836
+glmark2-wayland-venus,2585
+[15:04:58] vkmark run 1: 2257 
+[15:07:09] vkmark run 2: 2374 
+[15:09:19] vkmark run 3: 2374 
+Running as unit: ff-bench.service; invocation ID: 1b4d4cfacac7416a90aa356e0a5d0a6e
+[15:12:10] vkmark under aquarium-25k run 1: 997 
+[15:14:20] vkmark under aquarium-25k run 2: 1045 
+[15:14:31] worker-enh: 0 poisoned-context lines
+[15:14:31] arm check enh: arm stock, stock lowering announced 2 time(s) (expect 0 for ours, >0 for stock)
+[15:14:31] stock boot
+[15:15:30] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=206s load=0.09
+final: up=206s load=0.09 0.12 0.05
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[15:23:50] basemark exit=0
+1790878728.059089842 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[15:23:50] basemark WebGL 1.0.2 Test 3695.96 
+[15:23:50] basemark WebGL 2.0 Test 5098.61 
+[15:23:50] basemark Shader Pipeline Test 1489.77 
+[15:23:50] basemark Draw-call Stress Test 81.07 
+[15:23:50] basemark Geometry Stress Test 1513.28 
+[15:23:50] basemark Canvas Test 1331.12 
+[15:23:50] basemark SVG Test 993.30 
+[15:24:00] worker-stock: 0 poisoned-context lines
+[15:24:00] arm check stock: arm stock, stock lowering announced 2 time(s) (expect 0 for ours, >0 for stock)
+[15:24:00] point n0-stock done; read perf/earlyz-2026-10-01/evidence/n0-stock/aquarium-r*/*-fps.png
+######## b1-ours 15:24:00
+[15:24:01] build earlyz b1-ours: arm ours; host mesa 503b79ff61d; virglrs 79fccb5 + libkrun 53522ebd; limina e2d02a9c
+[15:24:02] enhanced boot
+[15:24:59] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=220s load=0.28
+final: up=220s load=0.28 0.46 0.22
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[15:29:56] aquarium r1 exit=0 
+[15:31:16] aquarium r2 exit=0 
+[15:33:07] perf-ledger run 1 exit=0 
+gl-replay-venus,46.1283
+gl-replay-llvmpipe,669.277
+vk-replay-venus-headless,1790.623857
+glmark2-wayland-venus,2484
+[15:34:59] perf-ledger run 2 exit=0 
+gl-replay-venus,46.159
+gl-replay-llvmpipe,670.948
+vk-replay-venus-headless,1763.752030
+glmark2-wayland-venus,2506
+[15:36:51] perf-ledger run 3 exit=0 
+gl-replay-venus,45.8872
+gl-replay-llvmpipe,669.502
+vk-replay-venus-headless,1846.620479
+glmark2-wayland-venus,2494
+[15:39:01] vkmark run 1: 2378 
+[15:41:11] vkmark run 2: 2393 
+[15:43:22] vkmark run 3: 2381 
+Running as unit: ff-bench.service; invocation ID: 67c09b5e206b45449843bfbbd2bef766
+[15:46:13] vkmark under aquarium-25k run 1: 1271 
+[15:48:23] vkmark under aquarium-25k run 2: 1286 
+[15:48:34] worker-enh: 0 poisoned-context lines
+[15:48:34] arm check enh: arm ours, stock lowering announced 0 time(s) (expect 0 for ours, >0 for stock)
+[15:48:34] stock boot
+[15:49:32] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.12
+final: up=205s load=0.12 0.12 0.05
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[15:58:01] basemark exit=0
+1790880769.870013153 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[15:58:01] basemark WebGL 1.0.2 Test 3785.71 
+[15:58:02] basemark WebGL 2.0 Test 5133.17 
+[15:58:02] basemark Shader Pipeline Test 1560.71 
+[15:58:02] basemark Draw-call Stress Test 81.32 
+[15:58:02] basemark Geometry Stress Test 1516.90 
+[15:58:02] basemark Canvas Test 1332.94 
+[15:58:02] basemark SVG Test 988.29 
+[15:58:12] worker-stock: 0 poisoned-context lines
+[15:58:12] arm check stock: arm ours, stock lowering announced 0 time(s) (expect 0 for ours, >0 for stock)
+[15:58:12] point b1-ours done; read perf/earlyz-2026-10-01/evidence/b1-ours/aquarium-r*/*-fps.png
+######## n1-stock 15:58:12
+[15:58:12] build earlyz n1-stock: arm stock; host mesa 503b79ff61d; virglrs 79fccb5 + libkrun 53522ebd; limina e2d02a9c
+[15:58:14] enhanced boot
+[16:00:02] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=206s load=0.09
+final: up=206s load=0.09 0.12 0.05
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[16:04:39] aquarium r1 exit=0 
+[16:06:00] aquarium r2 exit=0 
+[16:07:51] perf-ledger run 1 exit=0 
+gl-replay-venus,46.4782
+gl-replay-llvmpipe,657.576
+vk-replay-venus-headless,1763.097709
+glmark2-wayland-venus,2533
+[16:09:43] perf-ledger run 2 exit=0 
+gl-replay-venus,45.9025
+gl-replay-llvmpipe,664.653
+vk-replay-venus-headless,1845.314228
+glmark2-wayland-venus,2479
+[16:11:35] perf-ledger run 3 exit=0 
+gl-replay-venus,46.1361
+gl-replay-llvmpipe,671.08
+vk-replay-venus-headless,1831.877870
+glmark2-wayland-venus,2502
+[16:13:45] vkmark run 1: 2375 
+[16:15:56] vkmark run 2: 2286 
+[16:18:06] vkmark run 3: 2285 
+Running as unit: ff-bench.service; invocation ID: 684f672a7df3417481addb0165bc3b3b
+[16:20:56] vkmark under aquarium-25k run 1: 1058 
+[16:23:06] vkmark under aquarium-25k run 2: 1106 
+[16:23:16] worker-enh: 0 poisoned-context lines
+[16:23:16] arm check enh: arm stock, stock lowering announced 2 time(s) (expect 0 for ours, >0 for stock)
+[16:23:16] stock boot
+[16:24:15] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=206s load=0.03
+final: up=206s load=0.03 0.07 0.03
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[16:31:55] basemark exit=0
+1790882853.920776978 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[16:31:55] basemark WebGL 1.0.2 Test 3781.66 
+[16:31:55] basemark WebGL 2.0 Test 5118.30 
+[16:31:55] basemark Shader Pipeline Test 1444.63 
+[16:31:55] basemark Draw-call Stress Test 82.27 
+[16:31:55] basemark Geometry Stress Test 1508.86 
+[16:31:55] basemark Canvas Test 1340.83 
+[16:31:55] basemark SVG Test 988.15 
+[16:32:05] worker-stock: 0 poisoned-context lines
+[16:32:05] arm check stock: arm stock, stock lowering announced 2 time(s) (expect 0 for ours, >0 for stock)
+[16:32:05] point n1-stock done; read perf/earlyz-2026-10-01/evidence/n1-stock/aquarium-r*/*-fps.png
+######## b2-ours 16:32:05
+[16:32:06] build earlyz b2-ours: arm ours; host mesa 503b79ff61d; virglrs 79fccb5 + libkrun 53522ebd; limina e2d02a9c
+[16:32:07] enhanced boot
+[16:33:05] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.25
+final: up=205s load=0.25 0.20 0.08
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[16:37:40] aquarium r1 exit=0 
+[16:39:00] aquarium r2 exit=0 
+[16:40:53] perf-ledger run 1 exit=0 
+gl-replay-venus,45.4776
+gl-replay-llvmpipe,696.614
+vk-replay-venus-headless,1846.535931
+glmark2-wayland-venus,2598
+[16:42:44] perf-ledger run 2 exit=0 
+gl-replay-venus,45.8213
+gl-replay-llvmpipe,698.026
+vk-replay-venus-headless,1952.842906
+glmark2-wayland-venus,2546
+[16:44:38] perf-ledger run 3 exit=0 
+gl-replay-venus,45.0533
+gl-replay-llvmpipe,699.797
+vk-replay-venus-headless,1794.365692
+glmark2-wayland-venus,2561
+[16:46:49] vkmark run 1: 2271 
+[16:48:59] vkmark run 2: 2371 
+[16:51:10] vkmark run 3: 2446 
+Running as unit: ff-bench.service; invocation ID: 21430ff00b844bedb371a027ddb0ca52
+[16:54:00] vkmark under aquarium-25k run 1: 990 
+[16:56:11] vkmark under aquarium-25k run 2: 1010 
+[16:56:22] worker-enh: 0 poisoned-context lines
+[16:56:22] arm check enh: arm ours, stock lowering announced 0 time(s) (expect 0 for ours, >0 for stock)
+[16:56:22] stock boot
+[16:57:19] display pinned on trend-stock: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.15
+final: up=205s load=0.15 0.17 0.08
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+[17:04:37] basemark exit=0
+1790884836.855193875 console.log: "BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+probe: BASEMARK_PROBE renderer=virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))) version=WebGL 1.0"
+[17:04:37] basemark WebGL 1.0.2 Test 3811.58 
+[17:04:37] basemark WebGL 2.0 Test 5188.45 
+[17:04:37] basemark Shader Pipeline Test 1579.52 
+[17:04:37] basemark Draw-call Stress Test 77.79 
+[17:04:37] basemark Geometry Stress Test 1504.02 
+[17:04:37] basemark Canvas Test 1353.21 
+[17:04:37] basemark SVG Test 995.79 
+[17:04:47] worker-stock: 0 poisoned-context lines
+[17:04:47] arm check stock: arm ours, stock lowering announced 0 time(s) (expect 0 for ours, >0 for stock)
+[17:04:47] point b2-ours done; read perf/earlyz-2026-10-01/evidence/b2-ours/aquarium-r*/*-fps.png
+######## legs done 17:04:47
