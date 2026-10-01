@@ -4,11 +4,11 @@
 //! The limina ⇄ libkrun facade.
 //!
 //! This module is the *one* place that translates limina's typed [`VmSpec`] into
-//! libkrun's `VmResources` and drives the microVM. It deliberately reimplements the
-//! orchestration that libkrun's C entrypoint (`krun_start_enter`) does internally, so
-//! that all coupling to libkrun's *internal* Rust API is concentrated here — an
-//! upstream rebase that changes `VmResources`/`build_microvm` touches this module and
-//! nothing else (architecture decision D2.1).
+//! libkrun's `VmResources` plus the devices to attach, and drives the microVM. It
+//! deliberately reimplements the orchestration that libkrun's own `VmmBuilder` does
+//! internally, so that all coupling to libkrun's *internal* Rust API is concentrated
+//! here — an upstream rebase that changes `VmResources`/`build_microvm` touches this
+//! module and nothing else (architecture decision D2.1).
 
 mod battery;
 mod console;
@@ -17,22 +17,22 @@ mod display_update;
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::unbounded;
 use devices::display::{DisplayInfo, DisplayInfoEdid, EdidIdentity, EdidParams};
-use devices::virtio::block::{CacheType, ImageType, SyncMode};
+use devices::virtio::block::{DiskFormat, SyncMode};
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
+use krun_lib::api::device_builders::{
+    BalloonDevice, BlockDevice, DisplayBackend, FsDevice, GpuDevice, I2cBatteryDevice, InputDevice,
+    MmioDeviceManager, NetDevice, NetFlags, RngDevice, SndDevice, TsiFlags, VirglRendererFlags,
+    VsockDevice,
+};
+use krun_lib::vmm;
 use limina_display::{CaptureConfig, WindowConfig};
 use limina_displayctl::DisplayCommand;
 use limina_launch::connect::ListenAt;
 use polly::event_manager::EventManager;
 use vmm::resources::VmResources;
-use vmm::vmm_config::block::BlockDeviceConfig;
 use vmm::vmm_config::external_kernel::{ExternalKernel, KernelFormat};
 use vmm::vmm_config::firmware::FirmwareConfig;
-use vmm::vmm_config::fs::FsDeviceConfig;
 use vmm::vmm_config::machine_config::VmConfig;
-use vmm::vmm_config::net::NetworkInterfaceConfig;
-use vmm::vmm_config::vsock::VsockDeviceConfig;
-
-use devices::virtio::net::device::VirtioNetBackend;
 
 use self::display_update::display_update_from;
 use crate::config::{
@@ -121,8 +121,18 @@ const GPU_COEXIST_FLAGS: u32 = VIRGLRENDERER_VENUS
     | VIRGLRENDERER_RENDER_SERVER
     | VIRGLRENDERER_USE_VIDEO;
 
-/// Translate a [`VmSpec`] into a libkrun [`VmResources`]. No VM is started yet.
-pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
+/// The virtio devices of one VM, in the order they are attached.
+///
+/// The order is load-bearing: the attach order assigns each device its MMIO window and IRQ, the
+/// guest binds its drivers to those, and a snapshot records them and refuses to restore into a
+/// machine where they moved. It is the order libkrun's builder used before devices became
+/// caller-supplied — balloon, battery, sound, RNG, console, GPU, input, shares, disks, vsock,
+/// network — so a VM keeps its layout, and a snapshot taken before that change still restores.
+pub type Devices = MmioDeviceManager<'static>;
+
+/// Translate a [`VmSpec`] into a libkrun [`VmResources`] and the [`Devices`] to attach. No VM is
+/// started yet.
+pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     let mut vmr = VmResources::default();
 
     vmr.set_vm_config(&VmConfig {
@@ -158,38 +168,50 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         vmr.smbios_oem_strings = Some(spec.smbios_oem_strings.clone());
     }
 
-    for disk in &spec.disks {
-        add_disk(&mut vmr, disk)?;
-    }
+    let blocks = spec
+        .disks
+        .iter()
+        .map(block_device)
+        .collect::<Result<Vec<_>>>()?;
 
-    for share in &spec.shares {
-        add_fs_share(&mut vmr, share)?;
-    }
+    let shares = spec
+        .shares
+        .iter()
+        .map(fs_device)
+        .collect::<Result<Vec<_>>>()?;
 
-    if let Some(vsock) = &spec.vsock {
-        add_vsock(&mut vmr, vsock)?;
-    }
+    let vsock = spec.vsock.as_ref().map(vsock_device).transpose()?;
 
-    if let Some(display) = &spec.display {
-        add_display(&mut vmr, display, &spec.disks)?;
-    }
+    let gpu = spec
+        .display
+        .as_ref()
+        .map(|display| gpu_device(display, &spec.disks));
 
     // The USB HID keyboard gadget is built here, before the input devices, because the key
     // router that decides where a keystroke goes is interposed as those are registered — but
     // it is cold-plugged *after* the other gadgets below, so adding it does not renumber the
     // ports an existing snapshot was captured with.
     let mut usb_keyboard = None;
+    let mut inputs = Vec::new();
     if let Some(input) = &spec.input {
         let hid_sink = spec.usb.then(|| {
             let (gadget, sink) = crate::usb_kbd::build();
             usb_keyboard = Some(gadget);
             sink
         });
-        add_input(&mut vmr, input, hid_sink);
+        inputs = input_devices(input, hid_sink);
     }
 
-    if let Some(net) = &spec.net {
-        add_net(&mut vmr, net)?;
+    let net = spec.net.as_ref().map(net_device).transpose()?;
+    if net.is_some() {
+        // `KRUN_DHCP=1` drives libkrun's *own* guest init (the L1/krun-guest path). A stock
+        // Fedora guest ignores it and runs DHCP via NetworkManager against gvproxy's built-in
+        // DHCP server either way.
+        let epilog = vmr.kernel_cmdline.epilog.get_or_insert_with(String::new);
+        if !epilog.is_empty() {
+            epilog.push(' ');
+        }
+        epilog.push_str("KRUN_DHCP=1");
     }
 
     if let Some(console) = &spec.console {
@@ -201,15 +223,23 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // Host battery mirror (virtio-i2c SBS battery): only when asked AND the host
     // actually has a battery to mirror (or the fake hook is set) — a desktop Mac
     // attaches nothing and the guest correctly shows no battery.
-    if spec.battery
+    let battery = if spec.battery
         && let Some(provider) = battery::provider()
     {
         log::info!("battery: mirroring the host battery into the guest");
-        vmr.battery_provider = Some(provider);
-    }
+        Some(I2cBatteryDevice::new(provider))
+    } else {
+        None
+    };
 
+    // One virtio-console device carries the data console (hvc0) and the named agent ports, so
+    // the ports land after hvc0 in a fixed order and the guest's topology is the same on every
+    // launch.
+    let mut console_ports = console::Ports::default();
     if let Some(vc) = &spec.virtio_console {
-        console::attach_virtio(&mut vmr, vc).context("attaching virtio-console")?;
+        console_ports
+            .virtio(vc)
+            .context("attaching virtio-console")?;
     }
 
     // M12: the named `com.redhat.spice.0` port that starts a stock guest's spice-vdagent.
@@ -217,7 +247,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // put the device on the bus. Always present when the supervisor made a port for it, so
     // the guest's device topology does not depend on how the VM was launched.
     if let Some(fd) = spec.spice_fd {
-        console::attach_spice_port(&mut vmr, fd).context("attaching the spice agent port")?;
+        console_ports.spice(fd);
     }
 
     // The named `org.qemu.guest_agent.0` port that starts a stock guest's qemu-guest-agent
@@ -225,27 +255,36 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
     // the spice port so the port order — and therefore the guest's device topology — is the
     // same on every launch.
     if let Some(fd) = spec.qga_fd {
-        console::attach_qga_port(&mut vmr, fd).context("attaching the qemu guest-agent port")?;
+        console_ports.qga(fd);
     }
+    let console = console_ports
+        .build()
+        .context("building the virtio-console device")?;
 
+    let balloon = BalloonDevice::new()
+        .map_err(|e| anyhow!("balloon: {e:?}"))?
+        .free_page_reporting(spec.free_page_reporting)
+        .deflate_on_oom(spec.deflate_on_oom);
     // Native virtio-snd audio device (device ID 25). On by default; the guest's stock
     // virtio_snd driver binds it and exposes an ALSA card with no guest components.
-    vmr.balloon_free_page_reporting = spec.free_page_reporting;
-    vmr.balloon_deflate_on_oom = spec.deflate_on_oom;
-    vmr.snd = spec.snd;
-    // Mic capture is opt-in (default off, privacy); only acts when snd is also on.
-    vmr.snd_capture = spec.mic;
-    // Tell the supervisor when the guest's playback stream comes and goes, so it can announce
-    // the VM to macOS as a media player while the guest holds the audio device open. Only
-    // possible with a window: the control socketpair is the supervisor's, and a headless VM
-    // has no media session to hold.
-    if spec.snd
-        && let Some(DisplaySink::Window { control_fd, .. }) = spec.display.as_ref().map(|d| &d.sink)
-    {
-        vmr.snd_state_cb = crate::audio_state::control_writer(*control_fd);
-        vmr.snd_audibility_cb = crate::audio_state::audibility_writer(*control_fd)
-            .map(|cb| (crate::audio_state::PAUSE_SILENCE, cb));
-    }
+    let snd = spec.snd.then(|| {
+        // Mic capture is opt-in (default off, privacy).
+        let mut snd = SndDevice::new().capture(spec.mic);
+        // Tell the supervisor when the guest's playback stream comes and goes, so it can
+        // announce the VM to macOS as a media player while the guest holds the audio device
+        // open. Only possible with a window: the control socketpair is the supervisor's, and a
+        // headless VM has no media session to hold.
+        if let Some(DisplaySink::Window { control_fd, .. }) = spec.display.as_ref().map(|d| &d.sink)
+        {
+            if let Some(cb) = crate::audio_state::control_writer(*control_fd) {
+                snd = snd.pcm_state_callback(cb);
+            }
+            if let Some(cb) = crate::audio_state::audibility_writer(*control_fd) {
+                snd = snd.pcm_audibility_callback(crate::audio_state::PAUSE_SILENCE, cb);
+            }
+        }
+        snd
+    });
     // Emulated xHCI USB controller (opt-in, default off). A stock guest binds it via
     // its own xhci-plat driver and enumerates any cold-plugged device models.
     vmr.usb = spec.usb;
@@ -310,7 +349,38 @@ pub fn build_resources(spec: &VmSpec) -> Result<VmResources> {
         }
     }
 
-    Ok(vmr)
+    let mut devices = Devices::new();
+    devices.add(balloon);
+    if let Some(battery) = battery {
+        devices.add(battery);
+    }
+    if let Some(snd) = snd {
+        devices.add(snd);
+    }
+    devices.add(RngDevice::new().map_err(|e| anyhow!("rng: {e:?}"))?);
+    if let Some(console) = console {
+        devices.add(console);
+    }
+    if let Some(gpu) = gpu {
+        devices.add(gpu);
+    }
+    for input in inputs {
+        devices.add(input);
+    }
+    for share in shares {
+        devices.add(share);
+    }
+    for block in blocks {
+        devices.add(block);
+    }
+    if let Some(vsock) = vsock {
+        devices.add(vsock);
+    }
+    if let Some(net) = net {
+        devices.add(net);
+    }
+
+    Ok((vmr, devices))
 }
 
 /// Attach a virtio-gpu display at the requested mode, with the chosen host sink (PNG capture
@@ -364,7 +434,7 @@ fn boot_identity(disks: &[DiskSpec]) -> EdidIdentity {
     }
 }
 
-fn add_display(vmr: &mut VmResources, display: &DisplaySpec, disks: &[DiskSpec]) -> Result<()> {
+fn gpu_device(display: &DisplaySpec, disks: &[DiskSpec]) -> GpuDevice {
     // Power-user escape hatch: LIMINA_VIRGL_FLAGS=0x.. forces a specific renderer flag set
     // (and thus the renderer/coexist path) without recompiling — for experiments/sweeps.
     let virgl_override = std::env::var("LIMINA_VIRGL_FLAGS").ok().and_then(|s| {
@@ -403,8 +473,6 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec, disks: &[DiskSpec])
         !software_2d,
         std::env::var("VREND_MAX_SAMPLES").unwrap_or_else(|_| "unset".into())
     );
-    vmr.set_gpu_virgl_flags(flags);
-    vmr.set_gpu_software_2d(software_2d);
     // Slot 0 is the display the guest boots on. The rest of the pool exists only so a display
     // can be *added* later without rebuilding the device — `num_scanouts` is config-space state
     // read once by the driver — so they boot disconnected: the guest sees the connectors, reports
@@ -416,22 +484,7 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec, disks: &[DiskSpec])
         identity: Some(identity),
         ..EdidParams::default()
     });
-    vmr.displays.push(slot0);
-    for _ in 1..display.pool {
-        let mut spare = DisplayInfo::new(display.width, display.height);
-        spare.connected = false;
-        vmr.displays.push(spare);
-    }
-    log::info!(
-        "virtio-gpu displays: {} scanout(s), slot 0 connected at {}x{} as LMN/limina serial \
-         {:#010x}",
-        display.pool,
-        display.width,
-        display.height,
-        identity.serial
-    );
-
-    vmr.display_backend = Some(match &display.sink {
+    let mut backend = DisplayBackend::from_backend(match &display.sink {
         DisplaySink::CapturePng(png_path) => limina_display::capture_backend(CaptureConfig {
             png_path: png_path.clone(),
         }),
@@ -443,25 +496,39 @@ fn add_display(vmr: &mut VmResources, display: &DisplaySpec, disks: &[DiskSpec])
             surface_port_name: surface_port_name.clone(),
         }),
     });
+    backend.add_display_info(slot0);
+    for _ in 1..display.pool {
+        let mut spare = DisplayInfo::new(display.width, display.height);
+        spare.connected = false;
+        backend.add_display_info(spare);
+    }
+    log::info!(
+        "virtio-gpu displays: {} scanout(s), slot 0 connected at {}x{} as LMN/limina serial \
+         {:#010x}",
+        display.pool,
+        display.width,
+        display.height,
+        identity.serial
+    );
 
-    Ok(())
+    // The renderer flags pass through whole: the named set covers only what upstream's C API
+    // offers, and the GLES/surfaceless/video bits are ours to set.
+    GpuDevice::new(VirglRendererFlags::from_bits_retain(flags), backend).software_2d(software_2d)
 }
 
 /// Attach a virtio-keyboard and a virtio-absolute-pointer, plus the optional relative mouse
 /// and multitouch touchpad. Each reads evdev events the
 /// supervisor writes (as 8-byte datagrams) to an inherited socket fd; we register the
-/// native Rust backends (D2.1) on those fds. libkrun attaches the devices iff
-/// `input_backends` is non-empty.
+/// native Rust backends (D2.1) on those fds. Each is named `input<n>` in attach order.
 ///
 /// With the USB controller present, a HID keyboard gadget is cold-plugged alongside and the
 /// key router is interposed on the keyboard socket, so keys still reach the guest in the
 /// window where it has no `virtio_input` driver — a stock encrypted-root guest cannot answer
 /// its own LUKS prompt otherwise (`docs/design/usb-hid-keyboard.md`).
-fn add_input(
-    vmr: &mut VmResources,
+fn input_devices(
     input: &InputSpec,
     hid_sink: Option<limina_input::router::HidReportSink>,
-) {
+) -> Vec<InputDevice<'static>> {
     log::info!(
         "virtio-input: keyboard fd={}, pointer fd={}, rel-pointer fd={}, touchpad fd={} ({:?})",
         input.kbd_fd,
@@ -470,27 +537,29 @@ fn add_input(
         input.touchpad_fd,
         input.touchpad_geometry
     );
-    vmr.input_backends
-        .push(limina_input::backends::keyboard_backends(
-            input.kbd_fd,
-            hid_sink,
-        ));
-    vmr.input_backends
-        .push(limina_input::backends::pointer_backends(input.ptr_fd));
+    let mut backends = vec![
+        limina_input::backends::keyboard_backends(input.kbd_fd, hid_sink),
+        limina_input::backends::pointer_backends(input.ptr_fd),
+    ];
     // The relative-pointer (mouse) device for capture mode is optional (M8).
     if input.rel_ptr_fd >= 0 {
-        vmr.input_backends
-            .push(limina_input::backends::rel_pointer_backends(
-                input.rel_ptr_fd,
-            ));
+        backends.push(limina_input::backends::rel_pointer_backends(
+            input.rel_ptr_fd,
+        ));
     }
     if input.touchpad_fd >= 0 {
-        vmr.input_backends
-            .push(limina_input::backends::touchpad_backends(
-                input.touchpad_fd,
-                input.touchpad_geometry,
-            ));
+        backends.push(limina_input::backends::touchpad_backends(
+            input.touchpad_fd,
+            input.touchpad_geometry,
+        ));
     }
+    backends
+        .into_iter()
+        .enumerate()
+        .map(|(index, (config, events))| {
+            InputDevice::from_backends(config, events).id(&format!("input{index}"))
+        })
+        .collect()
 }
 
 /// Configure a direct kernel boot (raw aarch64 `Image` + optional cpio initramfs).
@@ -506,7 +575,7 @@ fn set_external_kernel(vmr: &mut VmResources, kernel: &KernelSpec) -> Result<()>
         None => 0,
     };
 
-    vmr.set_external_kernel(ExternalKernel {
+    vmr.external_kernel = Some(ExternalKernel {
         path: kernel.image.clone(),
         format: KernelFormat::Raw,
         initramfs_path: kernel.initramfs.clone(),
@@ -519,52 +588,43 @@ fn set_external_kernel(vmr: &mut VmResources, kernel: &KernelSpec) -> Result<()>
 
 /// Share a host directory into the guest over virtio-fs. A `/dev/root`-tagged share
 /// becomes the guest root (paired with `rootfstype=virtiofs` on the cmdline).
-fn add_fs_share(vmr: &mut VmResources, share: &FsShare) -> Result<()> {
+fn fs_device(share: &FsShare) -> Result<FsDevice<'static>> {
     let path = share
         .path
         .to_str()
-        .with_context(|| format!("share path is not valid UTF-8: {:?}", share.path))?
-        .to_string();
+        .with_context(|| format!("share path is not valid UTF-8: {:?}", share.path))?;
 
-    vmr.add_fs_device(FsDeviceConfig {
-        fs_id: share.tag.clone(),
-        shared_dir: Some(path),
-        shm_size: None,
-        read_only: share.read_only,
-        virtual_entries: Vec::new(),
-    });
-
-    Ok(())
+    if share.read_only {
+        FsDevice::new_read_only(&share.tag, path)
+    } else {
+        FsDevice::new(&share.tag, path)
+    }
+    .map_err(|e| anyhow!("virtio-fs share {:?}: {e:?}", share.tag))
 }
 
 /// Wire a vsock device so the guest agent can reach the host. `listen = false` means
 /// the host listens on `socket_path` and the guest connects to `CID_HOST(2):port`;
 /// libkrun bridges the two.
-fn add_vsock(vmr: &mut VmResources, vsock: &VsockSpec) -> Result<()> {
-    let mut unix_ipc_port_map = std::collections::HashMap::new();
-    unix_ipc_port_map.insert(vsock.port, (vsock.socket_path.clone(), false));
+fn vsock_device(vsock: &VsockSpec) -> Result<VsockDevice> {
+    let utf8 = |path: &std::path::Path| {
+        path.to_str()
+            .map(str::to_owned)
+            .with_context(|| format!("vsock socket path is not valid UTF-8: {path:?}"))
+    };
+    let mut device = VsockDevice::new(GUEST_CID.into(), TsiFlags::empty())
+        .map_err(|e| anyhow!("vsock: {e:?}"))?;
+    device.add_unix_port(vsock.port, &utf8(&vsock.socket_path)?, false);
     if let Some((port, path)) = &vsock.bench {
         anyhow::ensure!(
             *port != vsock.port,
             "LIMINA_VSOCK_BENCH port {port} is the control plane's"
         );
         log::warn!("vsock: bench port {port} bridged to {path:?} (LIMINA_VSOCK_BENCH)");
-        unix_ipc_port_map.insert(*port, (path.clone(), false));
+        device.add_unix_port(*port, &utf8(path)?, false);
     }
-
-    vmr.set_vsock_device(VsockDeviceConfig {
-        vsock_id: "vsock0".to_string(),
-        guest_cid: GUEST_CID,
-        host_port_map: None,
-        unix_ipc_port_map: Some(unix_ipc_port_map),
-        tsi_flags: devices::virtio::TsiFlags::empty(),
-        // Our guests take the time over the control plane; none listens on libkrun's timesync
-        // port, so its per-minute datagram only ever came back as a reset.
-        timesync: false,
-    })
-    .map_err(|e| anyhow!("set_vsock_device: {e:?}"))?;
-
-    Ok(())
+    // Our guests take the time over the control plane; none listens on libkrun's timesync
+    // port, so its per-minute datagram only ever came back as a reset.
+    Ok(device.timesync(false))
 }
 
 /// Attach the user-mode NAT NIC: a virtio-net device whose backend is a vfkit-style UNIX
@@ -572,24 +632,22 @@ fn add_vsock(vmr: &mut VmResources, vsock: &VsockSpec) -> Result<()> {
 /// established lazily when the guest activates the device during boot, so gvproxy only needs
 /// to be listening on the socket by then — the supervisor guarantees that ordering.
 ///
-/// `dhcp_client = true` adds `KRUN_DHCP=1` to the cmdline; that drives libkrun's *own* guest
-/// init (the L1/krun-guest path). A stock Fedora guest ignores it and runs DHCP via
-/// NetworkManager against gvproxy's built-in DHCP server either way.
-fn add_net(vmr: &mut VmResources, net: &NetSpec) -> Result<()> {
-    vmr.add_network_interface(NetworkInterfaceConfig {
-        iface_id: "eth0".to_string(),
-        backend: VirtioNetBackend::UnixgramPath(
-            net.gvproxy_socket.clone(),
-            /* vfkit magic */ true,
-        ),
-        mac: net.mac.unwrap_or(NET_GUEST_MAC),
-        features: NET_COMPAT_FEATURES,
+fn net_device(net: &NetSpec) -> Result<NetDevice> {
+    let path = net.gvproxy_socket.to_str().with_context(|| {
+        format!(
+            "gvproxy socket path is not valid UTF-8: {:?}",
+            net.gvproxy_socket
+        )
+    })?;
+    NetDevice::new_unixgram_path(
+        "eth0",
+        path,
+        &net.mac.unwrap_or(NET_GUEST_MAC),
+        NET_COMPAT_FEATURES,
         // gvproxy builds every frame in its own gVisor stack, so the guest can skip re-summing.
-        rx_csum_valid: true,
-    })
-    .map_err(|e| anyhow!("add_network_interface(gvproxy): {e:?}"))?;
-    vmr.dhcp_client = true;
-    Ok(())
+        NetFlags::VFKIT | NetFlags::CSUM_VALID,
+    )
+    .map_err(|e| anyhow!("virtio-net (gvproxy): {e:?}"))
 }
 
 /// Detect the disk image format by its magic, so a user needn't tag `--disk foo.qcow2` (M10
@@ -598,36 +656,29 @@ fn add_net(vmr: &mut VmResources, net: &NetSpec) -> Result<()> {
 /// surfaces a genuine open failure later). Auto-detect supersedes the design's planned explicit
 /// `:qcow2` suffix: it removes the silent-corruption footgun of opening a qcow2 as raw, and a real
 /// qcow2 always carries the magic so detection is unambiguous.
-fn detect_image_type(path: &std::path::Path) -> ImageType {
+fn detect_image_type(path: &std::path::Path) -> DiskFormat {
     use std::io::Read;
     const QCOW_MAGIC: [u8; 4] = [0x51, 0x46, 0x49, 0xfb]; // "QFI\xfb"
     let mut buf = [0u8; 4];
     match std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut buf)) {
-        Ok(()) if buf == QCOW_MAGIC => ImageType::Qcow2,
-        _ => ImageType::Raw,
+        Ok(()) if buf == QCOW_MAGIC => DiskFormat::Qcow2,
+        _ => DiskFormat::Raw,
     }
 }
 
-fn add_disk(vmr: &mut VmResources, disk: &DiskSpec) -> Result<()> {
+/// A virtio-blk device on `disk`. libkrun picks write-back caching for an image file.
+fn block_device(disk: &DiskSpec) -> Result<BlockDevice> {
     let format = detect_image_type(&disk.path);
     let path = disk
         .path
         .to_str()
-        .with_context(|| format!("disk path is not valid UTF-8: {:?}", disk.path))?
-        .to_string();
+        .with_context(|| format!("disk path is not valid UTF-8: {:?}", disk.path))?;
 
-    vmr.add_block_device(BlockDeviceConfig {
-        block_id: disk.id.clone(),
-        cache_type: CacheType::Writeback,
-        disk_image_path: path,
-        disk_image_format: format,
-        is_disk_read_only: disk.read_only,
-        direct_io: false,
-        sync_mode: SyncMode::Full,
-    })
-    .map_err(|e| anyhow!("add_block_device({}): {e:?}", disk.id))?;
-
-    Ok(())
+    let mut device = BlockDevice::new(&disk.id, path, format)
+        .map_err(|e| anyhow!("virtio-blk {}: {e:?}", disk.id))?;
+    device.set_read_only(disk.read_only);
+    device.set_sync_mode(SyncMode::Full);
+    Ok(device)
 }
 
 /// Build and run the microVM. Blocks indefinitely running our own event loop.
@@ -637,7 +688,7 @@ fn add_disk(vmr: &mut VmResources, disk: &DiskSpec) -> Result<()> {
 /// in-process with the UI (decision D3). So on a clean shutdown this never returns;
 /// it returns `Err` only on a build/run failure.
 pub fn boot(spec: &VmSpec) -> Result<()> {
-    let vmr = build_resources(spec).context("building VmResources")?;
+    let (vmr, devices) = build_resources(spec).context("building VmResources")?;
 
     // Guest shutdown eventfd + SIGTERM/SIGINT handlers (graceful power-off request).
     let shutdown_efd = crate::shutdown::install().context("installing shutdown handler")?;
@@ -684,6 +735,7 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         Some(restart_efd),
         Some(wake_efd),
         worker_tx,
+        Box::new(devices),
         spec.restore_file.clone(),
     ) {
         Ok(vmm) => vmm,
@@ -1185,7 +1237,7 @@ fn serve_balloon_conn(
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageType, detect_image_type};
+    use super::{DiskFormat, detect_image_type};
     use crate::config::{BootSource, VmSpec};
     use std::path::PathBuf;
 
@@ -1236,7 +1288,7 @@ mod tests {
             "io.systemd.credential:vmm.notify_socket=vsock:2:1234".to_string(),
         ];
 
-        let vmr = super::build_resources(&spec).expect("build_resources");
+        let (vmr, _) = super::build_resources(&spec).expect("build_resources");
 
         assert_eq!(
             vmr.smbios_oem_strings.as_deref(),
@@ -1251,7 +1303,7 @@ mod tests {
     /// a gratuitous change to the stock-baseline guest for a feature it never asked for.
     #[test]
     fn no_oem_strings_means_no_type_11_structure() {
-        let vmr = super::build_resources(&efi_spec()).expect("build_resources");
+        let (vmr, _) = super::build_resources(&efi_spec()).expect("build_resources");
         assert!(
             vmr.smbios_oem_strings.is_none(),
             "an empty OEM-string list must not emit a Type 11 structure"
@@ -1301,13 +1353,13 @@ mod tests {
         std::fs::write(&raw, [0u8; 16]).unwrap(); // zeros (a fresh sparse raw)
         std::fs::write(&tiny, [0x51, 0x46]).unwrap(); // <4 bytes — short read
 
-        assert!(matches!(detect_image_type(&qcow), ImageType::Qcow2));
-        assert!(matches!(detect_image_type(&raw), ImageType::Raw));
-        assert!(matches!(detect_image_type(&tiny), ImageType::Raw));
+        assert!(matches!(detect_image_type(&qcow), DiskFormat::Qcow2));
+        assert!(matches!(detect_image_type(&raw), DiskFormat::Raw));
+        assert!(matches!(detect_image_type(&tiny), DiskFormat::Raw));
         // A missing file falls back to raw (libkrun surfaces the real open error).
         assert!(matches!(
             detect_image_type(&dir.join("nope")),
-            ImageType::Raw
+            DiskFormat::Raw
         ));
 
         std::fs::remove_dir_all(&dir).ok();

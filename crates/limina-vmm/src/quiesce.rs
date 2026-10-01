@@ -24,7 +24,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use vmm::Vmm;
+use krun_lib::vmm::Vmm;
 
 /// How far the guest got. The caller decides what each outcome is worth to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

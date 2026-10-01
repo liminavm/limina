@@ -48,7 +48,10 @@ fn a_suspend_completed_after_host_wake_is_woken() {
             .with_net()
             .with_supervisor_log()
             .with_env("LIMINA_HOST_SLEEP_SEAM", "1")
-            .with_env("RUST_LOG", "warn,limina_vmm=info,limina=info,krun_vmm=info"),
+            .with_env(
+                "RUST_LOG",
+                "warn,limina_vmm=info,limina=info,krun::vmm=info",
+            ),
         Err(e) => {
             eprintln!("SKIPPED a_suspend_completed_after_host_wake_is_woken: {e}");
             return;

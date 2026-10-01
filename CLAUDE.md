@@ -389,7 +389,7 @@ directly observed.
   `LIMINA_NET`/`LIMINA_CPUS`/`LIMINA_RAM_MIB`/`LIMINA_EXTRA_ARGS`; the disk boots **in place**, so
   clone it first to keep it pristine — `cp -c` makes that free (APFS CoW, instant, no space).
   **Always boot a poke VM with the debug channels already open**:
-  `RUST_LOG=warn,limina=info,krun_vmm=info,krun_devices=info`, `LIMINA_POINTER_WIRE_TRACE=1`, and
+  `RUST_LOG=warn,limina=info,krun::vmm=info,krun_devices=info`, `LIMINA_POINTER_WIRE_TRACE=1`, and
   `LIMINA_WINDOW_CAPTURE=<file>.png` (add the subsystem's own trace, e.g. `LIMINA_DISPLAY_TRACE`)
   so an incident caught in passing is already recorded. **Keep the bare leading `warn`.** A
   directive list with no bare level filters every unlisted crate to *off*, not to its default — so

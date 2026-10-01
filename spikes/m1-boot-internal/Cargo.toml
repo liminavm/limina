@@ -3,6 +3,12 @@
 # utils) directly, with NO C ABI. Path-deps into the vendored workspace; the empty
 # [workspace] table detaches this crate so Cargo doesn't walk up into either the
 # limina root or third_party/libkrun's own workspace.
+#
+# Written against libkrun's API before devices moved out of VmResources into a device manager,
+# so it no longer builds on the current tree. To rerun it, check out libkrun's
+# `pre-rebase-2026-10-01` tag (third_party/libkrun) and point `vmm` back at
+# `{ package = "krun-vmm", path = "../../third_party/libkrun/src/vmm" }`. The manifest points at
+# the current crate only so that the workspace-wide `cargo fmt` can still load it.
 [package]
 name = "m1-boot-internal"
 version = "0.0.0"
@@ -14,7 +20,7 @@ name = "boot-internal"
 path = "src/main.rs"
 
 [dependencies]
-vmm = { package = "krun-vmm", path = "../../third_party/libkrun/src/vmm", features = ["blk"] }
+vmm = { package = "libkrun", path = "../../third_party/libkrun/src/libkrun", features = ["blk"] }
 devices = { package = "krun-devices", path = "../../third_party/libkrun/src/devices", features = ["blk"] }
 polly = { package = "krun-polly", path = "../../third_party/libkrun/src/polly" }
 utils = { package = "krun-utils", path = "../../third_party/libkrun/src/utils" }

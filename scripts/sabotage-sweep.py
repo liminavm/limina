@@ -410,50 +410,50 @@ SABOTAGES = [
     ),
     (
         'a register count sizes its own allocation',
-        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/snapshot.rs',
         """    let n = bounded_count(r, MAX_VCPU_REGS, "register")?;""",
         """    let n = r.u32()? as usize;""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'head_counts_are_bounded_before_they_allocate',
     ),
     (
         'a queue count sizes its own allocation',
-        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/snapshot.rs',
         """        let q_count = bounded_count(&mut r, MAX_QUEUES, "queue")?;""",
         """        let q_count = r.u32()? as usize;""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'head_counts_are_bounded_before_they_allocate',
     ),
     (
         'a snapshot chunk sizes the frame buffers unchecked',
-        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/snapshot.rs',
         """                    if chunk == 0 || chunk > CHUNK_SIZE as u64 {""",
         """                    if chunk == 0 {""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'a_chunk_past_the_writers_is_refused_before_it_sizes_a_frame',
     ),
     (
         'a snapshot region may wrap the address space',
-        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/snapshot.rs',
         """                    if gpa.checked_add(len).is_none() {""",
         """                    if gpa.checked_add(len).is_none() && false {""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'a_region_past_the_top_of_the_address_space_is_refused',
     ),
     (
         'the head CRC is not enforced',
-        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/snapshot.rs',
         """    if crc32(raw.slice(0, head_end)) != stored && !cfg!(fuzzing) {""",
         """    if crc32(raw.slice(0, head_end)) != stored && cfg!(fuzzing) {""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'snapshot_rejects_head_corruption',
     ),
     (
         'a frame CRC is not enforced',
-        'third_party/libkrun/src/vmm/src/snapshot.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/snapshot.rs',
         """                            if crc32(data) != f.crc && !cfg!(fuzzing) {""",
         """                            if crc32(data) != f.crc && cfg!(fuzzing) {""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'snapshot_rejects_frame_corruption',
     ),
     (
@@ -681,7 +681,7 @@ SABOTAGES = [
     ),
     (
         'a band disarm does not claim the move first',
-        'third_party/libkrun/src/vmm/src/macos/vcpu_sched.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/macos/vcpu_sched.rs',
         """        if self
             .word
             .compare_exchange(seen, hold | DISARMING, Ordering::Acquire, Ordering::Relaxed)
@@ -691,26 +691,26 @@ SABOTAGES = [
         }
         if os.set_timeshare(port) {""",
         """        if os.set_timeshare(port) {""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'loom:macos::vcpu_sched::loom_model::the_sampler_and_the_guard_decide_at_once',
     ),
     (
         'a band disarm acts on the hold it finds, not the one it judged',
-        'third_party/libkrun/src/vmm/src/macos/vcpu_sched.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/macos/vcpu_sched.rs',
         """    fn disarm<O: BandOs>(&self, os: &O, port: u32, seen: u64) -> bool {
         if seen & PHASE != IN {""",
         """    fn disarm<O: BandOs>(&self, os: &O, port: u32, _seen: u64) -> bool {
         let seen = self.load();
         if seen & PHASE != IN {""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'loom:macos::vcpu_sched::loom_model::the_sampler_and_the_guard_decide_at_once',
     ),
     (
         'a new band hold is not told apart from the last',
-        'third_party/libkrun/src/vmm/src/macos/vcpu_sched.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/macos/vcpu_sched.rs',
         """        let hold = (seen & !PHASE) + (PHASE + 1);""",
         """        let hold = seen & !PHASE;""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'loom:macos::vcpu_sched::loom_model::the_sampler_and_the_guard_decide_at_once',
     ),
     (
@@ -723,19 +723,19 @@ SABOTAGES = [
     ),
     (
         'a vCPU in a WFx wait drops a Snapshot',
-        'third_party/libkrun/src/vmm/src/macos/vstate.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/macos/vstate.rs',
         """        (VcpuEvent::Snapshot(_), P::Parked) => A::Snapshot,""",
         """        (VcpuEvent::Snapshot(_), P::Parked) => A::Snapshot,
         (VcpuEvent::Snapshot(_), P::WfxWait) => A::Ignore,""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'macos::vstate::tests::every_park_site_answers_the_coordinator',
     ),
     (
         'a paused vCPU parks again for a Snapshot',
-        'third_party/libkrun/src/vmm/src/macos/vstate.rs',
+        'third_party/libkrun/src/libkrun/src/vmm/macos/vstate.rs',
         """        (VcpuEvent::Snapshot(_), P::Parked) => A::Snapshot,""",
         """        (VcpuEvent::Snapshot(_), P::Parked) => A::SnapshotAndPark,""",
-        'third_party/libkrun/src/vmm',
+        'third_party/libkrun/src/libkrun',
         'macos::vstate::tests::every_park_site_answers_the_coordinator',
     ),
     (

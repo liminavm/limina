@@ -22,7 +22,9 @@ license = "GPL-2.0-only WITH LicenseRef-limina-exception"
 
 [workspace.dependencies]
 # --- vendored libkrun internal crates (D2.1) ---
-vmm          = { package = "krun-vmm",     path = "third_party/libkrun/src/vmm" }
+# libkrun's own crate (lib name `krun`), which now holds the VMM as its `vmm` module and the
+# device builders as `api`. Renamed because limina-vmm has a `krun` module of its own.
+krun_lib     = { package = "libkrun",      path = "third_party/libkrun/src/libkrun" }
 devices      = { package = "krun-devices", path = "third_party/libkrun/src/devices" }
 polly        = { package = "krun-polly",   path = "third_party/libkrun/src/polly" }
 utils        = { package = "krun-utils",   path = "third_party/libkrun/src/utils" }
@@ -73,13 +75,13 @@ ciborium          = "0.2"
 
 # Override imago (libkrun's virtio-blk storage backend, a transitive crates.io dep) with our
 # fork (github.com/liminavm/imago, `limina` branch — the fork model; pinned by
-# third_party/manifest.toml, materialized by `cargo xtask vendor`). The delta stops a
-# tail-reaching discard from truncating the backing file, which otherwise shrinks a
-# fixed-capacity virtio-blk device's advertised capacity across a reboot and makes a guest
-# filesystem unmountable ("bad geometry"), and pins vm-memory to the stack's ^0.17. The [patch]
+# third_party/manifest.toml, materialized by `cargo xtask vendor`). The delta retries a
+# transient EFAULT on the guest-buffer data path: the worker briefly revokes its own mapping of
+# guest RAM while settling macOS memory-accounting ledgers, and a disk IO landing in that window
+# would otherwise surface to the guest as an IO error. The [patch]
 # lives here, in the workspace root that actually builds the graph (third_party is excluded from
 # the workspace, so libkrun's crates are path deps in *our* build). Audit status:
-# docs/upstreaming/ledger/imago.md; rationale in spikes/m10-disk-durability/RESULTS.md.
+# docs/upstreaming/ledger/imago.md.
 # The present path converts full frames per-pixel (readback presents: RGBA→BGRA swizzle
 # into the canvas). Unoptimized + debug-assert'd, that's ~60-100 ms per 2560×1440 frame —
 # it made every debug boot of the virgl tier look "slower than software-2D" (2026-07-28)

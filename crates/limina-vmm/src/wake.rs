@@ -19,7 +19,7 @@ use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use vmm::Vmm;
+use krun_lib::vmm::Vmm;
 
 use anyhow::{Result, anyhow};
 use utils::eventfd::{EFD_NONBLOCK, EventFd};

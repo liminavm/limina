@@ -42,6 +42,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use krun_lib::vmm;
 use vmm::Vmm;
 
 use crate::quiesce::{QuiesceRequest, Quiesced};

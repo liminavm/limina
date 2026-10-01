@@ -65,7 +65,10 @@ fn an_aborted_suspend_is_not_taken_for_parked() {
             .with_net()
             .with_supervisor_log()
             .with_env("LIMINA_HOST_SLEEP_SEAM", "1")
-            .with_env("RUST_LOG", "warn,limina_vmm=info,limina=info,krun_vmm=info"),
+            .with_env(
+                "RUST_LOG",
+                "warn,limina_vmm=info,limina=info,krun::vmm=info",
+            ),
         Err(e) => {
             eprintln!("SKIPPED an_aborted_suspend_is_not_taken_for_parked: {e}");
             return;

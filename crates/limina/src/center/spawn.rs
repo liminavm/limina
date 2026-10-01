@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn a_refused_resume_is_translated() {
-        let log = "ERROR krun_vmm::builder] restore refused: this VM's devices differ from the \
+        let log = "ERROR krun::vmm::builder] restore refused: this VM's devices differ from the \
                    ones it was suspended with (suspended with virtio-input @0xa009000 irq 48)\n";
         let hint = known_cause(log).expect("a refused resume must be recognised");
         assert!(hint.contains("--discard-suspend"), "{hint}");

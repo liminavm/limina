@@ -7,7 +7,7 @@
 //! ([`crate::snapshot`]) snapshots *immediately* — a running guest, no quiesce check, for the M9.1
 //! mechanism tests — the **bracket** performs the whole indivisible suspend operation the supervisor
 //! asks for: pulse the guest suspend button ([`crate::suspend::pulse`]), wait for the guest to
-//! s2idle-**quiesce** (every virtio device reset to `INIT`; the [`krun_vmm::Vmm::is_quiesced`]
+//! s2idle-**quiesce** (every virtio device reset to `INIT`; the [`krun_lib::vmm::Vmm::is_quiesced`]
 //! oracle), and only *then* snapshot — so we never capture a mid-flight machine that would wedge on
 //! restore. If the guest never quiesces within the timeout the bracket **aborts** (wakes the guest
 //! back out of s2idle and keeps running); the supervisor sees no exit-126 and reports the suspend
