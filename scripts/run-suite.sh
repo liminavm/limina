@@ -94,10 +94,19 @@ live_suite_pids() {
 }
 
 refuse_if_live() {
-    local pids
+    local pids pid cwd log
     if pids="$(live_suite_pids)" && [ -n "$pids" ]; then
-        echo "a suite is already running (pid(s): $pids) — attach with:" >&2
-        echo "  scripts/run-suite.sh --wait <its-logfile> ${pids%%$'\n'*}" >&2
+        # Host-wide on purpose: two suites overlap their timing-sensitive tests. But the run may
+        # belong to another checkout or worktree, so name which, and where it is logging.
+        echo "a suite is already running on this host (pid(s): $(echo $pids)):" >&2
+        for pid in $pids; do
+            cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+            log="$(lsof -a -p "$pid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p')"
+            echo "  pid $pid  in ${cwd:-?}  logging to ${log:-?}" >&2
+        done
+        pid="${pids%%$'\n'*}"
+        log="$(lsof -a -p "$pid" -d 1 -Fn 2>/dev/null | sed -n 's/^n//p')"
+        echo "attach with:  scripts/run-suite.sh --wait ${log:-<its-logfile>} $pid" >&2
         exit 2
     fi
 }

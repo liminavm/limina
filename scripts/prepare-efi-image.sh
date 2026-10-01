@@ -53,11 +53,20 @@ mkdir -p "$WORK"
 [[ -f "$IMAGE" ]]    || { echo "image not found: $IMAGE" >&2; exit 1; }
 [[ -f "$KERNEL" ]]   || { echo "16k kernel not found: $KERNEL (scripts/build-test-kernel.sh PAGESIZE=16k)" >&2; exit 1; }
 [[ -f "$FIRMWARE" ]] || { echo "EFI firmware not found: $FIRMWARE" >&2; exit 1; }
+IMAGE="$(cd "$(dirname "$IMAGE")" && pwd)/$(basename "$IMAGE")"
 
-SSH=(ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+# Other checkouts, worktrees and sessions run VMs on this host. Everything below touches only
+# this script's own VM: a port picked for it (never "whatever answers on 2222"), and the worker
+# whose command line names this disk.
+SSH_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+SSH=(ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
      -o BatchMode=yes -o ConnectTimeout=4 claude@127.0.0.1)
 
-kill_vm() { pkill -9 limina-vmm 2>/dev/null || true; lsof -ti tcp:2222 2>/dev/null | xargs -r kill -9 2>/dev/null || true; }
+our_vmm() { pgrep -f "limina-vmm.*--disk $IMAGE" 2>/dev/null; }
+kill_vm() {
+  [ -n "${LIMINA_PID:-}" ] && kill -9 "$LIMINA_PID" 2>/dev/null || true
+  our_vmm | xargs -r kill -9 2>/dev/null || true
+}
 trap kill_vm EXIT
 
 wait_ssh() {  # $1 = timeout seconds
@@ -71,7 +80,7 @@ wait_ssh() {  # $1 = timeout seconds
 
 wait_down() {  # wait for limina-vmm to exit (guest rebooted → VMM tears down)
   local deadline=$(( SECONDS + ${1:-90} ))
-  while (( SECONDS < deadline )); do pgrep -x limina-vmm >/dev/null || return 0; sleep 3; done
+  while (( SECONDS < deadline )); do our_vmm >/dev/null || return 0; sleep 3; done
   return 1
 }
 
@@ -79,7 +88,7 @@ echo "==> [1/2] prep: set SELINUX=permissive + /.autorelabel + serial console on
 kill_vm
 "$LIMINA" --vmm-bin "$VMM" --kernel "$KERNEL" \
   --cmdline "root=/dev/vda3 rootflags=subvol=root rootfstype=btrfs rw selinux=0 console=ttyAMA0" \
-  --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --gpu-software-2d >"$WORK/prep.log" 2>&1 &
+  --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --ssh-port "$SSH_PORT" --gpu-software-2d >"$WORK/prep.log" 2>&1 &
 LIMINA_PID=$!
 if ! wait_ssh 90; then
   if ! kill -0 "$LIMINA_PID" 2>/dev/null; then
@@ -101,7 +110,7 @@ echo "==> [2/2] relabel + converge: one EFI boot — fixfiles relabels, the gues
 echo "         the supervisor relaunches the worker until it converges to sshd (/.autorelabel gone)"
 kill_vm
 "$LIMINA" --vmm-bin "$VMM" --firmware "$FIRMWARE" \
-  --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --gpu-software-2d \
+  --disk "$IMAGE" --cpus 4 --ram-mib 4096 --net --ssh-port "$SSH_PORT" --gpu-software-2d \
   --console "$WORK/relabel.log" >"$WORK/relabel-worker.log" 2>&1 &
 LIMINA_PID=$!
 # The relabel reboot no longer tears the VM down — limina relaunches the worker on a guest reboot
