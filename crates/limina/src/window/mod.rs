@@ -41,6 +41,7 @@ use objc2_quartz_core::{CALayer, CATransaction};
 
 pub(crate) mod absfit;
 pub(crate) mod arrangement;
+mod button_pace;
 mod capture_tap;
 mod copy;
 mod cursor;
@@ -2250,7 +2251,6 @@ pub fn run(
         ));
     }
     let _capture_tap = capture_tap::install(
-        conn.clone(),
         captured.clone(),
         input_state.clone(),
         soft_kbd_grab,
@@ -3932,6 +3932,7 @@ pub fn run(
             // uncaptured pointer's, so it should be known before the pointer first needs it.
             timer_input.probe_mapping(&timer_view);
             timer_input.touchpad_watchdog();
+            timer_input.flush_buttons();
         }
 
         // Frame apply: normally event-driven (dispatch from the reader thread); this is

@@ -25,7 +25,6 @@
 //! ([`prompt_accessibility_once`]).
 
 use std::cell::{Cell, RefCell};
-use std::os::fd::RawFd;
 use std::os::raw::c_void;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -40,19 +39,15 @@ use objc2_core_graphics::{
 };
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSString};
 
-use limina_input::InputEvent;
 use limina_input::auxkey::{
     GrabMode, NX_SUBTYPE_AUX_CONTROL_BUTTONS, decode_aux_data1, nx_key_to_linux,
     route_aux_event_key,
 };
-use limina_input::constants::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, EV_KEY};
+use limina_input::constants::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
 
-use super::WorkerConn;
 use super::fit;
 use super::grab_policy::{self, Release};
-use super::input::{
-    HostShortcut, InputState, RevealSrc, UngrabAction, match_host_shortcut, send_event,
-};
+use super::input::{HostShortcut, InputState, RevealSrc, UngrabAction, match_host_shortcut};
 
 type CFMachPortRef = *mut c_void;
 type CFRunLoopSourceRef = *mut c_void;
@@ -156,7 +151,6 @@ static TAP_PORT: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 /// the main run loop, so the `Cell` accumulators are safe.
 struct TapCtx {
     captured: Arc<AtomicBool>,
-    conn: Arc<WorkerConn>,
     /// The shared input translator: keyboard forwarding, capture toggles
     /// ([`InputState::toggle_capture`] — host-cursor transition, release warp, modifier
     /// reconciliation), and the Ctrl+Option ungrab-chord state all live there, so the tap
@@ -537,20 +531,6 @@ extern "C" fn tap_callback(
     // via the virtual cursor in the capture window. The stepping, mapping, and edge-pressure
     // forwarding all live in `InputState::captured_step_and_emit`, shared with the degraded
     // no-tap path, so the tap and the monitor cannot map differently by construction.
-    let io = ctx.conn.io();
-    let fd: RawFd = io.ptr_fd();
-    let send = |ev: InputEvent| {
-        if super::input::wire_trace() {
-            eprintln!(
-                "[WIRE] t={} dev=abs type={} code={} value={} (tap)",
-                super::input::wire_now_us(),
-                ev.type_,
-                ev.code,
-                ev.value
-            );
-        }
-        send_event(fd, ev)
-    };
     // A press re-sends the position first — same staleness guard as the uncaptured path.
     // Buttons also disarm the ungrab chord (clicking mid-chord = interacting, not ungrabbing).
     let send_click = |btn: u16, down: bool| {
@@ -558,8 +538,8 @@ extern "C" fn tap_callback(
             ctx.input.cancel_ungrab_chord();
             let _ = ctx.input.captured_step_and_emit(0.0, 0.0, &ctx.view);
         }
-        send(InputEvent::new(EV_KEY, btn, i32::from(down)));
-        send(InputEvent::syn());
+        // Paced: two clicks closer than libinput's bounce window are one click to the guest.
+        ctx.input.send_button(btn, down);
     };
     let from_trackpad = geti(FIELD_MOUSE_SUBTYPE) == MOUSE_SUBTYPE_TOUCH;
     match etype {
@@ -1359,11 +1339,10 @@ pub(crate) fn trace_ms() -> f64 {
 /// if Accessibility permission is missing (capture then falls back to the local-monitor warp
 /// path — leaky, but it still does *something* — and [`retry_install`] can pick the tap up
 /// later). Call once, on the main thread, before the app run loop starts.
-// Six plumbing parameters, each a distinct shared handle the callback needs for the app's
+// Seven plumbing parameters, each a distinct shared handle the callback needs for the app's
 // lifetime; bundling them into a struct would just move the same list one line up.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn install(
-    conn: Arc<WorkerConn>,
     captured: Arc<AtomicBool>,
     input: Rc<InputState>,
     soft_kbd_grab: bool,
@@ -1374,7 +1353,6 @@ pub(crate) fn install(
 ) -> bool {
     let ctx = Box::into_raw(Box::new(TapCtx {
         captured,
-        conn,
         input,
         soft_enabled: soft_kbd_grab,
         soft_muted: Cell::new(false),

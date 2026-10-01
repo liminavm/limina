@@ -719,6 +719,9 @@ pub struct InputState {
     /// The Input menu's "Raw Trackpad While Captured" switch; raw mode is on while it is and
     /// the pointer is captured ([`Self::sync_raw_trackpad`]).
     raw_trackpad: Cell<bool>,
+    /// The tablet's button events, spaced so the guest never reads two clicks as one bounce
+    /// ([`super::button_pace`]).
+    button_pace: RefCell<super::button_pace::ButtonPacer>,
     /// The local touch and resting counts the last `[TOUCH]` trace line reported (it logs
     /// changes only).
     touch_trace_count: Cell<(usize, usize)>,
@@ -956,6 +959,7 @@ impl InputState {
             scroll_x: Cell::new(ScrollAxis::default()),
             trackpad: RefCell::new(TrackpadSeq::new(crate::hosttrackpad::geometry())),
             raw_trackpad: Cell::new(false),
+            button_pace: RefCell::new(super::button_pace::ButtonPacer::default()),
             touch_trace_count: Cell::new((0, 0)),
             trackpad_record: RefCell::new(TrackpadRecorder::from_env()),
             overlay_active,
@@ -2058,8 +2062,7 @@ impl InputState {
             // its position with the press (same staleness guard as the uncaptured path below).
             self.buttons.set(self.buttons.get().pressed(btn_bit(btn)));
             self.send_captured_pos(view);
-            self.send_ptr(InputEvent::new(EV_KEY, btn, 1));
-            self.send_ptr(InputEvent::syn());
+            self.send_button(btn, true);
         } else if self.target_of(event, view).inside {
             // The tap, when installed, owns clicks and logs each one with the grab's verdict
             // (`capture_tap::uncaptured_edges`). Without it there is no grab to take at all —
@@ -2075,8 +2078,7 @@ impl InputState {
             // Send the position with the press so the guest clicks where the host did,
             // even if the last forwarded motion is stale (pointer re-entered the view).
             self.emit_motion(event, view);
-            self.send_ptr(InputEvent::new(EV_KEY, btn, 1));
-            self.send_ptr(InputEvent::syn());
+            self.send_button(btn, true);
         }
         false
     }
@@ -2086,8 +2088,7 @@ impl InputState {
         let (next, forward) = self.buttons.get().released(btn_bit(btn));
         self.buttons.set(next);
         if forward {
-            self.send_ptr(InputEvent::new(EV_KEY, btn, 0));
-            self.send_ptr(InputEvent::syn());
+            self.send_button(btn, false);
         }
         false
     }
@@ -3554,6 +3555,32 @@ impl InputState {
         // reboot relaunch can't close (or let the OS reuse) the fd mid-write.
         let io = self.conn.io();
         send_event(io.kbd_fd(), ev);
+    }
+
+    /// A tablet button transition, paced ([`super::button_pace`]): now, or from the render
+    /// tick ([`Self::flush_buttons`]) once the button's last transition is far enough back.
+    pub(crate) fn send_button(&self, btn: u16, down: bool) {
+        let ready = self
+            .button_pace
+            .borrow_mut()
+            .push(btn, down, std::time::Instant::now());
+        self.send_buttons(&ready);
+    }
+
+    /// Send the paced button transitions that are due. Called from the render tick.
+    pub fn flush_buttons(&self) {
+        if !self.button_pace.borrow().pending() {
+            return;
+        }
+        let ready = self.button_pace.borrow_mut().due(std::time::Instant::now());
+        self.send_buttons(&ready);
+    }
+
+    fn send_buttons(&self, ready: &[(u16, bool)]) {
+        for &(btn, down) in ready {
+            self.send_ptr(InputEvent::new(EV_KEY, btn, i32::from(down)));
+            self.send_ptr(InputEvent::syn());
+        }
     }
 
     /// Send to the absolute-pointer device — both modes drive it now (captured mode moves a

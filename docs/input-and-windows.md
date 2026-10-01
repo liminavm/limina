@@ -553,6 +553,13 @@ configuration back (`crates/limina/src/hostmods.rs`, the ByHost global domain vi
 - **Synthetic events are a poor oracle here.** A cursor warp opens a suppression window, and posting
   synthetic events needs Accessibility for the posting process; both show up as "the fix does not
   work" against working code. For anything the user must perceive, ask them.
+- **The guest debounces the tablet's buttons.** libinput treats a pointer device that is neither
+  virtual nor a touchpad as a mechanical switch: a release followed by a press and a release
+  within 25 ms is contact bounce, and the second click is dropped
+  (`libinput-plugin-button-debounce.c`). macOS sends a double-tap's second click 0.1–15 ms after
+  the first one's release, so double-taps double-clicked about one time in ten. Every tablet
+  button transition goes through `window/button_pace.rs`, which spaces each button's
+  transitions 30 ms apart and lets the render tick send the late ones.
 - **The guest is authoritative about the guest.** Which display its cursor is on, how its monitors
   are arranged, what scale it chose — all of it is the compositor's to decide and ours to be told.
   Every host-side inference of one of these has eventually been wrong.
