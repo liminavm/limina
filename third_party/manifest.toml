@@ -53,8 +53,8 @@ rev = "e04b8ec772b51d7e5bfcab83f36e01a2cd6952c1"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
-rev = "07d6cad32740126c60a47b5848c9d1d4d11ff560"
-base = "418f2963a15"
+rev = "285f2e97a415ebdd8262d8719b4b209f56013c17"
+base = "ab0ab2209c4"
 
 # The GUEST venus Mesa (task #11 — same liminavm/mesa repo, its own branch). NOT vendored by
 # `cargo xtask vendor`: the working checkout is a worktree at /Volumes/mesa-cs/mesa-guest (same

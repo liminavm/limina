@@ -1,5 +1,12 @@
 # The KosmicKrisp command-allocator pool, measured
 
+**Status: the pool is not carried on `limina-kk` any more.** Upstream KosmicKrisp now records one
+MTL4 command buffer per `VkCommandBuffer` from per-command-pool allocators that are never reset
+(mesa `0126f4388a5`), so the lifetime rule this pool enforced has no counterpart to guard. The
+encoder guard is carried; its liveness line is `[LIMINA-KK-GUARD]`, paced by compute-encoder
+closes. `record-pool.sh` records both tags. The memory cost of never resetting is owed a
+measurement.
+
 Instrumentation raised for the dogfood SIGSEGV that has now killed `limina-vmm` six times: a
 store through a pointer AGX read out of its own compute-context state, reached from a guest GL
 texture upload (`vrend … transfer write` → zink `zink_copy_image_buffer` →
