@@ -37,6 +37,9 @@ Cargo.lock.orig
 !/third_party/manifest.toml
 /vendor-build
 
+# Linked worktrees (`cargo xtask worktree new`): each is a checkout of its own, nested here.
+/.claude/worktrees/
+
 # Screenshots keep landing at the repo root (Limina.HEIC and friends)
 *.HEIC
 *.heic

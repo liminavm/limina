@@ -10,9 +10,9 @@
 //! any pin is unpushed, and the limina pre-push hook runs it on every commit being published.
 //!
 //! "Pushed" means the rev is an ancestor of the fork's `branch` on its remote. A rev reachable
-//! only through some other remote ref (a backup tag after a rewrite, a side branch) is still
-//! fetchable, so the gate lets it through — with a warning, because the manifest's `branch` then
-//! no longer describes the pin.
+//! only through some other remote ref (a backup tag after a rewrite, a side branch) is fetchable,
+//! but the gate refuses it all the same: the `branch` a manifest names is where our work lives,
+//! and a pin off it is work that branch does not carry.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,7 +23,7 @@ use crate::git;
 use crate::manifest::{Dep, MANIFEST, Manifest};
 
 pub struct Opts {
-    /// Exit nonzero unless every pin is fetchable from its remote.
+    /// Exit nonzero unless every pin is on its manifest branch on the remote.
     pub check: bool,
     /// Read the committed manifest from this commit instead of the working tree.
     pub at: Option<String>,
@@ -33,10 +33,13 @@ pub struct Opts {
 
 enum Remote {
     Pushed,
-    /// On the remote, but only through another ref (named here) than the manifest's branch:
-    /// anyone can still vendor it, so the gate lets it through, but the manifest's `branch`
-    /// no longer describes the pin — typically a branch rewritten after a backup tag was cut.
-    Elsewhere(String),
+    /// On the remote, but only through another ref (`name`) than the manifest's branch —
+    /// typically a branch rewritten after a backup tag was cut, or work left on a side branch.
+    /// Fetchable, and still refused: the branch is meant to carry the work. `tip` as below.
+    Elsewhere {
+        name: String,
+        tip: Option<String>,
+    },
     /// Not on the remote at all; `tip` is the branch's head, when it could be read.
     NotPushed {
         tip: Option<String>,
@@ -94,7 +97,7 @@ pub fn pins(root: &Path, opts: &Opts) -> Result<()> {
     print_table(&what, &rows);
     let unresolved = print_plan(&rows);
     if opts.check && unresolved > 0 {
-        bail!("{unresolved} pin(s) are not known to be fetchable from their remote");
+        bail!("{unresolved} pin(s) are not known to be on their manifest branch");
     }
     Ok(())
 }
@@ -175,7 +178,7 @@ fn fetch_check(tree: &Path, repo: &str, branch: &str, rev: &str) -> Remote {
         return Remote::Pushed;
     }
     match on_other_ref(tree, repo, rev) {
-        Some(name) => Remote::Elsewhere(name),
+        Some(name) => Remote::Elsewhere { name, tip },
         None => Remote::NotPushed { tip },
     }
 }
@@ -233,7 +236,10 @@ fn tracking_check(tree: &Path, repo: &str, branch: &str, rev: &str) -> Remote {
     if refs.iter().any(|r| r.ends_with(&format!("/{branch}"))) {
         Remote::Pushed
     } else if let Some(other) = refs.first() {
-        Remote::Elsewhere(other.to_string())
+        Remote::Elsewhere {
+            name: other.to_string(),
+            tip: None,
+        }
     } else {
         Remote::Unknown("in no fetched remote ref (offline check)".into())
     }
@@ -311,7 +317,7 @@ fn print_table(what: &str, rows: &[Row]) {
         };
         let remote = match &r.remote {
             Remote::Pushed => "pushed".to_string(),
-            Remote::Elsewhere(name) => format!("on {name}, NOT {}", r.branch),
+            Remote::Elsewhere { name, .. } => format!("NOT on {} (only {name})", r.branch),
             Remote::NotPushed { .. } => "NOT PUSHED".to_string(),
             Remote::Unknown(why) => format!("UNKNOWN ({why})"),
         };
@@ -328,26 +334,14 @@ fn print_table(what: &str, rows: &[Row]) {
 }
 
 /// Print what publishing would take. Returns the number of pins the gate refuses: everything not
-/// fetchable from its remote. A pin that is fetchable through another ref than its manifest
-/// branch only warns — nobody is blocked from vendoring it.
+/// known to be on its manifest branch.
 fn print_plan(rows: &[Row]) -> usize {
-    for r in rows {
-        if let Remote::Elsewhere(name) = &r.remote {
-            println!(
-                "warning: {}: {} is fetchable only through {name}, not the manifest's branch {} — \
-                 the `branch` field no longer describes this pin",
-                r.label,
-                short(&r.rev),
-                r.branch
-            );
-        }
-    }
     let open: Vec<&Row> = rows
         .iter()
-        .filter(|r| matches!(r.remote, Remote::NotPushed { .. } | Remote::Unknown(_)))
+        .filter(|r| !matches!(r.remote, Remote::Pushed))
         .collect();
     if open.is_empty() {
-        println!("every pin is fetchable from its remote.");
+        println!("every pin is on its remote branch.");
         return 0;
     }
     println!("to publish — forks first, in this order, then limina (by SHA, never a branch tip):");
@@ -373,8 +367,16 @@ fn print_plan(rows: &[Row]) -> usize {
             );
             continue;
         };
+        if let Remote::Elsewhere { name, .. } = &r.remote {
+            println!(
+                "  (note) {}: {} is on the remote only through {name} — it belongs on {}",
+                r.label,
+                short(&r.rev),
+                r.branch
+            );
+        }
         let tip = match &r.remote {
-            Remote::NotPushed { tip } => tip.as_deref(),
+            Remote::NotPushed { tip } | Remote::Elsewhere { tip, .. } => tip.as_deref(),
             _ => None,
         };
         match tip {

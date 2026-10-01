@@ -104,7 +104,9 @@ A misspelt dependency or key is an error, not a silent no-op.
 `cargo xtask pins` shows each pin, the tree standing in for it, and whether its remote has
 it, then prints the fork pushes that would publish it — in order, by SHA. The pre-push hook
 runs `cargo xtask pins --check` on every commit being pushed that touched the manifest, so a
-limina commit naming revs nobody can fetch is refused rather than published.
+limina commit naming revs nobody can fetch is refused rather than published. "Pushed" means on
+the fork's manifest `branch`: a rev reachable only through a backup tag or a side branch is
+refused too, because the branch is where our work is meant to live.
 
 ### Worktrees
 
