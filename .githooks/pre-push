@@ -23,13 +23,19 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     [ "$local_sha" = "$zero" ] && continue          # deleting a remote ref publishes nothing
     if [ "$remote_sha" != "$zero" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
         range=("$remote_sha..$local_sha")
-    else
+    elif [ -n "$(git for-each-ref --count=1 refs/remotes)" ]; then
         # A new branch, or a remote tip this clone has never seen: everything no remote has.
         range=("$local_sha" --not --remotes)
+    else
+        # No remote refs at all (a first push to a fresh remote): "everything no remote has" is
+        # all of history, whose old pins were rewritten away long ago. Check the tip only.
+        range=()
     fi
-    while read -r c; do
-        [ -n "$c" ] && commits+=("$c")
-    done < <(git rev-list "${range[@]}" -- third_party/manifest.toml)
+    if [ "${#range[@]}" -gt 0 ]; then
+        while read -r c; do
+            [ -n "$c" ] && commits+=("$c")
+        done < <(git rev-list "${range[@]}" -- third_party/manifest.toml)
+    fi
     commits+=("$local_sha")
 done
 [ "${#commits[@]}" -eq 0 ] && exit 0

@@ -94,9 +94,12 @@ checkout = "~/src/virglrs"            # build this tree as it stands, whatever i
 ```
 
 `source` never changes what is built, only where it is fetched from — the container builds
-(firmware, kernel) mount the repository read-only for it. `checkout` builds a tree's HEAD;
-for a `third_party/` dependency `vendor` makes it a symlink, and refuses to replace a real
-tree. A misspelt dependency or key is an error, not a silent no-op.
+(firmware, kernel) mount the repository read-only for it. `checkout` builds a tree as it
+stands; for a `third_party/` dependency `vendor` makes it a symlink, and refuses to replace a
+real tree. **"As it stands" differs by build:** the cargo path deps and the host Mesa compile
+the working tree, uncommitted edits included, but the firmware and kernel containers fetch the
+tree's HEAD *commit* — commit an edk2 or kernel change before building it, or it does not ship.
+A misspelt dependency or key is an error, not a silent no-op.
 
 `cargo xtask pins` shows each pin, the tree standing in for it, and whether its remote has
 it, then prints the fork pushes that would publish it — in order, by SHA. The pre-push hook
