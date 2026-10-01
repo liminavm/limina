@@ -1,11 +1,37 @@
 # The KosmicKrisp command-allocator pool, measured
 
-**Status: the pool is not carried on `limina-kk` any more.** Upstream KosmicKrisp now records one
-MTL4 command buffer per `VkCommandBuffer` from per-command-pool allocators that are never reset
-(mesa `0126f4388a5`), so the lifetime rule this pool enforced has no counterpart to guard. The
-encoder guard is carried; its liveness line is `[LIMINA-KK-GUARD]`, paced by compute-encoder
-closes. `record-pool.sh` records both tags. The memory cost of never resetting is owed a
-measurement.
+**Status: the pool is not carried on `limina-kk` any more, and upstream's replacement ratchets.**
+Upstream KosmicKrisp now records one MTL4 command buffer per `VkCommandBuffer` from per-command-pool
+allocators that are never reset (mesa `0126f4388a5`): nothing under `src/kosmickrisp/vulkan` calls
+`mtl_command_allocator_reset`. The encoder guard is carried; its liveness line is
+`[LIMINA-KK-GUARD]`, paced by compute-encoder closes. `record-pool.sh` records both tags.
+
+**Measured 2026-10-01 (`ratchet.sh`, evidence in `ratchet-2026-10-01/`):** enhanced F44, a 30k
+aquarium for 15 min, then eight open/close cycles of a 5k aquarium. The KK carried
+`alloc-stats-at-begin.patch`, because the stock `LIMINA_KK_ALLOC_STATS` samples only at reset and
+so never fires on upstream. Closed states only:
+
+| closed state | live allocators | `allocatedSize` sum / max | worker footprint | IOAccelerator (graphics) |
+|---|---|---|---|---|
+| after the steady phase | 117 | 663 / 81 MiB | 7.87 GiB | 1.2 G, 7 096 regions |
+| cycle 1 | 117 | 813 / 81 MiB | 8.07 GiB | 1.4 G, 8 329 regions |
+| cycle 4 | 117 | 1 201 / 95 MiB | 8.48 GiB | 1.8 G, 11 192 regions |
+| cycle 8 | 117 | 1 492 / 95 MiB | 8.76 GiB | 2.0 G, 13 322 regions |
+
+- **Each workload launch leaves 50-150 MiB behind, and closing it returns nothing.** The
+  population is flat at 117, so this is per-allocator high-water: a launch drives allocators to
+  new sizes, and an allocator that is never reset never gives them back. The size histogram drifts
+  right in steps (1-8 MiB: 32 → 2; 8-32 MiB: 30 → 49; 32-128 MiB: 2 → 13).
+- **A single long-lived workload barely moves it.** The steady phase rose 587 → 663 MiB over
+  3.5 M command buffers, in steps rather than continuously.
+- **No contract violations.** 3.86 M commits were charged and discharged, with 0 resets on
+  in-flight work, because there are no resets at all.
+- The increments shrink (+150 MiB at cycle 1, +48 MiB at cycle 8). The ceiling is every allocator
+  at its worst-case high-water, roughly 117 × ~95 MiB. That bound is far above what anyone should
+  pay, and a long-lived desktop opens many more than eight workloads.
+
+So a pool, or at least a reset of an idle allocator whose size has grown past a budget, is
+needed again.
 
 Instrumentation raised for the dogfood SIGSEGV that has now killed `limina-vmm` six times: a
 store through a pointer AGX read out of its own compute-context state, reached from a guest GL

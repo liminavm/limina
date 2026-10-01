@@ -1,0 +1,186 @@
+From 26010e9085f565ca6e37ff1d4945172f8fb40196 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Thu, 1 Oct 2026 17:14:47 -0300
+Subject: [PATCH] SCRATCH: alloc stats sampled at begin, forget on pool release
+
+---
+ src/kosmickrisp/bridge/mtl_command_buffer.h   |  3 ++
+ src/kosmickrisp/bridge/mtl_command_buffer.m   | 51 +++++++++++++++----
+ .../bridge/stubs/mtl_command_buffer.c         |  5 ++
+ src/kosmickrisp/vulkan/kk_cmd_pool.c          |  1 +
+ 4 files changed, 51 insertions(+), 9 deletions(-)
+
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.h b/src/kosmickrisp/bridge/mtl_command_buffer.h
+index 8bbdb0b4061..56ee256dbad 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.h
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.h
+@@ -27,6 +27,9 @@ int limina_kk_alloc_stats_on(void);
+  * freed memory. */
+ uint64_t limina_kk_alloc_track_commit(void **cbs, uint32_t count);
+ void limina_kk_alloc_track_complete(uint64_t token);
++/* The pool is about to release `allocator`: drop it from the live population so the dump's
++ * live sum stops counting its last size. */
++void limina_kk_alloc_stats_forget(mtl_command_allocator *allocator);
+ 
+ void mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                               mtl_command_allocator *allocator);
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
+index 6dae1cee67d..5d5d80391a5 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
+@@ -54,9 +54,15 @@
+    uint64_t size;
+    int32_t pending;    /* committed-but-not-yet-complete command buffers on this allocator */
+    uint64_t violations; /* resets taken while pending > 0 */
++   bool dead;           /* released by its pool; the key stays so the probe chain holds */
+ } limina_alloc_seen[LIMINA_ALLOC_SLOTS];
+ static uint32_t limina_alloc_distinct;
+ static uint64_t limina_alloc_resets;
++/* Upstream KK never resets an allocator: it returns it to its command pool's free list and
++ * begins the next command buffer on it. So the size is sampled at begin as well, and the
++ * dump is paced by begins + resets, or it would never fire. */
++static uint64_t limina_alloc_begins;
++static uint32_t limina_alloc_forgotten;
+ static uint64_t limina_alloc_violations;  /* total resets taken while pending > 0 */
+ static uint64_t limina_alloc_commits;
+ static uint32_t limina_alloc_cb_overflow; /* cmd-buf map ran full; mappings were dropped */
+@@ -286,9 +292,11 @@
+    pthread_mutex_unlock(&limina_alloc_stats_lock);
+ }
+ 
+-/* Record this allocator's current pool size, then periodically dump the population. */
++/* Record this allocator's current pool size, then periodically dump the population. A reset
++ * with work in flight is a contract violation; a begin with work in flight is how upstream
++ * runs, so only `at_reset` counts it. */
+ static void
+-limina_alloc_stats_note(id<MTL4CommandAllocator> alloc, uint32_t every)
++limina_alloc_stats_note(id<MTL4CommandAllocator> alloc, uint32_t every, bool at_reset)
+ {
+    uint64_t sz = [alloc allocatedSize];
+ 
+@@ -297,15 +305,21 @@
+    int slot = limina_alloc_slot((void *)alloc, true);
+    if (slot >= 0) {
+       limina_alloc_seen[slot].size = sz;
++      limina_alloc_seen[slot].dead = false;
+       /* THE measurement: is this reset landing on in-flight work? */
+-      if (limina_alloc_seen[slot].pending > 0) {
++      if (at_reset && limina_alloc_seen[slot].pending > 0) {
+          limina_alloc_seen[slot].violations++;
+          limina_alloc_violations++;
+       }
+    }
+ 
+-   if ((++limina_alloc_resets % every) == 0) {
++   if (at_reset)
++      limina_alloc_resets++;
++   else
++      limina_alloc_begins++;
++   if (((limina_alloc_resets + limina_alloc_begins) % every) == 0) {
+       uint64_t sum = 0, max = 0;
++      uint32_t live_n = 0;
+       uint32_t pend_now = 0, ever_violated = 0, clean_n = 0;
+       /* THE O2 JOIN: split the bytes by whether the allocator ever took a reset while its work
+        * was in flight. If growth is violation-driven, it concentrates on violated_sum. If it
+@@ -317,8 +331,9 @@
+        * buckets should drift right in steps rather than spread smoothly. */
+       uint32_t hist[5] = {0};
+       for (uint32_t s = 0; s < LIMINA_ALLOC_SLOTS; ++s) {
+-         if (limina_alloc_seen[s].key == NULL)
++         if (limina_alloc_seen[s].key == NULL || limina_alloc_seen[s].dead)
+             continue;
++         live_n++;
+          uint64_t sz2 = limina_alloc_seen[s].size;
+          sum += sz2;
+          if (sz2 > max)
+@@ -340,13 +355,15 @@
+       }
+       uint32_t n = limina_alloc_distinct;
+       fprintf(stderr,
+-              "[LIMINA-ALLOC-STATS] resets=%llu distinct=%u sum=%.1fMiB max=%.3fMiB "
++              "[LIMINA-ALLOC-STATS] begins=%llu resets=%llu live=%u forgotten=%u distinct=%u sum=%.1fMiB max=%.3fMiB "
+               "mean=%.3fMiB | commits=%llu VIOLATIONS=%llu allocs_ever_violated=%u "
+               "pending_now=%u peak_pending=%u cb_overflow=%u charged=%llu missed=%llu "
+               "discharges=%llu truncated=%llu | JOIN violated_n=%u violated_sum=%.1fMiB "
+               "clean_n=%u clean_sum=%.1fMiB | hist<1M=%u 1-8M=%u 8-32M=%u 32-128M=%u "
+               ">=128M=%u\n",
+-              (unsigned long long)limina_alloc_resets, n, sum / 1048576.0,
++              (unsigned long long)limina_alloc_begins,
++              (unsigned long long)limina_alloc_resets, live_n, limina_alloc_forgotten, n,
++              sum / 1048576.0,
+               max / 1048576.0, n ? (sum / (double)n) / 1048576.0 : 0.0,
+               (unsigned long long)limina_alloc_commits,
+               (unsigned long long)limina_alloc_violations, ever_violated,
+@@ -362,6 +379,20 @@
+    pthread_mutex_unlock(&limina_alloc_stats_lock);
+ }
+ 
++void
++limina_kk_alloc_stats_forget(mtl_command_allocator *allocator)
++{
++   if (!limina_kk_alloc_stats_on())
++      return;
++   pthread_mutex_lock(&limina_alloc_stats_lock);
++   int s = limina_alloc_slot(allocator, false);
++   if (s >= 0 && !limina_alloc_seen[s].dead) {
++      limina_alloc_seen[s].dead = true;
++      limina_alloc_forgotten++;
++   }
++   pthread_mutex_unlock(&limina_alloc_stats_lock);
++}
++
+ uint64_t
+ mtl_command_allocator_allocated_size(mtl_command_allocator *allocator)
+ {
+@@ -379,7 +410,7 @@
+       /* Sample BEFORE the reset: after it, the pool is marked reusable and the interesting
+        * quantity (what this allocator was holding) may read differently. */
+       if (every)
+-         limina_alloc_stats_note(alloc, every);
++         limina_alloc_stats_note(alloc, every, true);
+       [alloc reset];
+    }
+ }
+@@ -391,8 +422,10 @@
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)command_buffer;
+       id<MTL4CommandAllocator> alloc = (id<MTL4CommandAllocator>)allocator;
+-      if (limina_kk_alloc_stats_on())
++      if (limina_kk_alloc_stats_on()) {
+          limina_alloc_track_begin(command_buffer, allocator);
++         limina_alloc_stats_note(alloc, limina_alloc_stats_every(), false);
++      }
+       [cmd_buf beginCommandBufferWithAllocator:alloc];
+    }
+ }
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+index 349d4ba6268..b01ff4acc66 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+@@ -34,6 +34,11 @@ limina_kk_alloc_track_complete(uint64_t token)
+ {
+ }
+ 
++void
++limina_kk_alloc_stats_forget(mtl_command_allocator *allocator)
++{
++}
++
+ void
+ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                          mtl_command_allocator *allocator)
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index 9cdfbf59409..3d984fcd9c0 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -204,6 +204,7 @@ kk_cmd_pool_release_mtl_objects(struct kk_cmd_pool *pool)
+ {
+    util_dynarray_foreach(&pool->metal.free_allocators, mtl_command_allocator *,
+                          allocator) {
++      limina_kk_alloc_stats_forget(*allocator);
+       mtl_release(*allocator);
+    }
+    util_dynarray_clear(&pool->metal.free_allocators);
+-- 
+2.54.0 (Apple Git-157)
+

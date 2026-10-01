@@ -1,0 +1,24 @@
+--- C0-idle 17:46:53
+Physical footprint:         6.3G
+IOAccelerator                     18.4M    18.4M     400K       0K       0K    18.0M       0K       18 
+IOAccelerator (graphics)         501.1M   500.1M   492.1M       0K       0K   500.1M       0K     2162 
+--- A-closed 18:02:35
+[LIMINA-ALLOC-STATS] begins=5072000 resets=0 live=117 forgotten=0 distinct=117 sum=663.3MiB max=81.146MiB mean=5.669MiB | commits=3294411 VIOLATIONS=0 allocs_ever_violated=0 pending_now=7 peak_pending=43 cb_overflow=0 charged=3294411 missed=0 discharges=3294404 truncated=0 | JOIN violated_n=0 violated_sum=0.0MiB clean_n=117 clean_sum=663.3MiB | hist<1M=53 1-8M=32 8-32M=30 32-128M=2 >=128M=0
+Physical footprint:         7.9G
+IOAccelerator                     47.3M    47.3M    1312K       0K       0K    46.0M       0K       51 
+IOAccelerator (graphics)           1.2G     1.2G     1.2G       0K       0K     1.2G       0K     7096 
+--- B1-closed 18:04:11
+[LIMINA-ALLOC-STATS] begins=5184000 resets=0 live=117 forgotten=0 distinct=117 sum=812.8MiB max=81.146MiB mean=6.947MiB | commits=3364911 VIOLATIONS=0 allocs_ever_violated=0 pending_now=1 peak_pending=43 cb_overflow=0 charged=3364911 missed=0 discharges=3364910 truncated=0 | JOIN violated_n=0 violated_sum=0.0MiB clean_n=117 clean_sum=812.8MiB | hist<1M=53 1-8M=24 8-32M=37 32-128M=3 >=128M=0
+Physical footprint:         8.1G
+IOAccelerator                     43.5M    43.5M    1552K       0K       0K    42.0M       0K       54 
+IOAccelerator (graphics)           1.4G     1.4G     1.4G       0K       0K     1.4G       0K     8329 
+--- B4-closed 18:08:53
+[LIMINA-ALLOC-STATS] begins=5522000 resets=0 live=117 forgotten=0 distinct=117 sum=1201.4MiB max=94.896MiB mean=10.268MiB | commits=3576530 VIOLATIONS=0 allocs_ever_violated=0 pending_now=0 peak_pending=43 cb_overflow=0 charged=3576530 missed=0 discharges=3576530 truncated=0 | JOIN violated_n=0 violated_sum=0.0MiB clean_n=117 clean_sum=1201.4MiB | hist<1M=53 1-8M=8 8-32M=48 32-128M=8 >=128M=0
+Physical footprint:         8.5G
+IOAccelerator                     38.0M    38.0M    2080K       0K       0K    36.0M       0K       62 
+IOAccelerator (graphics)           1.8G     1.7G     1.7G       0K       0K     1.7G       0K    11192 
+--- B8-closed 18:15:10
+[LIMINA-ALLOC-STATS] begins=5974000 resets=0 live=117 forgotten=0 distinct=117 sum=1492.0MiB max=94.896MiB mean=12.752MiB | commits=3859541 VIOLATIONS=0 allocs_ever_violated=0 pending_now=0 peak_pending=43 cb_overflow=0 charged=3859541 missed=0 discharges=3859541 truncated=0 | JOIN violated_n=0 violated_sum=0.0MiB clean_n=117 clean_sum=1492.0MiB | hist<1M=53 1-8M=2 8-32M=49 32-128M=13 >=128M=0
+Physical footprint:         8.8G
+IOAccelerator                     44.4M    44.4M    2464K       0K       0K    42.0M       0K       73 
+IOAccelerator (graphics)           2.0G     2.0G     2.0G       0K       0K     2.0G       0K    13322 

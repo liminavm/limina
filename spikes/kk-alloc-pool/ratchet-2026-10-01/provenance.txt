@@ -1,0 +1,4 @@
+kk icd: /Volumes/mesa-cs/build-kk-ratchet/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json
+-rwxr-xr-x@ 1 kov  staff  14985112 Oct  1 17:15 /Volumes/mesa-cs/build-kk-ratchet/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+limina 219fb2b4 virglrs 79fccb5 libkrun 53522ebd disk Fedora-Workstation-44.enhanced.raw
+kk build: limina-kk 285f2e97 + spikes/kk-alloc-pool/alloc-stats-at-begin.patch (scratch 26010e9085f)
