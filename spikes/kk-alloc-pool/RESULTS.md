@@ -1,15 +1,25 @@
 # The KosmicKrisp command-allocator pool, measured
 
-**Status: the pool is not carried on `limina-kk` any more, and upstream's replacement ratchets.**
-Upstream KosmicKrisp now records one MTL4 command buffer per `VkCommandBuffer` from per-command-pool
-allocators that are never reset (mesa `0126f4388a5`): nothing under `src/kosmickrisp/vulkan` calls
-`mtl_command_allocator_reset`. The encoder guard is carried; its liveness line is
-`[LIMINA-KK-GUARD]`, paced by compute-encoder closes. `record-pool.sh` records both tags.
+**Status: `limina-kk` carries the pool again (mesa `5d248de2541`), rebuilt for upstream's
+command-buffer model.** Upstream KosmicKrisp records one MTL4 command buffer per `VkCommandBuffer`
+from per-command-pool allocators that are never reset (mesa `0126f4388a5`), and that ratchets. The
+pool borrows allocators device-wide for one recording, takes an allocator past a 4 MiB budget out
+of service, and **releases** it once everything begun on it has completed. Nothing is reset. The
+rationale is on `struct kk_alloc_pool` in `kk_device.h`. The encoder guard is carried; its liveness
+line is `[LIMINA-KK-GUARD]`, paced by compute-encoder closes. `record-pool.sh` records both tags.
 
-**Measured 2026-10-01 (`ratchet.sh`, evidence in `ratchet-2026-10-01/`):** enhanced F44, a 30k
-aquarium for 15 min, then eight open/close cycles of a 5k aquarium. The KK carried
-`alloc-stats-at-begin.patch`, because the stock `LIMINA_KK_ALLOC_STATS` samples only at reset and
-so never fires on upstream. Closed states only:
+**Never reset an allocator under upstream's model.** Reusing a reset MTL4 allocator faults in
+`-[IOGPUMetal4CommandBuffer fillCommandBufferArgs:]` (a read at NULL+0x80) inside
+`kk_queue_commit`, within minutes of boot. It fails even with a 100 ms wait after the last
+completion and with work recorded on every committed command buffer. Releasing the allocator and
+minting a fresh one ran clean over 66 k replacements. Reset also returns none of the allocator's
+memory, so it never bought anything.
+
+**Measured 2026-10-01 with `ratchet.sh`.** The workload was enhanced F44, a 30k aquarium for
+15 min, then eight open/close cycles of a 5k aquarium, closed states only.
+
+Upstream (evidence in `ratchet-2026-10-01/`; the KK carried `alloc-stats-at-begin.patch`, because
+upstream never resets, so a reset-time sampler never fires):
 
 | closed state | live allocators | `allocatedSize` sum / max | worker footprint | IOAccelerator (graphics) |
 |---|---|---|---|---|
@@ -18,20 +28,29 @@ so never fires on upstream. Closed states only:
 | cycle 4 | 117 | 1 201 / 95 MiB | 8.48 GiB | 1.8 G, 11 192 regions |
 | cycle 8 | 117 | 1 492 / 95 MiB | 8.76 GiB | 2.0 G, 13 322 regions |
 
-- **Each workload launch leaves 50-150 MiB behind, and closing it returns nothing.** The
-  population is flat at 117, so this is per-allocator high-water: a launch drives allocators to
-  new sizes, and an allocator that is never reset never gives them back. The size histogram drifts
-  right in steps (1-8 MiB: 32 → 2; 8-32 MiB: 30 → 49; 32-128 MiB: 2 → 13).
-- **A single long-lived workload barely moves it.** The steady phase rose 587 → 663 MiB over
-  3.5 M command buffers, in steps rather than continuously.
-- **No contract violations.** 3.86 M commits were charged and discharged, with 0 resets on
-  in-flight work, because there are no resets at all.
-- The increments shrink (+150 MiB at cycle 1, +48 MiB at cycle 8). The ceiling is every allocator
-  at its worst-case high-water, roughly 117 × ~95 MiB. That bound is far above what anyone should
-  pay, and a long-lived desktop opens many more than eight workloads.
+With the pool (evidence in `pool-2026-10-01/`; the stats are the pool's own `LIMINA_KK_ALLOC_STATS`
+line):
 
-So a pool, or at least a reset of an idle allocator whose size has grown past a budget, is
-needed again.
+| closed state | live allocators | `allocatedSize` sum / max | worker footprint | IOAccelerator (graphics) |
+|---|---|---|---|---|
+| after the steady phase | 50 | 69 / 3.7 MiB | 7.35 GiB | 686 M, 1 887 regions |
+| cycle 1 | 50 | 63 / 4.9 MiB | 7.39 GiB | 671 M, 1 717 regions |
+| cycle 4 | 50 | 63 / 4.7 MiB | 7.42 GiB | 667 M, 1 754 regions |
+| cycle 8 | 50 | 51 / 3.1 MiB | 7.43 GiB | 650 M, 1 605 regions |
+
+- **Upstream: each workload launch leaves 50-150 MiB behind, and closing it returns nothing.**
+  The population is flat at 117, so this is per-allocator high-water. A launch drives allocators
+  to new sizes, and an allocator that is never reset never gives them back. The increments shrink
+  (+150 MiB at cycle 1, +48 MiB at cycle 8). The ceiling is every allocator at its worst-case
+  high-water, roughly 117 × ~95 MiB, and a long-lived desktop opens far more than eight workloads.
+- **The pool holds flat.** About 50 allocators held 51-77 MiB through every phase, steady and
+  cycling. The graphics region count fell slightly over the cycles instead of climbing 6 000.
+- **The price is churn.** 66 k allocators crossed the budget and were replaced in 32 minutes,
+  about 35 a second under the 30k aquarium. A replaced allocator had served 95-185 recordings on
+  average. Around 46 allocators read as borrowed even at closed states, because zink begins its
+  batch command buffers ahead of use. The fps cost is measured in
+  `perf/kk-alloc-pool-2026-10-01/`.
+- Host compressor and swap were unchanged across the run (`pool-2026-10-01/host-mem.txt`).
 
 Instrumentation raised for the dogfood SIGSEGV that has now killed `limina-vmm` six times: a
 store through a pointer AGX read out of its own compute-context state, reached from a guest GL

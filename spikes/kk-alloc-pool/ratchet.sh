@@ -65,13 +65,19 @@ stats_line() { tail -n 400 "$WLOG" | grep 'LIMINA-ALLOC-STATS' | tail -n 1; }
 # One CSV row: time, phase, footprint GiB, and the stats fields that answer the question.
 sample() { # <phase>
   local pid pf s
-  pid=$(worker_pid); [ -n "$pid" ] || return 1
+  pid=$(worker_pid)
+  # A dead worker must end the run, not turn every later row into an empty "measurement".
+  if [ -z "$pid" ]; then
+    log "ABORT: worker gone at $1 ($(grep -m1 'terminated by signal' "$WLOG" || echo 'no exit line'))"
+    cp "$WLOG" "$OUT/worker.log"; kill_by_disk; exit 3
+  fi
   pf=$("$DUMP" "$pid" -a 2>/dev/null | awk '/^phys_footprint /{print $4}')
   s=$(stats_line)
-  printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$1" "${pf:-}" \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date +%s)" "$1" "${pf:-}" \
     "$(sed -n 's/.*begins=\([0-9]*\).*/\1/p' <<<"$s")" \
     "$(sed -n 's/.* live=\([0-9]*\).*/\1/p' <<<"$s")" \
-    "$(sed -n 's/.* forgotten=\([0-9]*\).*/\1/p' <<<"$s")" \
+    "$(sed -n 's/.* draining=\([0-9]*\).*/\1/p' <<<"$s")" \
+    "$(sed -n 's/.* released=\([0-9]*\).*/\1/p' <<<"$s")" \
     "$(sed -n 's/.* sum=\([0-9.]*\)MiB.*/\1/p' <<<"$s")" \
     "$(sed -n 's/.* max=\([0-9.]*\)MiB.*/\1/p' <<<"$s")" >> "$OUT/samples.csv"
 }
@@ -80,7 +86,7 @@ snap() { # <label>: vmmap at a closed state only -- it suspends the worker
   local pid; pid=$(worker_pid)
   { echo "--- $1 $(date +%H:%M:%S)"; stats_line
     vmmap --summary "$pid" 2>/dev/null | grep -E "^IOAccelerator|Physical footprint:"; } >> "$OUT/snaps.txt"
-  log "snap $1: $(grep -A3 -- "--- $1 " "$OUT/snaps.txt" | grep -E '^IOAccelerator \(graphics\)' | tr -s ' ')"
+  log "snap $1: $(grep -A4 -- "--- $1 " "$OUT/snaps.txt" | grep -E '^IOAccelerator \(graphics\)' | tr -s ' ')"
 }
 
 aquarium() { # <fish>
@@ -93,7 +99,7 @@ close_ff() { "${SSH[@]}" "$BUS; systemctl --user stop ff-bench 2>/dev/null; true
 
 kill_by_disk; rm -f "$OUT/ratchet.raw"
 cp -c "$SRC_DISK" "$DISK" || { log "ABORT: clone failed"; exit 1; }
-echo "ts,phase,footprint_gib,begins,live,forgotten,sum_mib,max_mib" > "$OUT/samples.csv"
+echo "ts,phase,footprint_gib,begins,live,draining,released,sum_mib,max_mib" > "$OUT/samples.csv"
 : > "$OUT/host-mem.txt"; host_mem before-boot
 : > "$OUT/snaps.txt"
 { echo "kk icd: $ICD"; ls -l "$(dirname "$ICD")"/libvulkan_kosmickrisp.dylib
