@@ -4,7 +4,7 @@
 // What tells trackpad pointer events from a mouse's, and a physical trackpad click from a
 // tap-to-click, at the level limina's capture tap sees them (a session CGEventTap).
 //
-//   swiftc -O clickprobe.swift -o clickprobe && ./clickprobe [--seconds 90] > run.log
+//   swiftc -O clickprobe.swift -o clickprobe && ./clickprobe [--seconds 90] [--fields] > run.log
 //
 // Listen-only: logs, per event, the type, the mouse subtype field (kCGMouseEventSubtype), the
 // pressure field, the click state, the NSEvent subtype and pressure/stage where AppKit gives
@@ -15,9 +15,11 @@ import AppKit
 import CoreGraphics
 
 var seconds = 90.0
+var dumpFields = false
 var argv = CommandLine.arguments.dropFirst().makeIterator()
 while let a = argv.next() {
     if a == "--seconds" { seconds = Double(argv.next() ?? "") ?? seconds }
+    if a == "--fields" { dumpFields = true }
 }
 
 let start = CFAbsoluteTimeGetCurrent()
@@ -69,6 +71,18 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
         let nsSub = ns.map { "\($0.subtype.rawValue)" } ?? "?"
         let nsPress = ns.map { "\($0.pressure)" } ?? "?"
         print("\(ms()) BUTTON type=\(raw) subtype=\(sub) nsSubtype=\(nsSub) pressure=\(press) nsPressure=\(nsPress) clicks=\(clicks)")
+        if dumpFields {
+            // Every integer and double field that is set, to find what marks a synthesized
+            // tap click apart from a physical press.
+            var set: [String] = []
+            for f in 0..<256 {
+                guard let field = CGEventField(rawValue: UInt32(f)) else { continue }
+                let i = event.getIntegerValueField(field)
+                let d = event.getDoubleValueField(field)
+                if i != 0 || d != 0 { set.append("\(f)=\(i)/\(d)") }
+            }
+            print("\(ms())   FIELDS \(set.joined(separator: " "))")
+        }
         lastMove = nil
     }
     fflush(stdout)

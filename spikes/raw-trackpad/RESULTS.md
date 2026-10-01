@@ -21,3 +21,11 @@ gesture event. Measured 2026-09-30, M1 Max built-in trackpad, macOS 26.6 (tap-to
 - Tap clicks arrive as a down and an up within ~0–20 ms; physical ones are held.
 - During a one-finger click-drag the touch-carrying gesture events keep coming, at most
   ~47 ms apart.
+- **macOS's tap-to-drag press comes with the finger down.** After a tap, landing again
+  within ~300 ms makes macOS press 7–18 ms after that landing (raw-mode poke, 7 drags;
+  29–32 ms for 3 in the recordings) and hold until the lift; the touch before it was a tap of
+  35–83 ms. Physical presses came 60 ms or more after a landing, except one two-finger click
+  at 6.5 ms with no tap in the 7 s before it; rapid physical clicks land 66–267 ms after the
+  previous lift, but the touch before them pressed. `--fields` dumps every set CG field of
+  each button event: none marks a synthesized press (fields 89/90 appear on tap-drag presses
+  and on two-finger physical clicks alike).

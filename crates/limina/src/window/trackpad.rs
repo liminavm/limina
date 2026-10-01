@@ -76,6 +76,50 @@ pub const TAP_GUARD: Duration = Duration::from_millis(200);
 /// touch — and in raw mode the guest reads that tap itself.
 pub const TAP_CLICK_GAP: Duration = Duration::from_millis(100);
 
+/// In raw mode, macOS's tap-to-drag: a tap (a touch shorter than [`DRAG_TAP`], no press) and
+/// a landing within [`DRAG_LANDING`] of its lift make macOS press [`DRAG_PRESS`] or less
+/// after that landing — 7–18 ms in the raw-mode poke, 29–32 ms in the recordings — while the
+/// finger is down. That press is the first tap's click, and is dropped like the others.
+/// Physical presses come later after a landing, and a quick one after a physical click
+/// follows a touch that pressed.
+pub const DRAG_TAP: Duration = Duration::from_millis(150);
+pub const DRAG_LANDING: Duration = Duration::from_millis(300);
+pub const DRAG_PRESS: Duration = Duration::from_millis(40);
+
+/// The fingers on the pad, whoever owns them: what raw mode needs to tell macOS's
+/// tap-to-drag press from a physical one ([`DRAG_TAP`]).
+#[derive(Debug, Default)]
+struct PadTouch {
+    /// When the current touch landed (fingers on the pad), if any.
+    landed: Option<Instant>,
+    /// Whether the current touch pressed the pad.
+    pressed: bool,
+    /// Whether the current touch landed just after a tap.
+    after_tap: bool,
+    /// When the last touch lifted, and whether it was a tap.
+    lifted: Option<(Instant, bool)>,
+}
+
+impl PadTouch {
+    fn update(&mut self, down: bool, now: Instant) {
+        match (down, self.landed) {
+            (true, None) => {
+                self.after_tap = self
+                    .lifted
+                    .is_some_and(|(t, tap)| tap && now.duration_since(t) <= DRAG_LANDING);
+                self.landed = Some(now);
+                self.pressed = false;
+            }
+            (false, Some(landed)) => {
+                let tap = !self.pressed && now.duration_since(landed) < DRAG_TAP;
+                self.lifted = Some((now, tap));
+                self.landed = None;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// One local finger, as AppKit reports it: a stable identity, a position normalized to the
 /// surface (**top-left** origin), and whether macOS considers it resting.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -153,6 +197,9 @@ pub struct TrackpadSeq {
     raw: bool,
     /// When a finger was last on the pad, resting or not ([`TAP_CLICK_GAP`]).
     last_contact: Option<Instant>,
+    /// The fingers on the pad, as touches arrive, whoever owns them ([`DRAG_TAP`]): when
+    /// they landed, whether they pressed, and whether they landed just after a tap.
+    pad: PadTouch,
     /// Whether the guest touchpad's button is down (raw mode).
     pad_button: bool,
 }
@@ -177,6 +224,7 @@ impl TrackpadSeq {
             three_fingers: true,
             raw: false,
             last_contact: None,
+            pad: PadTouch::default(),
             pad_button: false,
         }
     }
@@ -216,14 +264,19 @@ impl TrackpadSeq {
             }
             return events;
         }
-        let physical = self.touchpad.active() > 0
-            || self
-                .last_contact
-                .is_some_and(|t| now.duration_since(t) <= TAP_CLICK_GAP);
-        if self.pad_button || !physical {
+        let physical = self
+            .last_contact
+            .is_some_and(|t| now.duration_since(t) <= TAP_CLICK_GAP);
+        let tap_drag = self.pad.after_tap
+            && self
+                .pad
+                .landed
+                .is_some_and(|t| now.duration_since(t) <= DRAG_PRESS);
+        if self.pad_button || !physical || tap_drag {
             return Vec::new();
         }
         self.pad_button = true;
+        self.pad.pressed = true;
         vec![InputEvent::new(EV_KEY, BTN_LEFT, 1), InputEvent::syn()]
     }
 
@@ -268,6 +321,7 @@ impl TrackpadSeq {
         if !touches.is_empty() {
             self.last_contact = Some(now);
         }
+        self.pad.update(!touches.is_empty(), now);
         let guest = self.owner == Some(Owner::Guest);
         let touches: Vec<TouchSample> = touches
             .iter()
@@ -1598,6 +1652,42 @@ mod tests {
         let ev = s.on_click(false, lift);
         assert!(button(&ev, false));
         assert!(lifted(&ev));
+    }
+
+    #[test]
+    fn raw_macos_tap_to_drag_press_is_dropped() {
+        // Tap, then land again at once: macOS presses 7-18 ms after the second landing, its
+        // tap-to-drag. The guest reads the tap and the drag from the contacts itself.
+        let mut s = raw();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.1, 0.1)], true, now);
+        let up = now + Duration::from_millis(50);
+        s.on_touches(&[], true, up);
+        let again = up + Duration::from_millis(150);
+        s.on_touches(&[t(2, 0.1, 0.1)], true, again);
+        let press = again + Duration::from_millis(15);
+        assert!(s.on_click(true, press).is_empty(), "macOS's tap-to-drag");
+        assert!(s.on_click(false, press + Duration::from_secs(1)).is_empty());
+    }
+
+    #[test]
+    fn raw_rapid_physical_clicks_all_reach_the_guest() {
+        // A quick physical click right after another is not a tap-to-drag: the touch before
+        // it pressed the pad.
+        let mut s = raw();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.1, 0.1)], true, now);
+        assert!(button(
+            &s.on_click(true, now + Duration::from_millis(20)),
+            true
+        ));
+        s.on_click(false, now + Duration::from_millis(80));
+        let up = now + Duration::from_millis(100);
+        s.on_touches(&[], true, up);
+        let again = up + Duration::from_millis(100);
+        s.on_touches(&[t(2, 0.1, 0.1)], true, again);
+        let ev = s.on_click(true, again + Duration::from_millis(20));
+        assert!(button(&ev, true));
     }
 
     #[test]

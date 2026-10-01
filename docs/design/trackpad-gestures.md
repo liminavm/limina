@@ -240,7 +240,13 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   touchpad's `BTN_LEFT` (the guest's click method decides left or right); anything later is
   macOS's tap-to-click — 220–340 ms after the lift, against 0–30 ms for a physical click
   (`spikes/raw-trackpad/`, the recordings) — and is dropped, the guest having read the tap
-  itself. While the pad is pressed the guest's fingers never lift, since touches can vanish
+  itself. So is macOS's tap-to-drag: after a tap (under 150 ms, no press), a landing within
+  300 ms of its lift makes macOS press within 40 ms of that landing (7–32 ms measured), with
+  the finger down; physical presses come later after a landing, and a quick one after a
+  physical click follows a touch that pressed (`DRAG_TAP`, `DRAG_LANDING`, `DRAG_PRESS`).
+  No event field tells the two apart (fields 89/90 are set on tap-drag presses and on
+  two-finger physical clicks alike). The guest's own taps follow its settings: GNOME ships
+  tap-to-click off. While the pad is pressed the guest's fingers never lift, since touches can vanish
   mid-press; the release lifts them. A trackpad push against the capture window's edge no
   longer releases the grab (the guest's pointer is not the tablet's); the ungrab chord does.
 
