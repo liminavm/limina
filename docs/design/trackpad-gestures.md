@@ -247,8 +247,11 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   No event field tells the two apart (fields 89/90 are set on tap-drag presses and on
   two-finger physical clicks alike). The guest's own taps follow its settings: GNOME ships
   tap-to-click off. While the pad is pressed the guest's fingers never lift, since touches can vanish
-  mid-press; the release lifts them. A trackpad push against the capture window's edge no
-  longer releases the grab (the guest's pointer is not the tablet's); the ungrab chord does.
+  mid-press; the release lifts them. The fullscreen grab's edge release still works:
+  the trackpad's motion charges the press as it does outside raw mode, judged where the
+  guest's cursor echo puts the pointer (the guest's acceleration moves it, so the tablet's
+  estimate is not it), its last pixel counting as the edge (`fit_point_of_echo`). A guest that
+  draws its own cursor sends no echo, and only the ungrab chord releases it.
 
 Teardown: on *any* transition — cursor leaves the view, window loses key, capture
 toggles, a fourth physical finger lands (the host is taking over), or the fingers lift — release every guest slot cleanly (`tracking_id` −1, `BTN_TOUCH` up, SYN) so the

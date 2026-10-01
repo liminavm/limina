@@ -3385,6 +3385,29 @@ impl InputState {
         from_trackpad && self.trackpad.borrow().raw()
     }
 
+    /// Raw mode's edge press: where the guest's own cursor is, from its echo, in the capture
+    /// window — the guest's acceleration moves the pointer, so the estimate the tablet keeps is
+    /// not it. `None` with no echo on the capture slot (a guest drawing its own cursor): the
+    /// ungrab chord is then the way out.
+    pub(crate) fn raw_press_step(&self, primary_view: &NSView) -> Option<CapturedStep> {
+        let slot = self.capture_slot.get();
+        let c = super::echo::snapshot()[slot];
+        if !c.visible || c.w == 0 || c.h == 0 {
+            return None;
+        }
+        let (view, fit) = self.slot_surface(slot, primary_view)?;
+        if fit.w <= 0.0 || fit.h <= 0.0 {
+            return None;
+        }
+        Some(CapturedStep {
+            slot,
+            view_point: super::fit::fit_point_of_echo((c.x, c.y), (c.w, c.h), fit),
+            fit,
+            view,
+            range: self.capture_range.get().unwrap_or_default(),
+        })
+    }
+
     /// A trackpad click in raw mode ([`TrackpadSeq::on_click`]).
     pub(crate) fn raw_trackpad_click(&self, down: bool) {
         if down {

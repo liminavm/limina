@@ -564,11 +564,21 @@ extern "C" fn tap_callback(
     let from_trackpad = geti(FIELD_MOUSE_SUBTYPE) == MOUSE_SUBTYPE_TOUCH;
     match etype {
         // Raw trackpad mode: the guest touchpad drives the pointer and reads the clicks; the
-        // hidden host cursor only stays parked.
+        // hidden host cursor only stays parked. The motion still charges the edge press, judged
+        // where the guest's own cursor is.
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG
             if ctx.input.raw_trackpad_owns(from_trackpad) =>
         {
+            let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
+            let (dx, dy) = ctx
+                .input
+                .swallow_warp(getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
             ctx.input.repin_park(&ctx.view);
+            if let Some(s) = ctx.input.raw_press_step(&ctx.view)
+                && let Some((edge, release)) = grab_release_edge(ctx, &s, dx, dy, pf.fullscreen)
+            {
+                release_grab(ctx, &s, edge, release);
+            }
         }
         LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP if ctx.input.raw_trackpad_owns(from_trackpad) => {
             let down = matches!(etype, LMB_DOWN | RMB_DOWN);

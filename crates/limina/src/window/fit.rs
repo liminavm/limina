@@ -484,6 +484,23 @@ pub(crate) fn fit_point_of_pixel(px: (i32, i32), scanout: (u32, u32), fit: FitRe
     (fit.x + u * fit.w, fit.y + (1.0 - v) * fit.h)
 }
 
+/// [`fit_point_of_pixel`] for the edge press: the guest clamps its pointer to the scanout's
+/// last pixel, so that pixel is placed on the fit's edge, where [`pressed_edge`] looks.
+pub(crate) fn fit_point_of_echo(px: (i32, i32), scanout: (u32, u32), fit: FitRect) -> (f64, f64) {
+    let (x, y) = fit_point_of_pixel(px, scanout, fit);
+    let x = if px.0 >= scanout.0 as i32 - 1 {
+        fit.x + fit.w
+    } else {
+        x
+    };
+    let y = if px.1 >= scanout.1 as i32 - 1 {
+        fit.y
+    } else {
+        y
+    };
+    (x, y)
+}
+
 /// How far inside the content the captured cursor is parked. Clear of any screen-edge trigger
 /// (menu bar, Dock, hot corner) with room to spare, and small enough that the park point is a
 /// short hop from wherever the pointer already was.
@@ -1007,6 +1024,34 @@ mod tests {
         // The plane origin can sit past the scanout's edge; the estimate stays in the fit.
         let p = fit_point_of_pixel((-4, 1500), (2560, 1440), fit);
         assert_eq!(p, (10.0, 20.0));
+    }
+
+    #[test]
+    fn a_guest_cursor_on_its_last_pixel_is_at_the_edge() {
+        // The guest clamps its pointer to the scanout's last pixel; for the edge press that
+        // pixel is the edge, or a pinned cursor could never press the right or bottom side.
+        let fit = FitRect {
+            x: 10.0,
+            y: 20.0,
+            w: 1280.0,
+            h: 720.0,
+        };
+        let right_bottom = fit_point_of_echo((2559, 1439), (2560, 1440), fit);
+        assert_eq!(right_bottom, (1290.0, 20.0));
+        assert_eq!(
+            pressed_edge(right_bottom, 3.0, 0.0, fit),
+            None,
+            "a corner presses nothing"
+        );
+        let right = fit_point_of_echo((2559, 700), (2560, 1440), fit);
+        assert_eq!(pressed_edge(right, 3.0, 0.0, fit), Some(Edge::Right));
+        let bottom = fit_point_of_echo((1200, 1439), (2560, 1440), fit);
+        assert_eq!(pressed_edge(bottom, 0.0, 3.0, fit), Some(Edge::Bottom));
+        let left = fit_point_of_echo((0, 700), (2560, 1440), fit);
+        assert_eq!(pressed_edge(left, -3.0, 0.0, fit), Some(Edge::Left));
+        // Inside, it is the ordinary mapping.
+        let mid = fit_point_of_echo((640, 360), (2560, 1440), fit);
+        assert_eq!(mid, fit_point_of_pixel((640, 360), (2560, 1440), fit));
     }
 
     /// The one letterbox rule: `dynamic` fills the whole guest area — view plus the housing
