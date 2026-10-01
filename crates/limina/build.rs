@@ -83,7 +83,8 @@ fn main() {
 /// `None` means there is no tree on this host to read: the edk2 firmware is built from the
 /// manifest pin inside a container (`scripts/build-krun-efi.sh` clones that rev itself), so
 /// for it the pin IS what was built, and a local checkout — kept only for fork surgery —
-/// would be the less truthful answer.
+/// would be the less truthful answer. A `checkout` override in
+/// `third_party/manifest.local.toml` replaces any of these trees, `None` included.
 const DEPS: &[(&str, Option<&str>)] = &[
     ("libkrun", Some("third_party/libkrun")),
     ("virglrs", Some("third_party/virglrs")),
@@ -152,21 +153,40 @@ fn build_stamp() {
 fn dep_stamp(root: &Path) -> String {
     let manifest_path = root.join("third_party/manifest.toml");
     println!("cargo:rerun-if-changed={}", manifest_path.display());
-    let manifest: toml::Table = std::fs::read_to_string(&manifest_path)
-        .ok()
-        .and_then(|text| text.parse().ok())
-        .unwrap_or_default();
+    let read = |path: &Path| -> toml::Table {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.parse().ok())
+            .unwrap_or_default()
+    };
+    let manifest = read(&manifest_path);
+    // A `checkout` override (scripts/lib/manifest.sh has the rules) is the tree that got built,
+    // so it is the one to ask — for edk2 too, whose firmware is then built from its HEAD.
+    // Declared only when present: cargo reruns on every build for a missing path.
+    let local_path = root.join("third_party/manifest.local.toml");
+    if local_path.exists() {
+        println!("cargo:rerun-if-changed={}", local_path.display());
+    }
+    let local = read(&local_path);
+    let anchor = |tree: &str| {
+        if let Some(rest) = tree.strip_prefix("~/") {
+            std::env::var_os("HOME")
+                .map_or_else(|| root.join(tree), |home| Path::new(&home).join(rest))
+        } else if Path::new(tree).is_absolute() {
+            PathBuf::from(tree)
+        } else {
+            root.join(tree)
+        }
+    };
 
     let mut records = Vec::new();
     for (name, tree) in DEPS {
-        let dir = tree.map(|tree| {
-            let tree = Path::new(tree);
-            if tree.is_absolute() {
-                tree.to_path_buf()
-            } else {
-                root.join(tree)
-            }
-        });
+        let checkout = local
+            .get(*name)
+            .and_then(|entry| entry.as_table())
+            .and_then(|entry| entry.get("checkout"))
+            .and_then(|value| value.as_str());
+        let dir = checkout.or(*tree).map(anchor);
         // A tree that is not vendored here (or sits on an unmounted volume) simply has no
         // HEAD to read; git tells us so by failing, and the pin is then all we have.
         let head = dir.as_deref().and_then(|dir| {

@@ -1,8 +1,9 @@
 # Pins for the dependency forks under third_party/ (the fork model: github.com/liminavm
 # holds a fork of every project we patch; each carries our work on a `limina` branch, with
 # `main` tracking upstream untouched). `cargo xtask vendor` clones each repo and checks out
-# `rev`. Bumping a dep = push the new fork head, tag the OLD head first (tag-before-rebase:
-# every rev ever pinned here must stay reachable), then update `rev` here in the same commit.
+# `rev`. Bumping a dep = update `rev` here; before limina is pushed, the fork must carry it — the
+# pre-push hook refuses otherwise. Tag the OLD head before any rewrite of a fork branch
+# (tag-before-rebase: every rev ever pinned here must stay reachable).
 # Patch-audit status lives in docs/upstreaming/ledger/.
 #
 # Every dep is on the fork model now (edk2 was the last holdout, migrated 2026-08-06).
@@ -12,6 +13,13 @@
 # fetches the pinned rev itself). Materialize one on demand with `cargo xtask vendor --heavy`.
 # `base` is the upstream tag the `limina` branch sits on; `scripts/export-linux-patches.sh`
 # derives the patch series from `base..branch` for the consumers that apply it onto other tags.
+# `tree` is where the local checkout lives when it is not third_party/<name> (the mesa trees need a
+# case-sensitive volume).
+#
+# Local overrides go in third_party/manifest.local.toml, which is never committed: per dependency,
+# `source = "<path>"` fetches the pinned rev from a local repository instead of the network, and
+# `checkout = "<path>"` builds that working tree as it stands. Readers: scripts/lib/manifest.sh,
+# xtask/src/manifest.rs. `cargo xtask pins` shows what is in effect and what still has to be pushed.
 
 # The VMM library. The `limina` branch is our delta as commits on upstream
 # (github.com/libkrun/libkrun); `base` is the upstream commit the branch sits on. limina consumes
@@ -55,6 +63,7 @@ upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
 rev = "d39e8bff0f307e1a2f6834bb1d5ab20fb3770d97"
 base = "ab0ab2209c4"
+tree = "/Volumes/mesa-cs/mesa"
 
 # The GUEST venus Mesa (task #11 — same liminavm/mesa repo, its own branch). NOT vendored by
 # `cargo xtask vendor`: the working checkout is a worktree at /Volumes/mesa-cs/mesa-guest (same
@@ -68,6 +77,7 @@ upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-guest"
 rev = "dc2265023e993b1af22e47bb0ce75c7a830ee241"
 base = "mesa-26.2.3"
+tree = "/Volumes/mesa-cs/mesa-guest"
 
 # The host GPU renderer, consumed by rutabaga as a Rust crate — nothing here is loaded at
 # runtime any more, so this pin decides what the worker *is*, not what it finds. Ours outright,

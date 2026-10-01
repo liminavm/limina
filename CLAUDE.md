@@ -44,6 +44,16 @@ right tool — not treat upstream as immutable:
     reference-only queue material). A dep marked `heavy = true` (the kernel — multi-GB, never
     built on this host) is **skipped unless `--heavy`**. Run it once after a fresh clone,
     before `cargo build` / `scripts/test-boot.sh`.
+  - **Pins can lead pushes.** Commit the rev a fork *will* be at; until it is pushed,
+    `third_party/manifest.local.toml` (never committed) points builds at local trees —
+    `source = <path>` fetches the pin from a local repo, `checkout = <path>` builds a tree as it
+    stands. The pre-push hook (`cargo xtask pins --check`) refuses to publish a limina commit
+    whose pins no remote carries; `cargo xtask pins` prints the fork pushes, in order. Read pins
+    only through `scripts/lib/manifest.sh` / `xtask/src/manifest.rs`, never a fresh awk.
+    Recipe: `docs/dev-onboarding.md` §1.
+  - **Worktrees: `cargo xtask worktree new <name>`** (`init` inside one made by hand, `rm` to
+    remove). Forks become worktrees of main's clones detached at the pin, so unpushed commits are
+    visible; images, venv and the Mesa image are shared; `target/` is per worktree.
 - **edk2 (the KRUN_EFI boot firmware)** — **fork model**:
   `github.com/liminavm/edk2` (`limina` branch; base is `slp/edk2@krun-support`, the tree
   krunkit's blob is built from), pinned by `[edk2]` in `third_party/manifest.toml` but **not

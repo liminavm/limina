@@ -35,9 +35,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
+# shellcheck source=scripts/lib/manifest.sh
+. "$ROOT/scripts/lib/manifest.sh"
+
 MOUNT="/Volumes/mesa-cs"
 IMAGE="$ROOT/third_party/mesa-cs.sparseimage"
-SRC="$MOUNT/mesa"
+# The [kosmickrisp] tree, or a `checkout` override's. The build dirs and the prefix below stay on
+# $MOUNT whichever source tree feeds them: there is one host Mesa per machine, and every checkout
+# and worktree links the same prefix. meson will not re-point a build dir at another source tree,
+# so switching trees means removing $MOUNT/build-kk and $MOUNT/build-zink-kk first.
+SRC="$(pin_tree kosmickrisp)"
 
 WHAT="${1:-both}"
 case "$WHAT" in kk|zink|both) ;; *) echo "usage: $0 [kk|zink|both]" >&2; exit 1 ;; esac
@@ -102,7 +109,7 @@ fi
 # CLC. Check the shape, not the presence.
 # libclc comes from the manifest pin, not from whatever Homebrew currently calls `libclc`.
 # LIBCLC_PC_DIR overrides it for a host that has a compatible one some other way.
-clc_pin() { awk -v k="$1" '/^\[libclc\]/{f=1;next} /^\[/{f=0} f && $1==k {gsub(/"/,"",$3); print $3; exit}' third_party/manifest.toml; }
+clc_pin() { pin libclc "$1"; }
 if [ -z "${LIBCLC_PC_DIR:-}" ]; then
   CLC_VER="$(clc_pin version)"; CLC_BLOB="$(clc_pin blob)"; CLC_BLOB_SHA="$(clc_pin blob_sha256)"
   CLC_SPIRV_SHA="$(clc_pin spirv_sha256)"; CLC_SPIRV64_SHA="$(clc_pin spirv64_sha256)"
@@ -162,25 +169,40 @@ echo "==> libclc: $CLC_BASEDIR"
 . "$ROOT/scripts/ensure-venv-mesa.sh"
 
 # ---- source, at the pin ---------------------------------------------------------------------
-pin() { awk -v k="$1" '/^\[kosmickrisp\]/{f=1;next} /^\[/{f=0} f && $1==k {gsub(/"/,"",$3); print $3; exit}' third_party/manifest.toml; }
-MESA_REPO="$(pin repo)"; MESA_BRANCH="$(pin branch)"; MESA_REV="$(pin rev)"
+MESA_REPO="$(pin kosmickrisp repo)"; MESA_BRANCH="$(pin kosmickrisp branch)"; MESA_REV="$(pin kosmickrisp rev)"
 [ -n "$MESA_REPO" ] && [ -n "$MESA_BRANCH" ] && [ -n "$MESA_REV" ] \
   || { echo "incomplete [kosmickrisp] entry in third_party/manifest.toml" >&2; exit 1; }
 
-if [ ! -d "$SRC/.git" ]; then
-  echo "==> cloning $MESA_REPO ($MESA_BRANCH) into $SRC"
-  git clone --branch "$MESA_BRANCH" "$MESA_REPO" "$SRC"
-  git -C "$SRC" remote add upstream "$(awk '/^\[kosmickrisp\]/{f=1;next} /^\[/{f=0} f && $1=="upstream" {gsub(/"/,"",$3); print $3; exit}' third_party/manifest.toml)" 2>/dev/null || true
-fi
-git -C "$SRC" cat-file -e "${MESA_REV}^{commit}" 2>/dev/null \
-  || { echo "==> fetching mesa (pinned rev $MESA_REV not present)"; git -C "$SRC" fetch origin --tags; }
-# Same rule as `cargo xtask vendor`: only move the branch when the pin is missing from it, so
-# local work on limina-kk survives a re-run.
-if git -C "$SRC" merge-base --is-ancestor "$MESA_REV" "$MESA_BRANCH" 2>/dev/null; then
-  git -C "$SRC" checkout --quiet "$MESA_BRANCH"
+if [ -n "$(pin_override kosmickrisp checkout)" ]; then
+  # A checkout override is built as it stands: no clone, no fetch, no branch moved under it.
+  pin_note kosmickrisp
+  [ -e "$SRC/.git" ] || { echo "the [kosmickrisp] checkout override $SRC is not a git tree" >&2; exit 1; }
 else
-  echo "==> mesa: moving $MESA_BRANCH to the pinned rev $MESA_REV"
-  git -C "$SRC" checkout --quiet -B "$MESA_BRANCH" "$MESA_REV"
+  # A `source` override changes where the pin is fetched from, never which rev is built.
+  FETCH_FROM="$(pin_override kosmickrisp source)"
+  [ -n "$FETCH_FROM" ] && pin_note kosmickrisp
+  if [ ! -e "$SRC/.git" ]; then
+    echo "==> cloning ${FETCH_FROM:-$MESA_REPO} ($MESA_BRANCH) into $SRC"
+    git clone --branch "$MESA_BRANCH" "${FETCH_FROM:-$MESA_REPO}" "$SRC"
+    git -C "$SRC" remote set-url origin "$MESA_REPO"
+    git -C "$SRC" remote add upstream "$(pin kosmickrisp upstream)" 2>/dev/null || true
+  fi
+  if ! git -C "$SRC" cat-file -e "${MESA_REV}^{commit}" 2>/dev/null; then
+    echo "==> fetching mesa (pinned rev $MESA_REV not present)"
+    if [ -n "$FETCH_FROM" ]; then
+      git -C "$SRC" fetch "$FETCH_FROM" "$MESA_REV"
+    else
+      git -C "$SRC" fetch origin --tags
+    fi
+  fi
+  # Same rule as `cargo xtask vendor`: only move the branch when the pin is missing from it, so
+  # local work on limina-kk survives a re-run.
+  if git -C "$SRC" merge-base --is-ancestor "$MESA_REV" "$MESA_BRANCH" 2>/dev/null; then
+    git -C "$SRC" checkout --quiet "$MESA_BRANCH"
+  else
+    echo "==> mesa: moving $MESA_BRANCH to the pinned rev $MESA_REV"
+    git -C "$SRC" checkout --quiet -B "$MESA_BRANCH" "$MESA_REV"
+  fi
 fi
 # The pin is a claim; the checkout HEAD is the fact. Nothing downstream records which rev a
 # dylib came from, so say it here.

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Gustavo Noronha Silva
+
+# limina pre-push: refuse to publish a commit whose dependency pins no remote carries.
+#
+# Pins may be committed before their forks are pushed — third_party/manifest.local.toml lets
+# every checkout build them from local trees meanwhile — but a published limina commit that
+# names a rev nobody can fetch cannot be vendored by anyone else. So every commit being pushed
+# that changed third_party/manifest.toml, and the tip, gets `cargo xtask pins --check`, which
+# also prints the fork pushes that would fix it. Enabled with the other hooks by
+# scripts/setup-hooks.sh. Bypass once with `git push --no-verify`.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+# A hook inherits GIT_DIR & co. for THIS repository, and `git -C <fork>` does not override them:
+# without this, every question xtask asks a fork's tree would be asked of limina instead.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
+zero=0000000000000000000000000000000000000000
+commits=()
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue          # deleting a remote ref publishes nothing
+    if [ "$remote_sha" != "$zero" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+        range=("$remote_sha..$local_sha")
+    else
+        # A new branch, or a remote tip this clone has never seen: everything no remote has.
+        range=("$local_sha" --not --remotes)
+    fi
+    while read -r c; do
+        [ -n "$c" ] && commits+=("$c")
+    done < <(git rev-list "${range[@]}" -- third_party/manifest.toml)
+    commits+=("$local_sha")
+done
+[ "${#commits[@]}" -eq 0 ] && exit 0
+
+# One check per distinct manifest, not per commit.
+seen=" "
+for c in "${commits[@]}"; do
+    blob="$(git rev-parse --verify --quiet "$c:third_party/manifest.toml" || true)"
+    [ -n "$blob" ] || continue
+    case "$seen" in *" $blob "*) continue ;; esac
+    seen="$seen$blob "
+    echo "pre-push: checking the dependency pins as of ${c:0:12}"
+    if ! cargo xtask pins --check --at "$c"; then
+        echo "pre-push: REFUSED — ${c:0:12} pins revisions no remote carries." >&2
+        echo "          Push the forks first (the plan above), or bypass once with --no-verify." >&2
+        exit 1
+    fi
+done

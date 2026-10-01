@@ -79,6 +79,45 @@ Idempotent; safe to re-run, and the way to repair a `third_party/` tree you dele
 > stay as their own scripts — `vendor` only materializes source trees. See
 > `docs/codebases.md` for which script builds what.
 
+### Local overrides: pins before pushes
+
+A limina commit records the rev a fork *will* be at; the fork does not have to be pushed
+first. Until it is, `third_party/manifest.local.toml` (never committed; one per checkout)
+tells every build where the local trees are:
+
+```toml
+[libkrun]
+source = "~/src/libkrun-feature"      # fetch the PINNED rev from this repo, not the network
+
+[virglrs]
+checkout = "~/src/virglrs"            # build this tree as it stands, whatever its HEAD
+```
+
+`source` never changes what is built, only where it is fetched from — the container builds
+(firmware, kernel) mount the repository read-only for it. `checkout` builds a tree's HEAD;
+for a `third_party/` dependency `vendor` makes it a symlink, and refuses to replace a real
+tree. A misspelt dependency or key is an error, not a silent no-op.
+
+`cargo xtask pins` shows each pin, the tree standing in for it, and whether its remote has
+it, then prints the fork pushes that would publish it — in order, by SHA. The pre-push hook
+runs `cargo xtask pins --check` on every commit being pushed that touched the manifest, so a
+limina commit naming revs nobody can fetch is refused rather than published.
+
+### Worktrees
+
+```sh
+cargo xtask worktree new <name> [--base <rev>]   # .claude/worktrees/<name>, branch <name>
+cargo xtask worktree init                         # inside one made by plain `git worktree add`
+cargo xtask worktree rm <name>                    # forks, symlinks and target/ go with it
+```
+
+In a worktree the forks are **worktrees of the main checkout's clones**, detached at the pin:
+objects are shared, so unpushed commits are already there, and each has its own HEAD. The
+test images, the Python venv and the Mesa sparse image are shared as symlinks (the harness
+clones images before booting them); `target/test-guest`, `target/krun-efi` and the trap probe
+are APFS clones. `target/` is the worktree's own — the first build is a full one, and `rm`
+reaps it. The suite stays one-at-a-time per host whichever worktree starts it.
+
 ## 1.5. Host Mesa (once per machine)
 
 ```sh

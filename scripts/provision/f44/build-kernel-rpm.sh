@@ -70,18 +70,15 @@ echo "==> base config: $CONFIG_BASE"
 # Source: the liminavm/linux fork's `limina` branch at the rev pinned in
 # third_party/manifest.toml. There is no patch-apply stage any more — our kernel changes ARE
 # the commits on that branch, so what gets built is exactly what the pin names.
-MANIFEST="$REPO/third_party/manifest.toml"
-manifest_field() {
-  awk -v key="$1" '
-      /^\[/ { in_linux = ($0 ~ /^\[linux\]/) }
-      in_linux && $1 == key { gsub(/^[^"]*"|"[^"]*$/, ""); print; exit }
-  ' "$MANIFEST"
-}
-FORK_URL="${FORK_URL:-$(manifest_field repo)}"
-KREV="${KREV:-$(manifest_field rev)}"
-KVER="${KVER:-$(manifest_field base)}"     # informational: the upstream tag the branch sits on
+# Committed values only (`pin`): a local override names a HOST path, so it is resolved by whoever
+# can see one — scripts/build-enhanced-rpms.sh passes FORK_URL/KREV in for it.
+# shellcheck source=scripts/lib/manifest.sh
+LIMINA_ROOT="$REPO" . "$REPO/scripts/lib/manifest.sh"
+FORK_URL="${FORK_URL:-$(pin linux repo)}"
+KREV="${KREV:-$(pin linux rev)}"
+KVER="${KVER:-$(pin linux base)}"     # informational: the upstream tag the branch sits on
 [ -n "$FORK_URL" ] && [ -n "$KREV" ] || {
-  echo "could not read the [linux] pin from $MANIFEST" >&2; exit 1; }
+  echo "could not read the [linux] pin from $REPO/third_party/manifest.toml" >&2; exit 1; }
 mkdir -p "$OUT"
 [ -r "$CONFIG_BASE" ] || { echo "base config $CONFIG_BASE not readable; set CONFIG_BASE" >&2; exit 1; }
 
@@ -111,7 +108,8 @@ cd "$BUILD"
 git config --global --add safe.directory "$BUILD" 2>/dev/null || true
 if ! git cat-file -e "${KREV}^{commit}" 2>/dev/null; then
   git fetch -q --depth 1 origin "$KREV" \
-    || { echo "could not fetch $KREV from $FORK_URL — is the manifest pin pushed?" >&2; exit 1; }
+    || { echo "could not fetch $KREV from $FORK_URL — is the manifest pin pushed? (unpushed:" \
+              "set [linux] source in third_party/manifest.local.toml)" >&2; exit 1; }
 fi
 git checkout -q --detach "$KREV"
 git reset --hard -q "$KREV"

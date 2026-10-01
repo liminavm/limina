@@ -12,10 +12,16 @@
 //!   `vendor` — materialize the gitignored `third_party/` source trees: fork-model deps
 //!              (libkrun, virglrs, imago, linux) clone from github.com/liminavm at the rev
 //!              pinned in `third_party/manifest.toml` — the fork's `limina` branch IS the delta,
-//!              nothing to apply. It also creates `third_party/venv-mesa`, which is what the
-//!              bare `python3` in virglrs's code generators has to resolve to. `heavy = true`
-//!              deps (the kernel) are skipped unless `--heavy` — nothing on this host builds
-//!              them. Run it first.
+//!              nothing to apply. `third_party/manifest.local.toml` overrides where they come
+//!              from (`src/manifest.rs`). It also creates `third_party/venv-mesa`, which is what
+//!              the bare `python3` in virglrs's code generators has to resolve to.
+//!              `heavy = true` deps (the kernel) are skipped unless `--heavy` — nothing on this
+//!              host builds them. Run it first.
+//!   `pins`   — every fork pin, the tree standing in for it, and whether its remote has it;
+//!              then the pushes that would publish it (`src/pins.rs`). `--check` is the
+//!              pre-push gate.
+//!   `worktree` — `new`/`init`/`rm` limina worktrees that build and test without touching each
+//!              other or the main checkout (`src/worktree.rs`).
 //!   `mesa`   — build the HOST Mesa (KosmicKrisp + zink-on-KK), creating the case-sensitive
 //!              volume and cloning the tree when they do not exist yet. `build` links libEGL
 //!              out of its prefix, so on a machine that has never been handed that volume this
@@ -49,15 +55,25 @@
 //!              worker did *not* hang and the layer rendered. (Distinct from `app`: `bundle` is a
 //!              launch-path smoke test booting the L1 guest, `app` is the real deliverable.)
 
+mod git;
+mod manifest;
+mod pins;
+mod worktree;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
-/// In-bundle path the supervisor writes its rendered-layer PNG to (LSEnvironment), so a
-/// normal launch is self-verifiable without screen-recording permission.
-const CAPTURE_PATH: &str = "/tmp/limina-app-capture.png";
+use crate::manifest::{MANIFEST_LOCAL, Manifest};
+
+/// Where the smoke bundle's supervisor writes its rendered-layer PNG (LSEnvironment), so a
+/// normal launch is self-verifiable without screen-recording permission. Under this checkout's
+/// `target/`, so two worktrees' smoke tests do not read each other's frames.
+fn capture_path(repo: &Path) -> PathBuf {
+    repo.join("target/limina-smoke-capture.png")
+}
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "limina dev tasks")]
@@ -77,6 +93,25 @@ enum Cmd {
         /// host never builds it). Needed only to author kernel commits or export its series.
         #[arg(long)]
         heavy: bool,
+    },
+    /// Show every fork pin, the tree that stands in for it here, and whether its remote branch
+    /// carries it — then the pushes that would publish it.
+    Pins {
+        /// Exit nonzero unless every pin is pushed (the pre-push hook's gate).
+        #[arg(long)]
+        check: bool,
+        /// Check the manifest as committed at this revision instead of the working tree's.
+        #[arg(long, value_name = "COMMIT")]
+        at: Option<String>,
+        /// Don't ask the remotes; trust the remote-tracking refs already fetched.
+        #[arg(long)]
+        no_fetch: bool,
+    },
+    /// Create, initialize or remove limina worktrees (forks as worktrees of main's clones,
+    /// shared test images and venv, own target/).
+    Worktree {
+        #[command(subcommand)]
+        cmd: WorktreeCmd,
     },
     /// Build the host Mesa (KosmicKrisp + zink-on-KK) that `build` and `run` need, creating
     /// the case-sensitive volume and cloning the tree if absent. Run once per machine.
@@ -166,11 +201,56 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum WorktreeCmd {
+    /// `git worktree add` a new branch, then `init` it.
+    New {
+        /// Branch name; also the directory name under `.claude/worktrees/`.
+        name: String,
+        /// Revision to branch from (default: HEAD of the checkout you run this in).
+        #[arg(long)]
+        base: Option<String>,
+        /// Put the worktree here instead of `.claude/worktrees/<name>`.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+    /// Make the worktree this runs in buildable: share the test images, venv and Mesa image,
+    /// clone the slow build outputs, vendor the forks as worktrees of main's clones.
+    Init,
+    /// Remove a worktree, its fork worktrees and its target/. Refuses when anything in it would
+    /// be lost, unless `--force`.
+    Rm {
+        /// The name given to `new`, or a path.
+        name: String,
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Setup => setup(),
-        Cmd::Vendor { heavy } => vendor(heavy),
+        Cmd::Vendor { heavy } => vendor(&repo_root(), heavy),
+        Cmd::Pins {
+            check,
+            at,
+            no_fetch,
+        } => pins::pins(
+            &repo_root(),
+            &pins::Opts {
+                check,
+                at,
+                no_fetch,
+            },
+        ),
+        Cmd::Worktree { cmd } => match cmd {
+            WorktreeCmd::New { name, base, path } => {
+                worktree::new(&repo_root(), &name, base.as_deref(), path)
+            }
+            WorktreeCmd::Init => worktree::init(&repo_root()),
+            WorktreeCmd::Rm { name, force } => worktree::rm(&repo_root(), &name, force),
+        },
         Cmd::Mesa { what } => mesa(what.as_deref()),
         Cmd::Build { release } => build(release),
         Cmd::Firmware => bash_script(&repo_root(), "scripts/build-krun-efi.sh", &[] as &[&str]),
@@ -229,54 +309,81 @@ fn profile_name(release: bool) -> &'static str {
 
 /// One-command fresh-clone bootstrap: vendor `third_party/`, then point git at the in-repo hooks.
 fn setup() -> Result<()> {
-    vendor(false)?;
+    vendor(&repo_root(), false)?;
     eprintln!("==> enabling git hooks (core.hooksPath = .githooks)");
     bash_script(&repo_root(), "scripts/setup-hooks.sh", &[] as &[&str])?;
     eprintln!("==> setup complete");
     Ok(())
 }
 
-/// Materialize every gitignored `third_party/` source tree, so the workspace can build.
+/// Materialize every gitignored `third_party/` source tree under `root`, so the workspace can
+/// build.
 ///
 /// Every dep is fork-model now (github.com/liminavm): clone our fork and check out the rev
 /// pinned in `third_party/manifest.toml` — the fork's `limina` branch IS the delta, no patch
 /// series. (edk2 is fork-model too but not vendored here: `scripts/build-krun-efi.sh` clones
 /// its pinned rev inside its own container build volume.)
 ///
+/// `third_party/manifest.local.toml` changes where a fork comes from (`src/manifest.rs`). And in
+/// a linked limina worktree, a fork that is absent becomes a worktree of the main checkout's
+/// clone instead of a fresh clone: no network, and commits nobody has pushed are already there.
+///
 /// Idempotent — re-running resets/refreshes each tree.
-fn vendor(heavy: bool) -> Result<()> {
-    let repo = repo_root();
+fn vendor(root: &Path, heavy: bool) -> Result<()> {
+    let manifest = Manifest::load(root)?;
+    let main = if git::is_linked_worktree(root)? {
+        Some(git::main_worktree(root)?)
+    } else {
+        None
+    };
 
     // The generators virglrs's build.rs runs (venus-gen, vrend-gen) import mako and yaml
     // through a bare `python3`. Materialize the venv that provides them here, so a fresh clone
     // builds without anything having been installed into the host's own Python -- which is
     // what "it builds on my machine" turned out to mean.
-    bash_script(&repo, "scripts/ensure-venv-mesa.sh", &[] as &[&str])?;
+    bash_script(root, "scripts/ensure-venv-mesa.sh", &[] as &[&str])?;
 
     // libkrun: the VMM library. limina consumes its crates by path ([workspace.dependencies]),
     // so the checkout is the build input directly — fork model (task #14).
-    vendor_fork(&repo, "libkrun")?;
+    vendor_fork(root, &manifest, "libkrun", main.as_deref())?;
 
     // virglrs: the host GPU renderer for both accelerated tiers, consumed by rutabaga as a Rust
     // crate. It pins and materializes its own dependencies — the C virglrenderer it generates
     // format tables from and records goldens against, and the venus-protocol the wire comes from
     // — so limina pins virglrs and nothing underneath it.
-    vendor_fork(&repo, "virglrs")?;
-    eprintln!("==> vendoring virglrs's own dependencies");
-    // Absolute program path: a relative one resolves against the parent's cwd on some platforms
-    // and the child's on others, and `current_dir` is set here.
-    let virglrs = repo.join("third_party/virglrs");
-    run(Command::new(virglrs.join("scripts/vendor.sh")).current_dir(&virglrs))?;
+    vendor_fork(root, &manifest, "virglrs", main.as_deref())?;
+    let virglrs = root.join("third_party/virglrs");
+    let nested = virglrs.join("third_party/virglrenderer");
+    if manifest.dep("virglrs")?.checkout.is_some() && git::is_tree(&nested) {
+        // A checkout override is used as it stands, and vendor.sh would move its
+        // virglrenderer onto virglrs's pin.
+        eprintln!("==> virglrs is a checkout override: leaving its own third_party/ as it is");
+    } else {
+        eprintln!("==> vendoring virglrs's own dependencies");
+        // Absolute program path: a relative one resolves against the parent's cwd on some
+        // platforms and the child's on others, and `current_dir` is set here.
+        let mut c = Command::new(virglrs.join("scripts/vendor.sh"));
+        c.current_dir(&virglrs);
+        // In a worktree, virglrs's pin of the C tree comes from main's copy of it — the same
+        // fetch-from-local rule, through the variable virglrs's own script already honours.
+        if let Some(main) = &main {
+            let src = main.join("third_party/virglrs/third_party/virglrenderer");
+            if std::env::var_os("VIRGLRENDERER_SRC").is_none() && git::is_tree(&src) {
+                c.env("VIRGLRENDERER_SRC", src);
+            }
+        }
+        run(&mut c)?;
+    }
 
     // imago: the fork-model pilot ([patch.crates-io] path override; the tree is a clone of our
     // fork pinned by third_party/manifest.toml — no patch series, the `limina` branch IS the delta).
-    vendor_fork(&repo, "imago")?;
+    vendor_fork(root, &manifest, "imago", main.as_deref())?;
 
     // linux: the enhanced-tier guest kernel fork. Marked `heavy` in the manifest — a multi-GB
     // tree this host never builds (the kernel builds in a Linux container / build guest, which
     // fetches the pinned rev itself), so it is opt-in.
     if heavy {
-        vendor_fork(&repo, "linux")?;
+        vendor_fork(root, &manifest, "linux", main.as_deref())?;
     }
 
     eprintln!("==> vendor complete");
@@ -292,127 +399,171 @@ fn vendor(heavy: bool) -> Result<()> {
     Ok(())
 }
 
-/// Materialize a fork-model dependency under `third_party/<name>`: clone the fork recorded in
-/// `third_party/manifest.toml` (adding upstream as a second remote) and check out the pinned rev.
+/// Materialize a fork-model dependency under `root/third_party/<name>`.
 ///
-/// Fresh clone → clone + checkout. Existing tree → fetch only if the pinned rev is absent, then
-/// check out the rev onto the fork's branch. Local work on the branch is left alone when it
-/// already contains the pin (we only force the branch pointer when the pin is missing from it,
-/// i.e. after a `manifest.toml` bump).
-fn vendor_fork(repo: &Path, name: &str) -> Result<()> {
-    let m = manifest_entry(repo, name)?;
-    let dir = repo.join("third_party").join(name);
-    if !dir.join(".git").exists() {
-        eprintln!(
-            "==> cloning {name} fork ({}) — third_party/{name} is absent",
-            m.repo
+/// - A `checkout` override: a symlink to that tree, used as it stands.
+/// - Absent, in a linked worktree whose main checkout has the fork: a worktree of that clone,
+///   detached at the pin.
+/// - Absent otherwise: clone the fork (from the `source` override, when there is one), adding
+///   upstream as a second remote, and check out the pinned rev.
+/// - Present: fetch only if the pinned rev is absent, then check it out. Local work is left
+///   alone when it already contains the pin (we only move HEAD when the pin is missing from it,
+///   i.e. after a `manifest.toml` bump).
+fn vendor_fork(root: &Path, manifest: &Manifest, name: &str, main: Option<&Path>) -> Result<()> {
+    let dep = manifest.dep(name)?;
+    let dir = root.join("third_party").join(name);
+    if let Some(checkout) = &dep.checkout {
+        return link_checkout(&dir, name, checkout, dep.rev.as_deref());
+    }
+    if dir
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
+        bail!(
+            "third_party/{name} is a symlink, but {MANIFEST_LOCAL} has no `checkout` for it: \
+             restore the override, or remove the link to vendor the pin"
         );
-        let mut c = Command::new("git");
-        c.current_dir(repo).args(["clone", "--branch", &m.branch]);
-        // Heavy trees (the kernel) clone blobless: full history, file contents fetched on
-        // demand. A plain clone of linux is several GB before you have touched anything.
-        if m.heavy {
-            c.arg("--filter=blob:none");
-        }
-        c.args([&m.repo, &format!("third_party/{name}")]);
-        run(&mut c)?;
-        if let Some(upstream) = &m.upstream {
-            run(Command::new("git")
-                .current_dir(&dir)
-                .args(["remote", "add", "upstream", upstream]))?;
+    }
+    let repo_url = dep.require("repo", &dep.repo)?;
+    let branch = dep.require("branch", &dep.branch)?;
+    let rev = dep.require("rev", &dep.rev)?;
+    let dir_s = dir.to_str().context("third_party path is not UTF-8")?;
+
+    let main_clone = main
+        .map(|m| m.join("third_party").join(name))
+        .and_then(|p| p.canonicalize().ok())
+        .filter(|p| git::is_tree(p));
+    if !git::is_tree(&dir) {
+        if let Some(main_clone) = &main_clone {
+            if !git::has_commit(main_clone, &rev) {
+                fetch_pin(main_clone, dep, &rev)?;
+            }
+            eprintln!(
+                "==> {name}: worktree of {} detached at the pin {rev}",
+                main_clone.display()
+            );
+            git::run(main_clone, &["worktree", "add", "--detach", dir_s, &rev])?;
+        } else {
+            let from = dep
+                .source
+                .as_deref()
+                .map(|s| s.display().to_string())
+                .unwrap_or_else(|| repo_url.clone());
+            eprintln!("==> cloning {name} fork ({from}) — third_party/{name} is absent");
+            let mut c = git::command(root);
+            c.args(["clone", "--branch", &branch]);
+            // Heavy trees (the kernel) clone blobless: full history, file contents fetched on
+            // demand. A plain clone of linux is several GB before you have touched anything.
+            if dep.heavy {
+                c.arg("--filter=blob:none");
+            }
+            c.args([&from, dir_s]);
+            run(&mut c)?;
+            if dep.source.is_some() {
+                git::run(&dir, &["remote", "set-url", "origin", &repo_url])?;
+                git::run(&dir, &["remote", "add", "local", &from])?;
+            }
+            if let Some(upstream) = &dep.upstream {
+                git::run(&dir, &["remote", "add", "upstream", upstream])?;
+            }
         }
     }
-    let has_rev = Command::new("git")
-        .current_dir(&dir)
-        .args(["cat-file", "-e", &format!("{}^{{commit}}", m.rev)])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !has_rev {
-        eprintln!("==> fetching {name} (pinned rev {} not present)", m.rev);
-        run(Command::new("git")
-            .current_dir(&dir)
-            .args(["fetch", "origin", "--tags"]))?;
+    if !git::has_commit(&dir, &rev) {
+        fetch_pin(&dir, dep, &rev)?;
     }
-    let on_pin = Command::new("git")
-        .current_dir(&dir)
-        .args(["merge-base", "--is-ancestor", &m.rev, &m.branch])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if on_pin {
-        run(Command::new("git")
-            .current_dir(&dir)
-            .args(["checkout", &m.branch]))?;
+
+    if git::is_linked_worktree(&dir)? {
+        // Detached, never on the fork's branch: a branch can be checked out in only one worktree
+        // of a repository, and main's clone already has it.
+        if git::is_ancestor(&dir, &rev, "HEAD") {
+            let head = git::out(&dir, &["rev-parse", "HEAD"])?;
+            if head != rev {
+                eprintln!(
+                    "==> {name}: HEAD {head} carries the pin plus local commits — left alone"
+                );
+            }
+        } else if git::is_dirty(&dir)? {
+            bail!(
+                "{name}: HEAD does not contain the pin {rev} and the tree has uncommitted \
+                 changes — commit them, then re-run"
+            );
+        } else {
+            eprintln!("==> {name}: moving the detached HEAD to the pin {rev}");
+            git::run(&dir, &["checkout", "--detach", &rev])?;
+        }
+        // Hooks: config is shared with main's clone, which already has its own set.
+        return Ok(());
+    }
+
+    if git::is_ancestor(&dir, &rev, &branch) {
+        git::run(&dir, &["checkout", &branch])?;
     } else {
-        eprintln!(
-            "==> {name}: moving {} to the pinned rev {}",
-            m.branch, m.rev
-        );
-        run(Command::new("git")
-            .current_dir(&dir)
-            .args(["checkout", "-B", &m.branch, &m.rev]))?;
+        eprintln!("==> {name}: moving {branch} to the pinned rev {rev}");
+        git::run(&dir, &["checkout", "-B", &branch, &rev])?;
     }
 
     // A fork with hooks of its own in `.githooks/<name>/` gets them wired here rather than in
     // scripts/setup-hooks.sh: this is the only path that can create the clone, and a re-vendor
     // that re-clones would otherwise silently drop the config. `core.hooksPath` is local, so it
     // has to be set per clone. Absolute, so git worktrees off the clone find it too.
-    let hooks = repo.join(".githooks").join(name);
+    let hooks = root.join(".githooks").join(name);
     if hooks.is_dir() {
-        run(Command::new("git").current_dir(&dir).args([
-            "config",
-            "core.hooksPath",
-            &hooks.display().to_string(),
-        ]))?;
+        git::run(
+            &dir,
+            &["config", "core.hooksPath", &hooks.display().to_string()],
+        )?;
     }
     Ok(())
 }
 
-struct ForkPin {
-    repo: String,
-    /// The project this is a fork of, added as a second remote. `None` for a repository that is
-    /// ours outright and forks nothing.
-    upstream: Option<String>,
-    branch: String,
-    rev: String,
-    /// Multi-GB tree this host never builds: skipped by `vendor` unless `--heavy`, and cloned
-    /// blobless when it is materialized.
-    heavy: bool,
+/// Bring the pinned rev into `dir`: from the local override when there is one, else origin.
+fn fetch_pin(dir: &Path, dep: &manifest::Dep, rev: &str) -> Result<()> {
+    if let Some(src) = dep.local_repo() {
+        let src = src.to_str().context("override path is not UTF-8")?;
+        eprintln!("==> {}: fetching the pin {rev} from {src}", dep.name);
+        git::run(dir, &["fetch", src, rev])
+    } else {
+        eprintln!("==> {}: fetching (pinned rev {rev} not present)", dep.name);
+        git::run(dir, &["fetch", "origin", "--tags"])
+    }
 }
 
-/// Read one dependency's pin from `third_party/manifest.toml`.
-fn manifest_entry(repo: &Path, name: &str) -> Result<ForkPin> {
-    let path = repo.join("third_party/manifest.toml");
-    let text =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let table: toml::Table = text
-        .parse()
-        .with_context(|| format!("parsing {}", path.display()))?;
-    let entry = table
-        .get(name)
-        .and_then(|v| v.as_table())
-        .with_context(|| format!("manifest has no [{name}] section"))?;
-    let field = |key: &str| -> Result<String> {
-        entry
-            .get(key)
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .with_context(|| format!("manifest [{name}] missing `{key}`"))
+/// Make `third_party/<name>` a symlink to a `checkout` override. Never over a real tree: that
+/// one may hold work, and moving it aside is the user's call.
+fn link_checkout(dir: &Path, name: &str, checkout: &Path, pin: Option<&str>) -> Result<()> {
+    if !git::is_tree(checkout) {
+        bail!(
+            "{MANIFEST_LOCAL}: [{name}] checkout {} is not a git working tree",
+            checkout.display()
+        );
+    }
+    match dir.symlink_metadata() {
+        Ok(m) if m.file_type().is_symlink() => {
+            if std::fs::read_link(dir)? != checkout {
+                std::fs::remove_file(dir)?;
+                std::os::unix::fs::symlink(checkout, dir)?;
+            }
+        }
+        Ok(_) => bail!(
+            "third_party/{name} is a real tree, and a checkout override takes its place as a \
+             symlink — move it aside first (it may hold work), then re-run"
+        ),
+        Err(_) => std::os::unix::fs::symlink(checkout, dir)?,
+    }
+    let head = git::out(checkout, &["rev-parse", "HEAD"])?;
+    let relation = match pin {
+        Some(pin) if pin == head => "at the pin".to_string(),
+        Some(pin) if git::is_ancestor(checkout, pin, &head) => {
+            format!("the pin {pin} plus local commits")
+        }
+        Some(pin) => format!("does NOT contain the pin {pin}"),
+        None => "no pin".to_string(),
     };
-    Ok(ForkPin {
-        repo: field("repo")?,
-        upstream: entry
-            .get("upstream")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        branch: field("branch")?,
-        rev: field("rev")?,
-        heavy: entry
-            .get("heavy")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-    })
+    eprintln!(
+        "==> {name}: LOCAL CHECKOUT OVERRIDE -> {} (HEAD {head}, {relation})",
+        checkout.display()
+    );
+    Ok(())
 }
 
 /// The one file whose presence decides whether the workspace can link: virglrs links `libEGL`
@@ -628,7 +779,9 @@ fn bundle(release: bool, open: bool) -> Result<()> {
         std::fs::copy(profile_dir.join(bin), macos.join(bin))
             .with_context(|| format!("copy {bin} into the bundle"))?;
     }
-    std::fs::write(app.join("Contents/Info.plist"), info_plist()).context("writing Info.plist")?;
+    let capture = capture_path(&repo);
+    std::fs::write(app.join("Contents/Info.plist"), info_plist(&capture))
+        .context("writing Info.plist")?;
     eprintln!("==> assembled {}", app.display());
 
     // 4. Codesign: worker keeps the hypervisor entitlement; then ad-hoc the main exe and
@@ -648,8 +801,11 @@ fn bundle(release: bool, open: bool) -> Result<()> {
     eprintln!("==> codesigned (worker: com.apple.security.hypervisor)");
 
     if open {
-        eprintln!("==> launching via LaunchServices (open); capture -> {CAPTURE_PATH}");
-        let _ = std::fs::remove_file(CAPTURE_PATH);
+        eprintln!(
+            "==> launching via LaunchServices (open); capture -> {}",
+            capture.display()
+        );
+        let _ = std::fs::remove_file(&capture);
         run(Command::new("open")
             .arg(&app)
             .args(["--args", "--window", "--kernel"])
@@ -661,7 +817,8 @@ fn bundle(release: bool, open: bool) -> Result<()> {
                 "console=ttyAMA0 rootfstype=virtiofs rw init=/init limina.hold",
             ]))?;
         eprintln!(
-            "    launched. Watch this Mac's screen; check {CAPTURE_PATH} for the rendered layer."
+            "    launched. Watch this Mac's screen; check {} for the rendered layer.",
+            capture.display()
         );
     } else {
         eprintln!("==> done: {}", app.display());
@@ -676,7 +833,8 @@ fn bundle(release: bool, open: bool) -> Result<()> {
 /// Minimal app Info.plist. `LSEnvironment` injects the capture path on a LaunchServices
 /// launch (it doesn't apply when the binary is run directly), so a normal launch is
 /// self-verifiable. The supervisor sets its own NSApplication activation policy in code.
-fn info_plist() -> String {
+fn info_plist(capture: &Path) -> String {
+    let capture = capture.display();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -693,7 +851,7 @@ fn info_plist() -> String {
     <key>NSHighResolutionCapable</key><true/>
     <key>LSEnvironment</key>
     <dict>
-        <key>LIMINA_WINDOW_CAPTURE</key><string>{CAPTURE_PATH}</string>
+        <key>LIMINA_WINDOW_CAPTURE</key><string>{capture}</string>
         <key>RUST_LOG</key><string>info</string>
     </dict>
 </dict>

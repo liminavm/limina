@@ -12,7 +12,8 @@
 # build fix, the VirtioSerialDxe TPL fix, PL031 DT status=okay, the vendored
 # VirtioKeyboardDxe, and the VirtioGpuDxe GOP + ConIn enablement are all commits there —
 # NOTHING is patched at build time any more (patches/edk2/ is a tombstone). To change the
-# firmware: commit on the fork's `limina` branch, push, bump the manifest rev.
+# firmware: commit on the fork's `limina` branch and bump the manifest rev; until the fork is
+# pushed, `source = "<local edk2 clone>"` under [edk2] in third_party/manifest.local.toml builds it.
 #
 # Why our own build (M2.5 Track B): krunkit ships only KRUN_EFI.silent.fd — serial-only, no
 # GOP, and a DEBUG build whose live ASSERTs end in CpuDeadLoop (the #14 cold-boot wedge).
@@ -28,10 +29,24 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The pin lives in the manifest; EDK2_REV/EDK2_REPO env override for fork surgery only.
-MANIFEST_REV=$(awk '/^\[edk2\]/{f=1; next} /^\[/{f=0} f && /^rev = /{gsub(/"/, "", $3); print $3; exit}' third_party/manifest.toml)
+# The pin lives in the manifest. A `source`/`checkout` override in third_party/manifest.local.toml
+# builds from a local repository instead of the network (scripts/lib/manifest.sh); EDK2_REV /
+# EDK2_REPO still override both, for fork surgery.
+# shellcheck source=scripts/lib/manifest.sh
+. scripts/lib/manifest.sh
+MANIFEST_REV="$(pin_build_rev edk2)"
 [ -n "$MANIFEST_REV" ] || { echo "no [edk2] rev in third_party/manifest.toml" >&2; exit 1; }
-EDK2_REPO="${EDK2_REPO:-https://github.com/liminavm/edk2}"
+# A local repository goes into the container read-only, as its git directory: a linked
+# worktree's `.git` is a file naming a host path that does not exist in there. file:// rather
+# than a bare path, because git ignores --depth on a plain-path clone.
+LOCAL_MOUNT=()
+LOCAL_EDK2="$(pin_local_repo edk2)"
+if [ -z "${EDK2_REPO:-}" ] && [ -n "$LOCAL_EDK2" ]; then
+    pin_note edk2
+    LOCAL_MOUNT=(--mount "type=bind,source=$(pin_git_dir "$LOCAL_EDK2"),target=/src/edk2.git,readonly")
+    EDK2_REPO="file:///src/edk2.git"
+fi
+EDK2_REPO="${EDK2_REPO:-$(pin edk2 repo)}"
 EDK2_REV="${EDK2_REV:-$MANIFEST_REV}"
 # RELEASE is the production default (smaller, no DEBUG overhead; ASSERTs compile out, so a
 # firmware error degrades instead of dead-looping). DEBUG builds boot fine too (the TPL fix
@@ -58,8 +73,12 @@ echo "    build volume: $VOL (incremental across runs); output: $OUT/$OUT_NAME"
 container run --rm --cpus "$JOBS" --memory "$MEM" \
     -v "$(pwd)/$OUT:/out" \
     -v "$VOL:/build" \
+    ${LOCAL_MOUNT[@]+"${LOCAL_MOUNT[@]}"} \
     "$LIMINA_BUILD_IMAGE" bash -euo pipefail -c "
         TARGET='$TARGET'; OUT_NAME='$OUT_NAME'; JOBS='$JOBS'; EDK2_REV='$EDK2_REV'
+        # A mounted local repository belongs to the host user, not root: without this git
+        # refuses it as 'dubious ownership'.
+        git config --global --add safe.directory /src/edk2.git
         # The unified image is F43, whose gcc defaults to gnu23 and miscompiles edk2's K&R
         # BaseTools ('()' becomes '(void)'). The image ships a -std=gnu17 wrapper OUT of PATH so it
         # can't taint the kernel/mesa builds; opt into it here only (build tools only — the

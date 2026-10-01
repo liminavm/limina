@@ -17,8 +17,9 @@
 # patches/mesa-guest/ via the spec (Patch9xxx lines derived from the directory listing, sorted).
 #
 # So the flow for changing the guest mesa is:
-#   1. commit on the fork's limina-guest branch (worktree: /Volumes/mesa-cs/mesa-guest), push
-#   2. update the [mesa-guest] rev in third_party/manifest.toml
+#   1. commit on the fork's limina-guest branch (worktree: /Volumes/mesa-cs/mesa-guest)
+#   2. update the [mesa-guest] rev in third_party/manifest.toml (push the fork before limina —
+#      the pre-push hook checks)
 #   3. run this script; commit the regenerated patches/mesa-guest/ together with the manifest
 #   4. rebuild the RPM (LIMINA_REL bump!) and redeliver per docs/images.md
 #
@@ -27,19 +28,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT="patches/mesa-guest"
-TREE="/Volumes/mesa-cs/mesa-guest"
-MANIFEST="third_party/manifest.toml"
-
-# Minimal TOML read: the [mesa-guest] section's scalar string fields.
-manifest_field() {
-    awk -v key="$1" '
-        /^\[/ { in_sec = ($0 ~ /^\[mesa-guest\]/) }
-        in_sec && $1 == key { gsub(/^[^"]*"|"[^"]*$/, ""); print; exit }
-    ' "$MANIFEST"
-}
-REV="$(manifest_field rev)"
-BASE="$(manifest_field base)"
-[ -n "$REV" ] && [ -n "$BASE" ] || { echo "could not read the [mesa-guest] pin from $MANIFEST" >&2; exit 1; }
+# shellcheck source=scripts/lib/manifest.sh
+. scripts/lib/manifest.sh
+# A `checkout` override only changes which tree the series is read out of. The series itself is
+# always the COMMITTED pin's: it is a committed artifact, and has to match the manifest beside it.
+TREE="$(pin_tree mesa-guest)"
+REV="$(pin mesa-guest rev)"
+BASE="$(pin mesa-guest base)"
+[ -n "$REV" ] && [ -n "$BASE" ] || { echo "could not read the [mesa-guest] pin from third_party/manifest.toml" >&2; exit 1; }
 
 if [ ! -d "$TREE" ]; then
     scripts/ensure-mesa-cs.sh

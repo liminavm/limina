@@ -56,6 +56,23 @@ esac
 echo "==> enhanced tier ($WHAT) in $LIMINA_BUILD_IMAGE — volume $VOL, -j$JOBS, $MEM"
 echo "    output: $OUT"
 
+# The kernel source comes from the [linux] pin's fork over the network, unless
+# third_party/manifest.local.toml names a local repository for it. Overrides are resolved HERE,
+# on the host: the provision scripts inside see only committed values, because the host paths an
+# override names mean nothing in the container. The repository goes in read-only, as its git
+# directory (a linked worktree's `.git` file names a host path).
+LOCAL_MOUNT=()
+KERNEL_SRC_ENV=""
+# shellcheck source=scripts/lib/manifest.sh
+. "$ROOT/scripts/lib/manifest.sh"
+LOCAL_LINUX="$(pin_local_repo linux)"
+if [ -n "$LOCAL_LINUX" ] && [ "$WHAT" != mesa ]; then
+  pin_note linux
+  LOCAL_MOUNT=(--mount "type=bind,source=$(pin_git_dir "$LOCAL_LINUX"),target=/src/linux.git,readonly")
+  KERNEL_SRC_ENV="export FORK_URL=file:///src/linux.git KREV=$(pin_build_rev linux)
+          git config --global --add safe.directory /src/linux.git"
+fi
+
 for entry in "${SCRIPTS[@]}"; do
   set -- $entry
   script="$1"; sub="$2"
@@ -68,12 +85,14 @@ for entry in "${SCRIPTS[@]}"; do
       --mount "type=bind,source=$ROOT,target=/repo,readonly" \
       -v "$OUT:/out" \
       -v "$VOL:/root" \
+      ${LOCAL_MOUNT[@]+"${LOCAL_MOUNT[@]}"} \
       "$LIMINA_BUILD_IMAGE" bash -euo pipefail -c "
           export HOME=/root
           # The provision scripts' own pins. Without them dnf hands over whatever mesa SRPM
           # Fedora ships today, which the series is not based on.
           ${MESA_SRPM_URL:+export MESA_SRPM_URL='$MESA_SRPM_URL'}
           ${LIMINA_REL:+export LIMINA_REL='$LIMINA_REL'}
+          $KERNEL_SRC_ENV
           # build-all.sh assembles a payload dir; the component builds take OUT directly.
           if [ '$script' = build-all.sh ]; then
               export PAYLOAD=/out/payload

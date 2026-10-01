@@ -23,24 +23,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT="${1:-target/linux-patches}"
-TREE="third_party/linux"
 MANIFEST="third_party/manifest.toml"
-
-# Minimal TOML read: the [linux] section's scalar string fields.
-manifest_field() {
-    awk -v key="$1" '
-        /^\[/ { in_linux = ($0 ~ /^\[linux\]/) }
-        in_linux && $1 == key { gsub(/^[^"]*"|"[^"]*$/, ""); print; exit }
-    ' "$MANIFEST"
-}
-REPO_URL="$(manifest_field repo)"
-UPSTREAM_URL="$(manifest_field upstream)"
-BRANCH="$(manifest_field branch)"
-REV="$(manifest_field rev)"
-BASE="$(manifest_field base)"
+# shellcheck source=scripts/lib/manifest.sh
+. scripts/lib/manifest.sh
+# The tree to read from (a `checkout` override's, else third_party/linux); the series is the
+# committed pin's either way.
+TREE="$(pin_tree linux)"
+REPO_URL="$(pin linux repo)"
+UPSTREAM_URL="$(pin linux upstream)"
+BRANCH="$(pin linux branch)"
+REV="$(pin linux rev)"
+BASE="$(pin linux base)"
 [ -n "$REV" ] && [ -n "$BASE" ] || { echo "could not read the [linux] pin from $MANIFEST" >&2; exit 1; }
 
-if [ ! -d "$TREE/.git" ]; then
+if [ ! -e "$TREE/.git" ]; then
     echo "==> cloning the linux fork ($REPO_URL) — third_party/linux is absent"
     echo "    (blobless: history without file contents, fetched on demand)"
     git clone --filter=blob:none --no-checkout "$REPO_URL" "$TREE"
@@ -49,7 +45,12 @@ fi
 
 if ! git -C "$TREE" cat-file -e "${REV}^{commit}" 2>/dev/null; then
     echo "==> fetching (pinned rev $REV not present)"
-    git -C "$TREE" fetch origin --tags
+    if [ -n "$(pin_override linux source)" ]; then
+        pin_note linux
+        git -C "$TREE" fetch "$(pin_override linux source)" "$REV"
+    else
+        git -C "$TREE" fetch origin --tags
+    fi
 fi
 
 # The base is an UPSTREAM tag (v7.1.8), and a GitHub fork does not receive tags pushed upstream

@@ -43,14 +43,13 @@ KCONFIG="$HOME/limina-build/linux/.config"
 cp -f "$REPO/third_party/manifest.toml" "$kdst/manifest.toml"
 cp -f "$REPO/scripts/provision/f44/build-kernel-rpm.sh" "$kdst/"
 # The source is the fork pin, not a tag + loose patches: read the [linux] section so the
-# reference names exactly the rev this kernel was built from.
-manifest_field() {
-  awk -v key="$1" '
-      /^\[/ { in_linux = ($0 ~ /^\[linux\]/) }
-      in_linux && $1 == key { gsub(/^[^"]*"|"[^"]*$/, ""); print; exit }
-  ' "$REPO/third_party/manifest.toml"
-}
-FORK_URL="$(manifest_field repo)"; KREV="$(manifest_field rev)"; KVER="$(manifest_field base)"
+# reference names exactly the rev this kernel was built from. The URL is always the fork's — a
+# local override's file:// path means nothing to whoever reads this — but the rev is KREV when
+# build-enhanced-rpms.sh passed one in, because that is what was built.
+# shellcheck source=scripts/lib/manifest.sh
+LIMINA_ROOT="$REPO" . "$REPO/scripts/lib/manifest.sh"
+FORK_URL="$(pin linux repo)"; KVER="$(pin linux base)"
+PIN_KREV="$(pin linux rev)"; KREV="${KREV:-$PIN_KREV}"
 cat > "$kdst/SOURCE.txt" <<TXT
 limina-kernel-16k source reference
 ==================================
@@ -68,6 +67,15 @@ apply: our changes ARE the commits on the branch. Fully reproducible:
 
 Upstream-facing status of each commit: docs/upstreaming/ledger/linux.md in the limina repo.
 TXT
+if [ "$KREV" != "$PIN_KREV" ]; then
+  cat >> "$kdst/SOURCE.txt" <<TXT
+
+NOTE: built from a local checkout override at $KREV, not the
+manifest pin $PIN_KREV. Until that rev is pushed to the fork, the
+fetch above cannot reproduce this kernel.
+TXT
+  echo "  WARN: kernel built from a local override ($KREV), not the pin ($PIN_KREV)"
+fi
 tar -czf "$SR/limina-kernel-16k-source.tar.gz" -C "$tmpd" limina-kernel-16k-source
 rm -rf "$tmpd"
 echo "  ok: limina-kernel-16k-source.tar.gz"

@@ -27,6 +27,8 @@ DMG="${1:?usage: park-bundle.sh <dmg> [profile]}"
 PROFILE="${2:-unknown}"
 LOT="${LIMINA_PARKING_LOT:-$HOME/Projects/LiminaParkingLot}"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=scripts/lib/manifest.sh
+. "$ROOT/scripts/lib/manifest.sh"
 
 [ -f "$DMG" ] || { echo "park-bundle: no such dmg: $DMG" >&2; exit 1; }
 mkdir -p "$LOT"
@@ -70,11 +72,10 @@ describe() {
   if ! git -C "$path" rev-parse --git-dir >/dev/null 2>&1; then
     # Not vendored on this host. Record the pin and say plainly that nothing verified it —
     # a `heavy = true` dep (the kernel) is skipped by `cargo xtask vendor` unless asked for.
-    local pin
-    pin=$(awk -v s="[$label]" '$0==s{f=1;next} f&&/^rev *=/{gsub(/[",]/,"");print $3;exit}' \
-          "$ROOT/third_party/manifest.toml" 2>/dev/null || true)
+    local rev
+    rev=$(pin "$label" rev 2>/dev/null || true)
     printf '| %s | `%s` | — | — | not vendored here — **manifest pin, unverified** |\n' \
-      "$label" "${pin:-<unknown>}"
+      "$label" "${rev:-<unknown>}"
     return
   fi
   hash=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo '<unknown>')
@@ -128,19 +129,22 @@ fi
           if (i=="") print "<unsigned>"; else print i (t==""?"":" (team " t ")")}')
   echo "- Signed: $sig"
   echo "- Size: $(du -sh "$LOT/$NAME" | awk '{print $1}')"
+  # A checkout override is a tree the manifest does not name at all; say so, with the path,
+  # since the table below shows only its HEAD.
+  for dep in libkrun virglrs imago edk2 linux kosmickrisp mesa-guest; do
+    c="$(pin_override "$dep" checkout)"
+    [ -n "$c" ] && echo "- **Local checkout override**: $dep built from \`$c\`, not the manifest's tree"
+  done
   echo
   echo '| tree | rev | branch | tree state | reachable |'
   echo '|---|---|---|---|---|'
   describe limina "$ROOT"
-  describe libkrun "$ROOT/third_party/libkrun"
-  describe virglrs "$ROOT/third_party/virglrs"
-  describe imago "$ROOT/third_party/imago"
-  describe edk2 "$ROOT/third_party/edk2"
-  describe linux "$ROOT/third_party/linux"
-  # Neither mesa build lives under third_party/ — anything that walks that directory misses the
-  # host renderer and the guest venus mesa entirely.
-  describe kosmickrisp /Volumes/mesa-cs/mesa
-  describe mesa-guest /Volumes/mesa-cs/mesa-guest
+  # pin_tree: the tree each dependency is on this checkout, overrides included. Neither mesa
+  # build lives under third_party/ — anything that walks that directory misses the host renderer
+  # and the guest venus mesa entirely.
+  for dep in libkrun virglrs imago edk2 linux kosmickrisp mesa-guest; do
+    describe "$dep" "$(pin_tree "$dep")"
+  done
   echo
 } >> "$INDEX"
 
