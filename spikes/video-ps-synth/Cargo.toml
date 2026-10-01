@@ -9,6 +9,10 @@ edition = "2024"
 license = "GPL-2.0-only WITH LicenseRef-limina-exception"
 publish = false
 
+# Its own workspace root: in a worktree nested inside another checkout, cargo would otherwise
+# walk up into the outer checkout's Cargo.toml, which does not exclude this tree's spikes/.
+[workspace]
+
 # The renderer is the subject, so it is a path dependency on the pinned tree rather than a
 # copy of anything out of it. `[lib] name` in virglrs's manifest is `virglrenderer`, which is
 # what the binaries import.

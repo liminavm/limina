@@ -11,6 +11,11 @@ edition = "2024"
 license = "GPL-2.0-only WITH LicenseRef-limina-exception"
 publish = false
 
+# Its own workspace root, so cargo stops looking here. Excluding it from the root workspace is
+# not enough: a worktree nested in another checkout (.claude/worktrees/) has cargo keep walking
+# up past this tree's root, into the OUTER checkout's Cargo.toml, which then claims it.
+[workspace]
+
 [dependencies]
 anyhow = "1"
 clap   = { version = "4", features = ["derive"] }

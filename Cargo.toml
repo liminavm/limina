@@ -13,7 +13,9 @@ members = ["crates/*"]
 # xtask is deliberately OUTSIDE the workspace: it must build on a fresh clone BEFORE
 # `xtask vendor` materializes third_party/, and workspace membership would drag it into the
 # [patch.crates-io] imago graph (which points at the not-yet-cloned third_party/imago).
-exclude = ["third_party", "spikes", "guest", "xtask"]
+# .claude/ holds nested worktrees (`cargo xtask worktree`), each a workspace of its own: cargo
+# walks up out of a worktree past anything that worktree excludes, and must not adopt it here.
+exclude = ["third_party", "spikes", "guest", "xtask", ".claude"]
 
 [workspace.package]
 version = "0.1.0"
