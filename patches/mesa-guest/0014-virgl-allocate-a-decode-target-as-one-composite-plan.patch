@@ -199,10 +199,10 @@ index d31a1bea99a..368787fe8b7 100644
     virgl_resource_free_gbm_layout(res);
     FREE(res);
 diff --git a/src/gallium/drivers/virgl/virgl_video.c b/src/gallium/drivers/virgl/virgl_video.c
-index c95e370e1c8..f366f912bcf 100644
+index c85794b151a..71b694eeb12 100644
 --- a/src/gallium/drivers/virgl/virgl_video.c
 +++ b/src/gallium/drivers/virgl/virgl_video.c
-@@ -1243,6 +1243,7 @@ virgl_video_create_buffer(struct pipe_context *ctx,
+@@ -1242,6 +1242,7 @@ virgl_video_create_buffer(struct pipe_context *ctx,
                            const struct pipe_video_buffer *tmpl)
  {
      struct virgl_context *vctx = virgl_context(ctx);
@@ -210,7 +210,7 @@ index c95e370e1c8..f366f912bcf 100644
      struct virgl_video_buffer *vbuf;
      struct pipe_video_buffer local_tmpl;
  
-@@ -1258,7 +1259,24 @@ virgl_video_create_buffer(struct pipe_context *ctx,
+@@ -1257,7 +1258,24 @@ virgl_video_create_buffer(struct pipe_context *ctx,
      local_tmpl.flags |= VIRGL_RESOURCE_FLAG_VIDEO_TARGET;
      tmpl = &local_tmpl;
  

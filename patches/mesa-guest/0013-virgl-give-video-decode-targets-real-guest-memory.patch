@@ -83,10 +83,10 @@ index 76dc5ee37d8..1d37e9eac4c 100644
                                             unsigned pflags)
  {
 diff --git a/src/gallium/drivers/virgl/virgl_video.c b/src/gallium/drivers/virgl/virgl_video.c
-index f3b6bd61001..c95e370e1c8 100644
+index 1ff145d26aa..c85794b151a 100644
 --- a/src/gallium/drivers/virgl/virgl_video.c
 +++ b/src/gallium/drivers/virgl/virgl_video.c
-@@ -1244,11 +1244,20 @@ virgl_video_create_buffer(struct pipe_context *ctx,
+@@ -1243,11 +1243,20 @@ virgl_video_create_buffer(struct pipe_context *ctx,
  {
      struct virgl_context *vctx = virgl_context(ctx);
      struct virgl_video_buffer *vbuf;

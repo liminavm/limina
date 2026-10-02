@@ -20,6 +20,8 @@
 #   FEDORA_REL=45   build for another Fedora (also rebuild the image: FORCE=1 build-image.sh)
 #   JOBS=8 MEM=12g  container resources (the kernel build is the heavy one)
 #   OUT=<dir>       host output dir (default target/enhanced-rpms)
+#   MESA_SRPM_URL=<url> LIMINA_REL=<n>   passed through to build-mesa-rpm.sh (the SRPM base and
+#                   the Release bump); the current base is in docs/images.md §Component versions
 # Outputs: $OUT/kernel/*.rpm, $OUT/mesa/*.rpm, and for `all` the install-ready $OUT/payload.
 # Prereq: `container system start`. Network required (dnf, SRPM downloads, kernel source).
 set -euo pipefail
@@ -68,6 +70,10 @@ for entry in "${SCRIPTS[@]}"; do
       -v "$VOL:/root" \
       "$LIMINA_BUILD_IMAGE" bash -euo pipefail -c "
           export HOME=/root
+          # The provision scripts' own pins. Without them dnf hands over whatever mesa SRPM
+          # Fedora ships today, which the series is not based on.
+          ${MESA_SRPM_URL:+export MESA_SRPM_URL='$MESA_SRPM_URL'}
+          ${LIMINA_REL:+export LIMINA_REL='$LIMINA_REL'}
           # build-all.sh assembles a payload dir; the component builds take OUT directly.
           if [ '$script' = build-all.sh ]; then
               export PAYLOAD=/out/payload

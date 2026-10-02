@@ -26,10 +26,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  1 file changed, 9 insertions(+)
 
 diff --git a/src/gallium/drivers/virgl/virgl_screen.c b/src/gallium/drivers/virgl/virgl_screen.c
-index 1e0b7cba1bf..aabb7ad44e2 100644
+index 66b3d3d6368..7140089e20f 100644
 --- a/src/gallium/drivers/virgl/virgl_screen.c
 +++ b/src/gallium/drivers/virgl/virgl_screen.c
-@@ -747,6 +747,15 @@ virgl_is_format_supported( struct pipe_screen *screen,
+@@ -739,6 +739,15 @@ virgl_is_format_supported( struct pipe_screen *screen,
       goto out_lookup;
     }
  

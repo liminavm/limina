@@ -27,10 +27,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
  1 file changed, 18 insertions(+), 3 deletions(-)
 
 diff --git a/src/egl/drivers/dri2/egl_dri2.c b/src/egl/drivers/dri2/egl_dri2.c
-index 8185b79bfed..3fd0293f891 100644
+index edee4ffc3ff..80b040943ea 100644
 --- a/src/egl/drivers/dri2/egl_dri2.c
 +++ b/src/egl/drivers/dri2/egl_dri2.c
-@@ -2591,9 +2591,24 @@ dri2_export_dma_buf_image_mesa(_EGLDisplay *disp, _EGLImage *img, int *fds,
+@@ -2607,9 +2607,24 @@ dri2_export_dma_buf_image_mesa(_EGLDisplay *disp, _EGLImage *img, int *fds,
            *    "If the number of fds is less than the number of planes, then
            *    subsequent fd slots should contain -1."
            */

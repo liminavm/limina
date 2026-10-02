@@ -29,10 +29,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
  1 file changed, 17 insertions(+), 4 deletions(-)
 
 diff --git a/src/gallium/drivers/virgl/virgl_video.c b/src/gallium/drivers/virgl/virgl_video.c
-index f366f912bcf..6af1e1113a6 100644
+index 71b694eeb12..0d4e5d87396 100644
 --- a/src/gallium/drivers/virgl/virgl_video.c
 +++ b/src/gallium/drivers/virgl/virgl_video.c
-@@ -1265,15 +1265,28 @@ virgl_video_create_buffer(struct pipe_context *ctx,
+@@ -1264,15 +1264,28 @@ virgl_video_create_buffer(struct pipe_context *ctx,
       * frame with one surface; only the composite create names a planar format, which
       * is what a host-side planar allocation keys off.
       *

@@ -22,16 +22,16 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
  src/virtio/vulkan/vn_common.c     | 14 +++--
  src/virtio/vulkan/vn_common.h     |  6 +-
  src/virtio/vulkan/vn_query_pool.c | 12 ++--
- src/virtio/vulkan/vn_queue.c      | 16 ++----
  src/virtio/vulkan/vn_ring.c       | 93 +++++++++++++++++++++++--------
  src/virtio/vulkan/vn_ring.h       |  5 +-
- 6 files changed, 100 insertions(+), 46 deletions(-)
+ src/virtio/vulkan/vn_sync.c       | 10 ++--
+ 6 files changed, 98 insertions(+), 42 deletions(-)
 
 diff --git a/src/virtio/vulkan/vn_common.c b/src/virtio/vulkan/vn_common.c
-index 128ce9aad66..731b495a3bf 100644
+index 01f40dddb28..09a77fa7ba6 100644
 --- a/src/virtio/vulkan/vn_common.c
 +++ b/src/virtio/vulkan/vn_common.c
-@@ -245,7 +245,7 @@ vn_relax_init(struct vn_instance *instance, enum vn_relax_reason reason)
+@@ -243,7 +243,7 @@ vn_relax_init(struct vn_instance *instance, enum vn_relax_reason reason)
     };
  }
  
@@ -40,7 +40,7 @@ index 128ce9aad66..731b495a3bf 100644
  vn_relax(struct vn_relax_state *state)
  {
     const uint32_t base_sleep_us = state->profile.base_sleep_us;
-@@ -257,7 +257,7 @@ vn_relax(struct vn_relax_state *state)
+@@ -255,7 +255,7 @@ vn_relax(struct vn_relax_state *state)
     (*iter)++;
     if (*iter < (1 << busy_wait_order)) {
        thrd_yield();
@@ -49,7 +49,7 @@ index 128ce9aad66..731b495a3bf 100644
     }
  
     state->warn = false;
-@@ -270,8 +270,13 @@ vn_relax(struct vn_relax_state *state)
+@@ -268,8 +268,13 @@ vn_relax(struct vn_relax_state *state)
        struct vn_ring *ring = instance->ring.ring;
        const uint32_t status = vn_ring_load_status(ring);
        if (status & VK_RING_STATUS_FATAL_BIT_MESA) {
@@ -65,7 +65,7 @@ index 128ce9aad66..731b495a3bf 100644
        }
  
        struct vn_watchdog *watchdog = &instance->ring.watchdog;
-@@ -293,6 +298,7 @@ vn_relax(struct vn_relax_state *state)
+@@ -291,6 +296,7 @@ vn_relax(struct vn_relax_state *state)
  
     const uint32_t shift = util_last_bit(*iter) - busy_wait_order - 1;
     os_time_sleep(base_sleep_us << shift);
@@ -74,10 +74,10 @@ index 128ce9aad66..731b495a3bf 100644
  
  struct vn_ring *
 diff --git a/src/virtio/vulkan/vn_common.h b/src/virtio/vulkan/vn_common.h
-index 92117977ab5..aace7a703a9 100644
+index 86235f6ae13..ab376ceb43b 100644
 --- a/src/virtio/vulkan/vn_common.h
 +++ b/src/virtio/vulkan/vn_common.h
-@@ -425,7 +425,11 @@ vn_watchdog_fini(struct vn_watchdog *watchdog)
+@@ -436,7 +436,11 @@ vn_watchdog_fini(struct vn_watchdog *watchdog)
  struct vn_relax_state
  vn_relax_init(struct vn_instance *instance, enum vn_relax_reason reason);
  
@@ -120,47 +120,6 @@ index 383eea694b9..74472f5aa1b 100644
           if (result != VK_SUCCESS)
              return result;
  
-diff --git a/src/virtio/vulkan/vn_queue.c b/src/virtio/vulkan/vn_queue.c
-index ad288ace3df..56241088bf0 100644
---- a/src/virtio/vulkan/vn_queue.c
-+++ b/src/virtio/vulkan/vn_queue.c
-@@ -1770,10 +1770,8 @@ vn_get_fence_status(VkDevice dev_handle,
-              */
-             result = vn_call_vkGetFenceStatus(dev->primary_ring, dev_handle,
-                                               fence_handle);
--            if (result == VK_ERROR_DEVICE_LOST) {
--               vn_log(dev->instance, "aborting on ffb device lost");
--               abort();
--            }
-+            if (result == VK_ERROR_DEVICE_LOST)
-+               vn_log(dev->instance, "device lost on ffb probe");
-             if (result == VK_SUCCESS &&
-                 vn_feedback_get_status(fence->feedback.slot) != VK_SUCCESS) {
-                vn_log(dev->instance, "ERROR: ffb must be signaled now");
-@@ -1852,8 +1850,8 @@ vn_update_sync_result(struct vn_device *dev,
-       if (abs_timeout != OS_TIMEOUT_INFINITE &&
-           os_time_get_nano() >= abs_timeout)
-          result = VK_TIMEOUT;
--      else
--         vn_relax(relax_state);
-+      else if (!vn_relax(relax_state))
-+         result = VK_ERROR_DEVICE_LOST;
-       break;
-    default:
-       assert(result == VK_SUCCESS || result < 0);
-@@ -2312,10 +2310,8 @@ vn_get_semaphore_counter_value(VkDevice dev_handle,
-          uint64_t tmp;
-          VkResult result = vn_call_vkGetSemaphoreCounterValue(
-             dev->primary_ring, dev_handle, sem_handle, &tmp);
--         if (result == VK_ERROR_DEVICE_LOST) {
--            vn_log(dev->instance, "aborting on sfb device lost");
--            abort();
--         }
-+         if (result == VK_ERROR_DEVICE_LOST)
-+            vn_log(dev->instance, "device lost on sfb probe");
-          if (result != VK_SUCCESS)
-             return result;
-       }
 diff --git a/src/virtio/vulkan/vn_ring.c b/src/virtio/vulkan/vn_ring.c
 index 2d75f051ed7..5edca8b2390 100644
 --- a/src/virtio/vulkan/vn_ring.c
@@ -376,3 +335,31 @@ index 5128fa4115f..a10ba6d7e32 100644
  vn_ring_wait_all(struct vn_ring *ring);
  
  struct vn_ring_submit_command {
+diff --git a/src/virtio/vulkan/vn_sync.c b/src/virtio/vulkan/vn_sync.c
+index ee0a5391b25..d40876e134d 100644
+--- a/src/virtio/vulkan/vn_sync.c
++++ b/src/virtio/vulkan/vn_sync.c
+@@ -178,8 +178,8 @@ vn_update_sync_result(struct vn_device *dev,
+       if (abs_timeout != OS_TIMEOUT_INFINITE &&
+           os_time_get_nano() >= abs_timeout)
+          result = VK_TIMEOUT;
+-      else
+-         vn_relax(relax_state);
++      else if (!vn_relax(relax_state))
++         result = VK_ERROR_DEVICE_LOST;
+       break;
+    default:
+       assert(result == VK_SUCCESS || result < 0);
+@@ -516,10 +516,8 @@ vn_get_semaphore_counter_value(VkDevice dev_handle,
+           */
+          VkResult result = vn_call_vkGetSemaphoreCounterValue(
+             dev->primary_ring, dev_handle, sem_handle, out_value);
+-         if (result == VK_ERROR_DEVICE_LOST) {
+-            vn_log(dev->instance, "aborting on sfb device lost");
+-            abort();
+-         }
++         if (result == VK_ERROR_DEVICE_LOST)
++            vn_log(dev->instance, "device lost on sfb probe");
+          if (result != VK_SUCCESS)
+             return result;
+       }

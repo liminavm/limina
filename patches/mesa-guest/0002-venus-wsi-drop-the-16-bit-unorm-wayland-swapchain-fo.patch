@@ -19,10 +19,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
  1 file changed, 8 insertions(+), 7 deletions(-)
 
 diff --git a/src/vulkan/wsi/wsi_common_wayland.c b/src/vulkan/wsi/wsi_common_wayland.c
-index bec50f1c070..a626e90bf1b 100644
+index 153157ec4f8..1b250343b73 100644
 --- a/src/vulkan/wsi/wsi_common_wayland.c
 +++ b/src/vulkan/wsi/wsi_common_wayland.c
-@@ -577,15 +577,16 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
+@@ -644,15 +644,16 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
      * compared to DRM formats, just like the 8-bits-per-channel ones.
      * On little endian systems the memory representation of each channel
      * matches the DRM formats'. */

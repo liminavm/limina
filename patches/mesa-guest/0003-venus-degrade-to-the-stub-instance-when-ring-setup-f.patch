@@ -24,10 +24,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
  1 file changed, 23 insertions(+), 4 deletions(-)
 
 diff --git a/src/virtio/vulkan/vn_instance.c b/src/virtio/vulkan/vn_instance.c
-index 8a3f9af873a..ad40ea2675c 100644
+index b05edbfd1aa..6fac90f145a 100644
 --- a/src/virtio/vulkan/vn_instance.c
 +++ b/src/virtio/vulkan/vn_instance.c
-@@ -333,11 +333,13 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+@@ -317,11 +317,13 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
  
     result = vn_instance_init_ring(instance);
     if (result != VK_SUCCESS)
@@ -44,7 +44,7 @@ index 8a3f9af873a..ad40ea2675c 100644
  
     VkInstanceCreateInfo local_create_info = *pCreateInfo;
     local_create_info.ppEnabledExtensionNames = NULL;
-@@ -392,10 +394,27 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+@@ -369,10 +371,27 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
  
     return VK_SUCCESS;
  

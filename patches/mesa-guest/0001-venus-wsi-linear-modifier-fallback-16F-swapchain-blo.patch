@@ -31,7 +31,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
  3 files changed, 68 insertions(+), 1 deletion(-)
 
 diff --git a/src/virtio/vulkan/vn_wsi.c b/src/virtio/vulkan/vn_wsi.c
-index eb290cb8d1a..4e1fa670529 100644
+index e73ab48c2fe..3a5a801c0bb 100644
 --- a/src/virtio/vulkan/vn_wsi.c
 +++ b/src/virtio/vulkan/vn_wsi.c
 @@ -189,6 +189,15 @@ vn_wsi_init(struct vn_physical_device *physical_dev)
@@ -51,10 +51,10 @@ index eb290cb8d1a..4e1fa670529 100644
  
     return VK_SUCCESS;
 diff --git a/src/vulkan/wsi/wsi_common.h b/src/vulkan/wsi/wsi_common.h
-index 8c9f1f1da50..9110dc4d204 100644
+index 803d140696a..c59d9d277e7 100644
 --- a/src/vulkan/wsi/wsi_common.h
 +++ b/src/vulkan/wsi/wsi_common.h
-@@ -92,6 +92,26 @@ struct wsi_device {
+@@ -93,6 +93,26 @@ struct wsi_device {
     bool supports_protected[VK_ICD_WSI_PLATFORM_MAX];
  
     bool supports_modifiers;
@@ -82,10 +82,10 @@ index 8c9f1f1da50..9110dc4d204 100644
     uint32_t optimalBufferCopyRowPitchAlignment;
     VkPresentModeKHR override_present_mode;
 diff --git a/src/vulkan/wsi/wsi_common_wayland.c b/src/vulkan/wsi/wsi_common_wayland.c
-index 38ec3cd8528..bec50f1c070 100644
+index 33a4059617c..153157ec4f8 100644
 --- a/src/vulkan/wsi/wsi_common_wayland.c
 +++ b/src/vulkan/wsi/wsi_common_wayland.c
-@@ -375,7 +375,7 @@ wsi_wl_display_add_vk_format(struct wsi_wl_display *display,
+@@ -442,7 +442,7 @@ wsi_wl_display_add_vk_format(struct wsi_wl_display *display,
  }
  
  static void
@@ -94,7 +94,7 @@ index 38ec3cd8528..bec50f1c070 100644
  {
     uint64_t *mod;
  
-@@ -391,6 +391,17 @@ wsi_wl_format_add_modifier(struct wsi_wl_format *format, uint64_t modifier)
+@@ -458,6 +458,17 @@ wsi_wl_format_add_modifier(struct wsi_wl_format *format, uint64_t modifier)
        *mod = modifier;
  }
  
@@ -112,7 +112,7 @@ index 38ec3cd8528..bec50f1c070 100644
  static void
  wsi_wl_display_add_vk_format_modifier(struct wsi_wl_display *display,
                                        struct u_vector *formats,
-@@ -412,6 +423,33 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
+@@ -479,6 +490,33 @@ wsi_wl_display_add_drm_format_modifier(struct wsi_wl_display *display,
     VK_FROM_HANDLE(vk_physical_device, pdevice, display->wsi_wl->physical_device);
     struct wsi_device *wsi_device = pdevice->wsi_device;
  

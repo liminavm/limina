@@ -32,10 +32,10 @@ Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
  1 file changed, 13 insertions(+), 1 deletion(-)
 
 diff --git a/src/virtio/vulkan/vn_device_memory.c b/src/virtio/vulkan/vn_device_memory.c
-index 213830aa9be..033d555f16a 100644
+index 8b6eb4cce18..833abdbc8bc 100644
 --- a/src/virtio/vulkan/vn_device_memory.c
 +++ b/src/virtio/vulkan/vn_device_memory.c
-@@ -136,7 +136,19 @@ vn_device_memory_import_dma_buf(struct vn_device *dev,
+@@ -150,7 +150,19 @@ vn_device_memory_import_dma_buf(struct vn_device *dev,
        .allocationSize = alloc_info->allocationSize,
        .memoryTypeIndex = alloc_info->memoryTypeIndex,
     };

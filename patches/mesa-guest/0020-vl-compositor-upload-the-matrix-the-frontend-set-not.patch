@@ -31,13 +31,14 @@ sets neither draws as before rather than through a zero matrix.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
- src/gallium/auxiliary/vl/vl_compositor.c     |  7 ++++++-
- src/gallium/auxiliary/vl/vl_compositor.h     |  1 -
- src/gallium/auxiliary/vl/vl_compositor_gfx.c | 18 +++++++++++++++---
- 3 files changed, 21 insertions(+), 5 deletions(-)
+ src/gallium/auxiliary/vl/vl_compositor.c      |  7 ++++++-
+ src/gallium/auxiliary/vl/vl_compositor.h      |  1 -
+ src/gallium/auxiliary/vl/vl_compositor_gfx.c  | 18 +++++++++++++++---
+ src/gallium/auxiliary/vl/vl_compositor_proc.c |  4 ----
+ 4 files changed, 21 insertions(+), 9 deletions(-)
 
 diff --git a/src/gallium/auxiliary/vl/vl_compositor.c b/src/gallium/auxiliary/vl/vl_compositor.c
-index e38e4c31415..ed08152ba2f 100644
+index efce66668ef..2bd3e6c8f81 100644
 --- a/src/gallium/auxiliary/vl/vl_compositor.c
 +++ b/src/gallium/auxiliary/vl/vl_compositor.c
 @@ -880,9 +880,14 @@ vl_compositor_init_state(struct vl_compositor_state *s, struct pipe_context *pip
@@ -57,10 +58,10 @@ index e38e4c31415..ed08152ba2f 100644
     return true;
  }
 diff --git a/src/gallium/auxiliary/vl/vl_compositor.h b/src/gallium/auxiliary/vl/vl_compositor.h
-index ecd8ea92681..71928299934 100644
+index f2eb5d2f90a..06ab51c8e7a 100644
 --- a/src/gallium/auxiliary/vl/vl_compositor.h
 +++ b/src/gallium/auxiliary/vl/vl_compositor.h
-@@ -137,7 +137,6 @@ struct vl_compositor_state
+@@ -142,7 +142,6 @@ struct vl_compositor_state
     vl_csc_matrix rgb2yuv;
     vl_csc_matrix primaries;
  
@@ -69,10 +70,10 @@ index ecd8ea92681..71928299934 100644
  
  struct vl_compositor
 diff --git a/src/gallium/auxiliary/vl/vl_compositor_gfx.c b/src/gallium/auxiliary/vl/vl_compositor_gfx.c
-index fba5388830c..58807ce6463 100644
+index c36937d5233..0703ffb00b3 100644
 --- a/src/gallium/auxiliary/vl/vl_compositor_gfx.c
 +++ b/src/gallium/auxiliary/vl/vl_compositor_gfx.c
-@@ -647,9 +647,21 @@ gen_vertex_data(struct vl_compositor *c, struct vl_compositor_state *s, struct u
+@@ -641,9 +641,21 @@ gen_vertex_data(struct vl_compositor *c, struct vl_compositor_state *s, struct u
  }
  
  static void
@@ -95,7 +96,7 @@ index fba5388830c..58807ce6463 100644
  
     float *ptr = pipe_buffer_map(s->pipe, s->shader_params,
                                  PIPE_MAP_WRITE | PIPE_MAP_DISCARD_WHOLE_RESOURCE,
-@@ -658,7 +670,7 @@ set_csc_matrix(struct vl_compositor_state *s)
+@@ -652,7 +664,7 @@ set_csc_matrix(struct vl_compositor_state *s)
     if (!ptr)
       return;
  
@@ -104,7 +105,7 @@ index fba5388830c..58807ce6463 100644
  
     ptr += sizeof(vl_csc_matrix) / sizeof(float);
     *ptr++ = 0.0f; /* luma_min */
-@@ -727,7 +739,7 @@ vl_compositor_gfx_render(struct vl_compositor_state *s,
+@@ -721,7 +733,7 @@ vl_compositor_gfx_render(struct vl_compositor_state *s,
  
     struct pipe_resource *releasebuf = NULL;
     gen_vertex_data(c, s, dirty_area, &releasebuf);
@@ -113,3 +114,25 @@ index fba5388830c..58807ce6463 100644
  
     if (clear_dirty && dirty_area &&
         (dirty_area->x0 < dirty_area->x1 || dirty_area->y0 < dirty_area->y1)) {
+diff --git a/src/gallium/auxiliary/vl/vl_compositor_proc.c b/src/gallium/auxiliary/vl/vl_compositor_proc.c
+index 7de461e1d15..02c586475d7 100644
+--- a/src/gallium/auxiliary/vl/vl_compositor_proc.c
++++ b/src/gallium/auxiliary/vl/vl_compositor_proc.c
+@@ -70,8 +70,6 @@ compositor_proc_process_frame(struct pipe_video_codec *codec,
+          /* RGB to RGB */
+          vl_csc_get_rgbyuv_matrix(PIPE_VIDEO_VPP_MCF_RGB, src->buffer_format, dst->buffer_format,
+                                   param->in_color_range, param->out_color_range, &proc->cstate.yuv2rgb);
+-         vl_csc_get_rgbyuv_matrix(PIPE_VIDEO_VPP_MCF_RGB, src->buffer_format, dst->buffer_format,
+-                                  param->in_color_range, param->out_color_range, &proc->cstate.csc_matrix);
+       } else {
+          /* YUV to YUV (convert to RGB for transfer function and primaries) */
+          enum pipe_format rgb_format = util_format_get_plane_format(src->buffer_format, 0);
+@@ -87,8 +85,6 @@ compositor_proc_process_frame(struct pipe_video_codec *codec,
+       /* YUV to RGB */
+       vl_csc_get_rgbyuv_matrix(param->in_matrix_coefficients, src->buffer_format, dst->buffer_format,
+                                param->in_color_range, param->out_color_range, &proc->cstate.yuv2rgb);
+-      vl_csc_get_rgbyuv_matrix(param->in_matrix_coefficients, src->buffer_format, dst->buffer_format,
+-                               param->in_color_range, param->out_color_range, &proc->cstate.csc_matrix);
+    } else {
+       /* RGB to YUV */
+       vl_csc_get_rgbyuv_matrix(param->out_matrix_coefficients, src->buffer_format, dst->buffer_format,

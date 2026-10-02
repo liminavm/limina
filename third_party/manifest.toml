@@ -66,8 +66,8 @@ base = "ab0ab2209c4"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-guest"
-rev = "6468acf5a69ab61528e3be011f220ad454ce1b8f"
-base = "mesa-26.1.7"
+rev = "abcf5b0bbc520be653e8302d54c1b4cf69ea2e42"
+base = "mesa-26.2.3"
 
 # The host GPU renderer, consumed by rutabaga as a Rust crate — nothing here is loaded at
 # runtime any more, so this pin decides what the worker *is*, not what it finds. Ours outright,

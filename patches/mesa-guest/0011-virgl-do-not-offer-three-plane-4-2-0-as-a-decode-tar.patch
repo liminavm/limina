@@ -27,10 +27,10 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
  1 file changed, 22 insertions(+), 1 deletion(-)
 
 diff --git a/src/gallium/drivers/virgl/virgl_screen.c b/src/gallium/drivers/virgl/virgl_screen.c
-index aabb7ad44e2..d2b6de7b80b 100644
+index 7140089e20f..44c643a675e 100644
 --- a/src/gallium/drivers/virgl/virgl_screen.c
 +++ b/src/gallium/drivers/virgl/virgl_screen.c
-@@ -775,7 +775,28 @@ static bool virgl_is_video_format_supported(struct pipe_screen *screen,
+@@ -767,7 +767,28 @@ static bool virgl_is_video_format_supported(struct pipe_screen *screen,
                                              enum pipe_video_profile profile,
                                              enum pipe_video_entrypoint entrypoint)
  {
