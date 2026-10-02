@@ -66,7 +66,7 @@ guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and 
 |---|---|---|---|---|---|
 | **F44 stock** (`vanilla`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.13-1` | 16 KiB | `26.2.3-1.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.13-1` | 16 KiB | `26.2.3-2.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-11.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 
 Two facts the table cannot show:
@@ -123,7 +123,11 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r29.tar.zst`** (r29, 2026-10-02: host-side
+**Current payload: `payload/limina-guest-tools-f44-r30.tar.zst`** (r30, 2026-10-02: host-side
+repack of r29 with mesa `26.2.3-2.limina` — the venus fix for a submission that waits and signals
+one binary semaphore, which segfaulted gfxrecon-replay on `-1`. Kernel and agents identical to
+r29; applied to all three F44 enhanced images (`.bak-pre-r30.raw` CoW backups).) Previous: r29
+(2026-10-02: host-side
 repack of r28 with `limina-kernel-16k-7.1.13-1`, the fork rebased onto stable v7.1.13; mesa and
 agents identical to r28. Applied to all three F44 enhanced images (`.bak-pre-r29.raw` CoW backups)
 after pruning `/boot` on each to the stock kernel plus `7.1.8-4` (superseded 7.1.8-2/-3 RPMs and
