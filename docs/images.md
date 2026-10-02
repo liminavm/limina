@@ -60,13 +60,13 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified by the r27 installer's own `rpm -q` in each booted F44 enhanced guest 2026-09-13, and the dogfood row by `rpm -V` on the dev VM 2026-09-07 after its mesa-only delivery. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
+guest with `rpm -q`. Last verified by the r28 installer's own `rpm -q` in each booted F44 enhanced guest 2026-10-02, and the dogfood row by `rpm -V` on the dev VM 2026-09-07 after its mesa-only delivery. All three F44 enhanced images boot `7.1.8-limina16k.4` as their permanent default, each confirmed by a default (un-armed) boot.
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`vanilla`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.1.8-11.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.8-4` | 16 KiB | `26.2.3-1.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.9-1` (running `7.1.9-limina16k`) | 16 KiB | `26.1.8-11.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 
 Two facts the table cannot show:
@@ -123,7 +123,12 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r27.tar.zst`** (r27, 2026-09-13: host-side
+**Current payload: `payload/limina-guest-tools-f44-r28.tar.zst`** (r28, 2026-10-02: host-side
+repack of r27 with mesa `26.2.3-1.limina`, built from Fedora's `mesa-26.2.3-1.fc44` SRPM with the
+`limina-guest` series rebased onto `mesa-26.2.3`; it also moves the limina video cap bits to 31/30
+in step with the host renderer. Kernel and agents identical to r27; applied to all three F44
+enhanced images (`.bak-pre-r28.raw` CoW backups), both agent hashes verified, kernel install
+short-circuited, no trial boot owed.) Previous: r27 (2026-09-13: host-side
 repack of r26 with `limina-agent-session` rebuilt at limina `c3676af3` — the drop-after-accept
 backoff. Kernel, mesa and `limina-agent` identical to r26; applied to all three F44 enhanced images
 (`.bak-pre-r27.raw` CoW backups), both agent hashes verified, kernel install short-circuited so the
