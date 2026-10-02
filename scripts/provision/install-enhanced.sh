@@ -184,7 +184,7 @@ ARMSH
   cat > /etc/systemd/system/limina-arm-16k.service <<'ARMUNIT'
 [Unit]
 Description=Arm the limina 16k kernel once the btrfs free-space tree is built
-After=multi-user.target
+After=systemd-user-sessions.service sshd.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/limina-arm-16k.sh
@@ -569,7 +569,7 @@ sed 's/^/   /' /etc/environment.d/90-limina-zink.conf
 # has no keyboard at GRUB or the emergency shell (2026-06-29), so a 16k that fails to boot would
 # strand the guest with no way to pick stock. Instead keep stock as the PERMANENT default, boot
 # 16k exactly ONCE (grub2-reboot sets next_entry, which GRUB consumes as it boots it), and let an
-# on-success service promote 16k to default only after it actually reaches multi-user. A failed
+# on-success service promote 16k to default only after it actually boots to logins. A failed
 # 16k boot just needs a power-cycle — the guest auto-returns to stock, no keyboard required.
 
 # Convert any v1-space-cache btrfs to the v2 free-space tree FIRST: a 16k kernel cannot mount v1
@@ -598,14 +598,20 @@ else
 fi
 grub2-editenv - unset boot_indeterminate menu_auto_hide 2>/dev/null || true
 
-# on-success promotion: once we are actually running THE TRIALED kernel ($KREL) at multi-user, make
+# on-success promotion: once we are actually running THE TRIALED kernel ($KREL) to logins, make
 # it the default and self-disable. Match the EXACT trialed release with `grep -qxF "$KREL"`, NOT a
 # loose `grep -q limina16k`: on a guest whose permanent fallback default is ITSELF a 16k kernel —
 # i.e. ANY already-enhanced guest, e.g. dogfood-guest's 7.0.13-limina16k — a loose match would fire on
 # the FALLBACK boot after a FAILED $KREL trial and promote the broken $KREL to the permanent default
 # → unrecoverable (no keyboard at GRUB). In the unquoted heredoc $KREL is baked at write time while
 # `uname -r` (a runtime pipe, not $(...)) is evaluated at boot, so this promotes only after the
-# trialed kernel itself reaches multi-user.
+# trialed kernel itself boots to logins.
+#
+# "Boots to logins" is After=systemd-user-sessions + sshd, NOT After=multi-user.target: the target
+# also waits for plymouth-quit-wait, which only finishes when a display manager quits plymouth, and
+# a guest whose session never does (synoik) stays short of multi-user forever -- the unit sat
+# queued behind it and the kernel was never promoted. Both units here use the same ordering; both
+# are still pulled in by WantedBy=multi-user.target, which orders nothing.
 #
 # The disable belongs INSIDE the success path, exactly as limina-arm-16k.sh does it. As an
 # ExecStartPost it fired on every boot, so any boot that was not the trial -- a stock boot before
@@ -616,7 +622,7 @@ grub2-editenv - unset boot_indeterminate menu_auto_hide 2>/dev/null || true
 cat > /etc/systemd/system/limina-kernel-promote.service <<PROMOTE
 [Unit]
 Description=Promote the limina 16k kernel to GRUB default after a verified boot
-After=multi-user.target
+After=systemd-user-sessions.service sshd.service
 [Service]
 Type=oneshot
 ExecStart=/bin/sh -c 'uname -r | grep -qxF "$KREL" || { echo "not on $KREL; staying armed"; exit 0; }; grubby --set-default=/boot/vmlinuz-$KREL && systemctl disable limina-kernel-promote.service && echo "promoted 16k ($KREL) to default"'
