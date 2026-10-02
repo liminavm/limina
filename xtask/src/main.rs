@@ -365,10 +365,21 @@ fn vendor(root: &Path, heavy: bool) -> Result<()> {
         let mut c = Command::new(virglrs.join("scripts/vendor.sh"));
         c.current_dir(&virglrs);
         // In a worktree, virglrs's pin of the C tree comes from main's copy of it — the same
-        // fetch-from-local rule, through the variable virglrs's own script already honours.
+        // fetch-from-local rule, through the variable virglrs's own script already honours. Only
+        // when main's copy has that pin: a virglrs bump main has not vendored yet names a rev it
+        // lacks, and the network has it. The rev is fetched here, by SHA: the script fetches
+        // branches only, and main's copy holds its pin as a detached HEAD.
         if let Some(main) = &main {
             let src = main.join("third_party/virglrs/third_party/virglrenderer");
-            if std::env::var_os("VIRGLRENDERER_SRC").is_none() && git::is_tree(&src) {
+            let dest = virglrs.join("third_party/virglrenderer");
+            if std::env::var_os("VIRGLRENDERER_SRC").is_none()
+                && git::is_tree(&src)
+                && let Some(rev) = nested_pin(&virglrs, "virglrenderer")?
+                && git::has_commit(&src, &rev)
+            {
+                if git::is_tree(&dest) && !git::has_commit(&dest, &rev) {
+                    git::run(&dest, &["fetch", "--quiet", &src.to_string_lossy(), &rev])?;
+                }
                 c.env("VIRGLRENDERER_SRC", src);
             }
         }
@@ -514,6 +525,16 @@ fn vendor_fork(root: &Path, manifest: &Manifest, name: &str, main: Option<&Path>
         )?;
     }
     Ok(())
+}
+
+/// The rev a dependency's checkout at `tree` pins `name` at, from its own committed manifest.
+fn nested_pin(tree: &Path, name: &str) -> Result<Option<String>> {
+    let path = tree.join(manifest::MANIFEST);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let nested = Manifest::parse(tree, &text, &path.display().to_string(), None)?;
+    Ok(nested.dep(name).ok().and_then(|d| d.rev.clone()))
 }
 
 /// Bring the pinned rev into `dir`: from the local override when there is one, else origin.
