@@ -22,7 +22,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "53522ebd5538912f85ad69b471f985775cd66dca"
+rev = "5905b876083e0118e0c0fb96829e969b913b39c5"
 base = "51367cfaf379a5869ca2aa78eab1cfe68a769a52"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
@@ -79,7 +79,7 @@ base = "mesa-26.2.3"
 [virglrs]
 repo = "https://github.com/liminavm/virglrs.git"
 branch = "main"
-rev = "79fccb5d2d1f11203461af3a7955cfd5238a83d9"
+rev = "880cac7e8127bb3f7ac1faebd6d3d911ce0df8dc"
 
 # The OpenCL C standard library KosmicKrisp's kernels are compiled against. NOT a source
 # checkout and not merely a configure-time gate: `src/kosmickrisp/libkk/*.cl` (tessellation,
