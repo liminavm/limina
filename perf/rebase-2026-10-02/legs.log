@@ -1,0 +1,101 @@
+######## o0-old 12:18:41
+[12:18:41] build rebase o0-old: guest old (Fedora-Workstation-44.enhanced.bak-pre-r28.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina c5f78aa4
+[12:18:51] enhanced boot
+[12:19:47] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.15
+final: up=205s load=0.15 0.18 0.08
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[12:24:24] aquarium r1 exit=0 
+[12:25:44] aquarium r2 exit=0 
+[12:27:37] perf-ledger run 1 exit=0 
+gl-replay-venus,45.3591
+gl-replay-llvmpipe,730.747
+vk-replay-venus-headless,1893.844487
+glmark2-wayland-venus,2649
+[12:29:47] vkmark run 1: 2548 
+[12:31:57] vkmark run 2: 2555 
+[12:34:08] vkmark run 3: 2565 
+[12:34:18] worker-enh: 0 poisoned-context lines
+[12:34:18] point o0-old done; read perf/rebase-2026-10-02/evidence/o0-old/aquarium-r*/*-fps.png
+######## n0-new 12:34:18
+[12:34:18] build rebase n0-new: guest new (Fedora-Workstation-44.enhanced.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina c5f78aa4
+[12:34:19] enhanced boot
+[12:35:15] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.24
+final: up=205s load=0.24 0.17 0.07
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-2.limina.fc44.aarch64
+[12:39:51] aquarium r1 exit=0 
+[12:41:10] aquarium r2 exit=0 
+[12:43:04] perf-ledger run 1 exit=0 
+gl-replay-venus,44.9105
+gl-replay-llvmpipe,727.398
+vk-replay-venus-headless,2335.622072
+glmark2-wayland-venus,2957
+[12:45:14] vkmark run 1: 3293 
+[12:47:25] vkmark run 2: 3290 
+[12:49:35] vkmark run 3: 3296 
+[12:49:45] worker-enh: 0 poisoned-context lines
+[12:49:45] point n0-new done; read perf/rebase-2026-10-02/evidence/n0-new/aquarium-r*/*-fps.png
+######## o1-old 12:49:45
+[12:49:46] build rebase o1-old: guest old (Fedora-Workstation-44.enhanced.bak-pre-r28.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina c5f78aa4
+[12:49:47] enhanced boot
+[12:50:42] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=235s load=0.23
+final: up=235s load=0.23 0.29 0.13
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[12:55:48] aquarium r1 exit=0 
+[12:57:08] aquarium r2 exit=0 
+[12:59:01] perf-ledger run 1 exit=0 
+gl-replay-venus,45.1631
+gl-replay-llvmpipe,726.778
+vk-replay-venus-headless,1923.290353
+glmark2-wayland-venus,2658
+[13:01:11] vkmark run 1: 2564 
+[13:03:22] vkmark run 2: 2559 
+[13:05:32] vkmark run 3: 2497 
+[13:05:42] worker-enh: 0 poisoned-context lines
+[13:05:42] point o1-old done; read perf/rebase-2026-10-02/evidence/o1-old/aquarium-r*/*-fps.png
+######## n1-new 13:05:42
+[13:05:43] build rebase n1-new: guest new (Fedora-Workstation-44.enhanced.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina c5f78aa4
+[13:05:44] enhanced boot
+[13:06:39] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=220s load=0.26
+final: up=220s load=0.26 0.22 0.09
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-2.limina.fc44.aarch64
+[13:11:31] aquarium r1 exit=0 
+[13:12:59] aquarium r2 exit=0 
+[13:14:55] perf-ledger run 1 exit=0 
+gl-replay-venus,43.9074
+gl-replay-llvmpipe,728.213
+vk-replay-venus-headless,2302.347099
+glmark2-wayland-venus,2921
+[13:17:05] vkmark run 1: 3293 
+[13:19:16] vkmark run 2: 3301 
+[13:21:26] vkmark run 3: 3293 
+[13:21:44] worker-enh: 0 poisoned-context lines
+[13:21:44] point n1-new done; read perf/rebase-2026-10-02/evidence/n1-new/aquarium-r*/*-fps.png
+######## o2-old 13:21:44
+[13:21:45] build rebase o2-old: guest old (Fedora-Workstation-44.enhanced.bak-pre-r28.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina c5f78aa4
+[13:21:47] enhanced boot
+[13:22:44] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.24
+final: up=205s load=0.24 0.18 0.07
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[13:27:20] aquarium r1 exit=0 
+[13:28:40] aquarium r2 exit=0 
+[13:30:33] perf-ledger run 1 exit=0 
+gl-replay-venus,45.3744
+gl-replay-llvmpipe,733.068
+vk-replay-venus-headless,1866.926993
+glmark2-wayland-venus,2677
+[13:32:43] vkmark run 1: 2557 
+[13:34:54] vkmark run 2: 2565 
+[13:37:04] vkmark run 3: 2498 
+[13:37:14] worker-enh: 0 poisoned-context lines
+[13:37:14] point o2-old done; read perf/rebase-2026-10-02/evidence/o2-old/aquarium-r*/*-fps.png
+######## legs done 13:37:14

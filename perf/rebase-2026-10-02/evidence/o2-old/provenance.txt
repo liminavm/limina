@@ -1,0 +1,3 @@
+rebase o2-old: guest old (Fedora-Workstation-44.enhanced.bak-pre-r28.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina c5f78aa4
+-rwxr-xr-x@ 1 kov  staff  14977624 Oct  2 09:42 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+-rwxr-xr-x@ 1 kov  staff  21431552 Oct  2 09:42 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-26.3.0-devel.dylib
