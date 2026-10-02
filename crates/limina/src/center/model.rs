@@ -32,6 +32,10 @@ pub struct VmRow {
     /// person. `None` means nothing known is wrong. Only computed while stopped: a running
     /// VM holds its own disk locks, and "why can't it start" is not a question about it.
     pub blocked: Option<String>,
+    /// Stopped with a suspended session waiting: Start resumes it. Read from the snapshot file,
+    /// which IS the resume-pending record (`supervisor::take_pending_resume`); `state.toml`'s
+    /// `[suspended]` is status only and can be stale.
+    pub suspended: bool,
 }
 
 /// Snapshot the whole library. A missing library is an empty list; an unreadable
@@ -51,6 +55,7 @@ pub fn snapshot() -> Vec<VmRow> {
                 runtime::VmStatus::Running { pid } => (true, pid),
                 runtime::VmStatus::Stopped => (false, 0),
             };
+            let suspended = !running && b.snapshot_bin().exists();
             match b.load() {
                 Ok(cfg) => VmRow {
                     name: b.display_name(&cfg),
@@ -61,6 +66,7 @@ pub fn snapshot() -> Vec<VmRow> {
                     running,
                     pid,
                     broken: false,
+                    suspended,
                     bundle: b,
                 },
                 Err(e) => VmRow {
@@ -72,6 +78,7 @@ pub fn snapshot() -> Vec<VmRow> {
                     running,
                     pid,
                     broken: true,
+                    suspended,
                     bundle: b,
                 },
             }
@@ -259,6 +266,30 @@ mod tests {
         assert!(why.contains("not found"), "{why}");
 
         unsafe { std::env::remove_var("LIMINA_GVPROXY_BIN") };
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    /// The row offers Resume and Discard exactly while a snapshot is waiting.
+    #[test]
+    fn a_stopped_vm_with_a_snapshot_reads_as_suspended() {
+        let _guard = crate::vmlib::bundle::tests::env_lock();
+        let lib = crate::vmlib::bundle::tests::scratch_library("suspended-row");
+        unsafe { std::env::set_var("LIMINA_VM_LIBRARY", &lib) };
+        let bundle = create(&crate::vmlib::bundle::tests::basic_opts("Alpha"), &lib).unwrap();
+
+        let row = snapshot().into_iter().find(|r| r.name == "Alpha").unwrap();
+        assert!(!row.suspended);
+
+        std::fs::create_dir_all(bundle.run_dir()).unwrap();
+        std::fs::write(bundle.snapshot_bin(), b"snapshot").unwrap();
+        let row = snapshot().into_iter().find(|r| r.name == "Alpha").unwrap();
+        assert!(row.suspended);
+
+        bundle.discard_suspend().unwrap();
+        let row = snapshot().into_iter().find(|r| r.name == "Alpha").unwrap();
+        assert!(!row.suspended);
+
         unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }

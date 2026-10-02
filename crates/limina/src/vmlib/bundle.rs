@@ -70,6 +70,32 @@ impl VmBundle {
         self.run_dir().join("snapshot.bin")
     }
 
+    /// The restore splash the window shows until a resumed guest's first frame, written beside
+    /// [`Self::snapshot_bin`] at suspend.
+    pub fn splash_png(&self) -> PathBuf {
+        self.run_dir().join("splash.png")
+    }
+
+    /// Throw away a suspended session so the next start cold-boots: the snapshot, its splash and
+    /// the `[suspended]` record. Returns whether there was a session to discard. The caller must
+    /// know the VM is stopped — a running VM's armed snapshot path is its own business.
+    pub fn discard_suspend(&self) -> Result<bool> {
+        let snapshot = self.snapshot_bin();
+        let had = snapshot.exists();
+        if had {
+            std::fs::remove_file(&snapshot).with_context(|| {
+                format!("discarding the suspended session {}", snapshot.display())
+            })?;
+        }
+        // The splash and the record are only meaningful beside a snapshot; clear any leftovers.
+        let _ = std::fs::remove_file(self.splash_png());
+        if super::state::load(&self.state_toml()).is_some_and(|s| s.suspended.is_some()) {
+            super::state::set_suspended(&self.state_toml(), None)
+                .with_context(|| format!("clearing {}'s suspended record", self.dir_name()))?;
+        }
+        Ok(had)
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.path.join("logs")
     }
@@ -295,6 +321,43 @@ pub(crate) mod tests {
         cfg.identity.name = Some(String::new());
         assert_eq!(bundle.display_name(&cfg), "Fedora");
 
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    #[test]
+    fn discard_suspend_removes_the_session_and_keeps_the_rest_of_the_state() {
+        use crate::vmlib::state;
+        let lib = scratch_library("discard");
+        let b = VmBundle::new(lib.join("Debian.liminavm"));
+        std::fs::create_dir_all(b.run_dir()).unwrap();
+        std::fs::write(b.snapshot_bin(), b"snapshot").unwrap();
+        std::fs::write(b.splash_png(), b"png").unwrap();
+        let window = state::WindowState {
+            frame: [10.0, 20.0, 800.0, 600.0],
+            content: (800, 600),
+            fullscreen: false,
+            fullscreen_display: None,
+        };
+        state::set_window(&b.state_toml(), Some(window)).unwrap();
+        state::set_suspended(
+            &b.state_toml(),
+            Some(state::Suspended {
+                snapshot: b.snapshot_bin(),
+            }),
+        )
+        .unwrap();
+
+        assert!(
+            b.discard_suspend().unwrap(),
+            "a suspended session was there to discard"
+        );
+        assert!(!b.snapshot_bin().exists());
+        assert!(!b.splash_png().exists());
+        let st = state::load(&b.state_toml()).unwrap();
+        assert_eq!(st.suspended, None);
+        assert_eq!(st.window, Some(window), "the window placement must survive");
+
+        assert!(!b.discard_suspend().unwrap(), "nothing left to discard");
         std::fs::remove_dir_all(&lib).ok();
     }
 

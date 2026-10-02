@@ -1762,18 +1762,11 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             suspend_state_file: cli.suspend_state_file.clone(),
             snapshot_file: cli.snapshot_file.clone(),
             on_window_close: cli.on_window_close,
-            // The restore splash lives beside the snapshot under a derived name (the snapshot
-            // itself gets renamed `.consumed` at restore; the splash does not). Managed VMs
-            // keep `run/splash.png` in their private bundle dir; a flat run's snapshot sits
-            // NEXT TO THE DISK in a shared directory, so its splash is disk-derived
-            // (`<disk>.limina-suspend.splash.png`) to avoid cross-VM collisions (#20).
-            splash_save_path: cli.snapshot_file.as_ref().map(|p| {
-                if cli.suspend_state_file.is_some() {
-                    p.with_file_name("splash.png")
-                } else {
-                    p.with_extension("splash.png")
-                }
-            }),
+            // The restore splash lives beside the snapshot (`splash_beside`).
+            splash_save_path: cli
+                .snapshot_file
+                .as_ref()
+                .map(|p| splash_beside(p, cli.suspend_state_file.is_some())),
             // A resume is pending iff the armed snapshot exists (a PEEK — the consume happens
             // at worker spawn inside the session). Separate from `restore_splash`, which is
             // additionally conditioned on the splash FILE existing: a restore with no splash
@@ -1784,13 +1777,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 .snapshot_file
                 .as_ref()
                 .filter(|p| p.exists())
-                .map(|p| {
-                    if cli.suspend_state_file.is_some() {
-                        p.with_file_name("splash.png")
-                    } else {
-                        p.with_extension("splash.png")
-                    }
-                })
+                .map(|p| splash_beside(p, cli.suspend_state_file.is_some()))
                 .filter(|p| p.exists()),
         });
     }
@@ -2187,10 +2174,26 @@ fn default_arm_flat_suspend(cli: &mut Cli) -> Result<()> {
     {
         std::fs::remove_file(&snap)
             .with_context(|| format!("discarding the pending suspend {snap:?}"))?;
-        let _ = std::fs::remove_file(snap.with_extension("splash.png"));
+        let managed = cli.suspend_state_file.is_some();
+        let _ = std::fs::remove_file(splash_beside(&snap, managed));
+        if let Some(state) = &cli.suspend_state_file {
+            let _ = vmlib::state::set_suspended(state, None);
+        }
         println!("discarded pending suspend {} — cold boot", snap.display());
     }
     Ok(())
+}
+
+/// The restore splash that goes with a snapshot. The snapshot itself is renamed `.consumed` at
+/// restore; the splash is not. A managed VM keeps `run/splash.png` in its private bundle dir; a
+/// flat run's snapshot sits NEXT TO THE DISK in a shared directory, so its splash is
+/// disk-derived (`<disk>.limina-suspend.splash.png`) to avoid cross-VM collisions (#20).
+fn splash_beside(snapshot: &std::path::Path, managed: bool) -> PathBuf {
+    if managed {
+        snapshot.with_file_name("splash.png")
+    } else {
+        snapshot.with_extension("splash.png")
+    }
 }
 
 /// Where this run keeps its passkeys — or `None`, which means *no authenticator at all*
@@ -2443,6 +2446,34 @@ mod tests {
         assert!(
             !armed.exists(),
             "--discard-suspend must delete the pending snapshot"
+        );
+
+        // A managed --discard-suspend takes the whole session: the snapshot, the bundle's
+        // run/splash.png beside it, and the [suspended] record.
+        let run = dir.join("run");
+        std::fs::create_dir_all(&run).unwrap();
+        let snap = run.join("snapshot.bin");
+        let state = dir.join("state.toml");
+        std::fs::write(&snap, b"pending").unwrap();
+        std::fs::write(run.join("splash.png"), b"png").unwrap();
+        vmlib::state::set_suspended(
+            &state,
+            Some(vmlib::state::Suspended {
+                snapshot: snap.clone(),
+            }),
+        )
+        .unwrap();
+        let mut cli =
+            Cli::try_parse_from(["limina", "--disk", disk_s, "--discard-suspend"]).unwrap();
+        cli.suspend_state_file = Some(state.clone());
+        cli.snapshot_file = Some(snap.clone());
+        default_arm_flat_suspend(&mut cli).unwrap();
+        assert!(!snap.exists(), "the managed snapshot is discarded");
+        assert!(!run.join("splash.png").exists(), "and its splash with it");
+        assert_eq!(
+            vmlib::state::load(&state).and_then(|s| s.suspended),
+            None,
+            "and the [suspended] record"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

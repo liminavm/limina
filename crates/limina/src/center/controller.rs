@@ -153,6 +153,14 @@ define_class!(
             }
         }
 
+        #[unsafe(method(discardSuspendClicked:))]
+        fn discard_suspend_clicked(&self, sender: &NSButton) {
+            if let Some(row) = self.row_for(sender) {
+                self.run_discard_suspend_flow(&row);
+                self.refresh(true);
+            }
+        }
+
         #[unsafe(method(stopClicked:))]
         fn stop_clicked(&self, sender: &NSButton) {
             if let Some(row) = self.row_for(sender) {
@@ -598,6 +606,8 @@ impl CenterController {
             status.push_str(" · stopping…");
         } else if row.running {
             status.push_str(&format!(" · running (pid {})", row.pid));
+        } else if row.suspended && !row.broken {
+            status.push_str(" · suspended");
         } else if !row.broken {
             status.push_str(" · stopped");
         }
@@ -687,10 +697,30 @@ impl CenterController {
                     sel!(startClicked:),
                     index,
                 ),
+                None if row.suspended => self.icon_button(
+                    mtm,
+                    "play.fill",
+                    "Resume the suspended session",
+                    sel!(startClicked:),
+                    index,
+                ),
                 None => self.icon_button(mtm, "play.fill", "Start", sel!(startClicked:), index),
             };
             start.setEnabled(row.blocked.is_none());
             actions.addView_inGravity(&start, NSStackViewGravity::Leading);
+            // The way out of a session that cannot or should not resume (one suspended with
+            // different devices is refused every time): next to Start, since what it changes
+            // is what Start does.
+            if row.suspended {
+                let discard = self.icon_button(
+                    mtm,
+                    "xmark.circle",
+                    "Discard the suspended session (the next start boots fresh)",
+                    sel!(discardSuspendClicked:),
+                    index,
+                );
+                actions.addView_inGravity(&discard, NSStackViewGravity::Leading);
+            }
             let configure = unsafe {
                 NSButton::buttonWithTitle_target_action(
                     &NSString::from_str("Configure…"),
@@ -770,6 +800,39 @@ impl CenterController {
         alert.setMessageText(&NSString::from_str(title));
         alert.setInformativeText(&NSString::from_str(text));
         alert.runModal();
+    }
+
+    /// Discard a suspended session after a confirmation: it is the guest's whole running state
+    /// (open windows, unsaved work), and unlike Delete nothing goes to the Trash.
+    fn run_discard_suspend_flow(&self, row: &VmRow) {
+        // The row is up to a refresh old: the VM may have been started since.
+        if matches!(
+            crate::vmlib::runtime::status(&row.bundle),
+            crate::vmlib::runtime::VmStatus::Running { .. }
+        ) {
+            self.alert(
+                "VM is running",
+                "The suspended session has already been resumed.",
+            );
+            return;
+        }
+        let alert = NSAlert::new(self.mtm());
+        alert.setMessageText(&NSString::from_str(&format!(
+            "Discard “{}”'s suspended session?",
+            row.name
+        )));
+        alert.setInformativeText(&NSString::from_str(
+            "The next start boots the VM fresh. Anything open in the suspended session — \
+             windows, unsaved work — is lost; the disks are kept as they are.",
+        ));
+        alert.addButtonWithTitle(&NSString::from_str("Discard"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        if alert.runModal() != NSAlertFirstButtonReturn {
+            return;
+        }
+        if let Err(e) = row.bundle.discard_suspend() {
+            self.alert("Could not discard the suspended session", &format!("{e:#}"));
+        }
     }
 
     /// Delete = move to the macOS Trash (recoverable), with a choice about disks:
