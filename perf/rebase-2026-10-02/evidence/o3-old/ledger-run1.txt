@@ -1,0 +1,7 @@
+verify OK: Virtual-1 1280x800@59.974 scale=1.0
+PROVENANCE: kernel=7.1.8-limina16k.4 pagesize=16384 mesa=26.1.8-11.limina.fc44 vnperf=<unset> vcpus=4 ram=3940MiB display=Virtual-1: 1280x800@59.974 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/rebase-2026-10-02/ledger.csv:
+2026-10-02,ceb14fdb,gl-replay-venus,fps,45.4632,rebase o3-old: guest old (Fedora-Workstation-44.enhanced.bak-pre-r28.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina ceb14fdb; run 1/1 
+2026-10-02,ceb14fdb,gl-replay-llvmpipe,fps,733.48,rebase o3-old: guest old (Fedora-Workstation-44.enhanced.bak-pre-r28.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina ceb14fdb; run 1/1 
+2026-10-02,ceb14fdb,vk-replay-venus-headless,fps,1889.525723,rebase o3-old: guest old (Fedora-Workstation-44.enhanced.bak-pre-r28.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina ceb14fdb; run 1/1 
+2026-10-02,ceb14fdb,glmark2-wayland-venus,score,2728,rebase o3-old: guest old (Fedora-Workstation-44.enhanced.bak-pre-r28.raw); host mesa d39e8bff0f3; virglrs 880cac7 + libkrun 5905b876; limina ceb14fdb; run 1/1 
