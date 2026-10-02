@@ -1,0 +1,148 @@
+######## b0-base 20:29:07
+[20:29:07] build kk-alloc-pool b0-base: arm base; host mesa fab44a91147; virglrs 79fccb5 + libkrun 53522ebd; limina c26902c1
+[20:29:18] enhanced boot
+[20:30:14] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=204s load=0.21
+final: up=204s load=0.21 0.24 0.11
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[20:34:50] aquarium r1 exit=0 
+[20:36:11] aquarium r2 exit=0 
+[20:38:01] perf-ledger run 1 exit=0 
+gl-replay-venus,46.5987
+gl-replay-llvmpipe,731.485
+vk-replay-venus-headless,1836.538859
+glmark2-wayland-venus,2669
+[20:40:11] vkmark run 1: 2581 
+[20:42:21] vkmark run 2: 2555 
+[20:44:32] vkmark run 3: 2529 
+[20:44:42] worker-enh: 0 poisoned-context lines
+[20:44:42] arm check enh: arm base, 0 pool stats line(s) (expect >0 for pool, 0 for base)
+[20:44:42] point b0-base done; read perf/kk-alloc-pool-2026-10-01/evidence/b0-base/aquarium-r*/*-fps.png
+######## p0-pool 20:44:42
+[20:44:42] build kk-alloc-pool p0-pool: arm pool; host mesa 5d248de2541; virglrs 79fccb5 + libkrun 53522ebd; limina 0a5179a7
+[20:44:51] enhanced boot
+[20:45:47] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=235s load=0.26
+final: up=235s load=0.26 0.29 0.13
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[20:50:53] aquarium r1 exit=0 
+[20:52:14] aquarium r2 exit=0 
+[20:54:03] perf-ledger run 1 exit=0 
+gl-replay-venus,46.6844
+gl-replay-llvmpipe,727.661
+vk-replay-venus-headless,730.024143
+glmark2-wayland-venus,1658
+[20:56:14] vkmark run 1: 1851 
+[20:58:24] vkmark run 2: 1864 
+[21:00:35] vkmark run 3: 1857 
+[21:00:45] worker-enh: 0 poisoned-context lines
+[21:00:45] arm check enh: arm pool, 119 pool stats line(s) (expect >0 for pool, 0 for base)
+[21:00:45] point p0-pool done; read perf/kk-alloc-pool-2026-10-01/evidence/p0-pool/aquarium-r*/*-fps.png
+######## b1-base 21:00:45
+[21:00:45] build kk-alloc-pool b1-base: arm base; host mesa fab44a91147; virglrs 79fccb5 + libkrun 53522ebd; limina 0a5179a7
+[21:00:46] enhanced boot
+[21:01:42] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=220s load=0.24
+final: up=220s load=0.24 0.26 0.11
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[21:06:33] aquarium r1 exit=0 
+[21:07:54] aquarium r2 exit=0 
+[21:09:43] perf-ledger run 1 exit=0 
+gl-replay-venus,46.5926
+gl-replay-llvmpipe,728.047
+vk-replay-venus-headless,1915.838810
+glmark2-wayland-venus,2647
+[21:11:54] vkmark run 1: 2548 
+[21:14:04] vkmark run 2: 2562 
+[21:16:15] vkmark run 3: 2531 
+[21:16:25] worker-enh: 0 poisoned-context lines
+[21:16:25] arm check enh: arm base, 0 pool stats line(s) (expect >0 for pool, 0 for base)
+[21:16:25] point b1-base done; read perf/kk-alloc-pool-2026-10-01/evidence/b1-base/aquarium-r*/*-fps.png
+######## p1-pool 21:16:25
+[21:16:25] build kk-alloc-pool p1-pool: arm pool; host mesa 5d248de2541; virglrs 79fccb5 + libkrun 53522ebd; limina 0a5179a7
+[21:16:26] enhanced boot
+[21:17:22] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=235s load=0.29
+final: up=235s load=0.29 0.29 0.13
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[21:22:35] aquarium r1 exit=0 
+[21:23:55] aquarium r2 exit=0 
+[21:25:45] perf-ledger run 1 exit=0 
+gl-replay-venus,46.7296
+gl-replay-llvmpipe,724.355
+vk-replay-venus-headless,869.485830
+glmark2-wayland-venus,1656
+[21:27:56] vkmark run 1: 1847 
+[21:30:06] vkmark run 2: 1852 
+[21:32:17] vkmark run 3: 1848 
+[21:32:26] worker-enh: 0 poisoned-context lines
+[21:32:26] arm check enh: arm pool, 115 pool stats line(s) (expect >0 for pool, 0 for base)
+[21:32:27] point p1-pool done; read perf/kk-alloc-pool-2026-10-01/evidence/p1-pool/aquarium-r*/*-fps.png
+######## b2-base 21:32:27
+[21:32:27] build kk-alloc-pool b2-base: arm base; host mesa fab44a91147; virglrs 79fccb5 + libkrun 53522ebd; limina 0a5179a7
+[21:32:28] enhanced boot
+[21:33:23] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=204s load=0.19
+final: up=204s load=0.19 0.23 0.10
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[21:37:59] aquarium r1 exit=0 
+[21:39:18] aquarium r2 exit=0 
+[21:41:08] perf-ledger run 1 exit=0 
+gl-replay-venus,46.5242
+gl-replay-llvmpipe,732.147
+vk-replay-venus-headless,1961.832548
+glmark2-wayland-venus,2654
+[21:43:19] vkmark run 1: 2564 
+[21:45:29] vkmark run 2: 2540 
+[21:47:40] vkmark run 3: 2533 
+[21:47:50] worker-enh: 0 poisoned-context lines
+[21:47:50] arm check enh: arm base, 0 pool stats line(s) (expect >0 for pool, 0 for base)
+[21:47:50] point b2-base done; read perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r*/*-fps.png
+######## legs done 21:47:50
+######## q-pool16 21:48:35
+[21:48:35] build kk-alloc-pool q-pool16: arm pool16; host mesa 5d248de2541; virglrs 79fccb5 + libkrun 53522ebd; limina 0a5179a7
+[21:48:36] enhanced boot
+[21:49:32] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.17
+final: up=205s load=0.17 0.19 0.08
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[21:54:15] aquarium r1 exit=0 
+[21:55:35] aquarium r2 exit=0 
+[21:57:26] perf-ledger run 1 exit=0 
+gl-replay-venus,46.3326
+gl-replay-llvmpipe,728.698
+vk-replay-venus-headless,1864.066076
+glmark2-wayland-venus,2626
+[21:59:36] vkmark run 1: 2522 
+[22:01:46] vkmark run 2: 2525 
+[22:03:57] vkmark run 3: 2520 
+[22:04:07] worker-enh: 0 poisoned-context lines
+[22:04:07] arm check enh: arm pool16, 148 pool stats line(s) (expect >0 for pool*, 0 for base)
+[22:04:07] point q-pool16 done; read perf/kk-alloc-pool-2026-10-01/evidence/q-pool16/aquarium-r*/*-fps.png
+######## q-pool64 22:04:07
+[22:04:07] build kk-alloc-pool q-pool64: arm pool64; host mesa 5d248de2541; virglrs 79fccb5 + libkrun 53522ebd; limina 0a5179a7
+[22:04:08] enhanced boot
+[22:05:04] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.24
+final: up=205s load=0.24 0.16 0.06
+7.1.8-limina16k.4
+mesa-dri-drivers-26.1.8-11.limina.fc44.aarch64
+[22:09:40] aquarium r1 exit=0 
+[22:11:00] aquarium r2 exit=0 
+[22:12:50] perf-ledger run 1 exit=0 
+gl-replay-venus,46.4559
+gl-replay-llvmpipe,729.823
+vk-replay-venus-headless,1886.363127
+glmark2-wayland-venus,2602
+[22:15:01] vkmark run 1: 2532 
+[22:17:11] vkmark run 2: 2530 
+[22:19:22] vkmark run 3: 2530 
+[22:19:32] worker-enh: 0 poisoned-context lines
+[22:19:32] arm check enh: arm pool64, 150 pool stats line(s) (expect >0 for pool*, 0 for base)
+[22:19:32] point q-pool64 done; read perf/kk-alloc-pool-2026-10-01/evidence/q-pool64/aquarium-r*/*-fps.png

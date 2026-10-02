@@ -1,0 +1,14 @@
+=== vrend / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: f6e901f2e68b4c7d98527733bfe5a19f
+  settling 35s…
+perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-25000-fps.png: 1200x520 (from perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0481
+  wrote perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-25000.png and perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-25000-fps.png
+=== vrend / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 991ded5947f24da2a15684f8163806be
+  settling 35s…
+perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-30000-fps.png: 1200x520 (from perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0921
+  wrote perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-30000.png and perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-25000-fps.png
+perf/kk-alloc-pool-2026-10-01/evidence/b2-base/aquarium-r1/vrend-30000-fps.png

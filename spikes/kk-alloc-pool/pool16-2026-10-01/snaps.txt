@@ -1,0 +1,24 @@
+--- C0-idle 22:21:32
+Physical footprint:         6.2G
+IOAccelerator                     16.3M    16.3M     256K       0K       0K    16.0M       0K       15 
+IOAccelerator (graphics)         409.4M   407.3M   395.3M       0K       0K   407.3M       0K     1278 
+--- A-closed 22:37:15
+[LIMINA-ALLOC-STATS] pool begins=5132000 live=54 peak=60 draining=0 borrowed=47 pending=47 released=371 retired=8 mean_uses=115.8 sum=229.1MiB max=10.7MiB
+Physical footprint:         7.5G
+IOAccelerator                     52.6M    52.6M     592K       0K       0K    52.0M       0K       40 
+IOAccelerator (graphics)         709.4M   706.7M   674.7M       0K       0K   706.7M       0K     2002 
+--- B1-closed 22:38:50
+[LIMINA-ALLOC-STATS] pool begins=5244000 live=51 peak=63 draining=0 borrowed=50 pending=50 released=422 retired=13 mean_uses=2071.0 sum=202.0MiB max=11.5MiB
+Physical footprint:         7.6G
+IOAccelerator                     48.6M    48.6M     640K       0K       0K    48.0M       0K       39 
+IOAccelerator (graphics)         802.5M   799.8M   777.8M       0K       0K   799.8M       0K     2966 
+--- B4-closed 22:43:33
+[LIMINA-ALLOC-STATS] pool begins=5584000 live=51 peak=63 draining=0 borrowed=45 pending=45 released=563 retired=34 mean_uses=1649.4 sum=191.5MiB max=9.9MiB
+Physical footprint:         7.7G
+IOAccelerator                     44.7M    44.7M     688K       0K       0K    44.0M       0K       38 
+IOAccelerator (graphics)         795.9M   793.9M   765.9M       0K       0K   793.9M       0K     2843 
+--- B8-closed 22:49:49
+[LIMINA-ALLOC-STATS] pool begins=6036000 live=51 peak=64 draining=0 borrowed=48 pending=48 released=739 retired=44 mean_uses=1407.8 sum=213.1MiB max=12.8MiB
+Physical footprint:         7.7G
+IOAccelerator                     46.7M    46.7M     736K       0K       0K    46.0M       0K       40 
+IOAccelerator (graphics)         810.3M   808.1M   786.1M       0K       0K   808.1M       0K     3011 

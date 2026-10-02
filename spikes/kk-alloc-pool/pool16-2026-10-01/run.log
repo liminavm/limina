@@ -1,0 +1,11 @@
+[22:19:51] boot (stats every 2000 begins)
+[22:20:01] ssh on 2222, worker 51125; settling 90 s
+[22:21:33] snap C0-idle: IOAccelerator (graphics) 409.4M 407.3M 395.3M 0K 0K 407.3M 0K 1278 
+[22:21:33] phase A: steady 30k aquarium for 15 min
+[22:37:16] snap A-closed: IOAccelerator (graphics) 709.4M 706.7M 674.7M 0K 0K 706.7M 0K 2002 
+[22:37:16] phase B: 8 open/close cycles of a 5k aquarium
+[22:38:51] snap B1-closed: IOAccelerator (graphics) 802.5M 799.8M 777.8M 0K 0K 799.8M 0K 2966 
+[22:43:34] snap B4-closed: IOAccelerator (graphics) 795.9M 793.9M 765.9M 0K 0K 793.9M 0K 2843 
+[22:49:50] snap B8-closed: IOAccelerator (graphics) 810.3M 808.1M 786.1M 0K 0K 808.1M 0K 3011 
+[22:49:50] shutting down
+[22:50:54] done

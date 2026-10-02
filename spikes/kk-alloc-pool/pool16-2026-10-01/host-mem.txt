@@ -1,0 +1,3 @@
+before-boot 22:19:50 stored_pages=14487 occupied_pages=4369 total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)
+after-exit 22:49:53 stored_pages=14322 occupied_pages=4324 total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)
+after-exit+60s 22:50:53 stored_pages=14322 occupied_pages=4324 total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)

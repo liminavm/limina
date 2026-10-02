@@ -1,0 +1,4 @@
+kk icd: /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json
+-rwxr-xr-x@ 1 kov  staff  14977624 Oct  1 19:47 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+limina 0a5179a7 virglrs 79fccb5 libkrun 53522ebd disk Fedora-Workstation-44.enhanced.raw
+LIMINA_KK_ALLOC_BUDGET_MIB=16; mesa limina-kk 5d248de2541 (237a51460f7 differs only in the default budget)
