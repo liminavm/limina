@@ -9,7 +9,7 @@
 #
 # READING THIS PASS: the host is the rebased stack in both arms (limina-kk, virglrs on the rebased
 # C fork, libkrun). The arms differ only in the guest image:
-#   new  Fedora-Workstation-44.enhanced.raw          payload r29 (mesa 26.2.3, kernel 7.1.13)
+#   new  Fedora-Workstation-44.enhanced.raw          payload r30 (mesa 26.2.3-2, kernel 7.1.13)
 #   old  Fedora-Workstation-44.enhanced.bak-pre-r28.raw  payload r27 (mesa 26.1.8, kernel 7.1.8)
 # so the guest half of the rebase is a bracketed A/B, and the host half is read against
 # perf/rebase-2026-10-02/ledger.csv (same instruments, the pre-rebase host), with the

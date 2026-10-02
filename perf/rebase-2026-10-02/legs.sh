@@ -5,7 +5,7 @@
 # The guest half of the 2026-10-02 rebase as one A/B on the rebased host (point.sh says how the
 # host half is read):
 #   o  old  the enhanced image before payload r28 (mesa 26.1.8, kernel 7.1.8)
-#   n  new  the enhanced image on payload r29 (mesa 26.2.3, kernel 7.1.13)
+#   n  new  the enhanced image on payload r30 (mesa 26.2.3-2, kernel 7.1.13)
 #
 # Order is o0 n0 o1 n1 o2 -- alternating, with the baseline measured at BOTH ENDS, because the
 # host's renderer speed drifts for tens of minutes and a one-ended sweep books that drift as the
