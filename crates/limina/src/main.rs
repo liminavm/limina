@@ -1015,7 +1015,7 @@ fn cmd_suspend_flat(disk: &Path) -> Result<()> {
     // `/private/var/...` are different strings), so matching keys on the same spelling.
     let snap = PathBuf::from(format!("{}.limina-suspend.bin", disk.display()));
 
-    let pid = flat_supervisor_pid(disk)?;
+    let pid = flat_supervisor_pid(disk, "suspend them individually with kill -TSTP")?;
 
     vmlib::runtime::signal_suspend(pid)?;
     // Same bound as the managed path: quiesce ≤20s + save, supervisor teardown after. The
@@ -1049,7 +1049,9 @@ fn cmd_suspend_flat(disk: &Path) -> Result<()> {
 }
 
 /// The supervisor of the running flat `--disk` run whose boot disk is `disk`.
-fn flat_supervisor_pid(disk: &Path) -> Result<i32> {
+///
+/// `several` says what to do instead when more than one matches.
+fn flat_supervisor_pid(disk: &Path, several: &str) -> Result<i32> {
     // Find the supervisor: `pgrep -f <disk path>` matches both the supervisor (limina) and its
     // worker (limina-vmm); keep only processes whose command name is exactly `limina`.
     let out = std::process::Command::new("pgrep")
@@ -1087,8 +1089,7 @@ fn flat_supervisor_pid(disk: &Path) -> Result<i32> {
         ),
         [pid] => Ok(*pid),
         many => anyhow::bail!(
-            "multiple limina supervisors match {} (pids {many:?}); address them \
-             individually by pid",
+            "multiple limina supervisors match {} (pids {many:?}); {several}",
             disk.display()
         ),
     }
@@ -1135,7 +1136,7 @@ fn debug_target_pid(vm: &str) -> Result<u32> {
     };
     let disk = Path::new(vm);
     if disk.is_file() {
-        return Ok(flat_supervisor_pid(disk)? as u32);
+        return Ok(flat_supervisor_pid(disk, "name one by its supervisor pid instead")? as u32);
     }
     if let Ok(pid) = vm.parse::<u32>() {
         return Ok(pid);

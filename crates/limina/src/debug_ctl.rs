@@ -170,9 +170,17 @@ fn set_log(scope: Scope, spec: &str) -> Result<Vec<String>, String> {
     }
     if scope.includes_worker() {
         *lock(&WORKER_FILTER) = (spec != "default").then(|| spec.to_string());
+        // `default` is spelled out for the worker. A worker spawned after a runtime change
+        // started from that change, so its own idea of `default` is the change, not the filter
+        // the VM was started with; both processes started from this one.
+        let spec = if spec == "default" {
+            limina_debug::logger::startup_spec()
+        } else {
+            spec.to_string()
+        };
         let req = Request::Log {
             scope: Scope::Worker,
-            spec: spec.to_string(),
+            spec,
         };
         if let Err(why) = ask_worker(&req) {
             // Not a failure of the request: the filter is kept for the next worker.
