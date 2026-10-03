@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Gustavo Noronha Silva
+
+# What Limina.app ships besides Rust crates, and where each one's licence text lives on the
+# build host. scripts/gen-third-party-notices.py reads this, adds every Rust crate the two
+# binaries link (from `cargo metadata`), and writes the THIRD-PARTY-NOTICES.txt that
+# build-app.sh puts in Contents/Resources and the About dialog's Licenses button shows.
+#
+# `claims` names the bundle files a component accounts for (globs, matched against leaf
+# names in Contents/Frameworks and Contents/MacOS). build-app.sh refuses a bundle with a
+# Frameworks library no component claims: bundle_dylib discovers the link closure on its own,
+# so a new dependency would otherwise ship without its notice.
+#
+# `files` are read verbatim at generation time; `{rust_sysroot}` expands to `rustc --print
+# sysroot`. The version comes from `keg` (a Homebrew opt link, resolved to its Cellar
+# version), `version_file`, `pin` (a third_party/manifest.toml table's rev), or `rustc`.
+
+[[component]]
+name = "Mesa (KosmicKrisp, zink, EGL, GLES, gallium)"
+url = "https://gitlab.freedesktop.org/mesa/mesa"
+license = "MIT"
+files = ["/Volumes/mesa-cs/mesa/docs/license.rst"]
+version_file = "/Volumes/mesa-cs/mesa/VERSION"
+claims = [
+  "libvulkan_kosmickrisp.dylib",
+  "libEGL.dylib",
+  "libEGL.1.dylib",
+  "libGLESv2.dylib",
+  "libgallium-*.dylib",
+]
+
+[[component]]
+name = "LLVM"
+url = "https://llvm.org"
+license = "Apache-2.0 WITH LLVM-exception"
+files = ["/opt/homebrew/opt/llvm/LICENSE.TXT"]
+keg = "/opt/homebrew/opt/llvm"
+claims = ["libLLVM.dylib"]
+
+[[component]]
+name = "SPIRV-Tools"
+url = "https://github.com/KhronosGroup/SPIRV-Tools"
+license = "Apache-2.0"
+files = ["/opt/homebrew/opt/spirv-tools/LICENSE"]
+keg = "/opt/homebrew/opt/spirv-tools"
+claims = ["libSPIRV-Tools.dylib"]
+
+[[component]]
+name = "Z3"
+url = "https://github.com/Z3Prover/z3"
+license = "MIT"
+files = ["/opt/homebrew/opt/z3/LICENSE.txt"]
+keg = "/opt/homebrew/opt/z3"
+claims = ["libz3.*.dylib"]
+
+[[component]]
+name = "Zstandard"
+url = "https://github.com/facebook/zstd"
+# Dual-licensed BSD-3-Clause OR GPL-2.0-only; distributed here under the BSD terms.
+license = "BSD-3-Clause"
+files = ["/opt/homebrew/opt/zstd/LICENSE"]
+keg = "/opt/homebrew/opt/zstd"
+claims = ["libzstd.*.dylib"]
+
+[[component]]
+name = "Vulkan Loader"
+url = "https://github.com/KhronosGroup/Vulkan-Loader"
+license = "Apache-2.0"
+files = ["/opt/homebrew/opt/vulkan-loader/LICENSE.txt"]
+keg = "/opt/homebrew/opt/vulkan-loader"
+claims = ["libvulkan.1.dylib"]
+
+[[component]]
+name = "dav1d"
+url = "https://code.videolan.org/videolan/dav1d"
+license = "BSD-2-Clause"
+files = ["/opt/homebrew/opt/dav1d/COPYING"]
+keg = "/opt/homebrew/opt/dav1d"
+claims = ["libdav1d.*.dylib"]
+
+[[component]]
+name = "gvproxy (gvisor-tap-vsock)"
+url = "https://github.com/containers/gvisor-tap-vsock"
+license = "Apache-2.0"
+files = ["/opt/homebrew/opt/gvproxy/LICENSE"]
+keg = "/opt/homebrew/opt/gvproxy"
+claims = ["gvproxy"]
+
+[[component]]
+name = "EDK II (the KRUN_EFI boot firmware)"
+url = "https://github.com/liminavm/edk2"
+license = "BSD-2-Clause-Patent"
+# Not vendored on the build host (build-krun-efi.sh clones it inside a container), so the
+# pinned revision's License.txt is kept here. Refresh it when the [edk2] pin moves.
+files = ["assets/third-party/edk2-License.txt"]
+pin = "edk2"
+claims = ["KRUN_EFI.gop.fd"]
+
+[[component]]
+name = "The Rust Standard Library"
+url = "https://www.rust-lang.org"
+license = "MIT OR Apache-2.0"
+files = ["{rust_sysroot}/share/doc/rust/COPYRIGHT-library.html"]
+rustc = true
+claims = []

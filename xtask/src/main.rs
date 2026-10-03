@@ -128,6 +128,12 @@ enum Cmd {
     },
     /// Build the GOP KRUN_EFI firmware (the EFI boot path's, and the test suite's, default).
     Firmware,
+    /// Write the third-party notices About → Licenses shows (`app` does this into the bundle).
+    Notices {
+        /// Where to write them.
+        #[arg(long, default_value = "target/THIRD-PARTY-NOTICES.txt")]
+        out: PathBuf,
+    },
     /// Build the enhanced-tier guest RPMs + payload in the unified Linux build container.
     Enhanced {
         /// Which half to build: `kernel`, `mesa`, or `all` (the default, which also assembles
@@ -254,6 +260,11 @@ fn main() -> Result<()> {
         Cmd::Mesa { what } => mesa(what.as_deref()),
         Cmd::Build { release } => build(release),
         Cmd::Firmware => bash_script(&repo_root(), "scripts/build-krun-efi.sh", &[] as &[&str]),
+        Cmd::Notices { out } => run(Command::new("python3")
+            .current_dir(repo_root())
+            .arg("scripts/gen-third-party-notices.py")
+            .arg("--out")
+            .arg(out)),
         Cmd::Enhanced { what } => enhanced(what.as_deref()),
         Cmd::Sign { release } => sign_worker(&repo_root(), release),
         Cmd::Test { release, args } => test(release, &args),

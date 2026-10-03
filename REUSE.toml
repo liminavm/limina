@@ -38,3 +38,10 @@ path = "spikes/archive/windowed-firmware-hang/pl011-capture-ring.patch"
 precedence = "override"
 SPDX-FileCopyrightText = ["2026 Gustavo Noronha Silva", "The EDK II contributors"]
 SPDX-License-Identifier = "BSD-2-Clause-Patent"
+
+# edk2's own licence file, kept verbatim for the bundle's third-party notices.
+[[annotations]]
+path = "assets/third-party/edk2-License.txt"
+precedence = "override"
+SPDX-FileCopyrightText = "2019 TianoCore and contributors"
+SPDX-License-Identifier = "BSD-2-Clause-Patent"

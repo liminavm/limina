@@ -312,6 +312,14 @@ cp "$GOP_FD" "$RES/KRUN_EFI.gop.fd"
 # ---- app icon (source + prep tool in assets/icon/) --------------------------------
 cp "$ROOT/assets/icon/Limina.icns" "$RES/Limina.icns"
 
+# ---- third-party notices ---------------------------------------------------------
+# What About → Licenses shows. Generated now, from the bundle as assembled: the run refuses a
+# Frameworks library or executable no entry in assets/third-party/components.toml claims,
+# since bundle_dylib above pulls in whatever the link closure names, attributed or not.
+echo "==> writing third-party notices"
+python3 "$ROOT/scripts/gen-third-party-notices.py" --out "$RES/THIRD-PARTY-NOTICES.txt" \
+  --check-bundle "$APP" || { echo "REFUSING to bundle: third-party notices incomplete (above)" >&2; exit 1; }
+
 # ---- Info.plist ------------------------------------------------------------------
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
