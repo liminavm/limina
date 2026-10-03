@@ -468,6 +468,11 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     ) {
         env.push(("LIMINA_VCPU_SCHED".into(), sched.into()));
     }
+    // A filter changed at runtime outlives the worker it was set on: a reboot or a resume must
+    // not quietly put the log back to what the supervisor started with.
+    if let Some(filter) = crate::debug_ctl::worker_rust_log() {
+        env.push(("RUST_LOG".into(), filter.into()));
+    }
 
     let (spice_host, spice_worker) = socketpair(libc::SOCK_STREAM)?;
     args.push("--spice-fd".into());

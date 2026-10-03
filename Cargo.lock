@@ -467,6 +467,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "env_filter"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
+dependencies = [
+ "log",
+ "regex",
+]
+
+[[package]]
 name = "env_logger"
 version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -474,7 +484,7 @@ checksum = "0621c04f2196ac3f488dd583365b9c09be011a4ab8b9f37248ffcc8f6198b56a"
 dependencies = [
  "anstream",
  "anstyle",
- "env_filter",
+ "env_filter 1.0.1",
  "jiff",
  "log",
 ]
@@ -942,8 +952,8 @@ dependencies = [
  "block2",
  "ciborium",
  "clap",
- "env_logger",
  "libc",
+ "limina-debug",
  "limina-displayctl",
  "limina-input",
  "limina-launch",
@@ -966,6 +976,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "limina-debug"
+version = "0.1.0"
+dependencies = [
+ "env_filter 2.0.0",
+ "env_logger",
+ "log",
 ]
 
 [[package]]
@@ -1061,6 +1080,7 @@ dependencies = [
  "krun-utils",
  "libc",
  "libkrun",
+ "limina-debug",
  "limina-display",
  "limina-displayctl",
  "limina-input",

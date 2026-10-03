@@ -30,6 +30,8 @@ limina-input   = { workspace = true, features = ["backends"] }
 # The worker inherits the supervisor's stderr, so a Dock-launched app silences its panics too.
 limina-paniclog = { workspace = true }
 limina-launch = { workspace = true }
+# Runtime log filter (the supervisor changes it over `--debug-control-fd`).
+limina-debug = { workspace = true }
 
 anyhow            = { workspace = true }
 clap              = { workspace = true }

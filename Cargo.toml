@@ -40,6 +40,9 @@ krun_display = { package = "krun-display", path = "third_party/libkrun/src/displ
 krun_input   = { package = "krun-input",   path = "third_party/libkrun/src/input", features = ["bindgen_clang_runtime"] }
 
 # --- our crates ---
+# Runtime log filters and diagnostic levers, shared by the supervisor (which owns the debug
+# socket, the Debug menu and `limina debug`) and the worker (which takes its filter over a link).
+limina-debug       = { path = "crates/limina-debug" }
 limina-display     = { path = "crates/limina-display" }
 # Display-control socket wire format, shared by the supervisor (which emits) and the worker
 # (which applies). Dependency-free on purpose — see the crate docs.
@@ -63,6 +66,8 @@ arc-swap          = "1"
 clap              = { version = "4", features = ["derive"] }
 crossbeam-channel = ">=0.5.15"
 env_logger        = "0.11"
+# The filter half of env_logger, used directly so a running process can swap its RUST_LOG.
+env_filter        = "2"
 libc              = "0.2"
 log               = "0.4"
 png               = "0.17"

@@ -102,10 +102,10 @@ fn test_copy_delay() -> Option<Duration> {
 }
 
 /// `LIMINA_PRESENT_COPY_TRACE`: log the first pixel of each frame as it arrives and as its copy
-/// goes up.
+/// goes up. Switchable while running (the `present-copy-trace` lever); it logs at `info`, so the
+/// filter has to admit `limina::window::copy` too.
 fn copy_trace() -> bool {
-    static TRACE: OnceLock<bool> = OnceLock::new();
-    *TRACE.get_or_init(|| std::env::var_os("LIMINA_PRESENT_COPY_TRACE").is_some())
+    crate::debug_ctl::PRESENT_COPY_TRACE.on()
 }
 
 /// The guest surface's first pixel as frame `id` arrives, when tracing.

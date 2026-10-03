@@ -15,6 +15,7 @@ mod balloon_policy;
 mod center;
 mod clipboard;
 mod control;
+mod debug_ctl;
 mod fido;
 mod gateway;
 // macOS's own Modifier Keys configuration, which positional normalization must read past.
@@ -486,6 +487,44 @@ enum Cmd {
     Suspend(SuspendArgs),
     /// Delete a stopped managed VM's bundle (disks outside the bundle are never touched).
     Rm(RmArgs),
+    /// Change a running VM's log filters and diagnostic traces without restarting it. Changes
+    /// last until the VM exits.
+    Debug(DebugArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct DebugArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
+    /// What to do; `status` when omitted.
+    #[command(subcommand)]
+    action: Option<DebugAction>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum DebugAction {
+    /// Print both log filters and every lever.
+    Status,
+    /// Replace the log filter (`RUST_LOG` syntax, e.g. `warn,limina::window=debug`), or go back
+    /// to the one the VM started with (`default`). Both processes unless one is named.
+    Log {
+        filter: String,
+        /// Only the supervisor (the app: window, input, policy).
+        #[arg(long, conflicts_with = "worker")]
+        supervisor: bool,
+        /// Only the worker (the VMM: devices, GPU, libkrun).
+        #[arg(long)]
+        worker: bool,
+    },
+    /// Turn a diagnostic trace on or off (`status` lists them).
+    Lever { name: String, state: OnOff },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum OnOff {
+    On,
+    Off,
 }
 
 #[derive(clap::Args, Debug)]
@@ -700,9 +739,10 @@ fn main() -> Result<()> {
     }
 
     // Default to warn-and-up so a production run is quiet; RUST_LOG overrides it (RUST_LOG=info
-    // restores the lifecycle log). User-facing output (e.g. the SSH-forward hint below) is
-    // printed directly, not via the logger, so it survives the default level.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    // restores the lifecycle log), and a running VM can change it (`limina debug`, the Debug
+    // menu). User-facing output (e.g. the SSH-forward hint below) is printed directly, not via
+    // the logger, so it survives the default level.
+    limina_debug::logger::init(|_| {});
 
     let mut cli = Cli::parse();
     match cli.cmd.take() {
@@ -714,6 +754,7 @@ fn main() -> Result<()> {
         Some(Cmd::Stop(args)) => cmd_stop(args),
         Some(Cmd::Suspend(args)) => cmd_suspend(args),
         Some(Cmd::Rm(args)) => cmd_rm(args),
+        Some(Cmd::Debug(args)) => cmd_debug(args),
         // Bare `limina` — a double-clicked limina.app or a plain terminal launch —
         // opens the control center. Any flag at all means the flat ephemeral-VM CLI.
         None if std::env::args_os().len() == 1 => center::run(),
@@ -974,48 +1015,7 @@ fn cmd_suspend_flat(disk: &Path) -> Result<()> {
     // `/private/var/...` are different strings), so matching keys on the same spelling.
     let snap = PathBuf::from(format!("{}.limina-suspend.bin", disk.display()));
 
-    // Find the supervisor: `pgrep -f <disk path>` matches both the supervisor (limina) and its
-    // worker (limina-vmm); keep only processes whose command name is exactly `limina`.
-    let out = std::process::Command::new("pgrep")
-        .arg("-f")
-        .arg(disk.as_os_str())
-        .output()
-        .context("running pgrep")?;
-    let mut supervisors: Vec<i32> = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Ok(pid) = line.trim().parse::<i32>() else {
-            continue;
-        };
-        if pid == std::process::id() as i32 {
-            continue;
-        }
-        let comm = std::process::Command::new("ps")
-            .args(["-o", "comm=", "-p", &pid.to_string()])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-        let name = Path::new(&comm)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or(comm);
-        if name == "limina" {
-            supervisors.push(pid);
-        }
-    }
-    let pid = match supervisors.as_slice() {
-        [] => anyhow::bail!(
-            "no running limina supervisor found for {} (is the VM running, and was it started \
-             with this disk path?)",
-            disk.display()
-        ),
-        [pid] => *pid,
-        many => anyhow::bail!(
-            "multiple limina supervisors match {} (pids {many:?}); suspend them individually \
-             with kill -TSTP",
-            disk.display()
-        ),
-    };
+    let pid = flat_supervisor_pid(disk)?;
 
     vmlib::runtime::signal_suspend(pid)?;
     // Same bound as the managed path: quiesce ≤20s + save, supervisor teardown after. The
@@ -1046,6 +1046,101 @@ fn cmd_suspend_flat(disk: &Path) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// The supervisor of the running flat `--disk` run whose boot disk is `disk`.
+fn flat_supervisor_pid(disk: &Path) -> Result<i32> {
+    // Find the supervisor: `pgrep -f <disk path>` matches both the supervisor (limina) and its
+    // worker (limina-vmm); keep only processes whose command name is exactly `limina`.
+    let out = std::process::Command::new("pgrep")
+        .arg("-f")
+        .arg(disk.as_os_str())
+        .output()
+        .context("running pgrep")?;
+    let mut supervisors: Vec<i32> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Ok(pid) = line.trim().parse::<i32>() else {
+            continue;
+        };
+        if pid == std::process::id() as i32 {
+            continue;
+        }
+        let comm = std::process::Command::new("ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let name = Path::new(&comm)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(comm);
+        if name == "limina" {
+            supervisors.push(pid);
+        }
+    }
+    match supervisors.as_slice() {
+        [] => anyhow::bail!(
+            "no running limina supervisor found for {} (is the VM running, and was it started \
+             with this disk path?)",
+            disk.display()
+        ),
+        [pid] => Ok(*pid),
+        many => anyhow::bail!(
+            "multiple limina supervisors match {} (pids {many:?}); address them \
+             individually by pid",
+            disk.display()
+        ),
+    }
+}
+
+/// `limina debug`: find the VM's supervisor and talk to its debug socket.
+fn cmd_debug(args: DebugArgs) -> Result<()> {
+    let pid = debug_target_pid(&args.vm)?;
+    let request = match args.action.unwrap_or(DebugAction::Status) {
+        DebugAction::Status => limina_debug::wire::Request::Status,
+        DebugAction::Log {
+            filter,
+            supervisor,
+            worker,
+        } => limina_debug::wire::Request::Log {
+            scope: match (supervisor, worker) {
+                (true, _) => limina_debug::wire::Scope::Supervisor,
+                (_, true) => limina_debug::wire::Scope::Worker,
+                _ => limina_debug::wire::Scope::All,
+            },
+            spec: filter,
+        },
+        DebugAction::Lever { name, state } => limina_debug::wire::Request::Lever {
+            name,
+            on: matches!(state, OnOff::On),
+        },
+    };
+    debug_ctl::client(pid, &[request])
+}
+
+/// The supervisor pid `limina debug` means: a managed VM first (the existing contract for every
+/// verb), then a flat run's boot disk, then a bare pid.
+fn debug_target_pid(vm: &str) -> Result<u32> {
+    let bundle_err = match vmlib::bundle::resolve(vm) {
+        Ok(bundle) => {
+            return match vmlib::runtime::status(&bundle) {
+                vmlib::runtime::VmStatus::Running { pid } => Ok(pid as u32),
+                vmlib::runtime::VmStatus::Stopped => {
+                    anyhow::bail!("{} is not running", bundle.dir_name())
+                }
+            };
+        }
+        Err(e) => e,
+    };
+    let disk = Path::new(vm);
+    if disk.is_file() {
+        return Ok(flat_supervisor_pid(disk)? as u32);
+    }
+    if let Ok(pid) = vm.parse::<u32>() {
+        return Ok(pid);
+    }
+    Err(bundle_err)
 }
 
 fn cmd_rm(args: RmArgs) -> Result<()> {
@@ -1235,6 +1330,7 @@ fn cli_from_definition(
 fn exit_cleanup() {
     gateway::cleanup();
     control::cleanup();
+    debug_ctl::cleanup();
 }
 
 fn run_vm(mut cli: Cli) -> Result<()> {
@@ -1276,6 +1372,13 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // The worker listeners the supervisor drives itself go over a link, not a path, so no other
     // process can reach them (`limina_launch::connect`). Each spawn arms the links listed here.
     let mut links: Vec<(&'static str, Connector)> = Vec::new();
+
+    // Runtime log filters and levers (`limina debug`, the Debug menu). The worker's filter goes
+    // over its own link. A socket that cannot be bound costs only the runtime switches.
+    debug_ctl::set_worker_link(worker_link(&mut links, "--debug-control-fd"));
+    if let Err(e) = debug_ctl::serve() {
+        log::warn!("debug: no runtime log/lever control for this run: {e:#}");
+    }
 
     // Balloon control (M6): an explicit socket path wins (the harness drives it); else a link
     // when --memory is given.

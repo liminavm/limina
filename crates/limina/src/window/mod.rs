@@ -45,6 +45,7 @@ mod button_pace;
 mod capture_tap;
 mod copy;
 mod cursor;
+mod debug_menu;
 mod diag;
 pub(crate) mod display_awake;
 mod displays;
@@ -748,15 +749,18 @@ define_class!(
         }
     }
 
-    // Both dynamic submenus are rebuilt every time they open — Displays because its rows are
-    // the host's attached panels, Input because its checkmark can be moved from elsewhere. One
-    // delegate serves both, so it must ask WHICH menu opened; repopulating by title is the only
-    // identity an NSMenu hands its delegate here.
+    // The dynamic submenus are rebuilt every time they open — Displays because its rows are
+    // the host's attached panels, Input and Debug because their checkmarks can be moved from
+    // elsewhere. One delegate serves them all, so it must ask WHICH menu opened; repopulating by
+    // title is the only identity an NSMenu hands its delegate here.
     unsafe impl NSMenuDelegate for VmMenuActions {
         #[unsafe(method(menuNeedsUpdate:))]
         fn menu_needs_update(&self, menu: &NSMenu) {
-            if menu.title().to_string() == "Input" {
+            let title = menu.title().to_string();
+            if title == "Input" {
                 populate_input_menu(menu, self.mtm(), self);
+            } else if title == debug_menu::TITLE {
+                debug_menu::populate(menu, self.mtm(), self);
             } else {
                 populate_displays_menu(menu, self.mtm(), self);
             }
@@ -904,6 +908,24 @@ define_class!(
                 "menu: raw trackpad while captured {}",
                 if on { "on" } else { "off" }
             );
+        }
+
+        // Debug ▸ a log preset: both processes' filter, for this run.
+        #[unsafe(method(setDebugLogPreset:))]
+        fn set_debug_log_preset(&self, sender: &NSMenuItem) {
+            debug_menu::apply_preset(sender.tag());
+        }
+
+        // Debug ▸ a trace lever, for this run.
+        #[unsafe(method(toggleDebugLever:))]
+        fn toggle_debug_lever(&self, sender: &NSMenuItem) {
+            debug_menu::toggle_lever(sender.tag());
+        }
+
+        // Debug ▸ Copy Debug Command: `limina debug <pid> status`, ready to paste and edit.
+        #[unsafe(method(copyDebugCommand:))]
+        fn copy_debug_command(&self, _sender: &NSMenuItem) {
+            crate::clipboard::copy_to_pasteboard(&debug_menu::command_line());
         }
 
         // Show in Finder: reveal the .liminavm bundle.
@@ -1366,10 +1388,10 @@ const OVERLAY_SETTLE: Duration = Duration::from_millis(400);
 ///
 /// Unknown answers conservatively as `true`: that yields the old always-drop behavior, so a
 /// missing screen can only cost the black strip, never a covered system dialog.
-/// Whether to log overlay level/space transitions to stderr (`LIMINA_OVERLAY_TRACE=1`).
+/// Whether to log overlay level/space transitions to stderr (`LIMINA_OVERLAY_TRACE=1`, or the
+/// `overlay-trace` lever while running).
 fn overlay_trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIMINA_OVERLAY_TRACE").is_some_and(|v| v != "0"))
+    crate::debug_ctl::OVERLAY_TRACE.on()
 }
 
 /// Whether to log every display-sizing decision to stderr (`LIMINA_DISPLAY_TRACE=1`): what
@@ -1377,9 +1399,9 @@ fn overlay_trace() -> bool {
 /// derived from it, and what the window was reshaped to. The oracle for the class of bug
 /// where the guest resolution and the window's own geometry feed each other — a host display
 /// hotplug drove eight modesets converging 114 px short of the screen (2026-08-08).
+/// Switchable while running (the `display-trace` lever).
 fn display_trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIMINA_DISPLAY_TRACE").is_some_and(|v| v != "0"))
+    crate::debug_ctl::DISPLAY_TRACE.on()
 }
 
 /// Shared zero for the trace timestamps, so lines from different traces sit on one timeline.
@@ -1968,6 +1990,9 @@ fn install_main_menu(mtm: MainThreadMarker, app: &NSApplication) {
     let input_item = NSMenuItem::new(mtm);
     menubar.addItem(&input_item);
     input_item.setSubmenu(Some(&build_input_menu(mtm, &actions)));
+    let debug_item = NSMenuItem::new(mtm);
+    menubar.addItem(&debug_item);
+    debug_item.setSubmenu(Some(&debug_menu::build(mtm, &actions)));
     app.setMainMenu(Some(&menubar));
     // NSMenuItem targets are weak; the actions object must live as long as the menu.
     std::mem::forget(actions);

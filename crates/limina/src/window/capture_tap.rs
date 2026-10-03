@@ -1317,9 +1317,9 @@ thread_local! {
         const { std::cell::Cell::new((None, 1.0, u32::MAX)) };
 }
 
+/// `LIMINA_EDGE_TRACE`, switchable while running (`limina debug <vm> lever edge-trace on`).
 pub(crate) fn edge_trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIMINA_EDGE_TRACE").is_some_and(|v| v != "0"))
+    crate::debug_ctl::EDGE_TRACE.on()
 }
 
 /// Milliseconds since the first traced event, stamped on every trace line.

@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -58,10 +58,9 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 /// cost one bounded probe per interval, not one per tick.
 const PROBE_RETRY: Duration = Duration::from_secs(30);
 
-/// Log every request and reply (`LIMINA_QGA_TRACE=1`).
+/// Log every request and reply (`LIMINA_QGA_TRACE=1`, or the `qga-trace` lever while running).
 fn trace_on() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIMINA_QGA_TRACE").is_some_and(|v| v != "0"))
+    crate::debug_ctl::QGA_TRACE.on()
 }
 
 /// What the agent said it can do, from `guest-info`. The gate for every command we send:

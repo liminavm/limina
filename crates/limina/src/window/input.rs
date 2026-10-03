@@ -250,9 +250,10 @@ fn mod_name(kc: u16) -> &'static str {
 /// looking (another Space, another app) is invisible to us until it moves again — and macOS sends
 /// no reconciling edge on refocus. Every line therefore prints both sides plus the drift between
 /// them, so a repro shows the divergence rather than requiring it to be inferred.
+///
+/// Switchable while running (`limina debug <vm> lever input-trace on`).
 pub(crate) fn input_trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIMINA_INPUT_TRACE").is_some_and(|v| v != "0"))
+    crate::debug_ctl::INPUT_TRACE.on()
 }
 
 /// The host pointer's adoption of the guest cursor (main thread only). `cursor` is what
@@ -3606,10 +3607,9 @@ impl InputState {
 /// absolute and relative devices, stamped with wallclock microseconds. The guest clock is
 /// host-anchored (PL031 + TimeSync), so a guest-side recording of where the compositor put
 /// the cursor can be correlated event-for-event; `spikes/pointer-units-oracle/` is the
-/// consumer.
+/// consumer. Switchable while running (`limina debug <vm> lever pointer-wire-trace on`).
 pub(crate) fn wire_trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LIMINA_POINTER_WIRE_TRACE").is_some_and(|v| v != "0"))
+    crate::debug_ctl::POINTER_WIRE_TRACE.on()
 }
 
 pub(crate) fn wire_now_us() -> u128 {

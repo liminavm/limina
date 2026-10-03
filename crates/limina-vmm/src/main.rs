@@ -14,6 +14,7 @@
 mod audio_state;
 mod bracket;
 mod config;
+mod debug_link;
 mod fido_usb;
 mod krun;
 mod moc_usb;
@@ -187,6 +188,11 @@ struct Cli {
     /// over (`limina_launch::connect`), so no other process can reach it.
     #[arg(long)]
     display_control_fd: Option<i32>,
+
+    /// The supervisor's link for changing this worker's log filter while it runs (`limina debug`,
+    /// the Debug menu). See `debug_link`.
+    #[arg(long)]
+    debug_control_fd: Option<i32>,
 
     /// Stage-2 translation granule for the VM (macOS 26+). Omitted keeps the host default,
     /// which is the host page size -- 16 KiB on Apple silicon. `4k` is what lets a 4 KiB-page
@@ -499,14 +505,14 @@ pub(crate) fn exit_flushing_logs(code: i32) -> ! {
     std::process::exit(code)
 }
 
+/// The filter starts from `RUST_LOG` and the supervisor can change it later (`debug_link`).
 fn init_worker_logging() {
-    let env = env_logger::Env::default().default_filter_or("warn");
     if std::env::var_os("LIMINA_LOG_BLOCKING").is_some() {
         // Microsecond timestamps: per-frame work (present, fences) is sub-millisecond —
         // second-resolution stamps make inter-event timing unreadable in trace captures.
-        env_logger::Builder::from_env(env)
-            .format_timestamp_micros()
-            .init();
+        limina_debug::logger::init(|b| {
+            b.format_timestamp_micros();
+        });
         return;
     }
     let (writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
@@ -538,10 +544,10 @@ fn init_worker_logging() {
                 }
             }
         });
-    env_logger::Builder::from_env(env)
-        .target(env_logger::Target::Pipe(Box::new(writer)))
-        .format_timestamp_micros()
-        .init();
+    limina_debug::logger::init(|b| {
+        b.target(env_logger::Target::Pipe(Box::new(writer)))
+            .format_timestamp_micros();
+    });
 }
 
 /// Default ceiling, in MiB, on host GPU memory held on the guest's behalf.
@@ -794,6 +800,11 @@ fn main() -> Result<()> {
         host_sleep_s2idle,
         smbios_oem_strings: cli.smbios_oem_string,
     };
+
+    // After every `set_var` above: from here on another thread is running.
+    if let Some(fd) = cli.debug_control_fd {
+        debug_link::install(ListenAt::Link(fd))?;
+    }
 
     krun::boot(&spec)
 }

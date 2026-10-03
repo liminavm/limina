@@ -1,0 +1,12 @@
+[package]
+name = "limina-debug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Shared by the supervisor and the worker, so it holds no libkrun and no AppKit types — the
+# supervisor has no libkrun dependencies by design, and the worker has no window.
+[dependencies]
+env_filter = { workspace = true }
+env_logger = { workspace = true }
+log        = { workspace = true }

@@ -24,7 +24,6 @@ anyhow     = { workspace = true }
 # pid+fds (OwnedFd — held open while the snapshot lives), the reboot relaunch swaps the set.
 arc-swap   = { workspace = true }
 clap       = { workspace = true }
-env_logger = { workspace = true }
 libc       = { workspace = true }
 log        = { workspace = true }
 # Managed VM definitions (.liminavm bundles / vm.toml) — src/vmlib.
@@ -40,6 +39,8 @@ serde_json = { workspace = true }
 # stderr, and the .ips crash report carries only a backtrace.
 limina-paniclog = { workspace = true }
 limina-launch = { workspace = true }
+# Runtime log filters and diagnostic levers (`limina debug`, the Debug menu).
+limina-debug = { workspace = true }
 
 # Shared evdev constants + macOS->Linux keymap + wire format (NO `backends` feature here,
 # so this pulls in no libkrun/bindgen; only the worker enables the krun_input backends).
