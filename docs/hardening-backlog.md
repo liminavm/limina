@@ -976,6 +976,25 @@ is verified live only: `l1_session_helper.rs` exercises the RemoteDesktop path a
 after a supervisor restart or after the D-Bus session dies. (Per-peer serials and stale-offer
 rejection are covered by `l1_clipboard_multi_session.rs`.)
 
+### A stock guest's idle inhibitors never reach the host
+Measured 2026-10-03 on a stock F44 guest, SELinux Enforcing: Firefox playing a video registers two
+gnome-session inhibitors ("Playing video", "Playing audio", flags 8 = idle), and they exist only in
+`org.gnome.SessionManager`'s `InhibitedActions` on the user's session bus. gnome-session forwards
+only logout → `shutdown` and suspend → `sleep` to logind (`gsm_systemd_set_inhibitors` in
+`gnome-session/gsm-systemd.c`), so `systemd-inhibit --list` does not change. `qemu-ga` runs as
+`virt_qemu_ga_t`, which can read logind over the system bus but is denied every route to a session
+bus (the socket write, `runuser`'s setgid, and the transient unit `--machine=user@.host` needs). So
+the stock tier keeps the display awake on the audio + hardware-decode heuristic alone, which misses
+software-decoded video and silent video. The enhanced tier relays the real inhibitor. Ways to
+close the gap, none started:
+- Upstream: have gnome-session forward idle inhibitors to logind. What stands in the way is that
+  logind's `idle` lock also blocks automatic suspend; systemd #29129 (split `idle` into a power
+  part and a screen-lock part) and #41982 (a session-lock inhibitor) are open with no PR.
+- A QGA poll of `InhibitedActions` where the agent is unconfined (AppArmor guests such as Ubuntu).
+  It costs one `guest-exec` process per poll and shares the port with the clock tick.
+- logind's session `IdleHint`, which QGA can read, does honour idle inhibitors, but it only turns
+  true after GNOME's `idle-delay`, and never when screen blanking is off (`idle-delay=0`).
+
 ---
 
 ## Networking
