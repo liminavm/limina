@@ -72,12 +72,15 @@ guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and 
 Two facts the table cannot show:
 
 - **The guest agents are not RPMs and so are not in the table.** All three F44 enhanced images
-  carry **`limina-agent` 0.6.1** and `limina-agent-session`, installed to `/usr/local/bin` with
-  their units (payload **r27**, delivered 2026-09-13; the dogfood guest is one step behind at 0.6.0,
-  taken by hand on 2026-09-03 straight from 0.4.0 — its first agent with the `vcpu` cap — but
-  carries r27's `limina-agent-session`, installed by hand 2026-09-13). r27 changed
-  `limina-agent-session` only: a channel the host drops within 5 s of opening now holds off the
-  next connect, so a drop-after-accept cannot become a connect storm. 0.6.1 added
+  carry **`limina-agent` 0.6.1** and **`limina-agent-session` 0.1.2**, installed to
+  `/usr/local/bin` with their units (payload **r31**, delivered 2026-10-03; the dogfood guest is one
+  step behind on the agent at 0.6.0, taken by hand on 2026-09-03 straight from 0.4.0 — its first
+  agent with the `vcpu` cap — but carries r31's `limina-agent-session` 0.1.2, installed by hand
+  2026-10-03, with 0.1.1 kept beside it as `limina-agent-session.0.1.1.bak`). 0.1.2 relays the
+  session's idle inhibitors (`idleinhibit`, the host's keep-the-display-awake signal) and shuts a
+  host channel down rather than dropping one half of it; 0.1.1's drop-after-accept backoff (r27)
+  stops a host that drops a channel within 5 s of opening it from turning into a connect storm.
+  Check the helper with `limina-agent-session --version`. 0.6.1 added
   the CPU utilisation and stall rates the host's vCPU grow rule needs; 0.6.0 added the
   `powerprofile` capability (the GNOME power-mode toggle reaching host policy); 0.5.0 added `vcpu`,
   the floor for dynamic vCPU offlining. Check the version in a guest with `limina-agent --version`, which is also the
@@ -123,7 +126,11 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r30.tar.zst`** (r30, 2026-10-02: host-side
+**Current payload: `payload/limina-guest-tools-f44-r31.tar.zst`** (r31, 2026-10-03: host-side
+repack of r30 with `limina-agent-session` 0.1.2 at limina `dcccafb6` — the idle-inhibitor relay.
+Kernel, mesa and `limina-agent` identical to r30; the installer is r30's, so it predates
+`e725b8d8`. Applied to all three F44 enhanced images (`.bak-pre-r31.raw` CoW backups), both agent
+hashes verified, kernel install short-circuited, no trial boot owed.) Previous: r30 (2026-10-02: host-side
 repack of r29 with mesa `26.2.3-2.limina` — the venus fix for a submission that waits and signals
 one binary semaphore, which segfaulted gfxrecon-replay on `-1`. Kernel and agents identical to
 r29; applied to all three F44 enhanced images (`.bak-pre-r30.raw` CoW backups).) Previous: r29
