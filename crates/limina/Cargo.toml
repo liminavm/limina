@@ -85,6 +85,8 @@ objc2-foundation = { version = "0.3", features = [
     # NSEvent.allTouches (the trackpad's per-finger touches).
     "NSSet",
     "NSEnumerator",
+    # About → Licenses: the notices file in the app bundle's Resources.
+    "NSBundle",
 ] }
 # The VM's media session: announce it to macOS as a player while the guest holds its
 # virtio-snd stream open, so the transport keys, the Control Center buttons and the
@@ -143,6 +145,9 @@ objc2-app-kit = { version = "0.3", features = [
     # transient popover (hover shows the same text as a fast tooltip).
     "NSPopover",
     "NSViewController",
+    # About → Licenses: the third-party notices in a scrolling, read-only text view.
+    "NSText",
+    "NSTextView",
     "objc2-core-graphics",
     "block2",
 ] }

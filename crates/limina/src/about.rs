@@ -30,11 +30,24 @@
 //! control center: a modal dialog showing the whole stamp as fixed-pitch text, with a button
 //! that copies it. What the dialog shows IS what the button copies — full hashes either way —
 //! so a screenshot and a paste say the same thing.
+//!
+//! Its Licenses button shows the third-party notices: the file `scripts/build-app.sh` writes
+//! into the bundle's Resources (`scripts/gen-third-party-notices.py`), read at click time so the
+//! dialog and the shipped file cannot disagree. A binary run from outside a bundle has no such
+//! file and says how to produce it.
+
+use std::path::{Path, PathBuf};
 
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
-use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSFont, NSMenuItem, NSTextField};
-use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
+use objc2_app_kit::{
+    NSAlert, NSAlertSecondButtonReturn, NSAlertThirdButtonReturn, NSFont, NSMenuItem, NSTextField,
+    NSTextView,
+};
+use objc2_foundation::{NSBundle, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+
+/// The notices file's name in the bundle's Resources, as `scripts/build-app.sh` writes it.
+const NOTICES: &str = "THIRD-PARTY-NOTICES.txt";
 
 /// One dependency's revision, as `build.rs` resolved it at compile time.
 pub(crate) struct Dep {
@@ -192,12 +205,64 @@ pub(crate) fn show(mtm: MainThreadMarker) {
         // hitting Return on a dialog you opened to read should not touch the pasteboard.
         alert.addButtonWithTitle(&NSString::from_str("OK"));
         alert.addButtonWithTitle(&NSString::from_str("Copy"));
-        if alert.runModal() != NSAlertSecondButtonReturn {
+        alert.addButtonWithTitle(&NSString::from_str("Licenses…"));
+        let answer = alert.runModal();
+        if answer == NSAlertSecondButtonReturn {
+            crate::clipboard::copy_to_pasteboard(&text);
+            copied = true;
+        } else if answer == NSAlertThirdButtonReturn {
+            // Back to About afterwards: Licenses is a detour from it, not a way out.
+            show_licenses(mtm);
+            copied = false;
+        } else {
             return;
         }
-        crate::clipboard::copy_to_pasteboard(&text);
-        copied = true;
     }
+}
+
+/// Where the bundled notices would be: the main bundle's Resources. For a binary run from
+/// outside a bundle that is its own directory, where there is no such file.
+fn notices_path() -> Option<PathBuf> {
+    let resources = NSBundle::mainBundle().resourcePath()?;
+    Some(PathBuf::from(resources.to_string()).join(NOTICES))
+}
+
+/// What Licenses shows: the notices file, or how to produce one when it cannot be read.
+fn licenses_text(path: Option<&Path>) -> String {
+    match path.map(std::fs::read_to_string) {
+        Some(Ok(text)) => text,
+        _ => format!(
+            "This build carries no third-party notices. {NOTICES} is written into the app \
+             bundle by `cargo xtask app`, and on its own by `cargo xtask notices`."
+        ),
+    }
+}
+
+/// The third-party notices, in a scrolling read-only text view: the file runs to megabytes,
+/// far past what a label in an alert can hold.
+fn show_licenses(mtm: MainThreadMarker) {
+    let text = licenses_text(notices_path().as_deref());
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str("Third-party licenses"));
+    let scroll = NSTextView::scrollableTextView(mtm);
+    scroll.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(620.0, 420.0),
+    ));
+    if let Some(view) = scroll
+        .documentView()
+        .and_then(|v| v.downcast::<NSTextView>().ok())
+    {
+        view.setEditable(false);
+        view.setSelectable(true);
+        if let Some(font) = NSFont::userFixedPitchFontOfSize(11.0) {
+            view.setFont(Some(&font));
+        }
+        view.setString(&NSString::from_str(&text));
+    }
+    alert.setAccessoryView(Some(&scroll));
+    alert.addButtonWithTitle(&NSString::from_str("OK"));
+    alert.runModal();
 }
 
 #[cfg(test)]
@@ -281,6 +346,33 @@ mod tests {
                 "{} chars, over a {budget}-char budget:\n{line}",
                 line.chars().count()
             );
+        }
+    }
+
+    /// Licenses shows the notices file exactly as the bundle step wrote it.
+    #[test]
+    fn licenses_show_the_bundled_file_verbatim() {
+        let dir = std::env::temp_dir().join(format!("limina-about-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(NOTICES);
+        std::fs::write(&path, "Limina — third-party notices\nzstd 1.5.7\n").unwrap();
+        assert_eq!(
+            licenses_text(Some(&path)),
+            "Limina — third-party notices\nzstd 1.5.7\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Outside a bundle there is no file, and Licenses says how to get one instead of failing.
+    #[test]
+    fn licenses_without_a_bundle_say_how_to_produce_them() {
+        for path in [
+            None,
+            Some(Path::new("/nonexistent/THIRD-PARTY-NOTICES.txt")),
+        ] {
+            let text = licenses_text(path);
+            assert!(text.contains(NOTICES), "{text}");
+            assert!(text.contains("cargo xtask app"), "{text}");
         }
     }
 
