@@ -238,11 +238,15 @@ fn hardware_decode_in_flight_survives_restore() {
     };
 
     // --- Restore into a fresh worker against the preserved disk ---
+    // VIRGLRS_SUBMIT_STATS: the decode thread's periodic line (units queued, decode times,
+    // reads that waited on a picture), so a decode that stops after the restore shows whether
+    // the host's decoder stalled or the guest stopped feeding it.
     let mut cfg2 = base_cfg
         .with_coexist_display(1280, 800)
         .with_virgl_host_gl()
         .with_net()
         .with_supervisor_log()
+        .with_env("VIRGLRS_SUBMIT_STATS", "1")
         .restore_from(&snap);
     if let limina_test::Boot::Firmware { disk: d, .. } = &mut cfg2.boot {
         *d = disk.clone();
@@ -290,15 +294,22 @@ fn hardware_decode_in_flight_survives_restore() {
             let log = g2
                 .ssh_exec(&format!("cat {HW_LOG} 2>/dev/null"))
                 .unwrap_or_default();
-            eprintln!("--- restore supervisor log tail ---");
-            let slog = g2.supervisor_log();
-            for line in slog.lines().rev().take(40).collect::<Vec<_>>().iter().rev() {
-                eprintln!("{line}");
-            }
+            // The whole supervisor log (the worker's stale-fence lines and virglrs's decode
+            // stats included), the decoder's threads and dmesg, kept past the VM. A 40-line tail
+            // once held nothing but scheduler noise, and the fence the guest waited on was gone.
+            let kept = g2.forensics(
+                "the hardware decode never finished after the restore",
+                "gst-launch-1.0",
+            );
+            let fences = g2
+                .ssh_exec("sudo -n sh -c 'cat /sys/kernel/debug/dri/*/virtio-gpu-fences' 2>&1")
+                .unwrap_or_else(|e| format!("the guest could not be asked: {e:#}\n"));
+            let _ = std::fs::write(kept.join("guest-virtio-gpu-fences.txt"), fences);
             cleanup();
             panic!(
-                "the hardware decode never finished after the restore\n\
-                 --- gst-launch log ---\n{log}"
+                "the hardware decode never finished after the restore (evidence kept in {})\n\
+                 --- gst-launch log ---\n{log}",
+                kept.display()
             );
         }
         std::thread::sleep(Duration::from_secs(2));
