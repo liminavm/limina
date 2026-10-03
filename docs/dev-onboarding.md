@@ -190,6 +190,25 @@ KosmicKrisp, windowed, with user-mode NAT. It tests the image exactly as it real
   shows `Virtio-GPU Venus`; over a non-login ssh shell it enumerates nothing (a false
   negative — the venus ICD is selected via `/etc/environment.d`).
 
+### Debug a running VM without restarting it
+
+The log filter and the supervisor's traces can change while the VM runs — the way to catch
+an intermittent fault on a VM (dogfood included) that was started quietly. `RUST_LOG` and the
+`LIMINA_*_TRACE` variables still set the starting values; nothing set at runtime outlives the run.
+
+```sh
+limina debug <vm> status                         # both filters, every lever
+limina debug <vm> log 'warn,limina::window=debug'  # both processes (--supervisor/--worker for one)
+limina debug <vm> log default                    # back to what it started with
+limina debug <vm> lever edge-trace on
+```
+
+`<vm>` is a managed VM's name or bundle, a flat run's boot-disk path, or the supervisor's pid.
+In an app bundle the binary is `Limina.app/Contents/MacOS/limina`. The window's **Debug** menu
+carries the common presets, every lever, and *Copy Debug Command*. The worker's filter follows
+it across a reboot or resume. Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …)
+are still environment-only.
+
 ## 4. Linux-side builds (firmware + the enhanced tier)
 
 Everything that has to be built *on Linux* runs in one container image —

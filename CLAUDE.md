@@ -398,7 +398,9 @@ directly observed.
   first.** `--no-net`/`--cpus`/`--ram-mib` and trailing `-- <extra limina flags>` map to the script's
   `LIMINA_NET`/`LIMINA_CPUS`/`LIMINA_RAM_MIB`/`LIMINA_EXTRA_ARGS`; the disk boots **in place**, so
   clone it first to keep it pristine — `cp -c` makes that free (APFS CoW, instant, no space).
-  **Always boot a poke VM with the debug channels already open**:
+  **A VM already running (dogfood included) can open them without a restart**: `limina debug <vm>`
+  or the window's Debug menu (`docs/dev-onboarding.md` §3). **Always boot a poke VM with the
+  debug channels already open**:
   `RUST_LOG=warn,limina=info,krun::vmm=info,krun_devices=info`, `LIMINA_POINTER_WIRE_TRACE=1`, and
   `LIMINA_WINDOW_CAPTURE=<file>.png` (add the subsystem's own trace, e.g. `LIMINA_DISPLAY_TRACE`)
   so an incident caught in passing is already recorded. **Keep the bare leading `warn`.** A
