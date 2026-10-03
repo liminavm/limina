@@ -618,6 +618,9 @@ pub struct Shared {
     /// transitions themselves are the signal — a start and a stop inside one tick is a track
     /// change, and collapsing it to "stopped" would retire a session that is still playing.
     pub(crate) audio_events: Vec<(u32, super::media_policy::AudioEvent)>,
+    /// What the worker has reported about the guest's hardware video decoder and the main thread
+    /// has not yet fed to the display-wake policy (`super::wake_policy`). Edges, not frames.
+    pub(crate) video_events: Vec<super::wake_policy::VideoEvent>,
     /// A fresh worker was swapped in and nothing has been said to it yet: the device is back to
     /// how it boots, and everything the host believes it told the old one is a lie. Taken once
     /// by the window tick, which re-asserts the arrangement (`DisplayTable::reset_connectors_to_boot`)
@@ -822,6 +825,16 @@ fn deliver_line<S: Clone>(
             if let (Some(stream), Some(event)) = (stream, event) {
                 log::info!("window: <- {line}");
                 s.audio_events.push((stream, event));
+                wake = true;
+            }
+        }
+        Some("video") => {
+            // video <decoding|still> — the guest's hardware decoder started running frames, or
+            // has run none for a second. Whether that keeps the host display awake is
+            // main-thread policy; the reader only queues it.
+            if let Some(event) = parts.next().and_then(super::wake_policy::VideoEvent::parse) {
+                log::info!("window: <- {line}");
+                s.video_events.push(event);
                 wake = true;
             }
         }

@@ -25,6 +25,7 @@ mod snapshot;
 mod surface_publisher;
 mod suspend;
 mod usb_kbd;
+mod video_state;
 mod wake;
 
 use std::path::PathBuf;
@@ -702,6 +703,10 @@ fn main() -> Result<()> {
             if let Some(name) = cli.surface_port_name.as_deref() {
                 surface_publisher::install(name);
             }
+            // Whether the guest is decoding video, for the supervisor's keep-the-display-awake
+            // policy. Before the renderer starts, for the same reason: a codec keeps the observer
+            // it was created under.
+            video_state::install(control_fd);
             Some(DisplaySink::Window {
                 control_fd,
                 surface_port_name: cli.surface_port_name.clone(),

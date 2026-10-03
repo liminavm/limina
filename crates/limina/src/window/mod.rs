@@ -46,6 +46,7 @@ mod capture_tap;
 mod copy;
 mod cursor;
 mod diag;
+mod display_awake;
 mod displays;
 mod echo;
 pub(crate) mod fit;
@@ -64,6 +65,7 @@ mod overlay;
 mod present;
 mod seams;
 mod trackpad;
+mod wake_policy;
 mod warp;
 mod windows;
 
@@ -2220,6 +2222,12 @@ pub fn run(
     let media_session = std::rc::Rc::new(RefCell::new(media_session::MediaSession::new(
         title.clone(),
     )));
+    // Whether to keep the host display awake for the guest, and the assertion that does it. Main
+    // thread for the same reason as the media session: the timer below drives them, from the same
+    // audio events plus the decoder's.
+    let wake_policy = RefCell::new(wake_policy::WakePolicy::new());
+    let display_awake = RefCell::new(display_awake::DisplayAwake::default());
+    let wake_title = title.clone();
     // Deliver a media key macOS routed to us as if it had come off the keyboard: the guest's own
     // desktop already binds KEY_PLAYPAUSE and friends, so nothing guest-side is required. The
     // press and release are synthesized together — a remote command is an event, not a key state,
@@ -3155,8 +3163,37 @@ pub fn run(
         // session. Draining before the exit check below so a guest that stops playing on its way
         // down still retires cleanly rather than through the Drop.
         {
-            let queued = std::mem::take(&mut shared.lock().unwrap().audio_events);
+            let (queued, video) = {
+                let mut s = shared.lock().unwrap();
+                (
+                    std::mem::take(&mut s.audio_events),
+                    std::mem::take(&mut s.video_events),
+                )
+            };
             let now = std::time::Instant::now();
+
+            // The same audio, plus the decoder and what is on screen, decide whether the host
+            // display stays awake for the guest (`wake_policy`).
+            {
+                let mut wake = wake_policy.borrow_mut();
+                for &(stream, event) in &queued {
+                    wake.audio(stream, event);
+                }
+                for event in video {
+                    wake.video(event);
+                }
+                wake.set_inhibited(display_awake::guest_inhibitors());
+                wake.set_visible(any_window_visible(&window));
+                let reason = wake.reason();
+                match wake.tick(now) {
+                    Some(wake_policy::Action::Hold) => {
+                        display_awake.borrow_mut().hold(&wake_title, reason)
+                    }
+                    Some(wake_policy::Action::Release) => display_awake.borrow_mut().release(),
+                    None => {}
+                }
+            }
+
             let mut policy = media_policy.borrow_mut();
             let mut actions: Vec<_> = queued
                 .into_iter()
@@ -3222,6 +3259,12 @@ pub fn run(
             && let Some(media_policy::Action::Retire) = media_policy.borrow_mut().worker_gone()
         {
             media_session.borrow_mut().retire();
+        }
+        // Nor is it playing a video: let the display sleep on its own schedule again.
+        if (exited || worker_suspended)
+            && let Some(wake_policy::Action::Release) = wake_policy.borrow_mut().worker_gone()
+        {
+            display_awake.borrow_mut().release();
         }
 
         // Worker gone (guest powered off, orderly or not): net any process-group
@@ -4075,6 +4118,18 @@ pub fn run(
     // normally exits us. Either way, don't fall through.
     crate::exit_cleanup();
     std::process::exit(0);
+}
+
+/// Whether any of this VM's windows is on screen. AppKit's occlusion state folds every way a
+/// window can be out of sight into one bit -- minimized, hidden with the app, on another Space,
+/// or wholly covered -- which is exactly the question "is the user looking at the guest".
+fn any_window_visible(primary: &NSWindow) -> bool {
+    let shows = |w: &NSWindow| w.occlusionState().contains(NSWindowOcclusionState::Visible);
+    shows(primary)
+        || windows::hosted_slots()
+            .into_iter()
+            .filter_map(windows::window_of_slot)
+            .any(|(w, _)| shows(&w))
 }
 
 #[cfg(test)]
