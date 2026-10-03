@@ -649,8 +649,10 @@ impl PowerProfileMsg {
 ///
 /// **Level-triggered**, like [`PowerProfileMsg`]: sent after HELLO and on every change, so a
 /// reconnect resynchronises with no replay. The capability is `idleinhibit`: a session helper
-/// advertises it only when it can read its desktop's inhibitors, and sends this only to a host
-/// whose WELCOME carries it too. The host forgets a helper's report when its connection closes.
+/// advertises it only when it can read its desktop's inhibitors, and a host that offers it says
+/// so in WELCOME. The helper does not wait for that: a host that predates the message answers
+/// `ERR_UNSUPPORTED`, which costs nothing. The host forgets a helper's report when its
+/// connection closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct IdleInhibit {
     #[n(0)]

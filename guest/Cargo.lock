@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "limina-agent-session"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "limina-proto",

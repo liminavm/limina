@@ -431,8 +431,10 @@ fn claim_phase(
     };
 
     loop {
-        if bridge.host.is_some() && bridge.idle.stale(inhibitors) {
-            bridge.host = None;
+        if bridge.idle.stale(inhibitors)
+            && let Some(stale) = bridge.host.take()
+        {
+            close_channel(stale);
             bridge.connected_at = None;
         }
         if bridge.host.is_none() {
@@ -644,6 +646,16 @@ struct Bridge {
     idle: IdleChannel,
 }
 
+impl Drop for Bridge {
+    /// Leaving the claim phase hands the clipboard back by reconnecting without the capability,
+    /// which only works if this channel really ends (see [`close_channel`]).
+    fn drop(&mut self) {
+        if let Some(host) = self.host.take() {
+            close_channel(host);
+        }
+    }
+}
+
 impl Bridge {
     /// One vsock connect + HELLO attempt; spawns the reader thread on success.
     fn try_connect(
@@ -827,6 +839,16 @@ impl Bridge {
             Event::Host(_) => {}
         }
     }
+}
+
+/// Close a host channel for real. The claim phase's reader thread holds a `try_clone` of the
+/// same socket, so dropping this half alone leaves the connection open: the host would keep a
+/// peer with the old HELLO's capabilities and whatever it last reported. Shutting the socket down
+/// ends it for both halves, and the reader exits on the EOF.
+fn close_channel(stream: File) {
+    use std::os::fd::AsRawFd;
+    // SAFETY: a live descriptor this function owns until the drop below.
+    unsafe { libc::shutdown(stream.as_raw_fd(), libc::SHUT_RDWR) };
 }
 
 /// One vsock connect attempt to `CID_HOST:port`.
@@ -1054,6 +1076,27 @@ mod channel_tests {
         );
         assert_eq!(second, Message::DisplayLayout(seed()));
         assert!(read_message(&mut r).is_err(), "exactly two frames");
+    }
+
+    /// The claim phase's reader thread holds a clone of the channel, so dropping the bridge's
+    /// half alone would leave the connection open — and the host would keep a peer with the
+    /// old HELLO's capabilities and its last idle-inhibit report.
+    #[test]
+    fn closing_a_channel_ends_it_even_while_the_reader_holds_a_clone() {
+        use std::io::Read;
+        use std::os::fd::OwnedFd;
+        let (ours, mut host) = std::os::unix::net::UnixStream::pair().unwrap();
+        let ours = std::fs::File::from(OwnedFd::from(ours));
+        let _reader = ours.try_clone().unwrap();
+        super::close_channel(ours);
+        host.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut buf = [0u8; 1];
+        assert_eq!(
+            host.read(&mut buf)
+                .expect("the host sees the end, not a timeout"),
+            0
+        );
     }
 
     #[test]
