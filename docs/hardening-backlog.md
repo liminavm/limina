@@ -94,11 +94,45 @@ before designing a fix.
 ## Input
 
 ### Clicks that neither take nor stand down the grab
-Reported once (2026-08-22), cause unknown. Every press the tap sees logs `pointer capture: click at (x,y) —
-grabbed=…; fullscreen=… key=… space=… on-screen=… grab-enabled=… latched=…`, and a system-disabled
-tap logs `pointer capture: the system disabled our event tap … re-enabled` — events in that gap
-reach the app untapped, which matches the reported signature. Next sighting: read those lines
-before forming a theory.
+Reported on dogfood (2026-08-22, again 2026-10-03: mid-screen clicks and trackpad motion in a
+focused fullscreen window intermittently not grabbing; the clicks still reach the guest). The
+known causes are the next three entries; a sighting that fits none of them needs the facts the
+per-click `info` line leaves out. That line (`pointer capture: click at (x,y) — grabbed=…`)
+carries fullscreen/key/space/latch, but not `menu_open`, the screen-capture verdict or the window
+the hit test found, so a click refused by a stuck `MENU_OPEN` looks like any other
+`grabbed=false`. Next sighting: `limina debug <vm> log 'warn,limina::window=info'` and
+`limina debug <vm> lever edge-trace on` on the running VM, then read `[CLICK]`/`[HITTEST]`
+before forming a theory. Ruled out for the 2026-10-03 report: a system-disabled tap (no
+`the system disabled our event tap` line in any dogfood log).
+
+### A lingering screenshot window refuses every grab
+`screen_capture_session_live` (`capture_tap.rs`) reads *any* on-screen window owned by
+`com.apple.screencaptureui` as a live Cmd-Shift-4 session, on the premise that the process exits
+with the session. Measured on the dogfood Mac (2026-10-03): `screencaptureui` alive for 26 hours,
+holding one on-screen window the size of the whole external display (layer 24, 2.4 KB backing
+store) across samples 30 s apart. While it is there, every click on guest content and every
+dwell re-grab is refused, on every display — and only the screen-gain grab (going fullscreen),
+which skips the check, still takes the pointer. What that window is (a recording session, the
+Cmd-Shift-5 toolbar, a leftover) is unidentified. Fix direction: require the click point to be
+under the capture window, and tell the crosshair overlay apart from whatever lingers.
+
+### The dwell re-grab is judged only on motion events
+After a release, moving back in re-takes the grab once the pointer has been `REGRAB_MARGIN`
+inside for `REGRAB_DWELL` (250 ms) — but `grab_policy::free_step` runs only from the tap, per
+motion event, and nothing on the tick re-asks it (`grab_on_screen_gain` covers screen gain only).
+A trackpad stops sending events the moment the finger lifts, so a stroke that ends deep inside
+before the dwell has run never grabs, however long the pointer then rests. Fix direction: a tick
+check of the live pointer against the same predicate (`fit::may_regrab`) once the dwell is owed.
+
+### A click on the notch strip reads as a click on macOS
+Under `notch = extend` the band beside the housing is the strip overlay, a window of ours showing
+the top of the guest's picture (the guest's top bar lives there). `guest_is_topmost_at` accepts
+only the guest windows, so a click there takes the "landed on macOS" arm: no grab, and the
+explicit-release latch is set. The click still reaches the guest. Because the band is inside the
+fit, the pointer may never leave the picture to re-arm, so the dwell re-grab stays off until a
+click on the main picture. Seen in the 2026-10-03 poke run: clicks at y≈0–50 on the housing
+panel hit a non-guest window and latched. Fix direction: count the strip windows as guest
+windows in the hit test.
 
 ### Needs repro: the released pointer can come back invisible
 Seen once on the two-panel rig (2026-08-23), fullscreen on both panels after a click had promoted the grab:
