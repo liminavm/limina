@@ -61,6 +61,7 @@ use limina_proto::{
 };
 
 mod idle_inhibit;
+mod idle_notify;
 mod layout_gate;
 mod vdagent;
 mod wayland_clip;
@@ -315,9 +316,17 @@ impl IdleChannel {
             return None;
         }
         let now = idle_inhibit::effective(inhibitors.current(), seat_active);
-        self.reporter
-            .due(now)
-            .map(|inhibited| Message::IdleInhibit(IdleInhibit { inhibited }))
+        self.reporter.due(now).map(|inhibited| {
+            eprintln!(
+                "limina-agent-session: telling the host idle is {}",
+                if inhibited {
+                    "inhibited"
+                } else {
+                    "not inhibited"
+                }
+            );
+            Message::IdleInhibit(IdleInhibit { inhibited })
+        })
     }
 }
 

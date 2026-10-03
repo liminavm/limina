@@ -187,7 +187,7 @@ impl WaylandClip {
 /// Connect to the session's Wayland display. User units reliably have
 /// `XDG_RUNTIME_DIR` but not always `WAYLAND_DISPLAY` — fall back to the
 /// default socket name.
-fn connect_display() -> Result<Connection, ConnectError> {
+pub(crate) fn connect_display() -> Result<Connection, ConnectError> {
     if let Ok(conn) = Connection::connect_to_env() {
         return Ok(conn);
     }
