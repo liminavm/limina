@@ -840,6 +840,22 @@ this path (they decode normally), so it needs a genuine host decode failure. Fix
 incoming frame's shape before the held one is submitted, or submit the held frame without `?` and
 log its failure.
 
+### AV1 has no host decoder on M1/M2, so AV1 playback there never counts as video
+virglrs offers AV1 only where `VTIsHardwareDecodeSupported` says so (M3+), so on an M1 or M2 the
+guest sees no AV1 profile and decodes with its own dav1d. The host decoder never runs, and the
+display-wake heuristic (guest audio plus host decode, `window/wake_policy.rs`) never fires for an
+AV1 video there. Measured 2026-10-03 on the dev Mac (M1 Max) with a stock Debian guest: Firefox
+playing VP9 held the assertion, AV1 did not, and the guest's `vainfo` listed no AV1 profile. The
+enhanced tier is covered by the relayed inhibitor, which Firefox registers whatever the codec.
+Fix shape: port the C backend's dav1d fallback, which reverses the "there is one decoder, and it is
+VideoToolbox" decision in `third_party/virglrs/docs/design.md`, so that decision's text changes
+first. The constraints are recorded in `docs/design/av1-decode.md` ("Not ported: the dav1d
+fallback"): replay from the last shown key frame, feed the serializer's own units, ask for
+invisible frames, refuse cleanly. The same decoder would bring back the super-resolution fallback.
+Costs to weigh: a new `unsafe` binding module, dav1d in the bundle, host CPU instead of guest CPU
+plus a copy into the guest's surfaces, and the harness's two-leg equivalence across a decoder
+switch. To be agreed with the virglrs session before anyone builds it.
+
 ### Stock-tier Firefox never gets hardware decode (virgl offers I420/YV12 as decode targets)
 `virgl_is_video_format_supported` ignores profile/entrypoint and answers with the generic sampling
 check, so vanilla mesa advertises NV12, YV12 and IYUV for decode. ffmpeg's
