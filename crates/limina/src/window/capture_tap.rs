@@ -963,7 +963,7 @@ thread_local! {
 /// Cheap first: the screenshot UI is almost never running, and a Launch Services lookup says so
 /// before any window list or cursor is read. Nothing spends even that until the policy has a
 /// reason to (a click, or a dwell that already earned the re-grab), like the hit test beside it.
-fn screen_capture_session() -> CaptureSession {
+fn screen_capture_session() -> CaptureReading {
     let windows = bundle_onscreen_windows(SCREENSHOT_UI_BUNDLE);
     let overlay = windows
         .iter()
@@ -976,13 +976,28 @@ fn screen_capture_session() -> CaptureSession {
         age
     });
     if windows.is_empty() {
-        return CaptureSession::None;
+        return CaptureReading {
+            session: CaptureSession::None,
+            system: None,
+            ours: None,
+        };
     }
-    let cursor = cursor_says(
-        system_cursor_shape(),
-        Some(CursorShape::of(&NSCursor::currentCursor())),
-    );
-    judge_capture(&windows, cursor, age)
+    let system = system_cursor_shape();
+    let ours = Some(CursorShape::of(&NSCursor::currentCursor()));
+    CaptureReading {
+        session: judge_capture(&windows, cursor_says(system, ours), age),
+        system,
+        ours,
+    }
+}
+
+/// A [`CaptureSession`] with the two cursors it was judged from, so the click line can show
+/// which side a surprising verdict came from.
+#[derive(Clone, Copy, Debug)]
+struct CaptureReading {
+    session: CaptureSession,
+    system: Option<CursorShape>,
+    ours: Option<CursorShape>,
 }
 
 /// The cursor on screen, whichever process set it. The one public way to read another process's
@@ -1142,34 +1157,39 @@ fn uncaptured_edges(
     };
     // The capture-session query, on the same deferral and memoized the same way — the policy
     // may ask it from either arm, and one event must not spend two window-list round trips.
-    let capture_seen = std::cell::Cell::new(None::<CaptureSession>);
+    let capture_seen = std::cell::Cell::new(None::<CaptureReading>);
     let capture_live = || {
-        let session = capture_seen.get().unwrap_or_else(screen_capture_session);
-        capture_seen.set(Some(session));
-        session.live()
+        let reading = capture_seen.get().unwrap_or_else(screen_capture_session);
+        capture_seen.set(Some(reading));
+        reading.session.live()
     };
     let out = ctx.with_grab(|st| grab_policy::free_step(st, &sample, on_guest, capture_live));
     // A click the screenshot UI owns is not a window in front of the guest — the hit test
     // answers our own window for it — so it needs its own line, or the message below would
     // name the guest as the thing that intercepted the click.
-    if let (true, Some(session)) = (click, capture_seen.get())
-        && session != CaptureSession::None
+    if let (true, Some(reading)) = (click, capture_seen.get())
+        && reading.session != CaptureSession::None
     {
         // Said either way: a refused click names the session that took it, and an overlay that
         // was judged over is the one place this gate decides against what is on screen.
+        let CaptureReading {
+            session,
+            system,
+            ours,
+        } = reading;
         if session.live() {
             log::info!(
-                "pointer capture: a screen-capture session is live ({session:?}) — the click is macOS's and the grab stands down"
+                "pointer capture: a screen-capture session is live ({session:?}; cursor {system:?}, ours {ours:?}) — the click is macOS's and the grab stands down"
             );
         } else {
             log::info!(
-                "pointer capture: the screenshot overlay is up but no session is taking input ({session:?}) — the click is not macOS's"
+                "pointer capture: the screenshot overlay is up but no session is taking input ({session:?}; cursor {system:?}, ours {ours:?}) — the click is not macOS's"
             );
         }
     }
     if click
         && !out.grab
-        && !capture_seen.get().is_some_and(CaptureSession::live)
+        && !capture_seen.get().is_some_and(|r| r.session.live())
         && hit_slot.is_some()
         && super::fit::point_in_fit(cur.0, cur.1, fit)
     {
