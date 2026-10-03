@@ -1,13 +1,18 @@
 // Samples the system-wide cursor and the screenshot UI's on-screen windows side by side, and
 // prints a line whenever either changes. The question it answers: does the cursor tell a live
 // interactive capture (Cmd-Shift-4 crosshair, its space-bar camera, the Cmd-Shift-5 panel) apart
-// from an idle `screencaptureui` window left on screen?
+// from an idle `screencaptureui` window left on screen? And do the focus signals — which app is
+// frontmost, whether this process is active, whether its own window is key — tell them apart
+// without the cursor, whose system-wide read is deprecated?
+//
+// The probe opens a window standing in for limina's: click into it before starting a session.
 //
 //     swiftc -O cursor-probe.swift -o cursor-probe && ./cursor-probe
 //
 // Each line: wall time, cursor fingerprint (image size in points, hot spot, pixel size, FNV-1a of
-// the pixels), then every on-screen window owned by com.apple.screencaptureui as
-// `#number layer bounds mem=<bytes>`.
+// the pixels), the focus state (`front=<frontmost bundle id> active=<this app> key=<its window>`),
+// then every on-screen window owned by com.apple.screencaptureui as `#number layer bounds
+// mem=<bytes>`.
 
 import AppKit
 import CoreGraphics
@@ -71,14 +76,24 @@ let stamp = DateFormatter()
 stamp.dateFormat = "HH:mm:ss.SSS"
 setvbuf(stdout, nil, _IOLBF, 0)
 
-// currentSystemCursor needs a window-server connection, which NSApplication sets up; the probe
-// stays an accessory so it never takes focus or changes the cursor itself.
+// A regular app with one window, so it can be frontmost and key the way limina's window is when
+// a capture session starts over it.
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(.regular)
+let window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 900, height: 600),
+                      styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+window.title = "cursor-probe: click here, then start a capture"
+window.makeKeyAndOrderFront(nil)
+app.activate()
+
+func focusState() -> String {
+    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
+    return "front=\(front) active=\(app.isActive) key=\(window.isKeyWindow)"
+}
 
 var last = ""
 Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-    let line = cursorFingerprint() + "  " + captureWindows()
+    let line = cursorFingerprint() + "  " + focusState() + "  " + captureWindows()
     if line != last {
         print(stamp.string(from: Date()) + "  " + line)
         last = line

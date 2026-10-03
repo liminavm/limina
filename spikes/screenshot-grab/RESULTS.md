@@ -19,9 +19,10 @@ what is observable.
   roughly display-sized (`(0,0 2560x1440)` full, `(13,7 2534x1426)` inset while it animates
   in), appears on the first Cmd-Shift-4 or Cmd-Shift-5. It stays on screen through Esc, through
   later sessions run by the same process (one window number across all of them), and through
-  a completed shot. It goes only when the process exits, ~10 s after the last session ended
-  (measured 2026-10-03, macOS 26.6.2). So an on-screen overlay means "a session ran within the
-  last ~10 s, or is running", not "a session is running".
+  a completed shot. It goes only when the process exits: ~5 s after an Esc, ~12 s after a shot
+  (measured 2026-10-03, macOS 26.6.2). A session started inside that window reuses the process;
+  one started after it gets a fresh one. So an on-screen overlay means "a session is running or
+  ran within the last few seconds", not "a session is running".
 - **A process that does not exit leaves the overlay up indefinitely.** Observed on the dogfood
   Mac: one `screencaptureui` process alive for 30 hours with its layer-24 display-sized window
   on screen and no session running. A presence-only check refuses every grab for as long as
@@ -60,6 +61,11 @@ ordinary accessory process with no grant. Measured 2026-10-03, macOS 26.6.2, 2x 
   of a live session; the panel's layer-1499 windows can.
 - **During a lingering overlay the cursor is the arrow too**, which is what separates it from a
   live Cmd-Shift-4 selection.
+- **Focus does not see a session at all.** With the probe's own window key and the pointer over
+  it, Cmd-Shift-4 (crosshair and camera), the Cmd-Shift-5 panel and a completed region shot all
+  left the probe active, its window key and the frontmost application unchanged:
+  `screencaptureui` never activates. So `isActive`, `isKeyWindow` and
+  `NSWorkspace.frontmostApplication` cannot stand in for the cursor.
 - **The API is on its way out.** The SDK marks `currentSystemCursor` deprecated and says it
   "will always be nil in a future version of macOS". A nil has to fall back to the
   presence-only answer, never to "no session".
@@ -76,9 +82,10 @@ aimed at a focused VM window is consumed by the soft keyboard grab and reaches t
 
 ## The probes
 
-`cursor-probe.swift` — samples the system cursor (size, hot spot, pixel hash) and the
-`screencaptureui` windows (number, layer, bounds, memory) at 10 Hz and prints a line whenever
-either changes.
+`cursor-probe.swift` — opens a window standing in for limina's, then samples the system cursor
+(size, hot spot, pixel hash), the focus state (frontmost app, active, key) and the
+`screencaptureui` windows (number, layer, bounds, memory) at 10 Hz, printing a line whenever any
+of them changes. Click into its window before starting a session.
 
     swiftc -O cursor-probe.swift -o cursor-probe && ./cursor-probe
 
