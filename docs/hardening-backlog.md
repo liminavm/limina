@@ -105,17 +105,6 @@ the hit test found, so a click refused by a stuck `MENU_OPEN` looks like any oth
 before forming a theory. Ruled out for the 2026-10-03 report: a system-disabled tap (no
 `the system disabled our event tap` line in any dogfood log).
 
-### A lingering screenshot window refuses every grab
-`screen_capture_session_live` (`capture_tap.rs`) reads *any* on-screen window owned by
-`com.apple.screencaptureui` as a live Cmd-Shift-4 session, on the premise that the process exits
-with the session. Measured on the dogfood Mac (2026-10-03): `screencaptureui` alive for 26 hours,
-holding one on-screen window the size of the whole external display (layer 24, 2.4 KB backing
-store) across samples 30 s apart. While it is there, every click on guest content and every
-dwell re-grab is refused, on every display — and only the screen-gain grab (going fullscreen),
-which skips the check, still takes the pointer. What that window is (a recording session, the
-Cmd-Shift-5 toolbar, a leftover) is unidentified. Fix direction: require the click point to be
-under the capture window, and tell the crosshair overlay apart from whatever lingers.
-
 ### The dwell re-grab is judged only on motion events
 After a release, moving back in re-takes the grab once the pointer has been `REGRAB_MARGIN`
 inside for `REGRAB_DWELL` (250 ms) — but `grab_policy::free_step` runs only from the tap, per

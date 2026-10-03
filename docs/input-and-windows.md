@@ -276,9 +276,14 @@ load-bearing parts:
   ordinary ask. The screenshot case is the sharper one — the grab would consume the drag and the
   mouse-up the selection needs, and take the keyboard with them, so Esc could not cancel what the
   click started. The session is found by bundle id (`com.apple.screencaptureui`) as a cheap
-  filter and confirmed by an on-screen window it owns; the process alone is not the session, it
-  outlives it. Both questions are deferred like the hit test — they are round trips, spent only
-  once the policy has a reason.
+  filter, then judged from its on-screen windows and the system cursor (`judge_capture`). The
+  display-sized overlay is not the session: it lives with the process, which outlives each
+  session by seconds and once kept it up for a day, refusing every grab. Live means the
+  Cmd-Shift-5 panel's own windows, or the overlay under a screenshot cursor (crosshair, camera);
+  the overlay under our own cursor is a session that has ended. When the cursor cannot vouch —
+  `currentSystemCursor` is deprecated and promised to go nil — the overlay is trusted for a
+  minute, then not. Measurements: `spikes/screenshot-grab/RESULTS.md`. Both questions are
+  deferred like the hit test — they are round trips, spent only once the policy has a reason.
 - **Taking the pointer settles the chrome ask** (`toggle_capture_to` → `reveal_moot`, so every
   route in obeys it). A held grab and a granted reveal are mutually exclusive: the reveal exists
   so the pointer can reach the menu bar and the window's controls, and a captured pointer is

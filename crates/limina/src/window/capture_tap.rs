@@ -32,10 +32,11 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2_app_kit::{NSEvent, NSRunningApplication, NSView};
-use objc2_core_foundation::CFArray;
+use objc2_app_kit::{NSCursor, NSEvent, NSRunningApplication, NSView};
+use objc2_core_foundation::{CFArray, CFString};
 use objc2_core_graphics::{
-    CGEvent, CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowOwnerPID,
+    CGEvent, CGWindowListCopyWindowInfo, CGWindowListOption, kCGWindowLayer, kCGWindowNumber,
+    kCGWindowOwnerPID,
 };
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSPoint, NSString};
 
@@ -780,7 +781,170 @@ pub(crate) fn menu_open() -> bool {
 /// is `screencaptureui`, so neither name finds it reliably; the bundle id is the identity.
 const SCREENSHOT_UI_BUNDLE: &str = "com.apple.screencaptureui";
 
-/// Whether macOS is running an interactive screen-capture session right now.
+/// The screenshot UI's overlay: one display-sized window at this layer, on screen for as long as
+/// the process lives rather than for as long as a session runs. Every other window the UI shows
+/// — the Cmd-Shift-5 bar (layer 1499), its tooltips (1000) — exists only while the panel is open.
+/// Measured in `spikes/screenshot-grab/`.
+const CAPTURE_OVERLAY_LAYER: i64 = 24;
+
+/// How long an overlay the cursor cannot vouch for still counts as a live session. A
+/// Cmd-Shift-4 selection is seconds long; the stuck process this bounds lasted a day. Only
+/// reached when the system cursor is unreadable or unrecognised — see [`CursorSays::Unknown`].
+const CAPTURE_OVERLAY_TRUST: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// One on-screen window of the screenshot UI, as the window list reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CaptureWindow {
+    number: i64,
+    layer: i64,
+}
+
+/// A cursor's shape as far as telling cursors apart needs: image size and hot spot, in points.
+/// Never the pixels — the crosshair's image carries the live coordinate readout, so its pixels
+/// change with every move.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CursorShape {
+    size: (f64, f64),
+    hot: (f64, f64),
+}
+
+impl CursorShape {
+    fn of(cursor: &NSCursor) -> Self {
+        let size = cursor.image().size();
+        let hot = cursor.hotSpot();
+        Self {
+            size: (size.width, size.height),
+            hot: (hot.x, hot.y),
+        }
+    }
+
+    fn matches(self, other: CursorShape) -> bool {
+        let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+        near(self.size.0, other.size.0)
+            && near(self.size.1, other.size.1)
+            && near(self.hot.0, other.hot.0)
+            && near(self.hot.1, other.hot.1)
+    }
+}
+
+/// The shapes the screenshot UI wears while it is taking input: the Cmd-Shift-4 crosshair with
+/// its coordinate readout, and the camera of window capture (Space in Cmd-Shift-4, or the
+/// Cmd-Shift-5 window mode). Measured on macOS 26.6.2.
+const CAPTURE_CURSORS: [CursorShape; 2] = [
+    CursorShape {
+        size: (64.0, 40.0),
+        hot: (15.0, 15.0),
+    },
+    CursorShape {
+        size: (28.0, 25.0),
+        hot: (14.0, 11.0),
+    },
+];
+
+/// What the system-wide cursor says about a capture session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CursorSays {
+    /// A screenshot cursor is showing: a session is taking input.
+    Selecting,
+    /// The cursor showing is the one this app set: nothing else owns the pointer.
+    Ours,
+    /// Unreadable, or a shape that is neither — a cursor size setting, a macOS that changed the
+    /// shapes, or the day `currentSystemCursor` starts answering nil as its header promises.
+    Unknown,
+}
+
+fn cursor_says(system: Option<CursorShape>, ours: Option<CursorShape>) -> CursorSays {
+    let Some(system) = system else {
+        return CursorSays::Unknown;
+    };
+    if CAPTURE_CURSORS.iter().any(|c| c.matches(system)) {
+        CursorSays::Selecting
+    } else if ours.is_some_and(|o| o.matches(system)) {
+        CursorSays::Ours
+    } else {
+        CursorSays::Unknown
+    }
+}
+
+/// The screen-capture verdict, kept with its reason so a refused (or allowed) click can say why.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureSession {
+    /// The screenshot UI has nothing on screen.
+    None,
+    /// A window other than the overlay is up — the Cmd-Shift-5 panel, which over its bar shows
+    /// the plain arrow, so only its windows can say it is live.
+    Panel,
+    /// The overlay, with a screenshot cursor showing.
+    Selecting,
+    /// The overlay, with this app's own cursor showing: the session has ended and the process
+    /// has not exited yet — for a few seconds normally, for a day on the dogfood Mac.
+    Lingering,
+    /// The overlay, with a cursor that cannot vouch either way, seen for less than
+    /// [`CAPTURE_OVERLAY_TRUST`].
+    Unconfirmed,
+    /// The overlay, unconfirmed for longer than [`CAPTURE_OVERLAY_TRUST`].
+    Stale,
+}
+
+impl CaptureSession {
+    fn live(self) -> bool {
+        matches!(self, Self::Panel | Self::Selecting | Self::Unconfirmed)
+    }
+}
+
+/// Judge the screenshot UI's on-screen windows, the cursor, and how long the overlay has been
+/// up. A window this does not recognise counts as live — the cost of a wrong "live" is one click
+/// that does not take the grab, while a wrong "not live" swallows the session's drag and Esc.
+fn judge_capture(
+    windows: &[CaptureWindow],
+    cursor: CursorSays,
+    overlay_age: std::time::Duration,
+) -> CaptureSession {
+    if windows.is_empty() {
+        return CaptureSession::None;
+    }
+    if windows.iter().any(|w| w.layer != CAPTURE_OVERLAY_LAYER) {
+        return CaptureSession::Panel;
+    }
+    match cursor {
+        CursorSays::Selecting => CaptureSession::Selecting,
+        CursorSays::Ours => CaptureSession::Lingering,
+        CursorSays::Unknown if overlay_age < CAPTURE_OVERLAY_TRUST => CaptureSession::Unconfirmed,
+        CursorSays::Unknown => CaptureSession::Stale,
+    }
+}
+
+/// When the current overlay was first seen, keyed by its window number: a new process puts up a
+/// new window, and that starts the clock again.
+#[derive(Clone, Copy, Debug, Default)]
+struct OverlayClock {
+    seen: Option<(i64, std::time::Instant)>,
+}
+
+impl OverlayClock {
+    fn age(&mut self, overlay: Option<i64>, now: std::time::Instant) -> std::time::Duration {
+        let Some(number) = overlay else {
+            self.seen = None;
+            return std::time::Duration::ZERO;
+        };
+        match self.seen {
+            Some((seen, since)) if seen == number => now.saturating_duration_since(since),
+            _ => {
+                self.seen = Some((number, now));
+                std::time::Duration::ZERO
+            }
+        }
+    }
+}
+
+thread_local! {
+    /// The overlay's clock. Main-thread only, like the tap that reads it. It is advanced only
+    /// when the policy asks (a click, or an earned dwell), so "first seen" is the first time a
+    /// click met it — later than it appeared, which only ever extends the trust.
+    static OVERLAY_CLOCK: Cell<OverlayClock> = Cell::new(OverlayClock::default());
+}
+
+/// Whether macOS is running an interactive screen-capture session right now, and why.
 ///
 /// The grab needs this for the same reason it needs [`MENU_OPEN`]: the click belongs to macOS,
 /// and no hit test can say so. The screenshot overlay intercepts at the *event* layer rather
@@ -790,52 +954,93 @@ const SCREENSHOT_UI_BUNDLE: &str = "com.apple.screencaptureui";
 /// so the selection can never finish — and the keyboard goes with it, so Esc cannot cancel
 /// either. That is how one stolen click left a capture session live for three unbroken minutes.
 ///
-/// Two stages, cheap first:
+/// The overlay alone is not the answer: it lives with the `screencaptureui` process, which
+/// outlives each session by seconds, and a process that never exits kept it on screen for a day
+/// on the dogfood Mac, refusing every grab. Focus cannot tell either — the screenshot UI never
+/// activates. What separates a live selection from a lingering overlay is the cursor
+/// ([`judge_capture`]). Measurements: `spikes/screenshot-grab/RESULTS.md`.
 ///
-///   1. **Is the screenshot UI running at all.** A Launch Services lookup, and the answer is no
-///      almost always: each session starts a fresh process (measured pids 76248 then 77373 over
-///      two sessions) and it exits when the session is done with it.
-///   2. **Does it have a window on screen.** The process outlives the session's end by a moment,
-///      so being alive is not the session; the overlay window appearing and disappearing with
-///      the crosshair is (`added=[2634] … owner=Screenshot layer=24`, gone again on Esc). This
-///      is the verdict, and it costs a window-list query — which is why nothing spends it until
-///      the policy has a reason to (a click, or a dwell that already earned the re-grab),
-///      exactly like the hit test beside it.
-fn screen_capture_session_live() -> bool {
-    bundle_has_onscreen_window(SCREENSHOT_UI_BUNDLE)
+/// Cheap first: the screenshot UI is almost never running, and a Launch Services lookup says so
+/// before any window list or cursor is read. Nothing spends even that until the policy has a
+/// reason to (a click, or a dwell that already earned the re-grab), like the hit test beside it.
+fn screen_capture_session() -> CaptureSession {
+    let windows = bundle_onscreen_windows(SCREENSHOT_UI_BUNDLE);
+    let overlay = windows
+        .iter()
+        .find(|w| w.layer == CAPTURE_OVERLAY_LAYER)
+        .map(|w| w.number);
+    let age = OVERLAY_CLOCK.with(|c| {
+        let mut clock = c.get();
+        let age = clock.age(overlay, std::time::Instant::now());
+        c.set(clock);
+        age
+    });
+    if windows.is_empty() {
+        return CaptureSession::None;
+    }
+    let cursor = cursor_says(
+        system_cursor_shape(),
+        Some(CursorShape::of(&NSCursor::currentCursor())),
+    );
+    judge_capture(&windows, cursor, age)
 }
 
-/// Does any running instance of `bundle_id` have a window on screen right now.
+/// The cursor on screen, whichever process set it. The one public way to read another process's
+/// cursor, deprecated without a replacement — the SDK points at `NSCursor.currentCursor`, which
+/// answers for this app only. A nil lands on [`CursorSays::Unknown`], which falls back to the
+/// overlay's age rather than to "no session".
+#[allow(deprecated)]
+fn system_cursor_shape() -> Option<CursorShape> {
+    NSCursor::currentSystemCursor().map(|c| CursorShape::of(&c))
+}
+
+/// The on-screen windows of every running instance of `bundle_id`, with number and layer.
 ///
-/// Split out from [`screen_capture_session_live`] so the *mechanism* — a Launch Services
-/// lookup, then a window list keyed on owner pid — can be exercised against a bundle that is
-/// reliably up (see this module's tests). Without that, the whole gate is unfalsifiable except
-/// by holding a crosshair over a running VM: it would return false forever if the pid key or
-/// the number cast were wrong, and a dead gate looks exactly like an unfixed bug.
+/// Split out from [`screen_capture_session`] so the *mechanism* — a Launch Services lookup, then
+/// a window list keyed on owner pid — can be exercised against a bundle that is reliably up (see
+/// this module's tests). Without that, the whole gate is unfalsifiable except by holding a
+/// crosshair over a running VM: it would answer "nothing" forever if the pid key or the number
+/// cast were wrong, and a dead gate looks exactly like an unfixed bug.
 ///
-/// Reads only the pid, never the window name — titles are the Screen-Recording-gated part of
-/// the list, and this must work with no TCC grant of any kind.
-fn bundle_has_onscreen_window(bundle_id: &str) -> bool {
+/// Reads only pid, number and layer, never the window name — titles are the
+/// Screen-Recording-gated part of the list, and this must work with no TCC grant of any kind.
+fn bundle_onscreen_windows(bundle_id: &str) -> Vec<CaptureWindow> {
     let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(
         bundle_id,
     ));
     if apps.is_empty() {
-        return false;
+        return Vec::new();
     }
     let pids: Vec<i32> = apps.iter().map(|a| a.processIdentifier()).collect();
     let Some(list) = CGWindowListCopyWindowInfo(CGWindowListOption::OptionOnScreenOnly, 0) else {
-        return false;
+        return Vec::new();
     };
     // The window list is a CFArray of CFDictionary, toll-free bridged to their NS counterparts.
     let windows: &NSArray<NSDictionary<NSString, AnyObject>> = unsafe {
         &*(&*list as *const CFArray as *const NSArray<NSDictionary<NSString, AnyObject>>)
     };
-    let key: &NSString = unsafe { &*(kCGWindowOwnerPID as *const _ as *const NSString) };
-    windows.iter().any(|w| {
-        w.objectForKey(key)
+    let key =
+        |k: &CFString| -> &NSString { unsafe { &*(k as *const CFString as *const NSString) } };
+    let (owner, number, layer) = unsafe {
+        (
+            key(kCGWindowOwnerPID),
+            key(kCGWindowNumber),
+            key(kCGWindowLayer),
+        )
+    };
+    let field = |w: &NSDictionary<NSString, AnyObject>, k: &NSString| {
+        w.objectForKey(k)
             .and_then(|v| v.downcast::<NSNumber>().ok())
-            .is_some_and(|n| pids.contains(&n.as_i32()))
-    })
+            .map(|n| n.as_i64())
+    };
+    windows
+        .iter()
+        .filter(|w| field(w, owner).is_some_and(|pid| pids.contains(&(pid as i32))))
+        .map(|w| CaptureWindow {
+            number: field(&w, number).unwrap_or(-1),
+            layer: field(&w, layer).unwrap_or(-1),
+        })
+        .collect()
 }
 
 thread_local! {
@@ -937,24 +1142,34 @@ fn uncaptured_edges(
     };
     // The capture-session query, on the same deferral and memoized the same way — the policy
     // may ask it from either arm, and one event must not spend two window-list round trips.
-    let capture_seen = std::cell::Cell::new(None::<bool>);
+    let capture_seen = std::cell::Cell::new(None::<CaptureSession>);
     let capture_live = || {
-        let live = capture_seen
-            .get()
-            .unwrap_or_else(screen_capture_session_live);
-        capture_seen.set(Some(live));
-        live
+        let session = capture_seen.get().unwrap_or_else(screen_capture_session);
+        capture_seen.set(Some(session));
+        session.live()
     };
     let out = ctx.with_grab(|st| grab_policy::free_step(st, &sample, on_guest, capture_live));
     // A click the screenshot UI owns is not a window in front of the guest — the hit test
     // answers our own window for it — so it needs its own line, or the message below would
     // name the guest as the thing that intercepted the click.
-    if click && !out.grab && capture_seen.get() == Some(true) {
-        log::info!(
-            "pointer capture: a screen-capture session is live — the click is macOS's and the grab stands down"
-        );
-    } else if click
+    if let (true, Some(session)) = (click, capture_seen.get())
+        && session != CaptureSession::None
+    {
+        // Said either way: a refused click names the session that took it, and an overlay that
+        // was judged over is the one place this gate decides against what is on screen.
+        if session.live() {
+            log::info!(
+                "pointer capture: a screen-capture session is live ({session:?}) — the click is macOS's and the grab stands down"
+            );
+        } else {
+            log::info!(
+                "pointer capture: the screenshot overlay is up but no session is taking input ({session:?}) — the click is not macOS's"
+            );
+        }
+    }
+    if click
         && !out.grab
+        && !capture_seen.get().is_some_and(CaptureSession::live)
         && hit_slot.is_some()
         && super::fit::point_in_fit(cur.0, cur.1, fit)
     {
@@ -1435,8 +1650,8 @@ pub(crate) fn prompt_accessibility_once() -> bool {
 mod tests {
     use super::*;
 
-    /// The capture gate's mechanism, run for real: the extern-static key, the CFArray→NSArray
-    /// bridge and the number downcast all have to be right together, and every one of them
+    /// The capture gate's mechanism, run for real: the extern-static keys, the CFArray→NSArray
+    /// bridge and the number downcasts all have to be right together, and every one of them
     /// fails *quietly* — a wrong key or a refused downcast makes the query answer "no window,
     /// ever", which reads as a working build in which the fix simply does nothing.
     ///
@@ -1454,14 +1669,128 @@ mod tests {
         if !dock_running {
             return; // no window server session here; the query has nothing to be right about
         }
+        let windows = bundle_onscreen_windows(DOCK);
         assert!(
-            bundle_has_onscreen_window(DOCK),
-            "the Dock is running and owns on-screen windows — a `false` here means the query is \
+            !windows.is_empty(),
+            "the Dock is running and owns on-screen windows — an empty list means the query is \
              broken, not that the Dock is hiding"
         );
         assert!(
-            !bundle_has_onscreen_window("dev.limina.no.such.bundle"),
+            windows.iter().all(|w| w.number > 0),
+            "every window must carry its number, or the overlay clock never keys: {windows:?}"
+        );
+        assert!(
+            bundle_onscreen_windows("dev.limina.no.such.bundle").is_empty(),
             "a bundle that is not running must not match any window"
+        );
+    }
+
+    const OVERLAY: CaptureWindow = CaptureWindow {
+        number: 481,
+        layer: CAPTURE_OVERLAY_LAYER,
+    };
+    const SECOND: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// The dogfood Mac's state: a `screencaptureui` that never exited, its display-sized
+    /// overlay on screen for a day, no session running and the user's own cursor showing. Every
+    /// click on the guest was refused as the screenshot UI's.
+    #[test]
+    fn a_lingering_overlay_under_our_own_cursor_is_not_a_session() {
+        let session = judge_capture(&[OVERLAY], CursorSays::Ours, 30 * 3600 * SECOND);
+        assert_eq!(session, CaptureSession::Lingering);
+        assert!(!session.live());
+        // Young or old, the cursor decides: the seconds after an Esc are not a session either.
+        assert!(!judge_capture(&[OVERLAY], CursorSays::Ours, std::time::Duration::ZERO).live());
+    }
+
+    #[test]
+    fn a_screenshot_cursor_over_the_overlay_is_a_session_however_long_it_lasts() {
+        let session = judge_capture(&[OVERLAY], CursorSays::Selecting, 3600 * SECOND);
+        assert_eq!(session, CaptureSession::Selecting);
+        assert!(session.live());
+    }
+
+    /// Over the Cmd-Shift-5 bar the cursor is the plain arrow, so only the panel's own windows
+    /// can say a session is running — and they do whatever the cursor and the clock say.
+    #[test]
+    fn the_cmd_shift_5_panel_is_a_session_under_any_cursor() {
+        let bar = CaptureWindow {
+            number: 2604,
+            layer: 1499,
+        };
+        for cursor in [CursorSays::Ours, CursorSays::Unknown, CursorSays::Selecting] {
+            let session = judge_capture(&[bar, OVERLAY], cursor, 3600 * SECOND);
+            assert_eq!(session, CaptureSession::Panel, "{cursor:?}");
+            assert!(session.live());
+        }
+    }
+
+    /// The day `currentSystemCursor` answers nil: the overlay is trusted for a while, then not,
+    /// so a stuck process can refuse the grab for a minute and no longer.
+    #[test]
+    fn an_overlay_the_cursor_cannot_vouch_for_is_trusted_only_for_a_while() {
+        let young = judge_capture(&[OVERLAY], CursorSays::Unknown, 5 * SECOND);
+        assert_eq!(young, CaptureSession::Unconfirmed);
+        assert!(young.live());
+        let old = judge_capture(&[OVERLAY], CursorSays::Unknown, CAPTURE_OVERLAY_TRUST);
+        assert_eq!(old, CaptureSession::Stale);
+        assert!(!old.live());
+    }
+
+    #[test]
+    fn no_screenshot_window_is_no_session() {
+        assert_eq!(
+            judge_capture(&[], CursorSays::Selecting, 3600 * SECOND),
+            CaptureSession::None
+        );
+    }
+
+    #[test]
+    fn the_cursor_reads_as_capture_ours_or_unknown() {
+        let shape = |w, h, x, y| CursorShape {
+            size: (w, h),
+            hot: (x, y),
+        };
+        let arrow = shape(28.0, 40.0, 5.0, 5.0);
+        let crosshair = shape(64.0, 40.0, 15.0, 15.0);
+        let camera = shape(28.0, 25.0, 14.0, 11.0);
+        assert_eq!(
+            cursor_says(Some(crosshair), Some(arrow)),
+            CursorSays::Selecting
+        );
+        assert_eq!(
+            cursor_says(Some(camera), Some(arrow)),
+            CursorSays::Selecting
+        );
+        // A screenshot shape wins even if this app happened to set the same one.
+        assert_eq!(
+            cursor_says(Some(crosshair), Some(crosshair)),
+            CursorSays::Selecting
+        );
+        assert_eq!(cursor_says(Some(arrow), Some(arrow)), CursorSays::Ours);
+        // Neither ours nor a known capture shape: no verdict from the cursor.
+        assert_eq!(
+            cursor_says(Some(shape(32.0, 32.0, 16.0, 16.0)), Some(arrow)),
+            CursorSays::Unknown
+        );
+        assert_eq!(cursor_says(None, Some(arrow)), CursorSays::Unknown);
+    }
+
+    #[test]
+    fn the_overlay_clock_restarts_for_a_new_window_and_clears_when_none() {
+        let t0 = std::time::Instant::now();
+        let mut clock = OverlayClock::default();
+        assert_eq!(clock.age(Some(481), t0), std::time::Duration::ZERO);
+        assert_eq!(clock.age(Some(481), t0 + 90 * SECOND), 90 * SECOND);
+        // A new process puts up a new window: its age starts from when it was seen.
+        assert_eq!(
+            clock.age(Some(2630), t0 + 91 * SECOND),
+            std::time::Duration::ZERO
+        );
+        assert_eq!(clock.age(None, t0 + 92 * SECOND), std::time::Duration::ZERO);
+        assert_eq!(
+            clock.age(Some(2630), t0 + 93 * SECOND),
+            std::time::Duration::ZERO
         );
     }
 
