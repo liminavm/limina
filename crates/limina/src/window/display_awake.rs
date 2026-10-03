@@ -36,7 +36,13 @@ unsafe extern "C" {
 /// its own thread; the window tick reads it.
 static GUEST_INHIBITED: Mutex<Option<bool>> = Mutex::new(None);
 
-/// What the control plane last recorded.
+/// Record what the guest's helpers report about idle inhibitors. Called by the control plane
+/// whenever a report arrives or a reporting helper comes or goes.
+pub(crate) fn report_guest_inhibitors(inhibited: Option<bool>) {
+    *GUEST_INHIBITED.lock().unwrap_or_else(|e| e.into_inner()) = inhibited;
+}
+
+/// What [`report_guest_inhibitors`] last recorded.
 pub(crate) fn guest_inhibitors() -> Option<bool> {
     *GUEST_INHIBITED.lock().unwrap_or_else(|e| e.into_inner())
 }

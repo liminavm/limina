@@ -131,6 +131,7 @@ fn serve(stream: &mut File) -> std::io::Result<AgentEnd> {
             Ok((_, Message::CpuPressure(_)))
             | Ok((_, Message::CpuTarget(_)))
             | Ok((_, Message::PowerProfile(_)))
+            | Ok((_, Message::IdleInhibit(_)))
             | Ok((_, Message::ClipOffer(_)))
             | Ok((_, Message::ClipRequest(_)))
             | Ok((_, Message::ClipData(_)))

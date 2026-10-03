@@ -57,9 +57,10 @@ use std::time::{Duration, Instant};
 
 use limina_proto::{
     CHANNEL_CLIPBOARD, CHANNEL_CONTROL, CONTROL_PORT, ClipData, ClipOffer, ClipRequest, Heartbeat,
-    Hello, Message, read_message, write_message,
+    Hello, IdleInhibit, Message, read_message, write_message,
 };
 
+mod idle_inhibit;
 mod layout_gate;
 mod vdagent;
 mod wayland_clip;
@@ -162,9 +163,13 @@ fn main() {
     // still be there for the other phase's (re)connects, and the active-session
     // arbitration (see [`layout_gate`]) has to survive the alternation too.
     let mut gate = layout_gate::LayoutGate::new();
+    // The session's idle inhibitors, for the host's keep-the-display-awake policy. Process-wide
+    // for the same reason as the watcher above, and read once before the first HELLO so the
+    // capability it announces is already right.
+    let inhibitors = idle_inhibit::Inhibitors::watch();
     loop {
-        yield_phase(port, &layout_rx, &mut gate);
-        claim_phase(port, &layout_rx, &mut gate);
+        yield_phase(port, &layout_rx, &mut gate, &inhibitors);
+        claim_phase(port, &layout_rx, &mut gate, &inhibitors);
     }
 }
 
@@ -178,12 +183,14 @@ fn yield_phase(
     port: u32,
     layouts: &mpsc::Receiver<limina_proto::DisplayLayout>,
     gate: &mut layout_gate::LayoutGate,
+    inhibitors: &idle_inhibit::Inhibitors,
 ) {
     // No agent installed, no reason to wait for one: claim straight away.
     if !vdagent::installed() {
         return;
     }
     let mut host: Option<File> = None;
+    let mut idle = IdleChannel::new();
     let mut seq: u64 = 0;
     let mut absent: u32 = 0;
     let mut ever_seen = false;
@@ -231,12 +238,18 @@ fn yield_phase(
         {
             host = Some(h);
         }
+        // A channel whose HELLO no longer says whether we report idle inhibitors is reopened
+        // with one that does.
+        if host.is_some() && idle.stale(inhibitors) {
+            host = None;
+        }
         // Keep the control channel alive without the clipboard capability. A fresh channel
         // is seeded with the arrangement (if we may write it): the host's copy died with
         // the old one and the compositor will not repeat itself.
         if host.is_none() {
             host = vsock_connect(port).and_then(|mut s| {
-                open_channel(&mut s, &hello_msg(&[]), gate.for_new_channel(active)).ok()?;
+                let hello = hello_msg(&idle.caps(inhibitors, &[]));
+                open_channel(&mut s, &hello, gate.for_new_channel(active)).ok()?;
                 if !logged {
                     eprintln!("limina-agent-session: connected to host (clipboard withheld)");
                     logged = true;
@@ -247,12 +260,64 @@ fn yield_phase(
         if let Some(stream) = host.as_mut() {
             seq += 1;
             let beat = Message::Heartbeat(Heartbeat { seq });
-            if write_message(stream, CHANNEL_CONTROL, &beat).is_err() {
+            let report = idle.due(inhibitors, active);
+            if write_message(stream, CHANNEL_CONTROL, &beat).is_err()
+                || report.is_some_and(|m| write_message(stream, CHANNEL_CONTROL, &m).is_err())
+            {
                 host = None;
                 logged = false;
             }
         }
         std::thread::sleep(VDAGENT_PROBE_EVERY);
+    }
+}
+
+/// One host channel's share of the idle-inhibit relay ([`idle_inhibit`]): whether its HELLO
+/// announced the capability, and what it has been told since.
+struct IdleChannel {
+    announced: bool,
+    reporter: idle_inhibit::Reporter,
+}
+
+impl IdleChannel {
+    fn new() -> Self {
+        IdleChannel {
+            announced: false,
+            reporter: idle_inhibit::Reporter::new(),
+        }
+    }
+
+    /// The capabilities for a new channel's HELLO: `base`, plus `idleinhibit` when the session's
+    /// inhibitors can be read. Starts this channel's reporting afresh.
+    fn caps<'a>(
+        &mut self,
+        inhibitors: &idle_inhibit::Inhibitors,
+        base: &[&'a str],
+    ) -> Vec<&'a str> {
+        self.announced = inhibitors.current().is_some();
+        self.reporter = idle_inhibit::Reporter::new();
+        let mut caps = base.to_vec();
+        if self.announced {
+            caps.push("idleinhibit");
+        }
+        caps
+    }
+
+    /// Whether the channel's HELLO is out of date: the inhibitors became readable, or stopped
+    /// being, since it went out. The capability can only change by reconnecting.
+    fn stale(&self, inhibitors: &idle_inhibit::Inhibitors) -> bool {
+        self.announced != inhibitors.current().is_some()
+    }
+
+    /// The report to send on this channel now, if any.
+    fn due(&mut self, inhibitors: &idle_inhibit::Inhibitors, seat_active: bool) -> Option<Message> {
+        if !self.announced {
+            return None;
+        }
+        let now = idle_inhibit::effective(inhibitors.current(), seat_active);
+        self.reporter
+            .due(now)
+            .map(|inhibited| Message::IdleInhibit(IdleInhibit { inhibited }))
     }
 }
 
@@ -290,6 +355,7 @@ fn claim_phase(
     port: u32,
     layouts: &mpsc::Receiver<limina_proto::DisplayLayout>,
     gate: &mut layout_gate::LayoutGate,
+    inhibitors: &idle_inhibit::Inhibitors,
 ) {
     // Pick a clipboard backend (retry: the compositor may still be coming up when the
     // user unit starts). Tier order: ext-data-control → mutter's RemoteDesktop D-Bus API
@@ -361,11 +427,19 @@ fn claim_phase(
         logged_waiting: false,
         connected_at: None,
         retry_after: None,
+        idle: IdleChannel::new(),
     };
 
     loop {
+        if bridge.host.is_some() && bridge.idle.stale(inhibitors) {
+            bridge.host = None;
+            bridge.connected_at = None;
+        }
         if bridge.host.is_none() {
-            bridge.try_connect(port, &tx, gate);
+            bridge.try_connect(port, &tx, gate, inhibitors);
+        }
+        if let Some(report) = bridge.idle.due(inhibitors, layout_gate::seat_active()) {
+            bridge.send(CHANNEL_CONTROL, &report);
         }
         if let Some(layout) = gate.poll(layouts.try_iter(), layout_gate::seat_active()) {
             bridge.handle(Event::Layout(layout));
@@ -566,11 +640,19 @@ struct Bridge {
     connected_at: Option<Instant>,
     /// No reconnect attempt before this.
     retry_after: Option<Instant>,
+    /// This channel's share of the idle-inhibit relay.
+    idle: IdleChannel,
 }
 
 impl Bridge {
     /// One vsock connect + HELLO attempt; spawns the reader thread on success.
-    fn try_connect(&mut self, port: u32, tx: &mpsc::Sender<Event>, gate: &layout_gate::LayoutGate) {
+    fn try_connect(
+        &mut self,
+        port: u32,
+        tx: &mpsc::Sender<Event>,
+        gate: &layout_gate::LayoutGate,
+        inhibitors: &idle_inhibit::Inhibitors,
+    ) {
         if self.retry_after.is_some_and(|t| Instant::now() < t) {
             return;
         }
@@ -583,7 +665,7 @@ impl Bridge {
             return;
         };
         // We only ever reach here in the claim phase, so the capability is announced.
-        let hello = hello_msg(&["clipboard"]);
+        let hello = hello_msg(&self.idle.caps(inhibitors, &["clipboard"]));
         let seed = gate.for_new_channel(layout_gate::seat_active());
         if open_channel(&mut stream, &hello, seed).is_err() {
             self.back_off(Duration::ZERO);

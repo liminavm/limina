@@ -180,6 +180,83 @@ fn l1_real_session_helper_never_takes_remotedesktop_without_optin() {
     let _ = std::fs::remove_file(&mock_log);
 }
 
+/// The helper relays the session's idle inhibitors to the host: it announces `idleinhibit`
+/// when gnome-session's `InhibitedActions` is readable, and the supervisor sees an application
+/// start and stop inhibiting idle. The mock plays gnome-session (`/mock-<id>.inhibit`), so this
+/// is the real helper against the real control plane, with only the desktop scripted.
+#[test]
+fn l1_real_session_helper_relays_idle_inhibitors() {
+    if !limina_test::require_hvf_or_skip("l1_real_session_helper_relays_idle_inhibitors") {
+        return;
+    }
+
+    let uniq = format!("{}i", std::process::id()); // distinct mock files from the other tests
+    let cfg = GuestConfig::l1_from_env()
+        .expect("resolving L1 guest config")
+        .with_control_agent()
+        .with_cmdline_token("limina.dbus")
+        .with_cmdline_token("limina.mock_mutter")
+        .with_cmdline_token("limina.session_helper")
+        // The helper only connects once it has a clipboard backend, and in this guest the
+        // mock's RemoteDesktop API is the only one.
+        .with_cmdline_token("limina.clipboard_rd")
+        .with_cmdline_token(&format!("limina.mock_id={uniq}"))
+        .with_supervisor_log();
+    let rootfs = rootfs_of(&cfg);
+    let _ = std::fs::remove_file(rootfs.join(format!("mock-{uniq}.inhibit")));
+    let _ = std::fs::remove_file(rootfs.join(format!("mock-{uniq}.log")));
+
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    let inhibit = guest.rootfs_dir().join(format!("mock-{uniq}.inhibit"));
+    let mock_log = guest.rootfs_dir().join(format!("mock-{uniq}.log"));
+
+    guest
+        .wait_for_supervisor_log(
+            "guest agent connected: limina-agent-session/",
+            Duration::from_secs(60),
+        )
+        .expect("the real limina-agent-session never connected (dbus/mock/helper chain)");
+    // The startup probe can lose the race with the mock claiming its name; the helper then
+    // reconnects with the capability once a retry reads the property.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !guest.supervisor_log().lines().any(|l| {
+        l.contains("guest agent connected: limina-agent-session/") && l.contains("idleinhibit")
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "the helper never announced idleinhibit:\n{}",
+            guest.supervisor_log()
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // An application starts inhibiting idle.
+    std::fs::write(&inhibit, "8").expect("writing the inhibit trigger");
+    wait_for_file_contains(&mock_log, "INHIBITED_ACTIONS 8", Duration::from_secs(10));
+    guest
+        .wait_for_supervisor_log("control: the guest inhibits idle", Duration::from_secs(10))
+        .expect("the supervisor never heard the guest inhibit idle");
+
+    // Other inhibitor flags (suspend here) are not idle.
+    std::fs::write(&inhibit, "4").expect("writing the inhibit trigger");
+    wait_for_file_contains(&mock_log, "INHIBITED_ACTIONS 4", Duration::from_secs(10));
+    guest
+        .wait_for_supervisor_log(
+            "control: the guest no longer inhibits idle",
+            Duration::from_secs(10),
+        )
+        .expect("the supervisor never heard the idle inhibitor go");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(10))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "harness had to force teardown");
+    assert_eq!(outcome.code, Some(0), "expected orderly power-off");
+
+    let _ = std::fs::remove_file(&inhibit);
+    let _ = std::fs::remove_file(&mock_log);
+}
+
 fn wait_for_file_contains(path: &std::path::Path, needle: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {

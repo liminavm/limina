@@ -23,6 +23,13 @@
 //! On SetSelection the mock immediately plays a pasting app (emits SelectionTransfer),
 //! so a host→guest sync is observable as `PASTED <text>` with no extra choreography.
 //!
+//! It also stands in for gnome-session's idle-inhibitor property, for the helper's
+//! idle-inhibit relay: `org.gnome.SessionManager` at `/org/gnome/SessionManager`, with an
+//! `InhibitedActions` property that starts at 0.
+//! - `/mock-<id>.inhibit` (host-written): a decimal `InhibitedActions` value (`8` is an
+//!   application inhibiting idle); a new value is set and announced with PropertiesChanged,
+//!   and logged as `INHIBITED_ACTIONS <n>`.
+//!
 //! It used to double as a stand-in for the clipboard@limina shell extension
 //! (`LIMINA_MOCK_BRIDGE=1`, `org.limina.Clipboard`); that tier was deleted with #37
 //! step 4, and this scaffolding went with it.
@@ -181,6 +188,21 @@ fn pipe() -> fdo::Result<(std::fs::File, std::fs::File)> {
     }
 }
 
+/// gnome-session's inhibitor property, nothing else of it.
+struct SessionManager {
+    actions: u32,
+}
+
+#[interface(name = "org.gnome.SessionManager")]
+impl SessionManager {
+    #[zbus(property)]
+    fn inhibited_actions(&self) -> u32 {
+        self.actions
+    }
+}
+
+const SESSION_MANAGER_PATH: &str = "/org/gnome/SessionManager";
+
 fn value_to_strings(v: &Value<'_>) -> Vec<String> {
     match v {
         Value::Value(inner) => value_to_strings(inner),
@@ -208,12 +230,15 @@ fn main() {
         // The session bus may still be coming up (init spawns dbus-daemon just before us).
         let conn = loop {
             match zbus::connection::Builder::session().and_then(|b| {
-                b.name("org.gnome.Mutter.RemoteDesktop")?.serve_at(
-                    "/org/gnome/Mutter/RemoteDesktop",
-                    RemoteDesktop {
-                        read_content: read_content.clone(),
-                    },
-                )
+                b.name("org.gnome.Mutter.RemoteDesktop")?
+                    .serve_at(
+                        "/org/gnome/Mutter/RemoteDesktop",
+                        RemoteDesktop {
+                            read_content: read_content.clone(),
+                        },
+                    )?
+                    .name("org.gnome.SessionManager")?
+                    .serve_at(SESSION_MANAGER_PATH, SessionManager { actions: 0 })
             }) {
                 Ok(builder) => match builder.build().await {
                     Ok(conn) => break conn,
@@ -227,9 +252,33 @@ fn main() {
 
         // Watch the host-written trigger file; new content = a scripted guest app copy.
         let trigger = format!("/mock-{id}.copy");
+        let inhibit_trigger = format!("/mock-{id}.inhibit");
         let mut last: Vec<u8> = Vec::new();
+        let mut last_actions: u32 = 0;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
+            // A scripted change of the session's inhibitors.
+            if let Some(actions) = std::fs::read_to_string(&inhibit_trigger)
+                .ok()
+                .and_then(|t| t.trim().parse::<u32>().ok())
+                && actions != last_actions
+                && let Ok(iface) = conn
+                    .object_server()
+                    .interface::<_, SessionManager>(SESSION_MANAGER_PATH)
+                    .await
+            {
+                last_actions = actions;
+                iface.get_mut().await.actions = actions;
+                match iface
+                    .get()
+                    .await
+                    .inhibited_actions_changed(iface.signal_emitter())
+                    .await
+                {
+                    Ok(()) => log_line(&format!("INHIBITED_ACTIONS {actions}")),
+                    Err(e) => eprintln!("limina-mock-mutter: emit failed: {e}"),
+                }
+            }
             let Ok(content) = std::fs::read(&trigger) else {
                 continue;
             };

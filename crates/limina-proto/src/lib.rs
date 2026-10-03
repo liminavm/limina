@@ -90,6 +90,8 @@ pub mod msg_type {
     pub const CPU_TARGET: u8 = 11;
     /// Guest → host: which power profile the guest's desktop has selected.
     pub const POWER_PROFILE: u8 = 12;
+    /// Guest → host: whether an application in the guest's session inhibits idle.
+    pub const IDLE_INHIBIT: u8 = 13;
     pub const CLIP_OFFER: u8 = 16;
     pub const CLIP_REQUEST: u8 = 17;
     pub const CLIP_DATA: u8 = 18;
@@ -640,6 +642,21 @@ impl PowerProfileMsg {
     }
 }
 
+/// Guest → host: whether any application in the reporting session holds an idle inhibitor -- on
+/// GNOME, the idle bit (8) of `org.gnome.SessionManager`'s `InhibitedActions`, which a video
+/// player or a presentation sets. The host keeps its display awake on it while the VM is on
+/// screen.
+///
+/// **Level-triggered**, like [`PowerProfileMsg`]: sent after HELLO and on every change, so a
+/// reconnect resynchronises with no replay. The capability is `idleinhibit`: a session helper
+/// advertises it only when it can read its desktop's inhibitors, and sends this only to a host
+/// whose WELCOME carries it too. The host forgets a helper's report when its connection closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub struct IdleInhibit {
+    #[n(0)]
+    pub inhibited: bool,
+}
+
 /// Host → guest: the host's authoritative wallclock. The guest kernel's CLOCK_REALTIME is
 /// CNTVCT-anchored and CNTVCT freezes while the host sleeps (mach_absolute_time), so a host
 /// nap lags the running guest's clock by the nap's length — and a snapshot restore lags it
@@ -737,6 +754,7 @@ pub enum Message {
     CpuPressure(CpuPressure),
     CpuTarget(CpuTarget),
     PowerProfile(PowerProfileMsg),
+    IdleInhibit(IdleInhibit),
     DisplayLayout(DisplayLayout),
     TimeSync(TimeSync),
     Shutdown(Shutdown),
@@ -764,6 +782,7 @@ impl Message {
             Message::CpuPressure(_) => msg_type::CPU_PRESSURE,
             Message::CpuTarget(_) => msg_type::CPU_TARGET,
             Message::PowerProfile(_) => msg_type::POWER_PROFILE,
+            Message::IdleInhibit(_) => msg_type::IDLE_INHIBIT,
             Message::DisplayLayout(_) => msg_type::DISPLAY_LAYOUT,
             Message::TimeSync(_) => msg_type::TIME_SYNC,
             Message::Shutdown(_) => msg_type::SHUTDOWN,
@@ -798,6 +817,7 @@ impl Message {
             Message::CpuPressure(m) => cbor(m),
             Message::CpuTarget(m) => cbor(m),
             Message::PowerProfile(m) => cbor(m),
+            Message::IdleInhibit(m) => cbor(m),
             Message::DisplayLayout(m) => cbor(m),
             Message::TimeSync(m) => cbor(m),
             Message::Shutdown(m) => cbor(m),
@@ -823,6 +843,7 @@ impl Message {
             msg_type::CPU_PRESSURE => Message::CpuPressure(cbor(&payload)?),
             msg_type::CPU_TARGET => Message::CpuTarget(cbor(&payload)?),
             msg_type::POWER_PROFILE => Message::PowerProfile(cbor(&payload)?),
+            msg_type::IDLE_INHIBIT => Message::IdleInhibit(cbor(&payload)?),
             msg_type::TIME_SYNC => Message::TimeSync(cbor(&payload)?),
             msg_type::SHUTDOWN => Message::Shutdown(cbor(&payload)?),
             msg_type::SHUTDOWN_ACK => Message::ShutdownAck,
@@ -1396,6 +1417,8 @@ mod tests {
                 caps: vec!["shutdown".into()],
             }),
             Message::Heartbeat(Heartbeat { seq: 3 }),
+            Message::IdleInhibit(IdleInhibit { inhibited: true }),
+            Message::IdleInhibit(IdleInhibit { inhibited: false }),
             Message::Shutdown(Shutdown { grace_ms: 5000 }),
             Message::ShutdownAck,
             Message::ClipOffer(ClipOffer {

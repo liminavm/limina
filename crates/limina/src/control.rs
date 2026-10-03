@@ -87,6 +87,10 @@ struct Peer<W = UnixStream> {
     /// Whether the monitor currently considers this peer silent (so transitions are
     /// logged once, not every sweep).
     silent: Arc<AtomicBool>,
+    /// What this peer last said about its session's idle inhibitors (`IdleInhibit`). Only read
+    /// for an `idleinhibit` peer, and gone with the peer, so a helper that dies cannot leave the
+    /// host display held awake.
+    idle_inhibited: Arc<AtomicBool>,
 }
 
 impl<W: Write> Peer<W> {
@@ -959,8 +963,25 @@ fn send_to_capable<W: Write>(
     }
     if !failed.is_empty() {
         peers.lock().unwrap().retain(|p| !failed.contains(&p.id));
+        publish_guest_inhibitors(peers);
     }
     delivered
+}
+
+/// What the guest's session helpers say about idle inhibitors: `None` while none that reports
+/// them is connected, so the host falls back on its own heuristic; otherwise whether any
+/// session holds one.
+fn guest_inhibitors<W: Write>(peers: &Peers<W>) -> Option<bool> {
+    let peers = peers.lock().unwrap();
+    let mut reporting = peers.iter().filter(|p| p.has_cap("idleinhibit")).peekable();
+    reporting.peek()?;
+    Some(reporting.any(|p| p.idle_inhibited.load(Ordering::Acquire)))
+}
+
+/// Hand the window what the guest's helpers now say about idle inhibitors. Called whenever a
+/// report arrives or a peer comes or goes.
+fn publish_guest_inhibitors<W: Write>(peers: &Peers<W>) {
+    crate::window::display_awake::report_guest_inhibitors(guest_inhibitors(peers));
 }
 
 /// The poller saw a host copy: offer it to every clipboard-capable peer.
@@ -1092,6 +1113,7 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
     let writer = Arc::new(PeerMutex::new(stream.try_clone()?));
     let last_seen = Arc::new(Mutex::new(Instant::now()));
+    let idle_inhibited = Arc::new(AtomicBool::new(false));
     let peer = Arc::new(Peer {
         id,
         agent: hello.agent.clone(),
@@ -1099,8 +1121,10 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         stream: writer.clone(),
         last_seen: last_seen.clone(),
         silent: Arc::new(AtomicBool::new(false)),
+        idle_inhibited: idle_inhibited.clone(),
     });
     admit(&inner.peers, peer, &inner.clipboard, time_sync_now);
+    publish_guest_inhibitors(&inner.peers);
 
     // Per-peer CTAPHID state: the agent creates one uhid FIDO device per connection,
     // so channel ids and reassembly are connection-scoped by construction; the passkey
@@ -1110,8 +1134,16 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         .fido_store
         .clone()
         .map(crate::fido::FidoAuthenticator::new);
-    let result = serve_loop(&mut stream, &writer, inner, &last_seen, &mut fido);
+    let result = serve_loop(
+        &mut stream,
+        &writer,
+        inner,
+        &last_seen,
+        &idle_inhibited,
+        &mut fido,
+    );
     inner.peers.lock().unwrap().retain(|p| p.id != id);
+    publish_guest_inhibitors(&inner.peers);
     log::info!("control: guest agent disconnected: {}", hello.agent);
     result
 }
@@ -1123,6 +1155,7 @@ fn serve_loop(
     writer: &PeerMutex<UnixStream>,
     inner: &Inner,
     last_seen: &Mutex<Instant>,
+    idle_inhibited: &AtomicBool,
     fido: &mut Option<crate::fido::FidoAuthenticator>,
 ) -> std::io::Result<()> {
     let reply = |msg: &Message, channel: u32| -> std::io::Result<()> {
@@ -1210,6 +1243,23 @@ fn serve_loop(
                     *inner.last_cpu_target.lock().unwrap() = Some(target.online);
                 }
             }
+            // Whether an application in this peer's session inhibits idle — a video player, a
+            // presentation. Level-triggered, so the latest report is the whole state; what it
+            // means for the host display is the window's decision (`window::wake_policy`).
+            Ok((_, Message::IdleInhibit(m))) => {
+                let was = idle_inhibited.swap(m.inhibited, Ordering::AcqRel);
+                if was != m.inhibited {
+                    log::info!(
+                        "control: the guest {} idle",
+                        if m.inhibited {
+                            "inhibits"
+                        } else {
+                            "no longer inhibits"
+                        }
+                    );
+                }
+                publish_guest_inhibitors(&inner.peers);
+            }
             // M15: the guest's own monitor arrangement, which the host cannot infer — an
             // absolute pointer is spread across the guest's whole desktop, so mapping into it
             // needs to know what order the compositor put the monitors in.
@@ -1257,7 +1307,13 @@ fn serve_loop(
 /// is a separate flag from `--no-usb` (see `Cli::fido_enabled`). Withholding the cap is also the
 /// whole fix: agents already gate the device on it, so no guest-side change is needed.
 fn welcome_caps(has_fido_store: bool, usb_fido_gadget: bool, dynamic_vcpus: bool) -> Vec<String> {
-    let mut caps = vec!["shutdown".to_string(), "clipboard".to_string()];
+    // `idleinhibit`: the host keeps its display awake on the guest's idle inhibitors, so a
+    // session helper that can read them reports them.
+    let mut caps = vec![
+        "shutdown".to_string(),
+        "clipboard".to_string(),
+        "idleinhibit".to_string(),
+    ];
     if has_fido_store && !usb_fido_gadget {
         caps.push("fido".to_string());
     }
@@ -1459,6 +1515,65 @@ mod tests {
             other => panic!("expected a CpuTarget grow, got {other:?}"),
         }
         assert_eq!(floor(), 10);
+    }
+
+    /// The guest's idle inhibitors as the host sees them: nothing to say until a helper that reads
+    /// them connects, any session's inhibitor counts, and a helper's report goes with it — a
+    /// helper that dies must not leave the host display held awake.
+    #[test]
+    fn idle_inhibitors_follow_the_reporting_helpers_and_leave_with_them() {
+        let path = std::env::temp_dir().join(format!(
+            "limina-ctl-idle-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let policy =
+            crate::vcpu_policy::VcpuPolicy::new(4, crate::vcpu_policy::CpuReclaim::Disabled);
+        let plane = ControlPlane::start(&path, None, policy, None, false).unwrap();
+        let seen = || guest_inhibitors(&plane.inner.peers);
+        let wait_for = |want: Option<bool>| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while seen() != want && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(seen(), want);
+        };
+        let inhibit = |s: &mut UnixStream, inhibited: bool| {
+            write_message(
+                s,
+                CHANNEL_CONTROL,
+                &Message::IdleInhibit(limina_proto::IdleInhibit { inhibited }),
+            )
+            .unwrap();
+        };
+
+        assert_eq!(seen(), None, "no helper, no report: the heuristic decides");
+        let _agent = connect_agent(&path, &["timesync"]);
+        wait_for(None);
+
+        let mut user = connect_agent(&path, &["idleinhibit"]);
+        wait_for(Some(false));
+        inhibit(&mut user, true);
+        wait_for(Some(true));
+
+        let mut greeter = connect_agent(&path, &["idleinhibit"]);
+        inhibit(&mut greeter, false);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(seen(), Some(true), "any session's inhibitor holds");
+
+        drop(user);
+        wait_for(Some(false));
+        drop(greeter);
+        wait_for(None);
+    }
+
+    #[test]
+    fn the_host_offers_idle_inhibit_reporting() {
+        assert!(
+            welcome_caps(false, false, false)
+                .iter()
+                .any(|c| c == "idleinhibit")
+        );
     }
 
     /// End-to-end over the socket: a guest short of CPUs gets a `CpuTarget` back on the same
@@ -1728,6 +1843,7 @@ mod loom_model {
             stream: wire.clone(),
             last_seen: Arc::new(std::sync::Mutex::new(Instant::now())),
             silent: Arc::new(AtomicBool::new(false)),
+            idle_inhibited: Arc::new(AtomicBool::new(false)),
         });
         (peer, wire)
     }

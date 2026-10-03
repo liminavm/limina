@@ -46,7 +46,7 @@ mod capture_tap;
 mod copy;
 mod cursor;
 mod diag;
-mod display_awake;
+pub(crate) mod display_awake;
 mod displays;
 mod echo;
 pub(crate) mod fit;
