@@ -482,12 +482,12 @@ Plasma's own D-Bus services. Built to verify the session helper's idle-inhibit s
   KWin 6.7.5), with `swayidle` and `wayland-utils` as probes. GDM stays the display manager:
   `/var/lib/AccountsService/users/claude` has `Session=plasma`, so autologin comes up in Plasma.
   The GNOME session is still installed; switch back by editing that file.
-- **`KWIN_COMPOSE=Q` in `/etc/environment`: KWin composites with QPainter.** With GL compositing
-  Plasma never finishes starting on this stack. KWin loops submitting and waiting on virtio-gpu
-  fences, never returns to its event loop, and plasmashell and kded6 time out behind it, leaving a
-  black screen with a cursor (`spikes/kde-kwin-gl-hang/`). Remove the
-  line to reproduce it. Under QPainter, mpv's GPU video outputs abort (`egl: failed to create dri2
-  screen`); use `mpv --vo=wlshm`.
+- **KWin composites with OpenGL** on virgl (zink on KosmicKrisp). It needs a worker with virglrs
+  `96a7b3d` and libkrun `e493221a` or later: an older one never answers a GL query that was not
+  ready when first asked, KWin blocks on its render-time query after the first page flip, and
+  Plasma never finishes starting (`spikes/kde-kwin-gl-hang/`). `KWIN_COMPOSE=Q` in
+  `/etc/environment` falls back to QPainter for an older worker; under QPainter, mpv's GPU video
+  outputs abort, so use `mpv --vo=wlshm` there.
 - **Test conveniences, not KDE defaults**:
   - screen autolock and lock-on-resume are off (`kscreenlockerrc`), as is turning the display off
     when idle (`powerdevilrc`). An idle test otherwise ends at the lock screen after five minutes,
@@ -574,7 +574,7 @@ cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw
 | `Fedora-Workstation-44.stock.test.raw` | **Stock-tier L2 image** — frozen CoW snapshot of `accessible` (`DEFAULT` for `LIMINA_FEDORA_REL=44`; also the seated baseline-3D vehicle). | ✅ built; `efi_boots_to_userspace` GREEN 2026-06-29 |
 | `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard *(historical — mutter left the delivery 2026-07-11 and is stock going forward; see the note above)*, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. **Respun 2026-07-04 to kernel `7.1.2-limina16k` + mesa `26.1.3-3` (dogfood parity — see the respin note above); versions in this row are the 2026-06-29 baseline.** **REBUILT FRESH 2026-07-05** from `accessible` per the procedure above (the prior `enhanced.raw`/`.test.raw` had accumulated bad state — the 16k kernel failed its `/boot/efi` mount and dropped to the rescue BLS entry; a clean clone+install booted `7.1.2-limina16k` with `/boot/efi` mounted, venus seated on the new KK). | ✅ finalized 2026-06-29; respun 2026-07-04; rebuilt 2026-07-05 |
 | `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_efi_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. **Recloned 2026-07-05 from the fresh rebuild** (see the `enhanced.raw` note). | ✅ **L2 GREEN 7/7 2026-06-29** (venus×3 + replay×3 + reset; replay tooling baked in); recloned 2026-07-05 |
-| `Fedora-Workstation-44.enhanced.kde.raw` | **KDE Plasma image** — `enhanced.test` + Plasma 6.7 from the F44 repos, autologin into Plasma, KWin on QPainter compositing (GL compositing hangs at startup). See its section above. | ✅ built 2026-10-03; idle-inhibit paths verified |
+| `Fedora-Workstation-44.enhanced.kde.raw` | **KDE Plasma image** — `enhanced.test` + Plasma 6.7 from the F44 repos, autologin into Plasma, KWin on GL compositing (needs the query fix, see its section). See its section above. | ✅ built 2026-10-03; idle-inhibit paths verified |
 
 **All five F44 images above plus `enhanced.synoik` boot with a zero GRUB menu timeout**
 (`scripts/provision/trim-boot-delays.sh`, applied 2026-09-16; `make-accessible.sh` bakes the same

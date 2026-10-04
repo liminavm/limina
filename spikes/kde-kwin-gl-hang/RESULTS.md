@@ -1,8 +1,9 @@
-# KWin with GL compositing never finishes starting: virglrs never completes a waited-on GL query
+# KWin with GL compositing never finished starting: virglrs never completed a waited-on GL query
 
-On `Fedora-Workstation-44.enhanced.kde.raw` with `KWIN_COMPOSE=Q` removed, Plasma 6.7 (KWin 6.7.5,
-DRM backend, GL compositing) on the coexist venus/virgl stack never finishes starting. The screen
-stays black with a cursor (`evidence-2026-10-03/last-frame.png`). It reproduced across a reboot.
+Fixed by virglrs `96a7b3d` and libkrun `e493221a` (see *The fix*). Before them, on
+`Fedora-Workstation-44.enhanced.kde.raw`, Plasma 6.7 (KWin 6.7.5,
+DRM backend, GL compositing) on the coexist venus/virgl stack never finished starting. The screen
+stayed black with a cursor (`evidence-2026-10-03/last-frame.png`). It reproduced across a reboot.
 
 ## What is known
 
@@ -50,6 +51,19 @@ After each page flip KWin reads its GPU render-time query with a blocking
 The bug is not specific to KWin or to timer queries: any guest GL client that blocks on a query
 result not ready at end-query time hangs the same way, occlusion queries included. Non-blocking
 polls (mutter's frame-timing queries, for one) never hang; they just never get an answer.
+
+## The fix
+
+- **virglrs `96a7b3d`** parks a query that is not ready, holds the context fence behind it, and
+  answers the query from `Renderer::poll()` on the renderer thread before that fence retires.
+  The VMM pumps it through `Renderer::poll_descriptor()`.
+- **libkrun `e493221a`** hands that descriptor to the GPU worker's epoll and calls `poll()` when
+  it is readable. The snapshot and reset fence drains pump it too, because they hold the worker
+  thread while they wait for fences.
+
+Verified 2026-10-03 on the KDE image with GL compositing: KWin reports "Compositing Type: OpenGL"
+on `virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP)))` at under 1% CPU, the Plasma desktop
+renders (window capture), and the worker log has no parked-fence reports.
 
 ## Evidence
 
