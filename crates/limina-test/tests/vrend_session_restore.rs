@@ -23,13 +23,13 @@
 //! oracle — the desktop's color diversity must survive the restore: the content-loss
 //! class (icon atlases / glyph caches / wallpaper flat gray, host-GL-only textures)
 //! collapses distinct-color counts by orders of magnitude while every process and
-//! submit oracle stays green. RED lever: `VREND_CONTENT=0` (structure-only replay).
+//! submit oracle stays green.
 //!
-//! The restore leg also arms `LIMINA_REPLAY_POISON=1`, which makes one replayed entry
-//! per context report a context error the way a stale retained reference does — so the
-//! sticky-`in_error` class is gated on every run instead of only when a journal happens
-//! to carry such an entry (RED lever for that half: revert the `in_error` test in
-//! `vrend_decode_ctx_replay_submit`).
+//! A replayed command that faults cannot poison the restored context: virglrs drops and
+//! counts it, along with any GL error it left, and stores nothing, so it cannot refuse a later
+//! live submit; the only fault that sticks during a replay is a journal it cannot parse back,
+//! and `replay_upto` reports that as an error. virglrs guards that with unit tests, so this
+//! gate needs no lever for it.
 //!
 //! The same body runs on two desktops: GNOME (mutter) on the enhanced golden, and KDE Plasma
 //! (KWin) on the KDE golden. KWin keeps GL queries in flight on every frame — it blocks on a
@@ -310,13 +310,13 @@ fn run(desktop: &Desktop) {
     let (pre_submits, pre_ticks) = tick_total(pre_window, "submits");
     let pre_app = ssh_retry(&g1, desktop.app_count);
     eprintln!(
-        "pre-suspend baseline: {app}-procs={pre_app} submits=+{pre_submits} \
+        "pre-suspend baseline: app-procs={pre_app} submits=+{pre_submits} \
          over {pre_ticks} ticks"
     );
     assert!(
         pre_submits > 0,
         "the LIVE seated session produced no classic submits under the stimulus \
-         (submits=+{pre_submits} over {pre_ticks} ticks, {app}-procs={pre_app}) — \
+         (submits=+{pre_submits} over {pre_ticks} ticks, app-procs={pre_app}) — \
          the oracle does not measure this environment; fix the stimulus/oracle \
          before trusting the gate"
     );
@@ -383,13 +383,19 @@ fn run(desktop: &Desktop) {
         .expect("preserving the suspended guest's disk");
     drop(g1);
 
+    // The restore consumes `snap` (renamed, then deleted when the worker exits), so keeping the
+    // artifacts means keeping a copy that can be restored again.
+    let keep = std::env::var_os("LIMINA_KEEP_ARTIFACTS").is_some();
+    let snap_kept = snap.with_extension("kept.snap");
+    if keep {
+        limina_test::cow_clone(&snap, &snap_kept).expect("keeping a copy of the snapshot");
+    }
     let snap_consumed = snap.with_extension("bin.consumed");
     let cleanup = || {
-        if std::env::var_os("LIMINA_KEEP_ARTIFACTS").is_some() {
+        if keep {
             eprintln!(
-                "keeping artifacts: snap={} (or {}) disk={}",
-                snap.display(),
-                snap_consumed.display(),
+                "keeping artifacts: snap={} disk={}",
+                snap_kept.display(),
                 disk.display()
             );
             return;
@@ -400,17 +406,6 @@ fn run(desktop: &Desktop) {
     };
 
     // --- Guest 2: fresh worker restoring against the preserved disk ---
-    // Poison the replay deterministically. A retained entry whose referent died before
-    // the snapshot makes vrend report a context error, which sets the STICKY in_error
-    // without failing the submit — vrend_check_no_error() reads glGetError(), never that
-    // flag — so the replayer's "did this entry fail?" test could not see the very flag it
-    // exists to clear. The flag then hides for the rest of the replay behind
-    // vrend_hw_switch_context's already-current fast path, and brands every post-restore
-    // guest submit EINVAL for the life of the context: a black desktop when the victim is
-    // gnome-shell, one blank window when it is an app. Whether a journal grows such an
-    // entry is chance (an 11-minute soak did, a 2-minute one did not), so the gate below
-    // is only honest with the lever forcing it.
-    unsafe { std::env::set_var("LIMINA_REPLAY_POISON", "1") };
     let mut cfg2 = devices(base_cfg.clone())
         .with_coexist_display(1280, 800)
         .with_net()
@@ -567,13 +562,19 @@ fn run(desktop: &Desktop) {
             .ssh_exec(&format!(
                 "for f in /sys/class/drm/card*-*/dpms /sys/class/drm/card*-*/enabled; do \
                  echo \"$f: $(cat $f 2>/dev/null)\"; done; \
-                 echo {app}-procs=$({})",
+                 echo app-procs=$({})",
                 desktop.app_count
             ))
             .unwrap_or_else(|e| format!("(drm probe failed: {e})"));
         let compositor = g2
             .ssh_exec(desktop.forensics)
             .unwrap_or_else(|e| format!("(compositor probe failed: {e})"));
+        // The whole restore leg, for what the filtered lines below leave out (the per-command
+        // breakdown of what the replay dropped, the worker's own lines).
+        let full_log =
+            std::env::temp_dir().join(format!("limina-vrend-restore-{}.log", std::process::id()));
+        let _ = std::fs::write(&full_log, &log);
+        eprintln!("restore-leg log kept at {}", full_log.display());
         let replay_lines: Vec<&str> = log
             .lines()
             .filter(|l| l.contains("restore:") || l.contains("replay") || l.contains("journal"))
