@@ -1,0 +1,478 @@
+[2026-10-03T22:40:31Z INFO  limina] suspend armed by default: snapshot path kde-poke.raw.limina-suspend.bin
+[2026-10-03T22:40:31Z INFO  limina::debug_ctl] debug: answering at /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-debug-56480.sock
+[2026-10-03T22:40:31Z INFO  limina::vcpu_policy] dynamic vCPUs: 4..4 online (reclaim Disabled, dwell 20s)
+time="2026-10-03T19:40:31-03:00" level=warning msg="bad log level \"\", falling back to \"info\""
+time="2026-10-03T19:40:31-03:00" level=info msg="gvproxy version v0.8.8"
+time="2026-10-03T19:40:31-03:00" level=info msg="waiting for clients..."
+[2026-10-03T22:40:31Z INFO  limina::gateway] death-pact watcher up (pid 56506) tying gvproxy 56505 to this supervisor
+[2026-10-03T22:40:31Z INFO  limina::gateway] gvproxy gateway up (pid 56505, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-56480.sock", ssh-port 2223)
+guest SSH forward ready: ssh -p 2223 <user>@127.0.0.1
+[2026-10-03T22:40:31Z INFO  limina::hosttrackpad] touchpad: host trackpad surface 124.8 x 76.8 mm
+[2026-10-03T22:40:32Z INFO  limina::supervisor] VM worker started through launchd (pid 56509, job eti.noronha.limina.worker.56480.0); Ctrl-C to power off
+[2026-10-03T22:40:32.078333Z INFO  limina_vmm::krun] virtio-gpu virgl_flags = 0xb5b, software_2d = false (coexist = true), vrend max_samples ceiling = 1
+[2026-10-03T22:40:32.078573Z INFO  limina_vmm::krun] virtio-gpu displays: 4 scanout(s), slot 0 connected at 2560x1440 as LMN/limina serial 0xaf9108dd
+[2026-10-03T22:40:32.078838Z INFO  limina_vmm::krun] virtio-input: keyboard fd=9, pointer fd=11, rel-pointer fd=13, touchpad fd=15 (TouchpadGeometry { width: 12480, height: 7680 })
+[2026-10-03T22:40:32.079350Z INFO  limina_vmm::krun] battery: mirroring the host battery into the guest
+[2026-10-03T22:40:32.079374Z INFO  limina_vmm::krun::console] spice: exposed the guest agent port com.redhat.spice.0
+[2026-10-03T22:40:32.079394Z INFO  limina_vmm::krun::console] qga: exposed the guest agent port org.qemu.guest_agent.0
+[2026-10-03T22:40:32.079472Z INFO  limina_vmm::krun] USB: cold-plugging the FIDO authenticator gadget (the supervisor's link (fd 23))
+[2026-10-03T22:40:32.079530Z INFO  limina_vmm::krun] USB: cold-plugging the fingerprint reader gadget (the supervisor's link (fd 25))
+[2026-10-03T22:40:32.079555Z INFO  limina_vmm::krun] USB: cold-plugging the HID keyboard gadget (the pre-virtio-input keyboard)
+[2026-10-03T22:40:32.079561Z INFO  limina_vmm::fido_usb] fido-usb: supervisor connected
+[2026-10-03T22:40:32.079721Z INFO  limina_vmm::moc_usb] moc-usb: supervisor connected
+[2026-10-03T22:40:32.079741Z INFO  limina_vmm::krun] building microVM: 4 vcpu(s), 6144 MiB, 1 disk(s), 0 share(s), display=true, boot=EFI firmware
+[2026-10-03T22:40:32Z INFO  limina::fido::usb] fido-usb: connected to the worker gadget at Link(the worker's link)
+[2026-10-03T22:40:32Z INFO  limina::moc::usb] moc: connected to the worker gadget at Link(the worker's link)
+[2026-10-03T22:40:32.083808Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms, at most 1 armed at once)
+[2026-10-03T22:40:32.084172Z INFO  limina_vmm::krun] display-resize: listening at the supervisor's link (fd 27)
+[2026-10-03T22:40:32.084245Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+[2026-10-03T22:40:32.084408Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+[2026-10-03T22:40:32.127219Z WARN  krun_devices::virtio::mmio] virtio queue marked ready with QueueNum=0; defaulting to max_size=256
+[virglrs] limina GPU budget: cap 12288 MiB, refusal stops the context
+[2026-10-03T22:40:32Z INFO  limina::window::capture_tap] pointer capture: CGEventTap installed (session-level, consuming)
+[2026-10-03T22:40:32Z INFO  limina::window::gesture_tap] trackpad: gesture tap installed (HID-level; takes guest three-finger gestures)
+[virglrs] vrend: hardware video decode h264 hevc vp9
+[virglrs] VREND_MAX_SAMPLES: advertising max_samples 1, not 4
+[virglrs] vrend: OpenGL ES 3.1 Mesa 26.3.0-devel (git-d39e8bff0f) (gles 31), 152 formats, 71 features, iosurface storage available
+[2026-10-03T22:40:32.373841Z INFO  limina_display::iosurface] window: scanout surfaces scoped via Mach port (name eti.noronha.limina.56480)
+[2026-10-03T22:40:32.375414Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [182, 343, 428] (640x480 BGRX)
+[2026-10-03T22:40:32Z INFO  limina::window::present] window: <- surface 182 343 640 480 0
+[2026-10-03T22:40:32.377982Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [433, 496, 507] (1280x800 BGRX)
+[2026-10-03T22:40:32Z INFO  limina::window::present] window: <- surface 433 496 1280 800 0
+[2026-10-03T22:40:32Z INFO  limina::window] display-control: pushed "display id=0 connected=0" to the guest
+[2026-10-03T22:40:32.378652Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: None, position: None, connected: Some(false), edid: None }
+[2026-10-03T22:40:32Z INFO  limina::window] window: off-glass ack gating ENGAGED (first gated ack waited 20.407375ms, fence cap 20ms)
+[2026-10-03T22:40:32Z INFO  limina::window::diag] capture: wrote IOSurface id=182 640x480 to <scratch>/kde.png (nonzero_px=0)
+[2026-10-03T22:40:32Z INFO  limina::window] display-control: pushed "display id=0 size=2560x1440 connected=1 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-10-03T22:40:32.448806Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((2560, 1440)), position: None, connected: Some(true), edid: Some(EdidSpec { refresh_hz: 60, dpi: 123, vendor: [76, 77, 78], product_id: 32795, serial: 1816328933, name: "BenQ LCD", serial_string: None, range: None, modes: [], alt_mode: None }) }
+[2026-10-03T22:40:33Z INFO  limina::window::diag] capture: wrote IOSurface id=433 1280x800 to <scratch>/kde.png (nonzero_px=0)
+[2026-10-03T22:40:34.932085Z INFO  krun_devices::virtio::gpu::worker] gpu worker: reset drain quiesced in 13.417µs
+[2026-10-03T22:40:34.932156Z INFO  krun_devices::virtio::gpu::worker] gpu worker: device reset with a quiescent session — PARKED for classification at the next activation
+[2026-10-03T22:40:35.239630Z INFO  krun_devices::virtio::gpu::worker] gpu worker: dropping the parked session — this activation programmed its queues (real driver re-init)
+[2026-10-03T22:40:35Z INFO  limina::window::present] window: <- guestdriver
+[2026-10-03T22:40:35Z INFO  limina::window] display: the guest's own driver has the GPU; the scanout pool is ours to arrange
+[2026-10-03T22:40:35Z INFO  limina::window] display-control: pushed "display id=0 connected=0" to the guest
+[2026-10-03T22:40:35.242290Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: None, position: None, connected: Some(false), edid: None }
+[2026-10-03T22:40:35Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-03T22:40:35.253528Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [123, 513, 515] (2560x1440 BGRX)
+[2026-10-03T22:40:35Z INFO  limina::window::present] window: <- surface 123 513 2560 1440 0
+[2026-10-03T22:40:35Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-03T22:40:35Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-03T22:40:35Z INFO  limina::window] display-control: pushed "display id=0 size=2560x1440 connected=1 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-10-03T22:40:35.302833Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((2560, 1440)), position: None, connected: Some(true), edid: Some(EdidSpec { refresh_hz: 60, dpi: 123, vendor: [76, 77, 78], product_id: 32795, serial: 1816328933, name: "BenQ LCD", serial_string: None, range: None, modes: [], alt_mode: None }) }
+[2026-10-03T22:40:35Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-03T22:40:35Z INFO  limina::window::present] window: <- surface 621 622 2560 1440 0
+[2026-10-03T22:40:35.305257Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [621, 622, 769] (2560x1440 BGRX)
+[2026-10-03T22:40:35Z INFO  limina::window::diag] capture: wrote IOSurface id=123 2560x1440 to <scratch>/kde.png (nonzero_px=0)
+[2026-10-03T22:40:35.802750Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[2026-10-03T22:40:36.502700Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 49.234ms of CPU over a 49.229583ms hold
+[2026-10-03T22:40:36.827864Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 26%, 1/1 armed)
+[2026-10-03T22:40:36Z INFO  limina::window::diag] capture: wrote IOSurface id=769 2560x1440 to <scratch>/kde.png (nonzero_px=0)
+[2026-10-03T22:40:37Z INFO  limina::window::diag] capture: wrote IOSurface id=621 2560x1440 to <scratch>/kde.png (nonzero_px=125671)
+[2026-10-03T22:40:38.915125Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 34.408ms of CPU over a 34.401541ms hold
+[2026-10-03T22:40:39Z INFO  limina::window::diag] capture: wrote IOSurface id=621 2560x1440 to <scratch>/kde.png (nonzero_px=125739)
+[2026-10-03T22:40:39.509037Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[2026-10-03T22:40:40Z INFO  limina::window::diag] capture: wrote IOSurface id=769 2560x1440 to <scratch>/kde.png (nonzero_px=147991)
+[2026-10-03T22:40:40.061147Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 35.483ms of CPU over a 44.087041ms hold
+[2026-10-03T22:40:40Z INFO  limina::control] control: guest agent connected: limina-agent/0.6.1 caps=["heartbeat", "shutdown", "mempressure", "vcpu", "timesync", "fido", "powerprofile"] pagesize=16384
+[2026-10-03T22:40:40.936465Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 27%, 1/1 armed)
+[2026-10-03T22:40:41Z INFO  limina::window::diag] capture: wrote IOSurface id=621 2560x1440 to <scratch>/kde.png (nonzero_px=142660)
+[2026-10-03T22:40:41.438022Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.536ms of CPU over a 33.529166ms hold
+[2026-10-03T22:40:42Z INFO  limina::window::diag] capture: wrote IOSurface id=769 2560x1440 to <scratch>/kde.png (nonzero_px=131148)
+[2026-10-03T22:40:42Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-03T22:40:42Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-03T22:40:42.319610Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=2 init=0x2 name=Some("gnome-shell\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:40:42.319683Z INFO  krun_devices::virtio::gpu::virtio_gpu] vrend context ctx=2 (capset 2): Global-ring fences now retire through virglrenderer
+[2026-10-03T22:40:42.361066Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 30%, 1/1 armed)
+[LIMINA-CTX] compute encoder class AGXG13XFamilyComputeContext_mtlnext from /System/Library/Extensions/AGXMetalG13X.bundle/Contents/MacOS/AGXMetalG13X (UUID E368C402-9A93-35F5-AE47-B1E561825A06): _impl@72 _allocator@104 _command_buffer@64; pass-state canary at +0x8f0 (G13X), armed once the +0xc0 relation is seen
+[LIMINA-CTX] pass-state canary armed (canary=G13X+0x8f0): [+0x8f0]=0x1116f4174 is [+0x8e8]+0xc0 as beginComputePass writes it
+[LIMINA-KK-GUARD] periodic encoder guard: checks=2 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=1 table=1/8192 | context: canary=G13X+0x8f0 born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+[LIMINA-SENTINEL] kk kk-sentinel-1 armed; dealloc sentinel self-test: OK
+[virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 841); renders land in the surface directly
+[2026-10-03T22:40:42.904045Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 35.621ms of CPU over a 38.023041ms hold
+[2026-10-03T22:40:43Z INFO  limina::control] control: guest agent connected: limina-agent-session/0.1.2 caps=["idleinhibit"] pagesize=16384
+[2026-10-03T22:40:44.067764Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=4 init=0x2 name=Some("Xwayland\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:40:44Z INFO  limina::window::arrangement] display: the guest reports its monitors as [("Virtual-1", GuestRect { x: 0, y: 0, w: 2048, h: 1152 })]
+MESA: warning: zink: PERF WARNING! > 100 copy boxes detected for 0x963484c00
+[2026-10-03T22:40:44.298077Z INFO  krun_devices::virtio::gpu::virtio_gpu] virtio-gpu: fence-accurate presents ENGAGED (first deferred present, scanout 0, iosurface 841)
+[virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 842); renders land in the surface directly
+[2026-10-03T22:40:44.354457Z WARN  krun_devices::virtio::gpu::virtio_gpu] virtio-gpu: a scanout flush parked frames without a fence to hold the guest off their buffers (1 such flushes so far)
+[2026-10-03T22:40:44.354526Z INFO  krun_devices::virtio::gpu::virtio_gpu] virtio-gpu: scanout 0 flushes carry no fence; nothing holds the guest off buffers on glass
+[2026-10-03T22:40:44Z INFO  limina::window::present] window: <- held 0 0
+[virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 848); renders land in the surface directly
+[2026-10-03T22:40:44.544221Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=6 init=0x2 name=Some("mutter-x11-fram\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:40:44.580722Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=7 init=0x2 name=Some("ibus-x11\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:40:44Z INFO  limina::window::diag] capture: wrote IOSurface id=841 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:40:44.802890Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] video: format 314 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 315 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 326 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 15 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 323 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 67 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 1 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 134 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 2 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 131 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: fence depth bound (16) held 1 batches for 277.5µs in all (0 gave up) since the last report; latest ctx ContextId(8)
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 853); plane views sample the surface directly
+[2026-10-03T22:40:44.979398Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 854); plane views sample the surface directly
+[virglrs] video: format 314 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 315 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 326 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 15 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 323 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 67 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 1 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 134 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 2 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 131 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[2026-10-03T22:40:44.993661Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+[2026-10-03T22:40:44.994062Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] video: format 314 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 315 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 326 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 15 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 323 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 67 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 1 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 134 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 2 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 131 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[2026-10-03T22:40:45.000280Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+[2026-10-03T22:40:45.000650Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x2 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[virglrs] vrend: composite target: 64x64 Y8_U8V8_420_UNORM on a two-plane IOSurface (id 852); plane views sample the surface directly
+[virglrs] video: format 314 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 315 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 326 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 15 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 323 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 67 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 1 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 134 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 2 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[virglrs] video: format 131 names no layout this build decodes into; decoding into a buffer of this format will be refused
+[2026-10-03T22:40:45.006534Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+[2026-10-03T22:40:45.007405Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+[2026-10-03T22:40:45.079414Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=8 init=0x4 name=Some("gst-plugin-scan\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[virglrs] limina GPU budget: ctx 8 [gst-plugin-scan] destroyed with 1.1 MiB still charged, now counted as shared -- storage a resource still holds a share of, or a charge this renderer did not drop
+[virglrs] limina GPU budget:   1 x 1.0 MiB (host shm), 1 x 147456 B (host shm)
+[2026-10-03T22:40:45.087685Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=8
+[2026-10-03T22:40:45Z INFO  limina::window::diag] capture: wrote IOSurface id=842 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:40:46.650780Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 31%, 1/1 armed)
+[2026-10-03T22:40:47.665609Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 37.761ms of CPU over a 37.75525ms hold
+[2026-10-03T22:40:47.668909Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 33%, 1/1 armed)
+[2026-10-03T22:40:47.711109Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 42.553ms of CPU over a 42.149041ms hold
+[2026-10-03T22:40:48.893266Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 2%, 1/1 armed)
+[2026-10-03T22:40:49.058053Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 42.237ms of CPU over a 42.230625ms hold
+[2026-10-03T22:40:50.526026Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[2026-10-03T22:41:00Z INFO  limina::window::diag] capture: wrote IOSurface id=848 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:41:01.602856Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 41.07ms of CPU over a 41.066125ms hold
+[2026-10-03T22:41:02.109509Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[2026-10-03T22:41:03.151282Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 44.66ms of CPU over a 44.6755ms hold
+[2026-10-03T22:41:03.560728Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 2%, 1/1 armed)
+[2026-10-03T22:41:22.772045Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.387ms of CPU over a 33.377458ms hold
+[2026-10-03T22:41:23.026907Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 9%, 1/1 armed)
+[2026-10-03T22:41:23.826253Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 39.79ms of CPU over a 39.781041ms hold
+[2026-10-03T22:41:24.898994Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 12%, 1/1 armed)
+[2026-10-03T22:41:27.702830Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 35.803ms of CPU over a 35.798291ms hold
+[2026-10-03T22:41:28.224652Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 10%, 1/1 armed)
+[2026-10-03T22:41:30.580187Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.525ms of CPU over a 34.40225ms hold
+[2026-10-03T22:41:30.896036Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 10%, 1/1 armed)
+[2026-10-03T22:41:31.432664Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.814ms of CPU over a 35.320708ms hold
+[2026-10-03T22:41:32.122980Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 25%, 1/1 armed)
+[2026-10-03T22:41:32.346837Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 35.058ms of CPU over a 37.616041ms hold
+[2026-10-03T22:41:32.533852Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 28%, 1/1 armed)
+[LIMINA-KK-GUARD] periodic encoder guard: checks=4099 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=737 table=71/8192 | context: canary=G13X+0x8f0 born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+[2026-10-03T22:41:34.528202Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 35.951ms of CPU over a 37.684666ms hold
+[2026-10-03T22:41:34Z INFO  limina::window::diag] capture: wrote IOSurface id=842 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:41:35.202412Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 21%, 1/1 armed)
+[2026-10-03T22:41:35.658391Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 41.985ms of CPU over a 41.979416ms hold
+[2026-10-03T22:41:36.019170Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 13%, 1/1 armed)
+[2026-10-03T22:41:36.161889Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 38.497ms of CPU over a 38.77975ms hold
+[2026-10-03T22:41:36.621917Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 21%, 1/1 armed)
+[2026-10-03T22:41:36.888222Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.737ms of CPU over a 55.285458ms hold
+[2026-10-03T22:41:37Z INFO  limina::window::diag] capture: wrote IOSurface id=841 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:41:37.655008Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 8%, 1/1 armed)
+[2026-10-03T22:41:38.168184Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 38.531ms of CPU over a 40.112666ms hold
+[2026-10-03T22:41:38.276958Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 34%, 1/1 armed)
+[2026-10-03T22:41:39.725228Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 41.117ms of CPU over a 51.071208ms hold
+[2026-10-03T22:41:40.345308Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[2026-10-03T22:41:40Z INFO  limina::window::diag] capture: wrote IOSurface id=841 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:41:41.874377Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 35.516ms of CPU over a 36.758416ms hold
+[2026-10-03T22:41:42.183945Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 31%, 1/1 armed)
+[2026-10-03T22:41:43Z INFO  limina::window::diag] capture: wrote IOSurface id=848 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:41:43.368734Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.494ms of CPU over a 33.521583ms hold
+[2026-10-03T22:41:43.601068Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 26%, 1/1 armed)
+[2026-10-03T22:41:44.812970Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 gave back the band (share 76%, 0/1 armed)
+[2026-10-03T22:41:46.228353Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 10%, 1/1 armed)
+[2026-10-03T22:41:46.276225Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.862ms of CPU over a 47.861875ms hold
+[2026-10-03T22:41:46.429252Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 34%, 1/1 armed)
+[2026-10-03T22:41:46.809529Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.844ms of CPU over a 34.026666ms hold
+[2026-10-03T22:41:49.088917Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 2%, 1/1 armed)
+[2026-10-03T22:41:49.965912Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 35.03ms of CPU over a 35.020208ms hold
+[2026-10-03T22:41:50.740855Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 32%, 1/1 armed)
+[2026-10-03T22:41:50Z INFO  limina::window::diag] capture: wrote IOSurface id=841 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:41:52.235896Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 37.433ms of CPU over a 37.564541ms hold
+[2026-10-03T22:41:53.187107Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 4%, 1/1 armed)
+[2026-10-03T22:41:53Z INFO  limina::window::diag] capture: wrote IOSurface id=848 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:41:55.322005Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.378ms of CPU over a 33.565291ms hold
+[2026-10-03T22:41:55.669404Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 8%, 1/1 armed)
+[2026-10-03T22:42:00Z INFO  limina::window::diag] capture: wrote IOSurface id=841 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:42:12.040822Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 34.585ms of CPU over a 34.590125ms hold
+[2026-10-03T22:42:12.840622Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 30%, 1/1 armed)
+[2026-10-03T22:42:13.839588Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 39.007ms of CPU over a 38.998208ms hold
+[2026-10-03T22:42:14.275240Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 28%, 1/1 armed)
+[2026-10-03T22:42:15.512709Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.91ms of CPU over a 33.92275ms hold
+[2026-10-03T22:42:15.689581Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 34%, 1/1 armed)
+[LIMINA-KK-GUARD] periodic encoder guard: checks=5336 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=982 table=79/8192 | context: canary=G13X+0x8f0 born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+[2026-10-03T22:42:16Z INFO  limina::window::diag] capture: wrote IOSurface id=848 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:42:17.481167Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 43.799ms of CPU over a 43.792625ms hold
+[2026-10-03T22:42:17.720823Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 9%, 1/1 armed)
+[2026-10-03T22:42:17.978646Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 50.07ms of CPU over a 50.065125ms hold
+[2026-10-03T22:42:18.133176Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 33%, 1/1 armed)
+[2026-10-03T22:42:19.426771Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.551ms of CPU over a 33.588ms hold
+[2026-10-03T22:42:19.772182Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 6%, 1/1 armed)
+[LIMINA-KK-GUARD] periodic encoder guard: checks=5426 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=1000 table=79/8192 | context: canary=G13X+0x8f0 born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+[2026-10-03T22:43:00Z INFO  limina::window::diag] capture: wrote IOSurface id=842 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:43:12.051495Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 39.834ms of CPU over a 40.176041ms hold
+[2026-10-03T22:43:12.312475Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 32%, 1/1 armed)
+[2026-10-03T22:43:12.438467Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 38.627ms of CPU over a 45.694416ms hold
+[2026-10-03T22:43:12.717392Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 29%, 1/1 armed)
+[2026-10-03T22:43:12.884430Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 46.605ms of CPU over a 46.598916ms hold
+[2026-10-03T22:43:13.133250Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 10%, 1/1 armed)
+[2026-10-03T22:43:14.535418Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 37.833ms of CPU over a 39.007041ms hold
+[2026-10-03T22:43:15.187559Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 4%, 1/1 armed)
+[LIMINA-KK-GUARD] periodic encoder guard: checks=5461 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=1007 table=79/8192 | context: canary=G13X+0x8f0 born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+[2026-10-03T22:44:00Z INFO  limina::window::diag] capture: wrote IOSurface id=841 2560x1440 to <scratch>/kde.png (nonzero_px=3686400)
+[2026-10-03T22:44:31Z INFO  limina::control] control: guest agent disconnected: limina-agent/0.6.1
+[2026-10-03T22:44:31.933409Z INFO  krun_devices::virtio::vsock::muxer] deferring proxy removal: 13059457872814493001
+[2026-10-03T22:44:31Z INFO  limina::control] control: guest agent disconnected: limina-agent-session/0.1.2
+[2026-10-03T22:44:31.946287Z INFO  krun_devices::virtio::vsock::muxer] deferring proxy removal: 13059457877109460297
+[LIMINA-KK-GUARD] periodic encoder guard: checks=5486 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=1012 table=79/8192 | context: canary=G13X+0x8f0 born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+[2026-10-03T22:44:32Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-03T22:44:32Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-03T22:44:32.029159Z INFO  krun_devices::virtio::snd::worker] snd: host output latency 1346 frames (28.0 ms at 48 kHz)
+[2026-10-03T22:44:32Z INFO  limina::window::present] window: <- audio 0 start
+[2026-10-03T22:44:32Z INFO  limina::window::media_session] media: announced the VM as a player (Limina)
+[2026-10-03T22:44:32Z INFO  limina::window::present] window: <- audio 0 audible
+[2026-10-03T22:44:32Z INFO  limina::window::diag] capture: wrote IOSurface id=622 2560x1440 to <scratch>/kde.png (nonzero_px=131132)
+[2026-10-03T22:44:32.587884Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 35.067ms of CPU over a 35.23925ms hold
+[2026-10-03T22:44:32.629323Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=7
+[2026-10-03T22:44:32Z INFO  limina::window::present] window: <- audio 0 stop
+[2026-10-03T22:44:32Z INFO  limina::window::present] window: <- audio 0 release
+[2026-10-03T22:44:32.949138Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 3%, 1/1 armed)
+[2026-10-03T22:44:33Z INFO  limina::window::diag] capture: wrote IOSurface id=622 2560x1440 to <scratch>/kde.png (nonzero_px=3093)
+[2026-10-03T22:44:34Z INFO  limina::qga::client] qga: no guest agent answered on org.qemu.guest_agent.0 (the guest agent did not answer in time); re-probing every 30s
+[2026-10-03T22:44:34Z INFO  limina::window::diag] capture: wrote IOSurface id=621 2560x1440 to <scratch>/kde.png (nonzero_px=3077)
+[2026-10-03T22:44:34.464455Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=6
+[2026-10-03T22:44:34.476381Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=4
+[2026-10-03T22:44:34.574218Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 36.775ms of CPU over a 48.89625ms hold
+[LIMINA] KK sampler slot retired (#1, index 3)
+[2026-10-03T22:44:34.594115Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=2
+[2026-10-03T22:44:35Z INFO  limina::window::diag] capture: wrote IOSurface id=622 2560x1440 to <scratch>/kde.png (nonzero_px=31299)
+[2026-10-03T22:44:35.815023Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 18%, 1/1 armed)
+[2026-10-03T22:44:35.983789Z INFO  krun::vmm::macos::vstate] vCPU 0 received reboot (PSCI SYSTEM_RESET)
+[2026-10-03T22:44:35.983886Z INFO  krun::vmm] Vmm is stopping.
+[2026-10-03T22:44:36Z INFO  limina::fido::usb] fido-usb: worker gadget connection ended; retrying
+[2026-10-03T22:44:36Z INFO  limina::window::present] window: control channel closed (worker gone)
+[2026-10-03T22:44:36Z INFO  limina::moc::usb] moc: worker gadget connection ended; retrying
+[2026-10-03T22:44:36Z INFO  limina::supervisor] guest rebooted (worker exit 125)
+time="2026-10-03T19:44:36-03:00" level=error msg="cannot receive packets from /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/krun-net-56509-0.sock, disconnecting: cannot read size from socket: read unixgram /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-56480.sock: use of closed network connection"
+time="2026-10-03T19:44:36-03:00" level=error msg="gvproxy exiting: signal caught"
+time="2026-10-03T19:44:36-03:00" level=warning msg="bad log level \"\", falling back to \"info\""
+time="2026-10-03T19:44:36-03:00" level=info msg="gvproxy version v0.8.8"
+time="2026-10-03T19:44:36-03:00" level=info msg="waiting for clients..."
+[2026-10-03T22:44:36Z INFO  limina::gateway] death-pact watcher up (pid 57966) tying gvproxy 57965 to this supervisor
+[2026-10-03T22:44:36Z INFO  limina::gateway] gvproxy gateway up (pid 57965, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-56480.sock", ssh-port 2223)
+[2026-10-03T22:44:36Z INFO  limina::supervisor] VM worker started through launchd (pid 57969, job eti.noronha.limina.worker.56480.1); Ctrl-C to power off
+[2026-10-03T22:44:36Z INFO  limina::session] guest rebooted → relaunched the windowed VM worker (pid 57969)
+[2026-10-03T22:44:36Z INFO  limina::window] display: the guest rebooted; back to the firmware arrangement
+[2026-10-03T22:44:36.299775Z INFO  limina_vmm::krun] virtio-gpu virgl_flags = 0xb5b, software_2d = false (coexist = true), vrend max_samples ceiling = 1
+[2026-10-03T22:44:36.299859Z INFO  limina_vmm::krun] virtio-gpu displays: 4 scanout(s), slot 0 connected at 2560x1440 as LMN/limina serial 0xaf9108dd
+[2026-10-03T22:44:36.299938Z INFO  limina_vmm::krun] virtio-input: keyboard fd=13, pointer fd=17, rel-pointer fd=21, touchpad fd=28 (TouchpadGeometry { width: 12480, height: 7680 })
+[2026-10-03T22:44:36.300423Z INFO  limina_vmm::krun] battery: mirroring the host battery into the guest
+[2026-10-03T22:44:36.300449Z INFO  limina_vmm::krun::console] spice: exposed the guest agent port com.redhat.spice.0
+[2026-10-03T22:44:36.300471Z INFO  limina_vmm::krun::console] qga: exposed the guest agent port org.qemu.guest_agent.0
+[2026-10-03T22:44:36.300529Z INFO  limina_vmm::krun] USB: cold-plugging the FIDO authenticator gadget (the supervisor's link (fd 35))
+[2026-10-03T22:44:36.300571Z INFO  limina_vmm::fido_usb] fido-usb: supervisor connected
+[2026-10-03T22:44:36.300581Z INFO  limina_vmm::krun] USB: cold-plugging the fingerprint reader gadget (the supervisor's link (fd 36))
+[2026-10-03T22:44:36.300610Z INFO  limina_vmm::krun] USB: cold-plugging the HID keyboard gadget (the pre-virtio-input keyboard)
+[2026-10-03T22:44:36.300625Z INFO  limina_vmm::moc_usb] moc-usb: supervisor connected
+[2026-10-03T22:44:36.300676Z INFO  limina_vmm::krun] building microVM: 4 vcpu(s), 6144 MiB, 1 disk(s), 0 share(s), display=true, boot=EFI firmware
+[2026-10-03T22:44:36Z INFO  limina::fido::usb] fido-usb: connected to the worker gadget at Link(the worker's link)
+[2026-10-03T22:44:36Z INFO  limina::moc::usb] moc: connected to the worker gadget at Link(the worker's link)
+[2026-10-03T22:44:36.303516Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms, at most 1 armed at once)
+[2026-10-03T22:44:36.304004Z INFO  limina_vmm::krun] display-resize: listening at the supervisor's link (fd 37)
+[2026-10-03T22:44:36.304107Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+[2026-10-03T22:44:36.304271Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+[2026-10-03T22:44:36.345603Z WARN  krun_devices::virtio::mmio] virtio queue marked ready with QueueNum=0; defaulting to max_size=256
+[virglrs] limina GPU budget: cap 12288 MiB, refusal stops the context
+[virglrs] vrend: hardware video decode h264 hevc vp9
+[virglrs] VREND_MAX_SAMPLES: advertising max_samples 1, not 4
+[virglrs] vrend: OpenGL ES 3.1 Mesa 26.3.0-devel (git-d39e8bff0f) (gles 31), 152 formats, 71 features, iosurface storage available
+[2026-10-03T22:44:36.583547Z INFO  limina_display::iosurface] window: scanout surfaces scoped via Mach port (name eti.noronha.limina.56480)
+[2026-10-03T22:44:36.584547Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [31, 123, 182] (640x480 BGRX)
+[2026-10-03T22:44:36Z INFO  limina::window::present] window: <- surface 31 123 640 480 0
+[2026-10-03T22:44:36Z INFO  limina::window] display: a fresh worker has the device; re-asserting the arrangement
+[2026-10-03T22:44:36Z INFO  limina::window] display-control: pushed "display id=0 connected=0" to the guest
+[2026-10-03T22:44:36.586899Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: None, position: None, connected: Some(false), edid: None }
+[2026-10-03T22:44:36.587115Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [343, 428, 433] (1280x800 BGRX)
+[2026-10-03T22:44:36Z INFO  limina::window::present] window: <- surface 343 428 1280 800 0
+[2026-10-03T22:44:36Z INFO  limina::window::diag] capture: wrote IOSurface id=31 640x480 to <scratch>/kde.png (nonzero_px=0)
+[2026-10-03T22:44:36Z INFO  limina::window] display-control: pushed "display id=0 size=2560x1440 connected=1 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-10-03T22:44:36.655631Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((2560, 1440)), position: None, connected: Some(true), edid: Some(EdidSpec { refresh_hz: 60, dpi: 123, vendor: [76, 77, 78], product_id: 32795, serial: 1816328933, name: "BenQ LCD", serial_string: None, range: None, modes: [], alt_mode: None }) }
+[2026-10-03T22:44:37Z INFO  limina::window::media_session] media: retired the VM's media session
+[2026-10-03T22:44:37.867086Z INFO  krun_devices::virtio::gpu::worker] gpu worker: reset drain quiesced in 8.25µs
+[2026-10-03T22:44:37.867149Z INFO  krun_devices::virtio::gpu::worker] gpu worker: device reset with a quiescent session — PARKED for classification at the next activation
+[2026-10-03T22:44:38.149409Z INFO  krun_devices::virtio::gpu::worker] gpu worker: dropping the parked session — this activation programmed its queues (real driver re-init)
+[2026-10-03T22:44:38Z INFO  limina::window::present] window: <- guestdriver
+[2026-10-03T22:44:38Z INFO  limina::window] display: the guest's own driver has the GPU; the scanout pool is ours to arrange
+[2026-10-03T22:44:38.153159Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: None, position: None, connected: Some(false), edid: None }
+[2026-10-03T22:44:38Z INFO  limina::window] display-control: pushed "display id=0 connected=0" to the guest
+[2026-10-03T22:44:38Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-03T22:44:38.159595Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [832, 833, 834] (2560x1440 BGRX)
+[2026-10-03T22:44:38Z INFO  limina::window::present] window: <- surface 832 833 2560 1440 0
+[2026-10-03T22:44:38Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-03T22:44:38Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-03T22:44:38Z INFO  limina::window] display-control: pushed "display id=0 size=2560x1440 connected=1 refresh=60 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-10-03T22:44:38.222277Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((2560, 1440)), position: None, connected: Some(true), edid: Some(EdidSpec { refresh_hz: 60, dpi: 123, vendor: [76, 77, 78], product_id: 32795, serial: 1816328933, name: "BenQ LCD", serial_string: None, range: None, modes: [], alt_mode: None }) }
+[2026-10-03T22:44:38Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-03T22:44:38.226718Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [835, 836, 839] (2560x1440 BGRX)
+[2026-10-03T22:44:38Z INFO  limina::window::present] window: <- surface 835 836 2560 1440 0
+[2026-10-03T22:44:38.367850Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 33%, 1/1 armed)
+[2026-10-03T22:44:38Z INFO  limina::window::diag] capture: wrote IOSurface id=832 2560x1440 to <scratch>/kde.png (nonzero_px=0)
+[2026-10-03T22:44:39.341436Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 36.3ms of CPU over a 42.513083ms hold
+[2026-10-03T22:44:39Z INFO  limina::window::diag] capture: wrote IOSurface id=839 2560x1440 to <scratch>/kde.png (nonzero_px=0)
+[2026-10-03T22:44:39.799978Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 9%, 1/1 armed)
+[2026-10-03T22:44:40Z INFO  limina::window::diag] capture: wrote IOSurface id=835 2560x1440 to <scratch>/kde.png (nonzero_px=128928)
+[2026-10-03T22:44:41Z INFO  limina::window::diag] capture: wrote IOSurface id=835 2560x1440 to <scratch>/kde.png (nonzero_px=129012)
+[2026-10-03T22:44:41.917489Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 40.468ms of CPU over a 42.429291ms hold
+[2026-10-03T22:44:42.258780Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 19%, 1/1 armed)
+[2026-10-03T22:44:42.894867Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.552ms of CPU over a 33.858083ms hold
+[2026-10-03T22:44:42Z INFO  limina::window::diag] capture: wrote IOSurface id=839 2560x1440 to <scratch>/kde.png (nonzero_px=147975)
+[2026-10-03T22:44:42Z INFO  limina::control] control: guest agent connected: limina-agent/0.6.1 caps=["heartbeat", "shutdown", "mempressure", "vcpu", "timesync", "fido", "powerprofile"] pagesize=16384
+[2026-10-03T22:44:43.675080Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 29%, 1/1 armed)
+[2026-10-03T22:44:43Z INFO  limina::window::diag] capture: wrote IOSurface id=835 2560x1440 to <scratch>/kde.png (nonzero_px=142381)
+[2026-10-03T22:44:44Z INFO  limina::window::diag] capture: wrote IOSurface id=835 2560x1440 to <scratch>/kde.png (nonzero_px=131132)
+[2026-10-03T22:44:45.527095Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 gave back the band (share 74%, 0/1 armed)
+[2026-10-03T22:44:45Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-03T22:44:45Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-03T22:44:45.743271Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=2 init=0x2 name=Some("kwin_wayland\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:44:45.743348Z INFO  krun_devices::virtio::gpu::virtio_gpu] vrend context ctx=2 (capset 2): Global-ring fences now retire through virglrenderer
+[2026-10-03T22:44:45.754708Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=3 init=0x2 name=Some("kwin_wayland\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:44:45.756297Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=3
+[2026-10-03T22:44:45.896484Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=3 init=0x4 name=Some("kwin_wayland\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[virglrs] ctx 3: ring 1 fences are ordered on queue 0x792527260
+[2026-10-03T22:44:45.928971Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=5 init=0x2 name=Some("kwin_wayland\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:44:46.132195Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 15%, 1/1 armed)
+[LIMINA-SENTINEL] kk kk-sentinel-1 armed; dealloc sentinel self-test: OK
+[virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 850); renders land in the surface directly
+[virglrs] vrend: iosurface scanout: 2560x1440 B8G8R8X8_UNORM (IOSurface id 851); renders land in the surface directly
+[LIMINA-CTX] compute encoder class AGXG13XFamilyComputeContext_mtlnext from /System/Library/Extensions/AGXMetalG13X.bundle/Contents/MacOS/AGXMetalG13X (UUID E368C402-9A93-35F5-AE47-B1E561825A06): _impl@72 _allocator@104 _command_buffer@64; pass-state canary at +0x8f0 (G13X), armed once the +0xc0 relation is seen
+[LIMINA-CTX] pass-state canary armed (canary=G13X+0x8f0): [+0x8f0]=0x11dec8174 is [+0x8e8]+0xc0 as beginComputePass writes it
+[LIMINA-KK-GUARD] periodic encoder guard: checks=2 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=1 table=1/8192 | context: canary=G13X+0x8f0 born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+[2026-10-03T22:44:46.462574Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=6 init=0x2 name=Some("ksplashqml\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:44:46.463222Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=7 init=0x2 name=Some("Xwayland\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:44:46.465604Z WARN  krun_devices::virtio::gpu::virtio_gpu] present fence injection failed (resource 5): rutabaga component failed with error -22; presenting now
+[2026-10-03T22:44:46.465680Z INFO  krun_devices::virtio::gpu::virtio_gpu] virtio-gpu: scanout 0 flushes carry no fence; nothing holds the guest off buffers on glass
+[2026-10-03T22:44:46Z INFO  limina::window::present] window: <- held 0 0
+[2026-10-03T22:44:46.465877Z WARN  krun_devices::virtio::gpu::worker] virtio-gpu: control queue drain ran 186 ms over 1 pass(es); nothing else on the worker ran meanwhile
+[2026-10-03T22:44:46.534988Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 gave back the band (share 76%, 0/1 armed)
+[2026-10-03T22:44:46.568442Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=9 init=0x2 name=Some("ibus-x11\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T22:44:46.601897Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=9
+[2026-10-03T22:44:46Z INFO  limina::window::diag] capture: wrote IOSurface id=850 2560x1440 to <scratch>/kde.png (nonzero_px=182)
+[2026-10-03T22:44:47.149208Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 33%, 1/1 armed)
+[2026-10-03T22:45:25.790115Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=6
+[2026-10-03T22:48:50.087909Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.36ms of CPU over a 33.354708ms hold
+[2026-10-03T22:48:50.377480Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 32%, 1/1 armed)
+[2026-10-03T22:49:30.598613Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.393ms of CPU over a 33.383166ms hold
+[2026-10-03T22:49:30.815557Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 32%, 1/1 armed)
+[2026-10-03T22:52:52.596456Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.351ms of CPU over a 33.338541ms hold
+[2026-10-03T22:52:53.001493Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 31%, 1/1 armed)
+[2026-10-03T22:54:37Z INFO  limina::qga::client] qga: guest agent 10.2.2 answered on org.qemu.guest_agent.0 (43 commands)
+[2026-10-03T22:54:37Z INFO  limina::qga::client] qga: guest is Fedora Linux 44 (Workstation Edition) (kernel 7.1.13-limina16k, aarch64) as fedora; addresses 192.168.127.2; logged in: claude
+[2026-10-03T22:54:37Z INFO  limina::qga::client] qga: guest filesystems: /boot/efi (vfat) 0.0/0.5 GiB, /boot (ext4) 1.0/1.8 GiB, / (btrfs) 13.9/37.1 GiB
+[2026-10-03T22:54:37Z INFO  limina::control] qga: trimmed 3 guest filesystem(s); the agent walked 24.6 GiB of free ranges (host space returned is smaller)
+[2026-10-03T22:58:23.877315Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 gave back the band (share 61%, 0/1 armed)
+[2026-10-03T22:58:52.524492Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 31%, 1/1 armed)
+[2026-10-03T23:03:19.933982Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 gave back the band (share 68%, 0/1 armed)
+[2026-10-03T23:04:29Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-03T23:04:29Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-03T23:04:29.142586Z INFO  krun_devices::virtio::snd::worker] snd: host output latency 1346 frames (28.0 ms at 48 kHz)
+[2026-10-03T23:04:29Z INFO  limina::window::present] window: <- audio 0 start
+[2026-10-03T23:04:29Z INFO  limina::window::media_session] media: announced the VM as a player (Limina)
+[2026-10-03T23:04:29.212891Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=6 init=0x2 name=Some("xwaylandvideobr\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-03T23:04:29Z INFO  limina::window::present] window: <- audio 0 audible
+[2026-10-03T23:04:30.339525Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 32%, 1/1 armed)
+[2026-10-03T23:04:31Z INFO  limina::window::present] window: <- audio 0 silent
+[2026-10-03T23:04:36Z INFO  limina::window::present] window: <- audio 0 stop
+[2026-10-03T23:04:36Z INFO  limina::window::present] window: <- audio 0 release
+[2026-10-03T23:04:41Z INFO  limina::window::media_session] media: retired the VM's media session

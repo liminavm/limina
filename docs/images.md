@@ -71,15 +71,22 @@ guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and 
 
 Two facts the table cannot show:
 
-- **The guest agents are not RPMs and so are not in the table.** All three F44 enhanced images
-  carry **`limina-agent` 0.6.1** and **`limina-agent-session` 0.1.2**, installed to
-  `/usr/local/bin` with their units (payload **r31**, delivered 2026-10-03; the dogfood guest is one
-  step behind on the agent at 0.6.0, taken by hand on 2026-09-03 straight from 0.4.0 — its first
-  agent with the `vcpu` cap — but carries r31's `limina-agent-session` 0.1.2, installed by hand
-  2026-10-03, with 0.1.1 kept beside it as `limina-agent-session.0.1.1.bak`). 0.1.2 relays the
-  session's idle inhibitors (`idleinhibit`, the host's keep-the-display-awake signal) and shuts a
-  host channel down rather than dropping one half of it; 0.1.1's drop-after-accept backoff (r27)
-  stops a host that drops a channel within 5 s of opening it from turning into a connect storm.
+- **The guest agents are not RPMs and so are not in the table.** All four F44 enhanced images
+  (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) carry **`limina-agent` 0.6.1**
+  and **`limina-agent-session` 0.1.3**, installed to `/usr/local/bin` with their units (payload
+  **r32**, delivered 2026-10-03). The dogfood guest is behind on both:
+  - `limina-agent` 0.6.0, taken by hand on 2026-09-03 straight from 0.4.0 (its first agent with
+    the `vcpu` cap);
+  - `limina-agent-session` 0.1.2, installed by hand 2026-10-03, with 0.1.1 kept beside it as
+    `limina-agent-session.0.1.1.bak`.
+
+  0.1.3 reads idle inhibitors from every source the desktop offers (the compositor through
+  ext-idle-notify-v1, gnome-session, PowerDevil) and reports idle inhibited when any of them says
+  so; 0.1.2 read gnome-session alone. Earlier helper changes still in effect:
+  - 0.1.2 started the idle-inhibit relay (`idleinhibit`, the host's keep-the-display-awake
+    signal), and shuts a host channel down rather than dropping one half of it;
+  - 0.1.1's drop-after-accept backoff (r27) stops a host that drops a channel within 5 s of
+    opening it from turning into a connect storm.
   Check the helper with `limina-agent-session --version`. 0.6.1 added
   the CPU utilisation and stall rates the host's vCPU grow rule needs; 0.6.0 added the
   `powerprofile` capability (the GNOME power-mode toggle reaching host policy); 0.5.0 added `vcpu`,
@@ -126,11 +133,15 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r31.tar.zst`** (r31, 2026-10-03: host-side
-repack of r30 with `limina-agent-session` 0.1.2 at limina `dcccafb6` — the idle-inhibitor relay.
-Kernel, mesa and `limina-agent` identical to r30; the installer is r30's, so it predates
-`e725b8d8`. Applied to all three F44 enhanced images (`.bak-pre-r31.raw` CoW backups), both agent
-hashes verified, kernel install short-circuited, no trial boot owed.) Previous: r30 (2026-10-02: host-side
+**Current payload: `payload/limina-guest-tools-f44-r32.tar.zst`** (r32, 2026-10-03: host-side
+repack of r31 with `limina-agent-session` 0.1.3 at limina `427ea0d8`, which reads idle inhibitors
+from the compositor, gnome-session and PowerDevil. Kernel, mesa, `limina-agent` and the installer
+are identical to r31; the installer is still r30's, so it predates `e725b8d8`. Applied to all four F44 enhanced images, including the new
+`enhanced.kde` (`.bak-pre-r32.raw` CoW backups), with both agent hashes verified; the kernel
+install short-circuited and no trial boot is owed.) Previous: r31 (2026-10-03: host-side
+repack of r30 with `limina-agent-session` 0.1.2 at limina `dcccafb6`, the gnome-session
+idle-inhibitor relay; applied to the three F44 enhanced images of the time, `.bak-pre-r31.raw`
+CoW backups.) Previous: r30 (2026-10-02: host-side
 repack of r29 with mesa `26.2.3-2.limina` — the venus fix for a submission that waits and signals
 one binary semaphore, which segfaulted gfxrecon-replay on `-1`. Kernel and agents identical to
 r29; applied to all three F44 enhanced images (`.bak-pre-r30.raw` CoW backups).) Previous: r29
@@ -460,6 +471,33 @@ Two gotchas that cost a run each, both of the same "verify, don't assume" shape:
 Run it like any enhanced image: `cargo xtask run --disk Fedora-Workstation-44.enhanced.synoik.raw`
 (the worker log is per-disk — `/tmp/limina-worker-<disk>.log` — and `/tmp/enhanced-efi-kk-worker.log` is a symlink to whichever VM booted last; `LIMINA_BOOT_LOG=<path>` still overrides).
 
+#### `Fedora-Workstation-44.enhanced.kde.raw` — the KDE Plasma image (added 2026-10-03)
+
+The image for anything that behaves differently under KDE: KWin's Wayland protocols, PowerDevil,
+Plasma's own D-Bus services. Built to verify the session helper's idle-inhibit sources
+(`spikes/idle-inhibit-sources/`).
+
+- **Base**: CoW clone of `Fedora-Workstation-44.enhanced.test.raw` plus
+  `dnf install plasma-desktop plasma-workspace-wayland powerdevil kwin konsole mpv` (Plasma 6.7,
+  KWin 6.7.5), with `swayidle` and `wayland-utils` as probes. GDM stays the display manager:
+  `/var/lib/AccountsService/users/claude` has `Session=plasma`, so autologin comes up in Plasma.
+  The GNOME session is still installed; switch back by editing that file.
+- **`KWIN_COMPOSE=Q` in `/etc/environment`: KWin composites with QPainter.** With GL compositing
+  Plasma never finishes starting on this stack. KWin loops submitting and waiting on virtio-gpu
+  fences, never returns to its event loop, and plasmashell and kded6 time out behind it, leaving a
+  black screen with a cursor (`spikes/kde-kwin-gl-hang/`). Remove the
+  line to reproduce it. Under QPainter, mpv's GPU video outputs abort (`egl: failed to create dri2
+  screen`); use `mpv --vo=wlshm`.
+- **Test conveniences, not KDE defaults**:
+  - screen autolock and lock-on-resume are off (`kscreenlockerrc`), as is turning the display off
+    when idle (`powerdevilrc`). An idle test otherwise ends at the lock screen after five minutes,
+    and nothing can map a window behind it;
+  - `/etc/firefox/policies/policies.json` allows audible autoplay, because Firefox inhibits idle
+    only for audible video.
+
+Run it like any enhanced image: `cargo xtask run --disk Fedora-Workstation-44.enhanced.kde.raw`.
+Plasma's Wayland socket is `wayland-0`.
+
 ##### Rebuilding it (and retargeting to F45)
 
 The guest-side work is scripted: **`scripts/provision/f44/install-synoik-session.sh`**, which
@@ -536,6 +574,7 @@ cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw
 | `Fedora-Workstation-44.stock.test.raw` | **Stock-tier L2 image** — frozen CoW snapshot of `accessible` (`DEFAULT` for `LIMINA_FEDORA_REL=44`; also the seated baseline-3D vehicle). | ✅ built; `efi_boots_to_userspace` GREEN 2026-06-29 |
 | `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard *(historical — mutter left the delivery 2026-07-11 and is stock going forward; see the note above)*, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. **Respun 2026-07-04 to kernel `7.1.2-limina16k` + mesa `26.1.3-3` (dogfood parity — see the respin note above); versions in this row are the 2026-06-29 baseline.** **REBUILT FRESH 2026-07-05** from `accessible` per the procedure above (the prior `enhanced.raw`/`.test.raw` had accumulated bad state — the 16k kernel failed its `/boot/efi` mount and dropped to the rescue BLS entry; a clean clone+install booted `7.1.2-limina16k` with `/boot/efi` mounted, venus seated on the new KK). | ✅ finalized 2026-06-29; respun 2026-07-04; rebuilt 2026-07-05 |
 | `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_efi_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. **Recloned 2026-07-05 from the fresh rebuild** (see the `enhanced.raw` note). | ✅ **L2 GREEN 7/7 2026-06-29** (venus×3 + replay×3 + reset; replay tooling baked in); recloned 2026-07-05 |
+| `Fedora-Workstation-44.enhanced.kde.raw` | **KDE Plasma image** — `enhanced.test` + Plasma 6.7 from the F44 repos, autologin into Plasma, KWin on QPainter compositing (GL compositing hangs at startup). See its section above. | ✅ built 2026-10-03; idle-inhibit paths verified |
 
 **All five F44 images above plus `enhanced.synoik` boot with a zero GRUB menu timeout**
 (`scripts/provision/trim-boot-delays.sh`, applied 2026-09-16; `make-accessible.sh` bakes the same

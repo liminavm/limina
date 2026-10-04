@@ -1,0 +1,224 @@
+== kwin stack
+[<0>] dma_fence_default_wait+0x1e4/0x2a0
+[<0>] dma_fence_wait_timeout+0x1c8/0x490
+[<0>] dma_resv_wait_timeout+0xcc/0x218
+[<0>] virtio_gpu_wait_ioctl+0x4c/0x110
+[<0>] drm_ioctl_kernel+0xc8/0x138
+[<0>] drm_ioctl+0x284/0x5c0
+[<0>] __arm64_sys_ioctl+0xac/0x118
+[<0>] invoke_syscall.constprop.0+0xac/0x110
+[<0>] el0_svc_common.constprop.0+0x40/0xf0
+[<0>] do_el0_svc+0x24/0x40
+[<0>] el0_svc+0x40/0x198
+[<0>] el0t_64_sync_handler+0xa0/0xf0
+[<0>] el0t_64_sync+0x1b0/0x1b8
+== irq fence
+fence 17372444 17372444
+== clients
+             command  tgid dev master a   uid      magic                                                             name                   id
+        kwin_wayland  1328 128   n    n  1000          0                                                          <unset>                    2
+        kwin_wayland  1328 128   n    n  1000          0                                                          <unset>                    4
+      systemd-logind   927   0   y    y     0          0                                                          <unset>                   11
+        kwin_wayland  1328   0   n    y  1000          1                                                          <unset>                   12
+            Xwayland  1411 128   n    n  1000          0                                                          <unset>                   14
+        kwin_wayland  1328   0   n    n  1000          0                                                          <unset>                   15
+     xwaylandvideobr  2275 128   n    n  1000          0                                                          <unset>                   17
+== state
+plane[38]: plane-0
+	crtc=crtc-0
+	fb=69
+		allocated by = kwin_wayland
+		refcount=2
+		format=XR24 little-endian (0x34325258)
+		modifier=0x0
+		size=2560x1440
+		layers:
+			size[0]=2560x1440
+			pitch[0]=10240
+			offset[0]=0
+			obj[0]:
+				name=0
+				refcount=3
+				start=000403cd
+				size=14745600
+				imported=no
+				pages_pin_count=0
+				pages_use_count=1
+				vmap_use_count=0
+				vaddr=0000000000000000
+	crtc-pos=2560x1440+0+0
+	src-pos=2560.000000x1440.000000+0.000000+0.000000
+	rotation=1
+	normalized-zpos=0
+	color-encoding=ITU-R BT.601 YCbCr
+	color-range=YCbCr limited range
+	color_mgmt_changed=0
+	color-pipeline=0
+plane[39]: plane-1
+	crtc=(null)
+	fb=0
+	crtc-pos=0x0+0+0
+	src-pos=0.000000x0.000000+0.000000+0.000000
+	rotation=1
+	normalized-zpos=0
+	color-encoding=ITU-R BT.601 YCbCr
+	color-range=YCbCr limited range
+	color_mgmt_changed=0
+	color-pipeline=0
+plane[45]: plane-2
+	crtc=(null)
+	fb=0
+	crtc-pos=0x0+0+0
+	src-pos=0.000000x0.000000+0.000000+0.000000
+	rotation=1
+	normalized-zpos=0
+	color-encoding=ITU-R BT.601 YCbCr
+	color-range=YCbCr limited range
+	color_mgmt_changed=0
+	color-pipeline=0
+plane[46]: plane-3
+	crtc=(null)
+	fb=0
+	crtc-pos=0x0+0+0
+	src-pos=0.000000x0.000000+0.000000+0.000000
+	rotation=1
+	normalized-zpos=0
+	color-encoding=ITU-R BT.601 YCbCr
+	color-range=YCbCr limited range
+	color_mgmt_changed=0
+	color-pipeline=0
+plane[52]: plane-4
+	crtc=(null)
+	fb=0
+	crtc-pos=0x0+0+0
+	src-pos=0.000000x0.000000+0.000000+0.000000
+	rotation=1
+	normalized-zpos=0
+	color-encoding=ITU-R BT.601 YCbCr
+	color-range=YCbCr limited range
+	color_mgmt_changed=0
+	color-pipeline=0
+plane[53]: plane-5
+	crtc=(null)
+	fb=0
+	crtc-pos=0x0+0+0
+	src-pos=0.000000x0.000000+0.000000+0.000000
+	rotation=1
+	normalized-zpos=0
+	color-encoding=ITU-R BT.601 YCbCr
+	color-range=YCbCr limited range
+	color_mgmt_changed=0
+	color-pipeline=0
+plane[59]: plane-6
+	crtc=(null)
+	fb=0
+	crtc-pos=0x0+0+0
+	src-pos=0.000000x0.000000+0.000000+0.000000
+	rotation=1
+	normalized-zpos=0
+	color-encoding=ITU-R BT.601 YCbCr
+	color-range=YCbCr limited range
+	color_mgmt_changed=0
+	color-pipeline=0
+plane[60]: plane-7
+	crtc=(null)
+	fb=0
+	crtc-pos=0x0+0+0
+	src-pos=0.000000x0.000000+0.000000+0.000000
+	rotation=1
+	normalized-zpos=0
+	color-encoding=ITU-R BT.601 YCbCr
+	color-range=YCbCr limited range
+	color_mgmt_changed=0
+	color-pipeline=0
+crtc[42]: crtc-0
+	enable=1
+	active=1
+	self_refresh_active=0
+	planes_changed=1
+	mode_changed=0
+	active_changed=0
+	connectors_changed=0
+	color_mgmt_changed=0
+	plane_mask=1
+	connector_mask=1
+	encoder_mask=1
+	mode: "2560x1440": 60 278900 2560 2624 2816 3120 1440 1441 1444 1490 0x48 0xa
+	background_color=ffff000000000000
+crtc[49]: crtc-1
+	enable=0
+	active=0
+	self_refresh_active=0
+	planes_changed=0
+	mode_changed=0
+	active_changed=0
+	connectors_changed=0
+	color_mgmt_changed=0
+	plane_mask=0
+	connector_mask=0
+	encoder_mask=0
+	mode: "": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	background_color=ffff000000000000
+crtc[56]: crtc-2
+	enable=0
+	active=0
+	self_refresh_active=0
+	planes_changed=0
+	mode_changed=0
+	active_changed=0
+	connectors_changed=0
+	color_mgmt_changed=0
+	plane_mask=0
+	connector_mask=0
+	encoder_mask=0
+	mode: "": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	background_color=ffff000000000000
+crtc[63]: crtc-3
+	enable=0
+	active=0
+	self_refresh_active=0
+	planes_changed=0
+	mode_changed=0
+	active_changed=0
+	connectors_changed=0
+	color_mgmt_changed=0
+	plane_mask=0
+	connector_mask=0
+	encoder_mask=0
+	mode: "": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	background_color=ffff000000000000
+connector[43]: Virtual-1
+	crtc=crtc-0
+	self_refresh_aware=0
+	interlace_allowed=0
+	ycbcr_420_allowed=0
+	max_requested_bpc=0
+	colorspace=Default
+connector[50]: Virtual-2
+	crtc=(null)
+	self_refresh_aware=0
+	interlace_allowed=0
+	ycbcr_420_allowed=0
+	max_requested_bpc=0
+	colorspace=Default
+connector[57]: Virtual-3
+	crtc=(null)
+	self_refresh_aware=0
+	interlace_allowed=0
+	ycbcr_420_allowed=0
+	max_requested_bpc=0
+	colorspace=Default
+connector[64]: Virtual-4
+	crtc=(null)
+	self_refresh_aware=0
+	interlace_allowed=0
+	ycbcr_420_allowed=0
+	max_requested_bpc=0
+	colorspace=Default
+== rpm
+kwin-6.7.5-1.fc44.aarch64
+plasma-workspace-6.7.5-1.fc44.aarch64
+mesa-dri-drivers-26.2.3-2.limina.fc44.aarch64
+mesa-vulkan-drivers-26.2.3-2.limina.fc44.aarch64
+kernel-core-6.19.10-300.fc44.aarch64
+7.1.13-limina16k
