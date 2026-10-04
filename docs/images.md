@@ -74,11 +74,11 @@ Two facts the table cannot show:
 - **The guest agents are not RPMs and so are not in the table.** All four F44 enhanced images
   (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) carry **`limina-agent` 0.6.1**
   and **`limina-agent-session` 0.1.3**, installed to `/usr/local/bin` with their units (payload
-  **r32**, delivered 2026-10-03). The dogfood guest is behind on both:
-  - `limina-agent` 0.6.0, taken by hand on 2026-09-03 straight from 0.4.0 (its first agent with
-    the `vcpu` cap);
-  - `limina-agent-session` 0.1.2, installed by hand 2026-10-03, with 0.1.1 kept beside it as
-    `limina-agent-session.0.1.1.bak`.
+  **r32**, delivered 2026-10-03). The dogfood guest:
+  - is behind on `limina-agent`: 0.6.0, taken by hand on 2026-09-03 straight from 0.4.0 (its
+    first agent with the `vcpu` cap);
+  - is current on `limina-agent-session`: 0.1.3, the r32 binary installed by hand 2026-10-03, with
+    0.1.2 and 0.1.1 kept beside it as `limina-agent-session.0.1.2.bak` / `.0.1.1.bak`.
 
   0.1.3 reads idle inhibitors from every source the desktop offers (the compositor through
   ext-idle-notify-v1, gnome-session, PowerDevil) and reports idle inhibited when any of them says
