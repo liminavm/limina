@@ -30,6 +30,15 @@
 //! sticky-`in_error` class is gated on every run instead of only when a journal happens
 //! to carry such an entry (RED lever for that half: revert the `in_error` test in
 //! `vrend_decode_ctx_replay_submit`).
+//!
+//! The same body runs on two desktops: GNOME (mutter) on the enhanced golden, and KDE Plasma
+//! (KWin) on the KDE golden. KWin keeps GL queries in flight on every frame — it blocks on a
+//! render-time query after each page flip — so its world holds query objects and queries the
+//! host parked until a later fence. The snapshot's fence drain must finish those parked queries
+//! itself, because it holds the GPU worker thread that would otherwise answer them; a drain that
+//! cannot logs `fence drain TIMED OUT` and snapshots with the fence still pending. Both runs fail
+//! on that line. The gate catches a stalled drain when one happens; it cannot force a parked query
+//! into the drain window, since the guest is already s2idle-quiesced by then.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -97,14 +106,125 @@ fn ssh_retry(guest: &Guest, cmd: &str) -> String {
     panic!("ssh `{cmd}` kept failing: {last_err}");
 }
 
+/// What differs between the desktops this gate runs on.
+struct Desktop {
+    /// The test's name, for SKIP lines.
+    test: &'static str,
+    config: fn() -> anyhow::Result<GuestConfig>,
+    /// The compositor's process name: it must be the same process after the restore.
+    shell: &'static str,
+    /// A command prefix that runs what follows in the seated user's session.
+    session: &'static str,
+    /// The app launched as the stimulus, and a command counting its processes.
+    app: &'static str,
+    app_count: &'static str,
+    /// `busctl` arguments that wake a display the in-guest suspend blanked.
+    wake: &'static str,
+    /// Proves the compositor really runs on classic vrend; panics otherwise.
+    premise: fn(&Guest),
+    /// A guest command whose output explains a failed restore: what the compositor is doing.
+    forensics: &'static str,
+}
+
+const GNOME: Desktop = Desktop {
+    test: "classic_vrend_world_survives_snapshot_restore",
+    config: GuestConfig::seated_efi_fedora_from_env,
+    shell: "gnome-shell",
+    session: "env XDG_RUNTIME_DIR=/run/user/1000 \
+              DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+    app: "gnome-calculator",
+    app_count: "pgrep -fc gnome-calculator || true",
+    wake: "org.gnome.ScreenSaver /org/gnome/ScreenSaver org.gnome.ScreenSaver \
+           SimulateUserActivity",
+    premise: gnome_runs_on_virgl,
+    forensics: "p=$(pgrep -xo gnome-shell); ps -o pid,stat,pcpu,wchan:32 -p $p; \
+                sudo cat /proc/$p/stack",
+};
+
+const KDE: Desktop = Desktop {
+    test: "kde_vrend_world_survives_snapshot_restore",
+    config: GuestConfig::seated_efi_kde_from_env,
+    shell: "kwin_wayland",
+    // The seated user is whoever owns KWin, not assumed to be the ssh user.
+    session: "p=$(pgrep -xo kwin_wayland); u=$(ps -o user= -p $p); uid=$(id -u $u); \
+              sudo -u $u env XDG_RUNTIME_DIR=/run/user/$uid \
+              DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus",
+    app: "konsole",
+    app_count: "pgrep -xc konsole || true",
+    wake: "org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver \
+           SimulateUserActivity",
+    premise: kwin_runs_on_virgl,
+    forensics: "p=$(pgrep -xo kwin_wayland); ps -o pid,stat,pcpu,wchan:32 -p $p; \
+                sudo cat /proc/$p/stack; u=$(ps -o user= -p $p); uid=$(id -u $u); \
+                sudo -u $u env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus \
+                timeout 5 busctl --user call org.kde.KWin /KWin org.kde.KWin \
+                supportInformation >/dev/null 2>&1 && echo 'KWin answers D-Bus' \
+                || echo 'KWin does NOT answer D-Bus'",
+};
+
+/// A session that fell back to llvmpipe ("No virgl contexts available on host") has no classic
+/// world to lose and the whole test would pass vacuously forever — which is exactly how the
+/// original regression stayed hidden.
+fn gnome_runs_on_virgl(g: &Guest) {
+    let no_virgl = ssh_retry(
+        g,
+        "journalctl -b --no-pager 2>/dev/null | grep -c 'No virgl contexts available' || true",
+    );
+    let gbm = ssh_retry(
+        g,
+        "journalctl -b --no-pager 2>/dev/null | grep -m1 'Created gbm renderer' || echo none",
+    );
+    eprintln!("pre-suspend renderer probe: no-virgl-hits={no_virgl} gbm={gbm:?}");
+    assert_eq!(
+        no_virgl.trim(),
+        "0",
+        "the seated session fell back from virgl (\"No virgl contexts available on host\" \
+         in the guest journal) — there is no classic vrend world to gate; fix the L2 \
+         environment before trusting this test"
+    );
+}
+
+/// KWin names its compositing type and GL renderer itself. QPainter or llvmpipe would leave no
+/// classic world to gate.
+fn kwin_runs_on_virgl(g: &Guest) {
+    let info = ssh_retry(
+        g,
+        &format!(
+            "{} timeout 10 busctl --user call org.kde.KWin /KWin org.kde.KWin \
+             supportInformation 2>&1",
+            KDE.session
+        ),
+    );
+    let renderer = info
+        .split("\\n")
+        .find(|l| l.starts_with("OpenGL renderer string:"))
+        .unwrap_or("(no renderer line)");
+    eprintln!("pre-suspend renderer probe: {renderer}");
+    assert!(
+        info.contains("Compositing Type: OpenGL") && renderer.contains("virgl"),
+        "KWin is not compositing with OpenGL on virgl — there is no classic vrend world to \
+         gate. supportInformation:\n{info}"
+    );
+}
+
 #[test]
 fn classic_vrend_world_survives_snapshot_restore() {
-    if !limina_test::require_hvf_or_skip("classic_vrend_world_survives_snapshot_restore") {
+    run(&GNOME);
+}
+
+#[test]
+fn kde_vrend_world_survives_snapshot_restore() {
+    run(&KDE);
+}
+
+fn run(desktop: &Desktop) {
+    let test = desktop.test;
+    if !limina_test::require_hvf_or_skip(test) {
         return;
     }
     if limina_test::kosmickrisp_icd().is_none() {
         eprintln!(
-            "SKIPPED classic_vrend_world_survives_snapshot_restore: no KosmicKrisp ICD under \
+            "SKIPPED {test}: no KosmicKrisp ICD under \
              /Volumes/mesa-cs/build-kk (mount third_party/mesa-cs.sparseimage and ninja)"
         );
         return;
@@ -113,10 +233,10 @@ fn classic_vrend_world_survives_snapshot_restore() {
     // classic CmdSubmit3d traffic even live (proved by this test's own baseline assert), so
     // only the firmware boot — the guest's own kernel, production reality — hosts the world
     // this gate protects.
-    let base_cfg = match GuestConfig::seated_efi_fedora_from_env() {
+    let base_cfg = match (desktop.config)() {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("SKIPPED classic_vrend_world_survives_snapshot_restore: {e}");
+            eprintln!("SKIPPED {test}: {e}");
             return;
         }
     };
@@ -158,63 +278,51 @@ fn classic_vrend_world_survives_snapshot_restore() {
         .wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable through gvproxy");
     eprintln!("guest SSH up: {banner}");
-    g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
-        .expect("gnome-shell never appeared — the seated session didn't come up");
+    let shell = desktop.shell;
+    g1.ssh_poll(
+        &format!("pgrep -x {shell} >/dev/null"),
+        Duration::from_secs(180),
+    )
+    .unwrap_or_else(|e| panic!("{shell} never appeared — the seated session didn't come up: {e}"));
 
     // Let the shell's classic world reach steady state (objects created, state bound).
     std::thread::sleep(Duration::from_secs(10));
 
     // Guard the premise: this gate is only meaningful if the seated shell actually
-    // RUNS on classic vrend. A session that fell back to llvmpipe ("No virgl contexts
-    // available on host") has no classic world to lose and the whole test would pass
-    // vacuously forever — which is exactly how the original regression stayed hidden.
-    let no_virgl = ssh_retry(
-        &g1,
-        "journalctl -b --no-pager 2>/dev/null | grep -c 'No virgl contexts available' || true",
-    );
-    let gbm = ssh_retry(
-        &g1,
-        "journalctl -b --no-pager 2>/dev/null | grep -m1 'Created gbm renderer' || echo none",
-    );
-    eprintln!("pre-suspend renderer probe: no-virgl-hits={no_virgl} gbm={gbm:?}");
-    assert_eq!(
-        no_virgl.trim(),
-        "0",
-        "the seated session fell back from virgl (\"No virgl contexts available on host\" \
-         in the guest journal) — there is no classic vrend world to gate; fix the L2 \
-         environment before trusting this test"
-    );
+    // RUNS on classic vrend.
+    (desktop.premise)(&g1);
 
     // Baseline the oracle on the KNOWN-live world: the same stimulus we use
     // post-restore must produce classic submits here, or the oracle itself is
     // wrong for this environment and the post-restore reading means nothing.
     let pre_mark = g1.supervisor_log().len();
+    let (session, app) = (desktop.session, desktop.app);
     ssh_retry(
         &g1,
-        "export XDG_RUNTIME_DIR=/run/user/1000 \
-         DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus; \
-         systemd-run --user --collect --unit vrend-stim-pre \
-         env WAYLAND_DISPLAY=wayland-0 gnome-calculator >/dev/null 2>&1; echo stim",
+        &format!(
+            "{session} systemd-run --user --collect --unit vrend-stim-pre \
+             env WAYLAND_DISPLAY=wayland-0 {app} >/dev/null 2>&1; echo stim"
+        ),
     );
     std::thread::sleep(SETTLE);
     let pre_log = g1.supervisor_log();
     let pre_window = &pre_log[pre_mark.min(pre_log.len())..];
     let (pre_submits, pre_ticks) = tick_total(pre_window, "submits");
-    let pre_calc = ssh_retry(&g1, "pgrep -fc gnome-calculator || true");
+    let pre_app = ssh_retry(&g1, desktop.app_count);
     eprintln!(
-        "pre-suspend baseline: calc-procs={pre_calc} submits=+{pre_submits} \
+        "pre-suspend baseline: {app}-procs={pre_app} submits=+{pre_submits} \
          over {pre_ticks} ticks"
     );
     assert!(
         pre_submits > 0,
         "the LIVE seated session produced no classic submits under the stimulus \
-         (submits=+{pre_submits} over {pre_ticks} ticks, calc-procs={pre_calc}) — \
+         (submits=+{pre_submits} over {pre_ticks} ticks, {app}-procs={pre_app}) — \
          the oracle does not measure this environment; fix the stimulus/oracle \
          before trusting the gate"
     );
 
     // Pixel baseline for the P2 content oracle: the freshest presented frame of the
-    // live desktop (calculator open from the stimulus above).
+    // live desktop (the app open from the stimulus above).
     let pre_frame = g1
         .read_capture()
         .expect("no pre-suspend scanout capture — display capture not flowing");
@@ -232,12 +340,9 @@ fn classic_vrend_world_survives_snapshot_restore() {
     }
 
     let boot_id = ssh_retry(&g1, "cat /proc/sys/kernel/random/boot_id");
-    let shell_pid = ssh_retry(&g1, "pgrep -x gnome-shell | head -1");
-    assert!(
-        !shell_pid.is_empty(),
-        "no gnome-shell pid before the snapshot"
-    );
-    eprintln!("pre-suspend: boot_id={boot_id} gnome-shell pid={shell_pid}");
+    let shell_pid = ssh_retry(&g1, &format!("pgrep -xo {shell}"));
+    assert!(!shell_pid.is_empty(), "no {shell} pid before the snapshot");
+    eprintln!("pre-suspend: boot_id={boot_id} {shell} pid={shell_pid}");
 
     // --- Suspend through the production bracket (in-guest trigger, no button) ---
     ssh_retry(
@@ -254,6 +359,18 @@ fn classic_vrend_world_survives_snapshot_restore() {
         "the seated guest should suspend (worker exit 126); got {outcome:?}\n\
          === supervisor+worker log ===\n{}",
         g1.supervisor_log()
+    );
+
+    // The snapshot's fence drain must have emptied the ledger, parked GL queries included.
+    let suspend_log = g1.supervisor_log();
+    let drained = suspend_log.lines().find(|l| {
+        l.contains("gpu snapshot: fence ledger drained") || l.contains("fence drain TIMED OUT")
+    });
+    eprintln!("snapshot drain: {}", drained.unwrap_or("(no drain line)"));
+    assert!(
+        drained.is_some_and(|l| l.contains("fence ledger drained")),
+        "the snapshot's fence drain did not empty the ledger — a fence was still pending when \
+         the GPU state was captured, so its waiter never wakes in the restored epoch: {drained:?}"
     );
 
     let scratch = g1.scratch_dir().to_path_buf();
@@ -373,14 +490,14 @@ fn classic_vrend_world_survives_snapshot_restore() {
     // no real user input to un-blank it — a blanked compositor issues no frame callbacks
     // and clients go idle (the rounds-5/6 "CRTC stays off" shape, benign here). Simulate
     // user activity first, then open the window.
+    let wake = desktop.wake;
     ssh_retry(
         &g2,
-        "export XDG_RUNTIME_DIR=/run/user/1000 \
-         DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus; \
-         busctl --user call org.gnome.ScreenSaver /org/gnome/ScreenSaver \
-         org.gnome.ScreenSaver SimulateUserActivity >/dev/null 2>&1; \
-         systemd-run --user --collect --unit vrend-stim \
-         env WAYLAND_DISPLAY=wayland-0 gnome-calculator >/dev/null 2>&1; echo stim",
+        &format!(
+            "{session} busctl --user call {wake} >/dev/null 2>&1; \
+             {session} systemd-run --user --collect --unit vrend-stim \
+             env WAYLAND_DISPLAY=wayland-0 {app} >/dev/null 2>&1; echo stim"
+        ),
     );
     std::thread::sleep(SETTLE);
 
@@ -421,7 +538,7 @@ fn classic_vrend_world_survives_snapshot_restore() {
     // rejections — the device error counter is the load-bearing storm oracle here.
     let (errs, _) = tick_total(window, "errs");
 
-    let shell_pid_after = ssh_retry(&g2, "pgrep -x gnome-shell | head -1");
+    let shell_pid_after = ssh_retry(&g2, &format!("pgrep -xo {shell}"));
 
     let verdict_ok = scanout_rejects == 0
         && submit_rejects <= MAX_REJECTIONS
@@ -447,12 +564,16 @@ fn classic_vrend_world_survives_snapshot_restore() {
         // Guest-side display forensics before teardown: distinguishes "world dead"
         // from "display never re-lit" (both read as submits=+0 host-side).
         let drm = g2
-            .ssh_exec(
+            .ssh_exec(&format!(
                 "for f in /sys/class/drm/card*-*/dpms /sys/class/drm/card*-*/enabled; do \
                  echo \"$f: $(cat $f 2>/dev/null)\"; done; \
-                 echo calc-procs=$(pgrep -fc gnome-calculator || true)",
-            )
+                 echo {app}-procs=$({})",
+                desktop.app_count
+            ))
             .unwrap_or_else(|e| format!("(drm probe failed: {e})"));
+        let compositor = g2
+            .ssh_exec(desktop.forensics)
+            .unwrap_or_else(|e| format!("(compositor probe failed: {e})"));
         let replay_lines: Vec<&str> = log
             .lines()
             .filter(|l| l.contains("restore:") || l.contains("replay") || l.contains("journal"))
@@ -477,8 +598,9 @@ fn classic_vrend_world_survives_snapshot_restore() {
              unknown_res=+{unknown_res} errs=+{errs}\n\
              (submits must advance, zero unknowns, errs within tolerance)\n\
              pixel diversity:          {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
-             gnome-shell pid:          {shell_pid} -> {shell_pid_after}\n\
-             guest display state:\n{drm}"
+             {shell} pid:          {shell_pid} -> {shell_pid_after}\n\
+             guest display state:\n{drm}\n\
+             compositor:\n{compositor}"
         );
     }
 

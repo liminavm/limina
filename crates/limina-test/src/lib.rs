@@ -1046,6 +1046,33 @@ impl GuestConfig {
         Ok(cfg)
     }
 
+    /// Like [`GuestConfig::seated_efi_fedora_from_env`], but booting the **KDE Plasma** enhanced
+    /// image — the same enhanced userspace with GDM autologin into Plasma, so KWin composites on
+    /// virgl/vrend where the GNOME golden runs mutter.
+    ///
+    /// Pinned to the F44 family (`Fedora-Workstation-44.enhanced.kde.raw`) for the same reason as
+    /// [`GuestConfig::seated_efi_synoik_from_env`]: the image exists for one release only.
+    /// Overrides: `LIMINA_TEST_DISK_KDE`, `LIMINA_GOP_FIRMWARE`, plus the usual
+    /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
+    /// or the KDE image is missing — it is a machine-local golden, see `docs/images.md`.
+    pub fn seated_efi_kde_from_env() -> Result<GuestConfig> {
+        let disk = match std::env::var("LIMINA_TEST_DISK_KDE") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => repo_root().join("Fedora-Workstation-44.enhanced.kde.raw"),
+        };
+        anyhow::ensure!(
+            disk.exists(),
+            "KDE enhanced disk not found at {disk:?} (set LIMINA_TEST_DISK_KDE); this is a \
+             machine-local golden, see docs/images.md"
+        );
+        let mut cfg = GuestConfig::seated_efi_fedora_from_env()?;
+        match &mut cfg.boot {
+            Boot::Firmware { disk: d, .. } => *d = disk,
+            other => anyhow::bail!("seated_efi_fedora_from_env built an unexpected boot {other:?}"),
+        }
+        Ok(cfg)
+    }
+
     /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its
     /// `-debug` log; assert on it via [`Guest::wait_for_gateway_log`] (DHCP lease, outbound).
     /// Append a verbatim extra flag to the `limina` supervisor command line.

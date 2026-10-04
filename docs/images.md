@@ -498,6 +498,12 @@ Plasma's own D-Bus services. Built to verify the session helper's idle-inhibit s
 Run it like any enhanced image: `cargo xtask run --disk Fedora-Workstation-44.enhanced.kde.raw`.
 Plasma's Wayland socket is `wayland-0`.
 
+L2 tests boot it through `GuestConfig::seated_efi_kde_from_env` (`LIMINA_TEST_DISK_KDE`
+overrides): `tests/kde_session.rs` (KWin composites with OpenGL on virgl and the desktop renders)
+and `kde_vrend_world_survives_snapshot_restore` in `tests/vrend_session_restore.rs`. The tests
+boot it read-only, so the image's own state is what they test — keep it free of anything that
+changes how the session comes up.
+
 ##### Rebuilding it (and retargeting to F45)
 
 The guest-side work is scripted: **`scripts/provision/f44/install-synoik-session.sh`**, which
