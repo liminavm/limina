@@ -497,6 +497,41 @@ without an agent — the host power state (`NSProcessInfo.isLowPowerModeEnabled`
 `IOPSGetProvidingPowerSourceType`) and whether anything reaches scanout. The idle far tail is also
 not fully clean: max 31–49 ms even when armed (`spikes/macos-timer-wakeup/results-guest-arms.md`).
 
+### A lightly loaded vCPU runs its work several times slower
+Measured 2026-10-02 on a stock F44 guest (kernel 7.1.8, 8 vCPUs) on a base M1 (4P+4E, 16 GB), so
+the guest has one vCPU per host core. A guest thread pinned to one vCPU, sleeping 5 ms between busy
+periods, times a fixed chunk of integer work at 84 ns when the vCPU is busy for ≥ ~60% of the time.
+Below ~50% the chunk takes 167-459 ns, typically 291 ns (~3.5x). That is close to the 3.75x
+slowdown measured for a `QOS_CLASS_BACKGROUND` vCPU when sizing `--little-vcpus` (`docs/roadmap.md`).
+The slowdown lasts for the whole burst: a 10 ms burst after a 50 ms gap stays slow throughout.
+It follows utilisation over tens of milliseconds, not burst length. Syscalls show the same split.
+`getppid()` costs 0.6 µs busy and 3.5 µs after a 16 ms gap. A `FUTEX_WAKE` costs 3.3 µs busy and
+16-18 µs after a ≥ 5 ms gap, the same whether the wakee is on the waker's vCPU or another one, so
+the slow party is the waker. The slow values are stepped (167/291/459 ns), which reads as E-cluster
+clock steps rather than one core type. That is inference: nothing yet reads the host core or clock.
+
+Why it matters: a browser's light load is all in this regime. Media playback in Firefox is a chain
+of thread handoffs at ~70 frames/s, each landing on an idle vCPU. `futex_wake` came to 11% of the
+content process's samples, and kernel time to ~45% of its media threads' CPU. It also makes guest
+CPU time an unstable measure of work: an idler guest runs a fixed-work probe slower.
+
+What is ours to try, in order:
+- **Observe it from the host first.** Read each vCPU thread's core while the duty probe runs (the
+  `TPIDR_EL0 & 0xfff` trick from `spikes/rt-ecore-placement/`), plus `powermetrics` per-cluster
+  frequency. That confirms or kills the E-core/DVFS reading.
+- **Halt polling is not available**: HVF parks WFI inside `hv_vcpu_run`, so the thread never
+  gets the chance to stay hot ([band design](design/vcpu-scheduling-band.md)).
+- **Thread-level levers not yet measured for this effect:** the vCPU threads' QoS class, an
+  `os_workgroup` joined by the vCPU threads (CLPC's input for interval workloads), and the RT band
+  itself. A mostly idle RT thread runs on E, so the band may worsen this on vCPU 0 while it fixes
+  timer lateness.
+- A guest `idle=poll` A/B would confirm the utilisation theory, but not with as many vCPUs as host
+  cores.
+
+Knock-ons: the grow rule reads worker CPU time (`HostCpu` in `crates/limina/src/vcpu_policy.rs`).
+An E-placed vCPU burns more host time per unit of work, which biases that rule. It may also be part
+of *Host-CPU cost of a busy VM is unattributed* below.
+
 ### Measure efficiency beyond idle, and against Parallels/Vz
 Known: an idle guest costs ~13 mW of package power over an empty host, a `vkcube` guest ~0.9 W
 (`spikes/macos-timer-wakeup/results-battery.md`). Disk, network, builds, video calls and a desktop in
