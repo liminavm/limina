@@ -27,10 +27,16 @@ while :; do
     ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 "rm -rf ~/results-gbm ~/results-gbm.log" &&
       touch "$OUT/.started"
   fi
+  # A host abort loses the guest's page cache with it. run.sh's -s fsyncs each result file, but
+  # not the rename that replaces a test's "incomplete" placeholder; the sync loop persists those.
   ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 \
-    "cd ~/piglit; if [ -d ~/$RES ]; then PIGLIT_PLATFORM=gbm ./piglit resume --no-retry ~/$RES >> ~/$RES.log 2>&1; else ~/run.sh ~/$RES; fi; echo piglit-exit=\$?"
+    "(while sleep 2; do sync; done) </dev/null >/dev/null 2>&1 & cd ~/piglit; if [ -e ~/$RES/metadata.json ]; then PIGLIT_PLATFORM=gbm ./piglit resume --no-retry ~/$RES >> ~/$RES.log 2>&1; else ~/run.sh ~/$RES; fi; echo piglit-exit=\$?; kill %1"
   rc=$?
-  if [ $rc -eq 0 ]; then
+  if [ $rc -ne 255 ] && ! ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 "ls ~/$RES/results.json*" > /dev/null; then
+    echo "boot $n: piglit stopped without results.json, see ~/$RES.log in the guest"
+    exit 1
+  fi
+  if [ $rc -ne 255 ]; then
     ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 "cd ~ && tar czf - $RES $RES.log" > "$OUT/results.tar.gz"
     cp "$LOG" "$OUT/worker-final.log"
     ssh -p "$port" "${SSH[@]}" claude@127.0.0.1 "sudo systemctl poweroff" || true

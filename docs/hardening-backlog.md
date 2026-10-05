@@ -595,6 +595,27 @@ virtio-gpu (89). The GL path needs its own answer: a guest's GL stream reaches z
 vrend, so hardening the Vulkan decoder does nothing for it. Decide what vrend validates before zink
 sees a command.
 
+### piglit kills the worker from an unprivileged guest GL program, two ways
+Ordinary guest GL calls, in stock and enhanced guests alike, abort `limina-vmm` and take the VM
+down (`spikes/piglit-virgl/`; 12 VM crashes across the two runs):
+- **KosmicKrisp, 3D textures.** For a 3D image created 2D_ARRAY-compatible, KK gives the 2D_ARRAY
+  Metal alias the 3D mip count. A legal 8x4x16 texture with 5 levels then fails Metal's descriptor
+  validation ("requests 5 mipmap levels, but the dimensions (8, 4, 1) can only support a maximum of
+  4") and Metal aborts. Hit by `arb_get_texture_sub_image-get`. The fix clamps the alias to its 2D
+  chain: KK `2315d532b3d` on branch `kk-3d-array-levels`, not yet merged into `limina-kk` or built
+  into the live KK.
+- **virglrs, texture-buffer sampler views.** `src/vrend/resource.rs:2065`
+  `unreachable!("a buffer has no texture target")`. Hit by `arb_texture_buffer_object` tests
+  (`re-init`, `data-sync`, `subdata-sync`, `fetch-outside-bounds`, `formats`) and
+  `arb_direct_state_access@texture-buffer`. `create_sampler_view` looks up a texture target for
+  every view before it checks for a buffer, so the first texture-buffer view any guest creates
+  panics. Which test piglit blames differs between runs. Fixed in virglrs `50dcb15`, not yet
+  pushed.
+
+Every virglrs panic becomes an abort: rutabaga's `virgl_renderer.rs:203` unwraps the mutex the
+panic poisoned, and a panic during cleanup cannot unwind. Until rutabaga handles a poisoned lock,
+a virglrs panic cannot be contained to one context.
+
 ### Nothing stops a guest from submitting seconds ahead of the host's decode
 A classic (vrend) client that submits faster than the virtio-gpu worker decodes keeps the control
 queue permanently non-empty. Measured 2026-09-12 on a stock F44 guest with the webglsamples aquarium at
@@ -712,32 +733,62 @@ of venus is never memory". Fix, guest-side and upstreamable (`limina-guest`): ca
 result into `vn_ring_submit_command` and have `vn_call_*` return it when the reply is absent. Cheap,
 and it makes the next dogfood OOM report classify itself.
 
-### piglit's buffer and texture-transfer groups fail 13 tests on classic virgl
-A piglit run of the buffer, PBO and texture-transfer groups (`quick` profile, 1871 tests) on the
-upstream reproduction rig — stock QEMU 10.2 + virglrenderer 1.3.0 (vrend) on an Intel host, guest
-Mesa `main` b39d173ca93, `PIGLIT_PLATFORM=surfaceless_egl`, measured 2026-10-05 — fails these,
-identically with and without the PBO wait fix:
-- **query buffers:** `arb_transform_feedback_overflow_query-basic` reads 0 back from every query
-  buffer object where 1 is expected; `arb_query_buffer_object@qbo` warns (QBO 37076 vs CPU 37135);
-  `arb_shader_image_load_store@early-z` gets half the expected occlusion count (768 vs 1536).
-- **transform feedback:** `ext_transform_feedback2@draw-auto offset` draws magenta;
-  `ext_transform_feedback@tessellation triangle_fan flat_first` warns on a flat-shaded vertex.
-- **texture readback:** `getteximage-targets` for 2d_array and cube_array S3TC return zeros from
-  layer 6 on; `arb_get_texture_sub_image-get`/`-getcompressed` fail on compressed 2D;
-  `copyteximage 3d`; `fbo-readpixels-depth-formats` (float depth reads 0.999985 for 1.0, a 24→32-bit
-  expansion off by 0x80); `teximage-colors` RGB 3_3_2 off by one LSB.
-- **image load/store:** `arb_shader_image_load_store@invalid` — out-of-bounds and invalid-format
-  image atomics return garbage instead of zero.
-- `max-ssbo-size@vs` and `arb_texture_buffer_object@max-size` (128 MiB buffers) are flaky.
+### piglit's buffer and texture-transfer groups on classic virgl: what upstream vrend shares
+The same 1871-test selection (piglit `quick`, buffer/PBO/texture-transfer groups) ran on two
+stacks, measured 2026-10-05:
+- **Upstream rig:** stock QEMU 10.2 + virglrenderer 1.3.0 on an Intel host, guest Mesa `main`
+  b39d173ca93, surfaceless (125 tests never reached the driver there). Run in
+  `spikes/upstream-repro/virgl-pbo-upload-wait/`.
+- **limina:** stock and enhanced F44 guests on virglrs vrend over zink-on-KK, gbm. Run in
+  `spikes/piglit-virgl/`.
 
-Excluded as harness artifacts, not driver results: 82 tests that could not find their
-`.shader_test`/compiler files (piglit built out of tree under `build/`, run with
-`PIGLIT_BUILD_DIR`), and 43 that need a default framebuffer and abort inside piglit's `run_test`
-on the surfaceless platform. Next: rerun on a limina stock-tier guest (virgl over virglrs's vrend
-on zink-on-KK) with piglit built in tree and a windowed platform in the seated session, so the
-excluded 125 run too; then split what limina's stack shares with upstream vrend from what is
-virglrs's own, and file the guest-Mesa ones upstream. The rig is described in
-`spikes/upstream-repro/virgl-pbo-upload-wait/README.md`, the run in its `piglit-run.sh`.
+**Fail on both stacks** (guest Mesa or vrend behaviour, so upstream candidates):
+- `copyteximage 3d`.
+- `arb_get_texture_sub_image-get`/`-getcompressed` on compressed 2D. On limina the first also
+  aborts the host; see the guest-reachable aborts section.
+- `getteximage-targets 2d_array s3tc`: zeros from layer 6 on.
+- `fbo-readpixels-depth-formats`: float depth reads 0.999985 for 1.0, a 24→32-bit expansion off by
+  0x80.
+- `arb_shader_image_load_store@early-z`: half the occlusion count.
+- `arb_shader_image_load_store@invalid`: out-of-bounds and invalid-format image atomics return
+  garbage instead of zero.
+- `ext_transform_feedback2@draw-auto offset`.
+- `tessellation triangle_fan flat_first`.
+- `arb_texture_buffer_object@max-size` (128 MiB, flaky on the rig).
+
+**Fail only on the rig** (pass on limina):
+- `arb_transform_feedback_overflow_query-basic` and `arb_query_buffer_object@qbo`.
+- `getteximage-targets cube_array s3tc`.
+- `teximage-colors` RGB 3_3_2, off by one LSB.
+
+### piglit fails about 140 more tests on limina's classic-virgl host than on upstream vrend
+Same run, `spikes/piglit-virgl/`. The stock and enhanced guests fail the same tests, so each of
+these is in limina's host (virglrs vrend over zink-on-KK), not in guest Mesa. Each passes on the
+upstream rig:
+- **Transform feedback, about 80 tests.**
+  - Captured buffers hold wrong values or zeros: `position-readback-*`, `order`, `structs`,
+    `separate-attribs`, `change-size`, `intervening-read`.
+  - The rendered output comes back black.
+  - All 27 timeouts (300 s) are xfb tests: the `query-primitives_*` family, plus polygon, quad
+    and quad_strip tessellation.
+- **Image load/store and SSBO outside the fragment stage, 15 tests.** For example `coherency`,
+  `atomicity`, `layer`, `level`, `max-size` (`GL_INVALID_ENUM` and zeros), and SSBO
+  `array-ssbo-binding`.
+- **Others:**
+  - `texture-buffer-size-clamp`: texel count 0.
+  - BPTC float compressed uploads decode wrong.
+  - `arb_draw_indirect-draw-elements-prim-restart-ugly`.
+  - `sgis_generate_mipmap`.
+  - `gettextureimage-formats`/`getteximage-formats init-by-rendering`.
+  - `vbo-subdata-sync`/`-zero`, `pos-array`.
+  - `transformfeedback-buffer*` (DSA).
+- **Fence waits that give up.** Several tests log "waiting got error - 16, slow gpu or hang?"
+  after 17–18 s. These account for the handful that differ between the two guests
+  (`shared-row_major-array-struct-mat3x*`, `vbo-subdata-many`, which fail on stock and pass on
+  enhanced), so treat those as host stalls, not Mesa differences.
+
+Start with transform feedback: it is one feature, it is most of the count, and Metal has no native
+xfb, so the question is how zink-on-KK emulates it and what virglrs advertises.
 
 ### virglrs's transfer bounds error does not say which bound failed
 `layout` in `vrend/transfer.rs` collapses its three exits (stride smaller than a row, layer stride
