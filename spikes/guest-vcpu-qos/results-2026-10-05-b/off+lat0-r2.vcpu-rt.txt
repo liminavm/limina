@@ -1,0 +1,8 @@
+[2026-10-05T15:20:26.371559Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 at latency QoS tier 0
+[2026-10-05T15:20:26.371716Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 1 at latency QoS tier 0
+[2026-10-05T15:20:26.371831Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 2 at latency QoS tier 0
+[2026-10-05T15:20:26.371928Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 3 at latency QoS tier 0
+[2026-10-05T15:20:26.372031Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 4 at latency QoS tier 0
+[2026-10-05T15:20:26.372115Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 5 at latency QoS tier 0
+[2026-10-05T15:20:26.372216Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 6 at latency QoS tier 0
+[2026-10-05T15:20:26.372313Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 7 at latency QoS tier 0

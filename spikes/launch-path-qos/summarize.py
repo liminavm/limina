@@ -37,7 +37,7 @@ for f in sorted(pathlib.Path(sys.argv[1]).glob("*-r*.txt")):
         )
 
 ctx_order = ["shell", "app", "job", "jobLT"]
-pol_order = ["default", "utility", "ui", "lat0", "critical", "wg", "rt", "wgrt"]
+pol_order = ["default", "utility", "ui", "lat0", "critical", "wg", "wgjoin", "rt", "wgrt"]
 busies = sorted({k[2] for k in rows})
 for busy in busies:
     print(f"\n## busy {busy} us per 16.667 ms ({100 * busy / 16667:.0f}% duty)\n")

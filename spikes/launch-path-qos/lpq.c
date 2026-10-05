@@ -13,7 +13,8 @@
 // Policies: default | utility | ui (QOS_CLASS_USER_INTERACTIVE) | lat0 (THREAD_LATENCY_QOS_POLICY
 // tier 0) | critical (kqueue EVFILT_TIMER NOTE_CRITICAL wait) | rt (libkrun's band:
 // THREAD_TIME_CONSTRAINT_POLICY 16.667/1/2 ms) | wg (joins an AudioWorkIntervalCreate workgroup and
-// brackets every period with interval start/finish) | wgrt (rt, then wg).
+// brackets every period with interval start/finish) | wgrt (rt, then wg) | wgjoin (joins the
+// workgroup but never brackets an interval: all a vCPU thread could do).
 //
 // Every arm prints one `ident` line (who launched us, as the kernel sees it) and one `result` line.
 #include <AudioToolbox/AudioWorkInterval.h>
@@ -111,7 +112,8 @@ static int set_lat0(void) {
 
 static void *measured(void *arg) {
     (void)arg;
-    int use_wg = !strcmp(policy, "wg") || !strcmp(policy, "wgrt");
+    int use_wg = !strcmp(policy, "wg") || !strcmp(policy, "wgrt") || !strcmp(policy, "wgjoin");
+    int bracket = strcmp(policy, "wgjoin") != 0;
     int use_kq = !strcmp(policy, "critical");
     if (!strcmp(policy, "utility")) rc_policy = pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
     else if (!strcmp(policy, "ui")) rc_policy = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -146,7 +148,7 @@ static void *measured(void *arg) {
         unsigned c = cpu_now();
         if (c < MAXCPU && is_e[c]) wake_e++; else wake_p++;
         if (nlate < MAXPER) late[nlate++] = t > d ? t - d : 0;
-        if (wg && rc_join == 0 && os_workgroup_interval_start(wg, d, d + period, NULL)) wg_start_err++;
+        if (wg && bracket && rc_join == 0 && os_workgroup_interval_start(wg, d, d + period, NULL)) wg_start_err++;
         uint64_t end = t + busy;
         uint64_t now = t;
         while (now < end) {
@@ -162,7 +164,7 @@ static void *measured(void *arg) {
         int cur;
         thread_pri(&cur, NULL);
         if (cur >= 97) rtpri_periods++;
-        if (wg && rc_join == 0 && os_workgroup_interval_finish(wg, NULL)) wg_finish_err++;
+        if (wg && bracket && rc_join == 0 && os_workgroup_interval_finish(wg, NULL)) wg_finish_err++;
         d += period;
         uint64_t n = mach_absolute_time();
         if (d < n) d = n + period; // overran: do not count a backlog as lateness

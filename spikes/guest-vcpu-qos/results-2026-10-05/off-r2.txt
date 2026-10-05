@@ -1,0 +1,11 @@
+off-r2 timerlat period_us=16667 p50=4183 p90=6107 p99=7988 max=12632 n=599
+off-r2 timerlat period_us=4000 p50=979 p90=1647 p99=2781 max=15614 n=2000
+off-r2 timerlat period_us=1000 p50=405 p90=580 p99=3828 max=10226 n=2000
+off-r2 dutyprobe gap_us=5000 busy_us=300 chunk_ns p50=500 p10=208 p90=500 n=126
+off-r2 dutyprobe gap_us=5000 busy_us=10000 chunk_ns p50=125 p10=83 p90=166 n=420
+off-r2 wakecost gap_us=5000 futex_wake p50=25.7us p90=36.3us getppid p50=3.96us
+off-r2 fcprobe frame_callback: n=476 rate=48.1/s p50=17.08 p95=33.59 p99=34.67 max=36.11 over25ms=116
+off-r2 fcprobe frame_callback histogram (ms: count): 13:1 14:3 15:31 16:182 17:105 18:16 19:3 20:4 21:3 22:1 23:6 24:5 25:1 27:2 28:8 29:3 30:7 31:17 32:29 33:38 34:7 35:2 36:2
+off-r2 fcprobe presented: n=475 rate=48.1/s p50=16.67 p95=33.35 p99=33.35 max=33.35 over25ms=117
+off-r2 fcprobe presented histogram (ms: count): 16:358 33:117
+off-r2 fcprobe commit_to_present: p50=58.19 p95=78.54 p99=79.25 max=111.46

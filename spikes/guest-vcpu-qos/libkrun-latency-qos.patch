@@ -1,0 +1,56 @@
+diff --git a/src/libkrun/src/vmm/macos/vcpu_sched.rs b/src/libkrun/src/vmm/macos/vcpu_sched.rs
+index 991d7234..845e7d7f 100644
+--- a/src/libkrun/src/vmm/macos/vcpu_sched.rs
++++ b/src/libkrun/src/vmm/macos/vcpu_sched.rs
+@@ -775,6 +775,39 @@ impl<O: BandOs> BandGuard<O> {
+     }
+ }
+ 
++const THREAD_LATENCY_QOS_POLICY: u32 = 7;
++/// `LATENCY_QOS_TIER_0` from `mach/task_policy.h`; tier `n` is `(0xFF << 16) | (n + 1)`.
++const LATENCY_QOS_TIER_BASE: u32 = 0xFF << 16;
++
++/// Put the calling vCPU thread in latency-QoS tier `LIMINA_VCPU_LATENCY_QOS` (0-5), if set.
++///
++/// A host thread's timer wakes late by a fixed share of how long it slept: a third under the
++/// default QoS, a fifth at tier 0 (`spikes/launch-path-qos/`). Off unless the variable is set; it
++/// applies to every vCPU and is independent of the band, which overrides it while armed.
++pub fn set_latency_qos(vcpuid: u64) {
++    let Some(tier) = std::env::var("LIMINA_VCPU_LATENCY_QOS")
++        .ok()
++        .and_then(|v| v.trim().parse::<u32>().ok())
++        .filter(|t| *t <= 5)
++    else {
++        return;
++    };
++    let mut policy = LATENCY_QOS_TIER_BASE | (tier + 1);
++    let ret = unsafe {
++        thread_policy_set(
++            mach_thread_self(),
++            THREAD_LATENCY_QOS_POLICY,
++            &mut policy,
++            1,
++        )
++    };
++    if ret == 0 {
++        log::info!("[VCPU-RT] vCPU {vcpuid} at latency QoS tier {tier}");
++    } else {
++        log::warn!("[VCPU-RT] vCPU {vcpuid}: latency QoS tier {tier} refused (kr={ret})");
++    }
++}
++
+ /// Move the *calling* thread into whichever band was asked for. Must run on the vCPU thread
+ /// itself, since both policies apply to the current thread.
+ pub fn set_realtime_band(vcpuid: u64) -> Option<BandGuard> {
+diff --git a/src/libkrun/src/vmm/macos/vstate.rs b/src/libkrun/src/vmm/macos/vstate.rs
+index f2274ec6..a6a8e124 100644
+--- a/src/libkrun/src/vmm/macos/vstate.rs
++++ b/src/libkrun/src/vmm/macos/vstate.rs
+@@ -578,6 +578,7 @@ impl Vcpu {
+     pub fn run(&mut self, init_tls_sender: Sender<u64>) {
+         // On this thread, before it ever enters the guest: the band applies to mach_thread_self().
+         // The guard it hands back is this thread's own way out of the band — see `BandGuard`.
++        vcpu_sched::set_latency_qos(self.id as u64);
+         let band_guard = vcpu_sched::set_realtime_band(self.id as u64);
+         let mut hvf_vcpu =
+             HvfVcpu::new(self.mpidr, self.nested_enabled).expect("Can't create HVF vCPU");
