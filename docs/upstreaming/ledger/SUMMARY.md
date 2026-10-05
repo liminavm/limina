@@ -16,7 +16,7 @@ docs-only.
 |---|---|---|---|
 | linux | **1** *(was 6; migrated to the fork model 2026-08-03 — base `v7.1.6`. One patch left for the DKMS tree; one replaced by an upstream backport; the blob-scanout fence **dropped 2026-08-04** after the rig measured it costing 86% of frames; and the two DRM format/modifier patches **dropped 2026-08-04**, punted to the future hardware-planes work — they addressed guest-KMS plane scanout, not the VM-output-to-Mac-display path we actually care about. Tag `limina/2026-08-04-modifiers` recovers them.)* | `gregkh/linux` (stable mirror) + dri-devel lore | lore.kernel.org |
 | kosmickrisp (KK) | 19 | mesa `84acd848` | gitlab.fd.o (Anubis) |
-| mesa (guest) | 15 | mesa `c9e4f184e593` | gitlab.fd.o (Anubis) |
+| mesa (guest) | 19 | mesa `b39d173ca93` (2026-10-05) | gitlab.fd.o (Anubis) |
 | imago | 2 | `hreitz/imago` | gitlab.com |
 | mutter | ~~1~~ RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer | 58 | `956b034f` | gitlab.fd.o (Anubis) |
@@ -69,11 +69,12 @@ Ranked roughly by blast radius / reviewer-readiness. None are blocked on disclos
   **0041** (macOS blob unmap balance), **0031** (display -2 enum arm), **0122** (EDID digital),
   **0119**-generator-subset (aspect shift + u16 clock wrap), **0027** (de-shear, strip DIAG),
   **0008**+**0015** (cursor depanic), **0061**-carve (KEY_POWER not KEY_RESTART).
-- mesa: **0014** (zink lost-wakeup deadlock — byte-for-byte on main, + the trywait timespec has
-  silently never waited), **0013** (venus ICD TLS-destructor pin), **0002** (fbobject NULL guard),
-  **0003+0004** as one MR, **0020** (zink missed pipeline rebind when vertex
-  input is static — generic to any driver without `EXT_vertex_input_dynamic_state`; **verified live on main
-  `1a4286e1abb`** 2026-08-17, tracker not yet searched).
+- mesa (guest): eight MRs ready on branch `upstream/guest-2026-10`, each with a reproducer run on
+  an upstream stack (`spikes/upstream-repro/`) — venus TLS-destructor pin, venus sync_count, zink
+  shadow recursion, EGL fd-export failure, zink lost-wakeup, venus stub-instance fallback, virgl
+  three-plane decode targets, vl/compositor RGB→YUV matrix. Order and the held rows: `mesa.md`.
+  Outside the guest series: fbobject NULL guard, the zink optional-extension guards, and the zink
+  pipeline re-lookup (`limina-kk`).
 - KK: **0009** (vk_meta empty rects — broad audience), the monolith's **dm nil-check** and
   **2DArray→2D demotion**.
 - virgl: **0020 / 0021 / 0023 / 0057** (vrend correctness + macOS enablement), **0002** (kqueue
