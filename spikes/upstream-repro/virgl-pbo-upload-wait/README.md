@@ -53,8 +53,23 @@ platform. The 13 real failures are in `docs/hardening-backlog.md`. The summary's
 `arb_texture_buffer_object@max-size` (128 MiB buffers), are flaky: re-run 3× each, main failed the
 TBO one once and the fix passed every run.
 
-**Still owed before filing:** a Firefox Canvas Test A/B with Firefox's PBO path re-enabled (the pass
-criteria in the firefox-perf note).
+**Firefox Canvas Test A/B (the real workload).** limina guest on an M1 host (Fedora 44, virgl over
+zink-on-KosmicKrisp), Basemark Web 3.0 Canvas Test from a local mirror, 5 interleaved runs per arm,
+Firefox `perf-arm64` 13108ec0939a ("cpuptr") vs the same with its PBO workaround reverted ("pbo"),
+measured 2026-10-05:
+
+| Guest Mesa | cpuptr median (range) | pbo median (range) | pbo vs cpuptr |
+|---|---|---|---|
+| Fedora `26.2.3-1.fc44` | 696.2k (591.5–741.5k) | 508.8k (473.2–512.2k) | −27% |
+| limina `26.2.3-3` (this fix as patch 0020) | 686.8k (597.2–709.5k) | 678.8k (662.1–712.5k) | −1.2%, inside the spread |
+
+`perf trace` of the CanvasRenderer thread (ioctls ≥ 0.3 ms, one 15 s run per arm): the stock pbo
+arm has 145 `VIRTGPU_WAIT`, 11.8 s in total, median 26.6 ms; with the fix the pbo arm has 2, one of
+0.61 ms under the upload path. The other, 940 ms under `TexImage2D` with the PBO bound, is being
+re-traced: single sub-second stalls also show on other ioctls in both arms (`RESOURCE_CREATE`
+768 ms on cpuptr), which points at the host, but one trace cannot tell. The limina arm carries all
+20 guest patches, so it measures "limina guest Mesa", not "stock + this commit"; the commit is the
+only one of them on the GL upload path.
 
 ## Opting virgl into blit-based transfers instead
 
