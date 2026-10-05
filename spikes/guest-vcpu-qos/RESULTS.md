@@ -128,11 +128,29 @@ mW. Same bundle, 3 reps, 180 s idle and 20 s animating windows (`power-abacate-i
   These are 20 s windows, so treat them as a hint. Whether the band works depends on host load,
   and band + tier 0 has not been run on this shape.
 
+## Band and tier 0 together; the enhanced tier; 2-4 vCPUs
+
+M1 Max with no other VM or build running, from the release bundle that ships tier 0, 3 boots per
+arm, 60 s of fcprobe each (`results-2026-10-05-cells/`, `fps-cells.sh`). Each boot's `[VCPU-RT]`
+lines confirm its arm. Presented fps, with frames over 25 ms in brackets:
+
+| cell | off | band | tier 0 | band + tier 0 |
+|---|---|---|---|---|
+| stock, 8 vCPUs | 36.6 / 43.1 / 38.9 | 36.1 / 37.2 / 41.4 | 54.7 / 53.4 / 54.6 | 57.9 / 52.7 / 53.3 |
+| enhanced, 4 vCPUs | 45.3 / 38.5 / 39.6 | 39.5 / 38.8 / 39.1 | 58.9 / 55.5 / 56.1 | 57.3 / 58.3 / 59.3 |
+| enhanced, 2 vCPUs | 41.7 / 42.0 / 42.8 | 41.7 / **59.1** / 40.6 | 57.4 / 57.7 / 58.0 | 59.1 / 59.9 / 59.5 |
+
+- **Tier 0 is the fix on both tiers and at every vCPU count measured**: +14 to +17 fps over off,
+  and frames over 25 ms drop from ~1000-1400 a minute to ~60-390.
+- **The band alone does nothing**, except one 2-vCPU boot in three. Adding it to tier 0 is a
+  wash at 8 vCPUs and helps slightly with fewer: at 2 vCPUs, vCPU 0 is half the guest, so the band
+  covers half the deadlines (7-51 slow frames a minute against 111-148).
+- That supports what ships: tier 0 on every vCPU, plus the band on vCPU 0.
+
 ## Not yet known
 
 - **Idle power** is settled on a quiet base M1 (see below): tier 0 costs no more than the band.
-- **Other shapes.** The enhanced tier (venus, 16k kernel). Fewer vCPUs, where the band did help in
-  August.
+- **Other shapes.** A single vCPU, and hosts other than the M1 Max and base M1.
 - **Why the band adds nothing on top of tier 0.** A lead: `dutyprobe` at 6% duty runs pinned to
   guest CPU 2, not the banded vCPU. Its p90 chunk time was 541 ns to 78 µs in 9 of the 10
   band-family boots, against 500-625 ns in all 10 band-off boots. A 500 ns chunk that takes 50 µs

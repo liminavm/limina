@@ -1,0 +1,18 @@
+[2026-10-05T21:31:45.996500Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms, at most 1 armed at once)
+[2026-10-05T21:31:48.089382Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 0%, 1/1 armed)
+[2026-10-05T21:31:48.879858Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 45.642ms of CPU over a 45.638416ms hold
+[2026-10-05T21:31:49.343068Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 6%, 1/1 armed)
+[2026-10-05T21:31:49.954839Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 gave back the band (share 62%, 0/1 armed)
+[2026-10-05T21:31:50.163267Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 20%, 1/1 armed)
+[2026-10-05T21:31:50.782996Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 34.233ms of CPU over a 37.202666ms hold
+[2026-10-05T21:31:50.783129Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 29%, 1/1 armed)
+[2026-10-05T21:31:50.925931Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.365ms of CPU over a 37.686541ms hold
+[2026-10-05T21:31:51.807192Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 11%, 1/1 armed)
+[2026-10-05T21:31:52.115381Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 34.381ms of CPU over a 34.365208ms hold
+[2026-10-05T21:32:00.728410Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 32%, 1/1 armed)
+[2026-10-05T21:32:00.916290Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 57.5ms of CPU over a 57.491333ms hold
+[2026-10-05T21:32:02.198619Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[2026-10-05T21:32:14.450112Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 40.171ms of CPU over a 40.328125ms hold
+[2026-10-05T21:32:14.516142Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 26%, 1/1 armed)
+[2026-10-05T21:32:26.462409Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 49.676ms of CPU over a 49.664291ms hold
+[2026-10-05T21:32:27.087441Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 35%, 1/1 armed)

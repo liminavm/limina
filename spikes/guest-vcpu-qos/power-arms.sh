@@ -33,7 +33,7 @@ for rep in $(seq 1 "$reps"); do
         *) echo "unknown arm $arm" >&2; exit 2 ;;
         esac
         export LIMINA_VCPU_SCHED="$sched"
-        if [ -n "$lat" ]; then export LIMINA_VCPU_LATENCY_QOS="$lat"; else unset LIMINA_VCPU_LATENCY_QOS; fi
+        export LIMINA_VCPU_LATENCY_QOS="$lat"  # empty = off; unset would get the supervisor default (tier 0)
         export RUST_LOG=warn,limina=info,krun=info LIMINA_DISK="$disk" LIMINA_CPUS="${LIMINA_CPUS:-8}" \
             LIMINA_RAM_MIB=8192 LIMINA_DISPLAY_CAPTURE="$out/$label.png"
         spikes/venus-draw-probe/boot-enhanced-efi-kk.sh >"$out/$label.boot.txt" 2>&1 &

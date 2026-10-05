@@ -3,7 +3,7 @@
 # instead of the dev tree's boot vehicle. Same windows and phases.txt format.
 #
 #   power-arms-bundle.sh <Limina.app> <disk> <outdir> <reps> [arm...]
-# Needs wait-guest-ssh.sh beside it. BASE_S / IDLE_S / ANIM_S and LIMINA_CPUS as in power-arms.sh.
+# Needs wait-guest-ssh.sh beside it, or WAIT_SSH naming it. BASE_S / IDLE_S / ANIM_S and LIMINA_CPUS as in power-arms.sh.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 app="${1:?Limina.app}"
@@ -29,14 +29,14 @@ for rep in $(seq 1 "$reps"); do
         *) echo "unknown arm $arm" >&2; exit 2 ;;
         esac
         export LIMINA_VCPU_SCHED="$sched"
-        if [ -n "$lat" ]; then export LIMINA_VCPU_LATENCY_QOS="$lat"; else unset LIMINA_VCPU_LATENCY_QOS; fi
+        export LIMINA_VCPU_LATENCY_QOS="$lat"  # empty = off; unset would get the supervisor default (tier 0)
         export RUST_LOG=warn,limina=info,krun=info
         log="$out/$label.worker.log"
         "$app/Contents/MacOS/limina" --firmware "$app/Contents/Resources/KRUN_EFI.gop.fd" \
             --disk "$disk" --cpus "${LIMINA_CPUS:-8}" --ram-mib 8192 --net \
             --display-capture "$out/$label.png" >"$log" 2>&1 &
         boot=$!
-        port=$("$here/wait-guest-ssh.sh" "$log" 300 "$boot")
+        port=$("${WAIT_SSH:-$here/wait-guest-ssh.sh}" "$log" 300 "$boot")
         sleep 30
         mark "$label-idle" begin; sleep "$IDLE_S"; mark "$label-idle" end
         mark "$label-anim" begin
@@ -44,6 +44,7 @@ for rep in $(seq 1 "$reps"); do
             eval \$(systemctl --user show-environment | grep -E '^(WAYLAND_DISPLAY|DBUS_SESSION_BUS_ADDRESS)=' | sed 's/^/export /'); \
             probes/fcprobe/fcprobe --seconds $ANIM_S --size 960x540" 2>&1 | grep -E "^presented:" >"$out/$label.fcprobe.txt" || true
         mark "$label-anim" end
+        grep -a "VCPU-RT" "$log" >"$out/$label.vcpu-rt.txt" || true
         ssh -p "$port" "${ssh_opts[@]}" claude@127.0.0.1 "sudo systemctl poweroff" >/dev/null 2>&1 || true
         wait "$boot" || true
         echo "$(date '+%T') $label done: $(/bin/cat "$out/$label.fcprobe.txt")"
