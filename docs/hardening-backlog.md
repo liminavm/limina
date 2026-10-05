@@ -235,9 +235,10 @@ the four days. Half the main thread's samples were in `model::ssh_line` → `por
 `read_to_string`s the whole `logs/supervisor.log` every second, then scans it backwards line by line
 for the last `guest SSH forward ready` line. That log had reached 187 MB, mostly `[LIMINA]` lines
 from KosmicKrisp's opt-in `LIMINA_KK_STATS`, and held one forward line. Moving the snapshot off the
-main thread would not fix this; it only moves the burn. The port should come from somewhere that
-does not grow: have the supervisor write it to a small file under `run/`, or cache it per bundle
-until the log's inode changes. A long-lived VM's log also wants a size bound (rotation) in any case.
+main thread would not fix this; it only moves the burn. A log is a record for humans, not an
+interface: the control center should ask the running supervisor over IPC for its runtime facts,
+the forwarded SSH port included, and get a typed answer. A long-lived VM's log also wants a size
+bound (rotation) in any case.
 
 ### Take the control-plane socket off its `$TMPDIR` path
 The worker's own listeners (balloon, display control, the FIDO and fingerprint gadgets) have no
