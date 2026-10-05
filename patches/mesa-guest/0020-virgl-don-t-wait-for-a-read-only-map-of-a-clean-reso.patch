@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Mon, 5 Oct 2026 10:13:28 -0300
+Subject: [PATCH 20/20] virgl: don't wait for a read-only map of a clean
+ resource
+
+virgl_resource_transfer_prepare() waits for every synchronized map of a
+busy resource. A read-only map of a resource whose guest storage is
+current (no readback needed) does not have to: every command that
+writes the resource on the host marks it dirty, so whatever is still in
+flight can only read it, and the guest storage the map returns cannot
+change under the caller.
+
+The common victim is a texture upload from a pixel-unpack buffer. With
+no blit-based transfers, st_TexSubImage maps the PBO for reading on the
+CPU, and the PBO is busy because the transfer of the data the
+application just wrote into it is still queued. Every glTexSubImage2D
+from a PBO then waits for the host. A loop that streams 64x64 tiles
+through a PBO into a texture it also draws from runs about 6x slower
+than the same loop with client memory, nearly all of it in
+VIRTGPU_WAIT; with this change both take the same time.
+
+Skip the flush and the wait for a read-only map that needs no
+readback. Blob resources keep waiting, since their storage is shared
+with the host.
+
+Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/gallium/drivers/virgl/virgl_resource.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/src/gallium/drivers/virgl/virgl_resource.c b/src/gallium/drivers/virgl/virgl_resource.c
+index 9b087c42624..a98d38b21c3 100644
+--- a/src/gallium/drivers/virgl/virgl_resource.c
++++ b/src/gallium/drivers/virgl/virgl_resource.c
+@@ -204,6 +204,18 @@ virgl_resource_transfer_prepare(struct virgl_context *vctx,
+       wait = false;
+    }
+ 
++   /* A read-only map of a clean resource reads guest storage that nothing in
++    * flight can change: every command that writes the resource on the host
++    * marks it dirty, which would have required a readback. Pending transfers
++    * and draws only read it, so there is nothing to wait for.
++    */
++   if (wait && !readback && !is_blob &&
++       !(xfer->base.usage & PIPE_MAP_WRITE) &&
++       likely(!(virgl_debug & VIRGL_DEBUG_XFER))) {
++      flush = false;
++      wait = false;
++   }
++
+    /* When the resource is busy but its content can be discarded, we can
+     * replace its HW resource or use a staging buffer to avoid waiting.
+     */

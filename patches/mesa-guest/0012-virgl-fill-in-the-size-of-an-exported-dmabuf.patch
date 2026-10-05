@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Mon, 5 Oct 2026 07:31:41 -0300
-Subject: [PATCH 12/19] virgl: fill in the size of an exported dmabuf
+Subject: [PATCH 12/20] virgl: fill in the size of an exported dmabuf
 
 virgl_drm_winsys_resource_get_handle filled the handle and stride but
 left whandle->size at 0, and VADRMPRIMESurfaceDescriptor's object size
