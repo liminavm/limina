@@ -61,11 +61,36 @@ The band does no better at 6 vCPUs than at 8. Tier 0 cuts the guest's timer late
 so something on the host shifted across arms within that rep. Tier 0 had two good boots of three,
 against one for each of the others. That is suggestive, not settled at n=3.
 
+## Power
+
+`power-arms.sh` marks the windows and `power-summary.py` reads them against a root `powermetrics
+--samplers cpu_power -i 1000` capture taken alongside. Two reps, interleaved: no VM, then each arm
+idle for 120 s and animating (fcprobe, 960x540) for 60 s. Results are in `power/summary.md`; the raw
+capture is not committed.
+
+| window | CPU mW per rep | mean | presented fps (animating) |
+|---|---|---|---|
+| no VM | 247 / 166 | 207 | - |
+| off, idle | 254 / 183 | 218 | - |
+| band, idle | 243 / 285 | 264 | - |
+| tier 0, idle | 246 / 364 | 305 | - |
+| off, animating | 4940 / 4892 | 4916 | 46.5 / 42.0 |
+| band, animating | 5098 / 4881 | 4989 | 41.0 / 43.0 |
+| tier 0, animating | 5191 / 5285 | 5238 | 59.5 / 59.4 |
+
+- **Animating, tier 0 costs 6.5% more CPU power and delivers 34% more frames.** That is 88 mJ per
+  presented frame, against 111 for no band and 119 for the shipped band. The 60 s windows reproduce
+  the frame-rate split cleanly, and tier 0 had 30-34 frames over 25 ms against 678-1137 for the others.
+- **Idle is not resolved.** The empty host drifted 81 mW between reps, more than any arm differs
+  from another. Tier 0's two idle windows read +28 mW and +181 mW over the band-off arm of the same
+  rep. Settling it needs more reps, or a quieter host than one carrying another session's VM.
+- A 960x540 shared-memory client animating at 42-60 fps keeps a P-cluster 98-99% active, at about
+  5 W, in every arm. That is the stock-tier present path's own cost, a lead worth its own look.
+
 ## Not yet known
 
-- **Power.** Tier 0 shrinks the timer slack; it does not add wakeups. Slack is what lets macOS batch
-  wakeups, though, so measure idle package power (`powermetrics`, needs root) before making it the
-  default.
+- **Idle power.** In the power run below, idle was within the host's drift, so whether tier 0
+  costs anything idle is not settled.
 - **Other shapes.** The base M1 (4 P + 4 E) with one vCPU per host core, which is where the original
   report came from. The enhanced tier (venus, 16k kernel). Fewer vCPUs, where the band did help in
   August.

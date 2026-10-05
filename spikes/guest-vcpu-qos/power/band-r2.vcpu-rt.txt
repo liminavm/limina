@@ -1,0 +1,14 @@
+[2026-10-05T16:23:36.013671Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms, at most 1 armed at once)
+[2026-10-05T16:23:40.416615Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 24%, 1/1 armed)
+[2026-10-05T16:23:41.740787Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 50.025ms of CPU over a 50.017208ms hold
+[2026-10-05T16:23:42.066606Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 21%, 1/1 armed)
+[2026-10-05T16:23:44.048731Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 34.094ms of CPU over a 34.144083ms hold
+[2026-10-05T16:23:44.534851Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[2026-10-05T16:23:46.889490Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.811ms of CPU over a 37.752958ms hold
+[2026-10-05T16:23:47.165686Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 17%, 1/1 armed)
+[2026-10-05T16:23:47.292621Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 55.042ms of CPU over a 55.1095ms hold
+[2026-10-05T16:23:48.386590Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 25%, 1/1 armed)
+[2026-10-05T16:23:48.964401Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 36.328ms of CPU over a 37.265916ms hold
+[2026-10-05T16:23:49.423758Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 5%, 1/1 armed)
+[2026-10-05T16:23:57.410855Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 37.838ms of CPU over a 46.571583ms hold
+[2026-10-05T16:23:57.526470Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 26%, 1/1 armed)
