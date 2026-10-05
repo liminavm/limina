@@ -41,9 +41,26 @@ Measured 2026-10-05. Every wait on `main` is the PBO read map
 (`virgl_drm_resource_wait` ← `virgl_resource_transfer_prepare` ← `_mesa_bufferobj_map_range` ←
 `_mesa_validate_pbo_teximage` ← `st_TexSubImage`); the destination texture never waits.
 
-**Still owed before filing:** a run of the GL CTS / piglit buffer-mapping and PBO groups on main vs
-fix under virgl, and a Firefox Canvas Test A/B with the PBO path re-enabled (the pass criteria in
-the firefox-perf note).
+**piglit, main vs fix.** piglit c3aa5b9, `quick` profile filtered to every group a read-only map of
+a buffer or texture can reach: PBOs, buffer mapping and storage, copy/clear buffer, VBOs, UBOs,
+SSBOs, image load/store, TBOs, query buffers, transform feedback, indirect draws, DSA, and the
+teximage / texsubimage / getteximage / readpixels tests. 1871 tests (10373 with subtests),
+`PIGLIT_PLATFORM=surfaceless_egl`. Summary: no regressions; the 43 crashes and the remaining
+failures are identical on both. The summary's two "fixes", `max-ssbo-size@vs` and
+`arb_texture_buffer_object@max-size` (128 MiB buffers), are flaky: re-run 3× each, main failed the
+TBO one once and the fix passed every run.
+
+**Still owed before filing:** a Firefox Canvas Test A/B with Firefox's PBO path re-enabled (the pass
+criteria in the firefox-perf note).
+
+## Opting virgl into blit-based transfers instead
+
+virgl sets `caps->texture_transfer_modes = false`, overriding the Gallium default
+(`PIPE_TEXTURE_TRANSFER_BLIT`), so `st_TexSubImage` never takes the GPU PBO path. Turning it on in
+main removes the waits too (0.18–0.26 ms per iteration, no `VIRTGPU_WAIT`), but the uploads are
+lost: 255 of 256 tiles read back as zeros, with nothing in the host log. It needs that bug found
+first and a much wider conformance run, since the cap also changes texture downloads and
+`ReadPixels`; the fix here does not conflict with it.
 
 ## MR description (draft)
 
