@@ -199,7 +199,7 @@ fi
 TS=(--timestamp)
 [ "${LIMINA_NO_TIMESTAMP:-0}" = "1" ] && TS=(--timestamp=none)
 [ "$SIGN_ID" = "-" ] && TS=()
-HARDEN=("${TS[@]}" --options runtime)
+HARDEN=(${TS[@]+"${TS[@]}"} --options runtime)
 [ "$SIGN_ID" = "-" ] && HARDEN=()
 
 echo "==> building limina + limina-vmm ($PROFILE)"
