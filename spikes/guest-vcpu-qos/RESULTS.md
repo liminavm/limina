@@ -89,12 +89,28 @@ capture is not committed.
   compositor path: mutter uploads each buffer through virgl, then vrend composites through zink on
   KosmicKrisp and presents. That is a lead worth its own look.
 
+## Base M1 (4 P + 4 E, 16 GB), one vCPU per host core
+
+The original report's shape. The same vehicle and arms ran from a signed release bundle carrying
+the knob (`power-arms-bundle.sh`), 3 reps, with presented fps over 60 s windows
+(`power-abacate/`):
+
+| arm | presented fps | frames >25 ms per 60 s |
+|---|---|---|
+| off | 42.3 / 40.9 / 41.8 | 1048 / 1143 / 1086 |
+| band (shipped) | 42.7 / 41.1 / 41.2 | 1034 / 1129 / 1124 |
+| **off + tier 0** | **59.4 / 58.1 / 59.6** | **35 / 114 / 25** |
+
+The shipped band changes nothing on this shape either, and tier 0 restores 60 fps in every boot.
+The power half of this run is void. Finder and `iconservicesagent` held that host's P-cluster
+98-100% active at 3.2 GHz throughout (Finder had burned 462 CPU-hours over 54 days of uptime), so
+the empty-host baseline read 4.3 W and no arm could be told apart from it.
+
 ## Not yet known
 
 - **Idle power.** In the power run below, idle was within the host's drift, so whether tier 0
   costs anything idle is not settled.
-- **Other shapes.** The base M1 (4 P + 4 E) with one vCPU per host core, which is where the original
-  report came from. The enhanced tier (venus, 16k kernel). Fewer vCPUs, where the band did help in
+- **Other shapes.** The enhanced tier (venus, 16k kernel). Fewer vCPUs, where the band did help in
   August.
 - **Why the band adds nothing on top of tier 0.** A lead: `dutyprobe` at 6% duty runs pinned to
   guest CPU 2, not the banded vCPU. Its p90 chunk time was 541 ns to 78 µs in 9 of the 10

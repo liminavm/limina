@@ -43,7 +43,7 @@ for line in open(sys.argv[2]):
     windows.setdefault(label, {})[edge] = int(ep)
 
 groups = collections.defaultdict(list)
-print("| window | n | CPU mW mean | E active % | E MHz | P0 active % | P1 active % |")
+print("| window | n | CPU mW mean | E active % | E MHz | P active % (P or P0) | P1 active % |")
 print("|---|---|---|---|---|---|---|")
 for label, w in windows.items():
     if "begin" not in w or "end" not in w:
@@ -57,7 +57,7 @@ for label, w in windows.items():
         v = [s[2][name][i] for s in inw if name in s[2] and s[2][name][i] is not None]
         return statistics.mean(v) if v else float("nan")
 
-    print(f"| {label} | {len(inw)} | {mw:.0f} | {cl('E', 1):.0f} | {cl('E', 0):.0f} | {cl('P0', 1):.0f} | {cl('P1', 1):.0f} |")
+    print(f"| {label} | {len(inw)} | {mw:.0f} | {cl('E', 1):.0f} | {cl('E', 0):.0f} | {(cl('P0', 1) if 'P0' in inw[0][2] else cl('P', 1)):.0f} | {cl('P1', 1):.0f} |")
     kind = re.sub(r"-r\d+", "", label)
     groups[kind].append(mw)
 
