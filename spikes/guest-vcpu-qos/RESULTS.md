@@ -84,8 +84,10 @@ capture is not committed.
 - **Idle is not resolved.** The empty host drifted 81 mW between reps, more than any arm differs
   from another. Tier 0's two idle windows read +28 mW and +181 mW over the band-off arm of the same
   rep. Settling it needs more reps, or a quieter host than one carrying another session's VM.
-- A 960x540 shared-memory client animating at 42-60 fps keeps a P-cluster 98-99% active, at about
-  5 W, in every arm. That is the stock-tier present path's own cost, a lead worth its own look.
+- A 960x540 `wl_shm` client animating at 42-60 fps keeps a P-cluster 98-99% active, at about 5 W,
+  in every arm. The client only fills shared memory on the CPU; the cost is the stock tier's
+  compositor path: mutter uploads each buffer through virgl, then vrend composites through zink on
+  KosmicKrisp and presents. That is a lead worth its own look.
 
 ## Not yet known
 
