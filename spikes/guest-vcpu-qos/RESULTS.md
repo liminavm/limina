@@ -84,10 +84,8 @@ capture is not committed.
 - **Idle is not resolved.** The empty host drifted 81 mW between reps, more than any arm differs
   from another. Tier 0's two idle windows read +28 mW and +181 mW over the band-off arm of the same
   rep. Settling it needs more reps, or a quieter host than one carrying another session's VM.
-- A 960x540 `wl_shm` client animating at 42-60 fps keeps a P-cluster 98-99% active, at about 5 W,
-  in every arm. The client only fills shared memory on the CPU; the cost is the stock tier's
-  compositor path: mutter uploads each buffer through virgl, then vrend composites through zink on
-  KosmicKrisp and presents. That is a lead worth its own look.
+- The ~5 W animating cost on this host is a debug-build figure: these runs used `target/debug`'s
+  unoptimized worker. The release bundle on a base M1 animates the same client for 0.35-0.5 W (below).
 
 ## Base M1 (4 P + 4 E, 16 GB), one vCPU per host core
 
@@ -106,10 +104,33 @@ The power half of this run is void. Finder and `iconservicesagent` held that hos
 98-100% active at 3.2 GHz throughout (Finder had burned 462 CPU-hours over 54 days of uptime), so
 the empty-host baseline read 4.3 W and no arm could be told apart from it.
 
+## Idle power on a quiet base M1
+
+After a runaway Finder was relaunched and the Aerial wallpaper replaced, the empty host read 24-44
+mW. Same bundle, 3 reps, 180 s idle and 20 s animating windows (`power-abacate-idle/`):
+
+| window | CPU mW per rep | mean | presented fps (20 s) |
+|---|---|---|---|
+| no VM | 27 / 44 / 24 | 32 | - |
+| off, idle | 110 / 42 / 110 | 87 | - |
+| band, idle | 60 / 44 / 44 | 49 | - |
+| tier 0, idle | 63 / 55 / 39 | 52 | - |
+| off, animating | 329 / 347 / 367 | 348 | 40.8 / 44.0 / 45.5 |
+| band, animating | 488 / 513 / 305 | 435 | 59.7 / 59.9 / 38.8 |
+| tier 0, animating | 450 / 485 / 487 | 474 | 54.9 / 54.3 / 59.0 |
+
+- **Tier 0 adds no idle cost over the band**: about 20 mW over an empty host for an idle 8-vCPU
+  GNOME guest, either way. Both off-arm reps that read 110 mW were the first boot after the
+  baseline; the cause is unexamined, but it is not tier 0.
+- **Animating, energy per frame is flat across arms**: 8.0 mJ off, 8.2 band, 8.4 tier 0.
+- **On this quiet host the band reached 60 fps in two boots of three**, while the earlier abacate
+  run, with the P-cluster pinned by Finder, gave it 41-43 in every boot. Tier 0 ran at 54-59 here.
+  These are 20 s windows, so treat them as a hint. Whether the band works depends on host load,
+  and band + tier 0 has not been run on this shape.
+
 ## Not yet known
 
-- **Idle power.** In the power run below, idle was within the host's drift, so whether tier 0
-  costs anything idle is not settled.
+- **Idle power** is settled on a quiet base M1 (see below): tier 0 costs no more than the band.
 - **Other shapes.** The enhanced tier (venus, 16k kernel). Fewer vCPUs, where the band did help in
   August.
 - **Why the band adds nothing on top of tier 0.** A lead: `dutyprobe` at 6% duty runs pinned to
