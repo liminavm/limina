@@ -45,8 +45,7 @@ compositor from producing pixels through vrend, whatever this patch does:
    operand, the context goes into error, and nothing is drawn. The swizzle is redundant, because
    the `.w` writemask already selects alpha. `vrend-swizzle-shim.c` (a measurement aid, not part of
    the reproducer) blanks it out of the TGSI text in flight. This breaks every virgl+vrend VA-API
-   post-processing and presentation path, so it is worth its own one-line Mesa fix (drop the
-   `ureg_scalar()`).
+   post-processing and presentation path; the Mesa fix is `../vl-compositor-sampler-swizzle/`.
 2. **The constants never reach the shader.** The compositor binds `shader_params`, a real buffer,
    at constant slot 0. virgl encodes that as a UBO at index 0 (`virgl_set_constant_buffer`), but
    vrend only maps `CONST[x][y]` with `y != 0` to UBOs (`src/vrend/vrend_shader.c:1947`). Plain
@@ -78,30 +77,10 @@ to (0,0,1). RGB→RGB is fixed on main by f5eb8ab7151. RGB→YUV is not.
 > 210e557f7e0 (separate MR), and it does not read a resource-backed constant buffer at slot 0, so
 > every gfx-compositor result there is black.
 
-## Proposed commit message
+## As sent
 
-    vl/compositor: upload the matrix the frontend set, not the init default
-
-    The gfx compositor uploads vl_compositor_state::csc_matrix as its
-    colour-conversion constants, while the compute compositor reads
-    ::yuv2rgb and ::rgb2yuv. compositor_proc_process_frame() writes
-    csc_matrix for RGB->RGB and YUV->RGB, but for RGB->YUV it only sets
-    rgb2yuv, and for 1-component sources it sets yuv2rgb and rgb2yuv. In
-    both cases the gfx path converts with the matrix vl_compositor_init_state()
-    seeded csc_matrix with, BT.709 limited-range YUV->RGB.
-
-    Remove csc_matrix and let the gfx path pick the direction from the
-    layers being drawn: the RGB->YUV shaders get rgb2yuv, everything else
-    yuv2rgb. Both fields are seeded at init with the matrix csc_matrix used
-    to hold, so a user that sets neither draws as before.
-
-    Fixes: f5eb8ab7151 ("vl: Add pipe_video_codec proc using vl_compositor")
-    Cc: mesa-stable
-    Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
-
-f5eb8ab7151 is in 26.2.0 and later, so `Cc: mesa-stable` applies to 26.2. The original message
-described the pre-f5eb8ab7151 state ("nothing writes csc_matrix after init", the
-5bc0df5aada/a337a97429a history). That no longer matches main and is left out.
+The commit — message, `Fixes:`, trimmed comments — is on branch `upstream/guest-2026-10` of
+`liminavm/mesa`.
 
 ## Should the patch be reduced?
 
@@ -110,23 +89,3 @@ two `csc_matrix` writes that f5eb8ab7151 added, which have to go once the field 
 alternative is to keep the field and add `csc_matrix` writes to the RGB→YUV and identity branches,
 four lines in one file. It fixes the same two cases, but it leaves two places that must agree. The
 deletion makes that drift impossible, which is why it is preferred here. It is a reviewer's call.
-
-## Code-comment trims
-
-`vl_compositor_init_state()`, before:
-
-    /* Seed both directions, so a frontend that never sets them draws with what the gfx
-     * compositor used to hold rather than with a zero matrix. */
-
-After:
-
-    /* Seed both directions for users that never set them. */
-
-`set_csc_matrix()`, before:
-
-    /* Both fragment shaders read the matrix from constants 0..2, so which direction belongs
-     * there is decided by the layer in play: the RGB->YUV shaders convert the other way. */
-
-After:
-
-    /* Constants 0..2 hold rgb2yuv for the RGB->YUV shaders, yuv2rgb otherwise. */

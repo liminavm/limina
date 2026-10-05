@@ -55,36 +55,7 @@ virglrenderer video.
 > Needs a host with virgl video enabled. I could not run it under QEMU, which does not enable
 > virglrenderer video.
 
-## Proposed commit message
+## As sent
 
-    virgl: do not offer three-plane 4:2:0 as a decode target
-
-    virgl_is_video_format_supported() returns
-    vl_video_buffer_is_format_supported() for every entrypoint. That helper
-    only checks that each plane can be sampled, so for a decode config
-    vaQuerySurfaceAttributes() advertises YV12 and I420 next to NV12.
-
-    ffmpeg picks the decode surface format by exact match against the
-    stream's software pixel format, so an 8-bit 4:2:0 stream gets an
-    I420 or YV12 surface. Consumers that only handle NV12 surfaces then
-    reject the frames and fall back to software decoding.
-
-    r600 and nouveau answer NV12 only for real decode profiles. virgl also
-    exposes 10-bit profiles, so instead of restricting to NV12 withhold
-    just the two three-plane 4:2:0 layouts for the bitstream entrypoint.
-
-    Fixes: 6b5aecb1955 ("virgl: add support for hardware video acceleration")
-    Cc: mesa-stable
-    Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
-
-The original message had a stray `%%` ("~20%% CPU") and host-specific anecdotes. Both are gone here.
-
-## Code-comment trim
-
-Before: the 17-line comment above the check in `virgl_screen.c`.
-
-After:
-
-    /* A decoder emits NV12 (or P010/P016); the generic helper only checks
-     * that the planes can be sampled, so it would also offer YV12/I420,
-     * which ffmpeg prefers by exact match for 8-bit 4:2:0 streams. */
+The commit — message, `Fixes:`, trimmed comments — is on branch `upstream/guest-2026-10` of
+`liminavm/mesa`.

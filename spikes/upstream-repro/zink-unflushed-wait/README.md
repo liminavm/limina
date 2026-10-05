@@ -50,7 +50,7 @@ system anv (Fedora mesa 26.1.8). 8 CPUs, process unpinned unless noted. "tc" = t
 | `main` + fix | under gdb (no breakpoints), tc / no tc, 120 s | 0/6 and 0/3 hung (0.6–2.5 M iterations each) |
 | `main` + fix | gdb breakpoint on the equivalent `mtx_lock` (line 1228), no tc, 20 s | 0/3 hung, 102k–112k breakpoint hits each |
 | `main` | gdb breakpoint on the multi-context `mtx_lock` (line 1210), no tc, 20 s — re-run | 3/3 hung on the first hit |
-| `main` + fix as sent (tip d3ae2e55ccf, `util/timespec.h` form) | breakpoint on the equivalent `mtx_lock` (line 1217), no tc, 20 s | 0/3 hung, 24k–95k hits each |
+| `main` + fix as sent (tip 1eea896f4d5: `util/timespec.h`, loop bounded by `submit_count`) | breakpoint on the equivalent `mtx_lock` (line 1217), no tc, 20 s | 0/3 hung, 95k–109k hits each; plain 60 s runs 0/2 |
 
 Measured 2026-10-05.
 
@@ -79,116 +79,12 @@ waiter is between its check and the lock, which two CPUs allow without any preem
 > The fix clears `unflushed` and broadcasts under the mutex, and waits in a loop on the predicate;
 > the try-wait computes a real deadline.
 
-## Proposed commit message
+## As sent
 
-```
-zink: fix lost-wakeup deadlock in the multi-context unflushed-batch wait
-
-zink_batch_usage_unflushed_wait() checks u->unflushed without u->mtx and
-then does a single cnd_wait() on u->flush without re-checking it, while
-submit_queue() clears the flag and broadcasts without the mutex. If the
-flush completes between the waiter's check and its cnd_wait(), the
-broadcast is lost and the waiter sleeps until that batch state is flushed
-again, which may never happen.
-
-Clear the flag and broadcast under the mutex, and have the waiter re-check
-the predicate under the mutex in a loop.
-
-The try-wait path passed {0, 10000} to cnd_timedwait(), which takes an
-absolute TIME_UTC deadline, so it returned immediately instead of waiting
-10us. Compute the deadline from the current time.
-
-Fixes: d4159963e3d ("zink: enforce multi-context waiting for unflushed resources on foreign batches")
-Fixes: 8dd314d2035 ("zink: handle broken resource mapping deadlocks")
-Cc: mesa-stable
-Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
-```
-
-`Fixes:` verified in a full clone: d4159963e3d (first in 21.2) added the predicate-less `cnd_wait`
-and the un-mutexed `cnd_broadcast`; 8dd314d2035 (first in 22.3) added the `trywait` branch with
-the `{0, 10000}` timespec.
-
-## Proposed code changes (not applied)
-
-**1. Use the util timespec helper** (`util/timespec.h`, as v3dv does for its query wait). Not
-`u_cnd_monotonic`: that would change the type of `zink_batch_usage::flush` for a 10 µs try-wait,
-and the absolute-`TIME_UTC` form is what the rest of the tree passes to `cnd_timedwait`.
-
-```diff
---- a/src/gallium/drivers/zink/zink_batch.c
-+++ b/src/gallium/drivers/zink/zink_batch.c
-@@
- #include "zink_surface.h"
- 
-+#include "util/timespec.h"
-+
-@@ zink_batch_usage_unflushed_wait
-          if (trywait) {
-             if (u->unflushed) {
--               /* cnd_timedwait takes an ABSOLUTE TIME_UTC timespec; the previous
--                * {0, 10000} was epoch+10us, i.e. always already expired
--                */
-+               /* cnd_timedwait takes an absolute TIME_UTC deadline */
-                struct timespec ts;
-                timespec_get(&ts, TIME_UTC);
--               ts.tv_nsec += 10000;
--               if (ts.tv_nsec >= 1000000000) {
--                  ts.tv_sec++;
--                  ts.tv_nsec -= 1000000000;
--               }
-+               timespec_add_nsec(&ts, &ts, 10000);
-                cnd_timedwait(&u->flush, &u->mtx, &ts);
-             }
-```
-
-**2. Tighten the loop predicate — needs your decision.** `zink_start_batch()` sets
-`bs->usage.unflushed = true` again when the batch state is reused, and reset bumps
-`submit_count`. If A's batch completes, is reset and restarted before the woken waiter reacquires
-the mutex, `while (u->unflushed)` puts the waiter back to sleep on A's *next* batch, which may
-never flush. The entry guard (`submit_count_diff > 1`) only covers a batch already reset before the
-call. Bounding the wait by the submission the caller saw closes it:
-
-```diff
-          } else {
--            while (u->unflushed)
-+            while (u->unflushed &&
-+                   zink_batch_submit_count_diff(u->submit_count, submit_count) == 0)
-                cnd_wait(&u->flush, &u->mtx);
-          }
-```
-
-(`submit_count++` in `submit_queue()` happens before the locked broadcast, so the waiter sees it.)
-Not observed in any run here; it is a narrower window than the one fixed. Note also that the
-`unflushed = true` store in `zink_start_batch()` remains outside the mutex; harmless for the
-waiter with the predicate above.
-
-## Recommended code-comment trims
-
-The patch's comments narrate the bug; upstream wants the invariant (the story is in the commit
-message).
-
-`submit_queue()`, before the clear:
-
-```c
-   /* the unflushed clear must happen under the usage mutex: waiters in
-    * zink_batch_usage_unflushed_wait() check the flag under that mutex before
-    * sleeping on u->flush, and a clear that lands between an unlocked check and
-    * the cnd_wait is a lost wakeup (observed as an infinite sleep on u->flush
-    * with every flush queue idle)
-    */
-```
-
-after:
-
-```c
-   /* waiters re-check this under the same mutex before sleeping on usage.flush */
-```
-
-`submit_queue()`, before the broadcast — drop the comment (the one above covers it), or:
-
-```c
-   /* under the mutex, pairs with the re-check in zink_batch_usage_unflushed_wait() */
-```
-
-`zink_batch_usage_unflushed_wait()`, the block comment before `mtx_lock` — drop it; the
-`while (u->unflushed)` loop states the protocol. The timespec comment is in diff 1 above.
+The commit — message, `Fixes:`, trimmed comments — is on branch `upstream/guest-2026-10` of
+`liminavm/mesa`. It also uses `timespec_add_nsec()` from `util/timespec.h` for the try-wait
+deadline (not `u_cnd_monotonic`, which would change the type of `zink_batch_usage::flush` for a
+10 µs wait), and bounds the wait loop by the caller's `submit_count`: a batch state reused after
+the awaited submission sets `unflushed` again for its next batch, which the bare
+`while (u->unflushed)` would keep sleeping on. That second case was never observed; it is closed by
+construction.

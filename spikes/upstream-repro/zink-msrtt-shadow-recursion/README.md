@@ -60,75 +60,10 @@ blit carried over.
 > apply a clear while its bit is masked (zink_fb_clear_enabled reads the same mask) and the
 > fb_clears entries are untouched, so the clear is only deferred to the following renderpass.
 
-## Proposed commit message
+## As sent
 
-```
-zink: don't recurse forever populating a shadow attachment
-
-zink_render_attachment_shadow() replicate-blits a texture into its
-transient MSAA image (the EXT_multisampled_render_to_texture emulation
-used when the driver has no VK_EXT_multisampled_render_to_single_sampled)
-and marks the transient valid only once that blit returns.
-
-util_blitter rebinds the framebuffer, and zink_set_framebuffer_state()
-flushes pending clears when the bound attachments change. Every
-attachment's clears were masked off across the blit except the one being
-shadowed, so that flush re-entered begin_rendering() while the transient
-was still invalid and the replicate blit started over, recursing until
-the stack ran out.
-
-Mask all pending clears across the blit and restore them afterwards. The
-clear is deferred, not dropped: zink_fb_clear_enabled() reads the same
-mask, so nothing can apply it while it is masked, and the fb_clears
-entries are untouched; the following renderpass applies it to the
-now-populated transient, which is the order the application asked for.
-
-Fixes: 82add9f2e99 ("zink: avoid recursion during msrtss blits from flushing clears")
-Cc: mesa-stable
-Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
-```
-
-**`Fixes:` — recommended 82add9f2e99, your call.** That commit (`Part-of: !22577`, first in
-23.2) added the clear save/restore around the replicate blit for exactly this re-entry, but its
-mask deliberately leaves the shadowed attachment's own clears enabled — that exclusion is what this
-patch removes. The MSRTT emulation itself is older (fbff2b6c652, "zink: implement
-GL_EXT_multisampled_render_to_texture", 21.3), but at that commit `zink_set_framebuffer_state()`
-did not flush pending clears on an attachment change, so the re-entry path did not exist there;
-the exact commit that made the own-attachment flush reachable was not pinned down. Either sha is in
-every live stable branch, so the backport reach is the same.
-
-## Recommended code-comment trim
-
-The patch's comment narrates the bug; upstream prefers the invariant (the story is in the commit
-message).
-
-Before:
-
-```c
-      /* Mask off ALL pending clears across the blit, this attachment's own
-       * included, and restore them afterwards.
-       *
-       * util_blitter rebinds the framebuffer, and zink_set_framebuffer_state
-       * flushes pending clears when the bound attachments change. Leaving this
-       * attachment's clear enabled meant that flush re-entered
-       * zink_batch_rp -> begin_rendering while the transient was still invalid
-       * (it is only marked valid once the blit below returns), so the replicate
-       * blit started over: unbounded recursion until the stack ran out.
-       * u_blitter's "Caught recursion" only logs, it does not break the cycle.
-       *
-       * The clear is not lost, only deferred: restored below, it is applied by
-       * the renderpass that follows, against the now-populated transient. That
-       * is the order the application asked for anyway — the clear was issued
-       * after the contents this blit is replicating.
-       */
-```
-
-After:
-
-```c
-      /* mask all pending clears, this attachment's included: the blit rebinds
-       * the framebuffer, and flushing a clear here would begin a renderpass
-       * that starts this replicate blit again. they are restored below and
-       * applied by the next renderpass
-       */
-```
+The commit — message, `Fixes:`, trimmed comments — is on branch `upstream/guest-2026-10` of
+`liminavm/mesa`. `Fixes: 82add9f2e99` because that commit added the clear save/restore
+around the replicate blit but left the shadowed attachment's own clears enabled; the emulation
+itself (fbff2b6c652) predates the clear flush on attachment change. Both reach every live stable
+branch.

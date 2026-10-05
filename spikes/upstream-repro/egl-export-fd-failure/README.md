@@ -47,40 +47,8 @@ Measured 2026-10-05. The export with free fds succeeds on every build (`EGL_TRUE
 > No EGL error is raised, the same as the existing early return for images that cannot be exported
 > at all. Whether both paths should set `EGL_BAD_ACCESS` is open for review.
 
-## Proposed commit message
+## As sent
 
-    egl/dri2: fail eglExportDMABUFImageMESA when the driver cannot export an fd
-
-    dri2_export_dma_buf_image_mesa() ignores the return value of the
-    __DRI_IMAGE_ATTRIB_FD query. When the driver cannot export the image as
-    an fd -- for example because the process has run out of file
-    descriptors -- the function still returns EGL_TRUE with the caller's
-    fds[] untouched, and the caller goes on to use whatever was in the array
-    as a file descriptor.
-
-    Return EGL_FALSE instead: close the fds already exported for earlier
-    planes, set every slot that was written to -1, and release the plane
-    image and the display lock as the success path does.
-
-    No EGL error is recorded, matching the existing early return when the
-    image cannot be exported at all.
-
-    Fixes: 8f7338f284c ("egl: add initial EGL_MESA_image_dma_buf_export v2.4")
-    Cc: mesa-stable
-    Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
-
-The current loop shape dates from f416a52960b ("egl: refine dma buf export to support multi
-plane"), but the result was already ignored in 8f7338f284c.
-
-## Code-comment trim
-
-Before:
-
-    /* The driver cannot export this image. Returning EGL_TRUE here
-     * would leave the caller's fd array untouched, and the caller
-     * would then use an uninitialized value as an fd.
-     */
-
-After:
-
-    /* The driver cannot export an fd for this image. */
+The commit — message, `Fixes:`, trimmed comments — is on branch `upstream/guest-2026-10` of
+`liminavm/mesa`. Whether this path (and the existing early return) should also raise
+`EGL_BAD_ACCESS` is a question to put to review.

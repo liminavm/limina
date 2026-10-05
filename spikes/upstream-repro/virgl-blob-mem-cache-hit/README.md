@@ -62,48 +62,7 @@ what the guest puts in `SET_TYPE` or in how vrend handles it. This patch only fi
 > rejects it. That needs separate work. This MR fixes the guest-side omission that stops
 > `SET_TYPE` from being sent at all.
 
-## Proposed commit message
+## As sent
 
-    virgl: report blob_mem for a resource that was already imported
-
-    virgl_drm_winsys_resource_create_from_handle() only fills in *blob_mem
-    when it allocates a new virgl_hw_res and queries RESOURCE_INFO. When the
-    handle is already in bo_handles or bo_names it returns early and leaves
-    *blob_mem at 0.
-
-    A multi-planar dma-buf carries every plane in one fd, so only the first
-    plane imported creates the virgl_hw_res. dri_create_image_from_winsys()
-    imports planes in reverse order and virgl_resource_from_handle() only
-    emits SET_TYPE for plane 0, so plane 0 is always the cache hit: it is
-    treated as a classic resource, its winsys stride/offset/modifier are
-    dropped, and SET_TYPE is never sent. An untyped blob then stays untyped
-    on the host, which rejects the first sampler view created on it.
-
-    Report the cached resource's blob_mem on the shared exit path.
-
-    Fixes: 87383e3163d ("virgl: query blob mem")
-    Cc: mesa-stable
-    Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
-
-`SET_TYPE` (and with it the visible failure) came with d37124b065c ("virgl: add support for
-VIRGL_CAP_V2_UNTYPED_RESOURCE"). The early return that skips `*blob_mem` was introduced by
-87383e3163d, so that is the commit the `Fixes:` tag names.
-
-## Code-comment trim
-
-Before (8 lines, in `virgl_drm_winsys.c` at `done:`):
-
-    /* Report the blob kind on the cache-hit paths too, not just where
-     * RESOURCE_INFO ran. A multi-planar dma-buf imports every plane from the
-     * same fd, so only the first plane allocates the virgl_hw_res; the rest hit
-     * the hash tables above. dri_create_image_from_winsys imports planes in
-     * reverse order, so plane 0 -- the only one virgl_resource_from_handle lets
-     * emit SET_TYPE -- is always a cache hit. Leaving *blob_mem at 0 there makes
-     * it look like a classic (non-blob) resource, SET_TYPE is skipped, and the
-     * host resource stays untyped: the image samples as garbage. */
-
-After:
-
-    /* Also report blob_mem on a cache hit: planes of a multi-planar dma-buf
-     * share one fd and are imported last to first, so plane 0 -- the one that
-     * sends SET_TYPE -- is always a hit. */
+The commit — message, `Fixes:`, trimmed comments — is on branch `upstream/guest-2026-10` of
+`liminavm/mesa`.
