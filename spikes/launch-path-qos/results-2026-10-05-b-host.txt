@@ -1,0 +1,1350 @@
+## 11:08:26 load { 4.90 3.21 3.14 }
+PID    COMMAND          %CPU #TH   
+47349  rustc            84.6 4/1   
+402    WindowServer     16.0 24    
+18333  2.1.289          12.7 23    
+3581   XprotectService  11.5 5     
+663    Finder           11.4 7     
+1      launchd          9.9  4     
+0      kernel_task      9.0  735/10
+369    opendirectoryd   8.4  14    
+## 11:08:37 load { 5.90 3.47 3.23 }
+PID    COMMAND          %CPU #TH   
+47508  lpq              65.8 2/1   
+474    syspolicyd       40.6 6/1   
+3581   XprotectService  34.8 5     
+402    WindowServer     15.7 24    
+403    tccd             8.4  3     
+18333  2.1.289          6.8  24    
+0      kernel_task      6.3  735/10
+47527  top              4.6  1/1   
+## 11:08:47 load { 5.22 3.40 3.21 }
+PID    COMMAND          %CPU #TH   
+47558  lpq              19.9 2     
+402    WindowServer     18.7 23    
+47626  top              8.7  1/1   
+18333  2.1.289          6.8  23    
+0      kernel_task      5.3  735/10
+369    opendirectoryd   4.1  10    
+1678   2.1.287          3.7  23    
+77210  limina           3.0  19    
+## 11:08:58 load { 4.95 3.41 3.21 }
+PID    COMMAND          %CPU #TH 
+357    mds              48.4 15/6
+402    WindowServer     19.0 24  
+18333  2.1.289          17.5 24  
+550    mds_stores       10.0 7/2 
+47679  top              9.3  1/1 
+47289  mdworker_shared  9.1  3   
+47288  mdworker_shared  8.1  4/2 
+47290  mdworker_shared  8.0  3/1 
+## 11:09:08 load { 6.72 3.85 3.37 }
+PID    COMMAND          %CPU #TH
+69292  AppleIntelligenc 46.7 5/1
+486    biomed           23.1 4/1
+1678   2.1.287          22.5 24 
+445    eligibilityd     17.8 5  
+402    WindowServer     16.3 23 
+599    BiomeAgent       14.8 6/1
+380    dasd             9.6  17 
+47753  top              9.4  1/1
+## 11:09:18 load { 6.84 3.97 3.42 }
+PID    COMMAND          %CPU #TH   
+47831  lpq              67.2 2/1   
+832    WeatherWidget    28.6 6     
+402    WindowServer     16.1 23/2  
+18333  2.1.289          6.6  24    
+0      kernel_task      6.1  735/11
+47848  top              4.8  1/1   
+410    runningboardd    3.2  7/1   
+4106   2.1.288          2.8  21    
+## 11:09:29 load { 5.86 3.89 3.40 }
+PID    COMMAND          %CPU #TH   
+47854  lpq              19.6 2     
+402    WindowServer     16.8 23    
+1678   2.1.287          13.3 24    
+47859  top              6.0  1/1   
+0      kernel_task      4.9  735/10
+77210  limina           2.6  19    
+557    com.apple.Driver 2.4  8     
+697    wifip2pd         1.2  2     
+## 11:09:39 load { 6.63 4.11 3.48 }
+PID    COMMAND          %CPU  #TH   
+47878  rustc            816.1 17/11 
+402    WindowServer     14.9  23/1  
+47885  top              6.4   1/1   
+0      kernel_task      4.9   735/10
+1678   2.1.287          2.2   23    
+557    com.apple.Driver 1.5   8     
+18333  2.1.289          0.9   23    
+697    wifip2pd         0.8   2     
+## 11:09:50 load { 10.40 5.03 3.82 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     15.1 23    
+357    mds              10.5 13/6  
+47896  top              6.4  1/1   
+0      kernel_task      3.8  735/10
+413    coreaudiod       3.0  13    
+92174  2.1.287          3.0  21    
+47673  mdworker_shared  2.9  4/3   
+18333  2.1.289          2.8  22    
+## 11:10:00 load { 9.04 4.92 3.79 }
+PID    COMMAND          %CPU #TH   
+47931  lpq              67.9 6     
+406    loginwindow      19.0 8     
+402    WindowServer     17.7 26    
+0      kernel_task      11.9 735/10
+47946  top              6.6  1/1   
+1678   2.1.287          5.9  23    
+77210  limina           2.6  19    
+557    com.apple.Driver 2.3  8     
+## 11:10:11 load { 7.89 4.80 3.77 }
+PID    COMMAND          %CPU #TH   
+47967  lpq              21.9 6     
+402    WindowServer     16.4 23    
+47972  top              9.6  1/1   
+640    Activity Monitor 3.6  5     
+0      kernel_task      3.4  735/10
+1678   2.1.287          3.4  23    
+685    ContinuityCaptur 3.1  7     
+77210  limina           2.9  18    
+## 11:10:21 load { 6.75 4.66 3.73 }
+PID    COMMAND          %CPU #TH   
+649    swcd             27.3 3     
+402    WindowServer     23.8 23    
+655    siriknowledged   16.5 6     
+48007  top              9.7  1/1   
+0      kernel_task      8.2  735/10
+685    ContinuityCaptur 7.4  8     
+648    chronod          5.9  7     
+1678   2.1.287          4.5  23    
+## 11:10:32 load { 5.86 4.54 3.69 }
+PID    COMMAND          %CPU #TH   
+48029  lpq              68.2 2/1   
+952    mdbulkimport     52.5 5     
+402    WindowServer     20.7 23    
+357    mds              7.6  7     
+48036  top              6.4  1/1   
+0      kernel_task      6.0  735/11
+809    Spotlight        4.8  13    
+1678   2.1.287          4.8  24    
+## 11:10:42 load { 5.10 4.42 3.66 }
+PID    COMMAND          %CPU #TH   
+48053  lpq              19.9 2     
+402    WindowServer     18.1 23    
+48060  top              9.5  1/1   
+51938  2.1.289          6.2  15    
+1678   2.1.287          5.5  23    
+0      kernel_task      4.7  736/10
+685    ContinuityCaptur 3.2  8     
+77210  limina           2.8  18/1  
+## 11:10:53 load { 4.48 4.31 3.63 }
+PID    COMMAND          %CPU  #TH   
+48083  rustc            790.4 16/10 
+402    WindowServer     15.2  23    
+0      kernel_task      7.6   736/10
+48104  top              6.4   1/1   
+4106   2.1.288          2.7   15    
+1678   2.1.287          2.4   24    
+685    ContinuityCaptur 1.9   8     
+557    com.apple.Driver 1.7   8     
+## 11:11:03 load { 9.47 5.37 4.01 }
+PID    COMMAND          %CPU #TH   
+48083  rustc            86.4 7/1   
+402    WindowServer     16.0 26    
+48125  top              6.0  1/1   
+0      kernel_task      3.4  736/10
+77210  limina           2.3  18    
+557    com.apple.Driver 1.9  8     
+48129  lpq              1.7  2     
+697    wifip2pd         1.3  3     
+## 11:11:14 load { 8.25 5.25 3.98 }
+PID    COMMAND          %CPU #TH   
+48172  lpq              68.5 2     
+402    WindowServer     17.1 23    
+895    sysmond          13.1 3     
+1678   2.1.287          9.3  23/1  
+48177  top              6.5  1/1   
+0      kernel_task      4.2  735/10
+640    Activity Monitor 3.3  5     
+336    systemstats      3.1  4     
+## 11:11:24 load { 6.77 5.07 3.94 }
+PID    COMMAND          %CPU #TH 
+1361   contactsd        38.5 74/3
+402    WindowServer     19.8 23  
+48202  lpq              19.0 2/1 
+48169  AddressBookSourc 17.1 8   
+895    sysmond          11.7 2   
+48230  top              9.8  1/1 
+1678   2.1.287          8.3  23  
+621    trustd           7.5  3   
+## 11:11:35 load { 6.10 4.98 3.93 }
+PID    COMMAND          %CPU #TH   
+895    sysmond          21.3 3     
+402    WindowServer     18.8 23    
+48273  top              9.4  1/1   
+1678   2.1.287          7.2  23/1  
+0      kernel_task      4.5  735/10
+640    Activity Monitor 4.2  5     
+77210  limina           3.1  18    
+77215  limina-vmm       2.7  67    
+## 11:11:45 load { 5.25 4.83 3.89 }
+PID    COMMAND          %CPU #TH   
+895    sysmond          22.2 3     
+402    WindowServer     19.6 23/1  
+48313  top              9.4  1/1   
+1678   2.1.287          8.4  24    
+640    Activity Monitor 5.8  5     
+0      kernel_task      5.4  735/10
+77210  limina           3.0  18    
+557    com.apple.Driver 2.6  8     
+## 11:11:56 load { 4.75 4.74 3.86 }
+PID    COMMAND          %CPU #TH   
+48350  rustc            82.5 4/1   
+48349  rustc            81.4 4/1   
+48337  lpq              68.1 6/1   
+402    WindowServer     18.2 23    
+895    sysmond          13.3 2     
+685    ContinuityCaptur 8.9  8     
+1      launchd          7.4  3     
+0      kernel_task      6.9  735/10
+## 11:12:06 load { 4.39 4.67 3.85 }
+PID    COMMAND          %CPU #TH   
+48385  lpq              21.7 6/1   
+685    ContinuityCaptur 19.9 8     
+402    WindowServer     19.6 23    
+895    sysmond          18.7 3     
+48402  top              9.4  1/1   
+640    Activity Monitor 6.6  6     
+0      kernel_task      4.5  735/10
+1678   2.1.287          3.0  23    
+## 11:12:17 load { 3.86 4.54 3.81 }
+PID    COMMAND          %CPU #TH   
+1678   2.1.287          22.2 24    
+895    sysmond          20.3 3     
+402    WindowServer     18.4 24    
+18333  2.1.289          13.6 17    
+48423  top              8.9  1/1   
+0      kernel_task      4.6  735/10
+640    Activity Monitor 3.9  6/1   
+77210  limina           2.8  18    
+## 11:12:27 load { 3.50 4.44 3.79 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.7 24    
+895    sysmond          10.5 3/1   
+48474  top              6.0  1/1   
+0      kernel_task      4.4  735/10
+1678   2.1.287          3.6  23    
+77210  limina           2.7  18    
+557    com.apple.Driver 2.3  10    
+92174  2.1.287          1.3  21    
+## 11:12:38 load { 3.42 4.40 3.78 }
+PID    COMMAND          %CPU #TH   
+48501  lpq              20.6 2     
+402    WindowServer     19.0 23    
+48506  top              9.6  1/1   
+445    eligibilityd     6.3  4     
+1678   2.1.287          5.7  24    
+0      kernel_task      5.2  735/10
+77210  limina           2.9  18    
+557    com.apple.Driver 2.9  10    
+## 11:12:48 load { 3.44 4.37 3.77 }
+PID    COMMAND          %CPU  #TH   
+48527  rustc            346.3 16/10 
+402    WindowServer     15.7  23    
+48539  top              6.5   1/1   
+0      kernel_task      4.0   735/10
+77210  limina           2.4   18/3  
+557    com.apple.Driver 1.8   10    
+48532  lpq              1.7   2     
+1678   2.1.287          1.5   23    
+## 11:12:58 load { 4.87 4.63 3.87 }
+PID    COMMAND          %CPU #TH   
+48527  rustc            84.8 7/1   
+48553  lpq              64.7 2/1   
+402    WindowServer     19.9 26/1  
+48560  top              6.4  1/1   
+640    Activity Monitor 5.6  7     
+406    loginwindow      5.4  6     
+0      kernel_task      4.9  735/10
+895    sysmond          4.7  3     
+## 11:13:09 load { 4.69 4.60 3.87 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.1 23    
+48609  top              9.8  1/1   
+1678   2.1.287          6.4  24    
+0      kernel_task      5.0  735/10
+77215  limina-vmm       3.7  68    
+77210  limina           2.9  18    
+557    com.apple.Driver 2.5  10    
+394    bluetoothd       1.6  9     
+## 11:13:19 load { 5.48 4.77 3.94 }
+PID    COMMAND          %CPU  #TH   
+48668  virglrenderer-c8 192.1 52/2  
+550    mds_stores       79.4  7/2   
+357    mds              27.9  18    
+402    WindowServer     12.4  23    
+48678  top              6.1   1/1   
+0      kernel_task      5.8   735/10
+474    syspolicyd       5.4   6     
+48641  mdworker_shared  4.4   4     
+## 11:13:30 load { 4.87 4.66 3.91 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.3 23    
+48712  top              8.8  1/1   
+685    ContinuityCaptur 5.7  8     
+92174  2.1.287          5.5  15    
+4106   2.1.288          5.5  15    
+0      kernel_task      4.4  735/10
+1678   2.1.287          4.0  23    
+77210  limina           2.8  18/1  
+## 11:13:40 load { 4.68 4.62 3.91 }
+PID    COMMAND          %CPU #TH   
+550    mds_stores       95.0 6/1   
+48772  clippy-driver    85.9 3/1   
+48773  clippy-driver    80.8 3/1   
+48774  clippy-driver    80.7 3/1   
+48747  lpq              67.0 2/1   
+402    WindowServer     18.3 23    
+0      kernel_task      9.3  735/11
+48782  top              6.5  1/1   
+## 11:13:51 load { 4.82 4.65 3.92 }
+PID    COMMAND          %CPU #TH   
+48874  clippy-driver    79.9 3/1   
+48873  clippy-driver    77.4 3/1   
+48872  clippy-driver    76.5 3/1   
+402    WindowServer     16.9 23/1  
+0      kernel_task      10.3 735/10
+413    coreaudiod       7.3  16    
+48885  top              6.8  1/1   
+333    mediaremoted     3.8  10    
+## 11:14:01 load { 4.84 4.66 3.94 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.5 26    
+48921  top              9.9  1/1   
+1678   2.1.287          7.0  23    
+0      kernel_task      4.9  735/11
+413    coreaudiod       4.3  16    
+640    Activity Monitor 3.5  6     
+77210  limina           2.8  19    
+77215  limina-vmm       2.6  68    
+## 11:14:12 load { 4.17 4.52 3.90 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     19.0 23    
+48942  top              9.4  1/1   
+685    ContinuityCaptur 5.7  9     
+0      kernel_task      4.7  735/10
+1678   2.1.287          4.2  24    
+77210  limina           3.0  19    
+48902  mdworker_shared  2.8  4     
+557    com.apple.Driver 2.5  9     
+## 11:14:22 load { 4.14 4.50 3.90 }
+PID    COMMAND          %CPU #TH   
+685    ContinuityCaptur 18.2 9/1   
+402    WindowServer     18.1 23    
+48988  top              9.1  1/1   
+1678   2.1.287          5.1  23    
+0      kernel_task      4.6  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.2  8     
+394    bluetoothd       1.8  10    
+## 11:14:33 load { 3.73 4.40 3.87 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     15.7 23    
+1678   2.1.287          8.0  24    
+49009  top              5.9  1/1   
+0      kernel_task      4.1  735/10
+663    Finder           4.1  6     
+92174  2.1.287          3.0  15    
+77210  limina           2.3  19    
+394    bluetoothd       1.7  10    
+## 11:14:43 load { 3.39 4.31 3.84 }
+PID    COMMAND          %CPU  #TH   
+49035  rustc            797.5 16/10 
+402    WindowServer     14.9  23    
+49050  top              6.2   1/1   
+0      kernel_task      3.8   735/10
+1678   2.1.287          3.4   24/1  
+18333  2.1.289          2.0   16/1  
+49045  lpq              1.6   2     
+550    mds_stores       1.6   5     
+## 11:14:54 load { 8.04 5.32 4.21 }
+PID    COMMAND          %CPU #TH   
+49035  rustc            86.6 7/1   
+49066  lpq              67.6 2/1   
+402    WindowServer     15.9 23    
+49073  top              6.4  1/1   
+0      kernel_task      3.4  735/10
+77210  limina           2.4  19    
+685    ContinuityCaptur 2.0  8     
+557    com.apple.Driver 1.8  8     
+## 11:15:04 load { 7.19 5.22 4.19 }
+PID    COMMAND          %CPU #TH   
+563    searchpartyd     19.3 7/1   
+402    WindowServer     16.8 26    
+49122  top              9.7  1/1   
+1678   2.1.287          9.3  23    
+0      kernel_task      4.6  735/10
+77210  limina           2.7  19    
+557    com.apple.Driver 2.2  9     
+77215  limina-vmm       1.3  68    
+## 11:15:15 load { 6.24 5.08 4.15 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.9 24    
+49160  top              7.6  1/1   
+51938  2.1.289          6.4  15    
+0      kernel_task      4.6  735/10
+18333  2.1.289          3.9  17    
+1678   2.1.287          3.8  17    
+685    ContinuityCaptur 3.2  8     
+77210  limina           2.8  19/1  
+## 11:15:25 load { 5.66 5.00 4.13 }
+PID    COMMAND          %CPU #TH   
+1      launchd          22.5 4/1   
+402    WindowServer     18.7 24    
+49205  top              9.3  1/1   
+1678   2.1.287          4.8  23    
+0      kernel_task      4.6  735/10
+77210  limina           3.0  19    
+557    com.apple.Driver 2.6  8     
+49200  lpq              1.9  2     
+## 11:15:36 load { 5.03 4.88 4.10 }
+PID    COMMAND          %CPU #TH   
+49241  lpq              68.7 2/1   
+402    WindowServer     18.3 23    
+49250  top              6.8  1/1   
+1678   2.1.287          5.7  23    
+0      kernel_task      5.0  735/10
+640    Activity Monitor 3.6  6     
+77210  limina           2.8  19    
+557    com.apple.Driver 2.6  8     
+## 11:15:46 load { 4.56 4.79 4.07 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     15.9 23    
+1678   2.1.287          8.1  24    
+413    coreaudiod       7.0  19    
+0      kernel_task      6.0  735/10
+49271  top              5.5  1/1   
+332    fseventsd        3.7  17/1  
+333    mediaremoted     3.3  8     
+640    Activity Monitor 2.5  6/1   
+## 11:15:57 load { 6.70 5.22 4.24 }
+PID    COMMAND          %CPU #TH   
+474    syspolicyd       15.1 7     
+357    mds              14.8 16    
+402    WindowServer     13.9 23    
+895    sysmond          8.3  3     
+550    mds_stores       6.7  6     
+3581   XprotectService  6.3  3/1   
+49317  top              6.1  1/1   
+0      kernel_task      4.7  735/10
+## 11:16:07 load { 5.98 5.12 4.21 }
+PID    COMMAND          %CPU  #TH   
+49344  rustc            803.0 16/10 
+402    WindowServer     14.2  23    
+49360  top              6.3   1/1   
+0      kernel_task      4.0   735/10
+557    com.apple.Driver 1.7   9     
+895    sysmond          1.5   3/1   
+663    Finder           1.4   7     
+640    Activity Monitor 0.9   6     
+## 11:16:18 load { 6.54 5.28 4.28 }
+PID    COMMAND          %CPU  #TH   
+49396  rustc            226.5 8/2   
+402    WindowServer     14.6  23    
+49402  top              6.1   1/1   
+413    coreaudiod       3.1   16    
+0      kernel_task      2.8   735/10
+77210  limina           1.9   19    
+663    Finder           1.8   7     
+333    mediaremoted     1.6   11    
+## 11:16:28 load { 5.84 5.17 4.25 }
+PID    COMMAND          %CPU  #TH   
+49430  rustc            268.5 8/2   
+402    WindowServer     15.4  22    
+895    sysmond          6.4   3     
+49436  top              6.4   1/1   
+0      kernel_task      3.5   735/10
+640    Activity Monitor 3.3   5     
+77210  limina           2.2   19    
+413    coreaudiod       2.1   14    
+## 11:16:39 load { 5.70 5.16 4.26 }
+PID    COMMAND          %CPU  #TH
+49460  rustc            169.7 8/2
+1118   ModelCatalogAgen 19.5  5  
+402    WindowServer     15.3  23 
+895    sysmond          11.2  3  
+1310   com.apple.Safari 8.4   4  
+380    dasd             7.9   7  
+640    Activity Monitor 5.1   5  
+49468  top              5.0   1/1
+## 11:16:49 load { 5.97 5.24 4.30 }
+PID    COMMAND          %CPU  #TH   
+49502  rustc            418.9 8/2   
+402    WindowServer     15.5  23    
+895    sysmond          11.6  3     
+49509  top              6.2   1/1   
+640    Activity Monitor 4.8   5     
+0      kernel_task      3.9   735/10
+663    Finder           2.6   7     
+92174  2.1.287          1.9   22    
+## 11:17:00 load { 7.36 5.54 4.42 }
+PID    COMMAND          %CPU  #TH   
+49533  rustc            214.8 8/2   
+402    WindowServer     18.5  26    
+406    loginwindow      17.6  7     
+49534  lpq              16.1  2     
+895    sysmond          13.6  2     
+0      kernel_task      11.9  735/10
+49539  top              6.1   1/1   
+640    Activity Monitor 5.4   6     
+## 11:17:10 load { 7.64 5.66 4.47 }
+PID    COMMAND          %CPU #TH   
+3581   XprotectService  31.4 5/1   
+402    WindowServer     16.1 23    
+474    syspolicyd       15.5 6     
+895    sysmond          8.9  3     
+0      kernel_task      6.9  735/10
+49569  top              6.2  1/1   
+640    Activity Monitor 3.0  6     
+77210  limina           2.3  19    
+## 11:17:20 load { 6.85 5.55 4.45 }
+PID    COMMAND          %CPU #TH
+49611  lpq              66.6 2/1
+3581   XprotectService  35.7 5  
+474    syspolicyd       34.0 7/1
+49612  virglrenderer-c8 25.2 2/1
+402    WindowServer     15.8 23 
+895    sysmond          11.3 3  
+403    tccd             8.8  3  
+49617  top              4.6  1/1
+## 11:17:31 load { 5.87 5.39 4.40 }
+PID    COMMAND          %CPU #TH   
+895    sysmond          21.4 2     
+402    WindowServer     18.8 23    
+49657  top              8.7  1/1   
+0      kernel_task      4.9  735/10
+640    Activity Monitor 4.4  5/1   
+77210  limina           2.9  19    
+557    com.apple.Driver 2.5  9     
+1678   2.1.287          2.4  23    
+## 11:17:41 load { 4.96 5.21 4.35 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.5 23    
+1678   2.1.287          11.9 24    
+895    sysmond          10.1 2/1   
+49683  top              7.2  1/1   
+0      kernel_task      6.5  735/10
+557    com.apple.Driver 2.9  9     
+369    opendirectoryd   2.9  11    
+77215  limina-vmm       2.6  68    
+## 11:17:52 load { 4.28 5.05 4.30 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.6 23    
+49722  top              9.0  1/1   
+0      kernel_task      4.1  735/10
+640    Activity Monitor 3.4  6     
+77210  limina           2.9  19/1  
+557    com.apple.Driver 2.7  9     
+1678   2.1.287          2.1  17    
+77215  limina-vmm       1.3  68    
+## 11:18:02 load { 3.92 4.95 4.28 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.4 26    
+49755  top              9.2  1/1   
+0      kernel_task      4.6  735/10
+1678   2.1.287          3.1  23    
+77210  limina           2.9  19    
+557    com.apple.Driver 2.8  8     
+77215  limina-vmm       1.6  68    
+394    bluetoothd       1.5  9     
+## 11:18:13 load { 5.40 5.22 4.38 }
+PID    COMMAND          %CPU #TH 
+357    mds              56.0 16/3
+402    WindowServer     21.7 23  
+49814  top              9.5  1/1 
+49777  mdworker_shared  9.3  4   
+49780  mdworker_shared  8.6  3   
+49775  mdworker_shared  7.4  4   
+49778  mdworker_shared  7.4  4   
+49776  mdworker_shared  7.1  4   
+## 11:18:23 load { 7.39 5.66 4.54 }
+PID    COMMAND          %CPU  #TH   
+550    mds_stores       143.2 6/2   
+49838  lpq              29.5  5/1   
+402    WindowServer     17.0  23/1  
+49850  top              7.1   1/1   
+0      kernel_task      5.7   735/10
+1678   2.1.287          5.4   23    
+77210  limina           2.1   19    
+557    com.apple.Driver 1.9   8     
+## 11:18:34 load { 6.63 5.55 4.52 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.5 23/1  
+49872  top              9.7  1/1   
+92174  2.1.287          5.9  15    
+1678   2.1.287          5.3  24    
+0      kernel_task      3.9  735/10
+77210  limina           2.9  19    
+557    com.apple.Driver 2.0  9     
+49865  lpq              1.9  6     
+## 11:18:44 load { 5.31 5.31 4.45 }
+PID    COMMAND          %CPU #TH   
+49886  lpq              21.9 2     
+402    WindowServer     18.5 23/1  
+49893  top              9.3  1/1   
+1678   2.1.287          5.5  23    
+0      kernel_task      3.9  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.5  10    
+697    wifip2pd         1.1  2     
+## 11:18:55 load { 4.57 5.15 4.40 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.7 23    
+49914  top              9.5  1/1   
+0      kernel_task      4.0  735/10
+92174  2.1.287          3.3  21/3  
+77210  limina           2.9  19    
+1678   2.1.287          2.7  22    
+557    com.apple.Driver 1.9  8     
+697    wifip2pd         1.2  3     
+## 11:19:05 load { 4.27 5.06 4.38 }
+PID    COMMAND          %CPU #TH   
+49931  lpq              67.2 2/1   
+402    WindowServer     17.7 24/1  
+49936  top              6.5  1/1   
+0      kernel_task      6.5  735/10
+92174  2.1.287          4.3  15    
+18333  2.1.289          3.1  17    
+77210  limina           2.8  19    
+557    com.apple.Driver 2.2  10    
+## 11:19:16 load { 3.69 4.91 4.33 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.4 23    
+1678   2.1.287          10.5 17    
+49970  top              9.0  1/1   
+4106   2.1.288          5.2  21    
+0      kernel_task      4.7  735/10
+640    Activity Monitor 3.6  6     
+77210  limina           2.7  19    
+557    com.apple.Driver 2.1  9     
+## 11:19:26 load { 3.12 4.75 4.28 }
+PID    COMMAND          %CPU #TH   
+50007  lpq              20.8 2/1   
+402    WindowServer     19.0 23    
+1      launchd          10.2 3     
+1678   2.1.287          9.8  17    
+50014  top              9.2  1/1   
+0      kernel_task      5.6  735/10
+640    Activity Monitor 3.8  6     
+77210  limina           2.9  19    
+## 11:19:37 load { 2.94 4.66 4.26 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.0 23    
+50048  top              9.6  1/1   
+0      kernel_task      3.8  735/10
+77210  limina           2.9  19    
+640    Activity Monitor 2.9  6     
+557    com.apple.Driver 2.5  9     
+1678   2.1.287          2.4  23    
+77215  limina-vmm       1.3  67    
+## 11:19:47 load { 2.56 4.52 4.21 }
+PID    COMMAND          %CPU #TH   
+50065  lpq              67.3 2/1   
+402    WindowServer     17.4 23    
+50070  top              6.5  1/1   
+51938  2.1.289          5.0  15    
+0      kernel_task      4.3  735/10
+1678   2.1.287          4.0  23    
+77210  limina           2.8  19    
+557    com.apple.Driver 2.6  8     
+## 11:19:58 load { 2.40 4.42 4.18 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.3 23    
+50092  top              9.7  1/1   
+0      kernel_task      4.9  735/10
+1678   2.1.287          2.9  17    
+77210  limina           2.8  19    
+648    chronod          2.5  7     
+557    com.apple.Driver 2.5  8     
+745    extensionkitserv 2.3  4     
+## 11:20:08 load { 2.17 4.31 4.14 }
+PID    COMMAND          %CPU #TH   
+50119  lpq              68.8 6     
+402    WindowServer     18.1 23    
+50127  top              6.5  1/1   
+0      kernel_task      4.6  735/10
+4106   2.1.288          3.2  15    
+77210  limina           2.7  19    
+1678   2.1.287          2.5  17    
+557    com.apple.Driver 2.3  9     
+## 11:20:19 load { 1.84 4.17 4.09 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.3 23    
+50148  top              9.6  1/1   
+92174  2.1.287          4.8  21    
+0      kernel_task      3.8  735/10
+413    coreaudiod       3.1  16    
+77210  limina           2.8  19    
+1678   2.1.287          2.6  23    
+557    com.apple.Driver 2.2  8     
+## 11:20:29 load { 1.58 3.99 4.03 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.1 23    
+50169  top              9.3  1/1   
+1678   2.1.287          6.7  17    
+413    coreaudiod       4.6  18    
+0      kernel_task      4.4  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.3  8     
+394    bluetoothd       1.7  11    
+## 11:20:40 load { 1.56 3.91 4.00 }
+PID    COMMAND          %CPU #TH   
+50188  lpq              21.8 2     
+402    WindowServer     17.1 23    
+50193  top              9.4  1/1   
+1678   2.1.287          6.8  17    
+0      kernel_task      4.7  735/10
+4106   2.1.288          3.1  15    
+77210  limina           2.7  19    
+369    opendirectoryd   2.7  12    
+## 11:20:50 load { 1.64 3.85 3.98 }
+PID    COMMAND          %CPU #TH   
+50235  lpq              68.0 2/1   
+402    WindowServer     18.7 23    
+592    accountsd        9.9  5     
+0      kernel_task      7.0  735/10
+50242  top              6.6  1/1   
+608    tccd             4.4  4     
+1678   2.1.287          4.4  23    
+1361   contactsd        3.8  5     
+## 11:21:01 load { 1.76 3.80 3.96 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     26.3 27    
+0      kernel_task      9.7  735/10
+406    loginwindow      8.1  7     
+50264  top              6.3  1/1   
+640    Activity Monitor 3.9  7     
+4106   2.1.288          3.2  15    
+77210  limina           2.4  19    
+1678   2.1.287          2.3  23    
+## 11:21:11 load { 1.81 3.74 3.94 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.9 23    
+50286  top              8.8  1/1   
+1678   2.1.287          5.0  17    
+0      kernel_task      4.7  735/10
+640    Activity Monitor 4.1  7     
+77210  limina           2.9  19    
+557    com.apple.Driver 2.1  8     
+50281  lpq              1.8  2     
+## 11:21:22 load { 1.92 3.70 3.92 }
+PID    COMMAND          %CPU #TH   
+50313  lpq              20.7 2     
+402    WindowServer     18.0 23    
+50320  top              8.9  1/1   
+1678   2.1.287          7.9  23    
+0      kernel_task      4.3  735/10
+640    Activity Monitor 2.9  7     
+77210  limina           2.8  19    
+557    com.apple.Driver 2.3  8     
+## 11:21:32 load { 1.77 3.61 3.88 }
+PID    COMMAND          %CPU #TH   
+50332  lpq              68.5 2/1   
+402    WindowServer     18.4 23/1  
+50341  top              6.6  1/1   
+51938  2.1.289          5.2  15    
+0      kernel_task      4.2  735/10
+1678   2.1.287          3.3  23    
+77210  limina           2.7  19    
+557    com.apple.Driver 2.6  9     
+## 11:21:43 load { 1.65 3.53 3.85 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.0 23    
+50362  top              9.2  1/1   
+0      kernel_task      4.3  735/10
+1678   2.1.287          3.8  23    
+77210  limina           2.8  19    
+557    com.apple.Driver 2.5  8     
+685    ContinuityCaptur 1.9  7     
+697    wifip2pd         1.2  3     
+## 11:21:53 load { 1.55 3.44 3.82 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.5 23    
+50385  top              9.7  1/1   
+0      kernel_task      5.1  735/10
+640    Activity Monitor 5.0  6     
+60022  Google Chrome    3.2  46    
+77210  limina           3.0  19    
+1678   2.1.287          2.9  22    
+557    com.apple.Driver 2.4  8     
+## 11:22:04 load { 1.39 3.35 3.78 }
+PID    COMMAND          %CPU #TH   
+50423  lpq              68.4 6/1   
+402    WindowServer     18.9 26    
+50436  top              6.7  1/1   
+0      kernel_task      5.4  735/10
+640    Activity Monitor 4.7  6     
+895    sysmond          3.7  3     
+77210  limina           2.9  19    
+557    com.apple.Driver 2.6  8     
+## 11:22:14 load { 1.41 3.29 3.75 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.6 23/1  
+895    sysmond          14.9 3     
+413    coreaudiod       7.7  15    
+50462  top              6.5  1/1   
+1678   2.1.287          6.0  17    
+640    Activity Monitor 5.0  6     
+0      kernel_task      4.0  735/10
+333    mediaremoted     3.4  10    
+## 11:22:24 load { 1.32 3.17 3.70 }
+PID    COMMAND          %CPU #TH   
+895    sysmond          22.0 3     
+402    WindowServer     18.0 23    
+50482  top              9.5  1/1   
+1678   2.1.287          6.8  22    
+640    Activity Monitor 4.9  6     
+0      kernel_task      4.9  735/10
+413    coreaudiod       3.3  14    
+77210  limina           2.8  19    
+## 11:22:35 load { 1.19 3.08 3.66 }
+PID    COMMAND          %CPU #TH   
+50499  lpq              68.8 2     
+895    sysmond          22.4 3     
+402    WindowServer     19.8 24    
+50504  top              6.7  1/1   
+640    Activity Monitor 5.8  6     
+0      kernel_task      4.9  735/10
+51938  2.1.289          2.9  15    
+77210  limina           2.9  19    
+## 11:22:45 load { 1.16 3.02 3.63 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.8 23    
+895    sysmond          18.6 3     
+50526  top              9.0  1/1   
+51938  2.1.289          6.5  15    
+640    Activity Monitor 5.4  6     
+0      kernel_task      3.6  735/10
+18333  2.1.289          3.2  16    
+77210  limina           2.9  19    
+## 11:22:56 load { 1.14 2.95 3.60 }
+PID    COMMAND          %CPU #TH   
+1      launchd          25.6 3     
+895    sysmond          20.1 3     
+402    WindowServer     19.5 23    
+50558  top              9.0  1/1   
+640    Activity Monitor 6.5  6     
+0      kernel_task      5.8  735/10
+77210  limina           3.0  19    
+1678   2.1.287          2.5  23    
+## 11:23:06 load { 1.18 2.90 3.58 }
+PID    COMMAND          %CPU #TH   
+50576  lpq              20.6 2     
+402    WindowServer     18.4 23    
+895    sysmond          12.1 3/1   
+50583  top              8.4  1/1   
+1678   2.1.287          6.0  17    
+0      kernel_task      4.1  735/10
+640    Activity Monitor 3.4  6     
+77210  limina           2.8  19    
+## 11:23:17 load { 1.07 2.82 3.54 }
+PID    COMMAND          %CPU #TH   
+50597  lpq              68.7 2/1   
+402    WindowServer     18.1 24    
+1678   2.1.287          8.1  22    
+50604  top              6.5  1/1   
+0      kernel_task      4.1  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.4  10    
+697    wifip2pd         1.3  3     
+## 11:23:27 load { 0.98 2.74 3.50 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.7 23    
+50625  top              9.2  1/1   
+0      kernel_task      3.9  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.8  8     
+1678   2.1.287          2.4  16    
+77215  limina-vmm       1.3  67    
+697    wifip2pd         1.3  3     
+## 11:23:38 load { 1.53 2.80 3.51 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.0 24    
+50658  top              9.5  1/1   
+0      kernel_task      4.3  735/10
+1678   2.1.287          3.2  17    
+77210  limina           2.9  19    
+557    com.apple.Driver 2.6  8     
+563    searchpartyd     1.9  8     
+376    locationd        1.6  6     
+## 11:23:48 load { 1.44 2.74 3.48 }
+PID    COMMAND          %CPU #TH   
+50675  lpq              20.4 2/1   
+402    WindowServer     17.6 24    
+50680  top              8.3  1/1   
+92174  2.1.287          5.9  15    
+0      kernel_task      4.0  735/10
+77210  limina           2.8  19/1  
+557    com.apple.Driver 2.4  8     
+1678   2.1.287          2.4  23    
+## 11:23:59 load { 1.38 2.68 3.46 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     26.3 26/1  
+406    loginwindow      12.9 7     
+50702  top              9.7  1/1   
+0      kernel_task      7.9  735/10
+1678   2.1.287          6.9  17    
+77215  limina-vmm       5.2  67    
+92174  2.1.287          4.3  15    
+77210  limina           2.9  19    
+## 11:24:09 load { 1.38 2.62 3.42 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.8 23    
+50724  top              4.6  1/1   
+0      kernel_task      4.2  735/10
+92174  2.1.287          4.2  15    
+77215  limina-vmm       3.6  67    
+77210  limina           2.7  19    
+557    com.apple.Driver 2.1  9     
+1678   2.1.287          2.1  17    
+## 11:24:20 load { 1.48 2.60 3.40 }
+PID    COMMAND          %CPU #TH   
+50732  lpq              19.8 2/1   
+402    WindowServer     16.6 23    
+50737  top              8.7  1/1   
+1678   2.1.287          7.2  23    
+92174  2.1.287          6.0  21    
+0      kernel_task      5.4  735/10
+557    com.apple.Driver 3.6  8     
+77210  limina           2.7  19    
+## 11:24:30 load { 1.70 2.61 3.40 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.5 23    
+50759  top              9.5  1/1   
+92174  2.1.287          5.8  15    
+0      kernel_task      4.0  735/10
+1678   2.1.287          3.1  23/1  
+77210  limina           2.8  19    
+557    com.apple.Driver 2.3  8     
+50754  lpq              1.8  2     
+## 11:24:41 load { 1.52 2.54 3.36 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.2 23/1  
+50770  top              9.7  1/1   
+0      kernel_task      3.9  735/10
+640    Activity Monitor 3.3  6     
+92174  2.1.287          3.3  15    
+77210  limina           2.7  19    
+1678   2.1.287          2.3  17    
+557    com.apple.Driver 2.0  8     
+## 11:24:51 load { 1.36 2.47 3.33 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.3 23    
+50781  top              4.7  1/1   
+0      kernel_task      4.2  735/10
+640    Activity Monitor 3.7  6     
+77210  limina           2.7  19    
+51938  2.1.289          2.6  21    
+557    com.apple.Driver 2.1  8     
+92174  2.1.287          1.7  21    
+## 11:25:02 load { 1.30 2.42 3.30 }
+PID    COMMAND          %CPU #TH   
+50788  lpq              20.3 2/1   
+402    WindowServer     18.5 26    
+50793  top              8.3  1/1   
+0      kernel_task      5.4  735/10
+640    Activity Monitor 3.3  6     
+77210  limina           3.0  19    
+92174  2.1.287          2.8  15    
+685    ContinuityCaptur 2.6  7     
+## 11:25:12 load { 1.10 2.34 3.26 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.9 23    
+50816  top              9.3  1/1   
+0      kernel_task      6.2  735/10
+1030   IPNExtension     5.1  21    
+557    com.apple.Driver 3.5  9     
+77210  limina           3.0  19    
+685    ContinuityCaptur 2.7  7     
+50800  lpq              1.9  2     
+## 11:25:23 load { 1.25 2.33 3.25 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.2 23/1  
+50827  top              9.7  1/1   
+0      kernel_task      3.8  735/10
+413    coreaudiod       3.7  14    
+77210  limina           2.8  19    
+557    com.apple.Driver 2.1  8     
+1678   2.1.287          1.8  23    
+333    mediaremoted     1.3  9     
+## 11:25:33 load { 1.06 2.25 3.21 }
+PID    COMMAND          %CPU #TH   
+50834  lpq              30.3 6     
+402    WindowServer     17.5 23/1  
+51938  2.1.289          9.1  15    
+50839  top              7.3  1/1   
+0      kernel_task      4.0  735/10
+77210  limina           2.7  19    
+557    com.apple.Driver 2.3  8     
+376    locationd        1.4  6     
+## 11:25:43 load { 0.98 2.20 3.17 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.8 23    
+50853  top              9.4  1/1   
+0      kernel_task      3.9  735/10
+685    ContinuityCaptur 2.8  7     
+77210  limina           2.8  19    
+557    com.apple.Driver 2.5  8     
+1678   2.1.287          2.1  16/1  
+50848  lpq              1.9  6     
+## 11:25:54 load { 0.97 2.16 3.15 }
+PID    COMMAND          %CPU #TH   
+50859  lpq              66.9 6/1   
+402    WindowServer     17.6 23/1  
+50866  top              4.6  1/1   
+18333  2.1.289          4.4  22    
+0      kernel_task      4.0  735/10
+51938  2.1.289          3.8  23    
+77210  limina           2.7  19    
+557    com.apple.Driver 2.3  8     
+## 11:26:04 load { 1.60 2.25 3.17 }
+PID    COMMAND          %CPU #TH   
+50907  lpq              19.9 2     
+402    WindowServer     17.6 26    
+50912  top              9.6  1/1   
+18333  2.1.289          5.3  16    
+0      kernel_task      5.0  735/10
+1678   2.1.287          4.9  17    
+92174  2.1.287          3.5  15    
+77210  limina           2.8  19    
+## 11:26:15 load { 1.55 2.20 3.14 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.8 23    
+50956  top              9.4  1/1   
+0      kernel_task      4.0  735/10
+77210  limina           2.9  19    
+557    com.apple.Driver 2.3  9     
+50949  lpq              1.9  2     
+697    wifip2pd         1.3  2     
+640    Activity Monitor 1.2  6     
+## 11:26:25 load { 1.39 2.15 3.11 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.8 22    
+1      launchd          14.0 3     
+50977  top              9.4  1/1   
+0      kernel_task      4.7  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.1  8     
+697    wifip2pd         1.2  3     
+640    Activity Monitor 1.1  6     
+## 11:26:36 load { 1.18 2.08 3.07 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.2 23    
+50999  top              6.5  1/1   
+640    Activity Monitor 6.5  6     
+0      kernel_task      4.2  735/10
+77210  limina           2.7  19    
+557    com.apple.Driver 2.2  9     
+697    wifip2pd         1.5  2     
+77215  limina-vmm       1.4  68    
+## 11:26:46 load { 1.14 2.04 3.04 }
+PID    COMMAND          %CPU #TH   
+51018  lpq              20.5 2     
+402    WindowServer     18.5 23    
+51025  top              9.3  1/1   
+640    Activity Monitor 6.7  6     
+1678   2.1.287          5.1  23    
+0      kernel_task      4.4  735/10
+77210  limina           3.0  19    
+557    com.apple.Driver 2.6  8     
+## 11:26:57 load { 1.44 2.07 3.04 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.3 23    
+51048  top              9.5  1/1   
+0      kernel_task      5.6  735/10
+895    sysmond          5.4  3     
+640    Activity Monitor 3.9  6     
+1678   2.1.287          3.7  17    
+77210  limina           2.8  19    
+369    opendirectoryd   2.5  11    
+## 11:27:07 load { 1.22 2.00 3.01 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     19.7 22    
+895    sysmond          18.4 3     
+51073  top              9.7  1/1   
+640    Activity Monitor 5.3  6     
+0      kernel_task      4.7  735/10
+77210  limina           3.0  19    
+557    com.apple.Driver 2.5  9     
+697    wifip2pd         1.3  3     
+## 11:27:18 load { 1.19 1.97 2.98 }
+PID    COMMAND          %CPU #TH   
+51090  lpq              68.3 2/1   
+895    sysmond          21.6 3     
+402    WindowServer     19.6 22    
+51095  top              6.8  1/1   
+640    Activity Monitor 5.7  6     
+0      kernel_task      5.5  735/10
+77210  limina           2.9  19    
+557    com.apple.Driver 2.7  9     
+## 11:27:28 load { 1.24 1.95 2.97 }
+PID    COMMAND          %CPU #TH   
+895    sysmond          23.2 3     
+51111  lpq              21.7 6     
+402    WindowServer     19.5 23    
+51116  top              9.3  1/1   
+51938  2.1.289          6.7  21    
+640    Activity Monitor 5.8  6     
+0      kernel_task      5.3  735/10
+92174  2.1.287          3.0  23    
+## 11:27:39 load { 1.36 1.96 2.95 }
+PID    COMMAND          %CPU #TH   
+895    sysmond          22.5 3     
+402    WindowServer     18.9 22    
+51136  top              9.1  1/1   
+640    Activity Monitor 5.0  6     
+0      kernel_task      4.5  735/10
+413    coreaudiod       3.7  12    
+18333  2.1.289          3.2  17    
+77210  limina           2.9  19    
+## 11:27:49 load { 1.22 1.91 2.92 }
+PID    COMMAND          %CPU #TH   
+895    sysmond          20.3 3/1   
+402    WindowServer     18.3 22    
+51159  top              6.0  1/1   
+413    coreaudiod       4.9  19    
+0      kernel_task      4.6  735/10
+1678   2.1.287          3.3  22/1  
+92174  2.1.287          2.9  21    
+77210  limina           2.7  19    
+## 11:28:00 load { 1.41 1.91 2.91 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     30.9 25    
+406    loginwindow      16.6 7     
+0      kernel_task      13.5 735/10
+895    sysmond          12.6 3/1   
+51192  top              9.0  1/1   
+685    ContinuityCaptur 8.5  7     
+557    com.apple.Driver 3.4  8     
+77210  limina           2.8  19    
+## 11:28:10 load { 1.34 1.88 2.89 }
+PID    COMMAND          %CPU #TH   
+51208  lpq              68.6 2/1   
+402    WindowServer     18.1 22    
+51215  top              6.6  1/1   
+0      kernel_task      4.5  735/10
+1678   2.1.287          4.0  17    
+77210  limina           2.8  19    
+685    ContinuityCaptur 2.7  7     
+557    com.apple.Driver 2.3  8     
+## 11:28:21 load { 1.36 1.87 2.87 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.9 22    
+51236  top              9.5  1/1   
+0      kernel_task      4.3  735/10
+640    Activity Monitor 3.5  6     
+77210  limina           2.9  19    
+77215  limina-vmm       2.6  68    
+1678   2.1.287          2.5  23    
+557    com.apple.Driver 2.3  8     
+## 11:28:31 load { 1.38 1.85 2.85 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.8 22    
+51259  top              9.6  1/1   
+4106   2.1.288          5.8  15    
+0      kernel_task      4.0  735/10
+640    Activity Monitor 3.9  6     
+1678   2.1.287          3.7  16    
+92174  2.1.287          3.0  15    
+77210  limina           2.9  19    
+## 11:28:42 load { 1.46 1.86 2.84 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.4 22    
+51281  top              9.7  1/1   
+0      kernel_task      4.4  735/11
+640    Activity Monitor 3.4  6     
+77210  limina           2.9  19    
+557    com.apple.Driver 2.2  10/2  
+51274  lpq              1.9  2     
+4106   2.1.288          1.7  22    
+## 11:28:52 load { 1.39 1.83 2.82 }
+PID    COMMAND          %CPU #TH   
+51295  lpq              68.7 2/1   
+402    WindowServer     18.8 22    
+51302  top              6.0  1/1   
+0      kernel_task      5.1  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.7  9     
+372    timed            1.5  3/1   
+612    rapportd         1.5  5/2   
+## 11:29:03 load { 1.65 1.87 2.82 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.1 26    
+51323  top              9.5  1/1   
+0      kernel_task      4.8  735/10
+77210  limina           2.9  19    
+557    com.apple.Driver 2.4  9     
+77215  limina-vmm       2.2  68    
+394    bluetoothd       1.9  15    
+697    wifip2pd         1.1  3     
+## 11:29:13 load { 1.98 1.94 2.83 }
+PID    COMMAND          %CPU #TH   
+51341  lpq              21.8 2     
+402    WindowServer     17.8 22    
+51345  top              9.2  1/1   
+0      kernel_task      3.4  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.3  9     
+1678   2.1.287          1.9  17    
+77215  limina-vmm       1.5  68    
+## 11:29:24 load { 1.98 1.94 2.82 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.6 22    
+51366  top              9.5  1/1   
+51938  2.1.289          5.8  21    
+0      kernel_task      4.3  735/10
+92174  2.1.287          4.0  21    
+77210  limina           2.9  19    
+557    com.apple.Driver 2.5  9     
+51361  lpq              1.9  6     
+## 11:29:34 load { 1.91 1.92 2.81 }
+PID    COMMAND          %CPU #TH   
+51380  lpq              32.2 6     
+402    WindowServer     18.2 23    
+51389  top              6.9  1/1   
+0      kernel_task      4.4  735/10
+410    runningboardd    2.8  7     
+77210  limina           2.7  19    
+557    com.apple.Driver 2.4  9     
+727    NotificationCent 1.9  6     
+## 11:29:45 load { 2.02 1.94 2.80 }
+PID    COMMAND          %CPU #TH   
+51415  lpq              21.8 6     
+402    WindowServer     16.5 24    
+51433  top              9.5  1/1   
+0      kernel_task      3.2  735/10
+77210  limina           2.8  19    
+557    com.apple.Driver 2.0  8     
+376    locationd        1.3  6     
+77215  limina-vmm       1.2  68    
+## 11:29:55 load { 2.15 1.98 2.80 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.2 23    
+1      launchd          11.1 4/1   
+51474  top              9.1  1/1   
+0      kernel_task      4.7  735/11
+410    runningboardd    2.8  5     
+77210  limina           2.8  19    
+557    com.apple.Driver 2.8  9     
+1678   2.1.287          2.4  23    
+## 11:30:06 load { 2.34 2.03 2.81 }
+PID    COMMAND          %CPU #TH   
+563    searchpartyd     49.1 7     
+402    WindowServer     17.9 24    
+51518  top              6.6  1/1   
+1678   2.1.287          5.6  17    
+0      kernel_task      5.1  735/10
+77210  limina           2.7  19    
+640    Activity Monitor 2.6  6     
+557    com.apple.Driver 2.3  9     
+## 11:30:16 load { 2.52 2.07 2.82 }
+PID    COMMAND          %CPU #TH   
+51574  lpq              20.8 2     
+402    WindowServer     17.9 23    
+51579  top              9.5  1/1   
+92174  2.1.287          8.9  15    
+18333  2.1.289          4.7  15    
+51938  2.1.289          4.6  15    
+0      kernel_task      4.3  735/10
+640    Activity Monitor 3.9  6     
+## 11:30:27 load { 2.89 2.17 2.84 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     18.0 23    
+1678   2.1.287          11.5 23    
+51621  top              8.1  1/1   
+0      kernel_task      4.2  735/10
+77210  limina           2.9  19/1  
+640    Activity Monitor 2.7  6     
+557    com.apple.Driver 2.5  9     
+51614  lpq              1.8  2/1   
+## 11:30:37 load { 2.84 2.18 2.84 }
+PID    COMMAND          %CPU #TH   
+51649  lpq              68.4 2/1   
+402    WindowServer     18.4 24    
+51668  top              6.6  1/1   
+0      kernel_task      4.3  735/11
+92174  2.1.287          3.4  15    
+1678   2.1.287          3.4  24    
+77210  limina           2.8  19    
+557    com.apple.Driver 2.6  9     
+## 11:30:48 load { 2.71 2.17 2.83 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.3 23    
+51700  top              6.6  1/1   
+0      kernel_task      6.3  735/10
+1678   2.1.287          5.1  23    
+77210  limina           2.7  19    
+557    com.apple.Driver 2.3  9     
+380    dasd             2.1  4     
+77215  limina-vmm       1.6  68    
+## 11:30:58 load { 2.67 2.18 2.82 }
+PID    COMMAND          %CPU  #TH   
+51723  rustc            501.7 16/10 
+410    runningboardd    26.3  4/1   
+402    WindowServer     18.5  24/1  
+51731  lpq              18.2  2     
+60638  PerfPowerService 10.3  13/1  
+0      kernel_task      6.3   735/11
+51736  top              5.9   1/1   
+77215  limina-vmm       3.5   68    
+## 11:31:09 load { 8.95 3.53 3.29 }
+PID    COMMAND          %CPU #TH
+51723  rustc            85.6 7/1
+550    mds_stores       18.6 6  
+895    sysmond          16.6 3  
+402    WindowServer     14.7 23 
+60638  PerfPowerService 9.0  10 
+357    mds              8.2  14 
+410    runningboardd    7.8  5  
+640    Activity Monitor 7.7  6  
+## 11:31:19 load { 8.04 3.51 3.29 }
+PID    COMMAND          %CPU #TH   
+51785  virglrenderer-c8 87.7 63/1  
+60638  PerfPowerService 18.2 6/1   
+402    WindowServer     16.1 23    
+51801  top              6.3  1/1   
+640    Activity Monitor 3.4  5     
+0      kernel_task      3.3  735/11
+4106   2.1.288          2.8  21    
+77210  limina           2.3  18    
+## 11:31:29 load { 7.36 3.51 3.29 }
+PID    COMMAND          %CPU #TH   
+51862  clippy-driver    77.8 3/1   
+51860  clippy-driver    76.4 3/1   
+51861  clippy-driver    76.1 3/1   
+402    WindowServer     17.2 23    
+895    sysmond          14.3 3     
+0      kernel_task      11.2 735/10
+51867  top              6.7  1/1   
+640    Activity Monitor 4.0  6     
+## 11:31:40 load { 6.73 3.57 3.31 }
+PID    COMMAND          %CPU #TH   
+51888  lpq              21.9 6     
+895    sysmond          19.7 3     
+402    WindowServer     17.9 23    
+51895  top              9.8  1/1   
+640    Activity Monitor 5.9  6     
+428    airportd         5.0  6     
+1678   2.1.287          3.5  17    
+0      kernel_task      3.5  735/10
+## 11:31:50 load { 5.85 3.48 3.29 }
+PID    COMMAND          %CPU #TH   
+402    WindowServer     17.6 23    
+895    sysmond          12.5 3     
+1678   2.1.287          10.4 17    
+51939  top              9.4  1/1   
+0      kernel_task      6.0  735/10
+92174  2.1.287          5.4  21    
+1030   IPNExtension     3.8  21    
+640    Activity Monitor 3.7  6     

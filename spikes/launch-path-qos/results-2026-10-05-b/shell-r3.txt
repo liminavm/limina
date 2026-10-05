@@ -1,0 +1,77 @@
+# shell rep 3 2026-10-05 11:24:00 load: { 1.35 2.65 3.44 }
+# busy: 77214 limina-vmm (arguments elided)
+# busy: 77215 limina-vmm (arguments elided)
+shell-r3 ident pid=50715 ppid=47374 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 ident pid=50716 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=default busy_us=300 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=3891 p90=7138 p99=8012 max=9926 over2ms=187 over8ms=3 wakeE=231 wakeP=9 chunks=19645 onE=0.931 chunk_ns med=4167 p90=4208 medE=4167 medP=1833
+shell-r3 percpu policy=default busy_us=300 cpu:chunks:mean_ns 0:8870:3850 1:9413:4209 2:205:1374 3:1157:2067
+shell-r3 ident pid=50718 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=default busy_us=4000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=3091 p90=4974 p99=5996 max=6228 over2ms=210 over8ms=0 wakeE=228 wakeP=12 chunks=229813 onE=0.897 chunk_ns med=4208 p90=4208 medE=4208 medP=1875
+shell-r3 percpu policy=default busy_us=4000 cpu:chunks:mean_ns 0:91561:4552 1:114661:4364 2:1832:2162 3:21759:2006
+shell-r3 ident pid=50728 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=default busy_us=13000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=1226 p90=1228 p99=1421 max=8340 over2ms=1 over8ms=1 wakeE=0 wakeP=240 chunks=3024390 onE=0.000 chunk_ns med=1042 p90=1042 medE=0 medP=1042
+shell-r3 percpu policy=default busy_us=13000 cpu:chunks:mean_ns 3:3024390:1024
+shell-r3 ident pid=50730 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=utility busy_us=300 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x11 rtpri_periods=0 late_us p50=4860 p90=6491 p99=7200 max=7826 over2ms=217 over8ms=0 wakeE=230 wakeP=10 chunks=18308 onE=0.934 chunk_ns med=4167 p90=4208 medE=4208 medP=2167
+shell-r3 percpu policy=utility busy_us=300 cpu:chunks:mean_ns 0:8790:4013 1:8309:4082 3:1209:2455
+shell-r3 ident pid=50732 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=utility busy_us=4000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x11 rtpri_periods=0 late_us p50=3106 p90=5073 p99=7319 max=9464 over2ms=191 over8ms=2 wakeE=192 wakeP=48 chunks=309661 onE=0.601 chunk_ns med=2583 p90=4208 medE=4167 medP=1250
+shell-r3 percpu policy=utility busy_us=4000 cpu:chunks:mean_ns 0:89016:4135 1:97175:4241 2:6610:2578 3:22957:1589 4:93903:1390
+shell-r3 ident pid=50753 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=utility busy_us=13000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x11 rtpri_periods=0 late_us p50=1226 p90=1229 p99=6794 max=8353 over2ms=4 over8ms=1 wakeE=6 wakeP=234 chunks=2919523 onE=0.008 chunk_ns med=1042 p90=1042 medE=3042 medP=1042
+shell-r3 percpu policy=utility busy_us=13000 cpu:chunks:mean_ns 0:7845:3954 1:14802:3300 2:644636:1062 3:1528731:1041 4:723509:1023
+shell-r3 ident pid=50754 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=ui busy_us=300 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=37/37 qos=0x21 rtpri_periods=0 late_us p50=4867 p90=5746 p99=7615 max=7921 over2ms=212 over8ms=0 wakeE=197 wakeP=43 chunks=23095 onE=0.632 chunk_ns med=4167 p90=4208 medE=4208 medP=1125
+shell-r3 percpu policy=ui busy_us=300 cpu:chunks:mean_ns 0:7514:4081 1:7085:4000 3:8496:1509
+shell-r3 ident pid=50764 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=ui busy_us=4000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=37/37 qos=0x21 rtpri_periods=0 late_us p50=3145 p90=4802 p99=6174 max=8358 over2ms=212 over8ms=1 wakeE=234 wakeP=6 chunks=231901 onE=0.959 chunk_ns med=4208 p90=4208 medE=4208 medP=2500
+shell-r3 percpu policy=ui busy_us=4000 cpu:chunks:mean_ns 0:117429:4204 1:104972:4150 2:8219:2412 3:1281:3101
+shell-r3 ident pid=50765 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=ui busy_us=13000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=37/37 qos=0x21 rtpri_periods=0 late_us p50=1227 p90=6051 p99=8072 max=8282 over2ms=28 over8ms=3 wakeE=30 wakeP=210 chunks=2696545 onE=0.036 chunk_ns med=1042 p90=1083 medE=4167 medP=1042
+shell-r3 percpu policy=ui busy_us=13000 cpu:chunks:mean_ns 0:45758:3988 1:51660:3897 2:1859433:1049 4:739694:1029
+shell-r3 ident pid=50775 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=lat0 busy_us=300 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x0 rtpri_periods=0 late_us p50=1591 p90=2028 p99=2821 max=3430 over2ms=113 over8ms=0 wakeE=235 wakeP=5 chunks=17510 onE=0.968 chunk_ns med=4208 p90=4208 medE=4208 medP=2542
+shell-r3 percpu policy=lat0 busy_us=300 cpu:chunks:mean_ns 0:8756:4122 1:8189:4192 3:565:2641
+shell-r3 ident pid=50776 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=lat0 busy_us=4000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x0 rtpri_periods=0 late_us p50=2012 p90=2029 p99=2494 max=6462 over2ms=131 over8ms=0 wakeE=240 wakeP=0 chunks=219936 onE=1.000 chunk_ns med=4208 p90=4208 medE=4208 medP=0
+shell-r3 percpu policy=lat0 busy_us=4000 cpu:chunks:mean_ns 0:108441:4289 1:111495:4383
+shell-r3 ident pid=50785 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=lat0 busy_us=13000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x0 rtpri_periods=0 late_us p50=738 p90=740 p99=773 max=2006 over2ms=1 over8ms=0 wakeE=0 wakeP=240 chunks=3022527 onE=0.000 chunk_ns med=1042 p90=1042 medE=0 medP=1042
+shell-r3 percpu policy=lat0 busy_us=13000 cpu:chunks:mean_ns 2:2260134:1025 4:3099:1057 5:758605:1023 6:689:1130
+shell-r3 ident pid=50787 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=critical busy_us=300 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=40 p90=214 p99=4798 max=13555 over2ms=8 over8ms=1 wakeE=228 wakeP=12 chunks=18589 onE=0.913 chunk_ns med=4167 p90=4208 medE=4208 medP=1875
+shell-r3 percpu policy=critical busy_us=300 cpu:chunks:mean_ns 0:7737:4076 1:9226:4319 2:933:2244 3:693:2154
+shell-r3 ident pid=50788 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=critical busy_us=4000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=43 p90=64 p99=425 max=6460 over2ms=1 over8ms=0 wakeE=191 wakeP=49 chunks=309932 onE=0.589 chunk_ns med=2417 p90=4208 medE=4167 medP=1250
+shell-r3 percpu policy=critical busy_us=4000 cpu:chunks:mean_ns 0:89118:4170 1:93472:4452 2:58879:1764 3:65246:1224 4:1577:2515 5:1640:2423
+shell-r3 ident pid=50799 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=critical busy_us=13000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=39 p90=50 p99=100 max=116 over2ms=0 over8ms=0 wakeE=2 wakeP=238 chunks=2965206 onE=0.002 chunk_ns med=1042 p90=1042 medE=2417 medP=1042
+shell-r3 percpu policy=critical busy_us=13000 cpu:chunks:mean_ns 0:3687:2994 1:3116:2722 2:2957651:1040 7:752:1452
+shell-r3 ident pid=50800 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=rt busy_us=300 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=97/97 qos=0x0 rtpri_periods=240 late_us p50=19 p90=28 p99=44 max=117 over2ms=0 over8ms=0 wakeE=199 wakeP=41 chunks=23575 onE=0.657 chunk_ns med=4167 p90=4208 medE=4208 medP=1125
+shell-r3 percpu policy=rt busy_us=300 cpu:chunks:mean_ns 0:4600:3946 1:10878:3790 2:8097:1510
+shell-r3 ident pid=50821 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=rt busy_us=4000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=97/97 qos=0x0 rtpri_periods=240 late_us p50=20 p90=27 p99=45 max=55 over2ms=0 over8ms=0 wakeE=229 wakeP=11 chunks=246542 onE=0.914 chunk_ns med=4208 p90=4208 medE=4208 medP=1875
+shell-r3 percpu policy=rt busy_us=4000 cpu:chunks:mean_ns 0:69097:3902 1:156241:4089 2:21204:2058
+shell-r3 ident pid=50822 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=rt busy_us=13000 periods=240 rc_policy=0 rc_join=-1 wg_err=0/0 kq_err=0 pri=97/97 qos=0x0 rtpri_periods=240 late_us p50=5 p90=6 p99=12 max=15 over2ms=0 over8ms=0 wakeE=3 wakeP=237 chunks=2935984 onE=0.005 chunk_ns med=1042 p90=1042 medE=2375 medP=1042
+shell-r3 percpu policy=rt busy_us=13000 cpu:chunks:mean_ns 0:13503:2570 2:2922481:1047
+shell-r3 ident pid=50831 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=wg busy_us=300 periods=240 rc_policy=0 rc_join=0 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=4521 p90=7012 p99=7564 max=8360 over2ms=198 over8ms=2 wakeE=240 wakeP=0 chunks=17891 onE=1.000 chunk_ns med=4208 p90=4208 medE=4208 medP=0
+shell-r3 percpu policy=wg busy_us=300 cpu:chunks:mean_ns 0:8636:3970 1:9255:3988
+shell-r3 ident pid=50833 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=wg busy_us=4000 periods=240 rc_policy=0 rc_join=0 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=4232 p90=4238 p99=4961 max=8365 over2ms=239 over8ms=1 wakeE=11 wakeP=229 chunks=700875 onE=0.017 chunk_ns med=1042 p90=1875 medE=2417 medP=1042
+shell-r3 percpu policy=wg busy_us=4000 cpu:chunks:mean_ns 0:6295:3062 1:5812:3357 2:400763:1278 3:288005:1390
+shell-r3 ident pid=50834 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=wg busy_us=13000 periods=240 rc_policy=0 rc_join=0 wg_err=0/0 kq_err=0 pri=31/31 qos=0x15 rtpri_periods=0 late_us p50=8355 p90=8357 p99=8373 max=8414 over2ms=216 over8ms=216 wakeE=1 wakeP=239 chunks=3017459 onE=0.001 chunk_ns med=1000 p90=1042 medE=4208 medP=1000
+shell-r3 percpu policy=wg busy_us=13000 cpu:chunks:mean_ns 0:2142:4406 1:178:2588 2:694101:1026 3:912171:1021 4:1406039:1023 6:2765:1105 8:63:1780
+shell-r3 ident pid=50848 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=wgrt busy_us=300 periods=240 rc_policy=0 rc_join=0 wg_err=0/0 kq_err=0 pri=97/97 qos=0x0 rtpri_periods=240 late_us p50=19 p90=27 p99=37 max=55 over2ms=0 over8ms=0 wakeE=240 wakeP=0 chunks=17808 onE=1.000 chunk_ns med=4208 p90=4208 medE=4208 medP=0
+shell-r3 percpu policy=wgrt busy_us=300 cpu:chunks:mean_ns 0:5111:3728 1:12697:4043
+shell-r3 ident pid=50858 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=wgrt busy_us=4000 periods=240 rc_policy=0 rc_join=0 wg_err=0/0 kq_err=0 pri=97/97 qos=0x0 rtpri_periods=240 late_us p50=21 p90=31 p99=41 max=46 over2ms=0 over8ms=0 wakeE=240 wakeP=0 chunks=242426 onE=1.000 chunk_ns med=4208 p90=4208 medE=4208 medP=0
+shell-r3 percpu policy=wgrt busy_us=4000 cpu:chunks:mean_ns 0:160104:3884 1:82322:3993
+shell-r3 ident pid=50859 ppid=50715 coalition=11988/11989(40) darwin_role=0 task_role=0 main_pri=31/31 main_qos=0x15
+shell-r3 result policy=wgrt busy_us=13000 periods=240 rc_policy=0 rc_join=0 wg_err=0/0 kq_err=0 pri=97/97 qos=0x0 rtpri_periods=240 late_us p50=9 p90=9 p99=15 max=31 over2ms=0 over8ms=0 wakeE=1 wakeP=239 chunks=3026977 onE=0.001 chunk_ns med=1000 p90=1042 medE=1958 medP=1000
+shell-r3 percpu policy=wgrt busy_us=13000 cpu:chunks:mean_ns 0:2924:2022 2:1082573:1019 5:1941480:1023
+shell-r3 DONE
