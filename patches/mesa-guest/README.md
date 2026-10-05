@@ -3,7 +3,7 @@
 This directory is the **exported form of the fork branch** `liminavm/mesa` **`limina-guest`**
 (fork model, task #11, 2026-08-05). The branch is the source of truth: one commit per patch,
 rationale in the commit message, based on the tag `third_party/manifest.toml [mesa-guest]`
-records (`base`, currently `mesa-26.1.7`).
+records (`base`).
 
 **`base` is the branch's GIT base, which is not always the SRPM the RPM build uses.** These were
 the same thing for a long time and the README used to conflate them; they came apart on

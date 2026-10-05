@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
-Date: Tue, 1 Sep 2026 12:43:48 -0300
-Subject: [PATCH 14/23] virgl: allocate a decode target as one composite planar
+Date: Mon, 5 Oct 2026 07:32:31 -0300
+Subject: [PATCH 14/19] virgl: allocate a decode target as one composite planar
  resource
 
 The per-plane form allocates a resource per plane, so the host sees two or three
@@ -23,25 +23,37 @@ consumer asking for the converted RGBA by exactly that mismatch against the
 resource's own format. Keeping the parent planar would make the two
 indistinguishable, and a luma sampler would silently read RGBA.
 
-Everything here is conditional and falls back rather than fails: the host must
-advertise VIDEO_PLANAR_TARGET, interlaced is excluded (its 2D_ARRAY template is a
-shape neither side's plane addressing takes), and a refused composite create retries
-as per-plane rather than losing the buffer.
+The shape is chosen from the caps, never by trying: a create the host refuses is
+invisible to the guest, since the kernel has already handed out the handle, and
+building on it puts the context in error for the rest of its life. gst-va provokes
+exactly that at plugin registration, creating a 64x64 surface of every fourcc it
+knows. So the composite shape needs VIDEO_PLANAR_TARGET (a fork-only cap bit at the
+top of capability_bits_v2) and a multi-plane format the host's sampler bitmask
+lists; interlaced is excluded (its 2D_ARRAY template is a shape neither side's plane
+addressing takes), and everything else takes the per-plane form. Measured on F44
+enhanced: 0 of 50 gst-va decodes produced a picture with a try-and-fall-back gate,
+49 of 50 with this one, the failure being an unrelated all-zero bitstream.
 
 get_param gains STRIDE and OFFSET, walking the chain by the plane argument the way
-every driver that builds one does, because that is how gst-va asks. Destroy releases
-the chain from the head; each element holds its own reference on the shared hw_res,
-so teardown is symmetric whatever order the references are dropped in.
+every driver that builds one does, because that is how gst-va asks.
+
+Destroy frees only its own object. pipe_resource_destroy() caches ->next before
+calling the driver hook and drops that reference itself, so a driver that also
+releases ->next frees a plane a frontend still references -- radeonsi's
+si_resource_destroy never touches ->next either. Each element holds its own
+reference on the shared hw_res, so teardown is symmetric whatever order the
+references are dropped in.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 ---
- src/gallium/drivers/virgl/virgl_resource.c | 123 ++++++++++++++++++++-
- src/gallium/drivers/virgl/virgl_video.c    |  20 +++-
+ src/gallium/drivers/virgl/virgl_resource.c | 125 ++++++++++++++++++++-
+ src/gallium/drivers/virgl/virgl_video.c    |  33 +++++-
  src/virtio/virtio-gpu/virgl_hw.h           |   6 +
- 3 files changed, 146 insertions(+), 3 deletions(-)
+ 3 files changed, 161 insertions(+), 3 deletions(-)
 
 diff --git a/src/gallium/drivers/virgl/virgl_resource.c b/src/gallium/drivers/virgl/virgl_resource.c
-index d31a1bea99a..368787fe8b7 100644
+index 9967d28f11b..1dbfe9ee7b7 100644
 --- a/src/gallium/drivers/virgl/virgl_resource.c
 +++ b/src/gallium/drivers/virgl/virgl_resource.c
 @@ -725,15 +725,114 @@ static size_t virgl_resource_shared_tex_size(struct virgl_resource *res)
@@ -160,7 +172,7 @@ index d31a1bea99a..368787fe8b7 100644
     res->b = *templ;
     res->b.screen = &vs->base;
     pipe_reference_init(&res->b.reference, 1);
-@@ -949,9 +1048,23 @@ virgl_resource_get_param(struct pipe_screen *screen,
+@@ -948,9 +1047,23 @@ virgl_resource_get_param(struct pipe_screen *screen,
                           unsigned handle_usage,
                           uint64_t *value)
  {
@@ -185,21 +197,23 @@ index d31a1bea99a..368787fe8b7 100644
     case PIPE_RESOURCE_PARAM_MODIFIER:
        virgl_resource_sync_gbm_layout(res);
  
-@@ -1096,6 +1209,12 @@ void virgl_resource_destroy(struct pipe_screen *screen,
+@@ -1095,6 +1208,14 @@ void virgl_resource_destroy(struct pipe_screen *screen,
     if (res->b.target == PIPE_BUFFER)
        util_range_destroy(&res->valid_buffer_range);
  
 +   /* limina: a planar target's remaining planes hang off the head, gallium's convention
-+    * for one allocation carrying several plane resources. Releasing the head releases
-+    * the rest by recursion; each element holds its own reference on the shared hw_res,
-+    * so teardown is symmetric whatever order the references are dropped in. */
-+   pipe_resource_reference(&res->b.next, NULL);
++    * for one allocation carrying several plane resources — and releasing them is the
++    * core's job, not ours. pipe_resource_destroy() caches ->next before it calls this
++    * hook and then drops that reference itself, so a driver that also releases ->next
++    * releases it twice: the plane is freed while a frontend still holds a reference,
++    * and the next pipe_resource_reference() on it reads a dead refcount. Free only our
++    * own object here, exactly as radeonsi's si_resource_destroy does. */
 +
     vs->vws->resource_reference(vs->vws, &res->hw_res, NULL);
     virgl_resource_free_gbm_layout(res);
     FREE(res);
 diff --git a/src/gallium/drivers/virgl/virgl_video.c b/src/gallium/drivers/virgl/virgl_video.c
-index c85794b151a..71b694eeb12 100644
+index c85794b151a..0d4e5d87396 100644
 --- a/src/gallium/drivers/virgl/virgl_video.c
 +++ b/src/gallium/drivers/virgl/virgl_video.c
 @@ -1242,6 +1242,7 @@ virgl_video_create_buffer(struct pipe_context *ctx,
@@ -210,7 +224,7 @@ index c85794b151a..71b694eeb12 100644
      struct virgl_video_buffer *vbuf;
      struct pipe_video_buffer local_tmpl;
  
-@@ -1257,7 +1258,24 @@ virgl_video_create_buffer(struct pipe_context *ctx,
+@@ -1257,7 +1258,37 @@ virgl_video_create_buffer(struct pipe_context *ctx,
      local_tmpl.flags |= VIRGL_RESOURCE_FLAG_VIDEO_TARGET;
      tmpl = &local_tmpl;
  
@@ -221,15 +235,28 @@ index c85794b151a..71b694eeb12 100644
 +     * frame with one surface; only the composite create names a planar format, which
 +     * is what a host-side planar allocation keys off.
 +     *
-+     * Falling back rather than failing is the rule for this whole feature, so a refused
-+     * composite create retries as per-plane rather than losing the buffer: a guest that
-+     * cannot get composite targets still decodes, just through the copy path.
++     * The decision has to be made here, from the caps, and not by trying: a create the
++     * host refuses is invisible to the guest. The kernel has already handed out the
++     * handle, so the driver goes on to attach backing and build sampler views on a
++     * resource the host never made, and the host answers with "Illegal resource" and
++     * puts the context in error for the rest of its life -- every later submission,
++     * the decode included, is dropped without a word. gst-va provokes exactly that
++     * during plugin registration, when it creates a 64x64 surface of every fourcc it
++     * knows to learn the layout each one derives to. So the composite shape is taken
++     * only for a format the host's sampler bitmask lists, which is the same lookup
++     * virgl_is_format_supported does for a planar layout; today that is NV12 alone.
++     * Everything else, single-plane formats included (Y800 would otherwise go out under
++     * its own name rather than as R8), takes the per-plane form the host has always
++     * accepted, and decodes through the copy path.
 +     *
 +     * Interlaced is excluded outright. Its template is a 2D_ARRAY, and a planar create
 +     * has to chain plane resources over one allocation -- a shape neither the guest
 +     * layout nor the host's plane addressing takes for an array target. */
 +    if ((vs->caps.caps.v2.capability_bits_v2 & VIRGL_CAP_V2_VIDEO_PLANAR_TARGET) &&
-+        !tmpl->interlaced)
++        !tmpl->interlaced &&
++        util_format_get_num_planes(tmpl->buffer_format) > 1 &&
++        vs->base.is_format_supported(&vs->base, tmpl->buffer_format, PIPE_TEXTURE_2D,
++                                     0, 0, PIPE_BIND_SAMPLER_VIEW))
 +        vbuf->buf = vl_video_buffer_create_as_resource(ctx, tmpl, NULL, 0);
 +    if (!vbuf->buf)
 +        vbuf->buf = vl_video_buffer_create(ctx, tmpl);
@@ -237,18 +264,18 @@ index c85794b151a..71b694eeb12 100644
          free(vbuf);
          return NULL;
 diff --git a/src/virtio/virtio-gpu/virgl_hw.h b/src/virtio/virtio-gpu/virgl_hw.h
-index 3a5eda2be11..4d7e1f32248 100644
+index 1a32a04843f..3f93033a252 100644
 --- a/src/virtio/virtio-gpu/virgl_hw.h
 +++ b/src/virtio/virtio-gpu/virgl_hw.h
-@@ -633,6 +633,12 @@ enum virgl_formats {
+@@ -636,6 +636,12 @@ enum virgl_formats {
   * as one-page staging stubs -- and can then be exported honestly. */
- #define VIRGL_CAP_V2_VIDEO_GUEST_PLANES   (1u << 19)
+ #define VIRGL_CAP_V2_VIDEO_GUEST_PLANES   (1u << 31)
  
 +/* limina: the host accepts a decode target as ONE resource in a planar format, with
 + * its planes chained behind it, rather than as one resource per plane. Separate from
 + * VIDEO_GUEST_PLANES because a host can do the writeback without accepting the
 + * composite shape -- that is exactly what shipped first. */
-+#define VIRGL_CAP_V2_VIDEO_PLANAR_TARGET  (1u << 20)
++#define VIRGL_CAP_V2_VIDEO_PLANAR_TARGET  (1u << 30)
 +
  /* virgl bind flags - these are compatible with mesa 10.5 gallium.
   * but are fixed, no other should be passed to virgl either.

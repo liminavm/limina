@@ -1,16 +1,15 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Wed, 2 Sep 2026 18:15:23 -0300
-Subject: [PATCH 19/23] egl/dri2: fail eglExportDMABUFImageMESA when the driver
+Subject: [PATCH 16/19] egl/dri2: fail eglExportDMABUFImageMESA when the driver
  cannot export an fd
 
 dri2_export_dma_buf_image_mesa ignored the return value of the
 __DRI_IMAGE_ATTRIB_FD query and returned EGL_TRUE with the caller's fd array
-untouched, so a driver that cannot export an image (virgl refuses one whose guest
-storage is a stub) reported success and the caller went on to use an
-uninitialized value as a file descriptor. GTK4 built a GdkDmabufTexture around
-0xFFFF00FF, failed the download, and handed back a broken texture instead of
-falling back.
+untouched, so a driver that cannot export an image reported success and the
+caller went on to use an uninitialized value as a file descriptor. GTK4 built a
+GdkDmabufTexture around 0xFFFF00FF, failed the download, and handed back a
+broken texture instead of falling back.
 
 Return EGL_FALSE, matching the adjacent stride and offset handling and the
 extension's contract: close any fds already exported for earlier planes, set every

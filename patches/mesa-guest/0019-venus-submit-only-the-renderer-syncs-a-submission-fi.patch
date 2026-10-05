@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Fri, 2 Oct 2026 11:24:21 -0300
-Subject: [PATCH 23/23] venus: submit only the renderer syncs a submission
+Subject: [PATCH 19/19] venus: submit only the renderer syncs a submission
  filled
 
 vn_queue_submission_count_semaphore counts a signal semaphore as

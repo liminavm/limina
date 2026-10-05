@@ -93,7 +93,7 @@ const VPP_REF: &str = "/tmp/limina-vpp-ref.bgra";
 ///
 /// Both directions out of the band mean something, which is why it is a band and not a floor:
 ///   - **~33 dB**: the guest driver gained the fix. Our guest mesa carries it
-///     (`patches/mesa-guest/0020-vl-compositor-*`); this gate rides the STOCK image, so this
+///     (`patches/mesa-guest/*-vl-compositor-*`); this gate rides the STOCK image, so this
 ///     is the day stock Fedora shipped it. Retarget the assertion at correctness -- the
 ///     measured value with the fix is 33.18 dB -- rather than widening the band.
 ///   - **~4.9 dB**: the host regressed instead. That is the reading when a sampler view's

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Tue, 4 Aug 2026 13:25:32 -0300
-Subject: [PATCH 21/23] zink: fix lost-wakeup deadlock in the multi-context
+Subject: [PATCH 18/19] zink: fix lost-wakeup deadlock in the multi-context
  unflushed-batch wait
 
 Three bugs in one path:
