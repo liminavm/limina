@@ -60,13 +60,13 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and `rpm -q` in each booted F44 enhanced guest after the r29 trial boots 2026-10-02, and the dogfood row by `rpm -q`/`rpm -V`, `uname -r` and `grubby` on the dev VM 2026-10-02 after its by-hand kernel and mesa delivery. All three F44 enhanced images boot `7.1.13-limina16k` as their permanent default. The synoik image never reaches `multi-user.target` (its `plymouth-quit-wait` hangs), so `limina-kernel-promote.service` never fires there: after its trial boot, promote by hand with the unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable the unit).
+guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and `rpm -q` in each booted F44 enhanced guest after the r29 trial boots 2026-10-02 (the enhanced mesa cell since by the r33 installer logs, 2026-10-05), and the dogfood row by `rpm -q`/`rpm -V`, `uname -r` and `grubby` on the dev VM 2026-10-02 after its by-hand kernel and mesa delivery. All three F44 enhanced images boot `7.1.13-limina16k` as their permanent default. The synoik image never reaches `multi-user.target` (its `plymouth-quit-wait` hangs), so `limina-kernel-promote.service` never fires there: after its trial boot, promote by hand with the unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable the unit).
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`vanilla`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`) | `limina-kernel-16k-7.1.13-1` | 16 KiB | `26.2.3-2.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.1.13-1` | 16 KiB | `26.2.3-3.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.13-1` (running and default `7.1.13-limina16k`; `7.1.9-1` kept as fallback) | 16 KiB | `26.2.3-2.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 
 Two facts the table cannot show:
@@ -133,7 +133,13 @@ is standing in as the compatibility floor.
 The enhanced tier is delivered as RPMs that **replace stock at `/usr`**, not as a sysext overlay —
 the rationale is a mesa soname collision and is written up in `docs/graphics.md` §5.1.
 
-**Current payload: `payload/limina-guest-tools-f44-r32.tar.zst`** (r32, 2026-10-03: host-side
+**Current payload: `payload/limina-guest-tools-f44-r33.tar.zst`** (r33, 2026-10-05: host-side
+repack of r32 with mesa `26.2.3-3.limina`, built from Fedora's `mesa-26.2.3-1.fc44` SRPM at
+`limina-guest` `ba7b4acbf62`: virgl skips the wait for a read-only map of a clean resource, so a
+`glTexSubImage2D` from a pixel-unpack buffer no longer waits for the host on every call. Kernel,
+agents and installer identical to r32. Applied to all four F44 enhanced images
+(`.bak-pre-r33.raw` CoW backups); each installer log shows mesa `-3` installed and re-versionlocked,
+both agent hashes verified, kernel install short-circuited, no trial boot owed.) Previous: r32 (2026-10-03: host-side
 repack of r31 with `limina-agent-session` 0.1.3 at limina `427ea0d8`, which reads idle inhibitors
 from the compositor, gnome-session and PowerDevil. Kernel, mesa, `limina-agent` and the installer
 are identical to r31; the installer is still r30's, so it predates `e725b8d8`. Applied to all four F44 enhanced images, including the new
