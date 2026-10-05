@@ -1,0 +1,7 @@
+verify OK: Virtual-1 1280x800@59.974 scale=1.0
+PROVENANCE: kernel=7.1.13-limina16k pagesize=16384 mesa=26.2.3-3.limina.fc44 vnperf=<unset> vcpus=4 ram=3941MiB display=Virtual-1: 1280x800@59.974 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/tier0-2026-10-05/ledger.csv:
+2026-10-05,a4e59ce2,gl-replay-venus,fps,50.9671,tier0 t0-tier0: arm tier0 (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2; run 1/1 
+2026-10-05,a4e59ce2,gl-replay-llvmpipe,fps,730.807,tier0 t0-tier0: arm tier0 (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2; run 1/1 
+2026-10-05,a4e59ce2,vk-replay-venus-headless,fps,2371.601270,tier0 t0-tier0: arm tier0 (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2; run 1/1 
+2026-10-05,a4e59ce2,glmark2-wayland-venus,score,2855,tier0 t0-tier0: arm tier0 (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2; run 1/1 

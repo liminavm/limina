@@ -1,0 +1,106 @@
+######## o0-off 19:39:44
+[19:39:44] build tier0 o0-off: arm off (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2
+[19:39:46] enhanced boot
+[19:40:42] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[19:40:42] arm off: 0 vCPUs at a latency QoS tier
+SETTLED up=205s load=0.26
+final: up=205s load=0.26 0.22 0.09
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[19:45:25] aquarium r1 exit=0 
+[19:46:45] aquarium r2 exit=0 
+[19:48:37] perf-ledger run 1 exit=0 
+gl-replay-venus,45.7633
+gl-replay-llvmpipe,735.528
+vk-replay-venus-headless,2299.839691
+glmark2-wayland-venus,2839
+[19:50:47] vkmark run 1: 3122 
+[19:52:58] vkmark run 2: 3127 
+[19:55:08] vkmark run 3: 3126 
+[19:55:18] worker-enh: 0 poisoned-context lines
+[19:55:18] point o0-off done; read perf/tier0-2026-10-05/evidence/o0-off/aquarium-r*/*-fps.png
+######## t0-tier0 19:55:18
+[19:55:19] build tier0 t0-tier0: arm tier0 (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2
+[19:55:20] enhanced boot
+[19:56:15] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[19:56:16] arm tier0: 8 vCPUs at a latency QoS tier
+SETTLED up=235s load=0.23
+final: up=235s load=0.23 0.23 0.10
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[20:01:28] aquarium r1 exit=0 
+[20:02:48] aquarium r2 exit=0 
+[20:04:30] perf-ledger run 1 exit=0 
+gl-replay-venus,50.9671
+gl-replay-llvmpipe,730.807
+vk-replay-venus-headless,2371.601270
+glmark2-wayland-venus,2855
+[20:06:40] vkmark run 1: 3128 
+[20:08:51] vkmark run 2: 3138 
+[20:11:01] vkmark run 3: 3138 
+[20:11:11] worker-enh: 0 poisoned-context lines
+[20:11:11] point t0-tier0 done; read perf/tier0-2026-10-05/evidence/t0-tier0/aquarium-r*/*-fps.png
+######## o1-off 20:11:11
+[20:11:12] build tier0 o1-off: arm off (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2
+[20:11:13] enhanced boot
+[20:12:09] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[20:12:09] arm off: 0 vCPUs at a latency QoS tier
+SETTLED up=205s load=0.20
+final: up=205s load=0.20 0.14 0.06
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[20:16:45] aquarium r1 exit=0 
+[20:18:05] aquarium r2 exit=0 
+[20:19:57] perf-ledger run 1 exit=0 
+gl-replay-venus,45.8774
+gl-replay-llvmpipe,734.938
+vk-replay-venus-headless,2253.430126
+glmark2-wayland-venus,2843
+[20:22:07] vkmark run 1: 3123 
+[20:24:18] vkmark run 2: 3120 
+[20:26:28] vkmark run 3: 3127 
+[20:26:38] worker-enh: 0 poisoned-context lines
+[20:26:38] point o1-off done; read perf/tier0-2026-10-05/evidence/o1-off/aquarium-r*/*-fps.png
+######## t1-tier0 20:26:38
+[20:26:38] build tier0 t1-tier0: arm tier0 (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2
+[20:26:40] enhanced boot
+[20:27:35] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[20:27:35] arm tier0: 8 vCPUs at a latency QoS tier
+SETTLED up=204s load=0.20
+final: up=204s load=0.20 0.21 0.09
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[20:32:10] aquarium r1 exit=0 
+[20:33:30] aquarium r2 exit=0 
+[20:35:12] perf-ledger run 1 exit=0 
+gl-replay-venus,50.9347
+gl-replay-llvmpipe,732.261
+vk-replay-venus-headless,2341.318349
+glmark2-wayland-venus,2854
+[20:37:22] vkmark run 1: 3130 
+[20:39:33] vkmark run 2: 3130 
+[20:41:43] vkmark run 3: 3134 
+[20:41:53] worker-enh: 0 poisoned-context lines
+[20:41:53] point t1-tier0 done; read perf/tier0-2026-10-05/evidence/t1-tier0/aquarium-r*/*-fps.png
+######## o2-off 20:41:53
+[20:41:53] build tier0 o2-off: arm off (Fedora-Workstation-44.enhanced.raw); host mesa 2315d532b3d; virglrs b91824b + libkrun 34fbcdec; limina a4e59ce2
+[20:41:55] enhanced boot
+[20:42:49] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[20:42:50] arm off: 0 vCPUs at a latency QoS tier
+SETTLED up=204s load=0.20
+final: up=204s load=0.20 0.20 0.09
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[20:47:25] aquarium r1 exit=0 
+[20:48:45] aquarium r2 exit=0 
+[20:50:37] perf-ledger run 1 exit=0 
+gl-replay-venus,45.7273
+gl-replay-llvmpipe,724.866
+vk-replay-venus-headless,2336.803487
+glmark2-wayland-venus,2854
+[20:52:48] vkmark run 1: 3132 
+[20:54:58] vkmark run 2: 3127 
+[20:57:08] vkmark run 3: 3126 
+[20:57:18] worker-enh: 0 poisoned-context lines
+[20:57:18] point o2-off done; read perf/tier0-2026-10-05/evidence/o2-off/aquarium-r*/*-fps.png
+######## legs done 20:57:19
