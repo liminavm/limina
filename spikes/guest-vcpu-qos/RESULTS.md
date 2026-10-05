@@ -46,6 +46,21 @@ band does not.** Five boots per arm, interleaved:
   (`spikes/launch-path-qos/`: only a workgroup with bracketed intervals does, and a vCPU cannot
   bracket them).
 
+## At 6 vCPUs
+
+Three boots per arm (`results-2026-10-05-6cpu/`):
+
+| arm | presented fps | guest timer, 16.7 ms period, p50 |
+|---|---|---|
+| off | 46.1 / 57.4 / 46.2 | 3.6 / 4.1 / 4.4 ms |
+| band (shipped) | 42.3 / 59.6 / 42.4 | 0.2 / 3.8 / 4.0 ms |
+| off + tier 0 | 47.8 / 60.0 / 57.1 | 1.5 / 1.9 / 1.3 ms |
+
+The band does no better at 6 vCPUs than at 8. Tier 0 cuts the guest's timer lateness by the same
+2.5x as at 8, every boot. Frame pacing is bimodal at this size: rep 2 ran at 57-60 fps in every arm,
+so something on the host shifted across arms within that rep. Tier 0 had two good boots of three,
+against one for each of the others. That is suggestive, not settled at n=3.
+
 ## Not yet known
 
 - **Power.** Tier 0 shrinks the timer slack; it does not add wakeups. Slack is what lets macOS batch
