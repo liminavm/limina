@@ -55,6 +55,13 @@ unless the environment names a policy (an empty value turns it off). `#1` limits
 a safety setting and costs about half the idle gap (52.1 FPS). A static choice cannot work, because
 the deadline that matters migrates between vCPUs.
 
+Alongside it, every vCPU but a little one runs in latency-QoS tier 0 (`LIMINA_VCPU_LATENCY_QOS=0`,
+set by the supervisor the same way; empty turns it off). A parked vCPU's timer wakes late by a
+share of how long it slept, a third by default and a fifth at tier 0, and that reaches the guest
+through HVF's park. Tier 0 reserves nothing, so it needs none of the band's guards; on 8-vCPU guests
+it is what restores 60 fps, where the band on vCPU 0 alone does not (`spikes/guest-vcpu-qos/`). The
+band overrides it on vCPU 0 while armed, and the tier survives the disarm.
+
 Burst transitions from 250 ms to 8 s cost no frame over 100 ms when banded; the unbanded arm is the
 one that suffers (77/123 frames over 33 ms at 250/500 ms bursts, against 2/29 banded;
 `results-burst-and-contention.md`). Arming has a cost: a vCPU that has just gone idle waits a sample

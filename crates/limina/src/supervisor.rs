@@ -385,6 +385,21 @@ fn worker_vcpu_sched(sched: Option<&OsStr>, legacy_rt: Option<&OsStr>) -> Option
     }
 }
 
+/// The latency-QoS tier every vCPU thread runs in unless the environment says otherwise.
+///
+/// A parked vCPU's timer wakes late by a share of how long it slept, and tier 0 shrinks that share
+/// from about a third to a fifth (libkrun's `set_latency_qos`). That took a stock 8-vCPU guest from
+/// ~43 fps to ~58 where the band, on vCPU 0 only, did nothing, at no measurable idle power
+/// (`spikes/guest-vcpu-qos/`). It reserves nothing, so unlike the band it is safe on every vCPU;
+/// the two stack, the band overriding the tier on vCPU 0 while armed.
+const DEFAULT_VCPU_LATENCY_QOS: &str = "0";
+
+/// What to set `LIMINA_VCPU_LATENCY_QOS` to for the worker: the default unless the environment
+/// names a value, an empty one included — that is how a run turns the tier off.
+fn worker_vcpu_latency_qos(tier: Option<&OsStr>) -> Option<&'static str> {
+    tier.is_none().then_some(DEFAULT_VCPU_LATENCY_QOS)
+}
+
 /// The running worker, however it was started: through launchd (the default, outside the app's
 /// process tree so Game Mode does not clamp it) or posix_spawned as our own child.
 pub enum WorkerHandle {
@@ -467,6 +482,11 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         std::env::var_os("LIMINA_VCPU_RT").as_deref(),
     ) {
         env.push(("LIMINA_VCPU_SCHED".into(), sched.into()));
+    }
+    if let Some(tier) =
+        worker_vcpu_latency_qos(std::env::var_os("LIMINA_VCPU_LATENCY_QOS").as_deref())
+    {
+        env.push(("LIMINA_VCPU_LATENCY_QOS".into(), tier.into()));
     }
     // A filter changed at runtime outlives the worker it was set on: a reboot or a resume must
     // not quietly put the log back to what the supervisor started with.
@@ -1055,5 +1075,13 @@ mod tests {
         // The older spelling is explicit too: it means the static band, and silently upgrading it
         // to a dynamic one would change what a run measures without saying so.
         assert_eq!(worker_vcpu_sched(None, Some(OsStr::new("1"))), None);
+    }
+
+    #[test]
+    fn an_explicit_latency_tier_always_beats_the_default() {
+        assert_eq!(worker_vcpu_latency_qos(None), Some("0"));
+        assert_eq!(worker_vcpu_latency_qos(Some(OsStr::new("3"))), None);
+        // Empty turns it off for an A/B: libkrun reads no tier from it.
+        assert_eq!(worker_vcpu_latency_qos(Some(OsStr::new(""))), None);
     }
 }
