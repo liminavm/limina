@@ -42,6 +42,15 @@ virglrenderer follow-up pair. Ring loss (0005) goes as an issue first. Filing is
 in each `spikes/upstream-repro/` README, and every commit is on `upstream/guest-2026-10`
 (`liminavm/mesa`).
 
+**Mesa's AI policy governs every send** (`docs/submittingpatches.rst`, "Expectations on
+contributors"; the text rule since MR !43990, 2026-08-25):
+- Code made with AI help needs a disclosure trailer: `Assisted-by: TOOL (MODEL)`, or
+  `Generated-by:` when the AI wrote almost all of it. `Co-authored-by` is reserved for humans.
+- Commit messages, code comments, MR descriptions and GitLab comments must be the submitter's own
+  words, not AI-generated. The commit messages, comments and drafts on `upstream/guest-2026-10`
+  were written with Claude, so they are research notes: rewrite them before sending.
+- No autonomous tool may submit or touch issues or MRs. `Signed-off-by` is optional.
+
 ## Found along the way (not in the series)
 
 - **VA post-processing on vrend is broken since 26.2.0** (`210e557f7e0`): a compositor shader emits
