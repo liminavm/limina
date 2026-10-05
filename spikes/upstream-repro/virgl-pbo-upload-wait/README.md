@@ -46,7 +46,10 @@ a buffer or texture can reach: PBOs, buffer mapping and storage, copy/clear buff
 SSBOs, image load/store, TBOs, query buffers, transform feedback, indirect draws, DSA, and the
 teximage / texsubimage / getteximage / readpixels tests. 1871 tests (10373 with subtests),
 `PIGLIT_PLATFORM=surfaceless_egl`. Summary: no regressions; the 43 crashes and the remaining
-failures are identical on both. The summary's two "fixes", `max-ssbo-size@vs` and
+failures are identical on both. 125 of the 1871 never reached the driver: 82 could not find their
+`.shader_test`/compiler files (piglit built out of tree, so build it in tree next time) and the 43
+"crashes" are piglit aborting in `run_test` for want of a default framebuffer on the surfaceless
+platform. The 13 real failures are in `docs/hardening-backlog.md`. The summary's two "fixes", `max-ssbo-size@vs` and
 `arb_texture_buffer_object@max-size` (128 MiB buffers), are flaky: re-run 3× each, main failed the
 TBO one once and the fix passed every run.
 

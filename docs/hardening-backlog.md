@@ -701,6 +701,33 @@ of venus is never memory". Fix, guest-side and upstreamable (`limina-guest`): ca
 result into `vn_ring_submit_command` and have `vn_call_*` return it when the reply is absent. Cheap,
 and it makes the next dogfood OOM report classify itself.
 
+### piglit's buffer and texture-transfer groups fail 13 tests on classic virgl
+A piglit run of the buffer, PBO and texture-transfer groups (`quick` profile, 1871 tests) on the
+upstream reproduction rig — stock QEMU 10.2 + virglrenderer 1.3.0 (vrend) on an Intel host, guest
+Mesa `main` b39d173ca93, `PIGLIT_PLATFORM=surfaceless_egl`, measured 2026-10-05 — fails these,
+identically with and without the PBO wait fix:
+- **query buffers:** `arb_transform_feedback_overflow_query-basic` reads 0 back from every query
+  buffer object where 1 is expected; `arb_query_buffer_object@qbo` warns (QBO 37076 vs CPU 37135);
+  `arb_shader_image_load_store@early-z` gets half the expected occlusion count (768 vs 1536).
+- **transform feedback:** `ext_transform_feedback2@draw-auto offset` draws magenta;
+  `ext_transform_feedback@tessellation triangle_fan flat_first` warns on a flat-shaded vertex.
+- **texture readback:** `getteximage-targets` for 2d_array and cube_array S3TC return zeros from
+  layer 6 on; `arb_get_texture_sub_image-get`/`-getcompressed` fail on compressed 2D;
+  `copyteximage 3d`; `fbo-readpixels-depth-formats` (float depth reads 0.999985 for 1.0, a 24→32-bit
+  expansion off by 0x80); `teximage-colors` RGB 3_3_2 off by one LSB.
+- **image load/store:** `arb_shader_image_load_store@invalid` — out-of-bounds and invalid-format
+  image atomics return garbage instead of zero.
+- `max-ssbo-size@vs` and `arb_texture_buffer_object@max-size` (128 MiB buffers) are flaky.
+
+Excluded as harness artifacts, not driver results: 82 tests that could not find their
+`.shader_test`/compiler files (piglit built out of tree under `build/`, run with
+`PIGLIT_BUILD_DIR`), and 43 that need a default framebuffer and abort inside piglit's `run_test`
+on the surfaceless platform. Next: rerun on a limina stock-tier guest (virgl over virglrs's vrend
+on zink-on-KK) with piglit built in tree and a windowed platform in the seated session, so the
+excluded 125 run too; then split what limina's stack shares with upstream vrend from what is
+virglrs's own, and file the guest-Mesa ones upstream. The rig is described in
+`spikes/upstream-repro/virgl-pbo-upload-wait/README.md`, the run in its `piglit-run.sh`.
+
 ### virglrs's transfer bounds error does not say which bound failed
 `layout` in `vrend/transfer.rs` collapses its three exits (stride smaller than a row, layer stride
 smaller than a layer, offset plus span past the pages) into one bare `Error::IovOutOfRange`.
