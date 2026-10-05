@@ -49,6 +49,11 @@ in each `spikes/upstream-repro/` README, and every commit is on `upstream/guest-
   "vl/compositor: don't swizzle the sampler operand of the alpha fetch" (`Fixes: 210e557f7e0`):
   main 3 host shader errors per VPP run, fix none. Not in the guest series (our host never hit it).
   `vl-compositor-sampler-swizzle/`.
+- **virgl `glTexSubImage2D` from a PBO waits for the host on every call** (found by the Firefox
+  perf work on an M1 limina host): the PBO read map waits on the queued transfer of the data just written.
+  Candidate "virgl: don't wait for a read-only map of a clean resource" on `wip/virgl-pbo-wait`:
+  1.1 → 0.18 ms per upload on stock QEMU, all tiles verified. Not yet in the guest series; CTS/piglit
+  and a Firefox A/B owed before filing. `virgl-pbo-upload-wait/`.
 - **virgl VA post-processing on vrend still draws black after that fix**: the compositor's matrix is
   a real buffer at constant slot 0 (virgl: UBO 0), which vrend never reads (`CONST[0]` is filled
   only from inline constants). Unclaimed; a virgl/vrend matter.
