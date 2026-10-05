@@ -229,6 +229,16 @@ check and the cheap-depth pre-flight behind `VmRow::blocked` (`docs/design/vm-st
 §3.6). A dead network mount can block a `stat()` for seconds and freeze the UI. Fix: snapshot on a
 background thread and hand the finished rows to the main thread.
 
+The same snapshot has a standing CPU cost. Measured 2026-10-05 on a base M1 whose only VM had run
+for four days and was suspended: the control center held 43-70% of a core, about 44 CPU-hours over
+the four days. Half the main thread's samples were in `model::ssh_line` → `port_from_log`. It
+`read_to_string`s the whole `logs/supervisor.log` every second, then scans it backwards line by line
+for the last `guest SSH forward ready` line. That log had reached 187 MB, mostly `[LIMINA]` lines
+from KosmicKrisp's opt-in `LIMINA_KK_STATS`, and held one forward line. Moving the snapshot off the
+main thread would not fix this; it only moves the burn. The port should come from somewhere that
+does not grow: have the supervisor write it to a small file under `run/`, or cache it per bundle
+until the log's inode changes. A long-lived VM's log also wants a size bound (rotation) in any case.
+
 ### Take the control-plane socket off its `$TMPDIR` path
 The worker's own listeners (balloon, display control, the FIDO and fingerprint gadgets) have no
 path: each spawn hands the worker a link socketpair and the supervisor connects by passing it one
