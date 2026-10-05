@@ -20,7 +20,7 @@ percent of a core.
 - **An ordinary thread's timer lateness is timer slack proportional to the wait, not run-queue
   delay.** On a P-core, a `mach_wait_until` deadline lands **1/3 of the wait** late under the
   default, `UTILITY` and `USER_INTERACTIVE` QoS. With `THREAD_LATENCY_QOS_POLICY` tier 0 it lands
-  **1/5** late. Measured ratios: 0.334-0.336 for waits of 0.67-6.7 ms (and 10.7 ms for a thread already on P), and 0.201-0.203 for tier 0 at 1.7-6.7 ms. The p90
+  **1/5** late. Measured ratios: 0.334-0.336 for waits of 1.7-6.7 ms in every default and `USER_INTERACTIVE` cell (also 0.67 ms in the one cell that did not overrun, and 10.7 ms for a thread already on P), and 0.201-0.203 for tier 0 at 1.7-6.7 ms. Exact 1/3 and 1/5 read as configured constants. xnu's timer coalescing parameters (`tcoal_prio_params`, the per-tier shift and maximum in `osfmk/kern/timer_call.c`) are where to look. Whether macOS 26.6.2 changed them from 26.5 is what would reconcile this with the August numbers, rather than another run of the probe. The p90
   sits within 3 µs of the p50, which a scheduling delay would not do. On an E-core, with a 10-16 ms
   wait, the default lands 0.26-0.32 of the wait late, and tier 0 tops out near 2 ms. A full 16.667 ms
   wait that follows an overrun lands 8.35 ms late. This contradicts the 2026-08-27 reading in
@@ -61,7 +61,9 @@ percent of a core.
      bracket intervals the way this probe does, because the vCPU thread does not see the guest's
      periods. Whether a joined but un-bracketed thread is still placed on P is the first thing to
      measure.
+  A workgroup may also pull the P-cluster out of idle for a lightly loaded thread. Measure package power (`powermetrics`) before shipping it.
 - Neither is shipped or proven at guest level yet.
+- **A banded, mostly idle vCPU stays on E.** RT and RT+workgroup ran on E at 2% and 24% duty. The band's panic shape is *saturated* banded threads (`docs/hardening-backlog.md`, *Explain the parked P-clusters*), so idle vCPUs are its safe regime. That bears on *Revisit the band arm cap*: a cap that counted only busy banded vCPUs might be loosened for idle ones. It is not measured here.
 
 ## Method
 
