@@ -65,9 +65,12 @@ measured 2026-10-05:
 
 `perf trace` of the CanvasRenderer thread (ioctls ≥ 0.3 ms, one 15 s run per arm): the stock pbo
 arm has 145 `VIRTGPU_WAIT`, 11.8 s in total, median 26.6 ms; with the fix the pbo arm has 2, one of
-0.61 ms under the upload path. The other, 940 ms under `TexImage2D` with the PBO bound, is being
-re-traced: single sub-second stalls also show on other ioctls in both arms (`RESOURCE_CREATE`
-768 ms on cpuptr), which points at the host, but one trace cannot tell. The limina arm carries all
+0.61 ms under the upload path. The other, 940 ms under `TexImage2D` with the PBO bound, belongs to a
+class that is not this fix's: across 8 traced runs, about 3 single ioctls per run take 100 ms or
+more, on every ioctl type and on both arms (`RESOURCE_CREATE` 768 ms on cpuptr). In three runs
+symbolized through Mesa (raw syscall tracepoints; `perf trace` loses the frames because arm64 PAC
+bits survive in the return addresses), no `VIRTGPU_WAIT` over 1 ms goes through
+`_mesa_bufferobj_map_range`; the largest, 4.5 ms, maps the busy destination texture. The limina arm carries all
 20 guest patches, so it measures "limina guest Mesa", not "stock + this commit"; the commit is the
 only one of them on the GL upload path.
 

@@ -834,6 +834,27 @@ polls stdin and bails on EOF).
 
 ## GPU perf
 
+### Single virtio-gpu ioctls stall for 100 ms to seconds under a canvas workload
+Firefox's canvas thread on a stock-session limina guest (M1 host, virgl over zink-on-KK, Basemark
+Canvas Test, guest Mesa `26.2.3-3.limina`) logged 27 ioctls over 100 ms in 8 traced 15 s runs —
+about 3 a run, typically 100–475 ms — spread over `RESOURCE_CREATE`, `GEM_CLOSE`, `EXECBUFFER`,
+`MAP` and `WAIT`, on the PBO and the CPU-pointer arm alike (measured 2026-10-05). Two runs opened
+with multi-second ones in their first 100 ms (`VIRTGPU_MAP` 7.3 s, `RESOURCE_CREATE` 3.4 s, both
+under `BufferData`). Nothing guest-side distinguishes the stalled calls from their thousands of fast
+siblings, so the cause is likely host-side: the virtio-gpu control queue behind another context, a
+virglrs resource create or destroy that blocks, or the worker's own scheduling. Next: catch one with
+`LIMINA_GPU_TRACE` and the worker log at the matching timestamp; the
+`vkWaitRingSeqnoMESA` entry below is one candidate for the queue head.
+
+### Texture uploads on virgl create a staging resource thousands of times per run
+The same runs show 7–8k `RESOURCE_CREATE` per 15 s on the canvas thread, about 100 of them over
+1 ms, mostly `virgl_staging_alloc` ← `virgl_resource_transfer_map` ← `st_texture_image_map` on the
+`TexSubImage` path (the destination texture is busy, so the write goes to staging). The staging
+uploader is meant to suballocate from one ring buffer; this many creates means it is refilling (or
+missing the resource cache) per upload. Each create is a host round trip, and the slow ones join
+the class above. Next: count staging refills against upload sizes in `virgl_staging.c`, then decide
+between a larger staging buffer and keeping the old one cached.
+
 ### Decide whether KK should advertise `VK_EXT_vertex_input_dynamic_state`
 Throughput, not correctness. Host GL is zink-on-KK, and without this extension zink compiles vertex
 input into the pipeline, so every shader × vertex-layout combination is a separate PSO; with it, zink

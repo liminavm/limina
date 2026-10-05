@@ -54,8 +54,9 @@ in each `spikes/upstream-repro/` README, and every commit is on `upstream/guest-
   Candidate "virgl: don't wait for a read-only map of a clean resource" on `wip/virgl-pbo-wait`:
   1.1 → 0.18 ms per upload on stock QEMU, all tiles verified; piglit buffer/PBO/texture-transfer
   groups show no regressions. In the guest series as 0020 (payload r33). Firefox Canvas Test on
-  limina: PBO path −27% vs CPU pointer on stock Mesa, −1.2% (noise) with the fix; one 940 ms
-  wait under `TexImage2D` is being re-traced before filing.
+  limina: PBO path −27% vs CPU pointer on stock Mesa, −1.2% (noise) with the fix. Re-traced: no
+  remaining wait goes through the PBO read map; the sub-second stalls hit every ioctl on both arms
+  (host-side, in `docs/hardening-backlog.md`). **Ready to file.**
   Opting virgl into blit-based transfers also removes the waits but loses the uploads on vrend. `virgl-pbo-upload-wait/`.
 - **virgl VA post-processing on vrend still draws black after that fix**: the compositor's matrix is
   a real buffer at constant slot 0 (virgl: UBO 0), which vrend never reads (`CONST[0]` is filled
