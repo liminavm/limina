@@ -2,7 +2,7 @@
 # per-workload guest output are what each run keeps.
 runs/*/worker.log
 runs/*/worker.stamped.log
-runs/*/window.png
+runs/*/*.png
 runs/*/boot.out
 runs/*/*.spv
 # one FPS line per ~0.1 s replay; RESULTS.md carries the summary

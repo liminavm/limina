@@ -7,8 +7,9 @@ host KK. Step 1 of the measure-first plan: per frame, how many bridge calls and 
 would that be, against the venus and vrend streams for the same frames. Step 2 is answered
 here only as far as the tally's clock reaches.
 
-Run of record: `runs/r3/` (`analysis.md` is the full per-workload, per-function breakdown).
-`runs/r1`, `runs/r2` predate the instrument fixes below and undercount; do not cite them.
+Runs of record: `runs/r3/` (benchmarks) and `runs/r4/` (the browser); each `analysis.md` is the
+full per-workload, per-function breakdown. `runs/r1`, `runs/r2` predate the instrument fixes
+below and undercount; do not cite them.
 
 ## Method
 
@@ -29,7 +30,8 @@ Run of record: `runs/r3/` (`analysis.md` is the full per-workload, per-function 
   `26.2.3-3.limina`, 4 vCPU / 4 GiB, offscreen benchmarks.
 - **Folded messages** merge descriptor-builder calls (`*_descriptor_set_*`, `*_descriptor_get_*`,
   commit-option handlers) into the one message that consumes them — what a real protocol would
-  send. **Query round trips** are sync calls that return a Metal-chosen value; fence waits
+  send. It is an upper bound: render-pass descriptor creates and their releases still count, and
+  a protocol would fold those into encoder begin too. **Query round trips** are sync calls that return a Metal-chosen value; fence waits
   (`mtl_shared_event_wait_until_signaled_value`) are split out, since a guest KK would block on a
   host-signalled fence rather than ask a question.
 
@@ -37,7 +39,7 @@ Cost of the instrument: ~11 ns per bridge call armed (+8 % on a 10 k-draw host s
 is within noise of the shared build. Counts are load-independent; the thread-time columns were
 taken with another session's piglit VM running and are indicative only.
 
-## Results (r3, per frame at each benchmark's own fps)
+## Results (per frame at each benchmark's own fps)
 
 | workload | fps | KK msgs/frame (folded) | stream cmds/frame | KK B/frame | stream B/frame | KK / stream bytes | query RTs/frame | KK bridge non-wait thread-s/s | venus busy thread-s/s |
 |---|---|---|---|---|---|---|---|---|---|
@@ -47,6 +49,13 @@ taken with another session's piglit VM running and are indicative only.
 | glmark2-es2 offscreen (vrend) | 5,206 | 154 (65) | 13.2 | 2,732 | 4,536 | 0.60 | **1.33** | 0.21 | — |
 | glmark2-build apitrace (zink→venus) | 52 | 137 (71) | 56.9 | 3,216 | 3,231 | 1.00 | 0.13 | 0.04 | 0.05 |
 | glmark2-build apitrace (vrend) | 54 | 104 (43) | 8.6 | 1,839 | 4,398 | 0.42 | 0.05 | 0.02 | — |
+| WebGL aquarium, 20k fish, Firefox (vrend) + gnome-shell (r4) | 48 | 35,661 (33,870) | 51,627 | 1,290,567 | 5,845,973 | **0.22** | **27** | 0.17 | — |
+
+The aquarium leg is the shipped desktop path: Firefox WebGL on the image's default GL (vrend),
+composited by gnome-shell, whose traffic is in the same windows (the real desktop, not
+subtracted). Its fps is read off the window capture (`fps: 48`, 1024×1024 canvas, display not
+pinned). It is about 15 k draws per frame, each `mtl_set_address` + `mtl_draw_indexed_primitives`
+(~64 B), against vrend's ~3.5 commands and ~390 B per draw, mostly inline uniform uploads.
 
 vk-replay (gfxreconstruct vkcube, ~0.1 s per process) is left out of the table: it is device
 and pipeline churn, not frames. There KK sends 4.0× venus's bytes, almost all MSL source in
@@ -56,7 +65,7 @@ and pipeline churn, not frames. There KK sends 4.0× venus's bytes, almost all M
 
 1. **Bytes are not the problem when commands are recorded per frame.** For streams that
    record every frame, a Metal-level wire is the same size or smaller: 0.6–1.0× venus, 0.4–0.6×
-   vrend. A draw is `mtl_set_address` + `mtl_draw_primitives`, 56 B, against ~92 B for
+   vrend, and 0.22× vrend for the browser (1.3 MB against 5.8 MB per frame). A draw is `mtl_set_address` + `mtl_draw_primitives`, 56 B, against ~92 B for
    venus's push-constants + draw. Folded, KK sends about one message per venus command
    (1.0–1.25×). vrend commands are coarse, so there it is about 5 messages per command, in fewer bytes.
 2. **Pre-recorded command buffers invert that.** vkmark records its command buffers once and
@@ -66,14 +75,17 @@ and pipeline churn, not frames. There KK sends 4.0× venus's bytes, almost all M
    Apps that reuse command buffers are exactly where venus is cheapest and this design is most
    expensive. Reaching parity there would need replayable host-side recordings (indirect command
    buffers, or a host cache of encoded passes), which is a protocol of its own.
-3. **Query round trips are the real hazard, and they come from one call.** Per-frame GL work
-   creates texture views. Each one asks for `mtl_texture_get_gpu_resource_id` (glmark2:
-   0.8–1.3 per frame, 4–7 k/s) because KK writes the id into argument buffers on the CPU. At any
-   realistic round-trip latency that would gate the frame rate. Buffer GPU addresses barely show
-   (≤ 6/s steady state) because KK's allocator pools them. Both can be designed out: the host
-   writes the id/address into guest-visible descriptor memory as an ordered async command, and
-   guest memory exposed as a few large `newBufferWithBytesNoCopy` buffers makes every buffer
-   address `base + offset`. But that changes KK's descriptor path, not just the bridge.
+3. **Query round trips are the real hazard: 1–27 per frame, from object creation.** Two
+   sources. Image views created per frame (zink) each ask `mtl_texture_get_gpu_resource_id`
+   twice (`kk_image_view.c`): glmark2 0.8–1.3 per frame. The browser creates about 11
+   buffers per frame, and each one asks `mtl_heap_buffer_size_and_align_with_length` and
+   `mtl_buffer_get_gpu_address`: about 22 per frame, plus 2.6 texture ids. KK writes those values
+   into argument buffers on the CPU, so in a split design each one waits on the host. At 27 per
+   frame, any realistic round-trip latency gates the frame rate. All three can be designed out.
+   Size/align is a device constant the guest can cache. Guest memory exposed as a few large
+   `newBufferWithBytesNoCopy` buffers makes a buffer address `base + offset`. The host can
+   write texture ids into guest-visible descriptor memory as an ordered async command. That
+   changes KK's allocator and descriptor path, not just the bridge.
 4. **Host CPU would roughly halve, not vanish** (indicative). Time inside the bridge, excluding
    fence waits, is what a replayer would spend in Metal. It is 0.23 thread-s/s against venus's
    0.45 for glmark2, and 0.10 against 0.52 for drawstorm. The rest (decode, KK's
@@ -87,8 +99,8 @@ and pipeline churn, not frames. There KK sends 4.0× venus's bytes, almost all M
 
 ## Verdict for step 1
 
-The transport-volume question comes out favourable for per-frame recording (most GL through
-zink, most desktop and browser traffic). It comes out unfavourable for reuse-heavy Vulkan. Two
+The transport-volume question comes out favourable for per-frame recording, including the
+browser (0.22× vrend's bytes). It comes out unfavourable for reuse-heavy Vulkan. Two
 design prerequisites surfaced that the original proposal did not name: async resource-id/address
 delivery, and a guest-memory-backed allocator replacing KK's heaps. Step 3 (the tri.c spike)
 should not start until both have a sketch. A tri.c would not exercise either.

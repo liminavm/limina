@@ -9,7 +9,8 @@
 # Usage: run-tally.sh <disk clone> <out dir> [workload...]
 #   The clone boots IN PLACE: make it with `cp -c Fedora-Workstation-44.enhanced.raw <clone>`.
 #   Workloads (default: all, in this order): idle vkmark vk-replay drawstorm gl-replay-venus
-#   gl-replay-vrend glmark2-venus glmark2-vrend
+#   gl-replay-vrend glmark2-venus glmark2-vrend; also `aquarium` (Firefox WebGL, AQ_FISH fish,
+#   default 20000), not in the default set because it needs the network
 # Env: DURATION (s per workload, default 30), TALLY_EVERY (s, default 5),
 #      KK_ICD (default: the build-kk-tally devenv json), LIMINA_CPUS / LIMINA_RAM_MIB (4 / 4096).
 set -euo pipefail
@@ -92,6 +93,9 @@ for w in "${WORKLOADS[@]}"; do
   kill -0 "$BOOT_PID" 2>/dev/null || { echo "!! the VM died before $w; stopping" >&2; break; }
   echo "==> $w (${DURATION}s)"
   t0="$(perl -MTime::HiRes=time -e 'printf "%.3f", time')"
+  # Keep the frame on screen near the end of each workload (the aquarium's fps counter is only
+  # ever drawn, never logged).
+  ( sleep "$((DURATION - 3))"; cp "$OUT/window.png" "$OUT/$w.png" 2>/dev/null ) &
   "${SSH[@]}" "bash /tmp/guest-workload.sh $w $DURATION" >"$OUT/$w.txt" 2>&1 || echo "    $w exited nonzero (see $OUT/$w.txt)"
   t1="$(perl -MTime::HiRes=time -e 'printf "%.3f", time')"
   printf '%s\t%s\t%s\n' "$w" "$t0" "$t1" >>"$MARKS"

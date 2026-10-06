@@ -66,6 +66,20 @@ glmark2-venus | glmark2-vrend)
     -b build:duration=$per -b texture:duration=$per -b shading:shading=phong:duration=$per \
     -b refract:duration=$per 2>&1
   ;;
+aquarium)
+  # The shipped desktop path: Firefox WebGL on the image's default GL (vrend), composited by
+  # gnome-shell, whose traffic lands in the same windows. Same launch as
+  # scripts/perf/aquarium-run.sh; the fps counter is read off the host's window capture.
+  export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+  systemctl --user stop ff-bench 2>/dev/null; systemctl --user reset-failed ff-bench 2>/dev/null
+  busctl --user set-property org.gnome.Shell /org/gnome/Shell org.gnome.Shell OverviewActive b false 2>/dev/null
+  systemd-run --user --unit=ff-bench \
+    --setenv=WAYLAND_DISPLAY=wayland-0 --setenv=MOZ_ENABLE_WAYLAND=1 \
+    --setenv=MOZ_DISABLE_GPU_SANDBOX=1 --setenv=XDG_RUNTIME_DIR=/run/user/1000 \
+    /usr/bin/firefox --kiosk "https://webglsamples.org/aquarium/aquarium.html?numFish=${AQ_FISH:-20000}"
+  sleep "$D"
+  systemctl --user stop ff-bench
+  ;;
 *)
   echo "unknown workload $W" >&2; exit 2
   ;;
