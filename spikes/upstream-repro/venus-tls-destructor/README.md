@@ -59,8 +59,11 @@ thread-exit-hook build imports `__cxa_thread_atexit_impl` and the fallback build
 
 Not covered by a run: the fallback's race, and a worker thread that calls `exit()` itself, which runs
 its own teardown from `exit()` on the thread-exit-hook path (tss destructors never ran there). The
-fallback's library destructor is `__GNUC__`-only, so an MSVC build keeps today's behaviour, and it
-also runs at process exit, where deleting the key is harmless.
+fallback's library destructor is `__GNUC__`-only and also runs at process exit, where deleting the
+key is harmless. Windows needs neither path: Mesa's emulated tss runs key destructors from the
+driver's own thread-detach callback (`src/c11/impl/threads_win32_tls_callback.cpp`), which the
+loader stops calling once the DLL is freed, and venus builds no renderer there (no vtest, no
+virtgpu).
 
 ## MR description
 
