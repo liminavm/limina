@@ -751,16 +751,20 @@ enhanced guests still fail the same tests, about 100 on limina's host that pass 
 Running each one in the enhanced guest under zink-on-venus as well
 (`MESA_LOADER_DRIVER_OVERRIDE=zink`, which reaches KK without vrend) splits them:
 - **Pass under zink-on-venus, so they are in virglrs vrend.** Its GLES 3.1 flavour has no geometry
-  shaders, texture buffers or tf3, and lacks image caps. That accounts for the image load/store,
-  SSBO, texture-buffer and most transform-feedback failures, plus BPTC float uploads,
-  `getteximage-formats`, `pos-array` and DSA `transformfeedback-buffer*`.
+  shaders or tf3, and lacks image caps. That accounts for the image load/store, SSBO and most
+  transform-feedback failures, plus BPTC float uploads, `getteximage-formats`, `pos-array` and DSA
+  `transformfeedback-buffer*`.
+  - Texture buffers reach it since KK emulates R32G32B32 texel buffers (KK `c76a16a26f8`), which
+    gives host zink `OES_texture_buffer`; 22 texture-buffer tests pass under vrend. Still failing
+    there: the legacy ALPHA, LUMINANCE, LUMINANCE_ALPHA and INTENSITY formats in
+    `arb_texture_buffer_object@formats (fs|vs, arb)`.
   - All 27 timeouts (300 s) are indexed draws under transform feedback, which GLES refuses. virglrs
     de-indexes them in `6c6a60b` (not yet pinned).
   - virglrs's desktop flavour passes 69 more of these and regresses 26 uploads; which flavour ships
     is undecided.
 - **Fail under zink-on-venus too, so they are in KK or zink:**
   - `arb_draw_indirect-draw-elements-prim-restart-ugly` (passes on virglrs's desktop flavour).
-  - `arb_shader_image_load_store@host-mem-barrier`, `texture-buffer-size-clamp` (texel count 0).
+  - `arb_shader_image_load_store@host-mem-barrier`.
   - `ext_transform_feedback2@counting with pause` and the five geometry-shader xfb tests: see the
     KosmicKrisp entries below.
 - **Fence waits that give up.** "waiting got error - 16, slow gpu or hang?" after 15–40 s turns a
