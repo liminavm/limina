@@ -1,4 +1,4 @@
-# venus: free a thread's TLS state without calling into an unloaded driver
+# venus: don't run a thread's TLS teardown from an unloaded driver
 
 **Bug.** `vn_tls_get()` registers `vn_tls_free` as a tss-key destructor (first reached from
 `vkCreateDevice`). A key destructor does not keep its DSO loaded, and the loader `dlclose()`s the
@@ -21,19 +21,22 @@ renderer, or page size.
 
 ## Fixes compared
 
+- **key deleted at unload** (`d6e1586bfbb` on `venus-tls-teardown`, `c0d892b7d18` on
+  `upstream/guest-2026-10`; the fix to send): keep the tss key and give the driver a library
+  destructor that `tss_delete()`s it. Deleting a key runs no destructors and stops every thread's
+  exit from calling `vn_tls_free`, so threads still holding venus TLS when the driver unloads leak
+  it: a `struct vn_tls` plus one emptied `vn_tls_ring` wrapper per instance that gave the thread a
+  ring, a few dozen bytes per thread per load cycle. The rings themselves are already destroyed by
+  `vkDestroyInstance` (`vn_instance_fini_ring`). Unloading is unchanged: the driver goes at the
+  last `vkDestroyInstance`, as before.
+- **thread-exit hook** (`338ca7b81ae`, comparison only): register the teardown with
+  `__cxa_thread_atexit_impl` (glibc 2.18+, bionic API 23+), whose loaders refuse to unload a DSO
+  while it has teardowns pending (`l_tls_dtor_count`, checked in `_dl_close_worker`). This closes
+  the race below, but a thread alive at the last `vkDestroyInstance` keeps the driver mapped until
+  the next `dlclose` that unloads anything, or process exit: nothing re-runs the close sweep when
+  the count drops, and the count is not reachable from outside libc.
 - **pin** (`8733525be5e`, comparison only): once the key exists, reopen the driver with
   `RTLD_NOLOAD | RTLD_NODELETE`. The driver stays loaded until the process exits.
-- **thread-exit hook** (`338ca7b81ae` on `upstream/guest-2026-10`, the fix to send): where the build finds `__cxa_thread_atexit_impl`
-  (glibc 2.18+, bionic API 23+), keep the state in a `thread_local` and register its teardown with
-  that hook. glibc (`l_tls_dtor_count`, checked in `_dl_close_worker`) and bionic
-  (`__loader_add_thread_local_dtor`) refuse to unload a DSO while it has teardowns pending, so the
-  driver stays loaded only while some thread still owes one. The main thread does not register:
-  its state goes with the process, and `exit()` takes no ring teardown. Without the hook, the tss key
-  is kept and a library destructor `tss_delete()`s it at unload; threads still holding venus TLS
-  then leak it. That path keeps a narrow race: a thread already inside the key destructor when
-  another thread's `dlclose` unmaps the driver.
-- **fallback** (`wip/venus-tls-fb`, test only): the thread-exit-hook fix with the meson check
-  forced off, so the `tss_delete` path runs on glibc.
 
 ## Results
 
@@ -46,32 +49,35 @@ last instance is destroyed.
 | build | `thread` | `unload` | `cycle` | `main-unload` | `main-alive` |
 |---|---|---|---|---|---|
 | `main` | SIGSEGV 3/3 | crashes before the report | crashes before the report | no 3/3 | exit 0 3/3 |
-| pin | exit 0 3/3 | yes 3/3 | yes 3/3 | yes 3/3 | exit 0 3/3 |
+| key deleted at unload | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
 | thread-exit hook | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
-| fallback | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
+| pin | exit 0 3/3 | yes 3/3 | yes 3/3 | yes 3/3 | exit 0 3/3 |
 
-`main-unload` is the check that the hook build skips the main thread: a registration there would
-hold the driver, as the pin does. `main-alive` exits cleanly on every build, unfixed included, so it
-only shows that `exit()` with a live device does not crash.
+`unload` and `cycle` read the map only after one extra instance create/destroy, which gives the
+loader a `dlclose` to unload on; on the hook build that is what releases a driver held past the
+last `vkDestroyInstance`. `main-unload` shows the hook build registers nothing on the main thread.
+`main-alive` exits cleanly on every build, unfixed included, so it only shows that `exit()` with a
+live device does not crash.
 
-Fedora 44's `mesa-vulkan-drivers-26.2.3-1.fc44` also crashes `thread` 3/3. `nm -D` confirms the
-thread-exit-hook build imports `__cxa_thread_atexit_impl` and the fallback build does not.
+Fedora 44's `mesa-vulkan-drivers-26.2.3-1.fc44` also crashes `thread` 3/3.
 
-Not covered by a run: the fallback's race, and a worker thread that calls `exit()` itself, which runs
-its own teardown from `exit()` on the thread-exit-hook path (tss destructors never ran there). The
-fallback's library destructor is `__GNUC__`-only and also runs at process exit, where deleting the
-key is harmless. Windows needs neither path: Mesa's emulated tss runs key destructors from the
-driver's own thread-detach callback (`src/c11/impl/threads_win32_tls_callback.cpp`), which the
-loader stops calling once the DLL is freed, and venus builds no renderer there (no vtest, no
-virtgpu).
+Not covered by a run: the race the key-deletion fix leaves. A thread that has already fetched the
+destructor in `__nptl_deallocate_tsd`, or is inside `vn_tls_free`, when another thread's last
+`vkDestroyInstance` unmaps the driver still faults: `munmap` invalidates the translations on every
+CPU before it returns, so cached instructions do not help. Only a thread exiting during the final
+teardown can hit it; an application that joins its threads first cannot. The library destructor is
+`__GNUC__`-only and also runs at process exit, where deleting the key is harmless. Windows needs
+nothing: Mesa's emulated tss runs key destructors from the driver's own thread-detach callback
+(`src/c11/impl/threads_win32_tls_callback.cpp`), which the loader stops calling once the DLL is
+freed, and venus builds no renderer there (no vtest, no virtgpu).
 
 ## MR description
 
 To be written by the submitter (Mesa's AI policy). Points it needs: the crash and its trigger
 (also seen with surfaceless EGL on zink over venus terminated before its thread exits); why a key
-destructor does not hold the DSO; the hook and its loader reference; the main-thread exclusion; the
-fallback and its leak and race; the table above; and the alternative of pinning with
-`RTLD_NODELETE` or `-z nodelete`.
+destructor does not hold the DSO; the key deletion, its bounded leak and the remaining race; why
+not the thread-exit hook (it delays unloading, which upstream keeps on purpose) or a pin with
+`RTLD_NODELETE` / `-z nodelete`; and the table above.
 
 Prior art to cite (searched 2026-10-06; no issue or MR covers the venus key): mesa#13571 is the
 same crash through sysprof's tss destructor in every driver, fixed in sysprof
