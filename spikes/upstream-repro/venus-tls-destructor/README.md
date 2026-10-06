@@ -29,6 +29,14 @@ renderer, or page size.
   ring, a few dozen bytes per thread per load cycle. The rings themselves are already destroyed by
   `vkDestroyInstance` (`vn_instance_fini_ring`). Unloading is unchanged: the driver goes at the
   last `vkDestroyInstance`, as before.
+- **key deleted from `atexit()`** (`6e88fb430f7`, `wip/venus-tls-key-atexit`): the same deletion,
+  registered with `atexit()` from `vn_tls_key_create_once` instead of a destructor attribute, as
+  `src/util` registers its cleanups. On glibc this runs at `dlclose`, not only at exit: `atexit` is
+  a static-only routine (`libc_nonshared.a`) that calls `__cxa_atexit(func, NULL, __dso_handle)`
+  with the library's own handle (`stdlib/atexit.c`), and the library's fini from `crtbeginS.o`
+  calls `__cxa_finalize(__dso_handle)` (libgcc `crtstuff.c`), which `_dl_close_worker` runs before
+  unmapping (`elf/dl-close.c`, `_dl_call_fini`). The built driver imports `__cxa_atexit` and
+  `__cxa_finalize`.
 - **thread-exit hook** (`338ca7b81ae`, comparison only): register the teardown with
   `__cxa_thread_atexit_impl` (glibc 2.18+, bionic API 23+), whose loaders refuse to unload a DSO
   while it has teardowns pending (`l_tls_dtor_count`, checked in `_dl_close_worker`). This closes
@@ -50,13 +58,16 @@ last instance is destroyed.
 |---|---|---|---|---|---|
 | `main` | SIGSEGV 3/3 | crashes before the report | crashes before the report | no 3/3 | exit 0 3/3 |
 | key deleted at unload | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
+| key deleted from `atexit()` | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
 | thread-exit hook | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
 | pin | exit 0 3/3 | yes 3/3 | yes 3/3 | yes 3/3 | exit 0 3/3 |
 
 `unload` and `cycle` read the map only after one extra instance create/destroy, which gives the
 loader a `dlclose` to unload on; on the hook build that is what releases a driver held past the
 last `vkDestroyInstance`. `main-unload` shows the hook build registers nothing on the main thread.
-`main-alive` exits cleanly on every build, unfixed included, so it only shows that `exit()` with a
+`thread` crashing on `main` and passing on the `atexit()` build is what shows the handler runs at
+`dlclose`: a handler that waited for process exit would leave the crash in place. `cycle` loads and
+unloads the driver 100 times in one process, registering the handler each time. `main-alive` exits cleanly on every build, unfixed included, so it only shows that `exit()` with a
 live device does not crash.
 
 Fedora 44's `mesa-vulkan-drivers-26.2.3-1.fc44` also crashes `thread` 3/3.
