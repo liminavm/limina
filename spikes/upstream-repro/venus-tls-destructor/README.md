@@ -72,3 +72,11 @@ To be written by the submitter (Mesa's AI policy). Points it needs: the crash an
 destructor does not hold the DSO; the hook and its loader reference; the main-thread exclusion; the
 fallback and its leak and race; the table above; and the alternative of pinning with
 `RTLD_NODELETE` or `-z nodelete`.
+
+Prior art to cite (searched 2026-10-06; no issue or MR covers the venus key): mesa#13571 is the
+same crash through sysprof's tss destructor in every driver, fixed in sysprof
+(GNOME/sysprof!152 links its static library `-z nodelete`) and picked up by mesa!38347; the
+Mesa-side `-z nodelete` attempt, mesa!36978, was closed for it. A driver built with
+`-Dsysprof=true` against sysprof 49+ is therefore already NODELETE and cannot show this bug; the
+Fedora build and a default `main` build are not. mesa#11085 and the open mesa!31185 are the same
+unload problem for `atexit()` handlers.
