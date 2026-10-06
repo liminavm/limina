@@ -21,6 +21,10 @@
  *                     loader a dlclose to unload it on).
  *   cycle             100 threads in turn, each with its own instance and
  *                     device, then the same unload report.
+ *   main-unload       the main thread creates and destroys an instance and a
+ *                     device, then reports whether the driver is still
+ *                     mapped. A fix that registers a thread-exit teardown on
+ *                     the main thread holds the driver here ("yes").
  *   main-alive        the main thread creates an instance and a device and
  *                     returns from main() without destroying them: exit()
  *                     with live venus state on the main thread.
@@ -159,6 +163,11 @@ main(int argc, char **argv)
          run_worker(0);
       printf("100 workers done\n");
       report_unload();
+   } else if (!strcmp(mode, "main-unload")) {
+      worker("v");
+      printf("driver mapped after the last instance: %s\n",
+             driver_mapped() ? "yes" : "no");
+      return 0;
    } else if (!strcmp(mode, "main-alive")) {
       VkInstance instance = create_instance();
       create_device(instance, 1);
