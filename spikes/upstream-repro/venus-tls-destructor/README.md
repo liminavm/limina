@@ -21,9 +21,9 @@ renderer, or page size.
 
 ## Fixes compared
 
-- **pin** (`8733525be5e` on `upstream/guest-2026-10`): once the key exists, reopen the driver with
+- **pin** (`8733525be5e`, comparison only): once the key exists, reopen the driver with
   `RTLD_NOLOAD | RTLD_NODELETE`. The driver stays loaded until the process exits.
-- **thread-exit hook** (`wip/venus-tls-atexit`): where the build finds `__cxa_thread_atexit_impl`
+- **thread-exit hook** (`338ca7b81ae` on `upstream/guest-2026-10`, the fix to send): where the build finds `__cxa_thread_atexit_impl`
   (glibc 2.18+, bionic API 23+), keep the state in a `thread_local` and register its teardown with
   that hook. glibc (`l_tls_dtor_count`, checked in `_dl_close_worker`) and bionic
   (`__loader_add_thread_local_dtor`) refuse to unload a DSO while it has teardowns pending, so the
@@ -32,7 +32,7 @@ renderer, or page size.
   is kept and a library destructor `tss_delete()`s it at unload; threads still holding venus TLS
   then leak it. That path keeps a narrow race: a thread already inside the key destructor when
   another thread's `dlclose` unmaps the driver.
-- **fallback** (`wip/venus-tls-fb`, test only): the thread-exit-hook branch with the meson check
+- **fallback** (`wip/venus-tls-fb`, test only): the thread-exit-hook fix with the meson check
   forced off, so the `tss_delete` path runs on glibc.
 
 ## Results
