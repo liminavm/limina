@@ -229,16 +229,13 @@ check and the cheap-depth pre-flight behind `VmRow::blocked` (`docs/design/vm-st
 §3.6). A dead network mount can block a `stat()` for seconds and freeze the UI. Fix: snapshot on a
 background thread and hand the finished rows to the main thread.
 
-The same snapshot has a standing CPU cost. Measured 2026-10-05 on a base M1 whose only VM had run
-for four days and was suspended: the control center held 43-70% of a core, about 44 CPU-hours over
-the four days. Half the main thread's samples were in `model::ssh_line` → `port_from_log`. It
-`read_to_string`s the whole `logs/supervisor.log` every second, then scans it backwards line by line
-for the last `guest SSH forward ready` line. That log had reached 187 MB, mostly `[LIMINA]` lines
-from KosmicKrisp's opt-in `LIMINA_KK_STATS`, and held one forward line. Moving the snapshot off the
-main thread would not fix this; it only moves the burn. A log is a record for humans, not an
-interface: the control center should ask the running supervisor over IPC for its runtime facts,
-the forwarded SSH port included, and get a typed answer. A long-lived VM's log also wants a size
-bound (rotation) in any case.
+Runtime facts about a running VM come from its supervisor's runtime socket (`runtime_ctl`,
+followed by `center/live.rs` off the main thread), never from its log; keep it that way.
+
+### Bound a long-lived VM's supervisor log
+`logs/supervisor.log` is rotated per run, not within one. Measured 2026-10-05 on a base M1 whose
+only VM had run for four days: the log had reached 187 MB, mostly `[LIMINA]` lines from
+KosmicKrisp's opt-in `LIMINA_KK_STATS`. It wants a size bound inside a run.
 
 ### Take the control-plane socket off its `$TMPDIR` path
 The worker's own listeners (balloon, display control, the FIDO and fingerprint gadgets) have no

@@ -34,6 +34,11 @@
 //! supervisor's `--ssh-port`) or, when that is omitted, by auto-allocating the first free port
 //! from [`DEFAULT_SSH_PORT`] upward (see [`allocate_ssh_port`]) so two VMs that both leave it
 //! unset still don't fight over 2222.
+//!
+//! The forward can move while the VM runs ([`SshForward::set`]): gvproxy also answers its HTTP
+//! services API on a second socket ([`services_path`]), whose `forwarder/expose` and `unexpose`
+//! open and close host listeners without touching the guest's link. A [`Gateway::restart`] after
+//! that respawns gvproxy at the moved port, so the change outlives a guest reboot.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -41,8 +46,8 @@ use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -77,7 +82,7 @@ static DEATHPACT_WFD: AtomicI32 = AtomicI32::new(-1);
 pub struct Gateway {
     socket_path: PathBuf,
     debug_log: Option<PathBuf>,
-    ssh_port: u16,
+    forward: SshForward,
     /// Custom guest MAC (normalized lowercase) — rebinds the static .2 lease via a
     /// generated gvproxy config file. None = gvproxy's built-in well-known-MAC config.
     guest_mac: Option<String>,
@@ -93,7 +98,12 @@ impl Gateway {
     /// one the caller requested, or the auto-allocated one when `--ssh-port` was omitted. The
     /// supervisor surfaces it so the user knows where to `ssh`.
     pub fn ssh_port(&self) -> u16 {
-        self.ssh_port
+        self.forward.port()
+    }
+
+    /// A handle that reads and moves the SSH forward while the VM runs.
+    pub fn forward(&self) -> SshForward {
+        self.forward.clone()
     }
 
     /// Recycle gvproxy at the **same** socket path, so the worker's already-baked
@@ -101,15 +111,131 @@ impl Gateway {
     /// guest reboot: gvproxy's vfkit socket is single-connection (it unlinks the socket once a VM
     /// connects — see libkrun `net/unixgram.rs`), so a fresh worker cannot reconnect to the old
     /// gvproxy. The socket path is keyed on the supervisor pid, so a restart reuses it.
+    ///
+    /// Respawns at the forward's *current* port, holding it so a concurrent
+    /// [`SshForward::set`] lands either before (and is respawned with) or after (and talks to the
+    /// new gvproxy).
     pub fn restart(&self) -> Result<()> {
+        let port = self.forward.lock();
         cleanup();
         spawn_gvproxy(
             &self.socket_path,
             self.debug_log.as_deref(),
-            self.ssh_port,
+            *port,
             self.guest_mac.as_deref(),
         )
     }
+}
+
+/// The host end of the guest's SSH forward, shared between the [`Gateway`] and whoever moves it
+/// at runtime (the supervisor's runtime socket). Cloning shares the same forward.
+#[derive(Clone)]
+pub struct SshForward {
+    port: Arc<Mutex<u16>>,
+    services: PathBuf,
+}
+
+impl SshForward {
+    fn new(port: u16, socket_path: &Path) -> Self {
+        SshForward {
+            port: Arc::new(Mutex::new(port)),
+            services: services_path(socket_path),
+        }
+    }
+
+    /// A forward with no gvproxy behind it, for tests that never move it.
+    #[cfg(test)]
+    pub(crate) fn for_tests(port: u16) -> Self {
+        SshForward::new(port, Path::new("/nonexistent/limina-gvproxy.sock"))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, u16> {
+        self.port.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The host port the forward listens on now.
+    pub fn port(&self) -> u16 {
+        *self.lock()
+    }
+
+    /// Move the forward to `port` without disturbing the guest. The new listener opens before the
+    /// old one closes, so a refusal (the port is taken, gvproxy said no) leaves the old forward
+    /// working. Moving to the current port is a no-op.
+    pub fn set(&self, port: u16) -> Result<()> {
+        let mut current = self.lock();
+        if *current == port {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            port >= SSH_PORT_MIN,
+            "the SSH port must be between {SSH_PORT_MIN} and 65535, got {port}"
+        );
+        anyhow::ensure!(port_is_free(port), "host port {port} is already in use");
+        services_post(
+            &self.services,
+            "/services/forwarder/expose",
+            &forward_json(port, true),
+        )
+        .with_context(|| format!("opening the SSH forward on port {port}"))?;
+        if let Err(e) = services_post(
+            &self.services,
+            "/services/forwarder/unexpose",
+            &forward_json(*current, false),
+        ) {
+            // The guest is reachable on the new port either way; the old one lingering until the
+            // next gateway restart is untidy, not broken.
+            log::warn!("gateway: could not close the old SSH forward on {current}: {e:#}");
+        }
+        log::info!("gateway: SSH forward moved from {current} to {port}");
+        *current = port;
+        Ok(())
+    }
+}
+
+/// The JSON body of a `forwarder/expose` (`with_remote`) or `forwarder/unexpose` request for the
+/// SSH forward at host `port` (pure — unit-tested).
+fn forward_json(port: u16, with_remote: bool) -> String {
+    let mut v = serde_json::json!({ "local": format!("127.0.0.1:{port}"), "protocol": "tcp" });
+    if with_remote {
+        v["remote"] = "192.168.127.2:22".into();
+    }
+    v.to_string()
+}
+
+/// One POST to gvproxy's services API: HTTP/1.1 over its unix socket, small enough not to want a
+/// client library. Any status but 2xx is an error carrying gvproxy's own text.
+fn services_post(socket: &Path, endpoint: &str, body: &str) -> Result<()> {
+    use std::io::Read;
+    let mut s = std::os::unix::net::UnixStream::connect(socket)
+        .with_context(|| format!("connecting to gvproxy's services API at {socket:?}"))?;
+    let timeout = Some(Duration::from_secs(2));
+    s.set_read_timeout(timeout)?;
+    s.set_write_timeout(timeout)?;
+    write!(
+        s,
+        "POST {endpoint} HTTP/1.1\r\nHost: gvproxy\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )?;
+    let mut reply = String::new();
+    s.read_to_string(&mut reply)
+        .context("reading gvproxy's answer")?;
+    parse_status(&reply)
+}
+
+/// Accept a 2xx HTTP answer; anything else becomes an error with gvproxy's body (pure).
+fn parse_status(reply: &str) -> Result<()> {
+    let status = reply
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse::<u16>().ok())
+        .with_context(|| format!("gvproxy sent no HTTP status: {reply:?}"))?;
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    let body = reply.split("\r\n\r\n").nth(1).unwrap_or("").trim();
+    bail!("gvproxy answered {status}: {body}")
 }
 
 impl Drop for Gateway {
@@ -159,6 +285,11 @@ fn default_socket_path() -> PathBuf {
     std::env::temp_dir().join(format!("limina-gvproxy-{}.sock", std::process::id()))
 }
 
+/// Where gvproxy answers its HTTP services API, next to its vfkit socket.
+fn services_path(socket_path: &Path) -> PathBuf {
+    socket_path.with_extension("services.sock")
+}
+
 /// Spawn gvproxy and wait for its socket to be ready, with `ssh_port` for the built-in SSH
 /// forward (distinct per VM lets several VMs run at once).
 ///
@@ -204,9 +335,9 @@ pub fn start(
         match spawn_gvproxy(&socket_path, debug_log, ssh_port, guest_mac) {
             Ok(()) => {
                 return Ok(Gateway {
+                    forward: SshForward::new(ssh_port, &socket_path),
                     socket_path,
                     debug_log: debug_log.map(Path::to_path_buf),
-                    ssh_port,
                     guest_mac: guest_mac.map(str::to_string),
                 });
             }
@@ -239,6 +370,7 @@ fn spawn_gvproxy(
 ) -> Result<()> {
     let _ = fs::remove_file(socket_path);
     let _ = fs::remove_file(local_bind_path(socket_path));
+    let _ = fs::remove_file(services_path(socket_path));
 
     let child = spawn_gvproxy_process(socket_path, debug_log, ssh_port, guest_mac)?;
     let pid = child.id() as i32;
@@ -345,6 +477,12 @@ fn gvproxy_args(
     v.push(OsString::from(format!(
         "unixgram://{}",
         socket_path.display()
+    )));
+    // The HTTP API that moves the SSH forward at runtime ([`SshForward::set`]).
+    v.push("-services".into());
+    v.push(OsString::from(format!(
+        "unix://{}",
+        services_path(socket_path).display()
     )));
     // Unlike `-ssh-port`, gvproxy applies `-mtu` over a config file, so it goes in both modes.
     v.push("-mtu".into());
@@ -459,6 +597,7 @@ pub fn cleanup() {
     }
     if let Some(sock) = GVPROXY_SOCK.lock().unwrap().take() {
         let _ = fs::remove_file(local_bind_path(&sock));
+        let _ = fs::remove_file(services_path(&sock));
         // The generated config for a custom guest MAC, if one was written.
         let _ = fs::remove_file(sock.with_extension("yaml"));
         let _ = fs::remove_file(&sock);
@@ -734,6 +873,7 @@ fn sweep_orphans(dir: &Path) {
         }
         if let Some(sock) = socket {
             let _ = fs::remove_file(local_bind_path(&sock));
+            let _ = fs::remove_file(services_path(&sock));
             let _ = fs::remove_file(&sock);
         }
         let _ = fs::remove_file(&path);
@@ -819,6 +959,49 @@ mod tests {
             !args.iter().any(|a| a == "-debug"),
             "no -debug without a log"
         );
+    }
+
+    #[test]
+    fn the_services_api_is_in_the_argv_in_both_modes() {
+        for config in [None, Some(Path::new("/tmp/x.yaml"))] {
+            let args = gvproxy_args(Path::new("/tmp/x.sock"), 2345, false, config);
+            let sp = args
+                .iter()
+                .position(|a| a == "-services")
+                .expect("-services present");
+            assert_eq!(args[sp + 1], OsString::from("unix:///tmp/x.services.sock"));
+        }
+    }
+
+    #[test]
+    fn forward_requests_name_the_loopback_port() {
+        let expose: serde_json::Value = serde_json::from_str(&forward_json(2400, true)).unwrap();
+        assert_eq!(expose["local"], "127.0.0.1:2400");
+        assert_eq!(expose["remote"], "192.168.127.2:22");
+        assert_eq!(expose["protocol"], "tcp");
+        let unexpose: serde_json::Value = serde_json::from_str(&forward_json(2400, false)).unwrap();
+        assert_eq!(unexpose["local"], "127.0.0.1:2400");
+        assert!(unexpose.get("remote").is_none());
+    }
+
+    #[test]
+    fn a_services_answer_is_judged_by_its_status() {
+        assert!(parse_status("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").is_ok());
+        let err = parse_status(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 22\r\n\r\nproxy already running\n",
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("proxy already running"), "{err}");
+        assert!(parse_status("").is_err());
+    }
+
+    #[test]
+    fn a_forward_refuses_a_port_below_gvproxys_range() {
+        let f = SshForward::new(2222, Path::new("/nonexistent/x.sock"));
+        assert!(f.set(80).is_err());
+        assert_eq!(f.port(), 2222);
+        // Moving to where it already is asks gvproxy nothing.
+        f.set(2222).unwrap();
     }
 
     #[test]
@@ -1106,5 +1289,55 @@ mod tests {
             "auto-allocation must give the second VM a different port (got {pa} then {pb})"
         );
         assert!(both, "both auto-allocated gateways must run at once");
+    }
+
+    /// Accepts a TCP connection on loopback `port` right now.
+    fn listening(port: u16) -> bool {
+        std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+    }
+
+    #[test]
+    fn an_ssh_forward_moves_without_restarting_gvproxy() {
+        if !gated() {
+            eprintln!(
+                "skipping an_ssh_forward_moves_without_restarting_gvproxy (set LIMINA_HVF_TESTS=1)"
+            );
+            return;
+        }
+        let dir = unique_tmp_dir("limina-gw-move");
+        // Both ways the forward gets set up: the `-ssh-port` flag, and the config file a managed
+        // VM's custom MAC needs (where the forward is one of the file's).
+        for (tag, mac) in [("flag", None), ("config", Some("5a:94:ef:e4:0c:ee"))] {
+            let sock = dir.join(format!("{tag}.sock"));
+            let from = allocate_ssh_port(None).expect("a port to start on");
+            let mut child =
+                spawn_gvproxy_process(&sock, None, from, mac).expect("gvproxy comes up");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !listening(from) {
+                assert!(
+                    Instant::now() < deadline,
+                    "{tag}: gvproxy never bound {from}"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let to = first_free_port(from + 1, port_is_free).expect("a port to move to");
+            let forward = SshForward::new(from, &sock);
+
+            let moved = forward.set(to);
+            let (new_open, old_open) = (listening(to), listening(from));
+            let still_running = pid_is_alive(child.id() as i32);
+            let _ = child.kill();
+            let _ = child.wait();
+
+            moved.unwrap_or_else(|e| panic!("{tag}: moving {from} → {to}: {e:#}"));
+            assert_eq!(forward.port(), to, "{tag}");
+            assert!(new_open, "{tag}: nothing listens on the new port {to}");
+            assert!(!old_open, "{tag}: the old port {from} still forwards");
+            assert!(
+                still_running,
+                "{tag}: the move must not cost gvproxy its life"
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 }

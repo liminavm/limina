@@ -24,6 +24,7 @@ mod hosttrackpad;
 mod moc;
 mod power_profile;
 mod qga;
+mod runtime_ctl;
 mod sep;
 mod session;
 mod supervisor;
@@ -490,6 +491,18 @@ enum Cmd {
     /// Change a running VM's log filters and diagnostic traces without restarting it. Changes
     /// last until the VM exits.
     Debug(DebugArgs),
+    /// Print a running VM's SSH forward port, or move it to another host port. A move lasts
+    /// until the VM exits; the port in its definition is the one the next start uses.
+    SshPort(SshPortArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct SshPortArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
+    /// The host port to move the forward to; omitted, the current one is printed.
+    port: Option<u16>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -755,6 +768,7 @@ fn main() -> Result<()> {
         Some(Cmd::Suspend(args)) => cmd_suspend(args),
         Some(Cmd::Rm(args)) => cmd_rm(args),
         Some(Cmd::Debug(args)) => cmd_debug(args),
+        Some(Cmd::SshPort(args)) => cmd_ssh_port(args),
         // Bare `limina` — a double-clicked limina.app or a plain terminal launch —
         // opens the control center. Any flag at all means the flat ephemeral-VM CLI.
         None if std::env::args_os().len() == 1 => center::run(),
@@ -1120,6 +1134,20 @@ fn cmd_debug(args: DebugArgs) -> Result<()> {
     debug_ctl::client(pid, &[request])
 }
 
+/// `limina ssh-port`: ask the VM's supervisor where its SSH forward is, or move it.
+fn cmd_ssh_port(args: SshPortArgs) -> Result<()> {
+    let pid = debug_target_pid(&args.vm)?;
+    let req = match args.port {
+        Some(p) => runtime_ctl::Request::SshPort(p),
+        None => runtime_ctl::Request::Info,
+    };
+    match runtime_ctl::request(pid, req)?.ssh_port {
+        Some(p) => println!("{p}"),
+        None => anyhow::bail!("{} has no SSH forward (no NAT network)", args.vm),
+    }
+    Ok(())
+}
+
 /// The supervisor pid `limina debug` means: a managed VM first (the existing contract for every
 /// verb), then a flat run's boot disk, then a bare pid.
 fn debug_target_pid(vm: &str) -> Result<u32> {
@@ -1332,6 +1360,7 @@ fn exit_cleanup() {
     gateway::cleanup();
     control::cleanup();
     debug_ctl::cleanup();
+    runtime_ctl::cleanup();
 }
 
 fn run_vm(mut cli: Cli) -> Result<()> {
@@ -1379,6 +1408,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     debug_ctl::set_worker_link(worker_link(&mut links, "--debug-control-fd"));
     if let Err(e) = debug_ctl::serve() {
         log::warn!("debug: no runtime log/lever control for this run: {e:#}");
+    }
+    // What the control center and `limina ssh-port` ask a running VM, and the SSH forward move.
+    if let Err(e) = runtime_ctl::serve() {
+        log::warn!("runtime: no runtime socket for this run: {e:#}");
     }
 
     // Balloon control (M6): an explicit socket path wins (the harness drives it); else a link
@@ -1731,6 +1764,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             "guest SSH forward ready: ssh -p {} <user>@127.0.0.1",
             gw.ssh_port()
         );
+        runtime_ctl::set_forward(Some(gw.forward()));
         args.push("--net-gvproxy".into());
         args.push(path_arg(gw.socket_path())?);
         if let Some(mac) = &cli.net_mac {

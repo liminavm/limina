@@ -287,6 +287,43 @@ define_class!(
                 }
         }
 
+        // Move a running VM's SSH forward. The supervisor does it and pushes the new port
+        // back over the row's live link, so the next refresh shows it.
+        #[unsafe(method(sshPortClicked:))]
+        fn ssh_port_clicked(&self, sender: &NSButton) {
+            let Some(row) = self.row_for(sender) else { return };
+            let current = row
+                .ssh
+                .as_deref()
+                .and_then(|s| s.strip_prefix("ssh -p "))
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or("");
+            let Some(text) = self.prompt_text(
+                "Move SSH",
+                "Host port for the guest's SSH from now until the VM stops. \
+                 Configure… sets the port it starts with.",
+                current,
+            ) else {
+                return;
+            };
+            let Ok(port) = text.trim().parse::<u16>() else {
+                self.alert("Invalid port", &format!("{:?} is not a port number.", text.trim()));
+                return;
+            };
+            let errors = self.ivars().errors.clone();
+            let (pid, name) = (row.pid as u32, row.name.clone());
+            // Asks gvproxy, which is quick, but never on the main thread.
+            std::thread::spawn(move || {
+                let req = crate::runtime_ctl::Request::SshPort(port);
+                if let Err(e) = crate::runtime_ctl::request(pid, req) {
+                    errors
+                        .lock()
+                        .unwrap()
+                        .push(format!("Moving SSH for {name}: {e:#}"));
+                }
+            });
+        }
+
         #[unsafe(method(newVmClicked:))]
         fn new_vm_clicked(&self, _sender: &NSButton) {
             self.run_new_vm_flow();
@@ -685,6 +722,16 @@ impl CenterController {
                 index,
             );
             actions.addView_inGravity(&reset, NSStackViewGravity::Leading);
+            if row.ssh.is_some() {
+                let ssh = self.icon_button(
+                    mtm,
+                    "network",
+                    "Move SSH to another host port (until the VM stops)",
+                    sel!(sshPortClicked:),
+                    index,
+                );
+                actions.addView_inGravity(&ssh, NSStackViewGravity::Trailing);
+            }
         } else {
             // A start that pre-flight already knows cannot work: leave the button visible so
             // the row still reads as a VM, but disabled and carrying the reason. Clicking a

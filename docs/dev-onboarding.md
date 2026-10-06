@@ -183,9 +183,9 @@ KosmicKrisp, windowed, with user-mode NAT. It tests the image exactly as it real
 - Fringe boot modes stay as their own scripts: `--kernel-inject` (deterministic external
   test kernel) and `--gpu-software-2d` (software-2D subject only). Don't reach for them by
   habit — EFI+venus is the default. See `CLAUDE.md`.
-- Networking: read the auto-allocated SSH port from the worker log
-  (`guest SSH forward ready: ssh -p N …`) — don't assume 2222. Creds + recipe:
-  `docs/images.md` §SSH access.
+- Networking: the SSH port auto-allocates — don't assume 2222. `limina ssh-port <vm>` asks the
+  running supervisor; the worker log also carries it (`guest SSH forward ready: ssh -p N …`,
+  the last one wins). Creds + recipe: `docs/images.md` §SSH access.
 - **Verify venus in the seated GNOME session, not over ssh:** `vulkaninfo` in the desktop
   shows `Virtio-GPU Venus`; over a non-login ssh shell it enumerates nothing (a false
   negative — the venus ICD is selected via `/etc/environment.d`).
@@ -208,6 +208,10 @@ In an app bundle the binary is `Limina.app/Contents/MacOS/limina`. The window's 
 carries the common presets, every lever, and *Copy Debug Command*. The worker's filter follows
 it across a reboot or resume. Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …)
 are still environment-only.
+
+The SSH forward can move the same way, without touching the guest's network:
+`limina ssh-port <vm> <port>` (or the control center's network button on a running VM). The move
+lasts until the VM stops; `ssh_port` in its definition is what the next start uses.
 
 ## 4. Linux-side builds (firmware + the enhanced tier)
 

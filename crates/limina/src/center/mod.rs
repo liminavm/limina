@@ -17,6 +17,7 @@
 //! changes, refreshed by a 1 s timer. No table-view data sources, no daemon.
 
 mod controller;
+mod live;
 mod model;
 mod spawn;
 

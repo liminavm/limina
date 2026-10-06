@@ -644,8 +644,9 @@ pub(crate) struct MenuCtx {
     pub(crate) suspend_armed: bool,
     /// The VM's .liminavm bundle directory — gates Show in Finder.
     pub(crate) bundle_dir: Option<PathBuf>,
-    /// The ready-to-paste SSH command (NAT gateway forward) — gates Copy SSH Command.
-    pub(crate) ssh_cmd: Option<String>,
+    /// The NAT gateway's SSH forward — gates Copy SSH Command, which reads its port at the
+    /// click because the forward can move while the VM runs.
+    pub(crate) ssh: Option<crate::gateway::SshForward>,
 }
 
 thread_local! {
@@ -945,10 +946,10 @@ define_class!(
         // Copy SSH Command: the NAT gateway's inbound forward, ready to paste.
         #[unsafe(method(copySshVm:))]
         fn copy_ssh_vm(&self, _sender: &NSMenuItem) {
-            let Some(cmd) = MENU_CTX.with(|c| c.borrow().ssh_cmd.clone()) else {
+            let Some(ssh) = MENU_CTX.with(|c| c.borrow().ssh.clone()) else {
                 return;
             };
-            crate::clipboard::copy_to_pasteboard(&cmd);
+            crate::clipboard::copy_to_pasteboard(&format!("ssh -p {} 127.0.0.1", ssh.port()));
         }
     }
 );
@@ -1157,7 +1158,7 @@ fn build_vm_menu(mtm: MainThreadMarker, actions: &VmMenuActions) -> Retained<NSM
     if ctx.bundle_dir.is_some() {
         add("Show in Finder", objc2::sel!(revealVm:), "");
     }
-    if ctx.ssh_cmd.is_some() {
+    if ctx.ssh.is_some() {
         add("Copy SSH Command", objc2::sel!(copySshVm:), "");
     }
     menu

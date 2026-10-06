@@ -342,9 +342,7 @@ impl WindowedSession {
                 .as_ref()
                 .and_then(|p| p.parent())
                 .map(|p| p.to_path_buf()),
-            ssh_cmd: gateway
-                .as_ref()
-                .map(|g| format!("ssh -p {} 127.0.0.1", g.ssh_port())),
+            ssh: gateway.as_ref().map(|g| g.forward()),
         };
 
         // The resolution the guest is currently driven to — written by the window on every

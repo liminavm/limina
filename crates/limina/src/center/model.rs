@@ -6,8 +6,7 @@
 //! Kept AppKit-free so it is unit-testable; the controller diffs consecutive
 //! snapshots and only rebuilds the row views when something actually changed.
 
-use std::path::Path;
-
+use super::live;
 use crate::vmlib::{bundle, preflight, runtime, schema};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,12 +47,17 @@ pub fn snapshot() -> Vec<VmRow> {
             return Vec::new();
         }
     };
-    bundles
+    let rows: Vec<VmRow> = bundles
         .into_iter()
         .map(|b| {
             let (running, pid) = match runtime::status(&b) {
                 runtime::VmStatus::Running { pid } => (true, pid),
                 runtime::VmStatus::Stopped => (false, 0),
+            };
+            let live_port = if running {
+                live::info(pid).and_then(|i| i.ssh_port)
+            } else {
+                None
             };
             let suspended = !running && b.snapshot_bin().exists();
             match b.load() {
@@ -61,7 +65,7 @@ pub fn snapshot() -> Vec<VmRow> {
                     name: b.display_name(&cfg),
                     summary: summarize(&cfg),
                     disks: disks_line(&b, &cfg),
-                    ssh: ssh_line(&b, &cfg, running),
+                    ssh: ssh_line(&cfg, running, live_port),
                     blocked: (!running).then(|| blocking_reason(&b, &cfg)).flatten(),
                     running,
                     pid,
@@ -83,7 +87,10 @@ pub fn snapshot() -> Vec<VmRow> {
                 },
             }
         })
-        .collect()
+        .collect();
+    let running: Vec<i32> = rows.iter().filter(|r| r.running).map(|r| r.pid).collect();
+    live::retain(&running);
+    rows
 }
 
 /// Pre-flight's verdict for the row, at the depth a 1 s refresh can afford: stat-only, no
@@ -131,36 +138,26 @@ fn disks_line(bundle: &bundle::VmBundle, cfg: &schema::VmConfig) -> String {
 }
 
 /// The SSH line — the actual copyable command whenever the port is knowable.
-/// For a running VM the truth is the supervisor log (the port auto-allocates from
-/// 2222 when not pinned — "guest SSH forward ready: ssh -p N"), falling back to
-/// the pinned port. A stopped VM with a pinned port shows the same command (it's
-/// what to use after Start); auto-port + stopped is the one unknowable case.
-fn ssh_line(bundle: &bundle::VmBundle, cfg: &schema::VmConfig, running: bool) -> Option<String> {
+/// For a running VM the truth is what its supervisor reports (`live_port`: the port
+/// auto-allocates from 2222 when not pinned, and can move while it runs), falling
+/// back to the pinned port until the first report. A stopped VM with a pinned port
+/// shows the same command (it's what to use after Start); auto-port + stopped is
+/// the one unknowable case.
+fn ssh_line(cfg: &schema::VmConfig, running: bool, live_port: Option<u16>) -> Option<String> {
     let net = cfg.networks.first()?;
+    let pinned = (net.ssh_port != 0).then_some(net.ssh_port);
     let port = if running {
-        port_from_log(&bundle.logs_dir().join("supervisor.log"))
-            .or((net.ssh_port != 0).then_some(net.ssh_port))
+        live_port.or(pinned)
     } else {
-        (net.ssh_port != 0).then_some(net.ssh_port)
+        pinned
     };
     match (port, running) {
         (Some(p), _) => Some(format!("ssh -p {p} 127.0.0.1")),
         (None, false) => Some("ssh: port assigned at start".into()),
-        // Running but the log has no forward line (yet, or started from a terminal
-        // where the supervisor's stdout never reached logs/supervisor.log).
+        // Running, but its supervisor has not reported yet (or cannot: a build from
+        // before the runtime socket).
         (None, true) => Some("ssh: port not yet known".into()),
     }
-}
-
-/// Parse the LAST "guest SSH forward ready: ssh -p N …" from a supervisor log (a
-/// terminal-started VM has no log here — the caller falls back to the pinned port).
-fn port_from_log(log: &Path) -> Option<u16> {
-    let text = std::fs::read_to_string(log).ok()?;
-    text.lines()
-        .rev()
-        .find_map(|l| l.split("guest SSH forward ready: ssh -p ").nth(1))
-        .and_then(|rest| rest.split_whitespace().next())
-        .and_then(|p| p.parse().ok())
 }
 
 fn human_size(bytes: u64) -> String {
@@ -295,34 +292,43 @@ mod tests {
     }
 
     #[test]
-    fn ssh_line_prefers_the_log_port_when_running() {
+    fn ssh_line_prefers_the_supervisors_port_when_running() {
         let _guard = crate::vmlib::bundle::tests::env_lock();
         let lib = crate::vmlib::bundle::tests::scratch_library("sshline");
-        let bundle = create(
-            &{
-                let mut o = crate::vmlib::bundle::tests::basic_opts("Net");
-                o.ssh_port = 0;
-                o
-            },
-            &lib,
-        )
-        .unwrap();
-        let cfg = bundle.load().unwrap();
+        let mut opts = crate::vmlib::bundle::tests::basic_opts("Net");
+        opts.ssh_port = 0;
+        let cfg = create(&opts, &lib).unwrap().load().unwrap();
 
         // Stopped, auto port: no command to show yet.
         assert_eq!(
-            ssh_line(&bundle, &cfg, false).as_deref(),
+            ssh_line(&cfg, false, None).as_deref(),
             Some("ssh: port assigned at start")
         );
-        // Running with a supervisor log: the auto-allocated port wins.
-        std::fs::write(
-            bundle.logs_dir().join("supervisor.log"),
-            "noise\nguest SSH forward ready: ssh -p 2223 <user>@127.0.0.1\n",
-        )
-        .unwrap();
+        // Running, before the supervisor reports.
         assert_eq!(
-            ssh_line(&bundle, &cfg, true).as_deref(),
+            ssh_line(&cfg, true, None).as_deref(),
+            Some("ssh: port not yet known")
+        );
+        // Running: the supervisor's port wins.
+        assert_eq!(
+            ssh_line(&cfg, true, Some(2223)).as_deref(),
             Some("ssh -p 2223 127.0.0.1")
+        );
+
+        // Pinned: shown while stopped, and until the supervisor reports a port it moved to.
+        let mut pinned = cfg.clone();
+        pinned.networks[0].ssh_port = 2299;
+        assert_eq!(
+            ssh_line(&pinned, false, None).as_deref(),
+            Some("ssh -p 2299 127.0.0.1")
+        );
+        assert_eq!(
+            ssh_line(&pinned, true, None).as_deref(),
+            Some("ssh -p 2299 127.0.0.1")
+        );
+        assert_eq!(
+            ssh_line(&pinned, true, Some(2300)).as_deref(),
+            Some("ssh -p 2300 127.0.0.1")
         );
 
         std::fs::remove_dir_all(&lib).ok();
