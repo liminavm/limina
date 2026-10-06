@@ -1,41 +1,61 @@
-# venus: keep the driver loaded once the TLS key exists
+# venus: free a thread's TLS state without calling into an unloaded driver
 
 **Bug.** `vn_tls_get()` registers `vn_tls_free` as a tss-key destructor (first reached from
 `vkCreateDevice`). A key destructor does not keep its DSO loaded, and the loader `dlclose()`s the
 ICD when the last instance is destroyed, so a thread that used venus and exits after its instance
 is gone calls into the unmapped driver: SIGSEGV in `__nptl_deallocate_tsd`.
 
-**Reproducer.** `venus-tls-destructor.c`: a worker thread creates an instance and a device on the
-first venus physical device, destroys both, and returns. Any venus guest reproduces it — no
-particular host GPU, renderer, or page size.
+**Reproducer.** `venus-tls-destructor.c`. Any venus guest reproduces it — no particular host GPU,
+renderer, or page size.
 
     cc -o venus-tls-destructor venus-tls-destructor.c -lvulkan -lpthread
-    VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.x86_64.json ./venus-tls-destructor
+    VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.x86_64.json ./venus-tls-destructor [mode]
+
+| mode | what it does |
+|---|---|
+| `thread` (default) | a worker thread creates an instance and a device on the first venus device, destroys both, and returns |
+| `unload` | `thread`, then one more instance create/destroy on the main thread, and reports whether `libvulkan_virtio.so` is still in `/proc/self/maps` |
+| `cycle` | 100 workers in turn, each with its own instance and device, then the same report |
+| `main-alive` | the main thread creates an instance and a device and returns from `main()` without destroying them |
+
+## Fixes compared
+
+- **pin** (`8733525be5e` on `upstream/guest-2026-10`): once the key exists, reopen the driver with
+  `RTLD_NOLOAD | RTLD_NODELETE`. The driver stays loaded until the process exits.
+- **thread-exit hook** (`wip/venus-tls-atexit`): where the build finds `__cxa_thread_atexit_impl`
+  (glibc 2.18+, bionic API 23+), keep the state in a `thread_local` and register its teardown with
+  that hook. glibc (`l_tls_dtor_count`, checked in `_dl_close_worker`) and bionic
+  (`__loader_add_thread_local_dtor`) refuse to unload a DSO while it has teardowns pending, so the
+  driver stays loaded only while some thread still owes one. The main thread does not register:
+  its state goes with the process, and `exit()` takes no ring teardown. Without the hook, the tss key
+  is kept and a library destructor `tss_delete()`s it at unload; threads still holding venus TLS
+  then leak it. That path keeps a narrow race: a thread already inside the key destructor when
+  another thread's `dlclose` unmaps the driver.
+- **fallback** (`wip/venus-tls-fb`, test only): the thread-exit-hook branch with the meson check
+  forced off, so the `tss_delete` path runs on glibc.
 
 ## Results
 
-| Mesa | Setup | Result |
-|---|---|---|
-| Fedora 44 `mesa-vulkan-drivers-26.2.3-1.fc44` | QEMU guest, venus on Intel Iris Plus G7 | SIGSEGV after `worker done`, 3/3 |
-| `main` b39d173ca93 | same | SIGSEGV after `worker done`, 3/3 |
-| `main` + fix (series tip e09e44d2d0d) | same | `worker joined`, exit 0, 3/3 |
+QEMU 10.2 + virglrenderer 1.3.0 guest, venus on Intel Iris Plus G7, Mesa `main` b39d173ca93 and
+that plus each fix. 3 runs per cell. Measured 2026-10-06.
 
-Measured 2026-10-05.
+| build | `thread` | `unload`: driver mapped after | `cycle`: driver mapped after | `main-alive` |
+|---|---|---|---|---|
+| `main` | SIGSEGV 3/3 | crashes before the report | crashes before the report | exit 0 3/3 |
+| pin | exit 0 3/3 | yes 3/3 | yes 3/3 | exit 0 3/3 |
+| thread-exit hook | exit 0 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
+| fallback | exit 0 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
 
-## MR description (draft)
+Fedora 44's `mesa-vulkan-drivers-26.2.3-1.fc44` also crashes `thread` 3/3. `nm -D` confirms the
+thread-exit-hook build imports `__cxa_thread_atexit_impl` and the fallback build does not.
 
-> **venus: keep the driver loaded once the TLS key exists**
->
-> A thread that used venus and exits after the last `VkInstance` is destroyed crashes in
-> `__nptl_deallocate_tsd`: `vn_tls_free` is registered as a tss-key destructor, a key destructor
-> does not keep its DSO loaded, and the loader has already `dlclose()`d the ICD.
->
-> Reproducer (any venus guest; tested under QEMU 10.2 + virglrenderer 1.3.0, venus on an Intel
-> host): a thread creates an instance and a device, destroys both, and returns. Source attached;
-> `cc -o repro repro.c -lvulkan -lpthread`. Before: SIGSEGV 3/3. After: clean exit 3/3. Also seen
-> in the wild with surfaceless EGL on zink-over-venus terminated before its thread exits (niri's
-> headless EGL tests run each test on its own thread).
->
-> The pin is taken only once the key exists, so processes that never touch venus TLS keep
-> unloading the driver as before. An alternative is linking the ICD with `-z nodelete`, which
-> pins it unconditionally.
+Not covered by a run: the fallback's race, and a worker thread that calls `exit()` itself, which runs
+its own teardown from `exit()` on the thread-exit-hook path (tss destructors never ran there).
+
+## MR description
+
+To be written by the submitter (Mesa's AI policy). Points it needs: the crash and its trigger
+(also seen with surfaceless EGL on zink over venus terminated before its thread exits); why a key
+destructor does not hold the DSO; the hook and its loader reference; the main-thread exclusion; the
+fallback and its leak and race; the table above; and the alternative of pinning with
+`RTLD_NODELETE` or `-z nodelete`.

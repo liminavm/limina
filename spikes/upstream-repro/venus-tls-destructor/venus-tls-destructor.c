@@ -10,10 +10,20 @@
  *
  * Build: cc -o venus-tls-destructor venus-tls-destructor.c -lvulkan -lpthread
  * Run:   VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.x86_64.json \
- *            ./venus-tls-destructor
+ *            ./venus-tls-destructor [mode]
  *
- * Unfixed: SIGSEGV (exit 139) after "worker done".
- * Fixed:   "worker joined", exit 0.
+ * Modes:
+ *   thread (default)  the crash above.
+ *                     Unfixed: SIGSEGV (exit 139) after "worker done".
+ *                     Fixed:   "worker joined", exit 0.
+ *   unload            thread, then report whether the driver is still mapped
+ *                     after one more instance create/destroy (which gives the
+ *                     loader a dlclose to unload it on).
+ *   cycle             100 threads in turn, each with its own instance and
+ *                     device, then the same unload report.
+ *   main-alive        the main thread creates an instance and a device and
+ *                     returns from main() without destroying them: exit()
+ *                     with live venus state on the main thread.
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -29,11 +39,9 @@
       }                                                                        \
    } while (0)
 
-static void *
-worker(void *arg)
+static VkInstance
+create_instance(void)
 {
-   (void)arg;
-
    const VkApplicationInfo app = {
       .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
       .apiVersion = VK_API_VERSION_1_1,
@@ -44,7 +52,12 @@ worker(void *arg)
    };
    VkInstance instance;
    CHECK(vkCreateInstance(&ici, NULL, &instance) == VK_SUCCESS);
+   return instance;
+}
 
+static VkDevice
+create_device(VkInstance instance, int verbose)
+{
    uint32_t count = 8;
    VkPhysicalDevice pdevs[8];
    CHECK(vkEnumeratePhysicalDevices(instance, &count, pdevs) >= 0);
@@ -60,7 +73,8 @@ worker(void *arg)
       };
       vkGetPhysicalDeviceProperties2(pdevs[i], &props);
       if (driver.driverID == VK_DRIVER_ID_MESA_VENUS) {
-         printf("device: %s\n", props.properties.deviceName);
+         if (verbose)
+            printf("device: %s\n", props.properties.deviceName);
          pdev = pdevs[i];
          break;
       }
@@ -81,21 +95,80 @@ worker(void *arg)
    };
    VkDevice device;
    CHECK(vkCreateDevice(pdev, &dci, NULL, &device) == VK_SUCCESS);
+   return device;
+}
 
+static void *
+worker(void *arg)
+{
+   const int verbose = arg != NULL;
+
+   VkInstance instance = create_instance();
+   VkDevice device = create_device(instance, verbose);
    vkDestroyDevice(device, NULL);
    vkDestroyInstance(instance, NULL);
 
-   printf("worker done\n");
-   fflush(stdout);
+   if (verbose) {
+      printf("worker done\n");
+      fflush(stdout);
+   }
    return NULL;
 }
 
-int
-main(void)
+static void
+run_worker(int verbose)
 {
    pthread_t t;
-   CHECK(pthread_create(&t, NULL, worker, NULL) == 0);
+   CHECK(pthread_create(&t, NULL, worker, verbose ? "v" : NULL) == 0);
    CHECK(pthread_join(t, NULL) == 0);
+}
+
+static int
+driver_mapped(void)
+{
+   FILE *maps = fopen("/proc/self/maps", "r");
+   CHECK(maps);
+   char line[4096];
+   int found = 0;
+   while (fgets(line, sizeof(line), maps))
+      found |= strstr(line, "libvulkan_virtio.so") != NULL;
+   fclose(maps);
+   return found;
+}
+
+static void
+report_unload(void)
+{
+   vkDestroyInstance(create_instance(), NULL);
+   printf("driver mapped after the last instance: %s\n",
+          driver_mapped() ? "yes" : "no");
+}
+
+int
+main(int argc, char **argv)
+{
+   const char *mode = argc > 1 ? argv[1] : "thread";
+
+   if (!strcmp(mode, "thread")) {
+      run_worker(1);
+   } else if (!strcmp(mode, "unload")) {
+      run_worker(1);
+      report_unload();
+   } else if (!strcmp(mode, "cycle")) {
+      for (int i = 0; i < 100; i++)
+         run_worker(0);
+      printf("100 workers done\n");
+      report_unload();
+   } else if (!strcmp(mode, "main-alive")) {
+      VkInstance instance = create_instance();
+      create_device(instance, 1);
+      printf("returning from main with a live device\n");
+      return 0;
+   } else {
+      fprintf(stderr, "unknown mode %s\n", mode);
+      return 2;
+   }
+
    printf("worker joined\n");
    return 0;
 }
