@@ -18,29 +18,27 @@ page cache and every resume runs it again.
 
 ## Results
 
-Measured 2026-10-05 on the M1 Max dev Mac. Host: virglrs `d505e48` (vrend over zink-on-KosmicKrisp),
-4 vCPUs, 8 GiB, EFI+venus coexist boot. GL_RENDERER in both guests:
-`virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP)))`.
+Measured 2026-10-05 on the M1 Max dev Mac. Host: limina `118ab2b6`, virglrs `b91824b` (vrend over
+zink-on-KosmicKrisp), KK `2315d532b3d`; 4 vCPUs, 8 GiB, EFI+venus coexist boot. GL_RENDERER in
+both guests: `virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP)))`.
 
-| Guest | Mesa | pass | fail | timeout | host crash (incomplete) | skip |
+| Guest | Mesa | pass | fail | timeout | host crash | skip |
 |---|---|---|---|---|---|---|
-| stock (`stock.test` clone) | Fedora `26.2.3-1.fc44` | 1508 | 127 + 1 crash | 27 | 7 | 201 |
-| enhanced (`enhanced.test` clone) | limina `26.2.3-3.limina.fc44` | 1513 | 125 | 27 | 5 | 201 |
+| stock (`stock.test` clone) | Fedora `26.2.3-1.fc44` | 1516 | 126 + 1 guest crash | 27 | 0 | 201 |
+| enhanced (`enhanced.test` clone) | limina `26.2.3-3.limina.fc44` | 1516 | 127 | 27 | 0 | 201 |
 
 `setup-guest.sh`'s `dnf install` moved the stock clone from the frozen image's Mesa `26.1.8` to
 Fedora's `26.2.3-1`. The two arms therefore differ only by limina's guest patches, on one base.
 
-**Host crashes.** Twelve in all, of two kinds, both reachable from an unprivileged guest GL
-program:
-- **KosmicKrisp, once per arm.** A 3D texture's 2D_ARRAY alias keeps the 3D mip count, and Metal
-  aborts. Hit by `arb_get_texture_sub_image-get`.
-- **virglrs, every other crash.** `resource.rs:2065` panics on the first texture-buffer sampler
-  view. Hit by the `arb_texture_buffer_object` tests and `arb_direct_state_access@texture-buffer`.
+**No host crashes.** Every test ran to a result in one boot per arm, and neither worker log has a
+panic or abort. This selection is the regression check for guest-reachable host aborts on the GL
+path: before KK `2315d532b3d` (a 3D texture's 2D_ARRAY alias kept the 3D mip count, and Metal
+aborted) and virglrs's texture-buffer sampler-view fix, it took the VM down twelve times.
 
-Fixes, assessments, and the failure split against the upstream rig are in
-`docs/hardening-backlog.md`: the guest-reachable aborts section and the two piglit entries under
-GPU correctness.
-
-**Stock vs enhanced.** The two guests fail the same tests, apart from a few that time out a fence
-wait ("waiting got error - 16") on one arm only. limina's guest Mesa patches change nothing this
+**Stock vs enhanced.** The two guests fail the same tests. The one difference is
+`arb_get_texture_sub_image-getcompressed`, which fails on both but segfaults the test process
+(SIGSEGV, in the guest) under Fedora's Mesa. limina's guest Mesa patches change nothing else this
 selection measures.
+
+The failure split against the upstream rig is in `docs/hardening-backlog.md`, in the two piglit
+entries under GPU correctness.

@@ -595,26 +595,13 @@ virtio-gpu (89). The GL path needs its own answer: a guest's GL stream reaches z
 vrend, so hardening the Vulkan decoder does nothing for it. Decide what vrend validates before zink
 sees a command.
 
-### piglit kills the worker from an unprivileged guest GL program, two ways
-Ordinary guest GL calls, in stock and enhanced guests alike, abort `limina-vmm` and take the VM
-down (`spikes/piglit-virgl/`; 12 VM crashes across the two runs):
-- **KosmicKrisp, 3D textures.** For a 3D image created 2D_ARRAY-compatible, KK gives the 2D_ARRAY
-  Metal alias the 3D mip count. A legal 8x4x16 texture with 5 levels then fails Metal's descriptor
-  validation ("requests 5 mipmap levels, but the dimensions (8, 4, 1) can only support a maximum of
-  4") and Metal aborts. Hit by `arb_get_texture_sub_image-get`. The fix clamps the alias to its 2D
-  chain: KK `2315d532b3d` on branch `kk-3d-array-levels`, not yet merged into `limina-kk` or built
-  into the live KK.
-- **virglrs, texture-buffer sampler views.** `src/vrend/resource.rs:2065`
-  `unreachable!("a buffer has no texture target")`. Hit by `arb_texture_buffer_object` tests
-  (`re-init`, `data-sync`, `subdata-sync`, `fetch-outside-bounds`, `formats`) and
-  `arb_direct_state_access@texture-buffer`. `create_sampler_view` looks up a texture target for
-  every view before it checks for a buffer, so the first texture-buffer view any guest creates
-  panics. Which test piglit blames differs between runs. Fixed in virglrs `50dcb15`, not yet
-  pushed.
-
+### A virglrs panic takes the whole VM down
 Every virglrs panic becomes an abort: rutabaga's `virgl_renderer.rs:203` unwraps the mutex the
 panic poisoned, and a panic during cleanup cannot unwind. Until rutabaga handles a poisoned lock,
-a virglrs panic cannot be contained to one context.
+a virglrs panic cannot be contained to one context. piglit reached one such panic from an
+unprivileged guest GL program (a texture-buffer sampler view, fixed in virglrs); the piglit
+selection in `spikes/piglit-virgl/` now runs without a host crash, so it is the regression check
+for guest-reachable aborts on the GL path.
 
 ### Nothing stops a guest from submitting seconds ahead of the host's decode
 A classic (vrend) client that submits faster than the virtio-gpu worker decodes keeps the control
@@ -744,8 +731,8 @@ stacks, measured 2026-10-05:
 
 **Fail on both stacks** (guest Mesa or vrend behaviour, so upstream candidates):
 - `copyteximage 3d`.
-- `arb_get_texture_sub_image-get`/`-getcompressed` on compressed 2D. On limina the first also
-  aborts the host; see the guest-reachable aborts section.
+- `arb_get_texture_sub_image-get`/`-getcompressed` on compressed 2D. With Fedora's Mesa,
+  `-getcompressed` segfaults in the guest.
 - `getteximage-targets 2d_array s3tc`: zeros from layer 6 on.
 - `fbo-readpixels-depth-formats`: float depth reads 0.999985 for 1.0, a 24→32-bit expansion off by
   0x80.
@@ -780,7 +767,7 @@ upstream rig:
   - `arb_draw_indirect-draw-elements-prim-restart-ugly`.
   - `sgis_generate_mipmap`.
   - `gettextureimage-formats`/`getteximage-formats init-by-rendering`.
-  - `vbo-subdata-sync`/`-zero`, `pos-array`.
+  - `pos-array`.
   - `transformfeedback-buffer*` (DSA).
 - **Fence waits that give up.** Several tests log "waiting got error - 16, slow gpu or hang?"
   after 17–18 s. These account for the handful that differ between the two guests
