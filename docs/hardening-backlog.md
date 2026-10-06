@@ -760,8 +760,7 @@ Running each one in the enhanced guest under zink-on-venus as well
     is undecided.
 - **Fail under zink-on-venus too, so they are in KK or zink:**
   - `arb_draw_indirect-draw-elements-prim-restart-ugly` (passes on virglrs's desktop flavour).
-  - `arb_shader_image_load_store@host-mem-barrier`, `texture-buffer-size-clamp` (texel count 0),
-    `sgis_generate_mipmap@gen-teximage`.
+  - `arb_shader_image_load_store@host-mem-barrier`, `texture-buffer-size-clamp` (texel count 0).
   - `ext_transform_feedback2@counting with pause` and the five geometry-shader xfb tests: see the
     KosmicKrisp entries below.
 - **Fence waits that give up.** "waiting got error - 16, slow gpu or hang?" after 15–40 s turns a
