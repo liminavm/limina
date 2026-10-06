@@ -1,0 +1,2204 @@
+diff --git a/src/kosmickrisp/bridge/meson.build b/src/kosmickrisp/bridge/meson.build
+index 03ba43b4248..8a00357de64 100644
+--- a/src/kosmickrisp/bridge/meson.build
++++ b/src/kosmickrisp/bridge/meson.build
+@@ -10,6 +10,7 @@ mtl_bridge_files = files(
+ 
+ if host_machine.system() == 'darwin'
+   mtl_bridge_files += files(
++    'mtl_tally.c',
+     'mtl_argument_table.m',
+     'mtl_bridge.m',
+     'mtl_buffer.m',
+diff --git a/src/kosmickrisp/bridge/mtl_argument_table.m b/src/kosmickrisp/bridge/mtl_argument_table.m
+index 21f97586b9f..251eb2dafc5 100644
+--- a/src/kosmickrisp/bridge/mtl_argument_table.m
++++ b/src/kosmickrisp/bridge/mtl_argument_table.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_argument_table.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -15,6 +16,7 @@
+ mtl_argument_table_descriptor *
+ mtl_new_argument_table_descriptor()
+ {
++   MTL_TALLY_SCOPE(0, 8, 0);
+    @autoreleasepool {
+       return (mtl_argument_table_descriptor *)limina_mtl_note_new([MTL4ArgumentTableDescriptor new]);
+    }
+@@ -24,6 +26,7 @@
+ mtl_set_max_buffer_binding_count(mtl_argument_table_descriptor *descriptor,
+                                  uint32_t count)
+ {
++   MTL_TALLY_SCOPE(1, 8 + (4) + (sizeof(count)), 0);
+    @autoreleasepool {
+       MTL4ArgumentTableDescriptor *desc = (MTL4ArgumentTableDescriptor *)descriptor;
+       desc.maxBufferBindCount = count;
+@@ -35,6 +38,7 @@
+ mtl_new_argument_table(mtl_device *device,
+                        mtl_argument_table_descriptor *descriptor)
+ {
++   MTL_TALLY_SCOPE(2, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTL4ArgumentTableDescriptor *desc = (MTL4ArgumentTableDescriptor *)descriptor;
+@@ -45,6 +49,7 @@
+ void
+ mtl_set_address(mtl_argument_table *table, uint64_t address, uint32_t binding)
+ {
++   MTL_TALLY_SCOPE(3, 8 + (4) + (sizeof(address)) + (sizeof(binding)), 0);
+    @autoreleasepool {
+       id<MTL4ArgumentTable> t = (id<MTL4ArgumentTable>)table;
+       [t setAddress:address atIndex:binding];
+diff --git a/src/kosmickrisp/bridge/mtl_bridge.m b/src/kosmickrisp/bridge/mtl_bridge.m
+index 60e3d62c556..ea5d30f9c87 100644
+--- a/src/kosmickrisp/bridge/mtl_bridge.m
++++ b/src/kosmickrisp/bridge/mtl_bridge.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_bridge.h"
+ 
+ // kk_image_layout.h should also includes "vulkan/vulkan.h", but just to be safe
+@@ -31,6 +32,7 @@
+ mtl_texture *
+ mtl_drawable_get_texture(void *drawable_ptr)
+ {
++   MTL_TALLY_SCOPE(4, 8 + (8), 0);
+    @autoreleasepool {
+       id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)drawable_ptr;
+       return drawable.texture;
+@@ -167,6 +169,7 @@ - (void)dealloc
+ void *
+ limina_mtl_note_new(void *handle)
+ {
++   MTL_TALLY_SCOPE(5, 8 + (4), 0);
+    if (handle == NULL || !limina_mtl_census_enabled())
+       return handle;
+    Class cls = object_getClass((id)handle);
+@@ -183,6 +186,7 @@ - (void)dealloc
+ void
+ limina_mtl_class_census_dump(void)
+ {
++   MTL_TALLY_SCOPE(6, 8, 0);
+    struct limina_mtl_census_row {
+       const char *name;
+       long long live;
+@@ -220,6 +224,7 @@ - (void)dealloc
+ void *
+ mtl_retain(void *handle)
+ {
++   MTL_TALLY_SCOPE(7, 8 + (4), 0);
+    @autoreleasepool {
+       NSObject *obj = (NSObject *)handle;
+       return [obj retain];
+@@ -229,6 +234,7 @@ - (void)dealloc
+ void
+ mtl_release(void *handle)
+ {
++   MTL_TALLY_SCOPE(8, 8 + (4), 0);
+    @autoreleasepool {
+       NSObject *obj = (NSObject *)handle;
+       [obj release];
+diff --git a/src/kosmickrisp/bridge/mtl_buffer.m b/src/kosmickrisp/bridge/mtl_buffer.m
+index c33ad2eb153..4138bf27b07 100644
+--- a/src/kosmickrisp/bridge/mtl_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_buffer.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_buffer.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -29,6 +30,7 @@
+ uint64_t
+ mtl_buffer_get_length(mtl_buffer *buffer)
+ {
++   MTL_TALLY_SCOPE(9, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
+       return buf.length;
+@@ -38,6 +40,7 @@
+ uint64_t
+ mtl_buffer_get_gpu_address(mtl_buffer *buffer)
+ {
++   MTL_TALLY_SCOPE(10, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
+       return [buf gpuAddress];
+@@ -47,6 +50,7 @@
+ void *
+ mtl_get_contents(mtl_buffer *buffer)
+ {
++   MTL_TALLY_SCOPE(11, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
+       return [buf contents];
+@@ -80,6 +84,7 @@
+                                        const struct kk_image_layout *layout,
+                                        uint64_t offset)
+ {
++   MTL_TALLY_SCOPE(12, 8 + (4) + (sizeof(*layout)) + (sizeof(offset)), 0);
+    @autoreleasepool {
+       id<MTLBuffer> buf = (id<MTLBuffer>)buffer;
+       MTLTextureDescriptor *descriptor = [mtl_new_texture_descriptor(layout) autorelease];
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
+index 6dae1cee67d..f4c384fcffc 100644
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_command_buffer.h"
+ 
+ #include <Metal/MTL4BufferRange.h>
+@@ -79,6 +80,7 @@
+ int
+ limina_kk_alloc_stats_on(void)
+ {
++   MTL_TALLY_SCOPE(13, 8, 0);
+    return limina_alloc_stats_every() != 0;
+ }
+ 
+@@ -209,6 +211,7 @@
+ uint64_t
+ limina_kk_alloc_track_commit(void **cbs, uint32_t count)
+ {
++   MTL_TALLY_SCOPE(14, 8 + ((uint64_t)count * 4) + (sizeof(count)), 0);
+    if (!limina_kk_alloc_stats_on() || count == 0)
+       return 0;
+ 
+@@ -259,6 +262,7 @@
+ void
+ limina_kk_alloc_track_complete(uint64_t token)
+ {
++   MTL_TALLY_SCOPE(15, 8 + (sizeof(token)), 0);
+    if (!token)
+       return;
+ 
+@@ -365,6 +369,7 @@
+ uint64_t
+ mtl_command_allocator_allocated_size(mtl_command_allocator *allocator)
+ {
++   MTL_TALLY_SCOPE(16, 8 + (4), 0);
+    @autoreleasepool {
+       return [(id<MTL4CommandAllocator>)allocator allocatedSize];
+    }
+@@ -373,6 +378,7 @@
+ void
+ mtl_command_allocator_reset(mtl_command_allocator *allocator)
+ {
++   MTL_TALLY_SCOPE(17, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandAllocator> alloc = (id<MTL4CommandAllocator>)allocator;
+       uint32_t every = limina_alloc_stats_every();
+@@ -388,6 +394,7 @@
+ mtl_begin_command_buffer(mtl_command_buffer *command_buffer,
+                          mtl_command_allocator *allocator)
+ {
++   MTL_TALLY_SCOPE(18, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)command_buffer;
+       id<MTL4CommandAllocator> alloc = (id<MTL4CommandAllocator>)allocator;
+@@ -400,6 +407,7 @@
+ void
+ mtl_end_command_buffer(mtl_command_buffer *command_buffer)
+ {
++   MTL_TALLY_SCOPE(19, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)command_buffer;
+       [cmd_buf endCommandBuffer];
+@@ -411,6 +419,7 @@
+                                  mtl_counter_heap *heap, uint32_t first_index,
+                                  uint32_t count, uint64_t dst_addr)
+ {
++   MTL_TALLY_SCOPE(20, 8 + (4) + (4) + (sizeof(first_index)) + (sizeof(count)) + (sizeof(dst_addr)), 0);
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)command_buffer;
+       id<MTL4CounterHeap> h = (id<MTL4CounterHeap>)heap;
+@@ -430,6 +439,7 @@
+ mtl_command_buffer_set_label(mtl_command_buffer *command_buffer,
+                              const char *label)
+ {
++   MTL_TALLY_SCOPE(21, 8 + (4) + ((label ? strlen(label) + 1 : 0)), 0);
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cb = (id<MTL4CommandBuffer>)command_buffer;
+       cb.label = @(label);
+diff --git a/src/kosmickrisp/bridge/mtl_command_queue.m b/src/kosmickrisp/bridge/mtl_command_queue.m
+index 09af1415b5b..d5a3250c704 100644
+--- a/src/kosmickrisp/bridge/mtl_command_queue.m
++++ b/src/kosmickrisp/bridge/mtl_command_queue.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_command_queue.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -16,6 +17,7 @@
+ mtl_commit_options *
+ mtl_new_commit_options(void)
+ {
++   MTL_TALLY_SCOPE(22, 8, 0);
+    @autoreleasepool {
+       return (mtl_commit_options *)limina_mtl_note_new([MTL4CommitOptions new]);
+    }
+@@ -26,6 +28,7 @@
+                                         mtl_feedback_handler_callback callback,
+                                         void *data)
+ {
++   MTL_TALLY_SCOPE(23, 8 + (4) + (sizeof(callback)) + (8), 0);
+    @autoreleasepool {
+       MTL4CommitOptions* opt = (MTL4CommitOptions *)options;
+       [opt addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+@@ -53,6 +56,7 @@
+ mtl_command_queue *
+ mtl_new_command_queue(mtl_device *device)
+ {
++   MTL_TALLY_SCOPE(24, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return (mtl_command_queue *)limina_mtl_note_new([dev newMTL4CommandQueue]);
+@@ -63,6 +67,7 @@
+ mtl_command_queue_add_residency_set(mtl_command_queue *cmd_queue,
+                                     mtl_residency_set *set)
+ {
++   MTL_TALLY_SCOPE(25, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandQueue> queue = (id<MTL4CommandQueue>)cmd_queue;
+       id<MTLResidencySet> s = (id<MTLResidencySet>)set;
+@@ -74,6 +79,7 @@
+ mtl_command_queue_remove_residency_set(mtl_command_queue *cmd_queue,
+                                        mtl_residency_set *set)
+ {
++   MTL_TALLY_SCOPE(26, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandQueue> queue = (id<MTL4CommandQueue>)cmd_queue;
+       id<MTLResidencySet> s = (id<MTLResidencySet>)set;
+@@ -84,6 +90,7 @@
+ void
+ mtl_signal_event(mtl_command_queue *queue, mtl_event *event, uint64_t value)
+ {
++   MTL_TALLY_SCOPE(27, 8 + (4) + (4) + (sizeof(value)), 0);
+    @autoreleasepool {
+       id<MTL4CommandQueue> q = (id<MTL4CommandQueue>)queue;
+       id<MTLEvent> e = (id<MTLEvent>)event;
+@@ -94,6 +101,7 @@
+ void
+ mtl_wait_for_event(mtl_command_queue *queue, mtl_event *event, uint64_t value)
+ {
++   MTL_TALLY_SCOPE(28, 8 + (4) + (4) + (sizeof(value)), 0);
+    @autoreleasepool {
+       id<MTL4CommandQueue> q = (id<MTL4CommandQueue>)queue;
+       id<MTLEvent> e = (id<MTLEvent>)event;
+@@ -106,6 +114,7 @@
+                          mtl_command_buffer **command_buffers, uint32_t count,
+                          mtl_commit_options *options)
+ {
++   MTL_TALLY_SCOPE(29, 8 + (4) + ((uint64_t)count * 4) + (sizeof(count)) + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandQueue> q = (id<MTL4CommandQueue>)queue;
+       id<MTL4CommandBuffer> *cmds = (id<MTL4CommandBuffer> *)command_buffers;
+@@ -125,6 +134,7 @@
+ void
+ mtl_command_queue_wait_for_drawable(mtl_command_queue *queue, void *drawable)
+ {
++   MTL_TALLY_SCOPE(30, 8 + (4) + (8), 0);
+    @autoreleasepool {
+       id<MTL4CommandQueue> q = (id<MTL4CommandQueue>)queue;
+       id<MTLDrawable> d = (id<MTLDrawable>)drawable;
+@@ -135,6 +145,7 @@
+ void
+ mtl_command_queue_signal_drawable(mtl_command_queue *queue, void *drawable)
+ {
++   MTL_TALLY_SCOPE(31, 8 + (4) + (8), 0);
+    @autoreleasepool {
+       id<MTL4CommandQueue> q = (id<MTL4CommandQueue>)queue;
+       id<MTLDrawable> d = (id<MTLDrawable>)drawable;
+diff --git a/src/kosmickrisp/bridge/mtl_compiler.m b/src/kosmickrisp/bridge/mtl_compiler.m
+index 00a04a476c2..2cf912cc560 100644
+--- a/src/kosmickrisp/bridge/mtl_compiler.m
++++ b/src/kosmickrisp/bridge/mtl_compiler.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_compiler.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -20,6 +21,7 @@
+ mtl_compiler *
+ mtl_new_compiler(mtl_device *device)
+ {
++   MTL_TALLY_SCOPE(32, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+ 
+@@ -43,6 +45,7 @@
+                 enum mtl_math_mode math_mode,
+                 enum mtl_math_floating_point_functions math_fp_fns)
+ {
++   MTL_TALLY_SCOPE(33, 8 + (4) + ((src ? strlen(src) + 1 : 0)) + (sizeof(msl_version)) + (sizeof(math_mode)) + (sizeof(math_fp_fns)), 0);
+    @autoreleasepool {
+       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
+       NSString *ns_src = [NSString stringWithCString:src encoding:NSASCIIStringEncoding];
+@@ -70,6 +73,7 @@
+ mtl_function_descriptor *
+ mtl_new_library_function_descriptor(mtl_library *library, const char *entry_point)
+ {
++   MTL_TALLY_SCOPE(34, 8 + (4) + ((entry_point ? strlen(entry_point) + 1 : 0)), 0);
+    @autoreleasepool {
+       id<MTLLibrary> lib = (id<MTLLibrary>)library;
+       NSString *ns_entry_point = [NSString stringWithCString:entry_point encoding:NSASCIIStringEncoding];
+@@ -87,6 +91,7 @@
+                                mtl_function_descriptor *function,
+                                uint64_t max_total_threads_per_threadgroup)
+ {
++   MTL_TALLY_SCOPE(35, 8 + (4) + (4) + (sizeof(max_total_threads_per_threadgroup)), 0);
+    @autoreleasepool {
+       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
+ 
+@@ -110,6 +115,7 @@
+ mtl_render_pipeline_descriptor *
+ mtl_new_render_pipeline_descriptor()
+ {
++   MTL_TALLY_SCOPE(36, 8, 0);
+    @autoreleasepool {
+       return (mtl_render_pipeline_descriptor *)limina_mtl_note_new([MTL4RenderPipelineDescriptor new]);
+    }
+@@ -119,6 +125,7 @@
+ mtl_render_pipeline_descriptor_set_vertex_shader(mtl_render_pipeline_descriptor *descriptor,
+                                                  mtl_function_descriptor *shader)
+ {
++   MTL_TALLY_SCOPE(37, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+       desc.vertexFunctionDescriptor = (MTL4FunctionDescriptor *)shader;
+@@ -129,6 +136,7 @@
+ mtl_render_pipeline_descriptor_set_fragment_shader(mtl_render_pipeline_descriptor *descriptor,
+                                                    mtl_function_descriptor *shader)
+ {
++   MTL_TALLY_SCOPE(38, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+       desc.fragmentFunctionDescriptor = (MTL4FunctionDescriptor *)shader;
+@@ -139,6 +147,7 @@
+ mtl_render_pipeline_descriptor_set_input_primitive_topology(mtl_render_pipeline_descriptor *descriptor,
+                                                             enum mtl_primitive_topology_class class)
+ {
++   MTL_TALLY_SCOPE(39, 8 + (4) + (sizeof(class)), 0);
+    @autoreleasepool {
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+       desc.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)class;
+@@ -150,6 +159,7 @@
+                                                            uint8_t index,
+                                                            enum mtl_pixel_format format)
+ {
++   MTL_TALLY_SCOPE(40, 8 + (4) + (sizeof(index)) + (sizeof(format)), 0);
+    @autoreleasepool {
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+       desc.colorAttachments[index].pixelFormat = (MTLPixelFormat)format;
+@@ -160,6 +170,7 @@
+ mtl_render_pipeline_descriptor_set_raster_sample_count(mtl_render_pipeline_descriptor *descriptor,
+                                                        uint32_t sample_count)
+ {
++   MTL_TALLY_SCOPE(41, 8 + (4) + (sizeof(sample_count)), 0);
+    @autoreleasepool {
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+       desc.rasterSampleCount = sample_count;
+@@ -170,6 +181,7 @@
+ mtl_render_pipeline_descriptor_set_rasterization_enabled(mtl_render_pipeline_descriptor *descriptor,
+                                                          bool enabled)
+ {
++   MTL_TALLY_SCOPE(42, 8 + (4) + (sizeof(enabled)), 0);
+    @autoreleasepool {
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+       desc.rasterizationEnabled = enabled;
+@@ -180,6 +192,7 @@
+ mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(mtl_render_pipeline_descriptor *descriptor,
+                                                                   uint32_t count)
+ {
++   MTL_TALLY_SCOPE(43, 8 + (4) + (sizeof(count)), 0);
+    @autoreleasepool {
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+       desc.maxVertexAmplificationCount = count;
+@@ -190,6 +203,7 @@
+ mtl_render_pipeline_descriptor_set_label(mtl_render_pipeline_descriptor *descriptor,
+                                          const char *label)
+ {
++   MTL_TALLY_SCOPE(44, 8 + (4) + ((label ? strlen(label) + 1 : 0)), 0);
+    @autoreleasepool {
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+       desc.label = [NSString stringWithUTF8String:label];
+@@ -200,6 +214,7 @@
+ mtl_render_pipeline_state *
+ mtl_new_render_pipeline(mtl_compiler *compiler, mtl_render_pass_descriptor *descriptor)
+ {
++   MTL_TALLY_SCOPE(45, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTL4Compiler> comp = (id<MTL4Compiler>)compiler;
+       MTL4RenderPipelineDescriptor *desc = (MTL4RenderPipelineDescriptor *)descriptor;
+diff --git a/src/kosmickrisp/bridge/mtl_device.m b/src/kosmickrisp/bridge/mtl_device.m
+index 7dab7f03e1f..3e2890e000b 100644
+--- a/src/kosmickrisp/bridge/mtl_device.m
++++ b/src/kosmickrisp/bridge/mtl_device.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_device.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -25,6 +26,7 @@
+ mtl_device *
+ mtl_device_create()
+ {
++   MTL_TALLY_SCOPE(46, 8, sizeof(mtl_device *));
+    mtl_device *device = nil;
+ 
+    @autoreleasepool {
+@@ -46,6 +48,7 @@
+ void
+ mtl_start_gpu_capture(mtl_device *mtl_dev_handle, const char *directory)
+ {
++   MTL_TALLY_SCOPE(47, 8 + (4) + ((directory ? strlen(directory) + 1 : 0)), 0);
+    @autoreleasepool {
+       id<MTLDevice> mtl_dev = (id<MTLDevice>)mtl_dev_handle;
+       MTLCaptureManager *captureMgr = [MTLCaptureManager sharedCaptureManager];
+@@ -73,6 +76,7 @@
+ void
+ mtl_stop_gpu_capture()
+ {
++   MTL_TALLY_SCOPE(48, 8, 0);
+    @autoreleasepool {
+       [[MTLCaptureManager sharedCaptureManager] stopCapture];
+    }
+@@ -82,6 +86,7 @@
+ void
+ mtl_device_get_name(mtl_device *dev, char buffer[256])
+ {
++   MTL_TALLY_SCOPE(49, 8 + (4) + (0), 256);
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       [device.name getCString:buffer maxLength:(sizeof(char) * 256) encoding:NSUTF8StringEncoding];
+@@ -91,6 +96,7 @@
+ void
+ mtl_device_get_architecture_name(mtl_device *dev, char buffer[256])
+ {
++   MTL_TALLY_SCOPE(50, 8 + (4) + (0), 256);
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       [device.architecture.name getCString:buffer maxLength:(sizeof(char) * 256) encoding:NSUTF8StringEncoding];
+@@ -100,6 +106,7 @@
+ uint32_t
+ mtl_device_get_gpu_apple_family(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(51, 8 + (4), sizeof(uint32_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       uint32_t gpu_family = 0u;
+@@ -115,6 +122,7 @@
+ uint64_t
+ mtl_device_get_registry_id(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(52, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return device.registryID;
+@@ -124,6 +132,7 @@
+ bool
+ mtl_device_supports_sample_count(mtl_device *dev, uint32_t sample_count)
+ {
++   MTL_TALLY_SCOPE(53, 8 + (4) + (sizeof(sample_count)), sizeof(bool));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return [device supportsTextureSampleCount:sample_count];
+@@ -133,6 +142,7 @@
+ struct mtl_size
+ mtl_device_max_threads_per_threadgroup(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(54, 8 + (4), sizeof(struct mtl_size));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return (struct mtl_size){.x = device.maxThreadsPerThreadgroup.width,
+@@ -144,6 +154,7 @@
+ uint32_t
+ mtl_device_max_threadgroup_memory_length(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(55, 8 + (4), sizeof(uint32_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return device.maxThreadgroupMemoryLength;
+@@ -153,6 +164,7 @@
+ uint64_t
+ mtl_device_max_buffer_length(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(56, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return device.maxBufferLength;
+@@ -162,6 +174,7 @@
+ uint64_t
+ mtl_device_recommended_max_working_set_size(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(57, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return device.recommendedMaxWorkingSetSize;
+@@ -171,6 +184,7 @@
+ uint64_t
+ mtl_device_current_allocated_size(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(58, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return device.currentAllocatedSize;
+@@ -180,6 +194,7 @@
+ uint32_t
+ mtl_device_max_argument_buffer_sampler_count(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(59, 8 + (4), sizeof(uint32_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return device.maxArgumentBufferSamplerCount;
+@@ -190,6 +205,7 @@
+ uint64_t
+ mtl_device_get_gpu_timestamp(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(60, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       MTLTimestamp cpu_ts, gpu_ts;
+@@ -203,6 +219,7 @@
+ uint64_t
+ mtl_device_timestamp_frequency(mtl_device *dev)
+ {
++   MTL_TALLY_SCOPE(61, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       return [device queryTimestampFrequency];
+@@ -212,6 +229,7 @@
+ mtl_counter_heap *
+ mtl_new_timestamp_counter_heap(mtl_device *dev, uint32_t count)
+ {
++   MTL_TALLY_SCOPE(62, 8 + (4) + (sizeof(count)), 0);
+    @autoreleasepool {
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       MTL4CounterHeapDescriptor *desc =
+@@ -240,6 +258,7 @@
+ mtl_heap_buffer_size_and_align_with_length(mtl_device *device, uint64_t *size_B,
+                                            uint64_t *align_B)
+ {
++   MTL_TALLY_SCOPE(63, 8 + (4) + (0) + (0), 16);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLSizeAndAlign size_align = [dev heapBufferSizeAndAlignWithLength:*size_B options:KK_MTL_RESOURCE_OPTIONS];
+@@ -341,6 +360,7 @@ - (void)dealloc
+ void
+ mtl_limina_texture_census(char *buf, unsigned long len)
+ {
++   MTL_TALLY_SCOPE(64, 8 + ((buf ? strlen(buf) + 1 : 0)) + (sizeof(len)), 0);
+    uint64_t c = atomic_load(&g_limina_kk_tex_create),
+             d = atomic_load(&g_limina_kk_tex_dealloc);
+    snprintf(buf, len, "kk import-tex created %llu deallocated %llu (alive %lld)",
+@@ -352,6 +372,7 @@ - (void)dealloc
+ long
+ mtl_limina_retain_count(void *obj)
+ {
++   MTL_TALLY_SCOPE(65, 8 + (4), 0);
+    return obj ? CFGetRetainCount((CFTypeRef)obj) : -1;
+ }
+ 
+@@ -361,6 +382,7 @@ - (void)dealloc
+ bool
+ mtl_handle_is_iosurface(void *handle)
+ {
++   MTL_TALLY_SCOPE(66, 8 + (4), 0);
+    return handle && CFGetTypeID((CFTypeRef)handle) == IOSurfaceGetTypeID();
+ }
+ 
+@@ -379,6 +401,7 @@ - (void)dealloc
+                                           const struct kk_image_layout *layout,
+                                           void *iosurface, uint32_t plane)
+ {
++   MTL_TALLY_SCOPE(67, 8 + (4) + (sizeof(*layout)) + (4) + (sizeof(plane)), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLTextureDescriptor *descriptor =
+@@ -418,6 +441,7 @@ - (void)dealloc
+ mtl_minimum_linear_texture_alignment_for_pixel_format(
+    mtl_device *device, enum mtl_pixel_format format)
+ {
++   MTL_TALLY_SCOPE(68, 8 + (4) + (sizeof(format)), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return [dev minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)format];
+@@ -430,6 +454,7 @@ - (void)dealloc
+                                                 uint64_t *size_B,
+                                                 uint64_t *align_B)
+ {
++   MTL_TALLY_SCOPE(69, 8 + (4) + (sizeof(*layout)) + (0) + (0), 16);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLTextureDescriptor *descriptor = [mtl_new_texture_descriptor(layout) autorelease];
+@@ -445,6 +470,7 @@ - (void)dealloc
+ 
+ uint32_t
+ mtl_sparse_tile_size_in_bytes(mtl_device *device) {
++   MTL_TALLY_SCOPE(70, 8 + (4), sizeof(uint32_t));
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return [dev sparseTileSizeInBytes];
+@@ -453,6 +479,7 @@ - (void)dealloc
+ 
+ struct mtl_size
+ mtl_sparse_tile_size(mtl_device *device, struct kk_image_layout *layout) {
++   MTL_TALLY_SCOPE(71, 8 + (4) + (sizeof(*layout)), sizeof(struct mtl_size));
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLSize tile_size = [dev sparseTileSizeWithTextureType:(MTLTextureType)layout->type
+@@ -465,6 +492,7 @@ - (void)dealloc
+ struct mtl_size
+ mtl_sparse_tile_count(mtl_device *device, struct kk_image_layout *layout,
+                       struct mtl_size tile_size) {
++   MTL_TALLY_SCOPE(72, 8 + (4) + (sizeof(*layout)) + (sizeof(tile_size)), sizeof(struct mtl_size));
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLRegion pixel_region = MTLRegionMake3D(
+@@ -486,6 +514,7 @@ - (void)dealloc
+ mtl_new_buffer_with_bytes_no_copy(mtl_device *device, void* ptr,
+                                   uint64_t size_B)
+ {
++   MTL_TALLY_SCOPE(73, 8 + (4) + (8) + (sizeof(size_B)), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return (mtl_buffer *)limina_mtl_note_new([dev newBufferWithBytesNoCopy:ptr length:size_B options:KK_MTL_RESOURCE_OPTIONS deallocator:nil]);
+@@ -495,6 +524,7 @@ - (void)dealloc
+ mtl_command_allocator *
+ mtl_new_command_allocator(mtl_device *device)
+ {
++   MTL_TALLY_SCOPE(74, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return (mtl_command_allocator *)limina_mtl_note_new([dev newCommandAllocator]);
+@@ -504,6 +534,7 @@ - (void)dealloc
+ mtl_command_buffer *
+ mtl_new_command_buffer(mtl_device *device)
+ {
++   MTL_TALLY_SCOPE(75, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return (mtl_command_buffer *)limina_mtl_note_new([dev newCommandBuffer]);
+diff --git a/src/kosmickrisp/bridge/mtl_encoder.m b/src/kosmickrisp/bridge/mtl_encoder.m
+index 32ecf75da45..be079df44af 100644
+--- a/src/kosmickrisp/bridge/mtl_encoder.m
++++ b/src/kosmickrisp/bridge/mtl_encoder.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_encoder.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -618,6 +619,7 @@
+ mtl_encoder_note_allocator(void *encoder, void *allocator, uint32_t resets,
+                            uint32_t ops_since_reset)
+ {
++   MTL_TALLY_SCOPE(76, 8 + (4) + (4) + (sizeof(resets)) + (sizeof(ops_since_reset)), 0);
+    if (!encoder)
+       return;
+    pthread_mutex_lock(&limina_enc_lock);
+@@ -673,12 +675,14 @@
+ void
+ mtl_encoder_note_released(void *encoder)
+ {
++   MTL_TALLY_SCOPE(77, 8 + (4), 0);
+    limina_enc_mark(encoder, LIMINA_ENC_RELEASED);
+ }
+ 
+ uint64_t
+ mtl_encoder_generation(void *encoder)
+ {
++   MTL_TALLY_SCOPE(78, 8 + (4), 0);
+    struct limina_enc_slot *s = encoder ? limina_enc_find(encoder) : NULL;
+    return s ? atomic_load(&s->gen) : 0;
+ }
+@@ -686,6 +690,7 @@
+ void
+ mtl_encoder_report_incarnation(void *encoder, const char *why)
+ {
++   MTL_TALLY_SCOPE(79, 8 + (4) + ((why ? strlen(why) + 1 : 0)), 0);
+    struct limina_enc_slot *s = encoder ? limina_enc_find(encoder) : NULL;
+    if (!s) {
+       fprintf(stderr, "[LIMINA-ENC] %s: encoder %p is not in the table (evicted, or never a "
+@@ -712,6 +717,7 @@
+ void
+ mtl_encoder_guard_stats(struct mtl_encoder_guard_stats *out)
+ {
++   MTL_TALLY_SCOPE(80, 8 + (0), 0);
+    out->checks = atomic_load(&limina_enc_checks);
+    out->untracked = atomic_load(&limina_enc_untracked);
+    out->bad_null = atomic_load(&limina_enc_bad[LIMINA_ENC_UNKNOWN]);
+@@ -809,6 +815,7 @@
+ void
+ mtl_end_encoding(void *encoder)
+ {
++   MTL_TALLY_SCOPE(81, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       [enc endEncoding];
+@@ -822,6 +829,7 @@
+ mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
+                          enum mtl_stages before_queue_stages)
+ {
++   MTL_TALLY_SCOPE(82, 8 + (4) + (sizeof(after_stages)) + (sizeof(before_queue_stages)), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       /* TODO_KOSMICKRISP Expose visibility option since resource alias should only be required
+@@ -835,6 +843,7 @@
+ mtl_barrier_after_encoder_stages(void *encoder, enum mtl_stages after_stages,
+                                  enum mtl_stages before_queue_stages)
+ {
++   MTL_TALLY_SCOPE(83, 8 + (4) + (sizeof(after_stages)) + (sizeof(before_queue_stages)), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       [enc barrierAfterEncoderStages:(MTLStages)after_stages beforeEncoderStages:(MTLStages)before_queue_stages
+@@ -847,6 +856,7 @@
+                                enum mtl_stages after_queue_stages,
+                                enum mtl_stages before_stages)
+ {
++   MTL_TALLY_SCOPE(84, 8 + (4) + (sizeof(after_queue_stages)) + (sizeof(before_stages)), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       [enc barrierAfterQueueStages:(MTLStages)after_queue_stages
+@@ -858,6 +868,7 @@
+ void
+ mtl_update_fence(void *encoder, mtl_fence *fence, enum mtl_stages after_stages)
+ {
++   MTL_TALLY_SCOPE(85, 8 + (4) + (4) + (sizeof(after_stages)), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       id<MTLFence> f = (id<MTLFence>)fence;
+@@ -869,6 +880,7 @@
+ mtl_wait_for_fence(void *encoder, mtl_fence *fence,
+                    enum mtl_stages before_stages)
+ {
++   MTL_TALLY_SCOPE(86, 8 + (4) + (4) + (sizeof(before_stages)), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       id<MTLFence> f = (id<MTLFence>)fence;
+@@ -879,6 +891,7 @@
+ void
+ mtl_encoder_set_label(void *encoder, const char *label)
+ {
++   MTL_TALLY_SCOPE(87, 8 + (4) + ((label ? strlen(label) + 1 : 0)), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       enc.label = @(label);
+@@ -888,6 +901,7 @@
+ void
+ mtl_encoder_insert_debug_signpost(void *encoder, const char *label)
+ {
++   MTL_TALLY_SCOPE(88, 8 + (4) + ((label ? strlen(label) + 1 : 0)), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       [enc insertDebugSignpost:@(label)];
+@@ -897,6 +911,7 @@
+ void
+ mtl_encoder_push_debug_group(void *encoder, const char *label)
+ {
++   MTL_TALLY_SCOPE(89, 8 + (4) + ((label ? strlen(label) + 1 : 0)), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       [enc pushDebugGroup:@(label)];
+@@ -906,6 +921,7 @@
+ void
+ mtl_encoder_pop_debug_group(void *encoder)
+ {
++   MTL_TALLY_SCOPE(90, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
+       [enc popDebugGroup];
+@@ -1054,6 +1070,7 @@
+ mtl_compute_encoder *
+ mtl_new_compute_command_encoder(mtl_command_buffer *cmd_buffer)
+ {
++   MTL_TALLY_SCOPE(91, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)cmd_buffer;
+       void *enc = limina_mtl_note_new([[cmd_buf computeCommandEncoder] retain]);
+@@ -1068,6 +1085,7 @@
+                                mtl_buffer *dst_buf, size_t dst_offset,
+                                size_t size)
+ {
++   MTL_TALLY_SCOPE(92, 8 + (4) + (4) + (sizeof(src_offset)) + (4) + (sizeof(dst_offset)) + (sizeof(size)), 0);
+    if (limina_enc_check(encoder, "mtl_copy_from_buffer_to_buffer", NULL) == LIMINA_ENC_BROKEN)
+       return;
+    @autoreleasepool {
+@@ -1082,6 +1100,7 @@
+ mtl_copy_from_buffer_to_texture(mtl_compute_encoder *encoder,
+                                 struct mtl_buffer_image_copy *data)
+ {
++   MTL_TALLY_SCOPE(93, 8 + (4) + (sizeof(*data)), 0);
+    uint64_t limina_gen = 0;
+    const uint32_t limina_enc_st = limina_enc_check(encoder, "mtl_copy_from_buffer_to_texture", &limina_gen);
+    if (limina_enc_st == LIMINA_ENC_BROKEN)
+@@ -1114,6 +1133,7 @@
+ mtl_copy_from_texture_to_buffer(mtl_compute_encoder *encoder,
+                                 struct mtl_buffer_image_copy *data)
+ {
++   MTL_TALLY_SCOPE(94, 8 + (4) + (sizeof(*data)), 0);
+    if (limina_enc_check(encoder, "mtl_copy_from_texture_to_buffer", NULL) == LIMINA_ENC_BROKEN)
+       return;
+    @autoreleasepool {
+@@ -1143,6 +1163,7 @@
+                                  mtl_texture *dst_tex_handle, size_t dst_slice,
+                                  size_t dst_level, struct mtl_origin dst_origin)
+ {
++   MTL_TALLY_SCOPE(95, 8 + (4) + (4) + (sizeof(src_slice)) + (sizeof(src_level)) + (sizeof(src_origin)) + (sizeof(src_size)) + (4) + (sizeof(dst_slice)) + (sizeof(dst_level)) + (sizeof(dst_origin)), 0);
+    if (limina_enc_check(encoder, "mtl_copy_from_texture_to_texture", NULL) == LIMINA_ENC_BROKEN)
+       return;
+    @autoreleasepool {
+@@ -1168,6 +1189,7 @@
+ mtl_compute_set_pipeline_state(mtl_compute_encoder *encoder,
+                                mtl_compute_pipeline_state *state_handle)
+ {
++   MTL_TALLY_SCOPE(96, 8 + (4) + (4), 0);
+    if (limina_enc_check(encoder, "mtl_compute_set_pipeline_state", NULL) == LIMINA_ENC_BROKEN)
+       return;
+    @autoreleasepool {
+@@ -1181,6 +1203,7 @@
+ mtl_compute_set_argument_table(mtl_compute_encoder *encoder,
+                                mtl_argument_table *table)
+ {
++   MTL_TALLY_SCOPE(97, 8 + (4) + (4), 0);
+    if (limina_enc_check(encoder, "mtl_compute_set_argument_table", NULL) == LIMINA_ENC_BROKEN)
+       return;
+    @autoreleasepool {
+@@ -1194,6 +1217,7 @@
+ mtl_dispatch_threads(mtl_compute_encoder *encoder,
+                      struct mtl_size grid_size, struct mtl_size local_size)
+ {
++   MTL_TALLY_SCOPE(98, 8 + (4) + (sizeof(grid_size)) + (sizeof(local_size)), 0);
+    if (limina_enc_check(encoder, "mtl_dispatch_threads", NULL) == LIMINA_ENC_BROKEN)
+       return;
+    @autoreleasepool {
+@@ -1211,6 +1235,7 @@
+                                                uint64_t addr,
+                                                struct mtl_size local_size)
+ {
++   MTL_TALLY_SCOPE(99, 8 + (4) + (sizeof(addr)) + (sizeof(local_size)), 0);
+    if (limina_enc_check(encoder, "mtl_dispatch_threadgroups_with_indirect_buffer", NULL) ==
+        LIMINA_ENC_BROKEN)
+       return;
+@@ -1271,6 +1296,7 @@
+ mtl_new_render_command_encoder_with_descriptor(
+    mtl_command_buffer *command_buffer, mtl_render_pass_descriptor *descriptor)
+ {
++   MTL_TALLY_SCOPE(100, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTL4CommandBuffer> cmd = (id<MTL4CommandBuffer>)command_buffer;
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+@@ -1345,6 +1371,7 @@
+ mtl_set_viewports(mtl_render_encoder *encoder, struct mtl_viewport *viewports,
+                   uint32_t count)
+ {
++   MTL_TALLY_SCOPE(101, 8 + (4) + ((uint64_t)count * sizeof(*viewports)) + (sizeof(count)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       MTLViewport *vps = (MTLViewport *)viewports;
+@@ -1361,6 +1388,7 @@
+ mtl_set_scissor_rects(mtl_render_encoder *encoder,
+                       struct mtl_scissor_rect *scissor_rects, uint32_t count)
+ {
++   MTL_TALLY_SCOPE(102, 8 + (4) + ((uint64_t)count * sizeof(*scissor_rects)) + (sizeof(count)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       MTLScissorRect *rects = (MTLScissorRect *)scissor_rects;
+@@ -1377,6 +1405,7 @@
+ mtl_render_set_pipeline_state(mtl_render_encoder *encoder,
+                               mtl_render_pipeline_state *pipeline)
+ {
++   MTL_TALLY_SCOPE(103, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       id<MTLRenderPipelineState> pipe = (id<MTLRenderPipelineState>)pipeline;
+@@ -1388,6 +1417,7 @@
+ mtl_set_depth_stencil_state(mtl_render_encoder *encoder,
+                             mtl_depth_stencil_state *state)
+ {
++   MTL_TALLY_SCOPE(104, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       id<MTLDepthStencilState> s = (id<MTLDepthStencilState>)state;
+@@ -1399,6 +1429,7 @@
+ mtl_set_stencil_references(mtl_render_encoder *encoder, uint32_t front,
+                            uint32_t back)
+ {
++   MTL_TALLY_SCOPE(105, 8 + (4) + (sizeof(front)) + (sizeof(back)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       [enc setStencilFrontReferenceValue:front backReferenceValue:back];
+@@ -1409,6 +1440,7 @@
+ mtl_set_front_face_winding(mtl_render_encoder *encoder,
+                            enum mtl_winding winding)
+ {
++   MTL_TALLY_SCOPE(106, 8 + (4) + (sizeof(winding)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       [enc setFrontFacingWinding:(MTLWinding)winding];
+@@ -1418,6 +1450,7 @@
+ void
+ mtl_set_cull_mode(mtl_render_encoder *encoder, enum mtl_cull_mode mode)
+ {
++   MTL_TALLY_SCOPE(107, 8 + (4) + (sizeof(mode)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       [enc setCullMode:(MTLCullMode)mode];
+@@ -1429,6 +1462,7 @@
+                                enum mtl_visibility_result_mode mode,
+                                size_t offset)
+ {
++   MTL_TALLY_SCOPE(108, 8 + (4) + (sizeof(mode)) + (sizeof(offset)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       [enc setVisibilityResultMode:(MTLVisibilityResultMode)mode offset:offset];
+@@ -1439,6 +1473,7 @@
+ mtl_set_depth_bias(mtl_render_encoder *encoder, float depth_bias,
+                    float slope_scale, float clamp)
+ {
++   MTL_TALLY_SCOPE(109, 8 + (4) + (sizeof(depth_bias)) + (sizeof(slope_scale)) + (sizeof(clamp)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       [enc setDepthBias:depth_bias slopeScale:slope_scale clamp:clamp];
+@@ -1449,6 +1484,7 @@
+ mtl_set_depth_clip_mode(mtl_render_encoder *encoder,
+                         enum mtl_depth_clip_mode mode)
+ {
++   MTL_TALLY_SCOPE(110, 8 + (4) + (sizeof(mode)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       [enc setDepthClipMode:(MTLDepthClipMode)mode];
+@@ -1458,6 +1494,7 @@
+ void
+ mtl_set_depth_test_bounds(mtl_render_encoder *encoder, float min, float max)
+ {
++   MTL_TALLY_SCOPE(111, 8 + (4) + (sizeof(min)) + (sizeof(max)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       [enc setDepthTestMinBound:min maxBound:max];
+@@ -1468,6 +1505,7 @@
+ mtl_set_vertex_amplification_count(mtl_render_encoder *encoder,
+                                    uint32_t *layer_ids, uint32_t id_count)
+ {
++   MTL_TALLY_SCOPE(112, 8 + (4) + ((uint64_t)id_count * sizeof(*layer_ids)) + (sizeof(id_count)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       MTLVertexAmplificationViewMapping mappings[32];
+@@ -1484,6 +1522,7 @@
+                               mtl_argument_table *table,
+                               enum mtl_render_stages stages)
+ {
++   MTL_TALLY_SCOPE(113, 8 + (4) + (4) + (sizeof(stages)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       id<MTL4ArgumentTable> t = (id<MTL4ArgumentTable>)table;
+@@ -1497,6 +1536,7 @@
+                     uint32_t vertexCount, uint32_t instanceCount,
+                     uint32_t baseInstance)
+ {
++   MTL_TALLY_SCOPE(114, 8 + (4) + (sizeof(primitve_type)) + (sizeof(vertexStart)) + (sizeof(vertexCount)) + (sizeof(instanceCount)) + (sizeof(baseInstance)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
+@@ -1517,6 +1557,7 @@
+                             uint32_t instance_count, int32_t base_vertex,
+                             uint32_t base_instance)
+ {
++   MTL_TALLY_SCOPE(115, 8 + (4) + (sizeof(primitve_type)) + (sizeof(index_count)) + (sizeof(index_type)) + (sizeof(index_addr)) + (sizeof(index_buffer_length)) + (sizeof(instance_count)) + (sizeof(base_vertex)) + (sizeof(base_instance)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       MTLIndexType ndx_type = (MTLIndexType)index_type;
+@@ -1537,6 +1578,7 @@
+                              enum mtl_primitive_type primitve_type,
+                              uint64_t addr)
+ {
++   MTL_TALLY_SCOPE(116, 8 + (4) + (sizeof(primitve_type)) + (sizeof(addr)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       [enc drawPrimitives:(MTLPrimitiveType)primitve_type indirectBuffer:addr];
+@@ -1551,6 +1593,7 @@
+                                      uint64_t index_buffer_length,
+                                      uint64_t addr)
+ {
++   MTL_TALLY_SCOPE(117, 8 + (4) + (sizeof(primitve_type)) + (sizeof(index_type)) + (sizeof(index_addr)) + (sizeof(index_buffer_length)) + (sizeof(addr)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
+@@ -1567,6 +1610,7 @@
+ mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
+                             mtl_counter_heap *heap, uint32_t index)
+ {
++   MTL_TALLY_SCOPE(118, 8 + (4) + (4) + (sizeof(index)), 0);
+    @autoreleasepool {
+       id<MTL4ComputeCommandEncoder> enc =
+          (id<MTL4ComputeCommandEncoder>)encoder;
+@@ -1582,6 +1626,7 @@
+                            enum mtl_render_stages stage, mtl_counter_heap *heap,
+                            uint32_t index)
+ {
++   MTL_TALLY_SCOPE(119, 8 + (4) + (sizeof(stage)) + (4) + (sizeof(index)), 0);
+    @autoreleasepool {
+       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+       id<MTL4CounterHeap> h = (id<MTL4CounterHeap>)heap;
+@@ -1598,6 +1643,7 @@
+                                   enum mtl_store_action action,
+                                   uint32_t index)
+ {
++   MTL_TALLY_SCOPE(120, 8 + (4) + (sizeof(action)) + (sizeof(index)), 0);
+     @autoreleasepool {
+         id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+         [enc setColorStoreAction:(MTLStoreAction)action
+@@ -1608,6 +1654,7 @@
+ void mtl_render_set_depth_store_action(mtl_render_encoder *encoder,
+                                        enum mtl_store_action action)
+ {
++   MTL_TALLY_SCOPE(121, 8 + (4) + (sizeof(action)), 0);
+     @autoreleasepool {
+         id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+         [enc setDepthStoreAction:(MTLStoreAction)action];
+@@ -1617,6 +1664,7 @@ void mtl_render_set_depth_store_action(mtl_render_encoder *encoder,
+ void mtl_render_set_stencil_store_action(mtl_render_encoder *encoder,
+                                        enum mtl_store_action action)
+ {
++   MTL_TALLY_SCOPE(122, 8 + (4) + (sizeof(action)), 0);
+     @autoreleasepool {
+         id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+         [enc setStencilStoreAction:(MTLStoreAction)action];
+diff --git a/src/kosmickrisp/bridge/mtl_heap.m b/src/kosmickrisp/bridge/mtl_heap.m
+index bb9f5255b83..151af1b140c 100644
+--- a/src/kosmickrisp/bridge/mtl_heap.m
++++ b/src/kosmickrisp/bridge/mtl_heap.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_heap.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -20,6 +21,7 @@
+ mtl_new_heap(mtl_device *device, uint64_t size,
+              enum mtl_resource_options resource_options)
+ {
++   MTL_TALLY_SCOPE(123, 8 + (4) + (sizeof(size)) + (sizeof(resource_options)), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLHeapDescriptor *descriptor = [[MTLHeapDescriptor new] autorelease];
+@@ -35,6 +37,7 @@
+ uint64_t
+ mtl_heap_get_size(mtl_heap *heap)
+ {
++   MTL_TALLY_SCOPE(124, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLHeap> hp = (id<MTLHeap>)heap;
+       return hp.size;
+@@ -66,6 +69,7 @@
+ mtl_buffer *
+ mtl_new_buffer_with_length(mtl_heap *heap, uint64_t size_B, uint64_t offset_B)
+ {
++   MTL_TALLY_SCOPE(125, 8 + (4) + (sizeof(size_B)) + (sizeof(offset_B)), 0);
+    @autoreleasepool {
+       id<MTLHeap> hp = (id<MTLHeap>)heap;
+       return (mtl_buffer *)limina_mtl_note_new((mtl_buffer *)[hp newBufferWithLength:size_B options:KK_MTL_RESOURCE_OPTIONS offset:offset_B]);
+@@ -77,6 +81,7 @@
+                                 const struct kk_image_layout *layout,
+                                 uint64_t offset)
+ {
++   MTL_TALLY_SCOPE(126, 8 + (4) + (sizeof(*layout)) + (sizeof(offset)), 0);
+    @autoreleasepool {
+       id<MTLHeap> hp = (id<MTLHeap>)heap;
+       MTLTextureDescriptor *descriptor = [mtl_new_texture_descriptor(layout) autorelease];
+@@ -88,6 +93,7 @@
+ void
+ mtl_heap_set_label(mtl_heap *heap, const char *label)
+ {
++   MTL_TALLY_SCOPE(127, 8 + (4) + ((label ? strlen(label) + 1 : 0)), 0);
+    @autoreleasepool {
+       id<MTLHeap> h = (id<MTLHeap>)heap;
+       h.label = @(label);
+@@ -97,6 +103,7 @@
+ void
+ mtl_resource_set_label(mtl_resource *resource, const char *label)
+ {
++   MTL_TALLY_SCOPE(128, 8 + (4) + ((label ? strlen(label) + 1 : 0)), 0);
+    @autoreleasepool {
+       id<MTLResource> res = (id<MTLResource>)resource;
+       res.label = @(label);
+diff --git a/src/kosmickrisp/bridge/mtl_render_state.m b/src/kosmickrisp/bridge/mtl_render_state.m
+index ddd7be86a24..ecccfcfeab7 100644
+--- a/src/kosmickrisp/bridge/mtl_render_state.m
++++ b/src/kosmickrisp/bridge/mtl_render_state.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_render_state.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -24,6 +25,7 @@
+ mtl_render_pass_descriptor *
+ mtl_new_render_pass_descriptor(void)
+ {
++   MTL_TALLY_SCOPE(129, 8, 0);
+    @autoreleasepool {
+       return (mtl_render_pass_descriptor *)limina_mtl_note_new([MTL4RenderPassDescriptor new]);
+    }
+@@ -33,6 +35,7 @@
+ mtl_render_pass_descriptor_get_color_attachment(
+    mtl_render_pass_descriptor *descriptor, uint32_t index)
+ {
++   MTL_TALLY_SCOPE(130, 8 + (4) + (sizeof(index)), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       return desc.colorAttachments[index];
+@@ -43,6 +46,7 @@
+ mtl_render_pass_descriptor_get_depth_attachment(
+    mtl_render_pass_descriptor *descriptor)
+ {
++   MTL_TALLY_SCOPE(131, 8 + (4), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       return desc.depthAttachment;
+@@ -53,6 +57,7 @@
+ mtl_render_pass_descriptor_get_stencil_attachment(
+    mtl_render_pass_descriptor *descriptor)
+ {
++   MTL_TALLY_SCOPE(132, 8 + (4), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       return desc.stencilAttachment;
+@@ -63,6 +68,7 @@
+ mtl_render_pass_attachment_descriptor_set_texture(
+    mtl_render_pass_attachment_descriptor *descriptor, mtl_texture *texture)
+ {
++   MTL_TALLY_SCOPE(133, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.texture = (id<MTLTexture>)texture;
+@@ -73,6 +79,7 @@
+ mtl_render_pass_attachment_descriptor_set_level(
+    mtl_render_pass_attachment_descriptor *descriptor, uint32_t level)
+ {
++   MTL_TALLY_SCOPE(134, 8 + (4) + (sizeof(level)), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.level = level;
+@@ -83,6 +90,7 @@
+ mtl_render_pass_attachment_descriptor_set_slice(
+    mtl_render_pass_attachment_descriptor *descriptor, uint32_t slice)
+ {
++   MTL_TALLY_SCOPE(135, 8 + (4) + (sizeof(slice)), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.slice = slice;
+@@ -94,6 +102,7 @@
+    mtl_render_pass_attachment_descriptor *descriptor,
+    enum mtl_load_action action)
+ {
++   MTL_TALLY_SCOPE(136, 8 + (4) + (sizeof(action)), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.loadAction = (MTLLoadAction)action;
+@@ -105,6 +114,7 @@
+    mtl_render_pass_attachment_descriptor *descriptor,
+    enum mtl_store_action action)
+ {
++   MTL_TALLY_SCOPE(137, 8 + (4) + (sizeof(action)), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.storeAction = (MTLStoreAction)action;
+@@ -116,6 +126,7 @@
+    mtl_render_pass_attachment_descriptor *descriptor,
+    struct mtl_clear_color clear_color)
+ {
++   MTL_TALLY_SCOPE(138, 8 + (4) + (sizeof(clear_color)), 0);
+    @autoreleasepool {
+       MTLRenderPassColorAttachmentDescriptor *desc = (MTLRenderPassColorAttachmentDescriptor *)descriptor;
+       desc.clearColor = MTLClearColorMake(clear_color.red, clear_color.green, clear_color.blue, clear_color.alpha);
+@@ -126,6 +137,7 @@
+ mtl_render_pass_attachment_descriptor_set_clear_depth(
+    mtl_render_pass_attachment_descriptor *descriptor, double depth)
+ {
++   MTL_TALLY_SCOPE(139, 8 + (4) + (sizeof(depth)), 0);
+    @autoreleasepool {
+       MTLRenderPassDepthAttachmentDescriptor *desc = (MTLRenderPassDepthAttachmentDescriptor *)descriptor;
+       desc.clearDepth = depth;
+@@ -136,6 +148,7 @@
+ mtl_render_pass_attachment_descriptor_set_clear_stencil(mtl_render_pass_attachment_descriptor *descriptor,
+                                                         uint32_t stencil)
+ {
++   MTL_TALLY_SCOPE(140, 8 + (4) + (sizeof(stencil)), 0);
+    @autoreleasepool {
+       MTLRenderPassStencilAttachmentDescriptor *desc = (MTLRenderPassStencilAttachmentDescriptor *)descriptor;
+       desc.clearStencil = stencil;
+@@ -146,6 +159,7 @@
+ mtl_render_pass_attachment_descriptor_set_depth_resolve_filter(mtl_render_pass_attachment_descriptor *descriptor,
+                                                                enum mtl_depth_resolve_filter filter)
+ {
++   MTL_TALLY_SCOPE(141, 8 + (4) + (sizeof(filter)), 0);
+    @autoreleasepool {
+       MTLRenderPassDepthAttachmentDescriptor *desc = (MTLRenderPassDepthAttachmentDescriptor *)descriptor;
+       desc.depthResolveFilter = (MTLMultisampleDepthResolveFilter)filter;
+@@ -156,6 +170,7 @@
+ mtl_render_pass_attachment_descriptor_set_stencil_resolve_filter(mtl_render_pass_attachment_descriptor *descriptor,
+                                                                  enum mtl_stencil_resolve_filter filter)
+ {
++   MTL_TALLY_SCOPE(142, 8 + (4) + (sizeof(filter)), 0);
+    @autoreleasepool {
+       MTLRenderPassStencilAttachmentDescriptor *desc = (MTLRenderPassStencilAttachmentDescriptor *)descriptor;
+       desc.stencilResolveFilter = (MTLMultisampleStencilResolveFilter)filter;
+@@ -166,6 +181,7 @@
+ mtl_render_pass_attachment_descriptor_set_resolve_texture(mtl_render_pass_attachment_descriptor *descriptor,
+                                                           mtl_texture *resolve_texture)
+ {
++   MTL_TALLY_SCOPE(143, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.resolveTexture = resolve_texture;
+@@ -176,6 +192,7 @@
+ mtl_render_pass_attachment_descriptor_set_resolve_level(mtl_render_pass_attachment_descriptor *descriptor,
+                                                         uint32_t resolve_level)
+ {
++   MTL_TALLY_SCOPE(144, 8 + (4) + (sizeof(resolve_level)), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.resolveLevel = resolve_level;
+@@ -186,6 +203,7 @@
+ mtl_render_pass_attachment_descriptor_set_resolve_slice(mtl_render_pass_attachment_descriptor *descriptor,
+                                                         uint32_t resolve_slice)
+ {
++   MTL_TALLY_SCOPE(145, 8 + (4) + (sizeof(resolve_slice)), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.resolveSlice = resolve_slice;
+@@ -196,6 +214,7 @@
+ mtl_render_pass_attachment_descriptor_set_resolve_depth_plane(mtl_render_pass_attachment_descriptor *descriptor,
+                                                               uint32_t resolve_depth_plane)
+ {
++   MTL_TALLY_SCOPE(146, 8 + (4) + (sizeof(resolve_depth_plane)), 0);
+    @autoreleasepool {
+       MTLRenderPassAttachmentDescriptor *desc = (MTLRenderPassAttachmentDescriptor *)descriptor;
+       desc.resolveDepthPlane = resolve_depth_plane;
+@@ -206,6 +225,7 @@
+ mtl_render_pass_descriptor_set_render_target_array_length(mtl_render_pass_descriptor *descriptor,
+                                                           uint32_t length)
+ {
++   MTL_TALLY_SCOPE(147, 8 + (4) + (sizeof(length)), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       desc.renderTargetArrayLength = length;
+@@ -216,6 +236,7 @@
+ mtl_render_pass_descriptor_set_render_target_width(mtl_render_pass_descriptor *descriptor,
+                                                    uint32_t width)
+ {
++   MTL_TALLY_SCOPE(148, 8 + (4) + (sizeof(width)), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       desc.renderTargetWidth = width;
+@@ -226,6 +247,7 @@
+ mtl_render_pass_descriptor_set_render_target_height(mtl_render_pass_descriptor *descriptor,
+                                                     uint32_t height)
+ {
++   MTL_TALLY_SCOPE(149, 8 + (4) + (sizeof(height)), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       desc.renderTargetHeight = height;
+@@ -236,6 +258,7 @@
+ mtl_render_pass_descriptor_set_default_raster_sample_count(mtl_render_pass_descriptor *descriptor,
+                                                            uint32_t sample_count)
+ {
++   MTL_TALLY_SCOPE(150, 8 + (4) + (sizeof(sample_count)), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       desc.defaultRasterSampleCount = sample_count;
+@@ -248,6 +271,7 @@
+    const struct mtl_sample_position *positions,
+    uint32_t count)
+ {
++   MTL_TALLY_SCOPE(151, 8 + (4) + ((uint64_t)count * sizeof(*positions)) + (sizeof(count)), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       if (count > 0) {
+@@ -266,6 +290,7 @@
+ mtl_render_pass_descriptor_set_visibility_buffer(mtl_render_pass_descriptor *descriptor,
+                                                  mtl_buffer *visibility_buffer)
+ {
++   MTL_TALLY_SCOPE(152, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       MTL4RenderPassDescriptor *desc = (MTL4RenderPassDescriptor *)descriptor;
+       id<MTLBuffer> buffer = (id<MTLBuffer>)visibility_buffer;
+@@ -277,6 +302,7 @@
+ mtl_stencil_descriptor *
+ mtl_new_stencil_descriptor()
+ {
++   MTL_TALLY_SCOPE(153, 8, 0);
+    @autoreleasepool {
+       return (mtl_stencil_descriptor *)limina_mtl_note_new([MTLStencilDescriptor new]);
+    }
+@@ -312,6 +338,7 @@
+ void
+ mtl_stencil_descriptor_set_stencil_failure_operation(mtl_stencil_descriptor *descriptor, VkStencilOp op)
+ {
++   MTL_TALLY_SCOPE(154, 8 + (4) + (sizeof(op)), 0);
+    @autoreleasepool {
+       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
+       desc.stencilFailureOperation = map_vk_stencil_op_to_mtl_stencil_operation(op);
+@@ -321,6 +348,7 @@
+ void
+ mtl_stencil_descriptor_set_depth_failure_operation(mtl_stencil_descriptor *descriptor, VkStencilOp op)
+ {
++   MTL_TALLY_SCOPE(155, 8 + (4) + (sizeof(op)), 0);
+    @autoreleasepool {
+       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
+       desc.depthFailureOperation = map_vk_stencil_op_to_mtl_stencil_operation(op);
+@@ -330,6 +358,7 @@
+ void
+ mtl_stencil_descriptor_set_depth_stencil_pass_operation(mtl_stencil_descriptor *descriptor, VkStencilOp op)
+ {
++   MTL_TALLY_SCOPE(156, 8 + (4) + (sizeof(op)), 0);
+    @autoreleasepool {
+       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
+       desc.depthStencilPassOperation = map_vk_stencil_op_to_mtl_stencil_operation(op);
+@@ -339,6 +368,7 @@
+ void
+ mtl_stencil_descriptor_set_stencil_compare_function(mtl_stencil_descriptor *descriptor, VkCompareOp op)
+ {
++   MTL_TALLY_SCOPE(157, 8 + (4) + (sizeof(op)), 0);
+    @autoreleasepool {
+       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
+       desc.stencilCompareFunction = (MTLCompareFunction)vk_compare_op_to_mtl_compare_function(op);
+@@ -348,6 +378,7 @@
+ void
+ mtl_stencil_descriptor_set_read_mask(mtl_stencil_descriptor *descriptor, uint32_t mask)
+ {
++   MTL_TALLY_SCOPE(158, 8 + (4) + (sizeof(mask)), 0);
+    @autoreleasepool {
+       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
+       desc.readMask = mask;
+@@ -357,6 +388,7 @@
+ void
+ mtl_stencil_descriptor_set_write_mask(mtl_stencil_descriptor *descriptor, uint32_t mask)
+ {
++   MTL_TALLY_SCOPE(159, 8 + (4) + (sizeof(mask)), 0);
+    @autoreleasepool {
+       MTLStencilDescriptor *desc = (MTLStencilDescriptor *)descriptor;
+       desc.writeMask = mask;
+@@ -367,6 +399,7 @@
+ mtl_depth_stencil_descriptor *
+ mtl_new_depth_stencil_descriptor()
+ {
++   MTL_TALLY_SCOPE(160, 8, 0);
+    @autoreleasepool {
+       return (mtl_depth_stencil_descriptor *)limina_mtl_note_new([MTLDepthStencilDescriptor new]);
+    }
+@@ -375,6 +408,7 @@
+ void
+ mtl_depth_stencil_descriptor_set_depth_compare_function(mtl_depth_stencil_descriptor *descriptor, VkCompareOp op)
+ {
++   MTL_TALLY_SCOPE(161, 8 + (4) + (sizeof(op)), 0);
+    @autoreleasepool {
+       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
+       desc.depthCompareFunction = (MTLCompareFunction)vk_compare_op_to_mtl_compare_function(op);
+@@ -384,6 +418,7 @@
+ void
+ mtl_depth_stencil_descriptor_set_depth_write_enabled(mtl_depth_stencil_descriptor *descriptor, bool enable_write)
+ {
++   MTL_TALLY_SCOPE(162, 8 + (4) + (sizeof(enable_write)), 0);
+    @autoreleasepool {
+       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
+       desc.depthWriteEnabled = enable_write;
+@@ -393,6 +428,7 @@
+ void
+ mtl_depth_stencil_descriptor_set_back_face_stencil(mtl_depth_stencil_descriptor *descriptor, mtl_stencil_descriptor *stencil_descriptor)
+ {
++   MTL_TALLY_SCOPE(163, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
+       desc.backFaceStencil = (MTLStencilDescriptor *)stencil_descriptor;
+@@ -402,6 +438,7 @@
+ void
+ mtl_depth_stencil_descriptor_set_front_face_stencil(mtl_depth_stencil_descriptor *descriptor, mtl_stencil_descriptor *stencil_descriptor)
+ {
++   MTL_TALLY_SCOPE(164, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
+       desc.frontFaceStencil = (MTLStencilDescriptor *)stencil_descriptor;
+@@ -411,6 +448,7 @@
+ mtl_depth_stencil_state *
+ mtl_new_depth_stencil_state(mtl_device *device, mtl_depth_stencil_descriptor *descriptor)
+ {
++   MTL_TALLY_SCOPE(165, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLDepthStencilDescriptor *desc = (MTLDepthStencilDescriptor *)descriptor;
+diff --git a/src/kosmickrisp/bridge/mtl_residency_set.m b/src/kosmickrisp/bridge/mtl_residency_set.m
+index eb413eea865..f44f12dfaa4 100644
+--- a/src/kosmickrisp/bridge/mtl_residency_set.m
++++ b/src/kosmickrisp/bridge/mtl_residency_set.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_residency_set.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -15,6 +16,7 @@
+ mtl_residency_set *
+ mtl_new_residency_set(mtl_device *device)
+ {
++   MTL_TALLY_SCOPE(166, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLResidencySetDescriptor *setDescriptor = [[[MTLResidencySetDescriptor alloc] init] autorelease];
+@@ -35,6 +37,7 @@
+ mtl_residency_set_add_allocation(mtl_residency_set *residency_set,
+                                  mtl_allocation *allocation)
+ {
++   MTL_TALLY_SCOPE(167, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTLResidencySet> set = (id<MTLResidencySet>)residency_set;
+       id<MTLAllocation> alloc = (id<MTLAllocation>)allocation;
+@@ -46,6 +49,7 @@
+ mtl_residency_set_remove_allocation(mtl_residency_set *residency_set,
+                                     mtl_allocation *allocation)
+ {
++   MTL_TALLY_SCOPE(168, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTLResidencySet> set = (id<MTLResidencySet>)residency_set;
+       id<MTLAllocation> alloc = (id<MTLAllocation>)allocation;
+@@ -56,6 +60,7 @@
+ void
+ mtl_residency_set_commit(mtl_residency_set *residency_set)
+ {
++   MTL_TALLY_SCOPE(169, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLResidencySet> set = (id<MTLResidencySet>)residency_set;
+       [set commit];
+@@ -65,6 +70,7 @@
+ void
+ mtl_residency_set_request_residency(mtl_residency_set *residency_set)
+ {
++   MTL_TALLY_SCOPE(170, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLResidencySet> set = (id<MTLResidencySet>)residency_set;
+       [set requestResidency];
+@@ -74,6 +80,7 @@
+ void
+ mtl_residency_set_end_residency(mtl_residency_set *residency_set)
+ {
++   MTL_TALLY_SCOPE(171, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLResidencySet> set = (id<MTLResidencySet>)residency_set;
+       [set endResidency];
+diff --git a/src/kosmickrisp/bridge/mtl_sampler.m b/src/kosmickrisp/bridge/mtl_sampler.m
+index 79edebf9dc4..0f785524992 100644
+--- a/src/kosmickrisp/bridge/mtl_sampler.m
++++ b/src/kosmickrisp/bridge/mtl_sampler.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_sampler.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -14,6 +15,7 @@
+ mtl_sampler_descriptor *
+ mtl_new_sampler_descriptor()
+ {
++   MTL_TALLY_SCOPE(172, 8, 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *descriptor = [MTLSamplerDescriptor new];
+       /* Set common variables we don't expose */
+@@ -26,6 +28,7 @@
+ void
+ mtl_sampler_descriptor_set_normalized_coordinates(mtl_sampler_descriptor *descriptor, bool normalized_coordinates)
+ {
++   MTL_TALLY_SCOPE(173, 8 + (4) + (sizeof(normalized_coordinates)), 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+       desc.normalizedCoordinates = normalized_coordinates;
+@@ -38,6 +41,7 @@
+                                         enum mtl_sampler_address_mode address_mode_v,
+                                         enum mtl_sampler_address_mode address_mode_w)
+ {
++   MTL_TALLY_SCOPE(174, 8 + (4) + (sizeof(address_mode_u)) + (sizeof(address_mode_v)) + (sizeof(address_mode_w)), 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+       desc.sAddressMode = (MTLSamplerAddressMode)address_mode_u;
+@@ -49,6 +53,7 @@
+ void
+ mtl_sampler_descriptor_set_border_color(mtl_sampler_descriptor *descriptor, enum mtl_sampler_border_color color)
+ {
++   MTL_TALLY_SCOPE(175, 8 + (4) + (sizeof(color)), 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+       desc.borderColor = (MTLSamplerBorderColor)color;
+@@ -61,6 +66,7 @@
+                                    enum mtl_sampler_min_mag_filter mag_filter,
+                                    enum mtl_sampler_mip_filter mip_filter)
+ {
++   MTL_TALLY_SCOPE(176, 8 + (4) + (sizeof(min_filter)) + (sizeof(mag_filter)) + (sizeof(mip_filter)), 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+       desc.minFilter = (MTLSamplerMinMagFilter)min_filter;
+@@ -74,6 +80,7 @@
+                                      float min,
+                                      float max)
+ {
++   MTL_TALLY_SCOPE(177, 8 + (4) + (sizeof(min)) + (sizeof(max)), 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+       desc.lodMinClamp = min;
+@@ -85,6 +92,7 @@
+ mtl_sampler_descriptor_set_max_anisotropy(mtl_sampler_descriptor *descriptor,
+                                           uint64_t max)
+ {
++   MTL_TALLY_SCOPE(178, 8 + (4) + (sizeof(max)), 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+       desc.maxAnisotropy = max ? max : 1u; /* Metal requires a non-zero value */
+@@ -95,6 +103,7 @@
+ mtl_sampler_descriptor_set_compare_function(mtl_sampler_descriptor *descriptor,
+                                             enum mtl_compare_function function)
+ {
++   MTL_TALLY_SCOPE(179, 8 + (4) + (sizeof(function)), 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+       desc.compareFunction = (MTLCompareFunction)function;
+@@ -105,6 +114,7 @@
+ mtl_sampler_descriptor_set_reduction_mode(mtl_sampler_descriptor *descriptor,
+                                           enum mtl_sampler_reduction_mode mode)
+ {
++   MTL_TALLY_SCOPE(180, 8 + (4) + (sizeof(mode)), 0);
+    @autoreleasepool {
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+       desc.reductionMode = (MTLSamplerReductionMode)mode;
+@@ -114,6 +124,7 @@
+ mtl_sampler *
+ mtl_new_sampler(mtl_device *device, mtl_sampler_descriptor *descriptor)
+ {
++   MTL_TALLY_SCOPE(181, 8 + (4) + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       MTLSamplerDescriptor *desc = (MTLSamplerDescriptor *)descriptor;
+@@ -124,6 +135,7 @@
+ uint64_t
+ mtl_sampler_get_gpu_resource_id(mtl_sampler *sampler)
+ {
++   MTL_TALLY_SCOPE(182, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLSamplerState> samp = (id<MTLSamplerState>)sampler;
+       return [samp gpuResourceID]._impl;
+diff --git a/src/kosmickrisp/bridge/mtl_sync.m b/src/kosmickrisp/bridge/mtl_sync.m
+index ea2364c00d5..66ba240401b 100644
+--- a/src/kosmickrisp/bridge/mtl_sync.m
++++ b/src/kosmickrisp/bridge/mtl_sync.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_sync.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -15,6 +16,7 @@
+ mtl_fence *
+ mtl_new_fence(mtl_device *device)
+ {
++   MTL_TALLY_SCOPE(183, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return (mtl_fence *)limina_mtl_note_new((mtl_fence *)[dev newFence]);
+@@ -25,6 +27,7 @@
+ mtl_event *
+ mtl_new_event(mtl_device *device)
+ {
++   MTL_TALLY_SCOPE(184, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return (mtl_event *)limina_mtl_note_new([dev newEvent]);
+@@ -35,6 +38,7 @@
+ mtl_shared_event *
+ mtl_new_shared_event(mtl_device *device)
+ {
++   MTL_TALLY_SCOPE(185, 8 + (4), 0);
+    @autoreleasepool {
+       id<MTLDevice> dev = (id<MTLDevice>)device;
+       return (mtl_shared_event *)limina_mtl_note_new([dev newSharedEvent]);
+@@ -44,6 +48,7 @@
+ int
+ mtl_shared_event_wait_until_signaled_value(mtl_shared_event *event_handle, uint64_t value, uint64_t timeout_ms)
+ {
++   MTL_TALLY_SCOPE(186, 8 + (4) + (sizeof(value)) + (sizeof(timeout_ms)), sizeof(int));
+    @autoreleasepool {
+       id<MTLSharedEvent> event = (id<MTLSharedEvent>)event_handle;
+       return (int)[event waitUntilSignaledValue:value timeoutMS:timeout_ms];
+@@ -53,6 +58,7 @@
+ void
+ mtl_shared_event_set_signaled_value(mtl_shared_event *event_handle, uint64_t value)
+ {
++   MTL_TALLY_SCOPE(187, 8 + (4) + (sizeof(value)), 0);
+    @autoreleasepool {
+       id<MTLSharedEvent> event = (id<MTLSharedEvent>)event_handle;
+       event.signaledValue = value;
+@@ -62,6 +68,7 @@
+ uint64_t
+ mtl_shared_event_get_signaled_value(mtl_shared_event *event_handle)
+ {
++   MTL_TALLY_SCOPE(188, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLSharedEvent> event = (id<MTLSharedEvent>)event_handle;
+       return event.signaledValue;
+diff --git a/src/kosmickrisp/bridge/mtl_tally.c b/src/kosmickrisp/bridge/mtl_tally.c
+new file mode 100644
+index 00000000000..a6cf939743b
+--- /dev/null
++++ b/src/kosmickrisp/bridge/mtl_tally.c
+@@ -0,0 +1,393 @@
++/* SPDX-License-Identifier: MIT
++ * Copyright © 2026 Gustavo Noronha Silva
++ *
++ * limina measurement spike (spikes/metal-bridge-tally): the runtime half of mtl_tally.h.
++ * Generated by gen_tally.py -- never commit this to limina-kk.
++ *
++ * Counters are relaxed atomics per function. Only the outermost bridge call on a thread
++ * counts: a bridge function that calls another is one message, not two. Whichever thread
++ * finds the window elapsed claims the report with a compare-exchange and swaps every
++ * counter to zero, the same shape as virglrs's venus tally so the two windows line up. */
++#include "mtl_tally.h"
++
++#include <mach/mach_time.h>
++#include <stdatomic.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#define MTL_TALLY_N 197
++
++struct mtl_tally_entry {
++   const char *name;
++   enum mtl_tally_class cls;
++};
++
++static const struct mtl_tally_entry entries[MTL_TALLY_N] = {
++   {"mtl_new_argument_table_descriptor", MTL_TALLY_CREATE},
++   {"mtl_set_max_buffer_binding_count", MTL_TALLY_ASYNC},
++   {"mtl_new_argument_table", MTL_TALLY_CREATE},
++   {"mtl_set_address", MTL_TALLY_ASYNC},
++   {"mtl_drawable_get_texture", MTL_TALLY_CREATE},
++   {"limina_mtl_note_new", MTL_TALLY_DIAG},
++   {"limina_mtl_class_census_dump", MTL_TALLY_DIAG},
++   {"mtl_retain", MTL_TALLY_ASYNC},
++   {"mtl_release", MTL_TALLY_ASYNC},
++   {"mtl_buffer_get_length", MTL_TALLY_SYNC},
++   {"mtl_buffer_get_gpu_address", MTL_TALLY_SYNC},
++   {"mtl_get_contents", MTL_TALLY_LOCAL},
++   {"mtl_new_texture_with_descriptor_linear", MTL_TALLY_CREATE},
++   {"limina_kk_alloc_stats_on", MTL_TALLY_DIAG},
++   {"limina_kk_alloc_track_commit", MTL_TALLY_DIAG},
++   {"limina_kk_alloc_track_complete", MTL_TALLY_DIAG},
++   {"mtl_command_allocator_allocated_size", MTL_TALLY_DIAG},
++   {"mtl_command_allocator_reset", MTL_TALLY_ASYNC},
++   {"mtl_begin_command_buffer", MTL_TALLY_ASYNC},
++   {"mtl_end_command_buffer", MTL_TALLY_ASYNC},
++   {"mtl_command_resolve_counter_heap", MTL_TALLY_ASYNC},
++   {"mtl_command_buffer_set_label", MTL_TALLY_DIAG},
++   {"mtl_new_commit_options", MTL_TALLY_CREATE},
++   {"mtl_commit_options_add_feedback_handler", MTL_TALLY_ASYNC},
++   {"mtl_new_command_queue", MTL_TALLY_CREATE},
++   {"mtl_command_queue_add_residency_set", MTL_TALLY_ASYNC},
++   {"mtl_command_queue_remove_residency_set", MTL_TALLY_ASYNC},
++   {"mtl_signal_event", MTL_TALLY_ASYNC},
++   {"mtl_wait_for_event", MTL_TALLY_ASYNC},
++   {"mtl_command_queue_commit", MTL_TALLY_ASYNC},
++   {"mtl_command_queue_wait_for_drawable", MTL_TALLY_ASYNC},
++   {"mtl_command_queue_signal_drawable", MTL_TALLY_ASYNC},
++   {"mtl_new_compiler", MTL_TALLY_CREATE},
++   {"mtl_new_library", MTL_TALLY_CREATE},
++   {"mtl_new_library_function_descriptor", MTL_TALLY_CREATE},
++   {"mtl_new_compute_pipeline_state", MTL_TALLY_CREATE},
++   {"mtl_new_render_pipeline_descriptor", MTL_TALLY_CREATE},
++   {"mtl_render_pipeline_descriptor_set_vertex_shader", MTL_TALLY_ASYNC},
++   {"mtl_render_pipeline_descriptor_set_fragment_shader", MTL_TALLY_ASYNC},
++   {"mtl_render_pipeline_descriptor_set_input_primitive_topology", MTL_TALLY_ASYNC},
++   {"mtl_render_pipeline_descriptor_set_color_attachment_format", MTL_TALLY_ASYNC},
++   {"mtl_render_pipeline_descriptor_set_raster_sample_count", MTL_TALLY_ASYNC},
++   {"mtl_render_pipeline_descriptor_set_rasterization_enabled", MTL_TALLY_ASYNC},
++   {"mtl_render_pipeline_descriptor_set_max_vertex_amplification_count", MTL_TALLY_ASYNC},
++   {"mtl_render_pipeline_descriptor_set_label", MTL_TALLY_DIAG},
++   {"mtl_new_render_pipeline", MTL_TALLY_CREATE},
++   {"mtl_device_create", MTL_TALLY_SYNC},
++   {"mtl_start_gpu_capture", MTL_TALLY_DIAG},
++   {"mtl_stop_gpu_capture", MTL_TALLY_DIAG},
++   {"mtl_device_get_name", MTL_TALLY_SYNC},
++   {"mtl_device_get_architecture_name", MTL_TALLY_SYNC},
++   {"mtl_device_get_gpu_apple_family", MTL_TALLY_SYNC},
++   {"mtl_device_get_registry_id", MTL_TALLY_SYNC},
++   {"mtl_device_supports_sample_count", MTL_TALLY_SYNC},
++   {"mtl_device_max_threads_per_threadgroup", MTL_TALLY_SYNC},
++   {"mtl_device_max_threadgroup_memory_length", MTL_TALLY_SYNC},
++   {"mtl_device_max_buffer_length", MTL_TALLY_SYNC},
++   {"mtl_device_recommended_max_working_set_size", MTL_TALLY_SYNC},
++   {"mtl_device_current_allocated_size", MTL_TALLY_SYNC},
++   {"mtl_device_max_argument_buffer_sampler_count", MTL_TALLY_SYNC},
++   {"mtl_device_get_gpu_timestamp", MTL_TALLY_SYNC},
++   {"mtl_device_timestamp_frequency", MTL_TALLY_SYNC},
++   {"mtl_new_timestamp_counter_heap", MTL_TALLY_CREATE},
++   {"mtl_heap_buffer_size_and_align_with_length", MTL_TALLY_SYNC},
++   {"mtl_limina_texture_census", MTL_TALLY_DIAG},
++   {"mtl_limina_retain_count", MTL_TALLY_DIAG},
++   {"mtl_handle_is_iosurface", MTL_TALLY_DIAG},
++   {"mtl_new_texture_with_descriptor_iosurface", MTL_TALLY_CREATE},
++   {"mtl_minimum_linear_texture_alignment_for_pixel_format", MTL_TALLY_SYNC},
++   {"mtl_heap_texture_size_and_align_with_descriptor", MTL_TALLY_SYNC},
++   {"mtl_sparse_tile_size_in_bytes", MTL_TALLY_SYNC},
++   {"mtl_sparse_tile_size", MTL_TALLY_SYNC},
++   {"mtl_sparse_tile_count", MTL_TALLY_SYNC},
++   {"mtl_new_buffer_with_bytes_no_copy", MTL_TALLY_CREATE},
++   {"mtl_new_command_allocator", MTL_TALLY_CREATE},
++   {"mtl_new_command_buffer", MTL_TALLY_CREATE},
++   {"mtl_encoder_note_allocator", MTL_TALLY_DIAG},
++   {"mtl_encoder_note_released", MTL_TALLY_DIAG},
++   {"mtl_encoder_generation", MTL_TALLY_DIAG},
++   {"mtl_encoder_report_incarnation", MTL_TALLY_DIAG},
++   {"mtl_encoder_guard_stats", MTL_TALLY_DIAG},
++   {"mtl_end_encoding", MTL_TALLY_ASYNC},
++   {"mtl_barrier_after_stages", MTL_TALLY_ASYNC},
++   {"mtl_barrier_after_encoder_stages", MTL_TALLY_ASYNC},
++   {"mtl_barrier_after_queue_stages", MTL_TALLY_ASYNC},
++   {"mtl_update_fence", MTL_TALLY_ASYNC},
++   {"mtl_wait_for_fence", MTL_TALLY_ASYNC},
++   {"mtl_encoder_set_label", MTL_TALLY_DIAG},
++   {"mtl_encoder_insert_debug_signpost", MTL_TALLY_DIAG},
++   {"mtl_encoder_push_debug_group", MTL_TALLY_DIAG},
++   {"mtl_encoder_pop_debug_group", MTL_TALLY_DIAG},
++   {"mtl_new_compute_command_encoder", MTL_TALLY_CREATE},
++   {"mtl_copy_from_buffer_to_buffer", MTL_TALLY_ASYNC},
++   {"mtl_copy_from_buffer_to_texture", MTL_TALLY_ASYNC},
++   {"mtl_copy_from_texture_to_buffer", MTL_TALLY_ASYNC},
++   {"mtl_copy_from_texture_to_texture", MTL_TALLY_ASYNC},
++   {"mtl_compute_set_pipeline_state", MTL_TALLY_ASYNC},
++   {"mtl_compute_set_argument_table", MTL_TALLY_ASYNC},
++   {"mtl_dispatch_threads", MTL_TALLY_ASYNC},
++   {"mtl_dispatch_threadgroups_with_indirect_buffer", MTL_TALLY_ASYNC},
++   {"mtl_new_render_command_encoder_with_descriptor", MTL_TALLY_CREATE},
++   {"mtl_set_viewports", MTL_TALLY_ASYNC},
++   {"mtl_set_scissor_rects", MTL_TALLY_ASYNC},
++   {"mtl_render_set_pipeline_state", MTL_TALLY_ASYNC},
++   {"mtl_set_depth_stencil_state", MTL_TALLY_ASYNC},
++   {"mtl_set_stencil_references", MTL_TALLY_ASYNC},
++   {"mtl_set_front_face_winding", MTL_TALLY_ASYNC},
++   {"mtl_set_cull_mode", MTL_TALLY_ASYNC},
++   {"mtl_set_visibility_result_mode", MTL_TALLY_ASYNC},
++   {"mtl_set_depth_bias", MTL_TALLY_ASYNC},
++   {"mtl_set_depth_clip_mode", MTL_TALLY_ASYNC},
++   {"mtl_set_depth_test_bounds", MTL_TALLY_ASYNC},
++   {"mtl_set_vertex_amplification_count", MTL_TALLY_ASYNC},
++   {"mtl_render_set_argument_table", MTL_TALLY_ASYNC},
++   {"mtl_draw_primitives", MTL_TALLY_ASYNC},
++   {"mtl_draw_indexed_primitives", MTL_TALLY_ASYNC},
++   {"mtl_draw_primitives_indirect", MTL_TALLY_ASYNC},
++   {"mtl_draw_indexed_primitives_indirect", MTL_TALLY_ASYNC},
++   {"mtl_compute_write_timestamp", MTL_TALLY_ASYNC},
++   {"mtl_render_write_timestamp", MTL_TALLY_ASYNC},
++   {"mtl_render_set_color_store_action", MTL_TALLY_ASYNC},
++   {"mtl_render_set_depth_store_action", MTL_TALLY_ASYNC},
++   {"mtl_render_set_stencil_store_action", MTL_TALLY_ASYNC},
++   {"mtl_new_heap", MTL_TALLY_CREATE},
++   {"mtl_heap_get_size", MTL_TALLY_SYNC},
++   {"mtl_new_buffer_with_length", MTL_TALLY_CREATE},
++   {"mtl_new_texture_with_descriptor", MTL_TALLY_CREATE},
++   {"mtl_heap_set_label", MTL_TALLY_DIAG},
++   {"mtl_resource_set_label", MTL_TALLY_DIAG},
++   {"mtl_new_render_pass_descriptor", MTL_TALLY_CREATE},
++   {"mtl_render_pass_descriptor_get_color_attachment", MTL_TALLY_LOCAL},
++   {"mtl_render_pass_descriptor_get_depth_attachment", MTL_TALLY_LOCAL},
++   {"mtl_render_pass_descriptor_get_stencil_attachment", MTL_TALLY_LOCAL},
++   {"mtl_render_pass_attachment_descriptor_set_texture", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_level", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_slice", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_load_action", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_store_action", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_clear_color", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_clear_depth", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_clear_stencil", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_depth_resolve_filter", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_stencil_resolve_filter", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_resolve_texture", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_resolve_level", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_resolve_slice", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_attachment_descriptor_set_resolve_depth_plane", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_descriptor_set_render_target_array_length", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_descriptor_set_render_target_width", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_descriptor_set_render_target_height", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_descriptor_set_default_raster_sample_count", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_descriptor_set_sample_positions", MTL_TALLY_ASYNC},
++   {"mtl_render_pass_descriptor_set_visibility_buffer", MTL_TALLY_ASYNC},
++   {"mtl_new_stencil_descriptor", MTL_TALLY_CREATE},
++   {"mtl_stencil_descriptor_set_stencil_failure_operation", MTL_TALLY_ASYNC},
++   {"mtl_stencil_descriptor_set_depth_failure_operation", MTL_TALLY_ASYNC},
++   {"mtl_stencil_descriptor_set_depth_stencil_pass_operation", MTL_TALLY_ASYNC},
++   {"mtl_stencil_descriptor_set_stencil_compare_function", MTL_TALLY_ASYNC},
++   {"mtl_stencil_descriptor_set_read_mask", MTL_TALLY_ASYNC},
++   {"mtl_stencil_descriptor_set_write_mask", MTL_TALLY_ASYNC},
++   {"mtl_new_depth_stencil_descriptor", MTL_TALLY_CREATE},
++   {"mtl_depth_stencil_descriptor_set_depth_compare_function", MTL_TALLY_ASYNC},
++   {"mtl_depth_stencil_descriptor_set_depth_write_enabled", MTL_TALLY_ASYNC},
++   {"mtl_depth_stencil_descriptor_set_back_face_stencil", MTL_TALLY_ASYNC},
++   {"mtl_depth_stencil_descriptor_set_front_face_stencil", MTL_TALLY_ASYNC},
++   {"mtl_new_depth_stencil_state", MTL_TALLY_CREATE},
++   {"mtl_new_residency_set", MTL_TALLY_CREATE},
++   {"mtl_residency_set_add_allocation", MTL_TALLY_ASYNC},
++   {"mtl_residency_set_remove_allocation", MTL_TALLY_ASYNC},
++   {"mtl_residency_set_commit", MTL_TALLY_ASYNC},
++   {"mtl_residency_set_request_residency", MTL_TALLY_ASYNC},
++   {"mtl_residency_set_end_residency", MTL_TALLY_ASYNC},
++   {"mtl_new_sampler_descriptor", MTL_TALLY_CREATE},
++   {"mtl_sampler_descriptor_set_normalized_coordinates", MTL_TALLY_ASYNC},
++   {"mtl_sampler_descriptor_set_address_mode", MTL_TALLY_ASYNC},
++   {"mtl_sampler_descriptor_set_border_color", MTL_TALLY_ASYNC},
++   {"mtl_sampler_descriptor_set_filters", MTL_TALLY_ASYNC},
++   {"mtl_sampler_descriptor_set_lod_clamp", MTL_TALLY_ASYNC},
++   {"mtl_sampler_descriptor_set_max_anisotropy", MTL_TALLY_ASYNC},
++   {"mtl_sampler_descriptor_set_compare_function", MTL_TALLY_ASYNC},
++   {"mtl_sampler_descriptor_set_reduction_mode", MTL_TALLY_ASYNC},
++   {"mtl_new_sampler", MTL_TALLY_CREATE},
++   {"mtl_sampler_get_gpu_resource_id", MTL_TALLY_SYNC},
++   {"mtl_new_fence", MTL_TALLY_CREATE},
++   {"mtl_new_event", MTL_TALLY_CREATE},
++   {"mtl_new_shared_event", MTL_TALLY_CREATE},
++   {"mtl_shared_event_wait_until_signaled_value", MTL_TALLY_SYNC},
++   {"mtl_shared_event_set_signaled_value", MTL_TALLY_ASYNC},
++   {"mtl_shared_event_get_signaled_value", MTL_TALLY_SYNC},
++   {"mtl_texture_get_gpu_resource_id", MTL_TALLY_SYNC},
++   {"mtl_texture_get_props", MTL_TALLY_SYNC},
++   {"mtl_new_texture_view_with", MTL_TALLY_CREATE},
++   {"mtl_new_texture_view_with_no_swizzle", MTL_TALLY_CREATE},
++   {"mtl_new_texture_view_with_format", MTL_TALLY_CREATE},
++   {"mtl_texture_get_bytes", MTL_TALLY_SYNC},
++   {"mtl_texture_replace_region", MTL_TALLY_ASYNC},
++   {"mtl_limina_set_label", MTL_TALLY_DIAG}
++};
++
++static const char *class_names[MTL_TALLY_NCLASS] = {"async", "create", "sync", "local",
++                                                    "diag"};
++
++struct counters {
++   _Atomic uint64_t calls, wire, reply, ticks;
++};
++
++static struct counters counters[MTL_TALLY_N];
++static _Atomic uint64_t window_began;
++static uint64_t every_ticks;
++static uint64_t t_numer = 1, t_denom = 1;
++static __thread int depth;
++
++int mtl_tally_armed;
++
++__attribute__((constructor)) static void
++mtl_tally_init(void)
++{
++   const char *v = getenv("LIMINA_KK_BRIDGE_TALLY");
++   if (!v || !*v || !strcmp(v, "0"))
++      return;
++   long secs = strtol(v, NULL, 10);
++   if (secs <= 0)
++      secs = 5;
++   mach_timebase_info_data_t tb;
++   mach_timebase_info(&tb);
++   t_numer = tb.numer;
++   t_denom = tb.denom;
++   every_ticks = (uint64_t)secs * 1000000000ull * t_denom / t_numer;
++   atomic_store(&window_began, mach_absolute_time());
++   mtl_tally_armed = 1;
++   fprintf(stderr, "[kk-tally] bridge tally on: %d functions, reporting every %lds\n",
++           MTL_TALLY_N, secs);
++}
++
++static double
++ticks_to_s(uint64_t t)
++{
++   return (double)t * t_numer / t_denom / 1e9;
++}
++
++struct row {
++   int idx;
++   uint64_t calls, wire, reply, ticks;
++};
++
++static int
++by_calls(const void *a, const void *b)
++{
++   const struct row *x = a, *y = b;
++   return x->calls < y->calls ? 1 : x->calls > y->calls ? -1 : 0;
++}
++
++static int
++by_wire(const void *a, const void *b)
++{
++   const struct row *x = a, *y = b;
++   return x->wire < y->wire ? 1 : x->wire > y->wire ? -1 : 0;
++}
++
++static int
++by_ticks(const void *a, const void *b)
++{
++   const struct row *x = a, *y = b;
++   return x->ticks < y->ticks ? 1 : x->ticks > y->ticks ? -1 : 0;
++}
++
++static void
++print_row(const char *tag, const struct row *r, double secs)
++{
++   fprintf(stderr,
++           "[kk-tally]   %-6s %-52s %-6s %9.0f/s wire %9.0f B/s reply %7.0f B/s %6.3f thread-s/s "
++           "%6.2f us/call\n",
++           tag, entries[r->idx].name, class_names[entries[r->idx].cls], r->calls / secs,
++           r->wire / secs, r->reply / secs, ticks_to_s(r->ticks) / secs,
++           r->calls ? ticks_to_s(r->ticks) * 1e6 / r->calls : 0.0);
++}
++
++static void
++report(uint64_t elapsed)
++{
++   static struct row rows[MTL_TALLY_N];
++   int n = 0;
++   uint64_t cls_calls[MTL_TALLY_NCLASS] = {0}, cls_wire[MTL_TALLY_NCLASS] = {0},
++            cls_reply[MTL_TALLY_NCLASS] = {0}, cls_ticks[MTL_TALLY_NCLASS] = {0};
++   for (int i = 0; i < MTL_TALLY_N; i++) {
++      struct row r = {
++         .idx = i,
++         .calls = atomic_exchange_explicit(&counters[i].calls, 0, memory_order_relaxed),
++         .wire = atomic_exchange_explicit(&counters[i].wire, 0, memory_order_relaxed),
++         .reply = atomic_exchange_explicit(&counters[i].reply, 0, memory_order_relaxed),
++         .ticks = atomic_exchange_explicit(&counters[i].ticks, 0, memory_order_relaxed),
++      };
++      if (!r.calls)
++         continue;
++      enum mtl_tally_class c = entries[i].cls;
++      cls_calls[c] += r.calls;
++      cls_wire[c] += r.wire;
++      cls_reply[c] += r.reply;
++      cls_ticks[c] += r.ticks;
++      rows[n++] = r;
++   }
++   double secs = ticks_to_s(elapsed);
++   if (secs <= 0)
++      secs = 1e-9;
++   uint64_t calls = 0, wire = 0, reply = 0, ticks = 0;
++   for (int c = 0; c < MTL_TALLY_NCLASS; c++) {
++      if (c == MTL_TALLY_DIAG || c == MTL_TALLY_LOCAL)
++         continue;
++      calls += cls_calls[c];
++      wire += cls_wire[c];
++      reply += cls_reply[c];
++      ticks += cls_ticks[c];
++   }
++   fprintf(stderr,
++           "[kk-tally] window %.1fs: %.0f msg/s, wire %.0f B/s (%.1f B/msg), reply %.0f B/s, "
++           "sync %.0f/s, bridge %.3f thread-s/s (excl. local+diag)\n",
++           secs, calls / secs, wire / secs, calls ? (double)wire / calls : 0.0, reply / secs,
++           cls_calls[MTL_TALLY_SYNC] / secs, ticks_to_s(ticks) / secs);
++   for (int c = 0; c < MTL_TALLY_NCLASS; c++) {
++      if (!cls_calls[c])
++         continue;
++      fprintf(stderr,
++              "[kk-tally]   class  %-6s %9.0f/s wire %9.0f B/s reply %7.0f B/s %6.3f thread-s/s\n",
++              class_names[c], cls_calls[c] / secs, cls_wire[c] / secs, cls_reply[c] / secs,
++              ticks_to_s(cls_ticks[c]) / secs);
++   }
++   qsort(rows, n, sizeof(rows[0]), by_calls);
++   for (int i = 0; i < n && i < 15; i++)
++      print_row("calls", &rows[i], secs);
++   qsort(rows, n, sizeof(rows[0]), by_wire);
++   for (int i = 0; i < n && i < 6; i++)
++      print_row("bytes", &rows[i], secs);
++   qsort(rows, n, sizeof(rows[0]), by_ticks);
++   for (int i = 0; i < n && i < 8; i++)
++      print_row("time", &rows[i], secs);
++   for (int i = 0; i < n; i++)
++      if (entries[rows[i].idx].cls == MTL_TALLY_SYNC)
++         print_row("sync", &rows[i], secs);
++}
++
++struct mtl_tally_scope
++mtl_tally_enter(int idx, uint64_t wire, uint64_t reply)
++{
++   if (depth++ > 0)
++      return (struct mtl_tally_scope){-2, 0};
++   atomic_fetch_add_explicit(&counters[idx].calls, 1, memory_order_relaxed);
++   atomic_fetch_add_explicit(&counters[idx].wire, wire, memory_order_relaxed);
++   atomic_fetch_add_explicit(&counters[idx].reply, reply, memory_order_relaxed);
++   return (struct mtl_tally_scope){idx, mach_absolute_time()};
++}
++
++void
++mtl_tally_exit(struct mtl_tally_scope *s)
++{
++   if (s->idx == -1)
++      return;
++   depth--;
++   if (s->idx < 0)
++      return;
++   uint64_t now = mach_absolute_time();
++   atomic_fetch_add_explicit(&counters[s->idx].ticks, now - s->t0, memory_order_relaxed);
++   uint64_t began = atomic_load_explicit(&window_began, memory_order_relaxed);
++   if (now - began < every_ticks)
++      return;
++   if (!atomic_compare_exchange_strong(&window_began, &began, now))
++      return;
++   report(now - began);
++}
+diff --git a/src/kosmickrisp/bridge/mtl_tally.h b/src/kosmickrisp/bridge/mtl_tally.h
+new file mode 100644
+index 00000000000..0210981e17b
+--- /dev/null
++++ b/src/kosmickrisp/bridge/mtl_tally.h
+@@ -0,0 +1,44 @@
++/* SPDX-License-Identifier: MIT
++ * Copyright © 2026 Gustavo Noronha Silva
++ *
++ * limina measurement spike (spikes/metal-bridge-tally): count every Metal bridge call, the
++ * bytes it would put on a guest->host wire, and the time spent inside it. Armed by
++ * LIMINA_KK_BRIDGE_TALLY=<seconds>; unset, each scope costs one load and one branch.
++ * Generated into the tree by gen_tally.py -- never commit this to limina-kk. */
++#pragma once
++
++#include <stdint.h>
++#include <string.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++enum mtl_tally_class {
++   MTL_TALLY_ASYNC,
++   MTL_TALLY_CREATE,
++   MTL_TALLY_SYNC,
++   MTL_TALLY_LOCAL,
++   MTL_TALLY_DIAG,
++   MTL_TALLY_NCLASS,
++};
++
++struct mtl_tally_scope {
++   int idx; /* -1 when unarmed */
++   uint64_t t0;
++};
++
++extern int mtl_tally_armed;
++struct mtl_tally_scope mtl_tally_enter(int idx, uint64_t wire, uint64_t reply);
++void mtl_tally_exit(struct mtl_tally_scope *s);
++
++#define MTL_TALLY_SCOPE(idx, wire, reply)                                        \
++   struct mtl_tally_scope _mtl_tally                                           \
++      __attribute__((cleanup(mtl_tally_exit), unused)) =                       \
++         __builtin_expect(mtl_tally_armed != 0, 0)                             \
++            ? mtl_tally_enter((idx), (uint64_t)(wire), (uint64_t)(reply))      \
++            : (struct mtl_tally_scope){-1, 0}
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/kosmickrisp/bridge/mtl_texture.m b/src/kosmickrisp/bridge/mtl_texture.m
+index 5c4e046347c..65831b2d0e3 100644
+--- a/src/kosmickrisp/bridge/mtl_texture.m
++++ b/src/kosmickrisp/bridge/mtl_texture.m
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "mtl_tally.h"
+ #include "mtl_texture.h"
+ 
+ /* limina: per-class allocation census (limina_mtl_note_new). */
+@@ -31,6 +32,7 @@
+ uint64_t
+ mtl_texture_get_gpu_resource_id(mtl_texture *texture)
+ {
++   MTL_TALLY_SCOPE(189, 8 + (4), sizeof(uint64_t));
+    @autoreleasepool {
+       id<MTLTexture> tex = (id<MTLTexture>)texture;
+       return (uint64_t)[tex gpuResourceID]._impl;
+@@ -40,6 +42,7 @@
+ void
+ mtl_texture_get_props(mtl_texture *texture, struct mtl_texture_props *props)
+ {
++   MTL_TALLY_SCOPE(190, 8 + (4) + (0), sizeof(*props));
+    @autoreleasepool {
+       id<MTLTexture> tex = (id<MTLTexture>)texture;
+       props->width = [tex width];
+@@ -97,6 +100,7 @@
+ mtl_texture *
+ mtl_new_texture_view_with(mtl_texture *texture, const struct kk_view_layout *layout)
+ {
++   MTL_TALLY_SCOPE(191, 8 + (4) + (sizeof(*layout)), 0);
+    @autoreleasepool {
+       id<MTLTexture> tex = (id<MTLTexture>)texture;
+       MTLTextureType type = mtl_texture_view_type(layout->view_type, layout->sample_count_sa);
+@@ -124,6 +128,7 @@
+ mtl_texture *
+ mtl_new_texture_view_with_no_swizzle(mtl_texture *texture, const struct kk_view_layout *layout)
+ {
++   MTL_TALLY_SCOPE(192, 8 + (4) + (sizeof(*layout)), 0);
+    @autoreleasepool {
+       id<MTLTexture> tex = (id<MTLTexture>)texture;
+       MTLTextureType type = mtl_texture_view_type(layout->view_type, layout->sample_count_sa);
+@@ -143,6 +148,7 @@
+ mtl_texture *
+ mtl_new_texture_view_with_format(mtl_texture *texture, uint32_t pixel_format)
+ {
++   MTL_TALLY_SCOPE(193, 8 + (4) + (sizeof(pixel_format)), 0);
+    @autoreleasepool {
+       id<MTLTexture> tex = (id<MTLTexture>)texture;
+       id<MTLTexture> v =
+@@ -164,6 +170,7 @@
+ mtl_texture_get_bytes(mtl_texture *texture, void *host_ptr,
+                       struct mtl_texture_memory_copy *data)
+ {
++   MTL_TALLY_SCOPE(194, 8 + (4) + (8) + (sizeof(*data)), (uint64_t)data->buffer_2d_image_size_B * (data->image_size.z ? data->image_size.z : 1));
+    @autoreleasepool {
+       id<MTLTexture> tex = (id<MTLTexture>)texture;
+       MTLRegion region = MTLRegionMake3D(data->image_origin.x, data->image_origin.y, data->image_origin.z,
+@@ -181,6 +188,7 @@
+ mtl_texture_replace_region(mtl_texture *texture, const void *host_ptr,
+                            struct mtl_texture_memory_copy *data)
+ {
++   MTL_TALLY_SCOPE(195, 8 + (4) + ((uint64_t)data->buffer_2d_image_size_B * (data->image_size.z ? data->image_size.z : 1)) + (sizeof(*data)), 0);
+    @autoreleasepool {
+       id<MTLTexture> tex = (id<MTLTexture>)texture;
+       MTLRegion region = MTLRegionMake3D(data->image_origin.x, data->image_origin.y, data->image_origin.z,
+@@ -200,6 +208,7 @@
+ void
+ mtl_limina_set_label(void *obj, const char *label)
+ {
++   MTL_TALLY_SCOPE(196, 8 + (4) + ((label ? strlen(label) + 1 : 0)), 0);
+    @autoreleasepool {
+       if (obj == NULL || label == NULL)
+          return;
