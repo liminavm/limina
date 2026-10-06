@@ -141,7 +141,7 @@ The first working fix is a candidate, not the answer. Before sending it:
   memory-safety bug goes through disclosure, never straight to a public MR.
 - Name the people to ask for review: the author of the regressing commit and the recent
   authors of the touched code (`git log --format=%an -- <files>`), and Mesa's
-  `.gitlab/CODEOWNERS` where it covers the path.
+  root `CODEOWNERS` where it covers the path.
 - Push only when the user asks. Before the first push to a new host, check its SSH key
   against a published source. freedesktop publishes SSHFP records:
   `dig +short SSHFP ssh.gitlab.freedesktop.org` against `ssh-keyscan`.
