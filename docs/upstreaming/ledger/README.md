@@ -14,6 +14,9 @@ phases. The 2026-07-04 inventory in `docs/upstreaming/00-obvious-fixes-and-secur
 and the `limina-upstreaming-triage` memory pre-date this ledger and seed its judgment
 columns; where they disagree with a fresh check, the fresh check wins.
 
+A patch picked to send then gets the per-patch pass in `../patch-diligence.md`: reproducer,
+regressing commit, prior art, focused alternatives, discriminating tests, packaging.
+
 ## Columns
 
 | column | values |
