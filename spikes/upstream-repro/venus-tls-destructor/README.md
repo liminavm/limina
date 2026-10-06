@@ -21,22 +21,25 @@ renderer, or page size.
 
 ## Fixes compared
 
-- **key deleted at unload** (`d6e1586bfbb` on `venus-tls-teardown`, `c0d892b7d18` on
-  `upstream/guest-2026-10`; the fix to send): keep the tss key and give the driver a library
-  destructor that `tss_delete()`s it. Deleting a key runs no destructors and stops every thread's
-  exit from calling `vn_tls_free`, so threads still holding venus TLS when the driver unloads leak
-  it: a `struct vn_tls` plus one emptied `vn_tls_ring` wrapper per instance that gave the thread a
-  ring, a few dozen bytes per thread per load cycle. The rings themselves are already destroyed by
-  `vkDestroyInstance` (`vn_instance_fini_ring`). Unloading is unchanged: the driver goes at the
-  last `vkDestroyInstance`, as before.
-- **key deleted from `atexit()`** (`6e88fb430f7`, `wip/venus-tls-key-atexit`): the same deletion,
-  registered with `atexit()` from `vn_tls_key_create_once` instead of a destructor attribute, as
-  `src/util` registers its cleanups. On glibc this runs at `dlclose`, not only at exit: `atexit` is
-  a static-only routine (`libc_nonshared.a`) that calls `__cxa_atexit(func, NULL, __dso_handle)`
-  with the library's own handle (`stdlib/atexit.c`), and the library's fini from `crtbeginS.o`
-  calls `__cxa_finalize(__dso_handle)` (libgcc `crtstuff.c`), which `_dl_close_worker` runs before
-  unmapping (`elf/dl-close.c`, `_dl_call_fini`). The built driver imports `__cxa_atexit` and
-  `__cxa_finalize`.
+- **key deleted from `atexit()`** (`928927769cb` on `venus-tls-teardown`, `c30de76d572` on
+  `upstream/guest-2026-10`; the fix to send): keep the tss key and, once it is created, register
+  an `atexit()` handler that `tss_delete()`s it, as `src/util` registers its cleanups. Deleting a
+  key runs no destructors and stops every thread's exit from calling `vn_tls_free`, so threads
+  still holding venus TLS when the driver unloads leak it: a `struct vn_tls` plus one emptied
+  `vn_tls_ring` wrapper per instance that gave the thread a ring, a few dozen bytes per thread per
+  load cycle. The rings themselves are already destroyed by `vkDestroyInstance`
+  (`vn_instance_fini_ring`). Unloading is unchanged: the driver goes at the last
+  `vkDestroyInstance`, as before.
+  The handler runs at `dlclose`, not only at exit. On glibc, `atexit` is a static-only routine
+  (`libc_nonshared.a`) that calls `__cxa_atexit(func, NULL, __dso_handle)` with the library's own
+  handle (`stdlib/atexit.c`), and the library's fini from `crtbeginS.o` calls
+  `__cxa_finalize(__dso_handle)` (libgcc `crtstuff.c`), which `_dl_close_worker` runs before
+  unmapping (`elf/dl-close.c`, `_dl_call_fini`); the built driver imports `__cxa_atexit` and
+  `__cxa_finalize`. FreeBSD's `__cxa_finalize(dso)` also runs plain `atexit` entries whose
+  function lies inside the DSO (`__elf_phdr_match_addr`, `lib/libc/stdlib/atexit.c`). musl never
+  unloads.
+- **key deleted from a destructor attribute** (`d6e1586bfbb`, comparison only): the same deletion
+  from `__attribute__((destructor))`, behind `#ifdef __GNUC__`. Same results.
 - **thread-exit hook** (`338ca7b81ae`, comparison only): register the teardown with
   `__cxa_thread_atexit_impl` (glibc 2.18+, bionic API 23+), whose loaders refuse to unload a DSO
   while it has teardowns pending (`l_tls_dtor_count`, checked in `_dl_close_worker`). This closes
@@ -57,8 +60,8 @@ last instance is destroyed.
 | build | `thread` | `unload` | `cycle` | `main-unload` | `main-alive` |
 |---|---|---|---|---|---|
 | `main` | SIGSEGV 3/3 | crashes before the report | crashes before the report | no 3/3 | exit 0 3/3 |
-| key deleted at unload | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
 | key deleted from `atexit()` | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
+| key deleted from a destructor attribute | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
 | thread-exit hook | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
 | pin | exit 0 3/3 | yes 3/3 | yes 3/3 | yes 3/3 | exit 0 3/3 |
 
@@ -67,8 +70,9 @@ loader a `dlclose` to unload on; on the hook build that is what releases a drive
 last `vkDestroyInstance`. `main-unload` shows the hook build registers nothing on the main thread.
 `thread` crashing on `main` and passing on the `atexit()` build is what shows the handler runs at
 `dlclose`: a handler that waited for process exit would leave the crash in place. `cycle` loads and
-unloads the driver 100 times in one process, registering the handler each time. `main-alive` exits cleanly on every build, unfixed included, so it only shows that `exit()` with a
-live device does not crash.
+unloads the driver 100 times in one process, registering the handler each time. `main-alive` exits
+cleanly on every build, unfixed included, so it only shows that `exit()` with a live device does
+not crash.
 
 Fedora 44's `mesa-vulkan-drivers-26.2.3-1.fc44` also crashes `thread` 3/3.
 
@@ -76,9 +80,8 @@ Not covered by a run: the race the key-deletion fix leaves. A thread that has al
 destructor in `__nptl_deallocate_tsd`, or is inside `vn_tls_free`, when another thread's last
 `vkDestroyInstance` unmaps the driver still faults: `munmap` invalidates the translations on every
 CPU before it returns, so cached instructions do not help. Only a thread exiting during the final
-teardown can hit it; an application that joins its threads first cannot. The library destructor is
-`__GNUC__`-only and also runs at process exit, where deleting the key is harmless. Windows needs
-nothing: Mesa's emulated tss runs key destructors from the driver's own thread-detach callback
+teardown can hit it; an application that joins its threads first cannot. The handler also runs at
+process exit, where deleting the key is harmless. Windows needs nothing: Mesa's emulated tss runs key destructors from the driver's own thread-detach callback
 (`src/c11/impl/threads_win32_tls_callback.cpp`), which the loader stops calling once the DLL is
 freed, and venus builds no renderer there (no vtest, no virtgpu).
 
@@ -96,4 +99,7 @@ same crash through sysprof's tss destructor in every driver, fixed in sysprof
 Mesa-side `-z nodelete` attempt, mesa!36978, was closed for it. A driver built with
 `-Dsysprof=true` against sysprof 49+ is therefore already NODELETE and cannot show this bug; the
 Fedora build and a default `main` build are not. mesa#11085 and the open mesa!31185 are the same
-unload problem for `atexit()` handlers.
+unload problem for `atexit()` handlers: the reporter (FreeBSD) and the MR (lavapipe, `os_misc.c`)
+both propose moving Mesa's `atexit()` cleanups to `__attribute__((destructor))`. Neither has had
+a maintainer response (no comments, checked 2026-10-06), so nothing upstream says `atexit()` in a
+driver is wrong; the fix uses it, and the MR should expect the question.
