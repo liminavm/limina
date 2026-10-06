@@ -83,6 +83,7 @@ glslangValidator -V spikes/venus-cmdstream-probe/shader.vert -o "$OUT/vert.spv" 
 glslangValidator -V spikes/venus-cmdstream-probe/shader.frag -o "$OUT/frag.spv" >/dev/null
 "${SCP[@]}" "$MAIN/fixtures/traces/glmark2-build.trace" "$MAIN/fixtures/traces/vkcube.gfxr" \
   spikes/venus-cmdstream-probe/drawstorm.c "$OUT/vert.spv" "$OUT/frag.spv" \
+  "$ROOT/spikes/metal-heap-addressing/rtt.c" \
   "$SPIKE/guest-workload.sh" claude@127.0.0.1:/tmp/
 
 # Let the session settle (gnome-shell start-up compiles and allocates) before the first window.

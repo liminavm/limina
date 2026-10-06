@@ -81,29 +81,31 @@ and pipeline churn, not frames. There KK sends 4.0× venus's bytes, almost all M
    buffers per frame, and each one asks `mtl_heap_buffer_size_and_align_with_length` and
    `mtl_buffer_get_gpu_address`: about 22 per frame, plus 2.6 texture ids. KK writes those values
    into argument buffers on the CPU, so in a split design each one waits on the host. At 27 per
-   frame, any realistic round-trip latency gates the frame rate. All three can be designed out.
-   Size/align is a device constant the guest can cache. Guest memory exposed as a few large
-   `newBufferWithBytesNoCopy` buffers makes a buffer address `base + offset`. The host can
-   write texture ids into guest-visible descriptor memory as an ordered async command. That
-   changes KK's allocator and descriptor path, not just the bridge.
+   frame, any realistic round-trip latency gates the frame rate (venus today: 1.5 µs with the ring hot, 0.6–1.4 ms once it has parked;
+   the cost in a busy frame is unmeasured). All three can be designed out (`spikes/metal-heap-addressing/`).
+   Buffer size/align is a constant. A buffer placed in a heap has address `heap base + offset`.
+   Texture ids are process-global and host-allocated, so they need a guest handle mapped through
+   a table the host fills. That changes KK's allocator and descriptor path, not just the bridge.
 4. **Host CPU would roughly halve, not vanish** (indicative). Time inside the bridge, excluding
    fence waits, is what a replayer would spend in Metal. It is 0.23 thread-s/s against venus's
    0.45 for glmark2, and 0.10 against 0.52 for drawstorm. The rest (decode, KK's
    Vulkan→Metal work) moves to guest vCPUs on the same cores. The structural win is the host
    shrinking to a replayer. Throughput is still unproven.
-5. **Not measured, and load-bearing:** KK writes descriptors, push constants and argument
-   tables into Metal shared memory through `mtl_get_contents`. The wire figures assume that
-   memory is guest memory the host GPU reads in place. KK allocates from `MTLHeap`s, which
-   cannot wrap a host pointer, so a guest KK needs a heap-less, `bytesNoCopy`-backed allocator
-   for anything the CPU writes. That is the prerequisite the byte counts quietly rest on.
+5. **The byte counts assume CPU-written state is memory both sides share.** KK writes
+   descriptors, push constants and argument tables through `mtl_get_contents`, and the wire
+   figures assume the host GPU reads that memory in place. That works in the host-owned
+   direction: KK's memory is a shared placement heap plus a buffer aliasing all of it, and the
+   venus blob path already maps such memory into guests. A guest driver can sub-allocate
+   host-owned heaps mapped once into its physical space. The measurement is in
+   `spikes/metal-heap-addressing/`.
 
 ## Verdict for step 1
 
 The transport-volume question comes out favourable for per-frame recording, including the
 browser (0.22× vrend's bytes). It comes out unfavourable for reuse-heavy Vulkan. Two
-design prerequisites surfaced that the original proposal did not name: async resource-id/address
-delivery, and a guest-memory-backed allocator replacing KK's heaps. Step 3 (the tri.c spike)
-should not start until both have a sketch. A tri.c would not exercise either.
+design prerequisites surfaced that the original proposal did not name: delivering Metal-chosen
+values without round trips, and CPU-written state in memory the guest owns. Both are sketched
+and measured in `spikes/metal-heap-addressing/` (`SKETCH.md`, `RESULTS.md`).
 
 ## Reproducing
 

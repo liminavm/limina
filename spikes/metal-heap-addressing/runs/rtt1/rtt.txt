@@ -1,0 +1,7 @@
+device: Virtio-GPU Venus (Apple M1 Max)
+query  gap=     0us n=5000   p50=     1.5us p90=     2.0us p99=    11.2us max=    334.7us
+fence  gap=     0us n=5000   p50=   196.1us p90=   225.0us p99=   269.5us max=   1968.6us
+query  gap=   200us n=5000   p50=    46.5us p90=   334.3us p99=   353.3us max=    641.5us
+fence  gap=   200us n=5000   p50=   229.2us p90=   354.8us p99=   957.3us max=  20923.2us
+query  gap=  5000us n=400    p50=   583.3us p90=  1352.2us p99=  7182.7us max=  11637.5us
+fence  gap=  5000us n=400    p50=   891.3us p90=  1240.3us p99= 11580.9us max=  17824.5us

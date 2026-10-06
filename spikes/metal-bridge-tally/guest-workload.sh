@@ -66,6 +66,11 @@ glmark2-venus | glmark2-vrend)
     -b build:duration=$per -b texture:duration=$per -b shading:shading=phong:duration=$per \
     -b refract:duration=$per 2>&1
   ;;
+rtt)
+  # One venus round trip, hot and parked (spikes/metal-heap-addressing/rtt.c).
+  [ -x /tmp/rtt ] || (cd /tmp && gcc -O2 -o rtt rtt.c -lvulkan) || exit 1
+  env VK_DRIVER_FILES=$VENUS_ICD /tmp/rtt "${RTT_ITERS:-5000}"
+  ;;
 aquarium)
   # The shipped desktop path: Firefox WebGL on the image's default GL (vrend), composited by
   # gnome-shell, whose traffic lands in the same windows. Same launch as

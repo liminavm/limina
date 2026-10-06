@@ -1,0 +1,7 @@
+probe
+probe.dSYM/
+runs/*/worker.log
+runs/*/worker.stamped.log
+runs/*/*.png
+runs/*/boot.out
+runs/*/*.spv
