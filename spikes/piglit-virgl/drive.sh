@@ -15,6 +15,10 @@ SSH=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=err
 RES=results-gbm
 n=0
 while :; do
+  # The waiter takes the last port line in the log, and the boot rewrites the log only once
+  # it gets going: a leftover log from an earlier boot of this disk hands it a stale port,
+  # which may by now belong to another VM.
+  rm -f "$LOG"
   LIMINA_DISK=$DISK LIMINA_CPUS=4 LIMINA_RAM_MIB=8192 \
     RUST_LOG=warn,limina=info,krun::vmm=info,krun_devices=info \
     LIMINA_WINDOW_CAPTURE=$OUT/window.png \
