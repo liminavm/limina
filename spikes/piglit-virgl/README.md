@@ -45,6 +45,17 @@ neither counts as a difference:
 **Rerun a list of tests in a booted guest.** `rep.sh <list> <n>` reads lines of
 `<piglit test name>\t<command under bin/, without -auto -fbo>`, runs each test `n` times on gbm, and
 marks the runs where a fence wait gave up `(stall)`.
+`./piglit print-cmd --format "{name}\t{command}" gpu` in the guest's piglit tree gives every
+test's command to build a list from. `rep.sh` changes into `~/piglit`, so pass the list's absolute
+path.
+
+**Trace KK's command stream.** `kk-cmdtrace.patch` applies to the `limina-kk` tree and adds a
+`[KKCT]` line to stderr (the worker log) for each command a KK command buffer records: rendering
+begin/end with the attachment and load op, every draw, barriers, copies, blits, and each submit,
+all tagged with the command buffer. It is on only with `LIMINA_KK_CMDTRACE=1`. Build it in a
+worktree with its own build dir and boot with `LIMINA_KK_ICD` set to that build's devenv ICD, so
+the shared build stays untouched. Comparing the trace of a failing run with one a sync makes pass
+is what found the meta push-set clobber behind `sgis_generate_mipmap@gen-teximage`.
 
 The failure split against the upstream rig is in `docs/hardening-backlog.md`, in the two piglit
 entries under GPU correctness.

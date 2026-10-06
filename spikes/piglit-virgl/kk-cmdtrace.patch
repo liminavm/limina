@@ -1,0 +1,180 @@
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index a823f6891a9..aa12c390fb0 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -217,6 +217,7 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+                       const VkCommandBufferBeginInfo *pBeginInfo)
+ {
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   KK_CT(cmd, "BeginCommandBuffer");
+    struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+ 
+@@ -268,6 +269,7 @@ VKAPI_ATTR VkResult VKAPI_CALL
+ kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
+ {
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   KK_CT(cmd, "EndCommandBuffer");
+ 
+    end_recording(cmd);
+ 
+@@ -317,6 +319,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+ 
+    cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
+       cmd->metal.cmd_buf, state->render_pass_descriptor);
++   KK_CT(cmd, "  start_render enc=%p area=%ux%u", (void *)cmd->metal.render, state->render.area.extent.width, state->render.area.extent.height);
+ 
+    kk_encoder_update_debug(cmd, cmd->metal.render);
+    cmd->limina_draws = 0u;
+@@ -552,6 +555,7 @@ cs_end(struct kk_cmd_buffer *cmd)
+ 
+    /* Render first as it may open a compute encoder for post render writes. */
+    if (cmd->metal.render) {
++      KK_CT(cmd, "  end_render enc=%p", (void *)cmd->metal.render);
+       end_encoder(cmd, cmd->metal.render);
+       cmd->metal.render = NULL;
+       kk_limina_note_encoder_closed(cmd, cmd->metal.render_what, true);
+@@ -670,6 +674,7 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+                        const VkDependencyInfo *pDependencyInfo)
+ {
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   KK_CT(cmd, "PipelineBarrier2 enc=%p imgbar=%u", (void *)cmd->metal.render, pDependencyInfo->imageMemoryBarrierCount);
+ 
+    /* TODO_KOSMICKRISP Lighten barriers according to the actual requested
+     * barrier. To take advantage of this we need to remove the chaining of
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+index bf94d7d7668..de6941b0371 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
+@@ -24,6 +24,22 @@
+ #include "vk_command_buffer.h"
+ 
+ #include <stdio.h>
++#include <stdlib.h>
++
++/* limina debug: LIMINA_KK_CMDTRACE=1 traces the Vulkan command stream per command buffer. */
++static inline bool
++kk_limina_cmdtrace(void)
++{
++   static int v = -1;
++   if (v < 0)
++      v = getenv("LIMINA_KK_CMDTRACE") != NULL;
++   return v;
++}
++#define KK_CT(cmd, fmt, ...)                                                       \
++   do {                                                                          \
++      if (kk_limina_cmdtrace())                                                  \
++         fprintf(stderr, "[KKCT] cmd=%p " fmt "\n", (void *)(cmd), ##__VA_ARGS__); \
++   } while (0)
+ 
+ struct kk_query_pool;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_copy.c b/src/kosmickrisp/vulkan/kk_cmd_copy.c
+index 67bb33ffbd3..01a2e43c50f 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_copy.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_copy.c
+@@ -90,6 +90,7 @@ kk_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+    VK_FROM_HANDLE(kk_buffer, buffer, pCopyBufferToImageInfo->srcBuffer);
+    VK_FROM_HANDLE(kk_image, image, pCopyBufferToImageInfo->dstImage);
++   KK_CT(cmd, "CopyBufferToImage dst=%p lvl=%u enc=%p", (void *)image, pCopyBufferToImageInfo->pRegions[0].imageSubresource.mipLevel, (void *)cmd->metal.render);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
+    for (int r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
+@@ -119,6 +120,7 @@ kk_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
+ {
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+    VK_FROM_HANDLE(kk_image, image, pCopyImageToBufferInfo->srcImage);
++   KK_CT(cmd, "CopyImageToBuffer src=%p", (void *)image);
+    VK_FROM_HANDLE(kk_buffer, buffer, pCopyImageToBufferInfo->dstBuffer);
+ 
+    mtl_compute_encoder *encoder = cs_get_compute(cmd);
+@@ -355,6 +357,7 @@ kk_CmdCopyImage2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+    VK_FROM_HANDLE(kk_image, src, pCopyImageInfo->srcImage);
+    VK_FROM_HANDLE(kk_image, dst, pCopyImageInfo->dstImage);
++   KK_CT(cmd, "CopyImage src=%p dst=%p", (void *)src, (void *)dst);
+ 
+    size_t buffer_size = 0u;
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index e68b137f162..4fc5d09a0f2 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -270,6 +270,16 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+ 
+    struct kk_rendering_state *render = &cmd->state.gfx.render;
+ 
++   if (kk_limina_cmdtrace()) {
++      const VkRenderingAttachmentInfo *a0 = pRenderingInfo->colorAttachmentCount ? &pRenderingInfo->pColorAttachments[0] : NULL;
++      VK_FROM_HANDLE(kk_image_view, iv0, a0 ? a0->imageView : VK_NULL_HANDLE);
++      KK_CT(cmd, "BeginRendering area=%ux%u+%d+%d ncol=%u img0=%p lvl0=%u load0=%d store0=%d flags=0x%x open_enc=%p",
++            pRenderingInfo->renderArea.extent.width, pRenderingInfo->renderArea.extent.height,
++            pRenderingInfo->renderArea.offset.x, pRenderingInfo->renderArea.offset.y,
++            pRenderingInfo->colorAttachmentCount, iv0 ? (void *)iv0->vk.image : NULL,
++            iv0 ? iv0->vk.base_mip_level : 0u, a0 ? (int)a0->loadOp : -1, a0 ? (int)a0->storeOp : -1,
++            pRenderingInfo->flags, (void *)cmd->metal.render);
++   }
+    memset(render, 0, sizeof(*render));
+ 
+    render->flags = pRenderingInfo->flags;
+@@ -588,6 +598,7 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+    struct kk_rendering_state *render = &cmd->state.gfx.render;
+    bool need_meta_resolve = false;
++   KK_CT(cmd, "EndRendering enc=%p need_start=%d", (void *)cmd->metal.render, cmd->state.gfx.need_to_start_render_pass);
+ 
+    /* Translate render state back to VK for meta */
+    VkRenderingAttachmentInfo vk_color_att[KK_MAX_RTS];
+@@ -2722,6 +2733,9 @@ kk_xfb_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+ static void
+ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+ {
++   KK_CT(cmd, "draw prim=%d idx=%d indirect=%d n=%u pred=%u enc=%p need_start=%d",
++         (int)data->prim, data->indexed, data->indirect, data->draw_count, data->predicate_count,
++         (void *)cmd->metal.render, cmd->state.gfx.need_to_start_render_pass);
+    if (kk_xfb_draw(cmd, data))
+       return;
+ 
+@@ -2783,6 +2797,7 @@ kk_CmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount,
+       return;
+ 
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   KK_CT(cmd, "kk_CmdDraw count=%u inst=%u enc=%p need_start=%d", vertexCount, instanceCount, (void *)cmd->metal.render, cmd->state.gfx.need_to_start_render_pass);
+ 
+    const struct vk_dynamic_graphics_state *dyn =
+       &cmd->vk.dynamic_graphics_state;
+@@ -2871,6 +2886,7 @@ kk_CmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount,
+       return;
+ 
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
++   KK_CT(cmd, "kk_CmdDrawIndexed count=%u inst=%u enc=%p need_start=%d", indexCount, instanceCount, (void *)cmd->metal.render, cmd->state.gfx.need_to_start_render_pass);
+ 
+    const struct vk_dynamic_graphics_state *dyn =
+       &cmd->vk.dynamic_graphics_state;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_meta.c b/src/kosmickrisp/vulkan/kk_cmd_meta.c
+index 9163df5643a..898f9a112df 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_meta.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_meta.c
+@@ -239,6 +239,7 @@ kk_CmdBlitImage2(VkCommandBuffer commandBuffer,
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+ 
++   KK_CT(cmd, "BlitImage src=%p dst=%p dstlvl=%u enc=%p", (void *)pBlitImageInfo->srcImage, (void *)pBlitImageInfo->dstImage, pBlitImageInfo->pRegions[0].dstSubresource.mipLevel, (void *)cmd->metal.render);
+    struct kk_meta_save save;
+    kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                  "meta:vkCmdBlitImage2");
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+index 24650848a03..1b07a8bf9cf 100644
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -297,6 +297,9 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+     * work. All resources should have been allocated before submission.
+     * Otherwise, users are playing with fire. */
+    kk_device_make_resources_resident(dev);
++   if (kk_limina_cmdtrace())
++      for (uint32_t i = 0; i < submit->command_buffer_count; i++)
++         fprintf(stderr, "[KKCT] SUBMIT %u/%u cmd=%p\n", i, submit->command_buffer_count, (void *)submit->command_buffers[i]);
+ 
+    for (uint32_t i = 0; i < submit->command_buffer_count; ++i) {
+       struct kk_cmd_buffer *cmd_buffer =
