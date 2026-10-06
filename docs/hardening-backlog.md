@@ -740,42 +740,36 @@ stacks, measured 2026-10-05:
 - `arb_shader_image_load_store@invalid`: out-of-bounds and invalid-format image atomics return
   garbage instead of zero.
 - `ext_transform_feedback2@draw-auto offset`.
-- `tessellation triangle_fan flat_first`.
 - `arb_texture_buffer_object@max-size` (128 MiB, flaky on the rig).
 
 **Fail only on the rig** (pass on limina):
 - `arb_transform_feedback_overflow_query-basic` and `arb_query_buffer_object@qbo`.
 - `getteximage-targets cube_array s3tc`.
 - `teximage-colors` RGB 3_3_2, off by one LSB.
+- `tessellation triangle_fan flat_first`.
 
-### piglit fails about 140 more tests on limina's classic-virgl host than on upstream vrend
-Same run, `spikes/piglit-virgl/`. The stock and enhanced guests fail the same tests, so each of
-these is in limina's host (virglrs vrend over zink-on-KK), not in guest Mesa. Each passes on the
-upstream rig:
-- **Transform feedback, about 80 tests.**
-  - Captured buffers hold wrong values or zeros: `position-readback-*`, `order`, `structs`,
-    `separate-attribs`, `change-size`, `intervening-read`.
-  - The rendered output comes back black.
-  - All 27 timeouts (300 s) are xfb tests: the `query-primitives_*` family, plus polygon, quad
-    and quad_strip tessellation.
-- **Image load/store and SSBO outside the fragment stage, 15 tests.** For example `coherency`,
-  `atomicity`, `layer`, `level`, `max-size` (`GL_INVALID_ENUM` and zeros), and SSBO
-  `array-ssbo-binding`.
-- **Others:**
-  - `texture-buffer-size-clamp`: texel count 0.
-  - BPTC float compressed uploads decode wrong.
-  - `arb_draw_indirect-draw-elements-prim-restart-ugly`.
-  - `sgis_generate_mipmap`.
-  - `gettextureimage-formats`/`getteximage-formats init-by-rendering`.
-  - `pos-array`.
-  - `transformfeedback-buffer*` (DSA).
-- **Fence waits that give up.** Several tests log "waiting got error - 16, slow gpu or hang?"
-  after 17–18 s. These account for the handful that differ between the two guests
-  (`shared-row_major-array-struct-mat3x*`, `vbo-subdata-many`, which fail on stock and pass on
-  enhanced), so treat those as host stalls, not Mesa differences.
-
-Start with transform feedback: it is one feature, it is most of the count, and Metal has no native
-xfb, so the question is how zink-on-KK emulates it and what virglrs advertises.
+### piglit's limina-only failures are now mostly vrend's GLES flavour
+Same selection, rerun 2026-10-06 with KK `43152beb621` (`spikes/piglit-virgl/`). The stock and
+enhanced guests still fail the same tests, about 100 on limina's host that pass on the upstream rig.
+Running each one in the enhanced guest under zink-on-venus as well
+(`MESA_LOADER_DRIVER_OVERRIDE=zink`, which reaches KK without vrend) splits them:
+- **Pass under zink-on-venus, so they are in virglrs vrend.** Its GLES 3.1 flavour has no geometry
+  shaders, texture buffers or tf3, and lacks image caps. That accounts for the image load/store,
+  SSBO, texture-buffer and most transform-feedback failures, plus BPTC float uploads,
+  `getteximage-formats`, `pos-array` and DSA `transformfeedback-buffer*`.
+  - All 27 timeouts (300 s) are indexed draws under transform feedback, which GLES refuses. virglrs
+    de-indexes them in `6c6a60b` (not yet pinned).
+  - virglrs's desktop flavour passes 69 more of these and regresses 26 uploads; which flavour ships
+    is undecided.
+- **Fail under zink-on-venus too, so they are in KK or zink:**
+  - `arb_draw_indirect-draw-elements-prim-restart-ugly` (passes on virglrs's desktop flavour).
+  - `arb_shader_image_load_store@host-mem-barrier`, `texture-buffer-size-clamp` (texel count 0),
+    `sgis_generate_mipmap@gen-teximage`.
+  - `ext_transform_feedback2@counting with pause` and the five geometry-shader xfb tests: see the
+    KosmicKrisp entries below.
+- **Fence waits that give up.** "waiting got error - 16, slow gpu or hang?" after 15–40 s turns a
+  pass into a fail on either guest. `vbo-subdata-*` fail this way in some full runs and pass 3/3 run
+  alone (`spikes/piglit-virgl/rep.sh`), so treat a lone difference with that line as a host stall.
 
 ### virglrs's transfer bounds error does not say which bound failed
 `layout` in `vrend/transfer.rs` collapses its three exits (stride smaller than a row, layer stride
@@ -982,6 +976,26 @@ All entry points now refuse NULL and the texture path logs the caller. What prod
 established (suspect: the three image-view residency call sites in `kk_image_view.c`); the guard has
 never fired since. If `[LIMINA-RESIDENCY] refused a NULL texture, called from %p` appears, symbolise
 that address — it names the site.
+
+### Transform feedback captures nothing from an indirect draw
+KK emulates xfb in the vertex shader (`kk_nir_lower_xfb.c`): while capture is on, `kk_xfb_draw`
+reissues each *direct* draw as a non-indexed list of primitive vertices, so the shader can map
+`vertex_id` to a primitive and a buffer slot. That needs the vertex count on the CPU. An indirect
+draw (`vkCmdDraw*Indirect*`) during capture writes nothing and counts nothing in
+`PRIMITIVES_GENERATED`/`_WRITTEN`. GL reaches this through `glDrawArraysIndirect` and friends with
+transform feedback active, which piglit's selection does not exercise. Fix: a small compute pass
+that reads the indirect arguments and writes the remapped draw's arguments and slot limit before
+the draw.
+
+### PRIMITIVES_GENERATED misses a primitive across a pause
+`ext_transform_feedback2@counting with pause` reads 2 where 3 primitives were generated. It fails
+under zink-on-venus too, so the query is in KK. KK counts generated primitives per draw at
+`kk_draw_impl`; which draw the pause/resume pair drops is not established.
+
+### Geometry-shader transform feedback has no path
+KK has no geometry shaders, so `ext_transform_feedback@geometry-shaders-basic`,
+`intervening-read * use_gs` and `overflow-edge-cases use_gs` fail on every route. They come with
+geometry-shader support, not with the xfb lowering.
 
 ---
 
