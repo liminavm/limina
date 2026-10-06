@@ -1,0 +1,19 @@
+    GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+warning: process name not yet set
+warning: process name not yet set
+warning: process name not yet set
+warning: process name not yet set
+warning: process name not yet set
+warning: process name not yet set
+warning: process name not yet set
+warning: process name not yet set
+warning: process name not yet set
+warning: process name not yet set
+/usr/bin/glmark2-es2-wayland
+renderableType = 4
+1666: warning: unsupported eglQueryDmaBufModifiersEXT call
+1667: warning: unsupported eglQueryDmaBufModifiersEXT call
+2145: warning: unsupported eglQueryDmaBufModifiersEXT call
+2146: warning: unsupported eglQueryDmaBufModifiersEXT call
+Rendered 4628 frames in 92.4071 secs, average of 50.0827 fps
+RUNS: 1 in 30s

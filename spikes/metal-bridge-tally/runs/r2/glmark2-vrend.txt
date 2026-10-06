@@ -1,0 +1,17 @@
+=======================================================
+    glmark2 2023.01
+=======================================================
+    OpenGL Information
+    GL_VENDOR:      Mesa
+    GL_RENDERER:    virgl (zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP)))
+    GL_VERSION:     OpenGL ES 3.1 Mesa 26.2.3
+    Surface Config: buf=32 r=8 g=8 b=8 a=8 depth=32 stencil=0 samples=0
+    Surface Size:   1280x720 windowed
+=======================================================
+[build] duration=7.5: FPS: 6417 FrameTime: 0.156 ms
+[texture] duration=7.5: FPS: 6291 FrameTime: 0.159 ms
+[shading] duration=7.5:shading=phong: FPS: 6391 FrameTime: 0.156 ms
+[refract] duration=7.5: FPS: 1119 FrameTime: 0.894 ms
+=======================================================
+                                  glmark2 Score: 5053 
+=======================================================

@@ -79,20 +79,6 @@ by_calls(const void *a, const void *b)
    return x->calls < y->calls ? 1 : x->calls > y->calls ? -1 : 0;
 }
 
-static int
-by_wire(const void *a, const void *b)
-{
-   const struct row *x = a, *y = b;
-   return x->wire < y->wire ? 1 : x->wire > y->wire ? -1 : 0;
-}
-
-static int
-by_ticks(const void *a, const void *b)
-{
-   const struct row *x = a, *y = b;
-   return x->ticks < y->ticks ? 1 : x->ticks > y->ticks ? -1 : 0;
-}
-
 static void
 print_row(const char *tag, const struct row *r, double secs)
 {
@@ -153,18 +139,10 @@ report(uint64_t elapsed)
               class_names[c], cls_calls[c] / secs, cls_wire[c] / secs, cls_reply[c] / secs,
               ticks_to_s(cls_ticks[c]) / secs);
    }
+   /* Every function that ran, so the reader can fold and rank offline. */
    qsort(rows, n, sizeof(rows[0]), by_calls);
-   for (int i = 0; i < n && i < 15; i++)
-      print_row("calls", &rows[i], secs);
-   qsort(rows, n, sizeof(rows[0]), by_wire);
-   for (int i = 0; i < n && i < 6; i++)
-      print_row("bytes", &rows[i], secs);
-   qsort(rows, n, sizeof(rows[0]), by_ticks);
-   for (int i = 0; i < n && i < 8; i++)
-      print_row("time", &rows[i], secs);
    for (int i = 0; i < n; i++)
-      if (entries[rows[i].idx].cls == MTL_TALLY_SYNC)
-         print_row("sync", &rows[i], secs);
+      print_row("fn", &rows[i], secs);
 }
 
 struct mtl_tally_scope

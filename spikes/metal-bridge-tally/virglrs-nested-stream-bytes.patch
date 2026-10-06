@@ -1,0 +1,43 @@
+diff --git a/src/venus/context.rs b/src/venus/context.rs
+index 2ac2855..192efdd 100644
+--- a/src/venus/context.rs
++++ b/src/venus/context.rs
+@@ -1765,6 +1765,12 @@ fn mutates(cmd: VkCommandTypeEXT) -> Option<&'static [VkObjectType]> {
+     }
+ }
+ 
++/// limina measurement spike (spikes/metal-bridge-tally): bytes of command streams that a
++/// `vkExecuteCommandStreamsMESA` names. The tally's per-batch byte count is the envelope only;
++/// the streams it points at live in shared memory and are most of the traffic. Process-wide, so a
++/// concurrent batch on another ring can pick up a share; window totals stay right.
++pub static NESTED_STREAM_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
+ /// Run the streams one `vkExecuteCommandStreamsMESA` named, seeking the reply stream per stream.
+ ///
+ /// Poisons through `fatal` rather than returning a reason: every refusal here names a stream
+@@ -1824,6 +1830,7 @@ fn run_streams(h: &mut Handlers<'_>, exec: &Execute, fatal: &AtomicBool, counts:
+         // resource is the guest's to detach -- and the `Arc` this holds is what keeps the pages
+         // alive for exactly as long as the copy takes. Decoding straight from guest memory would
+         // instead need that guarantee to hold for the whole nested dispatch, which runs handlers.
++        NESTED_STREAM_BYTES.fetch_add(s.size as u64, Ordering::Relaxed);
+         let mut bytes = vec![0u8; s.size];
+         assert!(
+             map.copy_out(s.offset, &mut bytes),
+diff --git a/src/venus/vkr.rs b/src/venus/vkr.rs
+index 8986a4e..51ab32a 100644
+--- a/src/venus/vkr.rs
++++ b/src/venus/vkr.rs
+@@ -201,8 +201,12 @@ fn timed<T>(
+ ) -> T {
+     let began = tally.batch_began();
+     let before = ctx.dispatched;
++    let nested = super::context::NESTED_STREAM_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+     let out = f(ctx);
+-    tally.batch_ended(began, origin, ctx.dispatched - before, buf.len());
++    let nested = super::context::NESTED_STREAM_BYTES
++        .load(std::sync::atomic::Ordering::Relaxed)
++        .wrapping_sub(nested);
++    tally.batch_ended(began, origin, ctx.dispatched - before, buf.len() + nested as usize);
+     out
+ }
+ 

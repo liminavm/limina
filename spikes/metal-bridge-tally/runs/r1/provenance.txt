@@ -1,0 +1,11 @@
+kernel=7.1.13-limina16k pagesize=16384 mesa=26.2.3-3.limina.fc44 vcpus=4
+# limina enhanced tier: GL through virgl (vrend), Vulkan through venus.
+GALLIUM_DRIVER=virgl
+MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
+VN_DEBUG=mem_budget
+gfxr=/opt/gfxreconstruct/bin/gfxrecon-replay
+/usr/bin/vkmark
+/usr/bin/glmark2-es2
+/usr/bin/eglretrace
+/usr/bin/gcc
