@@ -1090,6 +1090,17 @@ dump-super -f <dev>` should show `compat_ro` `0x3` afterwards, and the 16k kerne
 
 ## Build & tooling
 
+### `LIMINA_HOST_GALLIUM` no longer swaps the worker's host Mesa
+`spikes/venus-draw-probe/boot-enhanced-efi-kk.sh` with `MESA_PREFIX=<prefix> LIMINA_HOST_GALLIUM=1`
+puts `<prefix>/lib` on `DYLD_LIBRARY_PATH`, and the worker does map that prefix's `libEGL` and
+`libgallium`, but virglrs's `eglInitialize` then fails (`egl: failed to create dri2 screen`) and
+the GPU degrades to software-2D. Measured 2026-10-07 with the shared `zink-kk-prefix` itself as
+`MESA_PREFIX`, so it is the mechanism, not a build; the same libraries and `DYLD_LIBRARY_PATH`
+initialise fine in a host process (`spikes/gles32-gate/es32gate`). Until it is fixed, A/B a host
+Mesa change with a runtime switch in one build (as `LIMINA_KK_NOLISTRESTART` and
+`LIMINA_ZINK_MVK_WORKAROUNDS` do). Next: an `EGL_LOG_LEVEL=debug` worker run (it printed nothing
+extra once, so check the variable reaches the worker first).
+
 ### Fold `xtask bundle` into `xtask app`
 `bundle` (writes `target/Limina-smoke.app`, debug, ad-hoc) no longer earns a second command: `app`'s
 assemble + sign + dmg phase measured ~25 s (2026-08-31), the rest is the cargo build, which `cargo xtask app --debug`
