@@ -19,7 +19,7 @@
 use std::time::{Duration, Instant};
 
 use super::fit;
-use super::grab_policy::{Free, GrabState, Press, Release, capture_tier, free_step, press_step};
+use super::grab_policy::{Free, GrabState, Press, Release, free_step, grab_mode, press_step};
 
 /// One trace line this replay understands, in file order.
 #[derive(Debug)]
@@ -256,7 +256,9 @@ fn the_hidden_seam_trace_replays_to_a_release_through_the_seam() {
                     side: fit::SideTuning::default(),
                     fullscreen: true,
                 };
-                let tier = capture_tier(captured, &st);
+                // Assembled the way the tap assembles it, once per event (`TapCtx::tier`). The
+                // soft grab never engages while captured, which every press line is.
+                let tier = grab_mode(captured, false, &st);
                 let out = press_step(&mut st, tier, &s, reachable);
                 let p = out.pressing.expect("the recorded press must replay");
                 assert_eq!(p.edge, *edge, "edge at t={t}");

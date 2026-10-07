@@ -140,14 +140,6 @@ visibility is readable from the `[CURSOR] … visible=` trace, so many cycles ca
 automatically, and the guest synoik session can be asked what it saw. One clean cycle did not
 reproduce it.
 
-### Assemble the grab tier once per tap event
-`soft` is computed once per event from one `window_facts` snapshot, and only two call sites remain
-outside `grab_policy.rs` (`grab_mode` on the aux-key path, `capture_tier`), but `capture_tier`
-still re-reads the `captured` atomic and `grab_state()` on its own. Shape: a `TapCtx::tier()` that
-assembles the tier from the event's facts, so only the answer travels; `grab_policy` stays pure and
-parameterised so its assertions run without a VM. `soft` must never be cached across events: a
-stale `space_visible` once left the keyboard pointed at a guest that had left the screen.
-
 ### Captured-pointer re-pin fights a remote-desktop client
 While captured, the tap re-pins the hidden host cursor to a park point inside the window on every
 motion event (`capture_tap.rs`, the NOTE at the re-pin; `window/warp.rs`). When another agent also

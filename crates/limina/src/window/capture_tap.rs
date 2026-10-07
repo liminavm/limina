@@ -221,6 +221,15 @@ fn btn_bit(etype: u32, button_number: i64) -> u8 {
 }
 
 impl TapCtx {
+    /// This event's grab tier, assembled once from the facts the event already sampled — the
+    /// capture flag as the tap read it and the soft grab it derived — so every judgment the
+    /// event makes reads the same answer and only the answer travels
+    /// ([`grab_policy::grab_mode`]). Never cached across events: `soft` rides `space_visible`,
+    /// and a stale one once left the keyboard pointed at a guest that had left the screen.
+    fn tier(&self, captured: bool, soft: bool) -> GrabMode {
+        grab_policy::grab_mode(captured, soft, &self.input.grab_state())
+    }
+
     /// Read-modify-write the policy state — the only way this file touches it.
     fn with_grab<T>(&self, f: impl FnOnce(&mut grab_policy::GrabState) -> T) -> T {
         // The state lives on `InputState`: the tick's screen-gain trigger needs it too, and it
@@ -371,14 +380,14 @@ extern "C" fn tap_callback(
         ctx.soft_muted.get(),
         space_visible,
     );
+    let tier = ctx.tier(captured, soft);
 
     // Aux keys (the special/media top row, which arrives as NX_SYSDEFINED rather than as a
     // keycode — see `limina_input::auxkey`). Ownership is per BUCKET, not per grab mode alone:
     // media and volume need the hard grab, brightness never leaves the host.
     // Anything the policy doesn't claim is returned untouched, so macOS still dims the screen.
     if etype == SYS_DEFINED {
-        let mode = grab_policy::grab_mode(captured, soft, &ctx.input.grab_state());
-        return route_aux_event(ctx, event, mode);
+        return route_aux_event(ctx, event, tier);
     }
 
     // The chord keeps its meaning after it has muted the soft grab — it does not go deaf the
@@ -556,7 +565,8 @@ extern "C" fn tap_callback(
                 .swallow_warp(getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
             ctx.input.repin_park(&ctx.view);
             if let Some(s) = ctx.input.raw_press_step(&ctx.view)
-                && let Some((edge, release)) = grab_release_edge(ctx, &s, dx, dy, pf.fullscreen)
+                && let Some((edge, release)) =
+                    grab_release_edge(ctx, &s, dx, dy, pf.fullscreen, tier)
             {
                 release_grab(ctx, &s, edge, release);
             }
@@ -637,7 +647,8 @@ extern "C" fn tap_callback(
             // the grab was taken in, whose fit clamps the virtual cursor. Every edge of that
             // fit can pin and so can press, a seam to a neighbouring guest window included.
             if let Some(s) = &step
-                && let Some((edge, release)) = grab_release_edge(ctx, s, dx, dy, pf.fullscreen)
+                && let Some((edge, release)) =
+                    grab_release_edge(ctx, s, dx, dy, pf.fullscreen, tier)
             {
                 release_grab(ctx, s, edge, release);
             }
@@ -1440,13 +1451,15 @@ fn release_grab(
 /// Charge the edge press this captured motion represents, and answer with the release it earned.
 /// The decision is [`grab_policy::press_step`]'s; this reads the arrangement and traces. The
 /// press geometry (`pos`, `fit`) is the capture window's, whose fit clamps the cursor — a press
-/// can exist at any of its edges.
+/// can exist at any of its edges. `tier` is the event's own ([`TapCtx::tier`]): only motion that
+/// arrived captured reaches here, so it names whose capture this is, `Auto` or `Hard`.
 fn grab_release_edge(
     ctx: &TapCtx,
     step: &super::input::CapturedStep,
     dx: f64,
     dy: f64,
     fullscreen: bool,
+    tier: GrabMode,
 ) -> Option<(fit::Edge, Release)> {
     let pos = step.view_point;
     let sample = grab_policy::Press {
@@ -1459,12 +1472,6 @@ fn grab_release_edge(
         side: side_tuning(),
         fullscreen,
     };
-    // Read the capture flag rather than assuming this path implies it: the tier is the whole
-    // question here, and a `true` written in by hand is the assumption that used to be implicit.
-    let tier = grab_policy::capture_tier(
-        ctx.captured.load(Ordering::Acquire),
-        &ctx.input.grab_state(),
-    );
     let out = ctx
         .with_grab(|st| grab_policy::press_step(st, tier, &sample, |p| releasable(&step.view, p)));
     if let (true, Some(p)) = (edge_trace(), out.pressing) {
