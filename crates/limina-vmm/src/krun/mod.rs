@@ -996,18 +996,18 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
     }
     log::info!("microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)");
 
-    // M9 restore: a suspended guest was snapshotted parked in s2idle. Now that its vCPUs are live
-    // behind the restored GIC + PL061 registers, inject the wake (KEY_WAKEUP) so it runs its own
-    // s2idle resume path and re-initialises its virtio devices (the 0058 thaw ladder). The wake_efd
-    // is level-triggered, so the first event-loop iteration below delivers it to the GPIO device;
-    // the raised SPI is latched pending in the restored GIC, so it wakes the vCPU regardless of
-    // exact timing. Harmless if the snapshot was of a running (non-suspended) guest.
+    // M9 restore: a suspended guest was snapshotted asleep, in s2idle or with its boot vCPU parked
+    // in PSCI SYSTEM_SUSPEND (the snapshot carries that park and the restored vCPU re-enters it).
+    // Inject the wake (KEY_WAKEUP) so it runs its own resume path and re-initialises its virtio
+    // devices (the 0058 thaw ladder). The wake_efd is level-triggered, so the first event-loop
+    // iteration below delivers it to the GPIO device, which wakes a SYSTEM_SUSPEND park and then
+    // raises the line. The restored vCPUs may not be back in their parks yet: a SYSTEM_SUSPEND
+    // park holds a wake that arrives first (`VcpuList::wake_system_suspended`), and an s2idle
+    // guest's SPI stays pending in the restored GIC. Harmless if the snapshot was of a running
+    // guest.
     if spec.restore_file.is_some() {
-        // Deliberately the raw pulse, not `wake::guest`: this is a FRESH worker, so there is no
-        // live system-suspend state to consult — the snapshot does not carry it (the same gap
-        // task #41 records for CPU_OFF online state). A guest snapshotted in PSCI SYSTEM_SUSPEND
-        // therefore restores unwakeable; the bracket avoids creating one by waking the guest
-        // before it snapshots.
+        // The raw pulse, not `wake::guest`: the GPIO device already does the system-suspend wake,
+        // and the pulse is what an s2idle guest needs.
         log::info!("restore: injecting guest wake (KEY_WAKEUP) to resume from s2idle");
         crate::wake::pulse();
         // Display re-probe nudge. A restored guest's driver is long past its boot-time

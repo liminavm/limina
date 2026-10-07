@@ -1110,17 +1110,6 @@ settle host↔guest uid mapping. Without DAX every guest gets plain FUSE read/wr
 
 ## Tests — flakes & coverage
 
-### A restored guest parked in PSCI `SYSTEM_SUSPEND` can miss its wake under host load
-`kde_vrend_world_survives_snapshot_restore` failed 4 of 18 runs on 2026-10-07 (1 of 8 unloaded, 3
-of 10 with six host CPU burners) with the restored guest never reaching SSH: the worker logs
-`restore: injecting guest wake (KEY_WAKEUP)` and never `vCPU 0 resumed from PSCI SYSTEM_SUSPEND`.
-In those runs vCPUs 1-3 log `resumed from snapshot` after the inject line; in passing runs every
-vCPU resumes first. Lead, not yet observed: the pulse can reach the in-kernel GIC while vCPU 0 is
-still `Running` (so its `kick` is an `hv_vcpus_exit` that reaches nobody), and
-`handle_system_suspend` then consults `should_wait`, which reads the software `pending_irqs`
-list rather than the GIC, finds nothing and blocks. Next: log the vCPU status the GPIO raise saw
-and whether the SPI is pending in the GIC when `handle_system_suspend` decides to wait.
-
 ### `synoik_desktop_survives_snapshot_restore` has an intermittent trigger that was never isolated
 Both observed failures gave byte-identical numbers: 36/1000 landmarks moved against a 1% budget, rows
 {0:17, 1:19}, colours 233 → 235, confined to rows 0–52 at full width, max channel delta 54, dy = 0 —
