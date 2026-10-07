@@ -120,7 +120,7 @@ mean for a TPM:
 ## Verification, from the first commit
 
 Each tool goes where `docs/design/in-crate-checkers.md` says it fits, and **every gate is armed
-by a sabotage entry** (`scripts/sabotage-sweep.py`) that breaks the property and watches it fail.
+by a sabotage entry** (janus's `harness/sabotage/sweep.py`) that breaks the property and watches it fail.
 An entry lands with its witness.
 
 - **Kani**, on fixed-shape code with wide data: the unmarshal primitives for every length a
@@ -174,6 +174,13 @@ An entry lands with its witness.
   restore, and a restore across a `Shutdown(STATE)` resumes the session state.
 - **Later:** reset-identity UI; Secure Enclave wrapping as an option; an EK certificate from a
   per-install limina CA, if remote attestation is ever wanted.
+- **Later, larger algorithms.** The engine implements RSA-2048 and ECC P-256 only, which is every
+  key the P0 consumers create; `TPM2_TestParms` refuses the rest, so `tpm2-pkcs11` (the one
+  client that probes widely) offers only those, and an explicit request for a larger key fails
+  at creation. Two additions, in this order: RSA-3072 (larger bounds and slower prime
+  generation, which costs most in primaries, re-derived on every creation); then P-384 with
+  SHA-384, which brings a second hash into names, sessions, tickets and signing (still one PCR
+  bank, SHA-256). Not planned: RSA-1024, P-192, P-224, RSA-4096 (which swtpm refuses too).
 
 ## Open questions
 
