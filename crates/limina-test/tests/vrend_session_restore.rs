@@ -106,6 +106,65 @@ fn ssh_retry(guest: &Guest, cmd: &str) -> String {
     panic!("ssh `{cmd}` kept failing: {last_err}");
 }
 
+/// The vrend replay's own summary lines (what it dropped and why). Printed on every run, so a
+/// passing run and a failing one can be compared.
+fn replay_summary(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter(|l| {
+            l.contains("vrend: ctx")
+                || l.contains("replay could not use")
+                || l.starts_with("[virglrs]        ")
+                || l.contains("classic content restored")
+        })
+        .collect()
+}
+
+/// Guest-side facts for a restored desktop: what every compositor thread and every app
+/// process is blocked in, the virtio-gpu fence state, and the guest journal since the last
+/// suspend entry. Gathered on failure (or always with `LIMINA_VREND_RESTORE_FORENSICS=1`);
+/// written next to the kept logs and returned.
+fn guest_forensics(g: &Guest, desktop: &Desktop, tag: &str) -> String {
+    let (shell, app, session) = (desktop.shell, desktop.app, desktop.session);
+    let cmd = format!(
+        "p=$(pgrep -xo {shell}); echo \"== {shell} pid=$p threads\"; \
+         for t in /proc/$p/task/*; do \
+           echo \"-- tid=$(basename $t) comm=$(cat $t/comm) state=$(awk '{{print $3}}' $t/stat) \
+wchan=$(cat $t/wchan)\"; sudo cat $t/stack; done; \
+         echo '== app processes'; ps -o pid,ppid,stat,pcpu,lstart,wchan:32,args -C {app}; \
+         for k in $(pgrep -x {app}); do for t in /proc/$k/task/*; do \
+           echo \"-- $k/$(basename $t) comm=$(cat $t/comm) state=$(awk '{{print $3}}' $t/stat) \
+wchan=$(cat $t/wchan)\"; done; done; \
+         echo '== virtio-gpu debugfs'; sudo sh -c 'for f in /sys/kernel/debug/dri/*/virtio-gpu-*; \
+           do echo \"$f:\"; cat $f; done'; \
+         echo '== drm state'; sudo sh -c 'for f in /sys/kernel/debug/dri/*/state; do echo \"$f:\"; \
+           cat $f; done'; \
+         echo '== sessions'; loginctl list-sessions --no-legend; \
+         for s in $(loginctl list-sessions --no-legend | awk '{{print $1}}'); do \
+           loginctl show-session $s -p Type -p State -p Active -p LockedHint -p IdleHint; done; \
+         u=$(ps -o user= -p $p); uid=$(id -u $u); \
+         echo '== compositor supportInformation'; \
+         {session} timeout 10 busctl --user call org.kde.KWin /KWin org.kde.KWin \
+           supportInformation 2>&1 | sed 's/\\\\n/\\n/g'; \
+         echo '== kscreen-doctor -o'; {session} WAYLAND_DISPLAY=wayland-0 \
+           QT_QPA_PLATFORM=wayland timeout 10 kscreen-doctor -o 2>&1; \
+         {session} WAYLAND_DISPLAY=wayland-0 \
+           QT_QPA_PLATFORM=wayland timeout 10 kscreen-doctor --dpms show 2>&1; \
+         echo '== kernel log (this boot)'; sudo journalctl -k -b --no-pager -o short-precise; \
+         echo '== {shell} journal (this boot)'; \
+         sudo journalctl -b --no-pager -o short-precise _COMM={shell}"
+    );
+    let out = g
+        .ssh_exec(&cmd)
+        .unwrap_or_else(|e| format!("(guest forensics probe failed: {e})"));
+    let path = std::env::temp_dir().join(format!(
+        "limina-vrend-guest-{tag}-{}.txt",
+        std::process::id()
+    ));
+    let _ = std::fs::write(&path, &out);
+    eprintln!("guest forensics ({tag}) kept at {}", path.display());
+    out
+}
+
 /// What differs between the desktops this gate runs on.
 struct Desktop {
     /// The test's name, for SKIP lines.
@@ -363,6 +422,20 @@ fn run(desktop: &Desktop) {
 
     // The snapshot's fence drain must have emptied the ledger, parked GL queries included.
     let suspend_log = g1.supervisor_log();
+    // Kept until the verdict (removed on a clean pass): a restore that fails is often decided
+    // here, in what the GPU did after the guest had already suspended.
+    let suspend_kept =
+        std::env::temp_dir().join(format!("limina-vrend-suspend-{}.log", std::process::id()));
+    let _ = std::fs::write(&suspend_kept, &suspend_log);
+    eprintln!("suspend-leg log kept at {}", suspend_kept.display());
+    // Commands the guest queued just before it suspended are completed by the snapshot's fence
+    // drain while the guest is parked; the restored guest must still learn about them.
+    let late_completions = suspend_log
+        .lines()
+        .skip_while(|l| !l.contains("PSCI SYSTEM_SUSPEND (suspend-to-RAM)"))
+        .filter(|l| l.contains("fence called: id="))
+        .count();
+    eprintln!("fence completions after the guest suspended: {late_completions}");
     let drained = suspend_log.lines().find(|l| {
         l.contains("gpu snapshot: fence ledger drained") || l.contains("fence drain TIMED OUT")
     });
@@ -509,7 +582,13 @@ fn run(desktop: &Desktop) {
         .expect("no post-restore scanout capture — the restored session presented no frame");
     let post_colors = color_diversity(&post_frame);
     eprintln!(
-        "post-restore pixel probe: {post_colors} distinct quantized colors (pre {pre_colors})"
+        "post-restore pixel probe: {post_colors} distinct quantized colors (pre {pre_colors}); \
+         post frame {} the pre-suspend frame",
+        if post_frame.rgba == pre_frame.rgba {
+            "IS byte-identical to"
+        } else {
+            "differs from"
+        }
     );
 
     let log = g2.supervisor_log();
@@ -540,6 +619,47 @@ fn run(desktop: &Desktop) {
 
     let shell_pid_after = ssh_retry(&g2, &format!("pgrep -xo {shell}"));
 
+    // The guest's own fence ledger: the virtio-gpu driver's last signalled and last emitted
+    // fence ids. A guest that stopped consuming the control queue holds emitted fences that never
+    // signal, and its compositor waits on them forever; a live one catches up within moments.
+    let fence_line = |g: &Guest| {
+        g.ssh_exec(
+            "sudo sh -c 'cat /sys/kernel/debug/dri/*/virtio-gpu-irq-fence' 2>/dev/null \
+             | grep -m1 '^fence'",
+        )
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+    };
+    let parse_fences = |l: &str| -> Option<(u64, u64)> {
+        let mut it = l.split_whitespace().skip(1).map(|v| v.parse::<u64>().ok());
+        Some((it.next()??, it.next()??))
+    };
+    let mut fences = fence_line(&g2);
+    for _ in 0..5 {
+        if parse_fences(&fences).is_some_and(|(signalled, emitted)| signalled == emitted) {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        fences = fence_line(&g2);
+    }
+    let fences_settled =
+        parse_fences(&fences).is_some_and(|(signalled, emitted)| signalled == emitted);
+    eprintln!("guest virtio-gpu fences (signalled emitted): {fences:?}");
+
+    eprintln!("--- vrend replay summary ---");
+    for l in replay_summary(&log) {
+        eprintln!("{}", &l[..l.len().min(190)]);
+    }
+    let post_app = ssh_retry(&g2, desktop.app_count);
+    eprintln!(
+        "post-restore window: app-procs={post_app} submits=+{submits} over {ticks} ticks \
+         (pre +{pre_submits})"
+    );
+    for l in log.lines().filter(|l| l.contains("[GPUTRACE] tick=")) {
+        eprintln!("{}", &l[..l.len().min(190)]);
+    }
+
     let verdict_ok = scanout_rejects == 0
         && submit_rejects <= MAX_REJECTIONS
         && ticks > 0
@@ -548,7 +668,40 @@ fn run(desktop: &Desktop) {
         && unknown_res == 0
         && (0..=MAX_REJECTIONS as i64).contains(&errs)
         && shell_pid_after == shell_pid
+        && fences_settled
         && post_colors * 4 >= pre_colors;
+    let always_forensics = std::env::var_os("LIMINA_VREND_RESTORE_FORENSICS").is_some();
+    if always_forensics || !verdict_ok {
+        let kept = std::env::temp_dir().join(format!(
+            "limina-vrend-restore-{}-{}.log",
+            if verdict_ok { "pass" } else { "fail" },
+            std::process::id()
+        ));
+        let _ = std::fs::write(&kept, &log);
+        eprintln!(
+            "restore-leg log (as of the verdict) kept at {}",
+            kept.display()
+        );
+        let facts = guest_forensics(&g2, desktop, if verdict_ok { "pass" } else { "fail" });
+        eprintln!("--- guest forensics ---\n{facts}\n--- end guest forensics ---");
+        // Is the stall permanent? Stimulate once more and count submits again.
+        let mark2 = g2.supervisor_log().len();
+        ssh_retry(
+            &g2,
+            &format!(
+                "{session} busctl --user call {wake} >/dev/null 2>&1; \
+                 {session} systemd-run --user --collect --unit vrend-stim2 \
+                 env WAYLAND_DISPLAY=wayland-0 {app} >/dev/null 2>&1; echo stim"
+            ),
+        );
+        std::thread::sleep(SETTLE);
+        let log2 = g2.supervisor_log();
+        let (submits2, ticks2) = tick_total(&log2[mark2.min(log2.len())..], "submits");
+        eprintln!("second stimulus: submits=+{submits2} over {ticks2} ticks");
+        if !verdict_ok {
+            guest_forensics(&g2, desktop, "fail-after-second-stim");
+        }
+    }
     if !verdict_ok {
         // Keep the two frames for forensics (the scratch copies die with the guests).
         let post_png =
@@ -562,7 +715,9 @@ fn run(desktop: &Desktop) {
             post_png.display()
         );
         // Guest-side display forensics before teardown: distinguishes "world dead"
-        // from "display never re-lit" (both read as submits=+0 host-side).
+        // from "display never re-lit" (both read as submits=+0 host-side). The sysfs `dpms`
+        // field is the legacy DPMS property: an atomic compositor that turns its CRTC off
+        // leaves it "On", so the `drm/*/state` dump in the guest forensics is the real oracle.
         let drm = g2
             .ssh_exec(&format!(
                 "for f in /sys/class/drm/card*-*/dpms /sys/class/drm/card*-*/enabled; do \
@@ -604,6 +759,7 @@ fn run(desktop: &Desktop) {
              unknown_res=+{unknown_res} errs=+{errs}\n\
              (submits must advance, zero unknowns, errs within tolerance)\n\
              pixel diversity:          {pre_colors} -> {post_colors} (post must keep >= 1/4)\n\
+             guest fences:             {fences:?} (signalled must catch up with emitted)\n\
              {shell} pid:          {shell_pid} -> {shell_pid_after}\n\
              guest display state:\n{drm}\n\
              compositor:\n{compositor}"
@@ -616,5 +772,8 @@ fn run(desktop: &Desktop) {
          {pre_colors} -> {post_colors}"
     );
     let _ = std::fs::remove_file(&pre_png);
+    if !always_forensics {
+        let _ = std::fs::remove_file(&suspend_kept);
+    }
     cleanup();
 }
