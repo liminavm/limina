@@ -228,18 +228,6 @@ probes — decide offer or decline for each and record it.
 
 ## Suspend/restore
 
-### A snapshot does not record each device's configuration or features
-Snapshot v9 records every virtio-mmio device's `(type_id, mmio_base, irq)` and refuses a restore
-whose device list differs (`slot_mismatch`, libkrun `vmm/snapshot.rs`; worker exit 124 with
-`RESTORE_REFUSED_ADVICE`), so an added, removed or reordered device is caught. Not caught: ports
-inside the one virtio-console device, and any change to a device's config space or offered
-features; v8 files are restored unchecked with only a warning (`builder.rs`). The
-`TODO(feature-drift)` in `device_manager/hvf/mmio.rs` still asks for an `acked_features` compare.
-The suite never sees this because it takes and restores on the same build. Fix: a per-device
-config/feature fingerprint in the snapshot head, compared beside `slot_mismatch` and naming both
-sides. Until then, resume and shut down parked VMs before installing a build that changes a
-device's ports or features.
-
 ### Device workers can write guest RAM while `dump_ram` runs
 Pausing the vCPUs stops new kicks, not writers already running: a device thread writing guest RAM
 during the dump can tear it (used.idx advanced while the payload is half copied). On the raw path
@@ -262,19 +250,6 @@ travel with it.
 ---
 
 ## Memory
-
-### The settle-sweep fault handler fields every fault at a guest address
-`sweep_fault_handler` (libkrun `hvf/src/released_ram.rs`) catches any SIGBUS/SIGSEGV whose address
-falls in a guest region, forever after the first sweep. By design it ignores `SWEEP_ACTIVE` (a
-last-window fault can arrive after the flag clears, and chaining it would restore SIG_DFL for good).
-The side effect: a non-protection fault at a guest address (e.g. a misaligned atomic in a device
-bug) refault-loops silently instead of crashing; it shows as `sweep_faults` climbing into the
-millions (stats verb / decision trace). `si_code` cannot separate the two: on arm64 a `PROT_NONE`
-access arrives as SIGBUS, and xnu hard-codes SIGBUS `si_code = BUS_ADRALN` and SIGSEGV
-`SEGV_ACCERR` (`third_party/xnu/bsd/dev/arm/unix_signal.c`), so an `ACCERR` filter would chain
-every sweep fault. Fix: bound the refault loop instead — chain to the previous action after
-repeated faults at one address with no window open (a window generation counter, or a short grace
-after the last window closed).
 
 ### Host anonymous memory outlives a worker that died abnormally, until reboot
 Measured 2026-09-05 on the dev Mac after a day of crash arms: swap grew from ~8 GiB to 68.7 GiB. At rest, with
@@ -510,13 +485,20 @@ virtio-gpu (89). The GL path needs its own answer: a guest's GL stream reaches z
 vrend, so hardening the Vulkan decoder does nothing for it. Decide what vrend validates before zink
 sees a command.
 
-### A virglrs panic takes the whole VM down
-Every virglrs panic becomes an abort: rutabaga's `virgl_renderer.rs:203` unwraps the mutex the
-panic poisoned, and a panic during cleanup cannot unwind. Until rutabaga handles a poisoned lock,
-a virglrs panic cannot be contained to one context. piglit reached one such panic from an
-unprivileged guest GL program (a texture-buffer sampler view, fixed in virglrs); the piglit
-selection in `spikes/piglit-virgl/` now runs without a host crash, so it is the regression check
-for guest-reachable aborts on the GL path.
+### A virglrs panic ends 3D for the rest of the VM's life
+A panic inside virglrs is caught at the rutabaga boundary: every call into the renderer goes
+through `Guarded` (libkrun `rutabaga_gfx/src/virgl_renderer.rs`), which catches the unwind, marks
+the renderer dead, refuses every later call with `EIO`, and leaks the renderer instead of dropping
+it. The containment is the whole renderer, not the context that panicked: the tables, the GL
+context and the venus decoder are shared, so nothing establishes that one context's damage stays
+in it. After a panic the guest keeps its disks, network and console, but loses 3D, and the fences
+pending in the renderer at that moment never retire (new ones are retired as lost by
+`virtio_gpu.rs`). Not caught: panics on virglrs's own threads (venus rings, decode, fence
+waiters), and panics in Rust callbacks entered from C (VideoToolbox, GL debug output), which abort.
+Next: decide whether a dead renderer should retire its pending fences so the guest's compositor
+fails cleanly instead of waiting, and whether per-context containment is worth a virglrs audit
+of what a context's handlers can leave half-updated. `spikes/piglit-virgl/` is the regression
+check for guest-reachable aborts on the GL path.
 
 ### Nothing stops a guest from submitting seconds ahead of the host's decode
 A classic (vrend) client that submits faster than the virtio-gpu worker decodes keeps the control
@@ -1066,13 +1048,6 @@ close the gap, none started:
 
 ## Networking
 
-### The net device dies permanently when gvproxy hangs up
-On HANG_UP/READ_HANG_UP from the backend socket, libkrun's net worker (`devices/src/virtio/net/worker.rs`,
-the `backend_socket` arm) logs "VIRTIO-NET FATAL … Networking is now disabled!" and stops servicing
-it. The supervisor notices gvproxy exiting and respawns it on the same socket path with backoff
-(`gateway.rs`, the `gvproxy-watchdog` thread), but the guest NIC stays dead until the VM restarts.
-Owed: the libkrun half, reconnecting to the socket path on hang-up.
-
 ### An idle guest reads virtio-net `InterruptStatus` about 2,400 times a second
 Measured 2026-08-27 on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of
 `0xa01f060` in 30 s — offset `0x060` (`InterruptStatus`) on `a01f000.virtio_mmio` → `virtio_net`.
@@ -1151,13 +1126,6 @@ settle host↔guest uid mapping. Without DAX every guest gets plain FUSE read/wr
 ---
 
 ## Tests — flakes & coverage
-
-### libkrun `sweep_fault_handler_fields_concurrent_touches` depends on a timing collision
-In `hvf/src/released_ram.rs`, run by `cargo test -p krun-hvf --lib` (not by `cargo xtask test`). It
-now loops until a collision or a 10 s budget runs out, failing with "windows never opened under
-load", but it still needs a racing write to land inside a sweep window it does not control. Make
-the collision deterministic (a `cfg(test)` hook that holds the window open until the toucher has
-written, or count observed windows and skip when there are none); do not just raise the budget.
 
 ### `synoik_desktop_survives_snapshot_restore` has an intermittent trigger that was never isolated
 Both observed failures gave byte-identical numbers: 36/1000 landmarks moved against a 1% budget, rows
@@ -1269,6 +1237,11 @@ parallel nextest lane.
   poison deterministically. A timeout trades the wedge for killing healthy slow waits.
 - When deferring delivery of a result, name the party that blocks on it. If nothing waits, the deferral
   is not latency, it is handing out stale data.
+- A signal handler that retries a fault must be able to say the fault was its own, and bound the retry
+  when it cannot. xnu reports every arm64 SIGBUS as `BUS_ADRALN`, so `si_code` says nothing.
+- A peer's death is not always an event. A connected unix datagram socket on macOS gets no kqueue event
+  when its peer closes; the next send's error is the only signal, so loss is handled where that error
+  surfaces, and the work item that met it is still completed.
 
 **GPU and renderer**
 - A VM crash that arrives through a web page means the guest-reachable crash surface includes GL/vrend,
@@ -1311,9 +1284,10 @@ parallel nextest lane.
   the swap.
 - A quiesce oracle counts only devices a driver actually took (`DRIVER_OK`), never "status != 0". Suspend
   has a guest-kernel floor (≥ 6.17 for `virtinput_freeze`); below it the VM keeps running.
-- A snapshot records the virtio-mmio device layout (type, base, irq), and restore refuses a machine
-  whose devices moved while keeping the suspended session. Any change to the spawn-time device list is
-  a one-way door for parked VMs.
+- A snapshot records the virtio-mmio device layout (type, base, irq) and what each device offers
+  (features, queue count, topology fields such as a console's ports), and restore refuses a machine
+  whose devices moved or changed while keeping the suspended session. Any change to the spawn-time
+  device list, or to what a device offers, is a one-way door for parked VMs.
 - A snapshot journal keeps every create whose handle a retained create references, even after the
   referenced object is destroyed.
 - `hv_vm_protect` on a page a vCPU is mid-store into lost the preceding store in 5 of 5 probe landings
