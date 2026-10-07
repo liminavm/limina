@@ -1227,14 +1227,6 @@ settle host↔guest uid mapping. Without DAX every guest gets plain FUSE read/wr
 
 ## Tests — flakes & coverage
 
-### `l1_silent_agent_is_reported_and_recovers` has no timing margin
-Fails about 9% of the time run solo (1 in 11 isolated runs, measured 2026-08-14), so load is not the cause. It sets
-`LIMINA_AGENT_SILENT_SECS=1` (`l1_liveness.rs`); the liveness sweep sleeps `threshold.min(1s)`
-(`control.rs`) and the seed agent `limina-init` heartbeats every 1000 ms, so threshold, sweep and
-heartbeat all sit at 1 s and the healthy agent is sometimes reported silent, then "heartbeating
-again" a second later. Fix: a threshold of at least 2× the heartbeat (3 s fits the test's waits). The balloon is not involved
-(`GuestConfig::l1_from_env` sets `memory: None`).
-
 ### libkrun `sweep_fault_handler_fields_concurrent_touches` depends on a timing collision
 In `hvf/src/released_ram.rs`, run by `cargo test -p krun-hvf --lib` (not by `cargo xtask test`). It
 now loops until a collision or a 10 s budget runs out, failing with "windows never opened under

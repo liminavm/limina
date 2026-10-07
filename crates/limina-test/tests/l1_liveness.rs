@@ -8,8 +8,10 @@
 //! Vehicle: the L1 guest's seed agent heartbeats normally (and must never be reported
 //! silent), while the harness joins the plane as a second peer that deliberately stops
 //! talking after HELLO. The supervisor must call out exactly the mute peer, then notice
-//! its recovery when a heartbeat finally arrives. `LIMINA_AGENT_SILENT_SECS=1` shortens
-//! the threshold so the test stays fast.
+//! its recovery when a heartbeat finally arrives. `LIMINA_AGENT_SILENT_SECS=3` shortens
+//! the threshold so the test stays fast, and keeps it three heartbeats long: the seed agent
+//! beats every second and the liveness sweep runs every second, so a threshold at either
+//! period reports a healthy agent silent whenever the two phases line up badly.
 
 use std::time::Duration;
 
@@ -27,7 +29,7 @@ fn l1_silent_agent_is_reported_and_recovers() {
         .with_control_agent()
         .with_control_socket()
         .with_supervisor_log()
-        .with_env("LIMINA_AGENT_SILENT_SECS", "1");
+        .with_env("LIMINA_AGENT_SILENT_SECS", "3");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     // The guest's seed agent is up and heartbeating (it also keeps the VM alive).
@@ -53,15 +55,15 @@ fn l1_silent_agent_is_reported_and_recovers() {
         other => panic!("expected WELCOME, got {other:?}"),
     }
 
-    // Silence is noticed, and it names the mute peer specifically.
+    // Silence is noticed, and it names the mute peer specifically: past the 3 s threshold,
+    // on the next 1 s sweep.
     guest
         .wait_for_supervisor_log("agent limina-test-mute/0 silent", Duration::from_secs(10))
         .expect("supervisor never reported the mute agent silent");
 
-    // Resuming heartbeats brings it back. Beat continuously like a real recovering
-    // agent — a single beat only moves last_seen once, and with the threshold equal to
-    // the sweep interval the next sweep can land just past it again (a phase race this
-    // test lost on its first run).
+    // Resuming heartbeats brings it back, on the first sweep after the first beat. Beat
+    // continuously like a real recovering agent rather than once, so the recovery does not
+    // hang on a single beat's timing.
     let recovered = (0..50).any(|seq| {
         conn.send(&Message::Heartbeat(Heartbeat { seq }))
             .expect("sending a recovery heartbeat");
