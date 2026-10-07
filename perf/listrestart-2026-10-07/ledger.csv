@@ -45,3 +45,27 @@ date,commit,workload,metric,value,notes
 2026-10-07,1ca2f089,aquarium-vrend-30000-r1,fps,22,listrestart bd0 arm unroll; KK batched unrolls + counters 3bcede94624
 2026-10-07,1ca2f089,aquarium-vrend-25000-r2,fps,26,listrestart bd0 arm unroll; KK batched unrolls + counters 3bcede94624
 2026-10-07,1ca2f089,aquarium-vrend-30000-r2,fps,22,listrestart bd0 arm unroll; KK batched unrolls + counters 3bcede94624
+2026-10-07,ff58bca2,aquarium-vrend-25000-r1,fps,43,listrestart os0 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-30000-r1,fps,38,listrestart os0 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-25000-r2,fps,44,listrestart os0 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-30000-r2,fps,40,listrestart os0 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-25000-r1,fps,41,listrestart os1 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-30000-r1,fps,38,listrestart os1 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-25000-r2,fps,43,listrestart os1 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-30000-r2,fps,37,listrestart os1 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-25000-r1,fps,42,listrestart os2 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-30000-r1,fps,35,listrestart os2 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-25000-r2,fps,40,listrestart os2 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-30000-r2,fps,38,listrestart os2 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-25000-r1,fps,47,listrestart rr0 arm unroll; host Mesa restart scan 6295aedf934
+2026-10-07,ff58bca2,aquarium-vrend-30000-r1,fps,36,listrestart rr0 arm unroll; host Mesa restart scan 6295aedf934
+2026-10-07,ff58bca2,aquarium-vrend-25000-r2,fps,41,listrestart rr0 arm unroll; host Mesa restart scan 6295aedf934
+2026-10-07,ff58bca2,aquarium-vrend-30000-r2,fps,39,listrestart rr0 arm unroll; host Mesa restart scan 6295aedf934
+2026-10-07,ff58bca2,aquarium-vrend-25000-r1,fps,41,listrestart os3 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-30000-r1,fps,40,listrestart os3 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-25000-r2,fps,42,listrestart os3 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-30000-r2,fps,38,listrestart os3 arm skip; shipping bundle
+2026-10-07,ff58bca2,aquarium-vrend-25000-r1,fps,42,listrestart rr1 arm unroll; host Mesa restart scan 6295aedf934
+2026-10-07,ff58bca2,aquarium-vrend-30000-r1,fps,37,listrestart rr1 arm unroll; host Mesa restart scan 6295aedf934
+2026-10-07,ff58bca2,aquarium-vrend-25000-r2,fps,42,listrestart rr1 arm unroll; host Mesa restart scan 6295aedf934
+2026-10-07,ff58bca2,aquarium-vrend-30000-r2,fps,39,listrestart rr1 arm unroll; host Mesa restart scan 6295aedf934

@@ -13,6 +13,11 @@ With the unrolls run ahead of the pass and batched per pass (branch `limina-kk-p
 unroll arm reaches 22-26 fps against the skip arm's 35-46: still a cost, from unrolling ~24k draws
 a frame, but no longer a cliff.
 
+**Unrolls avoided at the source, the conformant arm runs at skip speed.** With host zink leaving
+list restart out of the supported modes on KK and the GL frontend dropping restart from draws whose
+indices hold no restart index (below), the unroll arm reaches 36-47 fps against the skip arm's
+35-44, at the same memory.
+
 ## Setup
 
 - Remote Mac: M1 Mac mini, 16 GB, macOS 26.6.2, with its own VM suspended and nothing else running.
@@ -121,6 +126,37 @@ time limit; `rss-watch.sh` now ends with the supervisor it first saw.
   The host compressor grew ~120 MB. The split path held 7.5-10 GB.
 - Captures are copied while the VM rewrites them once a second, so a copy can be truncated. A crop
   of one shows garbage below the counter (bu0 r2 30k); the counter line above it is intact.
+
+## With needless unrolls avoided
+
+Two Mesa commits on branch `limina-kk-restartscan` (off `limina-kk` `88b1341efe8`), with KK's
+unroll path unchanged:
+
+1. **GL frontend** (`79c39a54c88`, an upstream candidate): the index min/max cache records whether
+   a scan saw the restart index, and before drawing a topology the driver cannot restart, restart is
+   dropped from draws whose ranges hold none. A static index buffer is scanned once.
+2. **zink on KK** (`6295aedf934`, limina-only): list topologies are left out of
+   `supported_prim_modes_with_restart`, so the frontend check runs on them. Only draws that really
+   restart reach emulation.
+
+The `rr` points run that host Mesa, bundled, with `LIMINA_KK_NOLISTRESTART=0`: the conformant
+path. The `os` points run the shipping bundle with the skip, interleaved with them.
+
+| point | build                 | arm    | r1 25k | r1 30k | r2 25k | r2 30k | peak footprint |
+|-------|-----------------------|--------|--------|--------|--------|--------|----------------|
+| os0   | shipping              | skip   | 43     | 38     | 44     | 40     | 6655 MiB       |
+| os1   | shipping              | skip   | 41     | 38     | 43     | 37     | 6649 MiB       |
+| os2   | shipping              | skip   | 42     | 35     | 40     | 38     | 6676 MiB       |
+| rr0   | restart scan          | unroll | 47     | 36     | 41     | 39     | 6650 MiB       |
+| os3   | shipping              | skip   | 41     | 40     | 42     | 38     | 6683 MiB       |
+| rr1   | restart scan          | unroll | 42     | 37     | 42     | 39     | 6677 MiB       |
+
+- **The two arms are indistinguishable**, in fps and in memory, as expected if aquarium's draws hold
+  no restart index and none reaches the unroll (this build carries no counters to show it).
+- **Correctness**: piglit's primitive-restart and provoking-vertex list (245 tests) gives the same
+  results under the guest's virgl driver on this stack as on the shipping one.
+- The first two restart-scan points (dropped) never booted: one dylib in that bundle kept an
+  ad-hoc signature, which dyld refuses next to the team-signed binaries.
 
 ## Reading it
 
