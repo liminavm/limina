@@ -1,5 +1,5 @@
 ++ mktemp -d
-+ cd /tmp/tmp.ZlXrMOjr8D
++ cd /tmp/tmp.VmH5UowOG7
 + openssl genpkey -provider tpm2 -provider default -propquery '?provider=tpm2' -algorithm EC -pkeyopt group:P-256 -out ec.pem
 + echo data
 + openssl pkeyutl -provider tpm2 -provider default -sign -inkey ec.pem -in data -rawin -digest sha256 -out sig
@@ -12,5 +12,5 @@
 ==> rsa.pem <==
 -----BEGIN TSS2 PRIVATE KEY-----
 + ls -l sig rsig
--rw-r--r--. 1 claude claude 256 Oct  7 08:34 rsig
--rw-r--r--. 1 claude claude  71 Oct  7 08:34 sig
+-rw-r--r--. 1 claude claude 256 Oct  7 08:22 rsig
+-rw-r--r--. 1 claude claude  70 Oct  7 08:22 sig

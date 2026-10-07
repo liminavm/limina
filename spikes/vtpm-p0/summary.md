@@ -6,30 +6,30 @@
 | CreatePrimary | 1 | 2 | 8 |  | 4 | 4 | 1 |  | 5 | 1 |  |  |
 | ECC_Parameters |  |  |  |  |  |  |  |  | 4 |  |  |  |
 | EvictControl |  | 1 |  |  |  |  | 1 |  |  |  |  |  |
-| FlushContext | 2 | 13 | 108 | 52 | 67 | 32 | 53 |  | 48 | 3 | 14 |  |
-| GetCapability | 76 | 15 | 32 | 18 |  | 4 | 29 | 6 | 12 | 76 | 5 |  |
-| GetRandom | 14 | 5 | 8 | 4 | 4 |  | 25 | 3 | 4 | 7 | 2 |  |
+| FlushContext | 2 | 13 | 108 | 52 | 68 | 33 | 53 |  | 48 | 2 | 14 |  |
+| GetCapability | 138 | 15 | 32 | 18 |  | 4 | 29 | 6 | 12 | 76 | 5 |  |
+| GetRandom | 7 | 5 | 8 | 4 | 4 |  | 25 | 3 | 4 | 6 | 2 |  |
 | Hash |  |  |  |  | 2 |  |  |  |  |  |  |  |
 | HashSequenceStart |  |  |  |  |  |  | 1 |  | 2 |  |  |  |
-| HierarchyChangeAuth | 1 |  |  |  |  |  |  |  |  | 1 |  |  |
+| HierarchyChangeAuth | 2 |  |  |  |  |  |  |  |  | 1 |  |  |
 | Load |  |  | 4 | 4 | 2 | 2 | 5 |  | 5 |  | 1 |  |
 | NV_DefineSpace |  | 2 |  |  |  |  |  |  |  |  |  |  |
 | NV_Extend |  | 2 |  |  |  |  |  |  |  |  |  |  |
-| PCR_Extend | 31 | 2 |  |  |  |  |  |  |  | 31 |  |  |
-| PCR_Read | 41 | 8 | 4 | 10 | 2 |  |  | 15 |  | 41 | 1 |  |
+| PCR_Extend | 56 | 2 |  |  |  |  |  |  |  | 31 |  |  |
+| PCR_Read | 67 | 2 | 3 | 8 | 2 |  |  | 5 |  | 41 | 1 |  |
 | PolicyAuthValue |  |  |  | 2 |  |  |  |  |  |  | 1 |  |
 | PolicyGetDigest |  |  | 4 | 4 | 2 |  |  |  |  |  | 1 |  |
 | PolicyPCR |  |  | 1 | 4 | 2 |  |  |  |  |  | 1 |  |
 | RSA_Decrypt |  |  |  |  |  | 1 |  |  |  |  |  |  |
 | ReadClock | 1 |  |  |  |  |  | 2 |  |  |  |  | 0x101×1 |
 | ReadPublic |  | 2 |  | 4 |  |  | 2 |  |  |  |  |  |
-| SelfTest | 2 |  |  |  |  |  |  |  |  | 2 |  |  |
+| SelfTest | 3 |  |  |  |  |  |  |  |  | 2 |  |  |
 | SequenceComplete |  |  |  |  |  |  | 1 |  | 2 |  |  |  |
 | SequenceUpdate |  |  |  |  |  |  | 1 |  | 2 |  |  |  |
-| Shutdown |  |  |  |  |  |  |  |  |  | 1 |  |  |
+| Shutdown | 1 |  |  |  |  |  |  |  |  | 1 |  |  |
 | Sign |  |  |  |  |  | 1 | 2 |  | 2 |  |  |  |
 | StartAuthSession | 1 | 1 | 12 | 10 | 12 | 6 | 14 |  |  | 1 | 2 |  |
-| Startup | 1 | 3 | 8 | 4 |  |  | 2 | 1 |  | 1 | 1 | 0x100×19 |
+| Startup | 2 | 3 | 8 | 4 |  |  | 2 | 1 |  | 1 | 1 | 0x100×19 |
 | TestParms |  | 5 | 12 | 4 |  |  | 36 | 1 |  |  | 1 | 0x1c4×4 |
 | Unseal |  |  | 4 | 4 | 2 |  | 3 |  |  |  | 1 |  |
 

@@ -16,6 +16,9 @@ work="${VTPM_P0_WORK:-$here/work}"
 base="${VTPM_P0_BASE:-$repo/Fedora-Workstation-44.stock.test.raw}"
 SSH_PORT="${SSH_PORT:-2240}"
 SWTPM_LOG_LEVEL="${SWTPM_LOG_LEVEL:-20}"
+# One SHA-256 bank, as the engine allocates (docs/design/vtpm.md). Without swtpm_setup, libtpms
+# allocates all four banks and the firmware extends every one of them.
+PCR_BANKS="${PCR_BANKS:-sha256}"
 
 if [[ "${1:-}" == "--fresh" ]]; then
     rm -rf "$work"
@@ -26,6 +29,11 @@ disk="$work/vtpm-p0.raw"
 [[ -e "$disk" ]] || cp -c "$base" "$disk"           # APFS CoW clone; the base stays pristine
 vars="$work/vars.fd"
 [[ -e "$vars" ]] || truncate -s 64m "$vars"
+
+if [[ ! -e "$work/tpm/tpm2-00.permall" ]]; then
+    swtpm_setup --tpm2 --tpmstate "$work/tpm" --pcr-banks "$PCR_BANKS" --overwrite \
+        > "$work/swtpm_setup.log" 2>&1
+fi
 
 sock="$work/swtpm.sock"
 rm -f "$sock"

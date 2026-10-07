@@ -1,0 +1,10 @@
++ echo -n clevis-plain
++ clevis encrypt tpm2 '{}'
++ clevis decrypt
+clevis-plain
++ echo
++ echo -n clevis-pcr7
++ clevis encrypt tpm2 '{"pcr_ids":"7"}'
++ clevis decrypt
+clevis-pcr7
++ echo

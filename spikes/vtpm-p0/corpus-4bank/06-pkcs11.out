@@ -1,27 +1,25 @@
 ++ mktemp -d
-+ export TPM2_PKCS11_STORE=/tmp/tmp.HoElPE1U35
-+ TPM2_PKCS11_STORE=/tmp/tmp.HoElPE1U35
-+ tpm2_ptool init --path=/tmp/tmp.HoElPE1U35
++ export TPM2_PKCS11_STORE=/tmp/tmp.SVcsAnLIhb
++ TPM2_PKCS11_STORE=/tmp/tmp.SVcsAnLIhb
++ tpm2_ptool init --path=/tmp/tmp.SVcsAnLIhb
 action: Created
 id: 1
 
-+ tpm2_ptool addtoken --pid=1 --label=vtpm --sopin=sopin --userpin=userpin --path=/tmp/tmp.HoElPE1U35
-+ tpm2_ptool addkey --algorithm=ecc256 --label=vtpm --key-label=ec --userpin=userpin --path=/tmp/tmp.HoElPE1U35
++ tpm2_ptool addtoken --pid=1 --label=vtpm --sopin=sopin --userpin=userpin --path=/tmp/tmp.SVcsAnLIhb
++ tpm2_ptool addkey --algorithm=ecc256 --label=vtpm --key-label=ec --userpin=userpin --path=/tmp/tmp.SVcsAnLIhb
 action: add
 private:
-  CKA_ID: '35656230303662336366623461626535'
+  CKA_ID: '35393836303839643764303765653335'
 public:
-  CKA_ID: '35656230303662336366623461626535'
-+ tpm2_ptool addkey --algorithm=rsa2048 --label=vtpm --key-label=rsa --userpin=userpin --path=/tmp/tmp.HoElPE1U35
+  CKA_ID: '35393836303839643764303765653335'
++ tpm2_ptool addkey --algorithm=rsa2048 --label=vtpm --key-label=rsa --userpin=userpin --path=/tmp/tmp.SVcsAnLIhb
 action: add
 private:
-  CKA_ID: '64366561383530613262363335363231'
+  CKA_ID: '33373131373939366136656665356130'
 public:
-  CKA_ID: '64366561383530613262363335363231'
+  CKA_ID: '33373131373939366136656665356130'
 + M=/usr/lib64/pkcs11/libtpm2_pkcs11.so
 + pkcs11-tool --module /usr/lib64/pkcs11/libtpm2_pkcs11.so -L
-WARNING:fapi:src/tss2-fapi/ifapi_io.c:339:ifapi_io_check_create_dir() Directory /home/claude/.local/share/tpm2-tss/user/keystore does not exist, creating 
-WARNING:fapi:src/tss2-fapi/ifapi_io.c:339:ifapi_io_check_create_dir() Directory /var/lib/tpm2-tss/system/keystore/policy does not exist, creating 
 WARNING:fapi:src/tss2-fapi/api/Fapi_List.c:228:Fapi_List_Finish() Profile of path not provisioned: /HS/SRK 
 ERROR:fapi:src/tss2-fapi/api/Fapi_List.c:81:Fapi_List() ErrorCode (0x00060034) Entities_List 
 WARNING: Listing FAPI token objects failed: "fapi:Provisioning was not executed."
@@ -49,4 +47,4 @@ Please see https://github.com/tpm2-software/tpm2-pkcs11/blob/1.10.1/docs/FAPI.md
 WARNING: Getting tokens from fapi backend failed.
 Using signature algorithm ECDSA-SHA256
 + ls -l /tmp/p11.ecsig
--rw-------. 1 claude claude 64 Oct  7 08:34 /tmp/p11.ecsig
+-rw-------. 1 claude claude 64 Oct  7 08:22 /tmp/p11.ecsig

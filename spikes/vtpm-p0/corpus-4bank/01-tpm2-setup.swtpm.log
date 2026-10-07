@@ -1,0 +1,2142 @@
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 02 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 12
+ 80 01 00 00 00 0C 00 00 01 7B 00 08 
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+ SWTPM_IO_Write: length 20
+ 80 01 00 00 00 14 00 00 00 00 00 08 5C BA EF 1A 
+ B3 7C AC 4E 
+ SWTPM_IO_Read: length 12
+ 80 01 00 00 00 0C 00 00 01 44 00 00 
+    IsEnEnabled(0x144 = 'Startup'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 01 00 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 00 00 00 
+ 00 01 00 00 00 7F 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 217
+ 80 01 00 00 00 D9 00 00 00 00 00 00 00 00 00 00 
+ 00 00 21 00 01 00 00 00 09 00 03 00 00 00 02 00 
+ 04 00 00 00 04 00 05 00 00 01 04 00 06 00 00 00 
+ 02 00 07 00 00 04 04 00 08 00 00 03 0C 00 0A 00 
+ 00 00 06 00 0B 00 00 00 04 00 0C 00 00 00 04 00 
+ 0D 00 00 00 04 00 14 00 00 01 01 00 15 00 00 02 
+ 01 00 16 00 00 01 01 00 17 00 00 02 01 00 18 00 
+ 00 01 01 00 19 00 00 04 01 00 1A 00 00 01 01 00 
+ 1B 00 00 05 01 00 1C 00 00 01 01 00 1D 00 00 04 
+ 01 00 20 00 00 04 04 00 21 00 00 04 04 00 22 00 
+ 00 04 04 00 23 00 00 00 09 00 25 00 00 00 08 00 
+ 26 00 00 00 02 00 3F 00 00 01 02 00 40 00 00 02 
+ 02 00 41 00 00 02 02 00 42 00 00 02 02 00 43 00 
+ 00 02 02 00 44 00 00 02 02 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 02 00 00 
+ 01 1F 00 00 01 00 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x11f = 'NV_UndefineSpaceSpecial'): 1
+    IsEnEnabled(0x11f = 'NV_UndefineSpaceSpecial'): 1
+    IsEnEnabled(0x120 = 'EvictControl'): 1
+    IsEnEnabled(0x120 = 'EvictControl'): 1
+    IsEnEnabled(0x121 = 'HierarchyControl'): 1
+    IsEnEnabled(0x121 = 'HierarchyControl'): 1
+    IsEnEnabled(0x122 = 'NV_UndefineSpace'): 1
+    IsEnEnabled(0x122 = 'NV_UndefineSpace'): 1
+    IsEnEnabled(0x123 = '(null)'): 0
+    IsEnEnabled(0x124 = 'ChangeEPS'): 1
+    IsEnEnabled(0x124 = 'ChangeEPS'): 1
+    IsEnEnabled(0x125 = 'ChangePPS'): 1
+    IsEnEnabled(0x125 = 'ChangePPS'): 1
+    IsEnEnabled(0x126 = 'Clear'): 1
+    IsEnEnabled(0x126 = 'Clear'): 1
+    IsEnEnabled(0x127 = 'ClearControl'): 1
+    IsEnEnabled(0x127 = 'ClearControl'): 1
+    IsEnEnabled(0x128 = 'ClockSet'): 1
+    IsEnEnabled(0x128 = 'ClockSet'): 1
+    IsEnEnabled(0x129 = 'HierarchyChangeAuth'): 1
+    IsEnEnabled(0x129 = 'HierarchyChangeAuth'): 1
+    IsEnEnabled(0x12a = 'NV_DefineSpace'): 1
+    IsEnEnabled(0x12a = 'NV_DefineSpace'): 1
+    IsEnEnabled(0x12b = 'PCR_Allocate'): 1
+    IsEnEnabled(0x12b = 'PCR_Allocate'): 1
+    IsEnEnabled(0x12c = 'PCR_SetAuthPolicy'): 1
+    IsEnEnabled(0x12c = 'PCR_SetAuthPolicy'): 1
+    IsEnEnabled(0x12d = 'PP_Commands'): 1
+    IsEnEnabled(0x12d = 'PP_Commands'): 1
+    IsEnEnabled(0x12e = 'SetPrimaryPolicy'): 1
+    IsEnEnabled(0x12e = 'SetPrimaryPolicy'): 1
+    IsEnEnabled(0x12f = '(null)'): 0
+    IsEnEnabled(0x130 = 'ClockRateAdjust'): 1
+    IsEnEnabled(0x130 = 'ClockRateAdjust'): 1
+    IsEnEnabled(0x131 = 'CreatePrimary'): 1
+    IsEnEnabled(0x131 = 'CreatePrimary'): 1
+    IsEnEnabled(0x132 = 'NV_GlobalWriteLock'): 1
+    IsEnEnabled(0x132 = 'NV_GlobalWriteLock'): 1
+    IsEnEnabled(0x133 = 'GetCommandAuditDigest'): 1
+    IsEnEnabled(0x133 = 'GetCommandAuditDigest'): 1
+    IsEnEnabled(0x134 = 'NV_Increment'): 1
+    IsEnEnabled(0x134 = 'NV_Increment'): 1
+    IsEnEnabled(0x135 = 'NV_SetBits'): 1
+    IsEnEnabled(0x135 = 'NV_SetBits'): 1
+    IsEnEnabled(0x136 = 'NV_Extend'): 1
+    IsEnEnabled(0x136 = 'NV_Extend'): 1
+    IsEnEnabled(0x137 = 'NV_Write'): 1
+    IsEnEnabled(0x137 = 'NV_Write'): 1
+    IsEnEnabled(0x138 = 'NV_WriteLock'): 1
+    IsEnEnabled(0x138 = 'NV_WriteLock'): 1
+    IsEnEnabled(0x139 = 'DictionaryAttackLockReset'): 1
+    IsEnEnabled(0x139 = 'DictionaryAttackLockReset'): 1
+    IsEnEnabled(0x13a = 'DictionaryAttackParameters'): 1
+    IsEnEnabled(0x13a = 'DictionaryAttackParameters'): 1
+    IsEnEnabled(0x13b = 'NV_ChangeAuth'): 1
+    IsEnEnabled(0x13b = 'NV_ChangeAuth'): 1
+    IsEnEnabled(0x13c = 'PCR_Event'): 1
+    IsEnEnabled(0x13c = 'PCR_Event'): 1
+    IsEnEnabled(0x13d = 'PCR_Reset'): 1
+    IsEnEnabled(0x13d = 'PCR_Reset'): 1
+    IsEnEnabled(0x13e = 'SequenceComplete'): 1
+    IsEnEnabled(0x13e = 'SequenceComplete'): 1
+    IsEnEnabled(0x13f = 'SetAlgorithmSet'): 1
+    IsEnEnabled(0x13f = 'SetAlgorithmSet'): 1
+    IsEnEnabled(0x140 = 'SetCommandCodeAuditStatus'): 1
+    IsEnEnabled(0x140 = 'SetCommandCodeAuditStatus'): 1
+    IsEnEnabled(0x141 = '(null)'): 0
+    IsEnEnabled(0x142 = 'IncrementalSelfTest'): 1
+    IsEnEnabled(0x142 = 'IncrementalSelfTest'): 1
+    IsEnEnabled(0x143 = 'SelfTest'): 1
+    IsEnEnabled(0x143 = 'SelfTest'): 1
+    IsEnEnabled(0x144 = 'Startup'): 1
+    IsEnEnabled(0x144 = 'Startup'): 1
+    IsEnEnabled(0x145 = 'Shutdown'): 1
+    IsEnEnabled(0x145 = 'Shutdown'): 1
+    IsEnEnabled(0x146 = 'StirRandom'): 1
+    IsEnEnabled(0x146 = 'StirRandom'): 1
+    IsEnEnabled(0x147 = 'ActivateCredential'): 1
+    IsEnEnabled(0x147 = 'ActivateCredential'): 1
+    IsEnEnabled(0x148 = 'Certify'): 1
+    IsEnEnabled(0x148 = 'Certify'): 1
+    IsEnEnabled(0x149 = 'PolicyNV'): 1
+    IsEnEnabled(0x149 = 'PolicyNV'): 1
+    IsEnEnabled(0x14a = 'CertifyCreation'): 1
+    IsEnEnabled(0x14a = 'CertifyCreation'): 1
+    IsEnEnabled(0x14b = 'Duplicate'): 1
+    IsEnEnabled(0x14b = 'Duplicate'): 1
+    IsEnEnabled(0x14c = 'GetTime'): 1
+    IsEnEnabled(0x14c = 'GetTime'): 1
+    IsEnEnabled(0x14d = 'GetSessionAuditDigest'): 1
+    IsEnEnabled(0x14d = 'GetSessionAuditDigest'): 1
+    IsEnEnabled(0x14e = 'NV_Read'): 1
+    IsEnEnabled(0x14e = 'NV_Read'): 1
+    IsEnEnabled(0x14f = 'NV_ReadLock'): 1
+    IsEnEnabled(0x14f = 'NV_ReadLock'): 1
+    IsEnEnabled(0x150 = 'ObjectChangeAuth'): 1
+    IsEnEnabled(0x150 = 'ObjectChangeAuth'): 1
+    IsEnEnabled(0x151 = 'PolicySecret'): 1
+    IsEnEnabled(0x151 = 'PolicySecret'): 1
+    IsEnEnabled(0x152 = 'Rewrap'): 1
+    IsEnEnabled(0x152 = 'Rewrap'): 1
+    IsEnEnabled(0x153 = 'Create'): 1
+    IsEnEnabled(0x153 = 'Create'): 1
+    IsEnEnabled(0x154 = 'ECDH_ZGen'): 1
+    IsEnEnabled(0x154 = 'ECDH_ZGen'): 1
+    IsEnEnabled(0x155 = 'MAC'): 1
+    IsEnEnabled(0x155 = 'MAC'): 1
+    IsEnEnabled(0x156 = 'Import'): 1
+    IsEnEnabled(0x156 = 'Import'): 1
+    IsEnEnabled(0x157 = 'Load'): 1
+    IsEnEnabled(0x157 = 'Load'): 1
+    IsEnEnabled(0x158 = 'Quote'): 1
+    IsEnEnabled(0x158 = 'Quote'): 1
+    IsEnEnabled(0x159 = 'RSA_Decrypt'): 1
+    IsEnEnabled(0x159 = 'RSA_Decrypt'): 1
+    IsEnEnabled(0x15a = '(null)'): 0
+    IsEnEnabled(0x15b = 'MAC_Start'): 1
+    IsEnEnabled(0x15b = 'MAC_Start'): 1
+    IsEnEnabled(0x15c = 'SequenceUpdate'): 1
+    IsEnEnabled(0x15c = 'SequenceUpdate'): 1
+    IsEnEnabled(0x15d = 'Sign'): 1
+    IsEnEnabled(0x15d = 'Sign'): 1
+    IsEnEnabled(0x15e = 'Unseal'): 1
+    IsEnEnabled(0x15e = 'Unseal'): 1
+    IsEnEnabled(0x15f = '(null)'): 0
+    IsEnEnabled(0x160 = 'PolicySigned'): 1
+    IsEnEnabled(0x160 = 'PolicySigned'): 1
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+    IsEnEnabled(0x163 = 'ECDH_KeyGen'): 1
+    IsEnEnabled(0x163 = 'ECDH_KeyGen'): 1
+    IsEnEnabled(0x164 = 'EncryptDecrypt'): 1
+    IsEnEnabled(0x164 = 'EncryptDecrypt'): 1
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+    IsEnEnabled(0x166 = '(null)'): 0
+    IsEnEnabled(0x167 = 'LoadExternal'): 1
+    IsEnEnabled(0x167 = 'LoadExternal'): 1
+    IsEnEnabled(0x168 = 'MakeCredential'): 1
+    IsEnEnabled(0x168 = 'MakeCredential'): 1
+    IsEnEnabled(0x169 = 'NV_ReadPublic'): 1
+    IsEnEnabled(0x169 = 'NV_ReadPublic'): 1
+    IsEnEnabled(0x16a = 'PolicyAuthorize'): 1
+    IsEnEnabled(0x16a = 'PolicyAuthorize'): 1
+    IsEnEnabled(0x16b = 'PolicyAuthValue'): 1
+    IsEnEnabled(0x16b = 'PolicyAuthValue'): 1
+    IsEnEnabled(0x16c = 'PolicyCommandCode'): 1
+    IsEnEnabled(0x16c = 'PolicyCommandCode'): 1
+    IsEnEnabled(0x16d = 'PolicyCounterTimer'): 1
+    IsEnEnabled(0x16d = 'PolicyCounterTimer'): 1
+    IsEnEnabled(0x16e = 'PolicyCpHash'): 1
+    IsEnEnabled(0x16e = 'PolicyCpHash'): 1
+    IsEnEnabled(0x16f = 'PolicyLocality'): 1
+    IsEnEnabled(0x16f = 'PolicyLocality'): 1
+    IsEnEnabled(0x170 = 'PolicyNameHash'): 1
+    IsEnEnabled(0x170 = 'PolicyNameHash'): 1
+    IsEnEnabled(0x171 = 'PolicyOR'): 1
+    IsEnEnabled(0x171 = 'PolicyOR'): 1
+    IsEnEnabled(0x172 = 'PolicyTicket'): 1
+    IsEnEnabled(0x172 = 'PolicyTicket'): 1
+    IsEnEnabled(0x173 = 'ReadPublic'): 1
+    IsEnEnabled(0x173 = 'ReadPublic'): 1
+    IsEnEnabled(0x174 = 'RSA_Encrypt'): 1
+    IsEnEnabled(0x174 = 'RSA_Encrypt'): 1
+    IsEnEnabled(0x175 = '(null)'): 0
+    IsEnEnabled(0x176 = 'StartAuthSession'): 1
+    IsEnEnabled(0x176 = 'StartAuthSession'): 1
+    IsEnEnabled(0x177 = 'VerifySignature'): 1
+    IsEnEnabled(0x177 = 'VerifySignature'): 1
+    IsEnEnabled(0x178 = 'ECC_Parameters'): 1
+    IsEnEnabled(0x178 = 'ECC_Parameters'): 1
+    IsEnEnabled(0x179 = '(null)'): 0
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+    IsEnEnabled(0x17c = 'GetTestResult'): 1
+    IsEnEnabled(0x17c = 'GetTestResult'): 1
+    IsEnEnabled(0x17d = 'Hash'): 1
+    IsEnEnabled(0x17d = 'Hash'): 1
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+    IsEnEnabled(0x17f = 'PolicyPCR'): 1
+    IsEnEnabled(0x17f = 'PolicyPCR'): 1
+    IsEnEnabled(0x180 = 'PolicyRestart'): 1
+    IsEnEnabled(0x180 = 'PolicyRestart'): 1
+    IsEnEnabled(0x181 = 'ReadClock'): 1
+    IsEnEnabled(0x181 = 'ReadClock'): 1
+    IsEnEnabled(0x182 = 'PCR_Extend'): 1
+    IsEnEnabled(0x182 = 'PCR_Extend'): 1
+    IsEnEnabled(0x183 = 'PCR_SetAuthValue'): 1
+    IsEnEnabled(0x183 = 'PCR_SetAuthValue'): 1
+    IsEnEnabled(0x184 = 'NV_Certify'): 1
+    IsEnEnabled(0x184 = 'NV_Certify'): 1
+    IsEnEnabled(0x185 = 'EventSequenceComplete'): 1
+    IsEnEnabled(0x185 = 'EventSequenceComplete'): 1
+    IsEnEnabled(0x186 = 'HashSequenceStart'): 1
+    IsEnEnabled(0x186 = 'HashSequenceStart'): 1
+    IsEnEnabled(0x187 = 'PolicyPhysicalPresence'): 1
+    IsEnEnabled(0x187 = 'PolicyPhysicalPresence'): 1
+    IsEnEnabled(0x188 = 'PolicyDuplicationSelect'): 1
+    IsEnEnabled(0x188 = 'PolicyDuplicationSelect'): 1
+    IsEnEnabled(0x189 = 'PolicyGetDigest'): 1
+    IsEnEnabled(0x189 = 'PolicyGetDigest'): 1
+    IsEnEnabled(0x18a = 'TestParms'): 1
+    IsEnEnabled(0x18a = 'TestParms'): 1
+    IsEnEnabled(0x18b = 'Commit'): 1
+    IsEnEnabled(0x18b = 'Commit'): 1
+    IsEnEnabled(0x18c = 'PolicyPassword'): 1
+    IsEnEnabled(0x18c = 'PolicyPassword'): 1
+    IsEnEnabled(0x18d = 'ZGen_2Phase'): 1
+    IsEnEnabled(0x18d = 'ZGen_2Phase'): 1
+    IsEnEnabled(0x18e = 'EC_Ephemeral'): 1
+    IsEnEnabled(0x18e = 'EC_Ephemeral'): 1
+    IsEnEnabled(0x18f = 'PolicyNvWritten'): 1
+    IsEnEnabled(0x18f = 'PolicyNvWritten'): 1
+    IsEnEnabled(0x190 = 'PolicyTemplate'): 1
+    IsEnEnabled(0x190 = 'PolicyTemplate'): 1
+    IsEnEnabled(0x191 = 'CreateLoaded'): 1
+    IsEnEnabled(0x191 = 'CreateLoaded'): 1
+    IsEnEnabled(0x192 = 'PolicyAuthorizeNV'): 1
+    IsEnEnabled(0x192 = 'PolicyAuthorizeNV'): 1
+    IsEnEnabled(0x193 = 'EncryptDecrypt2'): 1
+    IsEnEnabled(0x193 = 'EncryptDecrypt2'): 1
+    IsEnEnabled(0x194 = '(null)'): 0
+    IsEnEnabled(0x195 = '(null)'): 0
+    IsEnEnabled(0x196 = '(null)'): 0
+    IsEnEnabled(0x197 = 'CertifyX509'): 1
+    IsEnEnabled(0x197 = 'CertifyX509'): 1
+    IsEnEnabled(0x198 = '(null)'): 0
+    IsEnEnabled(0x199 = 'ECC_Encrypt'): 0
+    IsEnEnabled(0x19a = 'ECC_Decrypt'): 0
+    IsEnEnabled(0x19b = 'PolicyCapability'): 0
+    IsEnEnabled(0x19c = 'PolicyParameters'): 0
+    IsEnEnabled(0x19d = '(null)'): 0
+    IsEnEnabled(0x19e = '(null)'): 0
+    IsEnEnabled(0x19f = '(null)'): 0
+ SWTPM_IO_Write: length 459
+ 80 01 00 00 01 CB 00 00 00 00 00 00 00 00 02 00 
+ 00 00 6E 04 40 01 1F 04 40 01 20 02 C0 01 21 04 
+ 40 01 22 02 C0 01 24 02 C0 01 25 02 C0 01 26 02 
+ 40 01 27 02 40 01 28 02 40 01 29 02 40 01 2A 02 
+ 40 01 2B 02 40 01 2C 02 40 01 2D 02 40 01 2E 02 
+ 00 01 30 12 00 01 31 02 40 01 32 04 40 01 33 04 
+ 40 01 34 04 40 01 35 04 40 01 36 04 40 01 37 04 
+ 40 01 38 02 40 01 39 02 40 01 3A 02 40 01 3B 02 
+ 40 01 3C 02 40 01 3D 03 00 01 3E 02 40 01 3F 02 
+ 40 01 40 00 40 01 42 00 40 01 43 00 40 01 44 00 
+ 40 01 45 00 40 01 46 04 00 01 47 04 00 01 48 06 
+ 00 01 49 04 00 01 4A 04 00 01 4B 04 00 01 4C 06 
+ 00 01 4D 04 00 01 4E 04 40 01 4F 04 00 01 50 04 
+ 00 01 51 04 00 01 52 02 00 01 53 02 00 01 54 02 
+ 00 01 55 02 00 01 56 12 00 01 57 02 00 01 58 02 
+ 00 01 59 12 00 01 5B 02 00 01 5C 02 00 01 5D 02 
+ 00 01 5E 04 00 01 60 10 00 01 61 02 00 01 62 02 
+ 00 01 63 02 00 01 64 00 00 01 65 10 00 01 67 02 
+ 00 01 68 02 00 01 69 02 00 01 6A 02 00 01 6B 02 
+ 00 01 6C 02 00 01 6D 02 00 01 6E 02 00 01 6F 02 
+ 00 01 70 02 00 01 71 02 00 01 72 02 00 01 73 02 
+ 00 01 74 14 00 01 76 02 00 01 77 00 00 01 78 00 
+ 00 01 7A 00 00 01 7B 00 00 01 7C 00 00 01 7D 00 
+ 00 01 7E 02 00 01 7F 02 00 01 80 00 00 01 81 02 
+ 40 01 82 02 00 01 83 06 00 01 84 05 40 01 85 10 
+ 00 01 86 02 00 01 87 02 00 01 88 02 00 01 89 00 
+ 00 01 8A 02 00 01 8B 02 00 01 8C 02 00 01 8D 00 
+ 00 01 8E 02 00 01 8F 02 00 01 90 12 00 01 91 06 
+ 00 01 92 02 00 01 93 04 00 01 97 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 08 00 00 
+ 00 00 00 00 01 FC 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 35
+ 80 01 00 00 00 23 00 00 00 00 00 00 00 00 08 00 
+ 00 00 08 00 01 00 02 00 03 00 04 00 05 00 10 00 
+ 11 00 20 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 05 00 00 
+ 00 00 00 00 00 01 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 43
+ 80 01 00 00 00 2B 00 00 00 00 00 00 00 00 05 00 
+ 00 00 04 00 04 03 FF FF FF 00 0B 03 FF FF FF 00 
+ 0C 03 FF FF FF 00 0D 03 FF FF FF 
+ SWTPM_IO_Read: length 18
+ 80 01 00 00 00 12 00 00 01 8A 00 25 00 06 00 80 
+ 00 43 
+    IsEnEnabled(0x18a = 'TestParms'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 01 81 00 
+ 00 01 00 00 00 01 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 19
+ 80 01 00 00 00 13 00 00 00 00 00 00 00 00 01 00 
+ 00 00 00 
+ SWTPM_IO_Read: length 24
+ 80 01 00 00 00 18 00 00 01 8A 00 23 00 06 00 80 
+ 00 43 00 10 00 03 00 10 
+    IsEnEnabled(0x18a = 'TestParms'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 67
+ 80 02 00 00 00 43 00 00 01 31 40 00 00 01 00 00 
+ 00 09 40 00 00 09 00 00 00 00 00 00 04 00 00 00 
+ 00 00 1A 00 23 00 0B 00 03 04 72 00 00 00 06 00 
+ 80 00 43 00 10 00 03 00 10 00 00 00 00 00 00 00 
+ 00 00 00 
+    IsEnEnabled(0x131 = 'CreatePrimary'): 1
+ SWTPM_IO_Write: length 314
+ 80 02 00 00 01 3A 00 00 00 00 80 00 00 00 00 00 
+ 01 23 00 5A 00 23 00 0B 00 03 04 72 00 00 00 06 
+ 00 80 00 43 00 10 00 03 00 10 00 20 CF 1F 95 79 
+ C9 8E 96 85 12 E9 51 83 F6 A3 BC E9 40 54 99 4F 
+ F6 85 D2 03 93 9B 10 48 C4 3A 3F BB 00 20 DC 5B 
+ 38 69 9E 53 01 B0 FC 6B 8A 89 78 65 43 33 C2 4D 
+ D6 61 2C B7 4B 7F 15 0C 7C C8 C0 B5 6B BE 00 37 
+ 00 00 00 00 00 20 E3 B0 C4 42 98 FC 1C 14 9A FB 
+ F4 C8 99 6F B9 24 27 AE 41 E4 64 9B 93 4C A4 95 
+ 99 1B 78 52 B8 55 01 00 10 00 04 40 00 00 01 00 
+ 04 40 00 00 01 00 00 00 20 5D A0 41 BA C0 EE 31 
+ 35 AE BB 0C AD FB A4 97 C6 A1 87 7F AE 83 2D D3 
+ D1 F8 F7 A8 71 B8 25 E8 54 80 21 40 00 00 01 00 
+ 40 2E 2C 06 96 ED 89 22 C7 84 49 1D 4D 29 CB 97 
+ 7D AA 91 17 57 B6 D9 1B D1 98 53 17 34 91 22 03 
+ 23 0E 41 4F E6 6B AF 29 C3 BA 4D 1C 59 44 A4 3D 
+ A5 6A 6D E2 D1 5D 35 07 D6 AB FE 53 8C 09 B6 4F 
+ CA 00 22 00 0B BB D6 FA B2 C1 55 97 9A F0 59 40 
+ 19 C6 96 20 2D FB 9F 1D 1B 1B 59 EE 0A C8 9E 3B 
+ D5 F2 D8 77 6E 00 00 01 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 02 80 00 00 00 40 00 00 01 01 B8 00 40 1E 13 
+ ED 8C 4E B0 44 EF C5 E7 DC 6A C4 DB A9 00 47 DD 
+ E1 32 77 64 0D 48 04 3B 96 CC 6F 02 4A 4B 36 C4 
+ 7E CA 09 7F EE 44 94 E8 DE E0 8C 77 6A 30 F8 35 
+ 52 4E ED D9 DD 85 2F BB B0 0C B6 9C 7D 94 EA FA 
+ DC 62 25 63 74 D4 21 AC 4D AA 67 AB F7 7B ED 38 
+ 68 64 B8 72 48 F1 DF BA 1D 74 57 57 15 5E 14 CD 
+ A1 47 A0 6F 5F F7 F5 C9 AE 07 23 F5 10 6B 44 6D 
+ DE 04 49 A6 E0 A2 2D CB FC 7C 91 FC 37 09 B3 E5 
+ 5D F3 C9 8C B2 6F 17 B9 D4 37 49 80 8B 59 1D 83 
+ 81 51 33 45 D2 5A D1 5B AD FD C1 24 69 AC FC EF 
+ 36 10 34 A6 2F 57 55 CB 6E 98 D7 B2 80 52 17 47 
+ F9 FF 68 94 58 AC 63 3A 95 9C C4 B0 94 A2 26 59 
+ 86 FC 88 41 FE CC CD 32 27 5C 5C 38 45 D4 F9 79 
+ F9 A9 C8 C5 98 CB 7F 2D 27 64 65 9F 1B F4 41 88 
+ 89 8B 11 A1 70 01 50 1E 70 22 B8 64 5A DC 84 1F 
+ 4F 02 EE 98 CD 29 EA 95 BF E6 04 5F D6 F0 0B 66 
+ 49 30 BA 66 72 20 27 60 1D 28 6D 5F B3 32 7B 00 
+ 96 D1 08 8A 77 AA 84 3E 23 70 84 75 E0 37 23 69 
+ 47 BD 35 A8 3A 40 5B 6A 62 76 D8 91 8E 3C 52 15 
+ E6 FD 70 63 61 30 7E 36 57 71 8D 54 F5 6D 6F 00 
+ 4E 72 67 B9 6A 09 8F 26 5F BF 74 3B 95 4B B4 3D 
+ 51 51 A0 1D 78 83 2D 28 8D 39 B9 C2 68 5F 82 09 
+ C6 43 55 04 A0 A3 B5 3A 7B 1D 9A 67 22 61 AE B9 
+ B7 3C E0 B7 93 5E 07 C8 85 99 80 7E D6 E9 7E 1C 
+ 9E B3 F1 13 89 B4 5F 08 AA 8A 7B E2 F7 6D 30 CC 
+ 3E B7 C3 9D FF E2 7D 0D 62 3A D8 1A 49 62 A8 0B 
+ C0 0B B0 00 57 95 8D 9E 69 BD B1 3F F1 43 BC A3 
+ 5F 1D 31 AC 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 02 80 00 00 00 40 00 00 01 01 B8 00 40 1E 13 
+ ED 8C 4E B0 44 EF C5 E7 DC 6A C4 DB A9 00 47 DD 
+ E1 32 77 64 0D 48 04 3B 96 CC 6F 02 4A 4B 36 C4 
+ 7E CA 09 7F EE 44 94 E8 DE E0 8C 77 6A 30 F8 35 
+ 52 4E ED D9 DD 85 2F BB B0 0C B6 9C 7D 94 EA FA 
+ DC 62 25 63 74 D4 21 AC 4D AA 67 AB F7 7B ED 38 
+ 68 64 B8 72 48 F1 DF BA 1D 74 57 57 15 5E 14 CD 
+ A1 47 A0 6F 5F F7 F5 C9 AE 07 23 F5 10 6B 44 6D 
+ DE 04 49 A6 E0 A2 2D CB FC 7C 91 FC 37 09 B3 E5 
+ 5D F3 C9 8C B2 6F 17 B9 D4 37 49 80 8B 59 1D 83 
+ 81 51 33 45 D2 5A D1 5B AD FD C1 24 69 AC FC EF 
+ 36 10 34 A6 2F 57 55 CB 6E 98 D7 B2 80 52 17 47 
+ F9 FF 68 94 58 AC 63 3A 95 9C C4 B0 94 A2 26 59 
+ 86 FC 88 41 FE CC CD 32 27 5C 5C 38 45 D4 F9 79 
+ F9 A9 C8 C5 98 CB 7F 2D 27 64 65 9F 1B F4 41 88 
+ 89 8B 11 A1 70 01 50 1E 70 22 B8 64 5A DC 84 1F 
+ 4F 02 EE 98 CD 29 EA 95 BF E6 04 5F D6 F0 0B 66 
+ 49 30 BA 66 72 20 27 60 1D 28 6D 5F B3 32 7B 00 
+ 96 D1 08 8A 77 AA 84 3E 23 70 84 75 E0 37 23 69 
+ 47 BD 35 A8 3A 40 5B 6A 62 76 D8 91 8E 3C 52 15 
+ E6 FD 70 63 61 30 7E 36 57 71 8D 54 F5 6D 6F 00 
+ 4E 72 67 B9 6A 09 8F 26 5F BF 74 3B 95 4B B4 3D 
+ 51 51 A0 1D 78 83 2D 28 8D 39 B9 C2 68 5F 82 09 
+ C6 43 55 04 A0 A3 B5 3A 7B 1D 9A 67 22 61 AE B9 
+ B7 3C E0 B7 93 5E 07 C8 85 99 80 7E D6 E9 7E 1C 
+ 9E B3 F1 13 89 B4 5F 08 AA 8A 7B E2 F7 6D 30 CC 
+ 3E B7 C3 9D FF E2 7D 0D 62 3A D8 1A 49 62 A8 0B 
+ C0 0B B0 00 57 95 8D 9E 69 BD B1 3F F1 43 BC A3 
+ 5F 1D 31 AC 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 35
+ 80 02 00 00 00 23 00 00 01 20 40 00 00 01 80 00 
+ 00 00 00 00 00 09 40 00 00 09 00 00 00 00 00 81 
+ 00 00 01 
+    IsEnEnabled(0x120 = 'EvictControl'): 1
+ SWTPM_IO_Write: length 19
+ 80 02 00 00 00 13 00 00 00 00 00 00 00 00 00 00 
+ 01 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 03 80 00 00 00 40 00 00 01 01 B8 00 40 71 CF 
+ E4 7F 1A 8F 17 31 A5 EF 74 64 D2 98 14 11 42 47 
+ DA E8 27 E7 12 0F 61 B7 D0 EF 9A F5 7D FB 01 8C 
+ 7A 6D 5B 0D 67 C7 40 AF 83 C7 53 E1 B4 42 16 B7 
+ 10 51 A8 34 B9 12 7A 5D 33 26 E6 44 13 8D F1 4C 
+ 22 03 E8 D4 2D 81 56 C1 19 B7 F7 C6 83 BC 85 81 
+ DA 32 66 45 81 A0 12 BF 85 EE E3 A3 45 D1 D3 37 
+ D5 47 C9 D9 D8 B0 26 D5 DF 5C 88 D4 58 CF 3F 75 
+ 7D 25 39 10 76 F6 99 CB 71 60 2E B4 9E 65 D6 CC 
+ 94 65 C3 CB 2B FC 24 1C BF C8 24 D7 31 AC 8A 0E 
+ A1 E6 78 80 70 DD CE 74 FE 48 2E 13 F9 54 B9 FE 
+ AC 80 59 44 9A 75 D5 6A F3 02 13 97 63 C5 91 ED 
+ 8E 3F D7 6C 37 13 4F 29 A0 FB 81 01 47 60 69 30 
+ 56 B4 E2 87 CE A8 B1 14 3D 6E 81 44 4D AC 25 37 
+ 55 CA F2 D6 08 B9 E7 65 91 A0 C3 F4 5C 3B BE 42 
+ E2 21 81 53 44 FF B7 52 C3 28 9A 46 34 54 EE BC 
+ 9C 7F AF 3B 1B 95 C0 DE 10 7D 4D 2F EB FD 00 35 
+ 15 9D 94 42 DA E4 6D D7 6B 15 32 1B A3 52 D0 93 
+ 74 62 14 E2 F1 DF 15 65 5A 24 2B 34 9F C4 F5 E7 
+ 92 11 82 88 C9 C4 C6 EA 29 E3 5E 3B 36 D4 23 FE 
+ 76 3A C2 62 D7 7C 59 02 7D B1 27 A0 12 A4 87 0E 
+ EC 9E 96 F6 4B 25 7A FD 1C 3F 2B 50 FD 6E 50 F9 
+ AC 37 AE 22 77 CF 09 A3 31 42 B2 EC 74 5B EC 7A 
+ A8 F1 8C 76 F1 FB A9 55 14 2A 4F 2F 9F FF 39 E5 
+ C9 5D 8E F8 60 78 00 47 6F BF A6 C0 AE 2C 86 C8 
+ A8 F5 B5 5F 4A 75 17 B5 7C 3C AD 95 92 69 FC 21 
+ 76 AC 6A 81 6E 90 D3 4B 31 FD 4B 46 E7 7F EF 21 
+ 0E 85 D0 45 8B B1 02 C7 C9 21 4D 52 9D F4 0C E3 
+ E8 3E 8D E9 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 03 80 00 00 00 40 00 00 01 01 B8 00 40 71 CF 
+ E4 7F 1A 8F 17 31 A5 EF 74 64 D2 98 14 11 42 47 
+ DA E8 27 E7 12 0F 61 B7 D0 EF 9A F5 7D FB 01 8C 
+ 7A 6D 5B 0D 67 C7 40 AF 83 C7 53 E1 B4 42 16 B7 
+ 10 51 A8 34 B9 12 7A 5D 33 26 E6 44 13 8D F1 4C 
+ 22 03 E8 D4 2D 81 56 C1 19 B7 F7 C6 83 BC 85 81 
+ DA 32 66 45 81 A0 12 BF 85 EE E3 A3 45 D1 D3 37 
+ D5 47 C9 D9 D8 B0 26 D5 DF 5C 88 D4 58 CF 3F 75 
+ 7D 25 39 10 76 F6 99 CB 71 60 2E B4 9E 65 D6 CC 
+ 94 65 C3 CB 2B FC 24 1C BF C8 24 D7 31 AC 8A 0E 
+ A1 E6 78 80 70 DD CE 74 FE 48 2E 13 F9 54 B9 FE 
+ AC 80 59 44 9A 75 D5 6A F3 02 13 97 63 C5 91 ED 
+ 8E 3F D7 6C 37 13 4F 29 A0 FB 81 01 47 60 69 30 
+ 56 B4 E2 87 CE A8 B1 14 3D 6E 81 44 4D AC 25 37 
+ 55 CA F2 D6 08 B9 E7 65 91 A0 C3 F4 5C 3B BE 42 
+ E2 21 81 53 44 FF B7 52 C3 28 9A 46 34 54 EE BC 
+ 9C 7F AF 3B 1B 95 C0 DE 10 7D 4D 2F EB FD 00 35 
+ 15 9D 94 42 DA E4 6D D7 6B 15 32 1B A3 52 D0 93 
+ 74 62 14 E2 F1 DF 15 65 5A 24 2B 34 9F C4 F5 E7 
+ 92 11 82 88 C9 C4 C6 EA 29 E3 5E 3B 36 D4 23 FE 
+ 76 3A C2 62 D7 7C 59 02 7D B1 27 A0 12 A4 87 0E 
+ EC 9E 96 F6 4B 25 7A FD 1C 3F 2B 50 FD 6E 50 F9 
+ AC 37 AE 22 77 CF 09 A3 31 42 B2 EC 74 5B EC 7A 
+ A8 F1 8C 76 F1 FB A9 55 14 2A 4F 2F 9F FF 39 E5 
+ C9 5D 8E F8 60 78 00 47 6F BF A6 C0 AE 2C 86 C8 
+ A8 F5 B5 5F 4A 75 17 B5 7C 3C AD 95 92 69 FC 21 
+ 76 AC 6A 81 6E 90 D3 4B 31 FD 4B 46 E7 7F EF 21 
+ 0E 85 D0 45 8B B1 02 C7 C9 21 4D 52 9D F4 0C E3 
+ E8 3E 8D E9 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 01 81 00 
+ 00 01 00 00 00 01 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 23
+ 80 01 00 00 00 17 00 00 00 00 00 00 00 00 01 00 
+ 00 00 01 81 00 00 01 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 04 80 00 00 00 40 00 00 01 01 B8 00 40 07 17 
+ D0 F5 88 C3 A5 4B 96 28 93 FA 53 A8 50 7A 15 6F 
+ 84 4D 59 2E 05 9C 5A 21 A4 4D E9 B8 E1 DE 0B AF 
+ 6C 37 B0 28 8B 33 6B 41 BD 18 D5 3F B6 DD F0 67 
+ A7 FD 6A 57 BB 8D DC 72 4D E6 91 96 27 AB 57 F8 
+ 78 09 8E 28 BF 51 D7 B3 22 38 9E 44 7D EE FE AF 
+ F1 3F F1 F0 53 CA 1D DE AB BF 2E 02 A4 3D 5D 6E 
+ 38 37 E5 F8 FA B2 E5 25 98 6C 60 FC D1 7B 88 11 
+ 64 C4 99 02 32 4E 9F E4 34 E2 FE 20 79 42 BC 91 
+ 07 75 D0 B9 41 4C 59 36 8B 5F BE 82 48 7C 77 52 
+ A4 36 F0 6B 50 03 D9 A6 41 64 F1 37 AD 83 79 73 
+ C9 DD A0 70 07 DC 95 B3 98 D6 52 E5 C8 50 C7 42 
+ F0 BF 08 65 44 85 FA AB 10 AB EE 4D A7 34 19 C3 
+ A1 99 9A 70 49 47 34 43 CB 15 14 5F 73 67 5D 40 
+ B3 5A 00 A2 21 32 CB EA 1C A3 CE EA 3A 5C F3 50 
+ F7 B2 F5 1D 05 6E 77 15 C6 FE 3C 31 FD 60 A5 C7 
+ FC 41 4F 1D F0 89 38 5A 3C 8E 7D E8 EB 3C 77 7A 
+ 70 E5 7E 37 02 16 4B EE 8C 1F 75 10 98 29 72 D5 
+ 48 6A 30 72 27 CB CB 92 1F 85 3F 26 29 6B 54 D7 
+ A0 75 78 2B 47 7D B9 E4 D5 59 FA F2 40 28 EC 7B 
+ 34 C1 60 B2 2F FE EB BF 02 13 7D 24 1C DF 49 9E 
+ 0A DB EA 28 27 8B 45 CA 17 4E 92 94 7D A8 73 20 
+ 9A 00 1E 09 A8 F5 B7 2D B4 17 D8 AB 19 CC 8B DF 
+ BE 86 16 CE 1F 98 64 78 06 26 74 53 F7 C4 94 03 
+ 20 CA F7 3A 39 61 EF A9 0F 8C F9 CC A2 DA 4D 31 
+ 7C 2B 16 26 C4 6A 5E F3 6A 18 70 8F E2 67 14 6F 
+ 63 48 A5 A6 71 C1 31 D1 0D 12 A4 E9 51 1B 4C 3E 
+ 6E 68 B5 74 42 46 E5 A8 2B 22 20 DF 65 56 C1 5C 
+ 57 21 15 C6 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 04 80 00 00 00 40 00 00 01 01 B8 00 40 07 17 
+ D0 F5 88 C3 A5 4B 96 28 93 FA 53 A8 50 7A 15 6F 
+ 84 4D 59 2E 05 9C 5A 21 A4 4D E9 B8 E1 DE 0B AF 
+ 6C 37 B0 28 8B 33 6B 41 BD 18 D5 3F B6 DD F0 67 
+ A7 FD 6A 57 BB 8D DC 72 4D E6 91 96 27 AB 57 F8 
+ 78 09 8E 28 BF 51 D7 B3 22 38 9E 44 7D EE FE AF 
+ F1 3F F1 F0 53 CA 1D DE AB BF 2E 02 A4 3D 5D 6E 
+ 38 37 E5 F8 FA B2 E5 25 98 6C 60 FC D1 7B 88 11 
+ 64 C4 99 02 32 4E 9F E4 34 E2 FE 20 79 42 BC 91 
+ 07 75 D0 B9 41 4C 59 36 8B 5F BE 82 48 7C 77 52 
+ A4 36 F0 6B 50 03 D9 A6 41 64 F1 37 AD 83 79 73 
+ C9 DD A0 70 07 DC 95 B3 98 D6 52 E5 C8 50 C7 42 
+ F0 BF 08 65 44 85 FA AB 10 AB EE 4D A7 34 19 C3 
+ A1 99 9A 70 49 47 34 43 CB 15 14 5F 73 67 5D 40 
+ B3 5A 00 A2 21 32 CB EA 1C A3 CE EA 3A 5C F3 50 
+ F7 B2 F5 1D 05 6E 77 15 C6 FE 3C 31 FD 60 A5 C7 
+ FC 41 4F 1D F0 89 38 5A 3C 8E 7D E8 EB 3C 77 7A 
+ 70 E5 7E 37 02 16 4B EE 8C 1F 75 10 98 29 72 D5 
+ 48 6A 30 72 27 CB CB 92 1F 85 3F 26 29 6B 54 D7 
+ A0 75 78 2B 47 7D B9 E4 D5 59 FA F2 40 28 EC 7B 
+ 34 C1 60 B2 2F FE EB BF 02 13 7D 24 1C DF 49 9E 
+ 0A DB EA 28 27 8B 45 CA 17 4E 92 94 7D A8 73 20 
+ 9A 00 1E 09 A8 F5 B7 2D B4 17 D8 AB 19 CC 8B DF 
+ BE 86 16 CE 1F 98 64 78 06 26 74 53 F7 C4 94 03 
+ 20 CA F7 3A 39 61 EF A9 0F 8C F9 CC A2 DA 4D 31 
+ 7C 2B 16 26 C4 6A 5E F3 6A 18 70 8F E2 67 14 6F 
+ 63 48 A5 A6 71 C1 31 D1 0D 12 A4 E9 51 1B 4C 3E 
+ 6E 68 B5 74 42 46 E5 A8 2B 22 20 DF 65 56 C1 5C 
+ 57 21 15 C6 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 73 81 00 00 01 
+    IsEnEnabled(0x173 = 'ReadPublic'): 1
+ SWTPM_IO_Write: length 174
+ 80 01 00 00 00 AE 00 00 00 00 00 5A 00 23 00 0B 
+ 00 03 04 72 00 00 00 06 00 80 00 43 00 10 00 03 
+ 00 10 00 20 CF 1F 95 79 C9 8E 96 85 12 E9 51 83 
+ F6 A3 BC E9 40 54 99 4F F6 85 D2 03 93 9B 10 48 
+ C4 3A 3F BB 00 20 DC 5B 38 69 9E 53 01 B0 FC 6B 
+ 8A 89 78 65 43 33 C2 4D D6 61 2C B7 4B 7F 15 0C 
+ 7C C8 C0 B5 6B BE 00 22 00 0B BB D6 FA B2 C1 55 
+ 97 9A F0 59 40 19 C6 96 20 2D FB 9F 1D 1B 1B 59 
+ EE 0A C8 9E 3B D5 F2 D8 77 6E 00 22 00 0B 47 60 
+ 16 3A 4B 80 D4 F2 05 EF 7D D8 C6 E5 DB F1 F2 E4 
+ FC B7 51 5A C1 74 B6 DB DD 9A 67 CC 30 38 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 05 80 00 00 00 40 00 00 01 01 B8 00 40 7A 5B 
+ 83 20 0A E0 31 69 32 65 2B 4D AB CE D6 3E F4 48 
+ F9 85 39 73 E0 82 FB C9 A7 30 E2 A2 C8 9C C2 19 
+ FC BB C1 9D ED 24 91 64 26 81 9A 8D 10 8D 8A 16 
+ 72 21 78 C9 5D B8 73 AB A6 CE 0C 7D 85 BD CA 91 
+ 18 6B D6 74 26 06 DA 7F 9C 67 55 7C 53 93 23 C2 
+ A1 F7 89 FE ED 0E 0E CC 6A CA 7A 3E 12 6A 71 9F 
+ BF 84 49 54 06 22 35 3D F0 DD 90 1A 5E 81 20 44 
+ 89 6C 5C 46 C3 F6 1F 9D 2D 89 0C 5F 47 EE F3 E6 
+ 5F BB CC EF 48 A6 25 A7 93 B1 46 A5 1E 10 77 26 
+ A1 E3 E5 90 A6 52 73 6A 3C 92 39 C9 29 55 45 95 
+ 4F 62 6D C2 D6 C6 C0 C5 23 EF 9F CD 25 37 CA 4D 
+ 3B 43 D4 30 42 25 AC B3 2F C0 00 D1 98 D3 60 21 
+ E6 D5 89 8A CE 3A 1B 79 32 76 34 A1 2D BA 4D 1E 
+ 77 1C E1 A3 AD D3 45 5B CF E5 D7 52 85 5B F8 0C 
+ 87 C9 DF AF 48 38 EF 05 5A 41 E3 6D A6 1F E6 74 
+ B4 89 7C EE CE A1 85 A2 BF 84 D2 5C 2A 2A 85 04 
+ EA 1F 29 C0 D0 E4 61 40 42 37 FF 0F C5 C3 D5 3B 
+ 48 8C 95 4D 1C 42 3A 64 22 DE C9 B7 9B 6E 72 2A 
+ 4E 73 65 65 A8 8F 99 6F 5B D2 7A 3A F4 C2 FA 91 
+ 28 57 61 58 36 F1 71 E8 A6 48 2E ED 2D 6B 2B 91 
+ 48 0F 79 BD D3 3D 59 20 08 55 AD 11 9B 70 D8 60 
+ 7E E0 AD 38 FA 56 65 93 2E 39 14 0E 48 67 7C 13 
+ D3 1E 5D 1C 95 40 06 A5 62 46 5F F9 2F E9 8C 24 
+ 3C 72 B5 19 EF 84 EA 4C 44 1A 63 99 0E B2 8F E0 
+ 5E 4C 8C C3 01 BA 74 B0 F1 DD AE 82 80 03 9B 3A 
+ AB FD 49 2E 44 18 CC 41 BF BF 30 9F 7F AA 03 FD 
+ B1 5A D9 61 9F C4 F9 80 E6 0D 55 B8 D8 25 C0 7C 
+ FB C8 38 FF 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 05 80 00 00 00 40 00 00 01 01 B8 00 40 7A 5B 
+ 83 20 0A E0 31 69 32 65 2B 4D AB CE D6 3E F4 48 
+ F9 85 39 73 E0 82 FB C9 A7 30 E2 A2 C8 9C C2 19 
+ FC BB C1 9D ED 24 91 64 26 81 9A 8D 10 8D 8A 16 
+ 72 21 78 C9 5D B8 73 AB A6 CE 0C 7D 85 BD CA 91 
+ 18 6B D6 74 26 06 DA 7F 9C 67 55 7C 53 93 23 C2 
+ A1 F7 89 FE ED 0E 0E CC 6A CA 7A 3E 12 6A 71 9F 
+ BF 84 49 54 06 22 35 3D F0 DD 90 1A 5E 81 20 44 
+ 89 6C 5C 46 C3 F6 1F 9D 2D 89 0C 5F 47 EE F3 E6 
+ 5F BB CC EF 48 A6 25 A7 93 B1 46 A5 1E 10 77 26 
+ A1 E3 E5 90 A6 52 73 6A 3C 92 39 C9 29 55 45 95 
+ 4F 62 6D C2 D6 C6 C0 C5 23 EF 9F CD 25 37 CA 4D 
+ 3B 43 D4 30 42 25 AC B3 2F C0 00 D1 98 D3 60 21 
+ E6 D5 89 8A CE 3A 1B 79 32 76 34 A1 2D BA 4D 1E 
+ 77 1C E1 A3 AD D3 45 5B CF E5 D7 52 85 5B F8 0C 
+ 87 C9 DF AF 48 38 EF 05 5A 41 E3 6D A6 1F E6 74 
+ B4 89 7C EE CE A1 85 A2 BF 84 D2 5C 2A 2A 85 04 
+ EA 1F 29 C0 D0 E4 61 40 42 37 FF 0F C5 C3 D5 3B 
+ 48 8C 95 4D 1C 42 3A 64 22 DE C9 B7 9B 6E 72 2A 
+ 4E 73 65 65 A8 8F 99 6F 5B D2 7A 3A F4 C2 FA 91 
+ 28 57 61 58 36 F1 71 E8 A6 48 2E ED 2D 6B 2B 91 
+ 48 0F 79 BD D3 3D 59 20 08 55 AD 11 9B 70 D8 60 
+ 7E E0 AD 38 FA 56 65 93 2E 39 14 0E 48 67 7C 13 
+ D3 1E 5D 1C 95 40 06 A5 62 46 5F F9 2F E9 8C 24 
+ 3C 72 B5 19 EF 84 EA 4C 44 1A 63 99 0E B2 8F E0 
+ 5E 4C 8C C3 01 BA 74 B0 F1 DD AE 82 80 03 9B 3A 
+ AB FD 49 2E 44 18 CC 41 BF BF 30 9F 7F AA 03 FD 
+ B1 5A D9 61 9F C4 F9 80 E6 0D 55 B8 D8 25 C0 7C 
+ FB C8 38 FF 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 73 81 00 00 01 
+    IsEnEnabled(0x173 = 'ReadPublic'): 1
+ SWTPM_IO_Write: length 174
+ 80 01 00 00 00 AE 00 00 00 00 00 5A 00 23 00 0B 
+ 00 03 04 72 00 00 00 06 00 80 00 43 00 10 00 03 
+ 00 10 00 20 CF 1F 95 79 C9 8E 96 85 12 E9 51 83 
+ F6 A3 BC E9 40 54 99 4F F6 85 D2 03 93 9B 10 48 
+ C4 3A 3F BB 00 20 DC 5B 38 69 9E 53 01 B0 FC 6B 
+ 8A 89 78 65 43 33 C2 4D D6 61 2C B7 4B 7F 15 0C 
+ 7C C8 C0 B5 6B BE 00 22 00 0B BB D6 FA B2 C1 55 
+ 97 9A F0 59 40 19 C6 96 20 2D FB 9F 1D 1B 1B 59 
+ EE 0A C8 9E 3B D5 F2 D8 77 6E 00 22 00 0B 47 60 
+ 16 3A 4B 80 D4 F2 05 EF 7D D8 C6 E5 DB F1 F2 E4 
+ FC B7 51 5A C1 74 B6 DB DD 9A 67 CC 30 38 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 06 80 00 00 00 40 00 00 01 01 B8 00 40 FE 17 
+ 74 37 E1 79 EA F2 F5 CE 26 75 3A 5B 21 7B DB E3 
+ A7 1B A1 C2 10 01 44 6C 99 01 13 95 A3 E7 A4 08 
+ 8C 45 F8 4E 7F EE 2F BC 9E 83 29 97 76 A0 4D 7A 
+ 09 74 24 41 03 D6 B1 49 9E B6 1A D9 DD 0D E4 BB 
+ 60 7D 0E F3 AB 6C 7F F5 B2 E6 42 B9 DA A0 49 B3 
+ 64 8B 1F 38 65 70 AE 33 8F 65 4E 17 C9 8C C7 47 
+ DA 9E 29 E1 E1 DE 4C 3E 53 6A E0 CA F5 64 1E 05 
+ 1C 44 14 27 A1 FA 0E 1A 79 9B AC 07 3F 49 2E 80 
+ F0 30 EE 22 AD 1E BB 81 FD 94 04 37 46 FD FE F5 
+ EA 9B 27 BB E0 38 B1 76 96 69 3D F6 B6 D7 C3 43 
+ 2F 97 79 13 9E 41 71 A2 0F 58 31 DD F2 D4 1D 2D 
+ 7D EF DB EF 56 80 34 01 7F E1 E8 70 F2 34 B4 AB 
+ 0C 99 08 16 BC 0A E7 9F 44 A5 7A F7 B7 0D 45 3D 
+ C0 82 95 D3 4A 22 82 3B 49 6D 41 B4 48 AF BE 41 
+ FE 6A 77 68 3F 12 B9 15 59 D1 B9 A8 FB E8 C4 C4 
+ DC 6E 47 5C D9 60 49 8C 68 F7 0E 7D 4B B5 17 2E 
+ 91 14 51 96 E5 30 C9 7E 88 2A 06 0F CE 05 E8 78 
+ 55 32 3A E8 33 BB DD E7 9A 0D E5 29 7F 11 89 62 
+ C0 FD 45 24 B0 8A 8C 10 3A B3 20 76 68 9A 9A 38 
+ 6E 43 64 50 4B D5 3B D5 16 E5 2E E6 3A 49 9D 91 
+ 3A 31 23 AB E0 3A B4 B2 74 9A B0 BC BD AC A2 0B 
+ 69 95 CA C3 A2 26 72 8B 7F 19 8D 9F C8 E9 F6 01 
+ 1C 4A A9 9E 12 DD 8F 1C 44 51 BC D3 4C D3 CD D4 
+ E2 98 96 1B 63 F5 37 6F AF 1A C2 92 59 02 7F E0 
+ CF 76 C3 6D DF 23 2A F8 51 80 A2 1E 09 D1 19 17 
+ 34 49 09 90 C0 C7 48 EE 76 49 76 52 10 D8 ED E2 
+ 66 A6 F6 6F F2 6D EF DD C6 09 47 F9 DF EF DA 87 
+ 5A DB 1A E1 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 06 80 00 00 00 40 00 00 01 01 B8 00 40 FE 17 
+ 74 37 E1 79 EA F2 F5 CE 26 75 3A 5B 21 7B DB E3 
+ A7 1B A1 C2 10 01 44 6C 99 01 13 95 A3 E7 A4 08 
+ 8C 45 F8 4E 7F EE 2F BC 9E 83 29 97 76 A0 4D 7A 
+ 09 74 24 41 03 D6 B1 49 9E B6 1A D9 DD 0D E4 BB 
+ 60 7D 0E F3 AB 6C 7F F5 B2 E6 42 B9 DA A0 49 B3 
+ 64 8B 1F 38 65 70 AE 33 8F 65 4E 17 C9 8C C7 47 
+ DA 9E 29 E1 E1 DE 4C 3E 53 6A E0 CA F5 64 1E 05 
+ 1C 44 14 27 A1 FA 0E 1A 79 9B AC 07 3F 49 2E 80 
+ F0 30 EE 22 AD 1E BB 81 FD 94 04 37 46 FD FE F5 
+ EA 9B 27 BB E0 38 B1 76 96 69 3D F6 B6 D7 C3 43 
+ 2F 97 79 13 9E 41 71 A2 0F 58 31 DD F2 D4 1D 2D 
+ 7D EF DB EF 56 80 34 01 7F E1 E8 70 F2 34 B4 AB 
+ 0C 99 08 16 BC 0A E7 9F 44 A5 7A F7 B7 0D 45 3D 
+ C0 82 95 D3 4A 22 82 3B 49 6D 41 B4 48 AF BE 41 
+ FE 6A 77 68 3F 12 B9 15 59 D1 B9 A8 FB E8 C4 C4 
+ DC 6E 47 5C D9 60 49 8C 68 F7 0E 7D 4B B5 17 2E 
+ 91 14 51 96 E5 30 C9 7E 88 2A 06 0F CE 05 E8 78 
+ 55 32 3A E8 33 BB DD E7 9A 0D E5 29 7F 11 89 62 
+ C0 FD 45 24 B0 8A 8C 10 3A B3 20 76 68 9A 9A 38 
+ 6E 43 64 50 4B D5 3B D5 16 E5 2E E6 3A 49 9D 91 
+ 3A 31 23 AB E0 3A B4 B2 74 9A B0 BC BD AC A2 0B 
+ 69 95 CA C3 A2 26 72 8B 7F 19 8D 9F C8 E9 F6 01 
+ 1C 4A A9 9E 12 DD 8F 1C 44 51 BC D3 4C D3 CD D4 
+ E2 98 96 1B 63 F5 37 6F AF 1A C2 92 59 02 7F E0 
+ CF 76 C3 6D DF 23 2A F8 51 80 A2 1E 09 D1 19 17 
+ 34 49 09 90 C0 C7 48 EE 76 49 76 52 10 D8 ED E2 
+ 66 A6 F6 6F F2 6D EF DD C6 09 47 F9 DF EF DA 87 
+ 5A DB 1A E1 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 09 10 
+ SWTPM_IO_Read: length 12
+ 80 01 00 00 00 0C 00 00 01 7B 00 08 
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+ SWTPM_IO_Write: length 20
+ 80 01 00 00 00 14 00 00 00 00 00 08 BD 90 0A 8B 
+ 8A 2A 99 10 
+ SWTPM_IO_Read: length 12
+ 80 01 00 00 00 0C 00 00 01 44 00 00 
+    IsEnEnabled(0x144 = 'Startup'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 01 00 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 00 00 00 
+ 00 01 00 00 00 7F 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 217
+ 80 01 00 00 00 D9 00 00 00 00 00 00 00 00 00 00 
+ 00 00 21 00 01 00 00 00 09 00 03 00 00 00 02 00 
+ 04 00 00 00 04 00 05 00 00 01 04 00 06 00 00 00 
+ 02 00 07 00 00 04 04 00 08 00 00 03 0C 00 0A 00 
+ 00 00 06 00 0B 00 00 00 04 00 0C 00 00 00 04 00 
+ 0D 00 00 00 04 00 14 00 00 01 01 00 15 00 00 02 
+ 01 00 16 00 00 01 01 00 17 00 00 02 01 00 18 00 
+ 00 01 01 00 19 00 00 04 01 00 1A 00 00 01 01 00 
+ 1B 00 00 05 01 00 1C 00 00 01 01 00 1D 00 00 04 
+ 01 00 20 00 00 04 04 00 21 00 00 04 04 00 22 00 
+ 00 04 04 00 23 00 00 00 09 00 25 00 00 00 08 00 
+ 26 00 00 00 02 00 3F 00 00 01 02 00 40 00 00 02 
+ 02 00 41 00 00 02 02 00 42 00 00 02 02 00 43 00 
+ 00 02 02 00 44 00 00 02 02 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 02 00 00 
+ 01 1F 00 00 01 00 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x11f = 'NV_UndefineSpaceSpecial'): 1
+    IsEnEnabled(0x11f = 'NV_UndefineSpaceSpecial'): 1
+    IsEnEnabled(0x120 = 'EvictControl'): 1
+    IsEnEnabled(0x120 = 'EvictControl'): 1
+    IsEnEnabled(0x121 = 'HierarchyControl'): 1
+    IsEnEnabled(0x121 = 'HierarchyControl'): 1
+    IsEnEnabled(0x122 = 'NV_UndefineSpace'): 1
+    IsEnEnabled(0x122 = 'NV_UndefineSpace'): 1
+    IsEnEnabled(0x123 = '(null)'): 0
+    IsEnEnabled(0x124 = 'ChangeEPS'): 1
+    IsEnEnabled(0x124 = 'ChangeEPS'): 1
+    IsEnEnabled(0x125 = 'ChangePPS'): 1
+    IsEnEnabled(0x125 = 'ChangePPS'): 1
+    IsEnEnabled(0x126 = 'Clear'): 1
+    IsEnEnabled(0x126 = 'Clear'): 1
+    IsEnEnabled(0x127 = 'ClearControl'): 1
+    IsEnEnabled(0x127 = 'ClearControl'): 1
+    IsEnEnabled(0x128 = 'ClockSet'): 1
+    IsEnEnabled(0x128 = 'ClockSet'): 1
+    IsEnEnabled(0x129 = 'HierarchyChangeAuth'): 1
+    IsEnEnabled(0x129 = 'HierarchyChangeAuth'): 1
+    IsEnEnabled(0x12a = 'NV_DefineSpace'): 1
+    IsEnEnabled(0x12a = 'NV_DefineSpace'): 1
+    IsEnEnabled(0x12b = 'PCR_Allocate'): 1
+    IsEnEnabled(0x12b = 'PCR_Allocate'): 1
+    IsEnEnabled(0x12c = 'PCR_SetAuthPolicy'): 1
+    IsEnEnabled(0x12c = 'PCR_SetAuthPolicy'): 1
+    IsEnEnabled(0x12d = 'PP_Commands'): 1
+    IsEnEnabled(0x12d = 'PP_Commands'): 1
+    IsEnEnabled(0x12e = 'SetPrimaryPolicy'): 1
+    IsEnEnabled(0x12e = 'SetPrimaryPolicy'): 1
+    IsEnEnabled(0x12f = '(null)'): 0
+    IsEnEnabled(0x130 = 'ClockRateAdjust'): 1
+    IsEnEnabled(0x130 = 'ClockRateAdjust'): 1
+    IsEnEnabled(0x131 = 'CreatePrimary'): 1
+    IsEnEnabled(0x131 = 'CreatePrimary'): 1
+    IsEnEnabled(0x132 = 'NV_GlobalWriteLock'): 1
+    IsEnEnabled(0x132 = 'NV_GlobalWriteLock'): 1
+    IsEnEnabled(0x133 = 'GetCommandAuditDigest'): 1
+    IsEnEnabled(0x133 = 'GetCommandAuditDigest'): 1
+    IsEnEnabled(0x134 = 'NV_Increment'): 1
+    IsEnEnabled(0x134 = 'NV_Increment'): 1
+    IsEnEnabled(0x135 = 'NV_SetBits'): 1
+    IsEnEnabled(0x135 = 'NV_SetBits'): 1
+    IsEnEnabled(0x136 = 'NV_Extend'): 1
+    IsEnEnabled(0x136 = 'NV_Extend'): 1
+    IsEnEnabled(0x137 = 'NV_Write'): 1
+    IsEnEnabled(0x137 = 'NV_Write'): 1
+    IsEnEnabled(0x138 = 'NV_WriteLock'): 1
+    IsEnEnabled(0x138 = 'NV_WriteLock'): 1
+    IsEnEnabled(0x139 = 'DictionaryAttackLockReset'): 1
+    IsEnEnabled(0x139 = 'DictionaryAttackLockReset'): 1
+    IsEnEnabled(0x13a = 'DictionaryAttackParameters'): 1
+    IsEnEnabled(0x13a = 'DictionaryAttackParameters'): 1
+    IsEnEnabled(0x13b = 'NV_ChangeAuth'): 1
+    IsEnEnabled(0x13b = 'NV_ChangeAuth'): 1
+    IsEnEnabled(0x13c = 'PCR_Event'): 1
+    IsEnEnabled(0x13c = 'PCR_Event'): 1
+    IsEnEnabled(0x13d = 'PCR_Reset'): 1
+    IsEnEnabled(0x13d = 'PCR_Reset'): 1
+    IsEnEnabled(0x13e = 'SequenceComplete'): 1
+    IsEnEnabled(0x13e = 'SequenceComplete'): 1
+    IsEnEnabled(0x13f = 'SetAlgorithmSet'): 1
+    IsEnEnabled(0x13f = 'SetAlgorithmSet'): 1
+    IsEnEnabled(0x140 = 'SetCommandCodeAuditStatus'): 1
+    IsEnEnabled(0x140 = 'SetCommandCodeAuditStatus'): 1
+    IsEnEnabled(0x141 = '(null)'): 0
+    IsEnEnabled(0x142 = 'IncrementalSelfTest'): 1
+    IsEnEnabled(0x142 = 'IncrementalSelfTest'): 1
+    IsEnEnabled(0x143 = 'SelfTest'): 1
+    IsEnEnabled(0x143 = 'SelfTest'): 1
+    IsEnEnabled(0x144 = 'Startup'): 1
+    IsEnEnabled(0x144 = 'Startup'): 1
+    IsEnEnabled(0x145 = 'Shutdown'): 1
+    IsEnEnabled(0x145 = 'Shutdown'): 1
+    IsEnEnabled(0x146 = 'StirRandom'): 1
+    IsEnEnabled(0x146 = 'StirRandom'): 1
+    IsEnEnabled(0x147 = 'ActivateCredential'): 1
+    IsEnEnabled(0x147 = 'ActivateCredential'): 1
+    IsEnEnabled(0x148 = 'Certify'): 1
+    IsEnEnabled(0x148 = 'Certify'): 1
+    IsEnEnabled(0x149 = 'PolicyNV'): 1
+    IsEnEnabled(0x149 = 'PolicyNV'): 1
+    IsEnEnabled(0x14a = 'CertifyCreation'): 1
+    IsEnEnabled(0x14a = 'CertifyCreation'): 1
+    IsEnEnabled(0x14b = 'Duplicate'): 1
+    IsEnEnabled(0x14b = 'Duplicate'): 1
+    IsEnEnabled(0x14c = 'GetTime'): 1
+    IsEnEnabled(0x14c = 'GetTime'): 1
+    IsEnEnabled(0x14d = 'GetSessionAuditDigest'): 1
+    IsEnEnabled(0x14d = 'GetSessionAuditDigest'): 1
+    IsEnEnabled(0x14e = 'NV_Read'): 1
+    IsEnEnabled(0x14e = 'NV_Read'): 1
+    IsEnEnabled(0x14f = 'NV_ReadLock'): 1
+    IsEnEnabled(0x14f = 'NV_ReadLock'): 1
+    IsEnEnabled(0x150 = 'ObjectChangeAuth'): 1
+    IsEnEnabled(0x150 = 'ObjectChangeAuth'): 1
+    IsEnEnabled(0x151 = 'PolicySecret'): 1
+    IsEnEnabled(0x151 = 'PolicySecret'): 1
+    IsEnEnabled(0x152 = 'Rewrap'): 1
+    IsEnEnabled(0x152 = 'Rewrap'): 1
+    IsEnEnabled(0x153 = 'Create'): 1
+    IsEnEnabled(0x153 = 'Create'): 1
+    IsEnEnabled(0x154 = 'ECDH_ZGen'): 1
+    IsEnEnabled(0x154 = 'ECDH_ZGen'): 1
+    IsEnEnabled(0x155 = 'MAC'): 1
+    IsEnEnabled(0x155 = 'MAC'): 1
+    IsEnEnabled(0x156 = 'Import'): 1
+    IsEnEnabled(0x156 = 'Import'): 1
+    IsEnEnabled(0x157 = 'Load'): 1
+    IsEnEnabled(0x157 = 'Load'): 1
+    IsEnEnabled(0x158 = 'Quote'): 1
+    IsEnEnabled(0x158 = 'Quote'): 1
+    IsEnEnabled(0x159 = 'RSA_Decrypt'): 1
+    IsEnEnabled(0x159 = 'RSA_Decrypt'): 1
+    IsEnEnabled(0x15a = '(null)'): 0
+    IsEnEnabled(0x15b = 'MAC_Start'): 1
+    IsEnEnabled(0x15b = 'MAC_Start'): 1
+    IsEnEnabled(0x15c = 'SequenceUpdate'): 1
+    IsEnEnabled(0x15c = 'SequenceUpdate'): 1
+    IsEnEnabled(0x15d = 'Sign'): 1
+    IsEnEnabled(0x15d = 'Sign'): 1
+    IsEnEnabled(0x15e = 'Unseal'): 1
+    IsEnEnabled(0x15e = 'Unseal'): 1
+    IsEnEnabled(0x15f = '(null)'): 0
+    IsEnEnabled(0x160 = 'PolicySigned'): 1
+    IsEnEnabled(0x160 = 'PolicySigned'): 1
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+    IsEnEnabled(0x163 = 'ECDH_KeyGen'): 1
+    IsEnEnabled(0x163 = 'ECDH_KeyGen'): 1
+    IsEnEnabled(0x164 = 'EncryptDecrypt'): 1
+    IsEnEnabled(0x164 = 'EncryptDecrypt'): 1
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+    IsEnEnabled(0x166 = '(null)'): 0
+    IsEnEnabled(0x167 = 'LoadExternal'): 1
+    IsEnEnabled(0x167 = 'LoadExternal'): 1
+    IsEnEnabled(0x168 = 'MakeCredential'): 1
+    IsEnEnabled(0x168 = 'MakeCredential'): 1
+    IsEnEnabled(0x169 = 'NV_ReadPublic'): 1
+    IsEnEnabled(0x169 = 'NV_ReadPublic'): 1
+    IsEnEnabled(0x16a = 'PolicyAuthorize'): 1
+    IsEnEnabled(0x16a = 'PolicyAuthorize'): 1
+    IsEnEnabled(0x16b = 'PolicyAuthValue'): 1
+    IsEnEnabled(0x16b = 'PolicyAuthValue'): 1
+    IsEnEnabled(0x16c = 'PolicyCommandCode'): 1
+    IsEnEnabled(0x16c = 'PolicyCommandCode'): 1
+    IsEnEnabled(0x16d = 'PolicyCounterTimer'): 1
+    IsEnEnabled(0x16d = 'PolicyCounterTimer'): 1
+    IsEnEnabled(0x16e = 'PolicyCpHash'): 1
+    IsEnEnabled(0x16e = 'PolicyCpHash'): 1
+    IsEnEnabled(0x16f = 'PolicyLocality'): 1
+    IsEnEnabled(0x16f = 'PolicyLocality'): 1
+    IsEnEnabled(0x170 = 'PolicyNameHash'): 1
+    IsEnEnabled(0x170 = 'PolicyNameHash'): 1
+    IsEnEnabled(0x171 = 'PolicyOR'): 1
+    IsEnEnabled(0x171 = 'PolicyOR'): 1
+    IsEnEnabled(0x172 = 'PolicyTicket'): 1
+    IsEnEnabled(0x172 = 'PolicyTicket'): 1
+    IsEnEnabled(0x173 = 'ReadPublic'): 1
+    IsEnEnabled(0x173 = 'ReadPublic'): 1
+    IsEnEnabled(0x174 = 'RSA_Encrypt'): 1
+    IsEnEnabled(0x174 = 'RSA_Encrypt'): 1
+    IsEnEnabled(0x175 = '(null)'): 0
+    IsEnEnabled(0x176 = 'StartAuthSession'): 1
+    IsEnEnabled(0x176 = 'StartAuthSession'): 1
+    IsEnEnabled(0x177 = 'VerifySignature'): 1
+    IsEnEnabled(0x177 = 'VerifySignature'): 1
+    IsEnEnabled(0x178 = 'ECC_Parameters'): 1
+    IsEnEnabled(0x178 = 'ECC_Parameters'): 1
+    IsEnEnabled(0x179 = '(null)'): 0
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+    IsEnEnabled(0x17c = 'GetTestResult'): 1
+    IsEnEnabled(0x17c = 'GetTestResult'): 1
+    IsEnEnabled(0x17d = 'Hash'): 1
+    IsEnEnabled(0x17d = 'Hash'): 1
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+    IsEnEnabled(0x17f = 'PolicyPCR'): 1
+    IsEnEnabled(0x17f = 'PolicyPCR'): 1
+    IsEnEnabled(0x180 = 'PolicyRestart'): 1
+    IsEnEnabled(0x180 = 'PolicyRestart'): 1
+    IsEnEnabled(0x181 = 'ReadClock'): 1
+    IsEnEnabled(0x181 = 'ReadClock'): 1
+    IsEnEnabled(0x182 = 'PCR_Extend'): 1
+    IsEnEnabled(0x182 = 'PCR_Extend'): 1
+    IsEnEnabled(0x183 = 'PCR_SetAuthValue'): 1
+    IsEnEnabled(0x183 = 'PCR_SetAuthValue'): 1
+    IsEnEnabled(0x184 = 'NV_Certify'): 1
+    IsEnEnabled(0x184 = 'NV_Certify'): 1
+    IsEnEnabled(0x185 = 'EventSequenceComplete'): 1
+    IsEnEnabled(0x185 = 'EventSequenceComplete'): 1
+    IsEnEnabled(0x186 = 'HashSequenceStart'): 1
+    IsEnEnabled(0x186 = 'HashSequenceStart'): 1
+    IsEnEnabled(0x187 = 'PolicyPhysicalPresence'): 1
+    IsEnEnabled(0x187 = 'PolicyPhysicalPresence'): 1
+    IsEnEnabled(0x188 = 'PolicyDuplicationSelect'): 1
+    IsEnEnabled(0x188 = 'PolicyDuplicationSelect'): 1
+    IsEnEnabled(0x189 = 'PolicyGetDigest'): 1
+    IsEnEnabled(0x189 = 'PolicyGetDigest'): 1
+    IsEnEnabled(0x18a = 'TestParms'): 1
+    IsEnEnabled(0x18a = 'TestParms'): 1
+    IsEnEnabled(0x18b = 'Commit'): 1
+    IsEnEnabled(0x18b = 'Commit'): 1
+    IsEnEnabled(0x18c = 'PolicyPassword'): 1
+    IsEnEnabled(0x18c = 'PolicyPassword'): 1
+    IsEnEnabled(0x18d = 'ZGen_2Phase'): 1
+    IsEnEnabled(0x18d = 'ZGen_2Phase'): 1
+    IsEnEnabled(0x18e = 'EC_Ephemeral'): 1
+    IsEnEnabled(0x18e = 'EC_Ephemeral'): 1
+    IsEnEnabled(0x18f = 'PolicyNvWritten'): 1
+    IsEnEnabled(0x18f = 'PolicyNvWritten'): 1
+    IsEnEnabled(0x190 = 'PolicyTemplate'): 1
+    IsEnEnabled(0x190 = 'PolicyTemplate'): 1
+    IsEnEnabled(0x191 = 'CreateLoaded'): 1
+    IsEnEnabled(0x191 = 'CreateLoaded'): 1
+    IsEnEnabled(0x192 = 'PolicyAuthorizeNV'): 1
+    IsEnEnabled(0x192 = 'PolicyAuthorizeNV'): 1
+    IsEnEnabled(0x193 = 'EncryptDecrypt2'): 1
+    IsEnEnabled(0x193 = 'EncryptDecrypt2'): 1
+    IsEnEnabled(0x194 = '(null)'): 0
+    IsEnEnabled(0x195 = '(null)'): 0
+    IsEnEnabled(0x196 = '(null)'): 0
+    IsEnEnabled(0x197 = 'CertifyX509'): 1
+    IsEnEnabled(0x197 = 'CertifyX509'): 1
+    IsEnEnabled(0x198 = '(null)'): 0
+    IsEnEnabled(0x199 = 'ECC_Encrypt'): 0
+    IsEnEnabled(0x19a = 'ECC_Decrypt'): 0
+    IsEnEnabled(0x19b = 'PolicyCapability'): 0
+    IsEnEnabled(0x19c = 'PolicyParameters'): 0
+    IsEnEnabled(0x19d = '(null)'): 0
+    IsEnEnabled(0x19e = '(null)'): 0
+    IsEnEnabled(0x19f = '(null)'): 0
+ SWTPM_IO_Write: length 459
+ 80 01 00 00 01 CB 00 00 00 00 00 00 00 00 02 00 
+ 00 00 6E 04 40 01 1F 04 40 01 20 02 C0 01 21 04 
+ 40 01 22 02 C0 01 24 02 C0 01 25 02 C0 01 26 02 
+ 40 01 27 02 40 01 28 02 40 01 29 02 40 01 2A 02 
+ 40 01 2B 02 40 01 2C 02 40 01 2D 02 40 01 2E 02 
+ 00 01 30 12 00 01 31 02 40 01 32 04 40 01 33 04 
+ 40 01 34 04 40 01 35 04 40 01 36 04 40 01 37 04 
+ 40 01 38 02 40 01 39 02 40 01 3A 02 40 01 3B 02 
+ 40 01 3C 02 40 01 3D 03 00 01 3E 02 40 01 3F 02 
+ 40 01 40 00 40 01 42 00 40 01 43 00 40 01 44 00 
+ 40 01 45 00 40 01 46 04 00 01 47 04 00 01 48 06 
+ 00 01 49 04 00 01 4A 04 00 01 4B 04 00 01 4C 06 
+ 00 01 4D 04 00 01 4E 04 40 01 4F 04 00 01 50 04 
+ 00 01 51 04 00 01 52 02 00 01 53 02 00 01 54 02 
+ 00 01 55 02 00 01 56 12 00 01 57 02 00 01 58 02 
+ 00 01 59 12 00 01 5B 02 00 01 5C 02 00 01 5D 02 
+ 00 01 5E 04 00 01 60 10 00 01 61 02 00 01 62 02 
+ 00 01 63 02 00 01 64 00 00 01 65 10 00 01 67 02 
+ 00 01 68 02 00 01 69 02 00 01 6A 02 00 01 6B 02 
+ 00 01 6C 02 00 01 6D 02 00 01 6E 02 00 01 6F 02 
+ 00 01 70 02 00 01 71 02 00 01 72 02 00 01 73 02 
+ 00 01 74 14 00 01 76 02 00 01 77 00 00 01 78 00 
+ 00 01 7A 00 00 01 7B 00 00 01 7C 00 00 01 7D 00 
+ 00 01 7E 02 00 01 7F 02 00 01 80 00 00 01 81 02 
+ 40 01 82 02 00 01 83 06 00 01 84 05 40 01 85 10 
+ 00 01 86 02 00 01 87 02 00 01 88 02 00 01 89 00 
+ 00 01 8A 02 00 01 8B 02 00 01 8C 02 00 01 8D 00 
+ 00 01 8E 02 00 01 8F 02 00 01 90 12 00 01 91 06 
+ 00 01 92 02 00 01 93 04 00 01 97 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 08 00 00 
+ 00 00 00 00 01 FC 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 35
+ 80 01 00 00 00 23 00 00 00 00 00 00 00 00 08 00 
+ 00 00 08 00 01 00 02 00 03 00 04 00 05 00 10 00 
+ 11 00 20 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 05 00 00 
+ 00 00 00 00 00 01 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 43
+ 80 01 00 00 00 2B 00 00 00 00 00 00 00 00 05 00 
+ 00 00 04 00 04 03 FF FF FF 00 0B 03 FF FF FF 00 
+ 0C 03 FF FF FF 00 0D 03 FF FF FF 
+ SWTPM_IO_Read: length 18
+ 80 01 00 00 00 12 00 00 01 8A 00 25 00 06 00 80 
+ 00 43 
+    IsEnEnabled(0x18a = 'TestParms'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 12
+ 80 01 00 00 00 0C 00 00 01 7B 00 08 
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+ SWTPM_IO_Write: length 20
+ 80 01 00 00 00 14 00 00 00 00 00 08 7C F7 7D D1 
+ C7 69 20 2A 
+ SWTPM_IO_Read: length 12
+ 80 01 00 00 00 0C 00 00 01 44 00 00 
+    IsEnEnabled(0x144 = 'Startup'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 01 00 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 00 00 00 
+ 00 01 00 00 00 7F 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 217
+ 80 01 00 00 00 D9 00 00 00 00 00 00 00 00 00 00 
+ 00 00 21 00 01 00 00 00 09 00 03 00 00 00 02 00 
+ 04 00 00 00 04 00 05 00 00 01 04 00 06 00 00 00 
+ 02 00 07 00 00 04 04 00 08 00 00 03 0C 00 0A 00 
+ 00 00 06 00 0B 00 00 00 04 00 0C 00 00 00 04 00 
+ 0D 00 00 00 04 00 14 00 00 01 01 00 15 00 00 02 
+ 01 00 16 00 00 01 01 00 17 00 00 02 01 00 18 00 
+ 00 01 01 00 19 00 00 04 01 00 1A 00 00 01 01 00 
+ 1B 00 00 05 01 00 1C 00 00 01 01 00 1D 00 00 04 
+ 01 00 20 00 00 04 04 00 21 00 00 04 04 00 22 00 
+ 00 04 04 00 23 00 00 00 09 00 25 00 00 00 08 00 
+ 26 00 00 00 02 00 3F 00 00 01 02 00 40 00 00 02 
+ 02 00 41 00 00 02 02 00 42 00 00 02 02 00 43 00 
+ 00 02 02 00 44 00 00 02 02 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 02 00 00 
+ 01 1F 00 00 01 00 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x11f = 'NV_UndefineSpaceSpecial'): 1
+    IsEnEnabled(0x11f = 'NV_UndefineSpaceSpecial'): 1
+    IsEnEnabled(0x120 = 'EvictControl'): 1
+    IsEnEnabled(0x120 = 'EvictControl'): 1
+    IsEnEnabled(0x121 = 'HierarchyControl'): 1
+    IsEnEnabled(0x121 = 'HierarchyControl'): 1
+    IsEnEnabled(0x122 = 'NV_UndefineSpace'): 1
+    IsEnEnabled(0x122 = 'NV_UndefineSpace'): 1
+    IsEnEnabled(0x123 = '(null)'): 0
+    IsEnEnabled(0x124 = 'ChangeEPS'): 1
+    IsEnEnabled(0x124 = 'ChangeEPS'): 1
+    IsEnEnabled(0x125 = 'ChangePPS'): 1
+    IsEnEnabled(0x125 = 'ChangePPS'): 1
+    IsEnEnabled(0x126 = 'Clear'): 1
+    IsEnEnabled(0x126 = 'Clear'): 1
+    IsEnEnabled(0x127 = 'ClearControl'): 1
+    IsEnEnabled(0x127 = 'ClearControl'): 1
+    IsEnEnabled(0x128 = 'ClockSet'): 1
+    IsEnEnabled(0x128 = 'ClockSet'): 1
+    IsEnEnabled(0x129 = 'HierarchyChangeAuth'): 1
+    IsEnEnabled(0x129 = 'HierarchyChangeAuth'): 1
+    IsEnEnabled(0x12a = 'NV_DefineSpace'): 1
+    IsEnEnabled(0x12a = 'NV_DefineSpace'): 1
+    IsEnEnabled(0x12b = 'PCR_Allocate'): 1
+    IsEnEnabled(0x12b = 'PCR_Allocate'): 1
+    IsEnEnabled(0x12c = 'PCR_SetAuthPolicy'): 1
+    IsEnEnabled(0x12c = 'PCR_SetAuthPolicy'): 1
+    IsEnEnabled(0x12d = 'PP_Commands'): 1
+    IsEnEnabled(0x12d = 'PP_Commands'): 1
+    IsEnEnabled(0x12e = 'SetPrimaryPolicy'): 1
+    IsEnEnabled(0x12e = 'SetPrimaryPolicy'): 1
+    IsEnEnabled(0x12f = '(null)'): 0
+    IsEnEnabled(0x130 = 'ClockRateAdjust'): 1
+    IsEnEnabled(0x130 = 'ClockRateAdjust'): 1
+    IsEnEnabled(0x131 = 'CreatePrimary'): 1
+    IsEnEnabled(0x131 = 'CreatePrimary'): 1
+    IsEnEnabled(0x132 = 'NV_GlobalWriteLock'): 1
+    IsEnEnabled(0x132 = 'NV_GlobalWriteLock'): 1
+    IsEnEnabled(0x133 = 'GetCommandAuditDigest'): 1
+    IsEnEnabled(0x133 = 'GetCommandAuditDigest'): 1
+    IsEnEnabled(0x134 = 'NV_Increment'): 1
+    IsEnEnabled(0x134 = 'NV_Increment'): 1
+    IsEnEnabled(0x135 = 'NV_SetBits'): 1
+    IsEnEnabled(0x135 = 'NV_SetBits'): 1
+    IsEnEnabled(0x136 = 'NV_Extend'): 1
+    IsEnEnabled(0x136 = 'NV_Extend'): 1
+    IsEnEnabled(0x137 = 'NV_Write'): 1
+    IsEnEnabled(0x137 = 'NV_Write'): 1
+    IsEnEnabled(0x138 = 'NV_WriteLock'): 1
+    IsEnEnabled(0x138 = 'NV_WriteLock'): 1
+    IsEnEnabled(0x139 = 'DictionaryAttackLockReset'): 1
+    IsEnEnabled(0x139 = 'DictionaryAttackLockReset'): 1
+    IsEnEnabled(0x13a = 'DictionaryAttackParameters'): 1
+    IsEnEnabled(0x13a = 'DictionaryAttackParameters'): 1
+    IsEnEnabled(0x13b = 'NV_ChangeAuth'): 1
+    IsEnEnabled(0x13b = 'NV_ChangeAuth'): 1
+    IsEnEnabled(0x13c = 'PCR_Event'): 1
+    IsEnEnabled(0x13c = 'PCR_Event'): 1
+    IsEnEnabled(0x13d = 'PCR_Reset'): 1
+    IsEnEnabled(0x13d = 'PCR_Reset'): 1
+    IsEnEnabled(0x13e = 'SequenceComplete'): 1
+    IsEnEnabled(0x13e = 'SequenceComplete'): 1
+    IsEnEnabled(0x13f = 'SetAlgorithmSet'): 1
+    IsEnEnabled(0x13f = 'SetAlgorithmSet'): 1
+    IsEnEnabled(0x140 = 'SetCommandCodeAuditStatus'): 1
+    IsEnEnabled(0x140 = 'SetCommandCodeAuditStatus'): 1
+    IsEnEnabled(0x141 = '(null)'): 0
+    IsEnEnabled(0x142 = 'IncrementalSelfTest'): 1
+    IsEnEnabled(0x142 = 'IncrementalSelfTest'): 1
+    IsEnEnabled(0x143 = 'SelfTest'): 1
+    IsEnEnabled(0x143 = 'SelfTest'): 1
+    IsEnEnabled(0x144 = 'Startup'): 1
+    IsEnEnabled(0x144 = 'Startup'): 1
+    IsEnEnabled(0x145 = 'Shutdown'): 1
+    IsEnEnabled(0x145 = 'Shutdown'): 1
+    IsEnEnabled(0x146 = 'StirRandom'): 1
+    IsEnEnabled(0x146 = 'StirRandom'): 1
+    IsEnEnabled(0x147 = 'ActivateCredential'): 1
+    IsEnEnabled(0x147 = 'ActivateCredential'): 1
+    IsEnEnabled(0x148 = 'Certify'): 1
+    IsEnEnabled(0x148 = 'Certify'): 1
+    IsEnEnabled(0x149 = 'PolicyNV'): 1
+    IsEnEnabled(0x149 = 'PolicyNV'): 1
+    IsEnEnabled(0x14a = 'CertifyCreation'): 1
+    IsEnEnabled(0x14a = 'CertifyCreation'): 1
+    IsEnEnabled(0x14b = 'Duplicate'): 1
+    IsEnEnabled(0x14b = 'Duplicate'): 1
+    IsEnEnabled(0x14c = 'GetTime'): 1
+    IsEnEnabled(0x14c = 'GetTime'): 1
+    IsEnEnabled(0x14d = 'GetSessionAuditDigest'): 1
+    IsEnEnabled(0x14d = 'GetSessionAuditDigest'): 1
+    IsEnEnabled(0x14e = 'NV_Read'): 1
+    IsEnEnabled(0x14e = 'NV_Read'): 1
+    IsEnEnabled(0x14f = 'NV_ReadLock'): 1
+    IsEnEnabled(0x14f = 'NV_ReadLock'): 1
+    IsEnEnabled(0x150 = 'ObjectChangeAuth'): 1
+    IsEnEnabled(0x150 = 'ObjectChangeAuth'): 1
+    IsEnEnabled(0x151 = 'PolicySecret'): 1
+    IsEnEnabled(0x151 = 'PolicySecret'): 1
+    IsEnEnabled(0x152 = 'Rewrap'): 1
+    IsEnEnabled(0x152 = 'Rewrap'): 1
+    IsEnEnabled(0x153 = 'Create'): 1
+    IsEnEnabled(0x153 = 'Create'): 1
+    IsEnEnabled(0x154 = 'ECDH_ZGen'): 1
+    IsEnEnabled(0x154 = 'ECDH_ZGen'): 1
+    IsEnEnabled(0x155 = 'MAC'): 1
+    IsEnEnabled(0x155 = 'MAC'): 1
+    IsEnEnabled(0x156 = 'Import'): 1
+    IsEnEnabled(0x156 = 'Import'): 1
+    IsEnEnabled(0x157 = 'Load'): 1
+    IsEnEnabled(0x157 = 'Load'): 1
+    IsEnEnabled(0x158 = 'Quote'): 1
+    IsEnEnabled(0x158 = 'Quote'): 1
+    IsEnEnabled(0x159 = 'RSA_Decrypt'): 1
+    IsEnEnabled(0x159 = 'RSA_Decrypt'): 1
+    IsEnEnabled(0x15a = '(null)'): 0
+    IsEnEnabled(0x15b = 'MAC_Start'): 1
+    IsEnEnabled(0x15b = 'MAC_Start'): 1
+    IsEnEnabled(0x15c = 'SequenceUpdate'): 1
+    IsEnEnabled(0x15c = 'SequenceUpdate'): 1
+    IsEnEnabled(0x15d = 'Sign'): 1
+    IsEnEnabled(0x15d = 'Sign'): 1
+    IsEnEnabled(0x15e = 'Unseal'): 1
+    IsEnEnabled(0x15e = 'Unseal'): 1
+    IsEnEnabled(0x15f = '(null)'): 0
+    IsEnEnabled(0x160 = 'PolicySigned'): 1
+    IsEnEnabled(0x160 = 'PolicySigned'): 1
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+    IsEnEnabled(0x163 = 'ECDH_KeyGen'): 1
+    IsEnEnabled(0x163 = 'ECDH_KeyGen'): 1
+    IsEnEnabled(0x164 = 'EncryptDecrypt'): 1
+    IsEnEnabled(0x164 = 'EncryptDecrypt'): 1
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+    IsEnEnabled(0x166 = '(null)'): 0
+    IsEnEnabled(0x167 = 'LoadExternal'): 1
+    IsEnEnabled(0x167 = 'LoadExternal'): 1
+    IsEnEnabled(0x168 = 'MakeCredential'): 1
+    IsEnEnabled(0x168 = 'MakeCredential'): 1
+    IsEnEnabled(0x169 = 'NV_ReadPublic'): 1
+    IsEnEnabled(0x169 = 'NV_ReadPublic'): 1
+    IsEnEnabled(0x16a = 'PolicyAuthorize'): 1
+    IsEnEnabled(0x16a = 'PolicyAuthorize'): 1
+    IsEnEnabled(0x16b = 'PolicyAuthValue'): 1
+    IsEnEnabled(0x16b = 'PolicyAuthValue'): 1
+    IsEnEnabled(0x16c = 'PolicyCommandCode'): 1
+    IsEnEnabled(0x16c = 'PolicyCommandCode'): 1
+    IsEnEnabled(0x16d = 'PolicyCounterTimer'): 1
+    IsEnEnabled(0x16d = 'PolicyCounterTimer'): 1
+    IsEnEnabled(0x16e = 'PolicyCpHash'): 1
+    IsEnEnabled(0x16e = 'PolicyCpHash'): 1
+    IsEnEnabled(0x16f = 'PolicyLocality'): 1
+    IsEnEnabled(0x16f = 'PolicyLocality'): 1
+    IsEnEnabled(0x170 = 'PolicyNameHash'): 1
+    IsEnEnabled(0x170 = 'PolicyNameHash'): 1
+    IsEnEnabled(0x171 = 'PolicyOR'): 1
+    IsEnEnabled(0x171 = 'PolicyOR'): 1
+    IsEnEnabled(0x172 = 'PolicyTicket'): 1
+    IsEnEnabled(0x172 = 'PolicyTicket'): 1
+    IsEnEnabled(0x173 = 'ReadPublic'): 1
+    IsEnEnabled(0x173 = 'ReadPublic'): 1
+    IsEnEnabled(0x174 = 'RSA_Encrypt'): 1
+    IsEnEnabled(0x174 = 'RSA_Encrypt'): 1
+    IsEnEnabled(0x175 = '(null)'): 0
+    IsEnEnabled(0x176 = 'StartAuthSession'): 1
+    IsEnEnabled(0x176 = 'StartAuthSession'): 1
+    IsEnEnabled(0x177 = 'VerifySignature'): 1
+    IsEnEnabled(0x177 = 'VerifySignature'): 1
+    IsEnEnabled(0x178 = 'ECC_Parameters'): 1
+    IsEnEnabled(0x178 = 'ECC_Parameters'): 1
+    IsEnEnabled(0x179 = '(null)'): 0
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+    IsEnEnabled(0x17c = 'GetTestResult'): 1
+    IsEnEnabled(0x17c = 'GetTestResult'): 1
+    IsEnEnabled(0x17d = 'Hash'): 1
+    IsEnEnabled(0x17d = 'Hash'): 1
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+    IsEnEnabled(0x17f = 'PolicyPCR'): 1
+    IsEnEnabled(0x17f = 'PolicyPCR'): 1
+    IsEnEnabled(0x180 = 'PolicyRestart'): 1
+    IsEnEnabled(0x180 = 'PolicyRestart'): 1
+    IsEnEnabled(0x181 = 'ReadClock'): 1
+    IsEnEnabled(0x181 = 'ReadClock'): 1
+    IsEnEnabled(0x182 = 'PCR_Extend'): 1
+    IsEnEnabled(0x182 = 'PCR_Extend'): 1
+    IsEnEnabled(0x183 = 'PCR_SetAuthValue'): 1
+    IsEnEnabled(0x183 = 'PCR_SetAuthValue'): 1
+    IsEnEnabled(0x184 = 'NV_Certify'): 1
+    IsEnEnabled(0x184 = 'NV_Certify'): 1
+    IsEnEnabled(0x185 = 'EventSequenceComplete'): 1
+    IsEnEnabled(0x185 = 'EventSequenceComplete'): 1
+    IsEnEnabled(0x186 = 'HashSequenceStart'): 1
+    IsEnEnabled(0x186 = 'HashSequenceStart'): 1
+    IsEnEnabled(0x187 = 'PolicyPhysicalPresence'): 1
+    IsEnEnabled(0x187 = 'PolicyPhysicalPresence'): 1
+    IsEnEnabled(0x188 = 'PolicyDuplicationSelect'): 1
+    IsEnEnabled(0x188 = 'PolicyDuplicationSelect'): 1
+    IsEnEnabled(0x189 = 'PolicyGetDigest'): 1
+    IsEnEnabled(0x189 = 'PolicyGetDigest'): 1
+    IsEnEnabled(0x18a = 'TestParms'): 1
+    IsEnEnabled(0x18a = 'TestParms'): 1
+    IsEnEnabled(0x18b = 'Commit'): 1
+    IsEnEnabled(0x18b = 'Commit'): 1
+    IsEnEnabled(0x18c = 'PolicyPassword'): 1
+    IsEnEnabled(0x18c = 'PolicyPassword'): 1
+    IsEnEnabled(0x18d = 'ZGen_2Phase'): 1
+    IsEnEnabled(0x18d = 'ZGen_2Phase'): 1
+    IsEnEnabled(0x18e = 'EC_Ephemeral'): 1
+    IsEnEnabled(0x18e = 'EC_Ephemeral'): 1
+    IsEnEnabled(0x18f = 'PolicyNvWritten'): 1
+    IsEnEnabled(0x18f = 'PolicyNvWritten'): 1
+    IsEnEnabled(0x190 = 'PolicyTemplate'): 1
+    IsEnEnabled(0x190 = 'PolicyTemplate'): 1
+    IsEnEnabled(0x191 = 'CreateLoaded'): 1
+    IsEnEnabled(0x191 = 'CreateLoaded'): 1
+    IsEnEnabled(0x192 = 'PolicyAuthorizeNV'): 1
+    IsEnEnabled(0x192 = 'PolicyAuthorizeNV'): 1
+    IsEnEnabled(0x193 = 'EncryptDecrypt2'): 1
+    IsEnEnabled(0x193 = 'EncryptDecrypt2'): 1
+    IsEnEnabled(0x194 = '(null)'): 0
+    IsEnEnabled(0x195 = '(null)'): 0
+    IsEnEnabled(0x196 = '(null)'): 0
+    IsEnEnabled(0x197 = 'CertifyX509'): 1
+    IsEnEnabled(0x197 = 'CertifyX509'): 1
+    IsEnEnabled(0x198 = '(null)'): 0
+    IsEnEnabled(0x199 = 'ECC_Encrypt'): 0
+    IsEnEnabled(0x19a = 'ECC_Decrypt'): 0
+    IsEnEnabled(0x19b = 'PolicyCapability'): 0
+    IsEnEnabled(0x19c = 'PolicyParameters'): 0
+    IsEnEnabled(0x19d = '(null)'): 0
+    IsEnEnabled(0x19e = '(null)'): 0
+    IsEnEnabled(0x19f = '(null)'): 0
+ SWTPM_IO_Write: length 459
+ 80 01 00 00 01 CB 00 00 00 00 00 00 00 00 02 00 
+ 00 00 6E 04 40 01 1F 04 40 01 20 02 C0 01 21 04 
+ 40 01 22 02 C0 01 24 02 C0 01 25 02 C0 01 26 02 
+ 40 01 27 02 40 01 28 02 40 01 29 02 40 01 2A 02 
+ 40 01 2B 02 40 01 2C 02 40 01 2D 02 40 01 2E 02 
+ 00 01 30 12 00 01 31 02 40 01 32 04 40 01 33 04 
+ 40 01 34 04 40 01 35 04 40 01 36 04 40 01 37 04 
+ 40 01 38 02 40 01 39 02 40 01 3A 02 40 01 3B 02 
+ 40 01 3C 02 40 01 3D 03 00 01 3E 02 40 01 3F 02 
+ 40 01 40 00 40 01 42 00 40 01 43 00 40 01 44 00 
+ 40 01 45 00 40 01 46 04 00 01 47 04 00 01 48 06 
+ 00 01 49 04 00 01 4A 04 00 01 4B 04 00 01 4C 06 
+ 00 01 4D 04 00 01 4E 04 40 01 4F 04 00 01 50 04 
+ 00 01 51 04 00 01 52 02 00 01 53 02 00 01 54 02 
+ 00 01 55 02 00 01 56 12 00 01 57 02 00 01 58 02 
+ 00 01 59 12 00 01 5B 02 00 01 5C 02 00 01 5D 02 
+ 00 01 5E 04 00 01 60 10 00 01 61 02 00 01 62 02 
+ 00 01 63 02 00 01 64 00 00 01 65 10 00 01 67 02 
+ 00 01 68 02 00 01 69 02 00 01 6A 02 00 01 6B 02 
+ 00 01 6C 02 00 01 6D 02 00 01 6E 02 00 01 6F 02 
+ 00 01 70 02 00 01 71 02 00 01 72 02 00 01 73 02 
+ 00 01 74 14 00 01 76 02 00 01 77 00 00 01 78 00 
+ 00 01 7A 00 00 01 7B 00 00 01 7C 00 00 01 7D 00 
+ 00 01 7E 02 00 01 7F 02 00 01 80 00 00 01 81 02 
+ 40 01 82 02 00 01 83 06 00 01 84 05 40 01 85 10 
+ 00 01 86 02 00 01 87 02 00 01 88 02 00 01 89 00 
+ 00 01 8A 02 00 01 8B 02 00 01 8C 02 00 01 8D 00 
+ 00 01 8E 02 00 01 8F 02 00 01 90 12 00 01 91 06 
+ 00 01 92 02 00 01 93 04 00 01 97 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 08 00 00 
+ 00 00 00 00 01 FC 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 35
+ 80 01 00 00 00 23 00 00 00 00 00 00 00 00 08 00 
+ 00 00 08 00 01 00 02 00 03 00 04 00 05 00 10 00 
+ 11 00 20 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 05 00 00 
+ 00 00 00 00 00 01 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 43
+ 80 01 00 00 00 2B 00 00 00 00 00 00 00 00 05 00 
+ 00 00 04 00 04 03 FF FF FF 00 0B 03 FF FF FF 00 
+ 0C 03 FF FF FF 00 0D 03 FF FF FF 
+ SWTPM_IO_Read: length 18
+ 80 01 00 00 00 12 00 00 01 8A 00 25 00 06 00 80 
+ 00 43 
+    IsEnEnabled(0x18a = 'TestParms'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 12
+ 80 01 00 00 00 0C 00 00 01 7B 00 20 
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+ SWTPM_IO_Write: length 44
+ 80 01 00 00 00 2C 00 00 00 00 00 20 9C 17 E0 66 
+ 71 DD 82 AD FD BC 0E BE 5E B8 3E 7F F9 36 53 2D 
+ D5 83 0E 3E 74 27 B1 38 EF E7 F6 D4 
+ SWTPM_IO_Read: length 24
+ 80 01 00 00 00 18 00 00 01 8A 00 23 00 06 00 80 
+ 00 43 00 10 00 03 00 10 
+    IsEnEnabled(0x18a = 'TestParms'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 67
+ 80 02 00 00 00 43 00 00 01 31 40 00 00 01 00 00 
+ 00 09 40 00 00 09 00 00 00 00 00 00 04 00 00 00 
+ 00 00 1A 00 23 00 0B 00 03 00 72 00 00 00 06 00 
+ 80 00 43 00 10 00 03 00 10 00 00 00 00 00 00 00 
+ 00 00 00 
+    IsEnEnabled(0x131 = 'CreatePrimary'): 1
+ SWTPM_IO_Write: length 314
+ 80 02 00 00 01 3A 00 00 00 00 80 00 00 00 00 00 
+ 01 23 00 5A 00 23 00 0B 00 03 00 72 00 00 00 06 
+ 00 80 00 43 00 10 00 03 00 10 00 20 D9 BD 06 71 
+ 7F 05 15 33 BE 65 5F 84 F7 1C 13 24 91 64 BA F0 
+ EB C9 ED 9D 9D E6 0E BB AC F8 37 03 00 20 B4 57 
+ C4 3E E7 A6 75 1C 0F 85 55 76 06 79 50 E4 6F 88 
+ E3 C7 D9 FA 39 13 66 D4 95 1A 2B 1C 8F A9 00 37 
+ 00 00 00 00 00 20 E3 B0 C4 42 98 FC 1C 14 9A FB 
+ F4 C8 99 6F B9 24 27 AE 41 E4 64 9B 93 4C A4 95 
+ 99 1B 78 52 B8 55 01 00 10 00 04 40 00 00 01 00 
+ 04 40 00 00 01 00 00 00 20 5D A0 41 BA C0 EE 31 
+ 35 AE BB 0C AD FB A4 97 C6 A1 87 7F AE 83 2D D3 
+ D1 F8 F7 A8 71 B8 25 E8 54 80 21 40 00 00 01 00 
+ 40 ED B8 6A 00 B3 8E FC 84 CA BC A0 3D 03 1D F6 
+ B4 D6 3C DC A6 AF 87 74 DF DB 1C 23 0E 30 A7 2F 
+ A6 90 16 93 93 BA AA 0E FE 32 7F A1 C0 34 5E 94 
+ FB 00 BE F4 AF E9 D6 73 BF 9D AF 7C 9B 3F 30 DB 
+ B8 00 22 00 0B 9D EB C6 29 7B 08 4B 07 DA EC D1 
+ D0 9F F9 BA 39 99 49 C1 64 F1 FF 99 82 AE 53 CD 
+ EF F6 8D 9A 48 00 00 01 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 07 80 00 00 00 40 00 00 01 01 B8 00 40 9A 4C 
+ 26 B4 2B F6 53 E3 2C 3F C1 93 5B 0B AB 36 AF 0C 
+ 63 C7 9D 83 1B 7F 5E F0 50 D2 59 45 4C DA 64 AD 
+ D5 E2 57 DD 01 BA 64 A0 84 E4 9A 9E B4 09 E0 36 
+ 1B E3 F1 42 A2 D3 3C 46 DA A3 4A 86 DD E9 EB F4 
+ D3 DA 0E 09 DC CA 34 69 9B C2 B5 D0 66 72 2A 26 
+ 6F 31 90 70 8B E2 3D 5B A1 1A 00 B6 6A FF DB CF 
+ 98 66 97 EF 5E 86 0D 57 42 FB 85 14 A2 1F 11 76 
+ 3D 53 6C 54 F4 52 D3 1B 83 6E 0D 43 EF 8D 99 9A 
+ 7B 8F 77 CC C6 81 3E 66 C8 F3 47 A5 26 0B 5A 63 
+ BF 80 07 2D C7 27 AB 11 1B BB 92 30 2C FB 02 09 
+ E7 60 7C DB BB D2 59 28 8F BF 58 E2 FD 46 7D 41 
+ 51 50 34 C3 13 89 25 67 18 0B 49 CB 4B 68 99 43 
+ BD 55 52 AD A2 5A AC 60 E9 D8 12 C1 1F A5 76 12 
+ BF 85 D7 78 EE 12 26 E5 61 B2 B2 85 20 41 E5 1F 
+ 55 3A A7 5D 58 9A CA C1 74 F5 D0 16 C3 D9 5A 23 
+ 82 97 0D 6D 22 82 6E 25 A6 B9 7B E3 0D E6 BA 4A 
+ 4E E7 B4 18 4C 6C 35 15 96 76 A5 6F 9B FE ED BA 
+ DF 6C F6 6F F2 E9 BB 2F A4 F5 87 F4 68 A0 19 9C 
+ F7 6E 11 10 A2 8B 96 89 6E 38 32 01 1A 5B 52 6F 
+ 1B 22 C9 AE D1 78 63 C6 0B 02 F5 16 D7 19 48 1F 
+ E0 09 B6 B3 32 5C 9A 91 BF 46 FF 2C 2A 9B A7 E2 
+ 7A 4D 75 BD 73 4A 6E 71 AC D4 8C 9F 9F 8D E2 F5 
+ 49 3F 2B 36 A4 ED D2 1B 90 81 CB A5 6D 8A 7E 10 
+ B7 6B B2 EE 1D F9 A4 8B 03 86 05 C1 CB 48 FE 15 
+ 64 B9 9B A3 A1 9D 0F 51 81 B5 20 27 A2 68 69 50 
+ 79 4A 39 83 52 78 4D 18 1F 3D A6 B0 74 DF C7 AC 
+ EB 44 95 14 22 1A AE EC 55 6C 68 8D B9 54 8A 31 
+ A3 40 31 56 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 07 80 00 00 00 40 00 00 01 01 B8 00 40 9A 4C 
+ 26 B4 2B F6 53 E3 2C 3F C1 93 5B 0B AB 36 AF 0C 
+ 63 C7 9D 83 1B 7F 5E F0 50 D2 59 45 4C DA 64 AD 
+ D5 E2 57 DD 01 BA 64 A0 84 E4 9A 9E B4 09 E0 36 
+ 1B E3 F1 42 A2 D3 3C 46 DA A3 4A 86 DD E9 EB F4 
+ D3 DA 0E 09 DC CA 34 69 9B C2 B5 D0 66 72 2A 26 
+ 6F 31 90 70 8B E2 3D 5B A1 1A 00 B6 6A FF DB CF 
+ 98 66 97 EF 5E 86 0D 57 42 FB 85 14 A2 1F 11 76 
+ 3D 53 6C 54 F4 52 D3 1B 83 6E 0D 43 EF 8D 99 9A 
+ 7B 8F 77 CC C6 81 3E 66 C8 F3 47 A5 26 0B 5A 63 
+ BF 80 07 2D C7 27 AB 11 1B BB 92 30 2C FB 02 09 
+ E7 60 7C DB BB D2 59 28 8F BF 58 E2 FD 46 7D 41 
+ 51 50 34 C3 13 89 25 67 18 0B 49 CB 4B 68 99 43 
+ BD 55 52 AD A2 5A AC 60 E9 D8 12 C1 1F A5 76 12 
+ BF 85 D7 78 EE 12 26 E5 61 B2 B2 85 20 41 E5 1F 
+ 55 3A A7 5D 58 9A CA C1 74 F5 D0 16 C3 D9 5A 23 
+ 82 97 0D 6D 22 82 6E 25 A6 B9 7B E3 0D E6 BA 4A 
+ 4E E7 B4 18 4C 6C 35 15 96 76 A5 6F 9B FE ED BA 
+ DF 6C F6 6F F2 E9 BB 2F A4 F5 87 F4 68 A0 19 9C 
+ F7 6E 11 10 A2 8B 96 89 6E 38 32 01 1A 5B 52 6F 
+ 1B 22 C9 AE D1 78 63 C6 0B 02 F5 16 D7 19 48 1F 
+ E0 09 B6 B3 32 5C 9A 91 BF 46 FF 2C 2A 9B A7 E2 
+ 7A 4D 75 BD 73 4A 6E 71 AC D4 8C 9F 9F 8D E2 F5 
+ 49 3F 2B 36 A4 ED D2 1B 90 81 CB A5 6D 8A 7E 10 
+ B7 6B B2 EE 1D F9 A4 8B 03 86 05 C1 CB 48 FE 15 
+ 64 B9 9B A3 A1 9D 0F 51 81 B5 20 27 A2 68 69 50 
+ 79 4A 39 83 52 78 4D 18 1F 3D A6 B0 74 DF C7 AC 
+ EB 44 95 14 22 1A AE EC 55 6C 68 8D B9 54 8A 31 
+ A3 40 31 56 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 131
+ 80 01 00 00 00 83 00 00 01 76 80 00 00 00 40 00 
+ 00 07 00 20 A9 97 66 B0 20 85 00 EA E3 9A F4 23 
+ 3A D4 B1 54 FF 5C 7D 50 61 E5 0B 75 40 FF 42 D5 
+ 36 7B 4D 34 00 44 00 20 9E D1 DF CA 8D 52 62 A6 
+ A3 26 71 85 B3 C2 62 B2 74 EE 6C 0E 4E A5 37 0A 
+ C7 F7 D6 82 E2 0E 20 6B 00 20 A2 03 E4 67 B8 12 
+ C7 A0 B0 59 CE FE 0F AA 6D 2E 3D 56 55 D5 D8 84 
+ C4 3A F9 63 A4 31 93 BE C3 E1 00 00 06 00 80 00 
+ 43 00 0B 
+    IsEnEnabled(0x176 = 'StartAuthSession'): 1
+ SWTPM_IO_Write: length 48
+ 80 01 00 00 00 30 00 00 00 00 02 00 00 00 00 20 
+ 4C CF 64 3C D3 D0 FE C4 91 E2 0F BE 59 01 67 99 
+ BA AF 4B F1 2A C2 FF E1 B9 8B 76 12 33 AD 89 D1 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 08 80 00 00 00 40 00 00 01 01 B8 00 40 8A 91 
+ 7D E7 AE AB 23 83 4A 82 6E FB DD 6C B7 E7 2A E5 
+ 0E A6 DB 8C 37 D3 4C 87 47 B3 82 B2 84 E8 ED F1 
+ 9C 60 94 71 CB CF B8 9D A0 3F 5A EA EB 09 1D ED 
+ 4B C6 E6 DB 95 F1 50 47 60 6B 1A C4 EB 42 15 AD 
+ 16 DA DD 5D 0E 94 56 7A 2D 6D 07 B7 68 B4 71 20 
+ 59 B4 FB 0C C3 67 48 20 A2 38 58 17 FA 11 63 41 
+ 74 6F AC 3F 4B E4 C8 9F 8B 10 7A 87 26 7C 71 8F 
+ 40 86 FB 6E 27 C5 53 1D 6E EE F5 63 9D 12 62 B5 
+ 57 6E 4B 41 2A 26 3B DC A4 37 78 84 C3 2C 90 FB 
+ 41 0D 37 77 07 A6 D8 27 70 1E F3 1A BE CC 10 9C 
+ D0 00 CF 5B 5B C0 92 65 40 43 FB 0D A2 D3 76 86 
+ C4 36 13 2D E1 A4 03 08 47 85 36 FC 5E F9 67 D0 
+ 47 CB A8 BA 57 1A 76 A8 0B 79 33 20 6F 4A 9B 35 
+ 66 88 1A 09 10 BD 85 4C E2 77 4A 24 66 D3 A3 E3 
+ 8A 84 26 2E C7 B3 3C 55 F3 2C 39 EE EB B1 AF 31 
+ C2 E4 4A 0A 95 AD F6 E2 45 1E 92 60 90 A4 7A A8 
+ 9B 5C F5 42 43 51 4E 78 6D 89 AB 39 75 B5 1A 6A 
+ 08 76 19 55 B1 1B 68 5B A0 35 CC BE 2A 28 06 75 
+ BA A9 CD E1 AD 62 E0 D1 34 F0 4A 67 8D 4F 9E CB 
+ DB 51 4A 99 DB C0 5B D9 13 CD 56 BB DF 23 E6 B3 
+ 67 F0 6F 69 59 6D 0F 3B 24 B0 B5 F0 D8 6A 6E 92 
+ 4D 3C 00 CC 8F AD 1A B0 C0 8A D2 60 03 DB 43 60 
+ 61 E8 4A 09 0E 2F 90 23 E4 2A 7D 86 95 0B 81 84 
+ 6D 1D C8 5C DB 1C E6 DF B0 34 8F 8A C5 7A 5E F4 
+ 48 19 47 A8 69 CB CB A3 30 E8 04 24 5E 57 98 61 
+ FB EB AD 25 55 E8 32 2D 62 3C 1E 71 DB 3E 79 42 
+ 68 2B 3E EA CD 70 CE E8 B1 5A 5E 38 B7 7F 1B E0 
+ 42 2A 1B 80 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 02 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 414
+ 80 01 00 00 01 9E 00 00 00 00 00 00 00 00 00 00 
+ 00 04 02 00 00 00 40 00 00 07 01 82 00 40 30 0B 
+ AB 5A 43 F6 70 66 04 F3 CE B2 18 99 94 9E 7F 12 
+ 4E F5 2D 5A 54 46 35 5E F5 49 99 93 EA CC 94 18 
+ DF 24 9F 86 5D 71 11 0E DF 05 69 E7 D5 BD 04 FE 
+ D2 4F D6 8C 27 AD E8 5C 07 13 24 85 EC A0 9B 01 
+ C7 0F 60 26 50 64 B9 38 5D 3E AF 1D 4D 26 86 7D 
+ 58 90 A4 BE 32 BC 3A 8A 25 FF A2 B0 14 90 04 72 
+ E3 B8 81 63 AE 1B F1 10 7E 92 58 04 E6 D5 DC 3B 
+ C1 57 37 7A 4C E5 61 27 BA 7C 63 C0 66 51 41 22 
+ D9 03 DD 2A A0 32 F1 82 B2 15 2C 5C 80 32 78 06 
+ 0E 26 89 FD D3 0E 83 C8 B0 C1 28 D3 CB 78 C8 25 
+ 8A 91 8D 57 2F 10 75 16 1B A4 34 9D 7C B6 D9 20 
+ F7 1B 57 4E FE 9B 44 E8 23 71 4E 66 6B 66 8F 9C 
+ 11 B5 F4 E9 73 43 4F 60 2A E1 D4 18 08 FB B1 F9 
+ 72 9C F9 86 70 6F 2C 88 F3 46 87 B0 54 54 27 59 
+ 49 5C 2D 96 AD 99 2F B7 5C ED 1D EC 1C 65 D4 A4 
+ 93 3A 6B 79 05 7C FE 0A B8 A9 A0 4A 6C 8A 77 DD 
+ D2 30 DD 98 34 D3 74 90 C4 E7 F7 65 7D D2 EC E7 
+ 69 62 DB 5A 39 BB 5E EE 6A 46 2D 52 37 20 AB 39 
+ E4 64 9E F8 B5 13 7B 9B 26 86 75 AC 45 6C A1 44 
+ 6B E8 17 38 98 BD 83 5C 3D B7 33 06 E0 E6 BC 95 
+ 30 12 5F 89 DB 45 A8 7C 24 DD 51 8F 32 67 02 93 
+ DD B8 3A 11 CD A3 19 8F 86 C0 06 25 7A 2B F9 1F 
+ 4B 30 1A 38 F6 EC DE FD 2C 7F 0A 27 CA 95 50 D3 
+ 32 97 10 83 EF 87 A7 06 6B 06 EA D8 0C 6D 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 08 80 00 00 00 40 00 00 01 01 B8 00 40 8A 91 
+ 7D E7 AE AB 23 83 4A 82 6E FB DD 6C B7 E7 2A E5 
+ 0E A6 DB 8C 37 D3 4C 87 47 B3 82 B2 84 E8 ED F1 
+ 9C 60 94 71 CB CF B8 9D A0 3F 5A EA EB 09 1D ED 
+ 4B C6 E6 DB 95 F1 50 47 60 6B 1A C4 EB 42 15 AD 
+ 16 DA DD 5D 0E 94 56 7A 2D 6D 07 B7 68 B4 71 20 
+ 59 B4 FB 0C C3 67 48 20 A2 38 58 17 FA 11 63 41 
+ 74 6F AC 3F 4B E4 C8 9F 8B 10 7A 87 26 7C 71 8F 
+ 40 86 FB 6E 27 C5 53 1D 6E EE F5 63 9D 12 62 B5 
+ 57 6E 4B 41 2A 26 3B DC A4 37 78 84 C3 2C 90 FB 
+ 41 0D 37 77 07 A6 D8 27 70 1E F3 1A BE CC 10 9C 
+ D0 00 CF 5B 5B C0 92 65 40 43 FB 0D A2 D3 76 86 
+ C4 36 13 2D E1 A4 03 08 47 85 36 FC 5E F9 67 D0 
+ 47 CB A8 BA 57 1A 76 A8 0B 79 33 20 6F 4A 9B 35 
+ 66 88 1A 09 10 BD 85 4C E2 77 4A 24 66 D3 A3 E3 
+ 8A 84 26 2E C7 B3 3C 55 F3 2C 39 EE EB B1 AF 31 
+ C2 E4 4A 0A 95 AD F6 E2 45 1E 92 60 90 A4 7A A8 
+ 9B 5C F5 42 43 51 4E 78 6D 89 AB 39 75 B5 1A 6A 
+ 08 76 19 55 B1 1B 68 5B A0 35 CC BE 2A 28 06 75 
+ BA A9 CD E1 AD 62 E0 D1 34 F0 4A 67 8D 4F 9E CB 
+ DB 51 4A 99 DB C0 5B D9 13 CD 56 BB DF 23 E6 B3 
+ 67 F0 6F 69 59 6D 0F 3B 24 B0 B5 F0 D8 6A 6E 92 
+ 4D 3C 00 CC 8F AD 1A B0 C0 8A D2 60 03 DB 43 60 
+ 61 E8 4A 09 0E 2F 90 23 E4 2A 7D 86 95 0B 81 84 
+ 6D 1D C8 5C DB 1C E6 DF B0 34 8F 8A C5 7A 5E F4 
+ 48 19 47 A8 69 CB CB A3 30 E8 04 24 5E 57 98 61 
+ FB EB AD 25 55 E8 32 2D 62 3C 1E 71 DB 3E 79 42 
+ 68 2B 3E EA CD 70 CE E8 B1 5A 5E 38 B7 7F 1B E0 
+ 42 2A 1B 80 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 414
+ 80 01 00 00 01 9E 00 00 01 61 00 00 00 00 00 00 
+ 00 04 02 00 00 00 40 00 00 07 01 82 00 40 30 0B 
+ AB 5A 43 F6 70 66 04 F3 CE B2 18 99 94 9E 7F 12 
+ 4E F5 2D 5A 54 46 35 5E F5 49 99 93 EA CC 94 18 
+ DF 24 9F 86 5D 71 11 0E DF 05 69 E7 D5 BD 04 FE 
+ D2 4F D6 8C 27 AD E8 5C 07 13 24 85 EC A0 9B 01 
+ C7 0F 60 26 50 64 B9 38 5D 3E AF 1D 4D 26 86 7D 
+ 58 90 A4 BE 32 BC 3A 8A 25 FF A2 B0 14 90 04 72 
+ E3 B8 81 63 AE 1B F1 10 7E 92 58 04 E6 D5 DC 3B 
+ C1 57 37 7A 4C E5 61 27 BA 7C 63 C0 66 51 41 22 
+ D9 03 DD 2A A0 32 F1 82 B2 15 2C 5C 80 32 78 06 
+ 0E 26 89 FD D3 0E 83 C8 B0 C1 28 D3 CB 78 C8 25 
+ 8A 91 8D 57 2F 10 75 16 1B A4 34 9D 7C B6 D9 20 
+ F7 1B 57 4E FE 9B 44 E8 23 71 4E 66 6B 66 8F 9C 
+ 11 B5 F4 E9 73 43 4F 60 2A E1 D4 18 08 FB B1 F9 
+ 72 9C F9 86 70 6F 2C 88 F3 46 87 B0 54 54 27 59 
+ 49 5C 2D 96 AD 99 2F B7 5C ED 1D EC 1C 65 D4 A4 
+ 93 3A 6B 79 05 7C FE 0A B8 A9 A0 4A 6C 8A 77 DD 
+ D2 30 DD 98 34 D3 74 90 C4 E7 F7 65 7D D2 EC E7 
+ 69 62 DB 5A 39 BB 5E EE 6A 46 2D 52 37 20 AB 39 
+ E4 64 9E F8 B5 13 7B 9B 26 86 75 AC 45 6C A1 44 
+ 6B E8 17 38 98 BD 83 5C 3D B7 33 06 E0 E6 BC 95 
+ 30 12 5F 89 DB 45 A8 7C 24 DD 51 8F 32 67 02 93 
+ DD B8 3A 11 CD A3 19 8F 86 C0 06 25 7A 2B F9 1F 
+ 4B 30 1A 38 F6 EC DE FD 2C 7F 0A 27 CA 95 50 D3 
+ 32 97 10 83 EF 87 A7 06 6B 06 EA D8 0C 6D 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 02 00 00 00 
+ SWTPM_IO_Read: length 183
+ 80 02 00 00 00 B7 00 00 01 53 80 00 00 00 00 00 
+ 00 49 02 00 00 00 00 20 F9 0D 2E 66 4D A0 05 30 
+ 41 8B A8 06 5F 72 F4 43 2E A5 5D 81 DE C3 CE 3B 
+ E0 A9 5F D0 F3 B9 52 42 61 00 20 BD C6 4B D0 F4 
+ BE 9A E3 67 4B F4 B9 33 56 19 4A 0D 5E 20 16 2F 
+ EE DC 06 CE 7F 64 07 12 A2 A2 8F 00 24 39 BC 8F 
+ BF 77 14 06 D3 4A 8F A2 91 5F E4 CA 09 20 3B EB 
+ 92 68 11 3E E3 9E 57 BA 4B E3 07 BF 3E DE 19 93 
+ AB 00 2E 00 08 00 0B 00 00 04 12 00 20 00 00 00 
+ 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+ 00 00 00 00 00 00 00 00 00 00 00 00 00 00 10 00 
+ 00 00 00 00 00 00 00 
+    IsEnEnabled(0x153 = 'Create'): 1
+ SWTPM_IO_Write: length 546
+ 80 02 00 00 02 22 00 00 00 00 00 00 01 CF 00 9E 
+ 0B 39 AB 95 CA 3F D7 9E 4E C8 FA F4 BB 81 53 4C 
+ 2D 33 41 0E 32 43 BC D4 BA 0E 19 4E 35 DB D5 B6 
+ 12 DD CC 32 F7 2E 98 46 FF D3 B7 47 BA E3 10 47 
+ F9 E8 F3 C8 C3 6D 85 8E B7 58 A6 CB 83 73 AE ED 
+ D5 4D A5 B1 EC B8 04 12 50 62 81 2E 59 3C 58 39 
+ 47 3E 9E 3F 7F A6 B1 88 3A 21 F4 70 75 DC 37 C2 
+ 76 61 CD D9 D9 1A 1B 4A 28 0F 9C 4D 5A 80 68 44 
+ 6B 4B 50 39 85 68 4C 22 5E 2D F3 F8 34 76 E6 42 
+ 36 FD 36 40 00 CE 4F 8A 4F AA 31 81 1D 32 EA 7F 
+ 81 08 22 02 BC 33 87 3F 88 BA B9 43 B7 01 00 4E 
+ 00 08 00 0B 00 00 04 12 00 20 00 00 00 00 00 00 
+ 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+ 00 00 00 00 00 00 00 00 00 00 00 10 00 20 14 E7 
+ 52 28 15 18 F5 23 50 D1 38 93 79 4B 74 12 1A 23 
+ 58 BC 01 29 21 D9 8F 04 32 14 58 B2 D2 82 00 73 
+ 00 00 00 00 00 20 E3 B0 C4 42 98 FC 1C 14 9A FB 
+ F4 C8 99 6F B9 24 27 AE 41 E4 64 9B 93 4C A4 95 
+ 99 1B 78 52 B8 55 01 00 0B 00 22 00 0B 9D EB C6 
+ 29 7B 08 4B 07 DA EC D1 D0 9F F9 BA 39 99 49 C1 
+ 64 F1 FF 99 82 AE 53 CD EF F6 8D 9A 48 00 22 00 
+ 0B C6 65 18 27 3E A6 FF 84 9A E4 CC 4B EC 50 5D 
+ 09 FD 46 31 5F 8B CC 09 A0 22 27 CD 00 36 BE CA 
+ C1 00 00 00 20 D1 C0 D2 F4 2A 69 6F 26 4B FA 6E 
+ 87 20 FC A8 96 FE 89 99 27 A3 96 4D 46 7D 54 6A 
+ 48 43 98 2F 49 80 21 40 00 00 01 00 40 4A 13 56 
+ 55 D9 93 91 16 84 30 7D 2B 57 16 0C B0 72 CA 45 
+ 7C D6 F1 1F 7E 52 EC 9B A4 BF B3 BF 23 56 EF FD 
+ 4F 44 17 0F 33 E3 CA 42 62 EF 44 53 90 55 77 EC 
+ 73 5D E8 E8 B5 1B B6 7C 3A 67 A3 07 C2 00 20 33 
+ 47 1C 7C 71 3B AB 06 24 81 84 79 44 CA FF C5 73 
+ 02 51 D9 33 75 7B 3F 19 B3 C4 BB 70 08 CD 2D 61 
+ 00 20 64 FC D0 2E 8B 4C 7F 8A 56 25 51 74 F9 67 
+ 35 DF D5 6A 8B 77 63 36 46 14 E1 10 73 05 3E 10 
+ 7A 48 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 09 80 00 00 00 40 00 00 01 01 B8 00 40 A1 A4 
+ C2 AE 05 DC 15 38 7A AB C7 4C A3 52 75 D0 CD A0 
+ F4 85 A8 CF 5E F9 6D 31 5E 5A 2B CD 8F 83 36 16 
+ 7D B4 CF 6D CA 17 82 71 8B 2B 30 E0 45 BA 76 E2 
+ BB DF 05 76 5A 08 3D 4F 71 5A 7F B4 A2 6A 34 37 
+ 85 39 12 C9 BD E9 01 82 A6 FA 42 4F 3B FB F4 E1 
+ 24 04 8B DD 42 D7 E1 5E 15 8E E7 8C 86 10 45 34 
+ 3F 49 1E 4A 56 3E 1C 1F 4B 98 AC 00 FD 4D 12 1A 
+ 6E 8C 10 0C 79 F2 41 59 60 E3 D1 C3 47 42 57 33 
+ 88 57 0D DD 0A 8B 69 91 77 6C DA CF 3A 64 DB 14 
+ 9A 04 7B C6 BD 68 FF 4C 42 18 FA 42 C9 F9 4D 9A 
+ 50 3D C1 1C 90 46 72 76 14 02 B3 9A C1 7C 64 EF 
+ 06 35 0C AD CC 89 91 35 29 78 73 93 19 1A FA E0 
+ F0 48 FF 9C D2 28 D9 C8 45 82 08 15 FE CB 74 66 
+ 72 73 8C 97 DF 37 6D A4 D3 77 33 41 90 A9 A6 5A 
+ 40 69 D7 0A 95 FE 1F A6 52 01 BE B7 19 CC B6 DB 
+ 27 E2 E5 2B F6 FA E6 75 41 30 6D 83 3F 9B FD 50 
+ 7C CE F0 7F 7C CF 09 4F 2E 46 06 BB 9E EB F5 EE 
+ 3E D8 6A 0D 4F 11 69 99 AD C0 6D 20 61 E3 11 CF 
+ FA D0 2F 59 1C 5F 39 BD 2D C0 F6 D2 19 96 5B 8A 
+ 81 F1 CD EB E9 C5 0C FF 35 6E CD EA 14 0D 83 25 
+ C3 C3 D3 41 F9 AC AD C8 80 59 40 73 53 91 D1 41 
+ 4C 7E 28 E7 30 2D 2B 4A 5D E5 AC 35 3A FC A7 82 
+ BC 0F AA 09 2E F7 F8 94 88 88 0C AB 77 93 E3 7B 
+ 5E 89 9E C0 03 43 8A 30 55 46 65 91 55 87 22 8F 
+ 73 BB A9 62 55 47 13 CC CD E9 74 A9 D1 B9 55 39 
+ 0C E3 31 41 86 E6 9F 3A E3 3A 09 C8 4A 1F E0 30 
+ 0B 9C 2C 1A 8F 4C A8 95 DE 13 91 7D 81 A2 79 29 
+ C9 57 6E DD 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 02 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 414
+ 80 01 00 00 01 9E 00 00 00 00 00 00 00 00 00 00 
+ 00 05 02 00 00 00 40 00 00 07 01 82 00 40 84 E5 
+ 5A 82 BB 06 D9 B6 F2 12 42 C8 86 2C 2B FF F0 C3 
+ 5C 73 46 C6 39 56 4B 29 DB E5 5A 64 E9 DB E9 F9 
+ 17 81 26 DC A8 75 3A 85 23 EB E8 F7 02 ED 91 56 
+ A4 85 9D 10 5B 4A FB BA 63 0C F8 40 70 2C AE 37 
+ 23 6D D7 ED 4F C3 42 49 BF 2F 20 78 00 82 37 BF 
+ ED A3 BD 8F F9 4B 91 4F EA 0C FA C3 09 C9 66 12 
+ DC 0A A1 EF EB 5C 07 66 1D EA F6 27 33 19 3E 88 
+ 5C CE D7 FA 39 AF 17 D4 2B CC 85 E7 BD 42 7E 7C 
+ 4F 53 84 BD 68 F7 57 25 C9 FB 43 E3 F7 E7 B9 6F 
+ DE 9A 04 B3 FC DC D5 5D 7C BD 61 2D EB 9C A7 5A 
+ C5 00 34 4F 73 ED DC 0B 8E F2 32 2A C5 BE 99 29 
+ 10 9F 43 21 4B DD 4F CF 17 9A 14 B3 8B 18 29 45 
+ 2B 6B 20 E9 DE FE DD 24 D1 C4 94 9F 3E 30 7E 01 
+ B7 FE B7 FD 4C A1 FD 86 A3 E6 02 45 3A 8D FB 1B 
+ 1F FD 3B E0 75 51 A3 52 F7 D1 95 74 8B C8 81 3C 
+ A6 D6 35 13 6B 0B 93 C2 C5 D5 9C A6 CC 17 61 A9 
+ 51 9D 28 33 89 D7 51 80 6B B9 89 6F A0 18 31 23 
+ B2 6A D6 E5 A6 8C 28 97 BC 2C 25 51 C4 BA 39 07 
+ 15 9A 4E 91 C7 6C A5 2F C1 F9 71 95 09 DD C5 22 
+ 03 28 0A CB DA 70 3C 92 C0 46 FF 0B 10 99 87 99 
+ 16 83 A8 01 C1 F9 3C C1 08 FC D8 27 60 F8 33 81 
+ 4C 4D 3C A7 E4 D6 78 78 B2 AC F8 5D 46 03 1D 52 
+ 41 51 4D 8D 41 AA FF 7B 8E 5D AB 2E FC 7D 1A 49 
+ 05 51 56 8E 65 69 63 A5 FA 7A AD DA 36 2E 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 09 80 00 00 00 40 00 00 01 01 B8 00 40 A1 A4 
+ C2 AE 05 DC 15 38 7A AB C7 4C A3 52 75 D0 CD A0 
+ F4 85 A8 CF 5E F9 6D 31 5E 5A 2B CD 8F 83 36 16 
+ 7D B4 CF 6D CA 17 82 71 8B 2B 30 E0 45 BA 76 E2 
+ BB DF 05 76 5A 08 3D 4F 71 5A 7F B4 A2 6A 34 37 
+ 85 39 12 C9 BD E9 01 82 A6 FA 42 4F 3B FB F4 E1 
+ 24 04 8B DD 42 D7 E1 5E 15 8E E7 8C 86 10 45 34 
+ 3F 49 1E 4A 56 3E 1C 1F 4B 98 AC 00 FD 4D 12 1A 
+ 6E 8C 10 0C 79 F2 41 59 60 E3 D1 C3 47 42 57 33 
+ 88 57 0D DD 0A 8B 69 91 77 6C DA CF 3A 64 DB 14 
+ 9A 04 7B C6 BD 68 FF 4C 42 18 FA 42 C9 F9 4D 9A 
+ 50 3D C1 1C 90 46 72 76 14 02 B3 9A C1 7C 64 EF 
+ 06 35 0C AD CC 89 91 35 29 78 73 93 19 1A FA E0 
+ F0 48 FF 9C D2 28 D9 C8 45 82 08 15 FE CB 74 66 
+ 72 73 8C 97 DF 37 6D A4 D3 77 33 41 90 A9 A6 5A 
+ 40 69 D7 0A 95 FE 1F A6 52 01 BE B7 19 CC B6 DB 
+ 27 E2 E5 2B F6 FA E6 75 41 30 6D 83 3F 9B FD 50 
+ 7C CE F0 7F 7C CF 09 4F 2E 46 06 BB 9E EB F5 EE 
+ 3E D8 6A 0D 4F 11 69 99 AD C0 6D 20 61 E3 11 CF 
+ FA D0 2F 59 1C 5F 39 BD 2D C0 F6 D2 19 96 5B 8A 
+ 81 F1 CD EB E9 C5 0C FF 35 6E CD EA 14 0D 83 25 
+ C3 C3 D3 41 F9 AC AD C8 80 59 40 73 53 91 D1 41 
+ 4C 7E 28 E7 30 2D 2B 4A 5D E5 AC 35 3A FC A7 82 
+ BC 0F AA 09 2E F7 F8 94 88 88 0C AB 77 93 E3 7B 
+ 5E 89 9E C0 03 43 8A 30 55 46 65 91 55 87 22 8F 
+ 73 BB A9 62 55 47 13 CC CD E9 74 A9 D1 B9 55 39 
+ 0C E3 31 41 86 E6 9F 3A E3 3A 09 C8 4A 1F E0 30 
+ 0B 9C 2C 1A 8F 4C A8 95 DE 13 91 7D 81 A2 79 29 
+ C9 57 6E DD 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 414
+ 80 01 00 00 01 9E 00 00 01 61 00 00 00 00 00 00 
+ 00 05 02 00 00 00 40 00 00 07 01 82 00 40 84 E5 
+ 5A 82 BB 06 D9 B6 F2 12 42 C8 86 2C 2B FF F0 C3 
+ 5C 73 46 C6 39 56 4B 29 DB E5 5A 64 E9 DB E9 F9 
+ 17 81 26 DC A8 75 3A 85 23 EB E8 F7 02 ED 91 56 
+ A4 85 9D 10 5B 4A FB BA 63 0C F8 40 70 2C AE 37 
+ 23 6D D7 ED 4F C3 42 49 BF 2F 20 78 00 82 37 BF 
+ ED A3 BD 8F F9 4B 91 4F EA 0C FA C3 09 C9 66 12 
+ DC 0A A1 EF EB 5C 07 66 1D EA F6 27 33 19 3E 88 
+ 5C CE D7 FA 39 AF 17 D4 2B CC 85 E7 BD 42 7E 7C 
+ 4F 53 84 BD 68 F7 57 25 C9 FB 43 E3 F7 E7 B9 6F 
+ DE 9A 04 B3 FC DC D5 5D 7C BD 61 2D EB 9C A7 5A 
+ C5 00 34 4F 73 ED DC 0B 8E F2 32 2A C5 BE 99 29 
+ 10 9F 43 21 4B DD 4F CF 17 9A 14 B3 8B 18 29 45 
+ 2B 6B 20 E9 DE FE DD 24 D1 C4 94 9F 3E 30 7E 01 
+ B7 FE B7 FD 4C A1 FD 86 A3 E6 02 45 3A 8D FB 1B 
+ 1F FD 3B E0 75 51 A3 52 F7 D1 95 74 8B C8 81 3C 
+ A6 D6 35 13 6B 0B 93 C2 C5 D5 9C A6 CC 17 61 A9 
+ 51 9D 28 33 89 D7 51 80 6B B9 89 6F A0 18 31 23 
+ B2 6A D6 E5 A6 8C 28 97 BC 2C 25 51 C4 BA 39 07 
+ 15 9A 4E 91 C7 6C A5 2F C1 F9 71 95 09 DD C5 22 
+ 03 28 0A CB DA 70 3C 92 C0 46 FF 0B 10 99 87 99 
+ 16 83 A8 01 C1 F9 3C C1 08 FC D8 27 60 F8 33 81 
+ 4C 4D 3C A7 E4 D6 78 78 B2 AC F8 5D 46 03 1D 52 
+ 41 51 4D 8D 41 AA FF 7B 8E 5D AB 2E FC 7D 1A 49 
+ 05 51 56 8E 65 69 63 A5 FA 7A AD DA 36 2E 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 02 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 02 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 468
+ 80 01 00 00 01 D4 00 00 00 00 00 00 00 00 00 00 
+ 00 0A 80 00 00 00 40 00 00 01 01 B8 00 40 1D BD 
+ F6 2F 6D 91 DB 61 6D 49 BC 51 72 15 65 4F 6B D5 
+ B6 C8 25 51 1C BF EE DE 52 9C 64 BF 70 8D D1 D1 
+ F2 BA D5 A3 8B 27 1C 7D 76 7C 68 81 76 5F 4C DF 
+ BD C8 90 AA 11 17 B1 D4 CD E6 BC 95 45 7B 54 E8 
+ 8C 6D 69 69 BB BB 2A 0E 9C 1A FC 31 AC D4 EE 9C 
+ 6E 4F 83 C6 3C 98 41 B2 2B E3 6A AA 98 A1 FF 20 
+ B0 4D ED 2E 43 A0 57 CE 3C D4 9E 4E 22 09 D9 89 
+ 8D 0D EF 18 B7 C2 DF B9 35 81 42 B3 10 19 AD AF 
+ 82 73 DB AE CA D1 10 E0 1D F1 AE 7B A3 3C 6B FC 
+ EE AB 32 ED AC 06 6A 38 6B CF 1A F5 06 9C 14 0D 
+ EF AD FD B0 BA 33 B5 97 6B 4F 15 DA 16 F8 4A AA 
+ 56 97 2A 0B D9 E6 04 5C 31 C7 5E BD C0 91 37 14 
+ 9D D2 60 DD AC 46 EF 9E 62 14 40 8D C5 90 56 6A 
+ A6 EB 54 99 7E 1C 62 1D 5D 87 3B 82 E5 3A 2C 5C 
+ ED 42 99 9A E8 89 9F B9 29 54 A1 61 7B 02 41 EA 
+ D6 38 EF 19 15 54 F3 C2 B4 C5 83 93 F6 89 A8 C3 
+ E4 43 5E 7B E0 06 3B 63 8D 60 43 B9 81 1D B6 E2 
+ 69 42 A0 75 DC D2 1B 78 A6 9E C5 C1 4D 29 BB 61 
+ 6E 43 B5 C5 F0 ED D7 4B 54 14 06 21 B7 AB F0 F4 
+ 89 35 E1 18 45 65 9A 16 2D 5A F2 CB 82 73 13 86 
+ 26 6A 37 53 A0 D2 39 94 3A 46 AB 93 7A F7 76 D9 
+ 34 D5 A5 32 DD 7A AB A0 8D 4B 9E 41 EF BE F6 11 
+ 72 B5 FE 61 D1 B6 6D C8 8B A7 A7 82 EB A1 7F DF 
+ 0F 7B D4 01 78 7B E7 2D B3 6D 7B 15 9F EC 6D 14 
+ 65 9E 24 EA 52 CE A6 6C B9 F4 7C 1A A6 DE DB DD 
+ 7B C8 CC 67 97 C2 F3 88 E2 EA FF A2 68 DA 60 BB 
+ 55 AA 34 6E 34 0E 28 58 E3 D6 E8 EA 35 9E 96 7D 
+ FC 26 6F 56 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 02 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 09 10 
+ SWTPM_IO_Read: length 468
+ 80 01 00 00 01 D4 00 00 01 61 00 00 00 00 00 00 
+ 00 0A 80 00 00 00 40 00 00 01 01 B8 00 40 1D BD 
+ F6 2F 6D 91 DB 61 6D 49 BC 51 72 15 65 4F 6B D5 
+ B6 C8 25 51 1C BF EE DE 52 9C 64 BF 70 8D D1 D1 
+ F2 BA D5 A3 8B 27 1C 7D 76 7C 68 81 76 5F 4C DF 
+ BD C8 90 AA 11 17 B1 D4 CD E6 BC 95 45 7B 54 E8 
+ 8C 6D 69 69 BB BB 2A 0E 9C 1A FC 31 AC D4 EE 9C 
+ 6E 4F 83 C6 3C 98 41 B2 2B E3 6A AA 98 A1 FF 20 
+ B0 4D ED 2E 43 A0 57 CE 3C D4 9E 4E 22 09 D9 89 
+ 8D 0D EF 18 B7 C2 DF B9 35 81 42 B3 10 19 AD AF 
+ 82 73 DB AE CA D1 10 E0 1D F1 AE 7B A3 3C 6B FC 
+ EE AB 32 ED AC 06 6A 38 6B CF 1A F5 06 9C 14 0D 
+ EF AD FD B0 BA 33 B5 97 6B 4F 15 DA 16 F8 4A AA 
+ 56 97 2A 0B D9 E6 04 5C 31 C7 5E BD C0 91 37 14 
+ 9D D2 60 DD AC 46 EF 9E 62 14 40 8D C5 90 56 6A 
+ A6 EB 54 99 7E 1C 62 1D 5D 87 3B 82 E5 3A 2C 5C 
+ ED 42 99 9A E8 89 9F B9 29 54 A1 61 7B 02 41 EA 
+ D6 38 EF 19 15 54 F3 C2 B4 C5 83 93 F6 89 A8 C3 
+ E4 43 5E 7B E0 06 3B 63 8D 60 43 B9 81 1D B6 E2 
+ 69 42 A0 75 DC D2 1B 78 A6 9E C5 C1 4D 29 BB 61 
+ 6E 43 B5 C5 F0 ED D7 4B 54 14 06 21 B7 AB F0 F4 
+ 89 35 E1 18 45 65 9A 16 2D 5A F2 CB 82 73 13 86 
+ 26 6A 37 53 A0 D2 39 94 3A 46 AB 93 7A F7 76 D9 
+ 34 D5 A5 32 DD 7A AB A0 8D 4B 9E 41 EF BE F6 11 
+ 72 B5 FE 61 D1 B6 6D C8 8B A7 A7 82 EB A1 7F DF 
+ 0F 7B D4 01 78 7B E7 2D B3 6D 7B 15 9F EC 6D 14 
+ 65 9E 24 EA 52 CE A6 6C B9 F4 7C 1A A6 DE DB DD 
+ 7B C8 CC 67 97 C2 F3 88 E2 EA FF A2 68 DA 60 BB 
+ 55 AA 34 6E 34 0E 28 58 E3 D6 E8 EA 35 9E 96 7D 
+ FC 26 6F 56 
+    IsEnEnabled(0x161 = 'ContextLoad'): 1
+ SWTPM_IO_Write: length 14
+ 80 01 00 00 00 0E 00 00 00 00 80 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 65 80 00 00 00 
+    IsEnEnabled(0x165 = 'FlushContext'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 00 00 
+ SWTPM_IO_Read: length 14
+ 80 01 00 00 00 0E 00 00 01 62 80 00 00 00 
+    IsEnEnabled(0x162 = 'ContextSave'): 1
+ SWTPM_IO_Write: length 10
+ 80 01 00 00 00 0A 00 00 09 10 
+ SWTPM_IO_Read: length 45
+ 80 02 00 00 00 2D 00 00 01 2A 40 00 00 01 00 00 
+ 00 09 40 00 00 09 00 00 00 00 00 00 00 00 0E 01 
+ D1 02 01 00 0B 0C 06 00 46 00 00 00 20 
+    IsEnEnabled(0x12a = 'NV_DefineSpace'): 1
+ SWTPM_IO_Write: length 19
+ 80 02 00 00 00 13 00 00 00 00 00 00 00 00 00 00 
+ 01 00 00 
+ SWTPM_IO_Read: length 65
+ 80 02 00 00 00 41 00 00 01 36 01 D1 02 01 01 D1 
+ 02 01 00 00 00 09 40 00 00 09 00 00 00 00 00 00 
+ 20 FC B6 AF 5F D4 75 73 01 30 CC FC 77 04 E9 2D 
+ B3 45 40 3F 25 33 C9 B8 B7 87 80 F2 1B 90 AB AD 
+ D5 
+    IsEnEnabled(0x136 = 'NV_Extend'): 1
+ SWTPM_IO_Write: length 19
+ 80 02 00 00 00 13 00 00 00 00 00 00 00 00 00 00 
+ 01 00 00 
+ SWTPM_IO_Read: length 20
+ 80 01 00 00 00 14 00 00 01 7E 00 00 00 01 00 04 
+ 03 00 02 00 
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+ SWTPM_IO_Write: length 50
+ 80 01 00 00 00 32 00 00 00 00 00 00 00 90 00 00 
+ 00 01 00 04 03 00 02 00 00 00 00 01 00 14 68 80 
+ 18 76 46 90 6B E4 01 91 5E 72 2F A0 38 C9 C6 FE 
+ 6B EF 
+ SWTPM_IO_Read: length 20
+ 80 01 00 00 00 14 00 00 01 7E 00 00 00 01 00 0B 
+ 03 00 02 00 
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+ SWTPM_IO_Write: length 62
+ 80 01 00 00 00 3E 00 00 00 00 00 00 00 90 00 00 
+ 00 01 00 0B 03 00 02 00 00 00 00 01 00 20 C1 FE 
+ 4A 1C A2 F9 EC D5 99 CA E7 54 74 51 12 8F 3F E2 
+ 7C 97 FA 7E 6C 7C 61 E9 14 50 DD E4 55 17 
+ SWTPM_IO_Read: length 20
+ 80 01 00 00 00 14 00 00 01 7E 00 00 00 01 00 0C 
+ 03 00 02 00 
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+ SWTPM_IO_Write: length 78
+ 80 01 00 00 00 4E 00 00 00 00 00 00 00 90 00 00 
+ 00 01 00 0C 03 00 02 00 00 00 00 01 00 30 B3 2D 
+ 2D 4E 8A 6A 13 D6 85 A0 82 AC DC E2 23 F9 F4 D5 
+ 1F BA BF C8 04 B1 1E AF B3 49 23 10 89 98 EF 98 
+ C3 F7 0D 13 49 76 31 CC 07 A7 B2 BF 0C 1B 
+ SWTPM_IO_Read: length 20
+ 80 01 00 00 00 14 00 00 01 7E 00 00 00 01 00 0D 
+ 03 00 02 00 
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+ SWTPM_IO_Write: length 94
+ 80 01 00 00 00 5E 00 00 00 00 00 00 00 90 00 00 
+ 00 01 00 0D 03 00 02 00 00 00 00 01 00 40 49 93 
+ C5 B4 A3 F3 B7 0D 2E 57 A0 F4 03 64 CF 55 66 6E 
+ 2D F8 76 E3 D3 15 EA EB 72 60 38 6B 8C B5 76 6F 
+ 42 DC 56 09 37 8B 97 FC 61 84 EB F3 C2 EF 64 5C 
+ 26 94 3C F0 D6 F3 C4 19 E4 6F C8 5E 08 BC 
+ SWTPM_IO_Read: length 203
+ 80 02 00 00 00 CB 00 00 01 82 00 00 00 09 00 00 
+ 00 09 40 00 00 09 00 00 00 00 00 00 00 00 04 00 
+ 04 C4 59 CC DC 62 E4 D4 E3 46 D9 B5 7C 91 59 7D 
+ 99 3B 6F 0E EA 00 0B 5C 09 02 AF 88 36 26 8D 24 
+ 23 0A EE BE A5 EA CE 03 A4 F1 31 B9 28 14 E3 9E 
+ 50 7C 19 5C B2 82 F9 00 0C 74 D6 83 E0 ED 04 61 
+ E0 19 06 66 9F D6 19 0C DC 98 FB 1D 9C 96 7E 7A 
+ 2C 1F A8 CA D9 C1 65 99 2A 1D 18 AB 26 F1 AA 90 
+ 75 6F 83 3C 92 8E 7A 04 7C 00 0D F2 BD 15 D2 C0 
+ D6 DC 6D A0 66 38 56 A6 F4 67 15 1C E4 8D E0 CB 
+ 19 DA 04 55 86 26 16 8B 91 8B 78 BD 24 8C 34 97 
+ 67 19 FE 47 5C DA C4 CF EB A4 6C F4 F7 F7 E7 34 
+ 84 31 8C 56 0E EE EF AA C7 E5 95 
+    IsEnEnabled(0x182 = 'PCR_Extend'): 1
+ SWTPM_IO_Write: length 19
+ 80 02 00 00 00 13 00 00 00 00 00 00 00 00 00 00 
+ 01 00 00 
+ SWTPM_IO_Read: length 45
+ 80 02 00 00 00 2D 00 00 01 2A 40 00 00 01 00 00 
+ 00 09 40 00 00 09 00 00 00 00 00 00 00 00 0E 01 
+ D1 02 00 00 0B 0C 06 00 46 00 00 00 20 
+    IsEnEnabled(0x12a = 'NV_DefineSpace'): 1
+ SWTPM_IO_Write: length 19
+ 80 02 00 00 00 13 00 00 00 00 00 00 00 00 00 00 
+ 01 00 00 
+ SWTPM_IO_Read: length 65
+ 80 02 00 00 00 41 00 00 01 36 01 D1 02 00 01 D1 
+ 02 00 00 00 00 09 40 00 00 09 00 00 00 00 00 00 
+ 20 7E F1 FD A2 71 AA B5 14 96 CF A6 A0 DE 3C A1 
+ 26 BC FD B7 05 42 F1 3B ED C3 70 5E 6B 21 63 D7 
+ C3 
+    IsEnEnabled(0x136 = 'NV_Extend'): 1
+ SWTPM_IO_Write: length 19
+ 80 02 00 00 00 13 00 00 00 00 00 00 00 00 00 00 
+ 01 00 00 
+ SWTPM_IO_Read: length 20
+ 80 01 00 00 00 14 00 00 01 7E 00 00 00 01 00 04 
+ 03 00 02 00 
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+ SWTPM_IO_Write: length 50
+ 80 01 00 00 00 32 00 00 00 00 00 00 00 94 00 00 
+ 00 01 00 04 03 00 02 00 00 00 00 01 00 14 24 33 
+ 47 3C 3C 58 5D C5 82 E5 FF 83 EE 15 B6 6C 14 B8 
+ 5F 30 
+ SWTPM_IO_Read: length 20
+ 80 01 00 00 00 14 00 00 01 7E 00 00 00 01 00 0B 
+ 03 00 02 00 
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+ SWTPM_IO_Write: length 62
+ 80 01 00 00 00 3E 00 00 00 00 00 00 00 94 00 00 
+ 00 01 00 0B 03 00 02 00 00 00 00 01 00 20 06 A4 
+ DF 98 15 53 CD 79 A1 A4 FE 9C C4 25 A6 6D D7 E3 
+ E7 F9 19 55 BF 40 A9 6D 49 AF 35 B3 BE 47 
+ SWTPM_IO_Read: length 20
+ 80 01 00 00 00 14 00 00 01 7E 00 00 00 01 00 0C 
+ 03 00 02 00 
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+ SWTPM_IO_Write: length 78
+ 80 01 00 00 00 4E 00 00 00 00 00 00 00 94 00 00 
+ 00 01 00 0C 03 00 02 00 00 00 00 01 00 30 3F DD 
+ 49 52 78 49 54 B7 AE 5D 61 76 48 08 3F 28 4D A8 
+ FF DF DA 4A 75 BD 27 87 87 64 9F 6F F8 BB 02 48 
+ B1 FA 3B 5F 97 34 8E B6 4A 5C FD D8 80 C4 
+ SWTPM_IO_Read: length 20
+ 80 01 00 00 00 14 00 00 01 7E 00 00 00 01 00 0D 
+ 03 00 02 00 
+    IsEnEnabled(0x17e = 'PCR_Read'): 1
+ SWTPM_IO_Write: length 94
+ 80 01 00 00 00 5E 00 00 00 00 00 00 00 94 00 00 
+ 00 01 00 0D 03 00 02 00 00 00 00 01 00 40 BF 9F 
+ 7C FD 7E 25 A3 5A A5 9E 39 8F F4 AA 8B BD 01 9C 
+ F4 BE 6A 27 D6 92 C2 CE C8 67 3B F2 4B 6B 61 33 
+ 31 66 23 59 0D 7E 64 C7 DA 7E EC 43 6E DB DC 90 
+ 89 62 53 8A 6D 04 B0 2F 13 0A 0A 1F AB 59 
+ SWTPM_IO_Read: length 203
+ 80 02 00 00 00 CB 00 00 01 82 00 00 00 09 00 00 
+ 00 09 40 00 00 09 00 00 00 00 00 00 00 00 04 00 
+ 04 4E F4 FE 44 C6 B1 1F 22 66 C0 AA 0A 8F D8 B4 
+ F6 89 05 65 5C 00 0B 07 41 44 77 A3 72 D7 44 CF 
+ 5D 22 99 96 46 F0 3A 6D B6 15 5B 58 0A 5B F5 34 
+ C8 9A E3 5E 77 96 12 00 0C D8 C6 CA 44 62 B7 D4 
+ B7 2B 30 34 11 90 B0 96 AF F9 53 3F 89 36 84 1F 
+ 05 9A 44 7D 71 3F A8 9E 20 60 E0 77 66 67 E7 A6 
+ 7A 8A DF 67 2B DA 9A 5E 50 00 0D E4 38 74 92 11 
+ 6B A5 B5 A7 A1 91 1F E4 78 E9 9E 27 DD C7 A6 61 
+ ED 47 3C 8E 00 F9 94 43 53 88 54 41 F9 EE 35 DB 
+ C4 08 9C 5A 87 43 37 F6 60 89 75 D5 90 76 1C FD 
+ 88 30 65 A6 49 9D 5E 58 4B 94 C1 
+    IsEnEnabled(0x182 = 'PCR_Extend'): 1
+ SWTPM_IO_Write: length 19
+ 80 02 00 00 00 13 00 00 00 00 00 00 00 00 00 00 
+ 01 00 00 
+ SWTPM_IO_Read: length 12
+ 80 01 00 00 00 0C 00 00 01 7B 00 08 
+    IsEnEnabled(0x17b = 'GetRandom'): 1
+ SWTPM_IO_Write: length 20
+ 80 01 00 00 00 14 00 00 00 00 00 08 84 C4 E0 09 
+ 23 44 44 44 
+ SWTPM_IO_Read: length 22
+ 80 01 00 00 00 16 00 00 01 7A 00 00 00 01 81 00 
+ 00 00 00 00 00 FE 
+    IsEnEnabled(0x17a = 'GetCapability'): 1
+ SWTPM_IO_Write: length 23
+ 80 01 00 00 00 17 00 00 00 00 00 00 00 00 01 00 
+ 00 00 01 81 00 00 01 

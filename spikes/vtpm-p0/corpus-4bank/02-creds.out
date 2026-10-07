@@ -1,5 +1,5 @@
 ++ mktemp -d
-+ cd /tmp/tmp.kapJ3JZiQQ
++ cd /tmp/tmp.8InwMXt3ou
 + echo -n s3cret-tpm2
 + sudo systemd-creds encrypt --with-key=tpm2 --name=t1 - t1.cred
 + sudo systemd-creds decrypt --name=t1 t1.cred -

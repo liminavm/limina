@@ -1,48 +1,48 @@
 ++ mktemp -d
-+ d=/tmp/tmp.7Mx6wYwj2Y
-+ cd /tmp/tmp.7Mx6wYwj2Y
-+ ssh-tpm-keygen -t ecdsa -N '' -f /tmp/tmp.7Mx6wYwj2Y/id_ecdsa
++ d=/tmp/tmp.hhVGUASRTJ
++ cd /tmp/tmp.hhVGUASRTJ
++ ssh-tpm-keygen -t ecdsa -N '' -f /tmp/tmp.hhVGUASRTJ/id_ecdsa
 Generating a sealed public/private ecdsa key pair.
-Enter passphrase (empty for no passphrase): Enter same passphrase again: Your identification has been saved in /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.tpm
-Your public key has been saved in /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.pub
+Enter passphrase (empty for no passphrase): Enter same passphrase again: Your identification has been saved in /tmp/tmp.hhVGUASRTJ/id_ecdsa.tpm
+Your public key has been saved in /tmp/tmp.hhVGUASRTJ/id_ecdsa.pub
 The key fingerprint is:
-SHA256:Vo86Jwoek6LTIHVAWmZFJFcn/qkhhbfukoOJL1HP5fM
+SHA256:YSRKKvXHVz4UiDiL9aHvkCKQIYJNbongABttiz8JZqQ
 The key's randomart image is the color of television, tuned to a dead channel.
-+ ssh-tpm-keygen -t rsa -N '' -f /tmp/tmp.7Mx6wYwj2Y/id_rsa
++ ssh-tpm-keygen -t rsa -N '' -f /tmp/tmp.hhVGUASRTJ/id_rsa
 Generating a sealed public/private rsa key pair.
-Enter passphrase (empty for no passphrase): Enter same passphrase again: Your identification has been saved in /tmp/tmp.7Mx6wYwj2Y/id_rsa.tpm
-Your public key has been saved in /tmp/tmp.7Mx6wYwj2Y/id_rsa.pub
+Enter passphrase (empty for no passphrase): Enter same passphrase again: Your identification has been saved in /tmp/tmp.hhVGUASRTJ/id_rsa.tpm
+Your public key has been saved in /tmp/tmp.hhVGUASRTJ/id_rsa.pub
 The key fingerprint is:
-SHA256:TlQRyKYLpr7evIPdbkRHxxeboKJQfduwhxIZ/4PlwMw
+SHA256:GTNyai7jx/HOZszEYbwwx/Mi9WTD5N/3ICbLW9rluZo
 The key's randomart image is the color of television, tuned to a dead channel.
-+ apid=2633
-+ ssh-tpm-agent -l /tmp/tmp.7Mx6wYwj2Y/agent.sock
++ apid=1491
++ ssh-tpm-agent -l /tmp/tmp.hhVGUASRTJ/agent.sock
 ++ seq 50
 + for i in $(seq 50)
-+ '[' -S /tmp/tmp.7Mx6wYwj2Y/agent.sock ']'
++ '[' -S /tmp/tmp.hhVGUASRTJ/agent.sock ']'
 + sleep 0.1
 + for i in $(seq 50)
-+ '[' -S /tmp/tmp.7Mx6wYwj2Y/agent.sock ']'
++ '[' -S /tmp/tmp.hhVGUASRTJ/agent.sock ']'
 + break
-+ export SSH_AUTH_SOCK=/tmp/tmp.7Mx6wYwj2Y/agent.sock SSH_TPM_AUTH_SOCK=/tmp/tmp.7Mx6wYwj2Y/agent.sock
-+ SSH_AUTH_SOCK=/tmp/tmp.7Mx6wYwj2Y/agent.sock
-+ SSH_TPM_AUTH_SOCK=/tmp/tmp.7Mx6wYwj2Y/agent.sock
-+ ssh-tpm-add /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.tpm
-Identity added: /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.tpm (claude@fedora)
-+ ssh-tpm-add /tmp/tmp.7Mx6wYwj2Y/id_rsa.tpm
-Identity added: /tmp/tmp.7Mx6wYwj2Y/id_rsa.tpm (claude@fedora)
++ export SSH_AUTH_SOCK=/tmp/tmp.hhVGUASRTJ/agent.sock SSH_TPM_AUTH_SOCK=/tmp/tmp.hhVGUASRTJ/agent.sock
++ SSH_AUTH_SOCK=/tmp/tmp.hhVGUASRTJ/agent.sock
++ SSH_TPM_AUTH_SOCK=/tmp/tmp.hhVGUASRTJ/agent.sock
++ ssh-tpm-add /tmp/tmp.hhVGUASRTJ/id_ecdsa.tpm
+Identity added: /tmp/tmp.hhVGUASRTJ/id_ecdsa.tpm (claude@fedora)
++ ssh-tpm-add /tmp/tmp.hhVGUASRTJ/id_rsa.tpm
+Identity added: /tmp/tmp.hhVGUASRTJ/id_rsa.tpm (claude@fedora)
 + ssh-add -l
-256 SHA256:Vo86Jwoek6LTIHVAWmZFJFcn/qkhhbfukoOJL1HP5fM claude@fedora (ECDSA)
-2048 SHA256:TlQRyKYLpr7evIPdbkRHxxeboKJQfduwhxIZ/4PlwMw claude@fedora (RSA)
+256 SHA256:YSRKKvXHVz4UiDiL9aHvkCKQIYJNbongABttiz8JZqQ claude@fedora (ECDSA)
+2048 SHA256:GTNyai7jx/HOZszEYbwwx/Mi9WTD5N/3ICbLW9rluZo claude@fedora (RSA)
 + echo data
-+ ssh-keygen -Y sign -f /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.pub -n file data
++ ssh-keygen -Y sign -f /tmp/tmp.hhVGUASRTJ/id_ecdsa.pub -n file data
 Signing file data
 Write signature to data.sig
 + mv data.sig data.ecdsa.sig
-+ ssh-keygen -Y sign -f /tmp/tmp.7Mx6wYwj2Y/id_rsa.pub -n file data
++ ssh-keygen -Y sign -f /tmp/tmp.hhVGUASRTJ/id_rsa.pub -n file data
 Signing file data
 Write signature to data.sig
 + ls data.ecdsa.sig data.sig
 data.ecdsa.sig
 data.sig
-+ kill 2633
++ kill 1491

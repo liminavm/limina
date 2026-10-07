@@ -11,12 +11,20 @@ the command set derived from it (`summary.md`).
 `run.sh` boots a CoW clone of `Fedora-Workstation-44.stock.test.raw` (kernel
 `6.19.10-300.fc44.aarch64`, systemd 259.5) under Homebrew QEMU 11.0 with HVF. The TPM is swtpm
 0.10.2 (libtpms 0.10.2) on `-device tpm-tis-device`, with QEMU's bundled edk2 as firmware.
+`swtpm_setup --pcr-banks sha256` manufactures the TPM with the one SHA-256 bank the engine will
+allocate. `consumers/00-provision.sh` installs what the consumers need.
 swtpm runs at log level 20, which dumps every command and response in hex. `capture.sh <name>
 <script>` runs one consumer script from `consumers/` in the guest and keeps the slice of the log
 it produced. `decode.py` turns a slice into JSON lines with the command code, response code,
 session attributes and algorithm choices, plus the raw bytes. `decode.py --summary` builds the
 table. The raw log slices (`corpus/*.swtpm.log`) are gitignored, because the JSON lines carry
 every byte of them that matters.
+
+There are two corpora. `corpus/` is the canonical one, with SHA-256 only. `corpus-4bank/` is the
+same runs against swtpm's default allocation (SHA-1, SHA-256, SHA-384 and SHA-512), which libtpms
+uses when swtpm creates its own state. There the firmware extends all four banks, so that corpus
+carries multi-bank `TPML_DIGEST_VALUES`. Both have the same 32 commands. The 4-bank one is kept as
+input the engine must also parse and answer correctly.
 
 Measured 2026-10-07.
 
@@ -77,8 +85,9 @@ Measured 2026-10-07.
   
   The one `TPM_RC_FAILURE` (`0x101`) is QEMU's version probe of a not-yet-powered swtpm, not a
   guest command.
-- **PCR banks:** swtpm allocates SHA-1, SHA-256, SHA-384 and SHA-512, and the firmware extends
-  all four. No consumer read any bank other than SHA-256.
+- **PCR banks:** the firmware extends exactly the banks the TPM reports as allocated. With
+  SHA-256 alone, every consumer works and the event log replays the same way. No consumer read
+  any other bank when four were allocated.
 - **Stock-image details that matter for P2:**
   - `/dev/tpmrm0` is `root:tss 0660`. An unprivileged user needs the `tss` group, or every
     tool fails with `Permission denied`.
@@ -101,11 +110,12 @@ brew install qemu swtpm
 spikes/vtpm-p0/run.sh --fresh
 echo "guest SSH forward ready: ssh -p 2240 claude@127.0.0.1" > spikes/vtpm-p0/work/fake-worker.log
 scripts/wait-guest-ssh.sh spikes/vtpm-p0/work/fake-worker.log 300
-# in the guest: sudo usermod -aG tss claude; dnf install tpm2-pkcs11 tpm2-pkcs11-tools clevis
-#   clevis-luks tpm2-openssl opensc openssl; ssh-tpm-agent 0.9.0 from its GitHub release
-for f in spikes/vtpm-p0/consumers/*.sh; do spikes/vtpm-p0/capture.sh "$(basename "$f" .sh)" "$f"; done
+for f in spikes/vtpm-p0/consumers/0*.sh; do spikes/vtpm-p0/capture.sh "$(basename "$f" .sh)" "$f"; done
+# then reboot the guest, wait for ssh again, and run consumers/10-after-reboot.sh the same way
 python3 spikes/vtpm-p0/decode.py --summary spikes/vtpm-p0/corpus/*.jsonl
 ```
 
-`corpus/boot.jsonl` is the whole log up to the first ssh login (QEMU probe, firmware, kernel).
+`corpus/boot.jsonl` is the whole log up to the first ssh login: the QEMU probe, firmware and
+kernel. On a fresh `vars.fd` it holds two boots, because the firmware resets once after its first
+boot and the shim fallback writes the boot entries.
 `corpus/09-reboot.jsonl` is a guest reboot from the shutdown to the next login.
