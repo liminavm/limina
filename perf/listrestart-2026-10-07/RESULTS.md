@@ -139,8 +139,9 @@ unroll path unchanged:
    `supported_prim_modes_with_restart`, so the frontend check runs on them. Only draws that really
    restart reach emulation.
 
-The `rr` points run that host Mesa, bundled, with `LIMINA_KK_NOLISTRESTART=0`: the conformant
-path. The `os` points run the shipping bundle with the skip, interleaved with them.
+The `rr` points run that host Mesa, bundled, with `LIMINA_KK_NOLISTRESTART=0`. On this stack the
+variable has no effect on vrend's draws: zink no longer hands KK a list restart, so KK's skip and its
+unroll are both bypassed. The `os` points run the shipping bundle with the skip, interleaved with them.
 
 | point | build                 | arm    | r1 25k | r1 30k | r2 25k | r2 30k | peak footprint |
 |-------|-----------------------|--------|--------|--------|--------|--------|----------------|
@@ -153,8 +154,13 @@ path. The `os` points run the shipping bundle with the skip, interleaved with th
 
 - **The two arms are indistinguishable**, in fps and in memory, as expected if aquarium's draws hold
   no restart index and none reaches the unroll (this build carries no counters to show it).
-- **Correctness**: piglit's primitive-restart and provoking-vertex list (245 tests) gives the same
-  results under the guest's virgl driver on this stack as on the shipping one.
+- **Correctness**: `spikes/list-restart-probe` draws a triangle list with a restart index mid-list
+  on the host GL stack vrend uses. This stack draws it correctly; the shipping stack's skip draws the
+  wrong triangle. piglit's primitive-restart and provoking-vertex list (245 tests) gives the same
+  results under the guest's virgl driver on both stacks: its list-restart tests do not tell the skip
+  from conformant restart.
+- **Venus is untouched.** Both commits are in host GL; a venus guest's draws reach KK without them,
+  so on that tier list restart still takes KK's skip, or its unroll with the skip off.
 - The first two restart-scan points (dropped) never booted: one dylib in that bundle kept an
   ad-hoc signature, which dyld refuses next to the team-signed binaries.
 
