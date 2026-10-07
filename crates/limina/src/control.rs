@@ -20,10 +20,10 @@
 //! every caller falls back to the pre-existing teardown ladder. Agents may also
 //! reconnect (guest reboot), so the accept loop runs for the supervisor's lifetime.
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -114,6 +114,81 @@ fn silent_threshold() -> Duration {
     Duration::from_secs(secs)
 }
 
+/// How long a fresh connection has to send its HELLO before it is dropped. Every agent sends
+/// HELLO the moment it connects, so a connection that says nothing for this long is not an
+/// agent getting ready — and while it waits it holds a serve thread and one of the
+/// [`MAX_UNAUTHENTICATED`] places. Generous next to a round trip, so a guest slowed by a busy
+/// host is never refused for it. Override with `LIMINA_CONTROL_HELLO_TIMEOUT_MS`.
+fn hello_timeout() -> Duration {
+    let ms = std::env::var("LIMINA_CONTROL_HELLO_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&ms: &u64| ms > 0)
+        .unwrap_or(10_000);
+    Duration::from_millis(ms)
+}
+
+/// How many connections may be waiting to say HELLO at once; past it, a new one is closed as
+/// soon as it is accepted.
+///
+/// A real guest opens one connection per agent: `limina-agent`, and one
+/// `limina-agent-session` per graphical session (the greeter's and each user's), each of which
+/// briefly reconnects when its clipboard capability changes. That is a handful at boot, and
+/// each is unauthenticated only for the round trip until its HELLO lands. Sixteen is several
+/// times the most a guest opens at once, so a legitimate burst is never refused, and it still
+/// bounds what a guest that connects and says nothing can hold: one thread per place, until
+/// [`hello_timeout`] frees it.
+const MAX_UNAUTHENTICATED: usize = 16;
+
+/// At most one warning about connections dropped before HELLO per this interval; the rest are
+/// counted into the next one. A guest reconnecting without backoff once made 396,747 connects
+/// in 150 s, and a line per connect is a log nobody can read.
+const REFUSAL_LOG_EVERY: Duration = Duration::from_secs(10);
+
+/// Lets one line through per interval and counts what it held back.
+#[derive(Debug, Default)]
+struct RateLimit {
+    last: Option<Instant>,
+    suppressed: u64,
+}
+
+impl RateLimit {
+    /// `Some(n)` when a line may be logged now — `n` lines were held back since the last one —
+    /// or `None` to hold this one back too.
+    fn allow(&mut self, now: Instant, every: Duration) -> Option<u64> {
+        if self
+            .last
+            .is_some_and(|t| now.saturating_duration_since(t) < every)
+        {
+            self.suppressed += 1;
+            return None;
+        }
+        self.last = Some(now);
+        Some(std::mem::take(&mut self.suppressed))
+    }
+}
+
+/// One of the [`MAX_UNAUTHENTICATED`] places, held by a connection until its HELLO lands or
+/// it goes away — whichever way the serve thread ends, the place comes back.
+struct Pending(Arc<AtomicUsize>);
+
+impl Pending {
+    fn claim(count: &Arc<AtomicUsize>, cap: usize) -> Option<Pending> {
+        count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < cap).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Pending(count.clone()))
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// How long a write to a peer may block before we declare the peer wedged and drop it.
 /// A peer that hasn't drained its socket buffer for this long has effectively stopped
 /// serving its side of the protocol; without a bound, one such peer blocks whoever is
@@ -192,6 +267,13 @@ struct Inner {
     /// Is the USB FIDO gadget serving this VM? Then the agent must NOT stand up a second
     /// authenticator — see [`welcome_caps`].
     usb_fido_gadget: bool,
+    /// How long a fresh connection has to say HELLO ([`hello_timeout`]).
+    hello_timeout: Duration,
+    /// Connections accepted and not yet past HELLO — each holds a serve thread. Bounded by
+    /// [`MAX_UNAUTHENTICATED`] through [`Pending`].
+    unauthenticated: Arc<AtomicUsize>,
+    /// The warnings for connections dropped before HELLO, rate-limited ([`Inner::refuse`]).
+    refusals: Mutex<RateLimit>,
 }
 
 impl ControlPlane {
@@ -210,6 +292,26 @@ impl ControlPlane {
         vcpu_policy: Option<crate::vcpu_policy::VcpuPolicy>,
         fido_store: Option<Arc<crate::fido::store::FidoStore>>,
         usb_fido_gadget: bool,
+    ) -> Result<ControlPlane> {
+        Self::start_with(
+            socket_path,
+            balloon_policy,
+            vcpu_policy,
+            fido_store,
+            usb_fido_gadget,
+            hello_timeout(),
+        )
+    }
+
+    /// [`Self::start`], with the HELLO deadline given rather than read from the environment —
+    /// so a test can shorten it without racing every other test over a process-wide variable.
+    fn start_with(
+        socket_path: &Path,
+        balloon_policy: Option<crate::balloon_policy::BalloonPolicy>,
+        vcpu_policy: Option<crate::vcpu_policy::VcpuPolicy>,
+        fido_store: Option<Arc<crate::fido::store::FidoStore>>,
+        usb_fido_gadget: bool,
+        hello_timeout: Duration,
     ) -> Result<ControlPlane> {
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)
@@ -232,6 +334,9 @@ impl ControlPlane {
             qga_vcpu_failures: AtomicU64::new(0),
             fido_store,
             usb_fido_gadget,
+            hello_timeout,
+            unauthenticated: Arc::new(AtomicUsize::new(0)),
+            refusals: Mutex::new(RateLimit::default()),
         });
         let serve_inner = inner.clone();
         std::thread::Builder::new()
@@ -602,6 +707,26 @@ impl ControlPlane {
 }
 
 impl Inner {
+    /// Drop a connection that never became an agent, and say so — at most once per
+    /// [`REFUSAL_LOG_EVERY`], with a count of the ones held back since.
+    fn refuse(&self, why: std::fmt::Arguments<'_>) {
+        let Some(held_back) = self
+            .refusals
+            .lock()
+            .unwrap()
+            .allow(Instant::now(), REFUSAL_LOG_EVERY)
+        else {
+            return;
+        };
+        if held_back == 0 {
+            log::warn!("control: {why}; dropping it");
+        } else {
+            log::warn!(
+                "control: {why}; dropping it ({held_back} more dropped before HELLO since the last such line)"
+            );
+        }
+    }
+
     /// Apply the host policy a guest-selected power profile asks for.
     ///
     /// Idempotent, because the guest reports level-triggered: the same profile arriving twice
@@ -1035,11 +1160,20 @@ fn accept_loop(listener: UnixListener, inner: Arc<Inner>) {
                 if let Err(e) = stream.set_write_timeout(write_timeout()) {
                     log::warn!("control: set_write_timeout failed ({e}); sends may block");
                 }
+                // A place among the connections still waiting to say HELLO, or none: then this
+                // one is closed here, before it costs a thread (`MAX_UNAUTHENTICATED`).
+                let Some(pending) = Pending::claim(&inner.unauthenticated, MAX_UNAUTHENTICATED)
+                else {
+                    inner.refuse(format_args!(
+                        "{MAX_UNAUTHENTICATED} connections are already waiting to say HELLO"
+                    ));
+                    continue;
+                };
                 let peer_inner = inner.clone();
                 let spawned = std::thread::Builder::new()
                     .name("limina-control-peer".into())
                     .spawn(move || {
-                        if let Err(e) = serve_agent(stream, &peer_inner) {
+                        if let Err(e) = serve_agent(stream, &peer_inner, pending) {
                             log::warn!("control: agent connection ended with error: {e}");
                         }
                     });
@@ -1083,15 +1217,40 @@ fn accept_error_is_transient(e: &std::io::Error) -> bool {
 /// One agent session: HELLO → WELCOME, register, then serve until EOF. Heartbeats keep
 /// liveness; unknown types get ERROR(UNSUPPORTED) — never fatal, per the protocol's
 /// ground rule. The peer is deregistered on any exit.
-fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
-    let (_, first) = read_message(&mut stream)?;
-    let hello = match first {
-        Message::Hello(h) => h,
-        other => {
-            log::warn!("control: peer's first message was not HELLO ({other:?}); dropping");
+///
+/// `pending` is this connection's place among those not yet past HELLO, given back the moment
+/// the HELLO lands. Until then the read is bounded by the HELLO deadline, and every way of
+/// failing it — another message first, silence, a close — is one rate-limited warning
+/// ([`Inner::refuse`]), so a guest that reconnects without backoff cannot fill the log.
+fn serve_agent(mut stream: UnixStream, inner: &Inner, pending: Pending) -> std::io::Result<()> {
+    // The timeout rides the socket, so it must be cleared before the write half is cloned off
+    // below — and it is, right after the HELLO.
+    stream.set_read_timeout(Some(inner.hello_timeout))?;
+    let hello = match read_message(&mut stream) {
+        Ok((_, Message::Hello(h))) => h,
+        Ok((_, other)) => {
+            // The type, not the message: a guest leading with a clipboard payload would put
+            // the whole of it in the log.
+            inner.refuse(format_args!(
+                "a peer's first message was not HELLO (type {:#04x})",
+                other.msg_type()
+            ));
+            return Ok(());
+        }
+        Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+            inner.refuse(format_args!(
+                "a peer sent no HELLO within {:?}",
+                inner.hello_timeout
+            ));
+            return Ok(());
+        }
+        Err(e) => {
+            inner.refuse(format_args!("a peer went away before its HELLO ({e})"));
             return Ok(());
         }
     };
+    stream.set_read_timeout(None)?;
+    drop(pending);
     // Numbered at the handshake, so every line about this connection can name it: two
     // sessions' helpers announce the same agent string, and the id is what tells them apart.
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
@@ -1409,6 +1568,108 @@ mod tests {
                 "errno {errno} should stop the loop"
             );
         }
+    }
+
+    /// One warning per interval, and the next one says how many it stood for.
+    #[test]
+    fn refusal_warnings_are_one_per_interval_and_count_the_rest() {
+        let mut rl = RateLimit::default();
+        let t0 = Instant::now();
+        let every = Duration::from_secs(10);
+        assert_eq!(rl.allow(t0, every), Some(0), "the first one is said");
+        for i in 1..=5 {
+            assert_eq!(rl.allow(t0 + Duration::from_secs(i), every), None);
+        }
+        assert_eq!(
+            rl.allow(t0 + every, every),
+            Some(5),
+            "the next one counts what was held back"
+        );
+        assert_eq!(rl.allow(t0 + every * 2, every), Some(0));
+    }
+
+    fn test_socket(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("limina-ctl-{name}-{}.sock", std::process::id()))
+    }
+
+    /// Whether the plane has closed `s`: EOF within `within`, as opposed to an open
+    /// connection that simply has nothing to say.
+    fn closed_by_host(s: &mut UnixStream, within: Duration) -> bool {
+        use std::io::Read;
+        s.set_read_timeout(Some(within)).unwrap();
+        let mut b = [0u8; 1];
+        matches!(s.read(&mut b), Ok(0))
+    }
+
+    /// A connection that never says HELLO is closed once the deadline passes, rather than
+    /// holding its serve thread for good — and an agent that did say HELLO is not held to it.
+    #[test]
+    fn a_peer_that_never_says_hello_is_dropped_at_the_deadline() {
+        let path = test_socket("hello-deadline");
+        let plane =
+            ControlPlane::start_with(&path, None, None, None, false, Duration::from_millis(200))
+                .unwrap();
+        let mut agent = connect_agent(&path, &[]);
+        let mut silent = UnixStream::connect(&path).unwrap();
+        let t0 = Instant::now();
+        assert!(
+            closed_by_host(&mut silent, Duration::from_secs(5)),
+            "a silent connection must be closed"
+        );
+        assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+        assert!(
+            !closed_by_host(&mut agent, Duration::from_millis(600)),
+            "the deadline is for the HELLO only; a quiet agent stays connected"
+        );
+        drop(plane);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Past [`MAX_UNAUTHENTICATED`] silent connections, the next is closed at once — and the
+    /// cap is on the WAITING, not on agents: once a place frees, an agent gets in.
+    #[test]
+    fn silent_connections_beyond_the_cap_are_closed_at_once() {
+        let path = test_socket("unauth-cap");
+        let plane =
+            ControlPlane::start_with(&path, None, None, None, false, Duration::from_secs(60))
+                .unwrap();
+        let mut silent: Vec<UnixStream> = (0..MAX_UNAUTHENTICATED)
+            .map(|_| UnixStream::connect(&path).unwrap())
+            .collect();
+        let mut over = UnixStream::connect(&path).unwrap();
+        assert!(
+            closed_by_host(&mut over, Duration::from_secs(5)),
+            "the connection past the cap must be closed"
+        );
+        assert!(
+            !closed_by_host(&mut silent[0], Duration::from_millis(200)),
+            "the ones within it wait for their HELLO"
+        );
+        // Free a place; the agent that comes next is served.
+        drop(silent.pop());
+        let welcomed = (0..50).any(|_| {
+            let Ok(mut s) = UnixStream::connect(&path) else {
+                return false;
+            };
+            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let hello = Message::Hello(Hello {
+                agent: "test-agent/0".into(),
+                caps: vec![],
+                pagesize: 4096,
+            });
+            if write_message(&mut s, CHANNEL_CONTROL, &hello).is_err() {
+                return false;
+            }
+            if matches!(read_message(&mut s), Ok((_, Message::Welcome(_)))) {
+                return true;
+            }
+            // The freed place may not be back yet; try again.
+            std::thread::sleep(Duration::from_millis(50));
+            false
+        });
+        assert!(welcomed, "an agent must get in once a place is free");
+        drop(plane);
+        let _ = std::fs::remove_file(&path);
     }
 
     /// Connect a fake agent to the plane's socket, handshake, and return the stream.

@@ -1112,14 +1112,6 @@ without underruns.
 
 ## Clipboard & agents
 
-### The control plane drops first-message violators at whatever rate the guest offers
-`control.rs` accepts a peer, logs `control: peer's first message was not HELLO …; dropping`, and
-returns — no per-peer backoff and no cap on concurrent unauthenticated peers, so a
-reconnect-without-backoff guest can still spin the accept loop (measured before the muxer and helper
-fixes: 396,747 connects in 150 s, 2026-08-21). The muxer now resets connections whose proxy socket cannot be
-created, so a storm no longer kills the worker. Consider a per-peer accept backoff or a cap on
-concurrent unauthenticated peers.
-
 ### Automated coverage gaps in the session helper
 `limina-agent-session`'s ext-data-control backend (`guest/limina-agent-session/src/wayland_clip.rs`)
 is verified live only: `l1_session_helper.rs` exercises the RemoteDesktop path and
