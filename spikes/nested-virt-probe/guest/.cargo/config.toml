@@ -1,0 +1,6 @@
+# Same recipe as guest/: static musl, linked by the toolchain's rust-lld, no C toolchain.
+[build]
+target = "aarch64-unknown-linux-musl"
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
