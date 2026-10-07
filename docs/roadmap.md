@@ -1136,13 +1136,13 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
   EFI-boot only, since libkrun writes SMBIOS only on the firmware path — and it needs
   `CONFIG_DMI_SYSFS=y` in the guest kernel (see §Boot chain), without which the credential is
   delivered but unreadable.
-- **Crypto tier deliberately skipped; verity kept.** KRUN_EFI has no SecureBoot and libkrun has no
-  TPM, so LUKS2-sealed-to-TPM2 and PCR measurement have no substrate. We take dm-verity + signed
-  images (integrity, rollback protection, measurable objects); confidentiality stays at the host
-  layer (FileVault/APFS), which was already this section's position. **The partition layout must be
-  designed so the crypto tier can be added later without a re-layout.** Named future lever, not
-  scheduled: a **paravirtual TPM2 in libkrun backed by the macOS Secure Enclave** — M14 already has
-  the SEP machinery, and it would unlock the article's model verbatim. `systemd-homed` is likewise
+- **Crypto tier waits on the vTPM; verity kept.** KRUN_EFI has no SecureBoot and libkrun has no
+  TPM yet, so LUKS2-sealed-to-TPM2 and PCR measurement have no substrate today. We take dm-verity +
+  signed images (integrity, rollback protection, measurable objects); confidentiality stays at the
+  host layer (FileVault/APFS), which was already this section's position. **The partition layout
+  must be designed so the crypto tier can be added without a re-layout.** The substrate is
+  `docs/design/vtpm.md`: a TPM 2.0 device in libkrun backed by our own Rust TPM, with measured boot
+  in our firmware; Secure Enclave wrapping of its state is a later option. `systemd-homed` is likewise
   skipped for now: its wins are host-layer concerns for a VM whose disk is already in FileVault.
 - **Factory reset** via repart's erase-on-reset partition marking, exposed as a **host UI action**
   ("reset this VM to factory") — far more natural in a VM than on metal.
