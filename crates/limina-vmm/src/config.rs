@@ -216,6 +216,8 @@ pub struct VmSpec {
     /// virtio-gpu blobs to be mappable at all — see `spikes/hv-ipa-granule/RESULTS.md`.
     /// Creation-time only, so this is fixed for the life of the worker process.
     pub ipa_granule: Option<IpaGranule>,
+    /// Boot the guest at EL2 so it can run its own hypervisor (KVM). Creation-time only.
+    pub nested_virt: bool,
     /// Guest RAM in MiB. With dynamic memory (M6) this is the **max** — what libkrun allocates and
     /// the guest sees; the supervisor's balloon policy shrinks effective RAM toward its min via the
     /// control socket (the worker is mechanism-only and doesn't know the min).

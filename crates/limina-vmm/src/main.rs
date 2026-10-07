@@ -200,6 +200,12 @@ struct Cli {
     #[arg(long, value_enum)]
     ipa_granule: Option<crate::config::IpaGranule>,
 
+    /// Expose EL2 to the guest so it can run KVM (nested virtualization). Needs an M3 or
+    /// later on macOS 15+; the worker refuses to start where HVF reports it unsupported.
+    /// Creation-time only.
+    #[arg(long)]
+    nested_virt: bool,
+
     /// Force the software-2D-only GPU (no virglrenderer/venus). Default is the coexist
     /// device (software-2D 2D + Venus 3D). Use for the capture oracle or the local-Terminal
     /// GPU-init hang.
@@ -763,6 +769,7 @@ fn main() -> Result<()> {
         cpus: cli.cpus,
         ram_mib: cli.ram_mib,
         ipa_granule: cli.ipa_granule,
+        nested_virt: cli.nested_virt,
         balloon_control_socket: listen_at(cli.balloon_control_socket, cli.balloon_control_fd),
         boot,
         disks,

@@ -152,6 +152,16 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
         crate::config::IpaGranule::SixteenK => vmm::resources::IpaGranule::SixteenK,
     });
 
+    // Nested virtualization: HVF only offers EL2 on M3 and later, and asking for it elsewhere
+    // fails deep in VM creation with a generic error, so check up front.
+    if spec.nested_virt {
+        anyhow::ensure!(
+            krun_lib::api::check_nested_virt(),
+            "--nested-virt: this host's Hypervisor.framework does not support EL2 (needs M3+, macOS 15+)"
+        );
+        vmr.nested_enabled = true;
+    }
+
     match &spec.boot {
         // EFI boot: load the EDK2 firmware blob; the guest boots its own kernel off the
         // disk's ESP (Payload::Firmware). No bundled kernel, no root_disk_remount.
@@ -1264,6 +1274,7 @@ mod tests {
             cpus: 1,
             ram_mib: 512,
             ipa_granule: None,
+            nested_virt: false,
             balloon_control_socket: None,
             boot: BootSource::Firmware(PathBuf::from("/nonexistent/KRUN_EFI.fd")),
             disks: Vec::new(),
