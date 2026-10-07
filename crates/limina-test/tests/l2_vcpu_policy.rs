@@ -294,6 +294,10 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
         .expect("the second worker cold-booted instead of restoring the snapshot");
     g2.wait_for_ssh(Duration::from_secs(180))
         .expect("the restored guest never became reachable");
+    // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
+    if let Err(e) = g2.assert_no_restore_kernel_errors() {
+        panic!("{e:#}");
+    }
 
     // Immediately after restore the guest must have every vCPU. Read it before the policy has had
     // time to start shrinking again (dwell is DWELL_SECS, so do not dawdle) — and read the

@@ -2618,6 +2618,35 @@ impl Guest {
         }
     }
 
+    /// Fail if the guest kernel logged a GPU error since it last suspended. Call it after a
+    /// restore, once SSH answers.
+    ///
+    /// A restore test cannot see these any other way: the images' `kernel.printk` keeps all but
+    /// emergency messages off the console, so a virtio-gpu `response 0x…` error (logged at `err`)
+    /// never reaches `console.log`. The journal has the whole boot, which a resumed guest shares
+    /// with its pre-suspend self, so only lines after the last `PM: suspend entry` count. The
+    /// offending lines are printed here because the scratch dir goes with the `Guest`.
+    pub fn assert_no_restore_kernel_errors(&self) -> Result<()> {
+        let errors =
+            self.ssh_exec("sudo journalctl -k -p err --no-pager -o short-monotonic || true")?;
+        let anchor = self.ssh_exec(
+            "sudo journalctl -k --no-pager -o short-monotonic -g 'PM: suspend entry' || true",
+        )?;
+        let bad = restore_kernel_errors(&errors, &anchor);
+        if bad.is_empty() {
+            return Ok(());
+        }
+        eprintln!("guest kernel GPU errors since the last suspend:");
+        for line in &bad {
+            eprintln!("  {line}");
+        }
+        bail!(
+            "the guest kernel logged {} GPU error(s) after the restore:\n{}",
+            bad.len(),
+            bad.join("\n")
+        )
+    }
+
     /// The pid of the `limina` supervisor this guest is running under. Signal it to drive the
     /// real stop ladder (SIGTERM = the graceful path, a second one = force) while keeping the
     /// `Guest` alive to read its supervisor log — [`Guest::shutdown`] consumes the guest and
@@ -3348,6 +3377,26 @@ pub fn ring_stalls(log: &str) -> Vec<&str> {
         .collect()
 }
 
+/// The GPU errors in a guest's `journalctl -k -p err -o short-monotonic` output that were logged
+/// at or after the last line of `suspends` (the same format, filtered to `PM: suspend entry`), so
+/// a resumed guest is judged on what happened since it went to sleep and not on its boot. With no
+/// suspend on record every line counts.
+pub fn restore_kernel_errors(errors: &str, suspends: &str) -> Vec<String> {
+    /// `[   12.345678] host kernel: …` → 12.345678.
+    fn stamp(line: &str) -> Option<f64> {
+        let rest = line.trim_start().strip_prefix('[')?;
+        rest[..rest.find(']')?].trim().parse().ok()
+    }
+    const GPU: [&str; 3] = ["virtio_gpu", "[drm]", "*ERROR*"];
+    let since = suspends.lines().rev().find_map(stamp).unwrap_or(f64::MIN);
+    errors
+        .lines()
+        .filter(|l| stamp(l).is_some_and(|t| t >= since))
+        .filter(|l| GPU.iter().any(|m| l.contains(m)))
+        .map(str::to_string)
+        .collect()
+}
+
 pub fn assert_console_has(console: &str, needles: &[&str]) -> Result<()> {
     for n in needles {
         if !console.contains(n) {
@@ -3401,6 +3450,44 @@ pub fn set_pasteboard_text_slowly(name: &str, text: &str, midwrite_delay: Durati
         pb.clearContents();
         std::thread::sleep(midwrite_delay);
         pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    }
+}
+
+#[cfg(test)]
+mod restore_kernel_errors_tests {
+    use super::restore_kernel_errors;
+
+    const ERRORS: &str = "\
+[    3.101000] fedora kernel: [drm] *ERROR* boot-time noise that predates the suspend
+[    4.200000] fedora kernel: nvme nvme0: unrelated error
+[  812.400000] fedora kernel: virtio_gpu virtio1: response 0x1200 (command 0x105)
+[  812.400100] fedora kernel: [drm:virtio_gpu_dequeue_ctrl_func] *ERROR* response 0x1203
+[  813.000000] fedora kernel: usb 1-1: unrelated error after the restore
+";
+
+    #[test]
+    fn only_gpu_errors_after_the_last_suspend_count() {
+        let suspends = "\
+[  300.000000] fedora kernel: PM: suspend entry (deep)
+[  800.000000] fedora kernel: PM: suspend entry (deep)
+";
+        let bad = restore_kernel_errors(ERRORS, suspends);
+        assert_eq!(bad.len(), 2, "{bad:?}");
+        assert!(bad[0].contains("response 0x1200"));
+        assert!(bad[1].contains("response 0x1203"));
+    }
+
+    #[test]
+    fn a_clean_restore_has_nothing_to_report() {
+        let suspends = "[  900.000000] fedora kernel: PM: suspend entry (deep)\n";
+        assert!(restore_kernel_errors(ERRORS, suspends).is_empty());
+        assert!(restore_kernel_errors("-- No entries --\n", suspends).is_empty());
+    }
+
+    #[test]
+    fn with_no_suspend_on_record_the_whole_boot_counts() {
+        let bad = restore_kernel_errors(ERRORS, "-- No entries --\n");
+        assert_eq!(bad.len(), 3, "{bad:?}");
     }
 }
 

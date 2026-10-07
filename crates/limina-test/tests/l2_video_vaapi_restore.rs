@@ -267,6 +267,11 @@ fn hardware_decode_in_flight_survives_restore() {
             cleanup();
             panic!("restored guest never became reachable over SSH: {e}");
         });
+    // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
+    if let Err(e) = g2.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
     if ssh_retry(&g2, "cat /proc/sys/kernel/random/boot_id") != boot_id {
         cleanup();
         panic!("boot_id changed across restore — the guest rebooted instead of resuming");

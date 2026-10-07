@@ -275,12 +275,6 @@ before the guest's next frame. virglrs keeps no such unit log, so it has to be b
 keyframe interval of bitstream per live codec, and the AV1 serializer's held-frame state has to
 travel with it.
 
-### Restore tests cannot see guest kernel errors
-The enhanced image's `kernel.printk` is `1 4 1 7`, so `console.log` carries only emergency
-messages and a virtio-gpu `response 0x…` error (logged at `err`) never reaches it; a restore test's
-console after resume is empty. Have the restore tests copy `journalctl -k` over ssh into scratch
-after each restore and fail on `virtio_gpu`/`[drm]` errors.
-
 ---
 
 ## Memory

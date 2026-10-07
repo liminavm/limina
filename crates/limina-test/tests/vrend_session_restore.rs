@@ -431,6 +431,11 @@ fn run(desktop: &Desktop) {
             cleanup();
             panic!("restored guest never became reachable over SSH: {e}");
         });
+    // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
+    if let Err(e) = g2.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
     eprintln!("restored guest SSH up: {banner}");
 
     // Identity floor.

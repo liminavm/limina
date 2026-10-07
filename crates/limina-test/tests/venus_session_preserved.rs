@@ -393,6 +393,11 @@ fn seated_gnome_session_survives_snapshot_restore() {
             cleanup();
             panic!("restored guest never became reachable over SSH: {e}");
         });
+    // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
+    if let Err(e) = g2.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
     eprintln!("restored guest SSH up: {banner}");
 
     // Same kernel boot — a differing boot_id means the guest REBOOTED, which is a
@@ -583,6 +588,11 @@ fn seated_gnome_session_survives_snapshot_restore() {
                  replay crashed or wedged the worker): {e}"
             );
         });
+    // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
+    if let Err(e) = g3.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
     eprintln!("gen-2 restored guest SSH up: {banner}");
 
     let boot_id_gen2 = ssh_retry(&g3, "cat /proc/sys/kernel/random/boot_id");

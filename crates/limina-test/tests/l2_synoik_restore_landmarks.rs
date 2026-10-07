@@ -525,6 +525,11 @@ fn synoik_desktop_survives_snapshot_restore() {
             cleanup();
             panic!("restored guest never became reachable over SSH: {e}");
         });
+    // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
+    if let Err(e) = g2.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
 
     let procs_after = workload_procs(&g2, &apps);
     // A blank desktop is perfectly still, so this settles quickly on the failing path too —
