@@ -1,0 +1,142 @@
+16:52:31 comp_mib=4800 worker=3392 top_mem_cmprs=9055M 4058M
+16:52:33 comp_mib=4800 worker=3392 top_mem_cmprs=10G 4057M
+16:52:34 comp_mib=4860 worker=3392 top_mem_cmprs=7837M 4114M
+16:52:35 comp_mib=4857 worker=3392 top_mem_cmprs=8817M 4112M
+16:52:37 comp_mib=4855 worker=3392 top_mem_cmprs=9523M 4112M
+16:52:38 comp_mib=4855 worker=3392 top_mem_cmprs=11G 4311M
+16:52:39 comp_mib=4873 worker=3392 top_mem_cmprs=7356M 4109M
+16:52:41 comp_mib=4867 worker=3392 top_mem_cmprs=8721M 4106M
+16:52:42 comp_mib=4866 worker=3392 top_mem_cmprs=10G 4105M
+16:52:43 comp_mib=4890 worker=3392 top_mem_cmprs=9952M 4238M
+16:52:45 comp_mib=4879 worker=3392 top_mem_cmprs=8980M 4109M
+16:52:46 comp_mib=4876 worker=3392 top_mem_cmprs=9278M 4108M
+16:52:47 comp_mib=4875 worker=3392 top_mem_cmprs=9223M 4108M
+16:52:49 comp_mib=4875 worker=3392 top_mem_cmprs=10G 4108M
+16:52:50 comp_mib=4911 worker=3392 top_mem_cmprs=9376M 4334M
+16:52:51 comp_mib=4740 worker=3392 top_mem_cmprs=8659M 3903M
+16:52:52 comp_mib=4734 worker=3392 top_mem_cmprs=9068M 3893M
+16:52:54 comp_mib=4734 worker=3392 top_mem_cmprs=10G 3893M
+16:52:55 comp_mib=4760 worker=3392 top_mem_cmprs=8552M 3965M
+16:52:56 comp_mib=4751 worker=3392 top_mem_cmprs=9013M 3903M
+16:52:58 comp_mib=4750 worker=3392 top_mem_cmprs=9253M 3901M
+16:52:59 comp_mib=4749 worker=3392 top_mem_cmprs=9180M 3901M
+16:53:00 comp_mib=4741 worker=3392 top_mem_cmprs=9137M 3900M
+16:53:02 comp_mib=4741 worker=3392 top_mem_cmprs=9250M 3899M
+16:53:03 comp_mib=4739 worker=3392 top_mem_cmprs=9102M 3897M
+16:53:04 comp_mib=4739 worker=3392 top_mem_cmprs=9035M 3895M
+16:53:06 comp_mib=4738 worker=3392 top_mem_cmprs=9323M 3895M
+16:53:07 comp_mib=4738 worker=3392 top_mem_cmprs=10G 3894M
+16:53:08 comp_mib=4792 worker=3392 top_mem_cmprs=8615M 4001M
+16:53:09 comp_mib=4792 worker=3392 top_mem_cmprs=9083M 3998M
+16:53:11 comp_mib=4784 worker=3392 top_mem_cmprs=7803M 3984M
+16:53:12 comp_mib=4782 worker=3392 top_mem_cmprs=6957M 3983M
+16:53:13 comp_mib=4782 worker=3392 top_mem_cmprs=6957M 3983M
+16:53:14 comp_mib=4772 worker=3392 top_mem_cmprs=6992M 3947M
+16:53:15 comp_mib=4766 worker=3392 top_mem_cmprs=8756M 3932M
+16:53:17 comp_mib=4763 worker=3392 top_mem_cmprs=8948M 3930M
+16:53:18 comp_mib=4761 worker=3392 top_mem_cmprs=8793M 3928M
+16:53:19 comp_mib=4755 worker=3392 top_mem_cmprs=9150M 3916M
+16:53:21 comp_mib=4754 worker=3392 top_mem_cmprs=9768M 3914M
+16:53:22 comp_mib=4797 worker=3392 top_mem_cmprs=11G 4354M
+16:53:23 comp_mib=4799 worker=3392 top_mem_cmprs=7704M 4024M
+16:53:25 comp_mib=4798 worker=3392 top_mem_cmprs=9340M 4023M
+16:53:26 comp_mib=4798 worker=3392 top_mem_cmprs=8244M 4023M
+16:53:27 comp_mib=4797 worker=3392 top_mem_cmprs=9356M 4023M
+16:53:28 comp_mib=4795 worker=3392 top_mem_cmprs=9085M 4022M
+16:53:30 comp_mib=4795 worker=3392 top_mem_cmprs=10G 4019M
+16:53:31 comp_mib=4794 worker=3392 top_mem_cmprs=9102M 4016M
+16:53:32 comp_mib=4791 worker=3392 top_mem_cmprs=8691M 4008M
+16:53:34 comp_mib=4790 worker=3392 top_mem_cmprs=9294M 4007M
+16:53:35 comp_mib=4790 worker=3392 top_mem_cmprs=9088M 4007M
+16:53:36 comp_mib=4788 worker=3392 top_mem_cmprs=9489M 4004M
+16:53:37 comp_mib=4788 worker=3392 top_mem_cmprs=9769M 4004M
+16:53:39 comp_mib=4786 worker=3392 top_mem_cmprs=9541M 4004M
+16:53:40 comp_mib=4786 worker=3392 top_mem_cmprs=10G 4003M
+16:53:41 comp_mib=4785 worker=3392 top_mem_cmprs=10G 4003M
+16:53:43 comp_mib=4785 worker=3392 top_mem_cmprs=9936M 4003M
+16:53:44 comp_mib=4785 worker=3392 top_mem_cmprs=9505M 4002M
+16:53:45 comp_mib=4783 worker=3392 top_mem_cmprs=9651M 3997M
+16:53:46 comp_mib=4783 worker=3392 top_mem_cmprs=9842M 3997M
+16:53:48 comp_mib=4783 worker=3392 top_mem_cmprs=9824M 3997M
+16:53:49 comp_mib=4783 worker=3392 top_mem_cmprs=9762M 3997M
+16:53:50 comp_mib=4782 worker=3392 top_mem_cmprs=9023M 3997M
+16:53:52 comp_mib=4779 worker=3392 top_mem_cmprs=9277M 3996M
+16:53:53 comp_mib=4775 worker=3392 top_mem_cmprs=9957M 3995M
+16:53:54 comp_mib=4774 worker=3392 top_mem_cmprs=9888M 3993M
+16:53:56 comp_mib=4774 worker=3392 top_mem_cmprs=9690M 3993M
+16:53:57 comp_mib=4774 worker=3392 top_mem_cmprs=10G 3993M
+16:53:58 comp_mib=4774 worker=3392 top_mem_cmprs=9625M 3993M
+16:53:59 comp_mib=4774 worker=3392 top_mem_cmprs=9241M 3993M
+16:54:01 comp_mib=4774 worker=3392 top_mem_cmprs=9543M 3993M
+16:54:02 comp_mib=4771 worker=3392 top_mem_cmprs=9773M 3993M
+16:54:03 comp_mib=4771 worker=3392 top_mem_cmprs=9395M 3993M
+16:54:05 comp_mib=4767 worker=3392 top_mem_cmprs=9586M 3992M
+16:54:06 comp_mib=4767 worker=3392 top_mem_cmprs=7931M 3992M
+16:54:07 comp_mib=4767 worker=3392 top_mem_cmprs=7927M 3992M
+16:54:08 comp_mib=4762 worker=3392 top_mem_cmprs=7689M 3982M
+16:54:10 comp_mib=4760 worker=3392 top_mem_cmprs=8832M 3978M
+16:54:11 comp_mib=4760 worker=3392 top_mem_cmprs=8844M 3977M
+16:54:12 comp_mib=4760 worker=3392 top_mem_cmprs=8644M 3976M
+16:54:14 comp_mib=4760 worker=3392 top_mem_cmprs=9206M 3975M
+16:54:15 comp_mib=4760 worker=3392 top_mem_cmprs=9078M 3974M
+16:54:16 comp_mib=4759 worker=3392 top_mem_cmprs=9531M 3974M
+16:54:18 comp_mib=4759 worker=3392 top_mem_cmprs=10G 4078M
+16:54:19 comp_mib=4804 worker=3392 top_mem_cmprs=8873M 4062M
+16:54:20 comp_mib=4804 worker=3392 top_mem_cmprs=9134M 4062M
+16:54:21 comp_mib=4804 worker=3392 top_mem_cmprs=10G 4062M
+16:54:23 comp_mib=4900 worker=3392 top_mem_cmprs=11G 4592M
+16:54:24 comp_mib=4882 worker=3392 top_mem_cmprs=8787M 4250M
+16:54:25 comp_mib=4879 worker=3392 top_mem_cmprs=9143M 4247M
+16:54:27 comp_mib=4878 worker=3392 top_mem_cmprs=9543M 4247M
+16:54:28 comp_mib=4878 worker=3392 top_mem_cmprs=10G 4247M
+16:54:29 comp_mib=4874 worker=3392 top_mem_cmprs=9592M 4243M
+16:54:31 comp_mib=4874 worker=3392 top_mem_cmprs=10G 4243M
+16:54:32 comp_mib=4873 worker=3392 top_mem_cmprs=9650M 4242M
+16:54:33 comp_mib=4873 worker=3392 top_mem_cmprs=9823M 4242M
+16:54:34 comp_mib=4873 worker=3392 top_mem_cmprs=10G 4242M
+16:54:36 comp_mib=4873 worker=3392 top_mem_cmprs=9574M 4242M
+16:54:37 comp_mib=4873 worker=3392 top_mem_cmprs=9926M 4241M
+16:54:38 comp_mib=4872 worker=3392 top_mem_cmprs=9843M 4239M
+16:54:40 comp_mib=4872 worker=3392 top_mem_cmprs=9925M 4239M
+16:54:41 comp_mib=4872 worker=3392 top_mem_cmprs=9290M 4239M
+16:54:42 comp_mib=4871 worker=3392 top_mem_cmprs=10G 4238M
+16:54:44 comp_mib=4866 worker=3392 top_mem_cmprs=9873M 4232M
+16:54:45 comp_mib=4866 worker=3392 top_mem_cmprs=9585M 4232M
+16:54:46 comp_mib=4866 worker=3392 top_mem_cmprs=9803M 4232M
+16:54:47 comp_mib=4862 worker=3392 top_mem_cmprs=10G 4225M
+16:54:49 comp_mib=4843 worker=3392 top_mem_cmprs=9809M 4205M
+16:54:50 comp_mib=4843 worker=3392 top_mem_cmprs=9576M 4205M
+16:54:51 comp_mib=4843 worker=3392 top_mem_cmprs=9756M 4205M
+16:54:53 comp_mib=4843 worker=3392 top_mem_cmprs=10G 4205M
+16:54:54 comp_mib=4843 worker=3392 top_mem_cmprs=9840M 4205M
+16:54:55 comp_mib=4842 worker=3392 top_mem_cmprs=9168M 4205M
+16:54:57 comp_mib=4842 worker=3392 top_mem_cmprs=9726M 4205M
+16:54:58 comp_mib=4839 worker=3392 top_mem_cmprs=10G 4198M
+16:54:59 comp_mib=4834 worker=3392 top_mem_cmprs=9693M 4197M
+16:55:00 comp_mib=4834 worker=3392 top_mem_cmprs=9770M 4197M
+16:55:02 comp_mib=4834 worker=3392 top_mem_cmprs=10G 4196M
+16:55:03 comp_mib=4791 worker=3392 top_mem_cmprs=10G 4387M
+16:55:04 comp_mib=4790 worker=3392 top_mem_cmprs=10G 4386M
+16:55:06 comp_mib=4790 worker=3392 top_mem_cmprs=10G 4307M
+16:55:07 comp_mib=4790 worker=3392 top_mem_cmprs=9663M 4291M
+16:55:08 comp_mib=4790 worker=3392 top_mem_cmprs=9531M 4291M
+16:55:09 comp_mib=4651 worker=3392 top_mem_cmprs=7717M 3959M
+16:55:11 comp_mib=4651 worker=3392 top_mem_cmprs=7713M 3959M
+16:55:12 comp_mib=4651 worker=3392 top_mem_cmprs=7713M 3959M
+16:55:13 comp_mib=4651 worker=3392 top_mem_cmprs=7713M 3959M
+16:55:14 comp_mib=4651 worker=3392 top_mem_cmprs=7713M 3959M
+16:55:16 comp_mib=4618 worker=3392 top_mem_cmprs=7713M 3868M
+16:55:17 comp_mib=4571 worker= top_mem_cmprs=
+16:55:18 comp_mib=4555 worker= top_mem_cmprs=
+16:55:19 comp_mib=4554 worker= top_mem_cmprs=
+16:55:20 comp_mib=4554 worker= top_mem_cmprs=
+16:55:21 comp_mib=4553 worker= top_mem_cmprs=
+16:55:22 comp_mib=4553 worker= top_mem_cmprs=
+16:55:23 comp_mib=4553 worker= top_mem_cmprs=
+16:55:24 comp_mib=4552 worker= top_mem_cmprs=
+16:55:25 comp_mib=4552 worker= top_mem_cmprs=
+16:55:26 comp_mib=4552 worker= top_mem_cmprs=
+16:55:27 comp_mib=4552 worker= top_mem_cmprs=
+16:55:28 comp_mib=4552 worker= top_mem_cmprs=
+16:55:29 comp_mib=4552 worker= top_mem_cmprs=
+16:55:30 comp_mib=4552 worker= top_mem_cmprs=

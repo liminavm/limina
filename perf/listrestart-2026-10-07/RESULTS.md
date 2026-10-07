@@ -52,9 +52,22 @@ encoder that reloads the attachments (the TODO above the draw loop in `kk_cmd_dr
 once unroll, tess and any compute does not split render pass"). The unroll kernel itself is one
 parallel 1024-thread workgroup per draw.
 
-The unroll arm also grows the worker without bound: on the 16 GB remote Mac it reached 18.5 GB
-resident with a 4 GiB guest and hard-hung the host (WindowServer watchdog, forced reboot).
-**Do not run the unroll arm on a shared host**, and cap any rerun with a timeout and an RSS watchdog.
+The unroll arm also costs memory, as transient churn rather than a leak. Point `kw` sampled the
+worker once a second (`rss-watch.sh`, `evidence/kw/rss-kw.tsv`, `evidence/kw/comp-guard.log`):
+
+- The worker holds a steady 4 GB until aquarium starts. Within 6 s of the launch it gains ~2 GB.
+- From then on its RSS swings by 1.5-2 GB every few seconds, while host free memory jumps between
+  60 MB and 3.5 GB: ~2 GB of per-frame allocations, released as frames retire.
+- Its footprint (`top`'s MEM, compressed pages included) peaks at 11 GB and holds at 7.5-10 GB for
+  the rest of the run, without trending up. Only a few frames are in flight at once.
+
+So the memory follows the pass splits: ~5000 encoders a frame, each holding its allocations until
+the GPU retires it. Removing the splits should remove the churn too.
+
+The margin is thin, though. One earlier unroll point on the 16 GB remote Mac reached 18.5 GB
+resident and hard-hung it (WindowServer watchdog, forced reboot). **Do not run the unroll arm on a
+shared host.** Cap any rerun with `rss-watch.sh`, which kills the VM on the worker's footprint or
+the host compressor's size. RSS alone falls as the worker's pages move into the compressor.
 
 ## Reading it
 
