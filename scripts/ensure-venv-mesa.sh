@@ -23,6 +23,12 @@
 set -euo pipefail
 
 VENV_MESA="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/third_party/venv-mesa"
+# A worktree's venv-mesa is a symlink to the main checkout's. Resolve it: meson records the
+# python it found by path, and the shared host Mesa builds on /Volumes/mesa-cs must not keep
+# a path into whichever worktree configured them last, or they break when it is removed.
+if [ -d "$VENV_MESA" ]; then
+  VENV_MESA="$(cd "$VENV_MESA" && pwd -P)"
+fi
 
 # Module name (what the build imports) paired with the distribution that provides it.
 # mako:      Mesa's and venus-protocol's template engine.
