@@ -37,6 +37,25 @@ frames, which show the counter where the crop does not, are gitignored.
 
 The skip arm is stable across its three points to ±1 fps, so the unroll arm's 1 fps is not drift.
 
+## Where the cost goes
+
+KK's encoder guard logs a running total of encoders (`[LIMINA-KK-GUARD] ... encoders=`). Its rate
+during aquarium at 30000 fish, divided by the measured fps:
+
+| arm    | encoders/s | fps | encoders per frame |
+|--------|-----------:|----:|-------------------:|
+| skip   | ~330       | ~40 | ~8                 |
+| unroll | ~5000      | 1   | ~5000              |
+
+So every unrolled draw ends the render encoder, runs its compute unroll, and opens a new render
+encoder that reloads the attachments (the TODO above the draw loop in `kk_cmd_draw.c`: "Remove this
+once unroll, tess and any compute does not split render pass"). The unroll kernel itself is one
+parallel 1024-thread workgroup per draw.
+
+The unroll arm also grows the worker without bound: on the 16 GB remote Mac it reached 18.5 GB
+resident with a 4 GiB guest and hard-hung the host (WindowServer watchdog, forced reboot).
+**Do not run the unroll arm on a shared host**, and cap any rerun with a timeout and an RSS watchdog.
+
 ## Reading it
 
 - WebGL 2 always has primitive restart enabled, and zink forwards that as `primitiveRestartEnable`
