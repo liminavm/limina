@@ -1,0 +1,21 @@
+date,commit,workload,metric,value,notes
+2026-10-07,ebefed85,aquarium-vrend-25000-r1,fps,42,listrestart s0 arm skip
+2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,39,listrestart s0 arm skip
+2026-10-07,ebefed85,aquarium-vrend-25000-r2,fps,42,listrestart s0 arm skip
+2026-10-07,ebefed85,aquarium-vrend-30000-r2,fps,38,listrestart s0 arm skip
+2026-10-07,ebefed85,aquarium-vrend-25000-r1,fps,,listrestart u0 arm unroll; counter hidden by the Firefox banner
+2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,1,listrestart u0 arm unroll
+2026-10-07,ebefed85,aquarium-vrend-25000-r2,fps,1,listrestart u0 arm unroll
+2026-10-07,ebefed85,aquarium-vrend-30000-r2,fps,1,listrestart u0 arm unroll
+2026-10-07,ebefed85,aquarium-vrend-25000-r1,fps,,listrestart s1 arm skip; counter hidden by the Firefox banner
+2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,38,listrestart s1 arm skip
+2026-10-07,ebefed85,aquarium-vrend-25000-r2,fps,42,listrestart s1 arm skip
+2026-10-07,ebefed85,aquarium-vrend-30000-r2,fps,38,listrestart s1 arm skip
+2026-10-07,ebefed85,aquarium-vrend-25000-r1,fps,,listrestart u1 arm unroll; counter hidden by the Firefox banner
+2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,1,listrestart u1 arm unroll
+2026-10-07,ebefed85,aquarium-vrend-25000-r2,fps,1,listrestart u1 arm unroll
+2026-10-07,ebefed85,aquarium-vrend-30000-r2,fps,1,listrestart u1 arm unroll
+2026-10-07,ebefed85,aquarium-vrend-25000-r1,fps,,listrestart s2 arm skip; counter hidden by the Firefox banner
+2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,39,listrestart s2 arm skip
+2026-10-07,ebefed85,aquarium-vrend-25000-r2,fps,42,listrestart s2 arm skip
+2026-10-07,ebefed85,aquarium-vrend-30000-r2,fps,38,listrestart s2 arm skip
