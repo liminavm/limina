@@ -256,8 +256,9 @@ fn echo_tests(ch: &mut Chan, tag: &str, ports: &mut [(String, String, fs::File)]
             continue;
         }
         if kind == "apple" {
-            // Apple's console behind a pipe wedges the guest tty under full-duplex bulk load
-            // (measured: the run hangs); latency is the comparison that matters here.
+            // An hvc echoed through a pipe/FIFO wedges under full-duplex bulk (seen with Apple's
+            // console here and libkrun's hvc0 in the baseline); only the in-process custom
+            // echo completed. Latency is the comparison that matters.
             continue;
         }
         // throughput: 16 KiB out, 16 KiB back, 1024 rounds, writer thread so neither side
@@ -654,7 +655,12 @@ fn main() {
         "HELLO pagesize={pg} kernel={}",
         uname.split_whitespace().nth(2).unwrap_or("?")
     ));
-    let mut ports = find_ports();
+    // vzprobe.noprobe: leave the custom device untouched before the save test, to tell
+    // "in-use queues lose their indices across restore" from "restore breaks the device".
+    let noprobe = fs::read_to_string("/proc/cmdline")
+        .unwrap_or_default()
+        .contains("vzprobe.noprobe");
+    let mut ports = if noprobe { Vec::new() } else { find_ports() };
     ch.send(&format!(
         "INFO ports {}",
         ports

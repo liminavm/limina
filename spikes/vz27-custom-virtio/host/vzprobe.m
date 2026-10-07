@@ -531,6 +531,7 @@ static void reply(int fd, NSString *s) {
                                                                      tSave, sz, tRest, ue, oldEcho.saveCalled, self.echo.restoreCalled,
                                                                      [[NSString alloc] initWithData:self.echo.restoredFrom encoding:NSUTF8StringEncoding]];
                         say(@"%@", self.saveStatus);
+                        [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
                     }];
                 }];
             }];
