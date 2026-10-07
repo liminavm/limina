@@ -1,13 +1,15 @@
 # Sketch: memory model and value delivery for a Metal-level guest GPU stack
 
 Target: guest GL and Vulkan drivers for Apple Silicon hosts only. They speak Metal-level
-commands over limina's own device and DKMS kernel driver to a thin host replayer, instead of
-venus/vrend over virtio-gpu. The new device is enhanced-tier only: a stock guest ignores it and
-keeps virtio-gpu.
+commands to a thin host replayer over limina's own transport, instead of venus/vrend. The
+transport extends the virtio-gpu device: our own shared memory and doorbell, behind a feature
+bit. A DKMS fork of the `virtio_gpu` kernel driver drives it (§6). Rendering never touches
+virtio-gpu's queues, rings or blob semantics; display keeps virtio-gpu's protocol. A stock guest
+ignores the feature bit and keeps plain virtio-gpu.
 
 End state and staging:
-1. **The device, kernel driver, wire protocol and host replayer, with KosmicKrisp and zink in
-   the guest.** KK's Metal bridge (`src/kosmickrisp/bridge/`) is replaced by a protocol encoder.
+1. **The virtio-gpu extension, the kernel driver fork, the wire protocol and the host replayer,
+   with KosmicKrisp and zink in the guest.** KK's Metal bridge (`src/kosmickrisp/bridge/`) is replaced by a protocol encoder.
    The wire is designed from Metal's object model (heaps, placed resources, encoders, guest
    handles), not from the bridge's ~200 calls, which carry KK internals. KK adapts to the wire;
    the wire is what outlives it.
@@ -16,9 +18,9 @@ End state and staging:
    and GLX stay on Mesa, selected per app through glvnd, until the driver covers them.
 3. **A Rust Vulkan driver replacing KK,** reusing the shader compiler built for stage 2.
 
-None of this needs Mesa's loaders. libglvnd vendor libraries, a Vulkan ICD, a libgbm backend
-(`/usr/lib/gbm/<name>_gbm.so`) and EGL external platforms are how NVIDIA's proprietary stack
-runs compositors. The long pole is the shader compiler: GLSL and SPIR-V front ends, an MSL back
+None of this needs Mesa's drivers. libglvnd vendor libraries, a Vulkan ICD and a libgbm
+backend are how NVIDIA's proprietary stack runs compositors (§6 covers how they select ours on a
+device named `virtio_gpu`). The long pole is the shader compiler: GLSL and SPIR-V front ends, an MSL back
 end, and the lowerings KK's NIR passes do today (geometry and tessellation emulation, transform
 feedback, clip distances, provoking vertex, quads, wide lines, polygon mode, logic ops). After
 that comes breadth, gated by VK-GL-CTS and piglit.
@@ -103,7 +105,7 @@ cited below are measured in `RESULTS.md` (this directory) unless marked otherwis
 - **The round-trip floor of the transport**, for what remains synchronous (descriptor-key
   queries, `vkDeviceWaitIdle`, query results read on the CPU). `RESULTS.md` measures venus's
   today. §4's query lane carries these across the process boundary at about 4–10 µs each.
-- **Display and sharing**: §6 puts display in our driver. What is left open is exporting
+- **Sharing**: display stays on the same device (§6). What is left open is exporting
   arena-backed images as dma-bufs to other guest consumers, such as video, screen capture and
   other devices.
 
@@ -173,43 +175,50 @@ the reference to read before designing ours. WebGPU itself is too limited to be 
 - **Arenas are a VMM memory class.** The balloon excludes them, snapshots save them, and
   accounting charges them to the VM.
 
-## 6. Display: our driver does modesetting; virtio-gpu is for boot and fallback
+## 6. One device: our transport extends virtio-gpu, driven by a `virtio_gpu` fork
 
-For the enhanced tier, the DKMS module is a full DRM driver: it renders and it does
-modesetting (KMS). It does not render on our device and scan out on virtio-gpu. Why:
-- **No cross-device buffer handoff.** Scanning out through virtio-gpu would make it import our
-  arena memory (new plumbing on a cross-device import path that has been fragile
-  here), or push the compositor into its multi-GPU copy, a full-frame
-  copy per frame. With modesetting in our driver, a scanout buffer is an IOSurface-backed arena
-  image and the host window presents it directly.
-- **Accurate presentation.** A page flip is a doorbell command. Vblank and present timestamps
-  arrive through the shared timing page (§5), so Wayland's presentation-time protocol reports
-  real times without extra machinery.
-- **Display state lives in the worker, rendering in the replayer.** Connectors, modes, the
-  scanout surface and the cursor sit on the worker's side of the device. A replayer crash is
-  then a GPU reset for the compositor while outputs and the last frame stay up.
-- **One device, one transport.** Mode setting, cursor, hotplug and resize use the same doorbell
-  and shared memory as rendering.
+There is no second GPU device. The host's virtio-gpu device carries our transport, and the guest
+kernel driver is a fork of upstream `virtio_gpu` that speaks both. The guest has one DRM device
+with one set of outputs, so display never hands over between devices.
 
-virtio-gpu stays, and its role is fixed:
-- **Boot and the stock tier.** Firmware, GRUB, the early console, plymouth and any kernel
-  without our module display through virtio-gpu (or the firmware framebuffer before it). This is
-  also the graceful fallback when our module is missing or fails.
-- **The host hands over between the two.** The kernel's usual handover from a firmware
-  framebuffer does not cover virtio-gpu to ours. Two live display outputs would show the
-  compositor two monitors, so the host decides:
-  - When our driver claims the display, the host reports virtio-gpu's output disconnected (a
-    hotplug event). A udev tag marks our device as the compositor's primary GPU
-    (mutter's preferred-primary tag).
-  - If our driver releases the display, or the replayer and the device go away, the host
-    reconnects virtio-gpu's output.
-  - Expect one mode switch at login, like plymouth to the greeter today.
-
-What it costs:
-- **The kernel side.** Connectors with EDID, modes, hotplug, a cursor plane, vblank events, and
-  a console framebuffer once the handover is done. DRM's helper libraries carry much of this;
-  virtio-gpu's own KMS half is a size reference.
-- **The host side.** Dynamic resize, EDID and hotplug, multi-display, cursor and capture, and
-  scanout across suspend/restore all exist on virtio-gpu today. Their host side is mostly
-  window and presentation code that does not care which device produced the surface. The work is
-  carrying them over our device's protocol; the virtio-gpu versions remain for the stock tier.
+- **Host.** libkrun's virtio-gpu device offers one extra feature bit and extra shared-memory
+  regions: arenas (§1), the doorbell page (§4) and the timing page (§5). The protocol runs over
+  those, not the virtqueues. Display, meaning modesetting, cursor, EDID and hotplug, resize,
+  multi-display, and scanout across suspend/restore, keeps virtio-gpu's existing protocol on
+  both sides, so none of it is re-plumbed.
+- **Stock guests** ignore the unknown feature bit and see a plain virtio-gpu. The two-tier
+  guarantee holds with no extra machinery.
+- **Guest kernel.** The DKMS module binds the virtio-gpu device in place of upstream
+  `virtio_gpu`. It keeps upstream's display code and adds our rendering path when the feature is
+  negotiated. It ships in the initramfs, so it drives the display from early boot: plymouth and
+  the greeter run on the same device. A modprobe `install` rule loads stock `virtio_gpu` if ours
+  fails to load.
+- **Zero-copy scanout.** A scanout resource backed by an IOSurface arena image is internal to the
+  host device, and the host window presents that surface directly. Present timestamps come
+  through the timing page.
+- **Crash isolation is a rule for the fork.** Display state lives in the worker and rendering in
+  the replayer (§4). A replayer crash must not reset the virtio device, because that would take
+  the display down with it. The fork reports it per context as a lost device while the display
+  carries on.
+- **The DRM driver name stays `virtio_gpu`, with upstream's ioctls,** so Mesa's venus and vrend
+  remain the per-app fallback on the same node. Mesa matches on that exact name (Mesa
+  `src/virtio/vulkan/vn_renderer_virtgpu.c:1114`,
+  `src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c:159`). The loaders that select by name
+  still pick ours:
+  - **GBM:** libgbm tries `virtio_gpu_gbm.so` first and falls through to Mesa's built-in backend
+    when that backend creates no device (Mesa `src/gbm/main/backend.c:147-165`). Ours declines
+    when the extension is not negotiated.
+  - **EGL (glvnd):** our vendor accepts a display only when the extension is present.
+  - **Vulkan:** the venus ICD and ours both report a GPU on the node. The default is ours,
+    through the Vulkan loader's driver ordering or Mesa's device-select layer, and venus stays
+    selectable per app.
+- **Cost:** an out-of-tree fork of a moderately sized upstream driver. The changes are additions
+  behind the feature bit, which keeps them upstreamable. Upstream already carries GPU-specific
+  protocols over `virtio_gpu` as native contexts (freedreno, amdgpu, asahi); this follows the
+  same pattern, with its own shared memory and doorbell.
+- **Rejected: a separate device with its own modesetting.** The guest would see two display
+  devices, so the host would have to hand the display between them: report virtio-gpu's output
+  disconnected and steer the compositor with a primary-GPU udev tag. Every host display feature
+  would also have to be carried over the new protocol.
+- **Still open: sharing with other guest consumers.** Exporting arena-backed images as dma-bufs
+  to video, screen capture and other devices (§3).
