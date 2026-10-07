@@ -1131,13 +1131,6 @@ fixes: 396,747 connects in 150 s, 2026-08-21). The muxer now resets connections 
 created, so a storm no longer kills the worker. Consider a per-peer accept backoff or a cap on
 concurrent unauthenticated peers.
 
-### Log which guest session each clipboard copy came from
-All `limina-agent-session` peers can push to the host pasteboard and the last write wins — deliberate,
-for cross-session paste including the gdm greeter (arbitration in `docs/roadmap.md` §M12). The cost is
-that a copy from a background session reaches the host with nothing that explains it. Log the
-originating peer for each accepted guest offer (no protocol change needed); session id and active
-state would need the agent to report them, since the host cannot see `loginctl`.
-
 ### Automated coverage gaps in the session helper
 `limina-agent-session`'s ext-data-control backend (`guest/limina-agent-session/src/wayland_clip.rs`)
 is verified live only: `l1_session_helper.rs` exercises the RemoteDesktop path and

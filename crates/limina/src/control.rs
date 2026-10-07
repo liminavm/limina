@@ -1092,8 +1092,11 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
             return Ok(());
         }
     };
+    // Numbered at the handshake, so every line about this connection can name it: two
+    // sessions' helpers announce the same agent string, and the id is what tells them apart.
+    let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
     log::info!(
-        "control: guest agent connected: {} caps={:?} pagesize={}",
+        "control: guest agent connected: {} (peer {id}) caps={:?} pagesize={}",
         hello.agent,
         hello.caps,
         hello.pagesize
@@ -1110,7 +1113,6 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         }),
     )?;
 
-    let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
     let writer = Arc::new(PeerMutex::new(stream.try_clone()?));
     let last_seen = Arc::new(Mutex::new(Instant::now()));
     let idle_inhibited = Arc::new(AtomicBool::new(false));
@@ -1138,22 +1140,29 @@ fn serve_agent(mut stream: UnixStream, inner: &Inner) -> std::io::Result<()> {
         &mut stream,
         &writer,
         inner,
+        (id, &hello.agent),
         &last_seen,
         &idle_inhibited,
         &mut fido,
     );
     inner.peers.lock().unwrap().retain(|p| p.id != id);
     publish_guest_inhibitors(&inner.peers);
-    log::info!("control: guest agent disconnected: {}", hello.agent);
+    log::info!(
+        "control: guest agent disconnected: {} (peer {id})",
+        hello.agent
+    );
     result
 }
 
 /// The post-handshake read loop for one peer. Replies go through the peer's `writer`
-/// mutex — never the raw read stream — because broadcasters write concurrently.
+/// mutex — never the raw read stream — because broadcasters write concurrently. `peer` is
+/// the connection's id and the agent its HELLO named, for the lines that must say who sent
+/// what.
 fn serve_loop(
     stream: &mut UnixStream,
     writer: &PeerMutex<UnixStream>,
     inner: &Inner,
+    peer: (u64, &str),
     last_seen: &Mutex<Instant>,
     idle_inhibited: &AtomicBool,
     fido: &mut Option<crate::fido::FidoAuthenticator>,
@@ -1178,8 +1187,19 @@ fn serve_loop(
             // `guest_serial` is deliberately a local: each guest session's helper numbers
             // its offers from 1, so the ratchet must be per-connection. Sharing one across
             // peers let the session with the highest count silence all the others.
+            //
+            // Every session's helper may write the host pasteboard and the last writer wins
+            // (cross-session paste, the greeter's included), so a copy from a background
+            // session lands with nothing on screen to explain it. The line names the peer —
+            // the same id its `connected` line carries — so the log can.
             Ok((_, Message::ClipOffer(o))) => {
+                let serial = o.serial;
                 if let Some(msg) = inner.clipboard.on_offer(o, &mut guest_serial) {
+                    log::info!(
+                        "clipboard: guest copy {serial} offered by peer {} ({}); requesting it",
+                        peer.0,
+                        peer.1
+                    );
                     reply(&msg, CHANNEL_CLIPBOARD)?;
                 }
             }
