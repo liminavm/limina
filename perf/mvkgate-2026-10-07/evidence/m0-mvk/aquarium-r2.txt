@@ -1,0 +1,14 @@
+=== vrend / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 559be54101f842378ca5f33ec55c3f8c
+  settling 35s…
+perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-25000-fps.png: 1200x520 (from perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0325
+  wrote perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-25000.png and perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-25000-fps.png
+=== vrend / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 629e1c2d74234ed18b1ba23e079f8f38
+  settling 35s…
+perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-30000-fps.png: 1200x520 (from perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0768
+  wrote perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-30000.png and perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-25000-fps.png
+perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r2/vrend-30000-fps.png

@@ -1,0 +1,66 @@
+######## b0-base 19:51:09
+[19:51:09] point mvkgate b0-base: arm base (Fedora-Workstation-44.enhanced.raw); host mesa de950d67e16; virglrs cd716cf + libkrun e3c140ad; limina 5328e111
+[19:51:09] enhanced boot
+[19:52:04] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[19:52:04] arm base: worker 90104 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 1 worker 90365 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 1 
+SETTLED up=205s load=0.23
+final: up=205s load=0.23 0.26 0.11
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[19:56:40] aquarium r1 exit=0 
+[19:58:00] aquarium r2 exit=0 
+[19:58:10] worker-enh: 0 poisoned-context lines
+[19:58:10] point b0-base done; read perf/mvkgate-2026-10-07/evidence/b0-base/aquarium-r*/*-fps.png
+######## m0-mvk 19:58:10
+[19:58:11] point mvkgate m0-mvk: arm mvk (Fedora-Workstation-44.enhanced.raw); host mesa de950d67e16; virglrs cd716cf + libkrun e3c140ad; limina 5328e111
+[19:58:11] enhanced boot
+[19:59:05] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[19:59:05] arm mvk: worker 91475 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 0 worker 91928 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 0 
+SETTLED up=205s load=0.27
+final: up=205s load=0.27 0.30 0.13
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[20:03:41] aquarium r1 exit=0 
+[20:05:02] aquarium r2 exit=0 
+[20:05:12] worker-enh: 0 poisoned-context lines
+[20:05:12] point m0-mvk done; read perf/mvkgate-2026-10-07/evidence/m0-mvk/aquarium-r*/*-fps.png
+######## b1-base 20:05:12
+[20:05:12] point mvkgate b1-base: arm base (Fedora-Workstation-44.enhanced.raw); host mesa de950d67e16; virglrs cd716cf + libkrun e3c140ad; limina 5328e111
+[20:05:12] enhanced boot
+[20:06:06] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[20:06:06] arm base: worker 92794 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 1 worker 93005 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 1 
+SETTLED up=204s load=0.13
+final: up=204s load=0.13 0.16 0.08
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[20:10:47] aquarium r1 exit=0 
+[20:12:07] aquarium r2 exit=0 
+[20:12:17] worker-enh: 0 poisoned-context lines
+[20:12:17] point b1-base done; read perf/mvkgate-2026-10-07/evidence/b1-base/aquarium-r*/*-fps.png
+######## m1-mvk 20:12:17
+[20:12:17] point mvkgate m1-mvk: arm mvk (Fedora-Workstation-44.enhanced.raw); host mesa de950d67e16; virglrs cd716cf + libkrun e3c140ad; limina 5328e111
+[20:12:17] enhanced boot
+[20:13:10] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[20:13:10] arm mvk: worker 93946 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 0 worker 94186 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 0 
+SETTLED up=220s load=0.24
+final: up=220s load=0.24 0.30 0.14
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[20:18:00] aquarium r1 exit=0 
+[20:19:20] aquarium r2 exit=0 
+[20:19:30] worker-enh: 0 poisoned-context lines
+[20:19:30] point m1-mvk done; read perf/mvkgate-2026-10-07/evidence/m1-mvk/aquarium-r*/*-fps.png
+######## b2-base 20:19:30
+[20:19:30] point mvkgate b2-base: arm base (Fedora-Workstation-44.enhanced.raw); host mesa de950d67e16; virglrs cd716cf + libkrun e3c140ad; limina 5328e111
+[20:19:30] enhanced boot
+[20:20:23] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+[20:20:24] arm base: worker 95106 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 1 worker 95398 LIMINA_ZINK_MVK_WORKAROUNDS=1 count: 1 
+SETTLED up=205s load=0.24
+final: up=205s load=0.24 0.36 0.17
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-3.limina.fc44.aarch64
+[20:25:07] aquarium r1 exit=0 
+[20:26:26] aquarium r2 exit=0 
+[20:26:36] worker-enh: 0 poisoned-context lines
+[20:26:36] point b2-base done; read perf/mvkgate-2026-10-07/evidence/b2-base/aquarium-r*/*-fps.png
+######## legs done 20:26:36
