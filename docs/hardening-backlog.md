@@ -689,12 +689,6 @@ Running each one in the enhanced guest under zink-on-venus as well
   pass into a fail on either guest. `vbo-subdata-*` fail this way in some full runs and pass 3/3 run
   alone (`spikes/piglit-virgl/rep.sh`), so treat a lone difference with that line as a host stall.
 
-### virglrs's transfer bounds error does not say which bound failed
-`layout` in `vrend/transfer.rs` collapses its three exits (stride smaller than a row, layer stride
-smaller than a layer, offset plus span past the pages) into one bare `Error::IovOutOfRange`.
-(`BoxOutOfRange` is already separate.) Diagnosability only: a distinct variant or detail per exit,
-carrying the two quantities compared.
-
 ### Re-verify CPU-write → GPU-read coherency on a shared dmabuf under virglrs
 A guest that does `gbm_bo_map` → write → unmap on a LINEAR `Argb8888` dmabuf and then samples it from
 venus read the buffer's previous contents: the write reaches the host as a control-queue transfer on
@@ -911,14 +905,6 @@ geometry-shader support, not with the xfb lowering.
 ---
 
 ## Video
-
-### A host failure decoding a held AV1 frame drops the next frame too
-`Av1::advance` (virglrs `vrend/video/mod.rs`) submits the frame held at the eight-slot wall with
-`?`, so a VideoToolbox error on the held frame returns before the incoming frame's shape is
-recorded, and that frame is dropped at END_FRAME as well. Super-resolution frames no longer take
-this path (they decode normally), so it needs a genuine host decode failure. Fix: record the
-incoming frame's shape before the held one is submitted, or submit the held frame without `?` and
-log its failure.
 
 ### AV1 has no host decoder on M1/M2, so AV1 playback there never counts as video
 virglrs offers AV1 only where `VTIsHardwareDecodeSupported` says so (M3+), so on an M1 or M2 the
