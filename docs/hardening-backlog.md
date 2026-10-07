@@ -636,7 +636,7 @@ Running each one in the enhanced guest under zink-on-venus as well
     there: the legacy ALPHA, LUMINANCE, LUMINANCE_ALPHA and INTENSITY formats in
     `arb_texture_buffer_object@formats (fs|vs, arb)`.
   - All 27 timeouts (300 s) are indexed draws under transform feedback, which GLES refuses. virglrs
-    de-indexes them in `6c6a60b` (not yet pinned).
+    de-indexes them since `6c6a60b` (pinned); the selection has not been rerun on it.
   - virglrs's desktop flavour passes 69 more of these and regresses 26 uploads; which flavour ships
     is undecided.
 - **Fail under zink-on-venus too, so they are in KK or zink:**
