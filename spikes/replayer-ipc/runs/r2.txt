@@ -1,0 +1,48 @@
+Wed Oct  7 08:50:16 -03 2026
+ 8:50  up 5 days, 15:10, 4 users, load averages: 9.93 10.92 10.09
+peer: a virglrs-harness limina-vmm --cpus 4
+[replayer] worker pid 9496 connected
+[replayer] A1: mach_make_memory_entry_64(heap alias, plain) -> 0 ((os/kern) successful), size 256 MiB
+[worker] A1: mach_vm_map of the heap entry -> 0 ((os/kern) successful) at 0x1059f8000
+[worker] A1 GPU-filled range, read by worker CPU       match=25165824/25165824 zero=0 other=0
+[worker] A1: hv_vm_map of the shared heap -> 0x0
+[worker] A1: guest reads of GPU-written words through stage 2: 64/64 correct
+[worker] A1: tagged texels of the heap-placed texture seen in the worker mapping: 65536/65536
+[replayer] A1: GPU check of the worker-filled range: 0 bad; guest-written word read by the replayer: 0xfeedf00d (ok)
+[worker] A1 after the replayer released the heap: [0,96M) vs S1  match=25165823/25165824 zero=0 other=1 [word 12345 = 0xfeedf00d]
+[worker] A1 after release: [96M,192M) vs S2            match=25165824/25165824 zero=0 other=0
+[worker] A1 after release: [0,96M) vs the replayer's NEW heaps (S3)  match=0/25165824 zero=0 other=25165824 [word 0 = 0x11111111] [word 1 = 0x11111110] [word 2 = 0x11111113] [word 3 = 0x11111112]
+[worker] A1 after release: guest read of word 99 = 0x11111172 (S1 pattern 0x11111172)
+[replayer] A2: newBufferWithBytesNoCopy over the worker's memory -> a buffer
+[replayer] A2: GPU check of the worker-filled half: 0 bad
+[worker] A2 GPU-written half, read by worker CPU (S5)  match=33550336/33550336 zero=0 other=0
+[worker] A2: guest reads of GPU-written words: 64/64 correct
+[worker] A2 after the replayer dropped buffer+mapping: [0,128M) S4  match=33554432/33554432 zero=0 other=0
+[worker] A2 after drop: [128M,256M-16K) S5             match=33550336/33550336 zero=0 other=0
+[worker] cross-process os_sync   gap=    0us n=20000  p50=   5.38us p90=   8.21us p99=   17.29us max=   1544.1us
+[worker] cross-process os_sync   gap=  200us n=2000   p50=   5.79us p90=  10.71us p99=   21.83us max=     48.4us
+[worker] cross-process os_sync   gap= 5000us n=200    p50=  10.00us p90=  19.12us p99=  526.88us max=   2688.0us
+[worker] cross-process semaphore gap=    0us n=20000  p50=   2.83us p90=   3.12us p99=    7.38us max=     47.2us
+[worker] cross-process semaphore gap=  200us n=2000   p50=   3.54us p90=   6.54us p99=   11.50us max=     29.6us
+[worker] cross-process semaphore gap= 5000us n=200    p50=   5.92us p90=   8.58us p99=   14.96us max=     19.5us
+[worker] cross-process mach-rpc  gap=    0us n=20000  p50=   3.00us p90=   3.29us p99=    7.33us max=     47.1us
+[worker] cross-process mach-rpc  gap=  200us n=2000   p50=   3.79us p90=   7.58us p99=   20.29us max=     66.2us
+[worker] cross-process mach-rpc  gap= 5000us n=200    p50=   9.08us p90=  12.54us p99=   23.96us max=     27.2us
+[worker] cross-process spin      gap=    0us n=20000  p50=   0.17us p90=   0.17us p99=    0.21us max=      0.3us
+[worker] cross-process spin      gap=  200us n=2000   p50=   0.08us p90=   0.33us p99=    0.38us max=      7.0us
+[worker] cross-process spin      gap= 5000us n=200    p50=   0.08us p90=   1.04us p99=   91.92us max=    233.8us
+[worker] in-process    os_sync   gap=    0us n=20000  p50=   2.83us p90=  11.04us p99=   28.29us max=   1504.8us
+[worker] in-process    os_sync   gap=  200us n=2000   p50=   4.25us p90=  10.75us p99=   34.75us max=    166.9us
+[worker] in-process    os_sync   gap= 5000us n=200    p50=   5.33us p90=   9.29us p99=   25.96us max=     35.0us
+[worker] in-process    semaphore gap=    0us n=20000  p50=   2.54us p90=   3.17us p99=    6.12us max=     45.2us
+[worker] in-process    semaphore gap=  200us n=2000   p50=   3.00us p90=   4.96us p99=   12.04us max=     33.7us
+[worker] in-process    semaphore gap= 5000us n=200    p50=   5.08us p90=   6.79us p99=   19.17us max=     45.9us
+[worker] in-process    mach-rpc  gap=    0us n=20000  p50=   2.58us p90=   3.12us p99=    6.75us max=     56.8us
+[worker] in-process    mach-rpc  gap=  200us n=2000   p50=   3.29us p90=   5.58us p99=   14.92us max=     62.2us
+[worker] in-process    mach-rpc  gap= 5000us n=200    p50=   5.21us p90=  10.38us p99=   25.67us max=     26.4us
+[worker] in-process    spin      gap=    0us n=20000  p50=   0.42us p90=   0.42us p99=    0.46us max=      0.6us
+[worker] in-process    spin      gap=  200us n=2000   p50=   0.08us p90=   0.33us p99=    0.33us max=      3.0us
+[worker] in-process    spin      gap= 5000us n=200    p50=   0.08us p90=   0.33us p99=    3.08us max=      5.7us
+[replayer] worker exited with status 0
+rc=0
+ 8:50  up 5 days, 15:10, 4 users, load averages: 10.07 10.91 10.09

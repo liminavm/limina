@@ -73,4 +73,5 @@ Medians in r2: trap 1.0–1.1 µs hot and 2–3 µs after 5 ms; metal 2.2–2.4 
 - **The cross-process hop.** The replayer will be its own process
   (`spikes/metal-heap-addressing/SKETCH.md` §4). The trap then wakes the replayer instead of
   doing the Metal work itself. The worker resumes the guest without waiting for bulk work, and
-  only the rare synchronous queries pay the hop. Its cost is not measured yet.
+  only the rare synchronous queries pay the hop: ~3–9 µs with a Mach semaphore
+  (`spikes/replayer-ipc/`).

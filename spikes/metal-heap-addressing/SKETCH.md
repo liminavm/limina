@@ -102,7 +102,7 @@ cited below are measured in `RESULTS.md` (this directory) unless marked otherwis
   needs its own design for invalidation when referenced objects die.
 - **The round-trip floor of the transport**, for what remains synchronous (descriptor-key
   queries, `vkDeviceWaitIdle`, query results read on the CPU). `RESULTS.md` measures venus's
-  today. §4's query lane carries these across the process boundary; its cost is unmeasured.
+  today. §4's query lane carries these across the process boundary at about 4–10 µs each.
 - **Display and sharing**: exporting arena-backed images as dma-bufs for the compositor and KMS
   scanout, and GBM/EGL in the guest.
 
@@ -131,24 +131,22 @@ the reference to read before designing ours. WebGPU itself is too limited to be 
     drains the ring without being woken again.
   - **Query lane.** The few synchronous calls left (texture size/align per new descriptor key,
     pipeline-cache misses, real CPU waits on the GPU) cross the boundary and wait for the reply.
-    They are rare by design. A parked-thread handoff costs 4–12 µs in-process; the
-    cross-process cost is not measured yet. Answers that need no Metal state are served by the
-    worker without crossing.
-- **Arena memory must be visible to both processes.** The worker needs it to `hv_vm_map` it into
-  the guest, and the replayer needs it for Metal. Two candidates, to measure:
-  - **Replayer-owned heaps shared into the worker.** The replayer allocates the placement heap
-    (§1, unchanged), makes a Mach memory entry of the alias range, and sends it to the worker,
-    which maps it and `hv_vm_map`s it. If Metal's memory survives that, §1 stands as written:
-    buffers and twiddled textures live in guest-mapped memory. It dies with the replayer.
-  - **Worker-owned memory wrapped by the replayer.** The worker allocates a shared memory object.
-    The replayer maps it and wraps it with `newBufferWithBytesNoCopy`, which is proven for
-    16 KiB-contiguous memory (`spikes/userptr-remap-metal/`). Buffer addresses remain
-    base + offset within that buffer. Optimal-tiling textures then live in replayer-private
-    heaps that the guest never maps. That is allowed: the guest CPU must not read twiddled
-    texels anyway, and Vulkan permits memory types for optimal images that are not host-visible.
-    This memory survives a replayer crash.
-- **The wake primitive is a measurement.** Candidates are `os_sync_wait_on_address` with the
-  shared flag over arena memory (futex-like), a Mach semaphore, and a Mach message.
+    They are rare by design, and each costs about 4–10 µs (below). Answers that need no
+    Metal state are served by the worker without crossing.
+- **Arena memory: the replayer owns it, the worker maps it.** Measured in
+  `spikes/replayer-ipc/`. The replayer allocates the placement heap (§1, unchanged) and exports
+  the alias range as a Mach memory entry with no special flags. The worker maps it and
+  `hv_vm_map`s it. GPU, replayer CPU, worker CPU and guest all see one coherent set of pages,
+  textures included. The worker's mapping keeps the pages alive even after the replayer is
+  killed with SIGKILL, so the guest never loses mapped memory. A crash loses only the Metal
+  objects and texture contents, the lost-device contract, and a restarted replayer can wrap the
+  surviving memory as `bytesNoCopy` buffers. Worker-owned memory wrapped with `bytesNoCopy`
+  also works, and is the fallback if heaps must not be replayer-owned.
+- **The wake primitive is a Mach semaphore,** or a Mach message where the wake carries data.
+  A cross-process round trip costs ~3 µs hot and 6–9 µs after 5 ms idle, against 2.5 µs and
+  5 µs inside one process. The boundary itself is well under 1 µs. `os_sync_wait_on_address`
+  across processes is about twice as slow, with tails in the hundreds of µs. A query-lane call
+  therefore costs about 4–10 µs: the doorbell trap plus the hop.
 - **Recovery and snapshot share one journal.** The worker keeps a journal of the protocol's
   object creation, the same idea as the virtio-gpu journal for suspend/restore. After a replayer
   crash the guest sees a lost device and recreates its contexts. On a snapshot restore, the
