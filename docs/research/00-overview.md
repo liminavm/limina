@@ -98,9 +98,9 @@ macOS Game Mode clamps an app's whole process tree (`crates/limina-launch`).
    differentiating feature needs patches. Build from `third_party` with the
    right feature flags. See [01](01-libkrun-internals-and-api.md).
 
-4. **Keep raw HVF; reject Virtualization.framework.** Vz is closed and forbids
-   custom virtio devices, USB passthrough, fine-grained ballooning, and custom
-   agents — and still needs the gated networking entitlement. libkrun's HVF
+4. **Keep raw HVF; reject Virtualization.framework.** Even with macOS 27's custom
+   virtio devices, Vz gives no working path for dynamic memory or GPU snapshot, no
+   doorbell/trap hook and no vCPU control, and it exists only on macOS. libkrun's HVF
    backend (run loop, PSCI/SMP, in-kernel `hv_gic` GICv3, vtimer, WFI parking)
    already works. See [02](02-macos-hvf.md).
 
@@ -184,7 +184,7 @@ macOS Game Mode clamps an app's whole process tree (`crates/limina-launch`).
 |---|---|
 | Run the VMM in a dedicated **process**, started by launchd | `krun_start_enter` loops forever and guest shutdown tears the process down; the UI must survive and supervise. Not the UI's child: Game Mode clamps an app's process tree. |
 | **Build libkrun from `third_party`** (gpu,input,net,blk,vhost-user) | Brew bottle lacks 1.18 APIs and every differentiator needs patches. |
-| Keep **raw HVF via libkrun**, reject Virtualization.framework | Vz is closed and forbids the custom devices, USB, ballooning, and agents that are limina's whole point. |
+| Keep **raw HVF via libkrun**, reject Virtualization.framework | Even with macOS 27 custom devices, Vz has no working dynamic memory or GPU snapshot, no doorbell hook, no vCPU control, and is macOS-only ([02](02-macos-hvf.md) §Option D). |
 | **Native AppKit UI** (NSWindow/CAMetalLayer/NSEvent), not GTK/SDL examples | Foreign event loops fight AppKit; examples are milestone-1 crutches only. |
 | Single multiplexed **vsock control plane** (guest connects out) + shutdown eventfd | Coexists with TSI, needs no patch, and is the lifecycle/clipboard/mem channel. |
 | **gvproxy user-mode NAT** as default networking | No root, no Apple-gated entitlement; bridged/vmnet is opt-in later. |

@@ -19,9 +19,9 @@ bridged networking and M7 real-device USB capture (both wait on the one privileg
 
 ## Cross-cutting architecture decisions
 
-- **Raw HVF via libkrun, not Apple Virtualization.framework.** Vz is closed and forbids the custom
-  virtio devices, host-USB passthrough, fine-grained ballooning and patchable guest agents that are
-  limina's point (research 02).
+- **Raw HVF via libkrun, not Apple Virtualization.framework.** Even with macOS 27's custom virtio
+  devices, Vz gives no working path for dynamic memory or GPU snapshot, no doorbell hook and no vCPU
+  control, and it would tie limina to macOS (research 02 §Option D, `spikes/vz27-custom-virtio/`).
 - **libkrun is consumed as a Rust crate** (internal API, no C ABI): the worker assembles
   `VmResources` in its `krun/` facade and runs `build_microvm` + the event loop itself.
 - **Dedicated child-process VMM.** `krun_start_enter` loops forever and guest PSCI SYSTEM_OFF tears

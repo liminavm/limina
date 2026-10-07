@@ -8,8 +8,8 @@
 > entitlements/codesigning and a deliberate comparison with Apple's higher-level
 > **Virtualization.framework (Vz)**. This is the layer beneath everything else
 > (display, net, balloon, USB); the decision here — *use raw HVF via libkrun, not
-> Vz* — is what lets `limina` patch the stack for dynamic memory, USB passthrough,
-> and custom virtio devices.
+> Vz* — is what lets `limina` patch the stack for dynamic memory, GPU snapshot,
+> emulated USB devices and its own vCPU policy, and keeps the VMM portable beyond macOS.
 
 > **Verification.** Confirmed against the local clone at `git` HEAD `07a3f40`
 > (~v1.18). Every libkrun citation below is a real `path:line` that was read
@@ -279,14 +279,13 @@ low-host-CPU-at-idle goal; worth measuring (§6).
   propagate from a dylib to its host process.
 - Hardened Runtime + notarization for distribution are compatible with this
   entitlement (unlike JIT, it needs no special Apple grant).
-- **`vmnet` is separate and gated.** NAT/bridged `vmnet` needs
-  **`com.apple.vm.networking`**, which Apple grants only via a provisioning
-  profile **or** requires the process to run as **root**. This is why headless
-  tooling (krunkit/vfkit) prefers **user-mode networking via gvproxy** (a
-  userspace TCP/IP stack over a datagram socket — libkrun has
-  `krun_add_net_unixgram`, cf. HEAD commit `07a3f40`). For `limina`: default to
-  **gvproxy user-mode NAT** (no root, no gated entitlement); treat bridged/`vmnet`
-  as an opt-in costing root or an Apple grant. Full matrix in the networking doc.
+- **`vmnet` needs `com.apple.security.virtualization`, not root.** Measured on macOS 26.6.2
+  (`spikes/vmnet-network-probe/RESULTS.md`): a non-root process signed ad-hoc with that
+  unrestricted entitlement runs vmnet shared, host-only and bridged (`en0`) interfaces with
+  packets flowing; with only `com.apple.security.hypervisor`, or none, every mode fails. The
+  restricted `com.apple.vm.networking` is not involved. gvproxy user-mode NAT stays the default;
+  the networking docs (07, `docs/design/multi-vm-networking.md`) still plan vmnet around root or
+  the restricted entitlement.
 
 ### 2.10 HVF limits relevant to limina
 
@@ -379,30 +378,40 @@ Guest PSCI SYSTEM_OFF/RESET (HVC) ──► VcpuExit::Shutdown                [l
 - **Fit:** Poor. Rejected unless libkrun proves unworkable.
 
 ### Option D — Apple Virtualization.framework (Vz) instead of HVF
-- **What Vz hands you turnkey:** Linux boot, virtio block/net/console/rng/
-  **balloon**/**gpu**/input/**virtiofs**, **vmnet** NAT/bridged without a TCP/IP
-  stack, **Rosetta** for x86-64 Linux binaries, and (recent macOS) display +
-  keyboard/mouse + **guest clipboard** via the Spice agent. Much of limina's list
-  for free.
-- **Why limina does NOT use Vz (decisive):**
-  1. **Not patchable** — closed Apple framework; cannot add custom virtio
-     devices, custom guest drivers/agents, or change device behavior. limina's
-     mandate depends on patching the VMM/virgl/rutabaga/guest.
-  2. **No host-USB passthrough** to Linux guests (only USB mass-storage attach).
-     limina wants real libusb/usbredir passthrough → must build it on HVF+libkrun.
-  3. **Coarse dynamic-memory control** — Vz balloon gives limited programmatic
-     min..max policy + host reclamation semantics; limina wants the fine-grained
-     take/return we get by owning the balloon handler (Option B-c).
-  4. **Fixed GPU** — limina wants the virglrenderer/rutabaga + Venus/Vulkan path
-     libkrun exposes and we can patch for 3D.
-  5. **Footprint** — heavier framework + device threads vs a lean, trimmable VMM.
-  6. **No networking escape** — Vz still needs `com.apple.vm.networking`/root for
-     vmnet, so it does not dodge the entitlement problem; it only hides the stack.
-- **Pros (honest):** Far less code; vmnet/clipboard/Rosetta/display free; Apple
-  maintains it. Great *if* limina shrank to "plain Linux desktop, no custom devices."
-- **Fit:** **Rejected as primary.** limina's differentiators (USB, custom 3D,
-  fine-grained dynamic memory, patchable agents) are exactly what Vz forbids. Keep
-  Vz as a UX reference and a fallback if an HVF limit proves fatal.
+- **What Vz hands you turnkey:** Linux boot (its own EFI, with Secure Boot and Microsoft key
+  enrollment from macOS 27), virtio block/net/console/rng/balloon/gpu/virtiofs/vsock, NAT
+  without a TCP/IP stack, **Rosetta** for x86-64 Linux binaries (Vz-only by design and by
+  licence), USB keyboard/pointer driven through `VZVirtualMachineView`, and from macOS 27
+  host-USB passthrough (`VZUSBPassthroughDevice`, needs the restricted
+  `com.apple.developer.accessory-access.usb` entitlement).
+- **macOS 27 custom devices.** `VZCustomVirtioDevice` adds any virtio PCI device we implement:
+  our own feature bits, queues and config space, raw guest-RAM access, one virtio
+  shared-memory region per device, and save/restore hooks. Measured
+  (`spikes/vz27-custom-virtio/RESULTS.md`, M4 Pro, macOS 27.0.1):
+  - **Shared-memory region works for GPU memory.** MTLBuffer, bytesNoCopy, placement-heap
+    buffers and IOSurfaces map in ~0.1 ms and are coherent both ways, GPU fills and reads
+    included. That is the mechanism venus host-visible blobs need.
+  - **Notifications are slow and the only signal.** A custom-device round trip is ~65 µs p50
+    (libkrun's virtio-console ~52 µs, Apple's own devices ~38 µs). There is no MMIO trap or
+    doorbell hook, so a vCPU-thread doorbell (~1 µs on bare HVF) has no counterpart.
+  - **No reclaim.** madvise through the framework's guest-RAM mapping and Apple's own
+    balloon both left the VM process's footprint unchanged.
+  - **Restore does not work for custom devices.** Save succeeds and the device's blob comes
+    back, but after restore the device's completions never reach the guest (cause not
+    isolated); descriptors held at save time are lost.
+  - **No config-space write callback,** so virtio-input cannot be a custom device; input stays
+    on Apple's devices and `VZVirtualMachineView`.
+- **What Vz still withholds:** vCPU threads (scheduling band, QoS, hotplug), PSCI and the
+  suspend handshake, the GIC, platform devices, firmware, trap handling, CPU feature masking,
+  and every non-virtio device — so none of our emulated USB devices on the xHCI. And it exists
+  only on macOS; a libkrun-based worker is the part of limina that can follow libkrun to other
+  host OSes.
+- **Fit:** **Rejected as primary.** The custom-device API removes the old "cannot add devices"
+  objection on paper, but dynamic memory and GPU snapshot — two of limina's differentiators —
+  have no working path on 27.0.1, the doorbell design has none at all, and adopting Vz would
+  tie limina to macOS. Re-test on later macOS releases with the spike above; the restore and
+  reclaim results are the ones that could change. Nested virtualization is not a reason to
+  move: libkrun already enables it on M3+ (§2.10).
 
 ---
 
