@@ -51,6 +51,7 @@ pub struct CreateOpts {
 /// already exists; cleans up the partial bundle on error (a failed import must not
 /// leave a half-VM in the library).
 pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
+    super::bundle::ensure_volume_mounted(dest_dir)?;
     anyhow::ensure!(!opts.name.is_empty(), "VM name must not be empty");
     anyhow::ensure!(
         !opts.name.contains('/') && !opts.name.starts_with('.'),

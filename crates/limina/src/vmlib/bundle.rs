@@ -132,16 +132,136 @@ impl VmBundle {
     }
 }
 
-/// The default VM library. `$LIMINA_VM_LIBRARY` overrides it (tests, portable setups);
-/// otherwise `~/Library/Application Support/Limina/VMs`.
+/// `~/Library/Application Support/Limina`: the default library's parent, and where the host
+/// config lives — outside the library, so it survives the library moving.
+pub fn app_support_dir() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    home.join("Library/Application Support/Limina")
+}
+
+/// The host-wide settings file (`docs/design/vm-definitions.md` §8.1). `$LIMINA_CONFIG`
+/// overrides its location (tests).
+pub fn config_path() -> PathBuf {
+    match std::env::var_os("LIMINA_CONFIG") {
+        Some(p) => PathBuf::from(p),
+        None => app_support_dir().join("config.toml"),
+    }
+}
+
+/// The VM library: `$LIMINA_VM_LIBRARY` (tests, portable setups), else `[library] path` from
+/// [`config_path`], else `~/Library/Application Support/Limina/VMs`.
+///
+/// The config is read on every call, not cached: the control center runs for days and has to
+/// see a change without a restart, and every caller is about to do directory I/O anyway.
 pub fn library_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("LIMINA_VM_LIBRARY") {
         return PathBuf::from(dir);
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    home.join("Library/Application Support/Limina/VMs")
+    configured_library(&config_path()).unwrap_or_else(|| app_support_dir().join("VMs"))
+}
+
+/// `[library] path` from the config at `path`. Missing file or key = `None`. A file that does
+/// not parse, or a relative path, is a warning and `None`: the control center must still open
+/// so the user can fix it.
+fn configured_library(path: &Path) -> Option<PathBuf> {
+    #[derive(serde::Deserialize, Default)]
+    struct Config {
+        #[serde(default)]
+        library: Library,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct Library {
+        path: Option<PathBuf>,
+    }
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            warn_config(format!(
+                "cannot read {}: {e}; using the default VM library",
+                path.display()
+            ));
+            return None;
+        }
+    };
+    let lib = match toml::from_str::<Config>(&text) {
+        Ok(c) => c.library.path?,
+        Err(e) => {
+            warn_config(format!(
+                "{} is malformed ({e}); using the default VM library",
+                path.display()
+            ));
+            return None;
+        }
+    };
+    if lib.as_os_str().is_empty() {
+        return None;
+    }
+    if !lib.is_absolute() {
+        warn_config(format!(
+            "{}: [library] path {} is not absolute; using the default VM library",
+            path.display(),
+            lib.display()
+        ));
+        return None;
+    }
+    Some(lib)
+}
+
+/// Say what is wrong with the config once, not on every one of the control center's refreshes.
+fn warn_config(msg: String) {
+    static LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
+    if last.as_deref() != Some(msg.as_str()) {
+        log::warn!("{msg}");
+        *last = Some(msg);
+    }
+}
+
+/// The volume root (`/Volumes/<name>`) `dir` lives on, when that volume is not mounted.
+///
+/// Only paths under `/Volumes` are judged: that is where removable and network volumes mount,
+/// and anything else lives on a volume that is always there. `is_mount_point` is the probe
+/// ([`is_mount_point`] in production) so the rule is testable without a disk to unplug.
+pub fn unmounted_volume(dir: &Path, is_mount_point: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut parts = dir.components();
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(Component::RootDir), Some(Component::Normal(v)), Some(Component::Normal(name)))
+            if v == "Volumes" =>
+        {
+            let root = Path::new("/Volumes").join(name);
+            (!is_mount_point(&root)).then_some(root)
+        }
+        _ => None,
+    }
+}
+
+/// Is `p` a mount point: an existing directory on a different device than its parent?
+pub fn is_mount_point(p: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (Ok(me), Some(Ok(parent))) = (std::fs::metadata(p), p.parent().map(std::fs::metadata))
+    else {
+        return false;
+    };
+    me.is_dir() && me.dev() != parent.dev()
+}
+
+/// Refuse to put a VM into `dir` when the volume it lives on is not mounted, rather than create
+/// the directory wherever the path happens to land and grow a second library there.
+pub fn ensure_volume_mounted(dir: &Path) -> Result<()> {
+    if let Some(root) = unmounted_volume(dir, is_mount_point) {
+        anyhow::bail!(
+            "the VM library {} is on {}, which is not mounted; connect that volume (or change \
+             [library] path in {}) and try again",
+            dir.display(),
+            root.display(),
+            config_path().display()
+        );
+    }
+    Ok(())
 }
 
 /// Resolve a VM spec to a bundle: a path if it looks like one (contains a separator or
@@ -242,6 +362,83 @@ pub(crate) mod tests {
             ssh_port: 0,
             window: true,
         }
+    }
+
+    /// `library_dir()` precedence (design §8.1): env > `[library] path` in config.toml >
+    /// default, re-read on every call, and a broken config falls through to the default.
+    #[test]
+    fn the_library_comes_from_env_then_config_then_the_default() {
+        let _g = env_lock();
+        let dir = scratch_library("config");
+        let config = dir.join("config.toml");
+        let saved_lib = std::env::var_os("LIMINA_VM_LIBRARY");
+        unsafe {
+            std::env::remove_var("LIMINA_VM_LIBRARY");
+            std::env::set_var("LIMINA_CONFIG", &config);
+        }
+        let default = app_support_dir().join("VMs");
+
+        assert_eq!(library_dir(), default, "no config file");
+        std::fs::write(&config, "[library]\npath = \"/Volumes/Ext/Limina VMs\"\n").unwrap();
+        assert_eq!(library_dir(), PathBuf::from("/Volumes/Ext/Limina VMs"));
+        // Re-read per call: a long-running center sees the change.
+        std::fs::write(&config, "[library]\npath = \"/Users/x/VMs\"\n").unwrap();
+        assert_eq!(library_dir(), PathBuf::from("/Users/x/VMs"));
+        std::fs::write(&config, "# nothing about the library\n").unwrap();
+        assert_eq!(library_dir(), default, "no [library] key");
+        std::fs::write(&config, "[library\npath = ").unwrap();
+        assert_eq!(library_dir(), default, "malformed: warn and fall through");
+        std::fs::write(&config, "[library]\npath = \"relative/VMs\"\n").unwrap();
+        assert_eq!(library_dir(), default, "relative: warn and fall through");
+
+        std::fs::write(&config, "[library]\npath = \"/Users/x/VMs\"\n").unwrap();
+        unsafe { std::env::set_var("LIMINA_VM_LIBRARY", &dir) };
+        assert_eq!(library_dir(), dir, "the env var outranks the config");
+
+        unsafe {
+            std::env::remove_var("LIMINA_CONFIG");
+            match saved_lib {
+                Some(v) => std::env::set_var("LIMINA_VM_LIBRARY", v),
+                None => std::env::remove_var("LIMINA_VM_LIBRARY"),
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Only `/Volumes/<name>` paths are judged, by their volume root.
+    #[test]
+    fn an_unmounted_volume_is_named_by_its_root() {
+        let mounted = |p: &Path| p == Path::new("/Volumes/Ext");
+        assert_eq!(
+            unmounted_volume(Path::new("/Volumes/Ext/Limina VMs"), mounted),
+            None
+        );
+        assert_eq!(
+            unmounted_volume(Path::new("/Volumes/Gone/Limina VMs"), mounted),
+            Some(PathBuf::from("/Volumes/Gone"))
+        );
+        assert_eq!(
+            unmounted_volume(Path::new("/Volumes/Gone"), mounted),
+            Some(PathBuf::from("/Volumes/Gone"))
+        );
+        assert_eq!(unmounted_volume(Path::new("/Users/x/VMs"), |_| false), None);
+        assert_eq!(unmounted_volume(Path::new("/Volumes"), |_| false), None);
+        // The real probe: a name nothing is mounted at is not a mount point.
+        assert!(!is_mount_point(Path::new("/Volumes/limina-no-such-volume")));
+    }
+
+    /// Creating a VM in a library whose volume is not mounted refuses, naming the volume,
+    /// rather than putting a directory wherever the path happens to land.
+    #[test]
+    fn creation_refuses_a_library_on_an_unmounted_volume() {
+        let lib = PathBuf::from(format!(
+            "/Volumes/limina-unplugged-{}/VMs",
+            std::process::id()
+        ));
+        let err = create(&basic_opts("Shadow"), &lib).unwrap_err().to_string();
+        assert!(err.contains("not mounted"), "{err}");
+        assert!(err.contains("limina-unplugged"), "{err}");
+        assert!(!lib.exists());
     }
 
     #[test]

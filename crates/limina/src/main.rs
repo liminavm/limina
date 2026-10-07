@@ -779,6 +779,7 @@ fn main() -> Result<()> {
 fn cmd_create(args: CreateArgs) -> Result<()> {
     let memory = vmlib::schema::Memory::parse(&args.memory).context("--memory")?;
     let dest = args.dir.unwrap_or_else(vmlib::bundle::library_dir);
+    vmlib::bundle::ensure_volume_mounted(&dest)?;
     std::fs::create_dir_all(&dest)
         .with_context(|| format!("creating the VM library {}", dest.display()))?;
     let opts = vmlib::import::CreateOpts {

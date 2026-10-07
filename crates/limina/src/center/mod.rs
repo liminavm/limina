@@ -43,13 +43,19 @@ use controller::CenterController;
 /// show its window (the single-instance "show yourself" channel).
 pub const SHOW_CENTER_NOTIFICATION: &str = "eti.noronha.limina.show-center";
 
-/// The center's single-instance flock sentinel, next to the VM library.
+/// The center's single-instance flock sentinel: beside the VM library a test points
+/// `$LIMINA_VM_LIBRARY` at, else in Application Support. Not beside a configured library,
+/// which can sit on a volume that is not mounted, and can move while a center runs.
 fn center_lock_path() -> PathBuf {
-    let lib = crate::vmlib::bundle::library_dir();
-    lib.parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| lib.clone())
-        .join("center.lock")
+    if std::env::var_os("LIMINA_VM_LIBRARY").is_some() {
+        let lib = crate::vmlib::bundle::library_dir();
+        return lib
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| lib.clone())
+            .join("center.lock");
+    }
+    crate::vmlib::bundle::app_support_dir().join("center.lock")
 }
 
 /// Take the center's exclusive flock. `None` = another center already holds it.

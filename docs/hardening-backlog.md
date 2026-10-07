@@ -210,13 +210,12 @@ in `gui/<uid>` is as reachable as a path. `control::cleanup` removes the socket 
 startup sweep that reaps sockets whose embedded pid is dead** — pids are recycled.
 
 ### Movable VM library and per-VM placement
-Design: `docs/design/vm-definitions.md` §8. The library location is only `$LIMINA_VM_LIBRARY` or the
-default (`vmlib/bundle.rs`); nothing persists it, and an unplugged external-volume library makes
-`create_dir_all` silently grow a shadow library on the boot volume. Order: (1) persist a library
-path in `config.toml` (env > config > default, re-read per call) plus a guard refusing creation on
-an unmounted volume; (2) a "Change VM Library Location…" picker that repoints without migrating;
-(3) per-VM placement via symlink-as-registration, showing dangling links greyed out as "volume not
-mounted". Interim: symlink `~/Library/Application Support/Limina/VMs` to the external disk.
+Design: `docs/design/vm-definitions.md` §8. The library can be moved by hand: `[library] path` in
+`~/Library/Application Support/Limina/config.toml` (env > config > default, re-read per call), and
+creating a VM refuses when the library's `/Volumes/<name>` is not mounted. Owed: (2) a "Change VM
+Library Location…" picker that repoints without migrating; (3) per-VM placement via
+symlink-as-registration, showing dangling links greyed out as "volume not mounted", and the center's
+banner for an unmounted library in place of the empty-library state.
 
 ### Inventory the firmware features the guest probes and gets `NOT_SUPPORTED`
 Each declined feature is guest behaviour inherited by default instead of chosen. PSCI 1.0 +

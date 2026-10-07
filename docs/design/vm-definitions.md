@@ -273,8 +273,9 @@ degrade legibly, not corrupt state:
 
 ### 8.5 Increments
 
-1. **config.toml + precedence in `library_dir()`** + the creation guard (§8.4 bullet 2),
-   RED-first under `ENV_LOCK`. CLI-visible immediately (no UI needed to benefit).
+1. **config.toml + precedence in `library_dir()`** + the creation guard (§8.4 bullet 2) —
+   done (`vmlib/bundle.rs`: `library_dir`, `config_path` with `$LIMINA_CONFIG` for tests,
+   `ensure_volume_mounted`).
 2. **Location picker UI** writing the config (§8.2).
 3. **Symlink registration** — "Add existing VM…", create-at, dangling-link rows (§8.3 +
    §8.4 bullet 1).

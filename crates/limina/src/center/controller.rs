@@ -1070,6 +1070,7 @@ impl CenterController {
         // Creating the blank sparse disk is instant; no background thread needed.
         let result = (|| -> anyhow::Result<()> {
             let dest = vmlib::bundle::library_dir();
+            vmlib::bundle::ensure_volume_mounted(&dest)?;
             std::fs::create_dir_all(&dest)?;
             vmlib::import::create(
                 &vmlib::import::CreateOpts {
@@ -1134,6 +1135,7 @@ impl CenterController {
         std::thread::spawn(move || {
             let run = || -> anyhow::Result<()> {
                 let dest = vmlib::bundle::library_dir();
+                vmlib::bundle::ensure_volume_mounted(&dest)?;
                 std::fs::create_dir_all(&dest)?;
                 vmlib::import::create(
                     &vmlib::import::CreateOpts {
