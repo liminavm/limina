@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Decode swtpm's level-20 log into TPM 2.0 command/response pairs, and summarise a corpus.
 
-    decode.py <slice.swtpm.log>              # one JSON object per command, on stdout
+    decode.py <slice.swtpm.log>              # one JSON object per event, on stdout
     decode.py --summary corpus/*.jsonl       # the command set, per consumer, as Markdown
 
 swtpm logs each command as ` SWTPM_IO_Read: length N` followed by hex lines, and each response
-as ` SWTPM_IO_Write: length N`. libtpms's own debug lines interleave and are skipped. Only the
+as ` SWTPM_IO_Write: length N`. The control channel's INIT (a platform reset) and SET_LOCALITY
+are kept as `{"ctrl": ...}` events in order. libtpms's own debug lines interleave and are skipped. Only the
 fields the design needs are decoded: the command code, the response code, session attributes,
 and the algorithm choices of the commands that create keys or sessions.
 """
@@ -218,12 +219,18 @@ def decode_command(cmd):
     return d
 
 
-HDR = re.compile(r"^\s*SWTPM_IO_(Read|Write): length (\d+)")
+HDR = re.compile(r"^\s*(SWTPM_IO_Read|SWTPM_IO_Write|Ctrl Cmd): length (\d+)")
 HEX = re.compile(r"^\s*([0-9A-F]{2} )+\s*$")
+
+# swtpm control-channel commands that change what the TPM does with the next command. INIT is
+# _TPM_Init (a platform reset); without it a replay cannot tell a reboot's Startup from a repeated
+# one. SET_LOCALITY sets the locality every later command runs at.
+CTRL_INIT, CTRL_SET_LOCALITY = 0x02, 0x05
 
 
 def parse_log(path):
-    pairs, cur, buf, want, pending = [], None, [], 0, None
+    """The log's events in order: ("cmd", command, response) and ("ctrl", name, value)."""
+    events, cur, buf, want, pending = [], None, [], 0, None
     for line in open(path, errors="replace"):
         m = HDR.match(line)
         if m:
@@ -233,17 +240,31 @@ def parse_log(path):
             buf.extend(bytes.fromhex(line))
             if len(buf) >= want:
                 data = bytes(buf[:want])
-                if cur == "Read":
+                if cur == "SWTPM_IO_Read":
                     pending = data
-                elif pending is not None:
-                    pairs.append((pending, data))
+                elif cur == "SWTPM_IO_Write":
+                    if pending is not None:
+                        events.append(("cmd", pending, data))
                     pending = None
+                else:
+                    code = int.from_bytes(data[0:4], "big")
+                    if code == CTRL_INIT:
+                        events.append(("ctrl", "init", None))
+                    elif code == CTRL_SET_LOCALITY:
+                        events.append(("ctrl", "locality", data[-1]))
                 cur = None
-    return pairs
+    return events
 
 
 def decode(path):
-    for cmd, rsp in parse_log(path):
+    for ev in parse_log(path):
+        if ev[0] == "ctrl":
+            d = {"ctrl": ev[1]}
+            if ev[2] is not None:
+                d["value"] = ev[2]
+            print(json.dumps(d))
+            continue
+        _, cmd, rsp = ev
         d = decode_command(cmd)
         d["rc"] = f"0x{int.from_bytes(rsp[6:10], 'big'):03x}"
         d["cmd"], d["rsp"] = cmd.hex(), rsp.hex()
@@ -260,6 +281,8 @@ def summary(paths):
         consumers.append(c)
         for line in open(p):
             d = json.loads(line)
+            if "ctrl" in d:
+                continue
             per[d["cc"]][c] += 1
             if d["rc"] != "0x000":
                 failures[d["cc"]][d["rc"]] += 1

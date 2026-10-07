@@ -1,5 +1,6 @@
 {"cc": "FlushContext", "sessions": [], "handles": [], "rc": "0x000", "cmd": "80010000000e0000016502000000", "rsp": "80010000000a00000000"}
 {"cc": "Shutdown", "sessions": [], "handles": [], "type": "CLEAR", "rc": "0x000", "cmd": "80010000000c000001450000", "rsp": "80010000000a00000000"}
+{"ctrl": "init"}
 {"cc": "Startup", "sessions": [], "handles": [], "type": "CLEAR", "rc": "0x000", "cmd": "80010000000c000001440000", "rsp": "80010000000a00000000"}
 {"cc": "GetCapability", "sessions": [], "handles": [], "capability": "PCRS", "property": "0x00000000", "rc": "0x000", "cmd": "8001000000160000017a000000050000000000000001", "rsp": "80010000002b00000000000000000500000004000403ffffff000b03ffffff000c03ffffff000d03ffffff"}
 {"cc": "SelfTest", "sessions": [], "handles": [], "rc": "0x000", "cmd": "80010000000b0000014300", "rsp": "80010000000a00000000"}
