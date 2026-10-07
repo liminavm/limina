@@ -114,6 +114,14 @@ pub(crate) fn live_pointer_global() -> NSPoint {
     NSPoint::new(p.x, h - p.y)
 }
 
+/// Is the window the hit test found one of the guest's? `guest` are the guest windows on glass;
+/// `strips` their `notch = extend` strips, each with whether it is up. A strip counts only while
+/// up: stood down for the chrome reveal it draws nothing and the band it covers is the menu
+/// bar's. `0` is the window server's "no window" and is never ours.
+fn guest_hit(hit: isize, guest: &[isize], strips: &[(isize, bool)]) -> bool {
+    hit != 0 && (guest.contains(&hit) || strips.iter().any(|&(n, up)| up && n == hit))
+}
+
 /// The event's cursor position in `view` coordinates.
 ///
 /// `locationInWindow` is relative to **the window the event was delivered to**, while
@@ -3160,8 +3168,11 @@ impl InputState {
     /// the thing the user is actually clicking. Treating those as guest clicks is what made the
     /// menus unusable: reaching for Displays re-took the pointer on the way, and clicking the
     /// item took it again. The window server already knows the answer it will give the click, so
-    /// ask it, and accept only our own guest windows (the notch overlay is ours too, and is
-    /// chrome — it must not count).
+    /// ask it, and accept only our own guest windows — each slot's `notch = extend` strip
+    /// included while it is up ([`guest_hit`]): the strip shows the top rows of the guest's
+    /// picture, the guest's own top bar among them, so a click there is a click on the guest.
+    /// While the chrome reveal stands it down the strip is invisible and ignores the mouse, and
+    /// the band is the menu bar's; it does not count then.
     ///
     /// `true` when the marker is unavailable: off the main thread this cannot be asked, and the
     /// conservative answer is the one that leaves behaviour as it was.
@@ -3173,15 +3184,22 @@ impl InputState {
         let h = unsafe { CGDisplayBounds(CGMainDisplayID()) }.size.height;
         let ns = NSPoint::new(loc.x, h - loc.y);
         let hit = NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(ns, 0, mtm);
-        let ours: Vec<isize> = self
-            .guest_surfaces(primary_view)
+        let surfaces = self.guest_surfaces(primary_view);
+        let ours: Vec<isize> = surfaces
             .iter()
             .filter_map(|(_, view, _)| view.window().map(|w| w.windowNumber()))
             .collect();
-        let guest = hit != 0 && ours.contains(&hit);
+        // Only the strips of windows on glass, the same set as the surfaces: a strip over a
+        // Space the user cannot see is not what a click there hits.
+        let strips: Vec<(isize, bool)> = surfaces
+            .iter()
+            .filter_map(|(slot, _, _)| super::windows::strip_of_slot(*slot))
+            .map(|(w, up)| (w.windowNumber(), up))
+            .collect();
+        let guest = guest_hit(hit, &ours, &strips);
         if super::capture_tap::edge_trace() {
             eprintln!(
-                "[HITTEST] t={:.1} loc=({:.1},{:.1}) hit={hit} guestwindows={ours:?} guest={guest}",
+                "[HITTEST] t={:.1} loc=({:.1},{:.1}) hit={hit} guestwindows={ours:?} strips={strips:?} guest={guest}",
                 super::capture_tap::trace_ms(),
                 loc.x,
                 loc.y,
@@ -3883,6 +3901,27 @@ impl TrackpadRecorder {
 
 #[cfg(test)]
 mod tests {
+    /// A click on the `notch = extend` strip is a click on the guest's own top bar while the
+    /// strip is up — and the menu bar's once the reveal has stood it down. Before this, only
+    /// the guest windows themselves counted, so a band click read as "the user went to macOS"
+    /// and latched the re-grab out.
+    #[test]
+    fn a_click_on_an_up_strip_is_a_click_on_the_guest() {
+        let guest = [101, 102];
+        let strips = [(201, true), (202, false)];
+        assert!(super::guest_hit(101, &guest, &strips), "a guest window");
+        assert!(super::guest_hit(201, &guest, &strips), "an up strip");
+        assert!(
+            !super::guest_hit(202, &guest, &strips),
+            "a strip the reveal stood down is not the guest's"
+        );
+        assert!(!super::guest_hit(300, &guest, &strips), "anything else");
+        assert!(
+            !super::guest_hit(0, &[0], &[(0, true)]),
+            "no window is never ours"
+        );
+    }
+
     use super::*;
 
     #[test]

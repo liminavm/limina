@@ -57,6 +57,38 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+/// A strip window and its overlay's on-screen flag.
+type Strip = (Retained<NSWindow>, Arc<AtomicBool>);
+
+thread_local! {
+    /// Each slot's `extend` STRIP window, with the overlay's on-screen flag
+    /// ([`super::ExtendOverlay::flag`]) — what the click hit test needs to count a band click as
+    /// the guest's while the strip is up and as macOS's while the reveal has stood it down.
+    /// Registered and pruned with the strip's [`WINDOW_SLOTS`] entry, by window identity.
+    static STRIP_WINDOWS: RefCell<HashMap<usize, Strip>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Register `strip` as `slot`'s strip, dropping any entry the same window held under another
+/// slot (a panel handover moves the primary, strip and all).
+fn register_strip(slot: usize, strip: &Retained<NSWindow>, active: Arc<AtomicBool>) {
+    let key = &**strip as *const NSWindow as usize;
+    STRIP_WINDOWS.with(|m| {
+        let mut m = m.borrow_mut();
+        m.retain(|&s, (w, _)| &**w as *const NSWindow as usize != key || s == slot);
+        m.insert(slot, (strip.clone(), active));
+    });
+}
+
+/// `slot`'s strip window and whether it is up — on screen and taking clicks — right now.
+pub(crate) fn strip_of_slot(slot: usize) -> Option<(Retained<NSWindow>, bool)> {
+    STRIP_WINDOWS.with(|m| {
+        m.borrow()
+            .get(&slot)
+            .map(|(w, a)| (w.clone(), a.load(Ordering::Relaxed)))
+    })
+}
+
 thread_local! {
     /// Which secondary slots currently host the guest under an active extend overlay —
     /// written every tick by [`SecondaryWindow::reconcile_extend`], pruned by
@@ -308,10 +340,13 @@ impl PrimaryDisplay {
         WINDOW_SLOTS.with(|m| {
             let mut m = m.borrow_mut();
             m.insert(key, slot);
-            if let Some(w) = strip {
-                m.insert(&*w as *const NSWindow as usize, slot);
+            if let Some(w) = &strip {
+                m.insert(&**w as *const NSWindow as usize, slot);
             }
         });
+        if let Some(w) = &strip {
+            register_strip(slot, w, self.core.overlay.flag());
+        }
         SLOT_WINDOWS.with(|m| {
             let mut m = m.borrow_mut();
             m.retain(|&s, w| &**w as *const NSWindow as usize != key || s == slot);
@@ -1019,6 +1054,10 @@ impl Drop for SecondaryWindow {
         if let Some(strip) = self.core.overlay.strip_window() {
             let skey = &*strip as *const NSWindow as usize;
             WINDOW_SLOTS.with(|m| m.borrow_mut().remove(&skey));
+            STRIP_WINDOWS.with(|m| {
+                m.borrow_mut()
+                    .retain(|_, (w, _)| &**w as *const NSWindow as usize != skey)
+            });
         }
         self.core.overlay.close();
         let key = &*self.core.window as *const NSWindow as usize;
@@ -1363,6 +1402,7 @@ impl SecondaryWindow {
                     m.borrow_mut()
                         .insert(&*strip as *const NSWindow as usize, slot)
                 });
+                register_strip(slot, &strip, self.core.overlay.flag());
                 self.strip_registered = true;
             }
         }

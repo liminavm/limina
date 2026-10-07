@@ -96,15 +96,12 @@ then make one trackpad stroke that ends deep inside and lift the finger at once 
 be taken about a quarter second later with no further motion (`pointer capture: taken — the
 pointer came to rest …` at `info`).
 
-### A click on the notch strip reads as a click on macOS
-Under `notch = extend` the band beside the housing is the strip overlay, a window of ours showing
-the top of the guest's picture (the guest's top bar lives there). `guest_is_topmost_at` accepts
-only the guest windows, so a click there takes the "landed on macOS" arm: no grab, and the
-explicit-release latch is set. The click still reaches the guest. Because the band is inside the
-fit, the pointer may never leave the picture to re-arm, so the dwell re-grab stays off until a
-click on the main picture. Seen in the 2026-10-03 poke run: clicks at y≈0–50 on the housing
-panel hit a non-guest window and latched. Fix direction: count the strip windows as guest
-windows in the hit test.
+### A click on the notch strip: the hit-test fix is unverified on hardware
+`guest_is_topmost_at` counts each slot's up strip as a guest window (`input::guest_hit`). Owed, on
+a notched panel under `notch = extend`, fullscreen, after an edge release: a click in the band
+beside the housing must take the grab (`pointer capture: taken — click on guest content`, and
+`[HITTEST] … guest=true` with edge-trace on), not latch it out; with the menu bar revealed, a click
+on it must still stand the grab down.
 
 ### Needs repro: the released pointer can come back invisible
 Seen once on the two-panel rig (2026-08-23), fullscreen on both panels after a click had promoted the grab:

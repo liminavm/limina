@@ -255,8 +255,9 @@ load-bearing parts:
   server's answer, not geometry's**: a fullscreen guest window covers its whole panel, so the
   revealed menu bar, an open menu hanging over the guest's picture and any other app's panel are
   all *inside* the fit while being what the user is actually clicking
-  (`InputState::guest_is_topmost_at`, `+[NSWindow windowNumberAtPoint:…]`; our own notch overlay
-  is chrome and does not count). The hit test is about the **window**, the fit test about the
+  (`InputState::guest_is_topmost_at`, `+[NSWindow windowNumberAtPoint:…]`). Each slot's
+  `notch = extend` strip counts as the guest while it is up — it shows the guest's own top bar —
+  and not while the chrome reveal has stood it down, when the band is the menu bar's. The hit test is about the **window**, the fit test about the
   **picture**, and the click path needs all three outcomes: not our window is the user leaving for
   macOS (stand down, so the walk back toward the guest does not re-take the pointer mid-menu); our
   window on the picture is the ask; our window off the picture — the letterbox, the band above a
