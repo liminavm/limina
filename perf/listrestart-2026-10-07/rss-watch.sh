@@ -14,8 +14,7 @@
 # compressed pages, was 8-11 GB). The kill therefore fires on the worker's footprint (top's MEM) or
 # on the host compressor's growth since the watch began, or when <max-seconds> pass. Growth, not
 # size: a host can sit at 5.4 GB compressed at rest (pages left behind by killed workers), and a
-# fixed cap then leaves almost no headroom. A guest reboot replaces the worker
-# process, so it follows the new pid and exits only after 90 s with no worker at all.
+# fixed cap then leaves almost no headroom.
 set -u
 DISK="$1"; OUT="$2"; FP_LIMIT="$3"; COMP_LIMIT="$4"; MAX_S="$5"
 PAGE=$(sysctl -n hw.pagesize)
@@ -25,10 +24,11 @@ host_comp_mib() {
   echo $((c * PAGE / 1048576))
 }
 COMP_BASE=$(host_comp_mib)
-# The VM's own processes: the supervisor and worker binaries inside the app bundle. A looser
+# The VM's own processes: the supervisor and worker binaries inside the app bundle, anchored to the
+# start of the command line so a shell that merely mentions them does not match. A looser
 # "limina.*<disk>" also matched the shell that launched this watcher, whose command line names the
 # bundle's directory and the disk, and killed it.
-VM_PAT="[C]ontents/MacOS/limina.*$DISK"
+VM_PAT="^[^ ]*Contents/MacOS/limina.*$DISK"
 start=$(date +%s)
 echo "# compressor at start: ${COMP_BASE} MiB; kill at +${COMP_LIMIT} MiB" > "$OUT"
 echo -e "time\tworker_pid\trss_mib\tfootprint_mib\tworker_compressed_mib\tfree_mib\tcompressor_mib" >> "$OUT"
@@ -66,19 +66,27 @@ to_mib() {
   esac
 }
 
-seen=0; absent=0
+# The watch belongs to the first supervisor that appears and ends with it. Points of a series reuse
+# one disk name, so a watch that outlived its own VM adopted the next point's and killed it on its
+# own time limit.
+sup=""; waited=0
 while :; do
   now=$(date +%s)
   if [ $((now - start)) -ge "$MAX_S" ]; then kill_vm "time limit ${MAX_S}s"; break; fi
-  w=$(pgrep -f "[C]ontents/MacOS/limina-vmm.*$DISK" | head -n 1)
-  if [ -z "$w" ]; then
-    if [ "$seen" = 1 ]; then
-      absent=$((absent + 1))
-      [ "$absent" -ge 90 ] && { echo "# $(date +%T) worker gone for 90 s" >> "$OUT"; break; }
+  if [ -z "$sup" ]; then
+    sup=$(pgrep -f "^[^ ]*Contents/MacOS/limina --disk .*$DISK" | head -n 1)
+    if [ -z "$sup" ]; then
+      waited=$((waited + 1))
+      [ "$waited" -ge 120 ] && { echo "# $(date +%T) no VM appeared in 120 s" >> "$OUT"; break; }
+      sleep 1; continue
     fi
-    sleep 1; continue
+    known="$sup"
+    echo "# $(date +%T) watching supervisor $sup" >> "$OUT"
   fi
-  seen=1; absent=0
+  kill -0 "$sup" 2>/dev/null || { echo "# $(date +%T) supervisor $sup gone" >> "$OUT"; break; }
+  # A guest reboot replaces the worker under the same supervisor; wait for the new one.
+  w=$(pgrep -f "^[^ ]*Contents/MacOS/limina-vmm.*$DISK" | head -n 1)
+  [ -z "$w" ] && { sleep 1; continue; }
   for p in $w $(pgrep -f "$VM_PAT"); do
     case " $known " in *" $p "*) ;; *) known="$known $p" ;; esac
   done

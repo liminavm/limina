@@ -9,6 +9,10 @@ cost anything on a real WebGL workload?
 fish counts, on every run of both unroll points. The frames are correct, only slow: the worker shows
 global-ring fences 2 s old and still unsignalled. The skip cannot simply be turned off.
 
+With the unrolls run ahead of the pass and batched per pass (branch `limina-kk-pregfx`, below), the
+unroll arm reaches 22-26 fps against the skip arm's 35-46: still a cost, from unrolling ~24k draws
+a frame, but no longer a cliff.
+
 ## Setup
 
 - Remote Mac: M1 Mac mini, 16 GB, macOS 26.6.2, with its own VM suspended and nothing else running.
@@ -71,35 +75,52 @@ point without its watcher and stops the series when one fires). It kills the VM 
 footprint or the host compressor's growth. RSS alone falls as the worker's pages move into the
 compressor.
 
-## With a pre-graphics stream
+## With a pre-graphics stream and batched unrolls
 
-KK branch `limina-kk-pregfx` records draw-time compute (the unroll included) into a command buffer
-committed just before the render pass, instead of ending the pass for it. The same A/B with that
-build bundled (app CDHash `0382908e6bcc73e98714a64ef897347b21c0f879`, KK `da9c3527240`):
+KK branch `limina-kk-pregfx` makes two changes, measured one after the other:
 
-| point | arm    | r1 25k | r1 30k | r2 25k | r2 30k |
-|-------|--------|--------|--------|--------|--------|
-| ps0   | skip   | 43     | 35     | 39     | 38     |
-| pu0   | unroll | 4      | 2      | ·      | ·      |
+1. **Pre-graphics stream** (KK `da9c3527240`): draw-time compute, the unroll included, is recorded
+   into a command buffer committed just before the render pass, instead of ending the pass.
+2. **Batched unrolls** (KK `0f17f9cc1a0`): a pass's unrolls are queued and run as one dispatch, a
+   workgroup per draw, when the pass closes, instead of one dispatch per draw.
+   `LIMINA_KK_NO_UNROLL_BATCH=1` restores one dispatch per draw.
 
-· : not measured; the watcher stopped the point after r1.
+| point | build             | arm    | r1 25k | r1 30k | r2 25k | r2 30k |
+|-------|-------------------|--------|--------|--------|--------|--------|
+| ps0   | pre-graphics      | skip   | 43     | 35     | 39     | 38     |
+| pu0   | pre-graphics      | unroll | 4      | 2      | ·      | ·      |
+| bs0   | + batched unrolls | skip   | 45     | 40     | 46     | 37     |
+| bu0   | + batched unrolls | unroll | 26     | 22     | 26     | 22     |
+| bs1   | + batched unrolls | skip   | 41     | 38     | 41     | 37     |
+| bs2   | + batched unrolls | skip   | 40     | 37     | 39     | 35     |
+| bd0   | + batched, counters (`3bcede94624`) | unroll | 26 | 22 | 26 | 22 |
 
-- **The splits are gone.** The unroll point ends with 4844 encoders in total, where the split path
-  had 770k. Correctness holds: piglit's two list-restart unroll tests pass, the tessellation list
-  shows no new failures, and the virglrs direct and indirect restart tests draw the right pixels.
-- **The per-draw dispatch is not gone.** The guard's `checks` counter (one per guarded compute
-  operation, ~5 per unroll dispatch) reaches 5.8M, so the dispatch count is unchanged: about 5000
-  single-workgroup unroll dispatches a frame, each bracketed by two dispatch-to-dispatch barriers,
-  so they run one after another. That is the remaining 10x.
-- **Memory**: the worker's footprint steps from 4.5 to 6.4 GB within seconds of aquarium starting
-  and then holds, where the split path held 7.5-10 GB. Lower, not gone.
-- The unroll numbers are a lower bound: the remote Mac had ~100 MB free during the point, and the
-  watcher's once-a-second sampling stalled for 16 s. The watcher's compressor cap (a fixed 6 GB,
-  against ~5.4 GB already compressed on that host at rest) is what stopped it.
+· : not measured. pu0's watcher stopped it after r1 on a fixed compressor cap; the remote Mac held
+~5.4 GB compressed at rest, left by earlier killed workers, so pu0 ran with ~100 MB free and its
+numbers are a lower bound. A reboot cleared that before the batched points. A sixth point (bu1) was
+killed during settle by bs0's watcher, which had followed each later point's worker until its own
+time limit; `rss-watch.sh` now ends with the supervisor it first saw.
 
-Getting to the skip arm's speed needs the per-draw dispatches themselves to go: fewer barriers
-between the independent unrolls (they allocate output with an atomic bump, and nothing in the
-stream reads another's output), or one batched dispatch per pass.
+- **Correctness holds** on both builds:
+  - piglit's two list-restart unroll tests pass;
+  - the tessellation list shows no new failures;
+  - the virglrs direct and indirect restart tests draw the right pixels, with one and with three
+    restart draws in a pass.
+- **The pre-graphics stream alone removes the splits but not the cost.** The unroll point ends with
+  under 5k compute encoders where the split path had 770k, yet it reaches only 4 fps. Every unroll
+  is still its own dispatch, bracketed by two dispatch-to-dispatch barriers, so they run one after
+  another.
+- **Batching takes the unroll arm from 4 to 22-26 fps**, about 60% of the skip arm. bd0's counters
+  show no remaining splits and no seals (in-pass barriers that would push unrolls back to
+  splitting). Over a 30 s window there are ~24k pre-graphics streams, each flushing one batch, and
+  ~17M unrolls: **about 24k unrolled draws a frame, one per fish, in ~33 batches.**
+- **What is left is the unroll work itself.** Each of those draws still costs a 1024-thread
+  workgroup, a heap allocation and an indirect draw, where the skip arm draws straight from the
+  application's index buffer.
+- **Memory**: the worker's footprint steps from 4.8 to ~7 GB when aquarium starts and holds there.
+  The host compressor grew ~120 MB. The split path held 7.5-10 GB.
+- Captures are copied while the VM rewrites them once a second, so a copy can be truncated. A crop
+  of one shows garbage below the counter (bu0 r2 30k); the counter line above it is intact.
 
 ## Reading it
 

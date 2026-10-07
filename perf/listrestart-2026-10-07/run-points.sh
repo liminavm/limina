@@ -32,6 +32,7 @@ for point in "$@"; do
 
   "$HERE/point-remote.sh" "$label" "$arm"
   echo "$label rc=$?"
+  ssh "${SSHO[@]}" "$REMOTE" "pkill -f '[r]ss-watch.sh $DISK $tsv'" || true
 
   mkdir -p "$HERE/evidence/$label"
   scp "${SSHO[@]}" -q "$REMOTE:$RDIR/$tsv" "$HERE/evidence/$label/" || true

@@ -25,3 +25,23 @@ date,commit,workload,metric,value,notes
 2026-10-07,ebefed85,aquarium-vrend-30000-r2,fps,38,listrestart ps0 arm skip; KK pre-graphics da9c3527240
 2026-10-07,ebefed85,aquarium-vrend-25000-r1,fps,4,listrestart pu0 arm unroll; KK pre-graphics da9c3527240; host under memory pressure
 2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,2,listrestart pu0 arm unroll; KK pre-graphics da9c3527240; host under memory pressure
+2026-10-07,1ca2f089,aquarium-vrend-25000-r1,fps,45,listrestart bs0 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-30000-r1,fps,40,listrestart bs0 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-25000-r2,fps,46,listrestart bs0 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-30000-r2,fps,37,listrestart bs0 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-25000-r1,fps,26,listrestart bu0 arm unroll; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-30000-r1,fps,22,listrestart bu0 arm unroll; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-25000-r2,fps,26,listrestart bu0 arm unroll; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-30000-r2,fps,22,listrestart bu0 arm unroll; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-25000-r1,fps,41,listrestart bs1 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-30000-r1,fps,38,listrestart bs1 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-25000-r2,fps,41,listrestart bs1 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-30000-r2,fps,37,listrestart bs1 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-25000-r1,fps,40,listrestart bs2 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-30000-r1,fps,37,listrestart bs2 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-25000-r2,fps,39,listrestart bs2 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-30000-r2,fps,35,listrestart bs2 arm skip; KK batched unrolls 0f17f9cc1a0
+2026-10-07,1ca2f089,aquarium-vrend-25000-r1,fps,26,listrestart bd0 arm unroll; KK batched unrolls + counters 3bcede94624
+2026-10-07,1ca2f089,aquarium-vrend-30000-r1,fps,22,listrestart bd0 arm unroll; KK batched unrolls + counters 3bcede94624
+2026-10-07,1ca2f089,aquarium-vrend-25000-r2,fps,26,listrestart bd0 arm unroll; KK batched unrolls + counters 3bcede94624
+2026-10-07,1ca2f089,aquarium-vrend-30000-r2,fps,22,listrestart bd0 arm unroll; KK batched unrolls + counters 3bcede94624
