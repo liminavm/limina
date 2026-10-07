@@ -1,0 +1,154 @@
++ sudo tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements
++ sed -n '/^pcrs:/,$p' /tmp/eventlog.yaml
+pcrs:
+  sha1:
+    0  : 0x0740cb85956f84d70719617b4478a05fbdd68dc6
+    1  : 0x8ad3af65037ce67eaae10fad03a0ff907c3991b4
+    2  : 0xb2a83b0ebf2f8374299a5b2bdfc31ea955ad7236
+    3  : 0xb2a83b0ebf2f8374299a5b2bdfc31ea955ad7236
+    4  : 0x3ce1c83e6ce3c5ac243f68f6e72eb6f38504aaee
+    5  : 0xd16d7e629fd8d08ca256f9ad3a3a1587c9e6cc1b
+    6  : 0xb2a83b0ebf2f8374299a5b2bdfc31ea955ad7236
+    7  : 0x1dbffd353397afbe91b5f90bfc53af84d3e6b234
+    9  : 0x6880187646906be401915e722fa038c9c6fe6bef
+    14 : 0xffaf5dfab351dc9b3b7a3cf748759e137f1601a8
+  sha256:
+    0  : 0xf39f09c767b055350719ab1c77d3410bc01f3355898865a7927c1989907306c0
+    1  : 0xdd87d1e3a3a3abba4cea40708a83621e9e612d1540058c15b47bedd3bfb65bf4
+    2  : 0x3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969
+    3  : 0x3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969
+    4  : 0x3250290d7a07e3e0ef63a14f428a6513e6cda38942c3c226997391f8dac2c5d9
+    5  : 0xa5ceb755d043f32431d63e39f5161464620a3437280494b5850dc1b47cc074e0
+    6  : 0x3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969
+    7  : 0x127c18eba2300e30767fafe71f4e5975776f665d22c7ca9017c7c24846b96fa1
+    9  : 0xc1fe4a1ca2f9ecd599cae7547451128f3fe27c97fa7e6c7c61e91450dde45517
+    14 : 0x17cdefd9548f4383b67a37a901673bf3c8ded6f619d36c8007562de1d93c81cc
+  sha384:
+    0  : 0x6e0a744b41ad36436e7c96cd418789b49b2a934768fc03b18b3c46908901b7df2183bc3a57af9ad1b32e5b4df5024084
+    1  : 0xf15057bdf63193e00ee9c006405b085b243fab60df06b3c66b1e7baca196583ebf86f2cdcc4e907e5b4f595c95998ae6
+    2  : 0x518923b0f955d08da077c96aaba522b9decede61c599cea6c41889cfbea4ae4d50529d96fe4d1afdafb65e7f95bf23c4
+    3  : 0x518923b0f955d08da077c96aaba522b9decede61c599cea6c41889cfbea4ae4d50529d96fe4d1afdafb65e7f95bf23c4
+    4  : 0x2477fad52a058a6fb1cccb30ae585e4d29d0f38c5e86c18537241c73c952afc5e215fcaae738e25d3c21890db1be3f94
+    5  : 0xc50b529497c7f441ea47305587d6ce83e2e31f7b4fab6c13dc0b0c3c900e1d0caf0768321100927862df142bf0465ee4
+    6  : 0x518923b0f955d08da077c96aaba522b9decede61c599cea6c41889cfbea4ae4d50529d96fe4d1afdafb65e7f95bf23c4
+    7  : 0xc5a11029b6fecf6b612643ba6122ef51cc04276655c0439d590fc690ae9704b4f8c9b89434be267e0d718a21fa719823
+    9  : 0xb32d2d4e8a6a13d685a082acdce223f9f4d51fbabfc804b11eafb34923108998ef98c3f70d13497631cc07a7b2bf0c1b
+    14 : 0x09f9db38cfaccff9a1b4ae1af68633505876fb0dea3fcbcb8f9fb0d133334efdc2ce2189384d6b37636ec827932f31ff
+  sha512:
+    0  : 0x71f231297194b820ff4dd89680e93c4379e553ed5bd7dd71cb131cd2d5587155a4844c0dc4a6740ba68de92d303fc96f96fa4ff40317b0c8be92fee6759c4dc6
+    1  : 0x3ae3910c861fe9059b97e143138459e80af07f35b44cfc9fefd83c38afb965919d515050b0b16703d84650d6767e4ae6e30ba172ed4360d5e5d27bc28fc231db
+    2  : 0x27ec091533c4b9eea38dd14c3a3ecdef0a99c1e564cbe66dfe008250154e7839b0b75228fe8debcc4ca330e6aebc1abc74070bc9c9c1e26b939c9d916e45e13c
+    3  : 0x27ec091533c4b9eea38dd14c3a3ecdef0a99c1e564cbe66dfe008250154e7839b0b75228fe8debcc4ca330e6aebc1abc74070bc9c9c1e26b939c9d916e45e13c
+    4  : 0xfa6c31c19e16fef5207ca3ad6c1a83d4ffec03a50a340b66e3995cb15a479d2de8f7d32c6cd74b3e7ab2544bfa15fc911807fa333bdffb22a8664730eccf9e8a
+    5  : 0xe1625f0f32e9d099c03b7818ab8d7dbff32175c6482deb5a852aa0792ed365f52fa48e7f3143c5070bd0fd3f9fc78ee3ce62fd0f9c0945ec40448cda934affde
+    6  : 0x27ec091533c4b9eea38dd14c3a3ecdef0a99c1e564cbe66dfe008250154e7839b0b75228fe8debcc4ca330e6aebc1abc74070bc9c9c1e26b939c9d916e45e13c
+    7  : 0x2a009acf28917159d61578e71217e14ac333fd297d64e4c507f7114553e73b34f10966b78cfd21ff9dfee317ce2663b8dc613837f72e1c1cdf302c7e9ac98670
+    9  : 0x4993c5b4a3f3b70d2e57a0f40364cf55666e2df876e3d315eaeb7260386b8cb5766f42dc5609378b97fc6184ebf3c2ef645c26943cf0d6f3c419e46fc85e08bc
+    14 : 0x19bb49275116ca64db7c2e323a80690ce47ca98c7c07d68a1794aeb125fefc270619b36f19e66c5350fc5bee99e70417cb16f759851d2b9bf985e58eff6958e6
++ sudo tpm2_pcrread sha256:0,1,2,3,4,5,6,7,8,9+sha1:0,1,2,3,4,5,6,7
+  sha256:
+    0 : 0xF39F09C767B055350719AB1C77D3410BC01F3355898865A7927C1989907306C0
+    1 : 0xDD87D1E3A3A3ABBA4CEA40708A83621E9E612D1540058C15B47BEDD3BFB65BF4
+    2 : 0x3D458CFE55CC03EA1F443F1562BEEC8DF51C75E14A9FCF9A7234A13F198E7969
+    3 : 0x3D458CFE55CC03EA1F443F1562BEEC8DF51C75E14A9FCF9A7234A13F198E7969
+    4 : 0x3250290D7A07E3E0EF63A14F428A6513E6CDA38942C3C226997391F8DAC2C5D9
+    5 : 0xA5CEB755D043F32431D63E39F5161464620A3437280494B5850DC1B47CC074E0
+    6 : 0x3D458CFE55CC03EA1F443F1562BEEC8DF51C75E14A9FCF9A7234A13F198E7969
+    7 : 0x127C18EBA2300E30767FAFE71F4E5975776F665D22C7CA9017C7C24846B96FA1
+    8 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    9 : 0x13A54E20C73BEF04C3D643C7D91BCFD9AD80EE96916C3322C0A4E1EE1F312470
+  sha1:
+    0 : 0x0740CB85956F84D70719617B4478A05FBDD68DC6
+    1 : 0x8AD3AF65037CE67EAAE10FAD03A0FF907C3991B4
+    2 : 0xB2A83B0EBF2F8374299A5B2BDFC31EA955AD7236
+    3 : 0xB2A83B0EBF2F8374299A5B2BDFC31EA955AD7236
+    4 : 0x3CE1C83E6CE3C5AC243F68F6E72EB6F38504AAEE
+    5 : 0xD16D7E629FD8D08CA256F9AD3A3A1587C9E6CC1B
+    6 : 0xB2A83B0EBF2F8374299A5B2BDFC31EA955AD7236
+    7 : 0x1DBFFD353397AFBE91B5F90BFC53AF84D3E6B234
++ sudo /usr/lib/systemd/systemd-pcrlock log
+Couldn't find component '750-enter-initrd' in event log.
+Didn't find component '770-nvpcr-separator' in event log, assuming system hasn't reached it yet.
+Didn't find component '800-leave-initrd' in event log, assuming system hasn't reached it yet.
+Didn't find component '850-sysinit' in event log, assuming system hasn't reached it yet.
+Didn't find component '900-ready' in event log, assuming system hasn't reached it yet.
+Didn't find component '950-shutdown' in event log, assuming system hasn't reached it yet.
+Didn't find component '990-final' in event log, assuming system hasn't reached it yet.
+Skipped 6 components (770-nvpcr-separator, 800-leave-initrd, 850-sysinit, 900-ready, 950-shutdown, 990-final).
+Unable to recognize 1 components in event log.
+Event log record 0 (PCR 0, "Raw: e\000d\000k\0002\000-\000s\000t\000a\000b\000l\000e\0002\0000\0002\0004\0000\0008\000-\000p\000r\000e\000b\000u\000i\000l\000t\000.\000q\000e\000m\000u\000.\000o\000r\000g\000\000\000") not matching any component.
+Event log record 8 (PCR 1, "Variable: BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c") not matching any component.
+Event log record 25 (PCR 4, "File: \EFI\fedora\grubaa64.efi") not matching any component.
+Event log record 2 (PCR 7, "Variable: SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c") not matching any component.
+Event log record 26 (PCR 9, "Linux: kernel command line") not matching any component.
+Event log record 21 (PCR 14, "Raw: MokList\000") not matching any component.
+
+PCR   PCRNAME            EVENT                         MATCH SHA256                                                           F/U COMPONENT                         DESCRIPTION
+  0 █ platform-code      s-crtm-version                    ✓ 6bac431513477a2adf6b10af98ee5854a7c79dff9ec876a16ff0c8da7d0b3226 F   -                                 Raw: e\000d\000k\0002\000-\000s\000t\000a\000b\000l\000e\0002\0000\0002\0004\0000\0008\000-\000p\000r\000e\000b\000u\000i\000l\000t\000.\000q\000e\000m\000u\000.\000o\000r\000g\000\000\000
+  0 █ platform-code      efi-platform-firmware-blob        - 1eb499f7ecc7d8e3e4ca1010f3159593c31b6154d3d005faccb9700f0184e3df F   -                                 Blob: 1.9M @ 0x1000
+  7 █ secure-boot-policy efi-variable-driver-config        ✓ ce9ce386b52e099f3019e512a0d6062d6b560efe4ff3e5661c7525e2f9c263df F   -                                 Variable: SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c
+  7 █ secure-boot-policy efi-variable-driver-config        ✓ dea7b80ab53a3daaa24d5cc46c64e1fa9ffd03739f90aadbd8c0867c4a5b4890 F   -                                 Variable: PK-8be4df61-93ca-11d2-aa0d-00e098032b8c
+  7 █ secure-boot-policy efi-variable-driver-config        ✓ e670e121fcebd473b8bc41bb801301fc1d9afa33904f06f7149b74f12c47a68f F   -                                 Variable: KEK-8be4df61-93ca-11d2-aa0d-00e098032b8c
+  7 █ secure-boot-policy efi-variable-driver-config        ✓ baf89a3ccace52750c5f0128351e0422a41597a1adfd50822aa363b9d124ea7c F   -                                 Variable: db-d719b2cb-3d3a-4596-a3bc-dad00e67656f
+  7 █ secure-boot-policy efi-variable-driver-config        ✓ 9f75b6823bff6af1024a4e2036719cdd548d3cbc2bf1de8e7ef4d0ed01f94bf9 F   -                                 Variable: dbx-d719b2cb-3d3a-4596-a3bc-dad00e67656f
+  7 █ secure-boot-policy separator                         ✓ df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119 F   400-secureboot-separator          Separator: Success (0x00)
+  1 █ platform-config    efi-variable-boot                 ✓ 415093c7a014e1aba1f54f87ae7747228f31cbf4ed40a68476d48a4651551be3 F   -                                 Variable: BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c
+  1 █ platform-config    efi-variable-boot                 ✓ be64ad847f1792431d051b3ef0d5351eb632b898329e4003ae5a01f4a795d819 F   -                                 Variable: Boot0003-8be4df61-93ca-11d2-aa0d-00e098032b8c
+  1 █ platform-config    efi-variable-boot                 ✓ fefaab4a01a6787fe8e57f595751e1d172ca72fe1226f4889e115b99da8f6464 F   -                                 Variable: Boot0000-8be4df61-93ca-11d2-aa0d-00e098032b8c
+  1 █ platform-config    efi-variable-boot                 ✓ a677ecb6676190c091b9cdb741a835d15521fa7444d679f87b4996124fa9ea0b F   -                                 Variable: Boot0001-8be4df61-93ca-11d2-aa0d-00e098032b8c
+  1 █ platform-config    efi-variable-boot                 ✓ b6fae4ce98285f111b41851698f618bc3df8749cb1de904097942f5a37621701 F   -                                 Variable: Boot0002-8be4df61-93ca-11d2-aa0d-00e098032b8c
+  4 █ boot-loader-code   efi-action                        ✓ 3d6772b4f84ed47595d72a2c4c5ffd15f5bb72c7507fe26f2aaee2c69d5633ba F   350-action-efi-application        Action: Calling EFI Application from Boot Option
+  0 █ platform-code      separator                         ✓ df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119 F   500-separator                     Separator: Success (0x00)
+  1 █ platform-config    separator                         ✓ df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119 F   500-separator                     Separator: Success (0x00)
+  2 █ external-code      separator                         ✓ df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119 F   500-separator                     Separator: Success (0x00)
+  3 █ external-config    separator                         ✓ df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119 F   500-separator                     Separator: Success (0x00)
+  4 █ boot-loader-code   separator                         ✓ df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119 F   500-separator                     Separator: Success (0x00)
+  5 █ boot-loader-config separator                         ✓ df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119 F   500-separator                     Separator: Success (0x00)
+  6 █ host-platform      separator                         ✓ df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119 F   500-separator                     Separator: Success (0x00)
+ 14 █ shim-policy        ipl                               - e8e48e3ad10bc243341b4663c0057aef0ec7894ccc9ecb0598f0830fa57f7220 F   -                                 Raw: MokList\000
+ 14 █ shim-policy        ipl                               - 8d8a3aae50d5d25838c95c034aadce7b548c9a952eb7925e366eda537c59c3b0 F   -                                 Raw: MokListX\000
+  7 █ secure-boot-policy efi-variable-authority            ✓ 922e939a5565798a5ef12fe09d8b49bf951a8e7f89a0cca7a51636693d41a34d F   -                                 Authority: SbatLevel-605dab50-e046-4300-abb6-3dd810dd8b23
+ 14 █ shim-policy        ipl                               - 4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a F   -                                 Raw: MokListTrusted\000
+  4 █ boot-loader-code   efi-boot-services-application     - a08c88ca88d36758a8c3b28221d02f2d73ed07254d129f95436d2b41f9de56da F   -                                 File: \EFI\fedora\grubaa64.efi
+  9 █ kernel-initrd      event-tag                         - bfb0468018e118ecdc2359925b131bc73ceef4f5da563bd78f08be6cb245108f F   -                                 Linux: kernel command line
+  9 █ kernel-initrd      event-tag                         - 3c474844661d76931450ee3ec7fa947c2a74450c6aa3f9196b3792d258bc38f3 F   -                                 Linux: initrd
+  5 █ boot-loader-config efi-action                        ✓ d8043d6b7b85ad358eb3b6ae6a873ab7ef23a26352c5dc4faa5aeedacf5eb41b F   700-action-efi-exit-boot-services Action: Exit Boot Services Invocation
+  5 █ boot-loader-config efi-action                        ✓ b54f7542cbd872a81a9d9dea839b2b8d747c7ebd5ea6615c40f42f44a6dbeba0 F   700-action-efi-exit-boot-services Action: Exit Boot Services Returned with Success
+  9 █ kernel-initrd      nvpcr-init                        ✓ 5c0902af8836268d24230aeebea5eace03a4f131b92814e39e507c195cb282f9 U   -                                 nvpcr-init:cryptsetup:0x1d10201:sha256:9557737c13dda7dfc04ed62192cda96fe0f83aff651860655a1e279ffaec9f70
+  9 █ kernel-initrd      nvpcr-init                        ✓ 07414477a372d744cf5d22999646f03a6db6155b580a5bf534c89ae35e779612 U   -                                 nvpcr-init:hardware:0x1d10200:sha256:8bb12982c821eeaeddfb3a56a7ec56e44923fc43df80d219fa15e5e237738bec
+
+PCR     PCRNAME             COUNT H R C CALCULATED SHA256                                                OBSERVED SHA256
+  0 █ 😨 platform-code           3 ✓ ✗ ✓ f39f09c767b055350719ab1c77d3410bc01f3355898865a7927c1989907306c0 f39f09c767b055350719ab1c77d3410bc01f3355898865a7927c1989907306c0
+  1 █ 😨 platform-config         6 ✓ ✗ ✓ dd87d1e3a3a3abba4cea40708a83621e9e612d1540058c15b47bedd3bfb65bf4 dd87d1e3a3a3abba4cea40708a83621e9e612d1540058c15b47bedd3bfb65bf4
+  2 █ 😀 external-code           1 ✓ ✓ ✓ 3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969 3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969
+  3 █ 😀 external-config         1 ✓ ✓ ✓ 3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969 3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969
+  4 █ 😨 boot-loader-code        3 ✓ ✗ ✓ 3250290d7a07e3e0ef63a14f428a6513e6cda38942c3c226997391f8dac2c5d9 3250290d7a07e3e0ef63a14f428a6513e6cda38942c3c226997391f8dac2c5d9
+  5 █ 😀 boot-loader-config      3 ✓ ✓ ✓ a5ceb755d043f32431d63e39f5161464620a3437280494b5850dc1b47cc074e0 a5ceb755d043f32431d63e39f5161464620a3437280494b5850dc1b47cc074e0
+  6 █ 😀 host-platform           1 ✓ ✓ ✓ 3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969 3d458cfe55cc03ea1f443f1562beec8df51c75e14a9fcf9a7234a13f198e7969
+  7 █ 😨 secure-boot-policy      7 ✓ ✗ ✓ 127c18eba2300e30767fafe71f4e5975776f665d22c7ca9017c7c24846b96fa1 127c18eba2300e30767fafe71f4e5975776f665d22c7ca9017c7c24846b96fa1
+  8 █ 😀 -                       - ✓ ✓ ✓ 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000000
+  9 █ 😨 kernel-initrd           4 ✓ ✗ ✓ 13a54e20c73bef04c3d643c7d91bcfd9ad80ee96916c3322c0a4e1ee1f312470 13a54e20c73bef04c3d643c7d91bcfd9ad80ee96916c3322c0a4e1ee1f312470
+ 10 █ 🤢 ima                     - ✗ ✓ ✓ 0000000000000000000000000000000000000000000000000000000000000000 fa63a12bb84cf0042a30121196ea7b09aa777bf0af6249142b7b8500ab31f89d
+ 11 █ 🙂 kernel-boot             - ✓ ✓ ✗ 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000000
+ 12 █ 😀 kernel-config           - ✓ ✓ ✓ 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000000
+ 13 █ 😀 sysexts                 - ✓ ✓ ✓ 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000000
+ 14 █ 😨 shim-policy             3 ✓ ✗ ✓ 17cdefd9548f4383b67a37a901673bf3c8ded6f619d36c8007562de1d93c81cc 17cdefd9548f4383b67a37a901673bf3c8ded6f619d36c8007562de1d93c81cc
+ 15 █ 😀 system-identity         - ✓ ✓ ✓ 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000000
+ 16 █ 😀 debug                   - ✓ ✓ ✓ 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000000
+ 17 █ 😀 -                       - ✓ ✓ ✓ ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ 18 █ 😀 -                       - ✓ ✓ ✓ ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ 19 █ 😀 -                       - ✓ ✓ ✓ ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ 20 █ 😀 -                       - ✓ ✓ ✓ ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ 21 █ 😀 -                       - ✓ ✓ ✓ ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ 22 █ 😀 -                       - ✓ ✓ ✓ ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+ 23 █ 😀 application-support     - ✓ ✓ ✓ 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000000
+
+Legend: H → PCR hash value matches event log
+        R → All event log records for this PCR have a matching component
+        C → No components that couldn't be matched with log records affect this PCR
++ sudo tpm2_getcap pcrs
+selected-pcrs:
+  - sha1: [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 ]
+  - sha256: [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 ]
+  - sha384: [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 ]
+  - sha512: [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 ]

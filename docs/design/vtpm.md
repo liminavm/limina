@@ -1,6 +1,6 @@
 # vTPM: a TPM 2.0 device backed by our own Rust TPM
 
-Status: **design agreed, P0 next** · Scope: a new TPM 2.0 engine crate (ours outright, like
+Status: **design agreed, P0 done** (`spikes/vtpm-p0/RESULTS.md`), P1 next · Scope: a new TPM 2.0 engine crate (ours outright, like
 virglrs), a TIS device in the libkrun fork, TPM2 support in the edk2 fork's `ArmVirtKrun`
 platform, and the limina-side state file and VM setting.
 
@@ -139,10 +139,20 @@ An entry lands with its witness.
 
 ## Phases
 
-- **P0, guest-side premise check (spike).** Homebrew QEMU with `swtpm` (logging every command)
-  boots a clone of the F44 stock image. Each consumer runs once. Exit: every consumer works on a
-  known-good TPM, and `spikes/vtpm-p0/` holds the command corpus per consumer and the derived
-  command set. The corpus is P1's first test set and the fuzzers' seed.
+- **P0, guest-side premise check (spike). Done.** Homebrew QEMU with `swtpm` booted a clone of the
+  F44 stock image with ACPI off, the device-tree path ours will use. Every consumer works, the
+  firmware event log replays to the reported PCRs, and the corpus is in
+  `spikes/vtpm-p0/corpus/`. **The measured command set is 32 commands** (`spikes/vtpm-p0/summary.md`):
+  Startup, Shutdown, SelfTest, GetCapability, GetRandom, TestParms, ECC_Parameters, ReadClock,
+  PCR_Read, PCR_Extend, CreatePrimary, Create, Load, ReadPublic, EvictControl, Unseal, Sign,
+  RSA_Decrypt, Hash, HashSequenceStart, SequenceUpdate, SequenceComplete, StartAuthSession,
+  PolicyPCR, PolicyAuthValue, PolicyGetDigest, ContextSave, ContextLoad, FlushContext,
+  NV_DefineSpace, NV_Extend, HierarchyChangeAuth. Algorithms: SHA-256 names, ECC P-256 (ECDSA,
+  and ECDH for every salted session), RSA 2048, KEYEDHASH sealing, AES-128-CFB parameter
+  encryption. The error answers clients depend on (`TPM_RC_INITIALIZE` to a repeated Startup,
+  `TPM_RC_REFERENCE_H0` to the kernel's stale ContextSave, `TPM_RC_VALUE` to an unsupported
+  `TestParms`) are part of the set. Signed PCR policies (PolicyAuthorize) and Import join it
+  with measured UKIs.
 - **P1, the engine.** Crate, marshalling generator, typestate core, sessions and authorization,
   then commands in the order the corpus needs them, each landing with its tests, checkers and
   differential run. Exit: the whole P0 corpus replays correctly, and every checker in the
@@ -160,7 +170,13 @@ An entry lands with its witness.
 
 - **Name, repository and licence of the engine crate.** virglrs is MIT because it was written
   against MIT code; this is written against the TCG specification, and libkrun is Apache-2.0.
-- **RSA.** The `rsa` crate carries an open timing advisory (RUSTSEC-2023-0071, "Marvin").
-  systemd's storage key defaults to ECC; RSA may still be needed for compatibility (P0 decides
-  which consumers need it).
-- **PCR banks.** SHA-256 only, or SHA-1 and SHA-256 as edk2's default hash mask asks for.
+- **RSA.** P0 settled that it is needed: ssh-tpm-agent, the OpenSSL provider and tpm2-pkcs11
+  all make RSA 2048 keys, and ssh-tpm-agent signs through `RSA_Decrypt`, a raw private-key
+  operation. The `rsa` crate's open timing advisory (RUSTSEC-2023-0071, "Marvin") is about
+  exactly that operation, so P1 needs a constant-time RSA private-key path before RSA ships.
+- **PCR banks.** No consumer in P0 read any bank but SHA-256; the firmware extends whatever is
+  allocated. The proposal is SHA-256 only, with the allocation stored in the state so a bank can
+  be added later without a new identity.
+- **The `tss` group.** `/dev/tpmrm0` is `root:tss 0660`; an unprivileged user needs the group,
+  and some images lack the `tss` user entirely. Whether limina's images add the default user to
+  `tss` is a provisioning decision for P2.

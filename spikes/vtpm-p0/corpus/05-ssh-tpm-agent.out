@@ -1,0 +1,48 @@
+++ mktemp -d
++ d=/tmp/tmp.7Mx6wYwj2Y
++ cd /tmp/tmp.7Mx6wYwj2Y
++ ssh-tpm-keygen -t ecdsa -N '' -f /tmp/tmp.7Mx6wYwj2Y/id_ecdsa
+Generating a sealed public/private ecdsa key pair.
+Enter passphrase (empty for no passphrase): Enter same passphrase again: Your identification has been saved in /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.tpm
+Your public key has been saved in /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.pub
+The key fingerprint is:
+SHA256:Vo86Jwoek6LTIHVAWmZFJFcn/qkhhbfukoOJL1HP5fM
+The key's randomart image is the color of television, tuned to a dead channel.
++ ssh-tpm-keygen -t rsa -N '' -f /tmp/tmp.7Mx6wYwj2Y/id_rsa
+Generating a sealed public/private rsa key pair.
+Enter passphrase (empty for no passphrase): Enter same passphrase again: Your identification has been saved in /tmp/tmp.7Mx6wYwj2Y/id_rsa.tpm
+Your public key has been saved in /tmp/tmp.7Mx6wYwj2Y/id_rsa.pub
+The key fingerprint is:
+SHA256:TlQRyKYLpr7evIPdbkRHxxeboKJQfduwhxIZ/4PlwMw
+The key's randomart image is the color of television, tuned to a dead channel.
++ apid=2633
++ ssh-tpm-agent -l /tmp/tmp.7Mx6wYwj2Y/agent.sock
+++ seq 50
++ for i in $(seq 50)
++ '[' -S /tmp/tmp.7Mx6wYwj2Y/agent.sock ']'
++ sleep 0.1
++ for i in $(seq 50)
++ '[' -S /tmp/tmp.7Mx6wYwj2Y/agent.sock ']'
++ break
++ export SSH_AUTH_SOCK=/tmp/tmp.7Mx6wYwj2Y/agent.sock SSH_TPM_AUTH_SOCK=/tmp/tmp.7Mx6wYwj2Y/agent.sock
++ SSH_AUTH_SOCK=/tmp/tmp.7Mx6wYwj2Y/agent.sock
++ SSH_TPM_AUTH_SOCK=/tmp/tmp.7Mx6wYwj2Y/agent.sock
++ ssh-tpm-add /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.tpm
+Identity added: /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.tpm (claude@fedora)
++ ssh-tpm-add /tmp/tmp.7Mx6wYwj2Y/id_rsa.tpm
+Identity added: /tmp/tmp.7Mx6wYwj2Y/id_rsa.tpm (claude@fedora)
++ ssh-add -l
+256 SHA256:Vo86Jwoek6LTIHVAWmZFJFcn/qkhhbfukoOJL1HP5fM claude@fedora (ECDSA)
+2048 SHA256:TlQRyKYLpr7evIPdbkRHxxeboKJQfduwhxIZ/4PlwMw claude@fedora (RSA)
++ echo data
++ ssh-keygen -Y sign -f /tmp/tmp.7Mx6wYwj2Y/id_ecdsa.pub -n file data
+Signing file data
+Write signature to data.sig
++ mv data.sig data.ecdsa.sig
++ ssh-keygen -Y sign -f /tmp/tmp.7Mx6wYwj2Y/id_rsa.pub -n file data
+Signing file data
+Write signature to data.sig
++ ls data.ecdsa.sig data.sig
+data.ecdsa.sig
+data.sig
++ kill 2633

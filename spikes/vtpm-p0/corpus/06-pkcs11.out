@@ -1,0 +1,50 @@
+++ mktemp -d
++ export TPM2_PKCS11_STORE=/tmp/tmp.SVcsAnLIhb
++ TPM2_PKCS11_STORE=/tmp/tmp.SVcsAnLIhb
++ tpm2_ptool init --path=/tmp/tmp.SVcsAnLIhb
+action: Created
+id: 1
+
++ tpm2_ptool addtoken --pid=1 --label=vtpm --sopin=sopin --userpin=userpin --path=/tmp/tmp.SVcsAnLIhb
++ tpm2_ptool addkey --algorithm=ecc256 --label=vtpm --key-label=ec --userpin=userpin --path=/tmp/tmp.SVcsAnLIhb
+action: add
+private:
+  CKA_ID: '35393836303839643764303765653335'
+public:
+  CKA_ID: '35393836303839643764303765653335'
++ tpm2_ptool addkey --algorithm=rsa2048 --label=vtpm --key-label=rsa --userpin=userpin --path=/tmp/tmp.SVcsAnLIhb
+action: add
+private:
+  CKA_ID: '33373131373939366136656665356130'
+public:
+  CKA_ID: '33373131373939366136656665356130'
++ M=/usr/lib64/pkcs11/libtpm2_pkcs11.so
++ pkcs11-tool --module /usr/lib64/pkcs11/libtpm2_pkcs11.so -L
+WARNING:fapi:src/tss2-fapi/api/Fapi_List.c:228:Fapi_List_Finish() Profile of path not provisioned: /HS/SRK 
+ERROR:fapi:src/tss2-fapi/api/Fapi_List.c:81:Fapi_List() ErrorCode (0x00060034) Entities_List 
+WARNING: Listing FAPI token objects failed: "fapi:Provisioning was not executed."
+Please see https://github.com/tpm2-software/tpm2-pkcs11/blob/1.10.1/docs/FAPI.md for more details
+WARNING: Getting tokens from fapi backend failed.
+Available slots:
+Slot 0 (0x1): vtpm
+  token label        : vtpm
+  token manufacturer : IBM
+  token model        : SW   TPM
+  token flags        : login required, rng, token initialized, PIN initialized
+  hardware version   : 1.83
+  firmware version   : 36.37
+  serial num         : 0000000000000000
+  pin min/max        : 0/128
+  uri                : pkcs11:model=SW%20%20%20TPM;manufacturer=IBM;serial=0000000000000000;token=vtpm
+Slot 1 (0x2): 
+  token state:   uninitialized
++ echo data
++ pkcs11-tool --module /usr/lib64/pkcs11/libtpm2_pkcs11.so --token-label vtpm -l -p userpin --sign -m ECDSA-SHA256 --label ec -i /tmp/p11data -o /tmp/p11.ecsig
+WARNING:fapi:src/tss2-fapi/api/Fapi_List.c:228:Fapi_List_Finish() Profile of path not provisioned: /HS/SRK 
+ERROR:fapi:src/tss2-fapi/api/Fapi_List.c:81:Fapi_List() ErrorCode (0x00060034) Entities_List 
+WARNING: Listing FAPI token objects failed: "fapi:Provisioning was not executed."
+Please see https://github.com/tpm2-software/tpm2-pkcs11/blob/1.10.1/docs/FAPI.md for more details
+WARNING: Getting tokens from fapi backend failed.
+Using signature algorithm ECDSA-SHA256
++ ls -l /tmp/p11.ecsig
+-rw-------. 1 claude claude 64 Oct  7 08:22 /tmp/p11.ecsig

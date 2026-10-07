@@ -1,0 +1,14 @@
++ sudo /usr/lib/systemd/systemd-tpm2-setup
+New SRK generated and stored in the TPM.
+SRK fingerprint is 72d804fb799c657ff51b32a23424a05c4a5f54855ab9af5e539d20d7633d64a6.
+SRK public key saved to '/var/lib/systemd/tpm2-srk-public-key.pem' in PEM format.
+SRK public key saved to '/var/lib/systemd/tpm2-srk-public-key.tpm2b_public' in TPM2B_PUBLIC format.
+Successfully written anchor secret to '/var/lib/systemd/nvpcr/nvpcr-anchor.cred'.
+Successfully written anchor secret to '/boot/loader/credentials/nvpcr-anchor.eafb4c9d1d3b473db4536cf892b07f85.cred'.
+2 NvPCRs initialized.
++ sudo tpm2_getcap handles-persistent
+- 0x81000001
++ ls -l '/run/systemd/tpm2-srk-public-key.*' /var/lib/systemd/tpm2-srk-public-key.pem /var/lib/systemd/tpm2-srk-public-key.tpm2b_public
+ls: cannot access '/run/systemd/tpm2-srk-public-key.*': No such file or directory
+-r--r--r--. 1 root root 178 Oct  7 08:21 /var/lib/systemd/tpm2-srk-public-key.pem
+-r--r--r--. 1 root root  92 Oct  7 08:21 /var/lib/systemd/tpm2-srk-public-key.tpm2b_public

@@ -1,0 +1,107 @@
++ sudo rm -f /var/tmp/vtpm-luks.img
++ sudo truncate -s 64M /var/tmp/vtpm-luks.img
++ img=/var/tmp/vtpm-luks.img
++ echo -n passphrase
++ sudo cryptsetup luksFormat --type luks2 --batch-mode --pbkdf pbkdf2 --pbkdf-force-iterations 1000 /var/tmp/vtpm-luks.img -
++ sudo PASSWORD=passphrase systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 /var/tmp/vtpm-luks.img
+New TPM2 token enrolled as key slot 1.
++ sudo /usr/lib/systemd/systemd-cryptsetup attach vtpmluks /var/tmp/vtpm-luks.img - tpm2-device=auto,headless=1
++ ls -l /dev/mapper/vtpmluks
+lrwxrwxrwx. 1 root root 7 Oct  7 08:21 /dev/mapper/vtpmluks -> ../dm-0
++ sudo /usr/lib/systemd/systemd-cryptsetup detach vtpmluks
++ sudo PASSWORD=passphrase NEWPIN=4321 systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7 --tpm2-with-pin=yes /var/tmp/vtpm-luks.img
+New TPM2 token enrolled as key slot 2.
+Wiped slot 1.
++ sudo PIN=4321 /usr/lib/systemd/systemd-cryptsetup attach vtpmluks /var/tmp/vtpm-luks.img - tpm2-device=auto,headless=1
++ ls -l /dev/mapper/vtpmluks
+lrwxrwxrwx. 1 root root 7 Oct  7 08:21 /dev/mapper/vtpmluks -> ../dm-0
++ sudo /usr/lib/systemd/systemd-cryptsetup detach vtpmluks
++ sudo cryptsetup luksDump /var/tmp/vtpm-luks.img
+LUKS header information
+Version:       	2
+Epoch:         	9
+Metadata area: 	16384 [bytes]
+Keyslots area: 	16744448 [bytes]
+UUID:          	cdef05d5-a145-4ee6-95f3-aae6f2b7a9ae
+Label:         	(no label)
+Subsystem:     	(no subsystem)
+Flags:       	(no flags)
+
+Data segments:
+  0: crypt
+	offset: 16777216 [bytes]
+	length: (whole device)
+	cipher: aes-xts-plain64
+	sector: 4096 [bytes]
+
+Keyslots:
+  0: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      pbkdf2
+	Hash:       sha256
+	Iterations: 1000
+	Salt:       3b e2 18 4b a2 54 d7 73 95 c0 6b 8b b5 58 1e ca 
+	            a6 6f 46 46 56 fe d3 15 b3 5f 09 fa dd 9d 71 8d 
+	AF stripes: 4000
+	AF hash:    sha256
+	Area offset:32768 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+  2: luks2
+	Key:        512 bits
+	Priority:   normal
+	Cipher:     aes-xts-plain64
+	Cipher key: 512 bits
+	PBKDF:      pbkdf2
+	Hash:       sha512
+	Iterations: 1000
+	Salt:       5d 83 c0 7c f4 c3 40 ac c6 e7 18 90 3d db e0 76 
+	            ad ac 17 a0 b5 82 66 8f e6 60 2a 3a bf a2 fb 21 
+	AF stripes: 4000
+	AF hash:    sha512
+	Area offset:548864 [bytes]
+	Area length:258048 [bytes]
+	Digest ID:  0
+Tokens:
+  1: systemd-tpm2
+	tpm2-hash-pcrs:   7
+	tpm2-pcr-bank:    sha256
+	tpm2-pubkey:
+	            (null)
+	tpm2-pubkey-pcrs: 
+	tpm2-primary-alg: ecc
+	tpm2-pin:         true
+	tpm2-pcrlock:     false
+	tpm2-salt:        true
+	tpm2-srk:         true
+	tpm2-pcrlock-nv:  false
+	tpm2-policy-hash:
+	            89 17 a4 13 d8 e4 c8 b6 b7 f1 1e 90 42 16 cc a4
+	            5b 06 9c 58 6b 46 f4 2c a6 70 e2 cc 05 a5 15 83
+	tpm2-blob:  00 9e 00 20 01 ae 1f ee ed 55 84 64 18 5b 60 e9
+	            72 b1 6a f1 85 b7 86 87 d7 7a a3 6b eb f1 29 03
+	            dd 7d b1 ad 00 10 c6 8f 0f d2 72 72 b1 c5 61 83
+	            44 ea f6 ed d2 a1 6a 23 f7 ca 8d c9 bf 28 c1 9a
+	            85 15 7c b1 0e 17 de 6a 18 4c be 5a 3c 1b f9 66
+	            a3 b6 87 77 39 34 76 7f 28 ae 72 92 f5 9f 87 43
+	            80 c7 18 e8 c1 e4 fa ff 3c 29 f0 9b a5 e0 1e 9d
+	            ad c3 53 d7 15 32 8e f4 55 47 c2 32 3a 2c 89 0f
+	            ad 9a c2 c6 5c 8e 18 38 7d 83 72 c3 57 b3 82 30
+	            6a 18 5f ad 24 87 02 ab 25 b0 0b d4 5a 7e ae 09
+	            00 4e 00 08 00 0b 00 00 00 12 00 20 89 17 a4 13
+	            d8 e4 c8 b6 b7 f1 1e 90 42 16 cc a4 5b 06 9c 58
+	            6b 46 f4 2c a6 70 e2 cc 05 a5 15 83 00 10 00 20
+	            fd 7b d4 de 50 e2 88 39 72 9b ce 2a 1e 4b 63 2e
+	            7f b0 f3 a0 21 38 6d ed ee 2c 64 af 84 3e aa f7
+	Keyslot:    2
+Digests:
+  0: pbkdf2
+	Hash:       sha256
+	Iterations: 1000
+	Salt:       53 db 64 05 31 05 2a 8e d3 eb 2d 94 db 3f 48 fd 
+	            2b 45 25 23 09 11 d6 e2 67 f9 56 a1 d8 29 87 37 
+	Digest:     40 b8 c6 e8 61 66 c0 cf 97 36 e1 d2 77 df 17 91 
+	            65 57 80 38 39 76 00 d8 a6 c8 4d be d8 de 11 fe 

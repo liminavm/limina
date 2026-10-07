@@ -1,0 +1,9 @@
++ sudo tpm2_getcap handles-persistent
+- 0x81000000
+- 0x81000001
+- 0x81000002
+- 0x81000003
++ sudo PIN=4321 /usr/lib/systemd/systemd-cryptsetup attach vtpmluks /var/tmp/vtpm-luks.img - tpm2-device=auto,headless=1
++ ls -l /dev/mapper/vtpmluks
+lrwxrwxrwx. 1 root root 7 Oct  7 08:23 /dev/mapper/vtpmluks -> ../dm-0
++ sudo /usr/lib/systemd/systemd-cryptsetup detach vtpmluks
