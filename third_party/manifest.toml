@@ -61,7 +61,7 @@ rev = "e04b8ec772b51d7e5bfcab83f36e01a2cd6952c1"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
-rev = "aa3be8eac95c2675e3ca68632e01173891b3d2bf"
+rev = "c6c29e8b099214311f4e57e97d3f32e6b708acca"
 base = "ab0ab2209c4"
 tree = "/Volumes/mesa-cs/mesa"
 

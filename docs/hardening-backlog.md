@@ -559,46 +559,6 @@ cubes visibly rendering and MSAA granted (`getContextAttributes().antialias` rea
 suite and an eyeball pass. Vehicle: `spikes/webgl-msaa/run-arm.sh` (VOIDs an arm with no live
 browser or no multisampled blit on the wire; needs `LIMINA_ARM_EXPECT_MSAA=0` under the mitigation).
 
-### KosmicKrisp's command-allocator pool has no ceiling
-The pool in `kk_device.c` (`limina-kk`) mints on a miss and retires surplus allocators only in a
-call already served from the pool. Two ways a guest drives it without bound; only the lost-device
-case is contained (the pool refuses to mint after `vk_device_is_lost_no_report`).
-- **A client that never lets a pass complete.** Every allocator stays `in_use` and the pool mints
-  one per pass. Measured 2026-08-26 on the host (zink-on-KK) with `spikes/notification-text-corruption/glyphmimic`:
-  100 passes → 101 live class-0 allocators, 300 → 301, 600 → 435, 930 → 510 — an unbounded
-  in-flight pool, not a leak, depending only on render-pass count. Any per-frame completion or flush
-  keeps it under the watermark, which is why gnome-shell (flushing every frame) never shows it. Repro:
-  `spikes/notification-text-corruption/mimic-host.sh 93`, watching stderr for
-  `[LIMINA-ALLOC-POOL] class 0 grew to N`.
-- **A slow GPU.** `kk_alloc_pool_get` never blocks on GPU progress, reasoning that the client's own
-  fencing bounds in-flight depth — which does not hold for a guest. Under full Metal shader validation
-  (~10x slower GPU) class 1 grew to 7,283 allocators against a 4 MiB budget until
-  `IOGPUMetalCommandBufferStorageAllocResourceAtIndex` refused and the worker took SIGABRT.
-
-Fix shape: enforce the budget — at a ceiling, retire, block on GPU progress, or fail the submit —
-without stalling `cs_start_render` in the common case. The "budget" in the warning is reported, not
-enforced. Rate-limit the "in-flight depth is outrunning completion" warning too: it fires on every new
-peak, runs to thousands of lines and adds load of its own. The growth warning only fires upward
-(`watermark_warned`), so read it as a high-water mark; the clock-paced pool report gives live/peak.
-
-### zink can begin rendering with a stale stencil attachment
-Measured 2026-09-04 on the dogfood Mac: SIGABRT after 29 h of session at `assert(!ctx->dynamic_fb.info.pStencilAttachment
-|| ctx->gfx_pipeline_state.rendering_info.stencilAttachmentFormat)` (`zink_context.c`), via
-`zink_draw` → `zink_batch_rp` → `begin_rendering` on the threaded-context worker. Crash report:
-`spikes/zink-stencil-attachment-assert/`. The guest workload is unknown (the app-launched worker's
-stderr is not captured). Mechanism, derived from source and not observed: `begin_rendering` refreshes
-the attachment pointers only when `rp_changed || rp_layout_changed || (!in_rp && rp_loadop_changed)`,
-while `zink_update_rendering_info` recomputes the formats on every call; a begin during a blit sets
-`pStencilAttachment` unconditionally, `zink_batch_no_rp` skips its `tc_info` reset while blitting, and
-the blit's rebind of the same framebuffer does not raise `rp_changed` — so the next draw pairs a stale
-non-NULL pointer with a freshly UNDEFINED format. (A stencil format mapping to UNDEFINED is ruled out:
-`zink_get_format` returns UNDEFINED only for two 4444 colour formats.) Our stack hits this far more
-often than upstream: KK lacks `EXT_multisampled_render_to_single_sampled`, so every MSAA
-render-to-texture goes through `zink_render_attachment_shadow`, which toggles `blitting`. Low
-priority — asserts are compiled out of the shipped stack, so the likely outcome is one wrong frame; a
-stale image view reaching KK is not ruled out. Fix on `limina-kk`: refresh the pointers whenever the
-formats are recomputed; worth upstreaming.
-
 ### Run a ThreadSanitizer round on the virglrs + zink-on-KK host stack
 virglrs's vrend keeps the seam that produced the C-era races: a fence waiter thread makes its own
 context current in ctx0's share group and waits on syncs (`vrend/waiter.rs`), entering zink's
