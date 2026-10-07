@@ -103,8 +103,9 @@ cited below are measured in `RESULTS.md` (this directory) unless marked otherwis
 - **The round-trip floor of the transport**, for what remains synchronous (descriptor-key
   queries, `vkDeviceWaitIdle`, query results read on the CPU). `RESULTS.md` measures venus's
   today. §4's query lane carries these across the process boundary at about 4–10 µs each.
-- **Display and sharing**: exporting arena-backed images as dma-bufs for the compositor and KMS
-  scanout, and GBM/EGL in the guest.
+- **Display and sharing**: §6 puts display in our driver. What is left open is exporting
+  arena-backed images as dma-bufs to other guest consumers, such as video, screen capture and
+  other devices.
 
 ## 4. Process layout: the replayer is its own process from the start
 
@@ -157,7 +158,7 @@ the reference to read before designing ours. WebGPU itself is too limited to be 
 - **Completion through memory.** A Metal completion handler in the replayer writes a sequence
   number into arena memory, and the worker injects an interrupt only for a guest thread that is
   sleeping on it.
-- **Zero-copy scanout.** Images meant for scanout are IOSurface-backed. IOSurfaces cross
+- **Zero-copy scanout** (§6). Images meant for scanout are IOSurface-backed. IOSurfaces cross
   processes natively, and the IOSurface's memory is mapped into the guest like an arena. The host
   window presents that surface directly.
 - **A persistent, host-wide shader cache.** Compiled shaders (`MTLBinaryArchive`) are stored by
@@ -171,3 +172,44 @@ the reference to read before designing ours. WebGPU itself is too limited to be 
   round trip or a conversion.
 - **Arenas are a VMM memory class.** The balloon excludes them, snapshots save them, and
   accounting charges them to the VM.
+
+## 6. Display: our driver does modesetting; virtio-gpu is for boot and fallback
+
+For the enhanced tier, the DKMS module is a full DRM driver: it renders and it does
+modesetting (KMS). It does not render on our device and scan out on virtio-gpu. Why:
+- **No cross-device buffer handoff.** Scanning out through virtio-gpu would make it import our
+  arena memory (new plumbing on a cross-device import path that has been fragile
+  here), or push the compositor into its multi-GPU copy, a full-frame
+  copy per frame. With modesetting in our driver, a scanout buffer is an IOSurface-backed arena
+  image and the host window presents it directly.
+- **Accurate presentation.** A page flip is a doorbell command. Vblank and present timestamps
+  arrive through the shared timing page (§5), so Wayland's presentation-time protocol reports
+  real times without extra machinery.
+- **Display state lives in the worker, rendering in the replayer.** Connectors, modes, the
+  scanout surface and the cursor sit on the worker's side of the device. A replayer crash is
+  then a GPU reset for the compositor while outputs and the last frame stay up.
+- **One device, one transport.** Mode setting, cursor, hotplug and resize use the same doorbell
+  and shared memory as rendering.
+
+virtio-gpu stays, and its role is fixed:
+- **Boot and the stock tier.** Firmware, GRUB, the early console, plymouth and any kernel
+  without our module display through virtio-gpu (or the firmware framebuffer before it). This is
+  also the graceful fallback when our module is missing or fails.
+- **The host hands over between the two.** The kernel's usual handover from a firmware
+  framebuffer does not cover virtio-gpu to ours. Two live display outputs would show the
+  compositor two monitors, so the host decides:
+  - When our driver claims the display, the host reports virtio-gpu's output disconnected (a
+    hotplug event). A udev tag marks our device as the compositor's primary GPU
+    (mutter's preferred-primary tag).
+  - If our driver releases the display, or the replayer and the device go away, the host
+    reconnects virtio-gpu's output.
+  - Expect one mode switch at login, like plymouth to the greeter today.
+
+What it costs:
+- **The kernel side.** Connectors with EDID, modes, hotplug, a cursor plane, vblank events, and
+  a console framebuffer once the handover is done. DRM's helper libraries carry much of this;
+  virtio-gpu's own KMS half is a size reference.
+- **The host side.** Dynamic resize, EDID and hotplug, multi-display, cursor and capture, and
+  scanout across suspend/restore all exist on virtio-gpu today. Their host side is mostly
+  window and presentation code that does not care which device produced the surface. The work is
+  carrying them over our device's protocol; the virtio-gpu versions remain for the stock tier.
