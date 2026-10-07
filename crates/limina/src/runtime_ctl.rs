@@ -336,9 +336,13 @@ fn watch_stream(stream: UnixStream, mut on_change: impl FnMut(Info)) -> Result<(
     on_change(info);
     // Pushes come only on change, which may be never.
     stream.set_read_timeout(None)?;
+    // A push repeats every line of the report; only the lines that differ are news.
     for line in reader.lines() {
+        let before = info;
         info.apply(&line.context("reading the watch")?);
-        on_change(info);
+        if info != before {
+            on_change(info);
+        }
     }
     Ok(())
 }
