@@ -35,13 +35,6 @@ names the real slot), but `shape_slot` treats it as a second cursor and it feeds
 fault above. Decide whether the guest should hide it or the echo should ignore a plane whose origin
 is outside its scanout.
 
-### A held seam leaves no trace
-`window/seams.rs` is pure policy with no logging, so a seam that was held (the adjacent panel not
-fullscreen, not on its active Space, or off-screen) cannot be told from one that was never reached.
-Fix, on the `cursor::undrawn_fault` pattern: log one line when a hold engages and one when it
-releases, naming the side, the slot the range leads to, and which coverage answer refused it
-(called from `input.rs`, `seams::Hold::of(...).apply(range)`).
-
 ### The mapping probe places its steps in union space, not per display
 `absfit::PROBE_SWEEP` keeps `v` within `0.30..0.70` of the union. On a display covering only part of
 the union's height that band can include the display's top edge (slot 1 on the two-panel rig starts

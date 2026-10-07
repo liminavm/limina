@@ -692,6 +692,8 @@ pub struct InputState {
     last_push: Cell<Option<std::time::Instant>>,
     /// The `sent` sample last verified, so each is judged once.
     echo_checked: Cell<Option<std::time::Instant>>,
+    /// The seams the last captured step held, so [`Self::note_seams`] reports changes only.
+    seam_holding: Cell<super::seams::Holding>,
     /// The captured cursor's position in the device range — what the guest actually receives,
     /// continuous for the whole session (`captured_step_and_emit`). `None` until the first
     /// captured step seeds it from the fit.
@@ -949,6 +951,7 @@ impl InputState {
             sent: Cell::new(None),
             last_push: Cell::new(None),
             echo_checked: Cell::new(None),
+            seam_holding: Cell::new(super::seams::Holding::default()),
             capture_range: Cell::new(None),
             echo_seen: Cell::new(EchoGate::default()),
             park_slot: Cell::new(0),
@@ -1373,6 +1376,9 @@ impl InputState {
             }
         } else {
             self.warp.disengage(release_to, &self.host_cursor, handback);
+            // A hold still standing ends with the capture; say so, or its engage line is the
+            // last word on it.
+            self.note_seams(super::seams::Holding::default());
         }
         self.ungrab_armed.set(false);
         // Anything the chord withheld dies here rather than being replayed: both branches below
@@ -2560,8 +2566,9 @@ impl InputState {
         // the grab's own edge release, whose charge this clamp is what lets accumulate: before
         // it, the guest crossed first and `follow_guest_echo` re-homed the fit out from under
         // the press (2026-08-24).
-        let range =
-            super::seams::Hold::of(&self.seam_facts(primary_view), slot, range).apply(range);
+        let hold = super::seams::Hold::of(&self.seam_facts(primary_view), slot, range);
+        self.note_seams(super::seams::Holding::of(slot, &hold));
+        let range = hold.apply(range);
         self.capture_range.set(Some(range));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_X, range.0.round() as i32));
         self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, range.1.round() as i32));
@@ -2586,6 +2593,16 @@ impl InputState {
             view,
             range,
         })
+    }
+
+    /// Say which seams changed between held and crossable ([`super::seams::transitions`]): the
+    /// hold is pure policy and silent, so without this a seam that was held could not be told
+    /// from one that was never reached. Steady state says nothing; each change is one line.
+    fn note_seams(&self, now: super::seams::Holding) {
+        let prev = self.seam_holding.replace(now);
+        for change in super::seams::transitions(&prev, &now) {
+            log::info!("{change}");
+        }
     }
 
     /// Move the park into the window of the panel the guest's cursor has crossed to, once the
@@ -3028,7 +3045,13 @@ impl InputState {
                     slot,
                     share: shares.iter().find(|(s, _)| *s == slot).map(|(_, r)| *r),
                     panel: panel_of(window.as_deref()),
-                    covered: f.is_some_and(|f| f.fullscreen && f.on_active_space && f.has_screen),
+                    cover: match f {
+                        None => super::seams::Cover::NoWindow,
+                        Some(f) if !f.has_screen => super::seams::Cover::NoScreen,
+                        Some(f) if !f.on_active_space => super::seams::Cover::OffActiveSpace,
+                        Some(f) if !f.fullscreen => super::seams::Cover::NotFullscreen,
+                        Some(_) => super::seams::Cover::Covered,
+                    },
                     pixels: (f64::from(w), f64::from(h)),
                 }
             })

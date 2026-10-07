@@ -589,6 +589,10 @@ configuration back (`crates/limina/src/hostmods.rs`, the ByHost global domain vi
   as a dead desktop until the trace showed seven `type=1 code=272 value=1` writes and not one
   `value=0`. Pair it with `evtest`/a raw read of the guest's `/dev/input/event*` to confirm the
   other end.
+- **A held seam says so at `info`** (`pointer capture: holding slot N's right seam — <why>` and
+  `… is no longer held`), one line per change and never per step: the side, the slot the range
+  leads to, and which answer refused it — the host panel beside it showing another slot, or its
+  window off its Space, not fullscreen, on no screen, or a live display not placed yet.
 - `LIMINA_INPUT_TRACE=1` prints every keyboard/modifier decision, including the drift between the
   host's bitmask and our believed pressed-set.
 - **Two diagnostics report at the default level**, so an ordinary dogfood log carries them with

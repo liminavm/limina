@@ -89,11 +89,34 @@ pub(crate) struct SlotFacts {
     pub(crate) share: Option<RangeRect>,
     /// The host panel this slot's window covers. `None` when it has no window or no screen.
     pub(crate) panel: Option<PanelRect>,
-    /// The window covering that panel is a fullscreen guest on the Space the user is looking
-    /// at — the whole of "the hand can see this display".
-    pub(crate) covered: bool,
+    /// Whether the window covering that panel is a fullscreen guest on the Space the user is
+    /// looking at — the whole of "the hand can see this display" — and, when not, which of
+    /// those answers said no.
+    pub(crate) cover: Cover,
     /// This slot's scanout size in guest pixels, for the one-pixel inset a held seam needs.
     pub(crate) pixels: (f64, f64),
+}
+
+/// Whether a slot's window covers its panel where the hand can see it, and if not, the first
+/// answer that refused it — the same three facts a [`super::grab_policy::WindowFacts`] carries,
+/// asked in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cover {
+    Covered,
+    /// No guest window shows this slot.
+    NoWindow,
+    /// Its window is on no screen.
+    NoScreen,
+    /// Its window is not on its panel's active Space — swiped away, or behind Mission Control.
+    OffActiveSpace,
+    /// Its window is on glass but not fullscreen.
+    NotFullscreen,
+}
+
+impl Cover {
+    pub(crate) fn covered(self) -> bool {
+        self == Cover::Covered
+    }
 }
 
 /// Which side of a slot a question is about.
@@ -103,6 +126,60 @@ pub(crate) enum Side {
     Right,
     Top,
     Bottom,
+}
+
+impl Side {
+    const ALL: [Side; 4] = [Side::Left, Side::Right, Side::Top, Side::Bottom];
+}
+
+/// Why a seam is held: the answer that refused the crossing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// A live display has no share fitted yet, so it could be beyond any side.
+    Unplaced { slot: usize },
+    /// The range leads to `range_to`, but the host panel beside us shows `host_shows` — another
+    /// slot, or (`None`) no guest window at all.
+    Disagree {
+        range_to: usize,
+        host_shows: Option<usize>,
+    },
+    /// The range and the host panel agree on `range_to`, and its window does not cover.
+    Uncovered { range_to: usize, cover: Cover },
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Refusal::Unplaced { slot } => write!(
+                f,
+                "display {slot} is live with no share fitted yet, so it could be beyond any side"
+            ),
+            Refusal::Disagree {
+                range_to,
+                host_shows: Some(h),
+            } => write!(
+                f,
+                "the range leads to slot {range_to} but the host panel beside it shows slot {h}"
+            ),
+            Refusal::Disagree {
+                range_to,
+                host_shows: None,
+            } => write!(
+                f,
+                "the range leads to slot {range_to} but no guest window shows the host panel beside it"
+            ),
+            Refusal::Uncovered { range_to, cover } => {
+                let why = match cover {
+                    Cover::Covered => "covered",
+                    Cover::NoWindow => "has no window",
+                    Cover::NoScreen => "is on no screen",
+                    Cover::OffActiveSpace => "is not on its panel's active Space",
+                    Cover::NotFullscreen => "is not fullscreen",
+                };
+                write!(f, "the range leads to slot {range_to}, whose window {why}")
+            }
+        }
+    }
 }
 
 /// Where the captured range may go this step: the capture slot's own share, and which of its
@@ -117,6 +194,9 @@ pub(crate) struct Hold {
     /// `true` where a seam is held: there IS a display on the other side in the range, and it
     /// is not one the hand can follow.
     pub(crate) held: Edges,
+    /// Why each held side is held, in [`Side`] order (`None` exactly where `held` is false) —
+    /// what [`transitions`] reports.
+    pub(crate) why: [Option<Refusal>; 4],
 }
 
 impl Hold {
@@ -125,6 +205,7 @@ impl Hold {
         share: None,
         pixels: (0.0, 0.0),
         held: Edges::NONE,
+        why: [None; 4],
     };
 
     /// The hold for `slot` with the range position at `at`.
@@ -139,25 +220,30 @@ impl Hold {
         // direction: it cannot be a neighbour of any side, so no side would be held, and the
         // range would walk into whichever one it is really on. Hold everything until it can
         // be placed.
-        if slots
+        if let Some(unplaced) = slots
             .iter()
-            .any(|s| s.slot != own.slot && s.share.is_none())
+            .find(|s| s.slot != own.slot && s.share.is_none())
         {
             return Hold {
                 share: Some(share),
                 pixels: own.pixels,
                 held: Edges::ALL,
+                why: [Some(Refusal::Unplaced {
+                    slot: unplaced.slot,
+                }); 4],
             };
         }
+        let why = Side::ALL.map(|side| held(slots, own, at, side));
         Hold {
             share: Some(share),
             pixels: own.pixels,
             held: Edges {
-                left: held(slots, own, at, Side::Left),
-                right: held(slots, own, at, Side::Right),
-                top: held(slots, own, at, Side::Top),
-                bottom: held(slots, own, at, Side::Bottom),
+                left: why[0].is_some(),
+                right: why[1].is_some(),
+                top: why[2].is_some(),
+                bottom: why[3].is_some(),
             },
+            why,
         }
     }
 
@@ -210,24 +296,139 @@ impl Hold {
 /// step already pins there ([`super::fit::range_step`] against the desktop, or the range's
 /// ends), that pin is at a wall by construction, and tightening it by a fitted share's error
 /// would take the desktop's last column away from the user.
-fn held(slots: &[SlotFacts], own: &SlotFacts, at: (f64, f64), side: Side) -> bool {
-    let Some(beyond) = range_neighbour(slots, own, at, side) else {
-        return false;
-    };
-    !crossable(slots, own, at, side, beyond)
+///
+/// `None` when it is not; otherwise why it is.
+fn held(slots: &[SlotFacts], own: &SlotFacts, at: (f64, f64), side: Side) -> Option<Refusal> {
+    let beyond = range_neighbour(slots, own, at, side)?;
+    refusal(slots, own, at, side, beyond)
 }
 
 /// May the pointer cross into `beyond`? It must be the same slot the adjacent host panel is
-/// showing, and it must be covered.
-fn crossable(
+/// showing, and it must be covered. `None` when it may; otherwise the answer that refused it.
+fn refusal(
     slots: &[SlotFacts],
     own: &SlotFacts,
     at: (f64, f64),
     side: Side,
     beyond: usize,
-) -> bool {
-    host_neighbour(slots, own, at, side) == Some(beyond)
-        && slots.iter().any(|s| s.slot == beyond && s.covered)
+) -> Option<Refusal> {
+    let host_shows = host_neighbour(slots, own, at, side);
+    if host_shows != Some(beyond) {
+        return Some(Refusal::Disagree {
+            range_to: beyond,
+            host_shows,
+        });
+    }
+    let cover = slots
+        .iter()
+        .find(|s| s.slot == beyond)
+        .map_or(Cover::NoWindow, |s| s.cover);
+    (!cover.covered()).then_some(Refusal::Uncovered {
+        range_to: beyond,
+        cover,
+    })
+}
+
+/// The seams held on one slot, as last reported — what [`transitions`] diffs against.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Holding {
+    pub(crate) slot: usize,
+    pub(crate) why: [Option<Refusal>; 4],
+}
+
+impl Holding {
+    /// What `hold` holds on `slot`.
+    pub(crate) fn of(slot: usize, hold: &Hold) -> Holding {
+        Holding {
+            slot,
+            why: hold.why,
+        }
+    }
+}
+
+/// One change in which seams are held, for the log. `side` is `None` when the change applies
+/// to every side at once for the same reason — a display we cannot place holds all four, and
+/// four identical lines would bury what changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SeamChange {
+    Engaged {
+        slot: usize,
+        side: Option<Side>,
+        why: Refusal,
+    },
+    Released {
+        slot: usize,
+        side: Option<Side>,
+        was: Refusal,
+    },
+}
+
+impl std::fmt::Display for SeamChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sides = |side: Option<Side>| match side {
+            Some(s) => format!("{s:?} seam").to_lowercase(),
+            None => "every seam".to_string(),
+        };
+        match *self {
+            SeamChange::Engaged { slot, side, why } => write!(
+                f,
+                "pointer capture: holding slot {slot}'s {} — {why}",
+                sides(side)
+            ),
+            SeamChange::Released { slot, side, was } => write!(
+                f,
+                "pointer capture: slot {slot}'s {} is no longer held (it was held because {was})",
+                sides(side)
+            ),
+        }
+    }
+}
+
+/// What changed between two reports of the held seams: a side newly held (or held for a new
+/// reason) engages, a side no longer held releases. A change of slot releases everything the
+/// old slot held and engages what the new one holds — they are different seams. Pure, so the
+/// log it drives is tested without a pointer.
+pub(crate) fn transitions(prev: &Holding, now: &Holding) -> Vec<SeamChange> {
+    let same_slot = prev.slot == now.slot;
+    let mut released = Vec::new();
+    let mut engaged = Vec::new();
+    for (i, side) in Side::ALL.into_iter().enumerate() {
+        let (was, is) = (prev.why[i], now.why[i]);
+        if let Some(was) = was
+            && (!same_slot || is.is_none())
+        {
+            released.push((side, was));
+        }
+        if let Some(why) = is
+            && (!same_slot || was != Some(why))
+        {
+            engaged.push((side, why));
+        }
+    }
+    let collapse = |v: Vec<(Side, Refusal)>| -> Vec<(Option<Side>, Refusal)> {
+        match v.first() {
+            Some(&(_, r)) if v.len() == 4 && v.iter().all(|&(_, x)| x == r) => vec![(None, r)],
+            _ => v.into_iter().map(|(s, r)| (Some(s), r)).collect(),
+        }
+    };
+    let mut out: Vec<SeamChange> = collapse(released)
+        .into_iter()
+        .map(|(side, was)| SeamChange::Released {
+            slot: prev.slot,
+            side,
+            was,
+        })
+        .collect();
+    out.extend(
+        collapse(engaged)
+            .into_iter()
+            .map(|(side, why)| SeamChange::Engaged {
+                slot: now.slot,
+                side,
+                why,
+            }),
+    );
+    out
 }
 
 /// The slot the *range* leads to past `side`, at the cross-axis position `at` names.
@@ -352,14 +553,14 @@ mod tests {
                 slot: 0,
                 share: share(0.0, 16000.0),
                 panel: panel(0.0, 2560.0),
-                covered: true,
+                cover: Cover::Covered,
                 pixels: PX,
             },
             SlotFacts {
                 slot: 1,
                 share: share(16000.0, RANGE),
                 panel: panel(2560.0, 5584.0),
-                covered: true,
+                cover: Cover::Covered,
                 pixels: PX,
             },
         ]
@@ -372,7 +573,7 @@ mod tests {
                 slot: 0,
                 share: share(0.0, 10000.0),
                 panel: panel(0.0, 2560.0),
-                covered: true,
+                cover: Cover::Covered,
                 pixels: PX,
             },
             // Guest put slot 2 in the middle of the range; the host shows it on the RIGHT.
@@ -380,14 +581,14 @@ mod tests {
                 slot: 2,
                 share: share(10000.0, 21000.0),
                 panel: panel(5120.0, 7680.0),
-                covered: true,
+                cover: Cover::Covered,
                 pixels: PX,
             },
             SlotFacts {
                 slot: 1,
                 share: share(21000.0, RANGE),
                 panel: panel(2560.0, 5120.0),
-                covered: true,
+                cover: Cover::Covered,
                 pixels: PX,
             },
         ]
@@ -440,7 +641,7 @@ mod tests {
     #[test]
     fn a_neighbour_the_hand_cannot_see_is_held_inside_our_own_share() {
         let mut slots = agreeing_pair();
-        slots[1].covered = false;
+        slots[1].cover = Cover::OffActiveSpace;
         let h = Hold::of(&slots, 0, mid());
         assert!(h.held.right);
         let margin = 8.0 * 16000.0 / 2560.0;
@@ -455,8 +656,188 @@ mod tests {
     fn a_panel_with_no_window_is_held() {
         let mut slots = agreeing_pair();
         slots[1].panel = None;
-        slots[1].covered = false;
+        slots[1].cover = Cover::NoWindow;
         assert!(Hold::of(&slots, 0, mid()).held.right);
+    }
+
+    /// Every held side says which answer refused it — the whole content of the log line, so
+    /// a held seam can be told from one that was never reached, and one refusal from another.
+    #[test]
+    fn a_held_side_names_the_answer_that_refused_it() {
+        let mut slots = agreeing_pair();
+        slots[1].cover = Cover::OffActiveSpace;
+        let h = Hold::of(&slots, 0, mid());
+        assert_eq!(
+            h.why,
+            [
+                None,
+                Some(Refusal::Uncovered {
+                    range_to: 1,
+                    cover: Cover::OffActiveSpace
+                }),
+                None,
+                None
+            ]
+        );
+
+        slots[1].cover = Cover::NoWindow;
+        slots[1].panel = None;
+        assert_eq!(
+            Hold::of(&slots, 0, mid()).why[1],
+            Some(Refusal::Disagree {
+                range_to: 1,
+                host_shows: None
+            }),
+            "no panel beside us is the host side of the question failing"
+        );
+
+        let trio = disagreeing_trio();
+        assert_eq!(
+            Hold::of(&trio, 0, (5000.0, RANGE / 2.0)).why[1],
+            Some(Refusal::Disagree {
+                range_to: 2,
+                host_shows: Some(1)
+            })
+        );
+
+        let mut unplaced = agreeing_pair();
+        unplaced[1].share = None;
+        assert_eq!(
+            Hold::of(&unplaced, 0, mid()).why,
+            [Some(Refusal::Unplaced { slot: 1 }); 4]
+        );
+
+        assert_eq!(
+            Hold::of(&agreeing_pair(), 0, mid()).why,
+            [None; 4],
+            "nothing held, nothing to explain"
+        );
+    }
+
+    fn holding(slot: usize, slots: &[SlotFacts], at: (f64, f64)) -> Holding {
+        Holding::of(slot, &Hold::of(slots, slot, at))
+    }
+
+    /// One line when a hold engages and one when it lets go — never one per step while it
+    /// stands, or the log is a 120 Hz stream nobody reads.
+    #[test]
+    fn a_hold_is_reported_once_when_it_engages_and_once_when_it_releases() {
+        let open = holding(0, &agreeing_pair(), mid());
+        let mut hidden = agreeing_pair();
+        hidden[1].cover = Cover::OffActiveSpace;
+        let held = holding(0, &hidden, mid());
+        let why = Refusal::Uncovered {
+            range_to: 1,
+            cover: Cover::OffActiveSpace,
+        };
+
+        assert_eq!(transitions(&open, &open), vec![]);
+        assert_eq!(
+            transitions(&open, &held),
+            vec![SeamChange::Engaged {
+                slot: 0,
+                side: Some(Side::Right),
+                why
+            }]
+        );
+        assert_eq!(transitions(&held, &held), vec![], "steady state is silent");
+        assert_eq!(
+            transitions(&held, &open),
+            vec![SeamChange::Released {
+                slot: 0,
+                side: Some(Side::Right),
+                was: why
+            }]
+        );
+        // The end of a capture reports against nothing held, so a hold that is still up says
+        // it is gone rather than vanishing from the record.
+        assert_eq!(
+            transitions(&held, &Holding::default()),
+            vec![SeamChange::Released {
+                slot: 0,
+                side: Some(Side::Right),
+                was: why
+            }]
+        );
+    }
+
+    /// A display we cannot place holds all four sides for one reason: one line, not four.
+    #[test]
+    fn every_side_held_for_one_reason_is_one_line() {
+        let mut slots = agreeing_pair();
+        slots[1].share = None;
+        let held = holding(0, &slots, mid());
+        let open = holding(0, &agreeing_pair(), mid());
+        let why = Refusal::Unplaced { slot: 1 };
+        assert_eq!(
+            transitions(&open, &held),
+            vec![SeamChange::Engaged {
+                slot: 0,
+                side: None,
+                why
+            }]
+        );
+        assert_eq!(
+            transitions(&held, &open),
+            vec![SeamChange::Released {
+                slot: 0,
+                side: None,
+                was: why
+            }]
+        );
+        assert!(
+            transitions(&open, &held)[0]
+                .to_string()
+                .contains("holding slot 0's every seam — display 1 is live"),
+            "{}",
+            transitions(&open, &held)[0]
+        );
+    }
+
+    /// A new reason on a side that stays held is a new engagement (the line says why it is
+    /// held NOW), and crossing to another slot releases the old slot's seams before engaging
+    /// the new one's — they are different seams.
+    #[test]
+    fn a_new_reason_or_a_new_slot_is_reported_as_such() {
+        let mut hidden = agreeing_pair();
+        hidden[1].cover = Cover::OffActiveSpace;
+        let mut windowed = agreeing_pair();
+        windowed[1].cover = Cover::NotFullscreen;
+        let a = holding(0, &hidden, mid());
+        let b = holding(0, &windowed, mid());
+        assert_eq!(
+            transitions(&a, &b),
+            vec![SeamChange::Engaged {
+                slot: 0,
+                side: Some(Side::Right),
+                why: Refusal::Uncovered {
+                    range_to: 1,
+                    cover: Cover::NotFullscreen
+                }
+            }]
+        );
+
+        let mut left_hidden = agreeing_pair();
+        left_hidden[0].cover = Cover::OffActiveSpace;
+        let on_1 = holding(1, &left_hidden, (20000.0, RANGE / 2.0));
+        let changes = transitions(&a, &on_1);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert!(matches!(
+            changes[0],
+            SeamChange::Released {
+                slot: 0,
+                side: Some(Side::Right),
+                ..
+            }
+        ));
+        assert!(matches!(
+            changes[1],
+            SeamChange::Engaged {
+                slot: 1,
+                side: Some(Side::Left),
+                ..
+            }
+        ));
     }
 
     /// Host `A B C`, guest `A C B`, EVERY panel covered: coverage alone would cross A's right
@@ -533,7 +914,7 @@ mod tests {
     #[test]
     fn a_neighbour_that_does_not_span_this_row_is_not_a_neighbour() {
         let mut slots = agreeing_pair();
-        slots[1].covered = false;
+        slots[1].cover = Cover::OffActiveSpace;
         slots[1].share = Some(RangeRect {
             x0: 16000.0,
             y0: 25000.0,
@@ -553,7 +934,7 @@ mod tests {
     /// Vertical arrangements are the same question on the other axis.
     #[test]
     fn a_panel_stacked_below_is_judged_the_same_way() {
-        let stacked = |covered| {
+        let stacked = |cover| {
             vec![
                 SlotFacts {
                     slot: 0,
@@ -569,7 +950,7 @@ mod tests {
                         x1: 2560.0,
                         y1: 1440.0,
                     }),
-                    covered: true,
+                    cover: Cover::Covered,
                     pixels: PX,
                 },
                 SlotFacts {
@@ -586,14 +967,14 @@ mod tests {
                         x1: 2560.0,
                         y1: 2880.0,
                     }),
-                    covered,
+                    cover,
                     pixels: PX,
                 },
             ]
         };
         let at = (RANGE / 2.0, 8000.0);
-        assert!(!Hold::of(&stacked(true), 0, at).held.bottom);
-        let h = Hold::of(&stacked(false), 0, at);
+        assert!(!Hold::of(&stacked(Cover::Covered), 0, at).held.bottom);
+        let h = Hold::of(&stacked(Cover::OffActiveSpace), 0, at);
         assert!(h.held.bottom);
         assert_eq!(
             h.apply((RANGE / 2.0, 20000.0)).1,
@@ -609,7 +990,7 @@ mod tests {
             slot: 0,
             share: share(0.0, RANGE),
             panel: panel(0.0, 2560.0),
-            covered: true,
+            cover: Cover::Covered,
             pixels: PX,
         }];
         let h = Hold::of(&slots, 0, mid());
@@ -647,7 +1028,7 @@ mod tests {
                     x1: 2560.0,
                     y1: 1440.0,
                 }),
-                covered: true,
+                cover: Cover::Covered,
                 pixels: (2560.0, 1440.0),
             },
             SlotFacts {
@@ -666,7 +1047,7 @@ mod tests {
                 }),
                 // The built-in's Space was swiped away. The assertions hold either way, which
                 // is the point: the arrangements disagree, so the seam is held regardless.
-                covered: false,
+                cover: Cover::OffActiveSpace,
                 pixels: (3024.0, 1896.0),
             },
         ];
@@ -692,7 +1073,7 @@ mod tests {
         // still disagree, so the crossing is still refused rather than teleporting the hand
         // from the BenQ's right edge onto a panel that is off to the left.
         let mut covered = slots.clone();
-        covered[1].covered = true;
+        covered[1].cover = Cover::Covered;
         let h = Hold::of(&covered, 0, at);
         assert!(h.held.right);
         assert!(!h.held.left);
