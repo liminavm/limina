@@ -104,8 +104,16 @@ pub fn start_vm(bundle: &VmBundle, errors: &ErrorSink) -> Result<()> {
 fn open_run_log(bundle: &VmBundle) -> Result<(PathBuf, std::fs::File)> {
     let path = bundle.logs_dir().join("supervisor.log");
     logrot::rotate(&path, logrot::GENERATIONS);
-    let file =
-        std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+    // Append mode is what lets the supervisor keep the file bounded while it runs
+    // (`logrot::bound_stderr_for_this_run`). Rotation moved the last run away; a file still
+    // here is one the rename could not move, and this run starts it over.
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.set_len(0)
+        .with_context(|| format!("emptying {}", path.display()))?;
     Ok((path, file))
 }
 

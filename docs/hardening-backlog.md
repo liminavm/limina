@@ -196,11 +196,6 @@ submits fail in a sustained run (log volume, poison, recovery).
 
 ## Lifecycle & supervisor
 
-### Bound a long-lived VM's supervisor log
-`logs/supervisor.log` is rotated per run, not within one. Measured 2026-10-05 on a base M1 whose
-only VM had run for four days: the log had reached 187 MB, mostly `[LIMINA]` lines from
-KosmicKrisp's opt-in `LIMINA_KK_STATS`. It wants a size bound inside a run.
-
 ### Take the control-plane socket off its `$TMPDIR` path
 The worker's own listeners (balloon, display control, the FIDO and fingerprint gadgets) have no
 path: each spawn hands the worker a link socketpair and the supervisor connects by passing it one

@@ -9,6 +9,7 @@
 //! 2026-08-31 a dogfood SIGSEGV was diagnosable only because the user did exactly that.
 
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 /// How many previous boots to keep beside the live file.
@@ -100,9 +101,209 @@ fn keep_tail(src: &Path, dst: &Path, cap: u64) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A live log is cut back in place once it grows past this.
+///
+/// Rotation happens once per boot, so on its own it bounds nothing inside a long run: a VM up for
+/// four days on a base M1 grew its `supervisor.log` to 187 MB, mostly KosmicKrisp's opt-in
+/// `[LIMINA]` stats. [`bound_in_place`] keeps the boot and the latest stretch of it.
+pub const LIVE_CAP_BYTES: u64 = MAX_GENERATION_BYTES;
+/// What a cut-back live log keeps of its start: the boot, which says what the run was.
+pub const LIVE_HEAD_BYTES: u64 = 1024 * 1024;
+/// What it keeps of its end: the recent history an investigation actually reads.
+pub const LIVE_TAIL_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Cut the **append-mode** log at `path` back to its first `head` and last `tail` bytes once it
+/// is longer than `cap`, with a marker naming what was dropped. Returns whether it cut. It is
+/// read through its path and cut through `writer`.
+///
+/// Works in place, through a descriptor that shares the open file with every writer — the
+/// supervisor's own stderr, which its worker inherits — because a rename would leave every
+/// writer appending to the renamed file. That only works in append mode: after the truncate,
+/// each writer's next write lands at the new end. A writer with its own offset would leave a
+/// hole the size of everything dropped, so the caller must check for `O_APPEND` first. Lines
+/// written between the read and the truncate are lost; the marker says the cut happened.
+pub fn bound_in_place(
+    path: &Path,
+    writer: &std::fs::File,
+    cap: u64,
+    head: u64,
+    tail: u64,
+) -> std::io::Result<bool> {
+    use std::os::unix::fs::FileExt;
+    let len = writer.metadata()?.len();
+    if len <= cap || head + tail >= len {
+        return Ok(false);
+    }
+    let f = std::fs::File::open(path)?;
+    let mut first = vec![0u8; head as usize];
+    f.read_exact_at(&mut first, 0)?;
+    // End the head on a line boundary, and start the tail on one.
+    first.truncate(first.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1));
+    let mut last = vec![0u8; tail as usize];
+    f.read_exact_at(&mut last, len - tail)?;
+    let cut = last.iter().position(|b| *b == b'\n').map_or(0, |i| i + 1);
+    let dropped = len - first.len() as u64 - (last.len() - cut) as u64;
+
+    let mut out = first;
+    out.extend_from_slice(
+        format!("[limina] ---- {dropped} bytes dropped to keep this log under {cap} ----\n")
+            .as_bytes(),
+    );
+    out.extend_from_slice(&last[cut..]);
+    writer.set_len(0)?;
+    (&mut &*writer).write_all(&out)?;
+    Ok(true)
+}
+
+/// How often a run checks its own log against [`LIVE_CAP_BYTES`].
+const LIVE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The path of the file behind `fd` when it can be bounded in place: a regular file opened for
+/// append (see [`bound_in_place`] for why nothing else can be).
+fn boundable(fd: std::os::fd::RawFd) -> Option<PathBuf> {
+    // SAFETY: fstat/fcntl only read the descriptor's state.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 || (st.st_mode & libc::S_IFMT) != libc::S_IFREG {
+        return None;
+    }
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || flags & libc::O_APPEND == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    if unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let len = buf.iter().position(|b| *b == 0)?;
+    buf.truncate(len);
+    Some(PathBuf::from(std::ffi::OsString::from_vec(buf)))
+}
+
+/// Keep this run's log bounded while it runs, when stderr is an append-mode file — the
+/// control center's `logs/supervisor.log`, which the worker writes through the same open file.
+/// A terminal, a pipe or a file opened without append is left alone.
+pub fn bound_stderr_for_this_run() {
+    let Some(path) = boundable(libc::STDERR_FILENO) else {
+        return;
+    };
+    // SAFETY: dup of our own stderr; the new descriptor is owned by the File.
+    let fd = unsafe { libc::dup(libc::STDERR_FILENO) };
+    if fd < 0 {
+        return;
+    }
+    let writer = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fd) };
+    let spawned = std::thread::Builder::new()
+        .name("log-bound".into())
+        .spawn(move || {
+            let mut warned = false;
+            loop {
+                std::thread::sleep(LIVE_CHECK_EVERY);
+                match bound_in_place(
+                    &path,
+                    &writer,
+                    LIVE_CAP_BYTES,
+                    LIVE_HEAD_BYTES,
+                    LIVE_TAIL_BYTES,
+                ) {
+                    Ok(true) => log::info!(
+                        "log: cut {} back under {LIVE_CAP_BYTES} bytes",
+                        path.display()
+                    ),
+                    Ok(false) => {}
+                    Err(e) if !warned => {
+                        warned = true;
+                        log::warn!("log: cannot keep {} bounded: {e}", path.display());
+                    }
+                    Err(_) => {}
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("log: no size bound for this run ({e})");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only an append-mode regular file can be cut back under live writers.
+    #[test]
+    fn only_an_append_mode_file_is_bounded() {
+        use std::os::fd::AsRawFd;
+        let dir = std::env::temp_dir().join(format!("limina-boundable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("supervisor.log");
+        let append = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        assert_eq!(
+            boundable(append.as_raw_fd()).map(|p| p.canonicalize().unwrap()),
+            Some(path.canonicalize().unwrap())
+        );
+        let plain = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert_eq!(
+            boundable(plain.as_raw_fd()),
+            None,
+            "a writer with its own offset"
+        );
+        let (r, _w) = std::os::unix::net::UnixStream::pair().unwrap();
+        assert_eq!(boundable(r.as_raw_fd()), None, "not a file");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A long run's log stays bounded, keeps its boot and its latest lines, and the next write —
+    /// from any holder of the shared append-mode descriptor — lands right after them rather than
+    /// at the old length.
+    #[test]
+    fn a_live_log_is_cut_back_in_place_and_keeps_appending() {
+        let dir = std::env::temp_dir().join(format!("limina-livebound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("supervisor.log");
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        // A second descriptor on the same open file, as the worker holds.
+        let worker = f.try_clone().unwrap();
+        (&f).write_all(b"boot line\n").unwrap();
+        for i in 0..400 {
+            (&worker)
+                .write_all(format!("[LIMINA] stats line {i:04}\n").as_bytes())
+                .unwrap();
+        }
+        assert!(
+            !bound_in_place(&path, &f, 1_000_000, 100, 100).unwrap(),
+            "under the cap: untouched"
+        );
+
+        assert!(bound_in_place(&path, &f, 2_000, 100, 300).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("boot line\n"), "{text}");
+        assert!(text.contains("bytes dropped"), "{text}");
+        assert!(text.ends_with("[LIMINA] stats line 0399\n"), "{text}");
+        assert!(text.len() < 500, "{} bytes", text.len());
+        // Every kept line is whole.
+        for line in text.lines() {
+            assert!(
+                line == "boot line"
+                    || line.starts_with("[limina] ----")
+                    || line.starts_with("[LIMINA] stats line "),
+                "torn line {line:?}"
+            );
+        }
+
+        (&worker).write_all(b"after the cut\n").unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after.len(), text.len() + "after the cut\n".len(), "no hole");
+        assert!(after.ends_with("0399\nafter the cut\n"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// A deploy must not destroy the run being analysed. Five VM starts survive, oldest
     /// dropped — at one generation the second boot after a measurement already took the

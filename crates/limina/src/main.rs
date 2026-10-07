@@ -1438,6 +1438,8 @@ fn exit_cleanup() {
 }
 
 fn run_vm(mut cli: Cli) -> Result<()> {
+    // A VM can run for days; a log file it was handed must not grow for as long.
+    vmlib::logrot::bound_stderr_for_this_run();
     // Task #20: flat runs get suspend armed by default (and --discard-suspend honored) before
     // anything below reads cli.snapshot_file.
     default_arm_flat_suspend(&mut cli)?;
