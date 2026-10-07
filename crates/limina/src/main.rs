@@ -993,29 +993,64 @@ fn cmd_suspend(args: SuspendArgs) -> Result<()> {
         }
         vmlib::runtime::VmStatus::Running { pid } => pid,
     };
+    // A snapshot already on disk before the request must not read as this suspend's success.
+    let before = suspend_stamp(&bundle);
     vmlib::runtime::signal_suspend(pid)?;
-    // The bracket is bounded (worker quiesce ≤20s + snapshot; the supervisor gives up at 60s). Wait
-    // a bit beyond that for the VM to tear down. If it stops AND state.toml records the suspend we
-    // succeeded; if it stays up the guest could not quiesce (a virtiofs share, or a guest that
-    // ignores the suspend button) and the VM keeps running.
-    if vmlib::runtime::wait_stopped(&bundle, Duration::from_secs(75)) {
-        match vmlib::state::load(&bundle.state_toml()).and_then(|s| s.suspended) {
-            Some(_) => {
+    // The bracket is bounded (worker quiesce ≤20s + snapshot; the supervisor gives up at 60s), so
+    // 75s covers it with margin. The success signal is the `[suspended]` record with its snapshot,
+    // not the run lock: a windowed supervisor outlives the suspend it ran.
+    let deadline = std::time::Instant::now() + Duration::from_secs(75);
+    loop {
+        // Lock first: the record is written before the supervisor exits, so reading it second
+        // cannot miss a suspend that landed just before the exit.
+        let running = vmlib::runtime::status(&bundle).is_running();
+        let landed = suspend_stamp(&bundle).is_some_and(|s| Some(s) != before);
+        let expired = std::time::Instant::now() >= deadline;
+        match suspend_verdict(landed, running, expired) {
+            SuspendVerdict::Suspended => {
                 println!("{} suspended", bundle.dir_name());
-                Ok(())
+                return Ok(());
             }
-            None => anyhow::bail!(
+            SuspendVerdict::StoppedWithout => anyhow::bail!(
                 "{} stopped without recording a snapshot (it may have powered off instead)",
                 bundle.dir_name()
             ),
+            SuspendVerdict::NotSuspended => anyhow::bail!(
+                "{} was not suspended: no snapshot was recorded within 75s. A guest that cannot \
+                 quiesce (a virtiofs share, or one ignoring the suspend button) is woken and \
+                 keeps running; `limina ls` shows its state",
+                bundle.dir_name()
+            ),
+            SuspendVerdict::Wait => std::thread::sleep(Duration::from_millis(200)),
         }
-    } else {
-        anyhow::bail!(
-            "{} did not suspend within 75s — the guest could not quiesce (a virtiofs share or a \
-             guest ignoring the suspend button); it is still running",
-            bundle.dir_name()
-        )
     }
+}
+
+/// What `limina suspend` concludes from one look at a managed VM. Pure so the order is pinned:
+/// a recorded suspend wins over everything, because the supervisor may well still be running
+/// (a windowed one keeps its window after a suspend) or may have exited a moment ago.
+#[derive(Debug, PartialEq, Eq)]
+enum SuspendVerdict {
+    Suspended,
+    StoppedWithout,
+    NotSuspended,
+    Wait,
+}
+
+fn suspend_verdict(landed: bool, running: bool, expired: bool) -> SuspendVerdict {
+    match (landed, running, expired) {
+        (true, _, _) => SuspendVerdict::Suspended,
+        (false, false, _) => SuspendVerdict::StoppedWithout,
+        (false, true, true) => SuspendVerdict::NotSuspended,
+        (false, true, false) => SuspendVerdict::Wait,
+    }
+}
+
+/// The modification time of the snapshot `state.toml`'s `[suspended]` record names, when both
+/// the record and the file exist — the pair a resume needs.
+fn suspend_stamp(bundle: &vmlib::bundle::VmBundle) -> Option<std::time::SystemTime> {
+    let record = vmlib::state::load(&bundle.state_toml())?.suspended?;
+    std::fs::metadata(&record.snapshot).ok()?.modified().ok()
 }
 
 /// Task #20: suspend a running FLAT `--disk` run by its boot-disk path. The supervisor is
@@ -2486,6 +2521,19 @@ fn create_disk_image(path: &Path, size: u64) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// A windowed supervisor keeps running after a suspend it completed, so a held run lock says
+    /// nothing about whether the suspend landed; the recorded snapshot does.
+    #[test]
+    fn a_recorded_suspend_is_success_whether_or_not_the_supervisor_lives() {
+        use SuspendVerdict::*;
+        assert_eq!(suspend_verdict(true, true, false), Suspended);
+        assert_eq!(suspend_verdict(true, true, true), Suspended);
+        assert_eq!(suspend_verdict(true, false, false), Suspended);
+        assert_eq!(suspend_verdict(false, false, false), StoppedWithout);
+        assert_eq!(suspend_verdict(false, true, false), Wait);
+        assert_eq!(suspend_verdict(false, true, true), NotSuspended);
+    }
 
     /// A share is host-filesystem exposure and the only path we resolve against the process
     /// working directory. Relative is refused so nobody can pick the base by choosing where

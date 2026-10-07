@@ -244,17 +244,6 @@ probes — decide offer or decline for each and record it.
 
 ## Suspend/restore
 
-### `limina suspend` reports failure on a suspend that succeeded
-For a managed VM, `cmd_suspend` (`crates/limina/src/main.rs`) waits up to 75 s for
-`vmlib::runtime::wait_stopped`, which polls the bundle's run **flock**. Observed twice: the snapshot
-was written 4.5 s after the request and the worker had exited, yet the CLI blocked the full 75 s and
-printed `did not suspend within 75s — the guest could not quiesce … it is still running`; `limina ls`
-then showed the VM suspended and it resumed normally. So the run lock outlives a successful suspend,
-and the message blames the guest and asserts the VM is running. Fix: treat `state.toml`'s
-`suspended` record (or the snapshot file, as `cmd_suspend_flat` does) as the success signal, and
-find what keeps the flock held (a lingering holder of the lock fd first). This is the path automation
-uses.
-
 ### `limina suspend <disk>` leaves the supervisor alive and blocks the next suspend
 After a flat-disk `limina suspend <disk>` the worker snapshots and exits 126, but the supervisor
 stays up holding its gvproxy (and SSH port) and a stale window, and `SIGTERM` does not end it. The

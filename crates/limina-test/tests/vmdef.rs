@@ -576,3 +576,118 @@ fn managed_vm_suspends_and_resumes() {
     assert!(disk.exists(), "the shared source image must survive");
     let _ = std::fs::remove_dir_all(&scratch);
 }
+
+/// `limina suspend` on a **windowed** managed VM — the shape the app and dogfood actually run,
+/// which the headless test above never exercises. A windowed supervisor handles the suspend
+/// itself (the window decides what a finished suspend means), so the run lock is not what tells
+/// the CLI the suspend landed: the `[suspended]` record and the snapshot are. The CLI must say
+/// "suspended" as soon as those exist, not wait out its budget and blame the guest.
+#[test]
+fn managed_windowed_vm_cli_suspend_reports_success() {
+    if !limina_test::require_hvf_or_skip("managed_windowed_vm_cli_suspend_reports_success") {
+        return;
+    }
+
+    let cfg = GuestConfig::fedora_from_env().expect("resolving guest config");
+    let Boot::Firmware { firmware, disk, .. } = &cfg.boot else {
+        panic!("fedora_from_env must give a firmware boot");
+    };
+    const PORT: &str = "2246";
+
+    let scratch = std::env::temp_dir().join(format!("limina-vmdef-win-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("creating the scratch library");
+    run_ok(
+        limina_cmd(&cfg.limina_bin, &scratch)
+            .args(["create", "susp-win", "--disk"])
+            .arg(disk),
+        "limina create",
+    );
+    let bundle = scratch.join("susp-win.liminavm");
+
+    // Windowed start: the definition's default is a window. The worker needs a host Vulkan ICD
+    // for its coexist GPU, exactly as `Guest::boot` arranges for a windowed display.
+    let sup_log = scratch.join("start.log");
+    let log_file = std::fs::File::create(&sup_log).expect("creating the start log");
+    let mut start = limina_cmd(&cfg.limina_bin, &scratch);
+    start
+        .args([
+            "start",
+            "susp-win",
+            "--window",
+            "--shutdown-grace-secs",
+            "5",
+            "--ssh-port",
+            PORT,
+        ])
+        .arg("--firmware")
+        .arg(firmware)
+        .arg("--vmm-bin")
+        .arg(&cfg.vmm_bin)
+        .env("RUST_LOG", "warn,limina=info")
+        .stdin(Stdio::null())
+        .stdout(log_file.try_clone().expect("cloning the log fd"))
+        .stderr(log_file);
+    match limina_test::kosmickrisp_icd() {
+        Some(icd) => {
+            start.env("VK_ICD_FILENAMES", icd);
+        }
+        None => {
+            eprintln!(
+                "SKIPPED managed_windowed_vm_cli_suspend_reports_success: no KosmicKrisp ICD"
+            );
+            return;
+        }
+    }
+    let mut boot = KillOnDrop(start.spawn().expect("spawning limina start"));
+    let log = || std::fs::read_to_string(&sup_log).unwrap_or_default();
+    assert!(
+        wait_ssh(PORT, Duration::from_secs(150)),
+        "guest did not reach SSH on the windowed boot\n{}",
+        log()
+    );
+    // A seated session needs a moment before the suspend key means anything.
+    std::thread::sleep(Duration::from_secs(20));
+
+    let t0 = Instant::now();
+    let out = limina_cmd(&cfg.limina_bin, &scratch)
+        .args(["suspend", "susp-win"])
+        .output()
+        .expect("running limina suspend");
+    let took = t0.elapsed();
+    let state = std::fs::read_to_string(bundle.join("state.toml")).unwrap_or_default();
+    assert!(
+        out.status.success(),
+        "`limina suspend` failed after {took:?} ({}):\nstdout: {}\nstderr: {}\nstate.toml:\n{state}\n\
+         supervisor log:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+        log()
+    );
+    assert!(
+        state.contains("[suspended]") && bundle.join("run/snapshot.bin").exists(),
+        "a successful `limina suspend` must leave the record and the snapshot:\n{state}"
+    );
+    eprintln!("limina suspend reported success after {took:?}");
+
+    // Whatever the supervisor does next, one SIGTERM must end it.
+    unsafe { libc::kill(boot.0.id() as i32, libc::SIGTERM) };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let ended = loop {
+        if let Some(s) = boot.0.try_wait().expect("polling limina start") {
+            break Some(s);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(
+        ended.is_some(),
+        "the supervisor ignored SIGTERM after the suspend\n{}",
+        log()
+    );
+    drop(boot);
+    let _ = std::fs::remove_dir_all(&scratch);
+}
