@@ -13,15 +13,6 @@ Dates attach to measurements only.
 
 ## Display & windows
 
-### The guest-cursor echo check judges against the identity mapping, so with two displays it is unreadable
-`echo::verdict` is fed `echo::expected_pixel(unit, scanout)` = `unit × scanout` (single call site
-in `input.rs`). That is right only when the absolute range covers one display. With several
-displays the range spans the desktop bounding box and the true expectation is absfit's fitted line
-(`pixel = a·u + b`), so the check either warns about a disagreement it computed wrongly or falls
-into `Ok(None)` and goes silent, which reads as agreement. Fix: expect the fitted pixel where a fit
-exists, keep identity only for the unfitted case, and say which one was used in the message.
-Diagnostic only: nothing in the pointer path reads the verdict.
-
 ### The captured cursor can go undrawn on the display the user is looking at
 Seen once on the dogfood Mac (2026-08-24) in a cold-booted two-display session: the pointer moved and GNOME's
 overview fired, but nothing was drawn while captured; the uncaptured pointer wore the guest's shape
@@ -135,10 +126,12 @@ Observed on the dogfood Mac (2026-08-22): a small downward move with a menu open
 menu. The ask is slaved to `NSMenu::menuBarVisible` (`InputState::menubar_observed`) and released by
 `reveal_step`; which of the two lets go first has not been measured.
 
-### `notch = extend` does not hide the band when the reveal triggers ungrabbed
-While macOS has the menu bar out, the strip overlay keeps covering its band, so the revealed bar
-sits behind it. The grant path works (`InputState::menubar_observed`); the band standing down in
-the uncaptured case is missing. Small.
+### Needs repro: `notch = extend` may not hide the band when the reveal triggers ungrabbed
+While macOS has the menu bar out, the strip overlay must not cover its band. Uncaptured, with the
+pointer at a panel's top, `InputState::menubar_observed` (run every tick) grants the reveal and
+`reconcile` stands the overlay down. A reveal with the pointer elsewhere (a Space switch, an
+app-initiated reveal) skips the grant by design. Which ungrabbed trigger leaves the band covering
+the bar is not established; catch one before changing anything.
 
 ### Needs repro: pointer not shown right after logout/login under synoik
 Intermittent on dogfood (sighted 2026-08-22) under synoik, not under mutter — a mutter "cannot reproduce" is a false
@@ -148,12 +141,12 @@ automatically, and the guest synoik session can be asked what it saw. One clean 
 reproduce it.
 
 ### Assemble the grab tier once per tap event
-`capture_tap.rs` builds `GrabMode` at several sites from the `captured` atomic, the per-event `soft`
-predicate and `GrabState` (`grab_policy::grab_mode`/`capture_tier` calls). `soft` comes from
-`window_facts` (a window-server round trip) and must not be cached: a stale `space_visible` once
-left the keyboard pointed at a guest that had left the screen. Shape: the tap samples facts once per
-event, a `TapCtx` method assembles the tier, and only the answer travels; `grab_policy` stays pure
-and parameterised so its assertions run without a VM.
+`soft` is computed once per event from one `window_facts` snapshot, and only two call sites remain
+outside `grab_policy.rs` (`grab_mode` on the aux-key path, `capture_tier`), but `capture_tier`
+still re-reads the `captured` atomic and `grab_state()` on its own. Shape: a `TapCtx::tier()` that
+assembles the tier from the event's facts, so only the answer travels; `grab_policy` stays pure and
+parameterised so its assertions run without a VM. `soft` must never be cached across events: a
+stale `space_visible` once left the keyboard pointed at a guest that had left the screen.
 
 ### Captured-pointer re-pin fights a remote-desktop client
 While captured, the tap re-pins the hidden host cursor to a park point inside the window on every
@@ -298,20 +291,22 @@ enhanced golden: a fresh seated GNOME session reaches PSCI SYSTEM_SUSPEND 11 s a
 slept 3.5 s later, and the bracket had already given up. The suite now waits for the guest to be
 asleep before signalling, so it no longer exercises this; the dogfood path still runs bracket-first
 under the same 20 s. The honest outcome of a missed budget is "not suspended, still running".
-Choose: a longer budget, no wake on abort, or a wake only if the guest is later seen asleep. The
-host-sleep bracket in `power.rs` (`DEVICE_WAIT` = 15 s) has the same shape and needs the same
-decision.
+Decided: a budget of about 45 s (under the supervisor's 60 s `SUSPEND_BRACKET_TIMEOUT`), and on
+abort keep watching briefly and wake only a guest still awake. The host-sleep bracket in `power.rs`
+(`DEVICE_WAIT` = 15 s) does not wake on a miss (it pauses the vCPUs and releases the sleep ack), so
+it needs only its budget reviewed.
 
-### A snapshot does not record the spawn-time device topology
-Any change to the worker's spawn-time device list (e.g. adding a virtio-serial port) makes every
-snapshot taken before it unrestorable into a worker built after it; the suite never sees this
-because it takes and restores on the same build. `validate_transport_states` (libkrun
-`vmm/src/device_manager/hvf/mmio.rs`) fails closed only when a *captured* device (in practice
-virtio-gpu, the only one still at DRIVER_OK) is missing from its mmio base/irq; it does not see
-ports, config or feature changes on devices the guest froze to INIT, and a `TODO(feature-drift)`
-asks for an `acked_features` compare. Fix: a topology/feature fingerprint in the snapshot header,
-refusing a mismatch loudly and naming both sides. Until then, resume and shut down parked VMs
-before installing a build that changes the device list.
+### A snapshot does not record each device's configuration or features
+Snapshot v9 records every virtio-mmio device's `(type_id, mmio_base, irq)` and refuses a restore
+whose device list differs (`slot_mismatch`, libkrun `vmm/snapshot.rs`; worker exit 124 with
+`RESTORE_REFUSED_ADVICE`), so an added, removed or reordered device is caught. Not caught: ports
+inside the one virtio-console device, and any change to a device's config space or offered
+features; v8 files are restored unchecked with only a warning (`builder.rs`). The
+`TODO(feature-drift)` in `device_manager/hvf/mmio.rs` still asks for an `acked_features` compare.
+The suite never sees this because it takes and restores on the same build. Fix: a per-device
+config/feature fingerprint in the snapshot head, compared beside `slot_mismatch` and naming both
+sides. Until then, resume and shut down parked VMs before installing a build that changes a
+device's ports or features.
 
 ### Device workers can write guest RAM while `dump_ram` runs
 Pausing the vCPUs stops new kicks, not writers already running: a device thread writing guest RAM
@@ -353,10 +348,14 @@ after each restore and fail on `virtio_gpu`/`[drm]` errors.
 `sweep_fault_handler` (libkrun `hvf/src/released_ram.rs`) catches any SIGBUS/SIGSEGV whose address
 falls in a guest region, forever after the first sweep. By design it ignores `SWEEP_ACTIVE` (a
 last-window fault can arrive after the flag clears, and chaining it would restore SIG_DFL for good).
-The side effect: a non-protection fault at a guest address (e.g. `BUS_ADRALN` from a misaligned
-atomic in a device bug) refault-loops silently instead of crashing. Fix: field only
-`SEGV_ACCERR`/`BUS_ACCERR` and chain the rest. Such a loop shows as `sweep_faults` climbing into the
-millions (stats verb / decision trace).
+The side effect: a non-protection fault at a guest address (e.g. a misaligned atomic in a device
+bug) refault-loops silently instead of crashing; it shows as `sweep_faults` climbing into the
+millions (stats verb / decision trace). `si_code` cannot separate the two: on arm64 a `PROT_NONE`
+access arrives as SIGBUS, and xnu hard-codes SIGBUS `si_code = BUS_ADRALN` and SIGSEGV
+`SEGV_ACCERR` (`third_party/xnu/bsd/dev/arm/unix_signal.c`), so an `ACCERR` filter would chain
+every sweep fault. Fix: bound the refault loop instead — chain to the previous action after
+repeated faults at one address with no window open (a window generation counter, or a short grace
+after the last window closed).
 
 ### Host anonymous memory outlives a worker that died abnormally, until reboot
 Measured 2026-09-05 on the dev Mac after a day of crash arms: swap grew from ~8 GiB to 68.7 GiB. At rest, with
@@ -960,13 +959,6 @@ know shader dimensionality): the bound pipeline's declared image dimension again
 `sample_count_sa`. `LIMINA_KK_ADDR_CHECK` already reports the view half as `[LIMINA-MSBIND]`
 (`kk_cmd_draw.c`). Not the WebGL-MSAA cause (`[LIMINA-MSBIND]` fired on 0 of 24 draws at the loss).
 
-### A meta dispatch "restores" the compute root instead of the caller's root
-The compute path binds its root through `kk_cmd_bind_root_to_argument_table` (`kk_cmd_dispatch.c`),
-which records it in `cmd->state.root_addr`; the meta dispatch's closing "Rebind the exiting root"
-(`kk_cmd_buffer.c`) then rebinds `cmd->state.root_addr` — the compute root just bound, not the
-graphics root live before it. Nothing breaks today because the draw flush rebinds unconditionally.
-Fix: save the caller's root before the dispatch and restore that.
-
 ### The source of a NULL allocation added to the residency set is unknown
 `kk_device_add_{heap,buffer,texture}_to_residency_set` used to pass NULL to
 `mtl_residency_set_add_allocation`; Metal stores it and the next submit faults in
@@ -1271,18 +1263,18 @@ settle host↔guest uid mapping. Without DAX every guest gets plain FUSE read/wr
 
 ### `l1_silent_agent_is_reported_and_recovers` has no timing margin
 Fails about 9% of the time run solo (1 in 11 isolated runs, measured 2026-08-14), so load is not the cause. It sets
-`LIMINA_AGENT_SILENT_SECS=1` (`l1_liveness.rs`) and the liveness sweep also runs every 1 s, so
-"silent for 1.0 s" is a phase tie and the healthy seed agent `limina-init` is sometimes reported
-silent, then "heartbeating again" a second later. Fix: give the threshold margin over the sweep
-interval (threshold ≥ 2× sweep, or a shorter sweep under test). The balloon is not involved
+`LIMINA_AGENT_SILENT_SECS=1` (`l1_liveness.rs`); the liveness sweep sleeps `threshold.min(1s)`
+(`control.rs`) and the seed agent `limina-init` heartbeats every 1000 ms, so threshold, sweep and
+heartbeat all sit at 1 s and the healthy agent is sometimes reported silent, then "heartbeating
+again" a second later. Fix: a threshold of at least 2× the heartbeat (3 s fits the test's waits). The balloon is not involved
 (`GuestConfig::l1_from_env` sets `memory: None`).
 
 ### libkrun `sweep_fault_handler_fields_concurrent_touches` depends on a timing collision
 In `hvf/src/released_ram.rs`, run by `cargo test -p krun-hvf --lib` (not by `cargo xtask test`). It
-passed 2 of 5 runs on a clean tree (2026-08-27), failing with `no toucher write collided with a sweep window in 50
-sweeps`: it needs a racing write to land inside a sweep window it does not control. Make the
-collision deterministic (hold the window open until the toucher has written, or count observed
-windows and skip when there are none); do not just raise the 50.
+now loops until a collision or a 10 s budget runs out, failing with "windows never opened under
+load", but it still needs a racing write to land inside a sweep window it does not control. Make
+the collision deterministic (a `cfg(test)` hook that holds the window open until the toucher has
+written, or count observed windows and skip when there are none); do not just raise the budget.
 
 ### `synoik_desktop_survives_snapshot_restore` has an intermittent trigger that was never isolated
 Both observed failures gave byte-identical numbers: 36/1000 landmarks moved against a 1% budget, rows
