@@ -228,6 +228,20 @@ probes — decide offer or decline for each and record it.
 
 ## Suspend/restore
 
+### The worker's quiesce budget plus a slow save can outrun the supervisor's bracket timeout
+The worker waits up to 45 s for the guest to quiesce (`QUIESCE_TIMEOUT`,
+`crates/limina-vmm/src/krun/mod.rs`) and then writes the snapshot; the supervisor abandons the
+bracket at 60 s (`SUSPEND_BRACKET_TIMEOUT`, `supervisor.rs`). A guest that quiesces late and a
+large RAM dump can together pass 60 s, so the supervisor reports the suspend abandoned while the
+worker completes it. Fix: have the supervisor's bound start at the worker's quiesce verdict (or
+extend while the worker reports a save in progress) rather than at the request.
+
+### `limina ls` shows a parked VM as running
+A supervisor parked behind the play button after a window-menu suspend holds the run lock, so
+`limina ls` reads the VM as running, never suspended, although its `[suspended]` record is
+written and the runtime socket reports `parked`. Fix: let the listing consult the runtime socket's
+parked state (or the record) before the lock.
+
 ### Device workers can write guest RAM while `dump_ram` runs
 Pausing the vCPUs stops new kicks, not writers already running: a device thread writing guest RAM
 during the dump can tear it (used.idx advanced while the payload is half copied). On the raw path
@@ -1047,6 +1061,12 @@ close the gap, none started:
 ---
 
 ## Networking
+
+### libkrun leaves its net socket files behind
+The unixgram net backend binds a local `krun-net-<pid>-N.sock` in `$TMPDIR` and never removes it;
+over a thousand stale ones had accumulated on the dev Mac (counted 2026-10-07). Fix: unlink the
+bound path when the backend drops, and unlink-before-bind on reconnect. Do not add a startup sweep
+by embedded pid — pids are recycled.
 
 ### An idle guest reads virtio-net `InterruptStatus` about 2,400 times a second
 Measured 2026-08-27 on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of
