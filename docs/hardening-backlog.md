@@ -242,13 +242,16 @@ A supervisor parked behind the play button after a window-menu suspend holds the
 written and the runtime socket reports `parked`. Fix: let the listing consult the runtime socket's
 parked state (or the record) before the lock.
 
-### Device workers can write guest RAM while `dump_ram` runs
-Pausing the vCPUs stops new kicks, not writers already running: a device thread writing guest RAM
-during the dump can tear it (used.idx advanced while the payload is half copied). On the raw path
-the worst offender is net RX from gvproxy; on the s2idle production path the guest has frozen net
-and blk, which leaves the GPU renderer thread. Fix: park the separate-thread writers (GPU renderer,
-blk) for the length of the dump. Check the thread inventory first — if `save_snapshot` runs on the
-event-loop thread, the EventManager-dispatched devices are already quiesced.
+### Some device threads can still write guest RAM while a snapshot dumps it
+`save_snapshot` holds every device with a `DumpGate` (`VirtioDevice::dump_gate`) from the GPU
+capture until it returns: the block and virtio-net workers, the GPU worker and the GPU fence handler,
+which renderer threads and the present latch thread also call. Not held, and still able to tear a
+raw-path dump: the vsock muxer, the console port threads, virtio-snd, virtio-input and virtio-fs
+workers, and the queue handlers the event loop dispatches (rng, balloon, vsock, console control),
+which with the vCPUs parked only run for a kick that landed before. On the s2idle production path
+the guest has reset all of those devices and their workers have exited; the xHCI worker is quiet by
+protocol after the guest's controller save. Fix for the raw path: give each of those devices a gate,
+one section per wake, as the block worker has.
 
 ### Restored hardware decode freezes instead of resyncing seamlessly
 After a restore, virglrs re-creates journaled video codecs/targets and gates the stream until the
@@ -1062,11 +1065,11 @@ close the gap, none started:
 
 ## Networking
 
-### libkrun leaves its net socket files behind
-The unixgram net backend binds a local `krun-net-<pid>-N.sock` in `$TMPDIR` and never removes it;
-over a thousand stale ones had accumulated on the dev Mac (counted 2026-10-07). Fix: unlink the
-bound path when the backend drops, and unlink-before-bind on reconnect. Do not add a startup sweep
-by embedded pid — pids are recycled.
+### A killed worker leaves its net socket file behind
+The unixgram net backend's local `krun-net-<pid>-N.sock` in `$TMPDIR` is removed when the backend
+drops, when an open fails, and on the VMM's exit (`Vmm::stop` runs an exit observer before `_exit`).
+A worker that crashes or is killed still leaves its file. Do not sweep by the embedded pid — pids
+are recycled; a safe sweep needs proof the owner is gone (a lock the worker holds, say).
 
 ### An idle guest reads virtio-net `InterruptStatus` about 2,400 times a second
 Measured 2026-08-27 on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of

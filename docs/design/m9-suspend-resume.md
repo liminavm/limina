@@ -649,10 +649,10 @@ parked-fence hang, pixel-verified (`iosdump` + human).
 > a product path without the removed replay (no thaw ⇒ nothing revives the transports for a guest that never
 > knew it was snapshotted); it remains the **L1 test vehicle** for vCPU/GIC/RAM mechanics only.
 >
-> **Follow-up (worker-quiesce, hardening):** the drain accidentally provided one real thing — no device
-> worker writes guest RAM during `dump_ram` (torn dump; loudest as net RX from gvproxy). Replace it with
-> "stop the writers, not the rings": park the separate-thread writers (GPU renderer / blk) around the dump.
-> Narrow on the production s2idle path (the guest froze net/blk to INIT; only the GPU worker is live).
+> **Worker quiesce:** the writers are stopped, not the rings. `save_snapshot` holds each device's
+> `DumpGate` from the GPU capture until it returns, so the block and net workers, the GPU worker and
+> the GPU fence handler write no guest RAM during the dump. The devices still ungated are listed in
+> `docs/hardening-backlog.md`; on the s2idle path the guest has reset all of them.
 
 ### M9.4 — Full-snapshot feature + suspend/resume UX
 Named snapshots (save / restore / **clone** / roll back / delete); VMGenID reseed on clone; one-click
