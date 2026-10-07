@@ -1,0 +1,30 @@
+Wed Oct  7 07:59:59 -03 2026
+ 7:59  up 5 days, 14:20, 4 users, load averages: 3.38 3.39 4.02
+peer: a dev-tree limina-vmm --cpus 4
+peer: a worktree limina-vmm --cpus 4
+peer: an installed Limina.app limina-vmm --cpus 6
+timebase: 41.667 ns/tick
+load  metal    gap=    0us n=2000   p50=   2.17us p90=   2.21us p99=   2.42us max=    33.2us mean=   2.21us 
+none  nothing  gap=    0us n=20000  p50=   0.00us p90=   0.04us p99=   0.04us max=     0.2us mean=   0.01us 
+store nothing  gap=    0us n=20000  p50=   0.96us p90=   0.96us p99=   1.12us max=    36.1us mean=   0.96us 
+load  nothing  gap=    0us n=20000  p50=   0.96us p90=   1.00us p99=   1.25us max=    30.5us mean=   0.99us 
+load  metal    gap=    0us n=20000  p50=   2.08us p90=   2.17us p99=   2.38us max=    61.5us mean=   2.10us 
+load  handoff  gap=    0us n=20000  p50=   3.88us p90=   8.04us p99=  23.92us max=   117.3us mean=   5.28us 
+load  spin     gap=    0us n=20000  p50=   1.04us p90=   1.29us p99=   1.38us max=  1213.2us mean=   1.17us 
+hvc   nothing  gap=    0us n=20000  p50=   0.83us p90=   0.92us p99=   1.08us max=    41.2us mean=   0.86us 
+none  nothing  gap=  200us n=2000   p50=   0.00us p90=   0.00us p99=   0.00us max=     0.1us mean=   0.00us 
+store nothing  gap=  200us n=2000   p50=   1.00us p90=   1.21us p99=   4.96us max=    47.8us mean=   1.17us 
+load  nothing  gap=  200us n=2000   p50=   1.00us p90=   1.25us p99=   4.12us max=    40.1us mean=   1.15us 
+load  metal    gap=  200us n=2000   p50=   2.08us p90=   2.42us p99=   9.58us max=    36.9us mean=   2.45us 
+load  handoff  gap=  200us n=2000   p50=   4.29us p90=   7.79us p99=  14.38us max=    41.1us mean=   4.93us 
+load  spin     gap=  200us n=2000   p50=   1.08us p90=   1.38us p99=   4.00us max=    96.1us mean=   1.30us 
+hvc   nothing  gap=  200us n=2000   p50=   0.83us p90=   0.96us p99=   1.46us max=     4.2us mean=   0.88us 
+none  nothing  gap= 5000us n=200    p50=   0.00us p90=   0.00us p99=   0.04us max=     0.0us mean=   0.00us 
+store nothing  gap= 5000us n=200    p50=   1.46us p90=   4.79us p99=   7.96us max=     9.1us mean=   2.34us 
+load  nothing  gap= 5000us n=200    p50=   2.46us p90=   4.75us p99=   9.08us max=    10.1us mean=   2.75us 
+load  metal    gap= 5000us n=200    p50=   5.46us p90=  27.83us p99=  35.62us max=   154.1us mean=  10.47us 
+load  handoff  gap= 5000us n=200    p50=   8.04us p90=  16.17us p99= 965.50us max=  1918.9us mean=  24.16us 
+load  spin     gap= 5000us n=200    p50=   1.62us p90=   4.83us p99=  10.58us max=    18.6us mean=   2.61us 
+hvc   nothing  gap= 5000us n=200    p50=   1.04us p90=   3.83us p99=   6.46us max=     7.9us mean=   1.68us 
+rc=0
+ 8:00  up 5 days, 14:20, 4 users, load averages: 3.24 3.36 4.00

@@ -106,15 +106,16 @@ cited below are measured in `RESULTS.md` (this directory) unless marked otherwis
 - **Display and sharing**: exporting arena-backed images as dma-bufs for the compositor and KMS
   scanout, and GBM/EGL in the guest.
 
-## 4. Shortcuts from owning the VMM and the host (proposals, unmeasured)
+## 4. Shortcuts from owning the VMM and the host (proposals; only the doorbell is measured)
 
 - **The vCPU thread does the host work.** The kernel driver maps a device doorbell page into
   the userspace driver. A store to it traps to libkrun on that vCPU's own thread, which decodes
   and runs the Metal work and resumes the guest with any answer. There is no syscall, no
   cross-thread hand-off and no host core spinning. A synchronous call costs one trap plus its
   work. Bulk streams still go through a ring in arena memory, with the trap as the "work is
-  there" signal. The trap's round-trip cost is the number to measure first: the bare-metal guest in
-  `spikes/userptr-remap-metal/` already exits through device-register writes.
+  there" signal. Measured in `spikes/doorbell-exit/`: ~1 µs per trap, and ~2.1 µs including a
+  real Metal query done inline. Handing off to a parked thread costs 4–12 µs and has a long
+  tail. libkrun's own exit path is not measured yet.
 - **Completion through memory.** A Metal completion handler writes a sequence number into arena
   memory, and the host injects an interrupt only for a guest thread that is sleeping on it.
 - **Zero-copy scanout.** Images meant for scanout are IOSurface-backed, with the IOSurface's

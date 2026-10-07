@@ -1,0 +1,4 @@
+doorbell
+doorbell.dSYM/
+payload.o
+payload.bin
