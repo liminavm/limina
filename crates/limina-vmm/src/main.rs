@@ -266,6 +266,12 @@ struct Cli {
     #[arg(long, default_value_t = 0)]
     little_vcpus: u32,
 
+    /// Attach a TPM 2.0: libkrun's TIS device over MMIO (`tcg,tpm-tis-mmio`), backed by the
+    /// janus engine. Opt-in and OFF by default; stock Linux binds it with its in-tree `tpm_tis`
+    /// driver. Its state lives in this process: a TPM is new at every boot.
+    #[arg(long)]
+    tpm: bool,
+
     /// Inherited link (`limina_launch::connect`) for the stock-tier FIDO USB gadget (M14 Stage
     /// C). The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
     /// CTAPHID frames over a connection on this link to the supervisor's authenticator
@@ -798,6 +804,7 @@ fn main() -> Result<()> {
         usb: cli.usb,
         cpufreq: cli.cpufreq,
         little_vcpus: cli.little_vcpus,
+        tpm: cli.tpm,
         fido_socket: cli.fido_fd.map(ListenAt::Link),
         moc_socket: cli.moc_fd.map(ListenAt::Link),
         free_page_reporting: cli.balloon_free_page_reporting,

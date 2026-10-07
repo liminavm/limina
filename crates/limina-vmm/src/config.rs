@@ -272,6 +272,8 @@ pub struct VmSpec {
     /// How many of the vCPUs are "little" (the last N). See the worker's `--little-vcpus`.
     /// Ignored unless `cpufreq` is on.
     pub little_vcpus: u32,
+    /// Attach a TPM 2.0 (TIS over MMIO). See the worker's `--tpm` flag.
+    pub tpm: bool,
     /// Where the stock-tier FIDO USB gadget (M14 Stage C) takes the supervisor's connection. When
     /// set (and `usb` is true) the worker cold-plugs a HID report-pipe gadget with the FIDO
     /// identity and bridges its CTAPHID frames to the supervisor's authenticator over it.

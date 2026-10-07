@@ -280,6 +280,12 @@ struct Cli {
     #[arg(long, default_value_t = 0)]
     little_vcpus: u32,
 
+    /// Attach a TPM 2.0 (the TIS interface over MMIO, `tcg,tpm-tis-mmio`) — forwarded to the
+    /// worker. OFF by default. Stock Linux binds it with its in-tree `tpm_tis` driver, so a guest
+    /// needs no limina components. Nothing is persisted yet: the TPM is new at every boot.
+    #[arg(long)]
+    tpm: bool,
+
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
     /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
@@ -1356,6 +1362,7 @@ fn cli_from_definition(
         // Not in vm.toml yet: this is still an experiment driven from the CLI.
         cpufreq: false,
         little_vcpus: 0,
+        tpm: cfg.hardware.tpm,
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1758,6 +1765,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             args.push("--little-vcpus".into());
             args.push(cli.little_vcpus.to_string());
         }
+    }
+    // The TPM (off by default). Carries no interrupt either.
+    if cli.tpm {
+        args.push("--tpm".into());
     }
     // The emulated USB controller (on by default). Push --usb to the worker once; the FIDO and
     // fingerprint gadgets below cold-plug onto it additively. `fingerprint` already implies `usb`.

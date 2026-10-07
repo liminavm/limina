@@ -401,6 +401,10 @@ fn vendor(root: &Path, heavy: bool) -> Result<()> {
     // fork pinned by third_party/manifest.toml — no patch series, the `limina` branch IS the delta).
     vendor_fork(root, &manifest, "imago", main.as_deref())?;
 
+    // janus: the TPM 2.0 engine libkrun's TIS device runs, consumed as a path dependency of
+    // krun-devices. Ours outright, like virglrs: its `main` branch is the whole thing.
+    vendor_fork(root, &manifest, "janus", main.as_deref())?;
+
     // linux: the enhanced-tier guest kernel fork. Marked `heavy` in the manifest — a multi-GB
     // tree this host never builds (the kernel builds in a Linux container / build guest, which
     // fetches the pinned rev itself), so it is opt-in.

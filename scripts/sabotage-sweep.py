@@ -906,6 +906,64 @@ SABOTAGES = [
         'third_party/libkrun/src/devices',
         'gpu_snapshot_payload_refuses_counts_and_lengths_past_its_end',
     ),
+    (
+        "the TPM's STS reads tpmGo, a bit Linux requires to read as zero",
+        'third_party/libkrun/src/devices/src/tpm/tis.rs',
+        """        let v = sts::VALID | sts::FAMILY_TPM2 | bits | ((avail as u32) << 8);""",
+        """        let v = sts::VALID | sts::FAMILY_TPM2 | sts::TPM_GO | bits | ((avail as u32) << 8);""",
+        'third_party/libkrun/src/devices',
+        'tpm::tis::tests::sts_never_reads_a_bit_linux_requires_to_be_zero',
+    ),
+    (
+        'the TPM clears dataAvail one byte before the response ends',
+        'third_party/libkrun/src/devices/src/tpm/tis.rs',
+        """                (if left > 0 { sts::DATA_AVAIL } else { 0 }, left)""",
+        """                (if left > 1 { sts::DATA_AVAIL } else { 0 }, left)""",
+        'third_party/libkrun/src/devices',
+        'tpm::tis::tests::data_avail_clears_exactly_at_the_last_response_byte',
+    ),
+    (
+        'a TPM locality that is not active reads the transaction registers',
+        'third_party/libkrun/src/devices/src/tpm/tis.rs',
+        """        if self.active != Some(locality) && !reg.describes_device() {""",
+        """        if false && self.active != Some(locality) && !reg.describes_device() {""",
+        'third_party/libkrun/src/devices',
+        'tpm::tis::tests::a_locality_that_is_not_active_reads_only_the_identity',
+    ),
+    (
+        'a TPM locality that is not active drives the transaction',
+        'third_party/libkrun/src/devices/src/tpm/tis.rs',
+        """            _ if self.active != Some(locality) => {}""",
+        """            _ if false => {}""",
+        'third_party/libkrun/src/devices',
+        'tpm::tis::tests::a_locality_that_is_not_active_reads_only_the_identity',
+    ),
+    (
+        'the TPM register decoder takes the byte after a register as its own',
+        'third_party/libkrun/src/devices/src/tpm/tis.rs',
+        """        .find(|(_, base, width)| (*base..base + width).contains(&within))""",
+        """        .find(|(_, base, width)| (*base..=base + width).contains(&within))""",
+        'third_party/libkrun/src/devices',
+        'kani:tpm::tis::proofs::the_decoder_maps_every_offset_to_its_register',
+    ),
+    (
+        'the TPM keeps expecting command bytes after the last one',
+        'third_party/libkrun/src/devices/src/tpm/tis.rs',
+        """                || u32::from_be_bytes([command[2], command[3], command[4], command[5]]) as usize
+                    > command.len());""",
+        """                || u32::from_be_bytes([command[2], command[3], command[4], command[5]]) as usize
+                    >= command.len());""",
+        'third_party/libkrun/src/devices',
+        'tpm::tis::tests::a_command_round_trips_through_the_fifo',
+    ),
+    (
+        'a lower TPM locality may seize a higher one',
+        'third_party/libkrun/src/devices/src/tpm/tis.rs',
+        """                Some(a) if l.0 > a.0 => {""",
+        """                Some(a) if l.0 != a.0 => {""",
+        'third_party/libkrun/src/devices',
+        'tpm::tis::tests::a_higher_locality_may_seize_and_the_loser_is_told',
+    ),
 ]
 
 
