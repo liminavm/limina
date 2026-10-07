@@ -102,34 +102,74 @@ cited below are measured in `RESULTS.md` (this directory) unless marked otherwis
   needs its own design for invalidation when referenced objects die.
 - **The round-trip floor of the transport**, for what remains synchronous (descriptor-key
   queries, `vkDeviceWaitIdle`, query results read on the CPU). `RESULTS.md` measures venus's
-  today. §4's doorbell page replaces the polled ring for these.
+  today. §4's query lane carries these across the process boundary; its cost is unmeasured.
 - **Display and sharing**: exporting arena-backed images as dma-bufs for the compositor and KMS
   scanout, and GBM/EGL in the guest.
 
-## 4. Shortcuts from owning the VMM and the host (proposals; only the doorbell is measured)
+## 4. Process layout: the replayer is its own process from the start
 
-- **The vCPU thread does the host work.** The kernel driver maps a device doorbell page into
-  the userspace driver. A store to it traps to libkrun on that vCPU's own thread, which decodes
-  and runs the Metal work and resumes the guest with any answer. There is no syscall, no
-  cross-thread hand-off and no host core spinning. A synchronous call costs one trap plus its
-  work. Bulk streams still go through a ring in arena memory, with the trap as the "work is
-  there" signal. Measured in `spikes/doorbell-exit/`: ~1 µs per trap, and ~2.1 µs including a
-  real Metal query done inline. Handing off to a parked thread costs 4–12 µs and has a long
-  tail. libkrun's own exit path is not measured yet.
-- **Completion through memory.** A Metal completion handler writes a sequence number into arena
-  memory, and the host injects an interrupt only for a guest thread that is sleeping on it.
-- **Zero-copy scanout.** Images meant for scanout are IOSurface-backed, with the IOSurface's
-  memory mapped into the guest like an arena. The host window presents that surface directly.
-- **A persistent, host-wide shader cache.** Compiled shaders (`MTLBinaryArchive`) are stored
-  by MSL hash on disk and shared across VMs and boots. The guest sends the hash, and the text
-  only on a miss.
-- **Reused command buffers as host recordings.** The host keeps the stream and the encoded
-  result of each reusable command buffer, as indirect command buffers where they fit. A resubmit
-  is one id on the wire.
+The Metal replayer runs in a separate host process: one per VM, sandboxed, started by launchd
+like the worker (`crates/limina-launch`). It is never in the worker. Two reasons:
+- Metal is not hardened against a hostile caller, and the replayer is where guest-controlled
+  input reaches it.
+- A replayer crash then reaches the guest as a lost device, the way a browser's GPU-process
+  crash reaches a page as a lost context, instead of killing the VM.
+
+Browsers show the cost of the process boundary can be made rare rather than cheap. Chromium's
+command buffer and Dawn's wire, and WebKit's GPU-process stream connection, all put commands in
+a shared-memory ring. Only a wake-up crosses the boundary, once per flush. Clients choose object
+ids, answer state queries from a cache, and receive errors and readback asynchronously. This
+design already has each of those (§1, §2), so the boundary costs one wake per flush, not one
+per call. Dawn's wire protocol, with its client-assigned ids, async errors and `mapAsync`, is
+the reference to read before designing ours. WebGPU itself is too limited to be the protocol.
+
+- **Two lanes.**
+  - **Bulk lane.** The guest writes command streams into a ring in arena memory and rings a
+    doorbell page mapped into its userspace. The trap (~1 µs, `spikes/doorbell-exit/`) lands
+    on the vCPU thread in the worker. That thread wakes the replayer and resumes the guest at
+    once, so the guest never waits on the replayer to deliver work. While busy, the replayer
+    drains the ring without being woken again.
+  - **Query lane.** The few synchronous calls left (texture size/align per new descriptor key,
+    pipeline-cache misses, real CPU waits on the GPU) cross the boundary and wait for the reply.
+    They are rare by design. A parked-thread handoff costs 4–12 µs in-process; the
+    cross-process cost is not measured yet. Answers that need no Metal state are served by the
+    worker without crossing.
+- **Arena memory must be visible to both processes.** The worker needs it to `hv_vm_map` it into
+  the guest, and the replayer needs it for Metal. Two candidates, to measure:
+  - **Replayer-owned heaps shared into the worker.** The replayer allocates the placement heap
+    (§1, unchanged), makes a Mach memory entry of the alias range, and sends it to the worker,
+    which maps it and `hv_vm_map`s it. If Metal's memory survives that, §1 stands as written:
+    buffers and twiddled textures live in guest-mapped memory. It dies with the replayer.
+  - **Worker-owned memory wrapped by the replayer.** The worker allocates a shared memory object.
+    The replayer maps it and wraps it with `newBufferWithBytesNoCopy`, which is proven for
+    16 KiB-contiguous memory (`spikes/userptr-remap-metal/`). Buffer addresses remain
+    base + offset within that buffer. Optimal-tiling textures then live in replayer-private
+    heaps that the guest never maps. That is allowed: the guest CPU must not read twiddled
+    texels anyway, and Vulkan permits memory types for optimal images that are not host-visible.
+    This memory survives a replayer crash.
+- **The wake primitive is a measurement.** Candidates are `os_sync_wait_on_address` with the
+  shared flag over arena memory (futex-like), a Mach semaphore, and a Mach message.
+- **Recovery and snapshot share one journal.** The worker keeps a journal of the protocol's
+  object creation, the same idea as the virtio-gpu journal for suspend/restore. After a replayer
+  crash the guest sees a lost device and recreates its contexts. On a snapshot restore, the
+  journal replays into a fresh replayer.
+
+## 5. Other shortcuts from owning the VMM and the host (proposals, unmeasured)
+
+- **Completion through memory.** A Metal completion handler in the replayer writes a sequence
+  number into arena memory, and the worker injects an interrupt only for a guest thread that is
+  sleeping on it.
+- **Zero-copy scanout.** Images meant for scanout are IOSurface-backed. IOSurfaces cross
+  processes natively, and the IOSurface's memory is mapped into the guest like an arena. The host
+  window presents that surface directly.
+- **A persistent, host-wide shader cache.** Compiled shaders (`MTLBinaryArchive`) are stored by
+  MSL hash on disk and shared across VMs and boots. The guest sends the hash, and the text only
+  on a miss. This is the one file the replayer's sandbox needs to write.
+- **Reused command buffers as host recordings.** The replayer keeps the stream and the encoded
+  result of each reusable command buffer, as indirect command buffers where they fit. A
+  resubmit is one id on the wire.
 - **Frame pacing through a shared page.** The host writes vsync and present timestamps into a
   shared page. Guest and host share the CPU timer, so the guest reads the timestamps without a
   round trip or a conversion.
-- **Arenas are a VMM memory class.** The balloon excludes them, snapshots save them and replay
-  the placements, and accounting charges them to the VM.
-- **The replayer runs in-process first.** Metal is not hardened against a hostile caller, so
-  the protocol allows moving the replayer into its own process later, at one hop per batch.
+- **Arenas are a VMM memory class.** The balloon excludes them, snapshots save them, and
+  accounting charges them to the VM.

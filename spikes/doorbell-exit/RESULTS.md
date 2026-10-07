@@ -70,6 +70,7 @@ Medians in r2: trap 1.0–1.1 µs hot and 2–3 µs after 5 ms; metal 2.2–2.4 
 - **Concurrency.** A vCPU thread doing Metal work blocks that vCPU for the duration, and several
   vCPUs may trap into one context at once. The replayer needs per-context ordering, by locking
   or by routing a context to one vCPU at a time.
-- **Isolation.** Doing the work on the vCPU thread puts the Metal replayer in the worker
-  process. Moving it out of process later adds a cross-process hop, which item 3 suggests
-  would land in the 4–12 µs handoff class or worse.
+- **The cross-process hop.** The replayer will be its own process
+  (`spikes/metal-heap-addressing/SKETCH.md` §4). The trap then wakes the replayer instead of
+  doing the Metal work itself. The worker resumes the guest without waiting for bulk work, and
+  only the rare synchronous queries pay the hop. Its cost is not measured yet.
