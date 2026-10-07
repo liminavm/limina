@@ -1,12 +1,27 @@
 # Sketch: memory model and value delivery for a Metal-level guest GPU stack
 
-Target: a guest Vulkan driver on Apple Silicon hosts that speaks Metal-level commands to a thin
-host replayer over its own device and DKMS kernel driver, instead of venus/vrend over
-virtio-gpu. In practice the guest userspace is KosmicKrisp's Vulkan layer with the Metal bridge
-(`src/kosmickrisp/bridge/`) replaced by a protocol encoder. It still uses NIR→MSL, and GL still
-comes from zink, so "replacing Mesa" means forking KK out of Mesa's tree, not writing a new
-driver. GBM/EGL for the guest compositor is the piece with no answer here yet. The new device is
-enhanced-tier only: a stock guest ignores it and keeps virtio-gpu.
+Target: guest GL and Vulkan drivers for Apple Silicon hosts only. They speak Metal-level
+commands over limina's own device and DKMS kernel driver to a thin host replayer, instead of
+venus/vrend over virtio-gpu. The new device is enhanced-tier only: a stock guest ignores it and
+keeps virtio-gpu.
+
+End state and staging:
+1. **The device, kernel driver, wire protocol and host replayer, with KosmicKrisp and zink in
+   the guest.** KK's Metal bridge (`src/kosmickrisp/bridge/`) is replaced by a protocol encoder.
+   The wire is designed from Metal's object model (heaps, placed resources, encoders, guest
+   handles), not from the bridge's ~200 calls, which carry KK internals. KK adapts to the wire;
+   the wire is what outlives it.
+2. **A Rust GLES 3.x + EGL + GBM driver on that wire,** bypassing zink. Compositors and
+   browsers use GLES/EGL, so this covers most desktop traffic. Desktop GL compatibility profile
+   and GLX stay on Mesa, selected per app through glvnd, until the driver covers them.
+3. **A Rust Vulkan driver replacing KK,** reusing the shader compiler built for stage 2.
+
+None of this needs Mesa's loaders. libglvnd vendor libraries, a Vulkan ICD, a libgbm backend
+(`/usr/lib/gbm/<name>_gbm.so`) and EGL external platforms are how NVIDIA's proprietary stack
+runs compositors. The long pole is the shader compiler: GLSL and SPIR-V front ends, an MSL back
+end, and the lowerings KK's NIR passes do today (geometry and tessellation emulation, transform
+feedback, clip distances, provoking vertex, quads, wide lines, polygon mode, logic ops). After
+that comes breadth, gated by VK-GL-CTS and piglit.
 
 The two prerequisites from `spikes/metal-bridge-tally/RESULTS.md`: delivering Metal-chosen
 values without round trips, and CPU-written GPU state living in memory the guest owns. Facts
@@ -87,7 +102,33 @@ cited below are measured in `RESULTS.md` (this directory) unless marked otherwis
   needs its own design for invalidation when referenced objects die.
 - **The round-trip floor of the transport**, for what remains synchronous (descriptor-key
   queries, `vkDeviceWaitIdle`, query results read on the CPU). `RESULTS.md` measures venus's
-  today. A custom device would use the same mechanism: a shared-memory ring polled by a host
-  thread, with a doorbell once it parks.
+  today. §4's doorbell page replaces the polled ring for these.
 - **Display and sharing**: exporting arena-backed images as dma-bufs for the compositor and KMS
   scanout, and GBM/EGL in the guest.
+
+## 4. Shortcuts from owning the VMM and the host (proposals, unmeasured)
+
+- **The vCPU thread does the host work.** The kernel driver maps a device doorbell page into
+  the userspace driver. A store to it traps to libkrun on that vCPU's own thread, which decodes
+  and runs the Metal work and resumes the guest with any answer. There is no syscall, no
+  cross-thread hand-off and no host core spinning. A synchronous call costs one trap plus its
+  work. Bulk streams still go through a ring in arena memory, with the trap as the "work is
+  there" signal. The trap's round-trip cost is the number to measure first: the bare-metal guest in
+  `spikes/userptr-remap-metal/` already exits through device-register writes.
+- **Completion through memory.** A Metal completion handler writes a sequence number into arena
+  memory, and the host injects an interrupt only for a guest thread that is sleeping on it.
+- **Zero-copy scanout.** Images meant for scanout are IOSurface-backed, with the IOSurface's
+  memory mapped into the guest like an arena. The host window presents that surface directly.
+- **A persistent, host-wide shader cache.** Compiled shaders (`MTLBinaryArchive`) are stored
+  by MSL hash on disk and shared across VMs and boots. The guest sends the hash, and the text
+  only on a miss.
+- **Reused command buffers as host recordings.** The host keeps the stream and the encoded
+  result of each reusable command buffer, as indirect command buffers where they fit. A resubmit
+  is one id on the wire.
+- **Frame pacing through a shared page.** The host writes vsync and present timestamps into a
+  shared page. Guest and host share the CPU timer, so the guest reads the timestamps without a
+  round trip or a conversion.
+- **Arenas are a VMM memory class.** The balloon excludes them, snapshots save them and replay
+  the placements, and accounting charges them to the VM.
+- **The replayer runs in-process first.** Metal is not hardened against a hostile caller, so
+  the protocol allows moving the replayer into its own process later, at one hop per batch.
