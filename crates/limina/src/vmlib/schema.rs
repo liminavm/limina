@@ -572,6 +572,22 @@ pub enum IpaGranule {
 }
 
 impl IpaGranule {
+    /// Bytes per stage-2 page; a larger one is coarser.
+    pub fn bytes(self) -> u64 {
+        match self {
+            IpaGranule::FourK => 4096,
+            IpaGranule::SixteenK => 16384,
+        }
+    }
+
+    /// How the control center names it ("Memory pages").
+    pub fn label(self) -> &'static str {
+        match self {
+            IpaGranule::FourK => "4 KB",
+            IpaGranule::SixteenK => "16 KB",
+        }
+    }
+
     /// The worker's `--ipa-granule` value.
     pub fn flag(self) -> &'static str {
         match self {

@@ -76,6 +76,8 @@ pub struct SessionConfig {
     pub suspend_state_file: Option<PathBuf>,
     /// The snapshot file the worker writes on suspend (the bundle's `run/snapshot.bin`).
     pub snapshot_file: Option<PathBuf>,
+    /// The stage-2 granule the worker runs under, recorded with a suspend.
+    pub ipa_granule: crate::vmlib::schema::IpaGranule,
     /// Window-close policy (M9.4). Only meaningful when suspend is armed (both paths above
     /// set); resolved to Shutdown otherwise — see [`WindowedSession::start`].
     pub on_window_close: crate::vmlib::schema::WindowCloseAction,
@@ -309,6 +311,7 @@ impl WindowedSession {
             default_content,
             suspend_state_file,
             snapshot_file,
+            ipa_granule,
             on_window_close,
             splash_save_path,
             restoring,
@@ -428,6 +431,7 @@ impl WindowedSession {
                         {
                             let sus = crate::vmlib::state::Suspended {
                                 snapshot: snapshot.clone(),
+                                ipa_granule: Some(ipa_granule),
                             };
                             match crate::vmlib::state::set_suspended(state_file, Some(sus)) {
                                 Ok(()) => {

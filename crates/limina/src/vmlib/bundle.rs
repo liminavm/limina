@@ -343,6 +343,7 @@ pub(crate) mod tests {
             &b.state_toml(),
             Some(state::Suspended {
                 snapshot: b.snapshot_bin(),
+                ipa_granule: None,
             }),
         )
         .unwrap();

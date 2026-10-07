@@ -78,9 +78,13 @@ pub fn keep_refused_snapshot(snapshot: &std::path::Path, state_file: Option<&std
         return;
     }
     if let Some(state) = state_file {
-        let sus = crate::vmlib::state::Suspended {
-            snapshot: snapshot.to_path_buf(),
-        };
+        // The record exactly as it was consumed, granule included; a fresh one if there was none.
+        let sus = lock_consumed()
+            .take()
+            .unwrap_or(crate::vmlib::state::Suspended {
+                snapshot: snapshot.to_path_buf(),
+                ipa_granule: None,
+            });
         if let Err(e) = crate::vmlib::state::set_suspended(state, Some(sus)) {
             log::error!("re-recording the suspended state failed: {e}");
         }
@@ -274,6 +278,16 @@ pub struct ResumePaths<'a> {
     pub suspend_state_file: Option<&'a std::path::Path>,
 }
 
+/// The `[suspended]` record [`take_pending_resume`] last cleared, so a refused resume can put it
+/// back as it was ([`keep_refused_snapshot`]) — the granule it carries is not something the
+/// refusing run can reconstruct.
+static CONSUMED_RECORD: std::sync::Mutex<Option<crate::vmlib::state::Suspended>> =
+    std::sync::Mutex::new(None);
+
+fn lock_consumed() -> std::sync::MutexGuard<'static, Option<crate::vmlib::state::Suspended>> {
+    CONSUMED_RECORD.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// M9.4 auto-resume: the armed snapshot path IS the resume-pending record. If `snapshot`
 /// exists, the VM was suspended and this boot MUST restore from it (cold-booting would leave a
 /// stale snapshot behind that a later start would apply over an advanced disk); if it doesn't,
@@ -312,10 +326,11 @@ pub fn take_pending_resume(
         return None;
     }
     log::info!("resume pending: restoring from {}", snapshot.display());
-    if let Some(state) = state_file
-        && let Err(e) = crate::vmlib::state::set_suspended(state, None)
-    {
-        log::warn!("clearing the suspended state failed: {e}; continuing");
+    if let Some(state) = state_file {
+        *lock_consumed() = crate::vmlib::state::load(state).and_then(|s| s.suspended);
+        if let Err(e) = crate::vmlib::state::set_suspended(state, None) {
+            log::warn!("clearing the suspended state failed: {e}; continuing");
+        }
     }
     // SINGLE-USE enforcement (M9.4-1b): rename the snapshot out of its canonical name before
     // the worker reads it. A snapshot is only valid against the disk EXACTLY as the suspend
@@ -1001,6 +1016,7 @@ mod tests {
 
     #[test]
     fn pending_resume_consumes_snapshot_and_record() {
+        let _serial = resume_tests();
         let dir = scratch("consume");
         let snap = dir.join("snapshot.bin");
         let state = dir.join("state.toml");
@@ -1009,6 +1025,7 @@ mod tests {
             &state,
             Some(crate::vmlib::state::Suspended {
                 snapshot: snap.clone(),
+                ipa_granule: None,
             }),
         )
         .unwrap();
@@ -1033,6 +1050,7 @@ mod tests {
     /// snapshot back at its canonical name and the `[suspended]` record back in state.toml.
     #[test]
     fn a_refused_resume_keeps_the_suspended_session() {
+        let _serial = resume_tests();
         let dir = scratch("refused");
         let snap = dir.join("snapshot.bin");
         let state = dir.join("state.toml");
@@ -1054,8 +1072,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The consumed record is process-global (see `CONSUMED_RECORD`), so these take turns.
+    fn resume_tests() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A refused resume restores the record it consumed as it was, granule included: the
+    /// refusing run cannot know what the guest was saved under.
+    #[test]
+    fn a_refused_resume_puts_the_recorded_granule_back() {
+        let _serial = resume_tests();
+        let dir = scratch("refused-granule");
+        let snap = dir.join("snapshot.bin");
+        let state = dir.join("state.toml");
+        std::fs::write(&snap, b"fake-snapshot").unwrap();
+        let rec = crate::vmlib::state::Suspended {
+            snapshot: snap.clone(),
+            ipa_granule: Some(crate::vmlib::schema::IpaGranule::FourK),
+        };
+        crate::vmlib::state::set_suspended(&state, Some(rec.clone())).unwrap();
+        take_pending_resume(&snap, Some(&state)).expect("a pending resume");
+        keep_refused_snapshot(&snap, Some(&state));
+        assert_eq!(
+            crate::vmlib::state::load(&state).and_then(|s| s.suspended),
+            Some(rec)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn no_snapshot_means_cold_boot_and_clears_stale_record() {
+        let _serial = resume_tests();
         let dir = scratch("stale");
         let snap = dir.join("snapshot.bin");
         let state = dir.join("state.toml");
@@ -1063,6 +1111,7 @@ mod tests {
             &state,
             Some(crate::vmlib::state::Suspended {
                 snapshot: snap.clone(),
+                ipa_granule: None,
             }),
         )
         .unwrap();

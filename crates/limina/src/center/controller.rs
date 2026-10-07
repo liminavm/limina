@@ -1245,6 +1245,16 @@ impl CenterController {
              changing this — a suspended guest resumes with the memory layout it was \
              saved with.",
         );
+        // A suspended guest can only resume under the pages it was saved with (or finer), and a
+        // suspended VM has no supervisor, so nothing else stops the change. Locked until the
+        // session is resumed and shut down, or discarded.
+        if row.suspended {
+            granule_popup.setEnabled(false);
+            granule_popup.setToolTip(Some(&NSString::from_str(
+                "Locked while the VM is suspended: resume it and shut it down, or discard \
+                 the suspended session, to change the memory page size.",
+            )));
+        }
         let ssh_field = labeled_field(mtm, &accessory, 122.0, "SSH port:", &ssh_now.to_string());
         self.row_help(
             &accessory,

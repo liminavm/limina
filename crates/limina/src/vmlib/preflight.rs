@@ -78,6 +78,7 @@ pub enum Code {
     FirmwareUnresolvable,
     FirmwareDebugFallback,
     GvproxyMissing,
+    SuspendedGranuleCoarser,
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +203,7 @@ pub fn check(bundle: &VmBundle, cfg: &VmConfig, depth: Depth) -> Report {
     check_shares(cfg, &mut f);
     check_network(cfg, depth, &mut f);
     check_firmware(bundle, cfg, &mut f);
+    check_suspended(bundle, cfg, &mut f);
     if depth == Depth::Full {
         check_running(bundle, &mut f);
     }
@@ -234,6 +236,43 @@ fn check_bundle(bundle: &VmBundle, out: &mut Vec<Finding>) {
             lock.display().to_string(),
             format!("cannot read the VM's run lock at {}: {e}", lock.display()),
         ));
+    }
+}
+
+/// A suspended session can resume under the granule it was saved with or a finer one, never a
+/// coarser one: the guest's layout already has 4 KiB-granular blob maps a 16 KiB stage 2 cannot
+/// express, and the restore fails part-way through its replay. A record that predates the
+/// granule says nothing, and a pending resume without its snapshot is not a resume.
+fn check_suspended(bundle: &VmBundle, cfg: &VmConfig, out: &mut Vec<Finding>) {
+    if !bundle.snapshot_bin().exists() {
+        return;
+    }
+    let Some(saved) = crate::vmlib::state::load(&bundle.state_toml())
+        .and_then(|s| s.suspended)
+        .and_then(|s| s.ipa_granule)
+    else {
+        return;
+    };
+    let now = cfg.hardware.ipa_granule;
+    if now.bytes() > saved.bytes() {
+        out.push(
+            Finding::blocker(
+                Code::SuspendedGranuleCoarser,
+                "hardware.ipa_granule",
+                format!(
+                    "{} was suspended with {} memory pages and is now set to {}: a suspended \
+                     guest cannot resume under coarser pages than it was saved with",
+                    bundle.dir_name(),
+                    saved.label(),
+                    now.label()
+                ),
+            )
+            .with_remedy(format!(
+                "set Memory pages back to {} to resume it, or use \"Discard suspended session\" \
+                 (--discard-suspend) to boot it fresh",
+                saved.label()
+            )),
+        );
     }
 }
 
@@ -522,6 +561,73 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Configure can change the page size of a suspended VM (it shows as stopped). Resuming under
+    /// a coarser one would fail mid-replay, so the start is refused up front; a finer one is fine,
+    /// and an old record that never noted its granule refuses nothing.
+    #[test]
+    fn a_suspended_vm_refuses_a_coarser_granule() {
+        use crate::vmlib::schema::IpaGranule;
+        use crate::vmlib::state::{Suspended, set_suspended};
+        let _g = env_lock();
+        let (lib, bundle, mut cfg) = startable("pf-granule");
+        std::fs::create_dir_all(bundle.run_dir()).unwrap();
+        std::fs::write(bundle.snapshot_bin(), b"snapshot").unwrap();
+        let record = |g: Option<IpaGranule>| {
+            set_suspended(
+                &bundle.state_toml(),
+                Some(Suspended {
+                    snapshot: bundle.snapshot_bin(),
+                    ipa_granule: g,
+                }),
+            )
+            .unwrap()
+        };
+
+        record(Some(IpaGranule::FourK));
+        cfg.hardware.ipa_granule = IpaGranule::SixteenK;
+        let r = check(&bundle, &cfg, Depth::Cheap);
+        assert!(
+            config_blockers(&r).contains(&Code::SuspendedGranuleCoarser),
+            "{:?}",
+            codes(&r)
+        );
+        let msg = r
+            .findings
+            .iter()
+            .find(|f| f.code == Code::SuspendedGranuleCoarser)
+            .unwrap()
+            .to_string();
+        assert!(msg.contains("4 KB") && msg.contains("16 KB"), "{msg}");
+        assert!(msg.contains("Discard suspended session"), "{msg}");
+
+        // Same or finer: resumes.
+        cfg.hardware.ipa_granule = IpaGranule::FourK;
+        assert!(
+            !codes(&check(&bundle, &cfg, Depth::Cheap)).contains(&Code::SuspendedGranuleCoarser)
+        );
+        record(Some(IpaGranule::SixteenK));
+        assert!(
+            !codes(&check(&bundle, &cfg, Depth::Cheap)).contains(&Code::SuspendedGranuleCoarser)
+        );
+
+        // A record from before the granule was kept: unknown, so not refused.
+        record(None);
+        cfg.hardware.ipa_granule = IpaGranule::SixteenK;
+        assert!(
+            !codes(&check(&bundle, &cfg, Depth::Cheap)).contains(&Code::SuspendedGranuleCoarser)
+        );
+
+        // No snapshot behind the record: nothing to resume.
+        record(Some(IpaGranule::FourK));
+        std::fs::remove_file(bundle.snapshot_bin()).unwrap();
+        assert!(
+            !codes(&check(&bundle, &cfg, Depth::Cheap)).contains(&Code::SuspendedGranuleCoarser)
+        );
+
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
+        std::fs::remove_dir_all(&lib).ok();
     }
 
     #[test]

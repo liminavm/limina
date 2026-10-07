@@ -844,13 +844,20 @@ fn cmd_start(args: StartArgs) -> Result<()> {
     // Before the run lock (see `docs/design/vm-start-preflight.md` §3.4): everything the
     // supervisor validates today happens inside run_vm, with the lock already held and the
     // message going only to whatever captured our stdout.
-    vmlib::preflight::check(
+    let mut report = vmlib::preflight::check(
         &bundle,
         &cfg_with_overrides(&cfg, &args.overrides),
         vmlib::preflight::Depth::Full,
-    )
-    .ensure_startable()
-    .with_context(|| format!("{} cannot start", bundle.dir_name()))?;
+    );
+    if args.overrides.discard_suspend {
+        // The session this refuses to resume is about to be thrown away.
+        report
+            .findings
+            .retain(|f| f.code != vmlib::preflight::Code::SuspendedGranuleCoarser);
+    }
+    report
+        .ensure_startable()
+        .with_context(|| format!("{} cannot start", bundle.dir_name()))?;
     let cli = cli_from_definition(&cfg, &bundle, &args.overrides)?;
     // Exclusive run lock + pidfile: taken before the VM comes up so a double-start
     // fails fast, leaked deliberately because every supervisor exit path is
@@ -1966,6 +1973,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             default_content,
             suspend_state_file: cli.suspend_state_file.clone(),
             snapshot_file: cli.snapshot_file.clone(),
+            ipa_granule: cli.ipa_granule,
             on_window_close: cli.on_window_close,
             // The restore splash lives beside the snapshot (`splash_beside`).
             splash_save_path: cli
@@ -2012,6 +2020,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         if let (Some(state_file), Some(snapshot)) = (&cli.suspend_state_file, &cli.snapshot_file) {
             let sus = vmlib::state::Suspended {
                 snapshot: snapshot.clone(),
+                ipa_granule: Some(cli.ipa_granule),
             };
             match vmlib::state::set_suspended(state_file, Some(sus)) {
                 Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
@@ -2693,6 +2702,7 @@ mod tests {
             &state,
             Some(vmlib::state::Suspended {
                 snapshot: snap.clone(),
+                ipa_granule: None,
             }),
         )
         .unwrap();

@@ -264,13 +264,6 @@ and blk, which leaves the GPU renderer thread. Fix: park the separate-thread wri
 blk) for the length of the dump. Check the thread inventory first — if `save_snapshot` runs on the
 event-loop thread, the EventManager-dispatched devices are already quiesced.
 
-### Configure can coarsen the IPA granule of a suspended VM
-A suspended VM has no supervisor, so the control center shows it Stopped and offers Configure.
-Changing *Memory pages* 4 KB → 16 KB and then resuming replays a guest layout the coarser granule
-cannot express, and blob maps refuse mid-replay (a finer granule is safe). Record the granule in the
-`Suspended` record (`vmlib/state.rs`, which carries only `snapshot`) and refuse or warn on a
-coarsening resume. The only guard today is the help text beside the popup (`center/controller.rs`).
-
 ### Restored hardware decode freezes instead of resyncing seamlessly
 After a restore, virglrs re-creates journaled video codecs/targets and gates the stream until the
 next keyframe (`vrend/video/mod.rs`, `Gate::AwaitingKey`; guard `l2_video_vaapi_restore.rs`),

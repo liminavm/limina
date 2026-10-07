@@ -116,6 +116,11 @@ mod u64_bits_as_i64 {
 pub struct Suspended {
     /// The snapshot file the worker wrote (the bundle's `run/snapshot.bin`).
     pub snapshot: PathBuf,
+    /// The stage-2 granule the guest was saved under. A resume under a coarser one cannot
+    /// express the layout the guest already built (`vmlib::preflight` refuses it). `None` in a
+    /// record written before the granule was recorded: nothing is known, so nothing is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipa_granule: Option<super::schema::IpaGranule>,
 }
 
 /// Load the state file. Missing, unreadable, or corrupt → `None` (state is
@@ -357,12 +362,19 @@ mod tests {
             &path,
             Some(Suspended {
                 snapshot: snap.clone(),
+                ipa_granule: None,
             }),
         )
         .unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.window, Some(win), "window preserved across suspend");
-        assert_eq!(loaded.suspended, Some(Suspended { snapshot: snap }));
+        assert_eq!(
+            loaded.suspended,
+            Some(Suspended {
+                snapshot: snap,
+                ipa_granule: None
+            })
+        );
         // Clear it — window still preserved.
         set_suspended(&path, None).unwrap();
         let cleared = load(&path).unwrap();
@@ -496,6 +508,7 @@ mod tests {
             &path,
             Some(Suspended {
                 snapshot: snap.clone(),
+                ipa_granule: None,
             }),
         )
         .unwrap();
@@ -509,10 +522,40 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert_eq!(
             loaded.suspended,
-            Some(Suspended { snapshot: snap }),
+            Some(Suspended {
+                snapshot: snap,
+                ipa_granule: None
+            }),
             "suspend record survives a window save"
         );
         assert_eq!(loaded.window, Some(win));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The granule rides the record so a resume can refuse a coarser one; a record from before
+    /// it was kept must still load, as "unknown".
+    #[test]
+    fn the_suspend_record_keeps_its_granule_and_old_records_still_load() {
+        use crate::vmlib::schema::IpaGranule;
+        let dir = std::env::temp_dir().join(format!("limina-state-gran-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.toml");
+        let rec = Suspended {
+            snapshot: PathBuf::from("/b/run/snapshot.bin"),
+            ipa_granule: Some(IpaGranule::FourK),
+        };
+        set_suspended(&path, Some(rec.clone())).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("ipa_granule = \"4k\""), "{text}");
+        assert_eq!(load(&path).unwrap().suspended, Some(rec));
+
+        std::fs::write(&path, "[suspended]\nsnapshot = \"/b/run/snapshot.bin\"\n").unwrap();
+        assert_eq!(
+            load(&path).unwrap().suspended.map(|s| s.ipa_granule),
+            Some(None),
+            "a record written before the granule was kept loads with it unknown"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
