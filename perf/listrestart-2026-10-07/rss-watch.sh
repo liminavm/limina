@@ -6,26 +6,54 @@
 # the VM before it can take the host down. Local to that Mac on purpose: when the host is swamped,
 # ssh from elsewhere is the first thing to stop answering.
 #
-# Usage: rss-watch.sh <disk-name> <out.tsv> <footprint-limit-MiB> <compressor-limit-MiB> <max-seconds>
+# Usage: rss-watch.sh <disk-name> <out.tsv> <footprint-limit-MiB> <compressor-growth-MiB> <max-seconds>
 #   <disk-name>  matched against the worker's command line (the VM's disk), so only this VM is touched
 #
 # RSS alone does not protect the host: under pressure the worker's pages move into the compressor,
 # so its RSS FALLS while the host runs out (measured: RSS 3-6 GB while top's footprint, which counts
 # compressed pages, was 8-11 GB). The kill therefore fires on the worker's footprint (top's MEM) or
-# on the host compressor's size, or when <max-seconds> pass. A guest reboot replaces the worker
+# on the host compressor's growth since the watch began, or when <max-seconds> pass. Growth, not
+# size: a host can sit at 5.4 GB compressed at rest (pages left behind by killed workers), and a
+# fixed cap then leaves almost no headroom. A guest reboot replaces the worker
 # process, so it follows the new pid and exits only after 90 s with no worker at all.
 set -u
 DISK="$1"; OUT="$2"; FP_LIMIT="$3"; COMP_LIMIT="$4"; MAX_S="$5"
 PAGE=$(sysctl -n hw.pagesize)
+host_comp_mib() {
+  local c
+  c=$(vm_stat | awk '/occupied by compressor/ {gsub(/\./,"",$5); print $5}')
+  echo $((c * PAGE / 1048576))
+}
+COMP_BASE=$(host_comp_mib)
+# The VM's own processes: the supervisor and worker binaries inside the app bundle. A looser
+# "limina.*<disk>" also matched the shell that launched this watcher, whose command line names the
+# bundle's directory and the disk, and killed it.
+VM_PAT="[C]ontents/MacOS/limina.*$DISK"
 start=$(date +%s)
-echo -e "time\tworker_pid\trss_mib\tfootprint_mib\tworker_compressed_mib\tfree_mib\tcompressor_mib" > "$OUT"
+echo "# compressor at start: ${COMP_BASE} MiB; kill at +${COMP_LIMIT} MiB" > "$OUT"
+echo -e "time\tworker_pid\trss_mib\tfootprint_mib\tworker_compressed_mib\tfree_mib\tcompressor_mib" >> "$OUT"
 
+# Every process of this VM seen so far. pgrep -f reads each candidate's arguments from its memory,
+# and under the pressure this guard exists for it can come back empty for a process that is
+# plainly alive: it once matched nothing at the moment of a kill, one second after it had found
+# the worker, and the VM ran on. So the kill also takes every pid already seen, and checks.
+known=""
 kill_vm() {
   echo "# $(date +%T) KILL: $1" >> "$OUT"
-  for p in $(pgrep -f "[l]imina.*$DISK"); do
+  local p left
+  for p in $known $(pgrep -f "$VM_PAT"); do
+    kill -0 "$p" 2>/dev/null || continue
     ps -ww -o pid=,command= -p "$p" | cut -c1-160 >> "$OUT"
-    kill -9 "$p"
+    kill -9 "$p" 2>/dev/null
   done
+  sleep 2
+  left=""
+  for p in $known; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
+  if [ -n "$left" ]; then
+    echo "# $(date +%T) STILL ALIVE after kill -9:$left" >> "$OUT"
+  else
+    echo "# $(date +%T) killed" >> "$OUT"
+  fi
 }
 
 # top prints sizes as 9055M / 10G / 512K; convert to MiB.
@@ -42,7 +70,7 @@ seen=0; absent=0
 while :; do
   now=$(date +%s)
   if [ $((now - start)) -ge "$MAX_S" ]; then kill_vm "time limit ${MAX_S}s"; break; fi
-  w=$(pgrep -f "[l]imina-vmm.*$DISK" | head -n 1)
+  w=$(pgrep -f "[C]ontents/MacOS/limina-vmm.*$DISK" | head -n 1)
   if [ -z "$w" ]; then
     if [ "$seen" = 1 ]; then
       absent=$((absent + 1))
@@ -51,6 +79,9 @@ while :; do
     sleep 1; continue
   fi
   seen=1; absent=0
+  for p in $w $(pgrep -f "$VM_PAT"); do
+    case " $known " in *" $p "*) ;; *) known="$known $p" ;; esac
+  done
   rss_kb=$(ps -o rss= -p "$w" | tr -d ' ')
   read -r fp cmp < <(top -l 1 -pid "$w" -stats mem,cmprs | tail -n 1)
   fp_mib=$(to_mib "${fp:-0}"); cmp_mib=$(to_mib "${cmp:-0}")
@@ -60,6 +91,8 @@ while :; do
   comp_mib=$((comp * PAGE / 1048576))
   echo -e "$(date +%T)\t$w\t$((${rss_kb:-0} / 1024))\t$fp_mib\t$cmp_mib\t$((free * PAGE / 1048576))\t$comp_mib" >> "$OUT"
   if [ "$fp_mib" -ge "$FP_LIMIT" ]; then kill_vm "worker footprint ${fp_mib} MiB >= ${FP_LIMIT} MiB"; break; fi
-  if [ "$comp_mib" -ge "$COMP_LIMIT" ]; then kill_vm "host compressor ${comp_mib} MiB >= ${COMP_LIMIT} MiB"; break; fi
+  if [ "$comp_mib" -ge $((COMP_BASE + COMP_LIMIT)) ]; then
+    kill_vm "host compressor ${comp_mib} MiB >= ${COMP_BASE} + ${COMP_LIMIT} MiB"; break
+  fi
   sleep 1
 done

@@ -62,12 +62,44 @@ worker once a second (`rss-watch.sh`, `evidence/kw/rss-kw.tsv`, `evidence/kw/com
   the rest of the run, without trending up. Only a few frames are in flight at once.
 
 So the memory follows the pass splits: ~5000 encoders a frame, each holding its allocations until
-the GPU retires it. Removing the splits should remove the churn too.
+the GPU retires it.
 
 The margin is thin, though. One earlier unroll point on the 16 GB remote Mac reached 18.5 GB
 resident and hard-hung it (WindowServer watchdog, forced reboot). **Do not run the unroll arm on a
-shared host.** Cap any rerun with `rss-watch.sh`, which kills the VM on the worker's footprint or
-the host compressor's size. RSS alone falls as the worker's pages move into the compressor.
+shared host.** Cap any rerun with `rss-watch.sh` (driven by `run-points.sh`, which will not start a
+point without its watcher and stops the series when one fires). It kills the VM on the worker's
+footprint or the host compressor's growth. RSS alone falls as the worker's pages move into the
+compressor.
+
+## With a pre-graphics stream
+
+KK branch `limina-kk-pregfx` records draw-time compute (the unroll included) into a command buffer
+committed just before the render pass, instead of ending the pass for it. The same A/B with that
+build bundled (app CDHash `0382908e6bcc73e98714a64ef897347b21c0f879`, KK `da9c3527240`):
+
+| point | arm    | r1 25k | r1 30k | r2 25k | r2 30k |
+|-------|--------|--------|--------|--------|--------|
+| ps0   | skip   | 43     | 35     | 39     | 38     |
+| pu0   | unroll | 4      | 2      | ·      | ·      |
+
+· : not measured; the watcher stopped the point after r1.
+
+- **The splits are gone.** The unroll point ends with 4844 encoders in total, where the split path
+  had 770k. Correctness holds: piglit's two list-restart unroll tests pass, the tessellation list
+  shows no new failures, and the virglrs direct and indirect restart tests draw the right pixels.
+- **The per-draw dispatch is not gone.** The guard's `checks` counter (one per guarded compute
+  operation, ~5 per unroll dispatch) reaches 5.8M, so the dispatch count is unchanged: about 5000
+  single-workgroup unroll dispatches a frame, each bracketed by two dispatch-to-dispatch barriers,
+  so they run one after another. That is the remaining 10x.
+- **Memory**: the worker's footprint steps from 4.5 to 6.4 GB within seconds of aquarium starting
+  and then holds, where the split path held 7.5-10 GB. Lower, not gone.
+- The unroll numbers are a lower bound: the remote Mac had ~100 MB free during the point, and the
+  watcher's once-a-second sampling stalled for 16 s. The watcher's compressor cap (a fixed 6 GB,
+  against ~5.4 GB already compressed on that host at rest) is what stopped it.
+
+Getting to the skip arm's speed needs the per-draw dispatches themselves to go: fewer barriers
+between the independent unrolls (they allocate output with an atomic bump, and nothing in the
+stream reads another's output), or one batched dispatch per pass.
 
 ## Reading it
 

@@ -16,11 +16,13 @@
 # Usage: REMOTE=<user@host> RDIR=<dir on the remote holding Limina.app and the image> \
 #          perf/listrestart-2026-10-07/point-remote.sh <label> <skip|unroll>
 # The host name is passed in, never written here: this tree is public.
+# APP=<bundle under RDIR> picks another bundle (default Limina.app).
 # EXTRA_ENV="K=V ..." adds worker environment for a diagnostic point (e.g. LIMINA_KK_STATS=1); its
 # fps are then not comparable with a plain point's.
 set -uo pipefail
 LABEL="${1:?label}"; ARM="${2:?skip or unroll}"
 REMOTE="${REMOTE:?REMOTE=<user@host>}"; RDIR="${RDIR:?RDIR=<remote dir>}"
+APP="${APP:-Limina.app}"  # the bundle under RDIR
 case "$ARM" in
   skip) ARMV="" ;;
   unroll) ARMV="LIMINA_KK_NOLISTRESTART=0" ;;
@@ -45,8 +47,8 @@ rsh() { ssh "${SSHO[@]}" "$REMOTE" bash -s <<< "$1"; }
 SSH=(ssh "${SSHO[@]}" -J "$REMOTE" -p "$PORT" claude@127.0.0.1)
 BUS='export XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus'
 
-APPV=$(rsh "codesign -dvvv '$RDIR/Limina.app' 2>&1 | grep -m1 CDHash=")
-NOTE="listrestart $LABEL: arm $ARM ($IMG) on a remote Mac; app $APPV; limina $(git rev-parse --short HEAD)"
+APPV=$(rsh "codesign -dvvv '$RDIR/$APP' 2>&1 | grep -m1 CDHash=")
+NOTE="listrestart $LABEL: arm $ARM ($IMG) on a remote Mac; app $APP $APPV; limina $(git rev-parse --short HEAD)"
 echo "$NOTE" > "$EV/provenance.txt"
 log "point $NOTE"
 
@@ -60,7 +62,7 @@ guest_up() { # waits for a real login, not just the banner
 boot() {
   rsh "cd '$RDIR' && rm -f ab-enh.raw && cp -c '$IMG' ab-enh.raw && rm -f '$CAP' &&
     (env $ARMV ${EXTRA_ENV:-} LIMINA_WINDOW_CAPTURE='$CAP' RUST_LOG=warn,limina=info,krun::vmm=info,krun_devices=info \
-      nohup ./Limina.app/Contents/MacOS/limina --disk '$CLONE' --cpus 4 --ram-mib 4096 --net \
+      nohup './$APP/Contents/MacOS/limina' --disk '$CLONE' --cpus 4 --ram-mib 4096 --net \
         --ssh-port $PORT --window --display-resolution 1280x800 > '$WLOG' 2>&1 < /dev/null &)" || return 1
   guest_up
 }

@@ -19,3 +19,9 @@ date,commit,workload,metric,value,notes
 2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,39,listrestart s2 arm skip
 2026-10-07,ebefed85,aquarium-vrend-25000-r2,fps,42,listrestart s2 arm skip
 2026-10-07,ebefed85,aquarium-vrend-30000-r2,fps,38,listrestart s2 arm skip
+2026-10-07,ebefed85,aquarium-vrend-25000-r1,fps,43,listrestart ps0 arm skip; KK pre-graphics da9c3527240
+2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,35,listrestart ps0 arm skip; KK pre-graphics da9c3527240
+2026-10-07,ebefed85,aquarium-vrend-25000-r2,fps,39,listrestart ps0 arm skip; KK pre-graphics da9c3527240
+2026-10-07,ebefed85,aquarium-vrend-30000-r2,fps,38,listrestart ps0 arm skip; KK pre-graphics da9c3527240
+2026-10-07,ebefed85,aquarium-vrend-25000-r1,fps,4,listrestart pu0 arm unroll; KK pre-graphics da9c3527240; host under memory pressure
+2026-10-07,ebefed85,aquarium-vrend-30000-r1,fps,2,listrestart pu0 arm unroll; KK pre-graphics da9c3527240; host under memory pressure
