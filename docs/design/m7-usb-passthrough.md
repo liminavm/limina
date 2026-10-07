@@ -3,7 +3,8 @@
 Goal: hand a host (macOS) USB device to the Linux guest. Strategy (from
 `docs/research/06-usb-passthrough.md`): **USB/IP**, because the *guest* side is 100% upstream —
 stock `vhci_hcd` (a virtual host controller; no real EHCI/XHCI) + `usbip attach`. limina writes
-only the **host** half: a libusb-backed USB/IP server. Staged plan **C → B → D**: prove over TCP,
+only the **host** half: a USB/IP server whose device backend is libusb, or on macOS 27 an
+`IOUSBHostDevice` opened through AccessoryAccess. Staged plan **C → B → D**: prove over TCP,
 ship over vsock, optionally add a native virtio-usb device later.
 
 This milestone is **enhanced-tier** (per the two-tier tenet): a stock guest simply lacks USB and
@@ -17,7 +18,7 @@ still boots/runs fine; the custom kernel is the entry fee for *USB*, never for t
 | 2 | Host `limina-usbip` crate: USB/IP wire protocol + backend trait + CDC-ACM mock + libusb backend | ✅ shipped, 17 unit tests |
 | 3a | L1 test: the guest-side USB/IP stack is present (`vhci_hcd`/usbip/uinput) | ✅ shipped, GREEN on HVF |
 | 3b | Full **mock-attach** end-to-end over vsock — a device enumerates in the guest, no hardware | ✅ shipped, GREEN on HVF |
-| 4 | **Real-device** passthrough — root USB capture (proven) via the shared privileged helper | ◻ DEFERRED — `privileged-helper.md` |
+| 4 | **Real-device** passthrough — AccessoryAccess on macOS 27 (headers read), root capture via the shared privileged helper below that (proven) | ◻ DEFERRED |
 
 ## Phase 1 — kernel (as built)
 
@@ -97,8 +98,8 @@ empirically with `spikes/usb-probe` against a real **SoloKeys Solo 2** (VID:PID 
 **Three layers, in order:**
 1. **USB TCC permission** (`com.apple.security.device.usb`) gates **enumeration**. Before the user
    grants the one-time dialog, `libusb` sees **0 devices**; after, it sees + `libusb_open`s the device
-   and reads all descriptors/strings (control transfers to EP0 work). *(This resolved the earlier
-   "0 devices" mystery — it was the unanswered dialog, not a sandbox.)*
+   and reads all descriptors/strings (control transfers to EP0 work). An unanswered dialog reads as
+   "no devices", not as an error.
 2. **Interface claiming** is the real gate. `libusb_claim_interface` succeeds **only for interfaces no
    macOS class driver holds**. The Solo 2 is *composite* and macOS binds **both** its interfaces —
    interface 0 = **CCID** (smartcard), interface 1 = **HID** (the FIDO/U2F interface) — so both claims
@@ -110,60 +111,75 @@ empirically with `spikes/usb-probe` against a real **SoloKeys Solo 2** (VID:PID 
    (AMFI, exit 137), while removing it (keeping only the USB-TCC entitlement) runs fine. It needs an
    **Apple-granted provisioning profile** (request via Apple; UTM/QEMU hit exactly this wall).
 
-**How to seize an Apple-claimed device — the entitlement is the WRONG path; root is the right one,
-and it's now EMPIRICALLY PROVEN.** Researched against Apple docs + forums (2026):
-`com.apple.vm.device-access` is **Apple-managed / approval-gated** (not self-service even with a paid
-Developer account; request via your Apple rep, no SLA) **and oriented at Mac App Store hypervisor
-apps**. A **dev key does NOT unlock it.** But — **Apple's own documented position is that a
-directly-distributed (Developer-ID) app does *not* need the entitlement at all**: it does the capture
-by **running that code as root** (`libusb_detach_kernel_driver` /
-`IOUSBHostObjectInitOptionsDeviceCapture` work with root, no entitlement — the path
-Parallels/UTM-Developer-ID use).
-
-**Proven on the real Solo 2 via `sudo spikes/usb-probe/run.sh` (2026-06-27):**
+**Proven as root on the real Solo 2 via `sudo spikes/usb-probe/run.sh` (2026-06-27):**
 ```
 == claim test (the macOS gate)  [running as ROOT] ==
   interface 0: kernel_driver_active=YES(bound)  detach=OK  claim=OK ✅
   interface 1: kernel_driver_active=no          detach=n/a  claim=OK ✅
 ```
-Interface 0 (CCID) detached + claimed cleanly with no entitlement; detaching it **also freed
-interface 1** (HID) — a live confirmation of the device-level (whole-device) capture semantics. The
-composite FIDO key is fully claimable as root. So:
+Interface 0 (CCID) detached and claimed with no entitlement, and detaching it **also freed
+interface 1** (HID): capture is device-level. Root needs no entitlement for
+`IOUSBHostObjectInitOptionsDeviceCapture`; the entitlement alternative is
+`com.apple.vm.device-access` plus `IOServiceAuthorize()`
+(`IOUSBHost.framework/Headers/IOUSBHostDefinitions.h:141-149`), Apple-managed and requested through
+an Apple rep.
 
-| Path | Obtainable? | Fit for limina |
-|---|---|---|
-| `com.apple.vm.device-access` entitlement | Apple-managed, App-Store-only; ad-hoc → AMFI SIGKILL | ✗ wrong distribution model |
-| **Root privilege escalation** (small privileged USB-capture helper) | **yes today, no Apple grant** | ✓ **the path** — opt-in, mirrors the M3 `vmnet-helper` shape |
-| DriverKit `.dext` (`com.apple.developer.driverkit.transport.usb`) | also managed + weeks of dext work | ✗ far more effort, no benefit here |
-| Codeless kext / SIP-off / nvram | dead on modern macOS (or dev-only) | ✗ |
+**macOS 27: AccessoryAccess.** `AAUSBAccessoryManager` matches devices and shows Apple's consent
+UI from the app; `-[AAUSBAccessory openWithServiceQueue:completionHandler:]` then gives the
+process exclusive use and returns an `IOUSBHostDevice`, with no root and no libusb
+(`AccessoryAccess.framework/Headers/AAUSBAccessory.h:61-80`). It needs the managed
+`com.apple.developer.accessory-access.usb` entitlement on a provisioning profile
+(`AAUSBAccessoryManager.h:32`). Full header reading in `docs/research/06-usb-passthrough.md` §1.5;
+**nothing of it has been exercised.**
 
-**Consequences for v1:**
-- **Free-to-claim devices work TODAY, unprivileged** — only the USB TCC grant — for any device whose
-  interfaces macOS does *not* bind (many vendor-specific dev boards / generic devices). The probe
-  auto-classifies free-to-claim / Apple-claimed / other.
-- **Apple-claimed classes** (HID, CCID, mass storage, audio — incl. the FIDO key) need the USB
-  capture done **as root**. The natural shape: a tiny privileged helper that opens+detaches+captures
-  the device and passes the open fd (or runs the `LibusbBackend` USB/IP server) — opt-in per the
-  unprivileged-first tenet, exactly like bridged networking's helper. **Caveat:** macOS capture is
-  **device-level, not interface-level** — capturing a composite device detaches *all* its drivers at
-  once, so while the guest holds e.g. the FIDO key the host loses it entirely (correct passthrough
-  semantics, but the host can't use it concurrently).
-- The **wire pipeline is fully proven** by the mock (3b): once a device is claimable (free, or root),
-  `LibusbBackend` drops into the same `serve()`. Remaining code = device selection + the privileged
-  capture helper.
+**The plan: three rungs, the highest the host and the grant allow.**
 
-**Empirical oracle:** `spikes/usb-probe/run.sh [VID PID]` opens+detaches+claims and classifies the
-device (free-to-claim / root-claimable / Apple-claimed / other); run it plain for the userspace gate
-and `sudo …` for the root path. Both gates are now characterized against the Solo 2.
+| Rung | Host | Grant | Who opens the device | Backend |
+|---|---|---|---|---|
+| 1. AccessoryAccess | macOS 27+ | `com.apple.developer.accessory-access.usb` (profile) | supervisor matches + gets consent, passes the `AAUSBAccessory` over XPC; **worker opens it** | IOUSBHost (new) |
+| 2. Free-to-claim | any supported (15+) | USB TCC only | worker | `LibusbBackend` |
+| 3. Root capture | any supported | root, via `limina-privhelperd` | helper captures, serves USB/IP | `LibusbBackend` |
 
-**Remaining build (the only M7 code left): USB capture via the privileged helper — DEFERRED.** Given
-a device id, open + detach + claim it via `LibusbBackend` and run `serve()` on a socket the supervisor
-bridges to the guest's `vhci_hcd` (the exact pipeline 3b proved with the mock, now with a real backend
-behind a privilege boundary). Opt-in (`--usb VID:PID`), unprivileged-first default. **Architecture
-decision (2026-06-27): this does NOT get its own helper binary — it is the first client of a single
-shared `limina-privhelperd` that brokers all root operations (USB capture, vmnet networking, future
-needs). See `docs/design/privileged-helper.md`.** Not CI-testable (needs root + the physical device) —
-validated via a manual `sudo` spike against the Solo 2.
+Rejected: a DriverKit `.dext` (`com.apple.developer.driverkit.transport.usb`, also managed, weeks of
+dext work, no benefit) and codeless kexts / SIP-off (dead or dev-only).
+
+- **Rung 1 splits by process because the API does.** The manager "presents UI on behalf of your
+  application" and must run in "an ordinary application, that is, one that appears in the Dock"
+  (`AAUSBAccessoryManager.h:30`), so matching, consent and hotplug live in the supervisor; the
+  accessory is XPC-encodable and the header expects "another worker process of this client
+  application" to open it (`AAUSBAccessory.h:67-68`). The open `IOUSBHostDevice` then lives in the
+  worker, next to the transport — no USB/IP server in a separate process and no privilege boundary.
+- **Rung 1 needs a second backend.** libusb cannot adopt an already-open `IOUSBHostDevice`, so an
+  IOUSBHost backend implements the same `limina-usbip` backend trait (and, later, the xHCI
+  `UsbDeviceModel`, `usb-xhci.md` §3.6). Rungs 2 and 3 keep `LibusbBackend`.
+- **Rung 1 depends on the channel decision.** The entitlement rides on a provisioning profile;
+  whether Apple grants it for a Developer ID build as well as a MAS one is unverified, and
+  `distribution.md` §2.1 owns that decision. Without the grant,
+  macOS 27 falls back to rungs 2–3.
+- **Rung 3 is the only one that needs the shared root broker.** It is the first client of
+  `limina-privhelperd` (`privileged-helper.md`); with rung 1 in place it shrinks to "Apple-claimed
+  devices on macOS 15–26, or without the AA grant". Not CI-testable (root + a physical device);
+  validated by the manual `sudo` spike against the Solo 2.
+- **Capture is device-level on every rung we know of:** while the guest holds a composite device,
+  the host loses all of it. Whether AA's `open` takes devices Apple's class drivers hold (HID,
+  CCID, mass storage) or refuses them with `AAErrorCodeInvalidAccessoryState` is not stated in the
+  headers and is the first thing to measure — it decides whether rung 1 covers the FIDO-key class
+  or only what rung 2 already reaches.
+- **The wire pipeline is proven** by the mock (3b): every rung drops a backend into the same
+  `serve()`. Remaining code: device selection (`--usb VID:PID`, opt-in), the IOUSBHost backend and
+  the supervisor-side AA listener for rung 1, the helper for rung 3.
+
+**To measure before building rung 1** (on a macOS 27 host): the consent UI and whether it
+persists per device; HID/CCID/mass storage through `open`; whether our launchd-started worker,
+which receives its fds over Mach (`crates/limina-launch`), is accepted as a worker process of the
+app; transfer latency and throughput against `LibusbBackend` on the same device; isochronous at
+all; behaviour across host sleep, device re-enumeration (DFU, mode switches) and fast user switch
+(the header says accessories disconnect and come back, `AAUSBAccessoryListener.h:22-27`); Developer
+ID + hardened runtime vs the App Sandbox.
+
+**Empirical oracle for rungs 2–3:** `spikes/usb-probe/run.sh [VID PID]` opens+detaches+claims and
+classifies the device (free-to-claim / root-claimable / Apple-claimed / other); run it plain for the
+userspace gate and `sudo …` for the root path.
 
 ## Files
 

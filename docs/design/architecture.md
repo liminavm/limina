@@ -450,9 +450,9 @@ located EFI firmware; `memory.max_mib` is the libkrun `ram_mib` and the balloon 
 | **macOS key-combo capture** | `limina-input`: `CGEventTap` behind a toggle (TCC) | no patch | [04] |
 | **Custom keybindings + Cmd/Option swap** | `limina-input` keymap table; `limina-config` | no patch | [04] |
 | **Clipboard sharing** | `liminad` (host NSPasteboard) ⇄ `limina-agent` (Wayland data-control) over vsock | no transport patch | [05][10] |
-| **USB passthrough** | libkrunfw kernel rebuild (USB) + native virtio-usb / USB-IP transport + `krun_add_usb*`; host libusb claiming | **kernel rebuild + new device patch**; v1 = libusb-claimable devices only | [06] |
+| **USB passthrough** | libkrunfw kernel rebuild (USB) + native virtio-usb / USB-IP transport + `krun_add_usb*`; host capture by rung: AccessoryAccess (macOS 27), libusb, root helper | **kernel rebuild + new device patch**; v1 = libusb-claimable devices only | [06] |
 | **NAT networking** | `limina-net` + gvproxy (`unixgram`+VFKIT) | no patch (gvproxy is external) | [07] |
-| **Bridged networking** | `limina-net` + vmnet helper (BRIDGED) | needs Apple `com.apple.vm.networking` + privileged helper; opt-in later | [07] |
+| **Bridged networking** | worker-held vmnet (BRIDGED) | `com.apple.security.virtualization` (unrestricted) on the worker; macOS 26+; opt-in | [07] |
 | **Low memory overhead** | static `krun_set_vm_config` + demand paging; `MADV_FREE_REUSABLE` reclaim | reclaim patch | [08] |
 | **Dynamic memory (min..max ballooning)** | `limina` balloon policy (PSI) + patched libkrun balloon + `limina-agent` reporter | **patch** (inflate/deflate, public API, 16 KiB align) | [08][10] |
 | **Audio** | native in-VMM virtio-snd → CoreAudio | **patch** (add `snd` feature + device + builder wiring, id 25) | [11] |
@@ -491,8 +491,8 @@ located EFI firmware; `memory.max_mib` is the libkrun `ram_mib` and the balloon 
 │             worker), NOT on libkrun.dylib. Ad-hoc (--sign -) suffices    │
 │             and is notarization-compatible.                              │
 │  limina (UI) needs NO hypervisor entitlement (it never calls HVF).        │
-│  Later: bridged net adds com.apple.vm.networking (Apple-managed) to a    │
-│         privileged helper, not to limina itself.                          │
+│  Later: vmnet (bridged/shared) adds com.apple.security.virtualization    │
+│         (unrestricted, ad-hoc OK) to the worker; no helper, no root.      │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -504,9 +504,12 @@ located EFI firmware; `memory.max_mib` is the libkrun `ram_mib` and the balloon 
 ```
 
 Without the entitlement on `limina-vmm`, `hv_vm_create` returns `Error::VmCreate`. Default
-networking (gvproxy) needs **no** entitlement and **no** root. USB passthrough may later need
-a device-access entitlement / DriverKit `.dext` for Apple-claimed interfaces; v1 scopes to
-libusb-claimable devices to avoid that. [02][06][07]
+networking (gvproxy) needs **no** entitlement and **no** root. USB passthrough needs no root
+on macOS 27 with the managed `com.apple.developer.accessory-access.usb` entitlement
+(AccessoryAccess: consent in the app, device opened by the worker). Free-to-claim devices need
+only the USB permission grant on any host; Apple-claimed devices without AccessoryAccess need root
+capture via `limina-privhelperd` (m7 §Phase 4). vmnet needs the unrestricted
+`com.apple.security.virtualization` on the worker. [02][06][07]
 
 ---
 
@@ -526,7 +529,7 @@ This doc's job is the *architecture* those milestones build on. The mapping at a
 | **M4** 3D + zero-copy scanout | virgl flags (§3.2), virglrenderer Apple-blob build, `SET_SCANOUT_BLOB` patch + display model A migration (§2.4) |
 | **M5** clipboard + virtiofs + agent | `liminad` bridge (§4.1), `limina-agent` (§4.2), virtiofs-overlay delivery |
 | **M6** dynamic memory | balloon patch series (§3.4 D9), PSI policy host-side, page-size menu |
-| **M7** USB | libkrunfw USB rebuild + native virtio-usb (§3.4), privileged-helper/entitlement (§9) |
+| **M7** USB | libkrunfw USB rebuild + native virtio-usb (§3.4), AccessoryAccess entitlement, or the privileged helper below macOS 27 (§9) |
 | **M8** audio + x86 + polish | native virtio-snd→CoreAudio (§3.4), FEX wiring (§4.2), runtime display resize, fullscreen/multi-display |
 
 ---

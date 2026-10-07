@@ -194,12 +194,17 @@ engages, MOC-verify = host Touch ID (never match-on-host).
 
 ### 3.6 Future: passthrough backend (not scheduled)
 
-A `UsbDeviceModel` impl wrapping `limina-usbip`'s `LibusbBackend` would give
-stock-tier real-device passthrough through the same controller once
-`limina-privhelperd` exists (capture still needs root). UTM/QEMU-on-macOS
-experience says the hard part is the host capture, not the controller — which M7
-already solved to the root-capture stage. Nothing in this design blocks it; the
-trait is deliberately the same shape as `limina-usbip::UsbDevice`.
+A `UsbDeviceModel` impl wrapping a real host device would give stock-tier real-device
+passthrough through the same controller. The capture path decides the backend, per the
+rungs in `m7-usb-passthrough.md` §Phase 4: on macOS 27 with the AccessoryAccess entitlement
+the worker holds an `IOUSBHostDevice` itself, which is the natural fit here (the device
+lives in the process that runs the controller, no privilege boundary); free-to-claim
+devices use `limina-usbip`'s `LibusbBackend` in the worker; Apple-claimed devices without
+AccessoryAccess still need root capture through `limina-privhelperd`, which puts the device
+in another process and makes USB/IP-over-vsock the simpler carrier than this controller.
+UTM/QEMU-on-macOS experience says the hard part is the host capture, not the controller.
+Nothing in this design blocks it; the trait is deliberately the same shape as
+`limina-usbip::UsbDevice`, and hotplug rides the PORTSC change bits (§7).
 
 ## 4. Kernel/config notes
 
@@ -255,7 +260,8 @@ trait is deliberately the same shape as `limina-usbip::UsbDevice`.
    (capability detection is additive per CLAUDE.md).
 3. **Fingerprint reader:** own design doc (target device selection, protocol
    corpus, enrollment UX), then gadget implementation.
-4. *(unscheduled)* passthrough backend behind privhelperd.
+4. *(unscheduled)* passthrough backend: IOUSBHost via AccessoryAccess on macOS 27, libusb for
+   free-to-claim devices (§3.6).
 
 ## 7. Open questions
 

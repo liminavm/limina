@@ -140,7 +140,7 @@ runtime via `krun_has_feature(KRUN_FEATURE_NET)`.
 | **gvproxy** (gvisor-tap-vsock) | YES (on PATH) | Userspace L3 gateway: NAT + DHCP + DNS + REST port-forward; vfkit dgram framing | **NAT** | `krun_add_net_unixgram(path, -1, mac, feats, NET_FLAG_VFKIT)` |
 | **passt / pasta** | qemu dep; **verify `which passt`** | Userspace TCP/UDP/ICMP NAT, no root, SOCK_STREAM | **NAT** | `krun_add_net_unixstream(path,…)` |
 | **socket_vmnet** | **UNCONFIRMED** — brief lists `vde`, not socket_vmnet; `brew list socket_vmnet` | Root daemon owning the `vmnet` handle; SOCK_STREAM to clients | **NAT (vmnet shared)** / **bridged** | `krun_add_net_unixstream` |
-| **vmnet-helper** | **UNCONFIRMED** — not in brief | Minimal privileged helper holding the `vmnet` handle; SOCK_DGRAM/vfkit framing | **NAT / bridged** | `krun_add_net_unixgram` |
+| **vmnet-helper** | **UNCONFIRMED** — not in brief | Per-VM helper holding the `vmnet` handle; SOCK_DGRAM, one frame per datagram | **NAT / bridged** | `krun_add_net_unixgram` |
 | **vde** (`vde_vmnet`, `vde_switch`) | YES | VDE switch + optional `vde_vmnet` bridge to `vmnet.framework` | **NAT / bridged** (older path) | unix-socket transport |
 | **krunkit** | YES | vfkit-REST front-end. Reference net wiring: parses `--device virtio-net,unixSocketPath=…,mac=…` and currently calls the **legacy** `krun_set_gvproxy_path` + `krun_set_net_mac` (`virtio.rs:240,247`). | (consumer) | — |
 
@@ -151,15 +151,25 @@ runtime via `krun_has_feature(KRUN_FEATURE_NET)`.
 - `VMNET_BRIDGED_MODE` — **bridge** the VM onto a chosen physical interface (e.g. `en0`); the guest gets a LAN DHCP lease and is a first-class LAN peer. **This is what "bridged" means for limina.**
 
 Constraints:
-- Bridged/advanced vmnet needs the **`com.apple.vm.networking`** entitlement,
-  which is **Apple-managed** (special provisioning profile; not freely
-  self-grantable for distribution). `VMNET_SHARED_MODE` is more permissive but a
-  non-Virtualization.framework process driving vmnet directly still needs
-  entitlements and often **root**.
-- libkrun does **not** link `vmnet.framework`. vmnet is always reached through a
-  **helper process** (socket_vmnet / vmnet-helper / vde_vmnet) that holds the
-  handle and exposes a UNIX socket; libkrun attaches via `krun_add_net_unixstream`
-  (socket_vmnet) or `krun_add_net_unixgram` (vmnet-helper, vfkit framing).
+- **Privilege: the unrestricted `com.apple.security.virtualization` entitlement, no root.**
+  Measured on macOS 26.6.2 (`spikes/vmnet-network-probe/RESULTS.md`): a non-root process
+  ad-hoc signed with it runs **all three modes** with packets flowing — ARP replies from the
+  shared and host-only gateways, LAN frames on a bridge over `en0`. With only
+  `com.apple.security.hypervisor` (what `limina-vmm` carries) or no entitlement, every mode
+  fails. The restricted `com.apple.vm.networking` is not involved, and the two entitlements
+  coexist on one binary.
+- **Measured only through the classic API** (`vmnet_start_interface`). The macOS 26
+  network-object API (`vmnet_network_create` → `vmnet_interface_start_with_network`) starts
+  under the same entitlement but returned no gateway address, so traffic over it is
+  unverified.
+- **Not measured:** macOS 15 (limina's floor, `LSMinimumSystemVersion` in
+  `scripts/build-app.sh`; vmnet-helper's author reports root is needed there), macOS 27,
+  Developer ID + hardened runtime + notarization, the App Store sandbox, throughput, and
+  bridging over Wi-Fi beyond receiving one frame.
+- libkrun does **not** link `vmnet.framework`. Whoever holds the vmnet interface relays
+  frames to libkrun over a UNIX socket — `krun_add_net_unixgram` (one frame per datagram,
+  vmnet-helper's framing) or `krun_add_net_unixstream` (socket_vmnet's). With no privilege
+  required, that holder can be limina's own worker (§4).
 
 ---
 
@@ -204,14 +214,15 @@ guest virtio_net driver -> TX vq (Ethernet frames, prefixed with virtio_net_hdr)
 ### 2.3 virtio-net + vmnet (bridged or shared)
 
 ```
-guest virtio_net -> TX vq -> net worker -> UNIX socket -> vmnet helper (root)
-   -> vmnet.framework (SHARED=NAT or BRIDGED=L2 on en0) -> physical NIC
+guest virtio_net -> TX vq -> net worker -> socketpair (SOCK_DGRAM) -> vmnet relay
+   -> vmnet.framework (SHARED=NAT, HOST, or BRIDGED=L2 on en0) -> physical NIC
 ```
 
 - In BRIDGED mode the guest's frames go straight onto the chosen physical
   segment; the guest MAC is visible on the LAN and it pulls a LAN DHCP lease.
-- The helper (root, entitled) owns the vmnet handle; libkrun (unprivileged) only
-  sees the UNIX socket — the privilege separation macOS forces.
+- The relay is whatever process holds the vmnet interface. It needs
+  `com.apple.security.virtualization`, not root (§1.7), so it can live inside the
+  worker; the socketpair keeps libkrun's net device unchanged.
 
 ---
 
@@ -245,20 +256,24 @@ guest virtio_net -> TX vq -> net worker -> UNIX socket -> vmnet helper (root)
   NAT only; `krun_set_port_map` unsupported.
 - **Verdict:** viable NAT fallback; pick gvproxy first (confirmed installed).
 
-### D — virtio-net + vmnet SHARED (NAT via Apple)
-- **Pros:** Apple-native NAT, kernel-fast, Apple DHCP/NAT; reuses bridged helper.
-- **Cons:** privileged helper (socket_vmnet/vmnet-helper — install status
-  unconfirmed) + entitlements + root/setuid. Heavier than gvproxy for plain NAT.
-- **Verdict:** only if we already ship vmnet for bridged.
+### D — virtio-net + vmnet SHARED / HOST (NAT or host-only via Apple)
+- **Pros:** Apple-native NAT with Apple DHCP, in-kernel forwarding instead of a userspace
+  TCP stack; the guest gets an IP the host (and other VMs on the same vmnet network)
+  can reach; HOST gives an isolated host-only segment. No root and no restricted
+  entitlement (§1.7).
+- **Cons:** macOS-only and measured only on 26; port forwards move from gvproxy's REST to
+  `vmnet_interface_add_port_forwarding_rule` (`vmnet.h:683`, not yet exercised); subnets
+  can collide with other vmnet users (podman machine, Apple `container`).
+- **Verdict:** opt-in enhanced NAT beside gvproxy; shares all of its plumbing with E.
 
 ### E — virtio-net + vmnet BRIDGED (bridged)  ← required for the bridged feature
 - **Pros:** the only true bridged path on macOS; guest is a first-class LAN peer
-  (LAN DHCP, ping, discovery) — matches Parallels bridged.
-- **Cons:** **`com.apple.vm.networking`** (Apple-managed entitlement) + root/setuid
-  helper holding the vmnet handle; signing/distribution friction; Wi-Fi (`en0`)
-  bridging has known macOS MAC limitations.
-- **Verdict:** mandatory for bridged; gate behind helper + entitlement; later
-  milestone.
+  (LAN DHCP, ping, discovery) — matches Parallels bridged. Needs the same unrestricted
+  entitlement as D, nothing more (§1.7).
+- **Cons:** Wi-Fi (`en0`) bridging has known macOS MAC limitations; measured only to the
+  point of receiving a LAN frame on `en0`. Needs a physical-interface picker
+  (`vmnet_copy_shared_interface_list`).
+- **Verdict:** the bridged feature; same mechanism as D, a different mode.
 
 ### F — virtio-net + tap
 - **Cons:** **no TAP on macOS** — the backend is `#[cfg(linux)]` and the macOS
@@ -279,28 +294,33 @@ guest virtio_net -> TX vq -> net worker -> UNIX socket -> vmnet helper (root)
    offloads; evaluate adding `NET_FEATURE_GUEST_TSO6 | NET_FEATURE_HOST_TSO6`
    (reachable only via the new API) once verified non-corrupting with gvproxy.
    Handle the no-auto-reconnect HANG_UP failure mode.
-3. **Bridged (later) — vmnet bridged (E):** ship a privileged vmnet helper
-   (vmnet-helper + `unixgram/vfkit`, or socket_vmnet + `unixstream`) plus the
-   `com.apple.vm.networking` entitlement/signing work. Reuse the helper for vmnet
-   SHARED (D) if we want Apple-native NAT later.
+3. **vmnet — bridged (E) and Apple NAT / host-only (D), opt-in:** the worker holds the
+   vmnet interface itself and relays frames over a `SOCK_DGRAM` socketpair handed to
+   `krun_add_net_unixgram` — vmnet-helper's job done in-process, so no helper binary,
+   no root and no installer flow. The worker gains `com.apple.security.virtualization`
+   beside `com.apple.security.hypervisor`. **Open:** this in-worker relay (recommended:
+   no libkrun change) vs. a native vmnet backend in libkrun's virtio-net (mechanism in
+   libkrun, saves the relay copy) — decide on throughput numbers. Offer vmnet on macOS 26+
+   only until the probe has been run on 15. gvproxy stays the default and the stock-tier
+   network.
 
 ### What limina must build / ship (glue)
-- **Network-backend manager**: spawn/monitor the host helper (gvproxy / passt /
-  vmnet-helper), own the UNIX socket path + lifecycle, detect death and
+- **Network-backend manager**: spawn/monitor gvproxy (or passt), own the in-worker vmnet
+  relay, own the UNIX socket path + lifecycle, detect death and
   restart/recreate (libkrun does **not** reconnect), surface health to UI.
 - **MAC allocation** (stable per-VM, locally-administered) passed as `c_mac`.
 - **Port-forward control plane**: limina rules → gvproxy REST for NAT; remember
   `krun_set_port_map` is TSI-only and rejected once a net device exists.
 - **DHCP/DNS wiring per backend**: gvproxy/passt internal; vmnet SHARED = Apple;
   vmnet bridged = LAN; raw datagram path = `NET_FLAG_DHCP_CLIENT` (guest `dhcp.c`).
-- **For bridged**: the vmnet helper binary, its entitlement plist, a privileged
-  install/authorization flow (SMAppService / SMJobBless or setuid-root), and a
-  physical-interface picker.
+- **For vmnet**: the vmnet relay in the worker, `com.apple.security.virtualization` in the
+  worker's entitlements, a physical-interface picker for bridged, and vmnet port-forward
+  rules for shared mode.
 
 ### What likely needs patching in libkrun
 - **NAT: nothing** — gvproxy/passt paths are complete and correct.
-- **Bridged: probably no libkrun patch** if the helper speaks unixstream/unixgram;
-  the entitlement + helper work is ours. Patch libkrun only if `NET_FEATURE_*`
+- **vmnet: no libkrun patch** with the in-worker relay over unixgram; a native vmnet
+  backend is the patch to write only if the relay copy proves costly. Patch libkrun only if `NET_FEATURE_*`
   negotiation, MTU, or the single-buffer worker proves incompatible with vmnet,
   or if we need worker **reconnect-on-crash** (a small, self-contained patch to
   `worker.rs`'s HANG_UP handling — recommended regardless for robustness).
@@ -312,15 +332,17 @@ guest virtio_net -> TX vq -> net worker -> UNIX socket -> vmnet helper (root)
 1. **Confirm net is built in** the Homebrew libkrun (`krun_has_feature(KRUN_FEATURE_NET)`).
 2. **gvproxy framing match:** does the installed gvproxy speak the `"VFKT"` dgram
    handshake `unixgram.rs` sends? Spike: boot guest, get DHCP lease, `curl` out.
-3. **Which vmnet helper is installed?** `brew list socket_vmnet vmnet-helper`;
-   does `vde` provide `vde_vmnet`? Determines unixstream vs unixgram transport.
+3. **vmnet on the network-object API:** does traffic flow over `vmnet_network_create` /
+   `vmnet_interface_start_with_network` (the probe saw it start with no gateway reported),
+   and does it give per-network isolation and pre-set port forwards as documented?
 4. **TSO6 offloads:** do GUEST_TSO6/HOST_TSO6 (new-API only) improve iperf3
    throughput without corruption, per backend (gvproxy/passt/vmnet)?
-5. **`com.apple.vm.networking` reality:** can we obtain/ship it for a non-App-Store
-   app, or must users install a separately-signed root helper? Prototype with a
-   self-signed helper run as root.
-6. **Wi-Fi bridging:** does vmnet BRIDGED over `en0` (Wi-Fi) work on this M1 Max,
-   or only over wired/USB Ethernet?
+5. **vmnet privilege beyond the probe:** re-run `spikes/vmnet-network-probe` on macOS 15
+   (the floor), on macOS 27, as a Developer ID + hardened-runtime + notarized build, and
+   inside the App Store sandbox.
+6. **Wi-Fi bridging:** does a guest behind vmnet BRIDGED over `en0` (Wi-Fi) get a LAN
+   lease and two-way traffic, or only over wired/USB Ethernet? (The probe proved only
+   that frames arrive.)
 7. **Worker robustness:** the single-thread/single-buffer worker disables the NIC
    permanently on backend HANG_UP. Decide whether limina restarts the whole VM net
    path or we patch `worker.rs` to reconnect. Also check the macOS datagram size
@@ -369,5 +391,6 @@ External (verify online):
 - containers/libkrun README + CHANGELOG (net API evolution).
 - gvisor-tap-vsock (gvproxy): vfkit dgram framing + REST forwarder API.
 - passt/pasta docs: SOCK_STREAM backend, forward maps.
-- lima-vm/socket_vmnet and vmnet-helper: privilege model, framing.
-- Apple `vmnet.framework`: `VMNET_{HOST,SHARED,BRIDGED}_MODE`, `com.apple.vm.networking`.
+- lima-vm/socket_vmnet and vmnet-helper: framing, per-VM model.
+- Apple `vmnet.framework`: `VMNET_{HOST,SHARED,BRIDGED}_MODE`; privilege measured in
+  `spikes/vmnet-network-probe/`.

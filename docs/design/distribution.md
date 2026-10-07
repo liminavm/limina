@@ -75,14 +75,22 @@ substantial piece of engineering, and it is worth doing **independently of the A
 see `input-and-windows.md` §5.
 
 **(c) Apple's approval — the real gate, and the reason to think about this early.**
-- **USB passthrough** needs `com.apple.vm.device-access`: Apple-managed, no self-service even
-  with a paid account, requested through an Apple rep with no SLA (`m7-usb-passthrough.md`).
-  On MAS it replaces the root helper entirely; off MAS the helper is the only path.
-- **Bridged networking** needs `com.apple.vm.networking`, restricted the same way.
-- The `SMAppService` root helper (`privileged-helper.md`) is not permitted on MAS at all. So
-  USB and bridged networking are *either* MAS-with-approval *or* Developer-ID-with-a-root-helper,
-  and the two designs do not share an implementation. **Decide the channel before building
-  either**, or build the mechanism behind an interface that can take both brokers.
+- **USB passthrough of Apple-claimed devices** needs a grant or root (`m7-usb-passthrough.md`
+  §Phase 4). On macOS 27 the grant is `com.apple.developer.accessory-access.usb`
+  (AccessoryAccess.framework): a managed entitlement on a provisioning profile, consent shown
+  by the app, the device opened by the worker, no root. Before 27 it is
+  `com.apple.vm.device-access`, Apple-managed and requested through an Apple rep with no SLA.
+  Whether AccessoryAccess works inside the App Sandbox, and whether its entitlement is granted
+  for Developer ID as well as MAS, is unverified; ask Apple for it on whichever channel we pick.
+- **vmnet networking** (bridged, shared, host-only) needs only the unrestricted
+  `com.apple.security.virtualization` on the worker, measured non-root on macOS 26
+  (`spikes/vmnet-network-probe/`); the restricted `com.apple.vm.networking` is not involved.
+  Whether it also works inside the App Sandbox is unmeasured.
+- The `SMAppService` root helper (`privileged-helper.md`) is not permitted on MAS at all. On
+  macOS 27 with the AccessoryAccess grant, USB needs no helper on either channel, so the
+  helper's USB role shrinks to Apple-claimed devices on macOS 15–26 (Developer ID only).
+  **Decide the channel before building the root path**, and build device opening behind an
+  interface that takes either an AccessoryAccess-opened device or a helper-captured one.
 
 The licensing side is already settled: the GPL-2.0-only "limina exception" carries an App Store
 distribution grant (shipped 2026-09-02, `LICENSE` / `CONTRIBUTING.md`).

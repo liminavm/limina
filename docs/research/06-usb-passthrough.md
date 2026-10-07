@@ -11,8 +11,10 @@ vhost-user reuse, and per-class shortcuts — and recommends a staged plan
 > finding and the C-API line numbers below are confirmed from source. The one
 > item that could **not** be confirmed from local source is whether the
 > libkrunfw guest kernel ships `CONFIG_USBIP_VHCI_HCD` — that is the #1 blocking
-> open question (§5). macOS/USB-IP/libusb facts are from established knowledge
-> and flagged where confidence is lower.
+> open question (§5). The macOS claiming gates in §1.5 are measured
+> (`spikes/usb-probe`) or read from the macOS 27 SDK headers, and say which;
+> other macOS/USB-IP/libusb facts are from established knowledge and flagged
+> where confidence is lower.
 
 ---
 
@@ -118,63 +120,72 @@ prerequisite.
 
 ### 1.5 macOS device-claiming reality (the hard part)
 
-To hand a USB device to the guest, the host process must take exclusive control
-of it away from macOS's own drivers:
+To hand a USB device to the guest, the host process must take exclusive control of it away from
+macOS's own drivers. macOS class drivers (`IOUSBHostHIDDevice`, mass storage, CCID, CDC, audio)
+bind to **interfaces**, not the whole device, and there is no per-device `kextunload`. Measured
+with `spikes/usb-probe` against a composite SoloKeys Solo 2 (CCID + HID), the gates are
+(details: `docs/design/m7-usb-passthrough.md` §Phase 4):
 
-- **Two levels of claiming.** A device exposes a *device* object
-  (`IOUSBHostDevice` / legacy `IOUSBDevice`) and one or more *interface*
-  objects (`IOUSBHostInterface` / `IOUSBInterface`). macOS class drivers
-  (`IOUSBHostHIDDevice`, `IOUSBMassStorageDriver`/`AppleUSBStorage`, CDC/ECM,
-  audio, etc.) bind to **interfaces**, not the whole device.
-- **libusb on macOS** opens the device via IOKit. For interfaces already bound
-  by an Apple kernel driver, `libusb_claim_interface` will fail unless the
-  kernel driver is detached. On Linux libusb can auto-detach
-  (`libusb_set_auto_detach_kernel_driver`); **on macOS that call is a no-op /
-  unsupported** — you cannot generically detach an arbitrary Apple driver from
-  user space the way you can on Linux.
-- **What actually works on macOS:**
-  - **Whole-device capture** for devices with **no matching Apple driver** (or
-    only a generic one): libusb can open and claim freely. Most "interesting"
-    passthrough targets (FTDI/CP210x serial without the Apple CDC match,
-    security keys, custom hardware, many cameras, SDR dongles) fall here.
-  - For devices Apple *does* claim (mass storage, standard HID keyboards/mice,
-    Apple-recognized audio), you must **prevent or undo the kernel match**:
-    - **Code Signing / Entitlement:** to seize a device, the host process
-      generally needs the entitlement
-      `com.apple.developer.driverkit.allow-any-userclient-access` *or* the
-      classic **`com.apple.vm.device-access`** entitlement (used by
-      virtualization software for USB/IO passthrough). Parallels/VMware/UTM
-      rely on privileged helpers + entitlements for this. **[CONFIRM]** exact
-      entitlement string and whether it requires a special Apple grant
-      (some are restricted/managed entitlements).
-    - **DriverKit / `IOUSBHost`:** the modern path is a **DriverKit (.dext)**
-      USB driver that matches the device with higher priority and exports it to
-      user space, or using the `IOUSBHost` framework's
-      `IOUSBHostDevice`/`...Interface` ObjC/Swift API with a matching dictionary
-      that wins over Apple's. This needs the
-      `com.apple.developer.driverkit.transport.usb` family of entitlements and
-      App Store / notarization-grade signing.
-    - **`kextunload`-style detach is not available** for in-kernel Apple USB
-      drivers per-device; the supported lever is matching priority + DriverKit,
-      or simply choosing devices Apple doesn't grab.
-- **Bottom line:** for a v1, target the *libusb-claimable* device set
-  (no-Apple-driver / generic devices). Mass storage and standard HID are
-  explicitly harder and may require DriverKit + special entitlements.
+1. **USB TCC permission** (`com.apple.security.device.usb`) gates enumeration: libusb sees 0
+   devices until the user answers the one-time dialog.
+2. **Interface claiming.** Unprivileged, `libusb_claim_interface` succeeds only on interfaces no
+   macOS driver holds (`LIBUSB_ERROR_ACCESS` on both Solo 2 interfaces). Many passthrough targets
+   (vendor-specific dev boards, SDR dongles, serial adapters without an Apple CDC match) are
+   free-to-claim and work with nothing more than the TCC grant.
+3. **Seizing an Apple-claimed device** means `IOUSBHostObjectInitOptionsDeviceCapture`, which
+   "terminate[s] all clients and drivers of the IOUSBHostDevice" and needs either **root** or the
+   restricted `com.apple.vm.device-access` entitlement plus `IOServiceAuthorize()`
+   (`IOUSBHost.framework/Headers/IOUSBHostDefinitions.h:141-149`). Measured: root works with no
+   entitlement (`detach=OK claim=OK` on both Solo 2 interfaces); `com.apple.vm.device-access`
+   cannot be ad-hoc signed (AMFI kills the process at launch). Capture is **device-level**: the
+   host loses every interface of a composite device while the guest holds it.
+
+**macOS 27 adds a second, unprivileged route: AccessoryAccess.framework** (`AA` below, headers at
+`AccessoryAccess.framework/Headers/`, every symbol `API_AVAILABLE(macos(27.0))`). From the headers,
+not exercised:
+
+- `AAUSBAccessoryManager` registers a listener with matching criteria and reports matching devices
+  already connected plus later arrivals/departures (`AAUSBAccessoryManager.h:47-65`,
+  `AAUSBAccessoryListener.h`). Criteria are IOKit device/interface matching dictionaries, an empty
+  list matching any device (`AAUSBAccessoryMatchingCriteria.h`).
+- `-[AAUSBAccessory openWithServiceQueue:completionHandler:]` opens the device "for this process to
+  access it exclusively" and returns an **`IOUSBHostDevice`** (`AAUSBAccessory.h:61-80`) — the
+  same object the capture path yields, so transfers go through IOUSBHost directly, with no
+  libusb and no root.
+- It needs the **`com.apple.developer.accessory-access.usb`** entitlement
+  (`AAUSBAccessoryManager.h:32`), a managed `com.apple.developer.*` entitlement that rides on a
+  provisioning profile. It is a different entitlement from `com.apple.vm.device-access`.
+- The manager "presents UI on behalf of your application" and must be used only from "an ordinary
+  application, that is, one that appears in the Dock" (`AAUSBAccessoryManager.h:30`): user
+  consent is Apple's UI, shown by the app, not by a background worker.
+- An `AAUSBAccessory` is `NSSecureCoding` and has an XPC representation
+  (`AAUSBAccessory.h:22,32,59`); `open` fails with `AAErrorCodeAccessoryNotAccessible` "if the
+  accessory was already opened by another worker process of this client application"
+  (`AAUSBAccessory.h:67-68`). So the intended shape is: the app matches and gets consent, hands
+  the accessory to a worker process over XPC, the worker opens it.
+- On a fast user switch or console logout every accessory is disconnected from the app and
+  reconnected when the user returns (`AAUSBAccessoryListener.h:22-27`).
+- The headers do not say whether `open` terminates Apple's class drivers the way
+  `DeviceCapture` does, or fails with `AAErrorCodeInvalidAccessoryState` on a device they hold
+  (`AAError.h`) — that decides whether the HID/CCID class is reachable through AA at all. They
+  say nothing about the App Sandbox.
+
+**Bottom line:** three rungs, by host and grant. macOS 27+ with the AccessoryAccess entitlement:
+the worker opens the device itself. Free-to-claim devices on any supported macOS: libusb in the
+worker, TCC grant only. Apple-claimed devices without AA (macOS 15–26, or no grant): capture as
+root through the shared privileged helper (`docs/design/privileged-helper.md`).
 
 ### 1.6 macOS hotplug & transfer-type caveats
 
-- **Hotplug:** libusb hotplug on macOS historically required the IOKit run loop
-  to be serviced and had gaps; modern libusb supports it but **confirm with a
-  spike** that `libusb_hotplug_register_callback` fires reliably for
-  arrive/leave on macOS 26. Fallback: poll `libusb_get_device_list`.
-- **Isochronous transfers** (webcams, USB audio): supported by libusb on macOS
-  but timing-sensitive; over USB/IP, isochronous is the weakest area — the
-  USB/IP protocol carries iso packets but latency/jitter across the vsock/net
-  hop frequently breaks real-time audio/video. Treat **iso as out-of-scope for
-  v1**.
-- **Bulk/interrupt/control:** well supported by libusb on macOS and by USB/IP;
-  these cover storage, serial, HID, security keys, printers, most "useful"
-  passthrough.
+- **Hotplug:** on macOS 27 with AA, the accessory listener's connect/disconnect callbacks are the
+  hotplug source (§1.5). On the libusb rungs, confirm with a spike that
+  `libusb_hotplug_register_callback` fires reliably for arrive/leave on the shipping macOS;
+  fallback: poll `libusb_get_device_list`.
+- **Isochronous transfers** (webcams, USB audio): supported by libusb and IOUSBHost but
+  timing-sensitive; over USB/IP, iso is the weakest area — latency/jitter across the vsock hop
+  frequently breaks real-time audio/video. **Iso is out of scope for v1.**
+- **Bulk/interrupt/control:** well supported on every rung and by USB/IP; these cover storage,
+  serial, HID, security keys, printers, most "useful" passthrough.
 
 ---
 
@@ -243,13 +254,12 @@ is virtio-blk/net/gpu. Two sub-options:
 
 ### 2.3 macOS API layer (shared by both paths)
 
-- **libusb** → **IOUSBHost.framework** (modern) / **IOKit IOUSBLib** (legacy)
-  → IOUSBHostFamily kext. Open device, set configuration, claim interface,
-  submit transfers, handle async completions on libusb's event thread (which
-  must service the IOKit/CFRunLoop).
-- The limina process must run an **event loop** for libusb async I/O
-  (`libusb_handle_events` on a dedicated thread), bridged to the virtio/vsock
-  worker.
+- **libusb rungs:** libusb → IOUSBHost.framework → IOUSBHostFamily. The process runs libusb's
+  async event loop (`libusb_handle_events` on a dedicated thread), bridged to the vsock/xHCI side.
+- **AccessoryAccess rung (macOS 27+):** the worker drives the returned `IOUSBHostDevice`
+  directly (`IOUSBHostInterface` / `IOUSBHostPipe` for transfers, completions on the dispatch
+  queue passed to `open`). libusb cannot adopt an already-open `IOUSBHostDevice`, so this is a
+  second backend behind the same backend trait, not a libusb configuration.
 
 ---
 
@@ -363,10 +373,10 @@ complementary win, and D as the planned follow-on.**
   and (for B) a vsock listener.
 - **Guest agent (for B):** vsock↔vhci_hcd bridge, or a small `vhci_hcd` kernel
   patch to accept an `AF_VSOCK` fd.
-- **macOS signing/entitlements:** code-sign limina with the device-access
-  entitlement needed to claim USB devices (§1.5); document the
-  DriverKit/entitlement requirement for the harder Apple-claimed device classes
-  as a *future* tier.
+- **macOS capture, by rung (§1.5):** the USB TCC entitlement for free-to-claim
+  devices; on macOS 27, `com.apple.developer.accessory-access.usb` (provisioning
+  profile) with the consent UI in the app and the open in the worker; root through
+  the shared privileged helper for Apple-claimed devices where AA is unavailable.
 - **libkrun (only for D):** new `virtio-usb` device under
   `src/devices/src/virtio/usb/`, C API `krun_add_usb*`, build feature `usb`.
 
@@ -383,15 +393,19 @@ complementary win, and D as the planned follow-on.**
 3. **macOS claiming matrix:** empirically classify a set of real devices
    (FTDI, YubiKey, USB mass-storage stick, a webcam, a USB keyboard) into
    "libusb claims freely" vs "Apple driver blocks" — drives v1 scope.
-4. **Entitlements:** determine the exact entitlement(s) needed (and whether they
-   require an Apple-granted/managed entitlement) to claim Apple-bound interfaces
-   without DriverKit; check what UTM/krunkit do today.
-5. **Hotplug on macOS 26:** does `libusb_hotplug_register_callback` fire
+4. **AccessoryAccess, measured (macOS 27):** what the consent UI looks like and
+   whether it persists per device; whether `open` takes an Apple-claimed device
+   (HID, CCID, mass storage) or refuses it; whether a launchd-started worker that
+   receives its fds over Mach counts as a "worker process of this client
+   application"; whether the open survives host sleep and device re-enumeration
+   (firmware updaters, mode switches); behaviour under Developer ID + hardened
+   runtime vs the App Sandbox. Nothing here has been run.
+5. **Hotplug on the libusb rungs:** does `libusb_hotplug_register_callback` fire
    reliably for arrive/leave, or must we poll?
 6. **Isochronous viability:** measure jitter for USB audio/webcam over
    USB/IP-via-vsock; decide whether iso is ever in scope.
 7. **Throughput:** benchmark a USB3 mass-storage device over USB/IP-vsock vs
-   virtio-fs; if virtio-fs wins decisively, deprioritize storage passthrough.
+   virtio-fs, on both the libusb and the IOUSBHost backend; if virtio-fs wins decisively, deprioritize storage passthrough.
 8. **libkrunfw build knobs:** confirm libkrunfw's Makefile/config layout lets us
    inject extra `CONFIG_USB*`/`CONFIG_USBIP*` symbols and that the bundled
    firmware blob is rebuildable from this checkout. (The C-API shape to mirror

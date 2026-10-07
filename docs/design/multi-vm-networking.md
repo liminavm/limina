@@ -12,18 +12,14 @@ Status: **proposal** · Target host: macOS 26.x (Apple Silicon) · Audience: lim
 > libkrun patches" is grounded, not aspirational. Companion: `docs/research/07-networking.md`
 > (M3 NAT background), `crates/limina/src/gateway.rs`, `crates/limina-vmm/src/krun/mod.rs`.
 
-> **Scope decision (2026-06-25): unprivileged-first.** We are deferring anything that needs root or
-> an Apple entitlement for now and focusing on the unprivileged options. **In scope:** the
-> gvproxy → `limina-networkd` user-mode NAT path, the `Network` abstraction, multi-VM + isolation,
-> dynamic per-VM forwards, and the orphan-lifecycle fix (§3.1–3.2, §4; Phases 0–3 in §6). **Deferred:**
-> all of vmnet — SHARED/HOST (root on macOS ≤15) and BRIDGED (the restricted
-> `com.apple.vm.networking` entitlement) — i.e. §3.3 and Phases 4–6. The vmnet material is kept below
-> as the documented enhanced-tier upgrade path, not current work.
->
-> **When the deferred vmnet (root) work is picked up, the privileged piece is NOT a net-specific
-> helper** — it is a client of the single shared **`limina-privhelperd`** that also handles USB
-> capture (M7) and any future root operation. See `docs/design/privileged-helper.md`. (The
-> unprivileged `limina-networkd` NAT daemon is its non-privileged sibling and stays separate.)
+> **Scope: unprivileged only.** Every networking feature limina ships runs without root or a
+> restricted Apple entitlement. That includes vmnet: on macOS 26 a non-root process with the
+> unrestricted `com.apple.security.virtualization` entitlement runs vmnet SHARED, HOST and BRIDGED
+> (`spikes/vmnet-network-probe/RESULTS.md`), so §3.3 and Phases 4–6 need no privileged helper and
+> are no longer a client of `limina-privhelperd` (`docs/design/privileged-helper.md`). Order of work:
+> the gvproxy → `limina-networkd` NAT path, the `Network` abstraction, multi-VM + isolation, dynamic
+> per-VM forwards and the orphan fix first (§3.1–3.2, §4; Phases 0–3), then vmnet (§3.3; Phases 4–6)
+> as the opt-in enhanced tier on macOS 26+.
 
 ## 1. Problem & goals
 
@@ -72,26 +68,23 @@ The realistic host-side backends, scored against limina's needs. (passt/pasta is
 table: it is **Linux-host-only** — Darwin is an unimplemented wishlist item, passt.top — so it
 cannot run on a macOS host at all.)
 
-| Backend | Privilege (macOS 26 / ≤15) | Multi-VM on one segment | Bridged-to-LAN | Fits two-tier? |
+| Backend | Privilege (macOS 26 / 15) | Multi-VM on one segment | Bridged-to-LAN | Fits two-tier? |
 |---|---|---|---|---|
 | **gvproxy** user-mode NAT | none / none | No (one peer per instance; switch is multi-endpoint but the vfkit listener isn't) | **No** (structural) | **Yes — this is the floor** |
 | **passt/pasta** | n/a (does not run on macOS) | n/a | n/a | n/a |
-| **vmnet SHARED** via helper | none\* / root-to-create-then-drop | Yes (same vmnet network = shared L2 via `bridge100`) | No (NAT only) | Yes (enhanced) |
-| **vmnet BRIDGED** via helper | **entitlement-gated** (see §3, §7) | Yes (whole LAN) | **Yes** | Yes (enhanced, gated) |
-| **vmnet HOST** via helper | none\* / root-to-create-then-drop | Yes (isolated L2, no Internet) | No (by design) | Yes (enhanced) |
+| **vmnet SHARED** | `com.apple.security.virtualization`\* / unmeasured | Yes (same vmnet network = shared L2 via `bridge100`) | No (NAT only) | Yes (enhanced) |
+| **vmnet BRIDGED** | `com.apple.security.virtualization`\* / unmeasured | Yes (whole LAN) | **Yes** | Yes (enhanced) |
+| **vmnet HOST** | `com.apple.security.virtualization`\* / unmeasured | Yes (isolated L2, no Internet) | No (by design) | Yes (enhanced) |
 
-\* The "no root on macOS 26" claim is the vmnet-helper author's, corroborated by upstream docs but
-**not independently verified on this 26.5 / M1 Max build** — it must be spike-gated (§7). On macOS
-≤15 the privileged piece needs root only to *create* the vmnet interface, then immediately drops to
-the real uid/gid.
+\* Measured on macOS 26.6.2, M1 Max, non-root, ad-hoc signed (`spikes/vmnet-network-probe/`):
+with this unrestricted entitlement all three modes move packets through the classic
+`vmnet_start_interface` API; with only `com.apple.security.hypervisor`, or none, all three fail.
+The restricted `com.apple.vm.networking` plays no part. macOS 15 (limina's floor) is unmeasured;
+vmnet-helper's author reports root is needed there to create the interface. Developer ID +
+notarization, the App Store sandbox and macOS 27 are unmeasured too.
 
-Two corrections from the verifiers that shape the table:
+One design rule that shapes the table:
 
-- **BRIDGED requires `com.apple.vm.networking` on all macOS versions**, including 26 — the SDK
-  header does not relax it, and UTM#7229 shows real-world bridged failures on 26. This entitlement
-  is **restricted to approved virtualization developers via an Apple contract**; ad-hoc/Developer-ID
-  self-signing cannot grant it (Apple entitlement docs; Homebrew discussion #5744). Treat bridged as
-  entitlement-gated until proven otherwise (§7).
 - **Isolation must come from separate vmnet networks/instances, not merely different subnet
   numbers.** The header guarantees intra-network reachability by default but does *not* promise that
   a different `/24` alone severs L2 reachability. And do **not** use `vmnet_enable_isolation_key` for
@@ -179,55 +172,55 @@ release deterministically. This is the documented lima/podman pattern and **side
 control socket. Guest IP per VM comes from a deterministic DHCP reservation keyed on the per-VM
 MAC, or is read back from the helper/agent.
 
-### 3.3 Bridged-to-physical — **decision: vmnet via a small privileged helper; vmnet-helper, not socket_vmnet**
+### 3.3 vmnet: bridged-to-physical and Apple NAT — **decision: the worker holds the vmnet interface; no helper**
 
-Bridged (and the vmnet SHARED/HOST modes) go through Apple `vmnet.framework`, which requires
-*either* root *or* the restricted entitlement. The universal pattern is to push that privilege into
-a **tiny helper that owns the vmnet interface and relays raw L2 frames over a datagram socket**,
-leaving the VMM/supervisor unprivileged — exactly today's gvproxy trust boundary.
+Bridged (and the vmnet SHARED/HOST modes) go through Apple `vmnet.framework`. It needs only the
+unrestricted `com.apple.security.virtualization` entitlement (§2), which ad-hoc and Developer ID
+signatures can carry, so there is no privilege left to isolate in a separate helper. **The worker
+(`limina-vmm`) opens the vmnet interface itself and relays frames over an in-process `SOCK_DGRAM`
+socketpair** whose other end goes to libkrun as `UnixgramFd` (vfkit off, one raw L2 frame per
+datagram) — the job vmnet-helper does, done in the process that already owns the VM. The worker is
+already launchd-started and entitled for HVF; it gains `com.apple.security.virtualization` beside
+`com.apple.security.hypervisor` (both coexist on one binary, measured).
 
-**Pick vmnet-helper (nirs/vmnet-helper) over socket_vmnet**, for four reasons:
+Why in-worker rather than a vmnet-helper child:
 
-1. **Transport fit.** vmnet-helper uses a `SOCK_DGRAM` socketpair, one raw ethernet frame per
-   datagram, no length prefix — a 1:1 match for libkrun's `krun_add_net_unixgram(fd, …)` path (it
-   even already drops the `VFKT` frame). socket_vmnet uses QEMU 4-byte-BE length-prefixed *stream*
-   framing, forcing the inferior `krun_add_net_unixstream` path and an extra copy (and whether
-   libkrun's unixstream backend matches socket_vmnet's exact framing is unverified — an open
-   question we'd rather not own).
-2. **Process model fit.** vmnet-helper is **per-VM** (confirmed in its `docs/architecture.md`): one
-   helper + one vmnet interface per VM; macOS's `bridge100` forwards between all interfaces on the
-   same network. This maps onto limina's per-VM supervisor tree and gives crash isolation.
-   socket_vmnet is a single persistent **root daemon** that *floods* frames to every client
-   (lima-vm/socket_vmnet#58) and never auto-exits — against limina's no-root-default posture.
-3. **Privilege.** vmnet-helper drops root immediately after creating the interface on ≤15, and
-   reportedly needs no root at all on 26. socket_vmnet stays fully root (its "root" check is a soft
-   warn, but rootless needs the entitlement, so operationally it runs as root).
-4. **Isolation correctness.** vmnet-helper isolates per-interface/per-subnet (separate helper =
-   separate Network), the model we want. socket_vmnet's "different socket path" does **not** by
-   itself guarantee L2 isolation between the underlying vmnet interfaces — two shared-mode daemons
-   can land on the same macOS vmnet network unless each also gets a distinct
-   `--vmnet-network-identifier`. vmnet-helper's per-interface model is cleaner.
+1. **Nothing to separate.** A helper existed to carry root or the restricted entitlement away from
+   the VMM; neither is needed.
+2. **Lifecycle for free.** The vmnet interface dies with the worker, so §4's orphan problem does not
+   arise for vmnet at all; no death-pact, no sweep, no extra process per VM.
+3. **No vendored C, no private syscalls.** vmnet-helper's throughput path uses private
+   `sendmsg_x`/`recvmsg_x`; our relay calls only the public `vmnet_read`/`vmnet_write`.
+4. **libkrun unchanged.** The `UnixgramFd` transport is the same one Phase 0 introduces for gvproxy.
+
+**Still open — where the relay lives:** the in-worker relay above (recommended: no libkrun change,
+reuses the unixgram path) vs. **a native vmnet backend in libkrun's virtio-net** (mechanism in
+libkrun, removes the socketpair copy). Decide on throughput: measure the relay first, and write the
+libkrun backend only if the copy shows up.
 
 Mapping to Networks:
-- **NAT-with-real-IP / Host groups:** `--operation-mode=shared` (or `host`) per Network; all VMs of
-  a group share the subnet → mutual visibility via `bridge100`; separate Networks = separate
-  subnets/instances = isolation. (For NAT we still default to the zero-privilege gvproxy floor;
-  vmnet SHARED is the *enhanced* "reachable VM IP" upgrade.)
-- **Bridged (goal b):** `--operation-mode=bridged --shared-interface en0`; enumerate eligible NICs
-  with `--list-shared-interfaces` for the UX. Guest gets a LAN DHCP lease. Surface
-  `VMNET_NOT_AUTHORIZED` (1010) and `VMNET_SHARING_SERVICE_BUSY` (1009, e.g. macOS Internet Sharing
-  conflict) as clear user errors.
-- **Stable guest MAC:** pin with `--interface-id <UUID>` per VM; stop relying on the gvproxy
-  well-known MAC and static `.2`. SSH reaches the helper-assigned IP (read back from vmnet-helper's
-  JSON / the limina-agent / ARP on the bridge), not a fixed `127.0.0.1:2222`.
+- **NAT-with-real-IP / Host groups:** SHARED (or HOST) per Network; all VMs of a group share the
+  subnet → mutual visibility via `bridge100`; separate Networks = separate vmnet networks =
+  isolation. Each worker is its own process, so a group spanning several workers needs either the
+  classic API's network-identifier/subnet keys to land them on one network, or the macOS 26
+  network object created once (by the supervisor or `limina-networkd`) and handed to each worker
+  with `vmnet_network_copy_serialization` / `_create_with_serialization`. **Neither is verified:**
+  the probe moved packets only through the classic API, and the network-object interface started
+  but reported no gateway address. (For NAT the default stays the gvproxy floor; vmnet SHARED is the
+  *enhanced* "reachable VM IP" upgrade.)
+- **Bridged (goal b):** `VMNET_BRIDGED_MODE` + `vmnet_shared_interface_name_key = en0`; enumerate
+  eligible NICs with `vmnet_copy_shared_interface_list` for the UX. Guest gets a LAN DHCP lease.
+  Surface `VMNET_NOT_AUTHORIZED` (1010) and `VMNET_SHARING_SERVICE_BUSY` (1009, e.g. macOS Internet
+  Sharing conflict) as clear user errors.
+- **Port forwards in SHARED mode:** `vmnet_interface_add_port_forwarding_rule` (`vmnet.h:683`)
+  replaces gvproxy's REST `expose` for SSH and user forwards — not yet exercised.
+- **Stable guest MAC:** pin per VM (the start parameters' interface id / our per-VM MAC); stop
+  relying on the gvproxy well-known MAC and static `.2`. SSH reaches the vmnet-assigned IP (read back
+  from the interface parameters / the limina-agent / ARP on the bridge), or a port-forward rule.
 
-**Privilege/entitlement story, gated and optional.** Bridged is the *only* feature that needs the
-restricted `com.apple.vm.networking` entitlement, and the helper is the *only* component that would
-carry it — never the main `limina.app` signature. We gate the bridged feature on the helper being
-present-and-authorized; if it isn't, bridged is simply unavailable (the VM still boots on NAT). On
-macOS ≤15 (if ever supported), SHARED/HOST need a one-time sudoers-NOPASSWD authorization of a
-root-owned fixed-path helper; on 26 the goal is zero-privilege for SHARED/HOST (spike-gated).
-**None of this is on the boot path of a stock NAT VM.**
+**Gating.** vmnet is opt-in and offered on macOS 26+ only until the probe has been run on 15. If
+starting the interface fails, the VM comes up on NAT (or with no NIC) with a clear error — **none of
+this is on the boot path of a stock NAT VM.**
 
 ### 3.4 Two-tier mapping
 
@@ -235,11 +228,11 @@ root-owned fixed-path helper; on 26 the goal is zero-privilege for SHARED/HOST (
   user-mode NAT. A stock unmodified Fedora guest just runs NetworkManager DHCP against the built-in
   DHCP/DNS/NAT — no root, no entitlement, no guest components, no limina-agent. This is the floor
   every richer feature degrades to, and **networking can never make a stock guest fail to boot**: if
-  a helper is missing or unauthorized, the VM falls back to NAT (or comes up with no NIC) rather
+  a vmnet interface cannot start, the VM falls back to NAT (or comes up with no NIC) rather
   than failing.
 - **Enhanced / opt-in:** vmnet SHARED/HOST (reachable VM IPs, intra-group visibility), vmnet BRIDGED
-  (LAN-peer; entitlement-gated), and on macOS 26 the native `vmnet_network_*` fast path (§5). These layer
-  **additively, per feature** — detect each helper's presence/authorization independently; a VM can
+  (LAN-peer), and on macOS 26 the `vmnet_network_*` network-object API (§5). These layer
+  **additively, per feature** — each comes up or falls back on its own; a VM can
   have NAT now and bridged later. The limina-agent is *not* required for any networking baseline; it
   only adds niceties (reporting the guest's leased IP back to the host for SSH targeting, per-VM
   hostname injection, etc.).
@@ -255,13 +248,8 @@ need* is the watch fd: when the supervisor (and its libkrun worker) die, the ker
 fds, the helper's read side sees `EV_EOF`, and it exits. This is **robust to SIGKILL/panic with
 zero cooperation from the dying parent** and has no pid-reuse hazard — strictly better than `kqueue
 EVFILT_PROC|NOTE_EXIT` on the parent pid (which must handle `ESRCH`-means-already-dead and is
-pid-reuse-prone; keep it only as optional belt-and-suspenders). vmnet-helper already exits on its
-read-path EOF (`read_from_vm()` returns 0 → `trigger_shutdown` → exit; verified in
-`programs/helper.c`). **Caveat to honor:** that guarantee lives on the *read* (vm→host) path; the
-host→vm write path swallows `EPIPE` by design. limina's libkrun worker keeps the read side live, so
-the EOF trigger fires — but the design must *not* rely on a write-side failure to kill the helper.
-For gvproxy specifically, verify it exits when its vfkit datagram peer disconnects; if not, wrap it
-in a tiny limina-owned watcher holding the inherited fd that `killpg`s gvproxy on EOF (preferred
+pid-reuse-prone; keep it only as optional belt-and-suspenders). For gvproxy specifically, verify it
+exits when its vfkit datagram peer disconnects; if not, wrap it in a tiny limina-owned watcher holding the inherited fd that `killpg`s gvproxy on EOF (preferred
 over patching the Go).
 
 **(2) Startup orphan-sweep (backstop).** On every limina launch, scan a limina-owned registry dir
@@ -273,8 +261,7 @@ loss, double-fault).
 
 **(3) Orderly ladder (unchanged).** Keep the existing `SIGTERM→grace→SIGKILL`+reap for normal exits.
 
-**Key decision: per-VM helpers vs a single `limina-networkd` daemon — recommend the daemon for NAT,
-per-VM helpers for vmnet.**
+**Key decision: a single `limina-networkd` daemon for NAT; vmnet needs no helper at all.**
 
 - **NAT → one long-lived user `limina-networkd`.** It owns all NAT Networks (multiple isolated
   bridges with distinct subnets/MACs), **refcounts** attached VMs, idle-exits at zero, and is the
@@ -282,52 +269,44 @@ per-VM helpers for vmnet.**
   `limina-networkd` is itself supervised by the limina app via the same EOF death-watch + startup
   sweep, so centralizing does not reintroduce orphans. (If it hosts child gvproxy processes, those
   get the nested death-pact too.)
-- **vmnet (shared/host/bridged) → per-VM vmnet-helper child**, owned over the socketpair with the
-  EOF death-watch, mirroring vmnet-run's contract. Per-VM is vmnet-helper's native model and gives
-  crash isolation; the helper holds **no guest state**, so a crashed helper is recoverable.
-- **Root-vmnet on macOS ≤15 only:** if we ever support it, install the privileged piece as an
-  `SMAppService.daemon` LaunchDaemon (modern `SMJobBless` replacement; plist inside the bundle; user
-  approves in System Settings) with internal refcounting so the root process idle-exits at zero VMs.
-  Reserve this strictly for ≤15 / features that still need root; on 26 prefer the rootless helper.
+- **vmnet (shared/host/bridged) → inside the worker** (§3.3). The interface's lifetime is the
+  worker's, so there is no helper to orphan and nothing for the death-watch or sweep to cover.
 
 ## 5. What we patch vs. reuse
 
 - **libkrun — essentially no patches.** The multi-NIC fd API already exists and is exercised
   (`krun_add_net_unixgram`/`unixstream` with `UnixgramFd(fd)`; the vmnet-helper `--fd 3` test
   in-tree). limina's change is host-side: extend `NetSpec` to carry an fd + the per-NIC vfkit flag,
-  switch `add_net` from `UnixgramPath` to `UnixgramFd`, and allow N NICs. "Mechanism already in
-  libkrun, policy in limina" holds verbatim. (The one *possible* libkrun-adjacent patch is the
+  switch `add_net` from `UnixgramPath` to `UnixgramFd`, and allow N NICs; for vmnet the worker owns
+  both ends of the socketpair (§3.3). "Mechanism already in libkrun, policy in limina" holds
+  verbatim. A native vmnet backend in libkrun's virtio-net is the one patch on the table, and only
+  if the relay copy measures as a cost (§3.3). (The one *possible* libkrun-adjacent patch is the
   gvproxy vfkit-demux of §3.2 option 1 — but the recommended path owns the NAT switch in
   `limina-networkd` and avoids even that.)
-- **vmnet-helper — vendor, then optionally fork.** It's Apache-2.0, so we vendor it into
-  `limina.app` (controls the trust/signing path, no Homebrew runtime dep). Per the own-the-stack
-  tenet, fork to a `limina-vmnet-helper` later if the trust/lifecycle/signing path demands it (e.g.
-  to carry the bridged entitlement on a separately-signed binary, or to integrate its stdout JSON
-  directly into our control plane). One caution: vmnet-helper uses **private `sendmsg_x`/`recvmsg_x`**
-  bulk syscalls for throughput — confirm a non-bulk fallback exists before depending on them across
-  a macOS bump.
-- **socket_vmnet — do not adopt** (stream framing + shared root daemon + flooding; see §3.3).
+- **vmnet-helper — not adopted.** Its reasons to exist (holding root or the restricted entitlement
+  away from the VMM) do not apply (§2), and the in-worker relay does its job with public API only.
+  It stays the reference for framing (raw L2 per datagram, vfkit off) and for the in-tree libkrun
+  test that exercises the same `UnixgramFd` path.
+- **socket_vmnet — do not adopt** (stream framing, a shared root daemon that floods frames to every
+  client — lima-vm/socket_vmnet#58 — and no need for root at all).
 - **gvproxy — reuse as-is for the floor**, or absorb its role into `limina-networkd`. No fork
   required for the recommended path.
-- **macOS 26 native `vmnet_network_*` fast path — evaluate as an *enhanced-tier optimization*, not a
-  dependency yet.** Terminology, to be precise: there is **no Apple facility called "vmnet-broker."**
-  The genuine macOS 26 facility is the new **`vmnet_network_*` network-object API** inside
-  `vmnet.framework` (`vmnet_network_configuration_create` / `vmnet_network_create` — which *reserves*
-  a subnet so per-VM interface starts can't collide — `vmnet_network_copy_serialization` /
-  `_create_with_serialization` to pass the network to another process as an XPC object, and
-  `vmnet_interface_start_with_network`; verified: zero occurrences of "broker" in
-  `MacOSX26.5.sdk/.../vmnet.h`). **`vmnet-broker` is a *separate third-party project***
-  (`github.com/nirs/vmnet-broker`, same author as vmnet-helper) — a userspace daemon that *consumes*
-  that Apple API and brokers a network across processes over XPC; vmnet-helper integrates with it
-  optionally. On 26 this native path reserves a subnet and forwards natively, decoupling network
-  lifetime from any single VM. **Correct the "9x" framing:** that figure is *the native
-  `vmnet_network_*` path vs. vmnet-helper's userspace relay copy*, i.e. the benefit of eliminating
-  the relay — **not** a speedup of our helper-relay over itself; don't cite it as Option-B's number.
-  The named-network model maps perfectly onto "one Network per isolation group," but a reserved
-  network belongs to its creating process and must be shared via XPC. Because limina owns its stack,
-  the natural move is to **call `vmnet_network_*` directly from our own helper/`limina-networkd`**
-  rather than depend on `nirs/vmnet-broker`; vendoring the broker is a fallback. Either way this is a
-  later, macOS-26-only layer — adopt **after** the helper baseline proves out.
+- **macOS 26 `vmnet_network_*` network-object API — the multi-worker Network mechanism, unproven.**
+  Terminology, to be precise: there is **no Apple facility called "vmnet-broker."** The genuine
+  macOS 26 facility is the **`vmnet_network_*` network-object API** inside `vmnet.framework`
+  (`vmnet_network_configuration_create` / `vmnet_network_create` — which *reserves* a subnet so
+  per-VM interface starts can't collide — `vmnet_network_copy_serialization` /
+  `_create_with_serialization` to pass the network to another process as an XPC object,
+  `vmnet_network_configuration_add_port_forwarding_rule`, and `vmnet_interface_start_with_network`;
+  verified: zero occurrences of "broker" in `MacOSX26.5.sdk/.../vmnet.h`). **`vmnet-broker` is a
+  *separate third-party project*** (`github.com/nirs/vmnet-broker`, same author as vmnet-helper) — a
+  userspace daemon that *consumes* that Apple API and brokers a network across processes over XPC.
+  The named-network model maps onto "one Network per isolation group": the supervisor or
+  `limina-networkd` creates the network, serializes it, and each worker starts its interface on it.
+  The probe started an interface this way under the same entitlement, but the start reported no
+  gateway address and no traffic was attempted, so **this path must be proven (packets, isolation
+  between two networks, pre-set port forwards) before Phase 6 depends on it.** Call it directly; do
+  not depend on `nirs/vmnet-broker`.
 - **Guest agent (limina-agent).** Optional and additive only: report the guest's DHCP-leased IP back
   to the host (so SSH/forwards target the right address without ARP scraping), inject per-VM
   hostnames, surface link state. Never required for any networking tier.
@@ -345,9 +324,8 @@ per-VM helpers for vmnet.**
 Each phase ships independently and is testable against the shipped binaries (`limina` →
 `limina-vmm`) via `crates/limina-test`; full validation via `scripts/test-boot.sh`.
 
-**Active scope (unprivileged-first, per the 2026-06-25 decision): Phases 0–3 only.** Phases 4–6 are
-the vmnet enhanced tier and are **deferred** until we choose to take on root/entitlement; they remain
-documented here as the upgrade path.
+**Order:** Phases 0–3 (NAT, multi-VM, orphans) first; Phases 4–6 (vmnet) after, as the opt-in
+enhanced tier on macOS 26+. No phase needs root or a restricted entitlement.
 
 - **Phase 0 — fd-backend migration (no behavior change).** Switch the existing single gvproxy NIC
   from `UnixgramPath` to a supervisor-created socketpair fd (`UnixgramFd`, vfkit on). *RED:* a test
@@ -365,65 +343,60 @@ documented here as the upgrade path.
   refcounted daemon owning the multi-endpoint switch; multiple VMs on one Network see each other.
   *RED:* two VMs on the *same* NAT Network ping each other; on *different* Networks cannot. Delivers
   goal (a). (M5+.)
-- **Phase 4 — vmnet enhanced tier (SHARED/HOST) via per-VM vmnet-helper.** Vendor + wire the helper
-  over socketpair fd (vfkit off); reachable VM IPs, intra-group visibility. *RED:* host reaches a
-  SHARED-mode VM by its IP; two SHARED VMs see each other; two Networks isolated. (M5+.)
-- **Phase 5 — bridged-to-LAN (goal b), entitlement-gated.** `--bridged en0`; gate on helper
-  authorization; surface `NOT_AUTHORIZED`/`SERVICE_BUSY`. *RED:* (where authorized) the guest pulls
-  a LAN DHCP lease and is pingable from another host; (unauthorized) the VM still boots on NAT and
-  bridged reports a clear error. Delivers goal (b). (M6.)
-- **Phase 6 (optional) — macOS-26 native `vmnet_network_*` fast path.** Call the Apple network-object
-  API directly from `limina-networkd` (or, as a fallback, layer `nirs/vmnet-broker`) under the
-  enhanced tier; measure the native-vs-relay delta before committing. (Polish.)
+- **Phase 4 — vmnet SHARED/HOST in the worker.** Add `com.apple.security.virtualization` to the
+  worker's entitlements; the worker starts a vmnet interface (classic API) and relays it over a
+  socketpair to `UnixgramFd` (vfkit off); SSH via `vmnet_interface_add_port_forwarding_rule` or the
+  vmnet-assigned IP. Measure relay throughput against gvproxy (`spikes/net-bench/`) here — it decides
+  the open relay-vs-libkrun-backend question (§3.3). *RED:* host reaches a SHARED-mode VM by its IP;
+  a failed vmnet start leaves the VM on NAT with a clear error. (M5+.)
+- **Phase 5 — bridged-to-LAN (goal b).** `--bridged en0`; interface picker from
+  `vmnet_copy_shared_interface_list`; surface `NOT_AUTHORIZED`/`SERVICE_BUSY`. *RED:* the guest
+  pulls a LAN DHCP lease and is pingable from another host, over Ethernet and over Wi-Fi; a failed
+  bridge still boots on NAT and reports a clear error. Delivers goal (b). (M6.)
+- **Phase 6 — vmnet Networks spanning several VMs.** Two VMs on one vmnet Network see each other;
+  two Networks are isolated — via the macOS 26 network object shared across workers, or the classic
+  API's network keys, whichever the spike proves (§5). *RED:* the same-network ping / cross-network
+  isolation pair as Phase 3, on vmnet. (M6+.)
 
 ## 7. Open questions & risks
 
-- **★ Bridged entitlement availability — the key risk.** `com.apple.vm.networking` is restricted to
-  approved virtualization vendors via an Apple contract; a non-App-Store **Developer-ID `limina.app`
-  cannot self-grant it**, and ad-hoc signing definitely cannot. **Mitigations, in order:** (1) keep
-  the entitlement *off* the main app and *on* a separately-signed `limina-vmnet-helper` only; (2)
-  pursue the entitlement via Apple DTS/representative for that helper (assess whether the contract is
-  realistically attainable for limina); (3) if unattainable, fall back to the **root-without-
-  entitlement** path for bridged (a sudoers-NOPASSWD or `SMAppService` root helper that creates the
-  vmnet bridged interface — socket_vmnet runs bridged this way today with root and no entitlement).
-  Bridged must remain strictly optional; **NAT (the floor) needs neither root nor entitlement and is
-  never gated.** This risk does not threaten goals (a) or (c), only the privileged half of (b).
-- **"No root on macOS 26" for SHARED/HOST is unverified on this build.** It's the helper author's
-  claim, corroborated by docs but not confirmed on 26.5/M1 Max — and UTM#7229 shows vmnet *creation*
-  (shared too, not only bridged) failing on some 26 builds. **Spike it before making the rootless
-  helper the enhanced default.** Root-only-no-entitlement for SHARED/HOST on ≤15 is solid.
-- **libkrun unixgram ↔ vmnet-helper framing interop.** Highest-risk integration assumption: confirm
-  the plain unixgram path (vfkit flag **off**, raw L2 frames, virtio_net_hdr alignment when offloads
-  are on) negotiates compatible virtio feature bits end-to-end. krunkit is only *compatible* with
-  vmnet-helper (per the README's "Compatible projects" list), **not a confirmed production adopter** —
-  so don't treat "krunkit already does it" as de-risking proof. Verify empirically.
-- **Bridged over Wi-Fi.** Apple historically restricts bridging on some Wi-Fi adapters; confirm
-  `--operation-mode=bridged --shared-interface en0` actually yields a LAN lease over Wi-Fi on the
-  target hardware (Ethernet/Thunderbolt are safer).
+- **★ vmnet privilege outside the measured configuration — the key risk.** The no-root, no-restricted-
+  entitlement result holds for an ad-hoc-signed binary on macOS 26.6.2. Unmeasured: macOS 15 (the
+  floor; vmnet-helper's author reports root there), macOS 27, a Developer ID + hardened-runtime +
+  notarized build, and the App Store sandbox (`docs/design/distribution.md`). **Mitigation:** re-run
+  `spikes/vmnet-network-probe` in each before shipping vmnet there; vmnet stays strictly optional and
+  **NAT (the floor) is never gated.** UTM#7229 reports vmnet creation failing on some 26 builds — the
+  probe's failure path (a clear error, NAT fallback) is the answer, not a reason to defer.
+- **libkrun unixgram ↔ vmnet relay framing.** Confirm the plain unixgram path (vfkit flag **off**, raw
+  L2 frames, virtio_net_hdr alignment when offloads are on) negotiates compatible virtio feature bits
+  end-to-end with frames vmnet produces; vmnet delivers whole frames up to its reported max packet
+  size, so offloads that hand the host larger-than-MTU frames must stay off or be segmented by the
+  relay. Verify empirically in Phase 4.
+- **Bridged over Wi-Fi.** Apple historically restricts bridging on some Wi-Fi adapters; the probe
+  received a LAN frame on `en0` but did not take a lease. Confirm a guest gets a LAN lease and
+  two-way traffic over Wi-Fi on the target hardware (Ethernet/Thunderbolt are safer).
 - **Subnet-conflict coexistence.** A user also running podman-machine/socket_vmnet/Apple `container`
   may already hold `192.168.64/105.x`. Prefer omitting explicit subnets (let vmnet auto-pick the
-  next free network) and read the assigned subnet back from the helper JSON into the control plane.
+  next free network) and read the assigned subnet back from the interface's start parameters into the control plane.
 - **`limina-networkd` centralization risk.** A single daemon owning all NAT Networks is one more
   critical shared component — mitigated by giving *it* the same EOF death-watch + startup sweep, and
   by refcount-driven idle-exit.
-- **Private syscalls in vmnet-helper.** `sendmsg_x`/`recvmsg_x` could break on a future macOS;
-  confirm a non-bulk fallback before depending on it.
-
 ---
 
 **Bottom line.** Keep gvproxy/user-mode NAT as the zero-privilege, always-boots floor (goal: never
 make a stock guest fail). Introduce a named `Network` abstraction; deliver multi-VM + isolation by
 owning a multi-endpoint NAT switch in a refcounted `limina-networkd` and by mapping isolation onto
-separate vmnet networks; deliver bridged-to-LAN through a small, separately-signed, per-VM
-**vmnet-helper** (not socket_vmnet) that is the only privileged/entitled component; and fix orphans
-with an EOF-on-inherited-socketpair death-pact plus an identity-verified startup sweep. libkrun
-needs essentially no patches — the multi-NIC fd mechanism is already present and tested in-tree.
+separate vmnet networks; deliver bridged-to-LAN and Apple NAT by having the worker hold the vmnet
+interface itself — no helper, no root, only the unrestricted `com.apple.security.virtualization`
+entitlement; and fix orphans with an EOF-on-inherited-socketpair death-pact plus an
+identity-verified startup sweep. libkrun needs no patches — the multi-NIC fd mechanism is already
+present and tested in-tree; a native vmnet backend is the one optional patch, if the relay copy
+measures as a cost.
 
 ## 8. Tailscale integration (fleet-wide, no per-VM config)
 
-> Scoped per the **unprivileged-first** decision (§ top): Options **A** and **C** below are in scope;
-> Option **B** (host-side `tailscaled` over a vmnet `bridge100`) is **deferred** with the rest of the
-> vmnet tier. Researched + adversarially verified 2026-06-25.
+> Options **A** and **C** below work on the NAT floor; Option **B** (host-side `tailscaled` over a
+> vmnet `bridge100`) waits on the vmnet tier (Phases 4–6), which needs no privilege. Researched + adversarially verified 2026-06-25.
 
 **Goal.** Offer tailnet connectivity *through* the limina infrastructure — VMs reachable over the
 user's tailnet (and reaching it) **without configuring each guest** — rather than installing and
@@ -468,13 +441,13 @@ the gvproxy segment**, driven by the Go core of `limina-networkd` (not plain `ts
 |---|--------|:---:|:---:|:---:|:---:|:---:|---|
 | **A** | Embedded node in `limina-networkd` (`ProcessSubnets` + patched dial into the gvproxy L2 segment) | **None** | **Yes** | No (subnet-router) | High (vendored TS patch) | **None** | **Strategic target** (after Phase 3 `limina-networkd`) |
 | **C** | Agent-injected per-VM `tailscaled` (ephemeral *tagged* auth key over vsock) | None (agent injects) | No (needs agent) | **Yes** | Medium | None on host; guest-internal TUN only | **Near-term win** |
-| **B** | Host-side `tailscaled` subnet router over a vmnet `bridge100` (`--advertise-routes=<CIDR>`) | None | Yes | No | Low | vmnet (root/entitlement) | **Deferred** (vmnet tier) |
+| **B** | Host-side `tailscaled` subnet router over a vmnet `bridge100` (`--advertise-routes=<CIDR>`) | None | Yes (on a vmnet Network) | No | Low | vmnet (`com.apple.security.virtualization`) | **After Phase 4** (vmnet tier) |
 
 - **Why A reaches stock guests and B can't:** the default gvproxy `/24` exists only inside gvproxy's
   userspace netstack — there's nothing host-routable for an external router to advertise. A (inside
   the daemon that owns that netstack) is the only path that brings the tailnet to the **zero-privilege
   NAT floor a stock guest gets by default**, satisfying the two-tier guarantee. B works only where
-  vmnet has produced a real `bridge100` interface — hence deferred with the vmnet tier.
+  vmnet has produced a real `bridge100` interface — so it follows Phase 4.
 - **Why C is the near-term win:** it needs **no Tailscale source patch** — it runs stock `tailscaled`
   in the guest with an ephemeral, pre-tagged auth key delivered over the existing vsock control plane,
   and it is the *only* option that returns true per-device identity (MagicDNS, per-device ACL tags,
@@ -520,8 +493,8 @@ on by default** — it changes the security boundary and needs explicit consent.
    through the infrastructure" answer: zero in-guest components, covers **stock** guests, lives in the
    Go daemon, and the `forwardDialFunc`/UDP patch is exactly the small pinned dependency patch the
    own-the-stack tenet exists for. Depends on Phase 3 (`limina-networkd`) landing first.
-3. **Deferred — Option B** (host `tailscaled` over vmnet). Parked with the vmnet tier; revisit if/when
-   we take on root/entitlement.
+3. **After Phase 4 — Option B** (host `tailscaled` over vmnet). Cheap once VMs sit on a vmnet
+   Network; it covers only VMs attached to one.
 
 **Rollout addendum (extends §6, unprivileged-first):**
 - **Phase 7 — Tailscale opt-in, Option C:** `--tailscale` on a Network; `limina-agent` brings up

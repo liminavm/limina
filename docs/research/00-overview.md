@@ -39,8 +39,8 @@ First milestone: boot `~/Projects/limina/Fedora-Workstation-43.raw` (a
         v                      v vtable     v (AF_UNIX)    v (gvproxy)
 +-----------------+  +----------------+ +-----------+ +------------------------+
 | Hypervisor.fwk  |  | virglrenderer  | | liminad     | | gvproxy (user NAT)     |
-| HVF (per-vCPU   |  | -> MoltenVK    | | clipboard | | vmnet helper (bridged, |
-|  host threads,  |  | -> Metal       | | mem-policy| |   later, entitlement)  |
+| HVF (per-vCPU   |  | -> MoltenVK    | | clipboard | | vmnet in the worker    |
+|  host threads,  |  | -> Metal       | | mem-policy| |   (bridged/shared)     |
 |  hv_gic GICv3)  |  | (Venus/Vulkan) | | agent     | |                        |
 +-----------------+  +----------------+ +-----------+ +------------------------+
                                               ^
@@ -166,9 +166,9 @@ macOS Game Mode clamps an app's whole process tree (`crates/limina-launch`).
 | Keyboard + macOS combos | virtio-input vtable (verbatim events) | NSView events -> CGEventTap (toggle); host kVK->KEY_* table | [04](04-input-and-keyboard.md) |
 | Keybindings / Cmd-Option swap | n/a (guest owns layout) | Host-side remap table edit | [04](04-input-and-keyboard.md) |
 | Clipboard sharing | vsock<->AF_UNIX transport exists | limina-agent <-> liminad bridge; NSPasteboard polling; Wayland data-control | [05](05-clipboard.md) |
-| USB passthrough | **None** (kernel USB disabled, no libkrun code) | Rebuild libkrunfw kernel; USB/IP over vsock; later native virtio-usb | [06](06-usb-passthrough.md) |
+| USB passthrough | **None** (kernel USB disabled, no libkrun code) | USB/IP over vsock built (mock-proven); host capture via AccessoryAccess (macOS 27) / libusb / root helper | [06](06-usb-passthrough.md) |
 | NAT networking | virtio-net + unixgram/unixstream; TSI default | gvproxy via `krun_add_net_unixgram` + VFKIT; supervise gateway | [07](07-networking.md) |
-| Bridged networking | virtio-net transport exists | vmnet helper + `com.apple.vm.networking` entitlement (later) | [07](07-networking.md) |
+| Bridged networking | virtio-net transport exists | worker-held vmnet (BRIDGED) + the unrestricted `com.apple.security.virtualization`; no root, macOS 26+ | [07](07-networking.md) |
 | Low memory overhead | demand-paged MAP_ANON guest RAM (reclaim works on the live hv_vm_map'd region — spike) | `MADV_FREE_REUSABLE` reclaim + 16 KiB align; page-size menu (4K-guest/16K-host) | [08](08-memory-and-dynamic.md) |
 | Dynamic memory (balloon) | balloon device present, only reporting wired | **Patch:** fix reclaim (MADV_FREE_REUSABLE), implement inflate/deflate, add `krun_add_balloon` API + PSI agent | [08](08-memory-and-dynamic.md), [10](10-guest-agent-and-vsock.md) |
 | Guest agent / control plane | vsock<->AF_UNIX, shutdown eventfd, timesync | limina-agent (vsock connect-out), CBOR protocol, virtiofs-overlay delivery | [10](10-guest-agent-and-vsock.md) |
@@ -187,7 +187,7 @@ macOS Game Mode clamps an app's whole process tree (`crates/limina-launch`).
 | Keep **raw HVF via libkrun**, reject Virtualization.framework | Even with macOS 27 custom devices, Vz has no working dynamic memory or GPU snapshot, no doorbell hook, no vCPU control, and is macOS-only ([02](02-macos-hvf.md) §Option D). |
 | **Native AppKit UI** (NSWindow/CAMetalLayer/NSEvent), not GTK/SDL examples | Foreign event loops fight AppKit; examples are milestone-1 crutches only. |
 | Single multiplexed **vsock control plane** (guest connects out) + shutdown eventfd | Coexists with TSI, needs no patch, and is the lifecycle/clipboard/mem channel. |
-| **gvproxy user-mode NAT** as default networking | No root, no Apple-gated entitlement; bridged/vmnet is opt-in later. |
+| **gvproxy user-mode NAT** as default networking | Zero setup on every guest and host; vmnet (bridged/shared) is the opt-in, and it is unprivileged too. |
 | **Codesign the limina executable** (not the dylib) with `com.apple.security.hypervisor` | HVF refuses to start without it; ad-hoc signing suffices, notarization-compatible. |
 | **Mechanism in libkrun, policy in limina** (esp. balloon/PSI, keymap) | Keep patches minimal and upstreamable; behavior lives in the app. |
 | **Two-tier guarantee**: stock distro always boots on upstream-shaped libkrun (degraded); custom kernel/drivers/agent are an additive enhanced tier | Hard constraint — see governing note in §2 and [CLAUDE.md](../../CLAUDE.md). Bound to neither Fedora's stock kernel nor libkrun defaults. |

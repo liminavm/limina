@@ -2,7 +2,7 @@
 
 > **Status: DEFERRED feature / architecture decision (2026-06-27).** Nothing here is built yet. This
 > doc records the *shape* so that when the first root-requiring feature ships (real-device USB
-> passthrough, M7 Phase 4), we build the broker — not a one-off helper — and every later privileged
+> passthrough of Apple-claimed devices below macOS 27, M7 Phase 4), we build the broker — not a one-off helper — and every later privileged
 > feature reuses it. **The default stays unprivileged-first**: limina runs with no elevated
 > privileges; the helper is opt-in, per-feature, and only spawned when a feature that needs root is
 > explicitly requested.
@@ -11,16 +11,17 @@
 
 **There will be exactly one privileged helper process, `limina-privhelperd`, that brokers every
 operation requiring root (or a future elevated capability).** Features do *not* each ship their own
-privileged binary. The first two clients are:
+privileged binary. The one known client:
 
 - **USB device capture** (M7 Phase 4) — open + detach Apple-bound drivers + claim a host USB device,
   then run the `LibusbBackend` USB/IP server on it. Proven to need root, **no entitlement** (see
   `m7-usb-passthrough.md` §Phase 4; `sudo spikes/usb-probe/run.sh` on a Solo 2 confirmed
-  `detach=OK claim=OK`).
-- **Privileged networking** — vmnet SHARED/HOST (root to *create* the interface on macOS ≤15, then
-  drop) and BRIDGED (the Apple-managed `com.apple.vm.networking` entitlement). Today's NAT path
-  (gvproxy / the planned unprivileged `limina-networkd`) needs none of this and stays outside the
-  helper. See `multi-vm-networking.md` §3.3 / Phases 4–6.
+  `detach=OK claim=OK`). On macOS 27 with the AccessoryAccess grant the worker opens devices
+  itself, so this client covers only Apple-claimed devices on macOS 15–26 or without that grant.
+- **Not a client: vmnet.** Every vmnet mode, bridged included, runs non-root in the worker with the
+  unrestricted `com.apple.security.virtualization` (measured on macOS 26,
+  `spikes/vmnet-network-probe/`; `multi-vm-networking.md` §3.3). limina offers vmnet on macOS 26+;
+  macOS 15 is unmeasured.
 - **Future** — anything else that genuinely needs root (e.g. raw bridged interfaces, certain
   performance knobs). New privileged capabilities are added as *methods on the existing broker*, not
   as new privileged binaries.
@@ -50,22 +51,22 @@ privileged binary. The first two clients are:
 │  - owns VM lifecycle      │ ───────────────► │  - validates the request    │
 │  - decides policy         │                  │  - does the root operation: │
 │  - holds NO root          │ ◄─────────────── │      • USB capture (libusb) │
-│                           │   fd + result    │      • vmnet create         │
+│                           │   fd + result    │                             │
 └──────────────────────────┘                  │  - hands back an fd, drops  │
         │  passes fd to libkrun                │    or holds privilege min.  │
         ▼                                      └─────────────────────────────┘
-   VMM worker  ──►  guest (vhci_hcd / virtio-net)
+   VMM worker  ──►  guest (vhci_hcd)
 ```
 
 - **Request/response over a UNIX socket**, with **SCM_RIGHTS fd passing** as the core primitive: the
   helper performs the privileged step and returns an *open fd* (the captured USB device's USB/IP
-  stream socket, or the vmnet datagram socket) to the unprivileged supervisor, which feeds it to
-  libkrun exactly as the mock USB path (3b) and the planned vmnet path already do. Root touches the
+  stream socket) to the unprivileged supervisor, which feeds it to libkrun exactly as the mock USB
+  path (3b) already does. Root touches the
   resource only long enough to create/capture it.
 - **Least privilege / least duration.** The helper does the minimum privileged action and then either
-  drops privilege (vmnet ≤15 create-then-drop) or confines itself to the one captured resource. It
+  drops privilege or confines itself to the one captured resource. It
   never runs guest-facing data-plane logic it doesn't have to.
-- **No-orphan death-pact** (same guarantee as the net helpers, `multi-vm-networking.md` §(c)): the
+- **No-orphan death-pact** (same guarantee as the net helpers, `multi-vm-networking.md` §4): the
   helper must never outlive the VM(s)/resources it serves — EOF-on-control-socket death-pact +
   startup sweep of dead-owner leftovers, reusing the gvproxy-reaping pattern already in
   `crates/limina/src/gateway.rs`.
@@ -80,28 +81,26 @@ privileged binary. The first two clients are:
    end-to-end against real hardware. **Not CI-testable** (needs root + a physical device).
 2. **Product:** ship `limina-privhelperd` as a launchd daemon installed via **`SMAppService`**
    (the modern `SMJobBless` replacement) — one user approval, the OS owns its lifecycle, the app
-   talks to it over XPC/UNIX. Code-signed; **no Apple-managed entitlement needed for USB capture or
-   vmnet SHARED/HOST** (root suffices). BRIDGED networking remains separately gated on
-   `com.apple.vm.networking` and stays out of scope until that entitlement story is resolved.
+   talks to it over XPC/UNIX. Code-signed; **no Apple-managed entitlement needed for USB capture**
+   (root suffices).
 3. **Avoid** setuid-root on the helper binary (brittle, historically a footgun); prefer the
    launchd-daemon model.
 
 ## Scope / non-goals
 
-- **Unprivileged-first is unchanged.** NAT networking (gvproxy / `limina-networkd`) and the entire
-  current feature set need **no** helper. A user who never asks for USB passthrough or vmnet never
-  spawns it.
+- **Unprivileged-first is unchanged.** Networking (gvproxy NAT and vmnet alike) and the entire
+  current feature set need **no** helper. A user who never asks to pass through an Apple-claimed
+  USB device without AccessoryAccess never spawns it.
 - This doc is the *architecture*; the concrete protocol (message types, the fd-passing handshake) is
   designed when the first client (USB Phase 4) is built.
-- Entitlement-gated capabilities (BRIDGED net via `com.apple.vm.networking`) are **not** unlocked by
-  this helper — root ≠ entitlement. The helper handles the root-but-not-entitlement set; the
-  entitlement set is a separate, Apple-gated track.
+- Entitlement-gated capabilities (AccessoryAccess) are **not** unlocked by this helper — root ≠
+  entitlement. The helper handles the root-but-not-entitlement set; AccessoryAccess is the
+  Apple-gated track (`distribution.md` §2.1).
 
 ## Cross-references
 
 - `m7-usb-passthrough.md` §Phase 4 — the first client (USB capture); the `LibusbBackend` + the 3b
   pipeline it plugs into are already built.
-- `multi-vm-networking.md` §3.3 / §(c) / Phases 4–6 — the vmnet side + the no-orphan lifecycle this
-  reuses; the unprivileged `limina-networkd` is the *non*-privileged sibling.
+- `multi-vm-networking.md` §4 — the no-orphan lifecycle this reuses.
 - `crates/limina/src/gateway.rs` — the existing orphan-reaping/death-pact pattern to lift.
-- Roadmap §M7 (and M3 networking) — tracked there as deferred.
+- Roadmap §M7 — tracked there as deferred.

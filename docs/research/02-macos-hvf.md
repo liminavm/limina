@@ -284,14 +284,13 @@ low-host-CPU-at-idle goal; worth measuring (§6).
   unrestricted entitlement runs vmnet shared, host-only and bridged (`en0`) interfaces with
   packets flowing; with only `com.apple.security.hypervisor`, or none, every mode fails. The
   restricted `com.apple.vm.networking` is not involved. gvproxy user-mode NAT stays the default;
-  the networking docs (07, `docs/design/multi-vm-networking.md`) still plan vmnet around root or
-  the restricted entitlement.
+  the plan holds vmnet in the worker (07, `docs/design/multi-vm-networking.md` §3.3).
 
 ### 2.10 HVF limits relevant to limina
 
 | Limit | Reality in this tree | Impact |
 |---|---|---|
-| Nested virt | **Conditionally supported**: probed via `hv_vm_config_get_el2_supported`, enabled via `set_el2_enabled`; only M3+/macOS 15+ (`lib.rs:208-256`). M1 Max = **no**. | No KVM-in-guest on this host. |
+| Nested virt | **Works on M3+/macOS 15+** via `limina-vmm --nested-virt` (libkrun `nested_enabled` → `set_el2_enabled`); M1/M2 = **no**, the worker refuses. Measured on M4 Pro (`spikes/nested-virt-probe/RESULTS.md`): guest KVM comes up nVHE with a 36-bit IPA limit through direct boot and firmware + GRUB alike; ~33 µs per nested exit. | KVM-in-guest (containers with KVM, nested VMs) on M3+ only. Snapshot of a nested VM is unsupported until the vCPU save list carries EL2 state. |
 | In-kernel GIC | **Used by default** (`hv_gic` via `HvfGicV3`), userspace GICv3 is fallback (`builder.rs:895-899`). | Perf win already in place; no patch needed. |
 | Dirty-page log | No API used; HVF historically exposes none. | Live migration/incremental snapshot hard; stop-the-world only. **[VERIFY]** macOS 26 headers for any new symbol. |
 | P/E core pinning | No HVF API; vCPU = host thread, macOS schedules it. | Use QoS hints only (e.g. `QOS_CLASS_USER_INTERACTIVE`). |
@@ -364,7 +363,8 @@ Guest PSCI SYSTEM_OFF/RESET (HVC) ──► VcpuExit::Shutdown                [l
   (a) harden the `panic!` exit paths into recoverable errors;
   (b) QoS hints (`QOS_CLASS_USER_INTERACTIVE`) on `fc_vcpu` threads for desktop feel;
   (c) balloon host handler made 16 KiB-aware for dynamic memory (doc 05);
-  (d) net-new USB passthrough riding this backend.
+  (d) net-new USB passthrough riding this backend (host capture via AccessoryAccess on
+  macOS 27, root below).
   (The `hv_gic` in-kernel GIC is **already the default** and the vCPU cap is 32
   (`machine_config.rs:8`) — neither needs a patch.)
 - **Cons:** Maintaining a fork; rebase cost.
@@ -411,7 +411,7 @@ Guest PSCI SYSTEM_OFF/RESET (HVC) ──► VcpuExit::Shutdown                [l
   have no working path on 27.0.1, the doorbell design has none at all, and adopting Vz would
   tie limina to macOS. Re-test on later macOS releases with the spike above; the restore and
   reclaim results are the ones that could change. Nested virtualization is not a reason to
-  move: libkrun already enables it on M3+ (§2.10).
+  move: it works through libkrun on M3+ (§2.10).
 
 ---
 
@@ -428,7 +428,7 @@ USB passthrough, fine-grained dynamic memory, and custom guest agents.
    (`com.apple.security.hypervisor`). Gating step — without it `hv_vm_create` →
    `Error::VmCreate` (`lib.rs:261`).
 2. Boot the raw image via libkrun's EFI/disk path; default to **gvproxy user-mode
-   NAT** (`krun_add_net_unixgram`) so no root / no `com.apple.vm.networking`.
+   NAT** (`krun_add_net_unixgram`) — the zero-setup default; vmnet is the unprivileged opt-in.
 3. Confirm the HVF run loop, PSCI SMP bringup, vtimer, and WFI parking behave for
    a Fedora guest (M1 Max, non-nested).
 
@@ -470,8 +470,8 @@ USB passthrough, fine-grained dynamic memory, and custom guest agents.
    unprivileged gvproxy NAT for the Fedora guest; defer bridged.
 8. **Exit-path hardening** — enumerate which ECs/PSCI fns a real Fedora desktop
    actually triggers, so we know which `panic!`s (`lib.rs:549,728`) are reachable.
-9. **Nested virt** — confirmed unavailable on M1 Max (`set_el2_enabled` only on
-   M3+/macOS 15+); affects any "Docker with KVM" guest expectation.
+9. **Nested virt** — works on M3+ (`spikes/nested-virt-probe/`), unavailable on M1/M2. Owed:
+   EL2 state in snapshot/suspend, an L2 Linux boot with device I/O, and a user-facing switch.
 
 ---
 
@@ -509,7 +509,7 @@ USB passthrough, fine-grained dynamic memory, and custom guest agents.
 **Apple / external:**
 - Hypervisor.framework reference — Apple Developer (`hv_vm_*`, `hv_vcpu_*`,
   `hv_gic_*`, `hv_vm_config_*`).
-- Entitlements — `com.apple.security.hypervisor`, `com.apple.vm.networking`.
+- Entitlements — `com.apple.security.hypervisor`, `com.apple.security.virtualization` (vmnet).
 - Virtualization.framework reference — Apple Developer (`VZVirtualMachine`,
   virtio gpu/fs/balloon, Rosetta on Linux, clipboard).
 - QEMU `target/arm/hvf/` — reference HVF aarch64 exit handling / PSCI / vtimer.

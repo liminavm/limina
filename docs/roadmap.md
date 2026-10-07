@@ -12,7 +12,8 @@ M3 NAT+SSH, M4 venus 3D, M5 control plane/clipboard/virtiofs, M6 dynamic memory,
 audio halves of M8, M9 suspend/resume + snapshots, M10 disks, M11 the `cargo xtask` surface, M12's
 clipboard, M12.5's QEMU-guest-agent steps 1–4, M14 biometrics, the emulated xHCI of M7, and M15
 wave 1. Open: the rest of M15, M13, M17, the M12 file-transfer half. Deferred by decision: M3
-bridged networking and M7 real-device USB capture (both wait on the one privileged helper). M16
+bridged networking (worker-held vmnet, no privilege needed) and M7 real-device USB capture
+(AccessoryAccess on macOS 27, root helper below). M16
 (LiminaOS) is the moonshot.
 
 ---
@@ -32,7 +33,8 @@ bridged networking and M7 real-device USB capture (both wait on the one privileg
   under a boot-loop cap. Guard: `reboot::guest_reboot_relaunches_the_worker`.
 - **Codesigning is a hard gate.** The worker must carry `com.apple.security.hypervisor`
   (`crates/limina-vmm/hvf-entitlements.plist`), else `hv_vm_create` fails.
-  `com.apple.vm.networking` is Apple-gated; the default network is user-mode NAT.
+  vmnet (bridged/shared) needs only the unrestricted `com.apple.security.virtualization` on
+  macOS 26 (`spikes/vmnet-network-probe/`); the default network is user-mode NAT.
 - **Page size.** The host has 16 KiB pages. Every VM is created at a 4 KiB stage-2 granule
   (`hv_vm_config_set_ipa_granule`, macOS 26+) unless its definition asks for `ipa_granule = "16k"`,
   so nothing *requires* a 16 KiB guest; the enhanced tier runs one because it is 4-8% faster on
@@ -212,9 +214,9 @@ command. `krun_set_port_map` is TSI-only. Runbook: `docs/images.md` §SSH access
 `docs/design/multi-vm-networking.md`.
 
 **Owed:**
-- **Bridged (opt-in):** vmnet BRIDGED needs the Apple-gated `com.apple.vm.networking` entitlement;
-  SHARED/HOST need root — both through the one privileged helper
-  (`docs/design/privileged-helper.md`). Spike first: does BRIDGED work over Wi-Fi `en0`?
+- **Bridged (opt-in):** the worker holds a vmnet BRIDGED interface — no root, no restricted
+  entitlement (`spikes/vmnet-network-probe/`, `docs/design/multi-vm-networking.md` §3.3). Spike
+  first: does BRIDGED carry real traffic over Wi-Fi `en0`?
 - **Net worker reconnect on HANG_UP**, so a gvproxy restart doesn't disable the NIC for the VM's life.
 - **Offload tuning:** evaluate `GUEST_TSO6|HOST_TSO6` once verified non-corrupting; mind the macOS
   datagram limit against large GSO frames.
@@ -481,12 +483,14 @@ proved the host side (`limina-usbip`: the wire protocol byte-exact to the kernel
 `UsbBackend` trait, a CDC-ACM mock, a libusb backend) and the guest side: `vhci_hcd` accepts an
 `AF_VSOCK` fd directly, and a mock CDC-ACM device enumerates as `/dev/ttyACM0` with no hardware
 (`tests/usb.rs`). Claiming an Apple-bound device works **as root with no entitlement** (a Solo 2 via
-`spikes/usb-probe/run.sh`); `com.apple.vm.device-access` is App-Store-only.
+`spikes/usb-probe/run.sh`); the entitlement route is `com.apple.vm.device-access` (Apple-managed) before macOS 27 and
+AccessoryAccess from 27.
 
-**Owed — real host-device passthrough**, as the first client of the one privileged helper
-(`docs/design/privileged-helper.md`). **Decide the distribution channel first**: MAS forbids the
-root helper, so host USB is either MAS-with-Apple's-entitlement or Developer-ID-with-helper, and the
-two share no implementation (`docs/design/distribution.md` §2.1). Not CI-testable (root + a device).
+**Owed — real host-device passthrough.** On macOS 27, AccessoryAccess
+(`com.apple.developer.accessory-access.usb`) opens the device in the worker with no root on either
+channel; the root helper (`docs/design/privileged-helper.md`) remains only for Apple-claimed
+devices on macOS 15–26. Request the entitlement and decide the channel first
+(`docs/design/distribution.md` §2.1, `docs/design/m7-usb-passthrough.md` §Phase 4). Not CI-testable (root + a device).
 Open questions: the macOS 26 claiming matrix (FTDI, YubiKey, mass storage, webcam, keyboard);
 isochronous transfers (out of scope for v1); USB3 storage over USB/IP-vsock vs just virtiofs. A cheap
 standalone win: serial-over-virtio-console for FTDI/CP210x boards.
