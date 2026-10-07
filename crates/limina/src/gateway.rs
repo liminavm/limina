@@ -35,6 +35,10 @@
 //! from [`DEFAULT_SSH_PORT`] upward (see [`allocate_ssh_port`]) so two VMs that both leave it
 //! unset still don't fight over 2222.
 //!
+//! gvproxy can die under a running VM. A watchdog ([`watchdog`]) notices the exit, logs it, and
+//! respawns gvproxy at the same socket path with a backoff, so a net device that reconnects to the
+//! path finds a gateway there again. It stands down at [`cleanup`], the exit path.
+//!
 //! The forward can move while the VM runs ([`SshForward::set`]): gvproxy also answers its HTTP
 //! services API on a second socket ([`services_path`]), whose `forwarder/expose` and `unexpose`
 //! open and close host listeners without touching the guest's link. A [`Gateway::restart`] after
@@ -77,6 +81,24 @@ static WATCHER_PID: AtomicI32 = AtomicI32::new(0);
 /// Write end of the death-pact pipe (-1 = none). Held open for the VM's life; its closure on
 /// ANY supervisor death is the EOF the watcher detects.
 static DEATHPACT_WFD: AtomicI32 = AtomicI32::new(-1);
+/// Serializes everything that reaps, kills or spawns gvproxy — [`cleanup`], [`Gateway::restart`]
+/// and the [`watchdog`] — so a reap and a kill can never land on a pid the other already
+/// released. Taken after an [`SshForward`]'s port lock wherever both are held.
+static GATEWAY_LOCK: Mutex<()> = Mutex::new(());
+/// Bumped by [`cleanup`]; a [`watchdog`] whose generation is stale stands down.
+static WATCH_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How often the watchdog looks for a dead gvproxy.
+const WATCH_POLL: Duration = Duration::from_millis(500);
+/// First respawn delay; doubles per consecutive quick exit, up to [`RESPAWN_MAX`].
+const RESPAWN_BASE: Duration = Duration::from_millis(250);
+const RESPAWN_MAX: Duration = Duration::from_secs(30);
+/// A gvproxy that ran this long before exiting was healthy: its exit starts a fresh backoff.
+const HEALTHY_UPTIME: Duration = Duration::from_secs(60);
+
+fn gateway_lock() -> std::sync::MutexGuard<'static, ()> {
+    GATEWAY_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
 
 /// A running gvproxy gateway. Drop tears it down (kill + reap + remove the socket).
 pub struct Gateway {
@@ -117,13 +139,118 @@ impl Gateway {
     /// new gvproxy).
     pub fn restart(&self) -> Result<()> {
         let port = self.forward.lock();
-        cleanup();
+        let _g = gateway_lock();
+        teardown();
         spawn_gvproxy(
             &self.socket_path,
             self.debug_log.as_deref(),
             *port,
             self.guest_mac.as_deref(),
         )
+    }
+}
+
+/// When to respawn a gvproxy that exited: right away after a healthy run, then backing off while
+/// it keeps dying young, so a gvproxy that cannot start does not spin.
+#[derive(Debug, Default)]
+struct Backoff {
+    quick_exits: u32,
+}
+
+impl Backoff {
+    /// The delay before respawning a gvproxy that ran for `uptime`.
+    fn next(&mut self, uptime: Duration) -> Duration {
+        if uptime >= HEALTHY_UPTIME {
+            self.quick_exits = 0;
+        }
+        let delay = RESPAWN_BASE
+            .saturating_mul(1u32 << self.quick_exits.min(16))
+            .min(RESPAWN_MAX);
+        self.quick_exits = self.quick_exits.saturating_add(1);
+        delay
+    }
+}
+
+/// Watch gvproxy for the gateway's life and respawn it at `socket_path` when it exits.
+///
+/// The guest's net device holds the socket path, not the process, so a gvproxy at the same path
+/// is all it needs to reconnect. Every reap happens under [`GATEWAY_LOCK`], so this never races
+/// [`cleanup`]'s or [`Gateway::restart`]'s own; a restart that already replaced gvproxy simply
+/// shows up here as a live pid.
+fn watchdog(
+    generation: u64,
+    socket_path: PathBuf,
+    debug_log: Option<PathBuf>,
+    forward: SshForward,
+    guest_mac: Option<String>,
+) {
+    let mut backoff = Backoff::default();
+    let mut up_since = Instant::now();
+    let current = || WATCH_GEN.load(Ordering::SeqCst) == generation;
+    let mut respawn_at: Option<Instant> = None;
+    loop {
+        std::thread::sleep(WATCH_POLL);
+        if !current() {
+            return;
+        }
+        let port = forward.lock();
+        let _g = gateway_lock();
+        if !current() {
+            return;
+        }
+        let pid = GVPROXY_PID.load(Ordering::SeqCst);
+        if pid > 0 {
+            let mut status = 0;
+            // SAFETY: plain non-blocking reap of our own child.
+            if unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } != pid {
+                continue; // alive (or someone else's restart is in charge)
+            }
+            GVPROXY_PID.store(0, Ordering::SeqCst);
+            let delay = backoff.next(up_since.elapsed());
+            log::warn!(
+                "gvproxy (pid {pid}) exited ({}) after {:?}; respawning it at {socket_path:?} in \
+                 {delay:?}",
+                describe_wait_status(status),
+                up_since.elapsed()
+            );
+            respawn_at = Some(Instant::now() + delay);
+            continue;
+        }
+        let Some(at) = respawn_at else {
+            continue; // torn down for a restart in progress, or never ours to watch
+        };
+        if Instant::now() < at {
+            continue;
+        }
+        teardown();
+        match spawn_gvproxy(
+            &socket_path,
+            debug_log.as_deref(),
+            *port,
+            guest_mac.as_deref(),
+        ) {
+            Ok(()) => {
+                log::warn!("gvproxy respawned at {socket_path:?} (ssh-port {})", *port);
+                up_since = Instant::now();
+                respawn_at = None;
+            }
+            Err(e) => {
+                let delay = backoff.next(Duration::ZERO);
+                log::error!("respawning gvproxy failed: {e:#}; trying again in {delay:?}");
+                respawn_at = Some(Instant::now() + delay);
+            }
+        }
+    }
+}
+
+/// `exit 1` / `signal 9` for a raw `waitpid` status.
+fn describe_wait_status(status: libc::c_int) -> String {
+    if libc::WIFEXITED(status) {
+        format!("exit {}", libc::WEXITSTATUS(status))
+    } else if libc::WIFSIGNALED(status) {
+        format!("signal {}", libc::WTERMSIG(status))
+    } else {
+        format!("status {status:#x}")
     }
 }
 
@@ -332,14 +459,32 @@ pub fn start(
             None => first_free_port(scan_base, port_is_free)
                 .with_context(|| format!("no free host port at or above {scan_base}"))?,
         };
-        match spawn_gvproxy(&socket_path, debug_log, ssh_port, guest_mac) {
+        let spawned = {
+            let _g = gateway_lock();
+            spawn_gvproxy(&socket_path, debug_log, ssh_port, guest_mac)
+        };
+        match spawned {
             Ok(()) => {
-                return Ok(Gateway {
+                let gateway = Gateway {
                     forward: SshForward::new(ssh_port, &socket_path),
                     socket_path,
                     debug_log: debug_log.map(Path::to_path_buf),
                     guest_mac: guest_mac.map(str::to_string),
-                });
+                };
+                let generation = WATCH_GEN.load(Ordering::SeqCst);
+                let (sock, log, fwd, mac) = (
+                    gateway.socket_path.clone(),
+                    gateway.debug_log.clone(),
+                    gateway.forward(),
+                    gateway.guest_mac.clone(),
+                );
+                if let Err(e) = std::thread::Builder::new()
+                    .name("gvproxy-watchdog".into())
+                    .spawn(move || watchdog(generation, sock, log, fwd, mac))
+                {
+                    log::warn!("no gvproxy watchdog for this run ({e}); a dead gvproxy stays dead");
+                }
+                return Ok(gateway);
             }
             Err(e) if requested.is_none() => {
                 log::warn!(
@@ -565,8 +710,17 @@ fn allocate_ssh_port(requested: Option<u16>) -> Result<u16> {
 
 /// Kill and reap the death-pact watcher + the gateway, and remove its socket + registry
 /// record. Idempotent and safe to call from any exit path (headless `Drop`, the windowed
-/// timer's `process::exit`, the SIGINT/SIGTERM-driven orderly stop).
+/// timer's `process::exit`, the SIGINT/SIGTERM-driven orderly stop). Stands the watchdog down
+/// first, so nothing respawns what this tears down.
 pub fn cleanup() {
+    WATCH_GEN.fetch_add(1, Ordering::SeqCst);
+    let _g = gateway_lock();
+    teardown();
+}
+
+/// [`cleanup`]'s work without standing the watchdog down — the first half of a respawn. Callers
+/// hold [`GATEWAY_LOCK`].
+fn teardown() {
     // Stand the death-pact watcher down FIRST, so it can't fire on a reused pid after we reap
     // our gvproxy. On a clean exit the watcher therefore never acts; only an un-cleanly-killed
     // supervisor (which never reaches cleanup) lets it do its job.
@@ -1099,6 +1253,23 @@ mod tests {
         );
     }
 
+    /// A gvproxy that keeps dying young is respawned ever more slowly, up to a ceiling; one that
+    /// ran a healthy while is respawned at once.
+    #[test]
+    fn respawn_backoff_doubles_on_quick_exits_and_resets_after_a_healthy_run() {
+        let mut b = Backoff::default();
+        let quick = Duration::from_secs(1);
+        assert_eq!(b.next(quick), RESPAWN_BASE);
+        assert_eq!(b.next(quick), RESPAWN_BASE * 2);
+        assert_eq!(b.next(quick), RESPAWN_BASE * 4);
+        for _ in 0..40 {
+            assert!(b.next(quick) <= RESPAWN_MAX);
+        }
+        assert_eq!(b.next(quick), RESPAWN_MAX);
+        assert_eq!(b.next(HEALTHY_UPTIME), RESPAWN_BASE);
+        assert_eq!(b.next(quick), RESPAWN_BASE * 2);
+    }
+
     #[test]
     fn first_free_port_returns_the_first_unused_from_the_base() {
         // Auto-allocation scans UP from the base, taking the first free port — so the first VM
@@ -1289,6 +1460,47 @@ mod tests {
             "auto-allocation must give the second VM a different port (got {pa} then {pb})"
         );
         assert!(both, "both auto-allocated gateways must run at once");
+    }
+
+    /// The supervisor half of a net device that survives gvproxy: gvproxy is killed under a
+    /// running gateway and comes back at the same socket path, and the watchdog stands down at
+    /// cleanup instead of respawning what the exit path tore down.
+    #[test]
+    fn a_dead_gvproxy_is_respawned_at_the_same_path() {
+        if !gated() {
+            eprintln!(
+                "skipping a_dead_gvproxy_is_respawned_at_the_same_path (set LIMINA_HVF_TESTS=1)"
+            );
+            return;
+        }
+        let gw = start(None, None, None).expect("gateway comes up");
+        let sock = gw.socket_path().to_path_buf();
+        let first = GVPROXY_PID.load(Ordering::SeqCst);
+        assert!(first > 0);
+        unsafe { libc::kill(first, libc::SIGKILL) };
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let second = loop {
+            let pid = GVPROXY_PID.load(Ordering::SeqCst);
+            if pid > 0 && pid != first && sock.exists() && pid_is_alive(pid) {
+                break pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "gvproxy was not respawned at {sock:?} within 10s"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert!(process_is_gvproxy(second), "the respawn is a gvproxy");
+
+        drop(gw); // cleanup(): the exit path
+        std::thread::sleep(WATCH_POLL * 3);
+        assert_eq!(
+            GVPROXY_PID.load(Ordering::SeqCst),
+            0,
+            "nothing may respawn gvproxy after cleanup"
+        );
+        assert!(!pid_is_alive(second), "cleanup reaps the respawned gvproxy");
     }
 
     /// Accepts a TCP connection on loopback `port` right now.

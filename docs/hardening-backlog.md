@@ -1083,8 +1083,9 @@ close the gap, none started:
 ### The net device dies permanently when gvproxy hangs up
 On HANG_UP/READ_HANG_UP from the backend socket, libkrun's net worker (`devices/src/virtio/net/worker.rs`,
 the `backend_socket` arm) logs "VIRTIO-NET FATAL … Networking is now disabled!" and stops servicing
-it. The supervisor can respawn gvproxy on the same socket path (`gateway.rs`), but the guest NIC stays
-dead until the VM restarts. Fix: a small libkrun change that reconnects to the socket path on hang-up.
+it. The supervisor notices gvproxy exiting and respawns it on the same socket path with backoff
+(`gateway.rs`, the `gvproxy-watchdog` thread), but the guest NIC stays dead until the VM restarts.
+Owed: the libkrun half, reconnecting to the socket path on hang-up.
 
 ### An idle guest reads virtio-net `InterruptStatus` about 2,400 times a second
 Measured 2026-08-27 on a stock F44 guest at a settled idle desktop with `--net`: 72,374 MMIO reads of
