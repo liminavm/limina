@@ -1110,15 +1110,16 @@ settle host↔guest uid mapping. Without DAX every guest gets plain FUSE read/wr
 
 ## Tests — flakes & coverage
 
-### `kde_vrend_world_survives_snapshot_restore` can restore to a guest that stops submitting
-Failed once in a full suite (2026-10-07, the last of 161 tests, under parallel load) and passed
-3 of 3 run alone on the same tree. The restore itself looked whole: pixel diversity 377 → 377, no
-scanout or submit rejections, the same `kwin_wayland` pid answering D-Bus, the compositor in a
-plain `ppoll`. But the six-tick window after the restore saw `submits=+0` (the pre-suspend baseline
-was +70), and the vrend replay had dropped `PipeResourceSetType` for a missing resource 91 in two
-contexts ("replay could not use 6 of 46 retained commands" and "6 of 7"). Whether that drop also
-happens on passing runs is not known: the test prints its replay lines only on failure. Next: have
-the test always print the replay summary, then compare passing and failing runs before theorising.
+### A restored guest parked in PSCI `SYSTEM_SUSPEND` can miss its wake under host load
+`kde_vrend_world_survives_snapshot_restore` failed 4 of 18 runs on 2026-10-07 (1 of 8 unloaded, 3
+of 10 with six host CPU burners) with the restored guest never reaching SSH: the worker logs
+`restore: injecting guest wake (KEY_WAKEUP)` and never `vCPU 0 resumed from PSCI SYSTEM_SUSPEND`.
+In those runs vCPUs 1-3 log `resumed from snapshot` after the inject line; in passing runs every
+vCPU resumes first. Lead, not yet observed: the pulse can reach the in-kernel GIC while vCPU 0 is
+still `Running` (so its `kick` is an `hv_vcpus_exit` that reaches nobody), and
+`handle_system_suspend` then consults `should_wait`, which reads the software `pending_irqs`
+list rather than the GIC, finds nothing and blocks. Next: log the vCPU status the GPIO raise saw
+and whether the SPI is pending in the GIC when `handle_system_suspend` decides to wait.
 
 ### `synoik_desktop_survives_snapshot_restore` has an intermittent trigger that was never isolated
 Both observed failures gave byte-identical numbers: 36/1000 landmarks moved against a 1% budget, rows
