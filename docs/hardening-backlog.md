@@ -1147,6 +1147,16 @@ settle host↔guest uid mapping. Without DAX every guest gets plain FUSE read/wr
 
 ## Tests — flakes & coverage
 
+### `kde_vrend_world_survives_snapshot_restore` can restore to a guest that stops submitting
+Failed once in a full suite (2026-10-07, the last of 161 tests, under parallel load) and passed
+3 of 3 run alone on the same tree. The restore itself looked whole: pixel diversity 377 → 377, no
+scanout or submit rejections, the same `kwin_wayland` pid answering D-Bus, the compositor in a
+plain `ppoll`. But the six-tick window after the restore saw `submits=+0` (the pre-suspend baseline
+was +70), and the vrend replay had dropped `PipeResourceSetType` for a missing resource 91 in two
+contexts ("replay could not use 6 of 46 retained commands" and "6 of 7"). Whether that drop also
+happens on passing runs is not known: the test prints its replay lines only on failure. Next: have
+the test always print the replay summary, then compare passing and failing runs before theorising.
+
 ### `synoik_desktop_survives_snapshot_restore` has an intermittent trigger that was never isolated
 Both observed failures gave byte-identical numbers: 36/1000 landmarks moved against a 1% budget, rows
 {0:17, 1:19}, colours 233 → 235, confined to rows 0–52 at full width, max channel delta 54, dy = 0 —
