@@ -196,16 +196,6 @@ submits fail in a sustained run (log volume, poison, recovery).
 
 ## Lifecycle & supervisor
 
-### The control center snapshots VMs on the AppKit main thread
-A 1 s `NSTimer` (`crates/limina/src/center/mod.rs`) calls `controller.refresh`, which runs
-`model::snapshot()` on the main thread — including every per-VM `stat()`: `disks_line`'s existence
-check and the cheap-depth pre-flight behind `VmRow::blocked` (`docs/design/vm-start-preflight.md`
-§3.6). A dead network mount can block a `stat()` for seconds and freeze the UI. Fix: snapshot on a
-background thread and hand the finished rows to the main thread.
-
-Runtime facts about a running VM come from its supervisor's runtime socket (`runtime_ctl`,
-followed by `center/live.rs` off the main thread), never from its log; keep it that way.
-
 ### Bound a long-lived VM's supervisor log
 `logs/supervisor.log` is rotated per run, not within one. Measured 2026-10-05 on a base M1 whose
 only VM had run for four days: the log had reached 187 MB, mostly `[LIMINA]` lines from

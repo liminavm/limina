@@ -48,6 +48,9 @@ use crate::vmlib;
 /// Window-content margin, shared by the chrome layout and the fit-to-content math.
 const MARGIN: f64 = 16.0;
 
+/// How often the center re-reads the library while nothing asks it to.
+pub const SNAPSHOT_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// The list stack's right edge inset (keeps rows clear of the overlay scroller).
 const LIST_RIGHT_INSET: f64 = 6.0;
 
@@ -67,6 +70,14 @@ pub struct CenterIvars {
     stopping: RefCell<HashSet<PathBuf>>,
     /// Errors from background threads, drained into an alert on the next refresh.
     errors: Arc<Mutex<Vec<String>>>,
+    /// Takes the library snapshots off the main thread (see [`model::Snapshotter`]).
+    snapshotter: model::Snapshotter,
+    /// When the last snapshot was asked for; the tick asks at most once per
+    /// [`SNAPSHOT_EVERY`] unless a user action wants one now.
+    last_request: std::cell::Cell<Option<std::time::Instant>>,
+    /// A user action asked for a refresh: rebuild from the next snapshot even if it
+    /// matches the rows on screen.
+    force_next: std::cell::Cell<bool>,
     /// busy+stopping as of the last rebuild, so a state flip alone triggers one.
     last_busy: RefCell<HashSet<PathBuf>>,
     last_stopping: RefCell<HashSet<PathBuf>>,
@@ -347,6 +358,9 @@ impl CenterController {
             busy: Arc::new(Mutex::new(HashSet::new())),
             stopping: RefCell::new(HashSet::new()),
             errors: Arc::new(Mutex::new(Vec::new())),
+            snapshotter: model::Snapshotter::default(),
+            last_request: std::cell::Cell::new(None),
+            force_next: std::cell::Cell::new(false),
             last_busy: RefCell::new(HashSet::new()),
             last_stopping: RefCell::new(HashSet::new()),
             chrome_h: std::cell::Cell::new(0.0),
@@ -483,15 +497,34 @@ impl CenterController {
     }
 
     /// Refresh the model and rebuild the rows if anything changed (or `force`).
-    /// Also drains background-thread errors into an alert. Called by the 1 s timer
-    /// and after every user action.
+    /// Also drains background-thread errors into an alert. Called by the timer and after
+    /// every user action.
+    ///
+    /// The snapshot itself runs on a background thread ([`model::Snapshotter`]): it
+    /// `stat()`s every VM's disks, which a dead network mount can block for seconds. This
+    /// asks for one and applies whichever has finished; `force` makes the next one rebuild
+    /// the rows even if nothing in it changed. Busy/stopping flips are local state and
+    /// apply at once, against the rows already on screen.
     pub fn refresh(&self, force: bool) {
         let drained: Vec<String> = std::mem::take(&mut *self.ivars().errors.lock().unwrap());
         if !drained.is_empty() {
             self.alert("Background operation failed", &drained.join("\n\n"));
         }
 
-        let snap = model::snapshot();
+        let iv = self.ivars();
+        if force {
+            iv.force_next.set(true);
+        }
+        let due = iv
+            .last_request
+            .get()
+            .is_none_or(|t| t.elapsed() >= SNAPSHOT_EVERY);
+        if (force || due) && iv.snapshotter.request() {
+            iv.last_request.set(Some(std::time::Instant::now()));
+        }
+        let fresh = iv.snapshotter.take();
+        let force = fresh.is_some() && iv.force_next.take();
+        let snap = fresh.unwrap_or_else(|| iv.rows.borrow().clone());
         // Prune transient per-bundle state that resolved itself: a bundle that is
         // no longer running is done "stopping".
         self.ivars()

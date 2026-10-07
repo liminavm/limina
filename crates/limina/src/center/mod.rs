@@ -222,13 +222,15 @@ pub fn run() -> ! {
         );
     }
 
-    // 1 s status refresh (flock probes + vm.toml mtimes are cheap). Common modes so
-    // status keeps updating while the user drags/resizes the window.
+    // Status refresh. The library is re-read off the main thread once a second
+    // (`controller::SNAPSHOT_EVERY`); the tick runs faster so a finished snapshot, and with
+    // it the result of a click, shows up within a quarter second. Common modes so status
+    // keeps updating while the user drags/resizes the window.
     let timer_controller = controller.clone();
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         timer_controller.refresh(false);
     });
-    let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(1.0, true, &block) };
+    let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(0.25, true, &block) };
     unsafe {
         NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
     }

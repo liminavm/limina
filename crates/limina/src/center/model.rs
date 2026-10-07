@@ -93,6 +93,66 @@ pub fn snapshot() -> Vec<VmRow> {
     rows
 }
 
+/// Takes [`snapshot`]s off the main thread, one at a time.
+///
+/// A snapshot `stat()`s every VM's disks, and a dead network mount can block one for seconds;
+/// on the AppKit main thread that froze the control center. A request while one is still in
+/// flight is dropped rather than queued: the next tick asks again, so a hung mount costs ticks,
+/// not a growing pile of blocked threads.
+#[derive(Default)]
+pub struct Snapshotter {
+    inner: std::sync::Arc<SnapshotSlot>,
+}
+
+#[derive(Default)]
+struct SnapshotSlot {
+    busy: std::sync::atomic::AtomicBool,
+    done: std::sync::Mutex<Option<Vec<VmRow>>>,
+}
+
+/// Frees the slot for the next request however the snapshot thread ends, panics included.
+struct Busy(std::sync::Arc<SnapshotSlot>);
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0
+            .busy
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Snapshotter {
+    /// Start a snapshot unless one is already running. Returns whether one started.
+    pub fn request(&self) -> bool {
+        self.request_with(snapshot)
+    }
+
+    fn request_with(&self, take: impl FnOnce() -> Vec<VmRow> + Send + 'static) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.inner.busy.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        let busy = Busy(self.inner.clone());
+        std::thread::Builder::new()
+            .name("center-snapshot".into())
+            .spawn(move || {
+                let rows = take();
+                *busy.0.done.lock().unwrap_or_else(|p| p.into_inner()) = Some(rows);
+                drop(busy);
+            })
+            .is_ok()
+    }
+
+    /// The newest finished snapshot not yet taken.
+    pub fn take(&self) -> Option<Vec<VmRow>> {
+        self.inner
+            .done
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+    }
+}
+
 /// Pre-flight's verdict for the row, at the depth a 1 s refresh can afford: stat-only, no
 /// opening every disk read-write and no port probes (those wait for the click).
 fn blocking_reason(bundle: &bundle::VmBundle, cfg: &schema::VmConfig) -> Option<String> {
@@ -177,6 +237,45 @@ mod tests {
     use super::*;
     use crate::vmlib::import::{CreateOpts, ImportMode, create};
     use crate::vmlib::schema::Memory;
+
+    /// A snapshot that hangs (a dead mount under a disk) holds one thread, never the caller, and
+    /// never a second thread: requests while it runs are dropped, and the next one after it
+    /// finishes starts fresh.
+    #[test]
+    fn a_hung_snapshot_skips_requests_instead_of_queueing_them() {
+        let s = Snapshotter::default();
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        assert!(s.request_with(move || {
+            gate.recv().ok();
+            Vec::new()
+        }));
+        assert!(
+            !s.request_with(Vec::new),
+            "a second request while one runs is dropped"
+        );
+        assert!(s.take().is_none(), "nothing finished yet");
+
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let rows = loop {
+            if let Some(r) = s.take() {
+                break r;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the snapshot never landed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(rows.is_empty());
+        assert!(s.take().is_none(), "taken once");
+        // The slot is free again once the thread is done with it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !s.request_with(Vec::new) {
+            assert!(std::time::Instant::now() < deadline, "the slot never freed");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn snapshot_lists_vms_and_tolerates_broken_bundles() {
