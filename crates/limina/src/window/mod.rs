@@ -1217,19 +1217,22 @@ pub(crate) fn speaks_for_a_guest(phase: ParkPhase) -> bool {
     matches!(phase, ParkPhase::Live)
 }
 
-/// What a suspend exit does with the window: park it (menu/CLI suspend — the user kept the
-/// window, so keep the VM one click away), or quit the process (the user closed the window
-/// or asked to stop — the window's disappearance is the point). Pure policy, decided once
+/// What a suspend exit does with the window: park it (a menu suspend — the user kept the
+/// window, so keep the VM one click away), or quit the process (the user closed the window,
+/// asked to stop, or suspended from the command line — the window's disappearance is the
+/// point, and a `limina suspend` caller has no window to click). Pure policy, decided once
 /// per suspend exit.
 ///
 /// `can_park` = the session wired a resume channel (parking without one would strand the
-/// window: the play click could never respawn).
+/// window: the play click could never respawn). `external` = the suspend came from
+/// `limina suspend` (SIGTSTP) rather than this window.
 pub(crate) fn should_park_on_suspend(
     close_requested: bool,
     stop_requested: bool,
+    external: bool,
     can_park: bool,
 ) -> bool {
-    can_park && !close_requested && !stop_requested
+    can_park && !close_requested && !stop_requested && !external
 }
 
 /// Has the resume's fresh worker presented? Pure policy for the timer's Resuming arm — what
@@ -3323,16 +3326,22 @@ pub fn run(
                         timer_primary_slot.get()
                     );
                 }
-                // Park instead of quitting (task #18): a menu/CLI suspend keeps the window
+                // Park instead of quitting (task #18): a menu suspend keeps the window
                 // up — final frame under a scrim, play glyph in the middle — so the VM is
                 // one click from coming back. A close/stop-triggered suspend still quits:
-                // the user asked the window to go away.
+                // the user asked the window to go away. So does a `limina suspend`: its caller
+                // expects the VM gone, and a parked supervisor would keep the run lock, the
+                // NAT gateway and its SSH port, and turn the next suspend of the disk away.
                 if should_park_on_suspend(
                     CLOSE_REQUESTED.with(|c| c.get()),
                     crate::supervisor::stop_requested(),
+                    crate::supervisor::suspend_requested_externally(),
                     resume_worker.is_some(),
                 ) {
                     PARK_STATE.with(|p| p.set(ParkPhase::Parked));
+                    // `limina suspend <disk>` asks this to tell a parked supervisor from a live
+                    // one sharing the disk path.
+                    crate::runtime_ctl::set_parked(true);
                     // The satisfied request must not re-suspend the VM the moment it
                     // resumes (monitor() SIGTSTPs on a set flag).
                     crate::supervisor::clear_suspend_request();
@@ -3375,6 +3384,7 @@ pub fn run(
                     let sent = resume_worker.as_ref().is_some_and(|tx| tx.send(()).is_ok());
                     if sent {
                         PARK_STATE.with(|p| p.set(ParkPhase::Resuming));
+                        crate::runtime_ctl::set_parked(false);
                         resume_clicked_at.set(std::time::Instant::now());
                         resume_epoch_baseline.set(worker_epoch);
                         let mut ov = timer_overlay.borrow_mut();
@@ -4293,27 +4303,33 @@ mod tests {
     /// Longer than `OVERLAY_SETTLE`: the condition has held.
 
     #[test]
-    fn a_menu_or_cli_suspend_parks_but_a_close_or_stop_still_quits() {
+    fn a_menu_suspend_parks_but_a_close_stop_or_cli_suspend_quits() {
         // Task #18: the play-button window exists precisely for suspends where the user KEPT
-        // the window (menu Suspend, `limina suspend`) — parking after the user closed the
+        // the window (menu Suspend) — parking after the user closed the
         // window (or hit Ctrl-C / `limina stop`) would resurrect a window they dismissed.
         //
-        // args: (close_requested, stop_requested, can_park)
+        // args: (close_requested, stop_requested, external, can_park)
         assert!(
-            should_park_on_suspend(false, false, true),
-            "a menu/CLI suspend with a live resume channel must park"
+            should_park_on_suspend(false, false, false, true),
+            "a menu suspend with a live resume channel must park"
         );
         assert!(
-            !should_park_on_suspend(true, false, true),
+            !should_park_on_suspend(true, false, false, true),
             "close-to-suspend must still close the window"
         );
         assert!(
-            !should_park_on_suspend(false, true, true),
+            !should_park_on_suspend(false, true, false, true),
             "a stop-requested suspend must still quit"
+        );
+        // `limina suspend` asked from outside: nobody is at the window to click play, and a
+        // parked supervisor keeps the run lock, the gateway and the SSH port.
+        assert!(
+            !should_park_on_suspend(false, false, true, true),
+            "a CLI suspend must quit, not park"
         );
         // No resume channel = parking would strand the window (the play click could never
         // respawn a worker) — always quit.
-        assert!(!should_park_on_suspend(false, false, false));
+        assert!(!should_park_on_suspend(false, false, false, false));
     }
 
     #[test]

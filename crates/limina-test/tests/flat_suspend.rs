@@ -14,9 +14,10 @@
 //! Vehicle: the stock seated golden EFI-booted IN PLACE on a private CoW clone
 //! (`Boot::Firmware` without net boots the configured disk directly — no harness
 //! scratch clone, so the disk path, and with it the derived snapshot identity, is
-//! stable across legs). No SSH: the suspend is the bracket's own button pulse (the
-//! seated GNOME session honors the suspend key), and the oracles are the supervisor
-//! log + on-disk snapshot artifacts.
+//! stable across legs), in a real window. No SSH: the suspend is the bracket's own
+//! button pulse (the seated GNOME session honors the suspend key), and the oracles are
+//! the supervisor log, its exit, and the on-disk snapshot artifacts. Two suspend/resume
+//! cycles run back to back through `limina suspend <disk>`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -35,7 +36,10 @@ fn flat_cfg(disk: &Path) -> GuestConfig {
         disk: disk.to_path_buf(),
         read_only: false, // in-place writable = the flat dev-run shape
     };
-    cfg.with_supervisor_log()
+    // Windowed, as `limina --disk` runs on a desktop: the window is what decides whether a
+    // suspend parks or exits.
+    cfg.with_windowed_coexist_display(1280, 800)
+        .with_supervisor_log()
 }
 
 #[test]
@@ -68,50 +72,80 @@ fn flat_run_default_arms_suspend_and_resumes_pending() {
         let _ = std::fs::remove_file(snap.with_extension("splash.png"));
     };
 
-    // --- Leg 1: boot flagless-flat, then suspend via the production bracket ---
-    let mut g1 = Guest::boot(&flat_cfg(&disk)).expect("booting the flat guest");
-    // Seated GNOME needs to be up before the suspend button means anything; the boot
-    // itself is the wait (EFI + autologin). Give the session time to settle.
-    g1.wait_for_supervisor_log("suspend armed by default", Duration::from_secs(60))
-        .expect("flat run did not default-arm suspend (task #20)");
-    std::thread::sleep(Duration::from_secs(90));
-
-    // Suspend through the FULL CLI path (task #20 part 3): `limina suspend <disk>` finds the
-    // flat supervisor by its argv (pgrep), relays SIGTSTP, and waits for the snapshot. This
-    // covers supervisor discovery + relay + bracket in one go (the harness's suspend_bracket
-    // signals the worker directly, skipping the first two).
+    // --- Two back-to-back cycles: boot (cold, then resumed), suspend through the CLI ---
+    // `limina suspend <disk>` finds the flat supervisor by its argv (pgrep), relays SIGTSTP, and
+    // waits for the snapshot. The run is windowed, the shape `limina --disk` runs in, and the
+    // supervisor must EXIT after a CLI suspend rather than park behind its play button: a parked
+    // one keeps its gateway and SSH port, and the next `limina suspend` of the disk found two
+    // supervisors and refused. The second cycle starts from a resumed guest, which is the path
+    // that broke.
     let base_for_bin = GuestConfig::baseline_fedora_from_env().expect("baseline config");
-    let cli = std::process::Command::new(&base_for_bin.limina_bin)
-        .arg("suspend")
-        .arg(&disk)
-        .output()
-        .expect("running limina suspend");
-    if !cli.status.success() {
-        let log = g1.supervisor_log();
-        cleanup();
-        panic!(
-            "`limina suspend {}` failed: {}\nstderr: {}\nsupervisor log:\n{log}",
-            disk.display(),
-            cli.status,
-            String::from_utf8_lossy(&cli.stderr)
+    for cycle in 1..=2 {
+        let mut g = Guest::boot(&flat_cfg(&disk)).expect("booting the flat guest");
+        if cycle == 1 {
+            g.wait_for_supervisor_log("suspend armed by default", Duration::from_secs(60))
+                .expect("flat run did not default-arm suspend (task #20)");
+        } else {
+            let resumed = g
+                .wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
+                .is_ok();
+            if !resumed {
+                let log = g.supervisor_log();
+                cleanup();
+                panic!(
+                    "the relaunch cold-booted past a pending resume (no 'restoring from \
+                     snapshot'):\n{log}"
+                );
+            }
+            // Single-use: the canonical snapshot is consumed (renamed) the moment the resume
+            // starts.
+            assert!(
+                !snap.exists(),
+                "the consumed snapshot must leave its canonical path (single-use invariant)"
+            );
+        }
+        // Seated GNOME needs to be up (or back) before the suspend button means anything.
+        std::thread::sleep(Duration::from_secs(if cycle == 1 { 90 } else { 45 }));
+
+        let cli = std::process::Command::new(&base_for_bin.limina_bin)
+            .arg("suspend")
+            .arg(&disk)
+            .output()
+            .expect("running limina suspend");
+        if !cli.status.success() {
+            let log = g.supervisor_log();
+            cleanup();
+            panic!(
+                "cycle {cycle}: `limina suspend {}` failed: {}\nstderr: {}\nsupervisor log:\n{log}",
+                disk.display(),
+                cli.status,
+                String::from_utf8_lossy(&cli.stderr)
+            );
+        }
+        let outcome = match g.wait_supervisor_exit(Duration::from_secs(60)) {
+            Ok(o) => o,
+            Err(e) => {
+                let log = g.supervisor_log();
+                cleanup();
+                panic!("cycle {cycle}: the supervisor outlived a CLI suspend: {e}\n{log}");
+            }
+        };
+        // The windowed path exits 0 once it has saved its state; a headless one returns the
+        // worker's 126. Either way the snapshot is what carries the session.
+        if !matches!(outcome.code, Some(0) | Some(126)) {
+            let log = g.supervisor_log();
+            cleanup();
+            panic!("cycle {cycle}: flat suspend failed (exit {outcome:?});\n{log}");
+        }
+        drop(g);
+        assert!(
+            snap.exists(),
+            "cycle {cycle}: suspend must leave the snapshot at the disk-derived path {}",
+            snap.display()
         );
     }
-    let outcome = g1
-        .wait_supervisor_exit(Duration::from_secs(120))
-        .expect("supervisor did not exit after the suspend bracket");
-    if outcome.code != Some(126) {
-        let log = g1.supervisor_log();
-        cleanup();
-        panic!("flat suspend failed (exit {outcome:?});\n{log}");
-    }
-    drop(g1);
-    assert!(
-        snap.exists(),
-        "suspend must leave the snapshot at the disk-derived path {}",
-        snap.display()
-    );
 
-    // --- Leg 2: identical flagless relaunch must RESUME, not cold-boot ---
+    // --- The second snapshot resumes too ---
     let mut g2 = Guest::boot(&flat_cfg(&disk)).expect("relaunching the flat guest");
     let resumed = g2
         .wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
@@ -119,15 +153,8 @@ fn flat_run_default_arms_suspend_and_resumes_pending() {
     if !resumed {
         let log = g2.supervisor_log();
         cleanup();
-        panic!(
-            "the relaunch cold-booted past a pending resume (no 'restoring from snapshot'):\n{log}"
-        );
+        panic!("the second snapshot did not resume:\n{log}");
     }
-    // Single-use: the canonical snapshot is consumed (renamed) the moment the resume starts.
-    assert!(
-        !snap.exists(),
-        "the consumed snapshot must leave its canonical path (single-use invariant)"
-    );
     let _ = g2.shutdown(Duration::from_secs(30));
 
     // --- Leg 3: a pending resume + --discard-suspend must COLD boot and delete it ---

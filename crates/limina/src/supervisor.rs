@@ -156,8 +156,13 @@ extern "C" fn on_signal(_sig: libc::c_int) {
 /// by the monitor loop, which relays it to the worker as the M9.2 suspend bracket. Distinct from
 /// [`STOP`] — suspend is snapshot-and-teardown-to-resume, not power-off.
 static SUSPEND: AtomicBool = AtomicBool::new(false);
+/// The pending suspend came from a signal (`limina suspend`), not from this process's own UI.
+/// The window parks after a suspend it was asked for, but a CLI caller has no window to click,
+/// so a supervisor whose suspend came from outside exits once the snapshot is down.
+static SUSPEND_FROM_SIGNAL: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_suspend(_sig: libc::c_int) {
+    SUSPEND_FROM_SIGNAL.store(true, Ordering::SeqCst);
     SUSPEND.store(true, Ordering::SeqCst);
 }
 
@@ -188,6 +193,12 @@ pub fn suspend_requested() -> bool {
 /// back into a suspend.
 pub fn clear_suspend_request() {
     SUSPEND.store(false, Ordering::SeqCst);
+    SUSPEND_FROM_SIGNAL.store(false, Ordering::SeqCst);
+}
+
+/// Did the pending (or just-finished) suspend come from `limina suspend` rather than the window?
+pub fn suspend_requested_externally() -> bool {
+    SUSPEND_FROM_SIGNAL.load(Ordering::SeqCst)
 }
 
 /// Ask for an IMMEDIATE forceful stop (SIGKILL, no grace) — the window menu's Force Stop.
@@ -774,6 +785,7 @@ pub fn monitor(
                      could not quiesce — e.g. a virtiofs mount); the VM keeps running"
             );
             SUSPEND.store(false, Ordering::SeqCst);
+            SUSPEND_FROM_SIGNAL.store(false, Ordering::SeqCst);
             suspend_at = None;
         }
 

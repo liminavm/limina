@@ -1108,7 +1108,7 @@ fn flat_supervisor_pid(disk: &Path, several: &str) -> Result<i32> {
         .arg(disk.as_os_str())
         .output()
         .context("running pgrep")?;
-    let mut supervisors: Vec<i32> = Vec::new();
+    let mut supervisors: Vec<(i32, bool)> = Vec::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         let Ok(pid) = line.trim().parse::<i32>() else {
             continue;
@@ -1127,20 +1127,52 @@ fn flat_supervisor_pid(disk: &Path, several: &str) -> Result<i32> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or(comm);
         if name == "limina" {
-            supervisors.push(pid);
+            // A supervisor parked on a suspended guest has no worker and nothing left to
+            // suspend; it can share the disk path with a fresh run of the same disk.
+            let parked = runtime_ctl::request(pid as u32, runtime_ctl::Request::Info)
+                .is_ok_and(|i| i.parked);
+            supervisors.push((pid, parked));
         }
     }
-    match supervisors.as_slice() {
-        [] => anyhow::bail!(
+    pick_flat_supervisor(&supervisors).map_err(|e| match e {
+        FlatPick::None => anyhow::anyhow!(
             "no running limina supervisor found for {} (is the VM running, and was it started \
              with this disk path?)",
             disk.display()
         ),
-        [pid] => Ok(*pid),
-        many => anyhow::bail!(
-            "multiple limina supervisors match {} (pids {many:?}); {several}",
+        FlatPick::AllParked(pids) => anyhow::anyhow!(
+            "the VM on {} is already suspended (supervisor pids {pids:?} parked on its snapshot)",
             disk.display()
         ),
+        FlatPick::Several(pids) => anyhow::anyhow!(
+            "multiple limina supervisors match {} (pids {pids:?}); {several}",
+            disk.display()
+        ),
+    })
+}
+
+/// Why no single supervisor was picked.
+#[derive(Debug, PartialEq, Eq)]
+enum FlatPick {
+    None,
+    AllParked(Vec<i32>),
+    Several(Vec<i32>),
+}
+
+/// The one live supervisor among `(pid, parked)` candidates. Parked ones are skipped: their guest
+/// is already suspended, and the parked window would otherwise make a later run of the same disk
+/// ambiguous.
+fn pick_flat_supervisor(candidates: &[(i32, bool)]) -> Result<i32, FlatPick> {
+    let live: Vec<i32> = candidates
+        .iter()
+        .filter(|(_, parked)| !parked)
+        .map(|(pid, _)| *pid)
+        .collect();
+    match (live.as_slice(), candidates) {
+        ([pid], _) => Ok(*pid),
+        ([], []) => Err(FlatPick::None),
+        ([], parked) => Err(FlatPick::AllParked(parked.iter().map(|c| c.0).collect())),
+        (many, _) => Err(FlatPick::Several(many.to_vec())),
     }
 }
 
@@ -2521,6 +2553,21 @@ fn create_disk_image(path: &Path, size: u64) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn a_parked_supervisor_is_not_a_suspend_target() {
+        assert_eq!(pick_flat_supervisor(&[(10, false)]), Ok(10));
+        assert_eq!(pick_flat_supervisor(&[(10, true), (11, false)]), Ok(11));
+        assert_eq!(pick_flat_supervisor(&[]), Err(FlatPick::None));
+        assert_eq!(
+            pick_flat_supervisor(&[(10, true)]),
+            Err(FlatPick::AllParked(vec![10]))
+        );
+        assert_eq!(
+            pick_flat_supervisor(&[(10, false), (11, false), (12, true)]),
+            Err(FlatPick::Several(vec![10, 11]))
+        );
+    }
 
     /// A windowed supervisor keeps running after a suspend it completed, so a held run lock says
     /// nothing about whether the suspend landed; the recorded snapshot does.

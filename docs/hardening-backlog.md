@@ -244,15 +244,6 @@ probes — decide offer or decline for each and record it.
 
 ## Suspend/restore
 
-### `limina suspend <disk>` leaves the supervisor alive and blocks the next suspend
-After a flat-disk `limina suspend <disk>` the worker snapshots and exits 126, but the supervisor
-stays up holding its gvproxy (and SSH port) and a stale window, and `SIGTERM` does not end it. The
-next `limina suspend` on the same disk refuses with "multiple limina supervisors match"
-(`cmd_suspend_flat` `pgrep -f`s the disk path and keeps every process named `limina`). Reproduced
-2026-08-29 on all three cycles of a synoik poke session. Decide whether a flat-run supervisor exits after a
-CLI-requested suspend (a windowed run parks behind the play button by design), make `SIGTERM` end a
-parked supervisor, and have `cmd_suspend_flat` skip a supervisor whose worker already suspended.
-
 ### The snapshot bracket gives up on a slow guest, wakes it, and then misses its late sleep
 The SIGTSTP bracket in `crates/limina-vmm/src/krun/mod.rs` has a fixed `QUIESCE_TIMEOUT` of 20 s;
 on expiry it logs `bracket: ABORTED`, pulses `wake::guest` and re-arms. Measured 2026-09-16 on the F44

@@ -9,6 +9,7 @@
 //! ```text
 //! > info
 //! < ssh-port 2223
+//! < parked no
 //! < ok
 //! > ssh-port 2300
 //! < ssh-port 2300
@@ -19,7 +20,9 @@
 //! < ssh-port 2301        (pushed whenever it changes, for as long as the client stays)
 //! ```
 //!
-//! `ssh-port none` means the VM has no NAT network, or its gateway is not up yet. After `watch`
+//! `ssh-port none` means the VM has no NAT network, or its gateway is not up yet. `parked yes`
+//! means the guest is suspended and its window is waiting for a play click: the supervisor is
+//! still up, but there is no worker behind it. After `watch`
 //! the connection carries only those pushed lines, so a watcher that also wants to change
 //! something opens a second connection. The control center keeps one watch open per running VM
 //! (`center::live`); `limina ssh-port` is the command-line client.
@@ -46,6 +49,9 @@ const PUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The NAT gateway's SSH forward, once `run_vm` has started one.
 static FORWARD: Mutex<Option<SshForward>> = Mutex::new(None);
+
+/// The window is parked on a suspended guest (no worker until the play click).
+static PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Connections that sent `watch`, each owed every change.
 static WATCHERS: Mutex<Vec<UnixStream>> = Mutex::new(Vec::new());
@@ -105,20 +111,27 @@ pub struct Info {
     /// The host port of the guest's SSH forward; `None` without a NAT network (or before its
     /// gateway is up).
     pub ssh_port: Option<u16>,
+    /// The guest is suspended and the supervisor's window is parked on it. A supervisor too old
+    /// to say reads as not parked.
+    pub parked: bool,
 }
 
 impl Info {
     fn current() -> Self {
         Info {
             ssh_port: lock(&FORWARD).as_ref().map(SshForward::port),
+            parked: PARKED.load(std::sync::atomic::Ordering::SeqCst),
         }
     }
 
     fn to_lines(self) -> Vec<String> {
-        vec![match self.ssh_port {
-            Some(p) => format!("ssh-port {p}"),
-            None => "ssh-port none".into(),
-        }]
+        vec![
+            match self.ssh_port {
+                Some(p) => format!("ssh-port {p}"),
+                None => "ssh-port none".into(),
+            },
+            format!("parked {}", if self.parked { "yes" } else { "no" }),
+        ]
     }
 
     /// Fold one report line in. Lines this build does not know are skipped, so a newer
@@ -126,6 +139,8 @@ impl Info {
     fn apply(&mut self, line: &str) {
         if let Some(v) = line.strip_prefix("ssh-port ") {
             self.ssh_port = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("parked ") {
+            self.parked = v.trim() == "yes";
         }
     }
 
@@ -146,6 +161,12 @@ pub fn socket_path(pid: u32) -> PathBuf {
 /// Publish the NAT gateway's SSH forward (and tell every watcher).
 pub fn set_forward(forward: Option<SshForward>) {
     *lock(&FORWARD) = forward;
+    push();
+}
+
+/// Publish whether the window is parked on a suspended guest (and tell every watcher).
+pub fn set_parked(parked: bool) {
+    PARKED.store(parked, std::sync::atomic::Ordering::SeqCst);
     push();
 }
 
@@ -351,8 +372,12 @@ pub(crate) mod tests {
         for info in [
             Info {
                 ssh_port: Some(2223),
+                parked: false,
             },
-            Info { ssh_port: None },
+            Info {
+                ssh_port: None,
+                parked: true,
+            },
         ] {
             let lines = info.to_lines();
             assert_eq!(Info::from_lines(lines.iter().map(String::as_str)), info);
