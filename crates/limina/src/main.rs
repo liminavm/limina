@@ -996,7 +996,7 @@ fn cmd_suspend(args: SuspendArgs) -> Result<()> {
     // A snapshot already on disk before the request must not read as this suspend's success.
     let before = suspend_stamp(&bundle);
     vmlib::runtime::signal_suspend(pid)?;
-    // The bracket is bounded (worker quiesce ≤20s + snapshot; the supervisor gives up at 60s), so
+    // The bracket is bounded (worker quiesce ≤45s + snapshot; the supervisor gives up at 60s), so
     // 75s covers it with margin. The success signal is the `[suspended]` record with its snapshot,
     // not the run lock: a windowed supervisor outlives the suspend it ran.
     let deadline = std::time::Instant::now() + Duration::from_secs(75);
@@ -1067,7 +1067,7 @@ fn cmd_suspend_flat(disk: &Path) -> Result<()> {
     let pid = flat_supervisor_pid(disk, "suspend them individually with kill -TSTP")?;
 
     vmlib::runtime::signal_suspend(pid)?;
-    // Same bound as the managed path: quiesce ≤20s + save, supervisor teardown after. The
+    // Same bound as the managed path: quiesce ≤45s + save, supervisor teardown after. The
     // SNAPSHOT is the success signal, not process death: it is published atomically
     // (stream-to-.tmp + rename), and an exited supervisor can linger as a zombie when its
     // parent hasn't reaped it yet — `kill(pid, 0)` still succeeds on a zombie.

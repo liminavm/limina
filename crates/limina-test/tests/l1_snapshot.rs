@@ -252,6 +252,27 @@ fn l1_guest_resumes_in_fresh_worker_from_snapshot() {
 /// quiesce poll (`Vmm::is_quiesced`) never succeeds. This asserts the fail-safe: after the quiesce
 /// timeout the bracket wakes the guest and the worker KEEPS RUNNING (never exits 126), and the guest
 /// survives (its counter keeps advancing). This is the untested half of the bracket — the abort path.
+/// Wait for the `n`th aborted bracket to finish: its marker, then the end of its grace (the line
+/// that says the guest stayed awake), bounded by the worker's 45 s budget + 10 s grace with margin.
+/// A bracket still in its grace has not re-armed yet, so firing the next one earlier would only
+/// queue it.
+fn wait_for_aborts(guest: &Guest, n: usize) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(75);
+    loop {
+        let log = guest.supervisor_log();
+        if log.matches("bracket: ABORTED").count() >= n
+            && log.matches("still awake after the").count() >= n
+        {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "bracket abort #{n} (marker + grace) did not finish within 75s; log:\n{log}"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
 #[test]
 fn l2_suspend_bracket_aborts_when_guest_cannot_quiesce() {
     if !limina_test::require_hvf_or_skip("l2_suspend_bracket_aborts_when_guest_cannot_quiesce") {
@@ -276,13 +297,12 @@ fn l2_suspend_bracket_aborts_when_guest_cannot_quiesce() {
     let before = last_counter(&guest.console()).expect("a counter heartbeat before the bracket");
 
     // Fire the suspend bracket. The virtiofs rootfs makes the guest unable to s2idle-quiesce, so the
-    // bracket must poll, time out (~20s in the worker), wake the guest, and keep the worker alive.
+    // bracket must poll, time out (45 s in the worker), watch out its grace for a late sleep, wake
+    // the guest, and keep the worker alive.
     guest
         .suspend_bracket()
         .expect("sending the SIGTSTP suspend bracket");
-
-    // Wait past the worker's 20s quiesce timeout, with margin.
-    std::thread::sleep(Duration::from_secs(28));
+    wait_for_aborts(&guest, 1);
 
     // The worker must still be alive — an aborted suspend never exits 126.
     let worker = guest.worker_pid();
@@ -326,7 +346,7 @@ fn l2_suspend_bracket_aborts_when_guest_cannot_quiesce() {
     guest
         .suspend_bracket()
         .expect("sending the second SIGTSTP suspend bracket");
-    std::thread::sleep(Duration::from_secs(28));
+    wait_for_aborts(&guest, 2);
     let log = guest.supervisor_log();
     assert_eq!(
         log.matches("bracket: ABORTED").count(),

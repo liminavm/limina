@@ -244,19 +244,6 @@ probes — decide offer or decline for each and record it.
 
 ## Suspend/restore
 
-### The snapshot bracket gives up on a slow guest, wakes it, and then misses its late sleep
-The SIGTSTP bracket in `crates/limina-vmm/src/krun/mod.rs` has a fixed `QUIESCE_TIMEOUT` of 20 s;
-on expiry it logs `bracket: ABORTED`, pulses `wake::guest` and re-arms. Measured 2026-09-16 on the F44
-enhanced golden: a fresh seated GNOME session reaches PSCI SYSTEM_SUSPEND 11 s after
-`systemctl suspend`, a *restored* one took 23.5 s — the wake landed on a guest still awake, the guest
-slept 3.5 s later, and the bracket had already given up. The suite now waits for the guest to be
-asleep before signalling, so it no longer exercises this; the dogfood path still runs bracket-first
-under the same 20 s. The honest outcome of a missed budget is "not suspended, still running".
-Decided: a budget of about 45 s (under the supervisor's 60 s `SUSPEND_BRACKET_TIMEOUT`), and on
-abort keep watching briefly and wake only a guest still awake. The host-sleep bracket in `power.rs`
-(`DEVICE_WAIT` = 15 s) does not wake on a miss (it pauses the vCPUs and releases the sleep ack), so
-it needs only its budget reviewed.
-
 ### A snapshot does not record each device's configuration or features
 Snapshot v9 records every virtio-mmio device's `(type_id, mmio_base, irq)` and refuses a restore
 whose device list differs (`slot_mismatch`, libkrun `vmm/snapshot.rs`; worker exit 124 with

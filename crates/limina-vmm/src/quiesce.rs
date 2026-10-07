@@ -4,7 +4,7 @@
 //! Driving the guest into a state where stopping it is safe — the one implementation.
 //!
 //! Two callers need this and had grown their own copies: the M9 snapshot bracket
-//! (`krun/mod.rs`, 20 s budget, aborts on failure) and the host-sleep bracket
+//! (`krun/mod.rs`, 45 s budget, aborts on failure) and the host-sleep bracket
 //! ([`crate::power`], 10 s budget, released the ack anyway). Same pulse, same oracle, same
 //! poll interval, different budgets and opposite failure policies. The budgets and the
 //! policy are genuinely per-caller; the sequence is not.
@@ -187,6 +187,36 @@ fn wait_for_quiesce(guest: &impl GuestProbe, req: &QuiesceRequest) -> Quiesced {
     }
 }
 
+/// How an aborted snapshot bracket finds the guest once its grace has run out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LateSleep {
+    /// The guest finished the suspend it was asked for after the budget had already gone:
+    /// PSCI `SYSTEM_SUSPEND`, or devices at `INIT` with every vCPU parked.
+    Slept,
+    /// Still awake when the grace ended.
+    Awake,
+}
+
+/// After a missed budget, watch up to `grace` for a guest that is still on its way to sleep.
+///
+/// A slow guest can be past the point of no return when the budget runs out (a restored F44
+/// session reached `SYSTEM_SUSPEND` 23.5 s after the request). A wake sent the moment the budget
+/// expires lands on a guest that is still awake and is lost; the guest then sleeps with nobody
+/// left to wake it. Returns as soon as the guest is asleep, so the caller's wake lands on a guest
+/// that can hear it.
+pub fn watch_for_late_sleep(vmm: &Arc<Mutex<Vmm>>, grace: Duration) -> LateSleep {
+    wait_for_late_sleep(&**vmm, grace)
+}
+
+fn wait_for_late_sleep(guest: &impl GuestProbe, grace: Duration) -> LateSleep {
+    let asleep = || guest.system_suspended() || (guest.is_quiesced() && guest.all_vcpus_parked());
+    if wait_until(grace, asleep) {
+        LateSleep::Slept
+    } else {
+        LateSleep::Awake
+    }
+}
+
 fn wait_until(budget: Duration, mut pred: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + budget;
     loop {
@@ -205,7 +235,66 @@ mod tests {
     use std::cell::Cell;
     use std::time::Duration;
 
-    use super::{GuestProbe, QuiesceRequest, Quiesced, wait_for_quiesce};
+    use super::{
+        GuestProbe, LateSleep, QuiesceRequest, Quiesced, wait_for_late_sleep, wait_for_quiesce,
+    };
+
+    /// A guest that misses the budget and suspends itself to RAM on its `sleeps_after`-th look.
+    struct LateSleeper {
+        looks: Cell<u32>,
+        sleeps_after: u32,
+    }
+
+    impl GuestProbe for LateSleeper {
+        fn is_quiesced(&self) -> bool {
+            false
+        }
+        fn quiesce_holdouts(&self) -> Vec<(u32, String, u32)> {
+            Vec::new()
+        }
+        fn system_suspended(&self) -> bool {
+            let n = self.looks.get() + 1;
+            self.looks.set(n);
+            n >= self.sleeps_after
+        }
+        fn all_vcpus_parked(&self) -> bool {
+            false
+        }
+        fn park_holdouts(&self) -> Vec<u64> {
+            Vec::new()
+        }
+    }
+
+    /// The wake after a missed budget must wait for a guest that is still falling asleep: woken
+    /// while awake, it slept anyway a few seconds later with nobody left to wake it.
+    #[test]
+    fn a_late_sleep_inside_the_grace_is_seen() {
+        let guest = LateSleeper {
+            looks: Cell::new(0),
+            sleeps_after: 4,
+        };
+        assert_eq!(
+            wait_for_late_sleep(&guest, Duration::from_secs(5)),
+            LateSleep::Slept
+        );
+        assert_eq!(
+            guest.looks.get(),
+            4,
+            "it returns as soon as the guest is asleep"
+        );
+    }
+
+    #[test]
+    fn a_guest_awake_through_the_grace_is_reported_awake() {
+        let guest = LateSleeper {
+            looks: Cell::new(0),
+            sleeps_after: u32::MAX,
+        };
+        assert_eq!(
+            wait_for_late_sleep(&guest, Duration::from_millis(200)),
+            LateSleep::Awake
+        );
+    }
 
     /// A guest whose devices quiesce, then come back — a suspend that aborted after
     /// `dpm_suspend` — and which then idles with every vCPU parked.

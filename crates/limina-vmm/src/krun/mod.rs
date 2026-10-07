@@ -893,7 +893,12 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                 // `snapshot_vcpus` parks every vCPU itself at a clean boundary. Only the
                 // host-sleep bracket needs `Parked`, because there the guest keeps running
                 // afterwards and must have classified the stop as suspend.
-                const QUIESCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+                // A restored seated session has taken 23.5 s to reach SYSTEM_SUSPEND (a fresh one
+                // 11 s). The budget plus ABORT_GRACE stays under the supervisor's 60 s
+                // SUSPEND_BRACKET_TIMEOUT, so the supervisor never gives up on a bracket that is
+                // still deciding.
+                const QUIESCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+                const ABORT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
                 let outcome = crate::quiesce::quiesce_guest(
                     &vmm_for_bracket,
                     &crate::quiesce::QuiesceRequest {
@@ -911,9 +916,20 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
                     // any rewording in the prose that follows it.
                     log::warn!(
                         "bracket: ABORTED — guest did not quiesce within {QUIESCE_TIMEOUT:?} \
-                         (holdouts: {holdouts:?}); waking it and aborting the suspend \
-                         (VM lives on)"
+                         (holdouts: {holdouts:?}); aborting the suspend (VM lives on)"
                     );
+                    // Not suspended, still running — so a guest that falls asleep late has to be
+                    // woken once it is asleep, when the wake can land.
+                    match crate::quiesce::watch_for_late_sleep(&vmm_for_bracket, ABORT_GRACE) {
+                        crate::quiesce::LateSleep::Slept => log::info!(
+                            "bracket: the guest finished suspending inside the {ABORT_GRACE:?} \
+                             grace; waking it"
+                        ),
+                        crate::quiesce::LateSleep::Awake => log::info!(
+                            "bracket: the guest is still awake after the {ABORT_GRACE:?} grace; \
+                             sending the wake button"
+                        ),
+                    }
                     crate::wake::guest(&vmm_for_bracket);
                     continue; // re-arm: the next SIGTSTP gets a fresh bracket
                 }

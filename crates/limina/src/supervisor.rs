@@ -94,7 +94,7 @@ const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(5);
 const MAX_RAPID_REBOOTS: u32 = 5;
 
 /// Bound on the whole M9.2 suspend bracket (worker: pulse suspend button → wait the guest to
-/// s2idle-quiesce [≤20s] → snapshot [seconds for a 1–2 GB image]). If the worker hasn't exited 126
+/// s2idle-quiesce [≤45s] → snapshot [seconds for a 1–2 GB image]). If the worker hasn't exited 126
 /// by now the guest could not quiesce; the supervisor gives up and the VM keeps running.
 pub(crate) const SUSPEND_BRACKET_TIMEOUT: Duration = Duration::from_secs(60);
 
