@@ -42,6 +42,15 @@ touches the guest disk, and the host can gate it on Touch ID or refuse a clone.
 - **Suspend/resume carries the TPM state** in the snapshot, including the volatile state a
   `TPM2_Shutdown(STATE)` saves.
 - **Firmware work is in scope**, so measured boot is part of the deliverable, not a follow-up.
+- **The engine is `janus`**, `MIT OR Apache-2.0`, its own repository under liminavm. It is not
+  published: the name is taken on crates.io.
+- **RSA uses RustCrypto's `rsa` 0.10** (a release candidate at the time of writing) as it
+  stands. Its timing advisory (RUSTSEC-2023-0071, "Marvin") is unpatched and accepted
+  knowingly; ssh-tpm-agent's raw `RSA_Decrypt` is the exposed operation. RSA is one module that
+  nothing else depends on, so replacing it stays local, and the advisory is re-checked before
+  each release.
+- **One PCR bank, SHA-256.** The allocation is part of the persisted state, so a bank can be
+  added later without a new identity.
 
 ## Architecture
 
@@ -59,7 +68,7 @@ guest tpm_tis driver ──MMIO──▶ libkrun TIS device ──▶ Backend tr
   `virt` machine, so Fedora's `tpm_tis` driver binds without help. The device is mechanism only:
   register file, localities, FIFO, and one call into the backend per command. It is the
   upstreamable half.
-- **Engine: a crate of its own**, consumed by libkrun as a path dependency the way rutabaga
+- **Engine: `janus`, a crate of its own**, consumed by libkrun as a path dependency the way rutabaga
   consumes virglrs, pinned by `third_party/manifest.toml`. It knows nothing about TIS, libkrun or
   files: bytes in, bytes out, plus an explicit state value the caller persists. Randomness and
   time are injected, so a test can replay a command stream deterministically.
@@ -168,15 +177,6 @@ An entry lands with its witness.
 
 ## Open questions
 
-- **Name, repository and licence of the engine crate.** virglrs is MIT because it was written
-  against MIT code; this is written against the TCG specification, and libkrun is Apache-2.0.
-- **RSA.** P0 settled that it is needed: ssh-tpm-agent, the OpenSSL provider and tpm2-pkcs11
-  all make RSA 2048 keys, and ssh-tpm-agent signs through `RSA_Decrypt`, a raw private-key
-  operation. The `rsa` crate's open timing advisory (RUSTSEC-2023-0071, "Marvin") is about
-  exactly that operation, so P1 needs a constant-time RSA private-key path before RSA ships.
-- **PCR banks.** No consumer in P0 read any bank but SHA-256; the firmware extends whatever is
-  allocated. The proposal is SHA-256 only, with the allocation stored in the state so a bank can
-  be added later without a new identity.
 - **The `tss` group.** `/dev/tpmrm0` is `root:tss 0660`; an unprivileged user needs the group,
   and some images lack the `tss` user entirely. Whether limina's images add the default user to
   `tss` is a provisioning decision for P2.
