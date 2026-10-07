@@ -105,6 +105,15 @@ fn live_pointer_in_view(view: &NSView) -> Option<(f64, f64)> {
     Some((local.x, local.y))
 }
 
+/// Where the pointer is **right now**, in CG global coordinates (top-left origin) — the
+/// window-server query [`live_pointer_in_view`] makes, in the space the capture tap's samples
+/// speak.
+pub(crate) fn live_pointer_global() -> NSPoint {
+    let p = NSEvent::mouseLocation();
+    let h = unsafe { CGDisplayBounds(CGMainDisplayID()) }.size.height;
+    NSPoint::new(p.x, h - p.y)
+}
+
 /// The event's cursor position in `view` coordinates.
 ///
 /// `locationInWindow` is relative to **the window the event was delivered to**, while
@@ -629,6 +638,9 @@ pub struct InputState {
     grab: Cell<super::grab_policy::GrabState>,
     /// The screen the guest occupied at the last tick, for that trigger's edge.
     screen_gain: Cell<Option<super::grab_policy::ScreenGain>>,
+    /// When the tick last re-asked the dwell re-grab for a resting pointer
+    /// ([`Self::rest_ask_due`]).
+    rest_asked: Cell<Option<std::time::Instant>>,
     /// The last send whose echo has been folded into the mapping, so one send is one sample.
     sampled: Cell<Option<u64>>,
     /// The deliberate sweep in progress, if any.
@@ -932,6 +944,7 @@ impl InputState {
             conn,
             grab: Cell::new(super::grab_policy::GrabState::default()),
             screen_gain: Cell::new(None),
+            rest_asked: Cell::new(None),
             sampled: Cell::new(None),
             probe: Cell::new(None),
             probe_rested: Cell::new(None),
@@ -3778,6 +3791,26 @@ impl ButtonLedger {
 }
 
 impl InputState {
+    /// Whether any button is down by either reckoning — what the at-rest re-grab waits out, as
+    /// the motion path does ([`super::capture_tap::regrab_at_rest`]).
+    pub(crate) fn any_button_down(&self) -> bool {
+        self.buttons.get().any_down()
+    }
+
+    /// Whether the at-rest re-grab may ask again now: at most once per
+    /// [`super::fit::REGRAB_DWELL`], so a refusal that stands (a menu open, a window in front)
+    /// is not a window-server round trip every tick. Records the ask when it answers yes.
+    pub(crate) fn rest_ask_due(&self, now: std::time::Instant) -> bool {
+        let due = self
+            .rest_asked
+            .get()
+            .is_none_or(|t| now.saturating_duration_since(t) >= super::fit::REGRAB_DWELL);
+        if due {
+            self.rest_asked.set(Some(now));
+        }
+        due
+    }
+
     /// Note a button's state from the CAPTURE TAP, into the tap's own mask.
     /// See [`ButtonLedger`] for why the two masks stay apart.
     pub(crate) fn note_tap_button(&self, bit: u8, down: bool) {

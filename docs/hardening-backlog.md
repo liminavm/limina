@@ -89,13 +89,12 @@ the hit test found, so a click refused by a stuck `MENU_OPEN` looks like any oth
 before forming a theory. Ruled out for the 2026-10-03 report: a system-disabled tap (no
 `the system disabled our event tap` line in any dogfood log).
 
-### The dwell re-grab is judged only on motion events
-After a release, moving back in re-takes the grab once the pointer has been `REGRAB_MARGIN`
-inside for `REGRAB_DWELL` (250 ms) — but `grab_policy::free_step` runs only from the tap, per
-motion event, and nothing on the tick re-asks it (`grab_on_screen_gain` covers screen gain only).
-A trackpad stops sending events the moment the finger lifts, so a stroke that ends deep inside
-before the dwell has run never grabs, however long the pointer then rests. Fix direction: a tick
-check of the live pointer against the same predicate (`fit::may_regrab`) once the dwell is owed.
+### The at-rest dwell re-grab is unverified on hardware
+The tick re-asks the dwell for a resting pointer (`capture_tap::regrab_at_rest`); the policy is
+unit-tested, the live behaviour is not. Owed: on a fullscreen guest, release the grab at an edge,
+then make one trackpad stroke that ends deep inside and lift the finger at once — the grab must
+be taken about a quarter second later with no further motion (`pointer capture: taken — the
+pointer came to rest …` at `info`).
 
 ### A click on the notch strip reads as a click on macOS
 Under `notch = extend` the band beside the housing is the strip overlay, a window of ours showing

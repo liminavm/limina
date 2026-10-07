@@ -266,7 +266,10 @@ load-bearing parts:
   session that is already fullscreen ("Use Other Screens When Fullscreen", a display plugged in).
   Neither reaches the tap, and the second happens while the user is still inside a macOS menu whose
   clicks have just stood the grab down. The silent re-take after an edge release
-  keeps its hysteresis (deep inside for the dwell, no button down).
+  keeps its hysteresis (deep inside for the dwell, no button down), and is judged on the tick
+  as well as on motion (`capture_tap::regrab_at_rest`): a trackpad sends nothing once the
+  finger lifts, so a stroke that ends inside short of the dwell is re-asked at rest, through
+  the same sample and predicate the tap uses.
 - **Some macOS UI takes the click without covering anything, and the hit test cannot see it.**
   Two known: an **open menu** (the click that dismisses it is spent on the dismissal) and a live
   **screen-capture session** — the Cmd-Shift-4 crosshair and its relatives, which intercept at

@@ -1122,63 +1122,33 @@ fn uncaptured_edges(
     click: bool,
 ) -> (CGEventRef, bool) {
     let loc = unsafe { CGEventGetLocation(event) };
-    // Resolve the guest window UNDER the pointer: the grab spans every covered panel, so the
-    // regrab is judged against whichever window's content the free pointer is over — that is
-    // what extends capture beyond the primary. Off every guest content, fall back to the
-    // primary's (affine, out-of-fit) conversion, which is exactly the "outside" `free_step`
-    // needs to disarm and to time the dwell.
-    let (fit, cur, hit_slot) = match ctx.input.guest_surface_at_global(loc, &ctx.view) {
-        Some(hit) => (hit.fit, hit.point, Some(hit.slot)),
-        None => {
-            let Some(cur) = super::input::cg_global_to_view_point(&ctx.view, loc) else {
-                return (event, false);
-            };
-            (ctx.input.primary_fit(), cur, None)
-        }
+    let Some(FreeSample {
+        free: sample,
+        hit_slot,
+        cur,
+        fit,
+    }) = free_sample(
+        &ctx.input,
+        &ctx.view,
+        facts,
+        loc,
+        ctx.hold > 0.0,
+        ctx.buttons.get() != 0,
+        click,
+    )
+    else {
+        return (event, false);
     };
     let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
-    let arming = grab_policy::free_arming(facts, hit_slot);
-    let sample = grab_policy::Free {
-        now: std::time::Instant::now(),
-        pos: cur,
-        fit,
-        // Judged against the window the pointer is OVER ([`grab_policy::free_arming`]): the
-        // fullscreen and Space facts are that window's own — with the primary's panel swiped
-        // to a workspace, the covering guest still on glass must be able to re-arm — while
-        // `key` stays the primary's (the keyboard reaches the guest through it alone, and a
-        // covered secondary never becomes key). The two flags stay separate terms because key
-        // and Space are *different* questions: a window keeps key status across a Space
-        // switch, which is exactly where the old single-flag bug lived.
-        fullscreen_and_key: arming.0,
-        space_visible: arming.1,
-        grab_enabled: ctx.hold > 0.0,
-        buttons_down: ctx.buttons.get() != 0,
-        menu_open: menu_open(),
-        click,
-    };
-    // The window server's own hit test, deferred until the policy has a reason to spend it (a
-    // click, or a dwell that has already earned the re-grab). Deliberately NOT short-circuited
-    // on the fit: a click in the letterbox is still on our own window, and must not be read as
-    // the user leaving for macOS.
-    let hit_window = std::cell::Cell::new(None::<isize>);
-    let on_guest = || {
-        let t = ctx.input.guest_is_topmost_at(loc, &ctx.view);
-        hit_window.set(Some(t.hit));
-        t.ours
-    };
-    // The capture-session query, on the same deferral and memoized the same way — the policy
-    // may ask it from either arm, and one event must not spend two window-list round trips.
-    let capture_seen = std::cell::Cell::new(None::<CaptureReading>);
-    let capture_live = || {
-        let reading = capture_seen.get().unwrap_or_else(screen_capture_session);
-        capture_seen.set(Some(reading));
-        reading.session.live()
-    };
-    let out = ctx.with_grab(|st| grab_policy::free_step(st, &sample, on_guest, capture_live));
+    let Judged {
+        out,
+        hit_window,
+        capture: capture_seen,
+    } = judge_free(&ctx.input, &ctx.view, loc, &sample);
     // A click the screenshot UI owns is not a window in front of the guest — the hit test
     // answers our own window for it — so it needs its own line, or the message below would
     // name the guest as the thing that intercepted the click.
-    if let (true, Some(reading)) = (click, capture_seen.get())
+    if let (true, Some(reading)) = (click, capture_seen)
         && reading.session != CaptureSession::None
     {
         // Said either way: a refused click names the session that took it, and an overlay that
@@ -1200,7 +1170,7 @@ fn uncaptured_edges(
     }
     if click
         && !out.grab
-        && !capture_seen.get().is_some_and(|r| r.session.live())
+        && !capture_seen.is_some_and(|r| r.session.live())
         && hit_slot.is_some()
         && super::fit::point_in_fit(cur.0, cur.1, fit)
     {
@@ -1211,7 +1181,7 @@ fn uncaptured_edges(
         log::info!(
             "pointer capture: the click on slot {} was taken by window {} in front of the guest — the grab stands down",
             hit_slot.map(|s| s as i64).unwrap_or(-1),
-            hit_window.get().unwrap_or(0),
+            hit_window.unwrap_or(0),
         );
     }
     if click && edge_trace() {
@@ -1237,7 +1207,7 @@ fn uncaptured_edges(
             out.left_guest,
             ctx.input.grab_state().user_released(),
             // `None` when nothing asked — the click was decided before the question arose.
-            capture_seen.get(),
+            capture_seen,
         );
     }
 
@@ -1320,6 +1290,161 @@ fn uncaptured_edges(
         ctx.input.toggle_capture(&ctx.view);
     }
     (event, out.grab)
+}
+
+/// One free-pointer sample at `loc` (CG global), as the policy reads it — shared by the tap's
+/// motion path and the tick's at-rest re-ask ([`regrab_at_rest`]), so the two can never build
+/// it differently.
+struct FreeSample {
+    free: grab_policy::Free,
+    /// The guest window the pointer is over, if any.
+    hit_slot: Option<usize>,
+    /// The pointer in that window's view space (the primary's, off every guest content).
+    cur: (f64, f64),
+    /// The fit `cur` is judged against.
+    fit: fit::FitRect,
+}
+
+fn free_sample(
+    input: &InputState,
+    view: &NSView,
+    facts: &[grab_policy::WindowFacts],
+    loc: NSPoint,
+    grab_enabled: bool,
+    buttons_down: bool,
+    click: bool,
+) -> Option<FreeSample> {
+    // Resolve the guest window UNDER the pointer: the grab spans every covered panel, so the
+    // regrab is judged against whichever window's content the free pointer is over — that is
+    // what extends capture beyond the primary. Off every guest content, fall back to the
+    // primary's (affine, out-of-fit) conversion, which is exactly the "outside" `free_step`
+    // needs to disarm and to time the dwell.
+    let (fit, cur, hit_slot) = match input.guest_surface_at_global(loc, view) {
+        Some(hit) => (hit.fit, hit.point, Some(hit.slot)),
+        None => (
+            input.primary_fit(),
+            super::input::cg_global_to_view_point(view, loc)?,
+            None,
+        ),
+    };
+    let arming = grab_policy::free_arming(facts, hit_slot);
+    Some(FreeSample {
+        free: grab_policy::Free {
+            now: std::time::Instant::now(),
+            pos: cur,
+            fit,
+            // Judged against the window the pointer is OVER ([`grab_policy::free_arming`]): the
+            // fullscreen and Space facts are that window's own — with the primary's panel
+            // swiped to a workspace, the covering guest still on glass must be able to re-arm —
+            // while `key` is asked of every guest window, since the keyboard is ours whenever
+            // any of them holds it. The two flags stay separate terms because key and Space are
+            // *different* questions: a window keeps key status across a Space switch, which is
+            // exactly where the old single-flag bug lived.
+            fullscreen_and_key: arming.0,
+            space_visible: arming.1,
+            grab_enabled,
+            buttons_down,
+            menu_open: menu_open(),
+            click,
+        },
+        hit_slot,
+        cur,
+        fit,
+    })
+}
+
+/// What [`judge_free`] decided, and the two round trips it spent getting there (`None` where it
+/// never needed to ask).
+struct Judged {
+    out: grab_policy::FreeOutcome,
+    hit_window: Option<isize>,
+    capture: Option<CaptureReading>,
+}
+
+/// Run one free sample through [`grab_policy::free_step`], with the window server's hit test and
+/// the screen-capture query deferred until the policy has a reason to spend them (a click, or a
+/// dwell that has already earned the re-grab) and memoized, so one sample never pays for either
+/// twice. Deliberately NOT short-circuited on the fit: a click in the letterbox is still on our
+/// own window, and must not be read as the user leaving for macOS.
+fn judge_free(
+    input: &InputState,
+    view: &NSView,
+    loc: NSPoint,
+    sample: &grab_policy::Free,
+) -> Judged {
+    let hit_window = std::cell::Cell::new(None::<isize>);
+    let on_guest = || {
+        let t = input.guest_is_topmost_at(loc, view);
+        hit_window.set(Some(t.hit));
+        t.ours
+    };
+    let capture_seen = std::cell::Cell::new(None::<CaptureReading>);
+    let capture_live = || {
+        let reading = capture_seen.get().unwrap_or_else(screen_capture_session);
+        capture_seen.set(Some(reading));
+        reading.session.live()
+    };
+    let out = input.with_grab(|st| grab_policy::free_step(st, sample, on_guest, capture_live));
+    Judged {
+        out,
+        hit_window: hit_window.get(),
+        capture: capture_seen.get(),
+    }
+}
+
+/// The dwell re-grab, asked from the tick for a pointer that has stopped sending events.
+///
+/// [`grab_policy::free_step`] advances the dwell only on motion, and a trackpad sends none once
+/// the finger lifts — so a stroke that ended deep inside before [`fit::REGRAB_DWELL`] had run
+/// rested there unjudged, however long it stayed. Once the dwell is owed
+/// ([`grab_policy::GrabState::dwell_owed`]) and no button is down, this builds the same sample
+/// from the live pointer and runs the same predicate; the grab is taken on its answer and on
+/// nothing else. The chrome ask is not fed from here: it is a push gesture, and a resting
+/// pointer has no delta to push with.
+///
+/// A refusal at rest (a menu open, a window in front) asks again only every
+/// [`fit::REGRAB_DWELL`], so a pointer resting under something else costs a window-server round
+/// trip four times a second, not sixty.
+pub(crate) fn regrab_at_rest(input: &InputState, view: &NSView, grab_enabled: bool) {
+    let now = std::time::Instant::now();
+    if !grab_enabled
+        || input.captured_flag()
+        || input.any_button_down()
+        || !input.grab_state().dwell_owed(now)
+        || !input.rest_ask_due(now)
+    {
+        return;
+    }
+    let loc = super::input::live_pointer_global();
+    let facts = input.window_facts(view);
+    let Some(sample) = free_sample(input, view, &facts, loc, grab_enabled, false, false) else {
+        return;
+    };
+    let judged = judge_free(input, view, loc, &sample.free);
+    if !judged.out.grab {
+        return;
+    }
+    if edge_trace() {
+        // Not a `grabbing:` line: those are the motion path's, and the fixture replays each
+        // against the [EDGE] event before it. This grab has no event.
+        eprintln!(
+            "[GRAB] t={:.1} taken at rest (src=tick): cur=({:.1},{:.1}) slot={:?} \
+             fit=({:.1},{:.1} {:.1}x{:.1}) inside_for={:?}",
+            trace_ms(),
+            sample.cur.0,
+            sample.cur.1,
+            sample.hit_slot,
+            sample.fit.x,
+            sample.fit.y,
+            sample.fit.w,
+            sample.fit.h,
+            judged.out.inside_for.map(|d| d.as_millis()),
+        );
+    }
+    log::info!(
+        "pointer capture: taken — the pointer came to rest deep inside the guest and stayed past the dwell"
+    );
+    input.toggle_capture(view);
 }
 
 /// Whether any display contains this global point.

@@ -469,6 +469,23 @@ impl GrabState {
         self.holding = false;
     }
 
+    /// Whether the re-grab dwell has been served and nothing has asked about it since — what the
+    /// tick checks for a pointer that has stopped sending events.
+    ///
+    /// [`free_step`] advances the dwell only on motion, and a trackpad sends none once the
+    /// finger lifts: a stroke that ends deep inside short of [`fit::REGRAB_DWELL`] would rest
+    /// there unjudged for good. This is the gate on the tick re-asking; the answer is still
+    /// [`free_step`]'s, run on the resting pointer, so the tick can never take a grab the motion
+    /// path would refuse. Not owed while the policy already holds, after an explicit release,
+    /// or for a pointer that never came deep inside.
+    pub(crate) fn dwell_owed(&self, now: Instant) -> bool {
+        !self.holding
+            && !self.user_released
+            && self
+                .inside_since
+                .is_some_and(|t| now.saturating_duration_since(t) >= fit::REGRAB_DWELL)
+    }
+
     /// Forget an explicit release, so the grab re-arms. Returns whether there was one.
     pub(crate) fn rearm(&mut self) -> bool {
         std::mem::replace(&mut self.user_released, false)
@@ -1819,6 +1836,65 @@ mod tests {
         assert!(out.inside_for.is_some_and(|d| d >= fit::REGRAB_DWELL));
         // Nothing half-earned survives the grab: the edge press that follows starts from zero.
         assert_eq!(st.charge.get(), (0.0, 0.0));
+    }
+
+    /// A trackpad stops sending events the moment the finger lifts, so a stroke that ends deep
+    /// inside short of the dwell leaves nothing to judge it again: the motion path never
+    /// re-asks, however long the pointer then rests. The tick asks instead, at rest, whether
+    /// the dwell is owed — and when it is, the same predicate the motion path runs takes the
+    /// grab.
+    #[test]
+    fn a_stroke_that_ends_inside_before_the_dwell_is_taken_at_rest() {
+        let mut st = GrabState::default();
+        let t0 = Instant::now();
+        let deep = (700.0, 400.0);
+        // The stroke's last events land deep inside, short of the dwell.
+        assert!(!free_step(&mut st, &free(deep, t0), || true).grab);
+        assert!(
+            !free_step(
+                &mut st,
+                &free(deep, t0 + Duration::from_millis(100)),
+                || true
+            )
+            .grab
+        );
+        // No more events. Asked before the dwell has run, nothing is owed yet.
+        assert!(!st.dwell_owed(t0 + Duration::from_millis(200)));
+        // Asked once it has, it is — and the predicate, re-run on the resting pointer, grabs.
+        let rest = t0 + fit::REGRAB_DWELL + Duration::from_millis(500);
+        assert!(st.dwell_owed(rest));
+        assert!(free_step(&mut st, &free(deep, rest), || true).grab);
+        assert!(
+            !st.dwell_owed(rest + Duration::from_secs(1)),
+            "holding: nothing is owed any more"
+        );
+    }
+
+    /// The tick's question is narrow: it never owes a grab the motion path would refuse. An
+    /// explicit release latches it out, a pointer that never came deep inside has served no
+    /// dwell, and leaving again forgets the one it had.
+    #[test]
+    fn nothing_is_owed_at_rest_that_the_motion_path_would_refuse() {
+        let t0 = Instant::now();
+        let later = t0 + fit::REGRAB_DWELL * 4;
+        let deep = (700.0, 400.0);
+
+        let st = GrabState::default();
+        assert!(!st.dwell_owed(later), "never inside");
+
+        let mut st = GrabState::default();
+        st.release_by_user(true);
+        free_step(&mut st, &free(deep, t0), || true);
+        assert!(!st.dwell_owed(later), "an explicit release is latched");
+
+        let mut st = GrabState::default();
+        free_step(&mut st, &free(deep, t0), || true);
+        free_step(
+            &mut st,
+            &free((1.0, 400.0), t0 + Duration::from_millis(50)),
+            || true,
+        );
+        assert!(!st.dwell_owed(later), "the pointer left the deep interior");
     }
 
     #[test]

@@ -3996,6 +3996,10 @@ pub fn run(
             // the tap sees, and the second happens while the user is still in a macOS menu — so it
             // is polled here, where the window facts are already being read.
             timer_input.grab_on_screen_gain(&timer_view, timer_grab_enabled);
+            // The dwell re-grab, for a pointer that came to rest inside before the dwell had
+            // run: a trackpad sends no events once the finger lifts, so the motion path that
+            // judges the dwell never runs again (`capture_tap::regrab_at_rest`).
+            capture_tap::regrab_at_rest(&timer_input, &timer_view, timer_grab_enabled);
             // Sweep the absolute device to learn each display's share of it, rather than waiting
             // for the user to cross the seam by accident. Grabbed or not: the mapping is the
             // uncaptured pointer's, so it should be known before the pointer first needs it.
