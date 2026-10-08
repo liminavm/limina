@@ -18,6 +18,10 @@
 //! reports, every PCR the log covers, which needs our firmware's TPM2 support. That makes the
 //! PCR-7 enrolment above a real measured-boot policy, which the reboot then has to satisfy.
 //!
+//! Suspend (P4): a guest suspended with the suspend bracket and restored by a new worker finds
+//! its TPM running as it left it: an extended PCR, a secret sealed to it, a loaded key and a
+//! saved session, which a TPM rebuilt from its state file could not have.
+//!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
 use std::os::unix::fs::PermissionsExt as _;
@@ -308,6 +312,146 @@ fn stock_guest_tpm_consumers_work_and_survive_a_reboot() {
     after_the_reboot(&guest);
 
     let outcome = guest
+        .shutdown(Duration::from_secs(30))
+        .expect("supervisor did not stop");
+    eprintln!("teardown outcome: {outcome:?}");
+    std::fs::remove_dir_all(&dir).expect("removing the TPM's state");
+}
+
+/// What the guest holds in the TPM's volatile state when it suspends, for the restore to find:
+/// a PCR extended past its boot value, a secret sealed to it, a key loaded at a transient handle
+/// and a policy session whose context is saved. All of it goes through `/dev/tpm0`, so the
+/// kernel's resource manager neither flushes the key nor virtualizes the handles.
+fn before_the_suspend(guest: &Guest) -> String {
+    run(
+        guest,
+        "volatile state",
+        r#"sudo rm -rf /var/tmp/l2s; sudo mkdir -p /var/tmp/l2s; cd /var/tmp/l2s
+export TPM2TOOLS_TCTI=device:/dev/tpm0
+sudo -E tpm2_pcrextend 16:sha256=$(printf p4 | sha256sum | cut -d" " -f1)
+sudo -E tpm2_createprimary -Q -C o -g sha256 -G ecc -c primary.ctx
+sudo -E tpm2_startauthsession -Q --policy-session -S session.ctx
+echo -n across-a-restore | sudo systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=16 --name=s1 - s1.cred"#,
+    );
+    run(guest, "PCR 16", "sudo tpm2_pcrread sha256:16")
+}
+
+/// After the restore, everything [`before_the_suspend`] left is still there and usable.
+fn after_the_restore(guest: &Guest, pcr16: &str) {
+    assert_eq!(
+        run(guest, "PCR 16", "sudo tpm2_pcrread sha256:16"),
+        pcr16,
+        "PCR 16 did not survive the restore"
+    );
+    let loaded = run(
+        guest,
+        "transient handles",
+        "sudo TPM2TOOLS_TCTI=device:/dev/tpm0 tpm2_getcap handles-transient",
+    );
+    assert!(
+        loaded.contains("0x80000000"),
+        "the key loaded before the suspend is gone:\n{loaded}"
+    );
+    // The contexts load and the session takes a policy command. Commands to /dev/tpm0 leave
+    // what they load loaded, so the transient objects are flushed before systemd-creds, which
+    // needs two of the TPM's three object slots.
+    let out = run(
+        guest,
+        "volatile state after the restore",
+        r#"cd /var/tmp/l2s
+export TPM2TOOLS_TCTI=device:/dev/tpm0
+sudo -E tpm2_readpublic -Q -c primary.ctx
+sudo -E tpm2_policypcr -Q -S session.ctx -l sha256:16
+sudo -E tpm2_flushcontext session.ctx
+sudo -E tpm2_flushcontext -t
+sudo systemd-creds decrypt --name=s1 s1.cred -; echo"#,
+    );
+    assert!(
+        out.lines().any(|l| l == "across-a-restore"),
+        "the secret sealed to PCR 16 did not unseal:\n{out}"
+    );
+}
+
+/// docs/design/vtpm.md, P4: a guest suspended with a TPM resumes with the TPM it suspended with,
+/// running: its PCRs, its loaded key and its saved session are where it left them. The guest
+/// sends `TPM2_Shutdown(STATE)` on the way down and no Startup on the way up, as on hardware
+/// whose firmware does not run on an s2idle resume.
+#[test]
+fn stock_guest_tpm_survives_a_suspend_and_restore() {
+    if !limina_test::require_hvf_or_skip("stock_guest_tpm_survives_a_suspend_and_restore") {
+        return;
+    }
+    // The device's trace names each command, so the suspend leg shows the guest's Shutdown.
+    unsafe { std::env::set_var("RUST_LOG", "info,krun_devices::tpm=trace") };
+    let dir = std::env::temp_dir().join(format!("limina-l2-tpm-snap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a directory for the TPM's state");
+    let state = dir.join("tpm.state");
+    let vars = dir.join("efi.vars");
+    let base = match GuestConfig::tpm_fedora_from_env() {
+        Ok(cfg) => cfg
+            .with_supervisor_arg("--tpm-state")
+            .with_supervisor_arg(state.to_str().expect("a UTF-8 temporary path"))
+            .with_supervisor_arg("--efi-vars")
+            .with_supervisor_arg(vars.to_str().expect("a UTF-8 temporary path"))
+            .with_supervisor_log(),
+        Err(e) => {
+            eprintln!("SKIP stock_guest_tpm_survives_a_suspend_and_restore: {e:#}");
+            return;
+        }
+    };
+
+    let mut g1 = Guest::boot(&base.clone().with_snapshot()).expect("spawning the supervisor");
+    g1.wait_for_ssh(Duration::from_secs(300))
+        .expect("guest did not reach sshd");
+    let booted = boot_id(&g1);
+    let pcr16 = before_the_suspend(&g1);
+
+    // The bracket's suspend-button pulse alone, as `limina suspend` does. A timer armed in the
+    // guest as well would fire after the restore and put the resumed guest back to sleep.
+    g1.suspend_bracket().expect("sending the suspend bracket");
+    let outcome = g1
+        .wait_supervisor_exit(Duration::from_secs(120))
+        .expect("supervisor did not exit after the suspend bracket");
+    let suspend_log = g1.supervisor_log();
+    assert_eq!(
+        outcome.code,
+        Some(126),
+        "the guest did not suspend: {outcome:?}\n{suspend_log}"
+    );
+    // The guest's own suspend sends TPM2_Shutdown (the firmware sends one too, on the fallback
+    // reset at first boot): the snapshot holds a TPM that has shut down and goes on running.
+    let shut_down = suspend_log
+        .lines()
+        .skip_while(|l| !l.contains("bracket: SIGTSTP received"))
+        .any(|l| l.contains("tpm: command 0x145 -> 0x0"));
+    assert!(
+        shut_down,
+        "the guest suspended without TPM2_Shutdown:\n{suspend_log}"
+    );
+
+    let snap = dir.join("snapshot");
+    let disk = dir.join("disk.raw");
+    std::fs::copy(g1.snapshot_path().expect("a snapshot path"), &snap).expect("keeping it");
+    limina_test::cow_clone(&g1.scratch_dir().join("disk.raw"), &disk).expect("keeping the disk");
+    drop(g1);
+
+    let mut cfg2 = base.restore_from(&snap);
+    if let limina_test::Boot::Firmware { disk: d, .. } = &mut cfg2.boot {
+        *d = disk.clone();
+    }
+    let mut g2 = Guest::boot(&cfg2).expect("spawning the restoring supervisor");
+    g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
+        .expect("the worker never entered the restore path");
+    g2.wait_for_ssh(Duration::from_secs(120))
+        .expect("the restored guest never reached sshd");
+    assert_eq!(
+        boot_id(&g2),
+        booted,
+        "the guest rebooted instead of resuming"
+    );
+    after_the_restore(&g2, &pcr16);
+
+    let outcome = g2
         .shutdown(Duration::from_secs(30))
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");

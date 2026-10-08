@@ -41,8 +41,13 @@ touches the guest disk, and the host can gate it on Touch ID or refuse a clone.
   would lose every sealed secret; that has to be the user's choice.
 - **A clone keeps the TPM identity.** A later UI action resets it (a fresh seed), which the user
   invokes knowing it invalidates every secret sealed in that guest.
-- **Suspend/resume carries the TPM state** in the snapshot, including the volatile state a
-  `TPM2_Shutdown(STATE)` saves.
+- **Suspend/resume carries the whole TPM** in the snapshot: running, with its PCRs, loaded
+  objects and sessions (`Janus::snapshot`, a v11 section of the snapshot head). The guest sends
+  `TPM2_Shutdown(STATE)` on the way down and, with no firmware run on the way up, no Startup,
+  so a TPM rebuilt from the state file would be one that never started. The snapshot's NV
+  replaces the state file on restore, so the TPM rolls back with the RAM. A snapshot with a TPM
+  does not restore into a VM without one, and the snapshot file is owner-only, like the state
+  file.
 - **Firmware work is in scope**, so measured boot is part of the deliverable, not a follow-up.
 - **The engine is `janus`**, `MIT OR Apache-2.0`, its own repository under liminavm. It is not
   published: the name is taken on crates.io.
