@@ -39,8 +39,11 @@ touches the guest disk, and the host can gate it on Touch ID or refuse a clone.
 - **Plain per-VM state file in v1.** Wrapping it with a Secure Enclave key is a later option. It
   would make the state unusable on another Mac, so a Time Machine restore onto a new machine
   would lose every sealed secret; that has to be the user's choice.
-- **A clone keeps the TPM identity.** A later UI action resets it (a fresh seed), which the user
-  invokes knowing it invalidates every secret sealed in that guest.
+- **A clone keeps the TPM identity.** The control center's Configure sheet resets it (deleting
+  `tpm.state`, so a fresh seed is made on the next start), behind a confirmation that spells out
+  that it invalidates every secret sealed in that guest. The deletion rides the sheet's Save, so
+  Cancel discards it, and it is locked while the VM is suspended (the TPM then lives in the
+  snapshot).
 - **Suspend/resume carries the whole TPM** in the snapshot: running, with its PCRs, loaded
   objects and sessions (`Janus::snapshot`, a v11 section of the snapshot head). The guest sends
   `TPM2_Shutdown(STATE)` on the way down and, with no firmware run on the way up, no Startup,
@@ -185,7 +188,7 @@ An entry lands with its witness.
   replays to the reported PCRs, and a PCR-7-bound LUKS volume unlocks.
 - **P4, snapshot.** TPM state in suspend/resume. Exit: a sealed credential unseals after a
   restore, and a restore across a `Shutdown(STATE)` resumes the session state.
-- **Later:** reset-identity UI; Secure Enclave wrapping as an option; an EK certificate from a
+- **Later:** Secure Enclave wrapping as an option; an EK certificate from a
   per-install limina CA, if remote attestation is ever wanted.
 - **Later, larger algorithms.** The engine implements RSA-2048 and ECC P-256 only, which is every
   key the P0 consumers create; `TPM2_TestParms` refuses the rest, so `tpm2-pkcs11` (the one

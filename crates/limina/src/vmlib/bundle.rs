@@ -110,6 +110,21 @@ impl VmBundle {
         Ok(had)
     }
 
+    /// Throw away this VM's TPM: delete `tpm.state` so the next start creates a fresh TPM (a new
+    /// seed, a new identity). Every secret sealed to the old TPM — disk-encryption keys bound to
+    /// its PCRs, keys it generated — becomes unrecoverable. Returns whether there was state to
+    /// remove. The caller must know the VM is stopped and not suspended: a suspended guest carries
+    /// its TPM inside the snapshot, and the worker refuses to resume a VM whose TPM has gone.
+    pub fn reset_tpm(&self) -> Result<bool> {
+        let state = self.tpm_state();
+        if !state.exists() {
+            return Ok(false);
+        }
+        std::fs::remove_file(&state)
+            .with_context(|| format!("resetting the TPM {}", state.display()))?;
+        Ok(true)
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.path.join("logs")
     }
@@ -570,6 +585,20 @@ pub(crate) mod tests {
         assert_eq!(st.window, Some(window), "the window placement must survive");
 
         assert!(!b.discard_suspend().unwrap(), "nothing left to discard");
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    #[test]
+    fn reset_tpm_removes_the_state_and_is_idempotent() {
+        let lib = scratch_library("reset-tpm");
+        let b = VmBundle::new(lib.join("Fedora.liminavm"));
+        std::fs::create_dir_all(&b.path).unwrap();
+
+        assert!(!b.reset_tpm().unwrap(), "no TPM state to reset yet");
+        std::fs::write(b.tpm_state(), b"tpm nv").unwrap();
+        assert!(b.reset_tpm().unwrap(), "state was there to reset");
+        assert!(!b.tpm_state().exists());
+        assert!(!b.reset_tpm().unwrap(), "nothing left to reset");
         std::fs::remove_dir_all(&lib).ok();
     }
 

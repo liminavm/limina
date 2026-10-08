@@ -30,9 +30,10 @@ use objc2::runtime::Sel;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSApplication,
-    NSApplicationDelegate, NSBezelStyle, NSBox, NSBoxType, NSButton, NSColor, NSFont, NSImage,
-    NSLayoutAttribute, NSLayoutConstraint, NSLayoutConstraintOrientation, NSModalResponseOK,
-    NSOpenPanel, NSPasteboard, NSPasteboardTypeString, NSPopUpButton, NSPopover, NSPopoverBehavior,
+    NSApplicationDelegate, NSBezelStyle, NSBox, NSBoxType, NSButton, NSColor,
+    NSControlStateValueOff, NSControlStateValueOn, NSFont, NSImage, NSLayoutAttribute,
+    NSLayoutConstraint, NSLayoutConstraintOrientation, NSModalResponseOK, NSOpenPanel,
+    NSPasteboard, NSPasteboardTypeString, NSPopUpButton, NSPopover, NSPopoverBehavior,
     NSScrollView, NSStackView, NSStackViewGravity, NSTextField, NSUserInterfaceLayoutOrientation,
     NSView, NSViewController, NSWindow,
 };
@@ -93,6 +94,12 @@ pub struct CenterIvars {
     cfg_resolution_popup: RefCell<Option<Retained<NSPopUpButton>>>,
     /// The currently shown "?" help popover (kept alive while displayed).
     cfg_help_popover: RefCell<Option<Retained<NSPopover>>>,
+    /// The bundle whose Configure sheet is running, so that sheet's modal Reset-TPM button
+    /// can find its `tpm.state`. Present only while the sheet runs.
+    cfg_tpm_bundle: RefCell<Option<vmlib::bundle::VmBundle>>,
+    /// Set while the Configure sheet runs once the user has confirmed a TPM reset. The state
+    /// file is deleted only if they then Save, so Cancel discards the reset like any other change.
+    cfg_tpm_reset_armed: std::cell::Cell<bool>,
 }
 
 define_class!(
@@ -266,6 +273,13 @@ define_class!(
             );
         }
 
+        // The Configure sheet's "Reset TPM…" was clicked: confirm, then arm the reset (the
+        // state file is only deleted if the sheet is then Saved — see run_configure_sheet).
+        #[unsafe(method(configureResetTpmClicked:))]
+        fn configure_reset_tpm_clicked(&self, sender: &NSButton) {
+            self.arm_tpm_reset(sender);
+        }
+
         #[unsafe(method(deleteClicked:))]
         fn delete_clicked(&self, sender: &NSButton) {
             if let Some(row) = self.row_for(sender) {
@@ -367,6 +381,8 @@ impl CenterController {
             window: RefCell::new(None),
             cfg_resolution_popup: RefCell::new(None),
             cfg_help_popover: RefCell::new(None),
+            cfg_tpm_bundle: RefCell::new(None),
+            cfg_tpm_reset_armed: std::cell::Cell::new(false),
         });
         // SAFETY: NSObject's init signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -1189,45 +1205,45 @@ impl CenterController {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 332.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 362.0));
         let name_field = labeled_field(
             mtm,
             &accessory,
-            302.0,
+            332.0,
             "Name:",
             cfg.identity.name.as_deref().unwrap_or_default(),
         );
         name_field.setPlaceholderString(Some(&NSString::from_str(&row.bundle.dir_name())));
         self.row_help(
             &accessory,
-            302.0,
+            332.0,
             &name_field,
             "Shown in the control center and the VM window. Leave empty to use the VM's name.",
         );
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            272.0,
+            302.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
         self.row_help(
             &accessory,
-            272.0,
+            302.0,
             &cpus_field,
             "How many virtual CPUs the guest sees.",
         );
         let cpu_reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            242.0,
+            272.0,
             "CPU reclaim:",
             &CPU_RECLAIM_CHOICES,
             cpu_reclaim_index(cfg.hardware.cpu_reclaim),
         );
         self.row_help(
             &accessory,
-            242.0,
+            272.0,
             &cpu_reclaim_popup,
             "Whether idle virtual CPUs are handed back to the Mac while the guest has \
              nothing to run, and taken up again as soon as it has work. Off keeps every \
@@ -1236,10 +1252,10 @@ impl CenterController {
              the smaller number and stay there for its whole run. Light gives back at most \
              half of them; Moderate goes down to two; Aggressive to one.",
         );
-        let mem_field = labeled_field(mtm, &accessory, 212.0, "Memory:", &mem_now);
+        let mem_field = labeled_field(mtm, &accessory, 242.0, "Memory:", &mem_now);
         self.row_help(
             &accessory,
-            212.0,
+            242.0,
             &mem_field,
             "The maximum guest RAM — \"4G\", \"8GiB\", or a bare MiB count. Idle guest \
              memory is returned to the Mac according to Reclaim.",
@@ -1247,14 +1263,14 @@ impl CenterController {
         let reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            182.0,
+            212.0,
             "Reclaim:",
             &RECLAIM_CHOICES,
             reclaim_index(cfg.hardware.reclaim),
         );
         self.row_help(
             &accessory,
-            182.0,
+            212.0,
             &reclaim_popup,
             "How hard idle guest memory is returned to the Mac. Moderate keeps some \
              guest disk cache unless the Mac is under memory pressure; Light engages \
@@ -1263,14 +1279,14 @@ impl CenterController {
         let granule_popup = labeled_popup(
             mtm,
             &accessory,
-            152.0,
+            182.0,
             "Memory pages:",
             &GRANULE_CHOICES,
             granule_index(cfg.hardware.ipa_granule),
         );
         self.row_help(
             &accessory,
-            152.0,
+            182.0,
             &granule_popup,
             "How finely the Mac maps this VM's memory. 4 KB suits any guest, including a \
              stock Linux distro whose own pages are 4 KB — such a guest gets no hardware \
@@ -1290,6 +1306,66 @@ impl CenterController {
                  the suspended session, to change the memory page size.",
             )));
         }
+
+        // Security: the vTPM toggle plus a reset. Built inline rather than with labeled_popup so
+        // the one row can carry both the Enabled checkbox and the Reset button.
+        let tpm_label = NSTextField::labelWithString(&NSString::from_str("TPM 2.0:"), mtm);
+        tpm_label.setFrame(rect(0.0, 152.0 + 3.0, 84.0, 18.0));
+        accessory.addSubview(&tpm_label);
+        // SAFETY: standard checkbox constructor; no target/action (its state is read on Save).
+        let tpm_checkbox = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Enabled"),
+                None,
+                None,
+                mtm,
+            )
+        };
+        tpm_checkbox.setFrame(rect(88.0, 152.0, 92.0, 24.0));
+        tpm_checkbox.setState(if cfg.hardware.tpm {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        accessory.addSubview(&tpm_checkbox);
+        // SAFETY: standard target/action wiring; self outlives the modal sheet.
+        let tpm_reset = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Reset TPM…"),
+                Some(self.as_ref()),
+                Some(sel!(configureResetTpmClicked:)),
+                mtm,
+            )
+        };
+        tpm_reset.setFrame(rect(184.0, 152.0 - 2.0, 108.0, 26.0));
+        // Reset only means something when there is saved state, and never while suspended (the
+        // TPM then lives in the snapshot, and the worker refuses to resume a VM without its TPM).
+        let tpm_has_state = row.bundle.tpm_state().exists();
+        tpm_reset.setEnabled(tpm_has_state && !row.suspended);
+        if row.suspended {
+            tpm_reset.setToolTip(Some(&NSString::from_str(
+                "Locked while the VM is suspended: resume it and shut it down, or discard \
+                 the suspended session, to reset the TPM.",
+            )));
+        } else if !tpm_has_state {
+            tpm_reset.setToolTip(Some(&NSString::from_str(
+                "No saved TPM state to reset yet — one is created the first time the VM \
+                 starts with the TPM on.",
+            )));
+        }
+        accessory.addSubview(&tpm_reset);
+        self.row_help(
+            &accessory,
+            152.0,
+            &tpm_checkbox,
+            "A virtual TPM 2.0 the guest can seal secrets to — disk-encryption keys bound to \
+             boot measurements, keys, certificates. Stock Linux binds it with its built-in \
+             driver, no Limina guest components. Its state is kept inside this VM's bundle, so a \
+             copy of the VM carries the same TPM and everything sealed to it. Reset throws that \
+             away and makes a fresh one on the next start, which invalidates every sealed secret \
+             and cannot be undone.",
+        );
+
         let ssh_field = labeled_field(mtm, &accessory, 122.0, "SSH port:", &ssh_now.to_string());
         self.row_help(
             &accessory,
@@ -1407,10 +1483,15 @@ impl CenterController {
 
         alert.setAccessoryView(Some(&accessory));
 
-        // Published so configureDisplayModeChanged: can toggle it while the sheet runs.
+        // Published so configureDisplayModeChanged: and configureResetTpmClicked: can act while
+        // the sheet runs. The reset button records its intent here and only Save carries it out.
         *self.ivars().cfg_resolution_popup.borrow_mut() = Some(resolution_popup.clone());
+        *self.ivars().cfg_tpm_bundle.borrow_mut() = Some(row.bundle.clone());
+        self.ivars().cfg_tpm_reset_armed.set(false);
         let response = alert.runModal();
         *self.ivars().cfg_resolution_popup.borrow_mut() = None;
+        *self.ivars().cfg_tpm_bundle.borrow_mut() = None;
+        let reset_tpm = self.ivars().cfg_tpm_reset_armed.replace(false);
         if response != NSAlertFirstButtonReturn {
             return;
         }
@@ -1441,6 +1522,7 @@ impl CenterController {
             cfg.hardware.cpu_reclaim =
                 cpu_reclaim_from_index(cpu_reclaim_popup.indexOfSelectedItem());
             cfg.hardware.ipa_granule = granule_from_index(granule_popup.indexOfSelectedItem());
+            cfg.hardware.tpm = tpm_checkbox.state() == NSControlStateValueOn;
             cfg.display.resolution = resolution;
             cfg.display.notch = notch_from_index(notch_popup.indexOfSelectedItem());
             cfg.display.edge_resistance = hold_from_index(
@@ -1462,10 +1544,46 @@ impl CenterController {
             Ok(cfg) => {
                 if let Err(e) = row.bundle.save(&cfg) {
                     self.alert("Could not save the configuration", &format!("{e:#}"));
+                } else if reset_tpm {
+                    // Only now, once the config is on disk: delete tpm.state so the next start
+                    // makes a fresh TPM. Ok(false) (nothing to remove) is a no-op, not an error.
+                    if let Err(e) = row.bundle.reset_tpm() {
+                        self.alert("Could not reset the TPM", &format!("{e:#}"));
+                    }
                 }
             }
             Err(e) => self.alert("Invalid configuration", &format!("{e:#}")),
         }
+    }
+
+    /// The Configure sheet's "Reset TPM…" button (dispatched while that sheet is modal): confirm
+    /// the destructive reset, and on OK only *arm* it — run_configure_sheet deletes `tpm.state`
+    /// if the sheet is then Saved, so Cancel still discards it. The button retitles itself and
+    /// disables, so the pending reset is visible and can't be armed twice.
+    fn arm_tpm_reset(&self, button: &NSButton) {
+        let name = self
+            .ivars()
+            .cfg_tpm_bundle
+            .borrow()
+            .as_ref()
+            .map(|b| b.dir_name())
+            .unwrap_or_default();
+        let mtm = self.mtm();
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(&format!("Reset the TPM for “{name}”?")));
+        alert.setInformativeText(&NSString::from_str(
+            "A fresh TPM is created the next time the VM starts. Every secret sealed to the \
+             current one — disk-encryption keys, keys, certificates — becomes unrecoverable, \
+             and this can't be undone. The reset is carried out when you click Save.",
+        ));
+        alert.addButtonWithTitle(&NSString::from_str("Reset TPM"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        if alert.runModal() != NSAlertFirstButtonReturn {
+            return;
+        }
+        self.ivars().cfg_tpm_reset_armed.set(true);
+        button.setTitle(&NSString::from_str("Will reset on Save"));
+        button.setEnabled(false);
     }
 
     /// A modal alert with a single text field; `Some(text)` on OK.
