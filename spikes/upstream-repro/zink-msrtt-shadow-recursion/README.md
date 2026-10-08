@@ -18,7 +18,16 @@ driver without MSRTSS under zink. Measured: anv on Ice Lake lacks it, and so doe
 QEMU guest; lavapipe has it (`zink_screen.c` also disables it for panvk).
 
     cc -o zink-msrtt-recursion zink-msrtt-recursion.c -lEGL -lGLESv2
-    MESA_LOADER_DRIVER_OVERRIDE=zink ./zink-msrtt-recursion
+    MESA_LOADER_DRIVER_OVERRIDE=zink ./zink-msrtt-recursion [color|zs]
+
+`color` (the default) is the sequence above. `zs` attaches a depth texture through MSRTT as well and
+leaves the scissored clear on depth instead: pass 1 writes depth 0.5, pass 3 clears the lower-left
+quadrant's depth to 1.0 and draws green at depth 0.75 with `GL_LESS`, so green shows where the
+clear landed and pass 1's blue wherever the replicated depth survived. It is a control: zink's
+depth/stencil shadow leg never runs on main, because `begin_rendering()` builds the shadow mask
+from colour attachments only (the line that would add the depth/stencil bit is commented out in
+`zink_context.c`, "maybe TODO but also not handled by legacy rp"). The patch changes that leg's
+mask too, without effect.
 
 Without the unbind (scissored clear on a fresh MSRTT attachment) it does not recurse, so the
 invalidated-transient step is required.
@@ -39,6 +48,8 @@ under test inside the rig guest, on the same host anv.
 | `main` 92b45bd0f2e | system lavapipe (`LIBGL_ALWAYS_SOFTWARE=1` plus `VK_DRIVER_FILES` naming its ICD) | the same three pixels, `ok`, exit 0 (control) |
 | `main` 92b45bd0f2e | venus on that anv, QEMU 10.2 + virglrenderer 1.3.0 guest | SIGSEGV, ~4358 "Caught recursion" lines before it, 5/5 |
 | `main` 92b45bd0f2e + fix | same | the same three pixels, `ok`, exit 0, 5/5 |
+| `main` 92b45bd0f2e, `zs` | anv, ICL | green, blue, blue, `ok`, exit 0, 5/5 (control) |
+| `main` 92b45bd0f2e + fix, `zs` | same | green, blue, blue, `ok`, exit 0, 5/5 |
 
 Measured 2026-10-05 (`b39d173ca93`) and 2026-10-08 (`92b45bd0f2e`).
 
@@ -70,6 +81,8 @@ blit carried over.
 
 The commit — message, `Fixes:`, trimmed comments — is on branch `upstream/guest-2026-10` of
 `liminavm/mesa`. `Fixes: 82add9f2e99` because that commit added the clear save/restore
-around the replicate blit but left the shadowed attachment's own clears enabled; the emulation
-itself (fbff2b6c652) predates the clear flush on attachment change. Both reach every live stable
-branch.
+around the replicate blit but left the shadowed attachment's own clears enabled. The loop itself
+is older: it needs only the emulation (`fbff2b6c652`, 2021) and the clear flush on attachment
+change (`66ceea7ed9a`, "zink: lift clearing on fb state change up a level", 22.2.0).
+`82add9f2e99` first shipped in 23.3.0 and `staging/26.2` carries it, so the stable reach is the
+same whichever commit the tag names.
