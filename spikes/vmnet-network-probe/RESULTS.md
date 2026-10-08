@@ -101,6 +101,12 @@ NATed out, and the replies are sent to the LAN router instead of the bridge.
   through. The host's own network was misbehaving in the same window (the user saw connections to
   remote services fail), and the host's own DNS was not checked, so that result is not counted
   either way.
+- **Moving the subnet does not escape it.** With the exit node and local access on, pinned subnets
+  `10.211.0.1/24` and `172.30.211.1/24` each gained the same static route via the LAN router within
+  about 2 s of the network appearing, and failed the same way. A non-private `198.18.211.1/24` was
+  accepted by `set_ipv4_subnet` and refused by `vmnet_network_create` (1001), as was a pinned
+  `192.168.65.1/24` while the hijacked route for it was still present. The route goes away when the
+  bridge does; replacing it needs root.
 - Bridged guests are untouched by the host's VPN because their traffic never enters the host's
   routing; they also never use the tunnel, which is a policy question for VPN users.
 - Root was not available, so the pf NAT rules were not inspected.

@@ -10,7 +10,8 @@
 //   ext <ifname|default|follow> --hold secs
 //       A shared network whose NAT uplink is chosen with set_external_interface (default = vmnet's
 //       own pick), checked once a second. follow tracks the host's route to 1.1.1.1 and rebuilds
-//       the network on the new uplink when it changes, keeping the guest MAC.
+//       the network on the new uplink when it changes, keeping the guest MAC. MINIGUEST_SUBNET pins
+//       the subnet (gateway address, /24).
 //   netobj
 //       macOS 26 network-object API: one shared network with a DHCP reservation and a port
 //       forward, two interfaces on it (lease each, ARP each other), and an interface on a second
@@ -713,6 +714,13 @@ static vmnet_network_ref make_ext_network(const char *ext) {
     if (ext) {
         st = vmnet_network_configuration_set_external_interface(cfg, ext);
         printf("set_external_interface %s: %d\n", ext, st);
+    }
+    const char *subnet = getenv("MINIGUEST_SUBNET");
+    if (subnet) {
+        struct in_addr sub, mask;
+        inet_aton(subnet, &sub), inet_aton("255.255.255.0", &mask);
+        st = vmnet_network_configuration_set_ipv4_subnet(cfg, &sub, &mask);
+        printf("set_ipv4_subnet %s/24: %d\n", subnet, st);
     }
     double t0 = now();
     vmnet_network_ref net = vmnet_network_create(cfg, &st);
