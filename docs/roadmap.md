@@ -489,7 +489,7 @@ AccessoryAccess from 27.
 **Owed — real host-device passthrough.** On macOS 27, AccessoryAccess
 (`com.apple.developer.accessory-access.usb`) opens the device in the worker with no root on either
 channel; the root helper (`docs/design/privileged-helper.md`) remains only for Apple-claimed
-devices on macOS 15–26. Request the entitlement and decide the channel first
+devices on macOS 26. Request the entitlement and decide the channel first
 (`docs/design/distribution.md` §2.1, `docs/design/m7-usb-passthrough.md` §Phase 4). Not CI-testable (root + a device).
 Open questions: the macOS 26 claiming matrix (FTDI, YubiKey, mass storage, webcam, keyboard);
 isochronous transfers (out of scope for v1); USB3 storage over USB/IP-vsock vs just virtiofs. A cheap

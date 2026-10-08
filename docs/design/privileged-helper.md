@@ -17,11 +17,11 @@ privileged binary. The one known client:
   then run the `LibusbBackend` USB/IP server on it. Proven to need root, **no entitlement** (see
   `m7-usb-passthrough.md` §Phase 4; `sudo spikes/usb-probe/run.sh` on a Solo 2 confirmed
   `detach=OK claim=OK`). On macOS 27 with the AccessoryAccess grant the worker opens devices
-  itself, so this client covers only Apple-claimed devices on macOS 15–26 or without that grant.
+  itself, so this client covers only Apple-claimed devices on macOS 26 or without that grant.
 - **Not a client: vmnet.** Every vmnet mode, bridged included, runs non-root in the worker with the
   unrestricted `com.apple.security.virtualization` (measured on macOS 26,
-  `spikes/vmnet-network-probe/`; `multi-vm-networking.md` §3.3). limina offers vmnet on macOS 26+;
-  macOS 15 is unmeasured.
+  `spikes/vmnet-network-probe/`; `multi-vm-networking.md` §3.3). macOS 26 is limina's
+  minimum, so vmnet is available on every supported host.
 - **Future** — anything else that genuinely needs root (e.g. raw bridged interfaces, certain
   performance knobs). New privileged capabilities are added as *methods on the existing broker*, not
   as new privileged binaries.

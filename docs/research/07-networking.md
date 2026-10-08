@@ -162,10 +162,8 @@ Constraints:
   network-object API (`vmnet_network_create` → `vmnet_interface_start_with_network`) starts
   under the same entitlement but returned no gateway address, so traffic over it is
   unverified.
-- **Not measured:** macOS 15 (limina's floor, `LSMinimumSystemVersion` in
-  `scripts/build-app.sh`; vmnet-helper's author reports root is needed there), macOS 27,
-  Developer ID + hardened runtime + notarization, the App Store sandbox, throughput, and
-  bridging over Wi-Fi beyond receiving one frame.
+- **Not measured:** macOS 27, Developer ID + hardened runtime + notarization, the App Store
+  sandbox, throughput, and bridging over Wi-Fi beyond receiving one frame.
 - libkrun does **not** link `vmnet.framework`. Whoever holds the vmnet interface relays
   frames to libkrun over a UNIX socket — `krun_add_net_unixgram` (one frame per datagram,
   vmnet-helper's framing) or `krun_add_net_unixstream` (socket_vmnet's). With no privilege
@@ -337,9 +335,8 @@ guest virtio_net -> TX vq -> net worker -> socketpair (SOCK_DGRAM) -> vmnet rela
    and does it give per-network isolation and pre-set port forwards as documented?
 4. **TSO6 offloads:** do GUEST_TSO6/HOST_TSO6 (new-API only) improve iperf3
    throughput without corruption, per backend (gvproxy/passt/vmnet)?
-5. **vmnet privilege beyond the probe:** re-run `spikes/vmnet-network-probe` on macOS 15
-   (the floor), on macOS 27, as a Developer ID + hardened-runtime + notarized build, and
-   inside the App Store sandbox.
+5. **vmnet privilege beyond the probe:** re-run `spikes/vmnet-network-probe` on macOS 27,
+   as a Developer ID + hardened-runtime + notarized build, and inside the App Store sandbox.
 6. **Wi-Fi bridging:** does a guest behind vmnet BRIDGED over `en0` (Wi-Fi) get a LAN
    lease and two-way traffic, or only over wired/USB Ethernet? (The probe proved only
    that frames arrive.)

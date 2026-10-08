@@ -883,7 +883,7 @@ fn info_plist(capture: &Path) -> String {
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>limina</string>
-    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSEnvironment</key>
     <dict>

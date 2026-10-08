@@ -172,7 +172,7 @@ not exercised:
 
 **Bottom line:** three rungs, by host and grant. macOS 27+ with the AccessoryAccess entitlement:
 the worker opens the device itself. Free-to-claim devices on any supported macOS: libusb in the
-worker, TCC grant only. Apple-claimed devices without AA (macOS 15–26, or no grant): capture as
+worker, TCC grant only. Apple-claimed devices without AA (macOS 26, or no grant): capture as
 root through the shared privileged helper (`docs/design/privileged-helper.md`).
 
 ### 1.6 macOS hotplug & transfer-type caveats

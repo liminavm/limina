@@ -158,7 +158,7 @@ dext work, no benefit) and codeless kexts / SIP-off (dead or dev-only).
   macOS 27 falls back to rungs 2–3.
 - **Rung 3 is the only one that needs the shared root broker.** It is the first client of
   `limina-privhelperd` (`privileged-helper.md`); with rung 1 in place it shrinks to "Apple-claimed
-  devices on macOS 15–26, or without the AA grant". Not CI-testable (root + a physical device);
+  devices on macOS 26, or without the AA grant". Not CI-testable (root + a physical device);
   validated by the manual `sudo` spike against the Solo 2.
 - **Capture is device-level on every rung we know of:** while the guest holds a composite device,
   the host loses all of it. Whether AA's `open` takes devices Apple's class drivers hold (HID,

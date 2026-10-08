@@ -88,7 +88,7 @@ see `input-and-windows.md` §5.
   Whether it also works inside the App Sandbox is unmeasured.
 - The `SMAppService` root helper (`privileged-helper.md`) is not permitted on MAS at all. On
   macOS 27 with the AccessoryAccess grant, USB needs no helper on either channel, so the
-  helper's USB role shrinks to Apple-claimed devices on macOS 15–26 (Developer ID only).
+  helper's USB role shrinks to Apple-claimed devices on macOS 26 (Developer ID only).
   **Decide the channel before building the root path**, and build device opening behind an
   interface that takes either an AccessoryAccess-opened device or a helper-captured one.
 

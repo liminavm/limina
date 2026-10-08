@@ -19,7 +19,7 @@ Status: **proposal** · Target host: macOS 26.x (Apple Silicon) · Audience: lim
 > are no longer a client of `limina-privhelperd` (`docs/design/privileged-helper.md`). Order of work:
 > the gvproxy → `limina-networkd` NAT path, the `Network` abstraction, multi-VM + isolation, dynamic
 > per-VM forwards and the orphan fix first (§3.1–3.2, §4; Phases 0–3), then vmnet (§3.3; Phases 4–6)
-> as the opt-in enhanced tier on macOS 26+.
+> as the opt-in enhanced tier.
 
 ## 1. Problem & goals
 
@@ -68,20 +68,19 @@ The realistic host-side backends, scored against limina's needs. (passt/pasta is
 table: it is **Linux-host-only** — Darwin is an unimplemented wishlist item, passt.top — so it
 cannot run on a macOS host at all.)
 
-| Backend | Privilege (macOS 26 / 15) | Multi-VM on one segment | Bridged-to-LAN | Fits two-tier? |
+| Backend | Privilege (macOS 26) | Multi-VM on one segment | Bridged-to-LAN | Fits two-tier? |
 |---|---|---|---|---|
 | **gvproxy** user-mode NAT | none / none | No (one peer per instance; switch is multi-endpoint but the vfkit listener isn't) | **No** (structural) | **Yes — this is the floor** |
 | **passt/pasta** | n/a (does not run on macOS) | n/a | n/a | n/a |
-| **vmnet SHARED** | `com.apple.security.virtualization`\* / unmeasured | Yes (same vmnet network = shared L2 via `bridge100`) | No (NAT only) | Yes (enhanced) |
-| **vmnet BRIDGED** | `com.apple.security.virtualization`\* / unmeasured | Yes (whole LAN) | **Yes** | Yes (enhanced) |
-| **vmnet HOST** | `com.apple.security.virtualization`\* / unmeasured | Yes (isolated L2, no Internet) | No (by design) | Yes (enhanced) |
+| **vmnet SHARED** | `com.apple.security.virtualization`\* | Yes (same vmnet network = shared L2 via `bridge100`) | No (NAT only) | Yes (enhanced) |
+| **vmnet BRIDGED** | `com.apple.security.virtualization`\* | Yes (whole LAN) | **Yes** | Yes (enhanced) |
+| **vmnet HOST** | `com.apple.security.virtualization`\* | Yes (isolated L2, no Internet) | No (by design) | Yes (enhanced) |
 
 \* Measured on macOS 26.6.2, M1 Max, non-root, ad-hoc signed (`spikes/vmnet-network-probe/`):
 with this unrestricted entitlement all three modes move packets through the classic
 `vmnet_start_interface` API; with only `com.apple.security.hypervisor`, or none, all three fail.
-The restricted `com.apple.vm.networking` plays no part. macOS 15 (limina's floor) is unmeasured;
-vmnet-helper's author reports root is needed there to create the interface. Developer ID +
-notarization, the App Store sandbox and macOS 27 are unmeasured too.
+The restricted `com.apple.vm.networking` plays no part. Developer ID + notarization, the App Store
+sandbox and macOS 27 are unmeasured.
 
 One design rule that shapes the table:
 
@@ -218,9 +217,8 @@ Mapping to Networks:
   relying on the gvproxy well-known MAC and static `.2`. SSH reaches the vmnet-assigned IP (read back
   from the interface parameters / the limina-agent / ARP on the bridge), or a port-forward rule.
 
-**Gating.** vmnet is opt-in and offered on macOS 26+ only until the probe has been run on 15. If
-starting the interface fails, the VM comes up on NAT (or with no NIC) with a clear error — **none of
-this is on the boot path of a stock NAT VM.**
+**Gating.** vmnet is opt-in. If starting the interface fails, the VM comes up on NAT (or with no
+NIC) with a clear error — **none of this is on the boot path of a stock NAT VM.**
 
 ### 3.4 Two-tier mapping
 
@@ -325,7 +323,7 @@ Each phase ships independently and is testable against the shipped binaries (`li
 `limina-vmm`) via `crates/limina-test`; full validation via `scripts/test-boot.sh`.
 
 **Order:** Phases 0–3 (NAT, multi-VM, orphans) first; Phases 4–6 (vmnet) after, as the opt-in
-enhanced tier on macOS 26+. No phase needs root or a restricted entitlement.
+enhanced tier. No phase needs root or a restricted entitlement.
 
 - **Phase 0 — fd-backend migration (no behavior change).** Switch the existing single gvproxy NIC
   from `UnixgramPath` to a supervisor-created socketpair fd (`UnixgramFd`, vfkit on). *RED:* a test
@@ -361,9 +359,9 @@ enhanced tier on macOS 26+. No phase needs root or a restricted entitlement.
 ## 7. Open questions & risks
 
 - **★ vmnet privilege outside the measured configuration — the key risk.** The no-root, no-restricted-
-  entitlement result holds for an ad-hoc-signed binary on macOS 26.6.2. Unmeasured: macOS 15 (the
-  floor; vmnet-helper's author reports root there), macOS 27, a Developer ID + hardened-runtime +
-  notarized build, and the App Store sandbox (`docs/design/distribution.md`). **Mitigation:** re-run
+  entitlement result holds for an ad-hoc-signed binary on macOS 26.6.2. Unmeasured: macOS 27, a
+  Developer ID + hardened-runtime + notarized build, and the App Store sandbox
+  (`docs/design/distribution.md`). **Mitigation:** re-run
   `spikes/vmnet-network-probe` in each before shipping vmnet there; vmnet stays strictly optional and
   **NAT (the floor) is never gated.** UTM#7229 reports vmnet creation failing on some 26 builds — the
   probe's failure path (a clear error, NAT fallback) is the answer, not a reason to defer.
