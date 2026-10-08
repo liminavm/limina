@@ -7,8 +7,9 @@ same binary semaphore, `vn_queue_submission_init_syncs` skips it while `sync_cou
 it. The renderer gets a sync slot nothing wrote. Regressed by `6f3a570d418`, which was also picked
 to 26.2 (in 26.2.0 through 26.2.4).
 
-**Fix.** `17c1e773a30` on `venus-sync-count` (`kov/mesa` on freedesktop.org), on `main`
-`3b1fece6ff5`: `vn_queue_submission_init_syncs` sets `sync_count` to the number of syncs it
+**Fix.** `a3e19b76b3f` on `venus-sync-count` (`kov/mesa` on freedesktop.org), on `main`
+`a51a418991f`, followed by `784d6782b0e` (below); the runs used the same commits on
+`3b1fece6ff5`, and nothing under `src/virtio` changed between the two. `vn_queue_submission_init_syncs` sets `sync_count` to the number of syncs it
 filled in, behind `assert(sync_index <= sync_count)`. The assert holds: a payload is
 `VN_SYNC_TYPE_SYNC` only on a semaphore created with `sync_fd_export` (`vn_sync.c`
 `vn_semaphore_init_payloads`), which `vn_semaphore_is_sync_fd` counts; temporary imports are
@@ -46,7 +47,7 @@ library):
 ## Results
 
 QEMU 10.2 + virglrenderer 1.3.0 guest, venus on Intel Iris Plus G7. 3 runs per cell. Measured
-2026-10-08. "Follow-up" is `fbacd346dc5` on top of the fix.
+2026-10-08. "Follow-up" is `784d6782b0e` on top of the fix.
 
 | Mesa | `sync` | `timeline` | `timeline2` | `group` |
 |---|---|---|---|---|
@@ -64,7 +65,7 @@ The crash on `main` is `virtgpu_submit` (`vn_renderer_virtgpu.c:815`) reading
 `init_pnext` drops the timeline values and device-group indices of signal semaphores that hold a
 sync fd, and runs before the waits; `init_signal_semaphores` drops the semaphores themselves, and
 runs after them. A semaphore both waited and signaled loses its value and index but keeps its
-place in the signal list. `fbacd346dc5` ("venus: drop signal semaphore values and indices after
+place in the signal list. `784d6782b0e` ("venus: drop signal semaphore values and indices after
 the waits", same `Fixes:`) moves the signal-side dropping into `init_signal_semaphores`, after the
 waits; semaphores not also waited on are unaffected, since the waits change only the payloads of
 waited semaphores. clang-format clean.
