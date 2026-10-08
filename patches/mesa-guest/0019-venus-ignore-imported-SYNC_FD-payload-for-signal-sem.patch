@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yiwei Zhang <zzyiwei@chromium.org>
+Date: Thu, 8 Oct 2026 13:17:00 -0700
+Subject: [PATCH 19/20] venus: ignore imported SYNC_FD payload for signal
+ semaphore inspection
+
+Vulkan allows to wait and signal the same binary semaphore as long as
+the dependency is satisfied (app responsibility), which also includes
+the case that the semaphore has an imported SYNC_FD payload. Fix this
+via inspecting permanent payload of the signal semaphore.
+
+This supersedes https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45030.
+
+Reported-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Fixes: 6f3a570d418 ("venus: extract syncs and scrub SYNC_FD signal semaphores")
+(cherry picked from commit f63aa202fa2fcffb866d0e0dd21cb1de96f34bdb)
+---
+ src/virtio/vulkan/vn_queue.c | 18 +++++++++---------
+ src/virtio/vulkan/vn_sync.h  |  9 ++++++++-
+ 2 files changed, 17 insertions(+), 10 deletions(-)
+
+diff --git a/src/virtio/vulkan/vn_queue.c b/src/virtio/vulkan/vn_queue.c
+index 057842a524e..d5f020787d1 100644
+--- a/src/virtio/vulkan/vn_queue.c
++++ b/src/virtio/vulkan/vn_queue.c
+@@ -391,7 +391,7 @@ vn_queue_submission_init_pnext(struct vn_queue_submission *submit)
+             uint32_t j = 0;
+             for (uint32_t i = 0; i < submit->wait_index_count; i++) {
+                VkSemaphore sem_handle = vn_get_wait_semaphore(submit, i);
+-               if (vn_semaphore_is_sync_fd(sem_handle))
++               if (vn_wait_semaphore_is_sync_fd(sem_handle))
+                   continue;
+ 
+                submit->temp.wait_indices[j++] =
+@@ -413,7 +413,7 @@ vn_queue_submission_init_pnext(struct vn_queue_submission *submit)
+             uint32_t j = 0;
+             for (uint32_t i = 0; i < submit->sig_index_count; i++) {
+                VkSemaphore sem_handle = vn_get_signal_semaphore(submit, i);
+-               if (vn_semaphore_is_sync_fd(sem_handle))
++               if (vn_signal_semaphore_is_sync_fd(sem_handle))
+                   continue;
+ 
+                submit->temp.sig_indices[j++] =
+@@ -443,7 +443,7 @@ vn_queue_submission_init_pnext(struct vn_queue_submission *submit)
+             uint32_t j = 0;
+             for (uint32_t i = 0; i < submit->wait_val_count; i++) {
+                VkSemaphore sem_handle = vn_get_wait_semaphore(submit, i);
+-               if (vn_semaphore_is_sync_fd(sem_handle))
++               if (vn_wait_semaphore_is_sync_fd(sem_handle))
+                   continue;
+ 
+                submit->temp.wait_vals[j++] =
+@@ -466,7 +466,7 @@ vn_queue_submission_init_pnext(struct vn_queue_submission *submit)
+             uint32_t j = 0;
+             for (uint32_t i = 0; i < submit->sig_val_count; i++) {
+                VkSemaphore sem_handle = vn_get_signal_semaphore(submit, i);
+-               if (vn_semaphore_is_sync_fd(sem_handle))
++               if (vn_signal_semaphore_is_sync_fd(sem_handle))
+                   continue;
+ 
+                submit->temp.sig_vals[j++] =
+@@ -520,14 +520,14 @@ vn_queue_submission_count_semaphore(struct vn_queue_submission *submit)
+    const uint32_t wait_count = vn_get_wait_semaphore_count(submit);
+    for (uint32_t i = 0; i < wait_count; i++) {
+       VkSemaphore sem_handle = vn_get_wait_semaphore(submit, i);
+-      fix.wait_sync_fd |= vn_semaphore_is_sync_fd(sem_handle);
++      fix.wait_sync_fd |= vn_wait_semaphore_is_sync_fd(sem_handle);
+       fix.wait_timeline |= vn_semaphore_is_timeline(sem_handle);
+    }
+ 
+    const uint32_t sig_count = vn_get_signal_semaphore_count(submit);
+    for (uint32_t i = 0; i < sig_count; i++) {
+       VkSemaphore sem_handle = vn_get_signal_semaphore(submit, i);
+-      if (vn_semaphore_is_sync_fd(sem_handle)) {
++      if (vn_signal_semaphore_is_sync_fd(sem_handle)) {
+          fix.sig_sync_fd = true;
+          submit->fix.sync_sem = true;
+          submit->sync_count++;
+@@ -939,7 +939,7 @@ vn_queue_submission_init_wait_semaphores(struct vn_queue_submission *submit)
+    const uint32_t wait_count = vn_get_wait_semaphore_count(submit);
+    for (uint32_t i = 0; i < wait_count; i++) {
+       VkSemaphore sem_handle = vn_get_wait_semaphore(submit, i);
+-      if (vn_semaphore_is_sync_fd(sem_handle)) {
++      if (vn_wait_semaphore_is_sync_fd(sem_handle)) {
+          if (!vn_semaphore_wait_sync_fd(dev_handle, sem_handle))
+             return VK_ERROR_DEVICE_LOST;
+ 
+@@ -988,7 +988,7 @@ vn_queue_submission_init_signal_semaphores(struct vn_queue_submission *submit)
+    const uint32_t sig_count = vn_get_signal_semaphore_count(submit);
+    for (uint32_t i = 0; i < sig_count; i++) {
+       VkSemaphore sem_handle = vn_get_signal_semaphore(submit, i);
+-      if (vn_semaphore_is_sync_fd(sem_handle)) {
++      if (vn_signal_semaphore_is_sync_fd(sem_handle)) {
+          /* drop the sync fd semaphore */
+          continue;
+       }
+@@ -1072,7 +1072,7 @@ vn_queue_submission_init(struct vn_queue_submission *submit)
+    vn_queue_submission_init_pnext(submit);
+ 
+    /* wait semaphores are initialized the last to ensure validity of
+-    * vn_semaphore_is_sync_fd used in init pnext
++    * vn_wait_semaphore_is_sync_fd used in init pnext
+     */
+    result = vn_queue_submission_init_wait_semaphores(submit);
+    if (result != VK_SUCCESS)
+diff --git a/src/virtio/vulkan/vn_sync.h b/src/virtio/vulkan/vn_sync.h
+index 2c88bddecba..28d92020ab9 100644
+--- a/src/virtio/vulkan/vn_sync.h
++++ b/src/virtio/vulkan/vn_sync.h
+@@ -98,13 +98,20 @@ vn_semaphore_is_timeline(VkSemaphore sem_handle)
+ }
+ 
+ static inline bool
+-vn_semaphore_is_sync_fd(VkSemaphore sem_handle)
++vn_wait_semaphore_is_sync_fd(VkSemaphore sem_handle)
+ {
+    struct vn_semaphore *sem = vn_semaphore_from_handle(sem_handle);
+    return sem->payload->type == VN_SYNC_TYPE_IMPORTED_SYNC_FD ||
+           (sem->payload->type == VN_SYNC_TYPE_SYNC && sem->sync_fd_export);
+ }
+ 
++static inline bool
++vn_signal_semaphore_is_sync_fd(VkSemaphore sem_handle)
++{
++   struct vn_semaphore *sem = vn_semaphore_from_handle(sem_handle);
++   return sem->permanent.type == VN_SYNC_TYPE_SYNC && sem->sync_fd_export;
++}
++
+ bool
+ vn_semaphore_wait_sync_fd(VkDevice dev_handle, VkSemaphore sem_handle);
+ 
