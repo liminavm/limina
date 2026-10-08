@@ -26,3 +26,43 @@ sign ad-hoc with each entitlement set and run as the normal user (uid 501).
   the probe had nothing to ARP for; whether packets flow on that path is not established here.
 - Not measured: macOS 27; the 16 KiB-page/throughput behaviour of vmnet under load; whether a
   Developer ID + notarized build behaves the same as ad-hoc.
+
+# miniguest — what a VM attached to vmnet actually gets
+
+`miniguest.c` plays a guest's network stack with raw frames over `vmnet_read`/`vmnet_write`: DHCP,
+ARP, ICMP echo, an ARP/echo responder and a TCP SYN counter. `./run.sh lease <shared|host|bridged>
+[ifname] [--vhdr]` or `./run.sh netobj` builds it, signs it ad-hoc with `both.entitlements` and runs
+it non-root under `gtimeout`. `MINIGUEST_TRACE=1` prints every frame the responder sees.
+
+## Measured 2026-10-08, dev Mac (M1 Max, macOS 26.6.2, Wi-Fi `en0`, Tailscale up, no exit node)
+
+| test | result |
+|---|---|
+| classic shared | lease 192.168.65.x in 0.05 s, router/DNS = .1, ping router 3 ms, ping 1.1.1.1 through the NAT 8–9 ms |
+| classic host-only | lease 192.168.128.x in 0.06 s, **no router option**; the host (.1) answers ARP and ping |
+| classic bridged on `en0` (Wi-Fi) | `en0` is the only bridgeable interface; a **real LAN lease** from the home router in 3.2 s, ping router and 1.1.1.1 |
+| shared + `vmnet_enable_virtio_header_key` + `vmnet_enable_tso_key` | starts; `max_packet` rises from 1514 to 65550; every frame carries the 12-byte header (all zero on these small frames); DHCP/ARP/ping unchanged |
+| network object, default config | starts, leases from the same 192.168.65 network as classic shared, NAT works |
+| network object, our own MAC (`vmnet_allocate_mac_address_key` false) | works; the guest MAC is ours |
+| `add_dhcp_reservation` | honoured: the reserved MAC got the reserved address |
+| two interfaces on one network | ARP each other |
+| interface on a second network | no ARP and no ping through the routers to the first: **isolated at L2 and L3** |
+| `add_port_forwarding_rule` host:2299 → guest:22 | delivered for connections arriving on a real interface (tailnet address, and from the shell's own connects); **not** for this binary's connects to `127.0.0.1` or the host's own `en0` address |
+| host → guest directly (`nc` to the guest's address on `bridge100`) | SYNs arrive; no forward is needed for the host to reach a guest |
+
+- **`vmnet_network_configuration_set_ipv4_subnet` takes the gateway address, not the network
+  address.** `192.168.211.1/24` works; `192.168.211.0/24` is accepted with `VMNET_SUCCESS` and the
+  interface start then fails with a bare `VMNET_FAILURE` (1001). `vmnet_network_get_ipv4_subnet`
+  likewise reports the gateway (`192.168.65.1`).
+- **A pinned subnet is exclusive:** a second `vmnet_network_create` for a subnet a live network
+  holds fails with 1001 until the first one is gone.
+- **The process that connects to a guest needs Local Network permission.** The same `connect()` to
+  the guest that succeeds from the shell ends, from the ad-hoc `miniguest`, in `EHOSTUNREACH` with
+  `reason: NECP` in the unified log, and no frame reaches the bridge. vmnet itself is unaffected
+  (it is not a socket); this is the supervisor's/UI's problem when it probes guest SSH directly.
+- The host-only lease handed out DNS `100.100.100.100`, i.e. the host's resolver at the time
+  (Tailscale's): bootpd passes the host's DNS through.
+
+Not measured here: throughput through a real virtio-net guest, VPN interaction (full tunnel, exit
+node), Internet Sharing on (1009), sleep/wake and Wi-Fi changes, pf state left behind
+(`scrub … no-df`), coexistence with Apple `container`.
