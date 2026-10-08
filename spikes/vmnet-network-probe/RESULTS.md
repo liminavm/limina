@@ -97,9 +97,23 @@ NATed out, and the replies are sent to the LAN router instead of the bridge.
   got the same address back each time, since bootpd keys its leases on the MAC.
 - `set_external_interface` is accepted for `en0` and `utun7` and the network follows it, but it
   cannot help against the route above, which the VPN client installs after the network appears.
-- UDP DNS to 1.1.1.1 failed throughout the exit-node-on, local-access-off window while ICMP got
-  through. The host's own DNS to 1.1.1.1 was not checked in that window, so whether this is vmnet or
-  the exit node's handling of port 53 is open.
+- **With local access off, forwarded UDP through the tunnel is dropped.** Every hold check runs
+  ICMP and a TCP SYN to 1.1.1.1:443, UDP DNS to 1.1.1.1, DNS to the guest's own resolver (the
+  gateway), and SNTP to time.cloudflare.com:
+
+  | exit node on, local access off | icmp | tcp | udp dns | gateway dns | udp ntp |
+  |---|---|---|---|---|---|
+  | bridged on `en0` (control) | ok | ok | ok | ok | ok |
+  | shared, uplink `utun7` | ok | ok | no | ok | no |
+  | shared, vmnet's default uplink | ok | ok | no | ok | no |
+  | shared, uplink pinned to `en0` | ok | ok | ok | ok | ok |
+
+  The host's own `dig @1.1.1.1` and `sntp` succeed in the same window, so it is UDP that vmnet NATs
+  into the tunnel, on any port, not DNS. Name resolution still works through the gateway's DNS
+  proxy, which resolves on the host. Pinning the uplink to `en0` restores UDP, presumably by
+  sending the guest around the tunnel the way bridged mode does (the egress path was not checked).
+  vmnet's default uplink with the exit node up is `utun7`. Root was not available to see where
+  the UDP is lost.
 - **Moving the subnet does not escape it.** With the exit node and local access on, pinned subnets
   `10.211.0.1/24` and `172.30.211.1/24` each gained the same static route via the LAN router within
   about 2 s of the network appearing, and failed the same way. A non-private `198.18.211.1/24` was

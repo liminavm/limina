@@ -7,7 +7,8 @@
 //       DHCP DISCOVER/REQUEST -> lease (address, router, DNS, MTU); ARP the router; ICMP echo to
 //       the router and, outside host mode, to 1.1.1.1 through it. --vhdr starts the interface with
 //       vmnet_enable_virtio_header_key and reports the 12-byte header it sees on every frame.
-//   ext <ifname|default|follow> --hold secs
+//   ext <ifname|default|follow> --hold secs  (every hold check: ICMP + TCP SYN to 1.1.1.1:443, UDP DNS
+//       to 1.1.1.1 and to the gateway, SNTP to time.cloudflare.com)
 //       A shared network whose NAT uplink is chosen with set_external_interface (default = vmnet's
 //       own pick), checked once a second. follow tracks the host's route to 1.1.1.1 and rebuilds
 //       the network on the new uplink when it changes, keeping the guest MAC. MINIGUEST_SUBNET pins
@@ -402,6 +403,28 @@ static int is_dns_reply(nic *n, const uint8_t *f, size_t len) {
     return ((u[0] << 8) | u[1]) == 53 && ((u[2] << 8) | u[3]) == dns_port;
 }
 
+static int ntp_port;
+static int is_ntp_reply(nic *n, const uint8_t *f, size_t len) {
+    if (len < 14 + 20 + 8 + 48 || f[12] != 0x08 || f[13] != 0 || f[14 + 9] != 17) return 0;
+    const uint8_t *u = f + 14 + (f[14] & 0xf) * 4;
+    return ((u[0] << 8) | u[1]) == 123 && ((u[2] << 8) | u[3]) == ntp_port;
+}
+
+// An SNTP client request to dst:123 via the router: UDP that is not DNS. RTT in ms, or -1.
+static double ntp(nic *n, struct in_addr dst) {
+    uint8_t f[128] = {0}, *p = f + 14, *u = p + 20;
+    eth(f, n->router_mac, n->mac, 0x0800);
+    ntp_port = 40000 + (rand() % 20000);
+    uint16_t sp = htons(ntp_port), dp = htons(123), ul = htons(8 + 48);
+    memcpy(u, &sp, 2), memcpy(u + 2, &dp, 2), memcpy(u + 4, &ul, 2);
+    u[8] = 0x1b;  // LI 0, version 3, mode 3 (client)
+    ipv4(p, n->ip, dst, 17, 8 + 48);
+    double t0 = now();
+    tx(n, f, 14 + 20 + 8 + 48);
+    uint8_t r[BUF];
+    return wait_for(n, r, 3, is_ntp_reply) ? (now() - t0) * 1000 : -1;
+}
+
 // A UDP DNS query for example.com (A) to dst:53 via the router; returns the RTT in ms, or -1.
 static double dns(nic *n, struct in_addr dst) {
     static const uint8_t q[] = {0x4c, 0x4d, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 7, 'e', 'x', 'a', 'm', 'p',
@@ -442,6 +465,61 @@ static double ping(nic *n, struct in_addr dst) {
     return wait_for(n, r, 3, is_echo_reply) ? (now() - t0) * 1000 : -1;
 }
 
+static int tcp_port;
+static struct in_addr tcp_dst;
+static int is_synack(nic *n, const uint8_t *f, size_t len) {
+    if (len < 14 + 20 + 20 || f[12] != 0x08 || f[13] != 0 || f[14 + 9] != 6) return 0;
+    if (memcmp(f + 26, &tcp_dst, 4)) return 0;
+    const uint8_t *t = f + 14 + (f[14] & 0xf) * 4;
+    return ((t[2] << 8) | t[3]) == tcp_port && (t[13] & 0x12) == 0x12;
+}
+
+// A TCP SYN to dst:443 via the router; returns the RTT to the SYN-ACK in ms, or -1. The guest
+// never completes the handshake (the peer's retransmits are ignored).
+static double tcp_syn(nic *n, struct in_addr dst) {
+    uint8_t f[128] = {0}, *p = f + 14, *t = p + 20;
+    eth(f, n->router_mac, n->mac, 0x0800);
+    tcp_port = 40000 + (rand() % 20000);
+    tcp_dst = dst;
+    uint16_t sp = htons(tcp_port), dp = htons(443);
+    memcpy(t, &sp, 2), memcpy(t + 2, &dp, 2);
+    uint32_t seq = htonl(rand());
+    memcpy(t + 4, &seq, 4);
+    t[12] = 5 << 4, t[13] = 0x02;  // header length 20, SYN
+    t[14] = 0xff, t[15] = 0xff;    // window
+    uint8_t ph[12];                // pseudo header
+    memcpy(ph, &n->ip, 4), memcpy(ph + 4, &dst, 4);
+    ph[8] = 0, ph[9] = 6, ph[10] = 0, ph[11] = 20;
+    uint32_t s = 0;
+    for (int i = 0; i < 12; i += 2) s += (ph[i] << 8) | ph[i + 1];
+    uint16_t c = csum(t, 20, s);
+    memcpy(t + 16, &c, 2);
+    ipv4(p, n->ip, dst, 6, 20);
+    double t0 = now();
+    tx(n, f, 14 + 20 + 20);
+    uint8_t r[BUF];
+    return wait_for(n, r, 3, is_synack) ? (now() - t0) * 1000 : -1;
+}
+
+// One round of Internet checks through the router: ICMP echo and TCP SYN to 1.1.1.1:443, UDP DNS to
+// 1.1.1.1 and to the guest's own resolver (the router), and SNTP to time.cloudflare.com. Prints one
+// line and returns 1 if every check was answered.
+static int check(nic *n, const char *route) {
+    struct in_addr one, ntp_server;
+    inet_aton("1.1.1.1", &one);
+    inet_aton("162.159.200.1", &ntp_server);
+    double r = ping(n, one), tc = tcp_syn(n, one), d = dns(n, one), g = dns(n, n->router),
+           u = ntp(n, ntp_server);
+    time_t now_t = time(NULL);
+    char ts[16];
+    strftime(ts, sizeof ts, "%H:%M:%S", localtime(&now_t));
+#define A(x) ((x) < 0 ? "NO" : "ok")
+    printf("[%s] %s%s%s: icmp %s, tcp %s, udp dns %s, gateway dns %s, udp ntp %s\n", n->name, ts,
+           route ? " host route " : "", route ? route : "", A(r), A(tc), A(d), A(g), A(u));
+#undef A
+    return r >= 0 && tc >= 0 && d >= 0 && g >= 0 && u >= 0;
+}
+
 // ---- modes ------------------------------------------------------------------------------------
 
 static int lease(const char *mode_s, const char *ifname, int vhdr, int hold) {
@@ -478,18 +556,9 @@ static int lease(const char *mode_s, const char *ifname, int vhdr, int hold) {
         if (r2 >= 0) printf("%.2f ms\n", r2);
         rc |= r2 < 0;
     }
-    // Hold the interface and ping 1.1.1.1 once a second, so a VPN can be toggled under a live guest.
-    for (int i = 0; i < hold; i++) {
-        struct in_addr ext;
-        inet_aton("1.1.1.1", &ext);
-        double r = ping(&n, ext), d = dns(&n, ext);
-        time_t t = time(NULL);
-        char ts[16];
-        strftime(ts, sizeof ts, "%H:%M:%S", localtime(&t));
-        printf("[%s] %s hold 1.1.1.1: icmp %s, udp dns %s\n", n.name, ts, r < 0 ? "NO REPLY" : "reply",
-               d < 0 ? "NO REPLY" : "reply");
-        if (r >= 0 && d >= 0) usleep(1000000);
-    }
+    // Hold the interface and check the Internet once a second, so a VPN can be toggled under a live guest.
+    for (int i = 0; i < hold; i++)
+        if (check(&n, NULL)) usleep(1000000);
 out:
     if (vhdr)
         printf("[%s] virtio-hdr: %d frames read, %d over 1514 bytes, non-zero header seen: %s\n",
@@ -764,16 +833,8 @@ static int ext_mode(const char *which, int hold) {
             if (!net || bring_up(&n, net)) { printf("[ext] rebuild FAILED\n"); break; }
             printf("[ext] rebuilt on %s in %.2f s, guest %s\n", up, now() - t0, inet_ntoa(n.ip));
         }
-        struct in_addr ext1;
-        inet_aton("1.1.1.1", &ext1);
-        double r = ping(&n, ext1), d = dns(&n, ext1);
-        time_t t = time(NULL);
-        char ts[16];
-        strftime(ts, sizeof ts, "%H:%M:%S", localtime(&t));
         route_ifname(cur);
-        printf("[ext] %s host route %s: icmp %s, udp dns %s\n", ts, cur, r < 0 ? "NO REPLY" : "reply",
-               d < 0 ? "NO REPLY" : "reply");
-        if (r >= 0 && d >= 0) ok++, usleep(1000000);
+        if (check(&n, cur)) ok++, usleep(1000000);
         else bad++;
     }
     stop(&n);
