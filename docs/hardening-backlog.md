@@ -895,6 +895,15 @@ the draw.
 under zink-on-venus too, so the query is in KK. KK counts generated primitives per draw at
 `kk_draw_impl`; which draw the pause/resume pair drops is not established.
 
+### The list-restart unroll can hang the GPU
+With KK's list-restart skip turned off (`LIMINA_KK_NOLISTRESTART=0`) on limina-kk `88b1341efe8`, piglit's
+`glsl-fs-flat-color` on the vrend tier hung the GPU (`kIOGPUCommandBufferCallbackErrorHang`, device
+lost, worker SIGSEGV); the encoders before it alternate a 160x160 render pass and a compute dispatch,
+one split per unrolled draw. It passes with the default skip and on the restart-scan stack, where
+zink no longer hands KK list restart. The venus tier still reaches the skip or the unroll. Untried on
+the pre-graphics/batched branch `limina-kk-pregfx` (`perf/listrestart-2026-10-07/`). A GPU hang is
+host-wide: reproduce only on an otherwise idle host.
+
 ### Geometry shaders: the failures left on the piglit GS list
 KK runs geometry shaders on poly's compute emulation, on by default (`LIMINA_KK_GEOMETRY_SHADER=0`
 withdraws them). Under zink-on-venus the GS list (no fp64) passes 2501 of 2622; what still fails,
