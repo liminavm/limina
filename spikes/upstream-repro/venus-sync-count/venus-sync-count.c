@@ -24,6 +24,9 @@
  *   group           the submission above with a VkDeviceGroupSubmitInfo that
  *                   carries the semaphore's device indices. Expected:
  *                   "submission completed".
+ *   export          the submission above on a semaphore created sync-fd
+ *                   exportable, then exports its sync fd. Expected:
+ *                   "export result 0".
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,7 +48,8 @@ main(int argc, char **argv)
    const int timeline = !strcmp(mode, "timeline");
    const int timeline2 = !strcmp(mode, "timeline2");
    const int group = !strcmp(mode, "group");
-   CHECK(timeline || timeline2 || group || !strcmp(mode, "sync"));
+   const int exportable = !strcmp(mode, "export");
+   CHECK(timeline || timeline2 || group || exportable || !strcmp(mode, "sync"));
 
    const VkApplicationInfo app = {
       .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -115,8 +119,13 @@ main(int argc, char **argv)
       vkGetDeviceProcAddr(device, "vkImportSemaphoreFdKHR");
    CHECK(import_fd);
 
+   const VkExportSemaphoreCreateInfo esci = {
+      .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+      .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+   };
    const VkSemaphoreCreateInfo sci = {
       .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+      .pNext = exportable ? &esci : NULL,
    };
    VkSemaphore sem;
    CHECK(vkCreateSemaphore(device, &sci, NULL, &sem) == VK_SUCCESS);
@@ -208,6 +217,18 @@ main(int argc, char **argv)
    CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, 5000000000ull) ==
          VK_SUCCESS);
    printf("submission completed\n");
+   if (exportable) {
+      PFN_vkGetSemaphoreFdKHR get_fd = (PFN_vkGetSemaphoreFdKHR)
+         vkGetDeviceProcAddr(device, "vkGetSemaphoreFdKHR");
+      const VkSemaphoreGetFdInfoKHR gfi = {
+         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
+         .semaphore = sem,
+         .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+      };
+      int fd = -2;
+      VkResult r = get_fd(device, &gfi, &fd);
+      printf("export result %d fd %d\n", r, fd);
+   }
 
    if (tl != VK_NULL_HANDLE) {
       uint64_t value = 0;

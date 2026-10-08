@@ -1,25 +1,24 @@
-# venus: submit only the renderer syncs that were filled in
+# venus: a semaphore waited and signaled in one submission
 
-**Bug.** `vn_queue_submission_count_semaphore` counts a signal semaphore holding a temporarily
-imported sync fd as needing a renderer sync. The waits are processed after the count, and waiting
-on such a semaphore restores its permanent payload, so when one submission waits on and signals the
-same binary semaphore, `vn_queue_submission_init_syncs` skips it while `sync_count` still includes
-it. The renderer gets a sync slot nothing wrote. Regressed by `6f3a570d418`, which was also picked
-to 26.2 (in 26.2.0 through 26.2.4).
+**Bug.** venus decides whether a signal semaphore holds a sync fd from its current payload, before
+the waits run, and acts on it after them. Waiting on a semaphore that holds a temporarily imported
+sync fd restores its permanent payload, so when one submission waits on and signals the same
+binary semaphore the two disagree:
 
-**Fix.** `a3e19b76b3f` on `venus-sync-count` (`kov/mesa` on freedesktop.org), on `main`
-`a51a418991f`, followed by `784d6782b0e` (below); the runs used the same commits on
-`3b1fece6ff5`, and nothing under `src/virtio` changed between the two. `vn_queue_submission_init_syncs` sets `sync_count` to the number of syncs it
-filled in, behind `assert(sync_index <= sync_count)`. The assert holds: a payload is
-`VN_SYNC_TYPE_SYNC` only on a semaphore created with `sync_fd_export` (`vn_sync.c`
-`vn_semaphore_init_payloads`), which `vn_semaphore_is_sync_fd` counts; temporary imports are
-`IMPORTED_SYNC_FD`, which `init_syncs` never writes; a timeline payload does not change during
-the waits. The semaphore the wait restored stays in the batch's signal list, so the renderer
-signals its permanent payload.
+- `vn_queue_submission_count_semaphore` counts a renderer sync for it, and
+  `vn_queue_submission_init_syncs` (after the waits) skips it: the renderer gets a sync slot
+  nothing wrote, and `virtgpu_submit` crashes on it.
+- `vn_queue_submission_init_pnext` drops its timeline value and device-group index, and
+  `vn_queue_submission_init_signal_semaphores` (after the waits) keeps the semaphore: the host
+  gets a signal list longer than the arrays chained to it.
 
-`Fixes: 6f3a570d418` is on `main` (checked on a full clone) and reached 26.2 as `c0ceec78eb8`:
-26.2.0 through 26.2.4 and `staging/26.2` carry it, 26.1 does not. No issue or MR reports the
-crash, and no open MR touches `vn_queue.c` (searched 2026-10-08).
+Regressed by `6f3a570d418`, which was also picked to 26.2 (in 26.2.0 through 26.2.4).
+
+**Fix.** The maintainer's "venus: ignore imported SYNC_FD payload for signal semaphore
+inspection" (`f63aa202fa2` on `zzyiwei/mesa`, `Fixes: 6f3a570d418`; it supersedes our !45030).
+Signal semaphores are judged by their permanent payload (`vn_signal_semaphore_is_sync_fd`), which a
+temporary import never replaces, so every stage gives the same answer whether or not the waits
+have run. Carried on `limina-guest` and `upstream/guest-2026-10` as a `cherry-pick -x`.
 
 **Reproducer.** `venus-sync-count.c`: import fd -1 (an already-signaled sync file) temporarily into
 a binary semaphore, then submit once with that semaphore as both wait and signal, plus a fence.
@@ -32,7 +31,8 @@ Real-world trigger: gfxreconstruct's virtual swapchain forwarding an acquire.
 a timeline semaphore to 5 through `VkTimelineSemaphoreSubmitInfo`; `timeline2` does the same
 through `vkQueueSubmit2`, where each value travels with its semaphore. Both print the timeline's
 value afterwards. `group` adds a `VkDeviceGroupSubmitInfo` carrying the semaphore's device
-indices.
+indices. `export` creates the semaphore sync-fd exportable and exports its sync fd after the
+submission.
 
 To test a Mesa tree on a Fedora guest without installing it (the devenv ICD names the built
 library):
@@ -46,42 +46,24 @@ library):
 
 ## Results
 
-QEMU 10.2 + virglrenderer 1.3.0 guest, venus on Intel Iris Plus G7. 3 runs per cell. Measured
-2026-10-08. "Follow-up" is `784d6782b0e` on top of the fix.
+QEMU 10.2 + virglrenderer 1.3.0 guest, venus on Intel Iris Plus G7, `main` `3b1fece6ff5`. 3 runs
+per cell. Measured 2026-10-08. `export` is a variant whose semaphore is created sync-fd exportable,
+so its permanent payload is itself a renderer sync.
 
-| Mesa | `sync` | `timeline` | `timeline2` | `group` |
-|---|---|---|---|---|
-| `main` 3b1fece6ff5 | SIGSEGV 3/3 | SIGSEGV 3/3 | SIGSEGV 3/3 | SIGSEGV 3/3 |
-| `main` + fix | completed 3/3 | completed, value 5, 3/3 | completed, value 5, 3/3 | SIGABRT 3/3 |
-| `main` + fix + follow-up | completed 3/3 | completed, value 5, 3/3 | completed, value 5, 3/3 | completed 3/3 |
+| Mesa | `sync` | `timeline` | `timeline2` | `group` | `export` |
+|---|---|---|---|---|---|
+| `main` | SIGSEGV 3/3 | SIGSEGV 3/3 | SIGSEGV 3/3 | SIGSEGV 3/3 | completed 3/3 |
+| `main` + fix | completed 3/3 | completed, value 5, 3/3 | completed, value 5, 3/3 | completed 3/3 | completed, fd exported, 3/3 |
 
 The crash on `main` is `virtgpu_submit` (`vn_renderer_virtgpu.c:815`) reading
 `syncs[i]->syncobj_handle` from the slot nothing wrote, called from
 `vn_queue_submission_signal_syncs`. Fedora 44's `mesa-vulkan-drivers-26.2.3-1.fc44` fails the
-`vkQueueSubmit` instead (measured 2026-10-05: the unwritten slot holds different garbage).
+`vkQueueSubmit` instead (measured 2026-10-05: the unwritten slot holds different garbage). In
+`group` the malformed submit reaches the host first: one `virgl_render_server` SIGSEGV per run.
 
-## Follow-up: values and device indices of the restored semaphore
-
-`init_pnext` drops the timeline values and device-group indices of signal semaphores that hold a
-sync fd, and runs before the waits; `init_signal_semaphores` drops the semaphores themselves, and
-runs after them. A semaphore both waited and signaled loses its value and index but keeps its
-place in the signal list. `784d6782b0e` ("venus: drop signal semaphore values and indices after
-the waits", same `Fixes:`) moves the signal-side dropping into `init_signal_semaphores`, after the
-waits; semaphores not also waited on are unaffected, since the waits change only the payloads of
-waited semaphores. clang-format clean.
-
-What venus hands the renderer, under gdb at `vn_queue_submission_do_submit`:
-
-| mode | fix only | fix + follow-up |
-|---|---|---|
-| `timeline` | 2 signal semaphores, `signalSemaphoreValueCount` 1, values `[5]` | 2 semaphores, 2 values `[0, 5]` |
-| `group` | 1 signal semaphore, `VkDeviceGroupSubmitInfo.signalSemaphoreCount` 0 | 1 and 1 |
-
-`timeline` still reads 5 on the fix alone because venus also signals the timeline through its
-renderer sync, which `vkGetSemaphoreCounterValue` reads; the host reads the timeline's value past
-the end of the array, unobserved here (no validation layer on the rig host). `group` on the fix
-alone completes the submission, then the host stops processing the ring and `vkDestroyInstance`
-aborts in `vn_relax` waiting on it.
+What the fix hands the renderer, under gdb at `vn_queue_submission_do_submit`: `timeline` 2 signal
+semaphores with 2 values `[0, 5]`; `group` 1 signal semaphore with 1 device index. With the
+Khronos validation layer loaded, all four modes complete with no message.
 
 **The host crashes on it, upstream and in limina.** The renderer decodes the zero-length
 `pSignalSemaphoreDeviceIndices` as NULL and passes the `VkSubmitInfo` through unvalidated (vkr:
@@ -90,9 +72,9 @@ then reads `pSignalSemaphoreDeviceIndices[i]` for every signal semaphore and fau
 Upstream, that is a `virgl_render_server` SIGSEGV (one coredump per `group` run on the rig host,
 `vk_common_QueueSubmit` in `libvulkan_intel.so`) and only that context's ring dies. In limina the
 renderer runs inside `limina-vmm`, so the same fault ends the VM: measured 2026-10-08 on the
-dogfood host, `group` from a guest build with the first fix only, worker SIGSEGV
+dogfood host, `group` from a guest build that still sends the mismatched counts, worker SIGSEGV
 `KERN_INVALID_ADDRESS at 0x0` in `vk_common_QueueSubmit` (`libvulkan_kosmickrisp.dylib`) on a
-`virglrs-ring` thread, one second after the run. The guest-side follow-up stops venus from
+`virglrs-ring` thread, one second after the run. The guest fix stops venus from
 sending it, but any guest process can still send it, so the renderer has to check the pNext
 array counts against the submit's counts (VUID-VkSubmitInfo-pNext-03240/03241, and the
 `VkDeviceGroupSubmitInfo` counts) and fail the command like any other malformed one. The
@@ -123,7 +105,7 @@ acquire semaphore and signals it again in the same `VkSubmitInfo`, with a comman
 `ALL_COMMANDS` as the wait stage.
 
 The Khronos validation layer agrees. Measured 2026-10-08 on the rig guest with
-`vulkan-validation-layers-1.4.341.0-2.fc44` and `main` + fix + follow-up, with and without
+`vulkan-validation-layers-1.4.341.0-2.fc44` and a fixed `main`, with and without
 synchronization validation: `sync`, `timeline`, `timeline2` and `group` all complete with no
 validation message (loader debug output confirms the layer is in both the instance and device
 chains). Controls in `vvl-control.c`, on the same setup: signaling twice without a wait reports
@@ -143,18 +125,3 @@ venus has no unit tests in Mesa; its CI runs dEQP-VK under crosvm on lavapipe (`
 (`vktApiExternalMemoryTests.cpp`, `testSemaphoreImportSyncFdSignaled`) imports fd -1 temporarily
 and only waits; a variant that also signals the semaphore in the same submission, with timeline
 and device-group variants, would hit both.
-
-## MR description (draft)
-
-> **venus: submit only the renderer syncs that were filled in**
->
-> A submission that waits on and signals the same binary semaphore, while that semaphore holds a
-> temporarily imported sync fd, either crashes in `virtgpu_submit` or fails: `sync_count` is
-> taken before the wait restores the semaphore's permanent payload, and
-> `vn_queue_submission_init_syncs` then (correctly) skips it, leaving the last slot unwritten.
->
-> Reproducer attached (`cc -o repro repro.c -lvulkan`; any venus guest). On main: SIGSEGV in
-> `virtgpu_submit` 3/3; with the fix it completes 3/3. Tested under QEMU 10.2 + virglrenderer
-> 1.3.0, venus on an Intel host. Hit in practice by gfxreconstruct's virtual swapchain.
->
-> 26.2 carries the regressing commit, hence `Cc: mesa-stable`.
