@@ -57,6 +57,13 @@ impl VmBundle {
         self.path.join("run")
     }
 
+    /// The TPM's state (its NV: seeds, keys, NV indexes, lockout), when `[hardware] tpm` is on.
+    /// Beside the disks because it is as much the VM's identity as they are: a copy of the
+    /// bundle keeps the TPM, and every secret sealed to it.
+    pub fn tpm_state(&self) -> PathBuf {
+        self.path.join("tpm.state")
+    }
+
     /// Mutable machine state (window placement etc.) — see `vmlib::state`.
     pub fn state_toml(&self) -> PathBuf {
         self.path.join("state.toml")

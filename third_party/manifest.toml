@@ -30,7 +30,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "7b25b0f25764be2275d434fe17f6de2b8ce518c9"
+rev = "36f12737f1da3bed8f87634f0bd1ab28fc2b6d68"
 base = "51367cfaf379a5869ca2aa78eab1cfe68a769a52"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
@@ -96,7 +96,7 @@ rev = "8ee796dedcbb0e7d95bdc98eea3b8005d75a73c6"
 [janus]
 repo = "https://github.com/liminavm/janus.git"
 branch = "main"
-rev = "c794949bc6004ffaa1c5ab53568cbdc3b42f2cfc"
+rev = "bbf230a3c1fae39ff6c0b4111fb470887e70832f"
 
 # The OpenCL C standard library KosmicKrisp's kernels are compiled against. NOT a source
 # checkout and not merely a configure-time gate: `src/kosmickrisp/libkk/*.cl` (tessellation,

@@ -129,8 +129,8 @@ pub struct Hardware {
     #[serde(default = "default_true")]
     pub fido: bool,
     /// Attach a TPM 2.0 (TIS over MMIO, `tcg,tpm-tis-mmio`; default false). Stock Linux binds it
-    /// with its in-tree `tpm_tis` driver, no guest components. Its state lives in memory for the
-    /// life of one VM run: nothing is persisted yet, so a TPM is new at every boot. See `--tpm`.
+    /// with its in-tree `tpm_tis` driver, no guest components. Its state lives in the bundle's
+    /// `tpm.state`, made with a new TPM on the first boot. See `--tpm-state`.
     #[serde(default)]
     pub tpm: bool,
     /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6

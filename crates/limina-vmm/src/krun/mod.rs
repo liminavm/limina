@@ -301,6 +301,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     vmr.cpufreq = spec.cpufreq;
     vmr.little_vcpus = spec.little_vcpus;
     vmr.tpm = spec.tpm;
+    vmr.tpm_state = spec.tpm_state.clone();
     // Test hook (not a user feature): with --usb, LIMINA_USB_MOCK selects a cold-plugged
     // mock gadget so a stock guest enumerates a device. `enum` (or the legacy `1`) is the
     // vendor-specific enumeration-only mock; `hid` is the full-speed HID echo gadget that
@@ -1295,6 +1296,7 @@ mod tests {
             cpufreq: false,
             little_vcpus: 0,
             tpm: false,
+            tpm_state: None,
             fido_socket: None,
             moc_socket: None,
             free_page_reporting: false,

@@ -282,9 +282,15 @@ struct Cli {
 
     /// Attach a TPM 2.0 (the TIS interface over MMIO, `tcg,tpm-tis-mmio`) — forwarded to the
     /// worker. OFF by default. Stock Linux binds it with its in-tree `tpm_tis` driver, so a guest
-    /// needs no limina components. Nothing is persisted yet: the TPM is new at every boot.
+    /// needs no limina components. Without `--tpm-state` the TPM is new at every boot.
     #[arg(long)]
     tpm: bool,
+
+    /// Keep the TPM's state in FILE across boots (implies `--tpm`) — forwarded to the worker.
+    /// Without it, `--tpm` is new at every boot. A managed VM with `tpm = true` keeps its state
+    /// in the bundle's `tpm.state`.
+    #[arg(long, value_name = "FILE")]
+    tpm_state: Option<PathBuf>,
 
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
@@ -1363,6 +1369,7 @@ fn cli_from_definition(
         cpufreq: false,
         little_vcpus: 0,
         tpm: cfg.hardware.tpm,
+        tpm_state: cfg.hardware.tpm.then(|| bundle.tpm_state()),
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1767,7 +1774,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         }
     }
     // The TPM (off by default). Carries no interrupt either.
-    if cli.tpm {
+    if let Some(state) = &cli.tpm_state {
+        args.push("--tpm-state".into());
+        args.push(path_arg(state)?);
+    } else if cli.tpm {
         args.push("--tpm".into());
     }
     // The emulated USB controller (on by default). Push --usb to the worker once; the FIDO and
