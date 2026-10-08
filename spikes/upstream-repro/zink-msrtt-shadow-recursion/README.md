@@ -33,8 +33,11 @@ Vulkan driver; zink from the Mesa under test.
 | `main` b39d173ca93 | anv, ICL (no MSRTSS) | SIGSEGV, ~4360 "Caught recursion" lines before it, 5/5 |
 | `main` + fix (series tip e09e44d2d0d) | same | `pixel 0: 255 0 0 255`, `pixel 1: 0 255 0 255`, `pixel 2: 0 0 255 255`, `ok`, exit 0, 5/5 |
 | `main` b39d173ca93 | lavapipe (has MSRTSS; `LIBGL_ALWAYS_SOFTWARE=1`) | `ok`, exit 0 (control: emulation path not taken) |
+| `main` 92b45bd0f2e | anv, ICL (no MSRTSS) | SIGSEGV, ~4360 "Caught recursion" lines before it, 5/5 |
+| `main` 92b45bd0f2e + fix | same | the same three pixels, `ok`, exit 0, 5/5 |
+| `main` 92b45bd0f2e | system lavapipe (`LIBGL_ALWAYS_SOFTWARE=1` plus `VK_DRIVER_FILES` naming its ICD) | the same three pixels, `ok`, exit 0 (control) |
 
-Measured 2026-10-05.
+Measured 2026-10-05 (`b39d173ca93`) and 2026-10-08 (`92b45bd0f2e`).
 
 The fixed run's pixels check the "deferred, not dropped" claim: the red quadrant is the scissored
 clear applied after the transient was repopulated, and the blue quadrant is content the replicate
