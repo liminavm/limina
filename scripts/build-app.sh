@@ -43,7 +43,9 @@ CARGO_FLAGS=()
 # choose, to bundle, or to get wrong. Its own dependencies (Mesa's libEGL, the Vulkan
 # loader) are in the worker's link closure and are bundled with it below.
 KK_BUILD="${LIMINA_KK_BUILD:-/Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan}"
-ZINK="/Volumes/mesa-cs/zink-kk-prefix/lib"
+# LIMINA_ZINK_LIB bundles another zink-on-KK prefix's lib dir. Build with MESA_PREFIX set to the
+# same prefix, so the worker links that prefix's libEGL too: the bundle takes Mesa from both.
+ZINK="${LIMINA_ZINK_LIB:-/Volumes/mesa-cs/zink-kk-prefix/lib}"
 KK_DRIVER="$KK_BUILD/libvulkan_kosmickrisp.dylib"
 # dlopen'd-by-env roots (not in the worker's link closure). The gallium dylib joins the
 # list below, AFTER ensure-mesa-cs mounts the volume — its leaf name carries the Mesa
