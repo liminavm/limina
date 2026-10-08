@@ -28,6 +28,15 @@
  *   main-alive        the main thread creates an instance and a device and
  *                     returns from main() without destroying them: exit()
  *                     with live venus state on the main thread.
+ *   exit-order        Vulkan teardown from an exit handler registered before
+ *                     the driver loads, as a C++ global's destructor would
+ *                     be, so it runs after any exit handler venus registers.
+ *                     A worker creates the instance and device; the main
+ *                     thread then queries pipeline cache data, which gives
+ *                     it a venus TLS ring, and returns from main(). The
+ *                     handler queries the cache again, creates and destroys
+ *                     a command pool (both reach venus TLS) and destroys
+ *                     everything. Expected: "late teardown done", exit 0.
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -119,6 +128,47 @@ worker(void *arg)
    return NULL;
 }
 
+static VkInstance late_instance;
+static VkDevice late_device;
+static VkPipelineCache late_cache;
+
+static void *
+late_worker(void *arg)
+{
+   (void)arg;
+   late_instance = create_instance();
+   late_device = create_device(late_instance, 1);
+   return NULL;
+}
+
+static void
+query_cache(void)
+{
+   size_t size = 0;
+   CHECK(vkGetPipelineCacheData(late_device, late_cache, &size, NULL) ==
+         VK_SUCCESS);
+}
+
+static void
+late_teardown(void)
+{
+   query_cache();
+
+   const VkCommandPoolCreateInfo cpci = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+      .queueFamilyIndex = 0,
+   };
+   VkCommandPool pool;
+   CHECK(vkCreateCommandPool(late_device, &cpci, NULL, &pool) == VK_SUCCESS);
+   vkDestroyCommandPool(late_device, pool, NULL);
+
+   vkDestroyPipelineCache(late_device, late_cache, NULL);
+   vkDestroyDevice(late_device, NULL);
+   vkDestroyInstance(late_instance, NULL);
+   printf("late teardown done\n");
+   fflush(stdout);
+}
+
 static void
 run_worker(int verbose)
 {
@@ -171,6 +221,19 @@ main(int argc, char **argv)
    } else if (!strcmp(mode, "main-alive")) {
       VkInstance instance = create_instance();
       create_device(instance, 1);
+      printf("returning from main with a live device\n");
+      return 0;
+   } else if (!strcmp(mode, "exit-order")) {
+      CHECK(atexit(late_teardown) == 0);
+      pthread_t t;
+      CHECK(pthread_create(&t, NULL, late_worker, NULL) == 0);
+      CHECK(pthread_join(t, NULL) == 0);
+      const VkPipelineCacheCreateInfo pcci = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+      };
+      CHECK(vkCreatePipelineCache(late_device, &pcci, NULL, &late_cache) ==
+            VK_SUCCESS);
+      query_cache();
       printf("returning from main with a live device\n");
       return 0;
    } else {

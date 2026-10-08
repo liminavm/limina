@@ -18,18 +18,28 @@ renderer, or page size.
 | `cycle` | 100 workers in turn, each with its own instance and device, then the same report |
 | `main-unload` | the main thread creates and destroys an instance and a device, then reports whether the driver is still mapped; a teardown registered on the main thread would hold it ("yes") |
 | `main-alive` | the main thread creates an instance and a device and returns from `main()` without destroying them |
+| `exit-order` | Vulkan teardown from an exit handler registered before the driver loads, as a C++ global's destructor is, so it runs after venus's own handler: a worker creates the instance and device, the main thread queries pipeline cache data (which gives it a venus TLS ring) and returns from `main()`, and the handler queries the cache again, creates a command pool and destroys everything |
 
 ## Fixes compared
 
-- **key deleted from `atexit()`** (`928927769cb` on `venus-tls-teardown`, `c30de76d572` on
-  `upstream/guest-2026-10`; the fix to send): keep the tss key and, once it is created, register
-  an `atexit()` handler that `tss_delete()`s it, as `src/util` registers its cleanups. Deleting a
-  key runs no destructors and stops every thread's exit from calling `vn_tls_free`, so threads
-  still holding venus TLS when the driver unloads leak it: a `struct vn_tls` plus one emptied
-  `vn_tls_ring` wrapper per instance that gave the thread a ring, a few dozen bytes per thread per
-  load cycle. The rings themselves are already destroyed by `vkDestroyInstance`
-  (`vn_instance_fini_ring`). Unloading is unchanged: the driver goes at the last
+- **key deleted from `atexit()`** (`cc13e545d9e` on `wip/venus-tls-key-v2`, a fixup on the
+  `95cf18d92d1` sent as mesa!44986 that applies the reviewer's v2; the fix to send): keep the tss
+  key and, once it is created, register an `atexit()` handler, as `src/util` registers its
+  cleanups. The handler clears `vn_tls_key_valid`, frees the calling thread's TLS and deletes the
+  key. Deleting a key runs no destructors and stops every other thread's exit from calling
+  `vn_tls_free`, so threads still holding venus TLS when the driver unloads leak it: a
+  `struct vn_tls` plus one emptied `vn_tls_ring` wrapper per instance that gave the thread a ring,
+  a few dozen bytes per thread per load cycle. The rings themselves are already destroyed by
+  `vkDestroyInstance` (`vn_instance_fini_ring`). Unloading is unchanged: the driver goes at the last
   `vkDestroyInstance`, as before.
+  Clearing the flag matters at process exit, where the driver stays loaded and an application's
+  exit handlers registered before venus loaded run after venus's and may still call it. Without
+  it, `vn_tls_get()` uses the deleted key: glibc's `tss_get` returns NULL and `tss_set` fails, so
+  venus falls back to the primary ring and `exit-order` passes, but C11 leaves a deleted key
+  undefined, and a key created later can reuse the slot. With it, venus returns no TLS and never
+  touches the key. Freeing the calling thread's TLS is safe in both cases: at unload its rings are
+  already destroyed, and at exit with a live instance it destroys the ring and the instance frees
+  the wrapper later, the same as when a thread exits before its instance.
   The handler runs at `dlclose`, not only at exit. On glibc, `atexit` is a static-only routine
   (`libc_nonshared.a`) that calls `__cxa_atexit(func, NULL, __dso_handle)` with the library's own
   handle (`stdlib/atexit.c`), and the library's fini from `crtbeginS.o` calls
@@ -52,18 +62,19 @@ renderer, or page size.
 ## Results
 
 QEMU 10.2 + virglrenderer 1.3.0 guest, venus on Intel Iris Plus G7, Mesa `main` b39d173ca93 and
-that plus each fix. 3 runs per cell. Measured 2026-10-06.
+that plus each fix. 3 runs per cell. The `main` and `atexit()` rows were measured 2026-10-07, the
+others 2026-10-06; `exit-order` was not run on the comparison-only fixes.
 
 Driver-mapped columns report whether `libvulkan_virtio.so` is still in `/proc/self/maps` after the
 last instance is destroyed.
 
-| build | `thread` | `unload` | `cycle` | `main-unload` | `main-alive` |
-|---|---|---|---|---|---|
-| `main` | SIGSEGV 3/3 | crashes before the report | crashes before the report | no 3/3 | exit 0 3/3 |
-| key deleted from `atexit()` | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
-| key deleted from a destructor attribute | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
-| thread-exit hook | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 |
-| pin | exit 0 3/3 | yes 3/3 | yes 3/3 | yes 3/3 | exit 0 3/3 |
+| build | `thread` | `unload` | `cycle` | `main-unload` | `main-alive` | `exit-order` |
+|---|---|---|---|---|---|---|
+| `main` | SIGSEGV 3/3 | crashes before the report | crashes before the report | no 3/3 | exit 0 3/3 | exit 0 3/3 |
+| key deleted from `atexit()` | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 | exit 0 3/3 |
+| key deleted from a destructor attribute | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 | — |
+| thread-exit hook | exit 0 3/3 | no 3/3 | no 3/3 | no 3/3 | exit 0 3/3 | — |
+| pin | exit 0 3/3 | yes 3/3 | yes 3/3 | yes 3/3 | exit 0 3/3 | — |
 
 `unload` and `cycle` read the map only after one extra instance create/destroy, which gives the
 loader a `dlclose` to unload on; on the hook build that is what releases a driver held past the
@@ -73,6 +84,15 @@ last `vkDestroyInstance`. `main-unload` shows the hook build registers nothing o
 unloads the driver 100 times in one process, registering the handler each time. `main-alive` exits
 cleanly on every build, unfixed included, so it only shows that `exit()` with a live device does
 not crash.
+
+Under gdb on the `atexit()` build: in `exit-order` the handler runs from `exit()`, frees the main
+thread's TLS through `vn_tls_destroy_ring` with its ring still live, the two later `vn_tls_get()`
+calls see `vn_tls_key_valid` false, and `vkDestroyInstance` frees the same wrapper afterwards; in
+`thread` it runs from `__cxa_finalize` in the driver's fini during `dlclose` and frees the worker's
+TLS. The sent version without the flag also passes `exit-order` 3/3, and gdb shows its later
+`vn_tls_get()` calls reaching the deleted key. No run covers the thread that unloads the driver
+also holding an emptied ring wrapper; that is the path a thread takes when it exits after its
+instance is destroyed.
 
 Fedora 44's `mesa-vulkan-drivers-26.2.3-1.fc44` also crashes `thread` 3/3.
 
