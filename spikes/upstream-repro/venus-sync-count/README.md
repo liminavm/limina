@@ -81,7 +81,23 @@ What venus hands the renderer, under gdb at `vn_queue_submission_do_submit`:
 renderer sync, which `vkGetSemaphoreCounterValue` reads; the host reads the timeline's value past
 the end of the array, unobserved here (no validation layer on the rig host). `group` on the fix
 alone completes the submission, then the host stops processing the ring and `vkDestroyInstance`
-aborts in `vn_relax` waiting on it; the QEMU log records nothing. A semaphore created with
+aborts in `vn_relax` waiting on it.
+
+**The host crashes on it, upstream and in limina.** The renderer decodes the zero-length
+`pSignalSemaphoreDeviceIndices` as NULL and passes the `VkSubmitInfo` through unvalidated (vkr:
+`vkr_dispatch_vkQueueSubmit`; virglrs: `Driver::queue_submit`); Mesa's `vk_common_QueueSubmit`
+then reads `pSignalSemaphoreDeviceIndices[i]` for every signal semaphore and faults at address 0.
+Upstream, that is a `virgl_render_server` SIGSEGV (one coredump per `group` run on the rig host,
+`vk_common_QueueSubmit` in `libvulkan_intel.so`) and only that context's ring dies. In limina the
+renderer runs inside `limina-vmm`, so the same fault ends the VM: measured 2026-10-08 on the
+dogfood host, `group` from a guest build with the first fix only, worker SIGSEGV
+`KERN_INVALID_ADDRESS at 0x0` in `vk_common_QueueSubmit` (`libvulkan_kosmickrisp.dylib`) on a
+`virglrs-ring` thread, one second after the run. The guest-side follow-up stops venus from
+sending it, but any guest process can still send it, so the renderer has to check the pNext
+array counts against the submit's counts (VUID-VkSubmitInfo-pNext-03240/03241, and the
+`VkDeviceGroupSubmitInfo` counts) and fail the command like any other malformed one. The
+`timeline` mismatch is the same pattern without a NULL: the host driver reads the signal value
+past the end of a decoded array. A semaphore created with
 `sync_fd_export` is dropped from all three lists, so only non-exportable semaphores hit this.
 
 ## Tests
