@@ -96,7 +96,7 @@ rev = "8ee796dedcbb0e7d95bdc98eea3b8005d75a73c6"
 [janus]
 repo = "https://github.com/liminavm/janus.git"
 branch = "main"
-rev = "b28a3a468d62f6c46489606ef17e7d0d0b8493e1"
+rev = "3f7721ff32a83f5d9a545f8fc5ad7b6587c4c2bd"
 
 # The OpenCL C standard library KosmicKrisp's kernels are compiled against. NOT a source
 # checkout and not merely a configure-time gate: `src/kosmickrisp/libkk/*.cl` (tessellation,
