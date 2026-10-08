@@ -98,7 +98,7 @@ array counts against the submit's counts (VUID-VkSubmitInfo-pNext-03240/03241, a
 `VkDeviceGroupSubmitInfo` counts) and fail the command like any other malformed one. The
 `timeline` mismatch is the same pattern without a NULL: the host driver reads the signal value
 past the end of a decoded array. virglrs fixes it in `fa3b3f6` ("venus: refuse a submit whose pNext counts
-disagree with its own", local to the virglrs clone until pushed): `Driver::queue_submit` rejects
+disagree with its own", on virglrs main): `Driver::queue_submit` rejects
 the context on a device-group or timeline count mismatch before the driver call; its driver-level
 test covers the `group` shape and a timeline signal without a value. Not yet run against this
 reproducer, which needs a limina build pinned to it. A semaphore created with
