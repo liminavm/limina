@@ -214,9 +214,11 @@ command. `krun_set_port_map` is TSI-only. Runbook: `docs/images.md` §SSH access
 `docs/design/multi-vm-networking.md`.
 
 **Owed:**
-- **Bridged (opt-in):** the worker holds a vmnet BRIDGED interface — no root, no restricted
-  entitlement (`spikes/vmnet-network-probe/`, `docs/design/multi-vm-networking.md` §3.3). Spike
-  first: does BRIDGED carry real traffic over Wi-Fi `en0`?
+- **vmnet (bridged, and Apple NAT / host-only):** the worker holds the vmnet interface — no root,
+  no restricted entitlement; a spike guest takes a real LAN lease over Wi-Fi `en0`
+  (`spikes/vmnet-network-probe/`). Next: the worker relay and the throughput/efficiency
+  measurement, which also settle whether gvproxy or vmnet shared is the default NAT
+  (`docs/design/multi-vm-networking.md` §6 Phase 1, §7).
 - **Net worker reconnect on HANG_UP**, so a gvproxy restart doesn't disable the NIC for the VM's life.
 - **Offload tuning:** evaluate `GUEST_TSO6|HOST_TSO6` once verified non-corrupting; mind the macOS
   datagram limit against large GSO frames.

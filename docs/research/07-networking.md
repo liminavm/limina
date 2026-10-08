@@ -158,12 +158,13 @@ Constraints:
   `com.apple.security.hypervisor` (what `limina-vmm` carries) or no entitlement, every mode
   fails. The restricted `com.apple.vm.networking` is not involved, and the two entitlements
   coexist on one binary.
-- **Measured only through the classic API** (`vmnet_start_interface`). The macOS 26
-  network-object API (`vmnet_network_create` → `vmnet_interface_start_with_network`) starts
-  under the same entitlement but returned no gateway address, so traffic over it is
-  unverified.
+- **A guest gets a working network in every mode** (`miniguest.c`, same results file): shared and
+  host-only leases, bridged over Wi-Fi `en0` with a real LAN lease, and on the macOS 26
+  network-object API own MACs, DHCP reservations, isolation between networks and port forwards.
+- **Host VPNs break shared mode** in ways user-mode NAT is immune to (measured with a Tailscale
+  exit node); details and consequences in `docs/design/multi-vm-networking.md` §4.
 - **Not measured:** macOS 27, Developer ID + hardened runtime + notarization, the App Store
-  sandbox, throughput, and bridging over Wi-Fi beyond receiving one frame.
+  sandbox, and throughput through a real guest.
 - libkrun does **not** link `vmnet.framework`. Whoever holds the vmnet interface relays
   frames to libkrun over a UNIX socket — `krun_add_net_unixgram` (one frame per datagram,
   vmnet-helper's framing) or `krun_add_net_unixstream` (socket_vmnet's). With no privilege
@@ -259,18 +260,19 @@ guest virtio_net -> TX vq -> net worker -> socketpair (SOCK_DGRAM) -> vmnet rela
   TCP stack; the guest gets an IP the host (and other VMs on the same vmnet network)
   can reach; HOST gives an isolated host-only segment. No root and no restricted
   entitlement (§1.7).
-- **Cons:** macOS-only and measured only on 26; port forwards move from gvproxy's REST to
-  `vmnet_interface_add_port_forwarding_rule` (`vmnet.h:683`, not yet exercised); subnets
-  can collide with other vmnet users (podman machine, Apple `container`).
-- **Verdict:** opt-in enhanced NAT beside gvproxy; shares all of its plumbing with E.
+- **Cons:** its NAT is the host's pf, so host VPNs can take it down (`multi-vm-networking.md`
+  §4); port forwards apply only to traffic arriving on a real interface; subnets can collide with
+  other vmnet users (podman machine, Apple `container`).
+- **Verdict:** beside gvproxy; which of the two is the default NAT is open pending throughput
+  and efficiency measurements (`multi-vm-networking.md` §7). Shares all of its plumbing with E.
 
 ### E — virtio-net + vmnet BRIDGED (bridged)  ← required for the bridged feature
 - **Pros:** the only true bridged path on macOS; guest is a first-class LAN peer
   (LAN DHCP, ping, discovery) — matches Parallels bridged. Needs the same unrestricted
   entitlement as D, nothing more (§1.7).
-- **Cons:** Wi-Fi (`en0`) bridging has known macOS MAC limitations; measured only to the
-  point of receiving a LAN frame on `en0`. Needs a physical-interface picker
-  (`vmnet_copy_shared_interface_list`).
+- **Cons:** bridged traffic bypasses a host VPN entirely. Needs a physical-interface picker
+  (`vmnet_copy_shared_interface_list`). Bridging over Wi-Fi `en0` works (a real LAN lease,
+  measured).
 - **Verdict:** the bridged feature; same mechanism as D, a different mode.
 
 ### F — virtio-net + tap
@@ -285,7 +287,7 @@ guest virtio_net -> TX vq -> net worker -> socketpair (SOCK_DGRAM) -> vmnet rela
 1. **Milestone 1 (boot the Fedora image):** use **TSI (A)** — zero glue, gets
    DNF/SSH working immediately; add `krun_set_port_map` for any test ports
    *before* any net device. First confirm `krun_has_feature(KRUN_FEATURE_NET)`.
-2. **Product default — NAT:** ship **virtio-net + gvproxy (B)** via the **new**
+2. **User-mode NAT:** ship **virtio-net + gvproxy (B)** via the **new**
    API: `krun_add_net_unixgram(c_path, -1, mac, features, NET_FLAG_VFKIT)`. Spawn
    and supervise gvproxy; allocate a stable per-VM MAC (locally-administered);
    map a limina port-forward UI to gvproxy's REST. Start with `NET_COMPAT_FEATURES`
@@ -298,9 +300,9 @@ guest virtio_net -> TX vq -> net worker -> socketpair (SOCK_DGRAM) -> vmnet rela
    no root and no installer flow. The worker gains `com.apple.security.virtualization`
    beside `com.apple.security.hypervisor`. **Open:** this in-worker relay (recommended:
    no libkrun change) vs. a native vmnet backend in libkrun's virtio-net (mechanism in
-   libkrun, saves the relay copy) — decide on throughput numbers. Offer vmnet on macOS 26+
-   only until the probe has been run on 15. gvproxy stays the default and the stock-tier
-   network.
+   libkrun, saves the relay copy) — decide on throughput numbers. Whether gvproxy or vmnet
+   shared is the default NAT is open until the same measurements are in
+   (`multi-vm-networking.md` §7).
 
 ### What limina must build / ship (glue)
 - **Network-backend manager**: spawn/monitor gvproxy (or passt), own the in-worker vmnet
@@ -330,16 +332,15 @@ guest virtio_net -> TX vq -> net worker -> socketpair (SOCK_DGRAM) -> vmnet rela
 1. **Confirm net is built in** the Homebrew libkrun (`krun_has_feature(KRUN_FEATURE_NET)`).
 2. **gvproxy framing match:** does the installed gvproxy speak the `"VFKT"` dgram
    handshake `unixgram.rs` sends? Spike: boot guest, get DHCP lease, `curl` out.
-3. **vmnet on the network-object API:** does traffic flow over `vmnet_network_create` /
-   `vmnet_interface_start_with_network` (the probe saw it start with no gateway reported),
-   and does it give per-network isolation and pre-set port forwards as documented?
+3. **vmnet network objects across processes:** traffic, isolation, reservations and forwards
+   are measured in-process; does a network serialized with
+   `vmnet_network_copy_serialization` work the same from a second worker?
 4. **TSO6 offloads:** do GUEST_TSO6/HOST_TSO6 (new-API only) improve iperf3
    throughput without corruption, per backend (gvproxy/passt/vmnet)?
 5. **vmnet privilege beyond the probe:** re-run `spikes/vmnet-network-probe` on macOS 27,
    as a Developer ID + hardened-runtime + notarized build, and inside the App Store sandbox.
-6. **Wi-Fi bridging:** does a guest behind vmnet BRIDGED over `en0` (Wi-Fi) get a LAN
-   lease and two-way traffic, or only over wired/USB Ethernet? (The probe proved only
-   that frames arrive.)
+6. **vmnet throughput and cost:** iperf/ssh both directions, CPU including kernel time, and
+   memory, against the gvproxy numbers in `spikes/net-bench/`.
 7. **Worker robustness:** the single-thread/single-buffer worker disables the NIC
    permanently on backend HANG_UP. Decide whether limina restarts the whole VM net
    path or we patch `worker.rs` to reconnect. Also check the macOS datagram size
