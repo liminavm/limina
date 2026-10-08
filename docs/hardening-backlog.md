@@ -895,10 +895,28 @@ the draw.
 under zink-on-venus too, so the query is in KK. KK counts generated primitives per draw at
 `kk_draw_impl`; which draw the pause/resume pair drops is not established.
 
-### Geometry-shader transform feedback has no path
-KK has no geometry shaders, so `ext_transform_feedback@geometry-shaders-basic`,
-`intervening-read * use_gs` and `overflow-edge-cases use_gs` fail on every route. They come with
-geometry-shader support, not with the xfb lowering.
+### Geometry shaders: the failures left on the piglit GS list
+KK runs geometry shaders on poly's compute emulation, on by default (`LIMINA_KK_GEOMETRY_SHADER=0`
+withdraws them). Under zink-on-venus the GS list (no fp64) passes 2501 of 2622; what still fails,
+each deferred by choice when GS landed:
+- **Vertex streams > 0** (`gs-stream-location-aliasing`, `stream-different-zero-gs-fs`): KK reports
+  one vertex stream. The same limit makes virglrs withdraw `transform_feedback3`.
+- **`clip-distance-{bulk,itemized}-copy`**: precision only. The interpolated error reaches 1.2e-6
+  against the test's absolute 1e-6 on values near 11, about 1 ulp.
+- **`point-size-out`, `redeclare-pervertex-out-subset-gs`**: a guest zink bug, not KK.
+  `delete_psiz_store` drops 1.0 point-size stores in a GS that emits more than once; it should drop
+  them only when every store is constant 1.0 (a `limina-guest` change, and an upstream one).
+- **`fbo-cubemap-array`** fails on the venus tier only, with GS off as well: every layer reads layer
+  0. The host stack and the vrend tier pass (`spikes/kk-gs/cube-array-layers.c`).
+- **`tes-primitiveid`** counts 24 invocations where 16 are expected: quads drawn as non-indexed
+  triangles.
+- **`tes-gs-max-output -small -scan 1 50`** times out on both tiers.
+- `arb_gl_spirv` failures are the guest lacking `spirv-as`, not a driver result.
+Latent, no test reaches it yet: `nir_to_msl.c`'s `load_output` builds its mask with a 32-bit
+`1 << location`. A fix (53ed2368595, branch `limina-kk-output-mask`) and a poly change that computes
+each GS input vertex index once (6e8b33cc5a4, `limina-kk-gs-vertex-hoist`, GS MSL about 3.7×
+smaller, no behaviour change) wait for the next limina-kk change. The hoist needs the GS piglit
+lists first: host probes do not cover adjacency or line inputs.
 
 ---
 
