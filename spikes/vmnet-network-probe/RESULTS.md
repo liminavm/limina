@@ -98,9 +98,8 @@ NATed out, and the replies are sent to the LAN router instead of the bridge.
 - `set_external_interface` is accepted for `en0` and `utun7` and the network follows it, but it
   cannot help against the route above, which the VPN client installs after the network appears.
 - UDP DNS to 1.1.1.1 failed throughout the exit-node-on, local-access-off window while ICMP got
-  through. The host's own network was misbehaving in the same window (the user saw connections to
-  remote services fail), and the host's own DNS was not checked, so that result is not counted
-  either way.
+  through. The host's own DNS to 1.1.1.1 was not checked in that window, so whether this is vmnet or
+  the exit node's handling of port 53 is open.
 - **Moving the subnet does not escape it.** With the exit node and local access on, pinned subnets
   `10.211.0.1/24` and `172.30.211.1/24` each gained the same static route via the LAN router within
   about 2 s of the network appearing, and failed the same way. A non-private `198.18.211.1/24` was
