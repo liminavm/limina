@@ -38,7 +38,7 @@ it non-root under `gtimeout`. `MINIGUEST_TRACE=1` prints every frame the respond
 
 | test | result |
 |---|---|
-| classic shared | lease 192.168.65.x in 0.05 s, router/DNS = .1, ping router 3 ms, ping 1.1.1.1 through the NAT 8–9 ms |
+| classic shared | lease 192.168.65.x in 0.05 s, router/DNS = .1, ping router and 1.1.1.1 through the NAT answered (RTTs are quantised by a 2 ms poll, not latency figures) |
 | classic host-only | lease 192.168.128.x in 0.06 s, **no router option**; the host (.1) answers ARP and ping |
 | classic bridged on `en0` (Wi-Fi) | `en0` is the only bridgeable interface; a **real LAN lease** from the home router in 3.2 s, ping router and 1.1.1.1 |
 | shared + `vmnet_enable_virtio_header_key` + `vmnet_enable_tso_key` | starts; `max_packet` rises from 1514 to 65550; every frame carries the 12-byte header (all zero on these small frames); DHCP/ARP/ping unchanged |
@@ -56,10 +56,15 @@ it non-root under `gtimeout`. `MINIGUEST_TRACE=1` prints every frame the respond
   likewise reports the gateway (`192.168.65.1`).
 - **A pinned subnet is exclusive:** a second `vmnet_network_create` for a subnet a live network
   holds fails with 1001 until the first one is gone.
-- **The process that connects to a guest needs Local Network permission.** The same `connect()` to
-  the guest that succeeds from the shell ends, from the ad-hoc `miniguest`, in `EHOSTUNREACH` with
-  `reason: NECP` in the unified log, and no frame reaches the bridge. vmnet itself is unaffected
-  (it is not a socket); this is the supervisor's/UI's problem when it probes guest SSH directly.
+- **NECP drops host connects to a guest from our own binaries.** A `connect()` to the guest's
+  address ends in `EHOSTUNREACH`, with `tcp drop outgoing … interface: bridge100` and `reason: NECP`
+  in the unified log, and no frame reaches the bridge. That holds for `miniguest` and for a bare
+  ad-hoc `connect()` binary with no entitlements alike, launched from the same shell where Apple's
+  `/usr/bin/nc` (`com.apple.nc`) gets through. So the trigger is the binary's identity, not the
+  entitlements or the vmnet handle, which is consistent with Local Network privacy exempting
+  platform binaries. Whether a Developer ID app gets through after the user grants Local Network
+  access is not measured. vmnet itself is unaffected (it is not a socket); this matters to any
+  limina process that dials a guest directly, such as an SSH readiness probe.
 - The host-only lease handed out DNS `100.100.100.100`, i.e. the host's resolver at the time
   (Tailscale's): bootpd passes the host's DNS through.
 
