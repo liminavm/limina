@@ -77,19 +77,6 @@ before designing a fix.
 
 ## Input
 
-### A re-pin's landing check killed a single-display VM under heavy GPU load
-Seen once (2026-10-08, the Debian VM, one 2560x1440 display, guest running WebGL aquarium, a VP9
-video and vkmark at once): `pointer capture [repin]: warped to (815.0,756.0) for slot 0 but the
-cursor reads back at (1406.0,868.0) — 601.5 pt off, on displays [2] (aimed at [2], window covers
-[2])`. `warp_checked`'s landing assert is fatal by design, so the supervisor killed the worker. The
-GPU log up to the panic is healthy. The target was on the window's own display, so this is not the
-window-server clamp the assert exists to catch: the warp either did not take or the readback was
-stale. `cursor_now` was measured synchronous with a warp (within 0.4 ms) only on an idle host.
-Unverified lead: WindowServer lagging under GPU saturation. Next: reproduce under the same load
-with the pointer moving while captured; if a stale readback is confirmed, a re-pin miss on a live
-target should re-read or re-derive rather than crash, keeping the fatal assert for a target that
-lands on another display.
-
 ### Clicks that neither take nor stand down the grab
 Reported on dogfood (2026-08-22, again 2026-10-03: mid-screen clicks and trackpad motion in a
 focused fullscreen window intermittently not grabbing; the clicks still reach the guest). The

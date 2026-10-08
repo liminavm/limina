@@ -35,7 +35,7 @@
 //! trade the geometric guarantee it measures for a coordinate conversion round-trip.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use objc2_app_kit::{NSCursor, NSEvent};
 use objc2_foundation::NSPoint;
@@ -158,6 +158,30 @@ fn landing_verdict(aimed: NSPoint, landed: NSPoint) -> Result<(), f64> {
     }
 }
 
+/// What a warp's readback means for the pointer, given the displays the readback sits on and
+/// the displays the aim allows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Landing {
+    /// Within [`LANDING_TOLERANCE`] of the target.
+    Hit,
+    /// Off the target, but on a display the aim allows: the pointer is still on the user's
+    /// screen, so nothing the assert guards has happened.
+    MissedOnAim(f64),
+    /// Off the target and off every display the aim allows — the clamp onto a neighbour.
+    Fault(f64),
+}
+
+/// Pure, so the line between a tolerated miss and a fault is pinned by tests.
+fn landing(aimed: NSPoint, landed: NSPoint, landed_on: &[u32], allowed: &[u32]) -> Landing {
+    match landing_verdict(aimed, landed) {
+        Ok(()) => Landing::Hit,
+        Err(miss) if !allowed.is_empty() && landed_on.iter().any(|d| allowed.contains(d)) => {
+            Landing::MissedOnAim(miss)
+        }
+        Err(miss) => Landing::Fault(miss),
+    }
+}
+
 /// Where the cursor is right now, CG global. Synchronous with respect to a warp just issued
 /// (measured 2026-08-21, `spikes`' warp probe: the new position reads back within 0.4 ms on
 /// both `NSEvent.mouseLocation` and a fresh `CGEvent`), so it is a sound post-condition.
@@ -169,7 +193,8 @@ fn cursor_now() -> NSPoint {
 }
 
 /// The one warp primitive: assert the target is on a display the aim allows, warp, and assert
-/// the cursor is now there. Every broker method's warp goes through here.
+/// the cursor is now on one of those displays. A readback off the target but still on them is
+/// logged, not fatal ([`Landing::MissedOnAim`]). Every broker method's warp goes through here.
 fn warp_checked(target: NSPoint, aim: &Aim) {
     let on = hostdisplay::displays_at(target);
     assert!(
@@ -195,8 +220,30 @@ fn warp_checked(target: NSPoint, aim: &Aim) {
     // SAFETY: plain CoreGraphics call; the target was just shown to be a real display point.
     unsafe { CGWarpMouseCursorPosition(target) };
     let landed = cursor_now();
-    if let Err(miss) = landing_verdict(target, landed) {
-        panic!(
+    let landed_on = hostdisplay::displays_at(landed);
+    match landing(target, landed, &landed_on, &aim.displays) {
+        Landing::Hit => {}
+        Landing::MissedOnAim(miss) => {
+            // Seen under heavy GPU load; whether the readback trails the warp or the warp did
+            // not take is unmeasured. The next motion event re-pins, so this is logged, not
+            // fatal — the first and then every 100th.
+            let n = MISSES_ON_AIM.fetch_add(1, Ordering::Relaxed);
+            if n.is_multiple_of(100) {
+                log::warn!(
+                    "pointer capture [{stage}]: warped to ({x:.1},{y:.1}) for slot {slot} but \
+                     the cursor reads back at ({lx:.1},{ly:.1}) — {miss:.1} pt off, still on \
+                     displays {landed_on:?} the window covers ({} such misses)",
+                    n + 1,
+                    stage = aim.stage,
+                    x = target.x,
+                    y = target.y,
+                    slot = aim.slot,
+                    lx = landed.x,
+                    ly = landed.y,
+                );
+            }
+        }
+        Landing::Fault(miss) => panic!(
             "pointer capture [{stage}]: warped to ({x:.1},{y:.1}) for slot {slot} but the cursor reads back at ({lx:.1},{ly:.1}) — {miss:.1} pt off, on displays {ld:?} (aimed at {on:?}, window covers {exp:?}); arrangement: {arr}",
             stage = aim.stage,
             x = target.x,
@@ -204,12 +251,15 @@ fn warp_checked(target: NSPoint, aim: &Aim) {
             slot = aim.slot,
             lx = landed.x,
             ly = landed.y,
-            ld = hostdisplay::displays_at(landed),
+            ld = landed_on,
             exp = aim.displays,
             arr = hostdisplay::describe_arrangement(),
-        );
+        ),
     }
 }
+
+/// Warp readbacks that missed but stayed on the aimed displays, for the rate-limited warning.
+static MISSES_ON_AIM: AtomicU64 = AtomicU64::new(0);
 
 /// Whether we currently have the host cursor hidden for capture — keeps `NSCursor::hide`/`unhide`
 /// (a reference count) balanced no matter how the toggle is driven.
@@ -652,6 +702,35 @@ mod tests {
                 seen: (1500.0, 1500.0)
             }
         );
+    }
+
+    #[test]
+    fn a_miss_that_stays_on_the_aimed_display_is_not_a_fault() {
+        // Dogfood, twice on 2026-10-08 under heavy GPU load, one display: a re-pin read the
+        // cursor back 601 and 1752 pt from its target, on the very display the window covers.
+        // The pointer never left the user's screen, so that must not kill the VM.
+        let aimed = NSPoint::new(693.0, 552.0);
+        let landed = NSPoint::new(2387.0, 102.0);
+        assert!(matches!(
+            landing(aimed, landed, &[2], &[2]),
+            Landing::MissedOnAim(_)
+        ));
+        // Landing on a display the window does not cover is the clamp: still a fault.
+        assert!(matches!(
+            landing(aimed, landed, &[1], &[2]),
+            Landing::Fault(_)
+        ));
+        // On no display at all: a fault.
+        assert!(matches!(
+            landing(aimed, landed, &[], &[2]),
+            Landing::Fault(_)
+        ));
+        // No window to judge by: a miss stays fatal, as before.
+        assert!(matches!(
+            landing(aimed, landed, &[2], &[]),
+            Landing::Fault(_)
+        ));
+        assert_eq!(landing(aimed, aimed, &[2], &[2]), Landing::Hit);
     }
 
     #[test]
