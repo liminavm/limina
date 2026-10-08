@@ -64,6 +64,13 @@ impl VmBundle {
         self.path.join("tpm.state")
     }
 
+    /// The firmware's UEFI variables (boot entries; later Secure Boot keys), mapped into the
+    /// guest as its variable store. Beside the disks for the same reason as `tpm_state`: the boot
+    /// entries name partitions on them.
+    pub fn efi_vars(&self) -> PathBuf {
+        self.path.join("efi.vars")
+    }
+
     /// Mutable machine state (window placement etc.) — see `vmlib::state`.
     pub fn state_toml(&self) -> PathBuf {
         self.path.join("state.toml")

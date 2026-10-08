@@ -278,6 +278,13 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     tpm_state: Option<PathBuf>,
 
+    /// Keep the firmware's UEFI variables in FILE across boots: libkrun maps it into the guest
+    /// as the variable store, so boot entries (and later Secure Boot keys) persist. Made, empty,
+    /// when absent; the firmware formats it on first boot. **EFI boot only.** Without it the
+    /// variables live in RAM and every boot starts with none.
+    #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
+    efi_vars: Option<PathBuf>,
+
     /// Inherited link (`limina_launch::connect`) for the stock-tier FIDO USB gadget (M14 Stage
     /// C). The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
     /// CTAPHID frames over a connection on this link to the supervisor's authenticator
@@ -812,6 +819,7 @@ fn main() -> Result<()> {
         little_vcpus: cli.little_vcpus,
         tpm: cli.tpm || cli.tpm_state.is_some(),
         tpm_state: cli.tpm_state.clone(),
+        efi_vars: cli.efi_vars.clone(),
         fido_socket: cli.fido_fd.map(ListenAt::Link),
         moc_socket: cli.moc_fd.map(ListenAt::Link),
         free_page_reporting: cli.balloon_free_page_reporting,

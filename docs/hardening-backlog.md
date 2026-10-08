@@ -217,6 +217,15 @@ Library Location…" picker that repoints without migrating; (3) per-VM placemen
 symlink-as-registration, showing dangling links greyed out as "volume not mounted", and the center's
 banner for an unmounted library in place of the empty-library state.
 
+### UEFI variables survive a torn write only by being reformatted
+The variable store is a file mapped into the guest (`docs/design/efi-vars.md`, mechanism B): every
+write lands in the file through the page cache, but there is no fault-tolerant write, so a host
+power loss mid-update can leave a store whose header the firmware rejects, and it then formats a
+new one. Today that costs one more shim fallback boot. It loses enrolled keys once Secure Boot
+keeps them there. Fix shape: ArmVirtQemu's CFI flash (`VirtNorFlashDxe` + a CFI device in
+libkrun) with the FTW working and spare blocks `VarStore.fdf.inc` already lays out; do it before
+Secure Boot ships.
+
 ### Inventory the firmware features the guest probes and gets `NOT_SUPPORTED`
 Each declined feature is guest behaviour inherited by default instead of chosen. PSCI 1.0 +
 `SYSTEM_SUSPEND` are offered (libkrun `hvf/src/lib.rs`, gated by `LIMINA_PSCI_SYSTEM_SUSPEND`).

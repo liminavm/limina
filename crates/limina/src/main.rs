@@ -292,6 +292,12 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     tpm_state: Option<PathBuf>,
 
+    /// Keep the firmware's UEFI variables in FILE across boots — forwarded to the worker. EFI
+    /// boot only. Without it they live in RAM and every boot starts with none, so shim's fallback
+    /// recreates the boot entry each time. A managed VM keeps them in the bundle's `efi.vars`.
+    #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
+    efi_vars: Option<PathBuf>,
+
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
     /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
@@ -1370,6 +1376,7 @@ fn cli_from_definition(
         little_vcpus: 0,
         tpm: cfg.hardware.tpm,
         tpm_state: cfg.hardware.tpm.then(|| bundle.tpm_state()),
+        efi_vars: Some(bundle.efi_vars()),
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1450,6 +1457,15 @@ fn exit_cleanup() {
     control::cleanup();
     debug_ctl::cleanup();
     runtime_ctl::cleanup();
+}
+
+/// A file that belongs to this run alone, removed when the run ends.
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 fn run_vm(mut cli: Cli) -> Result<()> {
@@ -1564,6 +1580,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // rest: an explicit --firmware is honored, and a windowed boot with neither given
     // defaults to the GOP firmware so EFI/GRUB/early-kernel render in the window (M2.5
     // Phase 3). A headless boot still needs an explicit --firmware or --kernel.
+    // Held for the supervisor's life: removes an ad-hoc run's variable store when it ends.
+    let mut _session_vars = None;
     if let Some(kernel) = &cli.kernel {
         args.push("--kernel".into());
         args.push(path_arg(kernel)?);
@@ -1617,6 +1635,26 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         for oem in &cli.smbios_oem_string {
             args.push("--smbios-oem-string".into());
             args.push(oem.clone());
+        }
+        // So does the variable store, which only a firmware reads. With a TPM, shim's fallback
+        // resets after writing the boot entry, and variables lost in that reset make it a loop
+        // (docs/design/efi-vars.md). So an ad-hoc TPM run with no store named gets one for as long
+        // as this supervisor runs, reboots included, as its TPM is ephemeral for the run.
+        let vars = match &cli.efi_vars {
+            Some(vars) => Some(vars.clone()),
+            None if cli.tpm || cli.tpm_state.is_some() => {
+                let path = std::env::temp_dir()
+                    .join(format!("limina-efi-vars-{}.vars", std::process::id()));
+                // A store left by an earlier process with this pid is not this run's.
+                let _ = std::fs::remove_file(&path);
+                _session_vars = Some(RemoveOnDrop(path.clone()));
+                Some(path)
+            }
+            None => None,
+        };
+        if let Some(vars) = vars {
+            args.push("--efi-vars".into());
+            args.push(path_arg(&vars)?);
         }
     }
     if let Some(rootfs) = &cli.rootfs {
