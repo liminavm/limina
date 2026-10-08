@@ -107,6 +107,34 @@ unvalidated) is broad across venus commands on KosmicKrisp; virglrs is addressin
 validation layer. A semaphore created with
 `sync_fd_export` is dropped from all three lists, so only non-exportable semaphores hit this.
 
+## Is the submission valid?
+
+Nothing forbids one batch from waiting on and signaling the same binary semaphore: no VU on
+`VkSubmitInfo` or `vkQueueSubmit` covers it. The rules that apply are
+`VUID-vkQueueSubmit-pSignalSemaphores-00067` (unsignaled when the signal executes),
+`VUID-vkQueueSubmit-pWaitSemaphores-03238` (the wait has a submitted signal) and
+`VUID-vkQueueSubmit-pWaitSemaphores-00068` (no other queue waiting). The wait's second
+synchronization scope and the signal's first both cover the batch's commands, and the wait unsignals
+the semaphore, so the re-signal finds it unsignaled. Waiting on a temporarily imported payload
+removes it and restores the permanent one, which the signal then acts on. gfxreconstruct relies on
+this deliberately: `VulkanVirtualSwapchain`'s first-acquire image transition
+(`framework/decode/vulkan_virtual_swapchain.cpp`, LunarG `5f06a43`) waits on the application's
+acquire semaphore and signals it again in the same `VkSubmitInfo`, with a command buffer and
+`ALL_COMMANDS` as the wait stage.
+
+The Khronos validation layer agrees. Measured 2026-10-08 on the rig guest with
+`vulkan-validation-layers-1.4.341.0-2.fc44` and `main` + fix + follow-up, with and without
+synchronization validation: `sync`, `timeline`, `timeline2` and `group` all complete with no
+validation message (loader debug output confirms the layer is in both the instance and device
+chains). Controls in `vvl-control.c`, on the same setup: signaling twice without a wait reports
+`VUID-vkQueueSubmit-pSignalSemaphores-00067`, and waiting on and signaling a semaphore nothing ever
+signaled reports `VUID-vkQueueSubmit-pWaitSemaphores-03238` (and then hangs in
+`vkQueueWaitIdle`, so bound it with `timeout`). Signaling it and then waiting on and
+signaling it in one batch, without an import, reports nothing.
+
+    cc -o vvl-control vvl-control.c -lvulkan
+    VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation ./vvl-control double-signal|unsignaled|resignal
+
 ## Tests
 
 venus has no unit tests in Mesa; its CI runs dEQP-VK under crosvm on lavapipe (`venus-lavapipe`,
