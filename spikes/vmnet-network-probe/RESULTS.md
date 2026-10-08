@@ -72,23 +72,39 @@ it non-root under `gtimeout`. `MINIGUEST_TRACE=1` prints every frame the respond
 
 `--hold <secs>` keeps the interface up and checks 1.1.1.1 every second with an ICMP echo (varying
 sequence) and a UDP DNS query; every receive loop answers ARP for the guest's address.
+`ext <ifname|default|follow> --hold <secs>` does the same on a network-object shared network whose
+NAT uplink is set with `vmnet_network_configuration_set_external_interface`; `follow` reads the
+host's route to 1.1.1.1 before every check (an `RTM_GET` on the routing socket) and, when it
+changes, stops the interface, releases the network, and rebuilds both on the new uplink with the
+same guest MAC.
 
-| sequence | shared-mode guest reaching 1.1.1.1 |
-|---|---|
-| VPN off throughout | every check answered for 80 s |
-| network up, then exit node switched on | stops the moment the exit node comes up, never recovers |
-| exit node on, then network created | answers for about 3 s after the lease, then ICMP and UDP both stop for good; nothing comes back, not even an ARP request |
-| exit node switched off under a broken network | stays broken; a fresh interface on the same (still held) default network is broken too, while the host's own TCP to 1.1.1.1 works |
-| broken network released, then recreated | works at once, default and pinned subnet alike |
-| bridged on `en0`, exit node on | leases and reaches 1.1.1.1 through the LAN router, i.e. bypassing the VPN |
+**The breakage is Tailscale's "Allow local network access", not vmnet's NAT binding.** With that
+option on, the exit node installs a static route for the vmnet subnet through the LAN router
+(`192.168.65  192.168.13.1  UGSc  en0`) in place of the bridge's connected route. Guest traffic is
+NATed out, and the replies are sent to the LAN router instead of the bridge.
 
-- **A shared network that lives through a VPN transition loses the Internet until every interface
-  on it is released**, whichever came first. A guest on it would need its vmnet interface torn
-  down and restarted, and so would every other guest sharing that network.
+| exit node | "Allow local network access" | shared-mode guest reaching 1.1.1.1 | route for the vmnet subnet |
+|---|---|---|---|
+| off | — | every check answered | `bridge100` |
+| on | on | stops when the exit node comes up under a live network; a network created or rebuilt behind it answers for about 3 s, then ICMP and UDP stop for good | static, via the LAN router on `en0` |
+| on | off | ICMP answered for the whole 66 s window, after a rebuild onto `utun7` | `bridge100` |
+| on → off, network kept | on | stays broken | — |
+| on → off, network rebuilt (`follow`) | on | answers at once | `bridge100` |
+
+- `follow` caught every uplink change on its next check; the routing socket and
+  SystemConfiguration's `State:/Network/Global/IPv4` `PrimaryInterface` named the same interface
+  (`utun7` with the exit node, `en0` without) every time. A rebuild took 0.30–0.35 s, and the guest
+  got the same address back each time, since bootpd keys its leases on the MAC.
+- `set_external_interface` is accepted for `en0` and `utun7` and the network follows it, but it
+  cannot help against the route above, which the VPN client installs after the network appears.
+- UDP DNS to 1.1.1.1 failed throughout the exit-node-on, local-access-off window while ICMP got
+  through. The host's own network was misbehaving in the same window (the user saw connections to
+  remote services fail), and the host's own DNS was not checked, so that result is not counted
+  either way.
 - Bridged guests are untouched by the host's VPN because their traffic never enters the host's
   routing; they also never use the tunnel, which is a policy question for VPN users.
 - Root was not available, so the pf NAT rules were not inspected.
 
 Not measured here: throughput through a real virtio-net guest, other VPN clients (WireGuard, Cisco,
-Zscaler), `vmnet_network_configuration_set_external_interface`, Internet Sharing on (1009), sleep/wake and Wi-Fi changes, pf state left behind
+Zscaler), Internet Sharing on (1009), sleep/wake and Wi-Fi changes, pf state left behind
 (`scrub … no-df`), coexistence with Apple `container`.

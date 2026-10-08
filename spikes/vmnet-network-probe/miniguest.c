@@ -7,6 +7,10 @@
 //       DHCP DISCOVER/REQUEST -> lease (address, router, DNS, MTU); ARP the router; ICMP echo to
 //       the router and, outside host mode, to 1.1.1.1 through it. --vhdr starts the interface with
 //       vmnet_enable_virtio_header_key and reports the 12-byte header it sees on every frame.
+//   ext <ifname|default|follow> --hold secs
+//       A shared network whose NAT uplink is chosen with set_external_interface (default = vmnet's
+//       own pick), checked once a second. follow tracks the host's route to 1.1.1.1 and rebuilds
+//       the network on the new uplink when it changes, keeping the guest MAC.
 //   netobj
 //       macOS 26 network-object API: one shared network with a DHCP reservation and a port
 //       forward, two interfaces on it (lease each, ARP each other), and an interface on a second
@@ -20,6 +24,8 @@
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/ethernet.h>
+#include <net/if.h>
+#include <net/route.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +35,7 @@
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
+#include <SystemConfiguration/SystemConfiguration.h>
 #include <vmnet/vmnet.h>
 
 #define BUF 70000
@@ -653,6 +660,120 @@ static int netobj(void) {
     return !ok;
 }
 
+// ---- uplink: what the host routes 1.1.1.1 through, and what SystemConfiguration calls primary ----
+
+// The interface of the host's route to 1.1.1.1, via an RTM_GET on the routing socket.
+static int route_ifname(char *out) {
+    out[0] = 0;
+    int s = socket(PF_ROUTE, SOCK_RAW, 0);
+    if (s < 0) return -1;
+    struct {
+        struct rt_msghdr h;
+        struct sockaddr_in dst;
+        char pad[512];
+    } m;
+    memset(&m, 0, sizeof m);
+    static int seq;
+    m.h.rtm_msglen = sizeof m.h + sizeof m.dst;
+    m.h.rtm_version = RTM_VERSION;
+    m.h.rtm_type = RTM_GET;
+    m.h.rtm_addrs = RTA_DST;
+    m.h.rtm_pid = getpid();
+    m.h.rtm_seq = ++seq;
+    m.dst.sin_len = sizeof m.dst;
+    m.dst.sin_family = AF_INET;
+    inet_aton("1.1.1.1", &m.dst.sin_addr);
+    if (write(s, &m, m.h.rtm_msglen) < 0) { close(s); return -1; }
+    for (;;) {
+        ssize_t r = read(s, &m, sizeof m);
+        if (r < (ssize_t)sizeof m.h) { close(s); return -1; }
+        if (m.h.rtm_pid == getpid() && m.h.rtm_seq == seq) break;
+    }
+    close(s);
+    return if_indextoname(m.h.rtm_index, out) ? 0 : -1;
+}
+
+// State:/Network/Global/IPv4 PrimaryInterface.
+static void sc_primary(char *out, size_t len) {
+    static SCDynamicStoreRef store;
+    out[0] = 0;
+    if (!store) store = SCDynamicStoreCreate(NULL, CFSTR("miniguest"), NULL, NULL);
+    CFDictionaryRef d = store ? SCDynamicStoreCopyValue(store, CFSTR("State:/Network/Global/IPv4")) : NULL;
+    if (!d) return;
+    CFStringRef p = CFDictionaryGetValue(d, CFSTR("PrimaryInterface"));
+    if (p) CFStringGetCString(p, out, len, kCFStringEncodingUTF8);
+    CFRelease(d);
+}
+
+// A shared network NATing out of ext (NULL = vmnet's default), with the time the create took.
+static vmnet_network_ref make_ext_network(const char *ext) {
+    vmnet_return_t st = 0;
+    vmnet_network_configuration_ref cfg = vmnet_network_configuration_create(VMNET_SHARED_MODE, &st);
+    if (!cfg) { printf("configuration_create status=%d\n", st); return NULL; }
+    if (ext) {
+        st = vmnet_network_configuration_set_external_interface(cfg, ext);
+        printf("set_external_interface %s: %d\n", ext, st);
+    }
+    double t0 = now();
+    vmnet_network_ref net = vmnet_network_create(cfg, &st);
+    CFRelease(cfg);
+    if (!net) { printf("network_create status=%d\n", st); return NULL; }
+    struct in_addr s, m;
+    vmnet_network_get_ipv4_subnet(net, &s, &m);
+    printf("network created in %.2f s, gateway %s\n", now() - t0, inet_ntoa(s));
+    return net;
+}
+
+static int bring_up(nic *n, vmnet_network_ref net) {
+    n->ip.s_addr = n->router.s_addr = 0;
+    if (start(n, net, 0, NULL, 1) || dhcp(n) || arp(n, n->router, 3)) return -1;
+    return 0;
+}
+
+// ext <ifname|default|follow> --hold N: a shared network on a chosen uplink, checked once a second.
+// follow picks the uplink the host routes 1.1.1.1 through, polls it every check, and on a change
+// tears the interface and network down and rebuilds them on the new uplink with the same guest MAC.
+static int ext_mode(const char *which, int hold) {
+    int follow = !strcmp(which, "follow");
+    char up[IFNAMSIZ] = "", cur[IFNAMSIZ] = "", sc[64] = "";
+    route_ifname(up);
+    sc_primary(sc, sizeof sc);
+    printf("host: route to 1.1.1.1 via %s; SystemConfiguration primary %s\n", up, sc);
+    const char *ext = follow ? up : !strcmp(which, "default") ? NULL : which;
+    nic n = {.name = "ext", .mac = {0x02, 0x4c, 0x4d, 0x00, 0x00, 0x0e}};
+    vmnet_network_ref net = make_ext_network(ext);
+    if (!net || bring_up(&n, net)) { printf("RESULT ext %s: FAIL (bring-up)\n", which); return 1; }
+    int ok = 0, bad = 0;
+    for (int i = 0; i < hold; i++) {
+        if (follow && route_ifname(cur) == 0 && cur[0] && strcmp(cur, up)) {
+            sc_primary(sc, sizeof sc);
+            double t0 = now();
+            printf("[ext] uplink %s -> %s (SystemConfiguration primary %s); rebuilding\n", up, cur, sc);
+            strcpy(up, cur);
+            stop(&n);
+            CFRelease(net);
+            net = make_ext_network(up);
+            if (!net || bring_up(&n, net)) { printf("[ext] rebuild FAILED\n"); break; }
+            printf("[ext] rebuilt on %s in %.2f s, guest %s\n", up, now() - t0, inet_ntoa(n.ip));
+        }
+        struct in_addr ext1;
+        inet_aton("1.1.1.1", &ext1);
+        double r = ping(&n, ext1), d = dns(&n, ext1);
+        time_t t = time(NULL);
+        char ts[16];
+        strftime(ts, sizeof ts, "%H:%M:%S", localtime(&t));
+        route_ifname(cur);
+        printf("[ext] %s host route %s: icmp %s, udp dns %s\n", ts, cur, r < 0 ? "NO REPLY" : "reply",
+               d < 0 ? "NO REPLY" : "reply");
+        if (r >= 0 && d >= 0) ok++, usleep(1000000);
+        else bad++;
+    }
+    stop(&n);
+    if (net) CFRelease(net);
+    printf("RESULT ext %s: %d answered, %d failed\n", which, ok, bad);
+    return bad > 0;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("uid=%d\n", getuid());
@@ -667,7 +788,8 @@ int main(int argc, char **argv) {
         return lease(argv[2], ifname, vhdr, hold);
     }
     if (argc == 2 && !strcmp(argv[1], "netobj")) return netobj();
+    if (argc == 5 && !strcmp(argv[1], "ext") && !strcmp(argv[3], "--hold")) return ext_mode(argv[2], atoi(argv[4]));
     if (argc == 4 && !strcmp(argv[1], "netobj-one")) return netobj_one(atoi(argv[2]), atoi(argv[3]));
-    fprintf(stderr, "usage: %s lease <shared|host|bridged> [ifname] [--vhdr] [--hold secs] | netobj\n", argv[0]);
+    fprintf(stderr, "usage: %s lease <shared|host|bridged> [ifname] [--vhdr] [--hold secs] | netobj | ext <ifname|default|follow> --hold secs\n", argv[0]);
     return 2;
 }
