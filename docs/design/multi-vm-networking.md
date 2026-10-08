@@ -59,9 +59,8 @@ footprint mid-transfer (default `GOGC` vs 400).
 
 Not measured: throughput and CPU through a real guest, macOS 27, a Developer ID + notarized build,
 the App Store sandbox, sleep/wake, Wi-Fi roaming, Internet Sharing being on
-(`VMNET_SHARING_SERVICE_BUSY`),
-and pf state left behind after teardown (apple/container #2335 reports a `scrub … no-df` rule
-breaking host IPv4 on some ISPs).
+(`VMNET_SHARING_SERVICE_BUSY`), and pf state left behind after teardown (apple/container #2335
+reports a `scrub … no-df` rule breaking host IPv4 on some ISPs).
 
 ## 3. Architecture
 
