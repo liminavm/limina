@@ -72,10 +72,14 @@ guest tpm_tis driver ──MMIO──▶ libkrun TIS device ──▶ Backend tr
   consumes virglrs, pinned by `third_party/manifest.toml`. It knows nothing about TIS, libkrun or
   files: bytes in, bytes out, plus an explicit state value the caller persists. Randomness and
   time are injected, so a test can replay a command stream deterministically.
-- **Firmware.** Our edk2 fork already discovers `tcg,tpm-tis-mmio` from the device tree
-  (`third_party/edk2/ArmVirtPkg/Library/PlatformPeiLib/PlatformPeiLib.c:119`), and
-  `ArmVirtQemu.dsc` carries a complete `TPM2_ENABLE` configuration. `ArmVirtKrun.dsc` has none
-  of it; P3 ports those blocks and verifies the event log reaches Linux.
+- **Firmware.** `ArmVirtKrun` builds with ArmVirtQemu's `TPM2_ENABLE` configuration, on by
+  default: PlatformPeiLib finds the `tcg,tpm-tis-mmio` node, and Tcg2Pei/Tcg2Dxe measure the boot
+  into the SHA-256 bank and hand the event log to Linux. Unlike ArmVirtQemu, it links
+  DxeTpm2MeasureBootLib without Secure Boot, so the images it loads reach PCR 4. A TPM needs
+  persistent UEFI variables (`docs/design/efi-vars.md`): with a TPM present, shim's fallback
+  resets after recreating the boot entry, and volatile variables make that a loop. A managed VM
+  keeps them in the bundle's `efi.vars`. An ad-hoc run with a TPM keeps them in a temporary
+  store for as long as its supervisor runs, unless `--efi-vars <file>` names one.
 - **limina** owns policy: whether a VM has a TPM, where its state file lives (beside the VM's
   disks), snapshot inclusion, and later the reset action.
 

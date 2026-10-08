@@ -44,7 +44,7 @@ base = "51367cfaf379a5869ca2aa78eab1cfe68a769a52"
 repo = "https://github.com/liminavm/edk2.git"
 upstream = "https://github.com/slp/edk2.git"
 branch = "limina"
-rev = "96006ce134cd8f52f40f3319ec821a17f74019da"
+rev = "4ab2a7b1267f2a8133eae54a0ddc2b7552533aaa"
 base = "13e8adac8a83141b51375c799996946082e1eb43"
 
 [imago]

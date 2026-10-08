@@ -12,7 +12,11 @@
 //!
 //! The image is the stock test image with the consumer packages installed
 //! (`scripts/provision/make-tpm-test-image.sh`); the test adds its user to `tss` in its own
-//! clone, as a user of a stock image would. Measured boot (07) is P3's.
+//! clone, as a user of a stock image would.
+//!
+//! Measured boot (07): on both boots, the firmware's event log must replay to the PCRs the TPM
+//! reports, every PCR the log covers, which needs our firmware's TPM2 support. That makes the
+//! PCR-7 enrolment above a real measured-boot policy, which the reboot then has to satisfy.
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
@@ -177,6 +181,43 @@ echo -n clevis-reboot | clevis encrypt tpm2 "{}" > /var/tmp/l2-tpm-r2.jwe"#,
 }
 
 /// What the first boot sealed opens on the second, and its keys are still in the TPM.
+/// The firmware's event log replays to what the TPM holds: for every PCR the log extends, the
+/// value computed from the log's SHA-256 digests is the one the TPM reports, and the log covers
+/// at least the firmware's PCRs 0-7.
+fn event_log_replays(guest: &Guest) {
+    let out = run(
+        guest,
+        "event log replay",
+        r#"sudo tpm2_eventlog /sys/kernel/security/tpm0/binary_bios_measurements > /tmp/l2-el.yaml
+sudo tpm2_pcrread sha256 > /tmp/l2-pcrs.yaml
+python3 - <<"PY"
+import re
+
+def bank(text):
+    text = text[text.index("sha256:") + len("sha256:"):]
+    values = {}
+    for line in text.splitlines()[1:]:
+        m = re.match(r"\s+(\d+)\s*:\s*0x([0-9A-Fa-f]+)\s*$", line)
+        if not m:
+            break
+        values[int(m.group(1))] = m.group(2).lower()
+    return values
+
+log = open("/tmp/l2-el.yaml").read()
+log = bank(log[log.index("\npcrs:"):])
+tpm = bank(open("/tmp/l2-pcrs.yaml").read())
+missing = sorted(set(range(8)) - set(log))
+assert not missing, f"the event log covers no events for PCRs {missing}"
+wrong = [i for i in sorted(log) if tpm.get(i) != log[i]]
+assert not wrong, "PCRs that do not replay: " + ", ".join(
+    f"{i}: log {log[i]} tpm {tpm.get(i)}" for i in wrong)
+print("replayed", " ".join(map(str, sorted(log))))
+PY"#,
+    );
+    assert!(out.contains("replayed"), "{out}");
+    eprintln!("event log: {}", out.trim());
+}
+
 fn after_the_reboot(guest: &Guest) {
     let handles = run(
         guest,
@@ -235,10 +276,16 @@ fn stock_guest_tpm_consumers_work_and_survive_a_reboot() {
     let dir = std::env::temp_dir().join(format!("limina-l2-tpm-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a directory for the TPM's state");
     let state = dir.join("tpm.state");
+    // With a TPM, shim's fallback resets after writing the boot entry, so the variables must
+    // persist or the guest resets forever (docs/design/efi-vars.md). The first boot here is that
+    // one fallback reset; the supervisor relaunches through it.
+    let vars = dir.join("efi.vars");
     let cfg = match GuestConfig::tpm_fedora_from_env() {
         Ok(cfg) => cfg
             .with_supervisor_arg("--tpm-state")
-            .with_supervisor_arg(state.to_str().expect("a UTF-8 temporary path")),
+            .with_supervisor_arg(state.to_str().expect("a UTF-8 temporary path"))
+            .with_supervisor_arg("--efi-vars")
+            .with_supervisor_arg(vars.to_str().expect("a UTF-8 temporary path")),
         Err(e) => {
             eprintln!("SKIP stock_guest_tpm_consumers_work_and_survive_a_reboot: {e:#}");
             return;
@@ -249,6 +296,7 @@ fn stock_guest_tpm_consumers_work_and_survive_a_reboot() {
     guest
         .wait_for_ssh(Duration::from_secs(300))
         .expect("guest did not reach sshd");
+    event_log_replays(&guest);
     consumers(&guest);
     assert_owner_only(&state);
 
@@ -256,6 +304,7 @@ fn stock_guest_tpm_consumers_work_and_survive_a_reboot() {
     guest
         .wait_for_ssh(Duration::from_secs(300))
         .expect("guest did not reach sshd after its reboot");
+    event_log_replays(&guest);
     after_the_reboot(&guest);
 
     let outcome = guest
