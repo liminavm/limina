@@ -216,8 +216,8 @@ command. `krun_set_port_map` is TSI-only. Runbook: `docs/images.md` §SSH access
 **Owed:**
 - **vmnet (bridged, and Apple NAT / host-only):** the worker holds the vmnet interface — no root,
   no restricted entitlement; a spike guest takes a real LAN lease over Wi-Fi `en0`
-  (`spikes/vmnet-network-probe/`). Next: the worker relay and the throughput/efficiency
-  measurement, which also settle whether gvproxy or vmnet shared is the default NAT
+  (`spikes/vmnet-network-probe/`). Next: a native vmnet backend in libkrun, then the
+  throughput/efficiency measurement that settles whether gvproxy or vmnet shared is the default NAT
   (`docs/design/multi-vm-networking.md` §6 Phase 1, §7).
 - **Net worker reconnect on HANG_UP**, so a gvproxy restart doesn't disable the NIC for the VM's life.
 - **Offload tuning:** evaluate `GUEST_TSO6|HOST_TSO6` once verified non-corrupting; mind the macOS

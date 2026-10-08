@@ -165,10 +165,10 @@ Constraints:
   exit node); details and consequences in `docs/design/multi-vm-networking.md` §4.
 - **Not measured:** macOS 27, Developer ID + hardened runtime + notarization, the App Store
   sandbox, and throughput through a real guest.
-- libkrun does **not** link `vmnet.framework`. Whoever holds the vmnet interface relays
-  frames to libkrun over a UNIX socket — `krun_add_net_unixgram` (one frame per datagram,
-  vmnet-helper's framing) or `krun_add_net_unixstream` (socket_vmnet's). With no privilege
-  required, that holder can be limina's own worker (§4).
+- Upstream libkrun does **not** link `vmnet.framework`: external holders relay frames over a
+  UNIX socket — `krun_add_net_unixgram` (one frame per datagram, vmnet-helper's framing) or
+  `krun_add_net_unixstream` (socket_vmnet's). With no privilege required, limina instead adds a
+  native vmnet backend to its libkrun fork and holds the interface in the worker (§4).
 
 ---
 
@@ -213,15 +213,16 @@ guest virtio_net driver -> TX vq (Ethernet frames, prefixed with virtio_net_hdr)
 ### 2.3 virtio-net + vmnet (bridged or shared)
 
 ```
-guest virtio_net -> TX vq -> net worker -> socketpair (SOCK_DGRAM) -> vmnet relay
+guest virtio_net -> TX vq -> libkrun vmnet backend (virtio_net_hdr passed through)
    -> vmnet.framework (SHARED=NAT, HOST, or BRIDGED=L2 on en0) -> physical NIC
 ```
 
 - In BRIDGED mode the guest's frames go straight onto the chosen physical
   segment; the guest MAC is visible on the LAN and it pulls a LAN DHCP lease.
-- The relay is whatever process holds the vmnet interface. It needs
-  `com.apple.security.virtualization`, not root (§1.7), so it can live inside the
-  worker; the socketpair keeps libkrun's net device unchanged.
+- The process holding the vmnet interface needs `com.apple.security.virtualization`, not
+  root (§1.7), so libkrun's backend runs it inside the worker. A relay over the unixgram
+  backend would keep libkrun unchanged but drops the `virtio_net_hdr`, losing TSO and
+  checksum offload.
 
 ---
 
@@ -294,33 +295,30 @@ guest virtio_net -> TX vq -> net worker -> socketpair (SOCK_DGRAM) -> vmnet rela
    offloads; evaluate adding `NET_FEATURE_GUEST_TSO6 | NET_FEATURE_HOST_TSO6`
    (reachable only via the new API) once verified non-corrupting with gvproxy.
    Handle the no-auto-reconnect HANG_UP failure mode.
-3. **vmnet — bridged (E) and Apple NAT / host-only (D), opt-in:** the worker holds the
-   vmnet interface itself and relays frames over a `SOCK_DGRAM` socketpair handed to
-   `krun_add_net_unixgram` — vmnet-helper's job done in-process, so no helper binary,
-   no root and no installer flow. The worker gains `com.apple.security.virtualization`
-   beside `com.apple.security.hypervisor`. **Open:** this in-worker relay (recommended:
-   no libkrun change) vs. a native vmnet backend in libkrun's virtio-net (mechanism in
-   libkrun, saves the relay copy) — decide on throughput numbers. Whether gvproxy or vmnet
-   shared is the default NAT is open until the same measurements are in
+3. **vmnet — bridged (E) and Apple NAT / host-only (D):** a native vmnet backend in
+   libkrun's virtio-net holds the interface inside the worker and passes `virtio_net_hdr`
+   through (TSO, checksum offload) — no helper binary, no root, no installer flow. The
+   worker gains `com.apple.security.virtualization` beside
+   `com.apple.security.hypervisor`. Whether gvproxy or vmnet shared is the default NAT is
+   open until throughput and efficiency are measured through it
    (`multi-vm-networking.md` §7).
 
 ### What limina must build / ship (glue)
-- **Network-backend manager**: spawn/monitor gvproxy (or passt), own the in-worker vmnet
-  relay, own the UNIX socket path + lifecycle, detect death and
+- **Network-backend manager**: spawn/monitor gvproxy (or passt), configure the vmnet
+  backend, own the UNIX socket path + lifecycle, detect death and
   restart/recreate (libkrun does **not** reconnect), surface health to UI.
 - **MAC allocation** (stable per-VM, locally-administered) passed as `c_mac`.
 - **Port-forward control plane**: limina rules → gvproxy REST for NAT; remember
   `krun_set_port_map` is TSI-only and rejected once a net device exists.
 - **DHCP/DNS wiring per backend**: gvproxy/passt internal; vmnet SHARED = Apple;
   vmnet bridged = LAN; raw datagram path = `NET_FLAG_DHCP_CLIENT` (guest `dhcp.c`).
-- **For vmnet**: the vmnet relay in the worker, `com.apple.security.virtualization` in the
-  worker's entitlements, a physical-interface picker for bridged, and vmnet port-forward
+- **For vmnet**: `com.apple.security.virtualization` in the worker's entitlements, a physical-interface picker for bridged, and vmnet port-forward
   rules for shared mode.
 
 ### What likely needs patching in libkrun
 - **NAT: nothing** — gvproxy/passt paths are complete and correct.
-- **vmnet: no libkrun patch** with the in-worker relay over unixgram; a native vmnet
-  backend is the patch to write only if the relay copy proves costly. Patch libkrun only if `NET_FEATURE_*`
+- **vmnet: a native vmnet backend** in virtio-net (`virtio_net_hdr` pass-through via
+  `vmnet_enable_virtio_header_key`, TSO, batched read/write). Patch further only if `NET_FEATURE_*`
   negotiation, MTU, or the single-buffer worker proves incompatible with vmnet,
   or if we need worker **reconnect-on-crash** (a small, self-contained patch to
   `worker.rs`'s HANG_UP handling — recommended regardless for robustness).

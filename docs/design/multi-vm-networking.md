@@ -6,7 +6,8 @@ Every networking feature here runs without root or a restricted Apple entitlemen
 carry guest traffic: **gvproxy**, a user-mode NAT limina ships today, and Apple's
 **`vmnet.framework`**, which a non-root process can drive in every mode with the unrestricted
 `com.apple.security.virtualization` entitlement. **Which of them is the default NAT is an open
-decision** (§7), to be settled by the performance and efficiency measurements Phase 1 takes.
+decision** (§7), to be settled by performance and efficiency measurements once vmnet runs through
+a native libkrun backend (Phase 1).
 
 Measured evidence lives in `spikes/vmnet-network-probe/RESULTS.md` (vmnet: privilege, leases,
 network objects, VPN behaviour) and `spikes/net-bench/RESULTS.md` (gvproxy throughput and CPU).
@@ -86,10 +87,10 @@ Each reference becomes one virtio-net device; libkrun's API takes N NICs, each w
 backend fd and MAC. The per-VM MAC already exists: `vm.toml` stores one derived from the VM uuid
 (`vmlib/schema.rs` `mac_for_uuid`), and gvproxy's config mode binds its static lease to it.
 
-The data plane is uniform: **each NIC is a `SOCK_DGRAM` socketpair, one end to libkrun as
-`UnixgramFd` (`new_unixgram_fd`), the other to the backend** — gvproxy (vfkit framing on) or the
-worker's vmnet relay (raw L2, vfkit off). Today's NIC uses `UnixgramPath`; moving it to a
-supervisor-created socketpair is Phase 0. The vfkit flag is per NIC, set by the backend.
+A user-mode NAT NIC is a `SOCK_DGRAM` socketpair, one end to libkrun as `UnixgramFd`
+(`new_unixgram_fd`, vfkit framing on), the other to gvproxy; today's NIC uses `UnixgramPath`, and
+moving it to a supervisor-created socketpair is Phase 0. A vmnet NIC uses libkrun's native vmnet
+backend (§3.3) and has no socket at all.
 
 ### 3.2 User-mode NAT
 
@@ -103,25 +104,24 @@ per-VM isolation as a fallback.
 
 ### 3.3 vmnet in the worker
 
-**The worker (`limina-vmm`) holds the vmnet interface.** It gains
-`com.apple.security.virtualization` beside `com.apple.security.hypervisor` and starts the interface
-itself; the interface dies with the worker, so there is no helper and nothing to orphan. No
-vendored C and no private syscalls: batched `vmnet_read`/`vmnet_write` are public API
-(`vmnet_read_max_packets_key`, macOS 15+).
+**The worker (`limina-vmm`) holds the vmnet interface, through a native vmnet backend in libkrun's
+virtio-net.** The worker gains `com.apple.security.virtualization` beside
+`com.apple.security.hypervisor`; the interface lives in the worker process and dies with it, so
+there is no helper and nothing to orphan. Public API only: batched `vmnet_read`/`vmnet_write`
+(`vmnet_read_max_packets_key`, macOS 15+), no private syscalls, no vendored C.
 
-Two ways to connect it to virtio-net, decided by Phase 1's measurements:
+The backend starts the interface with `vmnet_enable_virtio_header_key` + `vmnet_enable_tso_key`,
+so the `virtio_net_hdr` passes straight between the guest's virtqueues and vmnet in both directions:
+64 KiB TSO frames and checksum offload end to end, and no socket hop (on the gvproxy path that hop
+costs ~0.6 of ~3.5 cores at 8 Gbit/s, `spikes/net-bench/`). Mechanism in libkrun, on the fork's
+`limina` branch and upstreamable: the backend takes a mode, a bridged interface name or a
+network object, and the guest MAC. Policy in limina: which Network, which mode, uplink tracking
+(§3.4), VPN detection (§4).
 
-- **Relay (no libkrun change):** a worker thread copies frames between vmnet and the socketpair's
-  far end. libkrun's unixgram backend writes a blank `virtio_net_hdr` on receive and strips it on
-  transmit (`unixgram.rs` `read_frame`/`write_frame`), so the guest's segmentation and checksum
-  metadata never reaches vmnet; offloads have to stay within what raw frames can carry.
-- **Native libkrun backend:** a vmnet backend in libkrun's virtio-net, using
-  `vmnet_enable_virtio_header_key` + `vmnet_enable_tso_key` so `virtio_net_hdr` passes straight
-  through in both directions (64 KiB TSO frames, checksum offload) and the socketpair copy goes
-  away. Mechanism in libkrun, policy in limina; upstreamable.
-
-On the gvproxy path the socket hop costs ~0.6 of ~3.5 cores at 8 Gbit/s (`spikes/net-bench/`); the
-relay pays a comparable hop, the native backend does not.
+A relay over libkrun's existing unixgram backend would need no libkrun change, but that backend
+writes a blank `virtio_net_hdr` on receive and strips it on transmit (`unixgram.rs`
+`read_frame`/`write_frame`), so the guest's segmentation and checksum metadata could never reach
+vmnet; the native backend is the one that can use what vmnet offers.
 
 **Modes onto Networks:**
 
@@ -209,16 +209,18 @@ Each phase ships on its own and is tested against the shipped binaries (`crates/
 - **Phase 0 — fd-backend migration.** The existing gvproxy NIC moves from `UnixgramPath` to a
   supervisor-created socketpair (`UnixgramFd`, vfkit on). *RED:* the stock guest still DHCPs and
   SSHes.
-- **Phase 1 — vmnet relay and the measurement.** Worker entitlement; `--net-vmnet shared|bridged`
-  (experimental); the relay of §3.3. Run `spikes/net-bench/netbench.sh` against the same guest on
-  both backends: iperf and ssh both directions, worker CPU, kernel time, gvproxy CPU and footprint,
-  idle cost, small-packet latency. Bridged too. **Closes §7 and the relay-vs-native question.**
+- **Phase 1 — native vmnet backend, then the measurement.** The libkrun vmnet backend of §3.3 on
+  the fork's `limina` branch; worker entitlement; `--net-vmnet shared|bridged` (experimental).
+  *RED:* a stock guest leases and reaches the Internet in shared and bridged mode. Once it works,
+  run `spikes/net-bench/netbench.sh` against the same guest on both backends: iperf and ssh both
+  directions, worker CPU, kernel time, gvproxy CPU and footprint, idle cost, small-packet latency.
+  Bridged too. **Closes §7.**
 - **Phase 2 — `Network` model + per-VM MACs + dynamic forwards.** `limina net` CLI; per-VM MAC to
   the worker; forwards per VM. *RED:* two VMs on two Networks, distinct SSH ports, mutually
   invisible.
 - **Phase 3 — vmnet NAT/Host as a product feature.** Network objects with reservations, uplink
   tracking (§3.4), VPN detection and fallback (§4), host → guest reachability with Local Network
-  permission. Native backend here if Phase 1 says so. *RED:* the host reaches a VM by its
+  permission. *RED:* the host reaches a VM by its
   address; a VPN taking the subnet route is reported; a failed vmnet start leaves the VM on
   user-mode NAT.
 - **Phase 4 — bridged.** Interface picker, `NOT_AUTHORIZED`/`SERVICE_BUSY` surfaced. *RED:* the
