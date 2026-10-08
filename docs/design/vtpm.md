@@ -184,6 +184,12 @@ An entry lands with its witness.
 
 ## Open questions
 
-- **The `tss` group.** `/dev/tpmrm0` is `root:tss 0660`; an unprivileged user needs the group,
-  and some images lack the `tss` user entirely. Whether limina's images add the default user to
-  `tss` is a provisioning decision for P2.
+None open. Settled in P2:
+
+- **The `tss` group.** `/dev/tpmrm0` is `root:tss 0660`, so a user-level consumer (ssh-tpm-agent,
+  tpm2-pkcs11, clevis as a user) needs the group. No limina image adds anyone to it, on either
+  tier: it is the user's choice, as on any Fedora machine with a TPM. root's consumers
+  (systemd-cryptenroll, systemd-creds) do not need it. The L2 test adds it in its own clone.
+- **Where the state lives.** A managed VM with `[hardware] tpm = true` keeps it in the bundle's
+  `tpm.state`. An ad-hoc `--tpm` stays in memory for one run unless `--tpm-state <file>` names
+  one, so tests and pokes are throwaway by default.

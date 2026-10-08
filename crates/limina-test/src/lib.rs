@@ -668,6 +668,28 @@ impl GuestConfig {
         })
     }
 
+    /// L2 config for the vTPM's consumers: [`GuestConfig::fedora_from_env`] on the stock image
+    /// with the TPM consumers installed (`Fedora-Workstation-44.tpm.test.raw`, made by
+    /// `scripts/provision/make-tpm-test-image.sh`), with NAT. The TPM itself is the test's to
+    /// attach. Override: `LIMINA_TEST_DISK_TPM`. Returns an error (the test should SKIP) when the
+    /// image is missing — it is a machine-local golden, see `docs/images.md`.
+    pub fn tpm_fedora_from_env() -> Result<GuestConfig> {
+        let disk = match std::env::var("LIMINA_TEST_DISK_TPM") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => fedora_image("tpm.test"),
+        };
+        anyhow::ensure!(
+            disk.exists(),
+            "vTPM test disk not found at {disk:?}; make it with \
+             `scripts/provision/make-tpm-test-image.sh` (or set LIMINA_TEST_DISK_TPM)"
+        );
+        let mut cfg = GuestConfig::fedora_from_env()?;
+        if let Boot::Firmware { disk: d, .. } = &mut cfg.boot {
+            *d = disk;
+        }
+        Ok(cfg.with_net())
+    }
+
     /// L2 config that EFI-boots the Fedora image on **our GOP firmware** with a captured
     /// software-2D display + NAT — the vehicle for the *visual* boot test (firmware → GRUB →
     /// kernel rendered into the window, read via [`Guest::wait_for_capture`]). `with_net` forces
