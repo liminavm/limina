@@ -1078,6 +1078,15 @@ building on any of them):
 
 Until one lands, a TPM on a Debian guest costs 90 s per boot and gives nothing; leave it off.
 
+### The TPM's state file is synced on the vCPU that sent the command
+The TIS device runs each command inside the guest's `tpmGo` write, and the janus backend writes
+the state file (`sync_all`, rename, directory sync) before it answers, all on that vCPU's thread.
+A slow disk stalls the vCPU for as long as the sync takes. One L2 reboot stalled once (the guest
+never came back) and never again in 22 runs; this is the candidate, not a finding. Moving the
+write off the vCPU would need the device to answer before the state is durable, which the
+backend's "no write the guest saw succeed is lost" rule forbids, so measure the sync's latency
+under load before changing anything.
+
 ---
 
 ## Guest images & delivery
