@@ -1,6 +1,6 @@
 # mesa (guest) — patch-audit ledger
 
-The `limina-guest` series (`third_party/manifest.toml [mesa-guest]`, base `mesa-26.2.3`), 19
+The `limina-guest` series (`third_party/manifest.toml [mesa-guest]`, base `mesa-26.2.3`), 20
 patches. Schema + protocol: `README.md`. Rows are keyed by the `limina-guest` SUBJECT; ordinals
 follow `patches/mesa-guest/` and drift on re-export.
 
@@ -33,11 +33,12 @@ stack — stock QEMU + virglrenderer 1.3.0 or plain zink on anv — never on lim
 | 0017 | vl/compositor: upload the matrix the frontend set, not the init default | `vl_compositor*.c/h` |  | needed (narrowed) | b39d173ca93 | none-yet | none-yet | no | standalone | guest-enhanced (generic) | **upstream-now** | `f5eb8ab7151` fixed RGB→RGB / YUV→RGB; RGB→YUV and 1-component identity still use the seed. `Fixes: f5eb8ab7151`. Stock vrend renders every conversion black (two unrelated host-side faults), so no before/after pixels on QEMU. `vl-compositor-matrix/` |
 | 0018 | zink: fix lost-wakeup deadlock in the multi-context unflushed-batch wait | `zink_batch.c` |  | needed | b39d173ca93 | none-yet | none-yet | no | standalone | guest-enhanced + host zink-on-KK | **upstream-now** | `Fixes: d4159963e3d`, `8dd314d2035`. Breakpoint on the waiter's `mtx_lock`: main hangs 3/3 on the first hit, fix 0/3 (95k–109k hits); plain runs ~1/7. Upstream version also uses `util/timespec.h` and bounds the wait by the caller's `submit_count` (reused batch state). `zink-unflushed-wait/` |
 | 0019 | venus: ignore imported SYNC_FD payload for signal semaphore inspection | `vn_queue.c`, `vn_sync.h` |  | needed | 5d4c4bd553a | n/a | none-yet | no | standalone | guest-enhanced | **upstream-now** | the maintainer's fix (`f63aa202fa2` on `zzyiwei/mesa`, not yet on main), carried as a `cherry-pick -x`; it supersedes our !45030 and its follow-up. `Fixes: 6f3a570d418` (in 26.2.0–26.2.4). Signal semaphores are judged by their permanent payload, so the count, the pNext filtering and the signal-list filtering no longer depend on the waits having run. Repro on main `3b1fece6ff5`: main SIGSEGV in `virtgpu_submit` 3/3 (and with a device group a host `virgl_render_server` SIGSEGV per run); with the fix `sync`, `timeline`, `timeline2` and `group` complete 3/3, the renderer gets matching timeline-value and device-index counts, and the validation layer is silent. The malformed submit crashed limina-vmm (in-process renderer); virglrs refuses it from `fa3b3f6` + `24af9c0`. `venus-sync-count/` |
+| 0020 | virgl: don't wait for a read-only map of a clean resource | `virgl_resource.c` |  | needed | 5d4c4bd553a | n/a | none-yet | no | standalone | guest-enhanced (generic) | **upstream-now** | `glTexSubImage2D` from a PBO waits for the host on every call: with no blit-based transfers the PBO is mapped for reading on the CPU while the transfer of the data just written is queued. Skips the wait for a read-only map that needs no readback (every host-side write marks the resource dirty); blob resources still wait. Stock QEMU: 1.1 → 0.18 ms per upload, the same as client memory, all tiles verified; piglit buffer/PBO/texture-transfer groups no regressions. Firefox Canvas Test on limina: PBO path −27% vs CPU pointer on stock Mesa, −1.2% (noise) with the fix. Opting virgl into blit-based transfers also removes the waits but loses the uploads on vrend. Upstream form on `wip/virgl-pbo-wait`, not yet on `upstream/guest-2026-10`. `virgl-pbo-upload-wait/` |
 
 ## Send queue
 
 One MR per row, in this order — deterministic reproducers first: 0004 (merged), 0019 (the maintainer's fix), 0007, 0016, 0018,
-0003, 0012, the sampler-swizzle fix below, 0011, 0017. 0009 waits for its Mesa +
+0003, 0012, the sampler-swizzle fix below, 0011, 0017, 0020. 0009 waits for its Mesa +
 virglrenderer follow-up pair. Ring loss (0005) goes as an issue first. Filing is the user's; the MR and issue drafts are
 in each `spikes/upstream-repro/` README, and every commit is on `upstream/guest-2026-10`
 (`liminavm/mesa`).
@@ -58,15 +59,6 @@ contributors"; the text rule since MR !43990, 2026-08-25):
   "vl/compositor: don't swizzle the sampler operand of the alpha fetch" (`Fixes: 210e557f7e0`):
   main 3 host shader errors per VPP run, fix none. Not in the guest series (our host never hit it).
   `vl-compositor-sampler-swizzle/`.
-- **virgl `glTexSubImage2D` from a PBO waits for the host on every call** (found by the Firefox
-  perf work on an M1 limina host): the PBO read map waits on the queued transfer of the data just written.
-  Candidate "virgl: don't wait for a read-only map of a clean resource" on `wip/virgl-pbo-wait`:
-  1.1 → 0.18 ms per upload on stock QEMU, all tiles verified; piglit buffer/PBO/texture-transfer
-  groups show no regressions. In the guest series as 0020 (payload r33). Firefox Canvas Test on
-  limina: PBO path −27% vs CPU pointer on stock Mesa, −1.2% (noise) with the fix. Re-traced: no
-  remaining wait goes through the PBO read map; the sub-second stalls hit every ioctl on both arms
-  (host-side, in `docs/hardening-backlog.md`). **Ready to file.**
-  Opting virgl into blit-based transfers also removes the waits but loses the uploads on vrend. `virgl-pbo-upload-wait/`.
 - **virgl VA post-processing on vrend still draws black after that fix**: the compositor's matrix is
   a real buffer at constant slot 0 (virgl: UBO 0), which vrend never reads (`CONST[0]` is filled
   only from inline constants). Unclaimed; a virgl/vrend matter.
