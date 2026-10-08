@@ -175,4 +175,4 @@ fills so every session resumes from durable state.
 
 edk2 was a script (`apply-virtio-keyboard.py`) rather than a format-patch series at
 audit time; since 2026-08-06 it is fork-model (`liminavm/edk2`, 6 commits, task #22)
-and any upstreaming rows would key on those commit subjects.
+and any upstreaming rows would key on those commit subjects (`edk2.md`).

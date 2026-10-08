@@ -21,7 +21,7 @@ docs-only.
 | mutter | ~~1~~ RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer | 58 | `956b034f` | gitlab.fd.o (Anubis) |
 | libkrun | 126 | `c652b56` (main) | github.com/libkrun/libkrun |
-| edk2 | (script) | — | prose section, no rows |
+| edk2 | (fork) | — | `edk2.md`: post-audit rows only, unresearched |
 | **total** | **226** | | (was 227; mutter's 1 retired) |
 
 ## Headline: what changes hands, what stays
