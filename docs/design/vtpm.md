@@ -45,9 +45,11 @@ touches the guest disk, and the host can gate it on Touch ID or refuse a clone.
   objects and sessions (`Janus::snapshot`, a v11 section of the snapshot head). The guest sends
   `TPM2_Shutdown(STATE)` on the way down and, with no firmware run on the way up, no Startup,
   so a TPM rebuilt from the state file would be one that never started. The snapshot's NV
-  replaces the state file on restore, so the TPM rolls back with the RAM. A snapshot with a TPM
-  does not restore into a VM without one, and the snapshot file is owner-only, like the state
-  file.
+  replaces the state file on restore, so the TPM rolls back with the RAM. That includes the
+  dictionary-attack counter: restoring a snapshot forgets the failures since it was taken, which
+  gives nothing to anyone who does not already hold the host's files. A VM without a TPM refuses
+  to resume a snapshot taken with one, and keeps it. The snapshot file is owner-only, like the
+  state file.
 - **Firmware work is in scope**, so measured boot is part of the deliverable, not a follow-up.
 - **The engine is `janus`**, `MIT OR Apache-2.0`, its own repository under liminavm. It is not
   published: the name is taken on crates.io.

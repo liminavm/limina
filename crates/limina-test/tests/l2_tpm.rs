@@ -435,6 +435,41 @@ fn stock_guest_tpm_survives_a_suspend_and_restore() {
     limina_test::cow_clone(&g1.scratch_dir().join("disk.raw"), &disk).expect("keeping the disk");
     drop(g1);
 
+    // A VM started without the TPM it was suspended with refuses the resume and keeps the
+    // suspended session, as it does for any other device that went missing.
+    let mut bare = GuestConfig::tpm_fedora_from_env()
+        .expect("the config built above")
+        .with_supervisor_arg("--efi-vars")
+        .with_supervisor_arg(vars.to_str().expect("a UTF-8 temporary path"))
+        .with_supervisor_log()
+        .restore_from(&snap);
+    if let limina_test::Boot::Firmware { disk: d, .. } = &mut bare.boot {
+        *d = disk.clone();
+    }
+    let mut refused = Guest::boot(&bare).expect("spawning the supervisor without a TPM");
+    let outcome = refused
+        .wait_supervisor_exit(Duration::from_secs(60))
+        .expect("the supervisor without a TPM did not exit");
+    let refused_log = refused.supervisor_log();
+    // Named for what is missing, not caught by chance: the TPM's window happens to sit before
+    // the virtio devices, so their slots move too.
+    assert!(
+        refused_log
+            .lines()
+            .any(|l| l.contains("restore refused") && l.contains("TPM")),
+        "the refusal does not name the missing TPM:\n{refused_log}"
+    );
+    assert_eq!(
+        outcome.code,
+        Some(124),
+        "a resume onto no TPM was not refused: {outcome:?}\n{refused_log}"
+    );
+    assert!(
+        snap.exists(),
+        "the refused resume did not keep the snapshot\n{refused_log}"
+    );
+    drop(refused);
+
     let mut cfg2 = base.restore_from(&snap);
     if let limina_test::Boot::Firmware { disk: d, .. } = &mut cfg2.boot {
         *d = disk.clone();
