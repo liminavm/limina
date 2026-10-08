@@ -21,6 +21,9 @@
  *                   value. Expected: "timeline value 5".
  *   timeline2       timeline through vkQueueSubmit2, where the value travels
  *                   with its semaphore. Expected: "timeline value 5".
+ *   group           the submission above with a VkDeviceGroupSubmitInfo that
+ *                   carries the semaphore's device indices. Expected:
+ *                   "submission completed".
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,7 +44,8 @@ main(int argc, char **argv)
    const char *mode = argc > 1 ? argv[1] : "sync";
    const int timeline = !strcmp(mode, "timeline");
    const int timeline2 = !strcmp(mode, "timeline2");
-   CHECK(timeline || timeline2 || !strcmp(mode, "sync"));
+   const int group = !strcmp(mode, "group");
+   CHECK(timeline || timeline2 || group || !strcmp(mode, "sync"));
 
    const VkApplicationInfo app = {
       .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -153,9 +157,17 @@ main(int argc, char **argv)
       .signalSemaphoreValueCount = 2,
       .pSignalSemaphoreValues = sig_vals,
    };
+   const uint32_t dev_index = 0;
+   const VkDeviceGroupSubmitInfo dgsi = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_GROUP_SUBMIT_INFO,
+      .waitSemaphoreCount = 1,
+      .pWaitSemaphoreDeviceIndices = &dev_index,
+      .signalSemaphoreCount = 1,
+      .pSignalSemaphoreDeviceIndices = &dev_index,
+   };
    const VkSubmitInfo submit = {
       .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-      .pNext = timeline ? &tsi : NULL,
+      .pNext = timeline ? (const void *)&tsi : group ? (const void *)&dgsi : NULL,
       .waitSemaphoreCount = 1,
       .pWaitSemaphores = &sem,
       .pWaitDstStageMask = &stage,
