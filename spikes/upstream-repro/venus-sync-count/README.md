@@ -97,11 +97,14 @@ sending it, but any guest process can still send it, so the renderer has to chec
 array counts against the submit's counts (VUID-VkSubmitInfo-pNext-03240/03241, and the
 `VkDeviceGroupSubmitInfo` counts) and fail the command like any other malformed one. The
 `timeline` mismatch is the same pattern without a NULL: the host driver reads the signal value
-past the end of a decoded array. virglrs fixes it in `fa3b3f6` ("venus: refuse a submit whose pNext counts
-disagree with its own", on virglrs main): `Driver::queue_submit` rejects
-the context on a device-group or timeline count mismatch before the driver call; its driver-level
-test covers the `group` shape and a timeline signal without a value. Not yet run against this
-reproducer, which needs a limina build pinned to it. A semaphore created with
+past the end of a decoded array. virglrs fixes it in two commits on its main: `fa3b3f6` ("venus: refuse a submit whose pNext counts
+disagree with its own") rejects the context on a device-group or timeline count mismatch before
+the driver call, and `24af9c0` ("venus: refuse a submit whose chained array is counted but
+absent") closes the case it missed, an array sent empty under a nonzero count, which the decoder
+also turns into NULL. Not yet run against this reproducer, which needs a limina build pinned to
+`24af9c0`. The same class (guest-supplied counts and offsets reaching the host driver
+unvalidated) is broad across venus commands on KosmicKrisp; virglrs is addressing it with a
+validation layer. A semaphore created with
 `sync_fd_export` is dropped from all three lists, so only non-exportable semaphores hit this.
 
 ## Tests
