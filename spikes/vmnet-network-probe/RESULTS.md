@@ -68,6 +68,27 @@ it non-root under `gtimeout`. `MINIGUEST_TRACE=1` prints every frame the respond
 - The host-only lease handed out DNS `100.100.100.100`, i.e. the host's resolver at the time
   (Tailscale's): bootpd passes the host's DNS through.
 
-Not measured here: throughput through a real virtio-net guest, VPN interaction (full tunnel, exit
-node), Internet Sharing on (1009), sleep/wake and Wi-Fi changes, pf state left behind
+## Under a full-tunnel VPN (Tailscale exit node), measured 2026-10-08 on the dev Mac
+
+`--hold <secs>` keeps the interface up and checks 1.1.1.1 every second with an ICMP echo (varying
+sequence) and a UDP DNS query; every receive loop answers ARP for the guest's address.
+
+| sequence | shared-mode guest reaching 1.1.1.1 |
+|---|---|
+| VPN off throughout | every check answered for 80 s |
+| network up, then exit node switched on | stops the moment the exit node comes up, never recovers |
+| exit node on, then network created | answers for about 3 s after the lease, then ICMP and UDP both stop for good; nothing comes back, not even an ARP request |
+| exit node switched off under a broken network | stays broken; a fresh interface on the same (still held) default network is broken too, while the host's own TCP to 1.1.1.1 works |
+| broken network released, then recreated | works at once, default and pinned subnet alike |
+| bridged on `en0`, exit node on | leases and reaches 1.1.1.1 through the LAN router, i.e. bypassing the VPN |
+
+- **A shared network that lives through a VPN transition loses the Internet until every interface
+  on it is released**, whichever came first. A guest on it would need its vmnet interface torn
+  down and restarted, and so would every other guest sharing that network.
+- Bridged guests are untouched by the host's VPN because their traffic never enters the host's
+  routing; they also never use the tunnel, which is a policy question for VPN users.
+- Root was not available, so the pf NAT rules were not inspected.
+
+Not measured here: throughput through a real virtio-net guest, other VPN clients (WireGuard, Cisco,
+Zscaler), `vmnet_network_configuration_set_external_interface`, Internet Sharing on (1009), sleep/wake and Wi-Fi changes, pf state left behind
 (`scrub … no-df`), coexistence with Apple `container`.

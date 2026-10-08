@@ -7,4 +7,4 @@ out=${MINIGUEST_OUT:-$here/miniguest}
 xcrun clang -O1 -Wall -Wextra -Wno-unused-parameter -mmacosx-version-min=26.0 \
     -framework vmnet -o "$out" "$here/miniguest.c"
 codesign -f -s - --entitlements "$here/both.entitlements" "$out" 2>/dev/null
-exec gtimeout --kill-after=5 90 "$out" "$@"
+exec gtimeout --kill-after=5 "${MINIGUEST_TIMEOUT:-90}" "$out" "$@"

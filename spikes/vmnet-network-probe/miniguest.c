@@ -27,6 +27,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/uio.h>
+#include <time.h>
 #include <unistd.h>
 #include <vmnet/vmnet.h>
 
@@ -159,12 +160,39 @@ static size_t rx(nic *n, uint8_t *f) {
     return len;
 }
 
+// Reply to an ARP request for our own address, as any guest would.
+static void answer_arp(nic *n, const uint8_t *f, size_t len) {
+    if (len < 42 || f[12] != 0x08 || f[13] != 0x06 || f[21] != 1 || !n->ip.s_addr) return;
+    if (memcmp(f + 38, &n->ip, 4)) return;
+    uint8_t r[64] = {0};
+    memcpy(r, f + 6, 6), memcpy(r + 6, n->mac, 6);
+    r[12] = 0x08, r[13] = 0x06;
+    uint8_t *a = r + 14;
+    a[1] = 1, a[2] = 8, a[4] = 6, a[5] = 4, a[7] = 2;
+    memcpy(a + 8, n->mac, 6), memcpy(a + 14, &n->ip, 4);
+    memcpy(a + 18, f + 22, 6), memcpy(a + 24, f + 28, 4);
+    tx(n, r, 42);
+}
+
 // Wait up to secs for a frame that match() accepts; returns its length or 0.
 static size_t wait_for(nic *n, uint8_t *f, double secs, int (*match)(nic *, const uint8_t *, size_t)) {
     double end = now() + secs;
     while (now() < end) {
         size_t len = rx(n, f);
         if (!len) { usleep(2000); continue; }
+        answer_arp(n, f, len);
+        if (getenv("MINIGUEST_TRACE_WAIT") && !match(n, f, len)) {
+            char s[20];
+            mac_str(f + 6, s);
+            printf("[%s] (unmatched) %zu bytes from %s type %02x%02x", n->name, len, s, f[12], f[13]);
+            if (f[12] == 0x08 && f[13] == 0) {
+                char a[20];
+                strcpy(a, inet_ntoa(*(struct in_addr *)(f + 26)));
+                printf(" proto %d %s -> %s", f[23], a, inet_ntoa(*(struct in_addr *)(f + 30)));
+            }
+            if (f[12] == 0x08 && f[13] == 6) printf(" arp op %d", f[21]);
+            printf("\n");
+        }
         if (match(n, f, len)) return len;
     }
     return 0;
@@ -359,6 +387,30 @@ static int serve(nic *n, double secs, int port, int *syns) {
 }
 
 static struct in_addr ping_dst;
+static int dns_port;
+static int is_dns_reply(nic *n, const uint8_t *f, size_t len) {
+    if (len < 14 + 20 + 8 + 12 || f[12] != 0x08 || f[13] != 0 || f[14 + 9] != 17) return 0;
+    const uint8_t *u = f + 14 + (f[14] & 0xf) * 4;
+    return ((u[0] << 8) | u[1]) == 53 && ((u[2] << 8) | u[3]) == dns_port;
+}
+
+// A UDP DNS query for example.com (A) to dst:53 via the router; returns the RTT in ms, or -1.
+static double dns(nic *n, struct in_addr dst) {
+    static const uint8_t q[] = {0x4c, 0x4d, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 7, 'e', 'x', 'a', 'm', 'p',
+                                'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1};
+    uint8_t f[128] = {0}, *p = f + 14, *u = p + 20;
+    eth(f, n->router_mac, n->mac, 0x0800);
+    dns_port = 40000 + (rand() % 20000);
+    uint16_t sp = htons(dns_port), dp = htons(53), ul = htons(8 + sizeof q);
+    memcpy(u, &sp, 2), memcpy(u + 2, &dp, 2), memcpy(u + 4, &ul, 2);
+    memcpy(u + 8, q, sizeof q);
+    ipv4(p, n->ip, dst, 17, 8 + sizeof q);
+    double t0 = now();
+    tx(n, f, 14 + 20 + 8 + sizeof q);
+    uint8_t r[BUF];
+    return wait_for(n, r, 3, is_dns_reply) ? (now() - t0) * 1000 : -1;
+}
+
 static int is_echo_reply(nic *n, const uint8_t *f, size_t len) {
     return len >= 42 && f[12] == 0x08 && f[13] == 0 && f[14 + 9] == 1 &&
            !memcmp(f + 26, &ping_dst, 4) && f[14 + (f[14] & 0xf) * 4] == 0;
@@ -368,7 +420,9 @@ static int is_echo_reply(nic *n, const uint8_t *f, size_t len) {
 static double ping(nic *n, struct in_addr dst) {
     uint8_t f[128] = {0}, *p = f + 14, *ic = p + 20;
     eth(f, n->router_mac, n->mac, 0x0800);
-    ic[0] = 8, ic[4] = 0x12, ic[5] = 0x34, ic[7] = 1;
+    static uint16_t seq = 0;
+    seq++;
+    ic[0] = 8, ic[4] = 0x12, ic[5] = 0x34, ic[6] = seq >> 8, ic[7] = seq & 0xff;
     memcpy(ic + 8, "limina-vmnet-probe", 18);
     uint16_t c = csum(ic, 26, 0);
     memcpy(ic + 2, &c, 2);
@@ -382,7 +436,7 @@ static double ping(nic *n, struct in_addr dst) {
 
 // ---- modes ------------------------------------------------------------------------------------
 
-static int lease(const char *mode_s, const char *ifname, int vhdr) {
+static int lease(const char *mode_s, const char *ifname, int vhdr, int hold) {
     uint64_t mode = !strcmp(mode_s, "shared") ? VMNET_SHARED_MODE
                     : !strcmp(mode_s, "host") ? VMNET_HOST_MODE
                                               : VMNET_BRIDGED_MODE;
@@ -415,6 +469,18 @@ static int lease(const char *mode_s, const char *ifname, int vhdr) {
         printf("[%s] ping 1.1.1.1 through the router: %s", n.name, r2 < 0 ? "no reply\n" : "");
         if (r2 >= 0) printf("%.2f ms\n", r2);
         rc |= r2 < 0;
+    }
+    // Hold the interface and ping 1.1.1.1 once a second, so a VPN can be toggled under a live guest.
+    for (int i = 0; i < hold; i++) {
+        struct in_addr ext;
+        inet_aton("1.1.1.1", &ext);
+        double r = ping(&n, ext), d = dns(&n, ext);
+        time_t t = time(NULL);
+        char ts[16];
+        strftime(ts, sizeof ts, "%H:%M:%S", localtime(&t));
+        printf("[%s] %s hold 1.1.1.1: icmp %s, udp dns %s\n", n.name, ts, r < 0 ? "NO REPLY" : "reply",
+               d < 0 ? "NO REPLY" : "reply");
+        if (r >= 0 && d >= 0) usleep(1000000);
     }
 out:
     if (vhdr)
@@ -591,16 +657,17 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("uid=%d\n", getuid());
     if (argc >= 3 && !strcmp(argv[1], "lease")) {
-        int vhdr = 0;
+        int vhdr = 0, hold = 0;
         const char *ifname = NULL;
         for (int i = 3; i < argc; i++) {
             if (!strcmp(argv[i], "--vhdr")) vhdr = 1;
+            else if (!strcmp(argv[i], "--hold") && i + 1 < argc) hold = atoi(argv[++i]);
             else ifname = argv[i];
         }
-        return lease(argv[2], ifname, vhdr);
+        return lease(argv[2], ifname, vhdr, hold);
     }
     if (argc == 2 && !strcmp(argv[1], "netobj")) return netobj();
     if (argc == 4 && !strcmp(argv[1], "netobj-one")) return netobj_one(atoi(argv[2]), atoi(argv[3]));
-    fprintf(stderr, "usage: %s lease <shared|host|bridged> [ifname] [--vhdr] | netobj\n", argv[0]);
+    fprintf(stderr, "usage: %s lease <shared|host|bridged> [ifname] [--vhdr] [--hold secs] | netobj\n", argv[0]);
     return 2;
 }
