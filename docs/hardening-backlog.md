@@ -657,6 +657,23 @@ Running each one in the enhanced guest under zink-on-venus as well
   pass into a fail on either guest. `vbo-subdata-*` fail this way in some full runs and pass 3/3 run
   alone (`spikes/piglit-virgl/rep.sh`), so treat a lone difference with that line as a host stall.
 
+### vrend guests on the GLES flavour compute every double as zero (low priority)
+With geometry shaders on in KK, the GLES host flavour lifts vrend guests to GLSL 430, which exposes
+`ARB_gpu_shader_fp64`. On a GLES host the guest's virgl driver drops every double instruction
+(`virgl_tgsi.c`, `fake_fp64 = HOST_IS_GLES`), an upstream hack so a GLES host can reach GL 4.0, so
+each double result reads 0: 357 generated `glsl-4.00` built-in-function tests fail on the vrend tier
+in every stage. They skipped before GS. Not a vrend translation bug: host GLES has no fp64 to offer,
+and vrend sets `has_fp64` only on the desktop flavour. Fix shape, two halves:
+- **Host, limina-only:** let ES contexts in host Mesa enable `ARB_gpu_shader_fp64` (no ES spec has
+  doubles, so it is carried, never upstreamed); vrend then sets `has_fp64` on the GLES flavour.
+- **Guest, one line on `limina-guest`:** fake only when the host lacks fp64,
+  `HOST_IS_GLES && !has_fp64`. It reuses an existing caps bit, so no protocol change, and is an
+  upstream candidate. Stock guests keep the zeros they get today.
+
+First, one vrend-tier run on the desktop flavour: KK has no hardware fp64, so zink emulates doubles,
+and whether that emulation computes correctly on KK is unmeasured. If it does not, the fix belongs
+there and the ES/desktop split is beside the point.
+
 ### Re-verify CPU-write → GPU-read coherency on a shared dmabuf under virglrs
 A guest that does `gbm_bo_map` → write → unmap on a LINEAR `Argb8888` dmabuf and then samples it from
 venus read the buffer's previous contents: the write reaches the host as a control-queue transfer on
