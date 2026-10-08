@@ -26,7 +26,8 @@ invalidated-transient step is required.
 ## Results
 
 Host: Fedora 44, Intel Iris Plus G7 (Ice Lake), system anv from Fedora mesa 26.1.8 as the
-Vulkan driver; zink from the Mesa under test.
+Vulkan driver; zink from the Mesa under test. The venus rows run zink and venus from the Mesa
+under test inside the rig guest, on the same host anv.
 
 | Mesa (zink) | Vulkan driver | Result |
 |---|---|---|
@@ -36,6 +37,8 @@ Vulkan driver; zink from the Mesa under test.
 | `main` 92b45bd0f2e | anv, ICL (no MSRTSS) | SIGSEGV, ~4360 "Caught recursion" lines before it, 5/5 |
 | `main` 92b45bd0f2e + fix | same | the same three pixels, `ok`, exit 0, 5/5 |
 | `main` 92b45bd0f2e | system lavapipe (`LIBGL_ALWAYS_SOFTWARE=1` plus `VK_DRIVER_FILES` naming its ICD) | the same three pixels, `ok`, exit 0 (control) |
+| `main` 92b45bd0f2e | venus on that anv, QEMU 10.2 + virglrenderer 1.3.0 guest | SIGSEGV, ~4358 "Caught recursion" lines before it, 5/5 |
+| `main` 92b45bd0f2e + fix | same | the same three pixels, `ok`, exit 0, 5/5 |
 
 Measured 2026-10-05 (`b39d173ca93`) and 2026-10-08 (`92b45bd0f2e`).
 
