@@ -60,14 +60,14 @@ produced/refreshed. All images live in the repo root and are **gitignored** (`*.
 *link to this table* rather than restate numbers — a stale "mesa 25.3.6" once propagated into three
 memories before anyone noticed. Verify by reading an image's rpmdb directly (loop-mount the btrfs
 root offline → `btrfs restore -r 256` the `root` subvol → `rpm --dbpath … -q`), or in a booted
-guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and `rpm -q` in each booted F44 enhanced guest after the r29 trial boots 2026-10-02 (the enhanced mesa cell since by the r34 installer logs, 2026-10-08), and the dogfood row by `rpm -q`/`rpm -V`, `uname -r` and `grubby` on the dev VM 2026-10-02 after its by-hand kernel and mesa delivery. All three F44 enhanced images boot `7.1.13-limina16k` as their permanent default. The synoik image never reaches `multi-user.target` (its `plymouth-quit-wait` hangs), so `limina-kernel-promote.service` never fires there: after its trial boot, promote by hand with the unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable the unit).
+guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and `rpm -q` in each booted F44 enhanced guest after the r29 trial boots 2026-10-02 (the enhanced mesa cell since by the r34 installer logs, 2026-10-08), and the dogfood row by `rpm -q`/`rpm -V`, `uname -r` and `grubby` on the dev VM 2026-10-02 after its by-hand kernel and mesa delivery (its mesa cell since by `rpm -q`/`rpm -V` after the by-hand r34 mesa delivery, 2026-10-08). All three F44 enhanced images boot `7.1.13-limina16k` as their permanent default. The synoik image never reaches `multi-user.target` (its `plymouth-quit-wait` hangs), so `limina-kernel-promote.service` never fires there: after its trial boot, promote by hand with the unit's own two steps (`grubby --set-default=/boot/vmlinuz-<KREL>`, then disable the unit).
 
 | Tier / images | Kernel | Page | Mesa | Mutter | GNOME Shell |
 |---|---|---|---|---|---|
 | **F44 stock** (`vanilla`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.1.13-1` | 16 KiB | `26.2.3-4.limina.fc44` | `50.1-1.limina.fc44` | `50.0` (stock) |
-| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.13-1` (running and default `7.1.13-limina16k`; `7.1.9-1` kept as fallback) | 16 KiB | `26.2.3-2.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
+| **F44 dogfood deployment** (the user's dev VM + upgraded clones) | `limina-kernel-16k-7.1.13-1` (running and default `7.1.13-limina16k`; `7.1.9-1` kept as fallback) | 16 KiB | `26.2.3-4.limina.fc44` | **stock** `50.3-3.fc44` | `50.3` (stock) |
 
 Two facts the table cannot show:
 
