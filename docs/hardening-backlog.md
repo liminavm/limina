@@ -1048,6 +1048,36 @@ writes are not logged, so the true exit count is higher. Unknown whether this is
 traffic, an ack pattern costing an extra read per event, or a genuine interrupt storm. Start by
 rerunning the count with `--no-net`, and against a guest with no NAT traffic.
 
+## TPM
+
+### Debian's arm64 kernel has no driver for our TPM
+Debian testing's `linux-image-*-arm64` (seen on `7.1.13+deb14`) builds `CONFIG_TCG_TIS_CORE=m` but
+leaves `CONFIG_TCG_TIS` unset, so nothing binds `tcg,tpm-tis-mmio`: the device tree node and the
+platform device appear, `/dev/tpm0` never does. The firmware still measures the boot and hands
+the event log to Linux, so systemd waits for `/dev/tpm0` and `/dev/tpmrm0` until its 90 s
+timeout, then boots without a TPM. That is the degradation every stock guest without `tpm_tis`
+gets from `tpm = true`. Fedora builds every driver below; Debian's options, from its packaging
+configs (`debian/config/config` and `arm64/config`, to be re-read on a booted kernel before
+building on any of them):
+
+- **TPM on SPI behind an emulated SoC SPI controller.** Debian has `TCG_TIS_SPI=m`, the generic
+  driver (`tcg,tpm_tis-spi`), and builds no `SPI_VIRTIO` and no `SPI_PL022`, but Debian and
+  Fedora both build `SPI_BCM2835`, `SPI_OMAP24XX`, `SPI_IMX`, `SPI_SUN6I`, `SPI_MESON_SPICC` and
+  `SPI_TEGRA114`; BCM2835's is the simplest register model. TCG's SPI protocol carries the same
+  TIS register accesses, so janus and the TIS register file stay as they are; the new parts are
+  the controller (FIFO, chip select, a fixed clock node) and an interface switch: edk2 cannot
+  speak SPI, so the firmware keeps the MMIO TIS for measured boot and must disable that node
+  before the OS sees the tree, or a kernel with both drivers binds two TPM devices to one TPM.
+  The one stock-kernel route found; a few days of work and a second OS-facing interface to test.
+- **I2C: not viable.** Debian has no generic `TCG_TIS_I2C`, only `TCG_TIS_I2C_CR50` (expects
+  Google's cr50 vendor ID: an impersonation) and `TCG_TIS_I2C_INFINEON` (believed TPM 1.2 parts
+  only), and no `I2C_VIRTIO`, so it also needs an emulated I2C controller.
+- **ACPI with a CRB TPM.** Both kernels build `tpm_crb` in, and edk2's Tpm2DeviceLibDTpm speaks
+  CRB, but arm64 Linux takes ACPI or a device tree, never both: the whole platform would have to
+  be described in ACPI. Out of proportion for this.
+
+Until one lands, a TPM on a Debian guest costs 90 s per boot and gives nothing; leave it off.
+
 ---
 
 ## Guest images & delivery

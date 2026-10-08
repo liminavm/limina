@@ -19,7 +19,9 @@ without the TPM state), **per-VM identity**, and the **stock TPM ecosystem**:
 3. **Keys that cannot leave the TPM**: `ssh-tpm-agent`, `tpm2-pkcs11`, commit signing, clevis.
 4. **Measured boot and PCR policy**, from TPM2 support in our firmware.
 5. **A stock-tier feature.** Fedora's kernel and userspace already carry the driver and the
-   tools, so the device works with no limina guest component.
+   tools, so the device works with no limina guest component. A kernel without `tpm_tis`
+   (Debian's arm64) still boots, but systemd waits 90 s for the TPM the firmware reported; see
+   `docs/hardening-backlog.md` §TPM.
 
 Session-keyring auto-unlock is **not** in scope here. When it comes, it goes through
 `limina-agent-session` over vsock with the password in the macOS Keychain: the secret never
