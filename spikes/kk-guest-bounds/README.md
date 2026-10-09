@@ -62,8 +62,26 @@ After it, all six cases PASS with and without asserts. In a guest, piglit's tran
 and query tests (469, over virgl → zink → KK) gave the same results on both KK builds except
 `ext_transform_feedback2@counting with pause`, which went from fail to pass (one run per build).
 
+The `mv-*` cases cover multiview, where one query claims N consecutive pool indices (N = views).
+`oq-mv-valid` / `ts-mv-valid` end an occlusion query, and write a timestamp, under a two-view
+mask at index 1 of an eight-query pool, and check exactly queries 1 and 2 come back available
+(query 3 does not). `oq-mv-over` / `ts-mv-over` do the same at the last index of a two-query pool
+under a 32-view mask, so the availability loop (`kk_CmdEndQuery`) and the resolve loop
+(`kk_CmdWriteTimestamp2`) would run past the pool; `oq-begin-over` names a base index past the
+pool. Those three overruns are GPU-side writes (`libkk_write_u32` / a blit resolve to a GPU
+address), so a large one faults the whole host GPU — they record the command (where a fixed KK
+clamps) but only submit it when `LIMINA_KK_PROBE_ALLOW_GPU` is set, which you do **only** against a
+KK carrying the clamp; otherwise they report SKIP. A faithful overrun RED is that host-wide fault,
+so reachability was shown with a temporary record-time bounds assert on the two loops (the over-end
+cases abort during recording), not by submitting the overrun.
+
+Fixed in limina-kk `kk: bound guest query indices and multiview spans to the pool`. With
+`LIMINA_KK_PROBE_ALLOW_GPU=1` all cases PASS: the valid multiview pair is marked/resolved, and the
+over-end and base-index cases survive clamped.
+
     cc -Wall -I/opt/homebrew/include query-probe.c -L/opt/homebrew/lib -lvulkan -o qp
     VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./qp [case]
+    LIMINA_KK_PROBE_ALLOW_GPU=1 ./qp   # also submit the gated over-end cases (fixed KK only)
 
 ## `tess-probe.c` — tessellation patch sizes
 
@@ -109,3 +127,41 @@ conditional-rendering tests (103) gave identical results on both KK builds.
 
     cc -Wall -I/opt/homebrew/include indirect-probe.c -L/opt/homebrew/lib -lvulkan -o ip
     VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./ip [case]
+
+## `renderpass-probe.c` — attachment-less render-pass lifecycle
+
+An attachment-less dynamic-rendering pass starts its Metal encoder lazily, deferred to the first
+draw, so between `vkCmdBeginRendering` and that draw KK holds a pending-start flag and no encoder.
+`vkCmdEndRendering` frees the Metal render-pass descriptor, but the flag is separate state: a pass
+ended before any draw left it set with the descriptor freed, and the next draw a guest recorded
+with no pass active started a pass from the NULL descriptor. `noattach-end-draw` ends such a pass
+with no draw, then draws with no pass active; `noattach-draw` (the control) draws inside the pass
+and must still render. The pipeline rasterizes nothing, so no attachment, image or readback is
+needed.
+
+Fixed in limina-kk `kk: drop a draw with no live render pass and clear the deferred-start flag on
+end`. Before it `noattach-end-draw` crashes (an assert in `cs_start_render` with asserts, a nil
+Metal encoder without); after it both cases PASS. A faithful crash is a host GPU fault, so the RED
+run aborted at `cs_get_render` during recording (a temporary bounds check), before any submit.
+
+    cc -Wall -I/opt/homebrew/include renderpass-probe.c -L/opt/homebrew/lib -lvulkan -o rp
+    VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./rp [case]
+
+## `xfb-probe.c` — transform-feedback buffer bindings
+
+`vkCmdBindTransformFeedbackBuffersEXT` takes a per-buffer offset and size from the guest. KK fed
+them to `vk_buffer_range`, whose only bound check is an assert compiled out of a release build,
+and the `VK_WHOLE_SIZE` size is `buffer_size - offset`, which underflows to ~2^64 for an offset
+past the buffer. The out-of-range base/size is what the capture shader writes through.
+`bind-offset-over` binds past the end and `bind-size-over` oversizes; `bind-ok` and `bind-whole`
+(the latter `VK_WHOLE_SIZE`) are in-range controls. No draw is issued — the binding is where the
+offset and size are validated.
+
+Fixed in limina-kk `kk: validate transform-feedback buffer offsets and sizes against the buffer`.
+Before it an asserts build aborts in `vk_buffer_range` on the two over cases (a release build
+stores the out-of-range range silently); after it all four cases PASS, the over cases dropped or
+clamped. The capture write an overrun would reach is GPU-side, so the RED run aborted at the
+binding during recording, before any draw.
+
+    cc -Wall -I/opt/homebrew/include xfb-probe.c -L/opt/homebrew/lib -lvulkan -o xp
+    VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./xp [case]
