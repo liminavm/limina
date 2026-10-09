@@ -64,6 +64,13 @@ impl VmBundle {
         self.path.join("tpm.state")
     }
 
+    /// The key the renderer signs this VM's guest pipeline-cache data with (made by the worker on
+    /// first boot, mode 0600). One per VM, so one VM's saved caches can never reach the host
+    /// driver through another; kept across boots so the guest's caches stay warm.
+    pub fn pipeline_cache_key(&self) -> PathBuf {
+        self.path.join("pipeline-cache.key")
+    }
+
     /// The firmware's UEFI variables (boot entries; later Secure Boot keys), mapped into the
     /// guest as its variable store. Beside the disks for the same reason as `tpm_state`: the boot
     /// entries name partitions on them.

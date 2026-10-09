@@ -18,6 +18,7 @@ mod debug_link;
 mod fido_usb;
 mod krun;
 mod moc_usb;
+mod pipeline_cache_key;
 mod power;
 mod quiesce;
 mod restart;
@@ -211,6 +212,14 @@ struct Cli {
     /// GPU-init hang.
     #[arg(long)]
     gpu_software_2d: bool,
+
+    /// Keep the key the renderer signs the guest's pipeline-cache data with in FILE (32 bytes,
+    /// mode 0600), made from the OS random source when absent. The same key on every boot keeps
+    /// the guest's saved shader caches warm; without it the key lives only as long as this
+    /// process, so every boot starts cold. A FILE that is not a key is left alone and the boot
+    /// runs without one.
+    #[arg(long, value_name = "FILE")]
+    gpu_cache_key: Option<PathBuf>,
 
     /// UNIX-socket path for runtime balloon control (M6). The worker binds a listener here and
     /// applies newline-delimited `target <bytes>` commands to the live virtio-balloon (replying to
@@ -754,6 +763,7 @@ fn main() -> Result<()> {
                     pool: cli.display_pool,
                     sink,
                     software_2d: cli.gpu_software_2d,
+                    pipeline_cache_key: cli.gpu_cache_key.clone(),
                     control_socket: listen_at(cli.display_control_socket, cli.display_control_fd),
                 })
             }

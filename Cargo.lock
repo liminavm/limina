@@ -1375,6 +1375,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "env_logger",
+ "getrandom 0.4.3",
  "krun-devices",
  "krun-polly",
  "krun-utils",

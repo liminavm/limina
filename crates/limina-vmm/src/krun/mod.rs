@@ -526,7 +526,21 @@ fn gpu_device(display: &DisplaySpec, disks: &[DiskSpec]) -> GpuDevice {
 
     // The renderer flags pass through whole: the named set covers only what upstream's C API
     // offers, and the GLES/surfaceless/video bits are ours to set.
-    GpuDevice::new(VirglRendererFlags::from_bits_retain(flags), backend).software_2d(software_2d)
+    let gpu = GpuDevice::new(VirglRendererFlags::from_bits_retain(flags), backend)
+        .software_2d(software_2d);
+    // A key that cannot be read or made costs the guest its warm caches, never the boot.
+    match display
+        .pipeline_cache_key
+        .as_deref()
+        .map(crate::pipeline_cache_key::load_or_create)
+    {
+        Some(Ok(key)) => gpu.pipeline_cache_key(key),
+        Some(Err(e)) => {
+            log::warn!("virtio-gpu: no pipeline-cache key, guest caches start cold: {e:#}");
+            gpu
+        }
+        None => gpu,
+    }
 }
 
 /// Attach a virtio-keyboard and a virtio-absolute-pointer, plus the optional relative mouse

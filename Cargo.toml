@@ -62,6 +62,7 @@ virglrs            = { path = "third_party/virglrs" }
 
 # --- shared third-party ---
 anyhow            = "1"
+getrandom         = "0.4.3"
 arc-swap          = "1"
 clap              = { version = "4", features = ["derive"] }
 crossbeam-channel = ">=0.5.15"

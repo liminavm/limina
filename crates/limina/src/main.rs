@@ -319,6 +319,13 @@ struct Cli {
     #[arg(long)]
     gpu_software_2d: bool,
 
+    /// Keep the key the renderer signs the guest's pipeline-cache data with in FILE — forwarded
+    /// to the worker, which makes it when absent. The same key on every boot keeps the guest's
+    /// shader caches warm; without one every boot starts cold. A managed VM keeps its key in the
+    /// bundle's `pipeline-cache.key`.
+    #[arg(long, value_name = "FILE")]
+    gpu_cache_key: Option<PathBuf>,
+
     /// Stage-2 translation granule for the VM (macOS 26+). `4k` (the default) is what lets a
     /// 4 KiB-page guest map its virtio-gpu host-visible blobs at all (spikes/hv-ipa-granule/);
     /// `16k` matches the Apple silicon host page size and is a few percent faster for a guest
@@ -1411,6 +1418,7 @@ fn cli_from_definition(
         balloon_deflate_on_oom: cfg.hardware.balloon_deflate_on_oom,
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
+        gpu_cache_key: Some(bundle.pipeline_cache_key()),
         ipa_granule: cfg.hardware.ipa_granule,
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
@@ -1790,6 +1798,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // coexist device; this forwards the software-2D-only override).
     if cli.gpu_software_2d {
         args.push("--gpu-software-2d".into());
+    }
+    if let Some(key) = &cli.gpu_cache_key {
+        args.push("--gpu-cache-key".into());
+        args.push(path_arg(key)?);
     }
     args.push("--ipa-granule".into());
     args.push(cli.ipa_granule.flag().into());
@@ -3182,6 +3194,13 @@ mod tests {
         );
         assert!(!cli.window);
         assert!(cli.gpu_software_2d);
+        assert_eq!(
+            cli.gpu_cache_key.as_deref(),
+            Some(std::path::Path::new(
+                "/lib/Fedora.liminavm/pipeline-cache.key"
+            )),
+            "a managed VM keeps one pipeline-cache key, in its bundle"
+        );
         assert_eq!(
             cli.ipa_granule,
             vmlib::schema::IpaGranule::FourK,
