@@ -49,6 +49,13 @@ marks the runs where a fence wait gave up `(stall)`.
 test's command to build a list from. `rep.sh` changes into `~/piglit`, so pass the list's absolute
 path.
 
+**A/B two KK builds.** `ab.sh <disk.raw> <kk-icd.json> <regex> <out-prefix>` boots a piglit guest
+on one KosmicKrisp ICD, runs the gpu tests matching the regex once, and keeps the list, results
+and worker log; run it per build on the same disk clone and `join` the two result files (the
+header has the line). The KK guest-input fixes were checked this way: the transform-feedback and
+query tests, the tessellation-heavy selection and the indirect/multi-draw tests each gave
+identical results on both builds.
+
 **Trace KK's command stream.** `kk-cmdtrace.patch` applies to the `limina-kk` tree and adds a
 `[KKCT]` line to stderr (the worker log) for each command a KK command buffer records: rendering
 begin/end with the attachment and load op, every draw, barriers, copies, blits, and each submit,
