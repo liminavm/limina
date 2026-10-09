@@ -1,0 +1,2 @@
+# kk_instance.c:236 reports a null member access in every case (unrelated to these probes)
+null:kk_instance.c
