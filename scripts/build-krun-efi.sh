@@ -139,5 +139,13 @@ container run --rm --cpus "$JOBS" --memory "$MEM" \
         echo \"--- done: \$(wc -c < /out/\$OUT_NAME) bytes -> \$OUT_NAME\"
     "
 
+# The edk2 rev this firmware was built from, for scripts/test-boot.sh to check against the pin: the
+# .fd itself does not say, and a stale one fails the TPM tests. An override of the rev records
+# what was asked for, so a fork-surgery build never passes for the pin.
+if [ "$EDK2_REV" = "$MANIFEST_REV" ]; then
+    echo "$EDK2_REV" > "$OUT/$OUT_NAME.rev"
+else
+    echo "$EDK2_REV (EDK2_REV override)" > "$OUT/$OUT_NAME.rev"
+fi
 echo "==> KRUN_EFI ready: $OUT/$OUT_NAME"
 echo "    boot it via: --firmware $OUT/$OUT_NAME"

@@ -25,10 +25,14 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
   `gvproxy` is not optional for the suite: every test that needs guest networking dies at
   `starting the gvproxy NAT gateway` before the VM boots (that is ~36 of them), and
   `scripts/build-app.sh` vendors the binary into the bundle. `libkrunfw` is how
-  `scripts/build-test-guest.sh` gets the L1 guest's kernel when no custom one exists.
-- The **test kernels**, `scripts/build-test-kernel.sh`. Worth building even though
-  `libkrunfw` covers the L1 case: the L2 venus and multi-display tests want the `Image-16k` /
-  `Image-16k-71` siblings and silently SKIP without them. Note the fork's patch series is
+  `scripts/build-test-guest.sh` gets an L1 kernel when no custom one exists, but that kernel has
+  no xHCI or EDID, so `scripts/test-boot.sh` refuses to run on it unless
+  `LIMINA_TEST_STOCK_KERNEL=1`.
+- The **test kernels**, `scripts/build-test-kernel.sh` (or `cp -c` the `Image*` files from
+  another checkout's `target/test-guest/kernel/`). The suite needs `Image`; the L2 venus and
+  multi-display tests also want the `Image-16k` / `Image-16k-71` siblings and silently SKIP
+  without them. The suite likewise refuses a `target/krun-efi/KRUN_EFI.gop.fd` that
+  `scripts/build-krun-efi.sh` did not record as built at the `[edk2]` pin. Note the fork's patch series is
   based on `v7.1.8`, so it cannot apply to the script's default `KVER=v6.12` — build those
   two with `PATCHES_OPTIONAL=1` (they are plain vehicles that do not need it) and the
   `Image-16k-71` one at `KVER=v7.1.8`, where it applies cleanly:

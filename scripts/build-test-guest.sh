@@ -30,8 +30,10 @@ if [ -f "$CUSTOM" ]; then
 else
     DYL="$(/opt/homebrew/bin/brew --prefix libkrunfw 2>/dev/null || echo /opt/homebrew/opt/libkrunfw)/lib/libkrunfw.dylib"
     [ -f "$DYL" ] || { echo "libkrunfw dylib not found at $DYL" >&2; exit 1; }
-    echo "==> no custom kernel; extracting libkrunfw's bundled Image (fallback)"
-    echo "    (build a custom one with scripts/build-test-kernel.sh)"
+    # stderr: scripts/test-boot.sh discards this script's stdout, and this kernel fails the
+    # suite's xHCI/EDID tests (test-boot.sh refuses to start without LIMINA_TEST_STOCK_KERNEL=1).
+    echo "WARNING: no custom kernel at $CUSTOM; extracting libkrunfw's bundled Image, which has" \
+         "no xHCI or EDID (build a custom one with scripts/build-test-kernel.sh)" >&2
     # The kernel is the dylib's __data section (symbol _KERNEL_BUNDLE). Pull its exact
     # file offset + size from the Mach-O headers so this survives libkrunfw version bumps.
     DATA_OFF=$(otool -l "$DYL" | awk '$1=="sectname"{s=$2} s=="__data"&&$1=="offset"{print $2; exit}')

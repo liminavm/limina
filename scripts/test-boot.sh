@@ -16,6 +16,15 @@ cd "$(dirname "$0")/.."
 PROFILE="${1:-debug}"
 [ $# -gt 0 ] && shift || true
 
+# Refuse up front, before ~40 minutes of a run whose kernel or firmware is not the one meant: both
+# come from builds nothing runs implicitly, so a stale one fails tests that then read like
+# regressions (scripts/lib/test-artifacts.sh).
+# shellcheck source=scripts/lib/manifest.sh
+. scripts/lib/manifest.sh
+# shellcheck source=scripts/lib/test-artifacts.sh
+. scripts/lib/test-artifacts.sh
+test_artifacts_check "$(pwd)" "$(pin_build_rev edk2)" || exit 1
+
 # This script runs `cargo build`/`cargo test` itself rather than going through
 # `cargo xtask build`, so it needs the same two things that command arranges, or the compile
 # dies in virglrs's build script:
