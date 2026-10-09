@@ -53,6 +53,17 @@ under test inside the rig guest, on the same host anv.
 
 Measured 2026-10-05 (`b39d173ca93`) and 2026-10-08 (`92b45bd0f2e`).
 
+**piglit, main vs fix** (2026-10-08, `92b45bd0f2e`): zink over venus in the rig guest, surfaceless
+EGL, `quick` filtered to `fbo`, `clear`, `framebuffer_srgb`, `ext_framebuffer_multisample`,
+`arb_framebuffer_object`, `ext_framebuffer_object`, `arb_texture_view` and `ext_texture_srgb`
+(1379 tests, 3496 results): no regressions, identical fail (21), crash (26) and skip (309) sets.
+The one difference, `ext_texture_array/fbo-depth-array stencil-clear`, stalled the main run once
+and passes 3/3 on both builds alone. The sRGB and texture-view groups are there because
+format-view shadowing runs the patched function. piglit's only MSRTT test,
+`ext_multisampled_render_to_texture-clear_color_and_depth`, is built but in no profile; run alone
+(`-auto -fbo`, which surfaceless EGL needs) it passes 3/3 on both, since its one unscissored clear
+on a fresh framebuffer never needs a replicate blit.
+
 The fixed run's pixels check the "deferred, not dropped" claim: the red quadrant is the scissored
 clear applied after the transient was repopulated, and the blue quadrant is content the replicate
 blit carried over.
