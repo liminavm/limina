@@ -1,0 +1,4 @@
+SETTLED up=205s load=0.03
+final: up=205s load=0.03 0.08 0.04
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-4.limina.fc44.aarch64

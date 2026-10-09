@@ -1,0 +1,85 @@
+######## w0-warm 13:40:42
+[13:40:42] build integration w0-warm: arm warm (warm.raw); host mesa 19e3ad7ebaa; virglrs a22cb8d + libkrun 8d9dfe0c; limina b992c5a4
+[13:40:46] enhanced boot
+[13:41:43] display pinned on warm: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.27
+final: up=205s load=0.27 0.27 0.11
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-4.limina.fc44.aarch64
+[13:46:19] aquarium r1 exit=0 
+[13:47:40] aquarium r2 exit=0 
+[13:49:21] perf-ledger run 1 exit=0 
+gl-replay-venus,51.2579
+gl-replay-llvmpipe,703.232
+vk-replay-venus-headless,1116.284002
+glmark2-wayland-venus,2713
+[13:51:32] vkmark run 1: 2885 
+[13:53:42] vkmark run 2: 2894 
+[13:55:52] vkmark run 3: 2889 
+[13:56:02] worker-enh: 0 poisoned-context lines
+[13:56:02] guest caches: 1 accepted, 0 ignored
+[13:56:02] point w0-warm done; read perf/integration-2026-10-09/evidence/w0-warm/aquarium-r*/*-fps.png
+######## p1 13:56:02
+[13:56:02] build integration p1: arm point (warm.raw); host mesa 19e3ad7ebaa; virglrs a22cb8d + libkrun 8d9dfe0c; limina b992c5a4
+[13:56:03] enhanced boot
+[13:57:00] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.17
+final: up=205s load=0.17 0.10 0.04
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-4.limina.fc44.aarch64
+[14:01:35] aquarium r1 exit=0 
+[14:02:56] aquarium r2 exit=0 
+[14:04:36] perf-ledger run 1 exit=0 
+gl-replay-venus,51.3272
+gl-replay-llvmpipe,711.119
+vk-replay-venus-headless,2237.664169
+glmark2-wayland-venus,2559
+[14:06:47] vkmark run 1: 3082 
+[14:08:57] vkmark run 2: 3088 
+[14:11:08] vkmark run 3: 3076 
+[14:11:18] worker-enh: 0 poisoned-context lines
+[14:11:18] guest caches: 2 accepted, 0 ignored
+[14:11:18] point p1 done; read perf/integration-2026-10-09/evidence/p1/aquarium-r*/*-fps.png
+######## p2 14:11:18
+[14:11:18] build integration p2: arm point (warm.raw); host mesa 19e3ad7ebaa; virglrs a22cb8d + libkrun 8d9dfe0c; limina b992c5a4
+[14:11:19] enhanced boot
+[14:12:16] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.03
+final: up=205s load=0.03 0.08 0.04
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-4.limina.fc44.aarch64
+[14:16:51] aquarium r1 exit=0 
+[14:18:12] aquarium r2 exit=0 
+[14:19:53] perf-ledger run 1 exit=0 
+gl-replay-venus,51.3478
+gl-replay-llvmpipe,709.244
+vk-replay-venus-headless,2198.725397
+glmark2-wayland-venus,2704
+[14:22:03] vkmark run 1: 3086 
+[14:24:13] vkmark run 2: 3085 
+[14:26:24] vkmark run 3: 3082 
+[14:26:34] worker-enh: 0 poisoned-context lines
+[14:26:34] guest caches: 2 accepted, 0 ignored
+[14:26:34] point p2 done; read perf/integration-2026-10-09/evidence/p2/aquarium-r*/*-fps.png
+######## p3 14:26:34
+[14:26:35] build integration p3: arm point (warm.raw); host mesa 19e3ad7ebaa; virglrs a22cb8d + libkrun 8d9dfe0c; limina b992c5a4
+[14:26:36] enhanced boot
+[14:27:32] display pinned on trend-enh: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.09
+final: up=205s load=0.09 0.07 0.02
+7.1.13-limina16k
+mesa-dri-drivers-26.2.3-4.limina.fc44.aarch64
+[14:32:08] aquarium r1 exit=0 
+[14:33:29] aquarium r2 exit=0 
+[14:35:10] perf-ledger run 1 exit=0 
+gl-replay-venus,51.1865
+gl-replay-llvmpipe,707.66
+vk-replay-venus-headless,2217.090077
+glmark2-wayland-venus,2684
+[14:37:20] vkmark run 1: 3183 
+[14:39:31] vkmark run 2: 3052 
+[14:41:41] vkmark run 3: 3048 
+[14:41:51] worker-enh: 0 poisoned-context lines
+[14:41:51] guest caches: 2 accepted, 0 ignored
+[14:41:51] point p3 done; read perf/integration-2026-10-09/evidence/p3/aquarium-r*/*-fps.png
+######## legs done 14:41:51
