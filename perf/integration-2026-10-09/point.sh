@@ -24,6 +24,7 @@ set -uo pipefail
 LABEL="${1:?label}"; ARM="${2:?warm or point}"
 W="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)/perf/integration-2026-10-09/work.noindex"
 CACHE="$W/shader-cache"; KEY="$W/pipeline-cache.key"; WARM_IMG="$W/warm.raw"
+mkdir -p "$W"
 case "$ARM" in
   warm) [ -e "$WARM_IMG" ] || cp -c "${W%/perf/*}/Fedora-Workstation-44.enhanced.raw" "$WARM_IMG" || exit 1 ;;
   point) [ -e "$WARM_IMG" ] && [ -e "$KEY" ] || { echo "no warmed image: run the warm point first" >&2; exit 1; } ;;
