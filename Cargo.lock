@@ -2574,8 +2574,12 @@ dependencies = [
  "bytemuck",
  "cros-libva",
  "dav1d",
+ "getrandom 0.4.3",
+ "hmac",
  "libc",
  "rustc-hash 2.1.2",
+ "sha2 0.11.0",
+ "zeroize",
 ]
 
 [[package]]
