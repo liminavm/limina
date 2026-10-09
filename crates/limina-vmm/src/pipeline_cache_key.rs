@@ -7,7 +7,7 @@
 //! keeps them warm. It is host-only: never logged, never shown to the guest.
 
 use std::fs::OpenOptions;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
@@ -18,11 +18,13 @@ pub const LEN: usize = 32;
 
 /// Read the key in `path`, or make one there from the OS random source when there is none.
 ///
-/// A new key is written with mode 0600 and `create_new`, so two workers racing on one path end
-/// up with the same key rather than each keeping its own. A file that is not exactly [`LEN`]
-/// bytes is an error, not something to replace: a key that changes makes every saved cache cold.
+/// A new key is written whole to a private (0600) file beside `path` and only then linked into
+/// place, so `path` never exists half-written: a crash leaves at most a stray temporary, and two
+/// workers racing on one path all end up with the key whose link landed first. A file that is not
+/// exactly [`LEN`] bytes is an error, not something to replace: a key that changes makes every
+/// saved cache cold.
 pub fn load_or_create(path: &Path) -> Result<[u8; LEN]> {
-    match read(path) {
+    match std::fs::read(path) {
         Err(e) if e.kind() == ErrorKind::NotFound => {}
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         Ok(bytes) => return exact(path, bytes),
@@ -30,35 +32,34 @@ pub fn load_or_create(path: &Path) -> Result<[u8; LEN]> {
     let mut key = [0u8; LEN];
     getrandom::fill(&mut key)
         .map_err(|e| anyhow::anyhow!("no OS randomness for {}: {e}", path.display()))?;
-    match OpenOptions::new()
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!(
+        ".{name}.{}.{:?}.tmp",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    // The name is this thread's alone, so one left by a crashed process with our pid is stale.
+    let _ = std::fs::remove_file(&tmp);
+    let written = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(path)
-    {
-        Ok(mut f) => {
-            f.write_all(&key)
-                .and_then(|()| f.sync_all())
-                .with_context(|| format!("writing the pipeline-cache key {}", path.display()))?;
-            Ok(key)
-        }
-        // Another worker made it between the read and the create: use theirs.
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(&key).and_then(|()| f.sync_all()));
+    // hard_link refuses an existing target, which is what makes the publish atomic.
+    let linked = written.and_then(|()| std::fs::hard_link(&tmp, path));
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(key),
+        // Another worker published first: use theirs, which is whole by construction.
         Err(e) if e.kind() == ErrorKind::AlreadyExists => exact(
             path,
-            read(path).with_context(|| format!("reading {}", path.display()))?,
+            std::fs::read(path).with_context(|| format!("reading {}", path.display()))?,
         ),
         Err(e) => {
             Err(e).with_context(|| format!("creating the pipeline-cache key {}", path.display()))
         }
     }
-}
-
-fn read(path: &Path) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(LEN + 1);
-    std::fs::File::open(path)?
-        .take(LEN as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    Ok(bytes)
 }
 
 fn exact(path: &Path, bytes: Vec<u8>) -> Result<[u8; LEN]> {
@@ -110,6 +111,29 @@ mod tests {
             first,
             "the same key on every launch"
         );
+    }
+
+    #[test]
+    fn workers_racing_on_one_path_all_get_the_one_key() {
+        let d = Dir::new("race");
+        for round in 0..50 {
+            let p = d.0.join(format!("k{round}"));
+            let keys: Vec<_> = std::thread::scope(|s| {
+                let hs: Vec<_> = (0..8).map(|_| s.spawn(|| load_or_create(&p))).collect();
+                hs.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            let first = keys[0].as_ref().expect("no worker may lose the race");
+            for k in &keys {
+                assert_eq!(k.as_ref().expect("no worker may lose the race"), first);
+            }
+            assert_eq!(std::fs::read(&p).unwrap(), first.to_vec());
+        }
+        let stray: Vec<_> = std::fs::read_dir(&d.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(stray.is_empty(), "temporaries left behind: {stray:?}");
     }
 
     #[test]
