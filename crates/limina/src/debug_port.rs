@@ -50,7 +50,7 @@ pub const FORMAT: u32 = 1;
 pub const END: &str = ".";
 
 /// The requests this port answers.
-const REQUESTS: &str = "identity help";
+const REQUESTS: &str = "identity host-state help";
 
 /// A request longer than this is not a request; it is discarded and answered with an error.
 const MAX_REQUEST: usize = 256;
@@ -249,6 +249,7 @@ pub fn answer(request: &str, identity: &Identity) -> Option<String> {
     match request {
         "" => None,
         "identity" => Some(frame(&identity.fields())),
+        "host-state" => Some(host_state_answer(crate::host_state::port_fields())),
         "help" => Some(frame(&[
             ("format".into(), FORMAT.to_string()),
             ("requests".into(), REQUESTS.into()),
@@ -257,6 +258,13 @@ pub fn answer(request: &str, identity: &Identity) -> Option<String> {
             "unknown request {other:?}; requests: {REQUESTS}"
         ))),
     }
+}
+
+/// The `host-state` answer: `format`, then the state's fields (`crate::host_state::fields`).
+fn host_state_answer(fields: Vec<(String, String)>) -> String {
+    let mut all = vec![("format".to_string(), FORMAT.to_string())];
+    all.extend(fields);
+    frame(&all)
 }
 
 /// Splits the guest's byte stream into request lines, refusing to buffer an unbounded one.
@@ -547,6 +555,26 @@ mod tests {
         assert_eq!(
             lines.push(b"xxx\nidentity\n"),
             vec![Input::Line("identity".into())]
+        );
+    }
+
+    #[test]
+    fn host_state_is_answered_in_the_same_framing() {
+        let id = identity();
+        let help = read_answer(&answer("help", &id).unwrap());
+        assert!(help[1].1.split(' ').any(|r| r == "host-state"), "{help:?}");
+        // Whatever this process has sampled (in a unit test: nothing), the answer is framed and
+        // says so rather than inventing a state.
+        let got = read_answer(&answer("host-state", &id).unwrap());
+        assert_eq!(got[0], ("format".into(), "1".into()));
+        assert!(got.iter().any(|(k, _)| k == "t_realtime_ns"), "{got:?}");
+        assert!(got.iter().any(|(k, _)| k == "state"), "{got:?}");
+        // No identity fact rides along.
+        assert!(!got.iter().any(|(k, _)| k == "limina_git_rev"), "{got:?}");
+        // Disabled, it is refused like every other request.
+        assert_eq!(
+            reply(Input::Line("host-state".into()), &id, false).unwrap(),
+            disabled()
         );
     }
 

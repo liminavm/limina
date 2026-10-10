@@ -10,10 +10,10 @@
 //!
 //! The socket is reachable by any process of the same user, like the control plane's. Most of
 //! what it does changes nothing in the guest: it decides what gets logged, and where the frame
-//! capture (`capture start <dir>`) writes what the windows showed. The two access levers are the
-//! exception: `input-inject`, `debug-port` and `lifecycle-control` open harness features that are
-//! off by default. They are a default-off posture, not a boundary against same-user code, which
-//! can flip them here.
+//! capture (`capture start <dir>`) writes what the windows showed. The access levers are the
+//! exception: `input-inject`, `debug-port`, `lifecycle-control` and `no-throttle` open harness
+//! features that are off by default. They are a default-off posture, not a boundary against
+//! same-user code, which can flip them here.
 //!
 //! All of it lasts for this process only. See `limina_debug` for why.
 
@@ -84,6 +84,13 @@ pub static LIFECYCLE_CONTROL: Lever = Lever::new(
     "LIMINA_LIFECYCLE_CONTROL",
     "harness: let `limina reset` power-cycle the VM (kill the worker, cold-boot a fresh one)",
 );
+/// Harness access: hold an activity that keeps App Nap off the supervisor (`no_throttle`), so a
+/// hidden or covered window does not slow what goes on glass while a harness measures.
+pub static NO_THROTTLE: Lever = Lever::new(
+    "no-throttle",
+    "LIMINA_NO_THROTTLE",
+    "harness: keep App Nap off the supervisor while hidden or covered (not Game Mode, not sleep)",
+);
 
 /// Every lever this process has, in the order the menu and `status` list them.
 pub static LEVERS: &[&Lever] = &[
@@ -97,6 +104,7 @@ pub static LEVERS: &[&Lever] = &[
     &INPUT_INJECT,
     &DEBUG_PORT,
     &LIFECYCLE_CONTROL,
+    &NO_THROTTLE,
 ];
 
 /// The levers that grant a harness access rather than print a trace. The menu lists them under
@@ -105,6 +113,7 @@ pub fn is_access(l: &Lever) -> bool {
     std::ptr::eq(l, &INPUT_INJECT)
         || std::ptr::eq(l, &DEBUG_PORT)
         || std::ptr::eq(l, &LIFECYCLE_CONTROL)
+        || std::ptr::eq(l, &NO_THROTTLE)
 }
 
 /// How to turn a lever on, for a refusal to quote: its variable, the Debug menu, the CLI.
@@ -118,8 +127,8 @@ pub fn how_to_enable(l: &Lever) -> String {
     )
 }
 
-/// The tests, in any module, that read or flip `INPUT_INJECT`, `DEBUG_PORT` or
-/// `LIFECYCLE_CONTROL` (process-global). Each leaves them off.
+/// The tests, in any module, that read or flip an access lever (process-global). Each leaves them
+/// off.
 #[cfg(test)]
 pub(crate) static ACCESS_LEVER_TESTS: Mutex<()> = Mutex::new(());
 
@@ -174,6 +183,9 @@ pub fn handle(req: &Request) -> Result<Vec<String>, String> {
             l.set(*on);
             if !*on && std::ptr::eq(l, &INPUT_INJECT) {
                 crate::inject::lever_off();
+            }
+            if std::ptr::eq(l, &NO_THROTTLE) {
+                crate::no_throttle::reconcile();
             }
             log::warn!(
                 "debug: lever {} is now {}",
@@ -404,7 +416,7 @@ mod tests {
     #[test]
     fn the_access_levers_are_off_by_default_and_say_how_to_turn_them_on() {
         let _serial = lock(&ACCESS_LEVER_TESTS);
-        for l in [&INPUT_INJECT, &DEBUG_PORT, &LIFECYCLE_CONTROL] {
+        for l in [&INPUT_INJECT, &DEBUG_PORT, &LIFECYCLE_CONTROL, &NO_THROTTLE] {
             assert!(
                 std::env::var_os(l.env()).is_none(),
                 "unset {} to run the unit tests",
@@ -433,11 +445,16 @@ mod tests {
             (LIFECYCLE_CONTROL.name(), LIFECYCLE_CONTROL.env()),
             ("lifecycle-control", "LIMINA_LIFECYCLE_CONTROL")
         );
+        assert_eq!(
+            (NO_THROTTLE.name(), NO_THROTTLE.env()),
+            ("no-throttle", "LIMINA_NO_THROTTLE")
+        );
         let lines = status();
         for want in [
             "lever input-inject off LIMINA_INPUT_INJECT ",
             "lever debug-port off LIMINA_DEBUG_PORT ",
             "lever lifecycle-control off LIMINA_LIFECYCLE_CONTROL ",
+            "lever no-throttle off LIMINA_NO_THROTTLE ",
         ] {
             assert!(lines.iter().any(|l| l.starts_with(want)), "{lines:?}");
         }
@@ -450,6 +467,7 @@ mod tests {
             (&INPUT_INJECT, "input-inject"),
             (&DEBUG_PORT, "debug-port"),
             (&LIFECYCLE_CONTROL, "lifecycle-control"),
+            (&NO_THROTTLE, "no-throttle"),
         ] {
             for on in [true, false] {
                 let req = Request::Lever {

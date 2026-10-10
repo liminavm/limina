@@ -30,11 +30,11 @@
 //! set in `.config/nextest.toml`. SKIPs cleanly without the KosmicKrisp ICD or the image. Gated
 //! behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
-use limina_framecap::{Line, Record, SIDECAR, Still, Summary};
+use limina_framecap::{HostStateCause, HostStateRecord, Line, Record, SIDECAR, Still, Summary};
 use limina_test::{Guest, GuestConfig};
 
 const DISPLAY: (u32, u32) = (1280, 800);
@@ -48,6 +48,9 @@ const MIN_CAPTURED: u64 = 60;
 /// How long the desktop is left alone before the still: long enough that the frame on glass is
 /// an idle screen's, not the animation's last.
 const IDLE: Duration = Duration::from_secs(3);
+
+/// How long the app stays hidden, and how long it is shown again before the stop.
+const HIDDEN: Duration = Duration::from_secs(2);
 
 /// `LIMINA_WINDOW_CAPTURE_DIR_MAX_MB` for the run.
 const MAX_MB: &str = "512";
@@ -104,7 +107,8 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
             .with_net()
             .with_supervisor_log()
             .with_env("RUST_LOG", "warn,limina::window::frame_capture=info")
-            .with_env("LIMINA_WINDOW_CAPTURE_DIR_MAX_MB", MAX_MB),
+            .with_env("LIMINA_WINDOW_CAPTURE_DIR_MAX_MB", MAX_MB)
+            .with_env("LIMINA_DEBUG_PORT", "1"),
         Err(e) => {
             eprintln!("SKIPPED {name}: {e:#}");
             return;
@@ -147,6 +151,21 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
     let (ok, out) = limina_debug(&guest, &["capture", "start", &dir_s]);
     assert!(ok, "capture start was refused:\n{out}");
     std::thread::sleep(WINDOW);
+
+    // Hide the app while the capture runs, ask the debug port from inside the guest, then show
+    // it again. Hiding rather than minimizing: an AX minimize needs the window on the current
+    // Space, and a window a test opens can land on another one; a process's visibility does not.
+    let hidden_port = set_app_visible(&guest, false).then(|| {
+        std::thread::sleep(HIDDEN);
+        port_answer(&guest, "host-state")
+    });
+    assert!(
+        set_app_visible(&guest, true) || hidden_port.is_none(),
+        "the app was hidden and could not be shown again"
+    );
+    std::thread::sleep(HIDDEN);
+    let shown_port = port_answer(&guest, "host-state");
+
     let (ok, stopped) = limina_debug(&guest, &["capture", "stop"]);
     assert!(ok, "capture stop was refused:\n{stopped}");
     eprintln!("capture stop answered:\n{stopped}");
@@ -160,14 +179,20 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
     let Some(Line::Summary(summary)) = lines.last().cloned() else {
         panic!("{SIDECAR} does not end in a summary line:\n{sidecar}");
     };
+    let mut states: Vec<HostStateRecord> = Vec::new();
     let records: Vec<Record> = lines[..lines.len() - 1]
         .iter()
-        .map(|l| match l {
-            Line::Frame(r) => r.clone(),
+        .filter_map(|l| match l {
+            Line::Frame(r) => Some(r.clone()),
+            Line::HostState(h) => {
+                states.push(h.clone());
+                None
+            }
             Line::Summary(_) => panic!("a summary line before the end of {SIDECAR}"),
         })
         .collect();
     eprintln!("{summary:?}");
+    check_host_states(&lines, &states, hidden_port.as_ref(), &shown_port);
 
     // In file order, per slot: seq strictly increasing over presented frames, flip never
     // decreasing over everything within one worker, and a flip number repeated on glass only by
@@ -341,6 +366,142 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
         .shutdown(Duration::from_secs(30))
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");
+}
+
+/// Hide or show the supervisor app through System Events. `false` when osascript could not do
+/// it (no Apple Events permission for the harness), so the caller can say what went unchecked.
+fn set_app_visible(guest: &Guest, visible: bool) -> bool {
+    let script = format!(
+        "tell application \"System Events\" to set visible of \
+         (first process whose unix id is {}) to {visible}",
+        guest.supervisor_pid()
+    );
+    match std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+    {
+        Ok(o) if o.status.success() => true,
+        Ok(o) => {
+            eprintln!(
+                "osascript could not set visible to {visible}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("osascript: {e}");
+            false
+        }
+    }
+}
+
+/// One debug-port answer, read in the guest with the documented stock-tools reader.
+fn port_answer(guest: &Guest, request: &str) -> BTreeMap<String, String> {
+    let reader = format!(
+        "sudo bash -c 'exec 3<>/dev/virtio-ports/org.limina.debug.0; \
+         echo {request} >&3; on=; while IFS= read -r -t 10 l <&3; do \
+         case $l in format=*) on=1;; esac; [ -n \"$on\" ] || continue; \
+         [ \"$l\" = . ] && break; echo \"$l\"; done'"
+    );
+    let out = guest
+        .ssh_exec_timeout(&reader, Duration::from_secs(60))
+        .unwrap_or_else(|e| panic!("reading the debug port's {request}: {e:#}"));
+    out.lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// The host-state records and the port's answers around the hide.
+fn check_host_states(
+    lines: &[Line],
+    states: &[HostStateRecord],
+    hidden: Option<&BTreeMap<String, String>>,
+    shown: &BTreeMap<String, String>,
+) {
+    for s in states {
+        eprintln!("host state: {}", s.to_line());
+    }
+    let Some(Line::HostState(first)) = lines.first() else {
+        panic!("{SIDECAR} does not start with the host state at capture start");
+    };
+    assert_eq!(first.cause, HostStateCause::CaptureStart, "{first:?}");
+    assert_eq!(first.format, limina_framecap::FORMAT);
+    assert!(
+        first.state.windows.iter().any(|w| w.slot == 0),
+        "the state names no window for display 0: {first:?}"
+    );
+    assert!(
+        states[1..]
+            .iter()
+            .all(|s| s.cause == HostStateCause::Change),
+        "only the first record is the capture start's"
+    );
+    for pair in states.windows(2) {
+        assert!(
+            !pair[0].state.same_as(&pair[1].state),
+            "a change record that changes nothing: {pair:?}"
+        );
+        assert!(pair[1].t_monotonic_raw_ns >= pair[0].t_monotonic_raw_ns);
+    }
+
+    eprintln!("debug port host-state after showing the app: {shown:?}");
+    for key in [
+        "visible",
+        "app_active",
+        "app_hidden",
+        "throttled",
+        "main_thread_priority",
+        "displays",
+        "thermal_state",
+        "low_power_mode",
+        "no_throttle",
+        "transitions",
+        "observed_ms",
+        "not_visible_ms",
+        "throttled_ms",
+    ] {
+        assert!(
+            shown.contains_key(key),
+            "host-state has no {key}: {shown:?}"
+        );
+    }
+    assert_eq!(shown.get("format").map(String::as_str), Some("1"));
+    assert_eq!(shown.get("app_hidden").map(String::as_str), Some("no"));
+    assert_eq!(shown.get("no_throttle").map(String::as_str), Some("no"));
+
+    let Some(hidden) = hidden else {
+        eprintln!(
+            "SKIPPED the hide half: the harness could not hide the app, so no change record or \
+             hidden answer is checked"
+        );
+        return;
+    };
+    eprintln!("debug port host-state while hidden: {hidden:?}");
+    assert_eq!(hidden.get("app_hidden").map(String::as_str), Some("yes"));
+    assert_eq!(hidden.get("visible").map(String::as_str), Some("no"));
+    let n = |m: &BTreeMap<String, String>, k: &str| -> u64 {
+        m.get(k)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("{k} is not a number: {m:?}"))
+    };
+    assert!(n(hidden, "transitions") >= 1, "{hidden:?}");
+    assert!(
+        n(shown, "transitions") > n(hidden, "transitions"),
+        "showing the app again was no transition: {hidden:?} then {shown:?}"
+    );
+    assert!(
+        n(shown, "not_visible_ms") >= HIDDEN.as_millis() as u64 / 2,
+        "the hidden stretch was not counted: {shown:?}"
+    );
+    let hid = states
+        .iter()
+        .position(|s| s.state.app_hidden && !s.state.visible())
+        .unwrap_or_else(|| panic!("no record of the app hidden: {states:?}"));
+    assert!(
+        states[hid..].iter().any(|s| !s.state.app_hidden),
+        "no record of the app shown again: {states:?}"
+    );
 }
 
 fn report(s: &Summary) {

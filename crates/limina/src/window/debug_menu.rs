@@ -2,7 +2,7 @@
 // Copyright © 2026 Gustavo Noronha Silva
 
 //! The "Debug" menu: the log filter and the levers of the running VM (traces, and the harness
-//! access levers `input-inject` and `debug-port`), the same switches `limina debug` drives over
+//! access levers `input-inject`, `debug-port` and `no-throttle`), the same switches `limina debug` drives over
 //! the debug socket (`crate::debug_ctl`).
 //!
 //! Every change lasts until the VM exits. The menu carries presets rather than a text field: the

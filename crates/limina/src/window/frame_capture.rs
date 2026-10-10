@@ -48,7 +48,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use limina_framecap::{
-    Cause, PixelOrder, Presented, Reason, Record, Reorder, Sequencer, Summary, Tally,
+    Cause, HostState, HostStateCause, HostStateRecord, PixelOrder, Presented, Reason, Record,
+    Reorder, Sequencer, Summary, Tally,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -132,6 +133,8 @@ struct MainState {
     /// Per slot, the last frame's blit and its overtaken flag.
     last_blit: HashMap<usize, (SendCommands, Arc<AtomicBool>)>,
     tx: Option<Sender<Job>>,
+    /// The host state last written, `None` until the first: that one is the capture start's.
+    host: Option<HostState>,
 }
 
 /// The capture buffers not in use, by size, and how many exist of every size together.
@@ -145,6 +148,8 @@ struct Pool {
 enum Msg {
     /// Record number `ord` is final; `bytes` of image were written for it.
     Done(u64, Record, u64),
+    /// Line number `ord` is a host-state record: in order, but no frame to count.
+    Line(u64, String),
     /// What one present cost the main thread, in microseconds.
     Cost(u32),
     /// Write the summary and stop writing; answer with it.
@@ -221,6 +226,28 @@ impl Session {
         self.outstanding.done();
     }
 
+    /// Write `state` as a host-state record, unless it is the one already written. The first
+    /// one a capture writes is its start's, whatever `cause` says.
+    fn host_state(&self, m: &mut MainState, state: HostState, cause: HostStateCause) {
+        let cause = match &m.host {
+            None => HostStateCause::CaptureStart,
+            Some(prev) if prev.same_as(&state) => return,
+            Some(_) => cause,
+        };
+        let record = HostStateRecord::new(
+            cause,
+            clock_ns(libc::CLOCK_MONOTONIC_RAW),
+            clock_ns(libc::CLOCK_REALTIME),
+            state.clone(),
+        );
+        m.host = Some(state);
+        let ord = self.take_ord(m);
+        if self.out.send(Msg::Line(ord, record.to_line())).is_err() {
+            log::error!("frame capture: the sidecar writer is gone");
+        }
+        self.outstanding.done();
+    }
+
     /// A free capture buffer of `geom`, or a new one. Fewer than [`BUFFERS`] exist in all; at
     /// the cap a free buffer of another size is let go to make room.
     fn buffer(&self, geom: (usize, usize)) -> Option<SendSurface> {
@@ -283,7 +310,15 @@ fn write_sidecar(rx: Receiver<Msg>, sidecar: std::fs::File) {
             }
         };
         match msg {
-            Msg::Done(..) if closed => {}
+            Msg::Done(..) | Msg::Line(..) if closed => {}
+            Msg::Line(ord, line) => {
+                for line in reorder.put(ord, line) {
+                    if let Err(e) = writeln!(file, "{line}") {
+                        log::error!("frame capture: writing {}: {e}", limina_framecap::SIDECAR);
+                    }
+                }
+                dirty = true;
+            }
             Msg::Done(ord, r, bytes) => {
                 tally.count(&r, bytes);
                 for line in reorder.put(ord, r.to_line()) {
@@ -335,6 +370,20 @@ pub(crate) fn pixel_order(surface: &IOSurfaceRef) -> PixelOrder {
         PixelOrder::Rgba
     } else {
         PixelOrder::Bgra
+    }
+}
+
+/// The host state changed to `state` (`window::host_observe`): a record in a running capture.
+pub(crate) fn on_host_state(state: HostState) {
+    if !ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(session) = lock(&SESSION).clone() else {
+        return;
+    };
+    let mut m = lock(&session.main);
+    if !m.closed {
+        session.host_state(&mut m, state, HostStateCause::Change);
     }
 }
 
@@ -637,8 +686,17 @@ pub(crate) fn start(dir: &Path) -> Result<String, String> {
     let session = spawn(dir, sidecar).inspect_err(|_| {
         let _ = std::fs::remove_file(&sidecar_path);
     })?;
-    *slot = Some(session);
+    // Live before the state is read, and the state written before the session is published:
+    // a change sampled from here on waits on `SESSION` and lands after the start's record, and
+    // one sampled before it is already in what `current` returns. The start's record is
+    // number 0. Before the window's first sample there is nothing to write; the first sample
+    // is then the start's.
     ACTIVE.store(true, Ordering::Release);
+    if let Some(state) = crate::host_state::current() {
+        let mut m = lock(&session.main);
+        session.host_state(&mut m, state, HostStateCause::CaptureStart);
+    }
+    *slot = Some(session);
     let msg = format!(
         "frame capture: capturing every presented frame to {}",
         dir.display()
@@ -666,6 +724,7 @@ fn spawn(dir: &Path, sidecar: std::fs::File) -> Result<Arc<Session>, String> {
             next_ord: 0,
             last_blit: HashMap::new(),
             tx: Some(tx),
+            host: None,
         }),
         pool: Mutex::new(Pool::default()),
         out,
@@ -788,6 +847,94 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    fn host(visible: bool, priority: i32) -> HostState {
+        HostState {
+            windows: vec![limina_framecap::WindowState {
+                slot: 0,
+                visible,
+                minimized: false,
+            }],
+            app_active: visible,
+            app_hidden: !visible,
+            throttled: priority <= 4,
+            main_thread_priority: priority,
+            displays: 1,
+            displays_asleep: 0,
+            screen_locked: Some(false),
+            on_console: Some(true),
+            thermal_state: limina_framecap::Thermal::Nominal,
+            low_power_mode: false,
+            no_throttle: false,
+        }
+    }
+
+    #[test]
+    fn host_states_take_their_place_among_the_frames_and_only_changes_are_written() {
+        let dir = std::env::temp_dir().join(format!("limina-framecap-h-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(limina_framecap::SIDECAR);
+        let _ = std::fs::remove_file(&path);
+        let session = spawn(&dir, std::fs::File::create(&path).unwrap()).unwrap();
+        {
+            let mut m = lock(&session.main);
+            // The first state a capture writes is its start's, whatever the caller calls it.
+            session.host_state(&mut m, host(true, 31), HostStateCause::Change);
+            // A priority wobble is not a change: nothing written.
+            session.host_state(&mut m, host(true, 47), HostStateCause::Change);
+            let ord = session.take_ord(&mut m);
+            session.finish(
+                ord,
+                Record {
+                    seq: Some(1),
+                    flip: 1,
+                    ..Record::default()
+                }
+                .drop_for(Reason::QueueFull),
+                0,
+            );
+            session.host_state(&mut m, host(false, 4), HostStateCause::Change);
+            m.tx = None;
+        }
+        assert_eq!(session.outstanding.wait(Instant::now() + DRAIN), 0);
+        let (reply, answer) = std::sync::mpsc::sync_channel(1);
+        session
+            .out
+            .send(Msg::Close {
+                duration: 1.0,
+                incomplete: None,
+                reply,
+            })
+            .unwrap();
+        let summary = answer.recv().unwrap();
+        assert_eq!(
+            summary.presented, 1,
+            "a host state is no frame: {summary:?}"
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<_> = text
+            .lines()
+            .map(|l| limina_framecap::parse_line(l).unwrap())
+            .collect();
+        use limina_framecap::Line;
+        match &lines[..] {
+            [
+                Line::HostState(start),
+                Line::Frame(frame),
+                Line::HostState(change),
+                Line::Summary(_),
+            ] => {
+                assert_eq!(start.cause, HostStateCause::CaptureStart);
+                assert!(start.state.visible());
+                assert_eq!(frame.seq, Some(1));
+                assert_eq!(change.cause, HostStateCause::Change);
+                assert!(change.state.throttled && !change.state.visible());
+                assert!(change.t_monotonic_raw_ns >= start.t_monotonic_raw_ns);
+            }
+            other => panic!("unexpected sidecar: {other:?}\n{text}"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn the_writer_keeps_present_order_and_writes_nothing_after_the_summary() {
         let dir = std::env::temp_dir().join(format!("limina-framecap-w-{}", std::process::id()));
@@ -829,7 +976,7 @@ mod tests {
             .iter()
             .map(|l| match l {
                 limina_framecap::Line::Frame(r) => r.seq,
-                limina_framecap::Line::Summary(_) => None,
+                limina_framecap::Line::Summary(_) | limina_framecap::Line::HostState(_) => None,
             })
             .collect();
         assert_eq!(seqs, [Some(1), Some(2)]);

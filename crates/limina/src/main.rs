@@ -19,12 +19,14 @@ mod debug_ctl;
 mod debug_port;
 mod fido;
 mod gateway;
+mod host_state;
 // macOS's own Modifier Keys configuration, which positional normalization must read past.
 mod hostmods;
 mod hosttrackpad;
 mod inject;
 mod lifecycle;
 mod moc;
+mod no_throttle;
 mod power_profile;
 mod qga;
 mod runtime_ctl;

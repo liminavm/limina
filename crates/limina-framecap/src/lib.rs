@@ -321,11 +321,144 @@ impl Summary {
     }
 }
 
+/// One of the VM's windows, as the host shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowState {
+    /// The guest display (pool slot) the window shows.
+    pub slot: usize,
+    /// Some part of the window is on screen: AppKit's occlusion state. `false` covers every way
+    /// out of sight — wholly covered, minimized, hidden with the app, on another Space.
+    pub visible: bool,
+    /// Minimized to the Dock.
+    pub minimized: bool,
+}
+
+/// `NSProcessInfo.thermalState`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Thermal {
+    Nominal,
+    Fair,
+    Serious,
+    Critical,
+    Unknown,
+}
+
+impl Thermal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Thermal::Nominal => "nominal",
+            Thermal::Fair => "fair",
+            Thermal::Serious => "serious",
+            Thermal::Critical => "critical",
+            Thermal::Unknown => "unknown",
+        }
+    }
+}
+
+/// What the host was doing to the VM's windows and its supervisor process, as the supervisor
+/// observes it. Only what is read from the system; nothing inferred. `docs/graphics.md` §8
+/// ("Host state") says which of these measurably slow presents.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HostState {
+    /// Every window showing a guest display, by slot.
+    pub windows: Vec<WindowState>,
+    /// The supervisor is the active (frontmost) app.
+    pub app_active: bool,
+    /// The app is hidden (Cmd-H).
+    pub app_hidden: bool,
+    /// The supervisor's main thread is at the background band (effective priority 4 or less):
+    /// what App Nap, and the Game Mode clamp, do to it. The main thread is the one every frame
+    /// goes on glass from.
+    pub throttled: bool,
+    /// The main thread's effective scheduling priority when sampled (`pth_curpri`). Moves
+    /// constantly (31, boosted to 37-47 while the app is in use); only the band is a state.
+    pub main_thread_priority: i32,
+    /// Online displays, and how many of them are asleep.
+    pub displays: u32,
+    pub displays_asleep: u32,
+    /// The login session's screen lock, from its session dictionary. `None` when unreadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen_locked: Option<bool>,
+    /// The session owns the console (`false` after fast user switching away from it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_console: Option<bool>,
+    pub thermal_state: Thermal,
+    pub low_power_mode: bool,
+    /// The supervisor holds its anti-throttle activity (the `no-throttle` lever).
+    pub no_throttle: bool,
+}
+
+impl HostState {
+    /// Any of the windows is on screen.
+    pub fn visible(&self) -> bool {
+        self.windows.iter().any(|w| w.visible)
+    }
+
+    /// The same state, ignoring the sampled priority (which jitters within a band).
+    pub fn same_as(&self, other: &HostState) -> bool {
+        HostState {
+            main_thread_priority: other.main_thread_priority,
+            ..self.clone()
+        } == *other
+    }
+}
+
+/// Why a [`HostStateRecord`] was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostStateCause {
+    /// The state when the capture started (or, for a capture started before the window had
+    /// sampled anything, the first state sampled).
+    CaptureStart,
+    /// The state changed.
+    Change,
+}
+
+/// A line of `frames.jsonl` that is not a frame: the host state at capture start and at every
+/// change after it. It holds from its place in the file until the next one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HostStateRecord {
+    /// [`FORMAT`].
+    pub format: u32,
+    /// Always `true`: what tells this line from a [`Record`] or a [`Summary`].
+    pub host_state: bool,
+    pub cause: HostStateCause,
+    /// When the state was sampled, on a frame record's clocks.
+    pub t_monotonic_raw_ns: u64,
+    pub t_realtime_ns: u64,
+    #[serde(flatten)]
+    pub state: HostState,
+}
+
+impl HostStateRecord {
+    pub fn new(
+        cause: HostStateCause,
+        t_monotonic_raw_ns: u64,
+        t_realtime_ns: u64,
+        state: HostState,
+    ) -> Self {
+        HostStateRecord {
+            format: FORMAT,
+            host_state: true,
+            cause,
+            t_monotonic_raw_ns,
+            t_realtime_ns,
+            state,
+        }
+    }
+
+    pub fn to_line(&self) -> String {
+        serde_json::to_string(self).expect("a host state always serializes")
+    }
+}
+
 /// One parsed line of `frames.jsonl`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Line {
     Summary(Summary),
+    HostState(HostStateRecord),
     Frame(Record),
 }
 
@@ -755,6 +888,63 @@ mod tests {
         assert_eq!(s.present_hook_us_max, 1000);
         let line = s.to_line();
         assert_eq!(parse_line(&line), Ok(Line::Summary(s)));
+    }
+
+    fn host(visible: bool, priority: i32) -> HostState {
+        HostState {
+            windows: vec![WindowState {
+                slot: 0,
+                visible,
+                minimized: !visible,
+            }],
+            app_active: visible,
+            app_hidden: false,
+            throttled: priority <= 4,
+            main_thread_priority: priority,
+            displays: 1,
+            displays_asleep: 0,
+            screen_locked: Some(false),
+            on_console: Some(true),
+            thermal_state: Thermal::Nominal,
+            low_power_mode: false,
+            no_throttle: false,
+        }
+    }
+
+    #[test]
+    fn a_host_state_line_round_trips_and_is_told_from_frames_and_summaries() {
+        let rec = HostStateRecord::new(HostStateCause::CaptureStart, 7, 8, host(true, 31));
+        let line = rec.to_line();
+        assert!(
+            line.starts_with(r#"{"format":1,"host_state":true,"cause":"capture_start","#),
+            "{line}"
+        );
+        // Flat: a reader filtering with jq sees the state's fields at the top level.
+        assert!(line.contains(r#""app_active":true"#), "{line}");
+        assert!(line.contains(r#""thermal_state":"nominal""#), "{line}");
+        assert_eq!(parse_line(&line), Ok(Line::HostState(rec)));
+        // A frame and a summary are still themselves.
+        let frame = presented(0, 1, 1);
+        assert_eq!(parse_line(&frame.to_line()), Ok(Line::Frame(frame)));
+        let summary = Tally::default().summary(1.0);
+        assert_eq!(parse_line(&summary.to_line()), Ok(Line::Summary(summary)));
+        // An unreadable lock state is left out, not guessed.
+        let mut unknown = host(false, 4);
+        unknown.screen_locked = None;
+        let line = HostStateRecord::new(HostStateCause::Change, 1, 2, unknown).to_line();
+        assert!(!line.contains("screen_locked"), "{line}");
+        assert!(line.contains(r#""throttled":true"#), "{line}");
+    }
+
+    #[test]
+    fn a_priority_wobble_is_not_a_change_of_state() {
+        assert!(host(true, 31).same_as(&host(true, 47)));
+        assert!(!host(true, 31).same_as(&host(false, 31)));
+        assert!(
+            !host(true, 31).same_as(&host(true, 4)),
+            "the band is a state"
+        );
+        assert!(host(true, 31).visible() && !host(false, 31).visible());
     }
 
     #[test]

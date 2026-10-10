@@ -89,6 +89,8 @@ objc2-foundation = { version = "0.3", features = [
     "NSEnumerator",
     # About → Licenses: the notices file in the app bundle's Resources.
     "NSBundle",
+    # Host state (thermal state, Low Power Mode) and the no-throttle lever's App Nap activity.
+    "NSProcessInfo",
 ] }
 # The VM's media session: announce it to macOS as a player while the guest holds its
 # virtio-snd stream open, so the transport keys, the Control Center buttons and the

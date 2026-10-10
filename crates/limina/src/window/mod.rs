@@ -58,6 +58,7 @@ mod gesture_tap;
 mod grab_fixture;
 mod grab_policy;
 mod guestwindow;
+mod host_observe;
 mod hostdisplay;
 mod input;
 mod lifecycle;
@@ -3175,6 +3176,8 @@ pub fn run(
     let timer_pointer_slot = pointer_slot.clone();
     let resume_clicked_at: Cell<std::time::Instant> = Cell::new(std::time::Instant::now());
     let resume_epoch_baseline: Cell<u64> = Cell::new(0);
+    // What the host is doing to the windows and to this process (`host_observe`).
+    let host_sampler = RefCell::new(host_observe::Sampler::default());
     let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
         // One-shot: the remembered fullscreen, taken on the first tick the window is actually on
         // screen. Not gated on the first frame — the guest is already sized for it, and waiting
@@ -3189,6 +3192,9 @@ pub fn run(
         // A compositor that quits stops presenting, and its framebuffers are exactly the ones
         // worth reclaiming (testcomp/supervisor-retention.sh).
         timer_windows.borrow().drain_releases(&timer_surface_map);
+        host_sampler
+            .borrow_mut()
+            .tick(&window, timer_primary_slot.get() as usize, &timer_app);
 
         // The guest's audio stream lifetime, turned into whether the VM holds macOS's media
         // session. Draining before the exit check below so a guest that stops playing on its way
