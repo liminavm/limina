@@ -32,6 +32,7 @@ use objc2_core_foundation::CFRetained;
 use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
 use objc2_quartz_core::CALayer;
 
+use super::frame_capture::FrameTag;
 use super::present::{self, AckMsg, SendSurface, Shared, SurfaceMap, SurfaceStore};
 
 /// One window presenting one guest scanout: the `NSWindow`, the layer-hosting content view,
@@ -252,9 +253,16 @@ impl GuestWindow {
     ///
     /// `src` is normally the resolved surface itself; the primary's diagnostic copy mode
     /// hands a local copy instead, still acked under the guest's `id`.
+    ///
+    /// Every frame any window puts on glass passes here, so this is where the frame capture
+    /// sees it ([`super::frame_capture::on_present`]). The capture runs after the layer write
+    /// but before this frame's shown-ack can be sent — that waits for the transaction's
+    /// completion, which cannot run until the main thread returns — which is what its "this
+    /// frame's pixels, not a later one's" check rests on.
     pub(crate) fn show_with_ack(
         &self,
         id: u32,
+        tag: FrameTag,
         src: &CFRetained<IOSurfaceRef>,
         ack_tx: &SyncSender<AckMsg>,
     ) {
@@ -263,6 +271,7 @@ impl GuestWindow {
         if self.overlay.is_active() {
             present::set_layer_surface(&self.overlay.strip_layer(), src, None);
         }
+        super::frame_capture::on_present(tag, id, src);
     }
 
     /// Put the guest's `surface` on glass as frame `id` — or, when `copy`, a private copy of it,
@@ -272,6 +281,7 @@ impl GuestWindow {
     pub(crate) fn show(
         &self,
         id: u32,
+        tag: FrameTag,
         surface: &CFRetained<IOSurfaceRef>,
         ack_tx: &SyncSender<AckMsg>,
         copy: bool,
@@ -279,7 +289,11 @@ impl GuestWindow {
         self.finish_copy(ack_tx);
         let mut dropped = Vec::new();
         let now = if copy {
-            match self.copies.borrow_mut().submit(id, surface, &mut dropped) {
+            match self
+                .copies
+                .borrow_mut()
+                .submit(id, tag, surface, &mut dropped)
+            {
                 super::copy::Submitted::Show(copied) => Some(copied),
                 super::copy::Submitted::Pending => None,
                 super::copy::Submitted::Unavailable => Some(surface.clone()),
@@ -291,7 +305,7 @@ impl GuestWindow {
         };
         ack_unshown(&dropped, ack_tx);
         if let Some(shown) = now {
-            self.show_with_ack(id, &shown, ack_tx);
+            self.show_with_ack(id, tag, &shown, ack_tx);
         }
     }
 
@@ -301,8 +315,8 @@ impl GuestWindow {
         let mut dropped = Vec::new();
         let ready = self.copies.borrow_mut().take_ready(&mut dropped);
         ack_unshown(&dropped, ack_tx);
-        if let Some((id, copied)) = ready {
-            self.show_with_ack(id, &copied, ack_tx);
+        if let Some((id, tag, copied)) = ready {
+            self.show_with_ack(id, tag, &copied, ack_tx);
         }
     }
 
@@ -311,6 +325,7 @@ impl GuestWindow {
     pub(crate) fn present(
         &self,
         id: u32,
+        tag: FrameTag,
         surface_map: &SurfaceMap,
         ack_tx: &SyncSender<AckMsg>,
         copy: bool,
@@ -318,7 +333,7 @@ impl GuestWindow {
         let Some(surface) = self.resolve(id, surface_map, ack_tx) else {
             return;
         };
-        self.show(id, &surface, ack_tx, copy);
+        self.show(id, tag, &surface, ack_tx, copy);
     }
 
     /// On the tick the `extend` strip comes up, hand it the frame this window is already

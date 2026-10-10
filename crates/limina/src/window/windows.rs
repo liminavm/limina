@@ -163,6 +163,10 @@ struct SlotSnapshot {
     height: u32,
     generation: u64,
     held: Option<bool>,
+    /// The worker's flip count for this slot and which worker it is from: the frame capture's
+    /// tag ([`super::frame_capture::FrameTag`]).
+    frames: u64,
+    epoch: u64,
 }
 
 /// What this tick does with one slot's secondary window, after the dismissal pass has closed
@@ -289,6 +293,8 @@ impl PrimaryDisplay {
         hidpi: bool,
         reveal: Arc<AtomicBool>,
     ) -> Self {
+        // `LIMINA_WINDOW_CAPTURE_DIR`: the frame-sequence capture, for the whole run.
+        super::frame_capture::start_from_env();
         Self {
             core,
             slot,
@@ -561,12 +567,14 @@ impl PrimaryDisplay {
         mode: DisplayResolution,
     ) {
         let SlotSnapshot {
+            slot,
             show_id,
             width,
             height,
             generation,
             held,
-            ..
+            frames,
+            epoch,
         } = *snap;
         if generation == self.last_gen.get() {
             return;
@@ -652,7 +660,12 @@ impl PrimaryDisplay {
                 trace.showing(id, surface);
             }
         }
-        self.core.show(id, surface, ack_tx, copy);
+        let tag = super::frame_capture::FrameTag {
+            slot,
+            flip: frames,
+            epoch,
+        };
+        self.core.show(id, tag, surface, ack_tx, copy);
 
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
         // long-running headless check ends with a recent frame, not just early boot.
@@ -808,6 +821,8 @@ impl GuestWindows {
                         height: d.height,
                         generation: d.generation,
                         held: d.held,
+                        frames: d.frames,
+                        epoch: s.reader_epoch,
                     }
                 })
                 .collect();
@@ -873,6 +888,8 @@ impl GuestWindows {
             height,
             generation,
             held,
+            frames,
+            epoch,
         } in slots
         {
             // The primary's slot already had its walk above; it gets no secondary window.
@@ -953,9 +970,14 @@ impl GuestWindows {
             }
 
             let Some(id) = show_id else { continue };
+            let tag = super::frame_capture::FrameTag {
+                slot,
+                flip: frames,
+                epoch,
+            };
             entry
                 .core
-                .present(id, surface_map, ack_tx, held == Some(false));
+                .present(id, tag, surface_map, ack_tx, held == Some(false));
         }
     }
 

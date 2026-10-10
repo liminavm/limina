@@ -47,6 +47,9 @@ limina-display     = { path = "crates/limina-display" }
 # Display-control socket wire format, shared by the supervisor (which emits) and the worker
 # (which applies). Dependency-free on purpose — see the crate docs.
 limina-displayctl  = { path = "crates/limina-displayctl" }
+# The frame-sequence capture's encoder and its `frames.jsonl` record format, shared by the
+# supervisor (which writes them) and the test harness (which reads them).
+limina-framecap    = { path = "crates/limina-framecap" }
 limina-input       = { path = "crates/limina-input" }
 # Starts the worker from launchd (outside the app's process tree, where Game Mode clamps) and
 # hands it its fds over Mach; the supervisor and the worker's launcher mode share it.
@@ -104,6 +107,28 @@ opt-level = 3
 # WebGL aquarium read 4 fps against 42 for the optimized C renderer it replaced, which is the whole
 # of that gap and nothing to do with either renderer's behaviour. Every rig that boots
 # `target/debug/limina-vmm` measures whatever this says, so it says the same as release.
+# The frame-sequence capture (`LIMINA_WINDOW_CAPTURE_DIR`) encodes every presented frame. The
+# PNG encoder is generic over its writer, so its code is instantiated in the CALLING crate at that
+# crate's opt-level: an override on `png` alone does nothing. Measured 2026-10-10 on a 1920x1080
+# aquarium frame (swizzle + RGB PNG, Fast/Sub): 167 ms unoptimized against 15 ms here, which is
+# the difference between 6 fps and keeping up with 60 Hz on four encoder threads.
+# The overrides on png and the crates under it are needed as well (the non-generic half of the
+# encoder lives there): with only this crate optimized the same frame took 89 ms.
+[profile.dev.package.limina-framecap]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.simd-adler32]
+opt-level = 3
+
 [profile.dev.package.virglrs]
 opt-level = 3
 

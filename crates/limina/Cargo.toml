@@ -55,6 +55,8 @@ limina-displayctl = { workspace = true }
 # The host<->guest control-plane wire protocol (M5/D8): the supervisor owns the host side
 # of the guest-agent channel (HELLO/WELCOME, heartbeats, orderly SHUTDOWN).
 limina-proto = { workspace = true }
+# The frame-sequence capture's encoder and record format (`window/frame_capture.rs`).
+limina-framecap = { workspace = true }
 
 # Native window (decision D3: the UI lives in the supervisor). Looks up the worker's
 # shared IOSurface by id and shows it via CALayer.contents; an NSTimer on the main thread

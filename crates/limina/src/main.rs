@@ -558,6 +558,21 @@ enum DebugAction {
     },
     /// Turn a diagnostic trace on or off (`status` lists them).
     Lever { name: String, state: OnOff },
+    /// Record every frame the VM's windows put on glass, each tagged (display, flip number,
+    /// IOSurface, size, host clocks), into a directory: `start <dir>`, then `stop`, which prints
+    /// the summary. Same output as `LIMINA_WINDOW_CAPTURE_DIR`; see docs/graphics.md.
+    Capture {
+        #[command(subcommand)]
+        action: CaptureAction,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum CaptureAction {
+    /// Start capturing into DIR (created if missing; one that already holds a capture is refused).
+    Start { dir: PathBuf },
+    /// Stop, wait for the frames already copied to be written, and print the summary.
+    Stop,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -1231,6 +1246,19 @@ fn cmd_debug(args: DebugArgs) -> Result<()> {
             name,
             on: matches!(state, OnOff::On),
         },
+        DebugAction::Capture {
+            action: CaptureAction::Start { dir },
+        } => {
+            // Absolute here: the supervisor's working directory is not the caller's.
+            let dir = std::path::absolute(&dir)
+                .with_context(|| format!("resolving {}", dir.display()))?;
+            limina_debug::wire::Request::Capture(limina_debug::wire::Capture::Start {
+                dir: dir.to_string_lossy().into_owned(),
+            })
+        }
+        DebugAction::Capture {
+            action: CaptureAction::Stop,
+        } => limina_debug::wire::Request::Capture(limina_debug::wire::Capture::Stop),
     };
     debug_ctl::client(pid, &[request])
 }
@@ -1466,6 +1494,7 @@ fn exit_cleanup() {
     control::cleanup();
     debug_ctl::cleanup();
     runtime_ctl::cleanup();
+    window::frame_capture::finish_at_exit();
 }
 
 /// A file that belongs to this run alone, removed when the run ends.

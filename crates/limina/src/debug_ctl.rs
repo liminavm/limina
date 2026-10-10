@@ -9,7 +9,8 @@
 //! the filter is remembered so the next worker (a guest reboot, a resume) starts from it.
 //!
 //! The socket is reachable by any process of the same user, like the control plane's. That is
-//! acceptable here because nothing it does changes the guest: it only decides what gets logged.
+//! acceptable here because nothing it does changes the guest: it only decides what gets logged,
+//! and where the frame capture (`capture start <dir>`) writes what the windows showed.
 //!
 //! All of it lasts for this process only. See `limina_debug` for why.
 
@@ -127,6 +128,12 @@ pub fn handle(req: &Request) -> Result<Vec<String>, String> {
             );
             Ok(Vec::new())
         }
+        Request::Capture(wire::Capture::Start { dir }) => {
+            crate::window::frame_capture::start(Path::new(dir)).map(|msg| vec![msg])
+        }
+        Request::Capture(wire::Capture::Stop) => {
+            crate::window::frame_capture::stop().map(|s| vec![s.describe()])
+        }
     }
 }
 
@@ -151,6 +158,10 @@ fn status() -> Vec<String> {
             l.about()
         ));
     }
+    lines.push(match crate::window::frame_capture::status() {
+        Some(dir) => format!("capture on {}", dir.display()),
+        None => "capture off".into(),
+    });
     lines
 }
 
@@ -282,8 +293,14 @@ pub fn client(pid: u32, requests: &[Request]) -> Result<()> {
             path.display()
         )
     })?;
-    // Status asks the worker too, which can take up to its own timeout.
-    let _ = stream.set_read_timeout(Some(WORKER_TIMEOUT * 3));
+    // Status asks the worker too, which can take up to its own timeout; a capture stop waits for
+    // the frames already copied to be written.
+    let timeout = if requests.iter().any(|r| matches!(r, Request::Capture(_))) {
+        Duration::from_secs(60)
+    } else {
+        WORKER_TIMEOUT * 3
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
     let mut reader = BufReader::new(&stream);
     for req in requests {
         (&stream)

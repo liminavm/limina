@@ -1,0 +1,14 @@
+[package]
+name = "limina-framecap"
+description = "Frame-sequence capture: the per-frame encoder and the frames.jsonl record format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Pure on purpose: no AppKit, no IOSurface. The supervisor owns grabbing the frames; this crate
+# owns what is written for each one, so the test harness can read the same records it writes.
+# It is optimized in dev builds (root Cargo.toml) because the encoder runs per presented frame.
+[dependencies]
+png        = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }

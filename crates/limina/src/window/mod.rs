@@ -51,6 +51,7 @@ pub(crate) mod display_awake;
 mod displays;
 mod echo;
 pub(crate) mod fit;
+pub(crate) mod frame_capture;
 mod gesture_tap;
 /// Recorded-gesture replay for the grab policy (`LIMINA_EDGE_TRACE` fixtures).
 #[cfg(test)]

@@ -18,6 +18,12 @@
 //! < ok
 //! > lever nope on
 //! < err no lever named nope
+//! > capture start /tmp/frames
+//! < frame capture: capturing every presented frame to /tmp/frames
+//! < ok
+//! > capture stop
+//! < 312 presented, 309 captured, 3 dropped, …
+//! < ok
 //! ```
 //!
 //! The supervisor speaks the same protocol to its worker, where only `log` means anything (the
@@ -67,6 +73,16 @@ pub enum Request {
     Log { scope: Scope, spec: String },
     /// Turn a lever on or off.
     Lever { name: String, on: bool },
+    /// Start the frame-sequence capture into a directory (the rest of the line, so it may hold
+    /// spaces), or stop it.
+    Capture(Capture),
+}
+
+/// What a `capture` request asks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Capture {
+    Start { dir: String },
+    Stop,
 }
 
 impl Request {
@@ -104,6 +120,29 @@ impl Request {
                     on,
                 })
             }
+            Some("capture") => match words.next() {
+                Some("start") => {
+                    // The directory is everything after `start`, so a path with spaces survives.
+                    let dir = line
+                        .trim_start()
+                        .strip_prefix("capture")
+                        .and_then(|r| r.trim_start().strip_prefix("start"))
+                        .map(str::trim)
+                        .unwrap_or("");
+                    if dir.is_empty() {
+                        return Err("capture start needs a directory".into());
+                    }
+                    Ok(Request::Capture(Capture::Start {
+                        dir: dir.to_string(),
+                    }))
+                }
+                Some("stop") => match words.next() {
+                    None => Ok(Request::Capture(Capture::Stop)),
+                    Some(extra) => Err(format!("unexpected {extra:?} after capture stop")),
+                },
+                Some(other) => Err(format!("capture takes start <dir> or stop, not {other}")),
+                None => Err("capture takes start <dir> or stop".into()),
+            },
             Some(other) => Err(format!("unknown request {other}")),
             None => Err("empty request".into()),
         }
@@ -116,6 +155,8 @@ impl Request {
             Request::Lever { name, on } => {
                 format!("lever {name} {}", if *on { "on" } else { "off" })
             }
+            Request::Capture(Capture::Start { dir }) => format!("capture start {dir}"),
+            Request::Capture(Capture::Stop) => "capture stop".into(),
         }
     }
 }
@@ -174,6 +215,10 @@ mod tests {
                 name: "input-trace".into(),
                 on: false,
             },
+            Request::Capture(Capture::Start {
+                dir: "/tmp/a dir with spaces/frames".into(),
+            }),
+            Request::Capture(Capture::Stop),
         ] {
             assert_eq!(Request::parse(&r.to_line()), Ok(r));
         }
@@ -189,6 +234,11 @@ mod tests {
         assert!(Request::parse("lever edge-trace").is_err());
         assert!(Request::parse("lever edge-trace maybe").is_err());
         assert!(Request::parse("reboot").is_err());
+        assert!(Request::parse("capture").is_err());
+        assert!(Request::parse("capture start").is_err());
+        assert!(Request::parse("capture start   ").is_err());
+        assert!(Request::parse("capture stop now").is_err());
+        assert!(Request::parse("capture pause").is_err());
     }
 
     #[test]

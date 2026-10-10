@@ -74,6 +74,10 @@ fn answer(line: &str) -> String {
             "{}\n",
             wire::err_line(&format!("the worker has no lever named {name}"))
         ),
+        Ok(Request::Capture(_)) => format!(
+            "{}\n",
+            wire::err_line("frame capture is the supervisor's: it captures what its windows show")
+        ),
         Err(e) => format!("{}\n", wire::err_line(&e)),
     }
 }

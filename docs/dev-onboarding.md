@@ -205,6 +205,8 @@ limina debug <vm> status                         # both filters, every lever
 limina debug <vm> log 'warn,limina::window=debug'  # both processes (--supervisor/--worker for one)
 limina debug <vm> log default                    # back to what it started with
 limina debug <vm> lever edge-trace on
+limina debug <vm> capture start <dir>            # every presented frame, tagged (docs/graphics.md §8)
+limina debug <vm> capture stop
 ```
 
 `<vm>` is a managed VM's name or bundle, a flat run's boot-disk path, or the supervisor's pid.

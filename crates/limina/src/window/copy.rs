@@ -37,6 +37,7 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use super::frame_capture::FrameTag;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -68,6 +69,8 @@ pub(crate) enum Submitted {
 /// The copy of frame `id`, from the moment it is started until it goes up.
 struct InFlight {
     id: u32,
+    /// Which guest frame this is, for the frame capture.
+    tag: FrameTag,
     /// The guest surface's first pixel when the frame arrived, under `LIMINA_PRESENT_COPY_TRACE`.
     arrived: Option<u32>,
     dst: CFRetained<IOSurfaceRef>,
@@ -133,7 +136,7 @@ pub(crate) struct CopyRing {
     next: usize,
     in_flight: Option<InFlight>,
     /// The newest frame that arrived while a blit was in flight, with its [`arrival`] pixel.
-    waiting: Option<(u32, CFRetained<IOSurfaceRef>, Option<u32>)>,
+    waiting: Option<(u32, FrameTag, CFRetained<IOSurfaceRef>, Option<u32>)>,
     cost: CopyCost,
 }
 
@@ -143,6 +146,7 @@ impl CopyRing {
     pub(crate) fn submit(
         &mut self,
         id: u32,
+        tag: FrameTag,
         src: &CFRetained<IOSurfaceRef>,
         dropped: &mut Vec<u32>,
     ) -> Submitted {
@@ -159,12 +163,12 @@ impl CopyRing {
             return Submitted::Unavailable;
         }
         if self.in_flight.is_some() {
-            if let Some((old, ..)) = self.waiting.replace((id, src.clone(), arrived)) {
+            if let Some((old, ..)) = self.waiting.replace((id, tag, src.clone(), arrived)) {
                 dropped.push(old);
             }
             return Submitted::Pending;
         }
-        match self.start(id, src, arrived) {
+        match self.start(id, tag, src, arrived) {
             Some(dst) => Submitted::Show(dst),
             None => Submitted::Pending,
         }
@@ -175,7 +179,7 @@ impl CopyRing {
     pub(crate) fn take_ready(
         &mut self,
         dropped: &mut Vec<u32>,
-    ) -> Option<(u32, CFRetained<IOSurfaceRef>)> {
+    ) -> Option<(u32, FrameTag, CFRetained<IOSurfaceRef>)> {
         let flight = self.in_flight.as_mut()?;
         if let Stage::Deferred { src, due } = &flight.stage {
             if Instant::now() < *due {
@@ -202,8 +206,8 @@ impl CopyRing {
         let done = self.in_flight.take()?;
         self.cost
             .record(matches!(done.stage, Stage::Blit(_)), done.started.elapsed());
-        let mut ready = Some((done.id, done.dst));
-        if !failed && let Some((id, dst)) = &ready {
+        let mut ready = Some((done.id, done.tag, done.dst));
+        if !failed && let Some((id, _, dst)) = &ready {
             trace_shown(*id, done.arrived, dst);
         }
         if failed {
@@ -214,12 +218,12 @@ impl CopyRing {
             dropped.push(done.id);
             ready = None;
         }
-        if let Some((id, src, arrived)) = self.waiting.take()
-            && let Some(dst) = self.start(id, &src, arrived)
+        if let Some((id, tag, src, arrived)) = self.waiting.take()
+            && let Some(dst) = self.start(id, tag, &src, arrived)
         {
             // Copied at once on the CPU, so it is up before the one just finished could be.
-            dropped.extend(ready.map(|(old, _)| old));
-            return Some((id, dst));
+            dropped.extend(ready.map(|(old, ..)| old));
+            return Some((id, tag, dst));
         }
         ready
     }
@@ -236,6 +240,7 @@ impl CopyRing {
     fn start(
         &mut self,
         id: u32,
+        tag: FrameTag,
         src: &CFRetained<IOSurfaceRef>,
         arrived: Option<u32>,
     ) -> Option<CFRetained<IOSurfaceRef>> {
@@ -245,6 +250,7 @@ impl CopyRing {
         if let Some(delay) = test_copy_delay() {
             self.in_flight = Some(InFlight {
                 id,
+                tag,
                 arrived,
                 dst,
                 stage: Stage::Deferred {
@@ -263,6 +269,7 @@ impl CopyRing {
         if let Some(commands) = gpu_copy(src, &dst) {
             self.in_flight = Some(InFlight {
                 id,
+                tag,
                 arrived,
                 dst,
                 stage: Stage::Blit(commands),
@@ -414,11 +421,11 @@ mod tests {
         ) -> CFRetained<IOSurfaceRef> {
             let mut dropped = Vec::new();
             assert!(matches!(
-                self.submit(id, src, &mut dropped),
+                self.submit(id, FrameTag::default(), src, &mut dropped),
                 Submitted::Pending
             ));
             self.wait();
-            let (shown, dst) = self.take_ready(&mut dropped).expect("a finished copy");
+            let (shown, _, dst) = self.take_ready(&mut dropped).expect("a finished copy");
             assert_eq!(shown, id);
             assert!(dropped.is_empty());
             dst
@@ -472,17 +479,45 @@ mod tests {
         let mut dropped = Vec::new();
         for id in 1..=3 {
             assert!(matches!(
-                ring.submit(id, &src, &mut dropped),
+                ring.submit(id, FrameTag::default(), &src, &mut dropped),
                 Submitted::Pending
             ));
         }
         assert_eq!(dropped, [2], "frame 2 was replaced before its copy began");
         ring.wait();
-        assert_eq!(ring.take_ready(&mut dropped).map(|(id, _)| id), Some(1));
+        assert_eq!(ring.take_ready(&mut dropped).map(|(id, ..)| id), Some(1));
         ring.wait();
-        assert_eq!(ring.take_ready(&mut dropped).map(|(id, _)| id), Some(3));
+        assert_eq!(ring.take_ready(&mut dropped).map(|(id, ..)| id), Some(3));
         assert!(ring.take_ready(&mut dropped).is_none(), "nothing left");
         assert_eq!(dropped, [2]);
+    }
+
+    /// The frame capture tags what goes on glass with the flip it was presented as, and a copied
+    /// frame goes up later, from `take_ready`: its tag has to come back with it, not with
+    /// whichever frame arrived last.
+    #[test]
+    fn a_copied_frame_goes_up_with_its_own_tag() {
+        let src = super::super::diag::create_local_iosurface(64, 64).expect("source surface");
+        let mut ring = CopyRing::default();
+        let mut dropped = Vec::new();
+        let tag = |flip| FrameTag {
+            slot: 1,
+            flip,
+            epoch: 2,
+        };
+        for id in 1..=3 {
+            ring.submit(id, tag(u64::from(id) + 10), &src, &mut dropped);
+        }
+        ring.wait();
+        let (id, t, _) = ring.take_ready(&mut dropped).expect("frame 1's copy");
+        assert_eq!((id, t), (1, tag(11)));
+        ring.wait();
+        let (id, t, _) = ring.take_ready(&mut dropped).expect("frame 3's copy");
+        assert_eq!(
+            (id, t),
+            (3, tag(13)),
+            "frame 2 was replaced, its tag with it"
+        );
     }
 
     #[test]
@@ -490,8 +525,8 @@ mod tests {
         let src = super::super::diag::create_local_iosurface(64, 64).expect("source surface");
         let mut ring = CopyRing::default();
         let mut dropped = Vec::new();
-        ring.submit(1, &src, &mut dropped);
-        ring.submit(2, &src, &mut dropped);
+        ring.submit(1, FrameTag::default(), &src, &mut dropped);
+        ring.submit(2, FrameTag::default(), &src, &mut dropped);
         ring.cancel(&mut dropped);
         assert_eq!(dropped, [1, 2]);
         assert!(ring.take_ready(&mut dropped).is_none());

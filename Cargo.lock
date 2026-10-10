@@ -1255,6 +1255,7 @@ dependencies = [
  "libc",
  "limina-debug",
  "limina-displayctl",
+ "limina-framecap",
  "limina-input",
  "limina-launch",
  "limina-paniclog",
@@ -1306,6 +1307,15 @@ name = "limina-displayctl"
 version = "0.1.0"
 
 [[package]]
+name = "limina-framecap"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "limina-input"
 version = "0.1.0"
 dependencies = [
@@ -1351,6 +1361,7 @@ dependencies = [
  "anyhow",
  "libc",
  "limina-displayctl",
+ "limina-framecap",
  "limina-proto",
  "limina-usbip",
  "objc2",

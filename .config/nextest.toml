@@ -28,7 +28,7 @@ binary(balloon) | binary(balloon_burst) | binary(balloon_inflate) | binary(ballo
 | binary(venus_fd_census) | binary(vrend_session_restore) | binary(flat_suspend)
 | binary(scanout_churn_retention) | binary(l2_desktop_restore_landmarks)
 | binary(l2_synoik_restore_landmarks) | binary(venus_scanout_scoping)
-| binary(scanout_copy_shows_presented_frame) | binary(l2_video_av1)
+| binary(scanout_copy_shows_presented_frame) | binary(l2_video_av1) | binary(l2_frame_capture)
 | test(=managed_windowed_vm_cli_suspend_reports_success)
 '''
 # scanout_churn_retention is exclusive for two reasons: its verdict is a memory measurement
@@ -37,6 +37,7 @@ binary(balloon) | binary(balloon_burst) | binary(balloon_inflate) | binary(ballo
 # in the supervisor's window frame-apply path, which a --display-capture boot never enters.
 # venus_scanout_scoping also opens a real NSWindow: the surface port it guards only exists on a
 # windowed boot. So does scanout_copy_shows_presented_frame, whose copy path lives in the window.
+# l2_frame_capture opens a window too: the capture lives in the window's present path.
 # l2_video_av1 opens a window too (the decode observer is only installed with a window sink), and
 # its no-drain-during-playback oracle is a timing verdict a co-resident guest could flip.
 # managed_windowed_vm_cli_suspend_reports_success boots a managed VM with its window open.
