@@ -77,7 +77,12 @@ cases abort during recording), not by submitting the overrun.
 
 Fixed in limina-kk `kk: bound guest query indices and multiview spans to the pool`. With
 `LIMINA_KK_PROBE_ALLOW_GPU=1` all cases PASS: the valid multiview pair is marked/resolved, and the
-over-end and base-index cases survive clamped.
+over-end and base-index cases survive clamped. In a guest, piglit's occlusion-query,
+transform-feedback, primitives-generated and multiview tests (400) gave the same results on KK
+before and after this and the five fixes around it (`19e3ad7ebaa` against `564598b99be`, one run
+each) except `ext_transform_feedback2@counting with pause`, fail to pass as above. The timer-query
+tests are left out: `ext_timer_query-time-elapsed`, in either mode, hangs the GPU on both builds,
+and the kernel then refuses that worker's GPU work, so every later test in the run stalls.
 
     cc -Wall -I/opt/homebrew/include query-probe.c -L/opt/homebrew/lib -lvulkan -o qp
     VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./qp [case]
@@ -142,7 +147,7 @@ needed.
 Fixed in limina-kk `kk: drop a draw with no live render pass and clear the deferred-start flag on
 end`. Before it `noattach-end-draw` crashes (an assert in `cs_start_render` with asserts, a nil
 Metal encoder without); after it both cases PASS. A faithful crash is a host GPU fault, so the RED
-run aborted at `cs_get_render` during recording (a temporary bounds check), before any submit.
+run aborted at `cs_get_render` during recording (a temporary bounds check), before any submit. The piglit run under `query-probe.c` covers this fix too.
 
     cc -Wall -I/opt/homebrew/include renderpass-probe.c -L/opt/homebrew/lib -lvulkan -o rp
     VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./rp [case]
@@ -161,7 +166,8 @@ Fixed in limina-kk `kk: validate transform-feedback buffer offsets and sizes aga
 Before it an asserts build aborts in `vk_buffer_range` on the two over cases (a release build
 stores the out-of-range range silently); after it all four cases PASS, the over cases dropped or
 clamped. The capture write an overrun would reach is GPU-side, so the RED run aborted at the
-binding during recording, before any draw.
+binding during recording, before any draw. The piglit run under `query-probe.c` covers this fix
+too.
 
     cc -Wall -I/opt/homebrew/include xfb-probe.c -L/opt/homebrew/lib -lvulkan -o xp
     VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./xp [case]
