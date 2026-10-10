@@ -248,6 +248,9 @@ pub struct VmSpec {
     /// inherited from the supervisor, which speaks the agent's JSON protocol on the other
     /// side. None = no port (an old supervisor, or a direct worker invocation).
     pub qga_fd: Option<std::os::fd::RawFd>,
+    /// fd of the host end of the debug port (`org.limina.debug.0`), inherited from the
+    /// supervisor, which answers the guest's requests on the other side. None = no port.
+    pub debug_port_fd: Option<std::os::fd::RawFd>,
     /// Optional virtio-gpu display (M2). None = headless (no GPU device).
     pub display: Option<DisplaySpec>,
     /// Optional virtio-input devices (M2). None = no keyboard/pointer.

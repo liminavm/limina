@@ -267,6 +267,12 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     if let Some(fd) = spec.qga_fd {
         console_ports.qga(fd);
     }
+
+    // The named `org.limina.debug.0` port a guest reads the host build from (the supervisor
+    // answers on the other end). Last, after qga, for the same fixed-order reason.
+    if let Some(fd) = spec.debug_port_fd {
+        console_ports.debug(fd);
+    }
     let console = console_ports
         .build()
         .context("building the virtio-console device")?;
@@ -1301,6 +1307,7 @@ mod tests {
             virtio_console: None,
             spice_fd: None,
             qga_fd: None,
+            debug_port_fd: None,
             display: None,
             input: None,
             net: None,

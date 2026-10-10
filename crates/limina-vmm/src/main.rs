@@ -156,6 +156,11 @@ struct Cli {
     #[arg(long)]
     qga_fd: Option<i32>,
 
+    /// fd of the guest's debug port (`org.limina.debug.0`), answered by the supervisor (the
+    /// host build and this launch's facts). Same shape as --spice-fd: no flag, no port.
+    #[arg(long)]
+    debug_port_fd: Option<i32>,
+
     /// fd of the worker→supervisor control channel (used with --display-window).
     #[arg(long, requires = "display_window")]
     control_fd: Option<i32>,
@@ -818,6 +823,7 @@ fn main() -> Result<()> {
         }),
         spice_fd: cli.spice_fd,
         qga_fd: cli.qga_fd,
+        debug_port_fd: cli.debug_port_fd,
         display,
         input,
         net,

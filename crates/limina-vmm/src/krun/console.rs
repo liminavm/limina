@@ -176,6 +176,21 @@ impl Ports {
         log::info!("qga: exposed the guest agent port org.qemu.guest_agent.0");
     }
 
+    /// Expose the **named** virtio-serial data port `org.limina.debug.0` on `guest_fd`.
+    ///
+    /// The guest reads which host build it runs on, and this launch's facts, from
+    /// `/dev/virtio-ports/org.limina.debug.0` with stock tools — nothing of ours installed
+    /// (`docs/design/debug-port.md`). The supervisor answers requests on the other end
+    /// (`crates/limina/src/debug_port.rs`); nothing here parses a byte. Added after the qga
+    /// port, so the ports that existed before it keep their indices.
+    pub fn debug(&mut self, guest_fd: RawFd) {
+        self.ports.push(Port::Named {
+            name: "org.limina.debug.0",
+            fd: guest_fd,
+        });
+        log::info!("debug: exposed the debug port org.limina.debug.0");
+    }
+
     /// The console device carrying every port, or `None` when there are none.
     ///
     /// libkrun dups each fd it is handed (separately for input and output), so a named port's
