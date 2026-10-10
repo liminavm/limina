@@ -107,6 +107,9 @@ fn stock_guest_survives_inplace_s2idle_with_correct_clock() {
         .to_string();
     assert!(!boot_id.is_empty(), "empty pre-suspend boot_id");
     let worker = guest.worker_pid().expect("resolving the worker pid");
+    let launch = guest
+        .current_launch()
+        .expect("the boot printed no identity block");
     eprintln!("pre-suspend: boot_id={boot_id} worker={worker}");
 
     // Suspend from inside the guest and confirm s2idle entry (SSH goes dark once
@@ -138,13 +141,9 @@ fn stock_guest_survives_inplace_s2idle_with_correct_clock() {
         boot_id_after, boot_id,
         "boot_id changed across the in-place s2idle — the guest rebooted"
     );
-    let worker_after = guest
-        .worker_pid()
-        .expect("resolving the post-wake worker pid");
-    assert_eq!(
-        worker_after, worker,
-        "worker pid changed — the VMM was relaunched; this test must be in-place"
-    );
+    guest
+        .assert_same_launch(&launch)
+        .expect("this test must be in-place");
 
     // Wallclock guard: the kernel's thaw must have stepped CLOCK_REALTIME across the
     // gap via the RTC (0088). A broken path leaves the guest ~SLEEP_GAP behind.
@@ -351,6 +350,9 @@ fn usb_device_survives_inplace_s2idle() {
     const KMSG_MARK: &str = "limina-test: pre-suspend usb baseline";
     mark_kmsg(&guest, KMSG_MARK);
     let worker = guest.worker_pid().expect("resolving the worker pid");
+    let launch = guest
+        .current_launch()
+        .expect("the boot printed no identity block");
 
     suspend_in_guest_and_wait_dark(&guest);
     eprintln!("guest is asleep; holding a {SLEEP_GAP:?} gap");
@@ -364,11 +366,9 @@ fn usb_device_survives_inplace_s2idle() {
     guest
         .ssh_poll("true", Duration::from_secs(90))
         .expect("guest never came back on SSH after the wake pulse");
-    assert_eq!(
-        guest.worker_pid().expect("post-wake worker pid"),
-        worker,
-        "worker pid changed — this test must be in-place"
-    );
+    guest
+        .assert_same_launch(&launch)
+        .expect("this test must be in-place");
 
     // The data path still works (a real control transfer), AND the device is the same one:
     // a re-enumeration would have handed it a fresh devnum.
@@ -465,6 +465,9 @@ fn venus_session_survives_inplace_s2idle() {
         "sudo coredumpctl list --no-legend gnome-shell 2>/dev/null | wc -l",
     );
     let worker = guest.worker_pid().expect("resolving the worker pid");
+    let launch = guest
+        .current_launch()
+        .expect("the boot printed no identity block");
     eprintln!(
         "pre-suspend: boot_id={boot_id} gnome-shell pid={shell_pid} cores={cores_before} \
          worker={worker}"
@@ -488,6 +491,9 @@ fn venus_session_survives_inplace_s2idle() {
         boot_id_after, boot_id,
         "boot_id changed across the in-place s2idle — the guest rebooted"
     );
+    guest
+        .assert_same_launch(&launch)
+        .expect("this test must be in-place");
 
     // Ride out the abort window: the pre-fix failure is a DELAYED crash (~17 s in
     // vn_relax), so a same-pid reading right after SSH-back proves nothing yet.

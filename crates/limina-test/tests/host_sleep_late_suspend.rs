@@ -79,6 +79,9 @@ fn a_suspend_completed_after_host_wake_is_woken() {
         .trim()
         .to_string();
     let worker = guest.worker_pid().expect("resolving the worker pid");
+    let launch = guest
+        .current_launch()
+        .expect("the boot printed no identity block");
 
     assert_eq!(
         unsafe { libc::kill(worker, libc::SIGURG) },
@@ -135,6 +138,9 @@ fn a_suspend_completed_after_host_wake_is_woken() {
         boot_id_after, boot_id,
         "the guest rebooted instead of resuming"
     );
+    guest
+        .assert_same_launch(&launch)
+        .expect("a host sleep must keep the worker");
 
     let outcome = guest
         .shutdown(Duration::from_secs(20))

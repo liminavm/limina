@@ -284,6 +284,29 @@ impl Run {
             .to_string()
     }
 
+    /// The worker launches this run's supervisor has printed, from its log.
+    fn launches(&self) -> Vec<limina_test::Identity> {
+        limina_test::logged_identities(&self.log())
+    }
+
+    /// Wait for the run's `n`th launch (1-based) to be printed.
+    fn wait_for_launch(&self, n: usize) -> limina_test::Identity {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let ids = self.launches();
+            if ids.len() >= n {
+                return ids[n - 1].clone();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the run printed {} launch(es), wanted {n}:\n{}",
+                ids.len(),
+                self.log()
+            );
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     fn worker(&self) -> libc::pid_t {
         limina_test::worker_pid_of(self.pid, &self.vmm).expect("the run's worker")
     }
@@ -356,6 +379,7 @@ fn a_detached_flat_run_resets_and_stops_without_a_terminal() {
     let run = Run::launch("orderly");
     run.wait_ssh();
     let first_boot = run.boot_id();
+    let first_launch = run.wait_for_launch(1);
     let first_worker = run.worker();
 
     // A second detach of the running disk is refused before it touches anything: the live run's
@@ -396,6 +420,13 @@ fn a_detached_flat_run_resets_and_stops_without_a_terminal() {
             && why.contains("limina debug <vm> lever lifecycle-control on"),
         "the refusal must say how to turn the lever on: {why}"
     );
+    let launches = run.launches();
+    assert!(
+        launches.len() == 1 && launches[0].get("launch_id") == first_launch.get("launch_id"),
+        "a refused reset relaunched the worker: {launches:?}"
+    );
+    // No relaunch is not the same as untouched: a worker killed and never replaced prints no
+    // block either, so the worker's pid stays the check for that.
     assert_eq!(
         run.worker(),
         first_worker,
@@ -416,7 +447,17 @@ fn a_detached_flat_run_resets_and_stops_without_a_terminal() {
         run.log()
     );
     assert!(!gone(run.pid), "reset must keep the supervisor");
-    assert_ne!(run.worker(), first_worker, "reset must replace the worker");
+    let reset_launch = run.wait_for_launch(2);
+    assert_ne!(
+        reset_launch.get("launch_id"),
+        first_launch.get("launch_id"),
+        "reset must replace the worker"
+    );
+    assert_eq!(
+        reset_launch.get("resumed").map(String::as_str),
+        Some("no"),
+        "a reset cold-boots: {reset_launch:?}"
+    );
     run.wait_ssh();
     let second_boot = run.boot_id();
     assert_ne!(

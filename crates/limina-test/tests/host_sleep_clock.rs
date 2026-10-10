@@ -110,6 +110,9 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
         .trim()
         .to_string();
     let worker = guest.worker_pid().expect("resolving the worker pid");
+    let launch = guest
+        .current_launch()
+        .expect("the boot printed no identity block");
     let sleep_gap = sleep_gap();
     let (real0, mono0, boot0) = clocks(&guest, "before");
     eprintln!("pre-sleep: worker={worker} real={real0:.3} mono={mono0:.3} boot={boot0:.3}");
@@ -151,6 +154,9 @@ fn host_sleep_is_not_absorbed_into_guest_monotonic() {
         boot_id_after, boot_id,
         "boot_id changed across the simulated host sleep — the guest rebooted"
     );
+    guest
+        .assert_same_launch(&launch)
+        .expect("a host sleep must keep the worker");
 
     for line in guest.supervisor_log().lines() {
         if line.contains("quiesce:") || line.contains("host sleep") || line.contains("host wake") {

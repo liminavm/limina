@@ -92,6 +92,9 @@ fn an_aborted_suspend_is_not_taken_for_parked() {
         .expect("arming pm_test=devices (needs CONFIG_PM_DEBUG in the guest kernel)");
 
     let worker = guest.worker_pid().expect("resolving the worker pid");
+    let launch = guest
+        .current_launch()
+        .expect("the boot printed no identity block");
     let (real0, mono0) = clocks(&guest, "before");
 
     assert_eq!(
@@ -116,6 +119,9 @@ fn an_aborted_suspend_is_not_taken_for_parked() {
     );
 
     let (real1, mono1) = clocks(&guest, "after");
+    guest
+        .assert_same_launch(&launch)
+        .expect("a host sleep must keep the worker");
     let d_mono = mono1 - mono0;
     eprintln!(
         "deltas across a {SLEEP_GAP:?} host sleep: real={:+.3} mono={d_mono:+.3}",

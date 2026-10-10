@@ -117,6 +117,9 @@ fn busy_seated_session_parks_across_reset() {
         "coredumpctl list gnome-shell --no-legend 2>/dev/null | wc -l",
     );
     let worker = g.worker_pid().expect("resolving the worker pid");
+    let launch = g
+        .current_launch()
+        .expect("the boot printed no identity block");
     eprintln!("pre-suspend: boot_id={boot_id} gnome-shell={shell_pid} worker={worker}");
 
     // Suspend from inside; GNOME's fade-out supplies present traffic right at entry.
@@ -147,6 +150,8 @@ fn busy_seated_session_parks_across_reset() {
     // Identity across the bracket, held past the vn_relax abort window.
     let boot_id_after = ssh_retry(&g, "cat /proc/sys/kernel/random/boot_id");
     assert_eq!(boot_id_after, boot_id, "guest rebooted across the bracket");
+    g.assert_same_launch(&launch)
+        .expect("the bracket must park in place, not relaunch the worker");
     std::thread::sleep(ABORT_WINDOW);
     let shell_pid_after = ssh_retry(&g, "pgrep -x gnome-shell | head -1");
     assert_eq!(

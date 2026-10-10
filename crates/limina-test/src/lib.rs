@@ -2553,6 +2553,33 @@ impl Guest {
         }
     }
 
+    /// The launch running now: the last identity block printed, waiting up to 30 s for the
+    /// first. Pair with [`Guest::assert_same_launch`] around something that must not relaunch
+    /// the worker.
+    pub fn current_launch(&mut self) -> Result<Identity> {
+        self.wait_for_launch(1, Duration::from_secs(30))?;
+        self.identities()
+            .pop()
+            .context("the identity blocks vanished from the log")
+    }
+
+    /// Fail if the supervisor has launched a worker since `launch` ([`Guest::current_launch`]):
+    /// an in-place suspend, a host sleep or a GPU reset keep the same worker, so `launch` must
+    /// still be the last block. Unlike comparing worker pids, a recycled pid cannot fool it.
+    pub fn assert_same_launch(&self, launch: &Identity) -> Result<()> {
+        let ids = self.identities();
+        let last = ids.last();
+        anyhow::ensure!(
+            last.and_then(|l| l.get("launch_id")) == launch.get("launch_id"),
+            "the worker was relaunched: launch {:?} is no longer the last of {} printed (now \
+             {:?})",
+            launch.get("launch_id"),
+            ids.len(),
+            last.and_then(|l| l.get("launch_id")),
+        );
+        Ok(())
+    }
+
     /// [`Guest::wait_for_launch`], requiring launch `n` to be a resume from a snapshot
     /// (`resumed=yes`: the supervisor handed the worker `--restore`) or a cold boot (`no`).
     ///
