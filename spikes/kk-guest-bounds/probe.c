@@ -222,8 +222,35 @@ static int push_big_layout(void) {
   return push(l, 0, 99999);
 }
 
+// A descriptor pool whose computed backing size is larger than any Metal heap. KK sizes one BO
+// from sum(stride * descriptorCount) + 16 * maxSets. Two guest-reachable faults met here: the
+// products were formed in 32 bits (they wrap), and -- the crash -- when kk_alloc_bo fails the
+// cleanup ran util_vma_heap_finish on a pool->heap that CreateDescriptorPool had not yet
+// initialised (it inits only after a successful alloc), so finish walked a NULL hole list and
+// SIGSEGV'd the host worker. KK must return an allocation error and survive. No command buffer
+// is recorded: the failure is at pool creation, so the case never touches the GPU.
+static int pool_alloc_fail(void) {
+  // UNIFORM_BUFFER stride is 16 (sizeof kk_buffer_address), so each product is 16 * 0x0F000000 =
+  // 0xF0000000 -- just under 2^32, i.e. honest on both builds (no wrap to a small value that
+  // would let the alloc succeed). Sixteen of them sum, in 64 bits, to ~64 GiB, larger than any
+  // heap mtl_new_heap can return, so kk_alloc_bo fails and the cleanup path is exercised.
+  enum { N = 16 };
+  VkDescriptorPoolSize ps[N];
+  for (int i = 0; i < N; i++)
+    ps[i] = (VkDescriptorPoolSize){VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0x0F000000u};
+  VkDescriptorPoolCreateInfo dpci = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                                     .maxSets = 1, .poolSizeCount = N, .pPoolSizes = ps};
+  VkDescriptorPool pool = VK_NULL_HANDLE;
+  VkResult r = vkCreateDescriptorPool(dev, &dpci, NULL, &pool);
+  printf("  create 16 x 0x0F000000 UBO pool -> %d\n", r);
+  if (r == VK_SUCCESS)
+    vkDestroyDescriptorPool(dev, pool, NULL);
+  return r != VK_SUCCESS;
+}
+
 struct test { const char *name; int (*fn)(void); };
 static const struct test tests[] = {
+  {"pool-alloc-fail", pool_alloc_fail},
   {"binding-wrap", binding_wrap}, {"dynamic-65", dynamic_65}, {"dynamic-support-300", dynamic_support_300},
   {"size-wrap", size_wrap}, {"mip-create", mip_create}, {"mip-query", mip_query}, {"mip-legal", mip_legal},
   {"bind-null-offsets", bind_null_offsets}, {"bind-total-128", bind_total_128},
