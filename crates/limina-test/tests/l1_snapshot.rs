@@ -200,11 +200,11 @@ fn l1_guest_resumes_in_fresh_worker_from_snapshot() {
     };
     let mut g2 = Guest::boot(&restore_cfg).expect("spawning the restoring limina supervisor");
 
-    // The fresh worker announces it is taking the restore path (not a fresh boot)...
-    g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(20))
+    // The supervisor launches the fresh worker as a resume (not a fresh boot)...
+    g2.wait_for_launch_kind(1, true, Duration::from_secs(20))
         .unwrap_or_else(|e| {
             cleanup();
-            panic!("restore worker never entered the restore path: {e}");
+            panic!("the restoring supervisor did not resume the snapshot: {e:#}");
         });
     // ...and then every vCPU comes back live at its saved PC behind the restored GIC. Wait for the
     // first "resumed" line (proves ≥1 vCPU restored + the worker is alive), then confirm all CPUS

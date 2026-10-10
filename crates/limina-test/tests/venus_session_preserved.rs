@@ -357,10 +357,10 @@ fn seated_gnome_session_survives_snapshot_restore() {
         other => panic!("seated EFI config built an unexpected boot {other:?}"),
     }
     let mut g2 = Guest::boot(&cfg2).expect("spawning the restoring supervisor");
-    g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
+    g2.wait_for_launch_kind(1, true, Duration::from_secs(30))
         .unwrap_or_else(|e| {
             cleanup();
-            panic!("restore worker never entered the restore path: {e}");
+            panic!("the restoring supervisor did not resume the snapshot: {e:#}");
         });
     let banner = g2
         .wait_for_ssh(Duration::from_secs(120))
@@ -574,6 +574,11 @@ fn seated_gnome_session_survives_snapshot_restore() {
         other => panic!("seated EFI config built an unexpected boot {other:?}"),
     }
     let mut g3 = Guest::boot(&cfg3).expect("spawning the gen-2 restoring supervisor");
+    g3.wait_for_launch_kind(1, true, Duration::from_secs(30))
+        .unwrap_or_else(|e| {
+            cleanup2();
+            panic!("the gen-2 restoring supervisor did not resume the snapshot: {e:#}");
+        });
     let banner = g3
         .wait_for_ssh(Duration::from_secs(120))
         .unwrap_or_else(|e| {

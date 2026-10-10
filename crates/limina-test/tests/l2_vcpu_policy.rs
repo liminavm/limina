@@ -290,7 +290,7 @@ fn a_snapshot_taken_while_shrunk_restores_with_every_vcpu() {
         other => panic!("seated EFI config built an unexpected boot {other:?}"),
     }
     let mut g2 = Guest::boot(&cfg2).expect("spawning the restore supervisor");
-    g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
+    g2.wait_for_launch_kind(1, true, Duration::from_secs(30))
         .expect("the second worker cold-booted instead of restoring the snapshot");
     g2.wait_for_ssh(Duration::from_secs(180))
         .expect("the restored guest never became reachable");

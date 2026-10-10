@@ -377,7 +377,10 @@ fn managed_vm_suspends_and_resumes() {
 
     // A fresh `limina start` command (headless; deterministic SSH port). Reused for the cold boot
     // and the restore boot — the disk/firmware/vmm all come from the definition + overrides.
-    let start_cmd = || {
+    // Each start's stdout and stderr go to its own log: the supervisor prints a launch identity
+    // block there at every worker spawn, which is how the test tells a resume from a cold boot.
+    let start_cmd = |log: &Path| {
+        let log = std::fs::File::create(log).expect("creating a start log");
         let mut c = limina_cmd(&cfg.limina_bin, &scratch);
         c.args([
             "start",
@@ -397,16 +400,29 @@ fn managed_vm_suspends_and_resumes() {
         // sensor too, so the USB survival assertions below are deterministic in CI.
         .env("LIMINA_FP_TEST_APPROVE", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(log.try_clone().expect("cloning the start log"))
+        .stderr(log);
         c
+    };
+    let log1 = scratch.join("start1.log");
+    let log2 = scratch.join("start2.log");
+    let launches = |log: &Path| {
+        limina_test::logged_identities(&std::fs::read_to_string(log).unwrap_or_default())
     };
 
     // --- cold boot ---
-    let mut boot1 = KillOnDrop::new(start_cmd().spawn().expect("spawning limina start #1"), &cfg);
+    let mut boot1 = KillOnDrop::new(
+        start_cmd(&log1).spawn().expect("spawning limina start #1"),
+        &cfg,
+    );
     assert!(
         wait_ssh(PORT, Duration::from_secs(150)),
         "guest did not reach SSH on the cold boot"
+    );
+    let cold = launches(&log1);
+    assert!(
+        cold.len() == 1 && cold[0].get("resumed").map(String::as_str) == Some("no"),
+        "the first start must be one cold-boot launch: {cold:?}"
     );
     let pre = ssh_exec(PORT, "cat /proc/sys/kernel/random/boot_id")
         .expect("reading the pre-suspend boot_id over SSH");
@@ -458,7 +474,7 @@ fn managed_vm_suspends_and_resumes() {
 
     // --- restore: the next start finds the pending snapshot and auto-resumes ---
     let mut boot2 = KillOnDrop::new(
-        start_cmd()
+        start_cmd(&log2)
             .spawn()
             .expect("spawning limina start #2 (restore)"),
         &cfg,
@@ -466,6 +482,11 @@ fn managed_vm_suspends_and_resumes() {
     assert!(
         wait_ssh(PORT, Duration::from_secs(150)),
         "guest did not come back on SSH after the restore"
+    );
+    let resumed = launches(&log2);
+    assert!(
+        resumed.len() == 1 && resumed[0].get("resumed").map(String::as_str) == Some("yes"),
+        "the second start must resume the pending snapshot: {resumed:?}"
     );
     let post = ssh_exec(PORT, "cat /proc/sys/kernel/random/boot_id")
         .expect("reading the post-restore boot_id over SSH");
@@ -531,10 +552,27 @@ fn managed_vm_suspends_and_resumes() {
     // "parent transid verify failed" → emergency mode). A reboot must produce a genuine
     // fresh boot: NEW boot_id, healthy writable filesystem.
     let _ = ssh_exec(PORT, "sudo reboot"); // the connection drops mid-command; error is fine
-    let gone = std::time::Instant::now();
-    while ssh_exec(PORT, "true").is_some() && gone.elapsed() < Duration::from_secs(60) {
-        std::thread::sleep(Duration::from_secs(2));
-    }
+    // The relaunch is the supervisor's second identity block, and it must be a cold boot:
+    // `resumed=yes` there is exactly the decision that re-applied the stale snapshot.
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let relaunch = loop {
+        let ids = launches(&log2);
+        if ids.len() >= 2 {
+            break ids[1].clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the supervisor never relaunched the worker after the in-guest reboot: {ids:?}"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    assert_eq!(
+        relaunch.get("resumed").map(String::as_str),
+        Some("no"),
+        "the reboot relaunch restored the snapshot again (the one-shot --restore bug): \
+         {relaunch:?}"
+    );
+    assert_ne!(relaunch.get("launch_id"), resumed[0].get("launch_id"));
     assert!(
         wait_ssh(PORT, Duration::from_secs(180)),
         "guest did not come back on SSH after the in-guest reboot"

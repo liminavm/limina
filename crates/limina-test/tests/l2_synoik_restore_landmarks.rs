@@ -515,6 +515,13 @@ fn synoik_desktop_survives_snapshot_restore() {
         *d = disk.clone();
     }
     let mut g2 = Guest::boot(&cfg2).expect("spawning the restoring supervisor");
+    g2.wait_for_launch_kind(1, true, Duration::from_secs(30))
+        .unwrap_or_else(|e| {
+            cleanup();
+            panic!("the restoring supervisor did not resume the snapshot: {e:#}");
+        });
+    // The identity says the supervisor set out to restore; nothing below reads the guest's
+    // boot_id, so the worker's own word that it took the restore path stays as well.
     g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
         .unwrap_or_else(|e| {
             cleanup();

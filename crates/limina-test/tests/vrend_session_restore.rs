@@ -488,10 +488,10 @@ fn run(desktop: &Desktop) {
         *d = disk.clone();
     }
     let mut g2 = Guest::boot(&cfg2).expect("spawning the restoring supervisor");
-    g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
+    g2.wait_for_launch_kind(1, true, Duration::from_secs(30))
         .unwrap_or_else(|e| {
             cleanup();
-            panic!("restore worker never entered the restore path: {e}");
+            panic!("the restoring supervisor did not resume the snapshot: {e:#}");
         });
     let banner = g2
         .wait_for_ssh(Duration::from_secs(120))

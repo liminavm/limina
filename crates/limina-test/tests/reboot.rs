@@ -9,15 +9,16 @@
 //! survives a guest reboot (real-hardware behavior). Without the fix the supervisor exited on
 //! the first reboot and the guest never came back.
 //!
-//! Oracle: SSH reaches the guest, we read its boot id, trigger a reboot, then wait for SSH to
-//! come back with a *different* boot id. That second SSH only succeeds if the supervisor stayed
-//! alive and relaunched the worker (it owns the gvproxy NAT + the `127.0.0.1:2222` forward; had
-//! it exited, the forward would be gone and SSH could never return). The changed boot id proves
-//! it was a genuine fresh boot, not the same instance.
+//! Oracle: SSH reaches the guest, we read its boot id, trigger a reboot, then wait for the
+//! supervisor to print a second launch identity block (a fresh `launch_id`, same supervisor pid,
+//! a cold boot) and for SSH to come back with a *different* boot id. The block is the host's
+//! evidence that this supervisor relaunched the worker; the second SSH only succeeds if it stayed
+//! alive (it owns the gvproxy NAT and the forward); the changed boot id proves it was a genuine
+//! fresh boot, not the same instance.
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
@@ -45,44 +46,36 @@ fn guest_reboot_relaunches_the_worker() {
         .wait_for_ssh(Duration::from_secs(180))
         .expect("guest did not reach sshd");
 
-    let boot_id_1 = guest
-        .ssh_exec("cat /proc/sys/kernel/random/boot_id")
-        .expect("reading boot id")
-        .trim()
-        .to_string();
-    assert!(!boot_id_1.is_empty(), "empty boot id");
-    eprintln!("boot id before reboot: {boot_id_1}");
-
-    // Schedule the reboot 1s out via a transient timer, so the SSH command returns cleanly (0)
-    // before the connection drops, instead of being killed mid-command.
-    guest
-        .ssh_exec("sudo systemd-run --on-active=1 systemctl reboot")
-        .expect("scheduling guest reboot");
-    eprintln!("reboot scheduled; waiting for the VM to come back with a fresh boot id");
-
-    // Wait for the guest to return with a *different* boot id. SSH will fail during the reboot
-    // window (tolerated) and may briefly still reach the pre-reboot instance (same id, ignored).
-    let deadline = Instant::now() + Duration::from_secs(180);
-    let mut boot_id_2 = None;
-    while Instant::now() < deadline {
-        if let Ok(out) = guest.ssh_exec("cat /proc/sys/kernel/random/boot_id") {
-            let id = out.trim().to_string();
-            if !id.is_empty() && id != boot_id_1 {
-                boot_id_2 = Some(id);
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_secs(2));
-    }
-
-    let boot_id_2 = boot_id_2.expect(
+    // The host's evidence that the worker relaunched is a second identity block with a fresh
+    // launch_id; the guest's is a new boot_id. `reboot_and_wait` requires both.
+    let first = guest
+        .wait_for_launch_kind(1, false, Duration::from_secs(30))
+        .expect("the boot printed no cold-boot identity block");
+    let rebooted = guest.reboot_and_wait(Duration::from_secs(180)).expect(
         "guest never came back with a fresh boot after reboot — the supervisor did not relaunch \
          the worker (it likely exited, treating reboot as power-off)",
     );
-    eprintln!("boot id after reboot:  {boot_id_2} (relaunch confirmed)");
+    eprintln!(
+        "boot id {} -> {} (launch {} -> {})",
+        rebooted.boot_id_before,
+        rebooted.boot_id_after,
+        first["launch_id"],
+        rebooted.launch["launch_id"]
+    );
     assert_ne!(
-        boot_id_1, boot_id_2,
+        rebooted.boot_id_before, rebooted.boot_id_after,
         "boot id did not change across the reboot"
+    );
+    assert_eq!(
+        rebooted.launch.get("resumed").map(String::as_str),
+        Some("no"),
+        "a reboot relaunch must cold-boot: {:?}",
+        rebooted.launch
+    );
+    assert_eq!(
+        rebooted.launch.get("supervisor_pid"),
+        first.get("supervisor_pid"),
+        "the relaunch came from another supervisor"
     );
 
     let outcome = guest

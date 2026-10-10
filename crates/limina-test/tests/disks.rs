@@ -29,7 +29,7 @@
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
@@ -159,31 +159,16 @@ fn second_disk_is_vdb_read_write_and_durable() {
     // and the ext4 (sized to the original capacity) failed to mount with "bad geometry". We
     // assert both invariants hold: the device is still exactly 64 MiB (capacity stable across
     // relaunch) AND the filesystem mounts and the marker survives.
-    let boot_id_1 = guest
-        .ssh_exec("cat /proc/sys/kernel/random/boot_id")
-        .expect("reading boot id before reboot");
-    eprintln!("boot id before reboot: {}", boot_id_1.trim());
-    guest
-        .ssh_exec("sudo systemd-run --on-active=1 systemctl reboot")
-        .expect("scheduling guest reboot");
-
-    let deadline = Instant::now() + Duration::from_secs(180);
-    let mut relaunched = false;
-    while Instant::now() < deadline {
-        if let Ok(out) = guest.ssh_exec("cat /proc/sys/kernel/random/boot_id") {
-            let id = out.trim();
-            if !id.is_empty() && id != boot_id_1.trim() {
-                eprintln!("boot id after reboot:  {id} (relaunch confirmed)");
-                relaunched = true;
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_secs(2));
-    }
-    assert!(
-        relaunched,
-        "guest never came back with a fresh boot after reboot — relaunch failed"
+    // The capacity check below only means something if the worker really reopened the disk:
+    // the relaunch's identity block is the host's evidence of that, the new boot_id the guest's.
+    let rebooted = guest
+        .reboot_and_wait(Duration::from_secs(180))
+        .expect("guest never came back with a fresh boot after reboot — relaunch failed");
+    eprintln!(
+        "boot id {} -> {} (relaunched as launch {})",
+        rebooted.boot_id_before, rebooted.boot_id_after, rebooted.launch["launch_id"]
     );
+    assert_ne!(rebooted.boot_id_before, rebooted.boot_id_after);
 
     // udev may settle a beat after sshd on the fresh boot.
     guest
@@ -290,25 +275,10 @@ fn qcow2_data_disk_reads_writes_and_survives_reboot() {
         .expect("mkfs + mount + write marker + unmount the qcow2");
 
     // Reboot (worker relaunch): the qcow2 reopens, capacity is stable, data survives.
-    let boot_id_1 = guest
-        .ssh_exec("cat /proc/sys/kernel/random/boot_id")
-        .expect("reading boot id before reboot");
-    guest
-        .ssh_exec("sudo systemd-run --on-active=1 systemctl reboot")
-        .expect("scheduling guest reboot");
-    let deadline = Instant::now() + Duration::from_secs(180);
-    let mut relaunched = false;
-    while Instant::now() < deadline {
-        if let Ok(out) = guest.ssh_exec("cat /proc/sys/kernel/random/boot_id") {
-            let id = out.trim();
-            if !id.is_empty() && id != boot_id_1.trim() {
-                relaunched = true;
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_secs(2));
-    }
-    assert!(relaunched, "guest never came back after reboot");
+    let rebooted = guest
+        .reboot_and_wait(Duration::from_secs(180))
+        .expect("guest never came back after reboot");
+    assert_ne!(rebooted.boot_id_before, rebooted.boot_id_after);
 
     guest
         .ssh_poll("test -b /dev/vdb && echo ok", Duration::from_secs(30))

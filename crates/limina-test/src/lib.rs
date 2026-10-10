@@ -2553,6 +2553,81 @@ impl Guest {
         }
     }
 
+    /// [`Guest::wait_for_launch`], requiring launch `n` to be a resume from a snapshot
+    /// (`resumed=yes`: the supervisor handed the worker `--restore`) or a cold boot (`no`).
+    ///
+    /// This is the supervisor's decision, printed before the worker runs: it says the launch
+    /// set out to restore, not that the guest came back. A resume test still checks the guest's
+    /// `boot_id` for that.
+    pub fn wait_for_launch_kind(
+        &mut self,
+        n: usize,
+        resumed: bool,
+        timeout: Duration,
+    ) -> Result<Identity> {
+        let launch = self.wait_for_launch(n, timeout)?;
+        let want = if resumed { "yes" } else { "no" };
+        anyhow::ensure!(
+            launch.get("resumed").map(String::as_str) == Some(want),
+            "launch {n} was {}, not {}: {launch:?}",
+            describe_resumed(launch.get("resumed")),
+            describe_resumed(Some(&want.to_string())),
+        );
+        Ok(launch)
+    }
+
+    /// Reboot the guest from inside and wait until it is back: the supervisor relaunches the
+    /// worker (a new identity block, with a `launch_id` of its own) and ssh reaches the fresh
+    /// boot. Fails unless the guest's `boot_id` changed too — the guest's own evidence that it
+    /// rebooted, next to the host's that the worker relaunched.
+    ///
+    /// The reboot is scheduled a second out (`systemd-run --on-active=1 systemctl reboot`), so
+    /// the ssh that asks for it returns before its connection drops. Launches are counted from
+    /// what has been printed when it is asked, so a boot that already relaunched once on its way
+    /// up (shim's fallback reset with a TPM) is waited on correctly. Requires
+    /// [`GuestConfig::with_net`] and a guest that answers ssh.
+    pub fn reboot_and_wait(&mut self, timeout: Duration) -> Result<Rebooted> {
+        let deadline = Instant::now() + timeout;
+        let boot_id = |g: &Guest| -> Result<String> {
+            Ok(g.ssh_exec("cat /proc/sys/kernel/random/boot_id")?
+                .trim()
+                .to_string())
+        };
+        let boot_id_before = boot_id(self).context("reading the boot_id before the reboot")?;
+        let launches = self.identities();
+        let before = launches.last().cloned();
+        self.ssh_exec("sudo systemd-run --on-active=1 systemctl reboot")
+            .context("scheduling the guest reboot")?;
+        let launch = self
+            .wait_for_launch(
+                launches.len() + 1,
+                deadline.saturating_duration_since(Instant::now()),
+            )
+            .context(
+                "the worker was not relaunched after the guest rebooted — the supervisor exited, \
+                 or treated the reboot as a power-off",
+            )?;
+        anyhow::ensure!(
+            before
+                .as_ref()
+                .is_none_or(|b| b.get("launch_id") != launch.get("launch_id")),
+            "the relaunch reused the previous launch_id: {before:?} -> {launch:?}"
+        );
+        self.wait_for_ssh(deadline.saturating_duration_since(Instant::now()))
+            .context("the rebooted guest never answered ssh")?;
+        let boot_id_after = boot_id(self).context("reading the boot_id after the reboot")?;
+        anyhow::ensure!(
+            boot_id_after != boot_id_before,
+            "the worker relaunched but the guest kept boot_id {boot_id_before}: the relaunch \
+             did not boot the guest afresh"
+        );
+        Ok(Rebooted {
+            boot_id_before,
+            boot_id_after,
+            launch,
+        })
+    }
+
     /// One debug-port answer, read in the guest over ssh with [`debug_port_reader`]. The guest
     /// only answers with the `debug-port` lever on (`LIMINA_DEBUG_PORT=1` at boot or
     /// `limina debug <pid> lever debug-port on`); off, every request reads `error=disabled`.
@@ -3572,6 +3647,24 @@ fn tee_to_stdout(mut pipe: impl Read + Send + 'static, path: PathBuf) {
 /// the debug port. `resumed`, `gpu`, `boot` and `cpus` are what the supervisor configured for
 /// the launch, not what the guest saw.
 pub type Identity = std::collections::BTreeMap<String, String>;
+
+/// A guest reboot as [`Guest::reboot_and_wait`] saw it.
+#[derive(Debug, Clone)]
+pub struct Rebooted {
+    /// The guest's `boot_id` before the reboot and after it (they differ).
+    pub boot_id_before: String,
+    pub boot_id_after: String,
+    /// The relaunched worker's identity block.
+    pub launch: Identity,
+}
+
+fn describe_resumed(v: Option<&String>) -> &'static str {
+    match v.map(String::as_str) {
+        Some("yes") => "a resume (resumed=yes)",
+        Some("no") => "a cold boot (resumed=no)",
+        _ => "neither (no resumed= field)",
+    }
+}
 
 /// The prefix of every identity line the supervisor prints.
 const IDENTITY_LINE: &str = "limina: identity ";

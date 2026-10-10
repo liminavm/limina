@@ -85,17 +85,15 @@ fn flat_run_default_arms_suspend_and_resumes_pending() {
         if cycle == 1 {
             g.wait_for_supervisor_log("suspend armed by default", Duration::from_secs(60))
                 .expect("flat run did not default-arm suspend (task #20)");
+            if let Err(e) = g.wait_for_launch_kind(1, false, Duration::from_secs(30)) {
+                cleanup();
+                panic!("the first boot of a fresh clone was not a cold boot: {e:#}");
+            }
         } else {
-            let resumed = g
-                .wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
-                .is_ok();
-            if !resumed {
+            if let Err(e) = g.wait_for_launch_kind(1, true, Duration::from_secs(30)) {
                 let log = g.supervisor_log();
                 cleanup();
-                panic!(
-                    "the relaunch cold-booted past a pending resume (no 'restoring from \
-                     snapshot'):\n{log}"
-                );
+                panic!("the relaunch cold-booted past a pending resume: {e:#}\n{log}");
             }
             // Single-use: the canonical snapshot is consumed (renamed) the moment the resume
             // starts.
@@ -147,13 +145,10 @@ fn flat_run_default_arms_suspend_and_resumes_pending() {
 
     // --- The second snapshot resumes too ---
     let mut g2 = Guest::boot(&flat_cfg(&disk)).expect("relaunching the flat guest");
-    let resumed = g2
-        .wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
-        .is_ok();
-    if !resumed {
+    if let Err(e) = g2.wait_for_launch_kind(1, true, Duration::from_secs(30)) {
         let log = g2.supervisor_log();
         cleanup();
-        panic!("the second snapshot did not resume:\n{log}");
+        panic!("the second snapshot did not resume: {e:#}\n{log}");
     }
     let _ = g2.shutdown(Duration::from_secs(30));
 
@@ -162,19 +157,20 @@ fn flat_run_default_arms_suspend_and_resumes_pending() {
     limina_test::cow_clone(&golden, &disk).expect("re-cloning for the discard leg");
     std::fs::write(&snap, b"stale-but-present").expect("planting a pending snapshot");
     let cfg3 = flat_cfg(&disk).with_supervisor_arg("--discard-suspend");
-    let g3 = Guest::boot(&cfg3).expect("booting with --discard-suspend");
-    // The discard happens before the worker spawns; the snapshot must be gone and the
-    // boot must NOT try to restore.
-    std::thread::sleep(Duration::from_secs(20));
+    let mut g3 = Guest::boot(&cfg3).expect("booting with --discard-suspend");
+    // The discard happens before the worker spawns, so by the first launch the snapshot must be
+    // gone, and that launch must be a cold boot.
+    let launch = g3.wait_for_launch(1, Duration::from_secs(60));
     let log = g3.supervisor_log();
-    let discarded = !snap.exists() && !log.contains("restoring from snapshot");
-    if !discarded {
+    let cold = launch
+        .as_ref()
+        .is_ok_and(|l| l.get("resumed").map(String::as_str) == Some("no"));
+    if !cold || snap.exists() {
         cleanup();
         panic!(
             "--discard-suspend must delete the pending snapshot and cold-boot \
-             (snap.exists()={}, log:\n{})",
+             (snap.exists()={}, first launch {launch:?}, log:\n{log})",
             snap.exists(),
-            log
         );
     }
     let _ = g3.shutdown(Duration::from_secs(30));

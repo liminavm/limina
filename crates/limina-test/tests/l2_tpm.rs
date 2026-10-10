@@ -26,7 +26,7 @@
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
@@ -251,25 +251,26 @@ sudo /usr/lib/systemd/systemd-cryptsetup detach l2tpm"#,
     );
 }
 
-fn reboot(guest: &Guest) {
-    let before = boot_id(guest);
-    run(
-        guest,
-        "reboot",
-        "sudo systemd-run --on-active=1 systemctl reboot",
-    );
-    let deadline = Instant::now() + Duration::from_secs(300);
-    while Instant::now() < deadline {
-        if let Ok(out) = guest.ssh_exec("cat /proc/sys/kernel/random/boot_id")
-            && !out.trim().is_empty()
-            && out.trim() != before
-        {
-            return;
+/// Reboot the guest: the supervisor relaunches the worker, which restores the TPM from its
+/// state file. The relaunch is counted from the launches already printed, because the first boot
+/// here already relaunched once, through shim's fallback reset.
+fn reboot(guest: &mut Guest) {
+    match guest.reboot_and_wait(Duration::from_secs(300)) {
+        Ok(r) => {
+            assert_ne!(
+                r.boot_id_before, r.boot_id_after,
+                "the guest did not reboot"
+            );
+            eprintln!(
+                "rebooted: boot id {} -> {}, launch {}",
+                r.boot_id_before, r.boot_id_after, r.launch["launch_id"]
+            );
         }
-        std::thread::sleep(Duration::from_secs(2));
+        Err(e) => {
+            let kept = guest.forensics("rebooting", "systemd");
+            panic!("the guest did not come back from its reboot: {e:#}; evidence in {kept:?}");
+        }
     }
-    let kept = guest.forensics("rebooting", "systemd");
-    panic!("the guest did not come back from its reboot; evidence in {kept:?}");
 }
 
 #[test]
@@ -304,10 +305,7 @@ fn stock_guest_tpm_consumers_work_and_survive_a_reboot() {
     consumers(&guest);
     assert_owner_only(&state);
 
-    reboot(&guest);
-    guest
-        .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest did not reach sshd after its reboot");
+    reboot(&mut guest);
     event_log_replays(&guest);
     after_the_reboot(&guest);
 
@@ -475,8 +473,8 @@ fn stock_guest_tpm_survives_a_suspend_and_restore() {
         *d = disk.clone();
     }
     let mut g2 = Guest::boot(&cfg2).expect("spawning the restoring supervisor");
-    g2.wait_for_supervisor_log("restoring from snapshot", Duration::from_secs(30))
-        .expect("the worker never entered the restore path");
+    g2.wait_for_launch_kind(1, true, Duration::from_secs(30))
+        .expect("the supervisor did not resume the snapshot");
     g2.wait_for_ssh(Duration::from_secs(120))
         .expect("the restored guest never reached sshd");
     assert_eq!(
