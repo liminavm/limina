@@ -129,7 +129,7 @@ fn hardware_decode_in_flight_survives_restore() {
     eprintln!("booting stock F44 (coexist GPU, virgl/zink-on-KK host GL, NAT, snapshot armed)");
 
     let mut g1 = Guest::boot(&cfg).expect("spawning the limina supervisor");
-    g1.wait_for_supervisor_log("software_2d = false", Duration::from_secs(60))
+    g1.wait_for_gpu("coexist", Duration::from_secs(60))
         .expect("coexist GPU did not come up (degraded to software-2D?)");
     let banner = g1
         .wait_for_ssh(Duration::from_secs(300))

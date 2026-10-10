@@ -96,7 +96,7 @@ fn stock_guest_plays_av1_through_vaapi() {
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_supervisor_log("software_2d = false", Duration::from_secs(60))
+        .wait_for_gpu("coexist", Duration::from_secs(60))
         .expect("coexist GPU did not come up (degraded to software-2D?)");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))

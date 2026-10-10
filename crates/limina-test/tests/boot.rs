@@ -282,6 +282,15 @@ fn fedora_stock_image_renders_graphical_desktop() {
     // device's vrend half brings up host GL via zink-on-KK, so it needs the Mesa/KK `DYLD_*` env —
     // wire it explicitly (`with_virgl_host_gl`) rather than depending on an ambient export, so the
     // test passes under the bare `test-boot.sh` runner too. It SKIPs if the KK prefix is absent.
+    // Without KosmicKrisp the harness degrades a coexist display to software-2D, which is the
+    // other test's subject; skip rather than pass on that path.
+    if limina_test::kosmickrisp_icd().is_none() {
+        eprintln!(
+            "SKIP fedora_stock_image_renders_graphical_desktop: no KosmicKrisp ICD — the coexist \
+             device is unavailable"
+        );
+        return;
+    }
     let cfg = match GuestConfig::fedora_gop_from_env() {
         Ok(cfg) => cfg.with_coexist_display(1280, 800).with_virgl_host_gl(),
         Err(e) => {
@@ -295,6 +304,10 @@ fn fedora_stock_image_renders_graphical_desktop() {
     );
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    // The device under test is the stock default, coexist; a run on any other is not this test.
+    guest
+        .wait_for_gpu("coexist", Duration::from_secs(60))
+        .expect("the guest did not get the coexist GPU");
 
     // sshd comes up first; the autologin graphical session follows.
     let banner = guest
@@ -382,6 +395,10 @@ fn fedora_stock_image_software_2d_floor_renders_desktop() {
     );
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    // The floor is the software-2D device with no 3D at all; check that is what the guest got.
+    guest
+        .wait_for_gpu("software-2d", Duration::from_secs(60))
+        .expect("the guest did not get the software-2D GPU");
     guest
         .wait_for_ssh(Duration::from_secs(240))
         .expect("guest never reached sshd over the EFI path");

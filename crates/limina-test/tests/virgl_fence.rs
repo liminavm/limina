@@ -69,7 +69,7 @@ fn virgl_global_fences_retire_through_virglrenderer() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     guest
-        .wait_for_supervisor_log("software_2d = false", Duration::from_secs(60))
+        .wait_for_gpu("coexist", Duration::from_secs(60))
         .expect("coexist GPU did not come up (degraded to software-2D?)");
 
     // 1. THE ORACLE: the first vrend context must flip Global-ring fence routing to

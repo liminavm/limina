@@ -2553,6 +2553,27 @@ impl Guest {
         }
     }
 
+    /// Wait for the first launch and require its virtio-gpu to be `tier`: `coexist`
+    /// (software-2D plus venus/vrend), `software-2d`, or `none`.
+    ///
+    /// This is the device the supervisor configured, so it catches [`Guest::boot`] degrading a
+    /// coexist display to software-2D on a host without KosmicKrisp, and any other path that
+    /// lands on the wrong device. It does not see a renderer that fails later inside the worker;
+    /// what the guest actually renders on is for the guest to say (`vulkaninfo`, the
+    /// compositor's renderer string).
+    pub fn wait_for_gpu(&mut self, tier: &str, timeout: Duration) -> Result<Identity> {
+        let launch = self.wait_for_launch(1, timeout)?;
+        anyhow::ensure!(
+            launch.get("gpu").map(String::as_str) == Some(tier),
+            "the guest got the {:?} virtio-gpu, not {tier:?}: {launch:?}",
+            launch
+                .get("gpu")
+                .map(String::as_str)
+                .unwrap_or("(none named)"),
+        );
+        Ok(launch)
+    }
+
     /// The launch running now: the last identity block printed, waiting up to 30 s for the
     /// first. Pair with [`Guest::assert_same_launch`] around something that must not relaunch
     /// the worker.

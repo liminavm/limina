@@ -71,7 +71,7 @@ fn virgl_readback_does_not_wedge_the_gpu() {
     // missing, Guest::boot would have degraded to software-2D — but we SKIPped above, so assert
     // the coexist device actually came up (else the readback path under test isn't exercised).
     guest
-        .wait_for_supervisor_log("software_2d = false", Duration::from_secs(60))
+        .wait_for_gpu("coexist", Duration::from_secs(60))
         .expect("coexist GPU did not come up (degraded to software-2D?)");
 
     // A stock software-2D first boot is slow; the inbound forward only yields a banner once

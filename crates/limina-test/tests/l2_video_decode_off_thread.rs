@@ -73,7 +73,7 @@ fn a_slow_decode_leaves_the_control_thread_free() {
     };
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
-        .wait_for_supervisor_log("software_2d = false", Duration::from_secs(60))
+        .wait_for_gpu("coexist", Duration::from_secs(60))
         .expect("coexist GPU did not come up (degraded to software-2D?)");
     guest
         .wait_for_ssh(Duration::from_secs(300))

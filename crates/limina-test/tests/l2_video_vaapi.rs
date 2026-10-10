@@ -153,7 +153,7 @@ fn stock_guest_hardware_decodes_vp9_through_vaapi() {
     // Without the coexist device there is no vrend, hence no video context. We SKIPped on a
     // missing ICD above, so a degrade here is a real failure, not a missing dev build.
     guest
-        .wait_for_supervisor_log("software_2d = false", Duration::from_secs(60))
+        .wait_for_gpu("coexist", Duration::from_secs(60))
         .expect("coexist GPU did not come up (degraded to software-2D?)");
 
     let banner = guest
