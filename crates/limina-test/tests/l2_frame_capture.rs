@@ -162,10 +162,20 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
     eprintln!("{summary:?}");
 
     // In file order, per slot: seq strictly increasing over presented frames, flip never
-    // decreasing over everything within one worker.
+    // decreasing over everything within one worker, and a flip number repeated on glass only by
+    // a record that says it is no new guest flip.
     let mut last_seq = std::collections::HashMap::new();
     let mut last_flip = std::collections::HashMap::new();
+    let mut last_guest_flip = std::collections::HashMap::new();
     for r in &records {
+        if r.seq.is_some() && r.guest_flip {
+            let prev = last_guest_flip.insert(r.slot, (r.epoch, r.flip));
+            assert_ne!(
+                prev,
+                Some((r.epoch, r.flip)),
+                "a guest flip on glass twice, unmarked: {r:?}"
+            );
+        }
         if let Some(seq) = r.seq {
             let prev = last_seq.insert(r.slot, seq);
             assert!(
@@ -187,10 +197,16 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
             "a record dropped without a reason, or with one and not dropped: {r:?}"
         );
         assert_eq!(r.file.is_some(), !r.dropped, "{r:?}");
+        assert_eq!(r.format, limina_framecap::FORMAT, "{r:?}");
+        assert_eq!(
+            r.guest_flip,
+            r.cause.is_none(),
+            "guest_flip and cause disagree: {r:?}"
+        );
         if r.seq.is_some() {
             assert!(
-                r.iosurface.is_some()
-                    && r.shown_iosurface.is_some()
+                r.presented_iosurface.is_some()
+                    && r.layer_iosurface.is_some()
                     && r.width.is_some()
                     && r.height.is_some()
                     && r.t_monotonic_raw_ns.is_some()

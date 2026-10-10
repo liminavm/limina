@@ -167,6 +167,9 @@ struct SlotSnapshot {
     /// tag ([`super::frame_capture::FrameTag`]).
     frames: u64,
     epoch: u64,
+    /// The slot's `show_id` is a freshly announced scanout's first buffer, not a guest flip
+    /// (`SlotPresent::announced`).
+    announced: bool,
 }
 
 /// What this tick does with one slot's secondary window, after the dismissal pass has closed
@@ -575,6 +578,7 @@ impl PrimaryDisplay {
             held,
             frames,
             epoch,
+            announced,
         } = *snap;
         if generation == self.last_gen.get() {
             return;
@@ -660,11 +664,7 @@ impl PrimaryDisplay {
                 trace.showing(id, surface);
             }
         }
-        let tag = super::frame_capture::FrameTag {
-            slot,
-            flip: frames,
-            epoch,
-        };
+        let tag = super::frame_capture::FrameTag::new(slot, frames, epoch, announced);
         self.core.show(id, tag, surface, ack_tx, copy);
 
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
@@ -823,6 +823,7 @@ impl GuestWindows {
                         held: d.held,
                         frames: d.frames,
                         epoch: s.reader_epoch,
+                        announced: d.announced,
                     }
                 })
                 .collect();
@@ -890,6 +891,7 @@ impl GuestWindows {
             held,
             frames,
             epoch,
+            announced,
         } in slots
         {
             // The primary's slot already had its walk above; it gets no secondary window.
@@ -970,11 +972,7 @@ impl GuestWindows {
             }
 
             let Some(id) = show_id else { continue };
-            let tag = super::frame_capture::FrameTag {
-                slot,
-                flip: frames,
-                epoch,
-            };
+            let tag = super::frame_capture::FrameTag::new(slot, frames, epoch, announced);
             entry
                 .core
                 .present(id, tag, surface_map, ack_tx, held == Some(false));

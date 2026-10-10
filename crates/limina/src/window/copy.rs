@@ -504,11 +504,7 @@ mod tests {
         let src = super::super::diag::create_local_iosurface(64, 64).expect("source surface");
         let mut ring = CopyRing::default();
         let mut dropped = Vec::new();
-        let tag = |flip| FrameTag {
-            slot: 1,
-            flip,
-            epoch: 2,
-        };
+        let tag = |flip| FrameTag::new(1, flip, 2, false);
         for id in 1..=3 {
             ring.submit(id, tag(u64::from(id) + 10), &src, &mut dropped);
         }

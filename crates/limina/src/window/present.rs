@@ -513,6 +513,11 @@ pub struct SlotPresent {
     /// on surface geometry. The restore overlay comes down on the first real frame, not on
     /// the fresh worker's surface announcement (which would flash black under the spinner).
     pub(crate) frames: u64,
+    /// Whether the latest update was a `surface` announcement rather than a `frame`: `show_id` is
+    /// then the first buffer of a freshly configured scanout, which no guest flip has drawn
+    /// into, and a window putting it up is not showing a new guest flip (the frame capture's
+    /// `cause`). A guest blanking and unblanking its display ends in exactly this.
+    pub(crate) announced: bool,
     /// Whether the worker says the guest is held off this scanout's presented buffers (`held`
     /// messages). `Some(false)` means it may draw into the surface on glass, so the window shows
     /// a copy. `None` until the worker says: an older worker never does, and zero-copy is what
@@ -783,6 +788,7 @@ fn deliver_line<S: Clone>(
                 slot.height = h;
                 slot.cursor.log.record("scanout", w);
                 slot.generation += 1;
+                slot.announced = true;
                 wake = true;
             }
         }
@@ -796,6 +802,7 @@ fn deliver_line<S: Clone>(
                 slot.last_shown = Some(id);
                 slot.generation += 1;
                 slot.frames += 1;
+                slot.announced = false;
                 wake = true;
             }
         }
@@ -1096,6 +1103,37 @@ mod tests {
             Some(55),
             "but its final frame is the splash"
         );
+    }
+
+    /// A guest that blanks and wakes its display disables the scanout and configures it again:
+    /// the worker announces fresh buffers with no new flip. The slot must say so, or the window
+    /// puts the announcement's (never drawn) buffer up looking like a repeat of the last flip.
+    #[test]
+    fn a_scanout_announcement_is_marked_until_the_next_guest_flip() {
+        let shared = Mutex::new(Shared::default());
+        let map: Mutex<SurfaceStore<u32>> = Mutex::new(SurfaceStore::default());
+        let say = |line: &str| super::deliver_line(&shared, 0, &map, line);
+        for line in ["surface 53 55 1280 800 0", "frame 55 0", "frame 53 0"] {
+            say(line);
+        }
+        {
+            let s = shared.lock().unwrap();
+            assert_eq!((s.slots[0].frames, s.slots[0].announced), (2, false));
+        }
+        say("scanoutgone 0");
+        say("surface 44 175 1280 800 0");
+        {
+            let s = shared.lock().unwrap();
+            assert_eq!(s.slots[0].show_id, Some(44));
+            assert_eq!(
+                (s.slots[0].frames, s.slots[0].announced),
+                (2, true),
+                "the wake brought no guest flip"
+            );
+        }
+        say("frame 175 0");
+        let s = shared.lock().unwrap();
+        assert_eq!((s.slots[0].frames, s.slots[0].announced), (3, false));
     }
 
     /// The 8.6 GB bug (spikes/venus-churn-retention §0.3): a compositor that mints a fresh

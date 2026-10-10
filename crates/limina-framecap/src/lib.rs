@@ -9,30 +9,11 @@
 //! never reached glass", and the reorder buffer that keeps `frames.jsonl` in present order while
 //! frames finish encoding out of order on several threads.
 //!
-//! # The capture directory
-//!
-//! - `s<slot>-<seq>.png` — one per captured frame, `seq` zero-padded to eight digits. RGB, 8 bit:
-//!   the scanout's alpha is "don't care", so it is dropped rather than written as noise.
-//! - `frames.jsonl` — one [`Record`] per line, in the order the frames went on glass, then one
-//!   [`Summary`] line when the capture stops.
-//!
-//! # What a record's numbers mean
-//!
-//! - `seq` counts the frames THIS capture saw a window put on glass for that slot, from 1. It is
-//!   the capture's own count, so it never resets, and it is what names the file.
-//! - `flip` is the worker's count of `frame` lines for that slot — the guest's page flips as the
-//!   supervisor received them. It resets when a fresh worker is swapped in (a guest reboot or a
-//!   resume), which bumps `epoch`. A gap in `flip` between two presented frames is guest flips the
-//!   window never showed: replaced by a newer one before the window applied it, or before its
-//!   copy finished. Each run of them is written as ONE `not_presented` record covering
-//!   `flip_from..=flip_to` with its `count` (and `flip` = `flip_to`), so a harness can count them
-//!   and a long gap costs one line, not one per flip.
-//! - `iosurface` is the id the worker presented (the guest's surface); `shown_iosurface` is the
-//!   surface actually on the layer, which differs when the window shows a private copy.
-//! - `t_monotonic_raw_ns` is `CLOCK_MONOTONIC_RAW` (= `mach_continuous_time` in ns; it keeps
-//!   counting across sleep) and `t_realtime_ns` is `CLOCK_REALTIME`, both read on the main thread
-//!   as the frame went on glass. The guest's RTC is anchored to the host's realtime clock, so the
-//!   second is the one to correlate with guest logs.
+//! The capture directory (`s<slot>-<seq>.png` images and `frames.jsonl`), and what every field
+//! of a [`Record`], a [`Summary`] and a [`Still`] means, are defined in `docs/graphics.md` §8
+//! ("The record format"); the field docs here are reminders, the document is the definition.
+//! Images are RGB, 8 bit: the scanout's alpha is "don't care", so it is dropped rather than
+//! written as noise.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -139,17 +120,52 @@ impl Reason {
     }
 }
 
+/// Why a frame went on glass when it is not a new guest flip: the host path that presented it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cause {
+    /// The worker (re)configured the scanout — a mode set, or the display re-enabled after the
+    /// guest blanked it — and announced fresh buffers; the window put up the first of them,
+    /// which no guest flip has drawn into yet. `flip` is the last guest flip, not this frame's.
+    ScanoutConfigured,
+    /// The window put a guest flip already on glass up again (a display moving to another
+    /// window, or a window that re-applied its slot with no new frame).
+    Reshow,
+}
+
+impl Cause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Cause::ScanoutConfigured => "scanout_configured",
+            Cause::Reshow => "reshow",
+        }
+    }
+}
+
+/// The record format this crate writes: the `format` field of every line. Bumped by any change
+/// a reader of an older format would misread; a field added that older readers can ignore does
+/// not bump it.
+pub const FORMAT: u32 = 1;
+
 /// One line of `frames.jsonl`: a frame that went on glass (captured or not), or a guest flip
 /// that never did.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
+    /// [`FORMAT`].
+    pub format: u32,
     /// The guest display (pool slot) the frame belongs to.
     pub slot: usize,
     /// This capture's count of presents on `slot`, from 1. `None` for a flip never presented.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
-    /// The worker's flip count for `slot` within `epoch`. For a `not_presented` run, its last.
+    /// The worker's flip count for `slot` within `epoch`. For a `not_presented` run, its last;
+    /// for a present that is not a guest flip, the last guest flip the worker had sent.
     pub flip: u64,
+    /// Whether the record stands for a guest flip: a new one on glass, or a `not_presented` run.
+    /// `false` for a frame the host put on glass with no new guest flip; `cause` says which path.
+    pub guest_flip: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<Cause>,
     /// A `not_presented` run's first and last flip (inclusive), and how many flips it covers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_from: Option<u64>,
@@ -159,12 +175,13 @@ pub struct Record {
     pub count: Option<u64>,
     /// Which worker the flip came from; bumped by every reboot or resume.
     pub epoch: u64,
-    /// The IOSurface id the worker presented.
+    /// The IOSurface id the worker named for this frame (the guest's scanout buffer).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub iosurface: Option<u32>,
-    /// The IOSurface id on the layer: a private copy's when the window shows one.
+    pub presented_iosurface: Option<u32>,
+    /// The IOSurface id the window put on its layer, which is what the image is read from: the
+    /// window's private copy when it shows one, else the same as `presented_iosurface`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shown_iosurface: Option<u32>,
+    pub layer_iosurface: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,6 +199,32 @@ pub struct Record {
     pub dropped: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<Reason>,
+}
+
+impl Default for Record {
+    fn default() -> Self {
+        Record {
+            format: FORMAT,
+            slot: 0,
+            seq: None,
+            flip: 0,
+            guest_flip: true,
+            cause: None,
+            flip_from: None,
+            flip_to: None,
+            count: None,
+            epoch: 0,
+            presented_iosurface: None,
+            layer_iosurface: None,
+            width: None,
+            height: None,
+            t_monotonic_raw_ns: None,
+            t_realtime_ns: None,
+            file: None,
+            dropped: false,
+            reason: None,
+        }
+    }
 }
 
 impl Record {
@@ -218,8 +261,10 @@ impl Record {
 }
 
 /// The last line of `frames.jsonl`, written when the capture stops.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Summary {
+    /// [`FORMAT`].
+    pub format: u32,
     /// Always `true`: what tells this line from a [`Record`].
     pub summary: bool,
     /// Frames a window put on glass while capturing.
@@ -284,8 +329,66 @@ pub enum Line {
     Frame(Record),
 }
 
+/// Parse one line of `frames.jsonl`. A line of another [`FORMAT`] is refused rather than read
+/// with this format's meanings.
 pub fn parse_line(line: &str) -> Result<Line, String> {
+    check_format(line)?;
     serde_json::from_str(line).map_err(|e| format!("{e}: {line}"))
+}
+
+fn check_format(line: &str) -> Result<(), String> {
+    #[derive(Deserialize)]
+    struct Format {
+        format: Option<u32>,
+    }
+    let f: Format = serde_json::from_str(line).map_err(|e| format!("{e}: {line}"))?;
+    match f.format {
+        Some(FORMAT) => Ok(()),
+        Some(n) => Err(format!(
+            "format {n}; this reader knows format {FORMAT}: {line}"
+        )),
+        None => Err(format!("no format field: {line}")),
+    }
+}
+
+/// What `limina debug <vm> capture still <png> [slot]` prints: the frame on glass on one display
+/// when the still was read, in the same vocabulary as a [`Record`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Still {
+    /// [`FORMAT`].
+    pub format: u32,
+    /// Always `true`: what tells this line from a [`Record`] or a [`Summary`].
+    pub still: bool,
+    pub slot: usize,
+    /// The frame on glass, as its record would tag it.
+    pub flip: u64,
+    pub epoch: u64,
+    pub guest_flip: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<Cause>,
+    pub presented_iosurface: u32,
+    pub layer_iosurface: u32,
+    pub width: u32,
+    pub height: u32,
+    /// When that frame went on glass, as a record's `t_*` (so possibly long ago).
+    pub t_monotonic_raw_ns: u64,
+    pub t_realtime_ns: u64,
+    /// When the still was read, on the same two clocks.
+    pub taken_t_monotonic_raw_ns: u64,
+    pub taken_t_realtime_ns: u64,
+    /// The image written, as given (absolute).
+    pub file: String,
+}
+
+impl Still {
+    pub fn to_line(&self) -> String {
+        serde_json::to_string(self).expect("a still always serializes")
+    }
+
+    pub fn parse(line: &str) -> Result<Still, String> {
+        check_format(line)?;
+        serde_json::from_str(line).map_err(|e| format!("{e}: {line}"))
+    }
 }
 
 /// Turns each present into its `seq`, and the worker's flip counter into the flips that never
@@ -301,23 +404,54 @@ struct SlotSeq {
     last: Option<(u64, u64)>,
 }
 
+/// What [`Sequencer::present`] made of one present.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Presented {
+    /// The present's `seq`.
+    pub seq: u64,
+    /// The flips of that worker since the previous guest flip on glass that never reached it.
+    pub missed: std::ops::Range<u64>,
+    /// `None` when the present is a new guest flip; otherwise the host path that presented it.
+    pub cause: Option<Cause>,
+}
+
 impl Sequencer {
-    /// A frame went on glass on `slot` as flip `flip` of worker `epoch`. Returns its `seq` and
-    /// the flips of that worker since the previous present that were never shown.
+    /// A frame went on glass on `slot`, tagged with flip `flip` of worker `epoch`. `cause` is the
+    /// window's own word for a present that is not a guest flip (`None` when it says it is one).
     ///
     /// The first present of a capture has no predecessor, so nothing before it counts as missed.
-    /// A new epoch's flips count from 1, so all of them before this one were missed. The same
-    /// flip again (a re-show after a modeset, with no new frame) misses nothing.
-    pub fn present(&mut self, slot: usize, epoch: u64, flip: u64) -> (u64, std::ops::Range<u64>) {
+    /// A new epoch's flips count from 1, so all of them before this one were missed. A present
+    /// that is not a guest flip misses nothing and leaves the bookkeeping where the last guest
+    /// flip put it, so a flip it stood in for still counts as missed when the next one lands.
+    pub fn present(
+        &mut self,
+        slot: usize,
+        epoch: u64,
+        flip: u64,
+        cause: Option<Cause>,
+    ) -> Presented {
         let s = self.slots.entry(slot).or_default();
         s.seq += 1;
+        // The window's word first; a flip already put on glass is a re-show whatever it says.
+        let cause = cause.or((s.last == Some((epoch, flip))).then_some(Cause::Reshow));
+        if cause.is_some() {
+            return Presented {
+                seq: s.seq,
+                missed: flip..flip,
+                cause,
+            };
+        }
         let missed = match s.last {
             None => flip..flip,
             Some((e, f)) if e == epoch => (f + 1).min(flip)..flip,
             Some(_) => 1.min(flip)..flip,
         };
         s.last = Some((epoch, flip));
-        (s.seq, missed)
+        Presented {
+            seq: s.seq,
+            missed,
+            cause,
+        }
     }
 }
 
@@ -400,6 +534,7 @@ impl Tally {
                 .unwrap_or(0) as u64
         };
         Summary {
+            format: FORMAT,
             summary: true,
             presented: self.presented,
             captured: self.captured,
@@ -435,8 +570,8 @@ mod tests {
             seq: Some(seq),
             flip,
             epoch: 1,
-            iosurface: Some(40),
-            shown_iosurface: Some(41),
+            presented_iosurface: Some(40),
+            layer_iosurface: Some(41),
             width: Some(2),
             height: Some(2),
             t_monotonic_raw_ns: Some(5),
@@ -446,24 +581,64 @@ mod tests {
         }
     }
 
+    fn flip(seq: u64, missed: std::ops::Range<u64>) -> Presented {
+        Presented {
+            seq,
+            missed,
+            cause: None,
+        }
+    }
+
     #[test]
     fn the_sequence_counts_presents_and_names_the_flips_never_shown() {
         let mut s = Sequencer::default();
         // The first present of a capture misses nothing, whatever flip it is.
-        assert_eq!(s.present(0, 1, 40), (1, 40..40));
+        assert_eq!(s.present(0, 1, 40, None), flip(1, 40..40));
         // Consecutive flips miss nothing.
-        assert_eq!(s.present(0, 1, 41), (2, 41..41));
-        assert!(s.present(0, 1, 42).1.is_empty());
+        assert_eq!(s.present(0, 1, 41, None), flip(2, 41..41));
+        assert!(s.present(0, 1, 42, None).missed.is_empty());
         // Flips 43 and 44 were replaced before the window applied them.
-        assert_eq!(s.present(0, 1, 45), (4, 43..45));
-        // A re-show of the same flip (a modeset with no new frame) misses nothing.
-        assert!(s.present(0, 1, 45).1.is_empty());
+        assert_eq!(s.present(0, 1, 45, None), flip(4, 43..45));
         // Another slot has its own count.
-        assert_eq!(s.present(1, 1, 7), (1, 7..7));
+        assert_eq!(s.present(1, 1, 7, None), flip(1, 7..7));
         // A fresh worker counts flips from 1: its first three never reached glass.
-        assert_eq!(s.present(0, 2, 4), (6, 1..4));
+        assert_eq!(s.present(0, 2, 4, None), flip(5, 1..4));
         // ... and a fresh worker whose first flip is shown misses nothing.
-        assert!(s.present(1, 2, 1).1.is_empty());
+        assert!(s.present(1, 2, 1, None).missed.is_empty());
+    }
+
+    /// The trial's seq 26: the display woke, the worker announced its scanout again, and the
+    /// window put the announcement's buffer up under the flip number it already had.
+    #[test]
+    fn a_present_that_is_no_new_guest_flip_says_what_presented_it() {
+        let mut s = Sequencer::default();
+        assert_eq!(s.present(0, 1, 286, None), flip(1, 286..286));
+        assert_eq!(s.present(0, 1, 287, None), flip(2, 287..287));
+        // The window says the scanout was (re)configured: not a guest flip, nothing missed.
+        let wake = s.present(0, 1, 287, Some(Cause::ScanoutConfigured));
+        assert_eq!(
+            wake,
+            Presented {
+                seq: 3,
+                missed: 287..287,
+                cause: Some(Cause::ScanoutConfigured)
+            }
+        );
+        // The guest's next flip is one again, and nothing was missed.
+        assert_eq!(s.present(0, 1, 288, None), flip(4, 288..288));
+        // The same flip again with no word from the window is still not a new guest flip.
+        assert_eq!(
+            s.present(0, 1, 288, None).cause,
+            Some(Cause::Reshow),
+            "a repeated flip must be marked"
+        );
+        // An announcement landing after a flip the window never applied: the announcement's
+        // buffer goes up tagged with that flip, which therefore never reached glass.
+        assert_eq!(
+            s.present(0, 1, 289, Some(Cause::ScanoutConfigured)).cause,
+            Some(Cause::ScanoutConfigured)
+        );
+        assert_eq!(s.present(0, 1, 290, None), flip(7, 289..290));
     }
 
     #[test]
@@ -475,6 +650,60 @@ mod tests {
         assert_eq!(r.put(0, "a".into()), ["a", "b", "c"]);
         assert_eq!(r.put(3, "d".into()), ["d"]);
         assert_eq!(r.waiting(), 0);
+    }
+
+    #[test]
+    fn every_line_carries_the_format_and_every_record_says_whether_it_is_a_guest_flip() {
+        let flipped = presented(0, 1, 9);
+        let line = flipped.to_line();
+        assert!(line.starts_with(r#"{"format":1,"#), "{line}");
+        assert!(line.contains(r#""guest_flip":true"#), "{line}");
+        assert!(!line.contains("cause"), "{line}");
+        let host = Record {
+            guest_flip: false,
+            cause: Some(Cause::ScanoutConfigured),
+            ..presented(0, 2, 9)
+        };
+        let line = host.to_line();
+        assert!(line.contains(r#""guest_flip":false"#), "{line}");
+        assert!(line.contains(r#""cause":"scanout_configured""#), "{line}");
+        assert_eq!(parse_line(&line), Ok(Line::Frame(host)));
+        let never = Record::not_presented(0, 1, 3..5).unwrap().to_line();
+        assert!(never.contains(r#""guest_flip":true"#), "{never}");
+        let summary = Tally::default().summary(1.0).to_line();
+        assert!(summary.starts_with(r#"{"format":1,"#), "{summary}");
+        // A line of another format, or none, is refused rather than misread.
+        let other = flipped.to_line().replace(r#""format":1"#, r#""format":2"#);
+        assert!(parse_line(&other).unwrap_err().contains("format 2"));
+        let bare = flipped.to_line().replace(r#""format":1,"#, "");
+        assert!(parse_line(&bare).is_err());
+    }
+
+    #[test]
+    fn a_still_round_trips_in_the_record_vocabulary() {
+        let still = Still {
+            format: FORMAT,
+            still: true,
+            slot: 0,
+            flip: 287,
+            epoch: 1,
+            guest_flip: false,
+            cause: Some(Cause::ScanoutConfigured),
+            presented_iosurface: 44,
+            layer_iosurface: 170,
+            width: 1280,
+            height: 800,
+            t_monotonic_raw_ns: 1,
+            t_realtime_ns: 2,
+            taken_t_monotonic_raw_ns: 3,
+            taken_t_realtime_ns: 4,
+            file: "/x/a.png".into(),
+        };
+        let line = still.to_line();
+        assert!(line.starts_with(r#"{"format":1,"still":true,"#), "{line}");
+        assert_eq!(Still::parse(&line), Ok(still));
+        // A record is not a still.
+        assert!(Still::parse(&presented(0, 1, 1).to_line()).is_err());
     }
 
     #[test]

@@ -810,21 +810,41 @@ limina debug <vm> capture stop          # waits for the frames in flight, prints
 LIMINA_WINDOW_CAPTURE_DIR=<dir> …        # or capture the whole run (summary written at exit)
 ```
 
-`<dir>` gets one `s<slot>-<seq>.png` (RGB) per captured frame and `frames.jsonl`: one record per
-frame a window put on glass, in present order, then a summary line (presented / captured / dropped /
-never-presented, duration, captured fps, what it cost the main thread; `incomplete` when the stop
-gave up waiting for frames still in flight, whose records are then never written). Each record carries the
-display (`slot`), the capture's own present count (`seq`, which names the file), the worker's flip
-count for that display (`flip`, per worker `epoch` — a reboot or resume starts a new one), the
-presented IOSurface id and the one on the layer (they differ when the window shows a copy), the
-size, and two host clocks taken as the frame went up: `t_monotonic_raw_ns` (`CLOCK_MONOTONIC_RAW`,
-which is `mach_continuous_time` in ns) and `t_realtime_ns` (`CLOCK_REALTIME`, the one to correlate
-with guest logs — the guest RTC is anchored to it). Nothing is silently lost: a frame with no image
-is a record with `"dropped": true` and a `reason` — `not_presented` (guest flips the window never
-showed: replaced before the window applied them; one record per run of them, with `flip_from`,
-`flip_to` and `count`), `queue_full`, `overtaken`, `copy_failed`, `disk_budget` or `write_error`. The format is `crates/limina-framecap`; the hook is
+`<dir>` (a relative one resolves against the directory `limina debug` runs in) gets one
+`s<slot>-<seq>.png` (RGB, 8 bit; `seq` zero-padded to eight digits) per captured frame and
+`frames.jsonl`: one record per frame a window put on glass, in present order, then one summary line
+when the capture stops. Nothing is silently lost: a frame with no image is still a record. The
+types and the reader are `crates/limina-framecap`; the hook is
 `crates/limina/src/window/frame_capture.rs`, in `GuestWindow::show_with_ack`, where every window's
 every frame goes on glass.
+
+**The record format.** Every line of `frames.jsonl` is one JSON object, and every one carries
+`"format": 1`. A per-line version rather than a header line: each line stays self-describing under
+`grep`, `tail` and `jq`, a reader needs no "the first line is special" rule, and the summary is
+just another line. A change an old reader would misread bumps it; a new field an old reader can
+ignore does not. `limina_framecap::parse_line` refuses any other format. A record's fields:
+
+| field | meaning |
+|---|---|
+| `slot` | The guest display (the pool slot) the frame belongs to. |
+| `seq` | This capture's count of frames put on glass for `slot`, from 1. Per capture: a new capture starts again at 1, and nothing else resets it. Names the image. Absent on a `not_presented` record. |
+| `flip`, `epoch` | `flip` is the worker's count of `frame` lines for `slot`, i.e. the guest's page flips as the supervisor received them; `epoch` names the worker. A fresh worker (a guest reboot, a resume) bumps `epoch` and starts `flip` again at 1, so `flip` is only comparable within one `epoch`. A gap in `flip` between two guest flips on glass is flips the window never showed. |
+| `guest_flip` | `true` when the record stands for a guest flip: a new one on glass, or a `not_presented` run. `false` when the window put up a frame with no new guest flip; `flip` is then the last guest flip the worker sent, and `cause` says which host path presented it. |
+| `cause` | Only when `guest_flip` is `false`. `scanout_configured`: the worker configured the scanout — a mode set, or the guest re-enabling a display it had blanked — and announced fresh buffers, and the window put up the first of them, which no guest flip has drawn into (it reads back black). A stock GNOME screen wake does exactly this, followed milliseconds later by the guest's own first flip. `reshow`: the window put a guest flip that was already on glass up again (a display moving between windows). |
+| `presented_iosurface` | The IOSurface id the worker named for the frame: the guest's scanout buffer. |
+| `layer_iosurface` | The IOSurface id the window put on its layer, which is what the image is read from. The window's private copy when it shows one — on every frame of a guest that is not held off its scanout buffers, the stock tier's normal case — otherwise equal to `presented_iosurface`. |
+| `width`, `height` | The layer surface's size, which is the image's. |
+| `t_monotonic_raw_ns` | `CLOCK_MONOTONIC_RAW` (= `mach_continuous_time` in ns; it keeps counting across host sleep), read on the main thread as the frame went on glass. For ordering and intervals. |
+| `t_realtime_ns` | `CLOCK_REALTIME`, ns since the Unix epoch, read at the same moment. The one to correlate with guest logs: the guest RTC is anchored to it. |
+| `file` | The image, relative to the capture directory. Absent when the frame has no image. |
+| `dropped`, `reason` | Present (and `dropped` true) only on a frame with no image. `not_presented`: guest flips the window never put on glass, replaced before it applied them; one record per run of them, with `flip_from`, `flip_to` and `count` (and `flip` = `flip_to`). The rest are frames that were on glass: `queue_full` (every capture buffer busy), `overtaken` (the next frame went up before this one's copy finished), `copy_failed`, `disk_budget`, `write_error`. |
+
+The summary line has `"summary": true` and: `presented` (frames put on glass, guest flips or not),
+`captured`, `dropped` (frames on glass with no image), `not_presented` (guest flips never on glass,
+counted in flips), `by_reason` (every frame without an image, by reason), `duration_s`,
+`captured_fps`, `bytes` (of image written), `present_hook_us_p50/p99/max` (what the capture cost
+the main thread per frame), and `incomplete` only when the stop gave up waiting for frames still in
+flight, whose records are then never written.
 
 What it costs and how it stays correct: the main thread only commits a GPU blit of the surface on
 glass into a capture buffer of its own and hands each record to a writer thread; encoder threads

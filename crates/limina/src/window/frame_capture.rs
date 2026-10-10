@@ -5,9 +5,9 @@
 //!
 //! Armed by `LIMINA_WINDOW_CAPTURE_DIR=<dir>` for the whole run, or at runtime over the debug
 //! plane (`limina debug <vm> capture start <dir>` / `capture stop`), which is how a harness
-//! captures just the stretch it cares about. The directory's layout and what each record's
-//! numbers mean are `limina_framecap`'s docs. `LIMINA_WINDOW_CAPTURE` (one PNG, overwritten) is a
-//! separate diagnostic and is untouched by this.
+//! captures just the stretch it cares about. The directory's layout and what every field means
+//! are defined in `docs/graphics.md` §8; the types are `limina_framecap`'s. `LIMINA_WINDOW_CAPTURE`
+//! (one PNG, overwritten) is a separate diagnostic and is untouched by this.
 //!
 //! **Where it hooks.** [`on_present`] runs from `GuestWindow::show_with_ack`, the one place every
 //! window — primary or secondary, zero-copy or copied — puts a surface on its layer. A frame the
@@ -47,7 +47,9 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use limina_framecap::{PixelOrder, Reason, Record, Reorder, Sequencer, Summary, Tally};
+use limina_framecap::{
+    Cause, PixelOrder, Presented, Reason, Record, Reorder, Sequencer, Summary, Tally,
+};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_core_foundation::CFRetained;
@@ -60,13 +62,28 @@ use objc2_metal::{
 
 use super::present::SendSurface;
 
-/// Which guest frame a present is: the slot it belongs to, and the worker's flip count for that
-/// slot when the window applied it (`SlotPresent::frames`, under the worker generation `epoch`).
+/// Which guest frame a present is: the slot it belongs to, the worker's flip count for that slot
+/// when the window applied it (`SlotPresent::frames`, under the worker generation `epoch`), and
+/// — when the window knows the surface is no guest flip — the host path that put it up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FrameTag {
     pub(crate) slot: usize,
     pub(crate) flip: u64,
     pub(crate) epoch: u64,
+    pub(crate) cause: Option<Cause>,
+}
+
+impl FrameTag {
+    /// `announced`: the slot's surface is a freshly configured scanout's first buffer
+    /// (`SlotPresent::announced`), not a guest flip.
+    pub(crate) fn new(slot: usize, flip: u64, epoch: u64, announced: bool) -> Self {
+        FrameTag {
+            slot,
+            flip,
+            epoch,
+            cause: announced.then_some(Cause::ScanoutConfigured),
+        }
+    }
 }
 
 /// Capture buffers in flight between the main thread and the disk.
@@ -345,8 +362,13 @@ impl Session {
         if m.closed {
             return;
         }
-        let FrameTag { slot, flip, epoch } = tag;
-        let (seq, missed) = m.seq.present(slot, epoch, flip);
+        let FrameTag {
+            slot,
+            flip,
+            epoch,
+            cause,
+        } = tag;
+        let Presented { seq, missed, cause } = m.seq.present(slot, epoch, flip, cause);
         if let Some(r) = Record::not_presented(slot, epoch, missed) {
             let ord = self.take_ord(&mut m);
             self.finish(ord, r, 0);
@@ -364,9 +386,11 @@ impl Session {
             slot,
             seq: Some(seq),
             flip,
+            guest_flip: cause.is_none(),
+            cause,
             epoch,
-            iosurface: Some(id),
-            shown_iosurface: Some(shown.id()),
+            presented_iosurface: Some(id),
+            layer_iosurface: Some(shown.id()),
             width: Some(geom.0 as u32),
             height: Some(geom.1 as u32),
             t_monotonic_raw_ns: Some(mono),
