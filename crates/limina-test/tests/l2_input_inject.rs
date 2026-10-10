@@ -127,9 +127,10 @@ fn expected() -> [(&'static str, Vec<Event>); 3] {
         (EV_ABS, abs_x, 8192),
         (EV_ABS, abs_y, 24575),
         SYN,
-        // abs-px: floor((p + 0.5) * 32768 / mode) — the pixel libinput maps the value back to.
-        (EV_ABS, abs_x, 16396),
-        (EV_ABS, abs_y, 16404),
+        // abs-px: floor((p + 0.25) * 32768 / mode) — maps back onto pixel p whether the
+        // compositor truncates or rounds.
+        (EV_ABS, abs_x, 16390),
+        (EV_ABS, abs_y, 16394),
         SYN,
         (EV_KEY, btn_right, 1),
         SYN,
@@ -184,7 +185,18 @@ fn inject(limina: &Path, pid: libc::pid_t) -> String {
     text
 }
 
-fn run(name: &str, cfg: GuestConfig) {
+/// Split a device's events into frames, each ending at its SYN_REPORT.
+fn frames(events: &[Event]) -> Vec<Vec<Event>> {
+    events
+        .split_inclusive(|e| e.0 == EV_SYN)
+        .map(<[Event]>::to_vec)
+        .collect()
+}
+
+/// Boot, inject, compare. `window_live`: the window's own input path shares the pointer
+/// devices, so those are matched frame by frame as an in-order subsequence; the keyboard,
+/// which the window only writes to while it is key and typed on, stays exact.
+fn run(name: &str, cfg: GuestConfig, window_live: bool) {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
         .wait_for_ssh(Duration::from_secs(240))
@@ -229,10 +241,24 @@ fn run(name: &str, cfg: GuestConfig) {
     );
     for (dev, want) in expected() {
         let got = parse_reader(&output, dev);
-        assert_eq!(
-            got, want,
-            "{name}: the virtio {dev} node did not carry exactly the injected events"
-        );
+        if !window_live || dev == "kbd" {
+            assert_eq!(
+                got, want,
+                "{name}: the virtio {dev} node did not carry exactly the injected events"
+            );
+        } else {
+            // A live window may put its own frames on the pointer devices (a host pointer
+            // crossing it); what injection owes is its frames, whole and in order.
+            let (got, want) = (frames(&got), frames(&want));
+            let mut rest = got.iter();
+            for f in &want {
+                assert!(
+                    rest.any(|g| g == f),
+                    "{name}: the virtio {dev} node is missing the injected frame {f:?} \
+                     (in order); it carried {got:?}"
+                );
+            }
+        }
     }
 
     let outcome = guest
@@ -259,7 +285,7 @@ fn l2_input_inject_headless_reaches_virtio_nodes() {
             return;
         }
     };
-    run(name, cfg);
+    run(name, cfg, false);
 }
 
 /// Windowed — the window's own input path is live alongside; injection must reach the same
@@ -277,5 +303,5 @@ fn l2_input_inject_windowed_reaches_virtio_nodes() {
             return;
         }
     };
-    run(name, cfg);
+    run(name, cfg, true);
 }

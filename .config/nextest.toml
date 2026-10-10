@@ -30,6 +30,7 @@ binary(balloon) | binary(balloon_burst) | binary(balloon_inflate) | binary(ballo
 | binary(l2_synoik_restore_landmarks) | binary(venus_scanout_scoping)
 | binary(scanout_copy_shows_presented_frame) | binary(l2_video_av1) | binary(l2_frame_capture)
 | test(=managed_windowed_vm_cli_suspend_reports_success)
+| test(=l2_input_inject_windowed_reaches_virtio_nodes)
 '''
 # scanout_churn_retention is exclusive for two reasons: its verdict is a memory measurement
 # (a co-resident guest's own scanout traffic lands in the same worker-side accounting the
@@ -41,6 +42,8 @@ binary(balloon) | binary(balloon_burst) | binary(balloon_inflate) | binary(ballo
 # l2_video_av1 opens a window too (the decode observer is only installed with a window sink), and
 # its no-drain-during-playback oracle is a timing verdict a co-resident guest could flip.
 # managed_windowed_vm_cli_suspend_reports_success boots a managed VM with its window open.
+# l2_input_inject_windowed_reaches_virtio_nodes opens a real NSWindow too (its subject is
+# injection alongside the window's own input path).
 # venus_fd_census joined the exclusive set 2026-08-03: its carrier-fd flatness oracle samples
 # after a fixed workload, and under 3-wide load the async fd consumption lags the sample
 # (12 vs baseline 4 — looked exactly like the virgl-0032 leak; solo it is flat).
