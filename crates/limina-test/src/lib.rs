@@ -95,6 +95,81 @@ pub fn child_pids(pid: libc::pid_t) -> Vec<libc::pid_t> {
     pids
 }
 
+/// The `limina-vmm` worker of the supervisor `supervisor`, a process whose executable is
+/// `vmm_bin` — see [`Guest::worker_pid`], which this is for a supervisor the harness did not
+/// spawn itself (a `--detach` run).
+pub fn worker_pid_of(supervisor: libc::pid_t, vmm_bin: &Path) -> Result<libc::pid_t> {
+    let want = vmm_bin
+        .canonicalize()
+        .unwrap_or_else(|_| vmm_bin.to_path_buf());
+    let children = child_pids(supervisor);
+    if let Some(&pid) = children
+        .iter()
+        .find(|&&p| pid_path(p).as_ref() == Some(&want))
+    {
+        return Ok(pid);
+    }
+    let label = format!("{WORKER_JOB_PREFIX}{supervisor}.");
+    let launchers: Vec<_> = child_pids(1)
+        .into_iter()
+        .filter(|&p| pid_path(p).as_ref() == Some(&want))
+        .filter(|&p| {
+            proc_argv(p).is_some_and(|a| {
+                a.get(1).map(String::as_str) == Some("--launcher")
+                    && a.get(2).is_some_and(|l| l.starts_with(&label))
+            })
+        })
+        .collect();
+    for launcher in &launchers {
+        if let Some(&pid) = child_pids(*launcher)
+            .iter()
+            .find(|&&p| pid_path(p).as_ref() == Some(&want))
+        {
+            return Ok(pid);
+        }
+    }
+    bail!(
+        "no worker {want:?} under supervisor {supervisor} (its children: {children:?}; its \
+         launchers: {launchers:?})"
+    )
+}
+
+/// Run `remote_cmd` as the test images' `claude` user over the SSH forward on host port `port`,
+/// returning its stdout — [`Guest::ssh_exec_timeout`] for a VM the harness did not spawn itself.
+pub fn ssh_exec_on(port: u16, remote_cmd: &str, timeout: Duration) -> Result<String> {
+    let port_s = port.to_string();
+    let login = format!("claude@{FORWARDED_SSH_HOST}");
+    let mut cmd = Command::new("ssh");
+    cmd.args(["-p", &port_s]);
+    cmd.args(SSH_SHARED_OPTS);
+    cmd.args(["-o", "ConnectTimeout=10"]);
+    cmd.args([login.as_str(), remote_cmd]);
+    let out = run_capped(cmd, timeout).with_context(|| {
+        format!("ssh `{remote_cmd}` to the guest ({FORWARDED_SSH_HOST}:{port})")
+    })?;
+    if !out.status.success() {
+        bail!(
+            "ssh `{remote_cmd}` failed ({}):\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// [`Guest::wait_for_ssh`] for a VM the harness did not spawn itself: wait until a real session
+/// can be established on host port `port`. `supervisor_alive` is polled between tries, and a
+/// `false` ends the wait at once.
+pub fn wait_for_ssh_on(
+    port: u16,
+    timeout: Duration,
+    mut supervisor_alive: impl FnMut() -> bool,
+) -> Result<String> {
+    Guest::wait_for_ssh_ready(port, timeout, || {
+        Ok((!supervisor_alive()).then(|| "supervisor gone".to_string()))
+    })
+}
+
 /// The canonical executable path of `pid`, or `None` if it is gone or unreadable.
 pub fn pid_path(pid: libc::pid_t) -> Option<PathBuf> {
     let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
@@ -2685,41 +2760,7 @@ impl Guest {
     /// spawn`) it is the supervisor's own child. With `--net` the supervisor also has gvproxy and
     /// a reaper child, so both matches go by the executable path, not the first child.
     pub fn worker_pid(&self) -> Result<libc::pid_t> {
-        let want = self
-            .vmm_bin
-            .canonicalize()
-            .unwrap_or_else(|_| self.vmm_bin.clone());
-        let children = child_pids(self.pid);
-        if let Some(&pid) = children
-            .iter()
-            .find(|&&p| pid_path(p).as_ref() == Some(&want))
-        {
-            return Ok(pid);
-        }
-        let label = format!("{WORKER_JOB_PREFIX}{}.", self.pid);
-        let launchers: Vec<_> = child_pids(1)
-            .into_iter()
-            .filter(|&p| pid_path(p).as_ref() == Some(&want))
-            .filter(|&p| {
-                proc_argv(p).is_some_and(|a| {
-                    a.get(1).map(String::as_str) == Some("--launcher")
-                        && a.get(2).is_some_and(|l| l.starts_with(&label))
-                })
-            })
-            .collect();
-        for launcher in &launchers {
-            if let Some(&pid) = child_pids(*launcher)
-                .iter()
-                .find(|&&p| pid_path(p).as_ref() == Some(&want))
-            {
-                return Ok(pid);
-            }
-        }
-        bail!(
-            "no worker {want:?} under supervisor {} (its children: {children:?}; its launchers: \
-             {launchers:?})",
-            self.pid
-        )
+        worker_pid_of(self.pid, &self.vmm_bin)
     }
 
     /// Trigger a host-side VM snapshot/suspend (M9): send `SIGUSR1` to the running worker, which
