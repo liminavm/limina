@@ -6,7 +6,7 @@
 //! minimize/app-hide, and the process-group kill fallback.
 
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use arc_swap::ArcSwap;
 
@@ -22,6 +22,20 @@ pub struct WorkerIo {
     rel_ptr: OwnedFd,
     touchpad: OwnedFd,
     ack: OwnedFd,
+    /// One lock per input device, held around one whole frame (the events up to and including
+    /// its SYN_REPORT). Each event is its own datagram, so two writers — the window and
+    /// `limina input` — could otherwise interleave mid-frame and hand the guest a position, or
+    /// a click at a position, that neither of them sent. Held only across nonblocking sends.
+    frames: [Mutex<()>; 4],
+}
+
+/// Which input device a frame lock covers ([`WorkerIo::frame`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputDev {
+    Kbd = 0,
+    Ptr = 1,
+    Rel = 2,
+    Touchpad = 3,
 }
 
 impl WorkerIo {
@@ -40,7 +54,16 @@ impl WorkerIo {
             rel_ptr,
             touchpad,
             ack,
+            frames: Default::default(),
         }
+    }
+
+    /// Hold `dev` for one whole frame: every writer takes this around the events of a frame,
+    /// and never across a pause.
+    pub fn frame(&self, dev: InputDev) -> MutexGuard<'_, ()> {
+        self.frames[dev as usize]
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
     }
 
     pub fn pid(&self) -> i32 {

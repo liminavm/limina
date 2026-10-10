@@ -22,8 +22,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::WorkerConn;
 use super::trackpad::{Recorded, TouchSample, TrackpadSeq};
+use super::{InputDev, WorkerConn};
 
 use objc2::Message;
 use objc2::rc::Retained;
@@ -1484,8 +1484,10 @@ impl InputState {
                     e.code,
                 );
             }
-            self.send_kbd(InputEvent::new(EV_KEY, e.code, e.down as i32));
-            self.send_kbd(InputEvent::syn());
+            self.in_frame(InputDev::Kbd, || {
+                self.send_kbd(InputEvent::new(EV_KEY, e.code, e.down as i32));
+                self.send_kbd(InputEvent::syn());
+            });
         }
     }
 
@@ -2225,9 +2227,12 @@ impl InputState {
         let Some((x, y)) = super::absfit::abs_position(slot, unit.0, unit.1, ABS_MAX as i32) else {
             return;
         };
-        self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
-        self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
-        self.send_ptr(InputEvent::syn());
+        let injected = crate::inject::pointer_epoch();
+        self.in_frame(InputDev::Ptr, || {
+            self.send_ptr(InputEvent::new(EV_ABS, ABS_X, x));
+            self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, y));
+            self.send_ptr(InputEvent::syn());
+        });
         self.record_sent(
             slot,
             unit,
@@ -2236,16 +2241,20 @@ impl InputState {
                 f64::from(y) / f64::from(ABS_MAX),
             ),
             captured,
+            injected,
         );
     }
 
-    /// Note what we just told the guest, for [`Self::verify_guest_echo`].
+    /// Note what we just told the guest, for [`Self::verify_guest_echo`]. `injected` is
+    /// [`crate::inject::pointer_epoch`] read BEFORE the frame's first send, so an injection
+    /// landing between the frame and this note still marks the send as overtaken.
     fn record_sent(
         &self,
         slot: usize,
         unit: (f64, f64),
         device: (f64, f64),
         captured: bool,
+        injected: u64,
     ) -> u64 {
         let seq = super::echo::note_send();
         let probe = self.probe.get().is_some();
@@ -2262,7 +2271,7 @@ impl InputState {
             at: std::time::Instant::now(),
             captured,
             probe,
-            injected: crate::inject::pointer_epoch(),
+            injected,
         }));
         seq
     }
@@ -2599,14 +2608,18 @@ impl InputState {
         self.note_seams(super::seams::Holding::of(slot, &hold));
         let range = hold.apply(range);
         self.capture_range.set(Some(range));
-        self.send_ptr(InputEvent::new(EV_ABS, ABS_X, range.0.round() as i32));
-        self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, range.1.round() as i32));
-        self.send_ptr(InputEvent::syn());
+        let injected = crate::inject::pointer_epoch();
+        self.in_frame(InputDev::Ptr, || {
+            self.send_ptr(InputEvent::new(EV_ABS, ABS_X, range.0.round() as i32));
+            self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, range.1.round() as i32));
+            self.send_ptr(InputEvent::syn());
+        });
         self.record_sent(
             slot,
             (u, v),
             (range.0 / f64::from(ABS_MAX), range.1 / f64::from(ABS_MAX)),
             true,
+            injected,
         );
         // What the range's ends ate is the push against the guest desktop's edge, which the
         // guest's own barriers charge on. (The grab's release press charges from the fit
@@ -2908,11 +2921,14 @@ impl InputState {
     /// nothing because a probe send is never verified.
     fn send_device(&self, on: (usize, (f64, f64)), pos: (f64, f64)) -> u64 {
         self.capture_range.set(Some(pos));
-        self.send_ptr(InputEvent::new(EV_ABS, ABS_X, pos.0.round() as i32));
-        self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, pos.1.round() as i32));
-        self.send_ptr(InputEvent::syn());
+        let injected = crate::inject::pointer_epoch();
+        self.in_frame(InputDev::Ptr, || {
+            self.send_ptr(InputEvent::new(EV_ABS, ABS_X, pos.0.round() as i32));
+            self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, pos.1.round() as i32));
+            self.send_ptr(InputEvent::syn());
+        });
         let range = f64::from(ABS_MAX);
-        self.record_sent(on.0, on.1, (pos.0 / range, pos.1 / range), true)
+        self.record_sent(on.0, on.1, (pos.0 / range, pos.1 / range), true, injected)
     }
 
     /// Every tick while captured: the host pointer must still be wearing the blank.
@@ -3361,12 +3377,15 @@ impl InputState {
         let dy = event.scrollingDeltaY();
         // Natural macOS scroll: right swipe = negative dx; REL_HWHEEL right = +1.
         let dx = -event.scrollingDeltaX();
-        let mut any =
-            self.emit_scroll_axis(&self.scroll_y, dy, precise, REL_WHEEL_HI_RES, REL_WHEEL);
-        any |= self.emit_scroll_axis(&self.scroll_x, dx, precise, REL_HWHEEL_HI_RES, REL_HWHEEL);
-        if any {
-            self.send_ptr(InputEvent::syn());
-        }
+        self.in_frame(InputDev::Ptr, || {
+            let mut any =
+                self.emit_scroll_axis(&self.scroll_y, dy, precise, REL_WHEEL_HI_RES, REL_WHEEL);
+            any |=
+                self.emit_scroll_axis(&self.scroll_x, dx, precise, REL_HWHEEL_HI_RES, REL_HWHEEL);
+            if any {
+                self.send_ptr(InputEvent::syn());
+            }
+        });
     }
 
     /// Step one scroll axis and emit its dual-rate wheel events: the hi-res v120 delta for
@@ -3599,6 +3618,8 @@ impl InputState {
             return;
         }
         let io = self.conn.io();
+        // The tick's events are whole frames; hold the device across all of them.
+        let _frame = io.frame(InputDev::Touchpad);
         for &ev in events {
             if wire_trace() {
                 eprintln!(
@@ -3641,9 +3662,20 @@ impl InputState {
 
     fn send_buttons(&self, ready: &[(u16, bool)]) {
         for &(btn, down) in ready {
-            self.send_ptr(InputEvent::new(EV_KEY, btn, i32::from(down)));
-            self.send_ptr(InputEvent::syn());
+            self.in_frame(InputDev::Ptr, || {
+                self.send_ptr(InputEvent::new(EV_KEY, btn, i32::from(down)));
+                self.send_ptr(InputEvent::syn());
+            });
         }
+    }
+
+    /// Run `f`, which sends one whole frame to `dev`, holding that device's frame lock on the
+    /// current worker ([`super::WorkerIo::frame`]) so an injected frame cannot land inside it.
+    /// The sends are nonblocking, so the hold is microseconds.
+    fn in_frame<R>(&self, dev: InputDev, f: impl FnOnce() -> R) -> R {
+        let io = self.conn.io();
+        let _frame = io.frame(dev);
+        f()
     }
 
     /// Send to the absolute-pointer device — both modes drive it now (captured mode moves a
@@ -3699,6 +3731,7 @@ pub(crate) fn send_edge_overflow(conn: &Arc<WorkerConn>, overflow: (f64, f64)) {
     }
     // Snapshot rule as everywhere: hold the Arc so the fd stays open across the sends.
     let io = conn.io();
+    let _frame = io.frame(InputDev::Rel);
     let fd = io.rel_ptr_fd();
     if dx != 0 {
         send_event(fd, InputEvent::new(EV_REL, REL_X, dx));

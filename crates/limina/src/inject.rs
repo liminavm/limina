@@ -22,7 +22,6 @@
 //! (`limina input <vm> -`, verbs on stdin), or says `keep-held`, which leaves them pressed until
 //! a later connection's `release`.
 
-use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -36,7 +35,7 @@ use limina_input::InputEvent;
 use limina_input::constants::*;
 use limina_input::names;
 
-use crate::window::{WorkerConn, WorkerIo};
+use crate::window::{InputDev, WorkerConn, WorkerIo};
 
 /// The reference for the verbs, printed by `limina input --help`.
 pub const HELP: &str = "\
@@ -143,6 +142,15 @@ impl Device {
             Device::Ptr => "ptr",
             Device::Rel => "rel",
             Device::Touchpad => "touchpad",
+        }
+    }
+
+    fn frame_lock(self) -> InputDev {
+        match self {
+            Device::Kbd => InputDev::Kbd,
+            Device::Ptr => InputDev::Ptr,
+            Device::Rel => InputDev::Rel,
+            Device::Touchpad => InputDev::Touchpad,
         }
     }
 
@@ -372,27 +380,36 @@ pub fn norm_to_device(u: f64) -> i32 {
 
 /// The device value libinput maps back onto scanout pixel `p` of a `size`-pixel axis.
 ///
-/// libinput scales an absolute value as `v · size / (max − min + 1)` and the compositor
-/// truncates to a pixel, so the value whose image is pixel `p`'s centre is
-/// `floor((p + ½) · 32768 / size)`. With one display at any scale this is exact: the range
-/// spreads over the logical desktop and the scale cancels on the way back to pixels.
+/// libinput scales an absolute value as `v · size / (max − min + 1)`, and a compositor may
+/// truncate or round the result to a pixel. Aiming at `p + ¼` — `floor((p + ¼) · 32768 / size)`
+/// — lands the image in `(p + ¼ − size/32768, p + ¼]`, which is pixel `p` under both rules for
+/// any `size ≤ 8192`. (Aiming at the centre, `p + ½`, rounds up to `p + 1` whenever the
+/// division is exact.) With one display at any scale this holds: the range spreads over the
+/// logical desktop and the scale cancels on the way back to pixels.
 pub fn px_to_device(p: f64, size: u32) -> i32 {
-    let v = ((p + 0.5) * f64::from(ABS_MAX + 1) / f64::from(size)).floor();
+    let v = ((p + 0.25) * f64::from(ABS_MAX + 1) / f64::from(size)).floor();
     v.clamp(0.0, f64::from(ABS_MAX)) as i32
 }
 
-/// Keys and buttons pressed and not yet released.
+/// Keys and buttons pressed and not yet released, each in the order it was pressed — so a
+/// release can undo them in reverse, as a hand would (Super-Tab lets go of Tab first).
 #[derive(Debug, Default)]
 pub struct Held {
-    keys: BTreeSet<u16>,
-    buttons: BTreeSet<u16>,
+    keys: Vec<u16>,
+    buttons: Vec<u16>,
+}
+
+fn press(set: &mut Vec<u16>, code: u16) {
+    if !set.contains(&code) {
+        set.push(code);
+    }
 }
 
 impl Held {
     const fn new() -> Self {
         Held {
-            keys: BTreeSet::new(),
-            buttons: BTreeSet::new(),
+            keys: Vec::new(),
+            buttons: Vec::new(),
         }
     }
 
@@ -406,9 +423,9 @@ impl Held {
             _ => return,
         };
         if ev.value == 0 {
-            set.remove(&ev.code);
+            set.retain(|&c| c != ev.code);
         } else {
-            set.insert(ev.code);
+            press(set, ev.code);
         }
     }
 
@@ -417,17 +434,32 @@ impl Held {
     }
 
     fn absorb(&mut self, other: Held) {
-        self.keys.extend(other.keys);
-        self.buttons.extend(other.buttons);
+        for k in other.keys {
+            press(&mut self.keys, k);
+        }
+        for b in other.buttons {
+            press(&mut self.buttons, b);
+        }
     }
 
-    /// The frames that release all of it.
+    /// The frames that release all of it: keys last-pressed first, then buttons likewise.
     fn release_frames(&self) -> Vec<Frame> {
         let keys = self.keys.iter().rev().map(|&k| (Device::Kbd, k));
-        let buttons = self.buttons.iter().map(|&b| (Device::Ptr, b));
+        let buttons = self.buttons.iter().rev().map(|&b| (Device::Ptr, b));
         keys.chain(buttons)
             .map(|(dev, code)| Frame::one(dev, InputEvent::new(EV_KEY, code, 0)))
             .collect()
+    }
+
+    /// What release frames that were never sent still hold, in press order again.
+    fn unreleased(frames: &[Frame]) -> Held {
+        let mut held = Held::new();
+        for f in frames.iter().rev() {
+            for &ev in &f.events {
+                held.note(f.dev, InputEvent::new(ev.type_, ev.code, 1));
+            }
+        }
+        held
     }
 }
 
@@ -615,8 +647,7 @@ impl Session {
             Verb::Release => {
                 let mut all = std::mem::take(&mut *lock(&ORPHANS));
                 all.absorb(std::mem::take(&mut self.held));
-                let frames = all.release_frames();
-                return Ok((frames, Vec::new()));
+                return Ok((all.release_frames(), Vec::new()));
             }
             Verb::KeepHeld => {
                 self.keep = true;
@@ -656,25 +687,38 @@ impl Session {
     /// Run one verb (the text after `input `) against the current worker.
     pub fn run(&mut self, line: &str) -> Result<Vec<String>, String> {
         let verb = Verb::parse(line)?;
+        let release = verb == Verb::Release;
         let (frames, report) = self.plan(verb)?;
-        if !frames.is_empty() {
-            self.send(&frames)?;
+        if !frames.is_empty()
+            && let Err((sent, why)) = self.send(&frames)
+        {
+            // The release took everything it was asked to undo out of the ledgers; what did
+            // not go out is still pressed in the guest, and a later `release` must find it.
+            if release {
+                lock(&ORPHANS).absorb(Held::unreleased(&frames[sent..]));
+            }
+            return Err(why);
         }
         Ok(report)
     }
 
-    fn send(&mut self, frames: &[Frame]) -> Result<(), String> {
-        let conn = lock(&CONN)
-            .clone()
-            .ok_or("this VM has no input devices to inject into (a headless run needs --input)")?;
+    /// Send `frames`, each under its device's frame lock (taken after the frame's pause, never
+    /// across it). On failure, how many frames went out whole, and why the next did not.
+    fn send(&mut self, frames: &[Frame]) -> Result<(), (usize, String)> {
+        let conn = lock(&CONN).clone().ok_or((
+            0,
+            "this VM has no input devices to inject into (a headless run needs --input)"
+                .to_string(),
+        ))?;
         // Snapshot rule as everywhere: hold the Arc so the fds stay open across the sends, and
         // a relaunch mid-verb leaves this verb on the worker it started on.
         let io = conn.io();
         let trace = crate::debug_ctl::POINTER_WIRE_TRACE.on();
-        for f in frames {
+        for (i, f) in frames.iter().enumerate() {
             if !f.pause.is_zero() {
                 std::thread::sleep(f.pause);
             }
+            let _frame = io.frame(f.dev.frame_lock());
             if matches!(f.dev, Device::Ptr | Device::Rel) && !f.events.is_empty() {
                 POINTER_EPOCH.fetch_add(1, Ordering::AcqRel);
             }
@@ -693,7 +737,7 @@ impl Session {
                         ev.value
                     );
                 }
-                try_send(fd, ev)?;
+                try_send(fd, ev).map_err(|why| (i, why))?;
                 self.held.note(f.dev, ev);
             }
         }
@@ -717,8 +761,13 @@ impl Drop for Session {
             held.keys,
             held.buttons
         );
-        if let Err(why) = self.send(&held.release_frames()) {
-            log::warn!("input: could not release what a client left pressed: {why}");
+        let frames = held.release_frames();
+        if let Err((sent, why)) = self.send(&frames) {
+            log::warn!(
+                "input: could not release what a client left pressed ({why}); a later \
+                 `release` will retry"
+            );
+            lock(&ORPHANS).absorb(Held::unreleased(&frames[sent..]));
         }
     }
 }
@@ -745,6 +794,9 @@ fn try_send(fd: RawFd, ev: InputEvent) -> Result<(), String> {
 pub struct WorkerPipes {
     sup: [OwnedFd; 4],
     worker: [OwnedFd; 4],
+    /// The [`WorkerIo`]'s shown-ack slot: `/dev/null`, since a headless run has no window to
+    /// ack. Opened here, before the spawn, so nothing after the spawn can fail.
+    ack: OwnedFd,
 }
 
 impl WorkerPipes {
@@ -761,9 +813,15 @@ impl WorkerPipes {
             worker.push(w);
         }
         let arr = |v: Vec<OwnedFd>| -> [OwnedFd; 4] { v.try_into().expect("four") };
+        let ack = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .context("opening /dev/null for a headless worker's ack slot")?
+            .into();
         Ok(Self {
             sup: arr(sup),
             worker: arr(worker),
+            ack,
         })
     }
 
@@ -789,17 +847,12 @@ impl WorkerPipes {
     }
 
     /// The spawned worker holds its own copies: drop ours, and keep the supervisor ends as a
-    /// [`WorkerIo`]. Its shown-ack slot is a `/dev/null` — a headless run has no window to ack.
-    pub fn into_io(self, pid: i32) -> Result<WorkerIo> {
-        let Self { sup, worker } = self;
+    /// [`WorkerIo`]. Infallible, so a spawned worker is always published and monitored.
+    pub fn into_io(self, pid: i32) -> WorkerIo {
+        let Self { sup, worker, ack } = self;
         drop(worker);
-        let ack: OwnedFd = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/null")
-            .context("opening /dev/null for a headless worker's ack slot")?
-            .into();
         let [kbd, ptr, rel, tpd] = sup;
-        Ok(WorkerIo::new(pid, kbd, ptr, rel, tpd, ack))
+        WorkerIo::new(pid, kbd, ptr, rel, tpd, ack)
     }
 }
 
@@ -826,6 +879,11 @@ pub fn client(pid: u32, keep_held: bool, verb: &[String]) -> Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     let mut reader = BufReader::new(&stream);
     let mut ask = |line: &str| -> Result<()> {
+        // One verb is one protocol line: a newline inside it would be a second request.
+        anyhow::ensure!(
+            !line.contains(['\n', '\r']),
+            "a verb cannot contain a line break: {line:?}"
+        );
         (&stream)
             .write_all(format!("{PREFIX} {line}\n").as_bytes())
             .context("sending to the supervisor")?;
@@ -964,7 +1022,7 @@ mod tests {
         );
         assert_eq!(
             evs(&plan("abs-px 640 400 1280x800")),
-            vec![p(ABS_X, 16396), p(ABS_Y, 16404), SYN_P]
+            vec![p(ABS_X, 16390), p(ABS_Y, 16394), SYN_P]
         );
         assert!(Verb::parse("abs 32768 0").is_err());
         assert!(Verb::parse("abs -1 0").is_err());
@@ -978,12 +1036,14 @@ mod tests {
 
     #[test]
     fn px_to_device_lands_on_the_pixel_libinput_maps_it_back_to() {
-        for size in [800u32, 1080, 1280, 2560, 3024] {
-            for p in [0, 1, size / 3, size / 2, size - 1] {
+        // Power-of-two sizes are where aiming at the centre broke under rounding.
+        for size in [512u32, 800, 1024, 1080, 1280, 2048, 2560, 3024, 4096, 8192] {
+            for p in (0..size).step_by(7).chain([size / 2, size - 1]) {
                 let v = px_to_device(f64::from(p), size);
-                // libinput: v · size / (max − min + 1), truncated by the compositor.
-                let back = (u64::from(v as u32) * u64::from(size)) / u64::from(ABS_MAX + 1);
-                assert_eq!(back, u64::from(p), "size {size} pixel {p} -> {v}");
+                // libinput: v · size / (max − min + 1); the compositor truncates or rounds.
+                let image = f64::from(v) * f64::from(size) / f64::from(ABS_MAX + 1);
+                assert_eq!(image.floor(), f64::from(p), "floor: size {size} pixel {p}");
+                assert_eq!(image.round(), f64::from(p), "round: size {size} pixel {p}");
             }
         }
     }
@@ -1078,6 +1138,29 @@ mod tests {
         ] {
             assert!(Verb::parse(bad).is_err(), "{bad:?} parsed");
         }
+    }
+
+    #[test]
+    fn release_undoes_presses_in_reverse_press_order_not_code_order() {
+        // KEY_LEFTMETA (125) then KEY_TAB (15): code order would let go of Super first.
+        let mut held = Held::new();
+        held.note(Device::Kbd, InputEvent::new(EV_KEY, KEY_LEFTMETA, 1));
+        held.note(Device::Kbd, InputEvent::new(EV_KEY, KEY_TAB, 1));
+        held.note(Device::Kbd, InputEvent::new(EV_KEY, KEY_LEFTMETA, 1)); // no duplicate
+        assert_eq!(
+            evs(&held.release_frames()),
+            vec![
+                (Device::Kbd, EV_KEY, KEY_TAB, 0),
+                SYN_K,
+                (Device::Kbd, EV_KEY, KEY_LEFTMETA, 0),
+                SYN_K,
+            ]
+        );
+        // What a failed release did not send comes back in press order.
+        let frames = held.release_frames();
+        let rest = Held::unreleased(&frames[1..]);
+        assert_eq!(rest.keys, vec![KEY_LEFTMETA]);
+        assert_eq!(Held::unreleased(&frames).keys, vec![KEY_LEFTMETA, KEY_TAB]);
     }
 
     #[test]

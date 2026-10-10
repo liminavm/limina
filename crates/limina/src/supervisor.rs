@@ -940,7 +940,7 @@ pub fn run(
                 links: spec.links.clone(),
             };
             let spawned = spawn_worker(&with_input, &pipes.worker_fds())?;
-            crate::inject::publish(pipes.into_io(spawned.child.id() as i32)?);
+            crate::inject::publish(pipes.into_io(spawned.child.id() as i32));
             spawned
         } else {
             spawn_worker(spec, &[])?

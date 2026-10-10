@@ -631,8 +631,9 @@ alternative, and it needs the window key and loses lone modifiers.
   applies, `KEY_LEFTMETA` is Super. `type` is a US-layout map.
 - **Coordinate spaces.** Injection speaks space 5 (§3), the device range: `abs X Y` in
   `0..=ABS_MAX`. `abs-norm U V` is a fraction of that range and `abs-px X Y [WxH]` a scanout
-  pixel of a `W×H` mode, sent as `floor((p + ½)·32768/W)` — the value libinput maps back onto that
-  pixel. Both mean "this display" **only while the guest has one display**, where the range is
+  pixel of a `W×H` mode, sent as `floor((p + ¼)·32768/W)` — a value libinput maps back onto that
+  pixel whether the compositor truncates or rounds (for `W ≤ 8192`; aiming at the centre rounds
+  up a pixel whenever the division is exact). Both mean "this display" **only while the guest has one display**, where the range is
   that display and the guest's scale cancels out. With several, the per-display mapping lives in
   the window's fitted lines and the agent's report (§4) and injection does not guess it:
   `abs-px` refuses, `abs-norm` stays a fraction of the whole desktop's bounding box.
@@ -640,6 +641,11 @@ alternative, and it needs the window key and loses lone modifiers.
   `syn [DEV]` sends one). Chords press in order and release in reverse, one frame per key; a
   `click`'s transitions are 30 ms apart for the debounce in §7; `scroll` sends v120 and detents
   as the window does, carrying sub-detent remainders per connection.
+- **Two writers share each device, a frame at a time.** Every event is its own datagram, so the
+  window and an injection could interleave inside a frame and hand the guest a position — or a
+  click at one — that neither sent. Each device has a frame lock in `WorkerIo`
+  (`WorkerIo::frame`); the window's frame sites and `inject::Session::send` both hold it around
+  exactly one frame, never across a pause, and the sends inside are nonblocking.
 - **The window does not know about injected input**, and is kept from mis-learning from it.
   Injected keys and buttons are outside the window's pressed set and `ButtonLedger`, so it never
   releases them and never reconciles them away; mixing an injected and a real press of the same
@@ -647,12 +653,16 @@ alternative, and it needs the window key and loses lone modifiers.
   fact is the guest's cursor: an injected position or relative move makes the echo answer
   something the window did not send, so every injected pointer event bumps
   `inject::pointer_epoch`, and a window send that an injection has moved past is neither sampled
-  into `absfit` nor judged by the echo verdict (`Sent::injected`). Captured, the estimate follows
+  into `absfit` nor judged by the echo verdict (`Sent::injected`, read before the window's frame
+  goes out, so an injection landing between the frame and its bookkeeping still counts). Captured, the estimate follows
   the guest's echo as always, so an injected move re-bases it rather than fighting it.
 - **What a connection holds dies with it.** Keys and buttons a connection leaves pressed are
   released when it closes, so a harness that crashes mid-chord cannot leave Ctrl held. A script
   that holds a key across verbs keeps one connection (stdin); `keep-held` (`--keep-held`) hands
-  them over until some later connection's `release`.
+  them over until some later connection's `release`. Holds are undone in reverse press order. A
+  release that cannot be sent (the worker is gone) keeps what it could not release for a later
+  `release`. A suspend does not release anything: a key injected-held across suspend and resume
+  is still down in the resumed guest until something releases it.
 - **Headless needs `--input`.** A windowed run always has the four devices. A headless run gets
   them only with `--input`, which wires the same socketpairs per spawn (`inject::WorkerPipes`) —
   opt-in because it changes the guest's device set, and a snapshot restores only onto the device
@@ -661,6 +671,10 @@ alternative, and it needs the window key and loses lone modifiers.
   same `WorkerConn`; each verb takes one snapshot of it, so a verb lands whole on one worker. A
   send to a worker that is gone, or a full queue, is an `err` answer, never a silent drop; a
   parked (suspended) VM refuses outright.
+- **Any process of the same user can type into the guest.** The runtime socket is `0600` and
+  same-user, like the debug socket, but injection through it needs no Accessibility (TCC) grant —
+  the gate osascript-driven input has to pass. That is deliberate (it is what makes unattended
+  harnesses possible) and has no opt-out.
 - `LIMINA_POINTER_WIRE_TRACE` prints injected events as `[WIRE] … dev=inject-<device>`. The L2
   oracle is `crates/limina-test/tests/l2_input_inject.rs`: it reads the guest's virtio evdev nodes
   raw (found by name, grabbed so the greeter sees nothing) and compares them event for event,

@@ -29,6 +29,8 @@
 //!
 //! `input <verb…>` lines inject keyboard and pointer events into the guest's virtio-input
 //! devices (`crate::inject`, whose `HELP` lists the verbs); `limina input` is their client.
+//! This means any process of the same user can type into the guest through this socket, with
+//! none of the Accessibility (TCC) grant that osascript-driven input needs.
 //!
 //! Like the debug socket it is reachable by any process of the same user. Moving the SSH forward
 //! binds a different loopback port on the host; the guest and its network are untouched.
@@ -234,11 +236,34 @@ fn serve_at(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The longest request line a client may send. Generous for a `type` line, and what keeps a
+/// client that never sends a newline from growing the supervisor's buffer without bound.
+const MAX_LINE: u64 = 64 * 1024;
+
+/// A reader's lines, ending (with an error) at the first one longer than [`MAX_LINE`].
+fn capped_lines<R: BufRead>(mut reader: R) -> impl Iterator<Item = std::io::Result<String>> {
+    use std::io::Read;
+    std::iter::from_fn(move || {
+        let mut buf = String::new();
+        match reader.by_ref().take(MAX_LINE + 1).read_line(&mut buf) {
+            Ok(0) => None,
+            Ok(_) if !buf.ends_with('\n') && buf.len() as u64 > MAX_LINE => Some(Err(
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "request line too long"),
+            )),
+            Ok(_) => {
+                let line = buf.strip_suffix('\n').unwrap_or(&buf);
+                Some(Ok(line.strip_suffix('\r').unwrap_or(line).to_string()))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    })
+}
+
 fn serve_client(stream: UnixStream) {
     let Ok(mut out) = stream.try_clone() else {
         return;
     };
-    let mut lines = BufReader::new(stream).lines();
+    let mut lines = capped_lines(BufReader::new(stream));
     // This connection's injected input: what it holds is released when it drops, on every way
     // out of this function (`inject::Session`).
     let mut input = crate::inject::Session::default();
@@ -379,6 +404,18 @@ pub(crate) mod tests {
         for r in [Request::Info, Request::Watch, Request::SshPort(2300)] {
             assert_eq!(Request::parse(&r.to_line()), Ok(r));
         }
+    }
+
+    #[test]
+    fn an_endless_request_line_ends_the_connection() {
+        let long = "x".repeat(MAX_LINE as usize + 10);
+        let input = format!("info\r\nwatch\n{long}\ninfo\n");
+        let got: Vec<_> = capped_lines(input.as_bytes()).collect();
+        assert_eq!(got[0].as_deref().ok(), Some("info"));
+        assert_eq!(got[1].as_deref().ok(), Some("watch"));
+        assert!(got[2].is_err(), "the oversized line is refused");
+        let ok = format!("{}\n", "y".repeat(MAX_LINE as usize - 1));
+        assert_eq!(capped_lines(ok.as_bytes()).count(), 1);
     }
 
     #[test]

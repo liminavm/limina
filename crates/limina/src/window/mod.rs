@@ -71,7 +71,7 @@ mod wake_policy;
 mod warp;
 mod windows;
 
-pub use lifecycle::{WorkerConn, WorkerIo};
+pub use lifecycle::{InputDev, WorkerConn, WorkerIo};
 pub use present::{
     Shared, SurfaceMap, empty_surface_map, mark_restore_refused, mark_resume_dead,
     mark_worker_exited, mark_worker_running, mark_worker_suspended, mark_worker_swapped,
