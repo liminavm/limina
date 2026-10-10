@@ -4363,18 +4363,30 @@ mod teardown_tests {
         assert!(signed.status.success(), "ad-hoc signing the fake worker");
         let fake = fake.canonicalize().unwrap();
 
-        let mut ours = Command::new(&fake).arg("300").spawn().unwrap();
-        let mut other_worker = Command::new("/bin/sh")
-            .arg("-c")
-            .arg("\"$0\" 300 & wait")
-            .arg(&fake)
-            .spawn()
-            .unwrap();
-        let mut other_supervisor = Command::new("/bin/sh")
-            .args(["-c", "sleep 300; :", "limina", "--vmm-bin"])
-            .arg(&fake)
-            .spawn()
-            .unwrap();
+        // No inherited stdio: the shells' own children outlive a kill of the shell, and one
+        // holding the test's output open reads to nextest as a leak.
+        let quiet = |mut c: Command| {
+            c.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            c.spawn().unwrap()
+        };
+        let mut ours = quiet({
+            let mut c = Command::new(&fake);
+            c.arg("300");
+            c
+        });
+        let mut other_worker = quiet({
+            let mut c = Command::new("/bin/sh");
+            c.arg("-c").arg("\"$0\" 300 & wait").arg(&fake);
+            c
+        });
+        let mut other_supervisor = quiet({
+            let mut c = Command::new("/bin/sh");
+            c.args(["-c", "sleep 300; :", "limina", "--vmm-bin"])
+                .arg(&fake);
+            c
+        });
         // Let the shell start its worker.
         let deadline = Instant::now() + Duration::from_secs(10);
         let theirs = loop {
@@ -4398,6 +4410,9 @@ mod teardown_tests {
         std::thread::sleep(Duration::from_millis(500));
         let theirs_alive = pid_path(theirs).as_ref() == Some(&fake);
         let other_supervisor_alive = other_supervisor.try_wait().ok().flatten().is_none();
+        for p in child_pids(other_supervisor.id() as libc::pid_t) {
+            unsafe { libc::kill(p, libc::SIGKILL) };
+        }
         for c in [&mut ours, &mut other_worker, &mut other_supervisor] {
             let _ = c.kill();
             let _ = c.wait();
