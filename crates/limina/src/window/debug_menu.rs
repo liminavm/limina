@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! The "Debug" menu: the log filter and the diagnostic levers of the running VM, the same
-//! switches `limina debug` drives over the debug socket (`crate::debug_ctl`).
+//! The "Debug" menu: the log filter and the levers of the running VM (traces, and the harness
+//! access levers `input-inject` and `debug-port`), the same switches `limina debug` drives over
+//! the debug socket (`crate::debug_ctl`).
 //!
 //! Every change lasts until the VM exits. The menu carries presets rather than a text field: the
 //! common asks are a handful of filters, and anything finer is what the CLI is for — the last
@@ -113,23 +114,14 @@ pub(super) fn populate(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
         menu.addItem(&custom);
     }
 
-    menu.addItem(&NSMenuItem::separatorItem(mtm));
-    menu.addItem(&header(mtm, "Traces (this run)"));
-    for (i, l) in debug_ctl::LEVERS.iter().enumerate() {
-        let item = row(
-            mtm,
-            actions,
-            l.name(),
-            objc2::sel!(toggleDebugLever:),
-            i as isize,
-            l.on(),
-        );
-        item.setToolTip(Some(&NSString::from_str(&format!(
-            "{} ({})",
-            l.about(),
-            l.env()
-        ))));
-        menu.addItem(&item);
+    // Traces first, then the harness access levers; the tag is the index into `LEVERS` either way.
+    for (title, access) in [
+        ("Traces (this run)", false),
+        ("Harness Access (this run)", true),
+    ] {
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        menu.addItem(&header(mtm, title));
+        add_levers(menu, mtm, actions, access);
     }
 
     menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -146,6 +138,28 @@ pub(super) fn populate(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
     )));
     unsafe { copy.setTarget(Some(actions)) };
     menu.addItem(&copy);
+}
+
+fn add_levers(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuActions, access: bool) {
+    for (i, l) in debug_ctl::LEVERS.iter().enumerate() {
+        if debug_ctl::is_access(l) != access {
+            continue;
+        }
+        let item = row(
+            mtm,
+            actions,
+            l.name(),
+            objc2::sel!(toggleDebugLever:),
+            i as isize,
+            l.on(),
+        );
+        item.setToolTip(Some(&NSString::from_str(&format!(
+            "{} ({})",
+            l.about(),
+            l.env()
+        ))));
+        menu.addItem(&item);
+    }
 }
 
 /// Apply a preset to both processes. Off the main thread: the worker's half waits on its link.

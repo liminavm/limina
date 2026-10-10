@@ -28,6 +28,13 @@
 //! rest of the line (spaces allowed, newlines never); keys are fixed here. Readers must ignore
 //! keys they do not know, which is what lets later facts be appended without a format bump;
 //! `format` changes only for a change an old reader would misread.
+//!
+//! **Off by default.** The port is on the bus for every launch whatever the setting — the
+//! device set must not depend on it, or a snapshot taken with it one way would not restore with
+//! it the other. What the setting decides is the answer: unless the `debug-port` lever is on
+//! (`crate::debug_ctl::DEBUG_PORT`), every request, `help` included, gets [`disabled`] — the
+//! format, `error=disabled`, how to enable it, and nothing about the build or the host. The lever
+//! is read per request, so a change applies to the next one.
 
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
@@ -212,6 +219,29 @@ fn error(msg: &str) -> String {
     ])
 }
 
+/// The answer to every request while the `debug-port` lever is off. It says how to turn it on and
+/// nothing else: no build, host or launch fact.
+pub fn disabled() -> String {
+    frame(&[
+        ("format".into(), FORMAT.to_string()),
+        ("error".into(), "disabled".into()),
+        (
+            "enable".into(),
+            crate::debug_ctl::how_to_enable(&crate::debug_ctl::DEBUG_PORT),
+        ),
+    ])
+}
+
+/// What the responder writes for one unit of input; `enabled` is the lever, read per request.
+fn reply(input: Input, identity: &Identity, enabled: bool) -> Option<String> {
+    match input {
+        Input::Line(line) if line.trim().is_empty() => None,
+        _ if !enabled => Some(disabled()),
+        Input::Line(line) => answer(&line, identity),
+        Input::TooLong => Some(error("request too long")),
+    }
+}
+
 /// The answer to one request line, or `None` for a blank line (a stray newline is not a
 /// request, and answering it would leave an extra answer for the next reader).
 pub fn answer(request: &str, identity: &Identity) -> Option<String> {
@@ -267,7 +297,9 @@ impl Lines {
     }
 }
 
-/// Print this launch's identity and answer the guest on `host_fd` until the worker exits.
+/// Print this launch's identity and answer the guest on `host_fd` until the worker exits (with
+/// [`disabled`] while the `debug-port` lever is off). The printed copy goes to the worker log on
+/// the host whatever the lever says.
 ///
 /// Printed rather than logged: the worker log runs at `warn` by default, and a build stamp
 /// that only shows up when someone remembered to raise the filter is the provenance gap this
@@ -300,11 +332,7 @@ fn respond(mut stream: UnixStream, identity: &Identity) -> std::io::Result<()> {
             Err(e) => return Err(e),
         };
         for input in lines.push(&buf[..n]) {
-            let reply = match input {
-                Input::Line(line) => answer(&line, identity),
-                Input::TooLong => Some(error("request too long")),
-            };
-            if let Some(reply) = reply
+            if let Some(reply) = reply(input, identity, crate::debug_ctl::DEBUG_PORT.on())
                 && let Err(e) = stream.write_all(reply.as_bytes())
             {
                 // A guest that asked and stopped reading. Drop the answer, keep serving: the
@@ -539,7 +567,91 @@ mod tests {
     }
 
     #[test]
+    fn disabled_every_request_gets_the_same_answer_and_it_carries_no_fact() {
+        let id = identity();
+        let off = read_answer(&disabled());
+        assert_eq!(off[0], ("format".into(), "1".into()));
+        assert_eq!(off[1], ("error".into(), "disabled".into()));
+        assert_eq!(off.len(), 3, "format, error, enable: {off:?}");
+        let (k, how) = &off[2];
+        assert_eq!(k, "enable");
+        assert!(how.contains("LIMINA_DEBUG_PORT=1"), "{how}");
+        assert!(how.contains("Debug menu"), "{how}");
+        assert!(
+            how.contains("limina debug <vm> lever debug-port on"),
+            "{how}"
+        );
+        for input in [
+            Input::Line("identity".into()),
+            Input::Line("help".into()),
+            Input::Line("bogus".into()),
+            Input::TooLong,
+        ] {
+            let text = reply(input, &id, false).unwrap();
+            assert_eq!(text, disabled());
+            // Nothing the identity knows leaks into it, value or key.
+            for (key, value) in id.fields().iter().skip(1) {
+                assert!(!text.contains(&format!("{key}=")), "{key} in {text}");
+                let fact = key.starts_with("limina_")
+                    || key.starts_with("dep.")
+                    || key.starts_with("host_")
+                    || key.ends_with("_pid")
+                    || key == "launch_id";
+                assert!(!fact || !text.contains(value.as_str()), "{value} in {text}");
+            }
+        }
+        // A blank line is still not a request, on or off.
+        assert_eq!(reply(Input::Line(" \r".into()), &id, false), None);
+        // On, the same inputs get their real answers.
+        assert!(
+            reply(Input::Line("identity".into()), &id, true)
+                .unwrap()
+                .contains("limina_git_rev=0123456789ab")
+        );
+        assert!(
+            reply(Input::TooLong, &id, true)
+                .unwrap()
+                .contains("error=request too long")
+        );
+    }
+
+    #[test]
+    fn the_responder_reads_the_lever_per_request() {
+        let _serial = crate::debug_ctl::ACCESS_LEVER_TESTS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let lever = &crate::debug_ctl::DEBUG_PORT;
+        assert!(!lever.on(), "off by default");
+        let (host, mut guest) = UnixStream::pair().unwrap();
+        let t = std::thread::spawn(move || respond(host, &identity()));
+        let mut got = String::new();
+        let mut buf = [0u8; 4096];
+        let mut ask = |guest: &mut UnixStream, req: &[u8]| {
+            guest.write_all(req).unwrap();
+            let start = got.len();
+            while !got[start..].ends_with("\n.\n") {
+                let n = guest.read(&mut buf).unwrap();
+                assert!(n > 0, "responder closed early: {got:?}");
+                got.push_str(std::str::from_utf8(&buf[..n]).unwrap());
+            }
+            got[start..].to_string()
+        };
+        assert_eq!(ask(&mut guest, b"identity\n"), disabled());
+        lever.set(true);
+        let on = ask(&mut guest, b"identity\n");
+        lever.set(false);
+        assert!(on.contains("limina_git_rev=0123456789ab"), "{on}");
+        assert_eq!(ask(&mut guest, b"help\n"), disabled());
+        drop(guest);
+        t.join().unwrap().unwrap();
+    }
+
+    #[test]
     fn the_responder_answers_over_a_socket_and_stops_when_the_worker_end_closes() {
+        let _serial = crate::debug_ctl::ACCESS_LEVER_TESTS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        crate::debug_ctl::DEBUG_PORT.set(true);
         let (host, guest) = UnixStream::pair().unwrap();
         let t = std::thread::spawn(move || respond(host, &identity()));
         let mut guest = guest;
@@ -553,6 +665,7 @@ mod tests {
         }
         assert!(got.starts_with("format=1\nerror="));
         assert!(got.contains("limina_git_rev=0123456789ab"));
+        crate::debug_ctl::DEBUG_PORT.set(false);
         drop(guest);
         t.join().unwrap().unwrap();
     }

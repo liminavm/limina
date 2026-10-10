@@ -8,9 +8,11 @@
 //! A `log` request for the worker is forwarded over the worker's `--debug-control-fd` link, and
 //! the filter is remembered so the next worker (a guest reboot, a resume) starts from it.
 //!
-//! The socket is reachable by any process of the same user, like the control plane's. That is
-//! acceptable here because nothing it does changes the guest: it only decides what gets logged,
-//! and where the frame capture (`capture start <dir>`) writes what the windows showed.
+//! The socket is reachable by any process of the same user, like the control plane's. Most of
+//! what it does changes nothing in the guest: it decides what gets logged, and where the frame
+//! capture (`capture start <dir>`) writes what the windows showed. The two access levers are the
+//! exception: `input-inject` and `debug-port` open harness features that are off by default. They
+//! are a default-off posture, not a boundary against same-user code, which can flip them here.
 //!
 //! All of it lasts for this process only. See `limina_debug` for why.
 
@@ -60,6 +62,20 @@ pub static PRESENT_COPY_TRACE: Lever = Lever::new(
     "LIMINA_PRESENT_COPY_TRACE",
     "frame copies: first pixel as a frame arrives and as its copy goes up (logged at info)",
 );
+/// Harness access: `input …` requests on the runtime socket (`limina input`). Off, every one is
+/// refused, and turning it off releases what injection holds pressed (`inject::lever_off`).
+pub static INPUT_INJECT: Lever = Lever::new(
+    "input-inject",
+    "LIMINA_INPUT_INJECT",
+    "harness: let `limina input` type and point into the guest (no Accessibility grant needed)",
+);
+/// Harness access: the debug port's answers (`debug_port`). Off, the port stays on the bus and
+/// answers every request with `error=disabled`.
+pub static DEBUG_PORT: Lever = Lever::new(
+    "debug-port",
+    "LIMINA_DEBUG_PORT",
+    "harness: let the guest read the host build, host OS/model and pids from its debug port",
+);
 
 /// Every lever this process has, in the order the menu and `status` list them.
 pub static LEVERS: &[&Lever] = &[
@@ -70,7 +86,31 @@ pub static LEVERS: &[&Lever] = &[
     &OVERLAY_TRACE,
     &QGA_TRACE,
     &PRESENT_COPY_TRACE,
+    &INPUT_INJECT,
+    &DEBUG_PORT,
 ];
+
+/// The levers that grant a harness access rather than print a trace. The menu lists them under
+/// their own header.
+pub fn is_access(l: &Lever) -> bool {
+    std::ptr::eq(l, &INPUT_INJECT) || std::ptr::eq(l, &DEBUG_PORT)
+}
+
+/// How to turn a lever on, for a refusal to quote: its variable, the Debug menu, the CLI.
+pub fn how_to_enable(l: &Lever) -> String {
+    format!(
+        "start the VM with {}=1, tick {} in the window's Debug menu, or run \
+         `limina debug <vm> lever {} on`",
+        l.env(),
+        l.name(),
+        l.name()
+    )
+}
+
+/// The tests, in any module, that read or flip `INPUT_INJECT` or `DEBUG_PORT` (process-global).
+/// Each leaves both off.
+#[cfg(test)]
+pub(crate) static ACCESS_LEVER_TESTS: Mutex<()> = Mutex::new(());
 
 /// How long a forwarded request waits for the worker's answer.
 const WORKER_TIMEOUT: Duration = Duration::from_secs(2);
@@ -121,6 +161,9 @@ pub fn handle(req: &Request) -> Result<Vec<String>, String> {
                 )
             })?;
             l.set(*on);
+            if !*on && std::ptr::eq(l, &INPUT_INJECT) {
+                crate::inject::lever_off();
+            }
             log::warn!(
                 "debug: lever {} is now {}",
                 l.name(),
@@ -341,6 +384,58 @@ mod tests {
                 "{} would not survive the wire",
                 l.name()
             );
+        }
+    }
+
+    #[test]
+    fn the_access_levers_are_off_by_default_and_say_how_to_turn_them_on() {
+        let _serial = lock(&ACCESS_LEVER_TESTS);
+        for l in [&INPUT_INJECT, &DEBUG_PORT] {
+            assert!(
+                std::env::var_os(l.env()).is_none(),
+                "unset {} to run the unit tests",
+                l.env()
+            );
+            assert!(!l.on(), "{} is on with its variable unset", l.name());
+            assert!(is_access(l) && LEVERS.iter().any(|x| std::ptr::eq(*x, l)));
+            let how = how_to_enable(l);
+            assert!(how.contains(&format!("{}=1", l.env())), "{how}");
+            assert!(how.contains("Debug menu"), "{how}");
+            assert!(
+                how.contains(&format!("limina debug <vm> lever {} on", l.name())),
+                "{how}"
+            );
+        }
+        assert!(!is_access(&EDGE_TRACE));
+        assert_eq!(
+            (INPUT_INJECT.name(), INPUT_INJECT.env()),
+            ("input-inject", "LIMINA_INPUT_INJECT")
+        );
+        assert_eq!(
+            (DEBUG_PORT.name(), DEBUG_PORT.env()),
+            ("debug-port", "LIMINA_DEBUG_PORT")
+        );
+        let lines = status();
+        for want in [
+            "lever input-inject off LIMINA_INPUT_INJECT ",
+            "lever debug-port off LIMINA_DEBUG_PORT ",
+        ] {
+            assert!(lines.iter().any(|l| l.starts_with(want)), "{lines:?}");
+        }
+    }
+
+    #[test]
+    fn the_access_levers_follow_the_lever_request() {
+        let _serial = lock(&ACCESS_LEVER_TESTS);
+        for (l, name) in [(&INPUT_INJECT, "input-inject"), (&DEBUG_PORT, "debug-port")] {
+            for on in [true, false] {
+                let req = Request::Lever {
+                    name: name.into(),
+                    on,
+                };
+                assert_eq!(handle(&req), Ok(vec![]));
+                assert_eq!(l.on(), on, "{name}");
+            }
         }
     }
 

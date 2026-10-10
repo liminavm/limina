@@ -10,20 +10,27 @@
 //!
 //! # Oracles
 //!
-//! 1. **The port is on the bus** of an unmodified Fedora guest (`/dev/virtio-ports/…`).
-//! 2. **The documented stock one-liner reads a whole answer** — bash and coreutils only — and
+//! 1. **The port is on the bus** of an unmodified Fedora guest (`/dev/virtio-ports/…`), with
+//!    the `debug-port` lever off — its default, which this boot keeps.
+//! 2. **Off, it says nothing but that.** `identity` and `help` both read `format=1`,
+//!    `error=disabled` and how to enable it, with no build fact; the helper exits 4. Then
+//!    `limina debug <pid> lever debug-port on` turns it on at runtime, and the next request is
+//!    answered in full.
+//! 3. **The documented stock one-liner reads a whole answer** — bash and coreutils only — and
 //!    what it reads is the build this supervisor printed at spawn. The comparison is against the
 //!    supervisor's own `limina: identity` lines, not against a revision this test computes: the
 //!    test binary and `limina` can be built from different trees, and the supervisor's line is
 //!    what the *running* process says about itself. Matching the `launch_id` too proves the
 //!    answer came from this VM's port, not a stale one.
-//! 3. **The shipped helper** (`guest/limina-debug-identity`) prints the same answer.
-//! 4. **A guest reboot gets a fresh launch** — the relaunched worker has the port again (every
+//! 4. **The shipped helper** (`guest/limina-debug-identity`) prints the same answer.
+//! 5. **A guest reboot gets a fresh launch** — the relaunched worker has the port again (every
 //!    spawn path must create it) and a new `launch_id`. One VM, two launches, for the price of a
-//!    reboot rather than a second cold boot.
+//!    reboot rather than a second cold boot. It also proves a lever turned on at runtime outlives
+//!    the worker it was turned on under: the supervisor holds it.
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use limina_test::{Guest, GuestConfig};
@@ -100,6 +107,11 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
     if !limina_test::require_hvf_or_skip(NAME) {
         return;
     }
+    assert!(
+        std::env::var_os("LIMINA_DEBUG_PORT").is_none(),
+        "unset LIMINA_DEBUG_PORT; the supervisor inherits it, and this test boots with the lever \
+         at its default"
+    );
     let cfg = match GuestConfig::fedora_from_env() {
         Ok(cfg) => cfg.with_net().with_supervisor_log(),
         Err(e) => {
@@ -123,7 +135,65 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
          did not attach it (crates/limina-vmm/src/krun/console.rs). Got: {ls}"
     );
 
-    // --- Oracle 2: the stock one-liner reads this supervisor's identity ---
+    // --- Oracle 2: off by default, the port answers that and nothing else ---
+    for request in ["identity", "help"] {
+        let off = parse(
+            &guest
+                .ssh_exec_timeout(
+                    &ONE_LINER.replace("echo identity", &format!("echo {request}")),
+                    Duration::from_secs(60),
+                )
+                .unwrap_or_else(|e| panic!("`{request}` got no answer while disabled: {e:#}")),
+        );
+        eprintln!("--- {request} while disabled: {off:?}");
+        assert_eq!(
+            off.get("format").map(String::as_str),
+            Some("1"),
+            "{request}"
+        );
+        assert_eq!(
+            off.get("error").map(String::as_str),
+            Some("disabled"),
+            "{request}"
+        );
+        assert!(
+            off.get("enable")
+                .is_some_and(|v| v.contains("LIMINA_DEBUG_PORT=1")),
+            "{request}: no enable hint: {off:?}"
+        );
+        assert_eq!(
+            off.keys().collect::<Vec<_>>(),
+            ["enable", "error", "format"],
+            "{request}: the disabled answer carries more than it should: {off:?}"
+        );
+    }
+    let helper = limina_test::repo_root().join("guest/limina-debug-identity");
+    guest
+        .scp_to_guest(Path::new(&helper), "/tmp/limina-debug-identity")
+        .expect("copying the helper into the guest");
+    let disabled = guest
+        .ssh_exec_timeout(
+            "sudo bash /tmp/limina-debug-identity limina_git_rev 2>&1; echo exit=$?",
+            Duration::from_secs(60),
+        )
+        .expect("running the helper");
+    assert!(
+        disabled.contains("exit=4") && disabled.contains("disabled"),
+        "the helper must exit 4 on a disabled port: {disabled}"
+    );
+    let pid = guest.supervisor_pid().to_string();
+    let out = Command::new(&cfg.limina_bin)
+        .args(["debug", &pid, "lever", "debug-port", "on"])
+        .stdin(Stdio::null())
+        .output()
+        .expect("running limina debug");
+    assert!(
+        out.status.success(),
+        "turning the debug-port lever on failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // --- Oracle 3: the stock one-liner reads this supervisor's identity ---
     let first = read_port(&guest);
     let logged = wait_for_identities(&mut guest, 1);
     let want = &logged[0];
@@ -186,11 +256,7 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
         "no error for a bogus request: {err}"
     );
 
-    // --- Oracle 3: the shipped helper prints the same answer ---
-    let helper = limina_test::repo_root().join("guest/limina-debug-identity");
-    guest
-        .scp_to_guest(Path::new(&helper), "/tmp/limina-debug-identity")
-        .expect("copying the helper into the guest");
+    // --- Oracle 4: the shipped helper prints the same answer ---
     let via_helper = guest
         .ssh_exec_timeout(
             "sudo bash /tmp/limina-debug-identity",
@@ -203,7 +269,8 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
         "the helper and the one-liner disagree"
     );
 
-    // --- Oracle 4: a reboot relaunches the worker, with the port and a fresh launch id ---
+    // --- Oracle 5: a reboot relaunches the worker, with the port, a fresh launch id, and the
+    // lever still on ---
     guest
         .ssh_exec("sudo systemd-run --on-active=1 systemctl reboot")
         .expect("scheduling guest reboot");

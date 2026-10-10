@@ -12,7 +12,8 @@
 #
 # Exit status: 0 on a full answer, 1 when the port is missing (not a limina guest, or a
 # limina build without it), 2 when the host did not answer within the timeout, 3 when the
-# answer has no such key.
+# answer has no such key, 4 when the host has the port's answers turned off (its debug-port
+# lever; the message says how to turn it on).
 set -u
 PORT=/dev/virtio-ports/org.limina.debug.0
 TIMEOUT=${LIMINA_DEBUG_TIMEOUT:-10}
@@ -34,6 +35,19 @@ while IFS= read -r -t "$TIMEOUT" line <&3; do
 done
 exec 3>&-
 [ -n "$complete" ] || { echo "no complete answer on $PORT within ${TIMEOUT}s" >&2; exit 2; }
+
+# Off by default on the host: every request is answered `error=disabled`, with `enable=` saying
+# how to turn it on. Checked before any key lookup, so `limina-debug-identity launch_id` on a
+# disabled port says so rather than "no such key".
+for line in "${out[@]}"; do
+  if [ "$line" = error=disabled ]; then
+    echo "the limina debug port is disabled on the host" >&2
+    for l in "${out[@]}"; do
+      case $l in enable=*) echo "to enable it: ${l#enable=}" >&2 ;; esac
+    done
+    exit 4
+  fi
+done
 
 if [ $# -gt 0 ]; then
   for line in "${out[@]}"; do

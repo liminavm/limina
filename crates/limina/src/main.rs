@@ -521,14 +521,16 @@ enum Cmd {
     Suspend(SuspendArgs),
     /// Delete a stopped managed VM's bundle (disks outside the bundle are never touched).
     Rm(RmArgs),
-    /// Change a running VM's log filters and diagnostic traces without restarting it. Changes
-    /// last until the VM exits.
+    /// Change a running VM's log filters, diagnostic traces and harness access levers without
+    /// restarting it. Changes last until the VM exits.
     Debug(DebugArgs),
     /// Print a running VM's SSH forward port, or move it to another host port. A move lasts
     /// until the VM exits; the port in its definition is the one the next start uses.
     SshPort(SshPortArgs),
     /// Inject keyboard and pointer events into a running VM's virtio-input devices — the real
-    /// device path the guest's seat sees, with no window or focus involved.
+    /// device path the guest's seat sees, with no window or focus involved. Off by default: the
+    /// VM refuses until its input-inject lever is on (LIMINA_INPUT_INJECT=1, the Debug menu, or
+    /// `limina debug <vm> lever input-inject on`).
     Input(InputArgs),
 }
 
@@ -582,7 +584,8 @@ enum DebugAction {
         #[arg(long)]
         worker: bool,
     },
-    /// Turn a diagnostic trace on or off (`status` lists them).
+    /// Turn a lever on or off: a diagnostic trace, or harness access (`input-inject`,
+    /// `debug-port`). `status` lists them.
     Lever { name: String, state: OnOff },
     /// Record every frame the VM's windows put on glass, each tagged (display, flip number,
     /// IOSurface, size, host clocks), into a directory: `start <dir>`, then `stop`, which prints

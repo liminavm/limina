@@ -29,8 +29,10 @@
 //!
 //! `input <verb…>` lines inject keyboard and pointer events into the guest's virtio-input
 //! devices (`crate::inject`, whose `HELP` lists the verbs); `limina input` is their client.
-//! This means any process of the same user can type into the guest through this socket, with
-//! none of the Accessibility (TCC) grant that osascript-driven input needs.
+//! They are refused unless the VM's `input-inject` lever is on (`debug_ctl::INPUT_INJECT`, off
+//! by default, read per request). With it on, any process of the same user can type into the
+//! guest through this socket, with none of the Accessibility (TCC) grant that osascript-driven
+//! input needs.
 //!
 //! Like the debug socket it is reachable by any process of the same user. Moving the SSH forward
 //! binds a different loopback port on the host; the guest and its network are untouched.
@@ -272,7 +274,10 @@ fn serve_client(stream: UnixStream) {
             .strip_prefix(crate::inject::PREFIX)
             .filter(|rest| rest.is_empty() || rest.starts_with(' '))
         {
-            let result = if PARKED.load(std::sync::atomic::Ordering::SeqCst) {
+            // The lever's refusal comes first: `run` answers it, parked or not.
+            let result = if crate::debug_ctl::INPUT_INJECT.on()
+                && PARKED.load(std::sync::atomic::Ordering::SeqCst)
+            {
                 Err("the guest is suspended: there is no worker to take input".to_string())
             } else {
                 input.run(verb)
@@ -453,6 +458,45 @@ pub(crate) mod tests {
         set_forward(None);
         let err = handle(Request::SshPort(2300)).unwrap_err();
         assert!(err.contains("no NAT network"), "{err}");
+    }
+
+    /// `input …` is refused while the lever is off, and only `input …`; the lever is read per
+    /// request, so a toggle applies to the next line on the same connection.
+    #[test]
+    fn input_requests_follow_the_lever_and_nothing_else_does() {
+        let _levers = lock(&crate::debug_ctl::ACCESS_LEVER_TESTS);
+        let _forward = lock(&FORWARD_TESTS);
+        let dir = std::env::temp_dir().join(format!("limina-rt-gate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("g.sock");
+        set_forward(None);
+        serve_at(&path).unwrap();
+        let stream = connect_at(&path).unwrap();
+        let mut reader = BufReader::new(&stream);
+        let mut say = |line: &str| {
+            (&stream).write_all(format!("{line}\n").as_bytes()).unwrap();
+            wire::read_answer(&mut reader)
+        };
+        let lever = |on| {
+            crate::debug_ctl::handle(&limina_debug::wire::Request::Lever {
+                name: "input-inject".into(),
+                on,
+            })
+            .unwrap()
+        };
+
+        assert_eq!(say("input info"), Err(crate::inject::refusal()));
+        assert_eq!(say("input"), Err(crate::inject::refusal()));
+        assert!(say("info").is_ok(), "info is not gated");
+        lever(true);
+        let report = say("input info").expect("allowed once the lever is on");
+        assert!(
+            report.iter().any(|l| l.starts_with("abs-max ")),
+            "{report:?}"
+        );
+        lever(false);
+        assert_eq!(say("input info"), Err(crate::inject::refusal()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

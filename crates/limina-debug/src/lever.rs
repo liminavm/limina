@@ -13,8 +13,9 @@ const ON: u8 = 2;
 ///
 /// Its starting value is its environment variable (set and not `"0"` means on), read on first
 /// use, so `LIMINA_EDGE_TRACE=1` keeps meaning what it always meant. After that [`Lever::set`]
-/// owns it. A lever is for *diagnostics* — output that costs something to produce and changes
-/// nothing else. A switch that changes behaviour is not a lever.
+/// owns it. A lever is for *diagnostics*: output that costs something to produce and changes
+/// nothing else, or a debugging facility a harness needs and a normal run should not expose
+/// (off by default, opened for one run). A switch that changes how the VM behaves is not a lever.
 pub struct Lever {
     name: &'static str,
     env: &'static str,

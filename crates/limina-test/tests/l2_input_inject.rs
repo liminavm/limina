@@ -22,6 +22,15 @@
 //!   click landing on the greeter would make the run's outcome depend on its UI.
 //! - **The kernel drops what changes nothing** (a repeated ABS value, an EV_KEY already in
 //!   that state, an empty frame), so every expected event below is a real change.
+//!
+//! # Off by default
+//!
+//! Injection is refused unless the VM's `input-inject` lever is on. The headless run boots with
+//! it off, has a verb refused (nonzero exit, the refusal naming how to enable it) while the
+//! reader is already grabbing the nodes, then turns it on with `limina debug <pid> lever
+//! input-inject on`: the exact keyboard comparison is what proves the refused tap never arrived,
+//! and the script landing proves the runtime toggle. The windowed run enables it the other way,
+//! with `LIMINA_INPUT_INJECT=1` in the supervisor's environment.
 
 use std::io::Write;
 use std::path::Path;
@@ -185,6 +194,45 @@ fn inject(limina: &Path, pid: libc::pid_t) -> String {
     text
 }
 
+/// Run `limina <args>`; whether it succeeded, and everything it printed.
+fn limina_cli(limina: &Path, args: &[&str]) -> (bool, String) {
+    let out = Command::new(limina)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("running limina");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+/// With the lever off, a verb is refused, loudly; then turn it on at runtime.
+fn refused_then_enabled(name: &str, limina: &Path, pid: libc::pid_t) {
+    let pid = pid.to_string();
+    let (ok, said) = limina_cli(limina, &["input", &pid, "key", "tap", "KEY_F13"]);
+    eprintln!("{name}: with the lever off, limina input said: {said}");
+    assert!(
+        !ok,
+        "{name}: injection was accepted with the lever off: {said}"
+    );
+    for needle in [
+        "input injection is off",
+        "LIMINA_INPUT_INJECT=1",
+        "Debug menu",
+        "limina debug <vm> lever input-inject on",
+    ] {
+        assert!(
+            said.contains(needle),
+            "{name}: the refusal lacks {needle:?}: {said}"
+        );
+    }
+    let (ok, said) = limina_cli(limina, &["debug", &pid, "lever", "input-inject", "on"]);
+    assert!(ok, "{name}: turning the lever on failed: {said}");
+}
+
 /// Split a device's events into frames, each ending at its SYN_REPORT.
 fn frames(events: &[Event]) -> Vec<Vec<Event>> {
     events
@@ -195,8 +243,15 @@ fn frames(events: &[Event]) -> Vec<Vec<Event>> {
 
 /// Boot, inject, compare. `window_live`: the window's own input path shares the pointer
 /// devices, so those are matched frame by frame as an in-order subsequence; the keyboard,
-/// which the window only writes to while it is key and typed on, stays exact.
-fn run(name: &str, cfg: GuestConfig, window_live: bool) {
+/// which the window only writes to while it is key and typed on, stays exact. `enabled`: the
+/// supervisor starts with the lever on; otherwise a refusal is checked first and the lever is
+/// turned on at runtime.
+fn run(name: &str, cfg: GuestConfig, window_live: bool, enabled: bool) {
+    assert!(
+        std::env::var_os("LIMINA_INPUT_INJECT").is_none(),
+        "{name}: unset LIMINA_INPUT_INJECT; the supervisor inherits it, and this test owns the \
+         lever's starting value"
+    );
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
         .wait_for_ssh(Duration::from_secs(240))
@@ -230,6 +285,9 @@ fn run(name: &str, cfg: GuestConfig, window_live: bool) {
         guest
             .ssh_poll("test -e /tmp/limina-inject-ready", Duration::from_secs(30))
             .expect("the reader never opened the nodes");
+        if !enabled {
+            refused_then_enabled(name, &cfg.limina_bin, guest.supervisor_pid());
+        }
         let said = inject(&cfg.limina_bin, guest.supervisor_pid());
         eprintln!("{name}: limina input said:\n{said}");
         reader.join().unwrap().expect("the guest reader failed")
@@ -268,7 +326,8 @@ fn run(name: &str, cfg: GuestConfig, window_live: bool) {
 }
 
 /// Headless — the compositor team's unattended loop: no window, a captured coexist display,
-/// and `--input` wiring the virtio input devices.
+/// and `--input` wiring the virtio input devices. Started with the lever off: refused first,
+/// then enabled at runtime.
 #[test]
 fn l2_input_inject_headless_reaches_virtio_nodes() {
     let name = "l2_input_inject_headless_reaches_virtio_nodes";
@@ -285,11 +344,11 @@ fn l2_input_inject_headless_reaches_virtio_nodes() {
             return;
         }
     };
-    run(name, cfg, false);
+    run(name, cfg, false, false);
 }
 
 /// Windowed — the window's own input path is live alongside; injection must reach the same
-/// devices through the worker connection the window uses.
+/// devices through the worker connection the window uses. Enabled by the environment variable.
 #[test]
 fn l2_input_inject_windowed_reaches_virtio_nodes() {
     let name = "l2_input_inject_windowed_reaches_virtio_nodes";
@@ -297,11 +356,14 @@ fn l2_input_inject_windowed_reaches_virtio_nodes() {
         return;
     }
     let cfg = match GuestConfig::fedora_from_env() {
-        Ok(cfg) => cfg.with_windowed_coexist_display(1280, 800).with_net(),
+        Ok(cfg) => cfg
+            .with_windowed_coexist_display(1280, 800)
+            .with_net()
+            .with_env("LIMINA_INPUT_INJECT", "1"),
         Err(e) => {
             eprintln!("SKIPPED {name}: {e:#}");
             return;
         }
     };
-    run(name, cfg, true);
+    run(name, cfg, true, true);
 }

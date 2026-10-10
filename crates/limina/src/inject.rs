@@ -21,12 +21,18 @@
 //! held in the guest. A harness that wants a key held across commands keeps one connection open
 //! (`limina input <vm> -`, verbs on stdin), or says `keep-held`, which leaves them pressed until
 //! a later connection's `release`.
+//!
+//! **Off by default.** Every verb is refused until the VM's `input-inject` lever is on
+//! (`crate::debug_ctl::INPUT_INJECT`: `LIMINA_INPUT_INJECT=1`, the window's Debug menu, or
+//! `limina debug <vm> lever input-inject on`). The lever is read per verb, so a change applies to
+//! the next one; turning it off also releases everything injection holds pressed, in every live
+//! connection and every `keep-held` one ([`lever_off`]).
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -68,7 +74,12 @@ the guest's WHOLE desktop: with one display, abs-norm/abs-px are that display's
 coordinates; with several, only `abs` is well defined. Keys are evdev codes, not macOS
 keys: no modifier normalization applies (KEY_LEFTMETA is Super, KEY_LEFTALT is Alt).
 Keys and buttons a connection leaves pressed are released when it closes, unless
-`keep-held` (or --keep-held) was sent.";
+`keep-held` (or --keep-held) was sent.
+
+Off by default: the VM refuses every verb until its input-inject lever is on. Start
+it with LIMINA_INPUT_INJECT=1, tick input-inject in the window's Debug menu, or run
+`limina debug <vm> lever input-inject on`. Turning the lever off releases every key
+and button injection holds pressed.";
 
 /// The current worker's input endpoints, once a session has any (`attach`/`publish`).
 static CONN: Mutex<Option<Arc<WorkerConn>>> = Mutex::new(None);
@@ -84,6 +95,46 @@ static HEADLESS_MODE: Mutex<Option<(u32, u32)>> = Mutex::new(None);
 
 /// Keys and buttons a `keep-held` connection left pressed, for a later `release`.
 static ORPHANS: Mutex<Held> = Mutex::new(Held::new());
+
+/// Every live connection's held set, so that turning the lever off can release them all — a
+/// harness idling on an open connection with Ctrl down must not keep it down.
+static LIVE: Mutex<Vec<Weak<Mutex<Held>>>> = Mutex::new(Vec::new());
+
+/// The answer to a verb while the `input-inject` lever is off.
+pub fn refusal() -> String {
+    format!(
+        "input injection is off for this VM; to allow it, {}",
+        crate::debug_ctl::how_to_enable(&crate::debug_ctl::INPUT_INJECT)
+    )
+}
+
+fn allowed() -> bool {
+    crate::debug_ctl::INPUT_INJECT.on()
+}
+
+/// The `input-inject` lever was just turned off: release what every connection holds and what
+/// `keep-held` connections left behind. Called after the lever is off, so a verb still sending
+/// sees it off after its last event and releases what it pressed itself (`Session::run`).
+pub fn lever_off() {
+    let mut all = std::mem::take(&mut *lock(&ORPHANS));
+    let live: Vec<_> = lock(&LIVE).iter().filter_map(Weak::upgrade).collect();
+    for held in live {
+        all.absorb(std::mem::take(&mut *lock(&held)));
+    }
+    if all.is_empty() {
+        return;
+    }
+    log::warn!(
+        "input: injection turned off; releasing keys {:?} and buttons {:?}",
+        all.keys,
+        all.buttons
+    );
+    let frames = all.release_frames();
+    if let Err((sent, why)) = send_frames(&frames, &Mutex::new(Held::new())) {
+        log::warn!("input: could not release what injection held ({why}); `release` will retry");
+        lock(&ORPHANS).absorb(Held::unreleased(&frames[sent..]));
+    }
+}
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -502,9 +553,10 @@ fn key(code: u16, down: bool) -> Frame {
 }
 
 /// One connection's injection state: what it holds, and the scroll remainders.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Session {
-    held: Held,
+    /// Shared with [`LIVE`], so [`lever_off`] can release it from another thread.
+    held: Arc<Mutex<Held>>,
     keep: bool,
     /// Sub-detent wheel motion carried between `scroll`s, in v120 units, so two half detents
     /// make one detent event — the dual-rate rule `window/input.rs` follows.
@@ -529,6 +581,21 @@ fn current_mode() -> Result<(u32, u32), String> {
     }
     lock(&HEADLESS_MODE)
         .ok_or_else(|| "the guest's mode is not known yet; give it: abs-px X Y WxH".into())
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        let held = Arc::new(Mutex::new(Held::new()));
+        let mut live = lock(&LIVE);
+        live.retain(|w| w.strong_count() > 0);
+        live.push(Arc::downgrade(&held));
+        Session {
+            held,
+            keep: false,
+            scroll_v: 0,
+            scroll_h: 0,
+        }
+    }
 }
 
 impl Session {
@@ -646,7 +713,7 @@ impl Session {
             },
             Verb::Release => {
                 let mut all = std::mem::take(&mut *lock(&ORPHANS));
-                all.absorb(std::mem::take(&mut self.held));
+                all.absorb(std::mem::take(&mut *lock(&self.held)));
                 return Ok((all.release_frames(), Vec::new()));
             }
             Verb::KeepHeld => {
@@ -671,11 +738,15 @@ impl Session {
                     format!("abs-max {ABS_MAX}"),
                     format!("mode {mode}"),
                 ];
+                let (keys, buttons) = {
+                    let held = lock(&self.held);
+                    (held.keys.clone(), held.buttons.clone())
+                };
                 let h = lock(&ORPHANS);
-                if !self.held.is_empty() || !h.is_empty() {
+                if !keys.is_empty() || !buttons.is_empty() || !h.is_empty() {
                     report.push(format!(
-                        "held keys {:?} buttons {:?} (kept {:?} {:?})",
-                        self.held.keys, self.held.buttons, h.keys, h.buttons
+                        "held keys {keys:?} buttons {buttons:?} (kept {:?} {:?})",
+                        h.keys, h.buttons
                     ));
                 }
                 return Ok((Vec::new(), report));
@@ -684,14 +755,34 @@ impl Session {
         Ok((frames, Vec::new()))
     }
 
-    /// Run one verb (the text after `input `) against the current worker.
+    /// Run one verb (the text after `input `) against the current worker — or refuse it, when
+    /// the `input-inject` lever is off.
     pub fn run(&mut self, line: &str) -> Result<Vec<String>, String> {
+        if !allowed() {
+            // Whatever this connection still holds was pressed while injection was allowed;
+            // `lever_off` normally took it already, and this catches what raced that sweep.
+            self.release_own();
+            return Err(refusal());
+        }
         let verb = Verb::parse(line)?;
         let release = verb == Verb::Release;
         let (frames, report) = self.plan(verb)?;
-        if !frames.is_empty()
-            && let Err((sent, why)) = self.send(&frames)
-        {
+        let sent = if frames.is_empty() {
+            Ok(())
+        } else {
+            send_frames(&frames, &self.held)
+        };
+        // The lever went off while this verb was sending: `lever_off` may have swept before the
+        // last press was noted. Reading the lever under the held set's lock — the lock the sweep
+        // takes after turning it off — means one of the two sees every press.
+        let stray = {
+            let mut held = lock(&self.held);
+            (!allowed()).then(|| std::mem::take(&mut *held))
+        };
+        if let Some(stray) = stray {
+            release_held(stray, &self.held);
+        }
+        if let Err((sent, why)) = sent {
             // The release took everything it was asked to undo out of the ledgers; what did
             // not go out is still pressed in the guest, and a later `release` must find it.
             if release {
@@ -702,53 +793,77 @@ impl Session {
         Ok(report)
     }
 
-    /// Send `frames`, each under its device's frame lock (taken after the frame's pause, never
-    /// across it). On failure, how many frames went out whole, and why the next did not.
-    fn send(&mut self, frames: &[Frame]) -> Result<(), (usize, String)> {
-        let conn = lock(&CONN).clone().ok_or((
-            0,
-            "this VM has no input devices to inject into (a headless run needs --input)"
-                .to_string(),
-        ))?;
-        // Snapshot rule as everywhere: hold the Arc so the fds stay open across the sends, and
-        // a relaunch mid-verb leaves this verb on the worker it started on.
-        let io = conn.io();
-        let trace = crate::debug_ctl::POINTER_WIRE_TRACE.on();
-        for (i, f) in frames.iter().enumerate() {
-            if !f.pause.is_zero() {
-                std::thread::sleep(f.pause);
-            }
-            let _frame = io.frame(f.dev.frame_lock());
-            if matches!(f.dev, Device::Ptr | Device::Rel) && !f.events.is_empty() {
-                POINTER_EPOCH.fetch_add(1, Ordering::AcqRel);
-            }
-            let fd = f.dev.fd(&io);
-            let syn = f.syn.then(InputEvent::syn);
-            for ev in f.events.iter().copied().chain(syn) {
-                if trace {
-                    eprintln!(
-                        "[WIRE] t={} dev=inject-{} type={} code={} value={}",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |d| d.as_micros()),
-                        f.dev.name(),
-                        ev.type_,
-                        ev.code,
-                        ev.value
-                    );
-                }
-                try_send(fd, ev).map_err(|why| (i, why))?;
-                self.held.note(f.dev, ev);
-            }
-        }
-        Ok(())
+    /// Release what this connection holds now.
+    fn release_own(&mut self) {
+        let held = std::mem::take(&mut *lock(&self.held));
+        release_held(held, &self.held);
     }
+}
+
+/// Send the frames that release `held`; what cannot be sent goes to [`ORPHANS`] for a later
+/// `release` (or the next [`lever_off`]).
+fn release_held(held: Held, ledger: &Mutex<Held>) {
+    if held.is_empty() {
+        return;
+    }
+    let frames = held.release_frames();
+    if let Err((sent, why)) = send_frames(&frames, ledger) {
+        log::warn!(
+            "input: could not release keys {:?} and buttons {:?} ({why}); a later `release` \
+             will retry",
+            held.keys,
+            held.buttons
+        );
+        lock(&ORPHANS).absorb(Held::unreleased(&frames[sent..]));
+    }
+}
+
+/// Send `frames`, each under its device's frame lock (taken after the frame's pause, never
+/// across it), noting presses and releases in `held`. On failure, how many frames went out
+/// whole, and why the next did not.
+fn send_frames(frames: &[Frame], held: &Mutex<Held>) -> Result<(), (usize, String)> {
+    let conn = lock(&CONN).clone().ok_or((
+        0,
+        "this VM has no input devices to inject into (a headless run needs --input)".to_string(),
+    ))?;
+    // Snapshot rule as everywhere: hold the Arc so the fds stay open across the sends, and
+    // a relaunch mid-verb leaves this verb on the worker it started on.
+    let io = conn.io();
+    let trace = crate::debug_ctl::POINTER_WIRE_TRACE.on();
+    for (i, f) in frames.iter().enumerate() {
+        if !f.pause.is_zero() {
+            std::thread::sleep(f.pause);
+        }
+        let _frame = io.frame(f.dev.frame_lock());
+        if matches!(f.dev, Device::Ptr | Device::Rel) && !f.events.is_empty() {
+            POINTER_EPOCH.fetch_add(1, Ordering::AcqRel);
+        }
+        let fd = f.dev.fd(&io);
+        let syn = f.syn.then(InputEvent::syn);
+        for ev in f.events.iter().copied().chain(syn) {
+            if trace {
+                eprintln!(
+                    "[WIRE] t={} dev=inject-{} type={} code={} value={}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_micros()),
+                    f.dev.name(),
+                    ev.type_,
+                    ev.code,
+                    ev.value
+                );
+            }
+            try_send(fd, ev).map_err(|why| (i, why))?;
+            lock(held).note(f.dev, ev);
+        }
+    }
+    Ok(())
 }
 
 impl Drop for Session {
     /// The connection is gone: release what it holds, unless it asked to keep it.
     fn drop(&mut self) {
-        let held = std::mem::take(&mut self.held);
+        let held = std::mem::take(&mut *lock(&self.held));
         if held.is_empty() {
             return;
         }
@@ -761,14 +876,7 @@ impl Drop for Session {
             held.keys,
             held.buttons
         );
-        let frames = held.release_frames();
-        if let Err((sent, why)) = self.send(&frames) {
-            log::warn!(
-                "input: could not release what a client left pressed ({why}); a later \
-                 `release` will retry"
-            );
-            lock(&ORPHANS).absorb(Held::unreleased(&frames[sent..]));
-        }
+        release_held(held, &self.held);
     }
 }
 
@@ -1187,40 +1295,66 @@ mod tests {
         );
     }
 
+    fn pair() -> (OwnedFd, OwnedFd) {
+        crate::supervisor::socketpair(libc::SOCK_DGRAM).unwrap()
+    }
+
+    fn read_all(fd: &OwnedFd) -> Vec<InputEvent> {
+        let mut out = Vec::new();
+        loop {
+            let mut b = [0u8; limina_input::WIRE_LEN];
+            let n = unsafe {
+                libc::recv(
+                    fd.as_raw_fd(),
+                    b.as_mut_ptr().cast(),
+                    b.len(),
+                    libc::MSG_DONTWAIT,
+                )
+            };
+            if n != b.len() as isize {
+                return out;
+            }
+            out.push(InputEvent::from_bytes(&b));
+        }
+    }
+
+    /// A worker's input endpoints: the supervisor's [`WorkerIo`] and the worker's four ends.
+    fn worker() -> (WorkerIo, [OwnedFd; 4]) {
+        let (k, kw) = pair();
+        let (p, pw) = pair();
+        let (r, rw) = pair();
+        let (t, tw) = pair();
+        let ack: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+        (WorkerIo::new(1, k, p, r, t, ack), [kw, pw, rw, tw])
+    }
+
+    /// Serialize on the process-global lever and connection, with the lever set to `on`; it is
+    /// off again when the guard drops.
+    fn lever(on: bool) -> impl Drop {
+        struct Guard {
+            _levers: std::sync::MutexGuard<'static, ()>,
+            _serial: std::sync::MutexGuard<'static, ()>,
+        }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                crate::debug_ctl::INPUT_INJECT.set(false);
+                *lock(&CONN) = None;
+            }
+        }
+        let levers = lock(&crate::debug_ctl::ACCESS_LEVER_TESTS);
+        let serial = lock(&TEST_SERIAL);
+        crate::debug_ctl::INPUT_INJECT.set(on);
+        Guard {
+            _levers: levers,
+            _serial: serial,
+        }
+    }
+
     /// The whole loop below the verbs: a session's events reach a worker's socket, a dropped
     /// session releases what it held, and a swapped worker gets the next verb.
     #[test]
     fn events_reach_the_current_worker_and_a_closed_session_releases() {
-        fn pair() -> (OwnedFd, OwnedFd) {
-            crate::supervisor::socketpair(libc::SOCK_DGRAM).unwrap()
-        }
-        fn read_all(fd: &OwnedFd) -> Vec<InputEvent> {
-            let mut out = Vec::new();
-            loop {
-                let mut b = [0u8; limina_input::WIRE_LEN];
-                let n = unsafe {
-                    libc::recv(
-                        fd.as_raw_fd(),
-                        b.as_mut_ptr().cast(),
-                        b.len(),
-                        libc::MSG_DONTWAIT,
-                    )
-                };
-                if n != b.len() as isize {
-                    return out;
-                }
-                out.push(InputEvent::from_bytes(&b));
-            }
-        }
-        fn worker() -> (WorkerIo, [OwnedFd; 4]) {
-            let (k, kw) = pair();
-            let (p, pw) = pair();
-            let (r, rw) = pair();
-            let (t, tw) = pair();
-            let ack: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
-            (WorkerIo::new(1, k, p, r, t, ack), [kw, pw, rw, tw])
-        }
-        let _serial = lock(&TEST_SERIAL);
+        let _lever = lever(true);
 
         let (io1, ends1) = worker();
         *lock(&CONN) = None;
@@ -1273,7 +1407,90 @@ mod tests {
         drop(ends2);
         let err = Session::default().run("key tap a").unwrap_err();
         assert!(err.contains("not taking input"), "{err}");
-        *lock(&CONN) = None;
+    }
+
+    /// Off, every verb is refused and nothing reaches the worker; turned off, everything held
+    /// — by a live connection and by a `keep-held` one that left — is released at once.
+    #[test]
+    fn the_lever_refuses_every_verb_and_turning_it_off_releases_what_is_held() {
+        let _lever = lever(false);
+        let (io, ends) = worker();
+        publish(io);
+        let ctrl = |v| InputEvent::new(EV_KEY, KEY_LEFTCTRL, v);
+
+        let mut s = Session::default();
+        for verb in ["key tap a", "info", "release", "rel 1 1", "bogus"] {
+            let err = s.run(verb).unwrap_err();
+            assert_eq!(err, refusal(), "{verb}");
+        }
+        assert!(ends.iter().all(|e| read_all(e).is_empty()), "nothing sent");
+        assert!(refusal().contains("LIMINA_INPUT_INJECT=1"));
+        assert!(refusal().contains("Debug menu"));
+        assert!(refusal().contains("limina debug <vm> lever input-inject on"));
+
+        // On at runtime: the next verb goes through.
+        crate::debug_ctl::handle(&wire::Request::Lever {
+            name: "input-inject".into(),
+            on: true,
+        })
+        .unwrap();
+        s.run("key down KEY_LEFTCTRL").unwrap();
+        s.run("button down left").unwrap();
+        let mut kept = Session::default();
+        kept.run("keep-held").unwrap();
+        kept.run("key down KEY_LEFTMETA").unwrap();
+        drop(kept);
+        assert_eq!(read_all(&ends[0]).len(), 4, "two presses, two SYNs");
+        assert_eq!(read_all(&ends[1]).len(), 2);
+
+        // Off at runtime, with `s` still open and idle: all of it comes up, newest first.
+        crate::debug_ctl::handle(&wire::Request::Lever {
+            name: "input-inject".into(),
+            on: false,
+        })
+        .unwrap();
+        assert_eq!(
+            read_all(&ends[0]),
+            vec![
+                ctrl(0),
+                InputEvent::syn(),
+                InputEvent::new(EV_KEY, KEY_LEFTMETA, 0),
+                InputEvent::syn()
+            ]
+        );
+        assert_eq!(
+            read_all(&ends[1]),
+            vec![InputEvent::new(EV_KEY, BTN_LEFT, 0), InputEvent::syn()]
+        );
+        assert_eq!(s.run("key tap a").unwrap_err(), refusal());
+        drop(s);
+        assert!(ends.iter().all(|e| read_all(e).is_empty()), "nothing after");
+    }
+
+    /// A press the sweep missed (noted after it ran) is released by the connection's next verb,
+    /// which is refused.
+    #[test]
+    fn a_refused_verb_releases_what_its_connection_still_holds() {
+        let _lever = lever(true);
+        let (io, ends) = worker();
+        publish(io);
+        let mut s = Session::default();
+        // A press sent and noted after the lever went off and the sweep ran (finding nothing).
+        let (frames, _) = s
+            .plan(Verb::parse("key down KEY_LEFTCTRL").unwrap())
+            .unwrap();
+        send_frames(&frames, &s.held).unwrap();
+        crate::debug_ctl::INPUT_INJECT.set(false);
+        assert_eq!(s.run("key tap a").unwrap_err(), refusal());
+        assert_eq!(
+            read_all(&ends[0]),
+            vec![
+                InputEvent::new(EV_KEY, KEY_LEFTCTRL, 1),
+                InputEvent::syn(),
+                InputEvent::new(EV_KEY, KEY_LEFTCTRL, 0),
+                InputEvent::syn()
+            ]
+        );
     }
 
     /// The tests that touch the process-global connection.
