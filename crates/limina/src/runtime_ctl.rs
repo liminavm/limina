@@ -67,6 +67,9 @@ static FORWARD: Mutex<Option<SshForward>> = Mutex::new(None);
 /// The window is parked on a suspended guest (no worker until the play click).
 static PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The run's boot disk, canonicalized: what `limina <verb> <disk>` matches a run by.
+static DISK: Mutex<Option<PathBuf>> = Mutex::new(None);
+
 /// Connections that sent `watch`, each owed every change.
 static WATCHERS: Mutex<Vec<UnixStream>> = Mutex::new(Vec::new());
 
@@ -182,6 +185,21 @@ pub fn set_forward(forward: Option<SshForward>) {
     push();
 }
 
+/// Publish the run's boot disk (canonical), reported as `disk <path>` after the state lines. It
+/// never changes during a run, so it is set once, before the socket is bound.
+pub fn set_disk(disk: Option<PathBuf>) {
+    *lock(&DISK) = disk;
+}
+
+/// Every line an `info` answers with: the state, then the run's identity.
+fn report() -> Vec<String> {
+    let mut lines = Info::current().to_lines();
+    if let Some(disk) = lock(&DISK).as_ref() {
+        lines.push(format!("disk {}", disk.display()));
+    }
+    lines
+}
+
 /// Publish whether the window is parked on a suspended guest (and tell every watcher).
 pub fn set_parked(parked: bool) {
     PARKED.store(parked, std::sync::atomic::Ordering::SeqCst);
@@ -219,6 +237,9 @@ fn reset() -> Result<Vec<String>, String> {
         if crate::supervisor::stop_requested() {
             return Err("the VM stopped instead of relaunching".into());
         }
+        if crate::supervisor::reset_skipped() {
+            return Err("not reset: a stop or suspend of this VM got there first".into());
+        }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
                 "no fresh worker within {RESET_TIMEOUT:?} of the reset; the VM log says why"
@@ -232,7 +253,7 @@ fn reset() -> Result<Vec<String>, String> {
 fn handle(req: Request) -> Result<Vec<String>, String> {
     match req {
         Request::Reset => reset(),
-        Request::Info | Request::Watch => Ok(Info::current().to_lines()),
+        Request::Info | Request::Watch => Ok(report()),
         Request::SshPort(port) => {
             let forward = lock(&FORWARD)
                 .clone()
@@ -241,14 +262,14 @@ fn handle(req: Request) -> Result<Vec<String>, String> {
             // The same line the boot printed: scripts that read the log take the last one.
             println!("guest SSH forward ready: ssh -p {port} <user>@127.0.0.1");
             push();
-            Ok(Info::current().to_lines())
+            Ok(report())
         }
     }
 }
 
 /// Send the current state to every watcher, dropping the ones that are gone.
 fn push() {
-    let mut text = Info::current().to_lines().join("\n");
+    let mut text = report().join("\n");
     text.push('\n');
     lock(&WATCHERS).retain_mut(|w| w.write_all(text.as_bytes()).is_ok());
 }
@@ -344,10 +365,7 @@ pub(crate) fn serve_client(stream: UnixStream) {
             // Answer and register under the lock the pushes take, so no change slips between
             // the state this client is told and the first push it gets.
             let mut watchers = lock(&WATCHERS);
-            if out
-                .write_all(answer(Ok(Info::current().to_lines())).as_bytes())
-                .is_err()
-            {
+            if out.write_all(answer(Ok(report())).as_bytes()).is_err() {
                 return;
             }
             let _ = out.set_write_timeout(Some(PUSH_TIMEOUT));
@@ -415,6 +433,57 @@ fn ask(stream: &UnixStream, req: Request) -> Result<Info> {
     let lines = wire::read_answer(&mut BufReader::new(stream))
         .map_err(|why| anyhow::anyhow!("{}: {why}", req.to_line()))?;
     Ok(Info::from_lines(lines.iter().map(String::as_str)))
+}
+
+/// Who a supervisor says it is: its run's boot disk (canonical; `None` from a run without one, or
+/// a build too old to say) and whether it is parked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub disk: Option<PathBuf>,
+    pub parked: bool,
+}
+
+impl Identity {
+    fn from_lines<'a>(lines: impl IntoIterator<Item = &'a str> + Clone) -> Self {
+        Identity {
+            disk: lines
+                .clone()
+                .into_iter()
+                .find_map(|l| l.strip_prefix("disk "))
+                .map(PathBuf::from),
+            parked: Info::from_lines(lines).parked,
+        }
+    }
+}
+
+/// Ask the supervisor with this pid who it is. An error means nothing answers there: no
+/// supervisor, whatever the pid is now.
+pub fn identity(pid: u32) -> Result<Identity> {
+    let stream = connect(pid)?;
+    (&stream)
+        .write_all(format!("{}\n", Request::Info.to_line()).as_bytes())
+        .context("sending the request")?;
+    let lines = wire::read_answer(&mut BufReader::new(&stream))
+        .map_err(|why| anyhow::anyhow!("info: {why}"))?;
+    Ok(Identity::from_lines(lines.iter().map(String::as_str)))
+}
+
+/// The pids whose runtime socket exists in this user's temp dir: every supervisor that might be
+/// running. A socket left by a SIGKILLed run is among them, which is why a caller asks each
+/// ([`identity`]) before believing it.
+pub fn socket_pids() -> Vec<u32> {
+    let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else {
+        return Vec::new();
+    };
+    dir.filter_map(|e| {
+        let name = e.ok()?.file_name();
+        name.to_str()?
+            .strip_prefix("limina-vm-")?
+            .strip_suffix(".sock")?
+            .parse()
+            .ok()
+    })
+    .collect()
 }
 
 /// `limina reset`: ask the supervisor with this pid to power-cycle its VM, and return the fresh
@@ -564,6 +633,10 @@ pub(crate) mod tests {
             let lines = info.to_lines();
             assert_eq!(Info::from_lines(lines.iter().map(String::as_str)), info);
         }
+        let id = Identity::from_lines(["ssh-port none", "parked yes", "disk /v/a b.raw"]);
+        assert_eq!(id.disk, Some(PathBuf::from("/v/a b.raw")));
+        assert!(id.parked);
+        assert_eq!(Identity::from_lines(["parked no"]).disk, None);
         let newer = ["vcpus 4", "ssh-port 2400"];
         assert_eq!(Info::from_lines(newer).ssh_port, Some(2400));
     }

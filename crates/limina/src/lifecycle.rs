@@ -29,6 +29,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+/// The launcher's exit status when the detached supervisor is running but did not answer on its
+/// runtime socket within [`SOCKET_WAIT`]. The `limina: detached …` line is still printed: the run
+/// exists and may yet come up, but nothing that needs the socket (`ssh-port`, `reset`) works yet.
+pub const EXIT_NOT_ANSWERING: i32 = 3;
+
 /// How long the launcher waits for the detached supervisor's runtime socket. The supervisor binds
 /// it before anything slow (the gateway, the worker's spawn), so this is margin for a loaded host.
 const SOCKET_WAIT: Duration = Duration::from_secs(30);
@@ -77,9 +82,24 @@ fn open_log(path: &Path) -> Result<std::fs::File> {
 
 /// `limina --detach …`: start the run as a session leader writing to `log`, wait for it to
 /// answer, print where it is and return. Never returns `Ok` without having printed the line.
-pub fn launch(log: &Path) -> Result<()> {
+pub fn launch(log: &Path, disk: Option<&Path>) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
+    // A disk that is already running is refused before anything is touched: rotating the log
+    // first would move the live run's log out from under it.
+    if let Some(disk) = disk {
+        let running = supervisors_on(disk);
+        anyhow::ensure!(
+            running.is_empty(),
+            "{} is already running (supervisor pid {}); not starting it again",
+            disk.display(),
+            running
+                .iter()
+                .map(|(p, _)| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     let log = std::path::absolute(log).with_context(|| format!("resolving {}", log.display()))?;
     let file = open_log(&log)?;
     let exe = std::env::current_exe().context("locating the limina binary")?;
@@ -110,7 +130,7 @@ pub fn launch(log: &Path) -> Result<()> {
     let pid = child.id();
     let socket = crate::runtime_ctl::socket_path(pid);
     let deadline = Instant::now() + SOCKET_WAIT;
-    loop {
+    let answered = loop {
         if let Some(status) = child
             .try_wait()
             .context("polling the detached supervisor")?
@@ -122,22 +142,57 @@ pub fn launch(log: &Path) -> Result<()> {
             );
         }
         if crate::runtime_ctl::request(pid, crate::runtime_ctl::Request::Info).is_ok() {
-            break;
+            break true;
         }
         if Instant::now() >= deadline {
             eprintln!(
-                "limina: supervisor {pid} has not bound {} after {SOCKET_WAIT:?}; it is still \
-                 starting, see {}",
+                "limina: supervisor {pid} has not answered on {} after {SOCKET_WAIT:?}; it may \
+                 still be starting, see {}",
                 socket.display(),
                 log.display()
             );
-            break;
+            break false;
         }
         std::thread::sleep(Duration::from_millis(50));
-    }
+    };
     println!("limina: detached pid={pid} log={}", log.display());
     // The child is not ours to wait for: once we exit, launchd adopts and reaps it.
+    if !answered {
+        std::process::exit(EXIT_NOT_ANSWERING);
+    }
     Ok(())
+}
+
+/// A canonical spelling of a disk path for matching runs by it: symlinks and `..` resolved, so
+/// `/tmp/x.raw` and `/private/tmp/x.raw` are one disk. Falls back to the absolute path for a disk
+/// that does not exist (any more).
+pub fn canonical_disk(disk: &Path) -> PathBuf {
+    disk.canonicalize()
+        .or_else(|_| std::path::absolute(disk))
+        .unwrap_or_else(|_| disk.to_path_buf())
+}
+
+/// The supervisors whose run boots from `disk`, as `(pid, parked)`. A candidate is only a pid
+/// whose runtime socket answers, and it matches only when the boot disk it reports is this disk,
+/// exactly — never a substring of another run's argv, so `enhanced.raw` cannot pick up a run of
+/// `poke-enhanced.raw` and no character in the path is a pattern.
+pub fn supervisors_on(disk: &Path) -> Vec<(i32, bool)> {
+    let me = std::process::id();
+    let found: Vec<(i32, crate::runtime_ctl::Identity)> = crate::runtime_ctl::socket_pids()
+        .into_iter()
+        .filter(|&pid| pid != me)
+        .filter_map(|pid| Some((pid as i32, crate::runtime_ctl::identity(pid).ok()?)))
+        .collect();
+    matching(&canonical_disk(disk), &found)
+}
+
+/// [`supervisors_on`]'s choice among the supervisors that answered.
+fn matching(want: &Path, found: &[(i32, crate::runtime_ctl::Identity)]) -> Vec<(i32, bool)> {
+    found
+        .iter()
+        .filter(|(_, id)| id.disk.as_deref() == Some(want))
+        .map(|(pid, id)| (*pid, id.parked))
+        .collect()
 }
 
 /// The last `n` non-empty lines of `path`.
@@ -147,32 +202,13 @@ fn tail(path: &Path, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-/// The name of `pid`'s executable, or `None` when it is gone.
-fn command_name(pid: i32) -> Option<String> {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "comm=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    let comm = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if comm.is_empty() {
-        return None;
-    }
-    Some(
-        Path::new(&comm)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or(comm),
-    )
-}
-
 /// Is `pid` a VM's supervisor? A bare pid on the command line is only ever signalled if it is, so
 /// a typo cannot SIGTERM something else of the user's — another `limina` process included: the
-/// control center and a gateway's reaper are `limina` too, but only a supervisor answers on a
-/// runtime socket.
+/// control center and a gateway's reaper are `limina` too. The oracle is the runtime socket
+/// answering, not its file existing: a SIGKILLed run leaves the file behind, and its pid can be
+/// recycled by anything.
 pub fn is_supervisor(pid: i32) -> bool {
-    pid > 0
-        && crate::runtime_ctl::socket_path(pid as u32).exists()
-        && command_name(pid).as_deref() == Some("limina")
+    pid > 0 && crate::runtime_ctl::request(pid as u32, crate::runtime_ctl::Request::Info).is_ok()
 }
 
 /// Has `pid` exited? A zombie counts: its parent may not have reaped it yet (a detached run's
@@ -243,6 +279,56 @@ mod tests {
         // A value that merely looks like the flag is someone else's argument only after its
         // own flag, which the parse already consumed: the flags are dropped wherever they are.
         assert_eq!(child_args(os(&["--net"])), os(&["--net"]));
+    }
+
+    /// A run is matched by the disk it reports, exactly: a name that is a substring of another
+    /// run's disk, or a path full of regex metacharacters, matches nothing it should not.
+    #[test]
+    fn a_disk_matches_only_its_own_run() {
+        use crate::runtime_ctl::Identity;
+        let id = |disk: &str, parked| Identity {
+            disk: Some(PathBuf::from(disk)),
+            parked,
+        };
+        let found = vec![
+            (10, id("/v/poke-enhanced.raw", false)),
+            (11, id("/v/enhanced.raw.bak", false)),
+            (12, id("/v/aab1.raw", false)),
+            (
+                13,
+                Identity {
+                    disk: None,
+                    parked: false,
+                },
+            ),
+            (14, id("/v/enhanced.raw", true)),
+        ];
+        assert_eq!(
+            matching(Path::new("/v/enhanced.raw"), &found),
+            vec![(14, true)]
+        );
+        assert!(matching(Path::new("/v/a+b[1].raw"), &found).is_empty());
+        assert!(matching(Path::new("/v/.*"), &found).is_empty());
+        assert_eq!(
+            matching(Path::new("/v/aab1.raw"), &found),
+            vec![(12, false)]
+        );
+    }
+
+    #[test]
+    fn a_disk_is_canonicalized_through_symlinks() {
+        let dir = std::env::temp_dir().join(format!("limina-canon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("a.raw");
+        std::fs::write(&disk, b"").unwrap();
+        let link = dir.join("b.raw");
+        std::os::unix::fs::symlink(&disk, &link).unwrap();
+        assert_eq!(canonical_disk(&link), canonical_disk(&disk));
+        // `/var/folders/…` is `/private/var/folders/…`: the spelling a run was given is not
+        // what it is matched by.
+        assert_eq!(canonical_disk(&link), disk.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

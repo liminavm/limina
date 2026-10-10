@@ -249,10 +249,14 @@ its log on stdio, waits until it answers on its runtime socket, prints the one l
 exits. The log defaults to `<disk>.limina.log` beside the boot disk, where its suspend snapshot
 also lives, and earlier runs' logs are kept as `<disk>.limina.1.log` and up; a run without
 `--disk` must name `--log <file>`. It is the supervisor's log, so `scripts/wait-guest-ssh.sh
-<log>` waits on it as on any other.
+<log>` waits on it as on any other. A disk that is already running is refused before its log is
+touched. The launcher exits 0 once the run answers; if it has not answered after 30 s it still
+prints the line but exits 3, as the run may yet come up but `ssh-port` and `reset` cannot reach it.
 
-Every verb finds the run by its boot-disk path (as the run spelled it), a managed VM's name, or the
-supervisor's pid. `stop` is the stop ladder of a SIGTERM to the supervisor (guest agent, power
+Every verb finds the run by its boot-disk path, a managed VM's name, or the supervisor's pid. A
+disk is matched against the boot disk each running supervisor reports on its runtime socket, both
+canonicalized, so any spelling of the same file finds the run and nothing else does; a pid counts
+only if a supervisor answers there. `stop` is the stop ladder of a SIGTERM to the supervisor (guest agent, power
 button, stock guest agent); it never kills, and reports a guest still running after `--timeout`
 (default 60 s) with a non-zero exit. `stop --force` is the second signal: the supervisor SIGKILLs
 the worker, tears down gvproxy and its sockets, and exits, without writing a suspend snapshot.
@@ -260,8 +264,9 @@ the worker, tears down gvproxy and its sockets, and exits, without writing a sus
 takes, so the supervisor, its window, the NAT gateway and the SSH port all stay; it answers once
 the fresh worker runs. There is no orderly reset: the orderly one is the guest's own `reboot`
 (`ssh … sudo reboot`), which relaunches the same way, and `reset` is for the guest that cannot be
-asked. Back-to-back resets under 5 s each count toward the boot-loop guard that stops a VM after
-five rapid reboots.
+asked. A reset is dropped (and says so) when a stop or a suspend is already under way. Back-to-back
+resets under 5 s each count toward the boot-loop guard that stops a VM after five rapid reboots,
+and a guest `reboot` that lands in the same instant as a reset is logged as the reset.
 
 Which of these need a lever follows from what they grant. `reset` is a new capability, a
 power-cycle on request, so it is refused until `lifecycle-control` is on, and the refusal says

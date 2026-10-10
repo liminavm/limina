@@ -501,7 +501,9 @@ struct Cli {
     /// Run in the background, detached from this terminal or ssh session, which returns at once.
     /// The VM leads its own session, logs to --log instead of the terminal, and keeps none of the
     /// launching shell's descriptors. Once it answers, one line is printed for scripts:
-    /// `limina: detached pid=<supervisor pid> log=<path>`. Stop it with `limina stop <disk>`.
+    /// `limina: detached pid=<supervisor pid> log=<path>`. Stop it with `limina stop <disk>`. A disk
+    /// that is already running is refused. Exit status 3: started, but not answering yet after 30 s
+    /// (the line is still printed).
     #[arg(long)]
     detach: bool,
 
@@ -900,7 +902,7 @@ fn main() -> Result<()> {
                 Some(l) => l.clone(),
                 None => lifecycle::default_log(disk.as_ref().map(|d| d.path.as_path()))?,
             };
-            lifecycle::launch(&log)
+            lifecycle::launch(&log, disk.as_ref().map(|d| d.path.as_path()))
         }
         None => run_vm(cli),
     }
@@ -1274,43 +1276,13 @@ fn cmd_suspend_flat(disk: &Path) -> Result<()> {
 ///
 /// `several` says what to do instead when more than one matches.
 fn flat_supervisor_pid(disk: &Path, several: &str) -> Result<i32> {
-    // Find the supervisor: `pgrep -f <disk path>` matches both the supervisor (limina) and its
-    // worker (limina-vmm); keep only processes whose command name is exactly `limina`.
-    let out = std::process::Command::new("pgrep")
-        .arg("-f")
-        .arg(disk.as_os_str())
-        .output()
-        .context("running pgrep")?;
-    let mut supervisors: Vec<(i32, bool)> = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Ok(pid) = line.trim().parse::<i32>() else {
-            continue;
-        };
-        if pid == std::process::id() as i32 {
-            continue;
-        }
-        let comm = std::process::Command::new("ps")
-            .args(["-o", "comm=", "-p", &pid.to_string()])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-        let name = Path::new(&comm)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or(comm);
-        if name == "limina" {
-            // A supervisor parked on a suspended guest has no worker and nothing left to
-            // suspend; it can share the disk path with a fresh run of the same disk.
-            let parked = runtime_ctl::request(pid as u32, runtime_ctl::Request::Info)
-                .is_ok_and(|i| i.parked);
-            supervisors.push((pid, parked));
-        }
-    }
+    // Every supervisor answering on its runtime socket whose run reports exactly this boot disk
+    // (`lifecycle::supervisors_on`). A parked one is kept as a candidate: it has no worker and
+    // nothing left to suspend, and can share the disk path with a fresh run of the same disk.
+    let supervisors = lifecycle::supervisors_on(disk);
     pick_flat_supervisor(&supervisors).map_err(|e| match e {
         FlatPick::None => anyhow::anyhow!(
-            "no running limina supervisor found for {} (is the VM running, and was it started \
-             with this disk path?)",
+            "no running limina supervisor found for {} (is the VM running from this disk?)",
             disk.display()
         ),
         FlatPick::AllParked(pids) => anyhow::anyhow!(
@@ -1696,6 +1668,13 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         log::warn!("debug: no runtime log/lever control for this run: {e:#}");
     }
     // What the control center and `limina ssh-port` ask a running VM, and the SSH forward move.
+    // The boot disk it reports is what `limina <verb> <disk>` finds a flat run by.
+    runtime_ctl::set_disk(
+        cli.disk
+            .first()
+            .and_then(|spec| parse_disk(spec).ok())
+            .map(|d| lifecycle::canonical_disk(&d.path)),
+    );
     if let Err(e) = runtime_ctl::serve() {
         log::warn!("runtime: no runtime socket for this run: {e:#}");
     }

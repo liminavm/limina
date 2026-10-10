@@ -213,6 +213,16 @@ pub fn suspend_requested_externally() -> bool {
 static RESET: AtomicBool = AtomicBool::new(false);
 /// The last worker exit was a reset, not the guest's own reboot (for the relaunch's log line).
 static RESET_RELAUNCH: AtomicBool = AtomicBool::new(false);
+/// The exit status the reset's kill gave the worker: what the supervisor exits with when a stop
+/// lands between the kill and the relaunch, instead of the reboot code the kill was reported as.
+static RESET_KILL_CODE: AtomicI32 = AtomicI32::new(0);
+/// The pending reset was dropped because a suspend or a stop got there first.
+static RESET_SKIPPED: AtomicBool = AtomicBool::new(false);
+
+/// Did [`monitor`] drop the last requested reset (a suspend or stop took precedence)?
+pub fn reset_skipped() -> bool {
+    RESET_SKIPPED.load(Ordering::SeqCst)
+}
 
 /// Was the exit just reported as a reboot a reset ([`request_reset`])? Clears the mark.
 pub fn take_reset_relaunch() -> bool {
@@ -238,6 +248,7 @@ pub fn request_reset() -> Result<i32, String> {
     if pid <= 0 {
         return Err("there is no worker running to reset".into());
     }
+    RESET_SKIPPED.store(false, Ordering::SeqCst);
     RESET.store(true, Ordering::SeqCst);
     Ok(pid)
 }
@@ -834,17 +845,35 @@ pub fn monitor(
         }
 
         // A hard reset (`limina reset`): kill the worker and report a guest reboot, which every
-        // caller's relaunch loop turns into a cold boot of a fresh worker. A stop that arrived
-        // since the request wins — `RebootGuard::should_relaunch` declines while one is pending.
+        // caller's relaunch loop turns into a cold boot of a fresh worker. `request_reset` refuses
+        // during a stop or a suspend, but either can land between its check and here; then the
+        // reset is dropped — a suspend bracket would otherwise SIGTSTP a fresh worker still in
+        // firmware, and a stop must end the VM, not relaunch it.
         if RESET.swap(false, Ordering::SeqCst) {
-            log::warn!("reset requested → killing the worker (pid {pid}) to cold-boot a fresh one");
-            let _ = child.kill();
-            let status = child
-                .wait()
-                .context("waiting on the worker after the reset kill")?;
-            report_exit(status);
-            RESET_RELAUNCH.store(true, Ordering::SeqCst);
-            return Ok(WORKER_EXIT_REBOOT);
+            if stop_requested()
+                || shutdown_at.is_some()
+                || SUSPEND.load(Ordering::SeqCst)
+                || suspend_at.is_some()
+            {
+                log::warn!("reset dropped: a stop or suspend of this VM is already under way");
+                RESET_SKIPPED.store(true, Ordering::SeqCst);
+            } else {
+                log::warn!(
+                    "reset requested → killing the worker (pid {pid}) to cold-boot a fresh one"
+                );
+                let _ = child.kill();
+                let status = child
+                    .wait()
+                    .context("waiting on the worker after the reset kill")?;
+                let code = report_exit(status);
+                // A stop that arrived during the kill ends the VM with the kill's own status.
+                if stop_requested() {
+                    return Ok(code);
+                }
+                RESET_KILL_CODE.store(code, Ordering::SeqCst);
+                RESET_RELAUNCH.store(true, Ordering::SeqCst);
+                return Ok(WORKER_EXIT_REBOOT);
+            }
         }
 
         // M9.2 suspend bracket: relay a `limina suspend` (SIGTSTP to us) to the worker, which
@@ -1017,6 +1046,11 @@ pub fn run(
 
         // Relaunch only on a guest reboot (not power-off / error / stop / boot loop).
         if !guard.should_relaunch(code, started.elapsed()) {
+            // A reset's kill reported as a reboot that is not relaunched (a stop came in after
+            // it) exits with the kill's status, not the reboot code.
+            if code == WORKER_EXIT_REBOOT && take_reset_relaunch() {
+                return Ok(RESET_KILL_CODE.load(Ordering::SeqCst));
+            }
             return Ok(code);
         }
 
