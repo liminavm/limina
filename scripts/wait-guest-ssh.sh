@@ -31,8 +31,8 @@
 # BOOT_PID is optional and is the boot vehicle's pid, or the supervisor's. Pass it
 # whenever you have it, for two reasons:
 #  - The port then comes from the running supervisor itself (`limina ssh-port <pid>`,
-#    asked of BOOT_PID and of its direct children, which is where the boot scripts run
-#    it), not from the log. A log that outlived an earlier run still names that run's
+#    asked of BOOT_PID and of its descendants, which is where the boot scripts run it),
+#    not from the log; once a pid is given the log's forward line is not consulted. A log that outlived an earlier run still names that run's
 #    port, and some other VM may be answering there now. Without a pid the last forward
 #    line in the log wins, so empty the log before the boot, as the callers do.
 #    The `limina` asked is LIMINA_BIN (relative to the repo root, as the boot scripts read
@@ -63,11 +63,21 @@ if [ -n "$boot_pid" ]; then
     fi
 fi
 
-# The forward port of the run under BOOT_PID: the first of BOOT_PID and its children that
-# answers `limina ssh-port` as a supervisor. Nothing while the supervisor is not up yet.
+# Every descendant of $1, parents before children.
+descendants() {
+    local c
+    for c in $(pgrep -P "$1" 2>/dev/null || true); do
+        echo "$c"
+        descendants "$c"
+    done
+}
+
+# The forward port of the run under BOOT_PID: the first of BOOT_PID and its descendants that
+# answers `limina ssh-port` as a supervisor (a vehicle may run limina under a wrapper such as
+# gtimeout, which makes it a grandchild). Nothing while the supervisor is not up yet.
 supervisor_port() {
     local pid p
-    for pid in "$boot_pid" $(pgrep -P "$boot_pid" 2>/dev/null || true); do
+    for pid in "$boot_pid" $(descendants "$boot_pid"); do
         p=$("$limina" ssh-port "$pid" 2>/dev/null || true)
         case "$p" in
             '' | *[!0-9]*) ;;

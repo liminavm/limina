@@ -125,6 +125,20 @@ WAIT_SSH_USER= LIMINA_BIN="$TMP/limina" "$WAIT" "$TMP/stale.log" 6 "$(cat "$TMP/
 check "boot pid is the supervisor itself" 0 $? "$TMP/o6" "^$greeter\$"
 kill "$(cat "$TMP/sup.pid")" "$VEHICLE" 2>/dev/null
 
+# ...and a supervisor run under a wrapper, a grandchild of the boot pid, is found too.
+: > "$TMP/sup.pid"
+bash -c 'bash -c "sleep 60 & echo \$! > \"\$0\"; wait" "$0"; wait' "$TMP/sup.pid" 2>/dev/null &
+VEHICLE=$!
+disown "$VEHICLE" 2>/dev/null || true
+for _ in $(seq 1 50); do
+    [ -s "$TMP/sup.pid" ] && break
+    sleep 0.1
+done
+WAIT_SSH_USER= LIMINA_BIN="$TMP/limina" "$WAIT" "$TMP/stale.log" 6 "$VEHICLE" > "$TMP/o7" 2>&1
+check "boot pid: the supervisor is a grandchild" 0 $? "$TMP/o7" "^$greeter\$"
+pkill -P "$VEHICLE" 2>/dev/null
+kill "$(cat "$TMP/sup.pid")" "$VEHICLE" 2>/dev/null
+
 echo
 echo "wait-guest-ssh stage tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
