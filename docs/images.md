@@ -748,7 +748,8 @@ agent memory.
 A run started over ssh or from a script should use `--detach` (`docs/dev-onboarding.md` §3, *Run
 unattended*): it returns at once with the supervisor's pid, and its log — `<disk>.limina.log` by
 default — carries the same `guest SSH forward ready` line, so `scripts/wait-guest-ssh.sh` waits on
-it unchanged.
+it unchanged. Give the script the printed pid as its third argument and it asks that supervisor for
+the port (`limina ssh-port <pid>`) instead of reading the log's last forward line.
 
 ### Root on a guest you hold no credentials for
 
