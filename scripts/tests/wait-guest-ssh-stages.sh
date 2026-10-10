@@ -103,6 +103,7 @@ check "WAIT_SSH_USER= stops at the banner" 0 $? "$TMP/o4" "$greeter"
 # fails at the banner stage.
 cat > "$TMP/limina" <<'EOF'
 #!/usr/bin/env bash
+[ "$1" = ssh-port ] && [ "$2" = --help ] && exit 0
 [ "$1" = ssh-port ] && [ "$2" = "$(cat "$(dirname "$0")/sup.pid")" ] || exit 1
 cat "$(dirname "$0")/port"
 EOF
@@ -138,6 +139,39 @@ WAIT_SSH_USER= LIMINA_BIN="$TMP/limina" "$WAIT" "$TMP/stale.log" 6 "$VEHICLE" > 
 check "boot pid: the supervisor is a grandchild" 0 $? "$TMP/o7" "^$greeter\$"
 pkill -P "$VEHICLE" 2>/dev/null
 kill "$(cat "$TMP/sup.pid")" "$VEHICLE" 2>/dev/null
+
+# --- a supervisor that is up but cannot be asked -----------------------------------------
+# Its runtime socket lives under its own $TMPDIR, which a waiter in another login session
+# does not share; every ask fails. After the grace the log is read — a log written since the
+# vehicle started — and a stale log still is not.
+cat > "$TMP/mute" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = ssh-port ] && [ "$2" = --help ] && exit 0
+exit 1
+EOF
+chmod +x "$TMP/mute"
+sleep 60 &
+VEHICLE=$!
+disown "$VEHICLE" 2>/dev/null || true
+sleep 1
+echo "guest SSH forward ready: ssh -p $greeter claude@127.0.0.1" > "$TMP/fresh.log"
+WAIT_SSH_USER= WAIT_SSH_ASK_GRACE=1 LIMINA_BIN="$TMP/mute" "$WAIT" "$TMP/fresh.log" 8 "$VEHICLE" \
+    > "$TMP/o8" 2>&1
+check "unaskable supervisor: a fresh log after the grace" 0 $? "$TMP/o8" "^$greeter\$"
+
+echo "guest SSH forward ready: ssh -p $greeter claude@127.0.0.1" > "$TMP/old.log"
+touch -t 202001010000 "$TMP/old.log"
+WAIT_SSH_USER= WAIT_SSH_ASK_GRACE=1 LIMINA_BIN="$TMP/mute" "$WAIT" "$TMP/old.log" 5 "$VEHICLE" \
+    > "$TMP/o9" 2>&1
+check "unaskable supervisor: never a stale log" 1 $? "$TMP/o9" "answered \`limina ssh-port\`"
+
+# ...and a limina with no ssh-port verb at all reads the log at once.
+printf '#!/usr/bin/env bash\nexit 2\n' > "$TMP/old-limina"
+chmod +x "$TMP/old-limina"
+WAIT_SSH_USER= WAIT_SSH_ASK_GRACE=60 LIMINA_BIN="$TMP/old-limina" "$WAIT" "$TMP/fresh.log" 5 \
+    "$VEHICLE" > "$TMP/o10" 2>&1
+check "a limina without ssh-port reads the log" 0 $? "$TMP/o10" "^$greeter\$"
+kill "$VEHICLE" 2>/dev/null
 
 echo
 echo "wait-guest-ssh stage tests: $pass passed, $fail failed"

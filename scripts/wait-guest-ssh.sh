@@ -32,11 +32,17 @@
 # whenever you have it, for two reasons:
 #  - The port then comes from the running supervisor itself (`limina ssh-port <pid>`,
 #    asked of BOOT_PID and of its descendants, which is where the boot scripts run it),
-#    not from the log; once a pid is given the log's forward line is not consulted. A log that outlived an earlier run still names that run's
-#    port, and some other VM may be answering there now. Without a pid the last forward
-#    line in the log wins, so empty the log before the boot, as the callers do.
+#    not from the log. A log that outlived an earlier run still names that run's port, and
+#    some other VM may be answering there now. Without a pid the last forward line in the
+#    log wins, so empty the log before the boot, as the callers do.
 #    The `limina` asked is LIMINA_BIN (relative to the repo root, as the boot scripts read
-#    it), default target/debug/limina; if that is not executable, the log is used.
+#    it), default target/debug/limina; if that is not executable or has no `ssh-port`
+#    verb, the log is used. The ask can also fail for a supervisor that is up: its runtime
+#    socket lives under ITS $TMPDIR, which another login session does not share. So once
+#    no supervisor has answered for WAIT_SSH_ASK_GRACE seconds (default 30) while the
+#    vehicle lives, the log's forward line is taken after all — but only from a log
+#    written since the vehicle started, which a stale log is not.
+#    One supervisor per boot pid: with several under it, the first that answers wins.
 #  - A vehicle that dies before the port is known (a missing worker binary, a bad disk
 #    path) is otherwise indistinguishable from a slow boot, and the wait burns the full
 #    timeout for a port that can never arrive. With the pid we notice in seconds.
@@ -56,12 +62,47 @@ limina="${LIMINA_BIN:-target/debug/limina}"
 case "$limina" in /*) ;; *) limina="$repo/$limina" ;; esac
 ask_supervisor=""
 if [ -n "$boot_pid" ]; then
-    if [ -x "$limina" ]; then
-        ask_supervisor=1
-    else
+    if [ ! -x "$limina" ]; then
         echo "wait-guest-ssh: no limina at $limina to ask for the port; reading $log" >&2
+    elif ! "$limina" ssh-port --help >/dev/null 2>&1; then
+        echo "wait-guest-ssh: $limina has no \`ssh-port\` (an older build?); reading $log" >&2
+    else
+        ask_supervisor=1
     fi
 fi
+grace="${WAIT_SSH_ASK_GRACE:-30}"
+ask_until=$(( $(date +%s) + grace ))
+
+# Seconds since $1 started, from ps's [[dd-]hh:]mm:ss etime; empty if it is gone.
+elapsed() {
+    local t d=0 h=0 m s
+    t=$(ps -o etime= -p "$1" 2>/dev/null | tr -d ' ') || return 0
+    [ -n "$t" ] || return 0
+    case "$t" in *-*) d=${t%%-*}; t=${t#*-} ;; esac
+    s=${t##*:}; t=${t%:*}
+    m=${t##*:}
+    case "$t" in *:*) h=${t%%:*} ;; esac
+    echo $(( 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s ))
+}
+
+# The log's forward port, if the log was written since the boot vehicle started (a log
+# untouched since before then cannot hold this run's line).
+fresh_log_port() {
+    local age mtime
+    age=$(elapsed "$boot_pid")
+    mtime=$(stat -f %m "$log" 2>/dev/null) || return 0
+    [ -n "$age" ] && [ "$mtime" -ge $(( $(date +%s) - age - 1 )) ] || return 0
+    log_port
+}
+
+log_port() {
+    # The log may not exist yet: a caller that launches the boot and waits in the
+    # same breath (deliver-payload.sh) gets here before the vehicle creates it. Left
+    # bare, sed's failure rides pipefail into set -e and kills this script SILENTLY --
+    # the caller then reads an empty port, and every ssh after it fails with
+    # `Bad port ''`. Absorb the failure and keep waiting for the file to appear.
+    { sed -n 's/.*guest SSH forward ready: ssh -p \([0-9][0-9]*\).*/\1/p' "$log" 2>/dev/null || true; } | tail -1
+}
 
 # Every descendant of $1, parents before children.
 descendants() {
@@ -101,13 +142,13 @@ while [ -z "$port" ]; do
     fi
     if [ -n "$ask_supervisor" ]; then
         port=$(supervisor_port)
+        if [ -z "$port" ] && [ "$(date +%s)" -ge "$ask_until" ]; then
+            port=$(fresh_log_port)
+            [ -z "$port" ] || echo "wait-guest-ssh: no supervisor under pid $boot_pid" \
+                "answered \`limina ssh-port\` in ${grace}s; took port $port from $log" >&2
+        fi
     else
-        # The log may not exist yet: a caller that launches the boot and waits in the
-        # same breath (deliver-payload.sh) gets here before the vehicle creates it. Left
-        # bare, sed's failure rides pipefail into set -e and kills this script SILENTLY --
-        # the caller then reads an empty port, and every ssh after it fails with
-        # `Bad port ''`. Absorb the failure and keep waiting for the file to appear.
-        port=$({ sed -n 's/.*guest SSH forward ready: ssh -p \([0-9][0-9]*\).*/\1/p' "$log" 2>/dev/null || true; } | tail -1)
+        port=$(log_port)
     fi
     if [ -z "$port" ] && [ -n "$boot_pid" ] && ! kill -0 "$boot_pid" 2>/dev/null; then
         echo "wait-guest-ssh: boot vehicle (pid $boot_pid) exited before announcing SSH; log tail:" >&2
