@@ -492,8 +492,8 @@ pub struct Spawned {
 /// `O_CLOEXEC` on fds it doesn't know about, so we clear it via `pre_exec`.
 ///
 /// The two stock-agent ports (SPICE's `com.redhat.spice.0`, QEMU's
-/// `org.qemu.guest_agent.0`) are created **here**, for every spawn, rather than at each call
-/// site. Two reasons: the guest's device topology must not depend on how the VM was
+/// `org.qemu.guest_agent.0`) and the debug port (`org.limina.debug.0`) are created **here**,
+/// for every spawn, rather than at each call site. Two reasons: the guest's device topology must not depend on how the VM was
 /// started (a headless run and a windowed run that differ in device count would restore
 /// each other's snapshots wrong), and "one port per spawn" is what makes the broker's
 /// announce-once-per-open rule fall out for free on reboot and resume.
@@ -527,6 +527,12 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     let (qga_host, qga_worker) = socketpair(libc::SOCK_STREAM)?;
     args.push("--qga-fd".into());
     args.push(qga_worker.as_raw_fd().to_string().into());
+    // The debug port (`org.limina.debug.0`). Unlike the two agent ports, nobody but this
+    // function needs its host end: the responder is started right here, so no spawn path can
+    // forget it (`crate::debug_port`).
+    let (debug_host, debug_worker) = socketpair(libc::SOCK_STREAM)?;
+    args.push("--debug-port-fd".into());
+    args.push(debug_worker.as_raw_fd().to_string().into());
     let mut link_ends = Vec::with_capacity(spec.links.len());
     for (flag, connector) in &spec.links {
         let end = connector
@@ -538,11 +544,13 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     }
     // Auto-resume (M9.4): decided HERE, per spawn, never via spec.args — see
     // `take_pending_resume` for why (a reboot relaunch must cold-boot, not re-restore).
+    let mut resumed = false;
     if let Some(snap) = &spec.snapshot_file
         && let Some(pending) = take_pending_resume(snap, spec.suspend_state_file.as_deref())
     {
         args.push("--restore".into());
         args.push(pending.into_os_string());
+        resumed = true;
     }
 
     // When running from an assembled limina.app, hand the worker the bundle-relative venus
@@ -583,6 +591,7 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     let mut fds = inherit_fds.to_vec();
     fds.push(spice_worker.as_raw_fd());
     fds.push(qga_worker.as_raw_fd());
+    fds.push(debug_worker.as_raw_fd());
     fds.extend(link_ends.iter().map(|end| end.as_raw_fd()));
 
     let mut launched = None;
@@ -638,8 +647,16 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     // when the worker exits, which is how a reboot relaunch unblocks the old reader thread.
     drop(spice_worker);
     drop(qga_worker);
+    drop(debug_worker);
     drop(link_ends);
     WORKER_PID.store(child.id() as i32, Ordering::Release);
+    crate::debug_port::serve(
+        debug_host,
+        crate::debug_port::Identity::for_launch(crate::debug_port::Launch::new(
+            resumed,
+            child.id(),
+        )),
+    );
     Ok(Spawned {
         child,
         spice_host,

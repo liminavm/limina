@@ -16,6 +16,7 @@ mod center;
 mod clipboard;
 mod control;
 mod debug_ctl;
+mod debug_port;
 mod fido;
 mod gateway;
 // macOS's own Modifier Keys configuration, which positional normalization must read past.
@@ -1940,6 +1941,44 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--display-pool".into());
         args.push(pool.to_string());
     }
+
+    // What the debug port reports about this run (every spawn adds its own launch facts).
+    // (`cli` is partly moved by now, so the fields are read one by one.)
+    let display = if cli.window {
+        "window"
+    } else if cli.display_capture.is_some() {
+        "capture"
+    } else {
+        "none"
+    };
+    let managed = cli.suspend_state_file.is_some();
+    debug_port::set_run_facts(debug_port::RunFacts {
+        vm_kind: if managed { "managed" } else { "flat" },
+        vm: if managed {
+            cli.window_title.clone().unwrap_or_default()
+        } else {
+            cli.disk
+                .first()
+                .and_then(|spec| parse_disk(spec).ok())
+                .and_then(|d| d.path.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_default()
+        },
+        boot: if cli.kernel.is_some() {
+            "kernel"
+        } else {
+            "efi"
+        },
+        // The worker attaches a virtio-gpu only for a window or a capture.
+        gpu: match (display, cli.gpu_software_2d) {
+            ("none", _) => "none",
+            (_, true) => "software-2d",
+            (_, false) => "coexist",
+        },
+        display,
+        display_pool: if display == "none" { 0 } else { pool },
+        cpus: cli.cpus,
+        ram_mib,
+    });
 
     // Windowed mode: open a native window in the supervisor and stream the guest scanout
     // from the worker over a control socketpair (the worker publishes shared IOSurfaces).
