@@ -365,8 +365,17 @@ mod tests {
         assert!(!is_supervisor(0));
         assert!(!is_supervisor(-5));
         assert!(!is_supervisor(1), "launchd is not a limina supervisor");
+        // A child of ours, not this process: another test in this binary (`center::live`) binds
+        // the real runtime socket under the test process's own pid.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let no_socket = !is_supervisor(child.id() as i32);
+        let _ = child.kill();
+        let _ = child.wait();
         assert!(
-            !is_supervisor(std::process::id() as i32),
+            no_socket,
             "a process with no runtime socket is not a supervisor"
         );
     }
