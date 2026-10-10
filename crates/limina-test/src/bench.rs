@@ -849,6 +849,9 @@ const STAMP_IDENTITY_KEYS: [&str; 6] = [
     "gpu",
 ];
 
+/// The [`STAMP_IDENTITY_KEYS`] written as JSON numbers.
+const STAMP_NUMERIC_KEYS: [&str; 2] = ["cpus", "ram_mib"];
+
 /// `s` as a JSON string literal.
 fn json_string(s: &str) -> String {
     let mut out = String::from("\"");
@@ -869,8 +872,8 @@ fn json_string(s: &str) -> String {
 impl TierStamp {
     /// Entries for [`json_object`]: the tier and what the guest reported, then the build and
     /// host the launch ran on — `limina_git_rev`, `host_model`, `host_os`, `cpus`, `ram_mib`,
-    /// `gpu`, and `deps` (`{"libkrun": <rev>, …}`, the identity's `dep.*`). Every value is a
-    /// string as the supervisor printed it; nothing here is a path.
+    /// `gpu`, and `deps` (`{"libkrun": <rev>, …}`, the identity's `dep.*`). `cpus` and `ram_mib`
+    /// are numbers, the rest strings as the supervisor printed them; nothing here is a path.
     pub fn entries(&self) -> Vec<(&'static str, String)> {
         let mut e = vec![
             ("tier", json_string(self.tier.label())),
@@ -880,7 +883,12 @@ impl TierStamp {
         ];
         for key in STAMP_IDENTITY_KEYS {
             if let Some(v) = self.launch.get(key) {
-                e.push((key, json_string(v)));
+                // Counts are numbers, like `guest_pagesize`; the rest are strings.
+                let value = match v.parse::<u64>() {
+                    Ok(n) if STAMP_NUMERIC_KEYS.contains(&key) => n.to_string(),
+                    _ => json_string(v),
+                };
+                e.push((key, value));
             }
         }
         let deps: Vec<(&str, String)> = self
@@ -989,8 +997,8 @@ mod tests {
             r#""limina_git_rev":"0123456789ab""#,
             r#""host_model":"Mac14,6""#,
             r#""host_os":"macOS 26.6.2""#,
-            r#""cpus":"4""#,
-            r#""ram_mib":"4096""#,
+            r#""cpus":4"#,
+            r#""ram_mib":4096"#,
             r#""gpu":"coexist""#,
             r#""deps":{"libkrun":"8d9dfe0c","virglrs":"f683c82b"}"#,
         ] {
