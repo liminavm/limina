@@ -903,7 +903,11 @@ after it in the VM stalls; a new worker gets a working GPU. Any guest GL app tim
 the KK path timer queries also use. Until fixed, KK piglit A/Bs leave every timer-query test out.
 Vehicle: `spikes/piglit-virgl/ab.sh <disk> <kk icd> ext_timer_query <out>`; match the hang to
 `log show --predicate 'process == "kernel" AND eventMessage CONTAINS "GPURestart"'`. A GPU hang is
-host-wide: reproduce only on an otherwise idle host.
+host-wide: reproduce only on an otherwise idle host. KK's timestamp mechanism is not the cause:
+`spikes/kk-guest-bounds/ts-probe.c` drives it directly over Vulkan (render-encoder writes bracketing
+a real draw, counter-heap resolve, `WAIT_BIT` readback, 400 submissions) and never hangs — no
+watchdog, no `GPURestart`. The trigger is above KK (zink/vrend's timer-query emission) and/or the
+timeline-semaphore / shared-event sync path above, which a fence-only vehicle does not exercise.
 
 ### Geometry shaders: the failures left on the piglit GS list
 KK runs geometry shaders on poly's compute emulation, on by default (`LIMINA_KK_GEOMETRY_SHADER=0`
