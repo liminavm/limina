@@ -906,8 +906,21 @@ Vehicle: `spikes/piglit-virgl/ab.sh <disk> <kk icd> ext_timer_query <out>`; matc
 host-wide: reproduce only on an otherwise idle host. KK's timestamp mechanism is not the cause:
 `spikes/kk-guest-bounds/ts-probe.c` drives it directly over Vulkan (render-encoder writes bracketing
 a real draw, counter-heap resolve, `WAIT_BIT` readback, 400 submissions) and never hangs — no
-watchdog, no `GPURestart`. The trigger is above KK (zink/vrend's timer-query emission) and/or the
-timeline-semaphore / shared-event sync path above, which a fence-only vehicle does not exercise.
+watchdog, no `GPURestart`. The trigger is in how zink/vrend drives the queries, not the write.
+
+Reproduced and traced 2026-10-10 with `kk-cmdtrace.patch` (`LIMINA_KK_CMDTRACE=1`) on
+`piglit-kkq.raw`: `ext_timer_query@time-elapsed` wedges the GPU (kernel `GPURestart` ×2, then
+`Deny submissions/ignore app[limina-vmm] … 2 GPURestarts in 241 submissions`), while
+`arb_timer_query@query gl_timestamp`, run first, passes before the ban. zink's per-measurement
+pattern, each on a fresh query index that climbs 1→63 across the run: `ResetQueryPool` one index →
+a compute-path `vkCmdWriteTimestamp2` (begin, no render encoder) → `vkCmdCopyQueryPoolResults` with
+`VK_QUERY_RESULT_WAIT_BIT` → a render pass whose render-encoder write is the end timestamp →
+another `WAIT_BIT` copy; two submits per measurement. The difference from the vehicle that does not
+hang is the per-timestamp GPU-side `WAIT_BIT` result copy (`kk_CmdCopyQueryPoolResultsToMemoryKHR`:
+`cs_end` + a `MTL_STAGE_BLIT`→`DISPATCH` barrier + the copy kernel, forced after every timestamp) and
+the compute-path begin write — not the timestamp write itself. Next: mirror that exact sequence in
+`ts-probe.c` (GPU-side `WAIT_BIT` copy per timestamp, compute-path begin) to trip it without a
+guest, or trace which submitted MTL4 command buffer the watchdog kills.
 
 ### Geometry shaders: the failures left on the piglit GS list
 KK runs geometry shaders on poly's compute emulation, on by default (`LIMINA_KK_GEOMETRY_SHADER=0`

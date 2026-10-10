@@ -1,8 +1,8 @@
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
-index a823f6891a9..aa12c390fb0 100644
+index 736189db576..195e56c0791 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
-@@ -217,6 +217,7 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
+@@ -221,6 +221,7 @@ kk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
                        const VkCommandBufferBeginInfo *pBeginInfo)
  {
     VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
@@ -10,7 +10,7 @@ index a823f6891a9..aa12c390fb0 100644
     struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
     struct kk_device *dev = kk_cmd_buffer_device(cmd);
  
-@@ -268,6 +269,7 @@ VKAPI_ATTR VkResult VKAPI_CALL
+@@ -276,6 +277,7 @@ VKAPI_ATTR VkResult VKAPI_CALL
  kk_EndCommandBuffer(VkCommandBuffer commandBuffer)
  {
     VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
@@ -18,7 +18,7 @@ index a823f6891a9..aa12c390fb0 100644
  
     end_recording(cmd);
  
-@@ -317,6 +319,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
+@@ -325,6 +327,7 @@ cs_start_render(struct kk_cmd_buffer *cmd)
  
     cmd->metal.render = mtl_new_render_command_encoder_with_descriptor(
        cmd->metal.cmd_buf, state->render_pass_descriptor);
@@ -26,7 +26,16 @@ index a823f6891a9..aa12c390fb0 100644
  
     kk_encoder_update_debug(cmd, cmd->metal.render);
     cmd->limina_draws = 0u;
-@@ -552,6 +555,7 @@ cs_end(struct kk_cmd_buffer *cmd)
+@@ -514,6 +517,8 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
+    mtl_release(encoder);
+ 
+    /* Fold the pending timestamp counter-heap resolves into `cmd_buf` */
++   KK_CT(cmd, "  resolve_counter_heap n=%u",
++         (unsigned)util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve));
+    util_dynarray_foreach(&cmd->ts_resolves, struct kk_ts_resolve, r) {
+       mtl_command_resolve_counter_heap(cmd->metal.cmd_buf, r->heap, r->index,
+                                        1u, r->dst_addr);
+@@ -560,6 +565,7 @@ cs_end(struct kk_cmd_buffer *cmd)
  
     /* Render first as it may open a compute encoder for post render writes. */
     if (cmd->metal.render) {
@@ -34,7 +43,7 @@ index a823f6891a9..aa12c390fb0 100644
        end_encoder(cmd, cmd->metal.render);
        cmd->metal.render = NULL;
        kk_limina_note_encoder_closed(cmd, cmd->metal.render_what, true);
-@@ -670,6 +674,7 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
+@@ -678,6 +684,7 @@ kk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
                         const VkDependencyInfo *pDependencyInfo)
  {
     VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
@@ -43,7 +52,7 @@ index a823f6891a9..aa12c390fb0 100644
     /* TODO_KOSMICKRISP Lighten barriers according to the actual requested
      * barrier. To take advantage of this we need to remove the chaining of
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.h b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
-index bf94d7d7668..de6941b0371 100644
+index 44b20d9e800..fc59aa84dde 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_buffer.h
 +++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.h
 @@ -24,6 +24,22 @@
@@ -98,12 +107,12 @@ index 67bb33ffbd3..01a2e43c50f 100644
     size_t buffer_size = 0u;
  
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
-index e68b137f162..4fc5d09a0f2 100644
+index daed04f31b7..c49561f81c0 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
-@@ -270,6 +270,16 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
- 
-    struct kk_rendering_state *render = &cmd->state.gfx.render;
+@@ -290,6 +290,16 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
+       }
+    }
  
 +   if (kk_limina_cmdtrace()) {
 +      const VkRenderingAttachmentInfo *a0 = pRenderingInfo->colorAttachmentCount ? &pRenderingInfo->pColorAttachments[0] : NULL;
@@ -118,7 +127,7 @@ index e68b137f162..4fc5d09a0f2 100644
     memset(render, 0, sizeof(*render));
  
     render->flags = pRenderingInfo->flags;
-@@ -588,6 +598,7 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
+@@ -608,6 +618,7 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
     VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
     struct kk_rendering_state *render = &cmd->state.gfx.render;
     bool need_meta_resolve = false;
@@ -126,17 +135,7 @@ index e68b137f162..4fc5d09a0f2 100644
  
     /* Translate render state back to VK for meta */
     VkRenderingAttachmentInfo vk_color_att[KK_MAX_RTS];
-@@ -2722,6 +2733,9 @@ kk_xfb_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
- static void
- kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
- {
-+   KK_CT(cmd, "draw prim=%d idx=%d indirect=%d n=%u pred=%u enc=%p need_start=%d",
-+         (int)data->prim, data->indexed, data->indirect, data->draw_count, data->predicate_count,
-+         (void *)cmd->metal.render, cmd->state.gfx.need_to_start_render_pass);
-    if (kk_xfb_draw(cmd, data))
-       return;
- 
-@@ -2783,6 +2797,7 @@ kk_CmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount,
+@@ -3318,6 +3329,7 @@ kk_CmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount,
        return;
  
     VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
@@ -144,7 +143,7 @@ index e68b137f162..4fc5d09a0f2 100644
  
     const struct vk_dynamic_graphics_state *dyn =
        &cmd->vk.dynamic_graphics_state;
-@@ -2871,6 +2886,7 @@ kk_CmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount,
+@@ -3406,6 +3418,7 @@ kk_CmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t indexCount,
        return;
  
     VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
@@ -153,7 +152,7 @@ index e68b137f162..4fc5d09a0f2 100644
     const struct vk_dynamic_graphics_state *dyn =
        &cmd->vk.dynamic_graphics_state;
 diff --git a/src/kosmickrisp/vulkan/kk_cmd_meta.c b/src/kosmickrisp/vulkan/kk_cmd_meta.c
-index 9163df5643a..898f9a112df 100644
+index 2004d9a9153..da02cd4cafc 100644
 --- a/src/kosmickrisp/vulkan/kk_cmd_meta.c
 +++ b/src/kosmickrisp/vulkan/kk_cmd_meta.c
 @@ -239,6 +239,7 @@ kk_CmdBlitImage2(VkCommandBuffer commandBuffer,
@@ -164,11 +163,46 @@ index 9163df5643a..898f9a112df 100644
     struct kk_meta_save save;
     kk_meta_begin(cmd, &save, VK_PIPELINE_BIND_POINT_GRAPHICS,
                   "meta:vkCmdBlitImage2");
+diff --git a/src/kosmickrisp/vulkan/kk_query_pool.c b/src/kosmickrisp/vulkan/kk_query_pool.c
+index 69cb899255a..d283a65b481 100644
+--- a/src/kosmickrisp/vulkan/kk_query_pool.c
++++ b/src/kosmickrisp/vulkan/kk_query_pool.c
+@@ -313,6 +313,9 @@ kk_CmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
+ 
++   KK_CT(cmd, "ResetQueryPool pool=%p first=%u count=%u ts=%d", (void *)pool, firstQuery,
++         queryCount, kk_pool_is_ts(pool));
++
+    assert(cmd->metal.render == NULL);
+ 
+    /* A prior timestamp write may have a resolve still pending. Land it before
+@@ -389,6 +392,9 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+    assert(kk_pool_is_ts(pool) && pool->ts.heap);
+ 
++   KK_CT(cmd, "WriteTimestamp2 stage=0x%llx pool=%p q=%u render_enc=%p",
++         (unsigned long long)stage, (void *)pool, query, (void *)cmd->metal.render);
++
+    /* limina: query is the guest's. The Metal counter heap and the pool BO both hold
+     * exactly query_count entries; refuse a base index past the pool before sampling
+     * the heap or writing the report. */
+@@ -737,6 +743,10 @@ kk_CmdCopyQueryPoolResultsToMemoryKHR(
+    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
+    struct kk_device *dev = kk_cmd_buffer_device(cmd);
+ 
++   KK_CT(cmd, "CopyQueryPoolResults pool=%p first=%u count=%u flags=0x%x ts=%d pending_resolves=%u",
++         (void *)pool, firstQuery, queryCount, flags, kk_pool_is_ts(pool),
++         (unsigned)util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve));
++
+    /* Timestamp results are resolved into the pool BO on a deferred command
+     * buffer; make sure any pending resolve lands before this copy reads it.
+     * This also gives VK_QUERY_RESULT_WAIT_BIT its meaning for timestamps. */
 diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
-index 24650848a03..1b07a8bf9cf 100644
+index b017847083e..a4470f139e3 100644
 --- a/src/kosmickrisp/vulkan/kk_queue.c
 +++ b/src/kosmickrisp/vulkan/kk_queue.c
-@@ -297,6 +297,9 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
+@@ -310,6 +310,9 @@ kk_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
      * work. All resources should have been allocated before submission.
      * Otherwise, users are playing with fire. */
     kk_device_make_resources_resident(dev);

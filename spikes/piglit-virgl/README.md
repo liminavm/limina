@@ -58,8 +58,10 @@ identical results on both builds.
 
 **Trace KK's command stream.** `kk-cmdtrace.patch` applies to the `limina-kk` tree and adds a
 `[KKCT]` line to stderr (the worker log) for each command a KK command buffer records: rendering
-begin/end with the attachment and load op, every draw, barriers, copies, blits, and each submit,
-all tagged with the command buffer. It is on only with `LIMINA_KK_CMDTRACE=1`. Build it in a
+begin/end with the attachment and load op, every draw, barriers, copies, blits, each submit, and
+the timer-query ops (reset, `vkCmdWriteTimestamp2` with its stage and whether a render encoder is
+live, `vkCmdCopyQueryPoolResults`, and each counter-heap resolve), all tagged with the command
+buffer. It is on only with `LIMINA_KK_CMDTRACE=1`. Build it in a
 worktree with its own build dir and boot with `LIMINA_KK_ICD` set to that build's devenv ICD, so
 the shared build stays untouched. Comparing the trace of a failing run with one a sync makes pass
 is what found the meta push-set clobber behind `sgis_generate_mipmap@gen-teximage`.
