@@ -25,8 +25,10 @@ use std::time::{Duration, Instant};
 use limina_test::{Boot, GuestConfig};
 
 /// How long the launcher may keep its stdout and stderr open. It waits for the supervisor's
-/// runtime socket before it returns, which takes a second or two; the rest is margin.
-const LAUNCHER_RETURNS_WITHIN: Duration = Duration::from_secs(30);
+/// runtime socket before it returns, which takes a second or two, and gives up after 30 s
+/// (`lifecycle::SOCKET_WAIT`); this bound is past that, so a slow host reads as a launcher that
+/// gave up (exit 3), never as a pipe a VM process inherited.
+const LAUNCHER_RETURNS_WITHIN: Duration = Duration::from_secs(45);
 
 /// Boot to a usable sshd, generous for a loaded host.
 const SSH_UP: Duration = Duration::from_secs(240);
@@ -328,7 +330,9 @@ impl Drop for Run {
             );
         }
         if !gone(self.pid) {
-            // Only ever this run's own processes: the scratch disk path is unique to it.
+            // Only ever this run's own processes: the disk path is under a scratch directory
+            // named for this test process's pid and the phase, so no other run on the host —
+            // another session's included — has it in its argv, as a whole or as a substring.
             unsafe { libc::kill(self.pid, libc::SIGKILL) };
             let _ = Command::new("pkill")
                 .args(["-9", "-f", self.disk_arg()])
@@ -353,6 +357,31 @@ fn a_detached_flat_run_resets_and_stops_without_a_terminal() {
     run.wait_ssh();
     let first_boot = run.boot_id();
     let first_worker = run.worker();
+
+    // A second detach of the running disk is refused before it touches anything: the live run's
+    // log stays where it is, and no new run starts.
+    let log = run.scratch.0.join("supervisor.log");
+    let again = run.cli(
+        &[
+            "--disk",
+            run.disk_arg(),
+            "--detach",
+            "--log",
+            log.to_str().expect("utf-8 scratch path"),
+        ],
+        Duration::from_secs(30),
+    );
+    assert!(
+        !again.status.success() && text(&again.stderr).contains("already running"),
+        "a second --detach of a running disk must be refused: {}{}",
+        text(&again.stdout),
+        text(&again.stderr)
+    );
+    assert!(
+        !run.scratch.0.join("supervisor.1.log").exists()
+            && run.log().contains("guest SSH forward ready"),
+        "the refused detach rotated the live run's log"
+    );
 
     // Reset is a control surface: refused, with the way to turn it on, while the lever is off.
     let refused = run.cli(&["reset", run.disk_arg()], Duration::from_secs(30));
@@ -431,6 +460,15 @@ fn a_detached_flat_run_resets_and_stops_without_a_terminal() {
     let run = Run::launch("forced");
     run.wait_ssh();
     let procs = run.processes();
+    // A panic must leave the guest wedged, not reboot it: no panic timeout, and no crash kernel
+    // loaded for kdump to boot into. The stock image has both that way; pin the first and check
+    // the second, so a changed image fails here instead of passing a test of something else.
+    run.ssh("sudo sysctl -q -w kernel.panic=0");
+    assert_eq!(
+        run.ssh("cat /sys/kernel/kexec_crash_loaded").trim(),
+        "0",
+        "a crash kernel is loaded: the panic below would reboot the guest into kdump"
+    );
     // The ssh that panics the kernel never gets an answer; its timeout is the expected outcome.
     let _ = limina_test::ssh_exec_on(
         run.port,
