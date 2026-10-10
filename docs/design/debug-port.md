@@ -182,6 +182,14 @@ Printed rather than logged, so it is in the worker log at the default `warn` fil
 (`grep '^limina: identity '`). A guest-side answer and a host-side block with the same
 `launch_id` describe the same launch.
 
+The test harness reads these blocks (`crates/limina-test/src/lib.rs`): a reboot or a reset is a new
+block with a new `launch_id` (`Guest::reboot_and_wait`), a restore a block with `resumed=yes`
+(`Guest::wait_for_launch_kind`), an in-place suspend or host sleep one that is still the last
+(`Guest::assert_same_launch`), the GPU tier its `gpu` field (`Guest::wait_for_gpu`), and a bench's
+`metrics.json` names the build and host from it. Reading the guest side needs the lever; tests opt
+in with `GuestConfig::with_ssh_target_check`, which requires the answer's `supervisor_pid` to be
+the test's own, so ssh is proven to reach the right VM.
+
 ## Device topology
 
 The port is appended after `com.redhat.spice.0` and `org.qemu.guest_agent.0` on the one

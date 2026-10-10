@@ -54,7 +54,8 @@ bridged networking (worker-held vmnet, no privilege needed) and M7 real-device U
 
 Tests drive the **shipped binaries** — `limina` → `limina-vmm` → libkrun/HVF — through the harness
 in `crates/limina-test` (the `Guest` type: boot, await a console marker, teardown that never leaks a
-live VM).
+live VM). Host-side facts — a relaunch, a resume, the GPU tier, the build a bench ran — come from
+the supervisor's launch identity blocks (`docs/design/debug-port.md`), not from log lines.
 
 - **L0 — unit.** Pure Rust per crate; no HVF; plain `cargo test`.
 - **L1 — fast boot.** A static Rust `init` (`guest/limina-init`, musl) served as the root over
