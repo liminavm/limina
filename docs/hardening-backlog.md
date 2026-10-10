@@ -915,12 +915,20 @@ Reproduced and traced 2026-10-10 with `kk-cmdtrace.patch` (`LIMINA_KK_CMDTRACE=1
 pattern, each on a fresh query index that climbs 1→63 across the run: `ResetQueryPool` one index →
 a compute-path `vkCmdWriteTimestamp2` (begin, no render encoder) → `vkCmdCopyQueryPoolResults` with
 `VK_QUERY_RESULT_WAIT_BIT` → a render pass whose render-encoder write is the end timestamp →
-another `WAIT_BIT` copy; two submits per measurement. The difference from the vehicle that does not
-hang is the per-timestamp GPU-side `WAIT_BIT` result copy (`kk_CmdCopyQueryPoolResultsToMemoryKHR`:
-`cs_end` + a `MTL_STAGE_BLIT`→`DISPATCH` barrier + the copy kernel, forced after every timestamp) and
-the compute-path begin write — not the timestamp write itself. Next: mirror that exact sequence in
-`ts-probe.c` (GPU-side `WAIT_BIT` copy per timestamp, compute-path begin) to trip it without a
-guest, or trace which submitted MTL4 command buffer the watchdog kills.
+another `WAIT_BIT` copy; two submits per measurement. Narrowed by elimination in `ts-probe.c`
+(all PASS on an idle host, no `GPURestart`): the timestamp write + counter-heap resolve
+(`ts-render`, `ts-render-loop` ×400), and the compute-path begin write + a climbing query index
+into a persistent pool + `WAIT_BIT` CPU readback (`ts-zink` ×120) all complete cleanly. The one
+difference left is zink's per-timestamp GPU-side `WAIT_BIT` `vkCmdCopyQueryPoolResultsToMemoryKHR`.
+Its KK code reads correct by inspection: `cs_end` keeps the same `cmd->metal.cmd_buf`, the resolve
+is folded onto it, and the copy's compute encoder opens on that same buffer with
+`barrierAfterQueueStages:BLIT beforeStages:DISPATCH` — resolve and copy co-located and ordered.
+A raw-Vulkan vehicle cannot reach that path (KK does not advertise `VK_KHR_device_address_commands`
+to apps and the host loader will not dispatch the entry), so the next step is an in-driver
+experiment: in a KK worktree make `kk_CmdCopyQueryPoolResultsToMemoryKHR` on a timestamp pool skip
+the per-call `cs_end`/copy (or coalesce the copies) behind an env flag, rerun the guest repro, and
+see whether the hang clears — or suspect a Metal 4 interaction of repeated
+`resolveCounterHeap` + queue-stage-barrier'd compute copies rather than a KK logic bug.
 
 ### Geometry shaders: the failures left on the piglit GS list
 KK runs geometry shaders on poly's compute emulation, on by default (`LIMINA_KK_GEOMETRY_SHADER=0`

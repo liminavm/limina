@@ -257,9 +257,104 @@ static int ts_render_n(int iters) {
 static int ts_render(void) { return ts_render_n(1); }
 static int ts_render_loop(void) { return ts_render_n(400); }
 
+// Closer to zink's GL_TIME_ELAPSED pattern than ts_render_n: a persistent timestamp pool whose
+// query index CLIMBS each measurement (a fresh counter-heap slot per frame, not a reused pair),
+// and a COMPUTE-path begin timestamp (written before the render pass, so KK takes the
+// no-render-encoder branch that stamps LIBKK_QUERY_UNAVAILABLE + a compute write) followed by a
+// render-path end timestamp. Readback is still CPU-side WAIT_BIT (the GPU-side
+// vkCmdCopyQueryPoolResults zink uses needs VK_KHR_copy_memory_indirect, absent from the host SDK
+// headers; tested separately if this does not reproduce). Returns 1 if every measurement completed
+// (no hang), 0 at the first timeout / device loss / bad value.
+static int ts_zink(void) {
+  enum { POOL = 256, ITERS = 120 };
+  VkImage img;
+  VkImageView view;
+  make_target(&img, &view);
+  VkPipeline pipe = make_pipeline();
+
+  VkQueryPoolCreateInfo qpi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                               .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = POOL};
+  VkQueryPool qp;
+  if (vkCreateQueryPool(dev, &qpi, NULL, &qp)) { fprintf(stderr, "query pool\n"); return 0; }
+
+  VkCommandBufferAllocateInfo cbai = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                                      .commandPool = cpool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                                      .commandBufferCount = 1};
+  VkFenceCreateInfo fi = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+
+  for (int it = 0; it < ITERS; it++) {
+    uint32_t qb = (uint32_t)(2 * it) % POOL;      // begin index, climbing
+    uint32_t qe = (uint32_t)(2 * it + 1) % POOL;  // end index, climbing
+
+    VkCommandBuffer cb;
+    vkAllocateCommandBuffers(dev, &cbai, &cb);
+    VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    vkBeginCommandBuffer(cb, &bi);
+
+    vkCmdResetQueryPool(cb, qp, qb, 1);
+    vkCmdResetQueryPool(cb, qp, qe, 1);
+
+    // Begin timestamp with NO render pass active -> KK compute path.
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, qp, qb);
+
+    VkImageMemoryBarrier2 imb = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                 .srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                 .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                 .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                 .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, .image = img,
+                                 .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1,
+                           .pImageMemoryBarriers = &imb};
+    vkCmdPipelineBarrier2(cb, &di);
+
+    VkRenderingAttachmentInfo cat = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = view,
+                                     .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                                     .clearValue = {.color = {.float32 = {0.2f, 0.4f, 0.6f, 1.0f}}}};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {64, 64}},
+                          .layerCount = 1, .colorAttachmentCount = 1, .pColorAttachments = &cat};
+    vkCmdBeginRendering(cb, &ri);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    // End timestamp inside the render pass -> KK render-encoder path.
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, qp, qe);
+    vkCmdEndRendering(cb);
+    vkEndCommandBuffer(cb);
+
+    VkFence fence;
+    vkCreateFence(dev, &fi, NULL, &fence);
+    VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cb};
+    if (vkQueueSubmit(q, 1, &si, fence)) { fprintf(stderr, "submit (iter %d)\n", it); return 0; }
+    VkResult w = vkWaitForFences(dev, 1, &fence, VK_TRUE, 3000000000ull);
+    if (w != VK_SUCCESS) {
+      printf("  iter %d (qb=%u qe=%u): fence wait -> %d -- HANG\n", it, qb, qe, w);
+      return 0;
+    }
+    uint64_t ts[2] = {0, 0};
+    uint64_t qr[2];
+    VkResult g = vkGetQueryPoolResults(dev, qp, qb, 1, sizeof(uint64_t), &qr[0], sizeof(uint64_t),
+                                       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    VkResult g2 = vkGetQueryPoolResults(dev, qp, qe, 1, sizeof(uint64_t), &qr[1], sizeof(uint64_t),
+                                        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    ts[0] = qr[0];
+    ts[1] = qr[1];
+    if (g != VK_SUCCESS || g2 != VK_SUCCESS || ts[1] < ts[0] || ts[1] == 0) {
+      printf("  iter %d (qb=%u qe=%u): getresults %d/%d t0=%llu t1=%llu -- BAD\n", it, qb, qe, g, g2,
+             (unsigned long long)ts[0], (unsigned long long)ts[1]);
+      return 0;
+    }
+    vkFreeCommandBuffers(dev, cpool, 1, &cb);
+    vkDestroyFence(dev, fence, NULL);
+  }
+  printf("  %d measurements (climbing index, compute-path begin) completed, no hang\n", ITERS);
+  return 1;
+}
+
 static const struct { const char *name; int (*fn)(void); } tests[] = {
   {"ts-render", ts_render},
   {"ts-render-loop", ts_render_loop},
+  {"ts-zink", ts_zink},
 };
 
 int main(int argc, char **argv) {
