@@ -812,8 +812,8 @@ LIMINA_WINDOW_CAPTURE_DIR=<dir> …        # or capture the whole run (summary w
 
 `<dir>` (a relative one resolves against the directory `limina debug` runs in) gets one
 `s<slot>-<seq>.png` (RGB, 8 bit; `seq` zero-padded to eight digits) per captured frame and
-`frames.jsonl`: one record per frame a window put on glass, in present order, then one summary line
-when the capture stops. Nothing is silently lost: a frame with no image is still a record. The
+`frames.jsonl`: one record per frame a window put on glass, in present order, a `host_state` line
+at the start and wherever the host state changed, then one summary line when the capture stops. Nothing is silently lost: a frame with no image is still a record. The
 types and the reader are `crates/limina-framecap`; the hook is
 `crates/limina/src/window/frame_capture.rs`, in `GuestWindow::show_with_ack`, where every window's
 every frame goes on glass.
@@ -845,6 +845,63 @@ counted in flips), `by_reason` (every frame without an image, by reason), `durat
 `captured_fps`, `bytes` (of image written), `present_hook_us_p50/p99/max` (what the capture cost
 the main thread per frame), and `incomplete` only when the stop gave up waiting for frames still in
 flight, whose records are then never written.
+
+**Host state lines.** The first line of every capture, and a line at every change after it, is
+the host state (`limina_framecap::HostStateRecord`): `"format": 1`, `"host_state": true`, `cause`
+(`capture_start` for the first, `change` after; a capture started before the window's first
+sample gets its first sample as the start's), `t_monotonic_raw_ns`/`t_realtime_ns` (when it was
+written, on the frame records' clocks), and the state's fields at the top level: `windows` (per
+window `slot`, `visible` — AppKit's occlusion bit — and `minimized`), `app_active`, `app_hidden`,
+`throttled` (the supervisor's main thread is in the background band, effective priority ≤ 4),
+`main_thread_priority`, `displays`, `displays_asleep`, `screen_locked` and `on_console` (absent
+when the session dictionary is unreadable), `thermal_state`, `low_power_mode`, and `no_throttle`
+(the lever's activity is held). A state holds from its line until the next one, so a frame is
+attributed by its place in the file; there is no per-frame copy. A priority wobble within its band
+is not a change. The same state, with counters since launch, is on the debug port as `host-state`
+(`docs/design/debug-port.md`).
+
+They did not bump `format`. The rule is that a change an old reader would *misread* bumps it: an
+old `parse_line` refuses the new line (it is neither a frame nor a summary) rather than reading it
+as one, and a `jq` filter on frame fields (`select(.seq)`, `.flip`) skips it. A reader that treats
+every line without `"summary"` as a frame does misread it; filter on `host_state` too.
+
+### Host state and timing honesty
+
+Measured 2026-10-10, stock F44 guest, 4 vCPU, windowed at 2560x1440 on an M1 Max (macOS 26.6.2):
+`vkcube --c 300` in GNOME timed in the guest, a guest busy loop and 1 ms sleeps alongside, a
+frame capture around it, and `ps -M` thread priorities of both host processes. Each state was
+held 45-60 s before measuring, 5 s of animation each.
+
+| state | supervisor threads | guest vkcube | on glass | present interval p99 / max | guest flips never shown |
+|---|---|---|---|---|---|
+| frontmost, visible | 31 (47 in use) | 57.6-59.6 fps | 57-59/s | 19-32 / 21-43 ms | 0 |
+| visible, another app active | 31 | 58.8 fps | 58.2/s | 28 / 35 ms | 0 |
+| covered by another window | **4** | 58.2-59.2 fps | **33-52/s** | **51-315 / 63-450 ms** | **38-133** |
+| hidden (Cmd-H) | **4** | 57.1-59.1 fps | **49-51/s** | **53-59 / 71-125 ms** | **39-42** |
+| minimized, another app active | **4** (once napped) | 57.8 fps | **49.9/s** | **64 / 89 ms** | **42** |
+| minimized, still frontmost | 31 | 59.0 fps | 58.4/s | 32 / 34 ms | 0 |
+| covered, hidden or minimized, `no-throttle` on | 31 / 46 | 57.9-59.5 fps | 57.7-59.1/s | 22-32 / 28-41 ms | 0 |
+
+- **What throttles: App Nap, on the supervisor only.** Once the app is neither frontmost nor
+  visible, App Nap moves every supervisor thread from priority 31 to 4 after roughly 40 s (35-60 s
+  measured; a minimized app napped by 60 s in one run and not by 45 s in another). The guest is not
+  slowed: it keeps flipping at full rate, but the main thread puts fewer of those flips on glass,
+  late. The `host_state` lines carry `throttled: true` (`main_thread_priority: 4`) exactly then.
+- **What does not.** The worker (a launchd job with `ProcessType=Interactive`) kept its priorities
+  in every state, and the guest's busy-loop rate (4.1-5.0 M iterations/s) and 1 ms sleep latency
+  (p50 0.1-0.2 ms, p99 1-4 ms) did not move. Before App Nap engages, and whenever the window is
+  merely covered, minimized or hidden, presents run at the full rate: occlusion does not stop them.
+- **A supervisor started from a shell never naps.** It belongs to the terminal app's coalition,
+  which is visible; every L2 test and the boot scripts start it that way. Only an app launched
+  through LaunchServices (the Dock, `open`) naps, which is how a user runs Limina.
+- **`no-throttle` fixes it.** With the lever on, no state napped after 60 s and nothing was lost;
+  turning it off at runtime let App Nap back in. (One hidden run with the lever on had the guest
+  itself at 39.8 fps, cause not established; the window kept up with it, one flip unshown, and a
+  repeat ran at 57.9 fps.) It is not a fix for Game Mode, which clamps the
+  app's whole process tree whatever it asserts (`spikes/game-mode-throttle/RESULTS.md`).
+- **Not measured.** Host display sleep and the screen lock (driving them would disturb whoever is
+  at the Mac and every other VM on it); they are reported, not characterised. Present-to-glass
+  latency needs a guest-side flip timestamp the records do not carry.
 
 **One frame, now: the still.** `limina debug <vm> capture still <png> [slot]` writes the frame on
 glass on one display (the main window's when `slot` is omitted) to `<png>` (RGB, replaced if it

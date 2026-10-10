@@ -10,8 +10,9 @@
 //! frames finish encoding out of order on several threads.
 //!
 //! The capture directory (`s<slot>-<seq>.png` images and `frames.jsonl`), and what every field
-//! of a [`Record`], a [`Summary`] and a [`Still`] means, are defined in `docs/graphics.md` §8
-//! ("The record format"); the field docs here are reminders, the document is the definition.
+//! of a [`Record`], a [`HostStateRecord`], a [`Summary`] and a [`Still`] means, are defined in
+//! `docs/graphics.md` §8 ("The record format", "Host state lines"); the field docs here are
+//! reminders, the document is the definition.
 //! Images are RGB, 8 bit: the scanout's alpha is "don't care", so it is dropped rather than
 //! written as noise.
 

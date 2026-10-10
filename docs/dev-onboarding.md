@@ -198,7 +198,8 @@ KosmicKrisp, windowed, with user-mode NAT. It tests the image exactly as it real
 
 The log filter and the supervisor's traces can change while the VM runs — the way to catch
 an intermittent fault on a VM (dogfood included) that was started quietly. `RUST_LOG` and the
-levers' variables (`LIMINA_*_TRACE`, `LIMINA_INPUT_INJECT`, `LIMINA_DEBUG_PORT`) still set the
+levers' variables (`LIMINA_*_TRACE`, `LIMINA_INPUT_INJECT`, `LIMINA_DEBUG_PORT`,
+`LIMINA_NO_THROTTLE`) still set the
 starting values; nothing set at runtime outlives the run.
 
 ```sh
@@ -209,6 +210,7 @@ limina debug <vm> lever edge-trace on
 limina debug <vm> lever input-inject on          # allow `limina input` (off by default)
 limina debug <vm> lever debug-port on            # let the guest read the debug port (off by default)
 limina debug <vm> lever lifecycle-control on     # allow `limina reset` (off by default)
+limina debug <vm> lever no-throttle on           # keep App Nap off the supervisor (off by default)
 limina debug <vm> capture start <dir>            # every presented frame, tagged (docs/graphics.md §8)
 limina debug <vm> capture stop
 ```
@@ -217,12 +219,18 @@ limina debug <vm> capture stop
 In an app bundle the binary is `Limina.app/Contents/MacOS/limina`. The window's **Debug** menu
 carries the common presets, every lever, and *Copy Debug Command*. The worker's filter and every
 lever hold for the supervisor's life, across guest reboots and a resume from the parked window; a
-fresh `limina start` (a resume from `limina suspend` included) starts from the variables again. Three levers are harness access rather than traces, and
+fresh `limina start` (a resume from `limina suspend` included) starts from the variables again. Four levers are harness access rather than traces, and
 are off unless turned on here, in the menu's *Harness Access* section, or by their variable at
 start: `input-inject` (`LIMINA_INPUT_INJECT`, `limina input`; `docs/input-and-windows.md` §9),
-`debug-port` (`LIMINA_DEBUG_PORT`, `docs/design/debug-port.md`) and `lifecycle-control`
-(`LIMINA_LIFECYCLE_CONTROL`, `limina reset`; *Run unattended* below). Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …)
-are still environment-only.
+`debug-port` (`LIMINA_DEBUG_PORT`, `docs/design/debug-port.md`), `lifecycle-control`
+(`LIMINA_LIFECYCLE_CONTROL`, `limina reset`; *Run unattended* below) and `no-throttle`
+(`LIMINA_NO_THROTTLE`). `no-throttle` holds an `NSProcessInfo` activity
+(`UserInitiatedAllowingIdleSystemSleep | LatencyCritical`) in the supervisor for as long as it is
+on, which keeps App Nap from slowing what goes on glass while the window is hidden or covered
+(`docs/graphics.md` §8, *Host state and timing honesty*). It does not keep the display or the Mac
+awake, does not reach the worker (which App Nap does not touch), and does nothing against Game
+Mode. Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …) are still
+environment-only.
 
 The SSH forward can move the same way, without touching the guest's network:
 `limina ssh-port <vm> <port>` (or the control center's network button on a running VM). The move

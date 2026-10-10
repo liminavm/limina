@@ -17,7 +17,8 @@ supervisor answers (`crates/limina/src/debug_port.rs`), started from `supervisor
 every worker launch has it — flat and managed, windowed and headless, after a guest reboot and
 after a resume. Test: `crates/limina-test/tests/l2_debug_port.rs` (boots with the answers off,
 checks the disabled answer and the helper's exit 4, turns them on at runtime, then reads the
-identity before and after a reboot).
+identity before and after a reboot); `crates/limina-test/tests/l2_frame_capture.rs` reads
+`host-state` with the app hidden and shown again.
 
 ## Reading it
 
@@ -50,6 +51,7 @@ line, in order. Requests:
 | request | answer |
 |---|---|
 | `identity` | the identity fields below |
+| `host-state` | what the host is doing to the VM's windows and the supervisor now, and since launch (below) |
 | `help` | `requests=<space-separated list>` |
 | anything else | `error=<message>` |
 
@@ -128,6 +130,43 @@ sees an error, as it would for any refused request.
 There is deliberately **no dirty-tree flag**: `crates/limina/build.rs` explains why one baked in
 at compile time would be wrong in both directions. Whether a bundle was cut from a dirty tree is
 recorded where it can be observed, by `scripts/park-bundle.sh`.
+
+## The `host-state` answer (format 1)
+
+For a harness inside the guest that times something on screen: ask before and after a
+measurement, and distrust the numbers if anything moved. The supervisor's window tick samples the
+state (`crates/limina/src/window/host_observe.rs`) and `crates/limina/src/host_state.rs` keeps it
+and the counters; the same state goes into a running frame capture as `host_state` records
+(`docs/graphics.md` §8, which also has what each state measurably does to timing).
+
+| key | value |
+|---|---|
+| `format` | `1` |
+| `t_realtime_ns` | host `CLOCK_REALTIME` when answered (the guest RTC is anchored to it) |
+| `state` | `observed`, or `unobserved` when nothing has been sampled: a VM with no window, or one asked before the window's first tick. Then no other key follows. |
+| `visible` | `yes` when any of the VM's windows is on screen (AppKit occlusion: covered, minimized, hidden and another Space all read `no`) |
+| `windows` | how many windows show a guest display |
+| `window.<slot>.visible`, `window.<slot>.minimized` | per window, by guest display |
+| `app_active` | the VM's app is the frontmost app |
+| `app_hidden` | the app is hidden (Cmd-H) |
+| `throttled` | the supervisor's main thread is in the background band (effective priority 4 or less): App Nap, or the Game Mode clamp. Every frame goes on glass from that thread. |
+| `main_thread_priority` | its effective priority when sampled (31 normally, 37-47 while in use, 4 throttled) |
+| `displays`, `displays_asleep` | online host displays, and how many are asleep |
+| `screen_locked` | the login session's screen lock, from its session dictionary (`yes`/`no`/`unknown`) |
+| `on_console` | the session owns the console (`no` after fast user switching away) |
+| `thermal_state` | `NSProcessInfo.thermalState`: `nominal`, `fair`, `serious`, `critical` |
+| `low_power_mode` | Low Power Mode is on |
+| `no_throttle` | the supervisor holds the `no-throttle` lever's activity |
+| `transitions` | state changes since the first sample (a wobble of the priority within its band is none) |
+| `observed_ms` | time since the first sample |
+| `not_visible_ms` | of that, time with no window on screen |
+| `throttled_ms` | of that, time with the main thread throttled |
+
+Not reported, because nothing here observes it: whether the **worker** is throttled (it is a
+launchd job, not an app; measured unaffected by every window state, so it is not sampled), why
+the main thread is throttled (App Nap and Game Mode look the same from inside), and host CPU
+contention from other processes. A change is sampled on the next window tick, which runs late
+while the app is throttled; counters are exact to that granularity.
 
 ## The same fields on the host
 
