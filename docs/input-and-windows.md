@@ -671,11 +671,23 @@ alternative, and it needs the window key and loses lone modifiers.
   same `WorkerConn`; each verb takes one snapshot of it, so a verb lands whole on one worker. A
   send to a worker that is gone, or a full queue, is an `err` answer, never a silent drop; a
   parked (suspended) VM refuses outright.
-- **Any process of the same user can type into the guest.** The runtime socket is `0600` and
+- **Off by default.** Every `input …` request is refused unless the VM's `input-inject` lever
+  is on (`debug_ctl::INPUT_INJECT`): start the VM with `LIMINA_INPUT_INJECT=1`, tick
+  `input-inject` under *Harness Access* in the window's Debug menu, or run
+  `limina debug <vm> lever input-inject on`. Off, the answer is `err input injection is off for
+  this VM; to allow it, …` naming those three, nothing reaches the worker, and `limina input`
+  exits nonzero; `info`, `watch` and `ssh-port` on the same socket are unaffected. The lever is
+  read per request, so a toggle applies to the next verb, and it lives in the supervisor, so it
+  holds across guest reboots and a resume from the parked window, not across a fresh start. Turning it off releases everything injection holds
+  pressed — in every open connection, idle ones included, and what `keep-held` connections left —
+  so no key outlives the permission that pressed it (`inject::lever_off`).
+- **On, any process of the same user can type into the guest.** The runtime socket is `0600` and
   same-user, like the debug socket, but injection through it needs no Accessibility (TCC) grant —
-  the gate osascript-driven input has to pass. That is deliberate (it is what makes unattended
-  harnesses possible) and has no opt-out.
+  the gate osascript-driven input has to pass. That is what makes unattended harnesses possible.
+  The lever is a default-off posture, not a boundary against same-user code: such code can turn
+  it on over the debug socket.
 - `LIMINA_POINTER_WIRE_TRACE` prints injected events as `[WIRE] … dev=inject-<device>`. The L2
   oracle is `crates/limina-test/tests/l2_input_inject.rs`: it reads the guest's virtio evdev nodes
   raw (found by name, grabbed so the greeter sees nothing) and compares them event for event,
-  headless and windowed.
+  headless and windowed. The headless run starts with the lever off and checks the refusal
+  before turning it on at runtime; the windowed one starts with `LIMINA_INPUT_INJECT=1`.

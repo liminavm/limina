@@ -9,10 +9,15 @@ kernel exposes it as `/dev/virtio-ports/org.limina.debug.0`.
 It exists so a test harness running inside a guest can attribute a result to the host build that
 produced it, without anyone copying a hash by hand.
 
+**Its answers are off by default.** The port is always there, but until the VM's `debug-port`
+lever is on, every request gets `error=disabled` and nothing else (see *Disabled* below).
+
 Code: the worker attaches the port (`crates/limina-vmm/src/krun/console.rs`, `Ports::debug`); the
 supervisor answers (`crates/limina/src/debug_port.rs`), started from `supervisor::spawn_worker`, so
 every worker launch has it — flat and managed, windowed and headless, after a guest reboot and
-after a resume. Test: `crates/limina-test/tests/l2_debug_port.rs`.
+after a resume. Test: `crates/limina-test/tests/l2_debug_port.rs` (boots with the answers off,
+checks the disabled answer and the helper's exit 4, turns them on at runtime, then reads the
+identity before and after a reboot).
 
 ## Reading it
 
@@ -31,7 +36,8 @@ exec 3>&-
 The same, packaged: `guest/limina-debug-identity` (copy it into the guest; bash only). With no
 argument it prints the whole answer; with a key it prints that value
 (`limina-debug-identity limina_git_rev`). Exit 1 = no port, 2 = no complete answer within
-`LIMINA_DEBUG_TIMEOUT` seconds (default 10).
+`LIMINA_DEBUG_TIMEOUT` seconds (default 10), 3 = no such key, 4 = the host has the answers
+disabled (stderr carries the `enable=` hint).
 
 Do not `cat` the port. It never reports end-of-file (the host end stays open for the life of the
 VM), and nothing arrives until a request is written, so a bare `cat` blocks forever.
@@ -65,6 +71,35 @@ holding a lone `.`, the only line in an answer without an `=`. A value is the re
 
 `key=value` rather than JSON because the reader is a stock guest, possibly one without `jq` or
 Python, and bash's `read`/`case` parse this with nothing else installed.
+
+## Disabled (the default)
+
+The answers are gated by the supervisor's `debug-port` lever (`debug_ctl::DEBUG_PORT`). Turn it
+on by starting the VM with `LIMINA_DEBUG_PORT=1`, by ticking `debug-port` under *Harness Access*
+in the window's Debug menu, or with `limina debug <vm> lever debug-port on`. While it is off,
+every non-blank request — `identity`, `help`, an unknown one, an over-long one — gets exactly:
+
+```
+format=1
+error=disabled
+enable=start the VM with LIMINA_DEBUG_PORT=1, tick debug-port in the window's Debug menu, or run `limina debug <vm> lever debug-port on`
+.
+```
+
+No build, host or launch fact is in it, `help` included. A reader that only looks for `error=`
+sees an error, as it would for any refused request.
+
+- **The port stays on the bus regardless.** The device set must not depend on the setting: a
+  snapshot restores only onto the device set it was taken with, and a VM suspended with the lever
+  one way must resume with it the other.
+- **Read per request.** A toggle applies to the next request, on the same open port. The lever
+  lives in the supervisor, so it holds across guest reboots and a resume from the parked window
+  (each a new worker), not across a fresh `limina start`.
+- **The host-side copy is unaffected.** The `limina: identity …` lines below go to the worker log
+  on the host at every launch, on or off.
+- **What it protects.** It keeps a guest from learning the host's build, OS and model unless
+  someone asked for that. It is not a boundary against host code of the same user, which can turn
+  the lever on over the debug socket.
 
 ## The `identity` answer (format 1)
 

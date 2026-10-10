@@ -198,21 +198,28 @@ KosmicKrisp, windowed, with user-mode NAT. It tests the image exactly as it real
 
 The log filter and the supervisor's traces can change while the VM runs — the way to catch
 an intermittent fault on a VM (dogfood included) that was started quietly. `RUST_LOG` and the
-`LIMINA_*_TRACE` variables still set the starting values; nothing set at runtime outlives the run.
+levers' variables (`LIMINA_*_TRACE`, `LIMINA_INPUT_INJECT`, `LIMINA_DEBUG_PORT`) still set the
+starting values; nothing set at runtime outlives the run.
 
 ```sh
 limina debug <vm> status                         # both filters, every lever
 limina debug <vm> log 'warn,limina::window=debug'  # both processes (--supervisor/--worker for one)
 limina debug <vm> log default                    # back to what it started with
 limina debug <vm> lever edge-trace on
+limina debug <vm> lever input-inject on          # allow `limina input` (off by default)
+limina debug <vm> lever debug-port on            # let the guest read the debug port (off by default)
 limina debug <vm> capture start <dir>            # every presented frame, tagged (docs/graphics.md §8)
 limina debug <vm> capture stop
 ```
 
 `<vm>` is a managed VM's name or bundle, a flat run's boot-disk path, or the supervisor's pid.
 In an app bundle the binary is `Limina.app/Contents/MacOS/limina`. The window's **Debug** menu
-carries the common presets, every lever, and *Copy Debug Command*. The worker's filter follows
-it across a reboot or resume. Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …)
+carries the common presets, every lever, and *Copy Debug Command*. The worker's filter and every
+lever hold for the supervisor's life, across guest reboots and a resume from the parked window; a
+fresh `limina start` (a resume from `limina suspend` included) starts from the variables again. Two levers are harness access rather than traces, and
+are off unless turned on here, in the menu's *Harness Access* section, or by their variable at
+start: `input-inject` (`LIMINA_INPUT_INJECT`, `limina input`; `docs/input-and-windows.md` §9) and
+`debug-port` (`LIMINA_DEBUG_PORT`, `docs/design/debug-port.md`). Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …)
 are still environment-only.
 
 The SSH forward can move the same way, without touching the guest's network:
