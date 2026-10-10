@@ -208,6 +208,7 @@ limina debug <vm> log default                    # back to what it started with
 limina debug <vm> lever edge-trace on
 limina debug <vm> lever input-inject on          # allow `limina input` (off by default)
 limina debug <vm> lever debug-port on            # let the guest read the debug port (off by default)
+limina debug <vm> lever lifecycle-control on     # allow `limina reset` (off by default)
 limina debug <vm> capture start <dir>            # every presented frame, tagged (docs/graphics.md §8)
 limina debug <vm> capture stop
 ```
@@ -216,15 +217,57 @@ limina debug <vm> capture stop
 In an app bundle the binary is `Limina.app/Contents/MacOS/limina`. The window's **Debug** menu
 carries the common presets, every lever, and *Copy Debug Command*. The worker's filter and every
 lever hold for the supervisor's life, across guest reboots and a resume from the parked window; a
-fresh `limina start` (a resume from `limina suspend` included) starts from the variables again. Two levers are harness access rather than traces, and
+fresh `limina start` (a resume from `limina suspend` included) starts from the variables again. Three levers are harness access rather than traces, and
 are off unless turned on here, in the menu's *Harness Access* section, or by their variable at
-start: `input-inject` (`LIMINA_INPUT_INJECT`, `limina input`; `docs/input-and-windows.md` §9) and
-`debug-port` (`LIMINA_DEBUG_PORT`, `docs/design/debug-port.md`). Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …)
+start: `input-inject` (`LIMINA_INPUT_INJECT`, `limina input`; `docs/input-and-windows.md` §9),
+`debug-port` (`LIMINA_DEBUG_PORT`, `docs/design/debug-port.md`) and `lifecycle-control`
+(`LIMINA_LIFECYCLE_CONTROL`, `limina reset`; *Run unattended* below). Traces inside libkrun (`LIMINA_GPU_TRACE`, `LIMINA_SND_TRACE`, …)
 are still environment-only.
 
 The SSH forward can move the same way, without touching the guest's network:
 `limina ssh-port <vm> <port>` (or the control center's network button on a running VM). The move
 lasts until the VM stops; `ssh_port` in its definition is what the next start uses.
+
+### Run unattended (scripts, a remote harness over ssh)
+
+```sh
+limina --firmware <fd> --disk <img> --net --detach   # returns at once
+# limina: detached pid=<supervisor pid> log=<img>.limina.log
+limina ssh-port <img>                                 # the guest's SSH forward
+limina reset <img>                                    # power-cycle (needs the lifecycle-control lever)
+limina stop <img> [--timeout SECS]                    # ask the guest to power off, wait, report
+limina stop --force <img>                             # kill it, wedged guest or not
+```
+
+A flat run in the foreground holds its terminal: every process of the run — the supervisor,
+gvproxy and its reaper, and the worker, whose stdio the supervisor hands launchd — inherits the
+launching shell's stdout and stderr, so `ssh host 'limina --disk …'` stays open for the VM's whole
+life (sshd ends a session only once every holder of its output pipes has closed them).
+`nohup` does not help there, as it redirects only a terminal; under `ssh -t`, a `nohup limina …
+&` was killed with the session instead (measured 2026-10-10). `--detach` starts the run as a session leader with only
+its log on stdio, waits until it answers on its runtime socket, prints the one line above and
+exits. The log defaults to `<disk>.limina.log` beside the boot disk, where its suspend snapshot
+also lives, and earlier runs' logs are kept as `<disk>.limina.1.log` and up; a run without
+`--disk` must name `--log <file>`. It is the supervisor's log, so `scripts/wait-guest-ssh.sh
+<log>` waits on it as on any other.
+
+Every verb finds the run by its boot-disk path (as the run spelled it), a managed VM's name, or the
+supervisor's pid. `stop` is the stop ladder of a SIGTERM to the supervisor (guest agent, power
+button, stock guest agent); it never kills, and reports a guest still running after `--timeout`
+(default 60 s) with a non-zero exit. `stop --force` is the second signal: the supervisor SIGKILLs
+the worker, tears down gvproxy and its sockets, and exits, without writing a suspend snapshot.
+`reset` SIGKILLs the worker and cold-boots a fresh one through the path a guest's own `reboot`
+takes, so the supervisor, its window, the NAT gateway and the SSH port all stay; it answers once
+the fresh worker runs. There is no orderly reset: the orderly one is the guest's own `reboot`
+(`ssh … sudo reboot`), which relaunches the same way, and `reset` is for the guest that cannot be
+asked. Back-to-back resets under 5 s each count toward the boot-loop guard that stops a VM after
+five rapid reboots.
+
+Which of these need a lever follows from what they grant. `reset` is a new capability, a
+power-cycle on request, so it is refused until `lifecycle-control` is on, and the refusal says
+how to turn it on. `stop` and `stop --force` grant nothing: they only send the supervisor the
+SIGTERMs that any process of the same user can already send it with `kill`, so gating them would
+gate nothing. `--detach` changes how a run is started, not what can be done to it once running.
 
 ## 4. Linux-side builds (firmware + the enhanced tier)
 

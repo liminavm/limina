@@ -744,3 +744,28 @@ ssh -p <PORT> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null claude
 user `claude` / password `claudiusrobotus`, passwordless sudo. The full operational SSH recipe +
 harness builders (`GuestConfig::with_net` / `with_ssh_port`) live in the `limina-fedora-access`
 agent memory.
+
+A run started over ssh or from a script should use `--detach` (`docs/dev-onboarding.md` §3, *Run
+unattended*): it returns at once with the supervisor's pid, and its log — `<disk>.limina.log` by
+default — carries the same `guest SSH forward ready` line, so `scripts/wait-guest-ssh.sh` waits on
+it unchanged.
+
+### Root on a guest you hold no credentials for
+
+systemd reads SMBIOS OEM strings of the form `io.systemd.credential:<name>=<value>` as system
+credentials, and its `ssh.authorized_keys.root` credential becomes `/root/.ssh/authorized_keys`
+at boot. So a host key can be handed to root without touching the image:
+
+```bash
+limina --firmware target/krun-efi/KRUN_EFI.gop.fd --disk <clone.raw> --net \
+  --smbios-oem-string "io.systemd.credential:ssh.authorized_keys.root=$(cat ~/.ssh/id_ed25519.pub)"
+ssh -p <PORT> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@127.0.0.1
+```
+
+Verified 2026-10-10 on a clone of `Fedora-Workstation-44.stock.test.raw` with a key generated for
+the run: root login worked, `systemd-creds --system list` showed `ssh.authorized_keys.root`, and
+Fedora's default `PermitRootLogin prohibit-password` admits a key. The guest still has to run
+`sshd`, which a fresh Fedora Workstation does not until it is enabled (the test images have it,
+see *Credentials*). EFI boots only: `--smbios-oem-string` conflicts with `--kernel`, as libkrun
+writes SMBIOS on the firmware path alone. The key lands in `/root/.ssh/authorized_keys`, which a
+later boot without the string leaves in place.
