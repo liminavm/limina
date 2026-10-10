@@ -9,10 +9,18 @@
 //! which is how a harness captures just the window of interest, around a guest animation: `vkcube`
 //! under the stock image's GNOME session, which presents continuously.
 //!
-//! Oracle, all from what the capture wrote: more than one frame captured; `seq` strictly
-//! increasing and `flip` never decreasing within the slot, in file order; every image file named
-//! by exactly one record and every record's file present, decodable, of the size it says and not
-//! blank; the summary line agreeing with the records; the stop's answer carrying that summary.
+//! Oracle, all from what the capture wrote: at least [`MIN_CAPTURED`] frames captured in the
+//! [`WINDOW`] (vkcube flips at 60 Hz, so ~240 are on offer; the floor leaves room for a loaded
+//! shared host) with frames lost to the capture or never presented a minority of the guest's
+//! flips; `seq` strictly increasing and `flip` never decreasing within the slot, in file order;
+//! every image file named by exactly one record and every record's file present, decodable, of the
+//! size it says and not blank; the summary line agreeing with the records; the stop's answer
+//! carrying that summary.
+//!
+//! The vehicle is part of the image (`vulkan-tools` is in the stock test image, docs/images.md), so
+//! a missing or dead `vkcube` FAILS the test rather than skipping it: a capture of a still desktop
+//! would pass the frame checks while proving nothing about rate. Images are capped at
+//! [`MAX_MB`] so a run stays small (~0.45 MB a frame at this size; the cap is not reached).
 //!
 //! Stock disk + our GOP firmware + a coexist display in a real window, so it is in the EXCLUSIVE
 //! set in `.config/nextest.toml`. SKIPs cleanly without the KosmicKrisp ICD or the image. Gated
@@ -28,7 +36,13 @@ use limina_test::{Guest, GuestConfig};
 const DISPLAY: (u32, u32) = (1280, 800);
 
 /// How long the capture runs.
-const WINDOW: Duration = Duration::from_secs(6);
+const WINDOW: Duration = Duration::from_secs(4);
+
+/// Frames that must be captured in [`WINDOW`]: a quarter of what 60 Hz offers.
+const MIN_CAPTURED: u64 = 60;
+
+/// `LIMINA_WINDOW_CAPTURE_DIR_MAX_MB` for the run.
+const MAX_MB: &str = "512";
 
 fn limina_debug(guest: &Guest, args: &[&str]) -> (bool, String) {
     let out = std::process::Command::new(limina_test::limina_bin().expect("the limina binary"))
@@ -81,7 +95,8 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
             .with_windowed_coexist_display(DISPLAY.0, DISPLAY.1)
             .with_net()
             .with_supervisor_log()
-            .with_env("RUST_LOG", "warn,limina::window::frame_capture=info"),
+            .with_env("RUST_LOG", "warn,limina::window::frame_capture=info")
+            .with_env("LIMINA_WINDOW_CAPTURE_DIR_MAX_MB", MAX_MB),
         Err(e) => {
             eprintln!("SKIPPED {name}: {e:#}");
             return;
@@ -111,8 +126,13 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
             "{session} nohup vkcube >/tmp/vkcube.log 2>&1 & sleep 1; echo started"
         ))
         .expect("could not launch vkcube in the guest session");
-    // Let it map and start spinning.
+    // Let it map and start spinning, and make sure it is still there to be captured.
     std::thread::sleep(Duration::from_secs(5));
+    let alive = guest.ssh_exec("pgrep -x vkcube >/dev/null && echo ALIVE || cat /tmp/vkcube.log");
+    assert!(
+        alive.as_deref().is_ok_and(|o| o.contains("ALIVE")),
+        "vkcube is not running, so nothing presents continuously: {alive:?}"
+    );
 
     let dir = guest.scratch_dir().join("frames");
     let dir_s = dir.to_string_lossy().into_owned();
@@ -207,10 +227,15 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
 
     // The summary agrees with the records it closes.
     let presented = records.iter().filter(|r| r.seq.is_some()).count() as u64;
-    let not_presented = records
+    let not_presented: u64 = records
         .iter()
         .filter(|r| r.reason == Some(limina_framecap::Reason::NotPresented))
-        .count() as u64;
+        .map(|r| {
+            let (from, to, n) = (r.flip_from.unwrap(), r.flip_to.unwrap(), r.count.unwrap());
+            assert_eq!(to + 1 - from, n, "a not_presented run miscounted: {r:?}");
+            n
+        })
+        .sum();
     assert_eq!(
         (summary.presented, summary.captured, summary.not_presented),
         (presented, captured.len() as u64, not_presented),
@@ -222,9 +247,22 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
         "the stop's answer does not carry the summary:\n{stopped}"
     );
     assert!(
-        summary.captured > 1,
-        "only {} frames captured in {WINDOW:?} of a spinning vkcube: {summary:?}",
+        summary.captured >= MIN_CAPTURED,
+        "only {} frames captured in {WINDOW:?} of a spinning vkcube (need {MIN_CAPTURED}): \
+         {summary:?}",
         summary.captured
+    );
+    let flips = summary.presented + summary.not_presented;
+    assert!(
+        2 * (summary.dropped + summary.not_presented) < flips,
+        "most of the guest's {flips} flips have no image ({} dropped, {} never presented): \
+         {summary:?}",
+        summary.dropped,
+        summary.not_presented
+    );
+    assert_eq!(
+        summary.incomplete, None,
+        "the stop did not drain: {summary:?}"
     );
     report(&summary);
 
