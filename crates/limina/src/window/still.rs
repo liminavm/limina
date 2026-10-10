@@ -271,7 +271,11 @@ mod tests {
             surface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut());
         }
         set_primary(0xa);
-        note(0xb, FrameTag::new(1, 287, 3, true), 44, &surface);
+        let reshow = FrameTag {
+            cause: Some(limina_framecap::Cause::Reshow),
+            ..FrameTag::new(1, 287, 3)
+        };
+        note(0xb, reshow, 44, &surface);
         let err = take(&png, None).unwrap_err();
         assert!(err.contains("main window has not"), "{err}");
         let err = take(&png, Some(2)).unwrap_err();
@@ -291,13 +295,7 @@ mod tests {
                 still.guest_flip,
                 still.cause
             ),
-            (
-                1,
-                287,
-                3,
-                false,
-                Some(limina_framecap::Cause::ScanoutConfigured)
-            )
+            (1, 287, 3, false, Some(limina_framecap::Cause::Reshow))
         );
         assert_eq!(
             (still.presented_iosurface, still.layer_iosurface),
@@ -321,7 +319,7 @@ mod tests {
         );
 
         // The main window's frame is the default; a closed window has nothing on glass.
-        note(0xa, FrameTag::new(0, 9, 3, false), 50, &surface);
+        note(0xa, FrameTag::new(0, 9, 3), 50, &surface);
         let main = Still::parse(&take(&png, None).unwrap()).unwrap();
         assert_eq!((main.slot, main.flip, main.guest_flip), (0, 9, true));
         forget(0xb);

@@ -499,7 +499,9 @@ pub(crate) fn register_apply_hook(hook: std::rc::Rc<dyn Fn()>) {
 #[cfg_attr(test, derive(Clone))]
 pub struct SlotPresent {
     /// The surface id the worker wants shown right now (alternates between its double
-    /// buffer so the layer's contents object changes and Core Animation re-reads).
+    /// buffer so the layer's contents object changes and Core Animation re-reads). Only ever a
+    /// guest flip (`frame`): a `surface` announcement clears it, because the buffer it names has
+    /// not been drawn into, and the window holds its last frame until the next flip.
     pub(crate) show_id: Option<u32>,
     /// The last surface this slot showed, kept across `scanoutgone`. A suspending guest turns
     /// its display off on the way into s2idle, so by the time the worker exits `show_id` is
@@ -511,13 +513,8 @@ pub struct SlotPresent {
     pub(crate) generation: u64,
     /// Count of *presented frames* (`frame` messages), as opposed to `generation`, which also bumps
     /// on surface geometry. The restore overlay comes down on the first real frame, not on
-    /// the fresh worker's surface announcement (which would flash black under the spinner).
+    /// the fresh worker's surface announcement.
     pub(crate) frames: u64,
-    /// Whether the latest update was a `surface` announcement rather than a `frame`: `show_id` is
-    /// then the first buffer of a freshly configured scanout, which no guest flip has drawn
-    /// into, and a window putting it up is not showing a new guest flip (the frame capture's
-    /// `cause`). A guest blanking and unblanking its display ends in exactly this.
-    pub(crate) announced: bool,
     /// Whether the worker says the guest is held off this scanout's presented buffers (`held`
     /// messages). `Some(false)` means it may draw into the surface on glass, so the window shows
     /// a copy. `None` until the worker says: an older worker never does, and zero-copy is what
@@ -530,6 +527,15 @@ pub struct SlotPresent {
     /// *left* blanked the shape while the display it arrived on was showing one, so the pointer
     /// vanished while still hit-testing correctly.
     pub(crate) cursor: CursorState,
+}
+
+impl SlotPresent {
+    /// Whether the worker has a scanout up on this slot: a mode announced, or a frame shown.
+    /// Not the same as having something to show — between an announcement and the guest's first
+    /// flip into it, the slot has a mode and no frame.
+    pub(crate) fn configured(&self) -> bool {
+        self.show_id.is_some() || (self.width != 0 && self.height != 0)
+    }
 }
 
 /// One scanout's hardware-cursor state.
@@ -773,22 +779,27 @@ fn deliver_line<S: Clone>(
     match parts.next() {
         Some("surface") => {
             log::info!("window: <- {line}");
-            // surface <id0> <id1> <w> <h> [<scanout>] — geometry + the initial buffer.
+            // surface <id0> <id1> <w> <h> [<scanout>] — the worker configured the scanout and
+            // allocated a fresh ring. The line carries the slot's new geometry and NOTHING to
+            // show: the ring is unwritten (every flip writes or names another buffer), so putting
+            // `id0` up is a black frame. The slot names no frame until the guest's first flip
+            // into the new scanout, and the window keeps what it has on glass until then — across
+            // a blank/wake, a modeset, or a fresh connector (whose window opens empty). Whatever
+            // `show_id` named before is from the ring this announcement replaced. `last_shown`
+            // stays the last flip, so a suspend in this gap saves a real splash.
             let id0 = parts.next().and_then(|s| s.parse::<u32>().ok());
             let _id1 = parts.next();
             let w = parts.next().and_then(|s| s.parse::<u32>().ok());
             let h = parts.next().and_then(|s| s.parse::<u32>().ok());
             let slot = parse_slot(parts.next());
-            if let (Some(id0), Some(w), Some(h), Some(slot)) = (id0, w, h, slot) {
+            if let (Some(_), Some(w), Some(h), Some(slot)) = (id0, w, h, slot) {
                 super::echo::publish_scanout(slot, w, h);
                 let slot = &mut s.slots[slot];
-                slot.show_id = Some(id0);
-                slot.last_shown = Some(id0);
+                slot.show_id = None;
                 slot.width = w;
                 slot.height = h;
                 slot.cursor.log.record("scanout", w);
                 slot.generation += 1;
-                slot.announced = true;
                 wake = true;
             }
         }
@@ -802,7 +813,6 @@ fn deliver_line<S: Clone>(
                 slot.last_shown = Some(id);
                 slot.generation += 1;
                 slot.frames += 1;
-                slot.announced = false;
                 wake = true;
             }
         }
@@ -1106,34 +1116,91 @@ mod tests {
     }
 
     /// A guest that blanks and wakes its display disables the scanout and configures it again:
-    /// the worker announces fresh buffers with no new flip. The slot must say so, or the window
-    /// puts the announcement's (never drawn) buffer up looking like a repeat of the last flip.
+    /// the worker announces fresh buffers with no new flip, and nothing has drawn into them. The
+    /// window must keep what it has on glass until the guest's first flip into the new scanout —
+    /// the announcement gives the slot its geometry and nothing to show.
     #[test]
-    fn a_scanout_announcement_is_marked_until_the_next_guest_flip() {
+    fn a_woken_display_holds_its_last_frame_until_the_first_guest_flip() {
         let shared = Mutex::new(Shared::default());
         let map: Mutex<SurfaceStore<u32>> = Mutex::new(SurfaceStore::default());
         let say = |line: &str| super::deliver_line(&shared, 0, &map, line);
         for line in ["surface 53 55 1280 800 0", "frame 55 0", "frame 53 0"] {
             say(line);
         }
-        {
-            let s = shared.lock().unwrap();
-            assert_eq!((s.slots[0].frames, s.slots[0].announced), (2, false));
-        }
         say("scanoutgone 0");
         say("surface 44 175 1280 800 0");
         {
             let s = shared.lock().unwrap();
-            assert_eq!(s.slots[0].show_id, Some(44));
+            let slot = &s.slots[0];
             assert_eq!(
-                (s.slots[0].frames, s.slots[0].announced),
-                (2, true),
-                "the wake brought no guest flip"
+                slot.show_id, None,
+                "the announced buffer 44 was never drawn into: nothing new to show"
             );
+            assert_eq!(
+                slot.last_shown,
+                Some(53),
+                "the splash is still the last flip"
+            );
+            assert_eq!((slot.width, slot.height, slot.frames), (1280, 800, 2));
         }
         say("frame 175 0");
         let s = shared.lock().unwrap();
-        assert_eq!((s.slots[0].frames, s.slots[0].announced), (3, false));
+        assert_eq!(s.slots[0].show_id, Some(175));
+        assert_eq!(s.slots[0].last_shown, Some(175));
+        assert_eq!(s.slots[0].frames, 3);
+    }
+
+    /// A first boot or a newly connected display: there is no previous frame, and the announced
+    /// buffer is no frame either. The slot is configured (it has a mode) but shows nothing until
+    /// the first flip.
+    #[test]
+    fn a_fresh_scanout_shows_nothing_until_its_first_flip() {
+        let shared = Mutex::new(Shared::default());
+        let map: Mutex<SurfaceStore<u32>> = Mutex::new(SurfaceStore::default());
+        let say = |line: &str| super::deliver_line(&shared, 0, &map, line);
+        say("surface 12 13 1280 800 1");
+        {
+            let s = shared.lock().unwrap();
+            let slot = &s.slots[1];
+            assert_eq!((slot.show_id, slot.last_shown), (None, None));
+            assert_eq!((slot.width, slot.height), (1280, 800));
+            assert!(slot.configured(), "a mode is up on the slot");
+        }
+        say("frame 13 1");
+        let s = shared.lock().unwrap();
+        assert_eq!(s.slots[1].show_id, Some(13));
+    }
+
+    /// A mode change with no `scanoutgone` in between: the worker drops the old ring and
+    /// announces a new one at the new size. The old frame's id belongs to the dead ring, and the
+    /// new ring's first buffer is unwritten, so the slot names neither until the first flip.
+    #[test]
+    fn a_mode_change_announcement_does_not_show_the_old_ring_or_the_new_one() {
+        let shared = Mutex::new(Shared::default());
+        let map: Mutex<SurfaceStore<u32>> = Mutex::new(SurfaceStore::default());
+        let say = |line: &str| super::deliver_line(&shared, 0, &map, line);
+        for line in ["surface 53 55 1280 800 0", "frame 55 0"] {
+            say(line);
+        }
+        say("surface 70 71 1920 1080 0");
+        let s = shared.lock().unwrap();
+        let slot = &s.slots[0];
+        assert_eq!(slot.show_id, None);
+        assert_eq!(slot.last_shown, Some(55));
+        assert_eq!((slot.width, slot.height), (1920, 1080));
+        assert!(slot.configured());
+    }
+
+    /// `scanoutgone` leaves the slot with no mode and nothing to show.
+    #[test]
+    fn a_gone_scanout_is_not_configured() {
+        let shared = Mutex::new(Shared::default());
+        let map: Mutex<SurfaceStore<u32>> = Mutex::new(SurfaceStore::default());
+        let say = |line: &str| super::deliver_line(&shared, 0, &map, line);
+        for line in ["surface 53 55 1280 800 0", "frame 55 0", "scanoutgone 0"] {
+            say(line);
+        }
+        assert!(!shared.lock().unwrap().slots[0].configured());
     }
 
     /// The 8.6 GB bug (spikes/venus-churn-retention §0.3): a compositor that mints a fresh

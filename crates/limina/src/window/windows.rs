@@ -167,9 +167,6 @@ struct SlotSnapshot {
     /// tag ([`super::frame_capture::FrameTag`]).
     frames: u64,
     epoch: u64,
-    /// The slot's `show_id` is a freshly announced scanout's first buffer, not a guest flip
-    /// (`SlotPresent::announced`).
-    announced: bool,
 }
 
 /// What this tick does with one slot's secondary window, after the dismissal pass has closed
@@ -579,7 +576,6 @@ impl PrimaryDisplay {
             held,
             frames,
             epoch,
-            announced,
         } = *snap;
         if generation == self.last_gen.get() {
             return;
@@ -589,7 +585,10 @@ impl PrimaryDisplay {
         // Gate order is the primary's own: `show_id` BEFORE the modeset follow (a secondary
         // follows geometry first and gates on `show_id` after). Deliberate until proven
         // otherwise — unifying the order would change when a connector that is up before its
-        // first frame triggers the dynamic setContentSize follow.
+        // first frame triggers the dynamic setContentSize follow. `show_id` is `None` from a
+        // scanout's announcement until the guest's first flip into it, so the primary keeps
+        // its last frame AND its fit until then, and a modeset's resize lands with the first
+        // frame of the new mode.
         let Some(id) = show_id else { return };
         if self.geom.get() != (width, height) {
             self.geom.set((width, height));
@@ -665,7 +664,7 @@ impl PrimaryDisplay {
                 trace.showing(id, surface);
             }
         }
-        let tag = super::frame_capture::FrameTag::new(slot, frames, epoch, announced);
+        let tag = super::frame_capture::FrameTag::new(slot, frames, epoch);
         self.core.show(id, tag, surface, ack_tx, copy);
 
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
@@ -824,7 +823,6 @@ impl GuestWindows {
                         held: d.held,
                         frames: d.frames,
                         epoch: s.reader_epoch,
-                        announced: d.announced,
                     }
                 })
                 .collect();
@@ -892,7 +890,6 @@ impl GuestWindows {
             held,
             frames,
             epoch,
-            announced,
         } in slots
         {
             // The primary's slot already had its walk above; it gets no secondary window.
@@ -972,8 +969,10 @@ impl GuestWindows {
                 entry.core.clear_frame_cache();
             }
 
+            // `None` from an announcement until the guest's first flip: the layer keeps its last
+            // frame (refit above if the mode changed), and a freshly opened window stays empty.
             let Some(id) = show_id else { continue };
-            let tag = super::frame_capture::FrameTag::new(slot, frames, epoch, announced);
+            let tag = super::frame_capture::FrameTag::new(slot, frames, epoch);
             entry
                 .core
                 .present(id, tag, surface_map, ack_tx, held == Some(false));

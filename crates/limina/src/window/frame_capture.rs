@@ -75,14 +75,16 @@ pub(crate) struct FrameTag {
 }
 
 impl FrameTag {
-    /// `announced`: the slot's surface is a freshly configured scanout's first buffer
-    /// (`SlotPresent::announced`), not a guest flip.
-    pub(crate) fn new(slot: usize, flip: u64, epoch: u64, announced: bool) -> Self {
+    /// A present of the slot's `show_id`, which is always a guest flip: a scanout announcement
+    /// names nothing to show (`SlotPresent::show_id`), so no window presents a buffer no flip
+    /// has drawn into and nothing tags [`Cause::ScanoutConfigured`]. A flip shown again is
+    /// recognised by the sequencer ([`Cause::Reshow`]).
+    pub(crate) fn new(slot: usize, flip: u64, epoch: u64) -> Self {
         FrameTag {
             slot,
             flip,
             epoch,
-            cause: announced.then_some(Cause::ScanoutConfigured),
+            cause: None,
         }
     }
 }

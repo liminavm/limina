@@ -125,9 +125,11 @@ impl Reason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cause {
-    /// The worker (re)configured the scanout — a mode set, or the display re-enabled after the
-    /// guest blanked it — and announced fresh buffers; the window put up the first of them,
-    /// which no guest flip has drawn into yet. `flip` is the last guest flip, not this frame's.
+    /// A window put up the first buffer of a freshly configured scanout, which no guest flip has
+    /// drawn into; `flip` is the last guest flip, not this frame's. The supervisor does not
+    /// produce it: a scanout announcement names nothing to show, and the window keeps its last
+    /// frame until the guest's first flip into the new scanout. Part of the vocabulary so a
+    /// reader accepts every record format 1 allows.
     ScanoutConfigured,
     /// The window put a guest flip already on glass up again (a display moving to another
     /// window, or a window that re-applied its slot with no new frame).

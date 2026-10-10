@@ -2592,7 +2592,7 @@ pub fn run(
                         let s = shared.lock().unwrap();
                         (
                             s.guest_driver_ready,
-                            s.slots.iter().any(|slot| slot.show_id.is_some()),
+                            s.slots.iter().any(|slot| slot.configured()),
                         )
                     };
                     if reassert_pending.get() && presented {

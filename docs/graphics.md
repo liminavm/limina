@@ -326,6 +326,22 @@ made a two-monitor desktop mint a surface per present and leak them all. Every m
 its surfaces. Guard: `scanout_copy_shows_presented_frame`, whose ignored twin documents the open
 case and whose two-output test bounds the surfaces.
 
+**An announcement is geometry, never a frame.** Whenever the worker gives a scanout a fresh ring —
+first boot, a modeset, a newly connected display, a guest re-enabling a display it had blanked (a
+stock GNOME screen wake) — it sends `surface` naming the ring's first buffer. Nothing has drawn into
+that buffer: the software-2D path writes the *next* ring buffer on every flip, and a venus or vrend
+guest presents its own resources. So the supervisor takes only the size from it (`deliver_line`,
+`crates/limina/src/window/present.rs`), and the window keeps what is on glass until the guest's
+first `frame` into the new scanout. A woken display shows its last frame until the wake's first
+flip; the main window's modeset resize lands together with the new mode's first frame (a
+secondary refits at the announcement and shows its old frame in the new fit until then); a window
+with no frame yet — first boot, a freshly connected display — stays on its black background. A
+modeset's old frame is held rather than replaced by nothing because the gap is one guest frame
+and a black flash is the worse picture. The hold takes no buffer from the guest: the frame on
+glass was acknowledged when it went up, and the first new flip's shown-ack waits for it to leave
+window-server use like any replaced frame, bounded, with libkrun's 150 ms fallback behind it. The
+suspend splash (`last_shown`) stays the last flip for the same reason.
+
 ### More than one display
 
 The guest may have several connectors, so every line of the worker→supervisor present protocol
@@ -830,7 +846,7 @@ ignore does not. `limina_framecap::parse_line` refuses any other format. A recor
 | `seq` | This capture's count of frames put on glass for `slot`, from 1. Per capture: a new capture starts again at 1, and nothing else resets it. Names the image. Absent on a `not_presented` record. |
 | `flip`, `epoch` | `flip` is the worker's count of `frame` lines for `slot`, i.e. the guest's page flips as the supervisor received them; `epoch` names the worker. A fresh worker (a guest reboot, a resume) bumps `epoch` and starts `flip` again at 1, so `flip` is only comparable within one `epoch`. A gap in `flip` between two guest flips on glass is flips the window never showed. |
 | `guest_flip` | `true` when the record stands for a guest flip: a new one on glass, or a `not_presented` run. `false` when the window put up a frame with no new guest flip; `flip` is then the last guest flip the worker sent, and `cause` says which host path presented it. |
-| `cause` | Only when `guest_flip` is `false`. `scanout_configured`: the worker configured the scanout — a mode set, or the guest re-enabling a display it had blanked — and announced fresh buffers, and the window put up the first of them, which no guest flip has drawn into (it reads back black). A stock GNOME screen wake re-enables the display this way; when the announcement and the guest's first flip (5-7 ms later) land in different window ticks, the black buffer gets a record of its own (measured 2026-10-10: 2 of 5 wakes on stock F44), otherwise the flip goes straight up. `reshow`: the window put a guest flip that was already on glass up again (a display moving between windows). |
+| `cause` | Only when `guest_flip` is `false`. `reshow`: the window put a guest flip that was already on glass up again (a display moving between windows). `scanout_configured`: a window put up the first buffer of a freshly configured scanout, which no guest flip has drawn into. The supervisor never produces it — an announcement is geometry, not a frame (§4), so across a modeset or a screen wake the record after the last flip before it is the first flip after it — and it stays in the vocabulary so a reader accepts every value format 1 allows. |
 | `presented_iosurface` | The IOSurface id the worker named for the frame: the guest's scanout buffer. |
 | `layer_iosurface` | The IOSurface id the window put on its layer, which is what the image is read from. The window's private copy when it shows one — on every frame of a guest that is not held off its scanout buffers, the stock tier's normal case — otherwise equal to `presented_iosurface`. |
 | `width`, `height` | The layer surface's size, which is the image's. |
