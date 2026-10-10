@@ -43,6 +43,8 @@ Decision-oriented design docs — the founding one plus one per major feature
   [GPU memory budget](design/gpu-memory-budget.md),
   [venus ring idle wakeups](design/venus-ring-idle-wakeups.md).
 - [Runtime display resize](design/runtime-display-resize.md) — shipped.
+- [Debug port](design/debug-port.md) — a guest reads the host build and launch facts from
+  `/dev/virtio-ports/org.limina.debug.0`, stock tools only; shipped.
 - [M6 dynamic memory](design/m6-dynamic-memory.md) — shipped.
 - [M7 USB passthrough](design/m7-usb-passthrough.md) — mock shipped; real-device
   capture rides the [privileged helper](design/privileged-helper.md) (deferred).
