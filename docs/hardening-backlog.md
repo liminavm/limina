@@ -891,20 +891,6 @@ zink no longer hands KK list restart. The venus tier still reaches the skip or t
 the pre-graphics/batched branch `limina-kk-pregfx` (`perf/listrestart-2026-10-07/`). A GPU hang is
 host-wide: reproduce only on an otherwise idle host.
 
-### A descriptor pool whose memory cannot be allocated crashes the worker
-`kk_CreateDescriptorPool` (`kk_descriptor_set.c`) sizes the pool's buffer from the guest's
-`maxSets` and `descriptorCount`s and, when `kk_alloc_bo` fails, cleans up through
-`kk_destroy_descriptor_pool`, whose `util_vma_heap_finish` walks a heap `util_vma_heap_init` has not
-run on yet: a NULL dereference (`KERN_INVALID_ADDRESS at 0x8`) on the `gpu worker` thread. Seen
-2026-10-09 (`limina-vmm-2026-10-09-220841.ips`): after a device loss the allocator refuses to mint,
-zink's next `create_pool` (from a draw inside `glGetQueryObject`'s sync) failed, and the worker took
-SIGSEGV. A device loss is one way to fail the allocation; a guest asking for a pool too large to
-allocate is presumably another, with no loss needed. The per-type size is also a 32-bit product
-(`MAX2(stride, max_align) * descriptorCount`), so a large count wraps rather than failing. The
-worker SIGSEGV after the list-restart hang above may be this same path. Fix shape: initialise the
-heap before anything can fail (or skip the finish when there is no BO), and compute the size in
-64 bits with a refusal above a cap.
-
 ### piglit's `ext_timer_query-time-elapsed` hangs the GPU
 On the vrend tier (vrend → zink → KK), the piglit binary `ext_timer_query-time-elapsed`, plain
 (`ext_timer_query@time-elapsed`) or with `timestamp` (`arb_timer_query@query gl_timestamp`), hangs a
