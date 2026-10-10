@@ -346,9 +346,13 @@ suspend splash (`last_shown`) stays the last flip for the same reason.
 
 The guest may have several connectors, so every line of the worker→supervisor present protocol
 names the **pool slot** it belongs to: `surface <id0> <id1> <w> <h> [<scanout>]`,
-`frame <id> [<scanout>]`, and `scanoutgone <scanout>` when a connector goes away. The field is
-optional on read and absent means slot 0, so an *old* trace still parses; the worker always
-writes it, so a new single-display trace carries a trailing `0` on every line.
+`frame <id> [<scanout> [<resource>]]`, and `scanoutgone <scanout>` when a connector goes away. The
+field is optional on read and absent means slot 0, so an *old* trace still parses; the worker always
+writes it, so a new single-display trace carries a trailing `0` on every line. A `frame` line's
+`<resource>` is the guest's virtio-gpu resource id whose flush the frame is, which libkrun names to
+the display backend right before each present of a guest flush (`frame_resource`); it is absent on a
+present of anything else (a restore's saved pixels) and from an older worker, and an older
+supervisor ignores it.
 
 Two structural facts follow from virtio-gpu itself and shape everything above:
 
@@ -849,6 +853,7 @@ ignore does not. `limina_framecap::parse_line` refuses any other format. A recor
 | `cause` | Only when `guest_flip` is `false`. `reshow`: the window put a guest flip that was already on glass up again (a display moving between windows). `scanout_configured`: a window put up the first buffer of a freshly configured scanout, which no guest flip has drawn into. The supervisor never produces it — an announcement is geometry, not a frame (§4), so across a modeset or a screen wake the record after the last flip before it is the first flip after it — and it stays in the vocabulary so a reader accepts every value format 1 allows. |
 | `presented_iosurface` | The IOSurface id the worker named for the frame: the guest's scanout buffer. |
 | `layer_iosurface` | The IOSurface id the window put on its layer, which is what the image is read from. The window's private copy when it shows one — on every frame of a guest that is not held off its scanout buffers, the stock tier's normal case — otherwise equal to `presented_iosurface`. |
+| `guest_resource` | The guest's virtio-gpu resource id whose `RESOURCE_FLUSH` produced the frame: what a guest DRM client gets as `res_handle` from `DRM_IOCTL_VIRTGPU_RESOURCE_INFO` on its scanout buffer's GEM handle, so a compositor can match the buffer it flipped to the frame on glass. It is the resource the scanout had bound (`SET_SCANOUT`/`SET_SCANOUT_BLOB`) when the guest flushed, also for a frame presented later on its fence, after the guest has bound another; the same on every path — zero-copy venus blob or vrend surface, the window's private copy, readback, software 2D — because it names the guest's buffer, not the host surface. Only on a guest flip on glass: absent on `not_presented` and `cause` records, and when the worker did not name one (an older worker). |
 | `width`, `height` | The layer surface's size, which is the image's. |
 | `t_monotonic_raw_ns` | `CLOCK_MONOTONIC_RAW` (= `mach_continuous_time` in ns; it keeps counting across host sleep), read on the main thread as the frame went on glass. For ordering and intervals. |
 | `t_realtime_ns` | `CLOCK_REALTIME`, ns since the Unix epoch, read at the same moment. The one to correlate with guest logs: the guest RTC is anchored to it. |
@@ -925,7 +930,8 @@ exists; a relative path resolves against the directory `limina debug` runs in, a
 does) immediately — however long ago that frame went up, and whether or not a sequence capture is
 running — and prints one JSON line tagging it in the record vocabulary: `"format": 1`,
 `"still": true`, `slot`, `flip`, `epoch`, `guest_flip`, `cause`, `presented_iosurface`,
-`layer_iosurface`, `width`, `height`, `t_monotonic_raw_ns`/`t_realtime_ns` (when that frame went on
+`layer_iosurface`, `guest_resource` (as a record's, so absent when `guest_flip` is false), `width`,
+`height`, `t_monotonic_raw_ns`/`t_realtime_ns` (when that frame went on
 glass, as in a record), `taken_t_monotonic_raw_ns`/`taken_t_realtime_ns` (when the still was read),
 and `file` (absolute). It refuses, with the reason, a display no window shows and a VM with no
 window (`limina_framecap::Still` parses the line). Every present notes the surface it put on the

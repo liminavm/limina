@@ -163,10 +163,12 @@ struct SlotSnapshot {
     height: u32,
     generation: u64,
     held: Option<bool>,
-    /// The worker's flip count for this slot and which worker it is from: the frame capture's
-    /// tag ([`super::frame_capture::FrameTag`]).
+    /// The worker's flip count for this slot, which worker it is from, and the guest resource
+    /// the latest flip came from: the frame capture's tag ([`super::frame_capture::FrameTag`]).
+    /// Read under the same lock, so the resource is that flip's.
     frames: u64,
     epoch: u64,
+    resource: Option<u32>,
 }
 
 /// What this tick does with one slot's secondary window, after the dismissal pass has closed
@@ -576,6 +578,7 @@ impl PrimaryDisplay {
             held,
             frames,
             epoch,
+            resource,
         } = *snap;
         if generation == self.last_gen.get() {
             return;
@@ -664,7 +667,7 @@ impl PrimaryDisplay {
                 trace.showing(id, surface);
             }
         }
-        let tag = super::frame_capture::FrameTag::new(slot, frames, epoch);
+        let tag = super::frame_capture::FrameTag::new(slot, frames, epoch).with_resource(resource);
         self.core.show(id, tag, surface, ack_tx, copy);
 
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
@@ -822,6 +825,7 @@ impl GuestWindows {
                         generation: d.generation,
                         held: d.held,
                         frames: d.frames,
+                        resource: d.resource,
                         epoch: s.reader_epoch,
                     }
                 })
@@ -890,6 +894,7 @@ impl GuestWindows {
             held,
             frames,
             epoch,
+            resource,
         } in slots
         {
             // The primary's slot already had its walk above; it gets no secondary window.
@@ -972,7 +977,8 @@ impl GuestWindows {
             // `None` from an announcement until the guest's first flip: the layer keeps its last
             // frame (refit above if the mode changed), and a freshly opened window stays empty.
             let Some(id) = show_id else { continue };
-            let tag = super::frame_capture::FrameTag::new(slot, frames, epoch);
+            let tag =
+                super::frame_capture::FrameTag::new(slot, frames, epoch).with_resource(resource);
             entry
                 .core
                 .present(id, tag, surface_map, ack_tx, held == Some(false));

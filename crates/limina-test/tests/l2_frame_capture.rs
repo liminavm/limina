@@ -21,6 +21,13 @@
 //! than the capture's last, both clocks), of the size its tag says, not blank — and a still of a
 //! display no window shows is refused.
 //!
+//! The guest resource, checked against the guest itself: every guest flip on glass names the
+//! virtio-gpu resource it came from (`guest_resource`), and every resource the guest's own KMS
+//! state says it was scanning out while the capture ran (`guest/scanoutres.py`, as root:
+//! GETCRTC → GETFB2 → VIRTGPU_RESOURCE_INFO) is among them. The compositor cycles a few
+//! buffers, so each one it flips is on glass many times over. The idle still names the resource
+//! the guest is scanning out around it.
+//!
 //! The vehicle is part of the image (`vulkan-tools` is in the stock test image, docs/images.md), so
 //! a missing or dead `vkcube` FAILS the test rather than skipping it: a capture of a still desktop
 //! would pass the frame checks while proving nothing about rate. Images are capped at
@@ -36,6 +43,14 @@ use std::time::Duration;
 
 use limina_framecap::{HostStateCause, HostStateRecord, Line, Record, SIDECAR, Still, Summary};
 use limina_test::{Guest, GuestConfig};
+
+/// The guest-side oracle: which resource each CRTC scans out, as the guest reads it.
+const SCANOUTRES: &str = include_str!("../guest/scanoutres.py");
+
+/// Samples of the guest's scanout taken while the capture runs, and the gap between them: about
+/// three of the capture's four seconds.
+const SAMPLES: u32 = 20;
+const SAMPLE_MS: u32 = 150;
 
 const DISPLAY: (u32, u32) = (1280, 800);
 
@@ -146,11 +161,19 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
         "vkcube is not running, so nothing presents continuously: {alive:?}"
     );
 
+    guest
+        .ssh_exec(&format!(
+            "cat > /tmp/scanoutres.py <<'SCANOUTRES_PY_EOF'\n{SCANOUTRES}\nSCANOUTRES_PY_EOF"
+        ))
+        .expect("writing scanoutres.py to the guest");
+
     let dir = guest.scratch_dir().join("frames");
     let dir_s = dir.to_string_lossy().into_owned();
     let (ok, out) = limina_debug(&guest, &["capture", "start", &dir_s]);
     assert!(ok, "capture start was refused:\n{out}");
-    std::thread::sleep(WINDOW);
+    let started = std::time::Instant::now();
+    let sampled = scanout_resources(&guest, SAMPLES, SAMPLE_MS);
+    std::thread::sleep(WINDOW.saturating_sub(started.elapsed()));
 
     // Hide the app while the capture runs, ask the debug port from inside the guest, then show
     // it again. Hiding rather than minimizing: an AX minimize needs the window on the current
@@ -247,7 +270,19 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
                 "a presented frame missing its tags: {r:?}"
             );
         }
+        if r.seq.is_some() && r.cause.is_none() {
+            assert!(
+                r.guest_resource.is_some(),
+                "a guest flip on glass that does not name its guest resource: {r:?}"
+            );
+        } else {
+            assert_eq!(
+                r.guest_resource, None,
+                "a record that is no guest flip on glass names a guest resource: {r:?}"
+            );
+        }
     }
+    check_guest_resources(&records, &sampled);
 
     // Files and records agree, both ways.
     let captured: Vec<&Record> = records.iter().filter(|r| r.file.is_some()).collect();
@@ -319,8 +354,10 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
     // with no sequence capture running.
     let _ = guest.ssh_exec("pkill -x vkcube; true");
     std::thread::sleep(IDLE);
+    let before_still = scanout_resources(&guest, 1, 0);
     let still_png = guest.scratch_dir().join("still.png");
     let (ok, said) = limina_debug(&guest, &["capture", "still", &still_png.to_string_lossy()]);
+    let after_still = scanout_resources(&guest, 1, 0);
     assert!(ok, "capture still was refused:\n{said}");
     let still = said
         .lines()
@@ -330,6 +367,24 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
     assert_eq!(still.format, limina_framecap::FORMAT);
     assert_eq!(still.file, still_png.to_string_lossy());
     assert_eq!(still.guest_flip, still.cause.is_none(), "{still:?}");
+    if still.guest_flip {
+        let around: BTreeSet<u32> = before_still
+            .iter()
+            .chain(&after_still)
+            .filter(|(slot, _)| *slot == still.slot)
+            .map(|(_, res)| *res)
+            .collect();
+        assert!(
+            still
+                .guest_resource
+                .is_some_and(|res| around.contains(&res)),
+            "the idle still names guest resource {:?}, but the guest was scanning out {around:?} \
+             around it: {still:?}",
+            still.guest_resource
+        );
+    } else {
+        assert_eq!(still.guest_resource, None, "{still:?}");
+    }
     let last = records.iter().rev().find(|r| r.seq.is_some()).unwrap();
     assert_eq!(
         (still.slot, still.epoch),
@@ -366,6 +421,52 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
         .shutdown(Duration::from_secs(30))
         .expect("supervisor did not stop");
     eprintln!("teardown outcome: {outcome:?}");
+}
+
+/// Sample, in the guest, which virtio-gpu resource each display is scanning out: `samples`
+/// readings `gap_ms` apart, as `(slot, resource)`. The CRTC index is the scanout, which is the
+/// slot. Fails the test when the guest cannot answer at all.
+fn scanout_resources(guest: &Guest, samples: u32, gap_ms: u32) -> Vec<(usize, u32)> {
+    let out = guest
+        .ssh_exec(&format!(
+            "sudo -n python3 /tmp/scanoutres.py {samples} {gap_ms}"
+        ))
+        .expect("running scanoutres.py in the guest");
+    let found: Vec<(usize, u32)> = out
+        .lines()
+        .filter_map(|l| {
+            let l = l.strip_prefix("SCANOUTRES ")?;
+            let field = |k: &str| {
+                l.split_whitespace()
+                    .find_map(|f| f.strip_prefix(k)?.strip_prefix('='))
+            };
+            Some((
+                field("crtc_index")?.parse().ok()?,
+                field("res")?.parse().ok()?,
+            ))
+        })
+        .collect();
+    assert!(
+        !found.is_empty(),
+        "the guest reported no scanout resource:\n{out}"
+    );
+    found
+}
+
+/// Every resource the guest scanned out while the capture ran is named by a guest flip on glass
+/// on that display.
+fn check_guest_resources(records: &[Record], sampled: &[(usize, u32)]) {
+    let on_glass: BTreeSet<(usize, u32)> = records
+        .iter()
+        .filter_map(|r| Some((r.slot, r.guest_resource?)))
+        .collect();
+    let sampled: BTreeSet<(usize, u32)> = sampled.iter().copied().collect();
+    eprintln!("guest scanout resources sampled: {sampled:?}; on glass: {on_glass:?}");
+    let missing: Vec<_> = sampled.difference(&on_glass).collect();
+    assert!(
+        missing.is_empty(),
+        "the guest scanned out {missing:?}, which no captured frame names (on glass: {on_glass:?})"
+    );
 }
 
 /// Hide or show the supervisor app through System Events. `false` when osascript could not do

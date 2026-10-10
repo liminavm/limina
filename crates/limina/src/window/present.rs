@@ -515,6 +515,10 @@ pub struct SlotPresent {
     /// on surface geometry. The restore overlay comes down on the first real frame, not on
     /// the fresh worker's surface announcement.
     pub(crate) frames: u64,
+    /// The guest's virtio-gpu resource id the slot's latest `frame` came from, when the worker
+    /// named it. Set by every `frame` line, so a frame that names none never carries an earlier
+    /// one's.
+    pub(crate) resource: Option<u32>,
     /// Whether the worker says the guest is held off this scanout's presented buffers (`held`
     /// messages). `Some(false)` means it may draw into the surface on glass, so the window shows
     /// a copy. `None` until the worker says: an older worker never does, and zero-copy is what
@@ -804,12 +808,15 @@ fn deliver_line<S: Clone>(
             }
         }
         Some("frame") => {
-            // frame <id> [<scanout>] — the buffer to show now, on that slot.
+            // frame <id> [<scanout> [<resource>]] — the buffer to show now, on that slot, and the
+            // guest resource whose flush it is. A worker that predates the resource omits it.
             let id = parts.next().and_then(|s| s.parse::<u32>().ok());
             let slot = parse_slot(parts.next());
+            let resource = parts.next().and_then(|s| s.parse::<u32>().ok());
             if let (Some(id), Some(slot)) = (id, slot) {
                 let slot = &mut s.slots[slot];
                 slot.show_id = Some(id);
+                slot.resource = resource;
                 slot.last_shown = Some(id);
                 slot.generation += 1;
                 slot.frames += 1;
@@ -1148,6 +1155,43 @@ mod tests {
         assert_eq!(s.slots[0].show_id, Some(175));
         assert_eq!(s.slots[0].last_shown, Some(175));
         assert_eq!(s.slots[0].frames, 3);
+    }
+
+    /// A `frame` line's guest resource is optional and belongs to that frame alone: a worker that
+    /// predates it (or a frame it names none for) leaves the slot with none, not the last one.
+    #[test]
+    fn a_frame_names_its_guest_resource_when_the_worker_does() {
+        let shared = Mutex::new(Shared::default());
+        let map: Mutex<SurfaceStore<u32>> = Mutex::new(SurfaceStore::default());
+        let say = |line: &str| super::deliver_line(&shared, 0, &map, line);
+        let at = |slot: usize| {
+            let s = shared.lock().unwrap();
+            (s.slots[slot].show_id, s.slots[slot].resource)
+        };
+        say("surface 53 55 1280 800 0");
+        say("frame 55 0 7");
+        assert_eq!(at(0), (Some(55), Some(7)));
+        say("frame 53 0");
+        assert_eq!(
+            at(0),
+            (Some(53), None),
+            "no resource named: none, not the last one"
+        );
+        say("frame 55");
+        assert_eq!(
+            at(0),
+            (Some(55), None),
+            "the oldest form still reads, as slot 0"
+        );
+        say("frame 12 1 9");
+        assert_eq!(at(1), (Some(12), Some(9)));
+        assert_eq!(
+            at(0),
+            (Some(55), None),
+            "another slot's resource stays its own"
+        );
+        say("frame 13 1 junk");
+        assert_eq!(at(1), (Some(13), None), "an unreadable resource is unknown");
     }
 
     /// A first boot or a newly connected display: there is no previous frame, and the announced

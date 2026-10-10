@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! surface <id> <id1> <width> <height> [<scanout>]  # a new scanout ring (id resolved via Mach)
-//! frame <id> [<scanout>]                           # the surface id to show now
+//! frame <id> [<scanout> [<resource>]]              # the surface id to show now
 //! cursor <id> <w> <h> <hot_x> <hot_y> [<scanout>] # a new cursor image
 //! cursormove <x> <y> [<scanout>]                   # where to draw it
 //! cursorhide [<scanout>]                           # that scanout has no cursor
@@ -21,6 +21,11 @@
 //! connectors presents into each independently, and the supervisor routes each slot to its own
 //! window. It is optional on the wire and absent means slot 0, so a single-display log reads
 //! exactly as it always did.
+//!
+//! A `frame` line may name, after the slot, the guest's virtio-gpu resource id whose flush the
+//! frame is (what a guest DRM client reads back as `res_handle`). It is absent when the frame is
+//! no guest flush — a restore putting saved pixels back — and from a worker that predates it, so a
+//! reader takes its absence as "unknown". A reader that predates it ignores the extra field.
 //!
 //! The cursor lines carry it too, and there it is not a nicety: a guest enables its hardware
 //! cursor plane on only the CRTC the pointer is on and disables the others, so the scanout id
@@ -113,6 +118,9 @@ pub struct WindowBackend {
     /// Also mark surfaces `kIOSurfaceIsGlobal` (debug escape hatch `LIMINA_GLOBAL_SCANOUT`, so
     /// `iosdump` still works as an oracle). Read once at construction. Default off = secure.
     also_global: bool,
+    /// Per slot, the guest resource the next present shows (`frame_resource`). Taken by that
+    /// present, so a present the device names nothing for cannot inherit an earlier frame's.
+    frame_resource: [Option<u32>; MAX_SCANOUTS],
 }
 
 struct Scanout {
@@ -182,6 +190,7 @@ impl DisplayBackendNew<WindowConfig> for WindowBackend {
             next_frame_id: 0,
             presents: 0,
             cursor: [const { None }; MAX_SCANOUTS],
+            frame_resource: [None; MAX_SCANOUTS],
             // No receiver ⇒ surfaces must stay global or the supervisor can't resolve them.
             also_global: also_global || sender.is_none(),
             sender,
@@ -217,6 +226,19 @@ impl WindowBackend {
             if let Err(e) = f.write_all(buf.as_bytes()) {
                 log::error!("window: control write failed: {e}");
             }
+        }
+    }
+
+    /// The `frame` line for `show_id` on `scanout_id`, naming the guest resource the device said
+    /// this present shows, and forgetting it.
+    fn frame_line(&mut self, show_id: u32, scanout_id: u32) -> String {
+        match self
+            .frame_resource
+            .get_mut(scanout_id as usize)
+            .and_then(Option::take)
+        {
+            Some(res) => format!("frame {show_id} {scanout_id} {res}"),
+            None => format!("frame {show_id} {scanout_id}"),
         }
     }
 
@@ -305,6 +327,7 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
     fn disable_scanout(&mut self, scanout_id: u32) -> Result<(), DisplayBackendError> {
         let slot = slot_of(scanout_id)?;
         self.scanouts[slot] = None;
+        self.frame_resource[slot] = None;
         // Tell the supervisor the slot has no scanout, so the window presenting it can go away.
         // Without this a disconnected display would keep its window up showing the last frame
         // forever — the guest never presents to it again, so nothing else would ever say so.
@@ -329,7 +352,8 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         slot_of(scanout_id)?;
         self.presents += 1;
         red_probe(iosurface_id, self.presents);
-        self.send(&format!("frame {iosurface_id} {scanout_id}"));
+        let line = self.frame_line(iosurface_id, scanout_id);
+        self.send(&line);
         Ok(())
     }
 
@@ -347,6 +371,17 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
     /// This rides the surface port rather than the control socket on purpose: it is what keeps a
     /// release naming a recycled IOSurface id from overtaking the publish that reused it. See
     /// `limina_surfaceport`'s module docs for the ordering argument.
+    /// The next present on `scanout_id` shows guest resource `resource_id`: carried on its
+    /// `frame` line.
+    fn frame_resource(
+        &mut self,
+        scanout_id: u32,
+        resource_id: u32,
+    ) -> Result<(), DisplayBackendError> {
+        self.frame_resource[slot_of(scanout_id)?] = Some(resource_id);
+        Ok(())
+    }
+
     fn release_surface(&mut self, iosurface_id: u32) -> Result<(), DisplayBackendError> {
         if let Some(tx) = self.sender.as_ref()
             && let Err(e) = tx.release(iosurface_id)
@@ -436,7 +471,8 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         let show_id = scanout.ids[i];
         self.presents += 1;
         self.scanouts[slot] = Some(scanout);
-        self.send(&format!("frame {show_id} {scanout_id}"));
+        let line = self.frame_line(show_id, scanout_id);
+        self.send(&line);
         Ok(())
     }
 
@@ -816,6 +852,53 @@ mod tests {
                 "no `frame … {slot}` line in {lines:?}"
             );
         }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The guest resource the device names for a present rides that present's `frame` line, on
+    /// that slot only, and only once: a present the device names nothing for (a restore's saved
+    /// pixels) must not inherit the previous frame's resource.
+    #[test]
+    fn a_named_guest_resource_rides_its_own_frame_line_once() {
+        let (mut b, path) = backend_with_wire();
+        for slot in [0u32, 1] {
+            b.configure_scanout(slot, 64, 32, 64, 32, ResourceFormat::BGRX)
+                .unwrap();
+        }
+        let present = |b: &mut WindowBackend, slot| {
+            b.alloc_frame(slot).unwrap();
+            b.present_frame(slot, 0, None).unwrap();
+        };
+        b.frame_resource(0, 41).unwrap();
+        present(&mut b, 1);
+        present(&mut b, 0);
+        present(&mut b, 0);
+        b.frame_resource(1, 7).unwrap();
+        b.present_surface(1, 900, None).unwrap();
+        // A disabled scanout forgets a name its present never used.
+        b.frame_resource(1, 8).unwrap();
+        b.disable_scanout(1).unwrap();
+        b.configure_scanout(1, 64, 32, 64, 32, ResourceFormat::BGRX)
+            .unwrap();
+        present(&mut b, 1);
+        assert!(b.frame_resource(MAX_SCANOUTS as u32, 1).is_err());
+
+        let frames: Vec<Vec<String>> = wire(&path)
+            .iter()
+            .filter(|l| l.starts_with("frame "))
+            .map(|l| l.split(' ').skip(2).map(str::to_string).collect())
+            .collect();
+        assert_eq!(
+            frames,
+            [
+                vec!["1"],
+                vec!["0", "41"],
+                vec!["0"],
+                vec!["1", "7"],
+                vec!["1"],
+            ],
+            "slot then resource, per frame line"
+        );
         let _ = std::fs::remove_file(&path);
     }
 

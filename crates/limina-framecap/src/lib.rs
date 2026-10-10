@@ -185,6 +185,11 @@ pub struct Record {
     /// window's private copy when it shows one, else the same as `presented_iosurface`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer_iosurface: Option<u32>,
+    /// The guest's virtio-gpu resource id whose flush produced this frame: what the guest's
+    /// `DRM_IOCTL_VIRTGPU_RESOURCE_INFO` calls `res_handle`. Only on a guest flip on glass, and
+    /// only when the worker names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_resource: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +224,7 @@ impl Default for Record {
             epoch: 0,
             presented_iosurface: None,
             layer_iosurface: None,
+            guest_resource: None,
             width: None,
             height: None,
             t_monotonic_raw_ns: None,
@@ -504,6 +510,10 @@ pub struct Still {
     pub cause: Option<Cause>,
     pub presented_iosurface: u32,
     pub layer_iosurface: u32,
+    /// As a [`Record`]'s: absent when the frame on glass is no guest flip or the worker did not
+    /// name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_resource: Option<u32>,
     pub width: u32,
     pub height: u32,
     /// When that frame went on glass, as a record's `t_*` (so possibly long ago).
@@ -708,6 +718,7 @@ mod tests {
             epoch: 1,
             presented_iosurface: Some(40),
             layer_iosurface: Some(41),
+            guest_resource: Some(7),
             width: Some(2),
             height: Some(2),
             t_monotonic_raw_ns: Some(5),
@@ -827,6 +838,7 @@ mod tests {
             cause: Some(Cause::ScanoutConfigured),
             presented_iosurface: 44,
             layer_iosurface: 170,
+            guest_resource: Some(12),
             width: 1280,
             height: 800,
             t_monotonic_raw_ns: 1,
@@ -837,7 +849,16 @@ mod tests {
         };
         let line = still.to_line();
         assert!(line.starts_with(r#"{"format":1,"still":true,"#), "{line}");
-        assert_eq!(Still::parse(&line), Ok(still));
+        assert!(line.contains(r#""guest_resource":12"#), "{line}");
+        assert_eq!(Still::parse(&line), Ok(still.clone()));
+        // A still with no guest resource leaves it out, and one written without it reads back.
+        let unnamed = Still {
+            guest_resource: None,
+            ..still
+        };
+        let line = unnamed.to_line();
+        assert!(!line.contains("guest_resource"), "{line}");
+        assert_eq!(Still::parse(&line), Ok(unnamed));
         // A record is not a still.
         assert!(Still::parse(&presented(0, 1, 1).to_line()).is_err());
     }
@@ -867,6 +888,27 @@ mod tests {
         assert!(!line.contains("seq"), "{line}");
         assert!(line.contains(r#""reason":"not_presented""#), "{line}");
         assert_eq!(parse_line(&line), Ok(Line::Frame(never)));
+    }
+
+    /// The guest resource is additive: it rides format 1, a record without it (a host
+    /// present, a run never presented, an older worker's frame) leaves it out, and a line
+    /// written before the field existed still reads.
+    #[test]
+    fn the_guest_resource_is_carried_when_known_and_left_out_when_not() {
+        let shown = presented(0, 1, 9);
+        let line = shown.to_line();
+        assert!(line.contains(r#""guest_resource":7"#), "{line}");
+        assert_eq!(parse_line(&line), Ok(Line::Frame(shown.clone())));
+        let unknown = Record {
+            guest_resource: None,
+            ..shown
+        };
+        let line = unknown.to_line();
+        assert!(!line.contains("guest_resource"), "{line}");
+        assert_eq!(parse_line(&line), Ok(Line::Frame(unknown)));
+        let never = Record::not_presented(0, 1, 3..5).unwrap();
+        assert_eq!(never.guest_resource, None);
+        assert!(!never.to_line().contains("guest_resource"));
     }
 
     #[test]

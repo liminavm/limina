@@ -200,6 +200,7 @@ pub(crate) fn take(path: &Path, slot: Option<usize>) -> Result<String, String> {
             cause: p.tag.cause,
             presented_iosurface: p.presented,
             layer_iosurface: layer.id(),
+            guest_resource: p.tag.guest_resource(p.tag.cause),
             width: w as u32,
             height: h as u32,
             t_monotonic_raw_ns: p.t_monotonic_raw_ns,
@@ -273,7 +274,7 @@ mod tests {
         set_primary(0xa);
         let reshow = FrameTag {
             cause: Some(limina_framecap::Cause::Reshow),
-            ..FrameTag::new(1, 287, 3)
+            ..FrameTag::new(1, 287, 3).with_resource(Some(5))
         };
         note(0xb, reshow, 44, &surface);
         let err = take(&png, None).unwrap_err();
@@ -298,6 +299,10 @@ mod tests {
             (1, 287, 3, false, Some(limina_framecap::Cause::Reshow))
         );
         assert_eq!(
+            still.guest_resource, None,
+            "a re-show is no flip of its resource"
+        );
+        assert_eq!(
             (still.presented_iosurface, still.layer_iosurface),
             (44, surface.id())
         );
@@ -319,9 +324,17 @@ mod tests {
         );
 
         // The main window's frame is the default; a closed window has nothing on glass.
-        note(0xa, FrameTag::new(0, 9, 3), 50, &surface);
+        note(
+            0xa,
+            FrameTag::new(0, 9, 3).with_resource(Some(12)),
+            50,
+            &surface,
+        );
         let main = Still::parse(&take(&png, None).unwrap()).unwrap();
-        assert_eq!((main.slot, main.flip, main.guest_flip), (0, 9, true));
+        assert_eq!(
+            (main.slot, main.flip, main.guest_flip, main.guest_resource),
+            (0, 9, true, Some(12))
+        );
         forget(0xb);
         assert!(take(&png, Some(1)).unwrap_err().contains("display 1"));
         forget(0xa);

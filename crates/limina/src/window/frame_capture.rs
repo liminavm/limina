@@ -64,13 +64,15 @@ use objc2_metal::{
 use super::present::SendSurface;
 
 /// Which guest frame a present is: the slot it belongs to, the worker's flip count for that slot
-/// when the window applied it (`SlotPresent::frames`, under the worker generation `epoch`), and
+/// when the window applied it (`SlotPresent::frames`, under the worker generation `epoch`), the
+/// guest resource that flip came from when the worker named it (`SlotPresent::resource`), and
 /// — when the window knows the surface is no guest flip — the host path that put it up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FrameTag {
     pub(crate) slot: usize,
     pub(crate) flip: u64,
     pub(crate) epoch: u64,
+    pub(crate) resource: Option<u32>,
     pub(crate) cause: Option<Cause>,
 }
 
@@ -84,8 +86,20 @@ impl FrameTag {
             slot,
             flip,
             epoch,
+            resource: None,
             cause: None,
         }
+    }
+
+    /// The tag naming the guest resource its flip came from.
+    pub(crate) fn with_resource(self, resource: Option<u32>) -> Self {
+        FrameTag { resource, ..self }
+    }
+
+    /// The guest resource to record for a present the sequencer judged `cause`: only a new guest
+    /// flip names one. A re-show or a host present is no flip of that resource.
+    pub(crate) fn guest_resource(&self, cause: Option<Cause>) -> Option<u32> {
+        self.resource.filter(|_| cause.is_none())
     }
 }
 
@@ -418,6 +432,7 @@ impl Session {
             flip,
             epoch,
             cause,
+            ..
         } = tag;
         let Presented { seq, missed, cause } = m.seq.present(slot, epoch, flip, cause);
         if let Some(r) = Record::not_presented(slot, epoch, missed) {
@@ -442,6 +457,7 @@ impl Session {
             epoch,
             presented_iosurface: Some(id),
             layer_iosurface: Some(shown.id()),
+            guest_resource: tag.guest_resource(cause),
             width: Some(geom.0 as u32),
             height: Some(geom.1 as u32),
             t_monotonic_raw_ns: Some(mono),
