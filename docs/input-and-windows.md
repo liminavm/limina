@@ -628,7 +628,12 @@ alternative, and it needs the window key and loses lone modifiers.
   USB HID gadget instead (`limina_input::router`) — a harness that needs the virtio node waits for
   it (`limina Virtual Keyboard` in `/proc/bus/input/devices`). Keys are evdev codes, by kernel
   name or number, and only the ones the keyboard advertises: no modifier normalization (§6b)
-  applies, `KEY_LEFTMETA` is Super. `type` is a US-layout map.
+  applies, `KEY_LEFTMETA` is Super. `type` is a US-layout map. `limina input <vm> keys` lists
+  every accepted name with its code, one `NAME CODE` per line (`KEY_ESC 1`): exactly the
+  advertised set, answered by the client, so it needs neither a running VM nor the lever. Names
+  are strict — case and the `KEY_` prefix are optional, nothing else is — and an unknown one is
+  refused with the nearest name as a suggestion (`escape` → "did you mean KEY_ESC?", never
+  accepted in its place) and a pointer to `keys`.
 - **Coordinate spaces.** Injection speaks space 5 (§3), the device range: `abs X Y` in
   `0..=ABS_MAX`. `abs-norm U V` is a fraction of that range and `abs-px X Y [WxH]` a scanout
   pixel of a `W×H` mode, sent as `floor((p + ¼)·32768/W)` — a value libinput maps back onto that
@@ -656,6 +661,11 @@ alternative, and it needs the window key and loses lone modifiers.
   into `absfit` nor judged by the echo verdict (`Sent::injected`, read before the window's frame
   goes out, so an injection landing between the frame and its bookkeeping still counts). Captured, the estimate follows
   the guest's echo as always, so an injected move re-bases it rather than fighting it.
+- **A script fails loudly.** On stdin, verbs run in order and the first one that fails — refused
+  (the lever, an unknown key, a malformed verb) or not delivered — stops the script: the verbs
+  before it have already reached the guest, none after it is sent, the error names its line, and
+  `limina input` exits nonzero. A single verb on the command line exits nonzero the same way. The
+  connection then closes, so whatever the script held is released (next item).
 - **What a connection holds dies with it.** Keys and buttons a connection leaves pressed are
   released when it closes, so a harness that crashes mid-chord cannot leave Ctrl held. A script
   that holds a key across verbs keeps one connection (stdin); `keep-held` (`--keep-held`) hands
@@ -690,4 +700,6 @@ alternative, and it needs the window key and loses lone modifiers.
   oracle is `crates/limina-test/tests/l2_input_inject.rs`: it reads the guest's virtio evdev nodes
   raw (found by name, grabbed so the greeter sees nothing) and compares them event for event,
   headless and windowed. The headless run starts with the lever off and checks the refusal
-  before turning it on at runtime; the windowed one starts with `LIMINA_INPUT_INJECT=1`.
+  before turning it on at runtime; the windowed one starts with `LIMINA_INPUT_INJECT=1`. Both
+  check that `keys` lists `KEY_ESC`, and that a script failing on its second verb exits nonzero
+  with its first verb delivered and its third never sent.

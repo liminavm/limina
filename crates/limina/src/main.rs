@@ -848,6 +848,13 @@ fn main() -> Result<()> {
         Some(Cmd::Rm(args)) => cmd_rm(args),
         Some(Cmd::Debug(args)) => cmd_debug(args),
         Some(Cmd::SshPort(args)) => cmd_ssh_port(args),
+        Some(Cmd::Input(args)) if inject::is_keys(&args.verb) => {
+            // The client's own answer: no VM to find, no lever to ask.
+            for l in inject::key_list() {
+                println!("{l}");
+            }
+            Ok(())
+        }
         Some(Cmd::Input(args)) => {
             inject::client(debug_target_pid(&args.vm)?, args.keep_held, &args.verb)
         }

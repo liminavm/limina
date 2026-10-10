@@ -261,7 +261,7 @@ fn capped_lines<R: BufRead>(mut reader: R) -> impl Iterator<Item = std::io::Resu
     })
 }
 
-fn serve_client(stream: UnixStream) {
+pub(crate) fn serve_client(stream: UnixStream) {
     let Ok(mut out) = stream.try_clone() else {
         return;
     };

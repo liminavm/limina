@@ -167,7 +167,13 @@ fn lookup(table: &[(&str, u16)], prefix: &str, s: &str) -> Option<u16> {
 pub fn key(s: &str) -> Result<u16, String> {
     let code = match parse_number(s) {
         Some(n) => u16::try_from(n).map_err(|_| format!("{s} is not a key code"))?,
-        None => lookup(KEY_NAMES, "KEY_", s).ok_or_else(|| format!("unknown key {s:?}"))?,
+        None => lookup(KEY_NAMES, "KEY_", s).ok_or_else(|| {
+            let guess = match nearest_key(s) {
+                Some(name) => format!("; did you mean {name}?"),
+                None => String::new(),
+            };
+            format!("unknown key {s:?}{guess} (`limina input <vm> keys` lists every key name)")
+        })?,
     };
     if SUPPORTED_KEYBOARD_KEYS.contains(&code) {
         Ok(code)
@@ -177,6 +183,64 @@ pub fn key(s: &str) -> Result<u16, String> {
              drop it (`ev kbd` sends it anyway)"
         ))
     }
+}
+
+/// The key name closest to an unknown `s`, for the error to suggest — never accepted in its
+/// place. A name that the input starts with, or that starts with the input, wins (`escape` →
+/// `KEY_ESC`, `pageup2` → `KEY_PAGEUP`), the longest such; otherwise the nearest by edit
+/// distance, if it is close enough to be a typo (`backspce` → `KEY_BACKSPACE`).
+pub fn nearest_key(s: &str) -> Option<&'static str> {
+    let upper = s.to_ascii_uppercase();
+    let want = upper.strip_prefix("KEY_").unwrap_or(&upper);
+    if want.is_empty() {
+        return None;
+    }
+    let bare = |n: &'static str| n.strip_prefix("KEY_").unwrap_or(n);
+    // One name inside the other: a shared prefix first (`escape` → `ESC`), then anywhere
+    // (`ctrl` → `LEFTCTRL`), the longest overlap, then the shorter name. Overlaps shorter than
+    // three letters say nothing (`E` starts `ESC`, `END`, `ENTER`, …).
+    let inside = KEY_NAMES
+        .iter()
+        .map(|&(n, _)| n)
+        .filter_map(|n| {
+            let b = bare(n);
+            let overlap = b.len().min(want.len());
+            let prefix = want.starts_with(b) || b.starts_with(want);
+            (overlap >= 3 && (prefix || want.contains(b) || b.contains(want))).then_some((
+                prefix,
+                overlap,
+                std::cmp::Reverse(b.len()),
+                n,
+            ))
+        })
+        .max_by_key(|&(prefix, overlap, shorter, _)| (prefix, overlap, shorter))
+        .map(|(.., n)| n);
+    if inside.is_some() {
+        return inside;
+    }
+    let (name, d) = KEY_NAMES
+        .iter()
+        .map(|&(n, _)| (n, edit_distance(want, bare(n))))
+        .min_by_key(|&(_, d)| d)?;
+    (d <= (want.len() / 3).max(1)).then_some(name)
+}
+
+/// Levenshtein distance over bytes (key names are ASCII).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, &ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let next = (prev + usize::from(ca != cb))
+                .min(row[j] + 1)
+                .min(row[j + 1] + 1);
+            prev = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
 }
 
 /// A pointer button: `BTN_LEFT`/`left`/`1`-style names (`left`, `right`, `middle`, with or
@@ -311,6 +375,32 @@ mod tests {
         // KEY_POWER (116) is a real kernel key the device does not advertise.
         assert!(key("116").unwrap_err().contains("not advertised"));
         assert!(key("70000").is_err());
+    }
+
+    #[test]
+    fn an_unknown_key_suggests_the_nearest_name_and_where_the_list_is_but_is_not_accepted() {
+        for (typed, want) in [
+            ("escape", "KEY_ESC"),
+            ("ESCAPE", "KEY_ESC"),
+            ("KEY_ESCAPE", "KEY_ESC"),
+            ("pageup2", "KEY_PAGEUP"),
+            ("ctrl", "KEY_LEFTCTRL"),
+            ("backspce", "KEY_BACKSPACE"),
+            ("entr", "KEY_ENTER"),
+        ] {
+            assert_eq!(nearest_key(typed), Some(want), "{typed}");
+            let err = key(typed).unwrap_err();
+            assert!(err.contains(&format!("did you mean {want}?")), "{err}");
+            assert!(err.contains("limina input <vm> keys"), "{err}");
+        }
+        // Nothing close: no guess, but still the pointer to the list.
+        assert_eq!(nearest_key("zzzzzzzz"), None);
+        assert_eq!(nearest_key(""), None);
+        let err = key("zzzzzzzz").unwrap_err();
+        assert!(
+            !err.contains("did you mean") && err.contains("keys"),
+            "{err}"
+        );
     }
 
     #[test]

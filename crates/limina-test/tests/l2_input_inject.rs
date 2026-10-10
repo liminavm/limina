@@ -31,6 +31,13 @@
 //! input-inject on`: the exact keyboard comparison is what proves the refused tap never arrived,
 //! and the script landing proves the runtime toggle. The windowed run enables it the other way,
 //! with `LIMINA_INPUT_INJECT=1` in the supervisor's environment.
+//!
+//! # Failing loudly
+//!
+//! Before the main script, both runs check that `limina input <vm> keys` lists `KEY_ESC 1`, and
+//! send a script whose second verb is an unknown key (`escape`): it must exit non-zero, name the
+//! line and suggest `KEY_ESC`, and the exact keyboard comparison proves its first verb arrived
+//! and its third never did.
 
 use std::io::Write;
 use std::path::Path;
@@ -84,6 +91,15 @@ while time.time() < deadline and not done:
 print("END" if done else "TIMEOUT", flush=True)
 "#;
 
+/// A script whose second verb names no key: it must stop there, after the first verb reached the
+/// guest and before the third is sent, and exit non-zero naming the line, the nearest key name
+/// and where the names are listed. The exact keyboard comparison is what proves F16 never left.
+const FAILING_SCRIPT: &str = "\
+key tap KEY_F15
+key tap escape
+key tap KEY_F16
+";
+
 /// What the harness sends, one verb per line — the same text a compositor team's script would.
 const SCRIPT: &str = "\
 # a tap, then a chord (pressed in order, released in reverse)
@@ -112,8 +128,10 @@ type Event = (u16, u16, i32);
 fn expected() -> [(&'static str, Vec<Event>); 3] {
     const SYN: Event = (EV_SYN, 0, 0);
     let tap = |k: u16| vec![(EV_KEY, k, 1), SYN, (EV_KEY, k, 0), SYN];
-    let (f13, f14, lctrl, lshift, a, b, one) = (183, 184, 29, 42, 30, 48, 2);
-    let mut kbd = tap(f13);
+    let (f13, f14, f15, lctrl, lshift, a, b, one) = (183, 184, 185, 29, 42, 30, 48, 2);
+    // FAILING_SCRIPT's first verb, and nothing of the rest of it.
+    let mut kbd = tap(f15);
+    kbd.extend(tap(f13));
     kbd.extend([(EV_KEY, lctrl, 1), SYN, (EV_KEY, lshift, 1), SYN]);
     kbd.extend(tap(f13));
     kbd.extend([(EV_KEY, lshift, 0), SYN, (EV_KEY, lctrl, 0), SYN]);
@@ -167,8 +185,8 @@ fn parse_reader(out: &str, dev: &str) -> Vec<Event> {
         .collect()
 }
 
-/// Feed the script to `limina input <supervisor pid> -` and return its output; panics on failure.
-fn inject(limina: &Path, pid: libc::pid_t) -> String {
+/// Feed `script` to `limina input <supervisor pid> -`; whether it succeeded, and its output.
+fn inject(limina: &Path, pid: libc::pid_t, script: &str) -> (bool, String) {
     let mut child = Command::new(limina)
         .args(["input", &pid.to_string(), "-"])
         .stdin(Stdio::piped())
@@ -180,7 +198,7 @@ fn inject(limina: &Path, pid: libc::pid_t) -> String {
         .stdin
         .take()
         .unwrap()
-        .write_all(SCRIPT.as_bytes())
+        .write_all(script.as_bytes())
         .unwrap();
     let out = child
         .wait_with_output()
@@ -190,8 +208,26 @@ fn inject(limina: &Path, pid: libc::pid_t) -> String {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(out.status.success(), "`limina input` failed: {text}");
-    text
+    (out.status.success(), text)
+}
+
+/// `keys` lists the key names, and a script stops loudly at its first bad verb.
+fn names_and_a_failing_script(name: &str, limina: &Path, pid: libc::pid_t) {
+    let (ok, keys) = limina_cli(limina, &["input", &pid.to_string(), "keys"]);
+    assert!(ok, "{name}: `limina input keys` failed: {keys}");
+    assert!(
+        keys.lines().any(|l| l == "KEY_ESC 1"),
+        "{name}: `keys` does not list KEY_ESC with its code:\n{keys}"
+    );
+    let (ok, said) = inject(limina, pid, FAILING_SCRIPT);
+    eprintln!("{name}: the failing script said: {said}");
+    assert!(!ok, "{name}: a script with an unknown key exited 0: {said}");
+    for needle in ["line 2", "\"escape\"", "did you mean KEY_ESC?", "keys"] {
+        assert!(
+            said.contains(needle),
+            "{name}: the failure lacks {needle:?}: {said}"
+        );
+    }
 }
 
 /// Run `limina <args>`; whether it succeeded, and everything it printed.
@@ -288,8 +324,10 @@ fn run(name: &str, cfg: GuestConfig, window_live: bool, enabled: bool) {
         if !enabled {
             refused_then_enabled(name, &cfg.limina_bin, guest.supervisor_pid());
         }
-        let said = inject(&cfg.limina_bin, guest.supervisor_pid());
+        names_and_a_failing_script(name, &cfg.limina_bin, guest.supervisor_pid());
+        let (ok, said) = inject(&cfg.limina_bin, guest.supervisor_pid(), SCRIPT);
         eprintln!("{name}: limina input said:\n{said}");
+        assert!(ok, "{name}: `limina input` failed: {said}");
         reader.join().unwrap().expect("the guest reader failed")
     });
     eprintln!("{name}: the guest read:\n{output}");

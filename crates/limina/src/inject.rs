@@ -68,6 +68,9 @@ VERBS (one per line on stdin, or one on the command line):
   keep-held                      keep what this connection holds pressed after it closes
   info                           the devices and the absolute pointer's mapping
   sleep MS                       (client side) pause between verbs
+  keys                           (client side) every KEY name `key` accepts and its
+                                 code, one `NAME CODE` per line: exactly the keys the
+                                 virtual keyboard advertises; needs no VM and no lever
 
 Every verb but `ev` ends each of its frames with a SYN_REPORT. The absolute device spans
 the guest's WHOLE desktop: with one display, abs-norm/abs-px are that display's
@@ -75,6 +78,11 @@ coordinates; with several, only `abs` is well defined. Keys are evdev codes, not
 keys: no modifier normalization applies (KEY_LEFTMETA is Super, KEY_LEFTALT is Alt).
 Keys and buttons a connection leaves pressed are released when it closes, unless
 `keep-held` (or --keep-held) was sent.
+
+On stdin, verbs run in order and the FIRST verb that fails stops the script: the verbs
+before it have already reached the guest, none after it is sent, the error names its
+line, and `limina input` exits non-zero. A single verb on the command line exits
+non-zero when it fails, too. A refusal (the lever is off, an unknown key) is a failure.
 
 Off by default: the VM refuses every verb until its input-inject lever is on. Start
 it with LIMINA_INPUT_INJECT=1, tick input-inject in the window's Debug menu, or run
@@ -415,6 +423,7 @@ impl Verb {
             "keep-held" => Verb::KeepHeld,
             "info" => Verb::Info,
             "sleep" => return Err("sleep is the client's (limina input), not the VM's".into()),
+            "keys" => return Err("keys is the client's (limina input), not the VM's".into()),
             other => return Err(format!("unknown input verb {other:?}")),
         };
         if let Some(extra) = w.next() {
@@ -971,9 +980,24 @@ impl WorkerPipes {
 /// What the runtime socket strips before handing a line here.
 pub const PREFIX: &str = "input";
 
+/// `keys`: every key name `key` accepts, with its code, one `NAME CODE` per line. Exactly the
+/// keys the virtual keyboard advertises (`names::KEY_NAMES`); answered by the client, so it
+/// needs neither a running VM nor the lever.
+pub fn key_list() -> Vec<String> {
+    names::KEY_NAMES
+        .iter()
+        .map(|(name, code)| format!("{name} {code}"))
+        .collect()
+}
+
+/// Whether a verb line is `keys`, which the client answers itself.
+pub fn is_keys(verb: &[String]) -> bool {
+    verb == ["keys"]
+}
+
 /// Send verbs to the supervisor with this pid. `verb` empty or `["-"]` reads them from stdin,
-/// one per line (`#` comments, blank lines and client-side `sleep MS` allowed). Report lines are
-/// printed; the first refusal is an error.
+/// one per line (`#` comments, blank lines and client-side `sleep MS` and `keys` allowed). Report
+/// lines are printed; the first refusal is an error, and no later verb is sent.
 pub fn client(pid: u32, keep_held: bool, verb: &[String]) -> Result<()> {
     let path = crate::runtime_ctl::socket_path(pid);
     let stream = UnixStream::connect(&path).with_context(|| {
@@ -985,30 +1009,52 @@ pub fn client(pid: u32, keep_held: bool, verb: &[String]) -> Result<()> {
     // A click is paced, and a long `type` is many sends; neither takes anywhere near this.
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
-    let mut reader = BufReader::new(&stream);
-    let mut ask = |line: &str| -> Result<()> {
+    run_verbs(
+        &stream,
+        keep_held,
+        verb,
+        std::io::stdin().lock(),
+        &mut std::io::stdout(),
+    )
+}
+
+/// [`client`] over a connected stream, with stdin and stdout passed in so a test can drive it.
+/// Stops at the first verb the VM refuses (or that fails to send): the verbs before it have
+/// already run, none after it is sent, and the error is what `limina input` exits non-zero with.
+fn run_verbs(
+    stream: &UnixStream,
+    keep_held: bool,
+    verb: &[String],
+    input: impl BufRead,
+    out: &mut impl Write,
+) -> Result<()> {
+    let mut reader = BufReader::new(stream);
+    let mut ask = |line: &str, out: &mut dyn Write| -> Result<()> {
         // One verb is one protocol line: a newline inside it would be a second request.
         anyhow::ensure!(
             !line.contains(['\n', '\r']),
             "a verb cannot contain a line break: {line:?}"
         );
-        (&stream)
-            .write_all(format!("{PREFIX} {line}\n").as_bytes())
+        let mut w = stream;
+        w.write_all(format!("{PREFIX} {line}\n").as_bytes())
             .context("sending to the supervisor")?;
         let report =
             wire::read_answer(&mut reader).map_err(|why| anyhow::anyhow!("{line}: {why}"))?;
         for l in report {
-            println!("{l}");
+            writeln!(out, "{l}")?;
         }
         Ok(())
     };
     if keep_held {
-        ask("keep-held")?;
+        ask("keep-held", out)?;
     }
     if !(verb.is_empty() || verb == ["-"]) {
-        return ask(&verb.join(" "));
+        if is_keys(verb) {
+            return print_keys(out);
+        }
+        return ask(&verb.join(" "), out);
     }
-    for line in std::io::stdin().lock().lines() {
+    for (n, line) in input.lines().enumerate() {
         let line = line.context("reading verbs from stdin")?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -1018,11 +1064,27 @@ pub fn client(pid: u32, keep_held: bool, verb: &[String]) -> Result<()> {
             let ms: u64 = ms
                 .trim()
                 .parse()
-                .with_context(|| format!("sleep {ms:?}: not milliseconds"))?;
+                .with_context(|| format!("line {}: sleep {ms:?}: not milliseconds", n + 1))?;
             std::thread::sleep(Duration::from_millis(ms));
             continue;
         }
-        ask(line)?;
+        if line == "keys" {
+            print_keys(out)?;
+            continue;
+        }
+        ask(line, out).with_context(|| {
+            format!(
+                "line {} of the script failed; the verbs before it ran, none after it was sent",
+                n + 1
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn print_keys(out: &mut dyn Write) -> Result<()> {
+    for l in key_list() {
+        writeln!(out, "{l}")?;
     }
     Ok(())
 }
@@ -1491,6 +1553,62 @@ mod tests {
                 InputEvent::syn()
             ]
         );
+    }
+
+    /// A harness must fail loudly: a script stops at its first failing verb, after the verbs
+    /// before it reached the guest and before any after it is sent, and the error says which
+    /// line and why; a refusal for the lever being off is such a failure too. (`limina input`
+    /// exits non-zero on the error: `main` returns it.)
+    #[test]
+    fn a_script_stops_at_its_first_failing_verb_and_says_so() {
+        let _lever = lever(true);
+        let (io, ends) = worker();
+        publish(io);
+        let serve = || {
+            let (client, server) = UnixStream::pair().unwrap();
+            let t = std::thread::spawn(move || crate::runtime_ctl::serve_client(server));
+            (client, t)
+        };
+
+        let (client, server) = serve();
+        let script = "key tap KEY_F15\nkeys\nkey tap escape\nkey tap KEY_F16\n";
+        let mut out = Vec::new();
+        let err = run_verbs(&client, false, &[], script.as_bytes(), &mut out).unwrap_err();
+        let err = format!("{err:#}");
+        for want in [
+            "line 3",
+            "none after it was sent",
+            "unknown key \"escape\"",
+            "did you mean KEY_ESC?",
+            "limina input <vm> keys",
+        ] {
+            assert!(err.contains(want), "{want:?} missing from: {err}");
+        }
+        let printed = String::from_utf8(out).unwrap();
+        assert!(printed.lines().any(|l| l == "KEY_ESC 1"), "{printed}");
+        assert_eq!(printed.lines().count(), names::KEY_NAMES.len());
+        drop(client);
+        server.join().unwrap();
+        let f15 = |v| InputEvent::new(EV_KEY, KEY_F15, v);
+        assert_eq!(
+            read_all(&ends[0]),
+            vec![f15(1), InputEvent::syn(), f15(0), InputEvent::syn()],
+            "the verb before the failure ran, and nothing after it"
+        );
+
+        // A refusal because the lever is off is a failure, with the refusal as the error.
+        crate::debug_ctl::INPUT_INJECT.set(false);
+        let (client, server) = serve();
+        let verb = ["key".to_string(), "tap".into(), "KEY_F13".into()];
+        let err = run_verbs(&client, false, &verb, std::io::empty(), &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&refusal()), "{err}");
+        drop(client);
+        server.join().unwrap();
+        assert!(ends.iter().all(|e| read_all(e).is_empty()), "nothing sent");
+        // `keys` is the client's: the VM refuses it as a verb.
+        assert!(Verb::parse("keys").unwrap_err().contains("client"));
     }
 
     /// The tests that touch the process-global connection.
