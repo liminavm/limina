@@ -14,6 +14,7 @@ pub mod constants;
 pub mod hidkbd;
 pub mod keymap;
 pub mod ledger;
+pub mod names;
 pub mod router;
 pub mod touchpad;
 
