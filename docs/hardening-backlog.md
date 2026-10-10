@@ -891,60 +891,49 @@ zink no longer hands KK list restart. The venus tier still reaches the skip or t
 the pre-graphics/batched branch `limina-kk-pregfx` (`perf/listrestart-2026-10-07/`). A GPU hang is
 host-wide: reproduce only on an otherwise idle host.
 
-### piglit's `ext_timer_query-time-elapsed` hangs the GPU
-On the vrend tier (vrend → zink → KK), the piglit binary `ext_timer_query-time-elapsed`, plain
-(`ext_timer_query@time-elapsed`) or with `timestamp` (`arb_timer_query@query gl_timestamp`), hangs a
-Metal command buffer (`kIOGPUCommandBufferCallbackErrorHang`, zink reports the device lost).
-Measured 2026-10-09: 6 hangs in 7 runs, on KK `19e3ad7ebaa` and `564598b99be` alike, all on one
-host boot; `timer_query`, run after it, times out behind it. After two GPU restarts the kernel logs
-`Deny submissions/ignore app[limina-vmm]` and drops that worker's later GPU work, so everything
-after it in the VM stalls; a new worker gets a working GPU. Any guest GL app timing its frames with
-`GL_TIME_ELAPSED` may be able to do the same. Lead, not a cause: the shared-event fault above sits on
-the KK path timer queries also use. Until fixed, KK piglit A/Bs leave every timer-query test out.
-Vehicle: `spikes/piglit-virgl/ab.sh <disk> <kk icd> ext_timer_query <out>`; match the hang to
-`log show --predicate 'process == "kernel" AND eventMessage CONTAINS "GPURestart"'`. A GPU hang is
-host-wide: reproduce only on an otherwise idle host. KK's timestamp mechanism is not the cause:
-`spikes/kk-guest-bounds/ts-probe.c` drives it directly over Vulkan (render-encoder writes bracketing
-a real draw, counter-heap resolve, `WAIT_BIT` readback, 400 submissions) and never hangs — no
-watchdog, no `GPURestart`. The trigger is in how zink/vrend drives the queries, not the write.
+### piglit's `ext_timer_query-time-elapsed` hangs the GPU (mitigated; in-guest verification pending)
+On the vrend tier (vrend → zink → KK), the piglit binary `ext_timer_query@time-elapsed` hangs a Metal
+command buffer — `kIOGPUCommandBufferCallbackErrorHang`, zink reports the device lost. After two GPU
+restarts the kernel logs `Deny submissions/ignore app[limina-vmm]` and drops that worker's later GPU
+work, so everything after it in the VM stalls; a new worker gets a working GPU. `arb_timer_query@query
+gl_timestamp`, run first, passes before the ban. Any guest GL app timing frames with `GL_TIME_ELAPSED`
+can trip it. A GPU hang is host-wide: reproduce only on an otherwise idle host. Vehicle:
+`spikes/piglit-virgl/ab.sh <disk> <kk icd> ext_timer_query <out>`; match with
+`log show --predicate 'process == "kernel" AND eventMessage CONTAINS "GPURestart"'`.
 
-Reproduced and traced 2026-10-10 with `kk-cmdtrace.patch` (`LIMINA_KK_CMDTRACE=1`) on
-`piglit-kkq.raw`: `ext_timer_query@time-elapsed` wedges the GPU (kernel `GPURestart` ×2, then
-`Deny submissions/ignore app[limina-vmm] … 2 GPURestarts in 241 submissions`), while
-`arb_timer_query@query gl_timestamp`, run first, passes before the ban. zink's per-measurement
-pattern, each on a fresh query index that climbs 1→63 across the run: `ResetQueryPool` one index →
-a compute-path `vkCmdWriteTimestamp2` (begin, no render encoder) → `vkCmdCopyQueryPoolResults` with
-`VK_QUERY_RESULT_WAIT_BIT` → a render pass whose render-encoder write is the end timestamp →
-another `WAIT_BIT` copy; two submits per measurement. Narrowed by elimination in `ts-probe.c`
-(all PASS on an idle host, no `GPURestart`): the timestamp write + counter-heap resolve
-(`ts-render`, `ts-render-loop` ×400), and the compute-path begin write + a climbing query index
-into a persistent pool + `WAIT_BIT` CPU readback (`ts-zink` ×120) all complete cleanly. The one
-difference left is zink's per-timestamp GPU-side `WAIT_BIT` `vkCmdCopyQueryPoolResultsToMemoryKHR`.
-Its KK code reads correct by inspection: `cs_end` keeps the same `cmd->metal.cmd_buf`, the resolve
-is folded onto it, and the copy's compute encoder opens on that same buffer with
-`barrierAfterQueueStages:BLIT beforeStages:DISPATCH` — resolve and copy co-located and ordered.
-A raw-Vulkan vehicle cannot reach that path (KK does not advertise `VK_KHR_device_address_commands`
-to apps and the host loader will not dispatch the entry), so it was confirmed in-driver instead
-(env-gated edits to `kk_CmdCopyQueryPoolResultsToMemoryKHR`, rerun on `piglit-kkq.raw`):
+Root cause — a Metal-4 GPU-scheduler interaction, not a KK logic bug (established 2026-10-10):
+- zink's measurement is ONE command buffer: a compute-path begin `vkCmdWriteTimestamp2` + its
+  `vkCmdCopyQueryPoolResults` (`WAIT_BIT`, 64-bit), then a render pass with a draw, then a render-path
+  end write + its copy; submitted with a sibling reset command buffer. The query index climbs through
+  a persistent pool. (Earlier "encoder churn / many copies per command buffer" framing was wrong —
+  there is one copy per command buffer.)
+- The copy DISPATCH is the trigger — in-guest A/B on `kk_CmdCopyQueryPoolResultsToMemoryKHR`: skipping
+  only the dispatch for timestamp pools clears the hang; dropping only its
+  `barrierAfterQueueStages:BLIT` does not. The copy kernel (`libkk_copy_queries`, `kk_query.cl`) is
+  bounded — under `WAIT_BIT` it reads the slot and returns, no wait loop — so it cannot hang in its
+  own execution.
+- The device-loss report names command buffers with `gpu=0.000000..` — they never started; the queue
+  was already wedged at its head (they are victims, not the cause). 94 heaps, 151 textures resident.
+- It is NOT reproducible bare-metal. `spikes/kk-guest-bounds/ts-probe.c` case `ts-copy` reproduces the
+  exact shape over raw Vulkan (core `vkCmdCopyQueryPoolResults`, which the common runtime forwards to
+  the KHR entry via the destination's device address — so KK not advertising
+  `VK_KHR_device_address_commands` to apps is no obstacle): compute copy → render(draw) → render copy,
+  one command buffer, device-address dst. It passes on an idle GPU and under concurrent load, with
+  correct values; `ts-render`, `ts-render-loop`, and `ts-zink` (climbing index, `WAIT_BIT` CPU
+  readback) also pass. So the dispatch is necessary but not sufficient: the wedge needs the full guest
+  GPU environment — KK's queue sharing the worker's GPU with vrend's scanout/blit queues under
+  continuous presentation. A standalone Metal repro, if wanted, would have to recreate that sharing.
 
-- Returning early for a timestamp pool (skip the per-call `cs_end` + copy entirely) — the hang
-  CLEARS: no `GPURestart`, no device loss, poweroff succeeds. Confirms this path is the trigger.
-- Keeping the copy but dropping only its `barrierAfterQueueStages:BLIT beforeStages:DISPATCH` — the
-  hang REMAINS. So the queue-stage barrier is not the wedge.
-
-The copy kernel (`libkk_copy_queries`, `kk_query.cl`) is bounded — it has no GPU-side wait loop
-(WAIT_BIT is honoured CPU-side by the `cs_end` before the copy), so it is not an infinite shader.
-What is left is the per-timestamp STRUCTURE the copy builds: it forces a `cs_end` (landing that one
-timestamp's `resolveCounterHeap`) then opens a fresh compute encoder for the copy dispatch, so a GL
-app timing every frame produces, per command buffer, many `resolveCounterHeap`s interleaved with
-compute-encoder open/close. The skip that clears the hang differs by batching all the pending
-resolves into one fold at `EndCommandBuffer` instead. Likely fix direction: for timestamp pools,
-defer/coalesce the result copies (or avoid the per-copy `cs_end`) so resolves are not forced
-one-per-timestamp amid encoder churn; plausibly a Metal 4 interaction with many
-`resolveCounterHeap` + encoder transitions per command buffer rather than a KK logic error, so
-worth a minimal standalone Metal repro before committing to a KK restructure. Diagnostics were
-env-gated and reverted (not committed); the shape is recorded here.
-
+Mitigation (on `kk-hardening`, local/unpushed): for a timestamp-pool copy with `VK_QUERY_RESULT_64_BIT`
+and no availability/partial reporting — the common case — `kk_CmdCopyQueryPoolResultsToMemoryKHR`
+resolves the counter-heap entries STRAIGHT into the destination (`mtl_command_resolve_counter_heap` →
+`pDstRange->address`) and skips the compute copy dispatch. resolveCounterHeap writes the same uint64
+the 64-bit copy kernel would, so output is byte-identical; the pending pool-BO resolve is still folded,
+so `vkGetQueryPoolResults` on the same pool stays correct. This is "SKIP-but-correct": the in-guest A/B
+proved removing the dispatch clears the hang, and this removes it while still writing the result.
+Correctness verified bare-metal (`ts-copy` value-checked; all `ts-probe` cases pass). PENDING: the
+anti-hang property is only testable in-guest (`ext_timer_query@time-elapsed` should pass instead of
+`fail(stall)`), held until no other VM shares the host.
 ### Geometry shaders: the failures left on the piglit GS list
 KK runs geometry shaders on poly's compute emulation, on by default (`LIMINA_KK_GEOMETRY_SHADER=0`
 withdraws them). Under zink-on-venus the GS list (no fp64) passes 2501 of 2622; what still fails,

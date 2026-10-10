@@ -79,7 +79,10 @@ static void setup(void) {
   float pr = 1;
   VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                  .queueFamilyIndex = qfam, .queueCount = 1, .pQueuePriorities = &pr};
+  VkPhysicalDeviceVulkan12Features f12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+                                          .bufferDeviceAddress = VK_TRUE};
   VkPhysicalDeviceVulkan13Features f13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+                                          .pNext = &f12,
                                           .dynamicRendering = VK_TRUE, .synchronization2 = VK_TRUE};
   VkDeviceCreateInfo dc = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &f13,
                            .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci};
@@ -351,10 +354,139 @@ static int ts_zink(void) {
   return 1;
 }
 
+// ts-zink's begin/end bracket, read back the way zink's GL_TIME_ELAPSED actually does: a GPU-side
+// vkCmdCopyQueryPoolResults (WAIT_BIT), not a CPU vkGetQueryPoolResults. KK has no core
+// kk_CmdCopyQueryPoolResults -- the common runtime forwards it to
+// kk_CmdCopyQueryPoolResultsToMemoryKHR via the dst buffer's device address (verified in
+// vk_command_buffer.c). Faithful to the hung command buffer in the guest cmdtrace: the WHOLE
+// measurement is ONE command buffer -- compute-path begin timestamp, its copy, then a render pass,
+// then the render-path end timestamp, then its copy -- giving the encoder interleave
+// compute -> compute(copy) -> render -> compute(copy) that wedges the GPU
+// (kIOGPUCommandBufferCallbackErrorHang). The reset is a second command buffer in the same submit,
+// as zink does it. One such submission should be enough; a few iterations climb the query index.
+// Returns 1 if all completed, 0 on the first fence timeout / device loss.
+static int ts_copy(void) {
+  enum { POOL = 256, ITERS = 8 };
+  const VkDeviceSize STRIDE = sizeof(uint64_t);
+  VkImage img;
+  VkImageView view;
+  make_target(&img, &view);
+  VkPipeline pipe = make_pipeline();
+
+  VkQueryPoolCreateInfo qpi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                               .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = POOL};
+  VkQueryPool qp;
+  if (vkCreateQueryPool(dev, &qpi, NULL, &qp)) { fprintf(stderr, "query pool\n"); return 0; }
+
+  // Device-address destination the GPU copy writes into.
+  VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = POOL * STRIDE,
+                            .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT};
+  VkBuffer dst;
+  if (vkCreateBuffer(dev, &bci, NULL, &dst)) { fprintf(stderr, "dst buffer\n"); return 0; }
+  VkMemoryRequirements mr;
+  vkGetBufferMemoryRequirements(dev, dst, &mr);
+  VkMemoryAllocateFlagsInfo maf = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+                                   .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+  VkMemoryAllocateInfo mai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &maf,
+                              .allocationSize = mr.size,
+                              .memoryTypeIndex = mem_type(mr.memoryTypeBits,
+                                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)};
+  VkDeviceMemory dm;
+  vkAllocateMemory(dev, &mai, NULL, &dm);
+  vkBindBufferMemory(dev, dst, dm, 0);
+  VkBufferDeviceAddressInfo bdai = {.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .buffer = dst};
+  (void)vkGetBufferDeviceAddress(dev, &bdai);
+  // host-visible dst: verify the mitigation's resolve-direct-to-dst wrote sane timestamps.
+  uint64_t *dvals = NULL;
+  vkMapMemory(dev, dm, 0, VK_WHOLE_SIZE, 0, (void **)&dvals);
+
+  VkCommandBufferAllocateInfo cbai = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                                      .commandPool = cpool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                                      .commandBufferCount = 1};
+  VkFenceCreateInfo fi = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  const VkQueryResultFlags RF = VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT;
+
+  for (int it = 0; it < ITERS; it++) {
+    uint32_t qb = (uint32_t)(2 * it) % POOL;
+    uint32_t qe = (uint32_t)(2 * it + 1) % POOL;
+
+    // reset command buffer (separate, submitted alongside the main one, as zink does)
+    VkCommandBuffer cbr;
+    vkAllocateCommandBuffers(dev, &cbai, &cbr);
+    VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    vkBeginCommandBuffer(cbr, &bi);
+    vkCmdResetQueryPool(cbr, qp, qb, 1);
+    vkCmdResetQueryPool(cbr, qp, qe, 1);
+    vkEndCommandBuffer(cbr);
+
+    // main command buffer: begin ts (compute) + copy, render pass, end ts (render) + copy
+    VkCommandBuffer cb;
+    vkAllocateCommandBuffers(dev, &cbai, &cb);
+    vkBeginCommandBuffer(cb, &bi);
+
+    // begin timestamp, no render pass active -> compute path; its copy folds the pending resolve.
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, qp, qb);
+    vkCmdCopyQueryPoolResults(cb, qp, qb, 1, dst, (VkDeviceSize)qb * STRIDE, STRIDE, RF);
+
+    // the timed render pass (empty, like piglit's): transition then clear/store, no draw.
+    VkImageMemoryBarrier2 imb = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                 .srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                 .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                 .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                 .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, .image = img,
+                                 .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1,
+                           .pImageMemoryBarriers = &imb};
+    vkCmdPipelineBarrier2(cb, &di);
+    VkRenderingAttachmentInfo cat = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = view,
+                                     .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                                     .clearValue = {.color = {.float32 = {0.2f, 0.4f, 0.6f, 1.0f}}}};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {64, 64}},
+                          .layerCount = 1, .colorAttachmentCount = 1, .pColorAttachments = &cat};
+    vkCmdBeginRendering(cb, &ri);
+    // a draw, so the COLOR_ATTACHMENT_OUTPUT-stage end timestamp has fragment work to time
+    // (matching zink's draws=1 pass; an empty pass resolves the end timestamp to 0).
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    // end timestamp inside the render pass -> render-encoder path.
+    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, qp, qe);
+    vkCmdEndRendering(cb);
+    // end copy, after EndRendering folded the resolve.
+    vkCmdCopyQueryPoolResults(cb, qp, qe, 1, dst, (VkDeviceSize)qe * STRIDE, STRIDE, RF);
+    vkEndCommandBuffer(cb);
+
+    VkFence fence;
+    vkCreateFence(dev, &fi, NULL, &fence);
+    VkCommandBuffer cbs[2] = {cbr, cb};
+    VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 2, .pCommandBuffers = cbs};
+    if (vkQueueSubmit(q, 1, &si, fence)) { fprintf(stderr, "submit (iter %d)\n", it); return 0; }
+    VkResult w = vkWaitForFences(dev, 1, &fence, VK_TRUE, 3000000000ull);
+    if (w != VK_SUCCESS) {
+      printf("  iter %d (qb=%u qe=%u): fence wait -> %d -- HANG\n", it, qb, qe, w);
+      return 0;
+    }
+    if (dvals[qb] == 0 || dvals[qe] == 0 || dvals[qe] < dvals[qb]) {
+      printf("  iter %d (qb=%u qe=%u): copied values begin=%llu end=%llu -- BAD\n", it, qb, qe,
+             (unsigned long long)dvals[qb], (unsigned long long)dvals[qe]);
+      return 0;
+    }
+    vkFreeCommandBuffers(dev, cpool, 1, &cbr);
+    vkFreeCommandBuffers(dev, cpool, 1, &cb);
+    vkDestroyFence(dev, fence, NULL);
+  }
+  printf("  %d single-cmdbuf measurements (compute copy; render; render copy) completed, no hang\n", ITERS);
+  return 1;
+}
+
 static const struct { const char *name; int (*fn)(void); } tests[] = {
   {"ts-render", ts_render},
   {"ts-render-loop", ts_render_loop},
   {"ts-zink", ts_zink},
+  {"ts-copy", ts_copy},
 };
 
 int main(int argc, char **argv) {
