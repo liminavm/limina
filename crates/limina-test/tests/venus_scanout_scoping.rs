@@ -258,6 +258,27 @@ fn stranger_view_of_live_scanouts(
         ring.len()
     );
 
+    // The window shows the presenter's frames, and live ones: a guest flip that went up within
+    // the last second (the ring flips at the display's rate). Proof the binds above are what
+    // reaches the glass, in both arms.
+    let (still, _) = guest
+        .stills()
+        .wait_for(Duration::from_secs(10), |still, frame| {
+            still.guest_flip
+                && still
+                    .taken_t_monotonic_raw_ns
+                    .saturating_sub(still.t_monotonic_raw_ns)
+                    < 1_000_000_000
+                && limina_test::is_kmschurn_frame(frame)
+        })
+        .unwrap_or_else(|e| {
+            panic!("[{arm}] the window is not showing the presenter's frames: {e:#}")
+        });
+    eprintln!(
+        "[{arm}] the window shows the presenter: flip {} on surface {}",
+        still.flip, still.presented_iosurface
+    );
+
     let mut seen = Vec::new();
     for &(id, _) in &ring {
         assert_ne!(id, 0, "[{arm}] parsed a zero surface id");

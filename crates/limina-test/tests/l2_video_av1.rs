@@ -111,6 +111,20 @@ fn stock_guest_plays_av1_through_vaapi() {
         return;
     }
 
+    // The vehicle, not the video: the decode observer exists only with a window sink, and
+    // nothing below puts pixels on screen (`-f null`), so check the window presents the desktop.
+    let (_, desktop) = guest
+        .stills()
+        .wait_for(Duration::from_secs(120), |_, f| {
+            let (colors, dominance) = f.richness();
+            colors >= 1000 && dominance < 0.90
+        })
+        .expect(
+            "the window never showed a painted desktop — the windowed vehicle is not presenting",
+        );
+    let (colors, dominance) = desktop.richness();
+    eprintln!("the window shows the desktop: {colors} colors, dominant {dominance:.2}");
+
     // ORACLE 1 — the host offers AV1 and the guest driver says so.
     let va_elements = guest
         .ssh_exec("gst-inspect-1.0 va 2>&1 || true")

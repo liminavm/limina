@@ -104,6 +104,28 @@ fn flat_run_default_arms_suspend_and_resumes_pending() {
         }
         // Seated GNOME needs to be up (or back) before the suspend button means anything.
         std::thread::sleep(Duration::from_secs(if cycle == 1 { 90 } else { 45 }));
+        // Nothing here reaches the guest over ssh, so the window is the one witness that the
+        // desktop is up (cycle 1) or came back (cycle 2): it must show a painted desktop, not a
+        // blank, a splash or a frozen restore.
+        let rich = |_: &limina_framecap::Still, f: &limina_test::CapturedFrame| {
+            let (colors, dominance) = f.richness();
+            colors >= 1000 && dominance < 0.90
+        };
+        match g.stills().wait_for(Duration::from_secs(60), rich) {
+            Ok((still, frame)) => {
+                let (colors, dominance) = frame.richness();
+                eprintln!(
+                    "cycle {cycle}: the window shows the desktop ({colors} colors, dominant \
+                     {dominance:.2}, flip {} epoch {})",
+                    still.flip, still.epoch
+                );
+            }
+            Err(e) => {
+                let log = g.supervisor_log();
+                cleanup();
+                panic!("cycle {cycle}: the window never showed a painted desktop: {e:#}\n{log}");
+            }
+        }
 
         let cli = std::process::Command::new(&base_for_bin.limina_bin)
             .arg("suspend")

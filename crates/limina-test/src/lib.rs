@@ -1727,6 +1727,12 @@ impl CapturedFrame {
     }
 }
 
+/// Whether `frame` is one of `guest/kmschurn.py`'s Vulkan frames: a solid clear to
+/// (0.1, g, 0.9) in UNORM, so red ≈ 26 and blue ≈ 230 with any green.
+pub fn is_kmschurn_frame(frame: &CapturedFrame) -> bool {
+    frame.dominant_within([20, 0, 224], [32, 255, 236], 0.98)
+}
+
 /// Takes `limina debug <supervisor> capture still` of a windowed guest: the frame on the
 /// window's glass now, with its tag line ([`limina_framecap::Still`]). Owns only the binary,
 /// the pid and a directory, so it can be moved to a thread that watches the window while the

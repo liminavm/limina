@@ -193,12 +193,40 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
     let (before, before_regions) = owned_unmapped(worker);
     eprintln!("worker {worker}: owned unmapped before = {before} B ({before_regions} regions)");
 
-    let out = guest
-        .ssh_exec_timeout(
-            &format!("sudo -n env {VENUS_ENV} python3 /tmp/kmschurn.py churn-vk {FRAMES}"),
-            Duration::from_secs(180),
-        )
-        .expect("running the churn presenter");
+    // While the churn runs (a few seconds of frames), a thread watches the window for one of
+    // them: proof the churned buffers are what reaches the glass, not just what the guest made.
+    // It stops at the first match, or when the churn returns, so it is done before the
+    // measurement below.
+    let stills = guest.stills();
+    let churning = std::sync::atomic::AtomicBool::new(true);
+    let (out, on_glass) = std::thread::scope(|scope| {
+        let watcher = scope.spawn(|| {
+            let mut last = String::from("no still taken");
+            while churning.load(std::sync::atomic::Ordering::Relaxed) {
+                match stills.take(None) {
+                    Ok((still, frame))
+                        if still.guest_flip && limina_test::is_kmschurn_frame(&frame) =>
+                    {
+                        return Ok(still);
+                    }
+                    Ok((still, frame)) => {
+                        last = format!("dominant {:?}, {still:?}", frame.dominant_color());
+                    }
+                    Err(e) => last = format!("{e:#}"),
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            Err(last)
+        });
+        let out = guest
+            .ssh_exec_timeout(
+                &format!("sudo -n env {VENUS_ENV} python3 /tmp/kmschurn.py churn-vk {FRAMES}"),
+                Duration::from_secs(180),
+            )
+            .expect("running the churn presenter");
+        churning.store(false, std::sync::atomic::Ordering::Relaxed);
+        (out, watcher.join().expect("the window watcher panicked"))
+    });
     eprintln!("{out}");
 
     // Settle before reading: releases and presents are drained on the supervisor's main thread
@@ -237,6 +265,14 @@ fn windowed_frame_apply_holds_bounded_state_under_scanout_churn() {
         created > FRAMES,
         "the presenter allocated only {created} buffers for {FRAMES} frames — it did not \
          churn, so the retention number below proves nothing:\n{out}"
+    );
+
+    let still = on_glass.unwrap_or_else(|last| {
+        panic!("no churned frame reached the window while the churn ran; the last still: {last}")
+    });
+    eprintln!(
+        "the window showed a churned frame: flip {} on surface {}",
+        still.flip, still.presented_iosurface
     );
 
     assert!(
