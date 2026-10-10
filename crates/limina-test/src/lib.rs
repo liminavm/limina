@@ -99,38 +99,17 @@ pub fn child_pids(pid: libc::pid_t) -> Vec<libc::pid_t> {
 /// `vmm_bin` — see [`Guest::worker_pid`], which this is for a supervisor the harness did not
 /// spawn itself (a `--detach` run).
 pub fn worker_pid_of(supervisor: libc::pid_t, vmm_bin: &Path) -> Result<libc::pid_t> {
-    let want = vmm_bin
-        .canonicalize()
-        .unwrap_or_else(|_| vmm_bin.to_path_buf());
-    let children = child_pids(supervisor);
-    if let Some(&pid) = children
-        .iter()
-        .find(|&&p| pid_path(p).as_ref() == Some(&want))
-    {
+    let run = run_worker_pids(supervisor, vmm_bin);
+    let is_launcher = |p: libc::pid_t| {
+        proc_argv(p).is_some_and(|a| a.get(1).map(String::as_str) == Some("--launcher"))
+    };
+    if let Some(&pid) = run.iter().find(|&&p| !is_launcher(p)) {
         return Ok(pid);
     }
-    let label = format!("{WORKER_JOB_PREFIX}{supervisor}.");
-    let launchers: Vec<_> = child_pids(1)
-        .into_iter()
-        .filter(|&p| pid_path(p).as_ref() == Some(&want))
-        .filter(|&p| {
-            proc_argv(p).is_some_and(|a| {
-                a.get(1).map(String::as_str) == Some("--launcher")
-                    && a.get(2).is_some_and(|l| l.starts_with(&label))
-            })
-        })
-        .collect();
-    for launcher in &launchers {
-        if let Some(&pid) = child_pids(*launcher)
-            .iter()
-            .find(|&&p| pid_path(p).as_ref() == Some(&want))
-        {
-            return Ok(pid);
-        }
-    }
     bail!(
-        "no worker {want:?} under supervisor {supervisor} (its children: {children:?}; its \
-         launchers: {launchers:?})"
+        "no worker {vmm_bin:?} under supervisor {supervisor} (its children: {:?}; the run's \
+         launchers: {run:?})",
+        child_pids(supervisor)
     )
 }
 
@@ -3214,11 +3193,17 @@ impl Guest {
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        // Even force didn't take: the supervisor itself is wedged. Kill it and net any
-        // orphaned worker, so a test run can never leave a live VM holding HVF.
+        // Even force didn't take: the supervisor itself is wedged. Kill it and net its orphaned
+        // worker, so a test run can never leave a live VM holding HVF. The worker is found by
+        // its lineage, so it has to be found BEFORE the kill: once the supervisor is gone, a
+        // worker it spawned as its own child is reparented and nothing ties it to this run.
+        let workers = run_worker_pids(self.pid, &self.vmm_bin);
         unsafe {
             libc::kill(self.pid, libc::SIGKILL);
         }
+        kill_worker_pids(&workers, &self.vmm_bin);
+        // A worker the supervisor launched in the moment between the look and the kill is still
+        // under a launcher whose job label names this run.
         self.kill_stray_workers();
         self.kill_stray_gateway();
         let status = self
@@ -3237,17 +3222,10 @@ impl Guest {
         }
     }
 
-    /// Best-effort: SIGKILL any process whose argv mentions our worker binary path.
-    /// Only reached on the forced path; the worker path is unique to this build, so this
-    /// can't hit an unrelated VM.
+    /// Best-effort: SIGKILL this run's worker processes ([`kill_run_workers`]). Only reached on
+    /// the forced path.
     fn kill_stray_workers(&self) {
-        if let Some(path) = self.vmm_bin.to_str() {
-            let _ = Command::new("pkill")
-                .args(["-9", "-f", path])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+        kill_run_workers(self.pid, &self.vmm_bin);
     }
 
     /// Best-effort: SIGKILL this supervisor's gvproxy on the forced path. After we SIGKILL the
@@ -3304,6 +3282,76 @@ impl AgentConn {
         limina_proto::write_message(&mut self.stream, limina_proto::CHANNEL_CONTROL, msg)
             .context("sending control-plane message to guest agent")
     }
+}
+
+/// SIGKILL the worker processes of the supervisor `supervisor` — its worker and, on the launchd
+/// path, the launcher — and nothing else. Every pid is re-checked to still be `vmm_bin` right
+/// before the kill, so a pid recycled since it was found is left alone.
+///
+/// Only processes of this one run are matched, by lineage: parallel tests and other sessions run
+/// the same worker binary, and every supervisor names it in its own argv (`--vmm-bin`), so
+/// anything keyed on the path alone reaches their VMs too.
+pub fn kill_run_workers(supervisor: libc::pid_t, vmm_bin: &Path) {
+    kill_worker_pids(&run_worker_pids(supervisor, vmm_bin), vmm_bin);
+}
+
+/// SIGKILL each of `pids` that is still running `vmm_bin`, workers before their launchers.
+fn kill_worker_pids(pids: &[libc::pid_t], vmm_bin: &Path) {
+    let want = vmm_bin
+        .canonicalize()
+        .unwrap_or_else(|_| vmm_bin.to_path_buf());
+    for &pid in pids {
+        if pid > 1 && pid_path(pid).as_ref() == Some(&want) {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
+/// The worker processes of the supervisor `supervisor` (see [`run_worker_pids_with`]), read from
+/// the live process table.
+pub fn run_worker_pids(supervisor: libc::pid_t, vmm_bin: &Path) -> Vec<libc::pid_t> {
+    let want = vmm_bin
+        .canonicalize()
+        .unwrap_or_else(|_| vmm_bin.to_path_buf());
+    run_worker_pids_with(supervisor, &want, child_pids, pid_path, proc_argv)
+}
+
+/// The processes of one run that execute the worker binary `want` (canonical): the worker as
+/// the supervisor's own child, and on the launchd path each `limina-vmm --launcher <label>`
+/// whose job label carries this supervisor's pid together with the worker under it. Workers come
+/// first, launchers after, so a kill in this order takes the worker down before the process
+/// that would notice it go.
+///
+/// The process table is read through the three functions so the selection can be tested
+/// without running any of it.
+pub fn run_worker_pids_with(
+    supervisor: libc::pid_t,
+    want: &Path,
+    children: impl Fn(libc::pid_t) -> Vec<libc::pid_t>,
+    exe: impl Fn(libc::pid_t) -> Option<PathBuf>,
+    argv: impl Fn(libc::pid_t) -> Option<Vec<String>>,
+) -> Vec<libc::pid_t> {
+    let is_worker_bin = |p: libc::pid_t| exe(p).as_deref() == Some(want);
+    let mut workers: Vec<libc::pid_t> = children(supervisor)
+        .into_iter()
+        .filter(|&p| is_worker_bin(p))
+        .collect();
+    let label = format!("{WORKER_JOB_PREFIX}{supervisor}.");
+    let launchers: Vec<libc::pid_t> = children(1)
+        .into_iter()
+        .filter(|&p| is_worker_bin(p))
+        .filter(|&p| {
+            argv(p).is_some_and(|a| {
+                a.get(1).map(String::as_str) == Some("--launcher")
+                    && a.get(2).is_some_and(|l| l.starts_with(&label))
+            })
+        })
+        .collect();
+    for &launcher in &launchers {
+        workers.extend(children(launcher).into_iter().filter(|&p| is_worker_bin(p)));
+    }
+    workers.extend(launchers);
+    workers
 }
 
 /// Last `n` lines of `s`.
@@ -3513,6 +3561,170 @@ pub fn set_pasteboard_text_slowly(name: &str, text: &str, midwrite_delay: Durati
         pb.clearContents();
         std::thread::sleep(midwrite_delay);
         pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    }
+}
+
+#[cfg(test)]
+mod teardown_tests {
+    use super::*;
+
+    /// The launchd path, on a fabricated process table: this run's launcher and the worker under
+    /// it are found, and another supervisor's — including one whose pid has this one's as a
+    /// prefix — are not. So is a direct child, and nothing that is not the worker binary.
+    #[test]
+    fn a_runs_workers_are_selected_by_lineage() {
+        let vmm = Path::new("/opt/limina/limina-vmm");
+        let other = Path::new("/bin/sh");
+        // pid -> (parent, exe, argv)
+        let table: Vec<(libc::pid_t, libc::pid_t, &Path, Vec<String>)> = vec![
+            (100, 50, other, vec!["limina".into()]),
+            // This supervisor's own child worker (the spawn path) and its gvproxy.
+            (101, 100, vmm, vec!["limina-vmm".into(), "--cpus".into()]),
+            (102, 100, other, vec!["gvproxy".into()]),
+            // This run's launcher (a child of launchd) and the worker under it.
+            (
+                200,
+                1,
+                vmm,
+                vec![
+                    "limina-vmm".into(),
+                    "--launcher".into(),
+                    format!("{WORKER_JOB_PREFIX}100.2"),
+                ],
+            ),
+            (201, 200, vmm, vec!["limina-vmm".into()]),
+            // Supervisor 1000's launcher: its label starts with "…worker.100" too.
+            (
+                300,
+                1,
+                vmm,
+                vec![
+                    "limina-vmm".into(),
+                    "--launcher".into(),
+                    format!("{WORKER_JOB_PREFIX}1000.0"),
+                ],
+            ),
+            (301, 300, vmm, vec!["limina-vmm".into()]),
+            // Another worker binary entirely, under a launcher-looking argv.
+            (
+                400,
+                1,
+                other,
+                vec![
+                    "x".into(),
+                    "--launcher".into(),
+                    format!("{WORKER_JOB_PREFIX}100.3"),
+                ],
+            ),
+        ];
+        let children = |p: libc::pid_t| {
+            table
+                .iter()
+                .filter(|r| r.1 == p)
+                .map(|r| r.0)
+                .collect::<Vec<_>>()
+        };
+        let exe = |p: libc::pid_t| table.iter().find(|r| r.0 == p).map(|r| r.2.to_path_buf());
+        let argv = |p: libc::pid_t| table.iter().find(|r| r.0 == p).map(|r| r.3.clone());
+        assert_eq!(
+            run_worker_pids_with(100, vmm, children, exe, argv),
+            vec![101, 201, 200],
+            "workers first, then this run's launcher, and nothing of supervisor 1000's"
+        );
+    }
+
+    fn dead_within(child: &mut Child, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if child.try_wait().ok().flatten().is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    /// The forced teardown kills this run's worker and nothing else. Parallel tests share one
+    /// worker binary, and every supervisor names it in its own argv (`--vmm-bin`), so a match on
+    /// the path reaches other runs' workers and supervisors too.
+    ///
+    /// Three processes, all carrying the fake worker's path: this test's own child running it
+    /// (the run's worker, the test process standing in for its supervisor), a process running it
+    /// under another parent (another run's worker), and a shell with the path in its argv
+    /// (another run's supervisor). Only the first may die.
+    #[test]
+    fn a_forced_teardown_kills_only_its_own_worker() {
+        let dir = std::env::temp_dir().join(format!(
+            "limina-test-teardown-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("limina-vmm");
+        fs::copy("/bin/sleep", &fake).unwrap();
+        // A copied platform binary is killed at exec until it carries a signature of its own.
+        let signed = Command::new("codesign")
+            .args(["-s", "-", "-f"])
+            .arg(&fake)
+            .output()
+            .unwrap();
+        assert!(signed.status.success(), "ad-hoc signing the fake worker");
+        let fake = fake.canonicalize().unwrap();
+
+        let mut ours = Command::new(&fake).arg("300").spawn().unwrap();
+        let mut other_worker = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("\"$0\" 300 & wait")
+            .arg(&fake)
+            .spawn()
+            .unwrap();
+        let mut other_supervisor = Command::new("/bin/sh")
+            .args(["-c", "sleep 300; :", "limina", "--vmm-bin"])
+            .arg(&fake)
+            .spawn()
+            .unwrap();
+        // Let the shell start its worker.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let theirs = loop {
+            let kids = child_pids(other_worker.id() as libc::pid_t);
+            if let Some(&p) = kids.iter().find(|&&p| pid_path(p).as_ref() == Some(&fake)) {
+                break p;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the other run's worker never started"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+
+        kill_run_workers(std::process::id() as libc::pid_t, &fake);
+
+        let ours_died = dead_within(&mut ours, Duration::from_secs(5));
+        // A SIGKILL is not instant to observe, and a killed process lingers as a zombie, which
+        // still answers kill(0) — so give the others time to die and ask for the executable,
+        // which a zombie no longer has.
+        std::thread::sleep(Duration::from_millis(500));
+        let theirs_alive = pid_path(theirs).as_ref() == Some(&fake);
+        let other_supervisor_alive = other_supervisor.try_wait().ok().flatten().is_none();
+        for c in [&mut ours, &mut other_worker, &mut other_supervisor] {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        unsafe { libc::kill(theirs, libc::SIGKILL) };
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            ours_died,
+            "the run's own worker survived its forced teardown"
+        );
+        assert!(
+            theirs_alive,
+            "the forced teardown killed another run's worker"
+        );
+        assert!(
+            other_supervisor_alive,
+            "the forced teardown killed another run's supervisor"
+        );
     }
 }
 
