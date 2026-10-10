@@ -19,27 +19,21 @@ use std::time::{Duration, Instant};
 
 use limina_test::{Boot, GuestConfig};
 
-/// Kill the `limina start` supervisor (and let its own teardown net the worker) if
-/// the test dies mid-way, so a failed assertion never leaks a running VM.
-struct KillOnDrop(std::process::Child);
+/// Force-stop the `limina start` supervisor (and let its own teardown net the worker) if
+/// the test dies mid-way, so a failed assertion never leaks a running VM. The binaries are the
+/// ones the run uses: `limina stop --force` first, and the worker binary for the last-resort
+/// kill of this run's worker ([`limina_test::force_stop_child`]).
+struct KillOnDrop(std::process::Child, PathBuf, PathBuf);
+
+impl KillOnDrop {
+    fn new(child: std::process::Child, cfg: &GuestConfig) -> KillOnDrop {
+        KillOnDrop(child, cfg.limina_bin.clone(), cfg.vmm_bin.clone())
+    }
+}
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        if self.0.try_wait().ok().flatten().is_none() {
-            // Two SIGTERMs = the force path (skip the grace), then reap.
-            for _ in 0..2 {
-                unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) };
-            }
-            let deadline = Instant::now() + Duration::from_secs(15);
-            while Instant::now() < deadline {
-                if self.0.try_wait().ok().flatten().is_some() {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
+        limina_test::force_stop_child(&mut self.0, &self.1, &self.2, Duration::from_secs(15));
     }
 }
 
@@ -112,7 +106,7 @@ fn managed_vm_lifecycle_create_start_stop_rm() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = KillOnDrop(start.spawn().expect("spawning limina start"));
+    let child = KillOnDrop::new(start.spawn().expect("spawning limina start"), &cfg);
     let supervisor_pid = child.0.id();
 
     // Boot oracle: GRUB's own `Booting \`Fedora …'` line on the captured serial console —
@@ -409,7 +403,7 @@ fn managed_vm_suspends_and_resumes() {
     };
 
     // --- cold boot ---
-    let mut boot1 = KillOnDrop(start_cmd().spawn().expect("spawning limina start #1"));
+    let mut boot1 = KillOnDrop::new(start_cmd().spawn().expect("spawning limina start #1"), &cfg);
     assert!(
         wait_ssh(PORT, Duration::from_secs(150)),
         "guest did not reach SSH on the cold boot"
@@ -463,10 +457,11 @@ fn managed_vm_suspends_and_resumes() {
     std::thread::sleep(Duration::from_secs(15));
 
     // --- restore: the next start finds the pending snapshot and auto-resumes ---
-    let mut boot2 = KillOnDrop(
+    let mut boot2 = KillOnDrop::new(
         start_cmd()
             .spawn()
             .expect("spawning limina start #2 (restore)"),
+        &cfg,
     );
     assert!(
         wait_ssh(PORT, Duration::from_secs(150)),
@@ -639,7 +634,7 @@ fn managed_windowed_vm_cli_suspend_reports_success() {
             return;
         }
     }
-    let mut boot = KillOnDrop(start.spawn().expect("spawning limina start"));
+    let mut boot = KillOnDrop::new(start.spawn().expect("spawning limina start"), &cfg);
     let log = || std::fs::read_to_string(&sup_log).unwrap_or_default();
     assert!(
         wait_ssh(PORT, Duration::from_secs(150)),

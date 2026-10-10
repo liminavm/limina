@@ -1568,6 +1568,9 @@ pub struct Guest {
     scratch: PathBuf,
     /// Worker binary path, used by the orphan safety-net.
     vmm_bin: PathBuf,
+    /// The `limina` binary this guest runs under, for the CLI verbs a user would reach for
+    /// (`limina stop`, `limina debug`).
+    limina_bin: PathBuf,
     /// Host vsock listener (bound before boot so the guest agent can connect).
     vsock_listener: Option<UnixListener>,
     /// vsock socket path, removed on drop.
@@ -2084,6 +2087,7 @@ impl Guest {
             console_path,
             scratch,
             vmm_bin: cfg.vmm_bin.clone(),
+            limina_bin: cfg.limina_bin.clone(),
             vsock_listener,
             vsock_socket,
             capture_png,
@@ -3085,11 +3089,46 @@ impl Guest {
     /// deliberately never kills such a guest on a timer (an ordinary stop is a request and
     /// nothing more), so asking politely would just burn `timeout` and come back `forced`.
     ///
-    /// This asks the way a user would: the **force** path (two stop signals, as
-    /// `limina stop --force` sends). The supervisor still does its own clean teardown, so a
-    /// `forced: true` outcome from here means the *supervisor* is wedged — which keeps that
-    /// flag meaningful as an oracle instead of merely restating what the guest cannot do.
+    /// This asks the way a user would: `limina stop --force <supervisor pid>`. The supervisor
+    /// still does its own clean teardown, so a `forced: true` outcome from here means the
+    /// *supervisor* is wedged — which keeps that flag meaningful as an oracle instead of merely
+    /// restating what the guest cannot do.
+    ///
+    /// When the CLI cannot reach the supervisor (it answers `stop` only once its runtime socket
+    /// is up) or does not end it, this falls back to sending the force pair itself, so the
+    /// teardown never depends on the CLI working.
     pub fn force_shutdown(mut self, timeout: Duration) -> Result<Outcome> {
+        let budget = timeout.max(Duration::from_secs(1));
+        let mut stop = Command::new(&self.limina_bin);
+        stop.args([
+            "stop",
+            "--force",
+            "--timeout",
+            &budget.as_secs().to_string(),
+            &self.pid.to_string(),
+        ]);
+        let cli = run_capped(stop, budget + Duration::from_secs(10));
+        if self
+            .child
+            .try_wait()
+            .context("polling supervisor")?
+            .is_some()
+        {
+            return self.terminate(Duration::ZERO);
+        }
+        eprintln!(
+            "limina-test: `limina stop --force {}` did not end the supervisor ({}); sending the \
+             force signals directly",
+            self.pid,
+            match &cli {
+                Ok(out) => format!(
+                    "{}: {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+                Err(e) => format!("{e:#}"),
+            }
+        );
         // `terminate` sends the second one, which is what makes the pair a force. The gap is
         // load-bearing: standard signals do not queue, so two SIGTERMs sent back to back
         // collapse into one delivery and the supervisor's counter never reaches 2 — the same
@@ -3293,6 +3332,68 @@ impl AgentConn {
 /// anything keyed on the path alone reaches their VMs too.
 pub fn kill_run_workers(supervisor: libc::pid_t, vmm_bin: &Path) {
     kill_worker_pids(&run_worker_pids(supervisor, vmm_bin), vmm_bin);
+}
+
+/// Force-stop a supervisor the harness spawned itself but not through [`Guest`] (a
+/// `limina start <vm>` child, say) and reap it — the safety net for a test that dies mid-way.
+///
+/// First the way a user would, `limina stop --force <pid>`. If that cannot reach the supervisor
+/// or does not end it, the force signals directly: SIGTERM re-delivered every 200 ms, never two
+/// back to back — standard signals do not queue, so a pair sent together arrives as one, and one
+/// is an ordinary stop that waits on the guest. Last, SIGKILL for the supervisor and its run's
+/// worker ([`kill_run_workers`]). Never depends on the CLI to finish the job.
+pub fn force_stop_child(
+    child: &mut Child,
+    limina_bin: &Path,
+    vmm_bin: &Path,
+    timeout: Duration,
+) -> std::process::ExitStatus {
+    let pid = child.id() as libc::pid_t;
+    let exited = |child: &mut Child, within: Duration| {
+        let deadline = Instant::now() + within;
+        loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                return Some(status);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    if let Some(status) = exited(child, Duration::ZERO) {
+        return status;
+    }
+    let budget = timeout.max(Duration::from_secs(1));
+    let mut stop = Command::new(limina_bin);
+    stop.args([
+        "stop",
+        "--force",
+        "--timeout",
+        &budget.as_secs().to_string(),
+        &pid.to_string(),
+    ]);
+    let _ = run_capped(stop, budget + Duration::from_secs(10));
+    if let Some(status) = exited(child, Duration::from_secs(1)) {
+        return status;
+    }
+    for _ in 0..5 {
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+        if let Some(status) = exited(child, Duration::from_millis(200)) {
+            return status;
+        }
+    }
+    if let Some(status) = exited(child, budget) {
+        return status;
+    }
+    let workers = run_worker_pids(pid, vmm_bin);
+    let _ = child.kill();
+    kill_worker_pids(&workers, vmm_bin);
+    kill_run_workers(pid, vmm_bin);
+    child.wait().unwrap_or_else(|_| {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(libc::SIGKILL)
+    })
 }
 
 /// SIGKILL each of `pids` that is still running `vmm_bin`, workers before their launchers.
