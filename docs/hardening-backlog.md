@@ -924,11 +924,26 @@ Its KK code reads correct by inspection: `cs_end` keeps the same `cmd->metal.cmd
 is folded onto it, and the copy's compute encoder opens on that same buffer with
 `barrierAfterQueueStages:BLIT beforeStages:DISPATCH` — resolve and copy co-located and ordered.
 A raw-Vulkan vehicle cannot reach that path (KK does not advertise `VK_KHR_device_address_commands`
-to apps and the host loader will not dispatch the entry), so the next step is an in-driver
-experiment: in a KK worktree make `kk_CmdCopyQueryPoolResultsToMemoryKHR` on a timestamp pool skip
-the per-call `cs_end`/copy (or coalesce the copies) behind an env flag, rerun the guest repro, and
-see whether the hang clears — or suspect a Metal 4 interaction of repeated
-`resolveCounterHeap` + queue-stage-barrier'd compute copies rather than a KK logic bug.
+to apps and the host loader will not dispatch the entry), so it was confirmed in-driver instead
+(env-gated edits to `kk_CmdCopyQueryPoolResultsToMemoryKHR`, rerun on `piglit-kkq.raw`):
+
+- Returning early for a timestamp pool (skip the per-call `cs_end` + copy entirely) — the hang
+  CLEARS: no `GPURestart`, no device loss, poweroff succeeds. Confirms this path is the trigger.
+- Keeping the copy but dropping only its `barrierAfterQueueStages:BLIT beforeStages:DISPATCH` — the
+  hang REMAINS. So the queue-stage barrier is not the wedge.
+
+The copy kernel (`libkk_copy_queries`, `kk_query.cl`) is bounded — it has no GPU-side wait loop
+(WAIT_BIT is honoured CPU-side by the `cs_end` before the copy), so it is not an infinite shader.
+What is left is the per-timestamp STRUCTURE the copy builds: it forces a `cs_end` (landing that one
+timestamp's `resolveCounterHeap`) then opens a fresh compute encoder for the copy dispatch, so a GL
+app timing every frame produces, per command buffer, many `resolveCounterHeap`s interleaved with
+compute-encoder open/close. The skip that clears the hang differs by batching all the pending
+resolves into one fold at `EndCommandBuffer` instead. Likely fix direction: for timestamp pools,
+defer/coalesce the result copies (or avoid the per-copy `cs_end`) so resolves are not forced
+one-per-timestamp amid encoder churn; plausibly a Metal 4 interaction with many
+`resolveCounterHeap` + encoder transitions per command buffer rather than a KK logic error, so
+worth a minimal standalone Metal repro before committing to a KK restructure. Diagnostics were
+env-gated and reverted (not committed); the shape is recorded here.
 
 ### Geometry shaders: the failures left on the piglit GS list
 KK runs geometry shaders on poly's compute emulation, on by default (`LIMINA_KK_GEOMETRY_SHADER=0`
