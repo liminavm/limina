@@ -24,7 +24,9 @@
 //!   supervisor received them. It resets when a fresh worker is swapped in (a guest reboot or a
 //!   resume), which bumps `epoch`. A gap in `flip` between two presented frames is guest flips the
 //!   window never showed: replaced by a newer one before the window applied it, or before its
-//!   copy finished. Each is written as a `not_presented` record, so a harness can count them.
+//!   copy finished. Each run of them is written as ONE `not_presented` record covering
+//!   `flip_from..=flip_to` with its `count` (and `flip` = `flip_to`), so a harness can count them
+//!   and a long gap costs one line, not one per flip.
 //! - `iosurface` is the id the worker presented (the guest's surface); `shown_iosurface` is the
 //!   surface actually on the layer, which differs when the window shows a private copy.
 //! - `t_monotonic_raw_ns` is `CLOCK_MONOTONIC_RAW` (= `mach_continuous_time` in ns; it keeps
@@ -146,8 +148,15 @@ pub struct Record {
     /// This capture's count of presents on `slot`, from 1. `None` for a flip never presented.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u64>,
-    /// The worker's flip count for `slot` within `epoch`.
+    /// The worker's flip count for `slot` within `epoch`. For a `not_presented` run, its last.
     pub flip: u64,
+    /// A `not_presented` run's first and last flip (inclusive), and how many flips it covers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_from: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_to: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
     /// Which worker the flip came from; bumped by every reboot or resume.
     pub epoch: u64,
     /// The IOSurface id the worker presented.
@@ -176,16 +185,23 @@ pub struct Record {
 }
 
 impl Record {
-    /// A guest flip on `slot` that never reached glass.
-    pub fn not_presented(slot: usize, epoch: u64, flip: u64) -> Record {
-        Record {
+    /// The guest flips `flips` on `slot` that never reached glass, as one record. `None` when
+    /// the range is empty.
+    pub fn not_presented(slot: usize, epoch: u64, flips: std::ops::Range<u64>) -> Option<Record> {
+        if flips.is_empty() {
+            return None;
+        }
+        Some(Record {
             slot,
-            flip,
+            flip: flips.end - 1,
+            flip_from: Some(flips.start),
+            flip_to: Some(flips.end - 1),
+            count: Some(flips.end - flips.start),
             epoch,
             dropped: true,
             reason: Some(Reason::NotPresented),
             ..Record::default()
-        }
+        })
     }
 
     /// Mark a presented frame as having no image, for `reason`.
@@ -212,9 +228,9 @@ pub struct Summary {
     pub captured: u64,
     /// Of those, frames with no image, by any reason but `not_presented`.
     pub dropped: u64,
-    /// Guest flips that never reached glass.
+    /// Guest flips that never reached glass (the sum of the `not_presented` records' counts).
     pub not_presented: u64,
-    /// Every `dropped: true` record, by reason (`not_presented` included).
+    /// Every frame without an image, by reason (`not_presented` counted in flips).
     pub by_reason: BTreeMap<String, u64>,
     /// Wall time from start to stop.
     pub duration_s: f64,
@@ -226,6 +242,10 @@ pub struct Summary {
     pub present_hook_us_p50: u64,
     pub present_hook_us_p99: u64,
     pub present_hook_us_max: u64,
+    /// Present only when the stop gave up waiting: how many frames were still in flight. Records
+    /// for them never reach the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete: Option<u64>,
 }
 
 impl Summary {
@@ -235,9 +255,13 @@ impl Summary {
 
     /// One human line, for a log or a terminal.
     pub fn describe(&self) -> String {
+        let incomplete = match self.incomplete {
+            Some(n) => format!("; INCOMPLETE: {n} frames still in flight at the stop"),
+            None => String::new(),
+        };
         format!(
             "{} presented, {} captured, {} dropped, {} flips never presented, over {:.1} s \
-             ({:.1} captured fps, {:.1} MB); main thread {} us p50 / {} us max per frame",
+             ({:.1} captured fps, {:.1} MB); main thread {} us p50 / {} us max per frame{}",
             self.presented,
             self.captured,
             self.dropped,
@@ -247,6 +271,7 @@ impl Summary {
             self.bytes as f64 / 1e6,
             self.present_hook_us_p50,
             self.present_hook_us_max,
+            incomplete,
         )
     }
 }
@@ -345,7 +370,7 @@ impl Tally {
             self.presented += 1;
         }
         match r.reason {
-            Some(reason) => *self.by_reason.entry(reason).or_default() += 1,
+            Some(reason) => *self.by_reason.entry(reason).or_default() += r.count.unwrap_or(1),
             None => {
                 self.captured += 1;
                 self.bytes += bytes;
@@ -395,6 +420,7 @@ impl Tally {
             present_hook_us_p50: pct(0.5),
             present_hook_us_p99: pct(0.99),
             present_hook_us_max: us.last().copied().unwrap_or(0) as u64,
+            incomplete: None,
         }
     }
 }
@@ -466,7 +492,12 @@ mod tests {
         assert!(!line.contains("file"), "{line}");
         assert_eq!(parse_line(&line), Ok(Line::Frame(gone)));
 
-        let never = Record::not_presented(1, 2, 17);
+        assert_eq!(Record::not_presented(1, 2, 17..17), None);
+        let never = Record::not_presented(1, 2, 17..20).unwrap();
+        assert_eq!(
+            (never.flip_from, never.flip_to, never.count, never.flip),
+            (Some(17), Some(19), Some(3), 19)
+        );
         let line = never.to_line();
         assert!(!line.contains("seq"), "{line}");
         assert!(line.contains(r#""reason":"not_presented""#), "{line}");
@@ -479,8 +510,7 @@ mod tests {
         t.count(&presented(0, 1, 1), 100);
         t.count(&presented(0, 2, 2), 50);
         t.count(&presented(0, 3, 3).drop_for(Reason::Overtaken), 0);
-        t.count(&Record::not_presented(0, 1, 4), 0);
-        t.count(&Record::not_presented(0, 1, 5), 0);
+        t.count(&Record::not_presented(0, 1, 4..6).unwrap(), 0);
         for us in [10, 20, 30, 1000] {
             t.hook_cost(us);
         }

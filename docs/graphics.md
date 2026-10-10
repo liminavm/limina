@@ -812,24 +812,29 @@ LIMINA_WINDOW_CAPTURE_DIR=<dir> …        # or capture the whole run (summary w
 
 `<dir>` gets one `s<slot>-<seq>.png` (RGB) per captured frame and `frames.jsonl`: one record per
 frame a window put on glass, in present order, then a summary line (presented / captured / dropped /
-never-presented, duration, captured fps, what it cost the main thread). Each record carries the
+never-presented, duration, captured fps, what it cost the main thread; `incomplete` when the stop
+gave up waiting for frames still in flight, whose records are then never written). Each record carries the
 display (`slot`), the capture's own present count (`seq`, which names the file), the worker's flip
 count for that display (`flip`, per worker `epoch` — a reboot or resume starts a new one), the
 presented IOSurface id and the one on the layer (they differ when the window shows a copy), the
 size, and two host clocks taken as the frame went up: `t_monotonic_raw_ns` (`CLOCK_MONOTONIC_RAW`,
 which is `mach_continuous_time` in ns) and `t_realtime_ns` (`CLOCK_REALTIME`, the one to correlate
 with guest logs — the guest RTC is anchored to it). Nothing is silently lost: a frame with no image
-is a record with `"dropped": true` and a `reason` — `not_presented` (a guest flip the window never
-showed: replaced before the window applied it), `queue_full`, `overtaken`, `copy_failed`,
-`disk_budget` or `write_error`. The format is `crates/limina-framecap`; the hook is
+is a record with `"dropped": true` and a `reason` — `not_presented` (guest flips the window never
+showed: replaced before the window applied them; one record per run of them, with `flip_from`,
+`flip_to` and `count`), `queue_full`, `overtaken`, `copy_failed`, `disk_budget` or `write_error`. The format is `crates/limina-framecap`; the hook is
 `crates/limina/src/window/frame_capture.rs`, in `GuestWindow::show_with_ack`, where every window's
 every frame goes on glass.
 
 What it costs and how it stays correct: the main thread only commits a GPU blit of the surface on
-glass into a capture buffer of its own; encoder threads wait for it and write the PNG (fast deflate,
-four threads). A frame whose blit has not finished when the next frame on its display goes up is
+glass into a capture buffer of its own and hands each record to a writer thread; encoder threads
+wait for the blit and write the PNG (fast deflate, four threads), and the writer keeps
+`frames.jsonl` in present order. While a blit reads a surface it holds that surface's use count,
+and the shown-ack waits for the replaced surface to leave use, so a capture can delay a guest's
+flip completion by up to the blit's length (about 1 ms). A frame whose blit has not finished when the next frame on its display goes up is
 dropped as `overtaken`, because from then on the guest may be handed that buffer back. At most 8
-frames are in flight (memory: 8 scanout-sized buffers), and images stop after
+frames are in flight (memory: 8 scanout-sized buffers, kept per size so two displays of different
+sizes each reuse their own), and images stop after
 `LIMINA_WINDOW_CAPTURE_DIR_MAX_MB` (default 4096) with every later frame still recorded. The virtio-gpu
 resource id is not on the worker→supervisor wire, so records carry IOSurface ids only. A headless
 `--display-capture` boot has no window and so no frame-sequence capture.

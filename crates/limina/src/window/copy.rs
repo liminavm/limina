@@ -51,6 +51,10 @@ use objc2_metal::{
 
 /// Copies in use at once: the one on glass, the one the window server may still be latching, and
 /// the one being written.
+///
+/// The frame capture (`frame_capture.rs`) relies on this being at least 3: it reads a copy with a
+/// blit and only checks that the blit finished by the time the NEXT frame goes up, which is safe
+/// only while a copy is not rewritten until two frames after it was shown.
 const RING: usize = 3;
 
 type Commands = Retained<ProtocolObject<dyn MTLCommandBuffer>>;

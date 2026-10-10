@@ -74,7 +74,8 @@ pub enum Request {
     /// Turn a lever on or off.
     Lever { name: String, on: bool },
     /// Start the frame-sequence capture into a directory (the rest of the line, so it may hold
-    /// spaces), or stop it.
+    /// spaces), or stop it. A relative directory resolves against the SUPERVISOR's working
+    /// directory, not the client's; `limina debug` makes it absolute before sending.
     Capture(Capture),
 }
 
