@@ -589,7 +589,8 @@ enum DebugAction {
     Lever { name: String, state: OnOff },
     /// Record every frame the VM's windows put on glass, each tagged (display, flip number,
     /// IOSurface, size, host clocks), into a directory: `start <dir>`, then `stop`, which prints
-    /// the summary. Same output as `LIMINA_WINDOW_CAPTURE_DIR`; see docs/graphics.md.
+    /// the summary. Same output as `LIMINA_WINDOW_CAPTURE_DIR`. `still <png> [slot]` writes the
+    /// frame on glass now. See docs/graphics.md §8.
     Capture {
         #[command(subcommand)]
         action: CaptureAction,
@@ -602,6 +603,14 @@ enum CaptureAction {
     Start { dir: PathBuf },
     /// Stop, wait for the frames already copied to be written, and print the summary.
     Stop,
+    /// Write the frame on glass on one display to PNG now — however long ago it went up, and
+    /// whether or not a capture is running — and print its tag (one JSON line, the records'
+    /// vocabulary). An existing file is replaced.
+    Still {
+        png: PathBuf,
+        /// The guest display (slot); the main window's when omitted.
+        slot: Option<usize>,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -1291,6 +1300,18 @@ fn cmd_debug(args: DebugArgs) -> Result<()> {
         DebugAction::Capture {
             action: CaptureAction::Stop,
         } => limina_debug::wire::Request::Capture(limina_debug::wire::Capture::Stop),
+        DebugAction::Capture {
+            action: CaptureAction::Still { png, slot },
+        } => {
+            // Absolute here, as for `start`: the supervisor's working directory is not the
+            // caller's.
+            let png = std::path::absolute(&png)
+                .with_context(|| format!("resolving {}", png.display()))?;
+            limina_debug::wire::Request::Capture(limina_debug::wire::Capture::Still {
+                slot,
+                path: png.to_string_lossy().into_owned(),
+            })
+        }
     };
     debug_ctl::client(pid, &[request])
 }

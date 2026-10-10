@@ -66,6 +66,7 @@ mod media_session;
 mod overlay;
 mod present;
 mod seams;
+pub(crate) mod still;
 mod trackpad;
 mod wake_policy;
 mod warp;

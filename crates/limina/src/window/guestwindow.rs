@@ -272,6 +272,13 @@ impl GuestWindow {
             present::set_layer_surface(&self.overlay.strip_layer(), src, None);
         }
         super::frame_capture::on_present(tag, id, src);
+        super::still::note(self.key(), tag, id, src);
+    }
+
+    /// This window's identity for the still capture's table: its `NSWindow`'s address, stable
+    /// for as long as the window lives.
+    pub(crate) fn key(&self) -> usize {
+        &*self.window as *const NSWindow as usize
     }
 
     /// Put the guest's `surface` on glass as frame `id` — or, when `copy`, a private copy of it,
@@ -491,6 +498,13 @@ impl GuestWindow {
             super::hostdisplay::learn_fullscreen_inset(&screen, observed);
         }
         observed
+    }
+}
+
+impl Drop for GuestWindow {
+    /// A closed window has nothing on glass: a still must not read its last frame.
+    fn drop(&mut self) {
+        super::still::forget(self.key());
     }
 }
 

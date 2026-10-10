@@ -298,6 +298,7 @@ impl PrimaryDisplay {
     ) -> Self {
         // `LIMINA_WINDOW_CAPTURE_DIR`: the frame-sequence capture, for the whole run.
         super::frame_capture::start_from_env();
+        super::still::set_primary(core.key());
         Self {
             core,
             slot,

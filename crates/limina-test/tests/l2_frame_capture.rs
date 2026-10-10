@@ -15,7 +15,11 @@
 //! flips; `seq` strictly increasing and `flip` never decreasing within the slot, in file order;
 //! every image file named by exactly one record and every record's file present, decodable, of the
 //! size it says and not blank; the summary line agreeing with the records; the stop's answer
-//! carrying that summary.
+//! carrying that summary. Every line carries `format` 1, every record's `guest_flip` agrees with its
+//! `cause`, and no guest flip is on glass twice unmarked. Then, with vkcube gone and no capture
+//! running, `capture still` writes the idle screen: tagged (format, the last epoch, a flip no older
+//! than the capture's last, both clocks), of the size its tag says, not blank — and a still of a
+//! display no window shows is refused.
 //!
 //! The vehicle is part of the image (`vulkan-tools` is in the stock test image, docs/images.md), so
 //! a missing or dead `vkcube` FAILS the test rather than skipping it: a capture of a still desktop
@@ -30,7 +34,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
-use limina_framecap::{Line, Record, SIDECAR, Summary};
+use limina_framecap::{Line, Record, SIDECAR, Still, Summary};
 use limina_test::{Guest, GuestConfig};
 
 const DISPLAY: (u32, u32) = (1280, 800);
@@ -40,6 +44,10 @@ const WINDOW: Duration = Duration::from_secs(4);
 
 /// Frames that must be captured in [`WINDOW`]: a quarter of what 60 Hz offers.
 const MIN_CAPTURED: u64 = 60;
+
+/// How long the desktop is left alone before the still: long enough that the frame on glass is
+/// an idle screen's, not the animation's last.
+const IDLE: Duration = Duration::from_secs(3);
 
 /// `LIMINA_WINDOW_CAPTURE_DIR_MAX_MB` for the run.
 const MAX_MB: &str = "512";
@@ -281,6 +289,53 @@ fn a_runtime_capture_records_every_presented_frame_tagged() {
         "the stop did not drain: {summary:?}"
     );
     report(&summary);
+
+    // A still of the screen once nothing animates: written now, tagged in the same vocabulary,
+    // with no sequence capture running.
+    let _ = guest.ssh_exec("pkill -x vkcube; true");
+    std::thread::sleep(IDLE);
+    let still_png = guest.scratch_dir().join("still.png");
+    let (ok, said) = limina_debug(&guest, &["capture", "still", &still_png.to_string_lossy()]);
+    assert!(ok, "capture still was refused:\n{said}");
+    let still = said
+        .lines()
+        .find_map(|l| Still::parse(l).ok())
+        .unwrap_or_else(|| panic!("capture still printed no tag line:\n{said}"));
+    eprintln!("still: {still:?}");
+    assert_eq!(still.format, limina_framecap::FORMAT);
+    assert_eq!(still.file, still_png.to_string_lossy());
+    assert_eq!(still.guest_flip, still.cause.is_none(), "{still:?}");
+    let last = records.iter().rev().find(|r| r.seq.is_some()).unwrap();
+    assert_eq!(
+        (still.slot, still.epoch),
+        (last.slot, last.epoch),
+        "{still:?}"
+    );
+    assert!(
+        still.flip >= last.flip,
+        "the still's flip went backwards: {still:?}"
+    );
+    assert!(
+        still.taken_t_realtime_ns >= still.t_realtime_ns
+            && still.taken_t_monotonic_raw_ns >= still.t_monotonic_raw_ns,
+        "the still was taken before its frame went up: {still:?}"
+    );
+    eprintln!(
+        "still: its frame had been on glass {:.2} s",
+        (still.taken_t_monotonic_raw_ns - still.t_monotonic_raw_ns) as f64 / 1e9
+    );
+    let (w, h, colours) = decode(&still_png);
+    assert_eq!((w, h), (still.width, still.height), "{still:?}");
+    assert!(colours > 16, "the still is blank ({colours} colours)");
+    // A display no window shows is refused, loudly.
+    let (ok, said) = limina_debug(
+        &guest,
+        &["capture", "still", &still_png.to_string_lossy(), "7"],
+    );
+    assert!(
+        !ok && said.contains("no window shows guest display 7"),
+        "a still of a display with no window was not refused clearly:\n{said}"
+    );
 
     let outcome = guest
         .shutdown(Duration::from_secs(30))

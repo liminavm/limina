@@ -315,7 +315,7 @@ fn write_sidecar(rx: Receiver<Msg>, sidecar: std::fs::File) {
 }
 
 /// Nanoseconds on `clock`.
-fn clock_ns(clock: libc::clockid_t) -> u64 {
+pub(crate) fn clock_ns(clock: libc::clockid_t) -> u64 {
     let mut ts = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -330,7 +330,7 @@ fn clock_ns(clock: libc::clockid_t) -> u64 {
 /// Read off the surface on glass. A copy the window shows is always `'BGRA'` whatever the
 /// guest's surface was, so for an `'RGBA'` guest surface shown through a copy this would be
 /// wrong; no such surface exists today.
-fn pixel_order(surface: &IOSurfaceRef) -> PixelOrder {
+pub(crate) fn pixel_order(surface: &IOSurfaceRef) -> PixelOrder {
     if surface.pixel_format() == u32::from_be_bytes(*b"RGBA") {
         PixelOrder::Rgba
     } else {
@@ -565,7 +565,7 @@ fn texture(gpu: &Gpu, surface: &IOSurfaceRef) -> Option<Retained<ProtocolObject<
 }
 
 /// Commit a blit of `src` into `dst` (same size). `None` when Metal cannot do it.
-fn gpu_copy(
+pub(crate) fn gpu_copy(
     src: &IOSurfaceRef,
     dst: &SendSurface,
 ) -> Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {

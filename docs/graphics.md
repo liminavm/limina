@@ -846,6 +846,20 @@ counted in flips), `by_reason` (every frame without an image, by reason), `durat
 the main thread per frame), and `incomplete` only when the stop gave up waiting for frames still in
 flight, whose records are then never written.
 
+**One frame, now: the still.** `limina debug <vm> capture still <png> [slot]` writes the frame on
+glass on one display (the main window's when `slot` is omitted) to `<png>` (RGB, replaced if it
+exists; a relative path resolves against the directory `limina debug` runs in, as `capture start`'s
+does) immediately — however long ago that frame went up, and whether or not a sequence capture is
+running — and prints one JSON line tagging it in the record vocabulary: `"format": 1`,
+`"still": true`, `slot`, `flip`, `epoch`, `guest_flip`, `cause`, `presented_iosurface`,
+`layer_iosurface`, `width`, `height`, `t_monotonic_raw_ns`/`t_realtime_ns` (when that frame went on
+glass, as in a record), `taken_t_monotonic_raw_ns`/`taken_t_realtime_ns` (when the still was read),
+and `file` (absolute). It refuses, with the reason, a display no window shows and a VM with no
+window (`limina_framecap::Still` parses the line). Every present notes the surface it put on the
+layer, per window; the still blits that surface on the asking thread with the capture's own copy
+and encoder, so the main thread never waits on it, and it retakes the still if the display
+presented during the blit. `LIMINA_WINDOW_CAPTURE` is unaffected (`crates/limina/src/window/still.rs`).
+
 What it costs and how it stays correct: the main thread only commits a GPU blit of the surface on
 glass into a capture buffer of its own and hands each record to a writer thread; encoder threads
 wait for the blit and write the PNG (fast deflate, four threads), and the writer keeps

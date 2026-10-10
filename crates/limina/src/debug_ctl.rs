@@ -177,6 +177,9 @@ pub fn handle(req: &Request) -> Result<Vec<String>, String> {
         Request::Capture(wire::Capture::Stop) => {
             crate::window::frame_capture::stop().map(|s| vec![s.describe()])
         }
+        Request::Capture(wire::Capture::Still { slot, path }) => {
+            crate::window::still::take(Path::new(path), *slot).map(|line| vec![line])
+        }
     }
 }
 

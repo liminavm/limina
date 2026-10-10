@@ -24,6 +24,9 @@
 //! > capture stop
 //! < 312 presented, 309 captured, 3 dropped, …
 //! < ok
+//! > capture still main /tmp/now.png
+//! < {"format":1,"still":true,"slot":0,"flip":287,…}
+//! < ok
 //! ```
 //!
 //! The supervisor speaks the same protocol to its worker, where only `log` means anything (the
@@ -74,16 +77,25 @@ pub enum Request {
     /// Turn a lever on or off.
     Lever { name: String, on: bool },
     /// Start the frame-sequence capture into a directory (the rest of the line, so it may hold
-    /// spaces), or stop it. A relative directory resolves against the SUPERVISOR's working
-    /// directory, not the client's; `limina debug` makes it absolute before sending.
+    /// spaces), stop it, or write the frame on glass now (`still`). A relative path resolves
+    /// against the SUPERVISOR's working directory, not the client's; `limina debug` makes it
+    /// absolute before sending.
     Capture(Capture),
 }
 
 /// What a `capture` request asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Capture {
-    Start { dir: String },
+    Start {
+        dir: String,
+    },
     Stop,
+    /// `capture still <slot|main> <png>`: the slot first, so the path can be the rest of the
+    /// line. `None` (`main`) is the main window's display.
+    Still {
+        slot: Option<usize>,
+        path: String,
+    },
 }
 
 impl Request {
@@ -141,8 +153,34 @@ impl Request {
                     None => Ok(Request::Capture(Capture::Stop)),
                     Some(extra) => Err(format!("unexpected {extra:?} after capture stop")),
                 },
-                Some(other) => Err(format!("capture takes start <dir> or stop, not {other}")),
-                None => Err("capture takes start <dir> or stop".into()),
+                Some("still") => {
+                    let slot = match words.next() {
+                        Some("main") => None,
+                        Some(n) => Some(n.parse::<usize>().map_err(|_| {
+                            format!("capture still takes a display number or main, not {n:?}")
+                        })?),
+                        None => return Err("capture still needs main|<slot> and a file".into()),
+                    };
+                    // The file is everything after the slot, so a path with spaces survives.
+                    let path = line
+                        .trim_start()
+                        .strip_prefix("capture")
+                        .and_then(|r| r.trim_start().strip_prefix("still"))
+                        .and_then(|r| r.trim_start().split_once(char::is_whitespace))
+                        .map(|(_, rest)| rest.trim())
+                        .unwrap_or("");
+                    if path.is_empty() {
+                        return Err("capture still needs a file".into());
+                    }
+                    Ok(Request::Capture(Capture::Still {
+                        slot,
+                        path: path.to_string(),
+                    }))
+                }
+                Some(other) => Err(format!(
+                    "capture takes start <dir>, stop or still <slot|main> <file>, not {other}"
+                )),
+                None => Err("capture takes start <dir>, stop or still <slot|main> <file>".into()),
             },
             Some(other) => Err(format!("unknown request {other}")),
             None => Err("empty request".into()),
@@ -158,6 +196,10 @@ impl Request {
             }
             Request::Capture(Capture::Start { dir }) => format!("capture start {dir}"),
             Request::Capture(Capture::Stop) => "capture stop".into(),
+            Request::Capture(Capture::Still { slot, path }) => match slot {
+                Some(n) => format!("capture still {n} {path}"),
+                None => format!("capture still main {path}"),
+            },
         }
     }
 }
@@ -220,6 +262,14 @@ mod tests {
                 dir: "/tmp/a dir with spaces/frames".into(),
             }),
             Request::Capture(Capture::Stop),
+            Request::Capture(Capture::Still {
+                slot: None,
+                path: "/tmp/a dir/now.png".into(),
+            }),
+            Request::Capture(Capture::Still {
+                slot: Some(2),
+                path: "/tmp/b.png".into(),
+            }),
         ] {
             assert_eq!(Request::parse(&r.to_line()), Ok(r));
         }
@@ -240,6 +290,10 @@ mod tests {
         assert!(Request::parse("capture start   ").is_err());
         assert!(Request::parse("capture stop now").is_err());
         assert!(Request::parse("capture pause").is_err());
+        assert!(Request::parse("capture still").is_err());
+        assert!(Request::parse("capture still main").is_err());
+        assert!(Request::parse("capture still main   ").is_err());
+        assert!(Request::parse("capture still left /tmp/a.png").is_err());
     }
 
     #[test]
