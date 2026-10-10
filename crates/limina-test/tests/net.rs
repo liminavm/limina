@@ -23,7 +23,8 @@ fn fedora_gets_nat_dhcp_and_outbound() {
 
     let cfg = GuestConfig::fedora_from_env()
         .expect("resolving guest config")
-        .with_net();
+        .with_net()
+        .with_ssh_target_check();
     eprintln!(
         "booting Fedora (writable COW clone) with user-mode NAT via {:?}",
         cfg.limina_bin
@@ -93,10 +94,12 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
     // Each VM cow-clones its own writable disk via with_net, so the two share nothing on disk.
     let cfg_a = GuestConfig::fedora_from_env()
         .expect("resolving guest config A")
-        .with_net();
+        .with_net()
+        .with_ssh_target_check();
     let cfg_b = GuestConfig::fedora_from_env()
         .expect("resolving guest config B")
-        .with_net();
+        .with_net()
+        .with_ssh_target_check();
 
     // Boot BOTH before waiting on either, so they come up concurrently (wall-clock ~= one boot).
     eprintln!("booting two Fedora VMs in parallel on auto-allocated ssh ports");
@@ -129,6 +132,10 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
         "both VMs must answer SSH on their distinct ports at once (A={banner_a:?}, B={banner_b:?})"
     );
 
+    // `with_ssh_target_check` already made each wait_for_ssh read its guest's debug port and
+    // require that guest's own supervisor_pid. The markers below prove the same from inside
+    // the guests, without the lever.
+    //
     // Identity proof — a banner answering is NOT proof the harness reached the RIGHT guest
     // (all test guests share creds, so crosstalk is invisible to every other check). Stamp
     // each guest with its own marker through its handle, then read BOTH back: a port mix-up
@@ -176,7 +183,8 @@ fn custom_guest_mac_keeps_the_static_lease_and_ssh_forward() {
     const MAC: &str = "5a:11:22:33:44:55";
     let cfg = GuestConfig::fedora_from_env()
         .expect("resolving guest config")
-        .with_net_mac(MAC);
+        .with_net_mac(MAC)
+        .with_ssh_target_check();
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     guest

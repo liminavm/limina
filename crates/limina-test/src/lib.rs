@@ -667,6 +667,12 @@ pub struct GuestConfig {
     /// harness has no dedicated knob for (e.g. `--balloon-free-page-reporting`). Set via
     /// [`with_supervisor_arg`](GuestConfig::with_supervisor_arg).
     pub extra_supervisor_args: Vec<String>,
+    /// After [`Guest::wait_for_ssh`], read the guest's debug port and require its
+    /// `supervisor_pid` to be this guest's supervisor: proof the ssh forward reached this VM and
+    /// not another one on the host. Turns the `debug-port` lever on (`LIMINA_DEBUG_PORT=1`) and
+    /// needs root in the guest. Set via
+    /// [`with_ssh_target_check`](GuestConfig::with_ssh_target_check).
+    pub ssh_target_check: bool,
 }
 
 impl GuestConfig {
@@ -719,6 +725,7 @@ impl GuestConfig {
             snapshot: false,
             restore_from: None,
             extra_supervisor_args: Vec::new(),
+            ssh_target_check: false,
         })
     }
 
@@ -830,6 +837,7 @@ impl GuestConfig {
             snapshot: false,
             restore_from: None,
             extra_supervisor_args: Vec::new(),
+            ssh_target_check: false,
         })
     }
 
@@ -921,6 +929,7 @@ impl GuestConfig {
             snapshot: false,
             restore_from: None,
             extra_supervisor_args: Vec::new(),
+            ssh_target_check: false,
         })
     }
 
@@ -963,6 +972,7 @@ impl GuestConfig {
             snapshot: false,
             restore_from: None,
             extra_supervisor_args: Vec::new(),
+            ssh_target_check: false,
         })
     }
 
@@ -1031,6 +1041,7 @@ impl GuestConfig {
             snapshot: false,
             restore_from: None,
             extra_supervisor_args: Vec::new(),
+            ssh_target_check: false,
         })
     }
 
@@ -1377,6 +1388,17 @@ impl GuestConfig {
         self
     }
 
+    /// Check that ssh reaches THIS VM: once [`Guest::wait_for_ssh`] has a session, the guest's
+    /// debug port must name this guest's supervisor (`supervisor_pid`). Every test image shares
+    /// one login, so a forward that lands on another VM passes every other check. Off by
+    /// default: it turns the `debug-port` lever on for the run (`LIMINA_DEBUG_PORT=1`, which
+    /// changes no device — the port is always on the bus) and needs root in the guest, so a
+    /// stock-floor verdict should not depend on it.
+    pub fn with_ssh_target_check(mut self) -> GuestConfig {
+        self.ssh_target_check = true;
+        self.with_env("LIMINA_DEBUG_PORT", "1")
+    }
+
     /// Capture the supervisor's stderr (its log) into the scratch dir for assertions.
     pub fn with_supervisor_log(mut self) -> GuestConfig {
         self.supervisor_log = true;
@@ -1602,6 +1624,8 @@ pub struct Guest {
     /// or the [`GuestConfig::restore_from`] path. A [`Guest::snapshot`] writes it; a later boot
     /// arming the same path auto-resumes from it (consuming it — rename to `.consumed`).
     snapshot_path: Option<PathBuf>,
+    /// [`GuestConfig::ssh_target_check`].
+    ssh_target_check: bool,
     /// Set once teardown has run, so Drop doesn't double-kill.
     torn_down: bool,
 }
@@ -2118,6 +2142,7 @@ impl Guest {
             stdout_log,
             control_socket,
             snapshot_path,
+            ssh_target_check: cfg.ssh_target_check,
             torn_down: false,
         })
     }
@@ -2753,15 +2778,61 @@ impl Guest {
     /// So: wait for the banner, then keep going until a real session can actually be
     /// established. The second stage costs about a second on the boots that need it and
     /// nothing on the rest.
+    ///
+    /// With [`GuestConfig::with_ssh_target_check`] it then also requires the guest's debug port
+    /// to name this guest's supervisor ([`Guest::check_ssh_target`]).
     pub fn wait_for_ssh(&mut self, timeout: Duration) -> Result<String> {
+        let started = Instant::now();
         let port = self.ssh_port;
         let child = &mut self.child;
-        Self::wait_for_ssh_ready(port, timeout, || {
+        let banner = Self::wait_for_ssh_ready(port, timeout, || {
             Ok(child
                 .try_wait()
                 .context("polling supervisor")?
                 .map(|status| status.to_string()))
-        })
+        })?;
+        if self.ssh_target_check {
+            self.check_ssh_target(
+                timeout
+                    .saturating_sub(started.elapsed())
+                    .max(Duration::from_secs(30)),
+            )?;
+        }
+        Ok(banner)
+    }
+
+    /// Require the VM this guest's ssh forward reaches to be this one: its debug port's
+    /// `supervisor_pid` must be this guest's supervisor. Needs the `debug-port` lever on and
+    /// root in the guest ([`GuestConfig::with_ssh_target_check`] arranges the lever). The port
+    /// is polled for a while, as its device node can appear a beat after sshd answers.
+    pub fn check_ssh_target(&self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let read = self.port_identity();
+            if let Ok(id) = &read
+                && let Some(pid) = id.get("supervisor_pid")
+            {
+                anyhow::ensure!(
+                    pid == &self.pid.to_string(),
+                    "ssh on port {} reached the VM of supervisor {pid}, not this guest's ({}): \
+                     the forward lands on another VM",
+                    self.ssh_port,
+                    self.pid
+                );
+                eprintln!(
+                    "ssh target verified: port {} reaches the VM of supervisor {pid}",
+                    self.ssh_port
+                );
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "the guest's debug port never named its supervisor within {timeout:?} (is \
+                     the debug-port lever on?): {read:?}"
+                );
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
     }
 
     /// The two-stage wait behind [`Guest::wait_for_ssh`], taking the port and a liveness
