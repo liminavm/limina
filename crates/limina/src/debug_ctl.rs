@@ -11,8 +11,9 @@
 //! The socket is reachable by any process of the same user, like the control plane's. Most of
 //! what it does changes nothing in the guest: it decides what gets logged, and where the frame
 //! capture (`capture start <dir>`) writes what the windows showed. The two access levers are the
-//! exception: `input-inject` and `debug-port` open harness features that are off by default. They
-//! are a default-off posture, not a boundary against same-user code, which can flip them here.
+//! exception: `input-inject`, `debug-port` and `lifecycle-control` open harness features that are
+//! off by default. They are a default-off posture, not a boundary against same-user code, which
+//! can flip them here.
 //!
 //! All of it lasts for this process only. See `limina_debug` for why.
 
@@ -76,6 +77,13 @@ pub static DEBUG_PORT: Lever = Lever::new(
     "LIMINA_DEBUG_PORT",
     "harness: let the guest read the host build, host OS/model and pids from its debug port",
 );
+/// Harness access: `reset` requests on the runtime socket (`limina reset`), which kill the VM's
+/// worker and cold-boot a fresh one. Off, every one is refused.
+pub static LIFECYCLE_CONTROL: Lever = Lever::new(
+    "lifecycle-control",
+    "LIMINA_LIFECYCLE_CONTROL",
+    "harness: let `limina reset` power-cycle the VM (kill the worker, cold-boot a fresh one)",
+);
 
 /// Every lever this process has, in the order the menu and `status` list them.
 pub static LEVERS: &[&Lever] = &[
@@ -88,12 +96,15 @@ pub static LEVERS: &[&Lever] = &[
     &PRESENT_COPY_TRACE,
     &INPUT_INJECT,
     &DEBUG_PORT,
+    &LIFECYCLE_CONTROL,
 ];
 
 /// The levers that grant a harness access rather than print a trace. The menu lists them under
 /// their own header.
 pub fn is_access(l: &Lever) -> bool {
-    std::ptr::eq(l, &INPUT_INJECT) || std::ptr::eq(l, &DEBUG_PORT)
+    std::ptr::eq(l, &INPUT_INJECT)
+        || std::ptr::eq(l, &DEBUG_PORT)
+        || std::ptr::eq(l, &LIFECYCLE_CONTROL)
 }
 
 /// How to turn a lever on, for a refusal to quote: its variable, the Debug menu, the CLI.
@@ -107,8 +118,8 @@ pub fn how_to_enable(l: &Lever) -> String {
     )
 }
 
-/// The tests, in any module, that read or flip `INPUT_INJECT` or `DEBUG_PORT` (process-global).
-/// Each leaves both off.
+/// The tests, in any module, that read or flip `INPUT_INJECT`, `DEBUG_PORT` or
+/// `LIFECYCLE_CONTROL` (process-global). Each leaves them off.
 #[cfg(test)]
 pub(crate) static ACCESS_LEVER_TESTS: Mutex<()> = Mutex::new(());
 
@@ -393,7 +404,7 @@ mod tests {
     #[test]
     fn the_access_levers_are_off_by_default_and_say_how_to_turn_them_on() {
         let _serial = lock(&ACCESS_LEVER_TESTS);
-        for l in [&INPUT_INJECT, &DEBUG_PORT] {
+        for l in [&INPUT_INJECT, &DEBUG_PORT, &LIFECYCLE_CONTROL] {
             assert!(
                 std::env::var_os(l.env()).is_none(),
                 "unset {} to run the unit tests",
@@ -418,10 +429,15 @@ mod tests {
             (DEBUG_PORT.name(), DEBUG_PORT.env()),
             ("debug-port", "LIMINA_DEBUG_PORT")
         );
+        assert_eq!(
+            (LIFECYCLE_CONTROL.name(), LIFECYCLE_CONTROL.env()),
+            ("lifecycle-control", "LIMINA_LIFECYCLE_CONTROL")
+        );
         let lines = status();
         for want in [
             "lever input-inject off LIMINA_INPUT_INJECT ",
             "lever debug-port off LIMINA_DEBUG_PORT ",
+            "lever lifecycle-control off LIMINA_LIFECYCLE_CONTROL ",
         ] {
             assert!(lines.iter().any(|l| l.starts_with(want)), "{lines:?}");
         }
@@ -430,7 +446,11 @@ mod tests {
     #[test]
     fn the_access_levers_follow_the_lever_request() {
         let _serial = lock(&ACCESS_LEVER_TESTS);
-        for (l, name) in [(&INPUT_INJECT, "input-inject"), (&DEBUG_PORT, "debug-port")] {
+        for (l, name) in [
+            (&INPUT_INJECT, "input-inject"),
+            (&DEBUG_PORT, "debug-port"),
+            (&LIFECYCLE_CONTROL, "lifecycle-control"),
+        ] {
             for on in [true, false] {
                 let req = Request::Lever {
                     name: name.into(),

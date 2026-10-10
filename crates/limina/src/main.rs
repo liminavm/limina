@@ -23,6 +23,7 @@ mod gateway;
 mod hostmods;
 mod hosttrackpad;
 mod inject;
+mod lifecycle;
 mod moc;
 mod power_profile;
 mod qga;
@@ -496,6 +497,18 @@ struct Cli {
     /// Title for the VM window (managed starts pass the VM's name; default "Limina").
     #[arg(long, hide = true)]
     window_title: Option<String>,
+
+    /// Run in the background, detached from this terminal or ssh session, which returns at once.
+    /// The VM leads its own session, logs to --log instead of the terminal, and keeps none of the
+    /// launching shell's descriptors. Once it answers, one line is printed for scripts:
+    /// `limina: detached pid=<supervisor pid> log=<path>`. Stop it with `limina stop <disk>`.
+    #[arg(long)]
+    detach: bool,
+
+    /// Where a --detach run logs (supervisor and worker). Default: beside the boot disk, as
+    /// `<disk>.limina.log`; previous runs' logs are kept as `<disk>.limina.1.log` and up.
+    #[arg(long, value_name = "FILE", requires = "detach")]
+    log: Option<PathBuf>,
 }
 
 /// Managed-VM subcommands (docs/design/vm-definitions.md Phase 1): a VM definition
@@ -513,8 +526,15 @@ enum Cmd {
     Ls,
     /// Report whether a managed VM can start, and why not (exit 1 if it cannot).
     Check(CheckArgs),
-    /// Ask a running managed VM to shut down (--force skips the guest-side grace).
+    /// Ask a running VM to shut down (--force kills it instead). Works for managed VMs and flat
+    /// `--disk` runs alike.
     Stop(StopArgs),
+    /// Power-cycle a running VM: kill its worker and cold-boot a fresh one behind the same
+    /// supervisor, window and SSH port, as a hard reset would. Nothing in the guest is asked or
+    /// saved. Off by default: the VM refuses until its lifecycle-control lever is on
+    /// (LIMINA_LIFECYCLE_CONTROL=1, the Debug menu, or `limina debug <vm> lever lifecycle-control
+    /// on`).
+    Reset(ResetArgs),
     /// Suspend a running managed VM (M9.2): snapshot the guest and tear it down; the next `start`
     /// resumes it. Falls back to leaving the VM running if the guest can't quiesce (e.g. a
     /// virtiofs share refuses suspend-to-idle).
@@ -720,13 +740,25 @@ struct StartOverrides {
 
 #[derive(clap::Args, Debug)]
 struct StopArgs {
-    /// VM name or .liminavm bundle path.
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
     vm: String,
     /// Kill the VM immediately instead of asking it to power off (a second SIGTERM to the
-    /// supervisor, which SIGKILLs the worker). An ordinary `limina stop` never kills: it asks,
-    /// and a guest that refuses keeps running.
+    /// supervisor, which SIGKILLs the worker and tears its gateway down; no suspend snapshot is
+    /// written). An ordinary `limina stop` never kills: it asks, and a guest that refuses keeps
+    /// running.
     #[arg(long)]
     force: bool,
+    /// Seconds to wait for the VM to be gone before reporting that it is still running.
+    #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+    timeout: u64,
+}
+
+#[derive(clap::Args, Debug)]
+struct ResetArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -844,6 +876,7 @@ fn main() -> Result<()> {
         Some(Cmd::Ls) => cmd_ls(),
         Some(Cmd::Check(a)) => cmd_check(a),
         Some(Cmd::Stop(args)) => cmd_stop(args),
+        Some(Cmd::Reset(args)) => cmd_reset(args),
         Some(Cmd::Suspend(args)) => cmd_suspend(args),
         Some(Cmd::Rm(args)) => cmd_rm(args),
         Some(Cmd::Debug(args)) => cmd_debug(args),
@@ -861,6 +894,14 @@ fn main() -> Result<()> {
         // Bare `limina` — a double-clicked limina.app or a plain terminal launch —
         // opens the control center. Any flag at all means the flat ephemeral-VM CLI.
         None if std::env::args_os().len() == 1 => center::run(),
+        None if cli.detach => {
+            let disk = cli.disk.first().map(|s| parse_disk(s)).transpose()?;
+            let log = match &cli.log {
+                Some(l) => l.clone(),
+                None => lifecycle::default_log(disk.as_ref().map(|d| d.path.as_path()))?,
+            };
+            lifecycle::launch(&log)
+        }
         None => run_vm(cli),
     }
 }
@@ -1039,7 +1080,16 @@ fn cmd_ls() -> Result<()> {
 }
 
 fn cmd_stop(args: StopArgs) -> Result<()> {
-    let bundle = vmlib::bundle::resolve(&args.vm)?;
+    let timeout = Duration::from_secs(args.timeout);
+    let bundle = match vmlib::bundle::resolve(&args.vm) {
+        Ok(b) => b,
+        // A flat run: no bundle, so no run lock to watch — the supervisor's own exit is the
+        // answer.
+        Err(bundle_err) => {
+            let pid = flat_stop_target(&args.vm).map_err(|e| e.context(bundle_err))?;
+            return lifecycle::stop_pid(pid, &args.vm, args.force, timeout);
+        }
+    };
     let pid = match vmlib::runtime::status(&bundle) {
         vmlib::runtime::VmStatus::Stopped => {
             println!("{} is not running", bundle.dir_name());
@@ -1048,25 +1098,51 @@ fn cmd_stop(args: StopArgs) -> Result<()> {
         vmlib::runtime::VmStatus::Running { pid } => pid,
     };
     vmlib::runtime::signal_stop(pid, args.force)?;
-    // 60s covers a slow guest shutdown (a seated desktop's own teardown is ~30s). A stop
-    // never kills the guest on its own, so overrunning this means the guest is still running,
-    // not that anything is broken — say what ends it.
-    if vmlib::runtime::wait_stopped(&bundle, Duration::from_secs(60)) {
+    // The default 60s covers a slow guest shutdown (a seated desktop's own teardown is ~30s). A
+    // stop never kills the guest on its own, so overrunning this means the guest is still
+    // running, not that anything is broken — say what ends it.
+    if vmlib::runtime::wait_stopped(&bundle, timeout) {
         println!("{} stopped", bundle.dir_name());
         Ok(())
     } else if args.force {
         anyhow::bail!(
-            "{} did not stop within 60s (supervisor pid {pid})",
+            "{} did not stop within {timeout:?} (supervisor pid {pid})",
             bundle.dir_name()
         )
     } else {
         anyhow::bail!(
-            "{} is still running after 60s: the guest has not powered off (supervisor pid \
-             {pid}). A stop never kills a VM on its own — `limina stop --force {}` ends it.",
+            "{} is still running after {timeout:?}: the guest has not powered off (supervisor \
+             pid {pid}). A stop never kills a VM on its own — `limina stop --force {}` ends it.",
             bundle.dir_name(),
             bundle.dir_name()
         )
     }
+}
+
+/// The supervisor `limina stop` signals for a VM that is not a managed one: a flat run's boot
+/// disk, or a pid — which must be a `limina` process, so a typo cannot SIGTERM anything else.
+fn flat_stop_target(vm: &str) -> Result<i32> {
+    let disk = Path::new(vm);
+    if disk.is_file() {
+        return flat_supervisor_pid(disk, "stop them individually by supervisor pid");
+    }
+    let pid: i32 = vm
+        .parse()
+        .ok()
+        .with_context(|| format!("{vm} is not a VM name, a boot disk or a pid"))?;
+    anyhow::ensure!(
+        lifecycle::is_limina(pid),
+        "pid {pid} is not a running limina supervisor"
+    );
+    Ok(pid)
+}
+
+/// `limina reset`: power-cycle the VM through its supervisor's runtime socket.
+fn cmd_reset(args: ResetArgs) -> Result<()> {
+    let pid = debug_target_pid(&args.vm)?;
+    let worker = runtime_ctl::request_reset(pid)?;
+    println!("{} reset (worker pid {worker})", args.vm);
+    Ok(())
 }
 
 fn cmd_suspend(args: SuspendArgs) -> Result<()> {
@@ -1538,6 +1614,10 @@ fn cli_from_definition(
         edge_resistance: cfg.display.edge_resistance,
         no_soft_kbd_grab: false,
         window_title: Some(bundle.display_name(cfg)),
+        // A managed start already runs detached (the control center's `start_vm`); `limina
+        // start` from a terminal stays in the foreground.
+        detach: false,
+        log: None,
     })
 }
 
@@ -3577,7 +3657,11 @@ mod tests {
             Cli::try_parse_from(["limina", "stop", "dev", "--force"])
                 .unwrap()
                 .cmd,
-            Some(Cmd::Stop(StopArgs { force: true, .. }))
+            Some(Cmd::Stop(StopArgs {
+                force: true,
+                timeout: 60,
+                ..
+            }))
         ));
         assert!(matches!(
             Cli::try_parse_from(["limina", "rm", "dev"]).unwrap().cmd,
@@ -3666,5 +3750,45 @@ mod tests {
             parse(&["--no-fido", "--fido"]).fido_enabled(),
             "last flag (--fido) wins"
         );
+    }
+
+    /// The unattended-lifecycle surface: `--detach [--log]` on the flat CLI, `stop --timeout`,
+    /// and `reset`, each naming a VM the way `debug` and `ssh-port` do.
+    #[test]
+    fn lifecycle_verbs_parse() {
+        let cli = Cli::try_parse_from(["limina", "--disk", "/v/a.raw", "--detach"]).unwrap();
+        assert!(cli.cmd.is_none() && cli.detach && cli.log.is_none());
+        let cli =
+            Cli::try_parse_from(["limina", "--disk", "d", "--detach", "--log", "/l"]).unwrap();
+        assert_eq!(cli.log, Some(PathBuf::from("/l")));
+        // --log means nothing without --detach: a foreground run logs to its own stderr.
+        assert!(Cli::try_parse_from(["limina", "--disk", "d", "--log", "/l"]).is_err());
+
+        match Cli::try_parse_from(["limina", "stop", "/v/a.raw", "--timeout", "5"])
+            .unwrap()
+            .cmd
+        {
+            Some(Cmd::Stop(a)) => {
+                assert_eq!((a.vm.as_str(), a.force, a.timeout), ("/v/a.raw", false, 5));
+            }
+            other => panic!("expected stop, got {other:?}"),
+        }
+        match Cli::try_parse_from(["limina", "reset", "4242"])
+            .unwrap()
+            .cmd
+        {
+            Some(Cmd::Reset(a)) => assert_eq!(a.vm, "4242"),
+            other => panic!("expected reset, got {other:?}"),
+        }
+        assert!(Cli::try_parse_from(["limina", "reset"]).is_err());
+    }
+
+    /// A pid given to `stop` is only signalled when it is a limina supervisor.
+    #[test]
+    fn stop_refuses_a_pid_that_is_not_limina() {
+        let err = flat_stop_target("1").unwrap_err().to_string();
+        assert!(err.contains("not a running limina supervisor"), "{err}");
+        let err = flat_stop_target("no-such-vm").unwrap_err().to_string();
+        assert!(err.contains("not a VM name"), "{err}");
     }
 }

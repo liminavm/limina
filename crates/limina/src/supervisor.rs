@@ -206,6 +206,47 @@ pub fn suspend_requested_externally() -> bool {
     SUSPEND_FROM_SIGNAL.load(Ordering::SeqCst)
 }
 
+/// Set by [`request_reset`]; observed by [`monitor`], which kills the worker and reports the exit
+/// as a guest reboot, so the relaunch loop that already handles a guest's own `reboot` (the
+/// headless [`run`] and the windowed session alike) cold-boots a fresh worker behind the same
+/// supervisor, window, gateway and SSH port.
+static RESET: AtomicBool = AtomicBool::new(false);
+/// The last worker exit was a reset, not the guest's own reboot (for the relaunch's log line).
+static RESET_RELAUNCH: AtomicBool = AtomicBool::new(false);
+
+/// Was the exit just reported as a reboot a reset ([`request_reset`])? Clears the mark.
+pub fn take_reset_relaunch() -> bool {
+    RESET_RELAUNCH.swap(false, Ordering::SeqCst)
+}
+
+/// Ask for a hard reset: the running worker is SIGKILLed and a fresh one cold-boots in its
+/// place, as a power-cycle would. Returns the pid of the worker being replaced, so the caller
+/// can tell when its successor is up ([`worker_pid`]). Refused when there is no worker to kill
+/// (a parked window, or between a worker's exit and its relaunch) and while a stop or a suspend
+/// is under way, which a reset would otherwise race.
+///
+/// There is no orderly variant. The orderly reset of a guest is its own `reboot`, which already
+/// relaunches through this same path; a reset exists for the guest that can no longer be asked.
+pub fn request_reset() -> Result<i32, String> {
+    if stop_requested() {
+        return Err("the VM is stopping".into());
+    }
+    if SUSPEND.load(Ordering::SeqCst) {
+        return Err("a suspend is in progress".into());
+    }
+    let pid = worker_pid();
+    if pid <= 0 {
+        return Err("there is no worker running to reset".into());
+    }
+    RESET.store(true, Ordering::SeqCst);
+    Ok(pid)
+}
+
+/// The running worker's pid, or 0 when there is none.
+pub fn worker_pid() -> i32 {
+    WORKER_PID.load(Ordering::Acquire)
+}
+
 /// Ask for an IMMEDIATE forceful stop (SIGKILL, no grace) — the window menu's Force Stop.
 /// Equivalent to a stop request plus the impatient second signal, which every ladder site
 /// already honors via [`force_stop_requested`].
@@ -498,6 +539,9 @@ pub struct Spawned {
 /// each other's snapshots wrong), and "one port per spawn" is what makes the broker's
 /// announce-once-per-open rule fall out for free on reboot and resume.
 pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
+    // A fresh worker satisfies any reset still pending: one asked as the last worker exited on
+    // its own must not kill this one.
+    RESET.store(false, Ordering::SeqCst);
     install_signal_handlers()?;
     install_panic_kill_hook();
     let mut args: Vec<OsString> = spec.args.iter().map(OsString::from).collect();
@@ -789,6 +833,20 @@ pub fn monitor(
             return Ok(report_exit(status));
         }
 
+        // A hard reset (`limina reset`): kill the worker and report a guest reboot, which every
+        // caller's relaunch loop turns into a cold boot of a fresh worker. A stop that arrived
+        // since the request wins — `RebootGuard::should_relaunch` declines while one is pending.
+        if RESET.swap(false, Ordering::SeqCst) {
+            log::warn!("reset requested → killing the worker (pid {pid}) to cold-boot a fresh one");
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .context("waiting on the worker after the reset kill")?;
+            report_exit(status);
+            RESET_RELAUNCH.store(true, Ordering::SeqCst);
+            return Ok(WORKER_EXIT_REBOOT);
+        }
+
         // M9.2 suspend bracket: relay a `limina suspend` (SIGTSTP to us) to the worker, which
         // pulses the guest suspend button, waits for the guest to s2idle-quiesce, snapshots it, and
         // exits 126 (caught by `try_wait` above → we return 126, the caller persists `[suspended]`).
@@ -970,7 +1028,11 @@ pub fn run(
             log::error!("could not restart the NAT gateway for the reboot: {e:#}; stopping");
             return Ok(code);
         }
-        log::info!("guest rebooted (PSCI SYSTEM_RESET) → relaunching the VM worker");
+        if take_reset_relaunch() {
+            log::info!("reset → cold-booting a fresh VM worker");
+        } else {
+            log::info!("guest rebooted (PSCI SYSTEM_RESET) → relaunching the VM worker");
+        }
     }
 }
 

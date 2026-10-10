@@ -552,6 +552,8 @@ impl WindowedSession {
                     // the swap so the window never sees "running" with a stale conn.
                     window::mark_worker_running(&monitor_shared);
                     log::info!("resumed the suspended VM in place (worker pid {pid})");
+                } else if supervisor::take_reset_relaunch() {
+                    log::info!("reset → cold-booted a fresh windowed VM worker (pid {pid})");
                 } else {
                     log::info!("guest rebooted → relaunched the windowed VM worker (pid {pid})");
                 }

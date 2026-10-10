@@ -34,6 +34,13 @@
 //! guest through this socket, with none of the Accessibility (TCC) grant that osascript-driven
 //! input needs.
 //!
+//! `reset` kills the VM's worker and cold-boots a fresh one behind the same supervisor, window,
+//! gateway and SSH port (`supervisor::request_reset`); `limina reset` is its client. The answer
+//! comes once the fresh worker is running (`worker-pid <pid>`). It is refused unless the VM's
+//! `lifecycle-control` lever is on (`debug_ctl::LIFECYCLE_CONTROL`, off by default, read per
+//! request). Stopping a VM needs no lever and no socket: it is a signal to the supervisor, which
+//! any process of the same user can already send (`limina stop`).
+//!
 //! Like the debug socket it is reachable by any process of the same user. Moving the SSH forward
 //! binds a different loopback port on the host; the guest and its network are untouched.
 
@@ -79,6 +86,8 @@ pub enum Request {
     Watch,
     /// Move the SSH forward to this host port.
     SshPort(u16),
+    /// Kill the worker and cold-boot a fresh one (`lifecycle-control` lever).
+    Reset,
 }
 
 impl Request {
@@ -87,6 +96,7 @@ impl Request {
         let req = match words.next() {
             Some("info") => Request::Info,
             Some("watch") => Request::Watch,
+            Some("reset") => Request::Reset,
             Some("ssh-port") => {
                 let port = words.next().ok_or("ssh-port needs a port")?;
                 Request::SshPort(
@@ -108,6 +118,7 @@ impl Request {
             Request::Info => "info".into(),
             Request::Watch => "watch".into(),
             Request::SshPort(p) => format!("ssh-port {p}"),
+            Request::Reset => "reset".into(),
         }
     }
 }
@@ -177,9 +188,50 @@ pub fn set_parked(parked: bool) {
     push();
 }
 
+/// How long a `reset` answer waits for the fresh worker. Its spawn goes through launchd and
+/// recycles gvproxy, which takes about a second.
+const RESET_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The answer to `reset` while the `lifecycle-control` lever is off.
+pub fn reset_refusal() -> String {
+    format!(
+        "lifecycle control is off for this VM; to allow `limina reset`, {}",
+        crate::debug_ctl::how_to_enable(&crate::debug_ctl::LIFECYCLE_CONTROL)
+    )
+}
+
+/// Reset the VM and wait for the fresh worker: the request is answered once it can be relied on.
+fn reset() -> Result<Vec<String>, String> {
+    if !crate::debug_ctl::LIFECYCLE_CONTROL.on() {
+        return Err(reset_refusal());
+    }
+    if PARKED.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("the guest is suspended: there is no worker to reset".into());
+    }
+    let old = crate::supervisor::request_reset()?;
+    log::warn!("runtime: reset requested (worker {old})");
+    let deadline = std::time::Instant::now() + RESET_TIMEOUT;
+    loop {
+        let now = crate::supervisor::worker_pid();
+        if now > 0 && now != old {
+            return Ok(vec![format!("worker-pid {now}")]);
+        }
+        if crate::supervisor::stop_requested() {
+            return Err("the VM stopped instead of relaunching".into());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "no fresh worker within {RESET_TIMEOUT:?} of the reset; the VM log says why"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Answer one request (`watch` is answered in `serve_client`, which also keeps the client).
 fn handle(req: Request) -> Result<Vec<String>, String> {
     match req {
+        Request::Reset => reset(),
         Request::Info | Request::Watch => Ok(Info::current().to_lines()),
         Request::SshPort(port) => {
             let forward = lock(&FORWARD)
@@ -365,6 +417,22 @@ fn ask(stream: &UnixStream, req: Request) -> Result<Info> {
     Ok(Info::from_lines(lines.iter().map(String::as_str)))
 }
 
+/// `limina reset`: ask the supervisor with this pid to power-cycle its VM, and return the fresh
+/// worker's pid once it is running.
+pub fn request_reset(pid: u32) -> Result<u32> {
+    let stream = connect(pid)?;
+    stream.set_read_timeout(Some(RESET_TIMEOUT + ANSWER_TIMEOUT))?;
+    (&stream)
+        .write_all(format!("{}\n", Request::Reset.to_line()).as_bytes())
+        .context("sending the request")?;
+    let lines = wire::read_answer(&mut BufReader::new(&stream))
+        .map_err(|why| anyhow::anyhow!("reset: {why}"))?;
+    lines
+        .iter()
+        .find_map(|l| l.strip_prefix("worker-pid ")?.trim().parse().ok())
+        .with_context(|| format!("reset: no worker pid in the answer {lines:?}"))
+}
+
 /// Ask the supervisor with this pid one question (`info` or `ssh-port N`).
 pub fn request(pid: u32, req: Request) -> Result<Info> {
     ask(&connect(pid)?, req)
@@ -406,7 +474,12 @@ pub(crate) mod tests {
 
     #[test]
     fn requests_round_trip() {
-        for r in [Request::Info, Request::Watch, Request::SshPort(2300)] {
+        for r in [
+            Request::Info,
+            Request::Watch,
+            Request::SshPort(2300),
+            Request::Reset,
+        ] {
             assert_eq!(Request::parse(&r.to_line()), Ok(r));
         }
     }
@@ -431,6 +504,49 @@ pub(crate) mod tests {
         assert!(Request::parse("ssh-port 2300 2301").is_err());
         assert!(Request::parse("info please").is_err());
         assert!(Request::parse("reboot").is_err());
+        assert!(Request::parse("reset now").is_err());
+    }
+
+    /// `reset` is refused while the lever is off, with the way to turn it on, and only `reset`
+    /// is; with the lever on it gets as far as asking for a worker, which a unit test has none
+    /// of. The lever is read per request, so a toggle applies to the next line.
+    #[test]
+    fn reset_follows_the_lifecycle_lever_and_nothing_else_does() {
+        let _levers = lock(&crate::debug_ctl::ACCESS_LEVER_TESTS);
+        let _forward = lock(&FORWARD_TESTS);
+        let dir = std::env::temp_dir().join(format!("limina-rt-reset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r.sock");
+        set_forward(None);
+        serve_at(&path).unwrap();
+        let stream = connect_at(&path).unwrap();
+        let mut reader = BufReader::new(&stream);
+        let mut say = |line: &str| {
+            (&stream).write_all(format!("{line}\n").as_bytes()).unwrap();
+            wire::read_answer(&mut reader)
+        };
+        let lever = |on| {
+            crate::debug_ctl::handle(&limina_debug::wire::Request::Lever {
+                name: "lifecycle-control".into(),
+                on,
+            })
+            .unwrap()
+        };
+
+        let refused = say("reset").unwrap_err();
+        assert_eq!(refused, reset_refusal());
+        assert!(
+            refused.contains("LIMINA_LIFECYCLE_CONTROL=1")
+                && refused.contains("limina debug <vm> lever lifecycle-control on"),
+            "{refused}"
+        );
+        assert!(say("info").is_ok(), "info is not gated");
+        lever(true);
+        let past_the_gate = say("reset").unwrap_err();
+        assert!(past_the_gate.contains("no worker"), "{past_the_gate}");
+        lever(false);
+        assert_eq!(say("reset"), Err(reset_refusal()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
