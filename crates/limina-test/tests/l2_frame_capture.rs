@@ -397,19 +397,9 @@ fn set_app_visible(guest: &Guest, visible: bool) -> bool {
 
 /// One debug-port answer, read in the guest with the documented stock-tools reader.
 fn port_answer(guest: &Guest, request: &str) -> BTreeMap<String, String> {
-    let reader = format!(
-        "sudo bash -c 'exec 3<>/dev/virtio-ports/org.limina.debug.0; \
-         echo {request} >&3; on=; while IFS= read -r -t 10 l <&3; do \
-         case $l in format=*) on=1;; esac; [ -n \"$on\" ] || continue; \
-         [ \"$l\" = . ] && break; echo \"$l\"; done'"
-    );
-    let out = guest
-        .ssh_exec_timeout(&reader, Duration::from_secs(60))
-        .unwrap_or_else(|e| panic!("reading the debug port's {request}: {e:#}"));
-    out.lines()
-        .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
+    guest
+        .debug_port(request)
+        .unwrap_or_else(|e| panic!("reading the debug port's {request}: {e:#}"))
 }
 
 /// The host-state records and the port's answers around the hide.

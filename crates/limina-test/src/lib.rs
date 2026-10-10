@@ -1593,6 +1593,9 @@ pub struct Guest {
     ssh_port: u16,
     /// Path to the captured supervisor stderr (inside `scratch`), if enabled.
     supervisor_log: Option<PathBuf>,
+    /// The copy of the supervisor's stdout kept when its log is not captured (inside `scratch`):
+    /// where [`Guest::identities`] reads the identity blocks then.
+    stdout_log: Option<PathBuf>,
     /// Path to the pinned supervisor-owned control socket (inside `scratch`), if enabled.
     control_socket: Option<PathBuf>,
     /// The armed VM snapshot path: `<scratch>/snapshot` if [`GuestConfig::snapshot`] was set,
@@ -2075,11 +2078,26 @@ impl Guest {
         } else {
             None
         };
+        // Without a captured log, stdout is still kept: the supervisor prints its identity block
+        // there at every worker launch ([`Guest::identities`]), whatever the debug-port lever
+        // says. It is teed, so it still reaches the test's own stdout as it did before.
+        let stdout_log = if supervisor_log.is_none() {
+            let path = scratch.join("supervisor.stdout");
+            fs::File::create(&path)
+                .with_context(|| format!("creating the supervisor stdout copy {path:?}"))?;
+            cmd.stdout(Stdio::piped());
+            Some(path)
+        } else {
+            None
+        };
 
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("spawning supervisor {:?}", cfg.limina_bin))?;
         let pid = child.id() as libc::pid_t;
+        if let (Some(path), Some(pipe)) = (&stdout_log, child.stdout.take()) {
+            tee_to_stdout(pipe, path.clone());
+        }
 
         Ok(Guest {
             child,
@@ -2097,6 +2115,7 @@ impl Guest {
             gateway_log,
             ssh_port: allocated_ssh_port.unwrap_or(DEFAULT_SSH_PORT),
             supervisor_log,
+            stdout_log,
             control_socket,
             snapshot_path,
             torn_down: false,
@@ -2479,6 +2498,75 @@ impl Guest {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+
+    /// What the supervisor wrote to its stdout so far: the captured log with
+    /// [`GuestConfig::with_supervisor_log`] (stdout and stderr together), else the stdout copy
+    /// every boot keeps.
+    fn host_log(&self) -> String {
+        self.supervisor_log
+            .as_ref()
+            .or(self.stdout_log.as_ref())
+            .and_then(|p| fs::read(p).ok())
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Every worker launch of this supervisor so far, in order, from the identity blocks it
+    /// printed ([`logged_identities`]). The first is the boot; a guest reboot, a `limina reset`
+    /// and a resume from the parked window each add one with a fresh `launch_id`; an in-place
+    /// suspend adds none. Needs nothing in the guest and no lever.
+    pub fn identities(&self) -> Vec<Identity> {
+        logged_identities(&self.host_log())
+    }
+
+    /// Wait until the supervisor has printed `n` launches (1-based) and return the `n`th. The
+    /// block lands right after the spawn, while the guest is still booting. Fails on `timeout`,
+    /// or when the supervisor exits without having printed it.
+    pub fn wait_for_launch(&mut self, n: usize, timeout: Duration) -> Result<Identity> {
+        anyhow::ensure!(n >= 1, "launches count from 1");
+        let deadline = Instant::now() + timeout;
+        loop {
+            let ids = self.identities();
+            if ids.len() >= n {
+                return Ok(ids[n - 1].clone());
+            }
+            let exited = self.child.try_wait().context("polling supervisor")?;
+            if exited.is_some() || Instant::now() >= deadline {
+                // One more look: the block may have landed just before the exit.
+                let ids = self.identities();
+                if ids.len() >= n {
+                    return Ok(ids[n - 1].clone());
+                }
+                bail!(
+                    "the supervisor printed {} launch identity block(s), wanted {n} ({}).\n\
+                     --- supervisor stdout tail ---\n{}",
+                    ids.len(),
+                    match exited {
+                        Some(status) => format!("it exited: {status}"),
+                        None => format!("waited {timeout:?}"),
+                    },
+                    tail(&self.host_log(), 30)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// One debug-port answer, read in the guest over ssh with [`debug_port_reader`]. The guest
+    /// only answers with the `debug-port` lever on (`LIMINA_DEBUG_PORT=1` at boot or
+    /// `limina debug <pid> lever debug-port on`); off, every request reads `error=disabled`.
+    pub fn debug_port(&self, request: &str) -> Result<std::collections::BTreeMap<String, String>> {
+        let out = self
+            .ssh_exec_timeout(&debug_port_reader(request), Duration::from_secs(60))
+            .with_context(|| format!("reading the debug port's {request:?} in the guest"))?;
+        Ok(parse_port_answer(&out))
+    }
+
+    /// The identity the guest reads from its debug port ([`Guest::debug_port`]`("identity")`):
+    /// which launch it is running under, from the inside.
+    pub fn port_identity(&self) -> Result<Identity> {
+        self.debug_port("identity")
     }
 
     /// Block until `needle` appears in the gvproxy gateway log, or `timeout` elapses, or the
@@ -2932,6 +3020,7 @@ impl Guest {
 
         for (src, name) in [
             (self.supervisor_log.as_ref(), "supervisor.log"),
+            (self.stdout_log.as_ref(), "supervisor.stdout"),
             (Some(&self.console_path), "console.log"),
             (self.capture_png.as_ref(), "scanout.png"),
         ] {
@@ -3455,6 +3544,85 @@ pub fn run_worker_pids_with(
     workers
 }
 
+/// Copy everything read from `pipe` to the file at `path` and to this process's stdout, until
+/// the last writer closes it. Runs on its own thread.
+fn tee_to_stdout(mut pipe: impl Read + Send + 'static, path: PathBuf) {
+    std::thread::spawn(move || {
+        let mut file = fs::OpenOptions::new().append(true).open(&path).ok();
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = match pipe.read(&mut buf) {
+                Ok(0) => return,
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return,
+            };
+            if let Some(f) = file.as_mut() {
+                let _ = f.write_all(&buf[..n]);
+            }
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(&buf[..n]);
+            let _ = out.flush();
+        }
+    });
+}
+
+/// One worker launch as the supervisor describes it: the `key=value` fields of its identity
+/// block (`docs/design/debug-port.md`, *The `identity` answer*). The same keys a guest reads from
+/// the debug port. `resumed`, `gpu`, `boot` and `cpus` are what the supervisor configured for
+/// the launch, not what the guest saw.
+pub type Identity = std::collections::BTreeMap<String, String>;
+
+/// The prefix of every identity line the supervisor prints.
+const IDENTITY_LINE: &str = "limina: identity ";
+
+/// The identity blocks the supervisor printed in `log`, one per worker launch, in order.
+///
+/// Every launch prints one, at its spawn, to the supervisor's stdout, whatever the `debug-port`
+/// lever says (the lever gates only the guest's answers), so reading these needs nothing in the
+/// guest. Only complete blocks are returned: `worker_pid` is the last field, and a log read
+/// mid-print would otherwise hand back half a launch.
+pub fn logged_identities(log: &str) -> Vec<Identity> {
+    let mut out: Vec<Identity> = Vec::new();
+    for line in log.lines() {
+        let Some(kv) = line.strip_prefix(IDENTITY_LINE) else {
+            continue;
+        };
+        let Some((k, v)) = kv.split_once('=') else {
+            continue;
+        };
+        if k == "format" {
+            out.push(Identity::new());
+        }
+        if let Some(block) = out.last_mut() {
+            block.insert(k.to_string(), v.to_string());
+        }
+    }
+    out.retain(|b| b.contains_key("worker_pid"));
+    out
+}
+
+/// The documented stock-tools reader for one debug-port request (`docs/design/debug-port.md`),
+/// as root, because stock udev leaves `/dev/vport*` root-only. Skips anything before the first
+/// `format=` line (the tail of an answer an earlier reader abandoned), stops at the `.`
+/// terminator, and gives up after 10 s of silence rather than hang. bash and coreutils only.
+pub fn debug_port_reader(request: &str) -> String {
+    format!(
+        "sudo bash -c 'exec 3<>/dev/virtio-ports/org.limina.debug.0; \
+         echo {request} >&3; on=; while IFS= read -r -t 10 l <&3; do \
+         case $l in format=*) on=1;; esac; [ -n \"$on\" ] || continue; \
+         [ \"$l\" = . ] && break; echo \"$l\"; done'"
+    )
+}
+
+/// A debug-port answer as `key -> value`: every line holding an `=`, value verbatim.
+pub fn parse_port_answer(text: &str) -> std::collections::BTreeMap<String, String> {
+    text.lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.trim().to_string(), v.to_string()))
+        .collect()
+}
+
 /// Last `n` lines of `s`.
 fn tail(s: &str, n: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
@@ -3662,6 +3830,59 @@ pub fn set_pasteboard_text_slowly(name: &str, text: &str, midwrite_delay: Durati
         pb.clearContents();
         std::thread::sleep(midwrite_delay);
         pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    /// Two launches between other log lines, and a third still being printed.
+    const LOG: &str = "\
+guest SSH forward ready: ssh -p 2300 <user>@127.0.0.1
+limina: identity format=1
+limina: identity limina_git_rev=0123456789ab
+limina: identity launch_id=aaaa
+limina: identity resumed=no
+limina: identity gpu=coexist
+limina: identity supervisor_pid=10
+limina: identity worker_pid=11
+[2026-10-10T00:00:00Z INFO  limina::supervisor] guest rebooted; relaunching
+limina: identity format=1
+limina: identity launch_id=bbbb
+limina: identity resumed=no
+limina: identity vm=disk with spaces.raw
+limina: identity supervisor_pid=10
+limina: identity worker_pid=12
+limina: identity format=1
+limina: identity launch_id=cccc
+";
+
+    #[test]
+    fn launches_are_read_in_order_and_a_half_printed_one_is_not_one_yet() {
+        let ids = logged_identities(LOG);
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert_eq!(ids[0]["launch_id"], "aaaa");
+        assert_eq!(ids[0]["gpu"], "coexist");
+        assert_eq!(ids[1]["launch_id"], "bbbb");
+        assert_eq!(ids[1]["worker_pid"], "12");
+        assert_eq!(ids[1]["vm"], "disk with spaces.raw");
+        assert!(!ids[1].contains_key("gpu"), "a field leaked between blocks");
+        assert!(logged_identities("no identity here\n").is_empty());
+    }
+
+    #[test]
+    fn a_port_answer_parses_like_the_documented_reader_prints_it() {
+        let answer =
+            "format=1\nerror=disabled\nenable=start the VM with LIMINA_DEBUG_PORT=1, or …\n";
+        let m = parse_port_answer(answer);
+        assert_eq!(m["format"], "1");
+        assert_eq!(m["error"], "disabled");
+        assert!(m["enable"].contains("LIMINA_DEBUG_PORT=1"));
+        assert_eq!(m.len(), 3);
+        let reader = debug_port_reader("host-state");
+        assert!(reader.contains("echo host-state >&3"), "{reader}");
+        assert!(reader.contains("/dev/virtio-ports/org.limina.debug.0"));
     }
 }
 

@@ -33,72 +33,16 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use limina_test::{Guest, GuestConfig};
+use limina_test::{Guest, GuestConfig, debug_port_reader, parse_port_answer};
 
 const PORT: &str = "/dev/virtio-ports/org.limina.debug.0";
 
-/// The documented stock-tools reader (docs/design/debug-port.md), as root because stock udev
-/// leaves `/dev/vport*` root-only. Skips anything before the first `format=` line (the tail of
-/// an answer an earlier reader abandoned), stops at the `.` terminator, and gives up after 10 s
-/// of silence rather than hang.
-const ONE_LINER: &str = "sudo bash -c 'exec 3<>/dev/virtio-ports/org.limina.debug.0; \
-     echo identity >&3; on=; while IFS= read -r -t 10 l <&3; do \
-     case $l in format=*) on=1;; esac; [ -n \"$on\" ] || continue; \
-     [ \"$l\" = . ] && break; echo \"$l\"; done'";
-
-fn parse(text: &str) -> BTreeMap<String, String> {
-    text.lines()
-        .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.trim().to_string(), v.to_string()))
-        .collect()
-}
-
-/// The identity blocks the supervisor printed, one per worker spawn, in order.
-fn logged_identities(log: &str) -> Vec<BTreeMap<String, String>> {
-    let mut out: Vec<BTreeMap<String, String>> = Vec::new();
-    for line in log.lines() {
-        let Some(kv) = line.strip_prefix("limina: identity ") else {
-            continue;
-        };
-        let Some((k, v)) = kv.split_once('=') else {
-            continue;
-        };
-        if k == "format" {
-            out.push(BTreeMap::new());
-        }
-        if let Some(block) = out.last_mut() {
-            block.insert(k.to_string(), v.to_string());
-        }
-    }
-    out
-}
-
 fn read_port(guest: &Guest) -> BTreeMap<String, String> {
     let out = guest
-        .ssh_exec_timeout(ONE_LINER, Duration::from_secs(60))
+        .debug_port("identity")
         .unwrap_or_else(|e| panic!("the stock one-liner failed on {PORT}: {e:#}"));
-    eprintln!("--- {PORT} answered ---\n{out}");
-    parse(&out)
-}
-
-/// Wait until the supervisor has printed `n` identity blocks (the line lands right after the
-/// spawn; the guest is still booting when it does, but a test that reads the log the moment ssh
-/// answers must not race it).
-fn wait_for_identities(guest: &mut Guest, n: usize) -> Vec<BTreeMap<String, String>> {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let ids = logged_identities(&guest.supervisor_log());
-        if ids.len() >= n && ids[n - 1].contains_key("worker_pid") {
-            return ids;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the supervisor printed {} identity block(s), wanted {n}. Log:\n{}",
-            ids.len(),
-            guest.supervisor_log()
-        );
-        std::thread::sleep(Duration::from_millis(500));
-    }
+    eprintln!("--- {PORT} answered ---\n{out:?}");
+    out
 }
 
 #[test]
@@ -137,14 +81,9 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
 
     // --- Oracle 2: off by default, the port answers that and nothing else ---
     for request in ["identity", "help"] {
-        let off = parse(
-            &guest
-                .ssh_exec_timeout(
-                    &ONE_LINER.replace("echo identity", &format!("echo {request}")),
-                    Duration::from_secs(60),
-                )
-                .unwrap_or_else(|e| panic!("`{request}` got no answer while disabled: {e:#}")),
-        );
+        let off = guest
+            .debug_port(request)
+            .unwrap_or_else(|e| panic!("`{request}` got no answer while disabled: {e:#}"));
         eprintln!("--- {request} while disabled: {off:?}");
         assert_eq!(
             off.get("format").map(String::as_str),
@@ -195,8 +134,9 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
 
     // --- Oracle 3: the stock one-liner reads this supervisor's identity ---
     let first = read_port(&guest);
-    let logged = wait_for_identities(&mut guest, 1);
-    let want = &logged[0];
+    let want = &guest
+        .wait_for_launch(1, Duration::from_secs(30))
+        .expect("the supervisor printed no identity block");
     eprintln!("supervisor printed: {want:?}");
     assert_eq!(first.get("format").map(String::as_str), Some("1"));
     for key in [
@@ -246,10 +186,7 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
 
     // An unknown request is answered (with an error), never left hanging.
     let err = guest
-        .ssh_exec_timeout(
-            &ONE_LINER.replace("echo identity", "echo bogus"),
-            Duration::from_secs(60),
-        )
+        .ssh_exec_timeout(&debug_port_reader("bogus"), Duration::from_secs(60))
         .expect("an unknown request must still get an answer");
     assert!(
         err.contains("error="),
@@ -264,7 +201,7 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
         )
         .expect("the helper failed");
     assert_eq!(
-        parse(&via_helper),
+        parse_port_answer(&via_helper),
         first,
         "the helper and the one-liner disagree"
     );
@@ -281,10 +218,12 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
             "the guest never answered with a new launch after the reboot"
         );
         std::thread::sleep(Duration::from_secs(3));
-        let Ok(out) = guest.ssh_exec_timeout(ONE_LINER, Duration::from_secs(30)) else {
+        let Ok(out) =
+            guest.ssh_exec_timeout(&debug_port_reader("identity"), Duration::from_secs(30))
+        else {
             continue;
         };
-        let ids = parse(&out);
+        let ids = parse_port_answer(&out);
         if ids
             .get("launch_id")
             .is_some_and(|id| Some(id) != first.get("launch_id"))
@@ -292,10 +231,12 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
             break ids;
         }
     };
-    let logged = wait_for_identities(&mut guest, 2);
+    let relaunch = guest
+        .wait_for_launch(2, Duration::from_secs(30))
+        .expect("the supervisor printed no identity block for the relaunch");
     assert_eq!(
         second.get("launch_id"),
-        logged[1].get("launch_id"),
+        relaunch.get("launch_id"),
         "after the reboot the guest read a launch id the supervisor never printed"
     );
     assert_eq!(second.get("limina_git_rev"), first.get("limina_git_rev"));
