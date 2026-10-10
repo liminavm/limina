@@ -834,17 +834,62 @@ pub struct TierStamp {
     pub pagesize: u64,
     pub uname_r: String,
     pub disk: String,
+    /// The supervisor's identity block for the launch measured (`crate::Identity`): which limina
+    /// build and dependency revisions ran it, on which Mac, with what vCPUs, RAM and GPU.
+    pub launch: crate::Identity,
+}
+
+/// The identity fields a `metrics.json` carries, under the same names.
+const STAMP_IDENTITY_KEYS: [&str; 6] = [
+    "limina_git_rev",
+    "host_model",
+    "host_os",
+    "cpus",
+    "ram_mib",
+    "gpu",
+];
+
+/// `s` as a JSON string literal.
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 impl TierStamp {
-    /// Entries for [`json_object`].
+    /// Entries for [`json_object`]: the tier and what the guest reported, then the build and
+    /// host the launch ran on — `limina_git_rev`, `host_model`, `host_os`, `cpus`, `ram_mib`,
+    /// `gpu`, and `deps` (`{"libkrun": <rev>, …}`, the identity's `dep.*`). Every value is a
+    /// string as the supervisor printed it; nothing here is a path.
     pub fn entries(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("tier", format!("\"{}\"", self.tier.label())),
+        let mut e = vec![
+            ("tier", json_string(self.tier.label())),
             ("guest_pagesize", self.pagesize.to_string()),
-            ("guest_kernel", format!("\"{}\"", self.uname_r)),
-            ("disk", format!("\"{}\"", self.disk)),
-        ]
+            ("guest_kernel", json_string(&self.uname_r)),
+            ("disk", json_string(&self.disk)),
+        ];
+        for key in STAMP_IDENTITY_KEYS {
+            if let Some(v) = self.launch.get(key) {
+                e.push((key, json_string(v)));
+            }
+        }
+        let deps: Vec<(&str, String)> = self
+            .launch
+            .iter()
+            .filter_map(|(k, v)| Some((k.strip_prefix("dep.")?, json_string(v))))
+            .collect();
+        e.push(("deps", json_object(&deps)));
+        e
     }
 }
 
@@ -855,6 +900,13 @@ impl TierStamp {
 /// producing a green run of the wrong guest.
 pub fn verify_tier(guest: &Guest, cfg: &crate::GuestConfig) -> Result<TierStamp> {
     let t = tier();
+    // Which build ran this: the supervisor's identity block for the launch being measured. It
+    // is printed at every launch whatever the debug-port lever says, so this needs nothing in
+    // the guest.
+    let launch = guest.identities().pop().context(
+        "the supervisor printed no launch identity block, so the run cannot be attributed to a \
+         build",
+    )?;
     let pagesize: u64 = guest
         .ssh_exec("getconf PAGESIZE")?
         .trim()
@@ -892,12 +944,63 @@ pub fn verify_tier(guest: &Guest, cfg: &crate::GuestConfig) -> Result<TierStamp>
         pagesize,
         uname_r,
         disk,
+        launch,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// metrics.json attributes a run to the build and host that produced it, from the launch's
+    /// identity block, and stays valid JSON whatever a value holds.
+    #[test]
+    fn a_tier_stamp_carries_the_build_and_the_host() {
+        let launch: crate::Identity = [
+            ("format", "1"),
+            ("limina_git_rev", "0123456789ab"),
+            ("dep.libkrun", "8d9dfe0c"),
+            ("dep.virglrs", "f683c82b"),
+            ("launch_id", "aaaa"),
+            ("vm", "Fedora-Workstation-44.stock.test.raw"),
+            ("host_model", "Mac14,6"),
+            ("host_os", "macOS 26.6.2"),
+            ("cpus", "4"),
+            ("ram_mib", "4096"),
+            ("gpu", "coexist"),
+            ("supervisor_pid", "10"),
+            ("worker_pid", "11"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let stamp = TierStamp {
+            tier: Tier::Stock,
+            pagesize: 4096,
+            uname_r: "6.17.1-300.fc44.aarch64".into(),
+            disk: "say \"hi\".raw".into(),
+            launch,
+        };
+        let json = json_object(&stamp.entries());
+        for needle in [
+            r#""tier":"stock""#,
+            r#""guest_pagesize":4096"#,
+            r#""disk":"say \"hi\".raw""#,
+            r#""limina_git_rev":"0123456789ab""#,
+            r#""host_model":"Mac14,6""#,
+            r#""host_os":"macOS 26.6.2""#,
+            r#""cpus":"4""#,
+            r#""ram_mib":"4096""#,
+            r#""gpu":"coexist""#,
+            r#""deps":{"libkrun":"8d9dfe0c","virglrs":"f683c82b"}"#,
+        ] {
+            assert!(json.contains(needle), "{needle} missing from {json}");
+        }
+        // Per-launch and per-process facts are not attribution.
+        for absent in ["launch_id", "supervisor_pid", "worker_pid", "\"vm\""] {
+            assert!(!json.contains(absent), "{absent} leaked into {json}");
+        }
+    }
 
     /// The CSV columns are a contract between the staged python and the parser; a drift
     /// (like the kswapd/reclaim columns added later) must break loudly here, not by rows
