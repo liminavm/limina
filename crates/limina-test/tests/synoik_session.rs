@@ -171,30 +171,13 @@ fn synoik_session_reaches_a_rendered_desktop() {
     // Gated behind the three above on purpose: the stuck-plymouth frame is a *rendered* frame, so
     // this alone does not discriminate the #39 failure. A real desktop yields thousands of
     // distinct colors with no single dominant one; a black or single-color session yields ~1 color
-    // at ~100% dominance. The capture is sparse for a static screen — poll and keep the best frame.
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut best_colors = 0usize;
-    let mut best_dominance = 1.0f64;
-    while Instant::now() < deadline {
-        if let Ok(frame) = guest.read_capture() {
-            let colors = frame.distinct_colors();
-            let (_, dominance) = frame.dominant_color();
-            if colors > best_colors {
-                best_colors = colors;
-                best_dominance = dominance;
-            }
-            if best_colors >= 1000 && best_dominance < 0.90 {
-                break; // unambiguously a rendered desktop — stop early
-            }
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    eprintln!("richest synoik frame: {best_colors} distinct colors, dominant {best_dominance:.2}");
-    assert!(
-        best_colors >= 1000 && best_dominance < 0.90,
-        "synoik came up and took seat0 but never painted a rich frame (richest: {best_colors} \
-         colors, {best_dominance:.2} dominant) — scanout or Vulkan-render regression"
-    );
+    // at ~100% dominance. The capture is sparse for a static screen — poll for one.
+    let frame = guest
+        .wait_for_rich_capture(Duration::from_secs(120), 1000, 0.90)
+        .unwrap_or_else(|e| panic!("synoik came up and took seat0 but never painted a rich frame — scanout or Vulkan-render \
+                 regression: {e:#}"));
+    let (colors, dominance) = frame.richness();
+    eprintln!("first rich synoik frame: {colors} distinct colors, dominant {dominance:.2}");
 
     let outcome = guest
         .shutdown(Duration::from_secs(30))

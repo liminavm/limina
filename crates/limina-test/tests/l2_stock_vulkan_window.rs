@@ -97,19 +97,9 @@ fn stock_guest_vulkan_client_composites_its_own_pixels() {
         .expect("gnome-shell never started on the stock guest");
 
     // Let the desktop settle, so the baseline is a painted desktop rather than a fade-in.
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut baseline = None;
-    while Instant::now() < deadline {
-        if let Ok(frame) = guest.read_capture() {
-            let (_, dominance) = frame.dominant_color();
-            if frame.distinct_colors() >= 1000 && dominance < 0.90 {
-                baseline = Some(frame);
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    let baseline = baseline.expect("the stock GNOME desktop never painted a settled frame");
+    let baseline = guest
+        .wait_for_rich_capture(Duration::from_secs(120), 1000, 0.90)
+        .unwrap_or_else(|e| panic!("the stock GNOME desktop never painted a settled frame: {e:#}"));
 
     let session = "env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0";
     guest

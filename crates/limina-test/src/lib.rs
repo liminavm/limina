@@ -1664,6 +1664,54 @@ impl CapturedFrame {
         set.len()
     }
 
+    /// Decode an 8-bit RGBA or RGB PNG (the capture sink writes RGBA, `capture still` RGB); RGB
+    /// pixels get an opaque alpha.
+    pub fn from_png(path: &Path) -> Result<CapturedFrame> {
+        let file = fs::File::open(path).with_context(|| format!("opening capture {path:?}"))?;
+        let mut reader = png::Decoder::new(BufReader::new(file))
+            .read_info()
+            .context("reading PNG header")?;
+        let mut buf = vec![0u8; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut buf).context("decoding PNG frame")?;
+        buf.truncate(info.buffer_size());
+        anyhow::ensure!(
+            info.bit_depth == png::BitDepth::Eight,
+            "unexpected capture bit depth {:?} (expected 8)",
+            info.bit_depth
+        );
+        let rgba = match info.color_type {
+            png::ColorType::Rgba => buf,
+            png::ColorType::Rgb => buf
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|&[r, g, b]| [r, g, b, 255])
+                .collect(),
+            other => bail!("unexpected capture colour type {other:?} (expected RGBA or RGB)"),
+        };
+        Ok(CapturedFrame {
+            width: info.width,
+            height: info.height,
+            rgba,
+        })
+    }
+
+    /// `(distinct colours, dominant colour's share)`: the two numbers the rich-frame bar reads.
+    pub fn richness(&self) -> (usize, f64) {
+        (self.distinct_colors(), self.dominant_color().1)
+    }
+
+    /// Whether the most common colour covers at least `min_share` of the frame and lies within
+    /// `lo..=hi` on every RGB channel: a frame of one known solid colour, give or take rounding.
+    pub fn dominant_within(&self, lo: [u8; 3], hi: [u8; 3], min_share: f64) -> bool {
+        let ([r, g, b, _], share) = self.dominant_color();
+        share >= min_share
+            && [r, g, b]
+                .iter()
+                .zip(lo.iter().zip(&hi))
+                .all(|(c, (l, h))| (l..=h).contains(&c))
+    }
+
     /// The most common RGBA pixel (the presumed background) and its share of all pixels.
     pub fn dominant_color(&self) -> ([u8; 4], f64) {
         let mut counts = std::collections::HashMap::new();
@@ -1676,6 +1724,77 @@ impl CapturedFrame {
             .max_by_key(|&(_, n)| n)
             .map(|(c, n)| (c, n as f64 / total as f64))
             .unwrap_or(([0, 0, 0, 0], 1.0))
+    }
+}
+
+/// Takes `limina debug <supervisor> capture still` of a windowed guest: the frame on the
+/// window's glass now, with its tag line ([`limina_framecap::Still`]). Owns only the binary,
+/// the pid and a directory, so it can be moved to a thread that watches the window while the
+/// test drives the guest over ssh. Get one from [`Guest::stills`].
+///
+/// A headless (`--display-capture`) guest has no window, and the CLI refuses the still.
+#[derive(Debug, Clone)]
+pub struct Stills {
+    limina_bin: PathBuf,
+    supervisor: libc::pid_t,
+    dir: PathBuf,
+}
+
+impl Stills {
+    /// One still of `slot` (the first window when `None`), decoded.
+    pub fn take(&self, slot: Option<usize>) -> Result<(limina_framecap::Still, CapturedFrame)> {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let png = self.dir.join(format!("still-{n}.png"));
+        let mut cmd = Command::new(&self.limina_bin);
+        cmd.arg("debug")
+            .arg(self.supervisor.to_string())
+            .args(["capture", "still"])
+            .arg(&png);
+        if let Some(slot) = slot {
+            cmd.arg(slot.to_string());
+        }
+        let out = run_capped(cmd, Duration::from_secs(20)).context("running capture still")?;
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        anyhow::ensure!(out.status.success(), "capture still was refused: {said}");
+        let still = said
+            .lines()
+            .find_map(|l| limina_framecap::Still::parse(l).ok())
+            .with_context(|| format!("capture still printed no tag line: {said}"))?;
+        let frame = CapturedFrame::from_png(&png)?;
+        let _ = fs::remove_file(&png);
+        Ok((still, frame))
+    }
+
+    /// Take stills of the first window every 500 ms until one satisfies `ok`, and return it;
+    /// the error describes the last still taken (or why none could be).
+    pub fn wait_for(
+        &self,
+        timeout: Duration,
+        ok: impl Fn(&limina_framecap::Still, &CapturedFrame) -> bool,
+    ) -> Result<(limina_framecap::Still, CapturedFrame)> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let last = match self.take(None) {
+                Ok((still, frame)) if ok(&still, &frame) => return Ok((still, frame)),
+                Ok((still, frame)) => {
+                    let (colors, dominance) = frame.richness();
+                    format!(
+                        "{colors} colors, dominant {:?} at {dominance:.2}, {still:?}",
+                        frame.dominant_color().0
+                    )
+                }
+                Err(e) => format!("{e:#}"),
+            };
+            if Instant::now() >= deadline {
+                bail!("no still met the bar within {timeout:?}; the last: {last}");
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
 }
 
@@ -2316,24 +2435,57 @@ impl Guest {
             .capture_png
             .as_ref()
             .context("no display configured (use GuestConfig::with_display)")?;
-        let file = fs::File::open(path).with_context(|| format!("opening capture {path:?}"))?;
-        let mut reader = png::Decoder::new(BufReader::new(file))
-            .read_info()
-            .context("reading PNG header")?;
-        let mut rgba = vec![0u8; reader.output_buffer_size()];
-        let info = reader.next_frame(&mut rgba).context("decoding PNG frame")?;
-        rgba.truncate(info.buffer_size());
-        anyhow::ensure!(
-            info.color_type == png::ColorType::Rgba && info.bit_depth == png::BitDepth::Eight,
-            "unexpected capture format {:?}/{:?} (expected RGBA8)",
-            info.color_type,
-            info.bit_depth
-        );
-        Ok(CapturedFrame {
-            width: info.width,
-            height: info.height,
-            rgba,
-        })
+        CapturedFrame::from_png(path)
+    }
+
+    /// Poll the capture sink until a frame has at least `min_colors` distinct colours and no
+    /// colour covering `max_dominance` or more of it, and return that frame. A painted desktop
+    /// (wallpaper, panels, text) clears 1000 / 0.90 easily; a black, stuck or single-colour
+    /// screen sits near 1 colour at ~100%. The sink rewrites its PNG only when the screen
+    /// changes, so a static desktop needs polling, not one read. Fails early if the supervisor
+    /// exits; the error names the richest frame seen, for the caller's message.
+    pub fn wait_for_rich_capture(
+        &mut self,
+        timeout: Duration,
+        min_colors: usize,
+        max_dominance: f64,
+    ) -> Result<CapturedFrame> {
+        let deadline = Instant::now() + timeout;
+        let mut richest = (0usize, 1.0f64);
+        loop {
+            if let Ok(frame) = self.read_capture() {
+                let (colors, dominance) = frame.richness();
+                if colors > richest.0 {
+                    richest = (colors, dominance);
+                }
+                if colors >= min_colors && dominance < max_dominance {
+                    return Ok(frame);
+                }
+            }
+            let (colors, dominance) = richest;
+            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
+                bail!(
+                    "the supervisor exited ({status}) before a rich frame (richest: {colors} \
+                     colors, {dominance:.2} dominant)"
+                );
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "no frame with {min_colors}+ colors and < {max_dominance:.2} dominant within \
+                     {timeout:?} (richest: {colors} colors, {dominance:.2} dominant)"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    /// A [`Stills`] for this guest's window, writing under the scratch dir.
+    pub fn stills(&self) -> Stills {
+        Stills {
+            limina_bin: self.limina_bin.clone(),
+            supervisor: self.pid,
+            dir: self.scratch.clone(),
+        }
     }
 
     /// Block until at least one scanout frame has been captured (and decode it), or
@@ -4472,5 +4624,52 @@ content restored (2 contexts, 0 failed), 1 scanout flips\n";
         let out = run_capped(cmd, Duration::from_secs(10)).expect("sh runs to completion");
         assert_eq!(out.status.code(), Some(3));
         assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "oops");
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    fn write_png(path: &Path, color: png::ColorType, w: u32, h: u32, data: &[u8]) {
+        let file = fs::File::create(path).unwrap();
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+        enc.set_color(color);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(data).unwrap();
+    }
+
+    /// `capture still` writes RGB, the capture sink RGBA; both decode to the same frame.
+    #[test]
+    fn an_rgb_still_and_an_rgba_capture_decode_alike() {
+        let dir = std::env::temp_dir().join(format!("limina-frame-tests-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        // 2x2: three of the presenter's clear colour, one black.
+        let px = [26u8, 128, 230];
+        let rgb: Vec<u8> = [px, px, px, [0, 0, 0]].concat();
+        let rgba: Vec<u8> = [
+            [26u8, 128, 230, 255],
+            [26, 128, 230, 255],
+            [26, 128, 230, 255],
+            [0, 0, 0, 255],
+        ]
+        .concat();
+        write_png(&dir.join("rgb.png"), png::ColorType::Rgb, 2, 2, &rgb);
+        write_png(&dir.join("rgba.png"), png::ColorType::Rgba, 2, 2, &rgba);
+        let a = CapturedFrame::from_png(&dir.join("rgb.png")).unwrap();
+        let b = CapturedFrame::from_png(&dir.join("rgba.png")).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(a.rgba, b.rgba);
+        assert_eq!((a.width, a.height), (2, 2));
+        assert_eq!(a.richness(), (2, 0.75));
+        assert!(a.dominant_within([20, 0, 224], [32, 255, 236], 0.75));
+        assert!(
+            !a.dominant_within([20, 0, 224], [32, 255, 236], 0.98),
+            "share too low"
+        );
+        assert!(
+            !a.dominant_within([0, 0, 0], [10, 255, 236], 0.5),
+            "red out of range"
+        );
     }
 }

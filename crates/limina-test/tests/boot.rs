@@ -24,7 +24,7 @@
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig, assert_console_has};
 
@@ -332,33 +332,16 @@ fn fedora_stock_image_renders_graphical_desktop() {
              to initialize (venus→kms_swrast fallback broken, or no software GL?)",
         );
 
-    // Oracle 2 — it actually painted. Sample the scanout AFTER the session started and keep the
-    // richest frame. A real desktop (wallpaper) yields thousands of distinct colors with no single
+    // Oracle 2 — it actually painted. Sample the scanout AFTER the session started until a rich
+    // frame shows. A real desktop (wallpaper) yields thousands of distinct colors with no single
     // dominant color; a black/stuck session yields ~1 color at ~100% dominance. The capture is
-    // sparse for a static screen, so poll with a generous window and keep the best frame seen.
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut best_colors = 0usize;
-    let mut best_dominance = 1.0f64;
-    while Instant::now() < deadline {
-        if let Ok(frame) = guest.read_capture() {
-            let colors = frame.distinct_colors();
-            let (_, dominance) = frame.dominant_color();
-            if colors > best_colors {
-                best_colors = colors;
-                best_dominance = dominance;
-            }
-            if best_colors >= 1000 && best_dominance < 0.90 {
-                break; // unambiguously a rendered desktop — stop early
-            }
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    eprintln!("richest desktop frame: {best_colors} distinct colors, dominant {best_dominance:.2}");
-    assert!(
-        best_colors >= 1000 && best_dominance < 0.90,
-        "the GNOME desktop never rendered a rich frame after the session started (richest: \
-         {best_colors} colors, {best_dominance:.2} dominant) — software GL / scanout regression?"
-    );
+    // sparse for a static screen, so poll with a generous window.
+    let frame = guest
+        .wait_for_rich_capture(Duration::from_secs(120), 1000, 0.90)
+        .unwrap_or_else(|e| panic!("the GNOME desktop never rendered a rich frame after the session started — software GL / \
+                 scanout regression?: {e:#}"));
+    let (colors, dominance) = frame.richness();
+    eprintln!("first rich desktop frame: {colors} distinct colors, dominant {dominance:.2}");
 
     let outcome = guest
         .shutdown(Duration::from_secs(20))
@@ -416,30 +399,17 @@ fn fedora_stock_image_software_2d_floor_renders_desktop() {
         );
 
     // Oracle 2 — it actually painted a rich desktop frame (same oracle as the coexist render test).
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut best_colors = 0usize;
-    let mut best_dominance = 1.0f64;
-    while Instant::now() < deadline {
-        if let Ok(frame) = guest.read_capture() {
-            let colors = frame.distinct_colors();
-            let (_, dominance) = frame.dominant_color();
-            if colors > best_colors {
-                best_colors = colors;
-                best_dominance = dominance;
-            }
-            if best_colors >= 1000 && best_dominance < 0.90 {
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
+    let frame = guest
+        .wait_for_rich_capture(Duration::from_secs(120), 1000, 0.90)
+        .unwrap_or_else(|e| {
+            panic!(
+                "the GNOME desktop never rendered on the software-2D floor — an llvmpipe/scanout \
+                 regression breaks the baseline tier: {e:#}"
+            )
+        });
+    let (colors, dominance) = frame.richness();
     eprintln!(
-        "richest software-2D desktop frame: {best_colors} distinct colors, dominant {best_dominance:.2}"
-    );
-    assert!(
-        best_colors >= 1000 && best_dominance < 0.90,
-        "the GNOME desktop never rendered on the software-2D floor (richest: {best_colors} colors, \
-         {best_dominance:.2} dominant) — an llvmpipe/scanout regression breaks the baseline tier"
+        "first rich software-2D desktop frame: {colors} distinct colors, dominant {dominance:.2}"
     );
 
     let outcome = guest

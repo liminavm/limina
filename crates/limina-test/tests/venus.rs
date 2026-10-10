@@ -17,7 +17,7 @@
 //! SKIPs cleanly if its prerequisite is missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`. This is a heavy test (full Fedora desktop boot on a custom kernel).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
@@ -248,30 +248,13 @@ fn venus_desktop_pixel_verifies_through_host_capture() {
         .expect("gnome-shell process never appeared — the seated session didn't come up");
 
     // Read the presented venus frame back through the host `--display-capture` sink.
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut best_colors = 0usize;
-    let mut best_dominance = 1.0f64;
-    while Instant::now() < deadline {
-        if let Ok(frame) = guest.read_capture() {
-            let colors = frame.distinct_colors();
-            let (_, dominance) = frame.dominant_color();
-            if colors > best_colors {
-                best_colors = colors;
-                best_dominance = dominance;
-            }
-            if best_colors >= 1000 && best_dominance < 0.90 {
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
+    let frame = guest
+        .wait_for_rich_capture(Duration::from_secs(120), 1000, 0.90)
+        .unwrap_or_else(|e| panic!("the venus desktop never presented a rich frame through the host capture sink — the \
+                 present_surface -2 gap: {e:#}"));
+    let (colors, dominance) = frame.richness();
     eprintln!(
-        "richest venus frame via host capture: {best_colors} distinct colors, dominant {best_dominance:.2}"
-    );
-    assert!(
-        best_colors >= 1000 && best_dominance < 0.90,
-        "the venus desktop never presented a rich frame through the host capture sink (richest: \
-         {best_colors} colors, {best_dominance:.2} dominant) — the present_surface -2 gap"
+        "first rich venus frame via host capture: {colors} distinct colors, dominant {dominance:.2}"
     );
 
     let outcome = guest

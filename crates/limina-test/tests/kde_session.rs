@@ -97,31 +97,16 @@ fn kde_plasma_composites_with_opengl_and_renders() {
     );
 
     // --- Oracle 2: the host capture shows the desktop ---
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut best_colors = 0usize;
-    let mut best_dominance = 1.0f64;
-    while Instant::now() < deadline {
-        if let Ok(frame) = guest.read_capture() {
-            let colors = frame.distinct_colors();
-            let (_, dominance) = frame.dominant_color();
-            if colors > best_colors {
-                best_colors = colors;
-                best_dominance = dominance;
-            }
-            if best_colors >= 1000 && best_dominance < 0.90 {
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
+    let frame = guest
+        .wait_for_rich_capture(Duration::from_secs(120), 1000, 0.90)
+        .unwrap_or_else(|e| {
+            panic!(
+                "the Plasma desktop never presented a rich frame through the host capture: {e:#}"
+            )
+        });
+    let (colors, dominance) = frame.richness();
     eprintln!(
-        "richest Plasma frame via host capture: {best_colors} distinct colors, dominant \
-         {best_dominance:.2}"
-    );
-    assert!(
-        best_colors >= 1000 && best_dominance < 0.90,
-        "the Plasma desktop never presented a rich frame through the host capture (richest: \
-         {best_colors} colors, {best_dominance:.2} dominant)"
+        "first rich Plasma frame via host capture: {colors} distinct colors, dominant {dominance:.2}"
     );
 
     // --- Oracle 3: plasmashell came up once and stayed up ---
