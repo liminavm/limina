@@ -31,6 +31,7 @@ somewhere far from the change.
 | `window/warp.rs` | the **warp broker**: the one owner of cursor warps, each asserted to land where it aimed |
 | `window/cursor.rs` | the guest cursor, in both of its two presentations |
 | `window/overlay.rs` | the suspend/resume scrim, and the notch **strip** carrier |
+| `inject.rs` (crate root) | host-side injection: `limina input` verbs into the worker's input sockets (§9) |
 
 **The structural rework is landed** (`docs/design/input-windows-restructure.md`, Moves A/D/B/C:
 the GuestWindow inversion, one gate-geometry rule, the ownership snapshot + pure policy engine,
@@ -609,3 +610,58 @@ configuration back (`crates/limina/src/hostmods.rs`, the ByHost global domain vi
 - Pure geometry and policy (`fit.rs`, `grab_policy.rs`, `arrangement.rs`, `displays.rs`) unit-test
   headless. Anything expressible there belongs there — that is the whole reason those modules have
   no AppKit in them.
+
+## 9. Injection: input with no window and no hand
+
+`limina input <vm> <verb…>` (or verbs on stdin, one per line, with client-side `sleep MS`) writes
+evdev events into the supervisor's ends of the worker's input sockets — the same `WorkerConn` the
+window writes to (`crates/limina/src/inject.rs`; the verbs are `input <verb>` lines on the
+per-VM runtime socket, `runtime_ctl.rs`, and `limina input --help` lists them). From the socket
+on it is the real path: the worker's virtio-input backends, the guest's `virtio_input` driver and
+evdev nodes, logind's TakeDevice, libinput, the compositor. That is what an in-guest uinput
+injector skips and a system-compositor test needs; osascript into the window is the other
+alternative, and it needs the window key and loses lone modifiers.
+
+- **Which devices.** Keys go to the virtio keyboard; positions, buttons and wheel to the absolute
+  tablet (as the window sends them); `rel` to the virtual mouse; `ev touchpad …` reaches the
+  multitouch touchpad raw. Until the guest binds `virtio_input` the key router sends keys to the
+  USB HID gadget instead (`limina_input::router`) — a harness that needs the virtio node waits for
+  it (`limina Virtual Keyboard` in `/proc/bus/input/devices`). Keys are evdev codes, by kernel
+  name or number, and only the ones the keyboard advertises: no modifier normalization (§6b)
+  applies, `KEY_LEFTMETA` is Super. `type` is a US-layout map.
+- **Coordinate spaces.** Injection speaks space 5 (§3), the device range: `abs X Y` in
+  `0..=ABS_MAX`. `abs-norm U V` is a fraction of that range and `abs-px X Y [WxH]` a scanout
+  pixel of a `W×H` mode, sent as `floor((p + ½)·32768/W)` — the value libinput maps back onto that
+  pixel. Both mean "this display" **only while the guest has one display**, where the range is
+  that display and the guest's scale cancels out. With several, the per-display mapping lives in
+  the window's fitted lines and the agent's report (§4) and injection does not guess it:
+  `abs-px` refuses, `abs-norm` stays a fraction of the whole desktop's bounding box.
+- **Every verb ends its frames with SYN_REPORT** (`ev` is the raw escape hatch and does not;
+  `syn [DEV]` sends one). Chords press in order and release in reverse, one frame per key; a
+  `click`'s transitions are 30 ms apart for the debounce in §7; `scroll` sends v120 and detents
+  as the window does, carrying sub-detent remainders per connection.
+- **The window does not know about injected input**, and is kept from mis-learning from it.
+  Injected keys and buttons are outside the window's pressed set and `ButtonLedger`, so it never
+  releases them and never reconciles them away; mixing an injected and a real press of the same
+  key or button is unsupported (the guest sees whichever transition comes last). The one shared
+  fact is the guest's cursor: an injected position or relative move makes the echo answer
+  something the window did not send, so every injected pointer event bumps
+  `inject::pointer_epoch`, and a window send that an injection has moved past is neither sampled
+  into `absfit` nor judged by the echo verdict (`Sent::injected`). Captured, the estimate follows
+  the guest's echo as always, so an injected move re-bases it rather than fighting it.
+- **What a connection holds dies with it.** Keys and buttons a connection leaves pressed are
+  released when it closes, so a harness that crashes mid-chord cannot leave Ctrl held. A script
+  that holds a key across verbs keeps one connection (stdin); `keep-held` (`--keep-held`) hands
+  them over until some later connection's `release`.
+- **Headless needs `--input`.** A windowed run always has the four devices. A headless run gets
+  them only with `--input`, which wires the same socketpairs per spawn (`inject::WorkerPipes`) —
+  opt-in because it changes the guest's device set, and a snapshot restores only onto the device
+  set it was taken with. Without it, `limina input` answers that the VM has no input devices.
+- **Reboots and resumes are followed for free.** A relaunch swaps the worker's endpoints into the
+  same `WorkerConn`; each verb takes one snapshot of it, so a verb lands whole on one worker. A
+  send to a worker that is gone, or a full queue, is an `err` answer, never a silent drop; a
+  parked (suspended) VM refuses outright.
+- `LIMINA_POINTER_WIRE_TRACE` prints injected events as `[WIRE] … dev=inject-<device>`. The L2
+  oracle is `crates/limina-test/tests/l2_input_inject.rs`: it reads the guest's virtio evdev nodes
+  raw (found by name, grabbed so the greeter sees nothing) and compares them event for event,
+  headless and windowed.

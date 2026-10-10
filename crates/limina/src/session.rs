@@ -387,6 +387,8 @@ impl WindowedSession {
         attach_vdagent(control.as_ref(), spice_host);
         attach_qga(control.as_ref(), qga_host);
         let conn = window::WorkerConn::new(io);
+        // `limina input` writes to the same endpoints, and follows every relaunch swap below.
+        crate::inject::attach(conn.clone());
         let shared = window::Shared::new();
         window::spawn_reader(sup, shared.clone(), surface_map.clone());
 
@@ -664,7 +666,7 @@ fn attach_qga(control: Option<&control::ControlPlane>, qga_host: OwnedFd) {
 
 /// Mark `fd` non-blocking so a write to a full socket fails fast (EAGAIN) instead of
 /// blocking the caller. Best-effort: a failure here only forfeits the non-blocking property.
-fn set_nonblocking(fd: libc::c_int) {
+pub(crate) fn set_nonblocking(fd: libc::c_int) {
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);
         if flags >= 0 {
@@ -674,7 +676,7 @@ fn set_nonblocking(fd: libc::c_int) {
 }
 
 /// Request `bytes` of send and receive buffer on `fd` (best-effort; the kernel may clamp).
-fn set_socket_buffer(fd: libc::c_int, bytes: libc::c_int) {
+pub(crate) fn set_socket_buffer(fd: libc::c_int, bytes: libc::c_int) {
     for opt in [libc::SO_SNDBUF, libc::SO_RCVBUF] {
         unsafe {
             libc::setsockopt(

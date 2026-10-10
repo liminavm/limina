@@ -915,15 +915,36 @@ pub fn force_stop_requested() -> bool {
 /// same VM — so the supervisor and its gvproxy/control-plane resources survive a guest reboot
 /// the way real hardware would. A runaway boot loop (repeated reboots each under
 /// [`MIN_HEALTHY_UPTIME`]) is capped at [`MAX_RAPID_REBOOTS`] so we don't spin forever.
+///
+/// `input` wires the virtio keyboard, pointer, mouse and touchpad as a windowed session does,
+/// fresh for every spawn, and publishes them for `limina input` (`crate::inject`).
 pub fn run(
     spec: &WorkerSpec,
     control: Option<&crate::control::ControlPlane>,
     gateway: Option<&crate::gateway::Gateway>,
+    input: bool,
 ) -> Result<i32> {
     let mut guard = RebootGuard::new();
     loop {
         let started = Instant::now();
-        let spawned = spawn_worker(spec, &[])?;
+        let spawned = if input {
+            let pipes = crate::inject::WorkerPipes::new()?;
+            let mut args = spec.args.clone();
+            args.extend(pipes.args());
+            let with_input = WorkerSpec {
+                vmm_bin: spec.vmm_bin.clone(),
+                args,
+                shutdown_grace: spec.shutdown_grace,
+                snapshot_file: spec.snapshot_file.clone(),
+                suspend_state_file: spec.suspend_state_file.clone(),
+                links: spec.links.clone(),
+            };
+            let spawned = spawn_worker(&with_input, &pipes.worker_fds())?;
+            crate::inject::publish(pipes.into_io(spawned.child.id() as i32)?);
+            spawned
+        } else {
+            spawn_worker(spec, &[])?
+        };
         // Clipboard for a stock guest: hand the fresh port to the broker. A relaunch
         // (reboot) replaces the previous one — the guest that owned it is gone.
         if let Some(cp) = control {

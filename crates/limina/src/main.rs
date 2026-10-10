@@ -22,6 +22,7 @@ mod gateway;
 // macOS's own Modifier Keys configuration, which positional normalization must read past.
 mod hostmods;
 mod hosttrackpad;
+mod inject;
 mod moc;
 mod power_profile;
 mod qga;
@@ -198,6 +199,12 @@ struct Cli {
     /// Attach a virtio-gpu display and capture presented frames to this PNG path.
     #[arg(long)]
     display_capture: Option<PathBuf>,
+
+    /// Give a headless run the virtio keyboard, pointer, mouse and touchpad a windowed run
+    /// always has, so `limina input` can drive it. Changes the guest's device set, so a
+    /// suspend taken with it resumes only with it. Implied by --window.
+    #[arg(long)]
+    input: bool,
 
     /// Display size as WIDTHxHEIGHT (e.g. 1280x800). Used with --display-capture; windowed
     /// boots derive their size from --display-resolution (this is only the last-resort
@@ -520,6 +527,25 @@ enum Cmd {
     /// Print a running VM's SSH forward port, or move it to another host port. A move lasts
     /// until the VM exits; the port in its definition is the one the next start uses.
     SshPort(SshPortArgs),
+    /// Inject keyboard and pointer events into a running VM's virtio-input devices — the real
+    /// device path the guest's seat sees, with no window or focus involved.
+    Input(InputArgs),
+}
+
+#[derive(clap::Args, Debug)]
+#[command(after_help = inject::HELP)]
+struct InputArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid. A headless run needs `--input` to have devices to inject into.
+    vm: String,
+    /// Leave keys and buttons this command pressed held after it exits. By default whatever
+    /// a connection leaves pressed is released when it closes; a later `release` undoes this.
+    #[arg(long)]
+    keep_held: bool,
+    /// One verb and its arguments (see VERBS). Omitted or `-`: verbs are read from stdin, one
+    /// per line, over one connection — what a script that holds a key across verbs needs.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    verb: Vec<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -810,6 +836,9 @@ fn main() -> Result<()> {
         Some(Cmd::Rm(args)) => cmd_rm(args),
         Some(Cmd::Debug(args)) => cmd_debug(args),
         Some(Cmd::SshPort(args)) => cmd_ssh_port(args),
+        Some(Cmd::Input(args)) => {
+            inject::client(debug_target_pid(&args.vm)?, args.keep_held, &args.verb)
+        }
         // Bare `limina` — a double-clicked limina.app or a plain terminal launch —
         // opens the control center. Any flag at all means the flat ephemeral-VM CLI.
         None if std::env::args_os().len() == 1 => center::run(),
@@ -1430,6 +1459,7 @@ fn cli_from_definition(
         virtio_console_input: None,
         window,
         display_capture: None,
+        input: false,
         // Dynamic-mode first-boot fallback only; the real initial size is derived per
         // display mode (and remembered state) in run_vm's windowed branch.
         display_size: "1280x800".into(),
@@ -2142,6 +2172,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push(path_arg(display_capture)?);
         args.push("--display-size".into());
         args.push(cli.display_size.clone());
+        // What `limina input abs-px` maps against when it is not told a mode.
+        inject::set_headless_mode(parse_display_size(&cli.display_size)?);
     }
 
     let spec = WorkerSpec {
@@ -2153,7 +2185,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         links,
     };
 
-    let code = supervisor::run(&spec, control.as_ref(), gateway.as_ref())?;
+    let code = supervisor::run(&spec, control.as_ref(), gateway.as_ref(), cli.input)?;
     // M9.2: the worker exited 126 → the guest was snapshotted and torn down by the suspend bracket.
     // Persist the `[suspended]` record (UI status; the snapshot file itself is what the next
     // start's auto-resume detects). Managed VMs only (a flat `--disk` run sets no

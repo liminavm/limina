@@ -822,6 +822,10 @@ struct Sent {
     /// This position was the probe's, not the pointer's. It still teaches the mapping, but it
     /// is not judged: the probe deliberately sends places the pointer is not.
     probe: bool,
+    /// [`crate::inject::pointer_epoch`] at this send. Once an injected event has moved the
+    /// guest's pointer, its echo answers that injection, not this send — so this send is
+    /// neither sampled nor judged (`docs/input-and-windows.md` §9).
+    injected: u64,
 }
 
 /// A deliberate sweep of the absolute device, to learn each display's share of it without
@@ -2258,6 +2262,7 @@ impl InputState {
             at: std::time::Instant::now(),
             captured,
             probe,
+            injected: crate::inject::pointer_epoch(),
         }));
         seq
     }
@@ -2274,6 +2279,9 @@ impl InputState {
         let Some(sent) = self.sent.get() else {
             return;
         };
+        if sent.injected != crate::inject::pointer_epoch() {
+            return;
+        }
         self.sample_guest_echo(&sent);
         if self.echo_checked.get() == Some(sent.at) {
             return;

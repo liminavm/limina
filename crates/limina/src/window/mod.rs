@@ -49,7 +49,7 @@ mod debug_menu;
 mod diag;
 pub(crate) mod display_awake;
 mod displays;
-mod echo;
+pub(crate) mod echo;
 pub(crate) mod fit;
 pub(crate) mod frame_capture;
 mod gesture_tap;

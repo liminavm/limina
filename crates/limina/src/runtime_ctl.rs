@@ -27,6 +27,9 @@
 //! something opens a second connection. The control center keeps one watch open per running VM
 //! (`center::live`); `limina ssh-port` is the command-line client.
 //!
+//! `input <verb…>` lines inject keyboard and pointer events into the guest's virtio-input
+//! devices (`crate::inject`, whose `HELP` lists the verbs); `limina input` is their client.
+//!
 //! Like the debug socket it is reachable by any process of the same user. Moving the SSH forward
 //! binds a different loopback port on the host; the guest and its network are untouched.
 
@@ -236,7 +239,24 @@ fn serve_client(stream: UnixStream) {
         return;
     };
     let mut lines = BufReader::new(stream).lines();
+    // This connection's injected input: what it holds is released when it drops, on every way
+    // out of this function (`inject::Session`).
+    let mut input = crate::inject::Session::default();
     while let Some(Ok(line)) = lines.next() {
+        if let Some(verb) = line
+            .strip_prefix(crate::inject::PREFIX)
+            .filter(|rest| rest.is_empty() || rest.starts_with(' '))
+        {
+            let result = if PARKED.load(std::sync::atomic::Ordering::SeqCst) {
+                Err("the guest is suspended: there is no worker to take input".to_string())
+            } else {
+                input.run(verb)
+            };
+            if out.write_all(answer(result).as_bytes()).is_err() {
+                return;
+            }
+            continue;
+        }
         let req = Request::parse(&line);
         if req == Ok(Request::Watch) {
             // Answer and register under the lock the pushes take, so no change slips between
