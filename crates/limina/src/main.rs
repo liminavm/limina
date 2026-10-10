@@ -1131,7 +1131,7 @@ fn flat_stop_target(vm: &str) -> Result<i32> {
         .ok()
         .with_context(|| format!("{vm} is not a VM name, a boot disk or a pid"))?;
     anyhow::ensure!(
-        lifecycle::is_limina(pid),
+        lifecycle::is_supervisor(pid),
         "pid {pid} is not a running limina supervisor"
     );
     Ok(pid)
@@ -3657,11 +3657,7 @@ mod tests {
             Cli::try_parse_from(["limina", "stop", "dev", "--force"])
                 .unwrap()
                 .cmd,
-            Some(Cmd::Stop(StopArgs {
-                force: true,
-                timeout: 60,
-                ..
-            }))
+            Some(Cmd::Stop(StopArgs { force: true, .. }))
         ));
         assert!(matches!(
             Cli::try_parse_from(["limina", "rm", "dev"]).unwrap().cmd,

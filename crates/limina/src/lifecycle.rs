@@ -165,10 +165,14 @@ fn command_name(pid: i32) -> Option<String> {
     )
 }
 
-/// Is `pid` a `limina` process? A bare pid on the command line is only ever signalled if it is,
-/// so a typo cannot SIGTERM something else of the user's.
-pub fn is_limina(pid: i32) -> bool {
-    pid > 0 && command_name(pid).as_deref() == Some("limina")
+/// Is `pid` a VM's supervisor? A bare pid on the command line is only ever signalled if it is, so
+/// a typo cannot SIGTERM something else of the user's — another `limina` process included: the
+/// control center and a gateway's reaper are `limina` too, but only a supervisor answers on a
+/// runtime socket.
+pub fn is_supervisor(pid: i32) -> bool {
+    pid > 0
+        && crate::runtime_ctl::socket_path(pid as u32).exists()
+        && command_name(pid).as_deref() == Some("limina")
 }
 
 /// Has `pid` exited? A zombie counts: its parent may not have reaped it yet (a detached run's
@@ -271,10 +275,14 @@ mod tests {
     }
 
     #[test]
-    fn only_a_limina_process_counts_as_one() {
-        assert!(!is_limina(0));
-        assert!(!is_limina(-5));
-        assert!(!is_limina(1), "launchd is not a limina supervisor");
+    fn only_a_supervisor_counts_as_one() {
+        assert!(!is_supervisor(0));
+        assert!(!is_supervisor(-5));
+        assert!(!is_supervisor(1), "launchd is not a limina supervisor");
+        assert!(
+            !is_supervisor(std::process::id() as i32),
+            "a process with no runtime socket is not a supervisor"
+        );
     }
 
     #[test]
