@@ -4,10 +4,11 @@
 
 # Park a built .dmg in the parking lot with its full provenance.
 #
-# THE POINT: a built bundle is opaque about what went into it. Nothing inside a .dmg says which
-# virglrs, libkrun or mesa revision it carries, or whether the renderer was compiled optimized.
-# Hand someone a bundle a week later and "which build is this?" has no answer. This records the
-# answer at the one moment it is knowable — the moment the artifact exists.
+# THE POINT: a bundle says little about what went into it. It carries the revisions compiled
+# into it and its own parking name, but not whether a tree was dirty, which branch it sat on, or
+# the guest mesa beside it. Hand someone a bundle a week later and "which build is this?" needs
+# this index to answer. It records the answer at the one moment it is knowable — the moment the
+# artifact exists — under the name the bundle itself reports.
 #
 # THE PIN IS A CLAIM; THE CHECKOUT HEAD IS THE FACT. This reads `git rev-parse HEAD` in each
 # tree, never `third_party/manifest.toml`. Those two disagreed three times in two days: the
@@ -20,13 +21,64 @@
 # exactly the ones missing from the index — a pile that looks complete and is not. So a dirty
 # tree or an unpushed rev is annotated loudly and parked anyway.
 #
-# Usage: park-bundle.sh <dmg> [profile]
+# THE NAME IS CHOSEN BEFORE THE BUNDLE IS BUILT. `scripts/build-app.sh` reserves it first and
+# stamps it into the bundle (Contents/Resources/bundle-id), so the running app can say which dmg
+# it came from (the identity's `limina_bundle`, crates/limina/src/bundle_id.rs). The stamp has to
+# be in before the bundle is signed, which is long before the dmg exists to be parked.
+#
+# Usage:
+#   park-bundle.sh --reserve          claim the next free name and print it (Limina-<date>-<n>.dmg)
+#   park-bundle.sh --release <name>   give back a reservation whose bundle was never finished
+#   park-bundle.sh <dmg> [profile] [name] [app]
+#                                     park <dmg> as <name> (reserved here when omitted); <app> is
+#                                     the bundle inside it, whose supervisor CDHash is recorded
 set -euo pipefail
 
-DMG="${1:?usage: park-bundle.sh <dmg> [profile]}"
-PROFILE="${2:-unknown}"
 LOT="${LIMINA_PARKING_LOT:-$HOME/Projects/LiminaParkingLot}"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+# A reservation is a `<name>.reserved` marker beside where the dmg will go, and a name is taken
+# while either exists. The marker is created under noclobber, which is O_EXCL: of two builds
+# racing for one ordinal exactly one creates it and the other moves on to the next. A build
+# spends minutes between reserving and parking, so a scan-then-copy would hand both the same
+# name. Scanning the directory rather than keeping a counter means a manually deleted or
+# copied-in bundle cannot desynchronise it.
+reserve() {
+  mkdir -p "$LOT"
+  local date n=0 name
+  date=$(date +%Y-%m-%d)
+  while :; do
+    name="Limina-$date-$n.dmg"
+    if [ ! -e "$LOT/$name" ] && (set -C; : > "$LOT/$name.reserved") 2>/dev/null; then
+      echo "$name"
+      return
+    fi
+    n=$((n + 1))
+  done
+}
+
+# Only names of the lot's own shape: the argument becomes a path inside it.
+lot_name() {
+  case "$1" in
+    Limina-*.dmg) [[ "$1" != */* ]] ;;
+    *) false ;;
+  esac
+}
+
+case "${1:-}" in
+  --reserve) reserve; exit 0 ;;
+  --release)
+    name="${2:?usage: park-bundle.sh --release <name>}"
+    lot_name "$name" || { echo "park-bundle: not a parking-lot name: $name" >&2; exit 1; }
+    rm -f "$LOT/$name.reserved"
+    exit 0
+    ;;
+esac
+
+DMG="${1:?usage: park-bundle.sh <dmg> [profile] [name] [app]}"
+PROFILE="${2:-unknown}"
+NAME="${3:-}"
+APP="${4:-}"
 # shellcheck source=scripts/lib/manifest.sh
 . "$ROOT/scripts/lib/manifest.sh"
 
@@ -44,15 +96,15 @@ if ! git -C "$LOT" rev-parse --git-dir >/dev/null 2>&1; then
   git -C "$LOT" -c commit.gpgsign=false commit -q -m 'parking lot: track the index, never the images' || true
 fi
 
-# Next free ordinal for today, starting at 0. Scanning the directory rather than keeping a
-# counter means a manually deleted or copied-in bundle cannot desynchronise it.
-DATE=$(date +%Y-%m-%d)
-n=0
-while [ -e "$LOT/Limina-$DATE-$n.dmg" ]; do n=$((n + 1)); done
-NAME="Limina-$DATE-$n.dmg"
+# The name the bundle was stamped with, or a fresh one for a dmg nobody stamped. Never an
+# existing image: a stamp naming one dmg must not end up on another.
+[ -n "$NAME" ] || NAME=$(reserve)
+lot_name "$NAME" || { echo "park-bundle: not a parking-lot name: $NAME" >&2; exit 1; }
+[ -e "$LOT/$NAME" ] && { echo "park-bundle: $LOT/$NAME already exists" >&2; exit 1; }
 
 # `cp -c` clones on APFS: instant, and it shares whatever blocks it can with the source.
 cp -c "$DMG" "$LOT/$NAME" 2>/dev/null || cp "$DMG" "$LOT/$NAME"
+rm -f "$LOT/$NAME.reserved"
 
 # describe <label> <path> — one row of provenance for one source tree.
 #
@@ -128,6 +180,13 @@ fi
         awk -F= '/^TeamIdentifier=/{t=$2} /^Identifier=/{i=$2} END{
           if (i=="") print "<unsigned>"; else print i (t==""?"":" (team " t ")")}')
   echo "- Signed: $sig"
+  # The supervisor's CDHash, which the running app reports as `limina_cdhash`. The bundle's
+  # signature seals Info.plist, Resources and the nested worker into it, so it names the whole
+  # bundle, and a build that was never parked has one too.
+  if [ -n "$APP" ]; then
+    cdhash=$(codesign -dvvv "$APP" 2>&1 | sed -n 's/^CDHash=//p')
+    echo "- Supervisor CDHash: \`${cdhash:-<none>}\`"
+  fi
   echo "- Size: $(du -sh "$LOT/$NAME" | awk '{print $1}')"
   # A checkout override is a tree the manifest does not name at all; say so, with the path,
   # since the table below shows only its HEAD.

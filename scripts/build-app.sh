@@ -322,6 +322,24 @@ echo "==> writing third-party notices"
 python3 "$ROOT/scripts/gen-third-party-notices.py" --out "$RES/THIRD-PARTY-NOTICES.txt" \
   --check-bundle "$APP" || { echo "REFUSING to bundle: third-party notices incomplete (above)" >&2; exit 1; }
 
+# ---- parking-lot name ------------------------------------------------------------
+# The name this bundle will be parked under, stamped into Resources so the running app can say
+# which dmg it is (the identity's `limina_bundle`; crates/limina/src/bundle_id.rs reads it). It
+# has to be written now: the signature below seals Resources, and the dmg that gets the name is
+# only made after that. park-bundle.sh reserves it atomically, so two concurrent builds never
+# stamp the same one. A build that dies before its bundle is sealed gives the name back; once
+# sealed, the name is spent whatever happens to the dmg, so no other bundle can ever carry it.
+# Not fatal: without a reservation the bundle says `unparked` and is parked under a fresh name.
+PARK_NAME="$("$ROOT/scripts/park-bundle.sh" --reserve)" || PARK_NAME=""
+if [ -n "$PARK_NAME" ]; then
+  printf '%s\n' "$PARK_NAME" > "$RES/bundle-id"
+  echo "==> parking-lot name: $PARK_NAME"
+  release_park_name() { [ -z "$PARK_NAME" ] || "$ROOT/scripts/park-bundle.sh" --release "$PARK_NAME"; }
+  trap release_park_name EXIT
+else
+  echo "==> WARNING: could not reserve a parking-lot name; this bundle will report limina_bundle=unparked" >&2
+fi
+
 # ---- Info.plist ------------------------------------------------------------------
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -423,6 +441,8 @@ if [ -n "$DR" ]; then
 else
   codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$APP"
 fi
+# Sealed with its name: from here the name belongs to this bundle (see "parking-lot name").
+trap - EXIT
 
 # ---- disk image ------------------------------------------------------------------
 # The .dmg is the shareable form: a plain tarball/zip of a .app round-trips through
@@ -444,7 +464,7 @@ fi
 # because a bundle without an index entry is worse than no bundle: the lot looks complete and
 # is not, and the one moment the revisions are knowable has passed. Never fatal — a failure to
 # record provenance must not destroy a build that succeeded.
-"$ROOT/scripts/park-bundle.sh" "$DMG" "$PROFILE" || echo "WARNING: could not park $DMG" >&2
+"$ROOT/scripts/park-bundle.sh" "$DMG" "$PROFILE" "$PARK_NAME" "$APP" || echo "WARNING: could not park $DMG" >&2
 
 echo "==> done: $APP"
 du -sh "$APP" | awk '{print "    bundle size: " $1}'
