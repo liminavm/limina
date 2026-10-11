@@ -952,7 +952,8 @@ sizes each reuse their own), and images stop after
 
 **Without a window: `--headless-capture`.** A run with no window shows the supervisor its frames
 only when started with `--headless-capture` (or `LIMINA_HEADLESS_CAPTURE=1`, which a run naming
-`--window` or `--display-capture` ignores). The flag attaches a display at `--display-size` and
+`--window` or `--display-capture` ignores, and a managed VM ignores too: a display added from the
+environment would change the device set its snapshots depend on; a run that honours it warns). The flag attaches a display at `--display-size` and
 launches the worker exactly as a windowed one — `--display-window`, a control channel, the surface
 port — and a reader thread in the supervisor (`crates/limina/src/window/headless.rs`, no AppKit)
 hands every `frame` line's surface to the same capture and still; `LIMINA_WINDOW_CAPTURE_DIR` works

@@ -207,8 +207,8 @@ struct Cli {
     /// hands to this supervisor as a windowed one does, so `limina debug <vm> capture still|start|
     /// stop` work on a headless run. Off by default: without it a headless worker publishes no
     /// surfaces, and since the worker's display sink is chosen when it launches, capture cannot be
-    /// turned on later. `LIMINA_HEADLESS_CAPTURE=1` asks for it too, on a run that names no other
-    /// display. A display changes the guest's device set, so a suspend taken with it resumes only
+    /// turned on later. `LIMINA_HEADLESS_CAPTURE=1` asks for it too, on a flat run that names no
+    /// other display (never on a managed VM). A display changes the guest's device set, so a suspend taken with it resumes only
     /// with one.
     #[arg(long, conflicts_with_all = ["window", "display_capture"])]
     headless_capture: bool,
@@ -1623,10 +1623,17 @@ fn exit_cleanup() {
     window::frame_capture::finish_at_exit();
 }
 
-/// Whether a run frames for a headless capture: the flag, or `LIMINA_HEADLESS_CAPTURE=1` on a run
-/// that names no other display (`other_display`: `--window` or `--display-capture`). The variable
-/// never overrides a display the command line chose; a run that ignores it says so.
-fn headless_capture_wanted(flag: bool, env: Option<&std::ffi::OsStr>, other_display: bool) -> bool {
+/// Whether a run frames for a headless capture: the flag, or `LIMINA_HEADLESS_CAPTURE=1` on a flat
+/// run that names no other display (`other_display`: `--window` or `--display-capture`). The
+/// variable never overrides a display the command line chose, and never reaches a managed VM
+/// (`managed`): it would change the VM's device set, which its snapshots must keep. A run that
+/// ignores it says so, and one that honours it warns that it attached a display.
+fn headless_capture_wanted(
+    flag: bool,
+    env: Option<&std::ffi::OsStr>,
+    other_display: bool,
+    managed: bool,
+) -> bool {
     if flag {
         return true;
     }
@@ -1637,6 +1644,17 @@ fn headless_capture_wanted(flag: bool, env: Option<&std::ffi::OsStr>, other_disp
         log::info!("LIMINA_HEADLESS_CAPTURE ignored: this run names its own display");
         return false;
     }
+    if managed {
+        log::warn!(
+            "LIMINA_HEADLESS_CAPTURE ignored: a managed VM's devices come from its definition, \
+             and a display added from the environment would break its snapshots"
+        );
+        return false;
+    }
+    log::warn!(
+        "LIMINA_HEADLESS_CAPTURE=1: attached a virtio-gpu display for headless frame capture \
+         (the guest's device set changes, so a suspend taken now resumes only with it)"
+    );
     true
 }
 
@@ -2127,6 +2145,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         cli.headless_capture,
         std::env::var_os("LIMINA_HEADLESS_CAPTURE").as_deref(),
         cli.window || cli.display_capture.is_some(),
+        cli.suspend_state_file.is_some(),
     );
     let display = if cli.window {
         "window"
@@ -2902,16 +2921,20 @@ mod tests {
             );
         }
         let one = Some(std::ffi::OsStr::new("1"));
-        assert!(headless_capture_wanted(true, None, false));
-        assert!(!headless_capture_wanted(false, None, false));
-        assert!(headless_capture_wanted(false, one, false));
+        assert!(headless_capture_wanted(true, None, false, false));
+        assert!(!headless_capture_wanted(false, None, false, false));
+        assert!(headless_capture_wanted(false, one, false, false));
         assert!(!headless_capture_wanted(
             false,
             Some(std::ffi::OsStr::new("0")),
+            false,
             false
         ));
         // The variable never overrides a display the command line chose.
-        assert!(!headless_capture_wanted(false, one, true));
+        assert!(!headless_capture_wanted(false, one, true, false));
+        // Nor reaches a managed VM, whose device set its snapshots depend on; the flag still can.
+        assert!(!headless_capture_wanted(false, one, false, true));
+        assert!(headless_capture_wanted(true, None, false, true));
     }
 
     #[test]
