@@ -11,6 +11,10 @@
 //! [`super::still::note`] — every flip the supervisor receives, none coalesced, so a headless
 //! capture has no `not_presented` runs unless a surface could not be resolved.
 //!
+//! **A display's still is its live worker's.** A relaunch (a guest reboot, `limina reset`), the
+//! worker's exit and a `scanoutgone` drop the still notes they make stale, so a still taken before
+//! the fresh guest flips is refused instead of handed a dead worker's frame.
+//!
 //! **What "presented" means here.** The frame the guest flipped, as the supervisor received it.
 //! Nothing composites it, so the records carry no `layer_iosurface` and say `headless`.
 //!
@@ -114,6 +118,9 @@ impl HeadlessDisplay {
         let HeadlessSpawn { worker_fd, sup } = spawn;
         drop(worker_fd);
         let ack = sup.try_clone()?;
+        // Nothing the previous worker put up is the new guest's: a still before its first flip
+        // is refused rather than handed the dead worker's frame.
+        forget_stills();
         if self
             .attached
             .swap(true, std::sync::atomic::Ordering::SeqCst)
@@ -153,8 +160,17 @@ fn read_frames(
             return;
         }
         let mut parts = line.split_whitespace();
-        if parts.next() != Some("frame") {
-            continue;
+        match parts.next() {
+            Some("frame") => {}
+            // The slot has no scanout: what it last showed is no longer the guest's display.
+            Some("scanoutgone") => {
+                if let Some(slot) = present::parse_slot(parts.next()) {
+                    super::still::forget(still_key(slot));
+                    last[slot] = None;
+                }
+                continue;
+            }
+            _ => continue,
         }
         let Some(id) = parts.next().and_then(|s| s.parse::<u32>().ok()) else {
             continue;
@@ -179,6 +195,17 @@ fn read_frames(
         let _ = acks.try_send(AckMsg::Shown(id, prev.map(SendSurface::new)));
     }
     log::info!("headless capture: control channel closed (worker gone)");
+    // The worker is gone; unless a fresh one has already taken over, so are its frames.
+    if shared.lock().unwrap().reader_epoch == epoch {
+        forget_stills();
+    }
+}
+
+/// Drop every slot's still note.
+fn forget_stills() {
+    for slot in 0..MAX_SCANOUTS {
+        super::still::forget(still_key(slot));
+    }
 }
 
 /// The surface the worker named, from the surface port (or, with no port, by global lookup). A
