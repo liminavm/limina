@@ -240,9 +240,10 @@ video). `docs/research/GAPS-and-verification.md` tracks claims still needing ver
   - **Every `cargo xtask app` parks its image, with provenance, in `~/Projects/LiminaParkingLot`.**
     `scripts/park-bundle.sh` (called by `build-app.sh`) copies the `.dmg` there as
     `Limina-<YYYY-MM-DD>-<n>.dmg`, `n` from 0 per day, and appends the revisions it was built
-    from to `INDEX.md`. **A built bundle is otherwise opaque about its own provenance** — nothing
-    inside a `.dmg` says which virglrs, libkrun or mesa it carries — so "which build is this?"
-    has no answer a week later, and that is exactly when it gets asked. Hashes come from each
+    from to `INDEX.md`. **The bundle knows only its parked name**: the name is reserved before
+    signing and stamped in, and a running bundle reports it as `limina_bundle` (plus its
+    `limina_cdhash`) in its identity — so "which build is this?" is answered by looking that
+    name up in `INDEX.md`, a week later, which is exactly when it gets asked. Hashes come from each
     checkout's `HEAD`, **never from `third_party/manifest.toml`**: the manifest says what a tree
     *should* be on, and the two disagreed three times in two days. Both mesa trees live on
     `/Volumes/mesa-cs`, outside `third_party/`, and are recorded too. It annotates rather than
