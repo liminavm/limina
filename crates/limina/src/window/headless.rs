@@ -98,6 +98,13 @@ impl HeadlessDisplay {
 
     /// A control channel for the next worker, and the worker arguments naming it.
     pub fn prepare(&self) -> anyhow::Result<(HeadlessSpawn, Vec<String>)> {
+        // A relaunch: let go of the dead worker's surfaces. Nothing else will — the release
+        // protocol needs a live worker — and an IOSurface bills to the task that made it, so they
+        // would stay pinned here, unattributable, for the rest of the run. Done before the spawn,
+        // so nothing the fresh worker publishes can be caught by it.
+        if self.attached.load(std::sync::atomic::Ordering::SeqCst) {
+            self.map.lock().unwrap().clear_for_new_worker();
+        }
         let (sup, worker_fd) = crate::supervisor::socketpair(libc::SOCK_STREAM)?;
         let mut args = vec![
             "--display-window".to_string(),
@@ -217,6 +224,9 @@ fn resolve(
 ) -> Option<CFRetained<IOSurfaceRef>> {
     let held = {
         let mut m = map.lock().unwrap();
+        // The released ids are queued for a window's frame cache; there is none here, so they
+        // are dropped rather than left to grow for the whole run.
+        let _ = m.take_released();
         m.pin_presented(id);
         m.get(id)
     };
