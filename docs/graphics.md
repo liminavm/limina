@@ -975,7 +975,10 @@ reader refuses such a still rather than misreading it — the rule format 1 allo
   buffer. A guest that is not held off its scanout (stock GNOME through vrend, §4) may draw into
   that buffer while the capture's blit reads it — the race a window avoids with its private copy.
 - No `host_state` lines: they describe windows and App Nap, and there are none.
-- The still's slot defaults to 0; a slot the guest has flipped nothing on is refused.
+- The still's slot defaults to 0; a slot the guest has flipped nothing on is refused. That
+  includes a fresh worker's (a guest reboot, `limina reset`) before its first flip, and a slot
+  after `scanoutgone`: a still never shows a dead worker's or a gone scanout's frame. Epochs start
+  at 0, as a window's do.
 
 Every flip is still acknowledged to the worker (`shown <id>`), after the surface it replaced on its
 slot has left use (bounded at 20 ms, a window's cap), because a worker with a control channel
