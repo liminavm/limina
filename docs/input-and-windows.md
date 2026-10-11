@@ -638,10 +638,33 @@ alternative, and it needs the window key and loses lone modifiers.
   `0..=ABS_MAX`. `abs-norm U V` is a fraction of that range and `abs-px X Y [WxH]` a scanout
   pixel of a `W×H` mode, sent as `floor((p + ¼)·32768/W)` — a value libinput maps back onto that
   pixel whether the compositor truncates or rounds (for `W ≤ 8192`; aiming at the centre rounds
-  up a pixel whenever the division is exact). Both mean "this display" **only while the guest has one display**, where the range is
-  that display and the guest's scale cancels out. With several, the per-display mapping lives in
-  the window's fitted lines and the agent's report (§4) and injection does not guess it:
-  `abs-px` refuses, `abs-norm` stays a fraction of the whole desktop's bounding box.
+  up a pixel whenever the division is exact). Without a display named, both mean "this
+  display" **only while the guest has one display**, where the range is that display and the
+  guest's scale cancels out; with several, `abs-px` refuses and `abs-norm` stays a fraction of
+  the whole desktop's bounding box.
+- **One display among several: `--display N`.** `abs-norm --display N U V` and
+  `abs-px --display N X Y [WxH]` (the flag may stand anywhere in the verb) address display N's
+  own content. N is the **scanout slot**, 0-based — the `display_id` of the display control and
+  the `slot N` of the logs; the guest calls it `Virtual-(N+1)`. There is still one tablet: the
+  point is placed in slot N's **share** of the device range, through the window's own mapping
+  for that slot (`absfit::Mapping`, the precedence `abs_position` applies): the agent's layout
+  report, else the lines the window fitted from the guest's cursor echo (§4), else — with one
+  display only — the whole range. `abs-norm --display` is exactly the value the window sends for
+  that unit point; `abs-px --display` aims at the pixel's first quarter inside the share
+  (`px_in_share`), so the guest's own transform (`v · desktop / 32768` logical units, then the
+  display's scale) lands on that pixel while the desktop is under 8192 pixels wide at that
+  scale. **Refused, with the reason:** a slot that is not a known display; a slot the agent's
+  report does not place; and a slot of several when there is no report and nothing learned —
+  the window's identity floor, which for an injector would be a silently wrong answer. What
+  the supervisor knows of the displays differs by run. **Windowed**, the live scanouts (the
+  worker's `surface` announcements) and their modes. **Headless**, only slot 0 at
+  `--display-size`, plus every slot the agent's report names, with no mode: `abs-px` there needs
+  the `WxH`, and a display connected behind the supervisor's back (the worker's display-control
+  socket) is invisible to it until the guest reports a layout — and headless learns nothing from
+  the echo, so on a headless multi-display guest the report is the only mapping. `info` prints
+  one line per known display: slot, connector, scanout mode, the reported logical rect
+  (`WxH+X+Y`), the device (`ptr`, always) and the mapping with the slot's share in device units,
+  or `none (<why>)` in the refusal's words.
 - **Every verb ends its frames with SYN_REPORT** (`ev` is the raw escape hatch and does not;
   `syn [DEV]` sends one). Chords press in order and release in reverse, one frame per key; a
   `click`'s transitions are 30 ms apart for the debounce in §7; `scroll` sends v120 and detents
@@ -702,4 +725,8 @@ alternative, and it needs the window key and loses lone modifiers.
   headless and windowed. The headless run starts with the lever off and checks the refusal
   before turning it on at runtime; the windowed one starts with `LIMINA_INPUT_INJECT=1`. Both
   check that `keys` lists `KEY_ESC`, and that a script failing on its second verb exits nonzero
-  with its first verb delivered and its third never sent.
+  with its first verb delivered and its third never sent. The per-display run boots headless
+  with a pool of two, connects slot 1, reads mutter's logical layout over D-Bus and reports it on
+  the control plane as the agent would, then checks `info`, the refusal before the report, the
+  tablet's raw values against the mapping computed from mutter's layout, and that each `abs-px`
+  value carried back through that layout lands on the named monitor's named pixel.

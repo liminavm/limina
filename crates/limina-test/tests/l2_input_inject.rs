@@ -38,6 +38,12 @@
 //! send a script whose second verb is an unknown key (`escape`): it must exit non-zero, name the
 //! line and suggest `KEY_ESC`, and the exact keyboard comparison proves its first verb arrived
 //! and its third never did.
+//!
+//! # Per display
+//!
+//! `l2_input_inject_per_display_headless` boots two displays and points at each in its own
+//! coordinates (`--display N`), with the layout reported the way the guest agent reports it;
+//! see that test for its oracle.
 
 use std::io::Write;
 use std::path::Path;
@@ -383,6 +389,336 @@ fn l2_input_inject_headless_reaches_virtio_nodes() {
         }
     };
     run(name, cfg, false, false);
+}
+
+/// One monitor as the guest's mutter has it: connector, logical position and logical size
+/// (the current mode over the monitor's scale) — what `limina-agent-session` reports.
+#[derive(Debug, Clone, PartialEq)]
+struct Logical {
+    connector: String,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+}
+
+/// The seated session's logical-monitor layout, from mutter's own `GetCurrentState` (the
+/// recipe `l2_arrangement.rs` documents).
+fn logical_layout(guest: &Guest) -> Vec<Logical> {
+    let cmd = r#"export XDG_RUNTIME_DIR=/run/user/$(id -u); \
+busctl --user call --json=short org.gnome.Mutter.DisplayConfig \
+  /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig GetCurrentState \
+| python3 -c '
+import json, sys
+state = json.load(sys.stdin)["data"]
+current = {}
+for mon in state[1]:
+    conn = mon[0][0]
+    for mode in mon[1]:
+        if mode[6].get("is-current", {}).get("data"):
+            current[conn] = (mode[1], mode[2])
+for lm in state[2]:
+    x, y, scale = lm[0], lm[1], lm[2]
+    for spec in lm[5]:
+        conn = spec[0]
+        w, h = current.get(conn, (0, 0))
+        print(conn, x, y, round(w / scale), round(h / scale))
+'"#;
+    let out = guest.ssh_exec(cmd).unwrap_or_default();
+    out.lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            Some(Logical {
+                connector: it.next()?.to_string(),
+                x: it.next()?.parse().ok()?,
+                y: it.next()?.parse().ok()?,
+                w: it.next()?.parse().ok()?,
+                h: it.next()?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// The guest's bounding box over `layout`: origin and size, in logical units.
+fn bounding_box(layout: &[Logical]) -> (i32, i32, f64, f64) {
+    let ox = layout.iter().map(|m| m.x).min().unwrap();
+    let oy = layout.iter().map(|m| m.y).min().unwrap();
+    let dw = layout.iter().map(|m| m.x + m.w as i32).max().unwrap() - ox;
+    let dh = layout.iter().map(|m| m.y + m.h as i32).max().unwrap() - oy;
+    (ox, oy, f64::from(dw), f64::from(dh))
+}
+
+/// Two displays, each addressed by its own coordinates. Headless on the stock image, with a
+/// display pool of two: slot 1 is connected through the display-control socket, mutter lays
+/// it out, and the harness then plays `limina-agent-session` — it reads mutter's own logical
+/// layout and reports it over the control plane, exactly the message the agent sends. Before
+/// that report, the supervisor knows only display 0 and `--display 1` is refused.
+///
+/// The oracle is the raw evdev values the guest's tablet carries, compared with the mapping
+/// computed here from mutter's layout, and then each `abs-px` value is carried back through
+/// that layout the way libinput and mutter do (`v · desktop / 32768` logical units across the
+/// bounding box) to the display and pixel it lands on. The pointer's final on-screen position
+/// is not read back: the reader grabs the nodes so the session sees nothing.
+#[test]
+fn l2_input_inject_per_display_headless() {
+    let name = "l2_input_inject_per_display_headless";
+    if !limina_test::require_hvf_or_skip(name) {
+        return;
+    }
+    assert!(
+        std::env::var_os("LIMINA_INPUT_INJECT").is_none(),
+        "{name}: unset LIMINA_INPUT_INJECT; this test sets it for the supervisor itself"
+    );
+    // Slot 1's mode differs from slot 0's, so a mapping that confused the two would show.
+    const W1: u32 = 1024;
+    const H1: u32 = 768;
+    let cfg = match GuestConfig::fedora_from_env() {
+        Ok(cfg) => cfg
+            .with_coexist_display(1280, 800)
+            .with_display_pool(2)
+            .with_net()
+            .with_supervisor_arg("--input")
+            .with_control_socket()
+            .with_supervisor_log()
+            .with_env("LIMINA_INPUT_INJECT", "1"),
+        Err(e) => {
+            eprintln!("SKIPPED {name}: {e:#}");
+            return;
+        }
+    };
+    let limina = cfg.limina_bin.clone();
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh(Duration::from_secs(240))
+        .expect("guest never reached sshd");
+    let pid = guest.supervisor_pid().to_string();
+    guest
+        .ssh_poll(
+            "grep -q 'limina Virtual Pointer' /proc/bus/input/devices && \
+             grep -q 'limina Virtual Keyboard' /proc/bus/input/devices",
+            Duration::from_secs(120),
+        )
+        .unwrap_or_else(|e| panic!("{name}: the virtio input devices never appeared: {e:#}"));
+    guest
+        .ssh_poll(
+            "export XDG_RUNTIME_DIR=/run/user/$(id -u); \
+             busctl --user status org.gnome.Mutter.DisplayConfig >/dev/null",
+            Duration::from_secs(180),
+        )
+        .unwrap_or_else(|e| panic!("{name}: mutter's DisplayConfig never appeared: {e:#}"));
+
+    // ---- 1. One display known: `info` lists it, and display 1 does not exist yet.
+    let (ok, info) = limina_cli(&limina, &["input", &pid, "info"]);
+    eprintln!("{name}: info with one display:\n{info}");
+    assert!(ok, "{name}: info failed: {info}");
+    assert!(
+        info.lines().any(
+            |l| l.starts_with("display 0 connector Virtual-1 scanout 1280x800")
+                && l.contains("device ptr mapping identity x 0..32767 y 0..32767")
+        ),
+        "{name}: info does not list display 0 as the whole range:\n{info}"
+    );
+    let (ok, said) = limina_cli(
+        &limina,
+        &["input", &pid, "abs-px", "--display", "1", "1", "1"],
+    );
+    eprintln!("{name}: --display 1 before it exists: {said}");
+    assert!(
+        !ok,
+        "{name}: a display that does not exist was accepted: {said}"
+    );
+    assert!(
+        said.contains("display 1 does not exist"),
+        "{name}: the refusal does not say why: {said}"
+    );
+
+    // ---- 2. Connect slot 1 and let mutter place it.
+    guest
+        .update_display(limina_test::DisplayControl {
+            display_id: 1,
+            size: Some((W1, H1)),
+            position: None,
+            connected: Some(true),
+            edid: Some(limina_test::EdidSpec {
+                refresh_hz: 60,
+                dpi: 96,
+                vendor: *b"LMN",
+                product_id: 0x5152,
+                serial: 0x5EC0_0002,
+                name: "L2 Inject Two".into(),
+                serial_string: None,
+                range: None,
+                modes: Vec::new(),
+                alt_mode: None,
+            }),
+        })
+        .expect("connecting slot 1");
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let layout = loop {
+        let l = logical_layout(&guest);
+        let both = ["Virtual-1", "Virtual-2"]
+            .iter()
+            .all(|c| l.iter().any(|m| m.connector == *c && m.w > 0 && m.h > 0));
+        if both {
+            break l;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{name}: mutter never laid out both monitors: {l:?}"
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    };
+    eprintln!("{name}: mutter's layout: {layout:?}");
+
+    // ---- 3. Report the layout as the agent would; the supervisor maps through it.
+    let mut conn = guest
+        .connect_control(Duration::from_secs(30))
+        .expect("connecting to the control plane");
+    conn.send(&limina_proto::Message::Hello(limina_proto::Hello {
+        agent: "limina-test-layout/0".to_string(),
+        caps: Vec::new(),
+        pagesize: 4096,
+    }))
+    .expect("sending Hello");
+    conn.send(&limina_proto::Message::DisplayLayout(
+        limina_proto::DisplayLayout {
+            monitors: layout
+                .iter()
+                .map(|m| limina_proto::GuestMonitor {
+                    connector: m.connector.clone(),
+                    x: m.x,
+                    y: m.y,
+                    width: m.w,
+                    height: m.h,
+                })
+                .collect(),
+        },
+    ))
+    .expect("sending the layout");
+    guest
+        .wait_for_supervisor_log(
+            "display: the guest reports its monitors as",
+            Duration::from_secs(20),
+        )
+        .expect("the supervisor never took the layout");
+    let (ok, info) = limina_cli(&limina, &["input", &pid, "info"]);
+    eprintln!("{name}: info with two displays:\n{info}");
+    assert!(ok, "{name}: info failed: {info}");
+    for (slot, scanout) in [(0, "1280x800"), (1, "unknown")] {
+        let prefix = format!(
+            "display {slot} connector Virtual-{} scanout {scanout} logical ",
+            slot + 1
+        );
+        assert!(
+            info.lines()
+                .any(|l| l.starts_with(&prefix) && l.contains("device ptr mapping report x ")),
+            "{name}: info does not list display {slot} as mapped through the report:\n{info}"
+        );
+    }
+
+    // ---- 4. Point at each display in its own coordinates and read what the guest got.
+    let script = guest.scratch_dir().join("inject-reader.py");
+    std::fs::write(&script, READER).unwrap();
+    guest
+        .scp_to_guest(&script, "/tmp/inject-reader.py")
+        .expect("copying the reader into the guest");
+    let _ = guest.ssh_exec("rm -f /tmp/limina-inject-ready");
+    let points = format!(
+        "abs-norm --display 0 0.5 0.5\n\
+         abs-px --display 1 100 200 {W1}x{H1}\n\
+         abs-px 10 20 --display 0\n\
+         sleep 50\n\
+         key tap KEY_F14\n"
+    );
+    let output = std::thread::scope(|s| {
+        let reader = s.spawn(|| {
+            guest.ssh_exec_timeout(
+                "sudo -n python3 /tmp/inject-reader.py 60",
+                Duration::from_secs(90),
+            )
+        });
+        guest
+            .ssh_poll("test -e /tmp/limina-inject-ready", Duration::from_secs(30))
+            .expect("the reader never opened the nodes");
+        let (ok, said) = inject(&limina, guest.supervisor_pid(), &points);
+        eprintln!("{name}: limina input said:\n{said}");
+        assert!(ok, "{name}: `limina input` failed: {said}");
+        reader.join().unwrap().expect("the guest reader failed")
+    });
+    eprintln!("{name}: the guest read:\n{output}");
+    assert!(output.contains("END"), "{name}: no end marker:\n{output}");
+
+    // What each verb must put on the tablet, from mutter's layout alone.
+    let (ox, oy, dw, dh) = bounding_box(&layout);
+    let mon = |c: &str| layout.iter().find(|m| m.connector == c).unwrap().clone();
+    let (v1, v2) = (mon("Virtual-1"), mon("Virtual-2"));
+    let max = 32767.0;
+    let norm = |m: &Logical, u: f64, v: f64| {
+        (
+            ((f64::from(m.x - ox) + u * f64::from(m.w)) / dw * max).round() as i32,
+            ((f64::from(m.y - oy) + v * f64::from(m.h)) / dh * max).round() as i32,
+        )
+    };
+    let px = |m: &Logical, p: u32, q: u32, (sw, sh): (u32, u32)| {
+        let at = |o: i32, len: u32, p: u32, size: u32, d: f64| {
+            let f = (f64::from(o) + (f64::from(p) + 0.25) / f64::from(size) * f64::from(len)) / d;
+            (f * (max + 1.0)).floor().clamp(0.0, max) as i32
+        };
+        (at(m.x - ox, m.w, p, sw, dw), at(m.y - oy, m.h, q, sh, dh))
+    };
+    let want = [
+        norm(&v1, 0.5, 0.5),
+        px(&v2, 100, 200, (W1, H1)),
+        px(&v1, 10, 20, (1280, 800)),
+    ];
+    let mut expected = Vec::new();
+    for (x, y) in want {
+        expected.extend([(EV_ABS, 0, x), (EV_ABS, 1, y), (EV_SYN, 0, 0)]);
+    }
+    assert_eq!(
+        parse_reader(&output, "ptr"),
+        expected,
+        "{name}: the tablet did not carry the per-display positions mutter's layout implies"
+    );
+
+    // And carried back through the guest's own transform, each pixel lands where it was aimed:
+    // on the named monitor, on that pixel of its mode.
+    for ((x, y), m, (p, q), (sw, sh)) in [
+        (want[1], &v2, (100u32, 200u32), (W1, H1)),
+        (want[2], &v1, (10, 20), (1280, 800)),
+    ] {
+        let lx = f64::from(x) * dw / (max + 1.0) + f64::from(ox);
+        let ly = f64::from(y) * dh / (max + 1.0) + f64::from(oy);
+        let on = layout
+            .iter()
+            .find(|o| {
+                lx >= f64::from(o.x)
+                    && lx < f64::from(o.x + o.w as i32)
+                    && ly >= f64::from(o.y)
+                    && ly < f64::from(o.y + o.h as i32)
+            })
+            .map(|o| o.connector.clone());
+        assert_eq!(
+            on.as_deref(),
+            Some(m.connector.as_str()),
+            "{name}: ({x},{y})"
+        );
+        let pix = (
+            (lx - f64::from(m.x)) * f64::from(sw) / f64::from(m.w),
+            (ly - f64::from(m.y)) * f64::from(sh) / f64::from(m.h),
+        );
+        assert_eq!(
+            (pix.0.floor() as u32, pix.1.floor() as u32),
+            (p, q),
+            "{name}: ({x},{y}) lands on {pix:?} of {}",
+            m.connector
+        );
+    }
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(30))
+        .expect("supervisor did not stop");
+    eprintln!("{name}: teardown outcome: {outcome:?}");
 }
 
 /// Windowed — the window's own input path is live alongside; injection must reach the same
