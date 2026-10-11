@@ -961,7 +961,9 @@ chosen when it launches, so a headless run without it (no display, or `--display
 PNG the worker writes itself) never hands a frame over, and `capture start` and `capture still`
 refuse, naming the flag. `limina debug <vm> status` says `capture unavailable` there.
 
-What changes in the vocabulary, all within format 1 (new fields an old reader ignores):
+What changes in the vocabulary, all within format 1. `headless` is a new field an old reader
+ignores; a headless still omits `layer_iosurface`, which an older `Still::parse` required, so that
+reader refuses such a still rather than misreading it — the rule format 1 allows without a bump:
 
 - **"Presented" means the guest flip as the supervisor received it.** Nothing composites it, so
   every received flip is a record — none are coalesced, and `not_presented` appears only for a
@@ -983,7 +985,7 @@ What it costs (stock F44, 1280x800, `vkcube` timed in the guest, debug builds;
 `spikes/headless-capture/RESULTS.md`): the supervisor's share of the gate is 1-2% of a core. The
 guest runs slower under the gate (41-58 fps) than on the PNG sink (60 fps), because the worker
 then presents through the window path, which a windowed run pays too (41-42 fps on the same
-boot); the acks never waited. A running sequence capture took the guest to 41-45 fps and the
+disk and configuration); the acks never waited. A running sequence capture took the guest to 41-45 fps and the
 supervisor to ~43% of a core, nearly all PNG encoding, with 0-2 of ~600 frames dropped.
 
 ### Full validation

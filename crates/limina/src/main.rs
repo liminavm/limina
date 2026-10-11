@@ -208,7 +208,8 @@ struct Cli {
     /// stop` work on a headless run. Off by default: without it a headless worker publishes no
     /// surfaces, and since the worker's display sink is chosen when it launches, capture cannot be
     /// turned on later. `LIMINA_HEADLESS_CAPTURE=1` asks for it too, on a run that names no other
-    /// display.
+    /// display. A display changes the guest's device set, so a suspend taken with it resumes only
+    /// with one.
     #[arg(long, conflicts_with_all = ["window", "display_capture"])]
     headless_capture: bool,
 
