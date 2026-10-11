@@ -1,7 +1,8 @@
 # Trackpad gestures: a guest-side multitouch device with strict contact ownership
 
 Status: the guest touchpad, its `NSTouch` feed and the HID-level gesture tap are BUILT
-(§What is built); two-finger scroll, pinch, taps and clicks work on the stock tier. The tap
+(§What is built); two-finger scroll, pinch, taps and clicks work on the stock tier, and two-
+and three-finger taps and clicks are the guest's to read by default (§Dedupe and teardown). The tap
 takes guest three-finger sequences from macOS while four fingers stay macOS's (user-poked on
 the default "three or four" setting). Two-finger system
 gestures (smart zoom, the right-edge Notification Center swipe) are not taken. Ownership decided (§The ownership rule): the guest owns 2-
@@ -39,9 +40,9 @@ gesture suppression). With it, the partition is:
 
 | physical contacts | owner | delivered to guest as |
 |---|---|---|
-| 1 finger | **host** (tablet, host pointer ballistics) | `ABS_X/Y` tablet motion, as today |
-| 2 fingers | **guest** — scroll, pinch, rotate | real MT contacts on the new device |
-| 3 fingers | **guest** — swipes (GNOME ≥40 binds everything to 3) | real MT contacts on the new device |
+| 1 finger | **host** (tablet, host pointer ballistics), taps and clicks included | `ABS_X/Y` tablet motion and buttons; a one-finger drag just after a guest tap is the guest's (tap-and-drag) |
+| 2 fingers | **guest** — scroll, pinch, rotate, taps and clicks | real MT contacts on the new device, and its `BTN_LEFT` |
+| 3 fingers | **guest** — swipes (GNOME ≥40 binds everything to 3), taps and clicks | real MT contacts on the new device, and its `BTN_LEFT` |
 | 4+ fingers | **host** — Spaces, Mission Control stay usable | nothing |
 
 - **It applies in seamless mode and under capture alike**, gated on the cursor being over
@@ -51,9 +52,11 @@ gesture suppression). With it, the partition is:
     over the VM.
   - Four fingers stay the host's, so every host gesture remains reachable. Revisit if this
     causes friction in use.
-- **Single-finger sequences are never forwarded**, so the MT device never drives the guest
-  cursor and cannot fight the tablet for it. That restriction is what makes a guest-side
-  touchpad compatible with the seamless host-cursor = guest-cursor model.
+- **Single-finger sequences are not forwarded**, so the MT device does not drive the guest
+  cursor and fight the tablet for it. That restriction is what makes a guest-side touchpad
+  compatible with the seamless host-cursor = guest-cursor model. The one exception is the
+  guest's tap-and-drag (§Dedupe and teardown), which takes the pointer from the tablet until
+  the finger lifts.
   - Full MT forwarding (1-finger motion included) is a possible *hard-capture* refinement
     later.
 - **Four-finger guest gestures** (KDE Plasma binds some) are out of scope. If they are
@@ -93,10 +96,11 @@ gesture suppression). With it, the partition is:
 - **The recordings** — `LIMINA_TRACKPAD_RECORD=<file>` writes every input the policy consumes
   (each gesture event's local touches, each trackpad click) as JSON lines. Recorded batteries
   of real hands live in `crates/limina/testdata/trackpad/` and are the policy's fixtures:
-  `window::trackpad::recordings` replays each through the policy and checks, against
-  libinput's tap rules (180 ms, 1.3 mm behind its hysteresis), that every click macOS
-  recognised reaches the guest once and the touchpad adds none, and that the small quick
-  flicks of `battery-5` scroll. `scripts/trackpad-oracle.sh <recording> <ssh-port>` judges
+  `window::trackpad::recordings` replays each through the policy, with the guest taking two-
+  and three-finger taps and clicks and without, and checks against libinput's tap rules
+  (180 ms, 1.3 mm behind its hysteresis) that every click macOS recognised reaches the guest
+  exactly once — through the tablet, the touchpad's button, or a touch the guest reads as a
+  tap — and that the small quick flicks of `battery-5` scroll. `scripts/trackpad-oracle.sh <recording> <ssh-port>` judges
   the same replay with the **real** libinput in a booted guest (uinput clones of both devices,
   events at their recorded times). The two agree: immediate forwarding fails both with the
   same 71 guest taps on `battery-1`. The oracle also measures the touchpad's two-finger
@@ -186,31 +190,74 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   content back and forth by fractions of a pixel (`spikes/scroll-wobble/`). A finger that
   creeps on in the same direction after stopping still moves the content, in small nudges
   after a pause.
-- **Taps and clicks are macOS's alone; the guest never sees a touch it could read as a
-  tap.** Two recognizers see the same fingers: macOS turns taps and clicks into mouse clicks,
-  and libinput would read its own taps from the contacts. Their events arrive on separate,
-  unordered streams — a click can reach limina 3–5 ms *before* the touches it belongs to,
-  touches vanish while the pad is pressed and reappear after, and macOS's tap click lands
-  287–310 ms after the fingers lift (it waits out the double-tap window; measured on
-  `battery-1`). Routing each click to one recognizer was therefore a race, and lost it
-  visibly (a menu opened and closed by two right-clicks). Instead a guest-owned sequence's
-  contacts reach the guest only once it **commits**: a finger moved ≥ 1 mm (`COMMIT_MOVE_MM`;
-  the guest gets the landing positions first and the motion after), or two fingers stayed
-  down 200 ms (`COMMIT_HOLD`). Either way the guest holds the touch at least 200 ms
-  (`TAP_GUARD`, past libinput's 180 ms tap timeout) until it has seen a finger move 1.6 mm
-  (`TAP_MOVE_MM`: libinput's 1.3 mm tap threshold, measured behind its 0.16 mm hysteresis,
-  with margin); from then on the touch lifts with the fingers. The commit distance sits
-  above the most a two-finger tap wiggles in the recordings (0.5 mm) and as low as that
-  allows, because what the guest does not see is gone from the scroll: libinput tells a
-  two-finger scroll once both fingers are 1.5 mm from where it saw them land, and scrolls
-  nothing in that frame (`tp_gesture_handle_state_scroll_start`), so a quick flick needs
-  a motion frame after that one before the lift. Committing at 3 mm lost 4 of the 13 small
-  flicks of `battery-5`; at 1 mm one is lost, and libinput would not scroll that one from
-  the trackpad's own frames either. Every
-  click goes to the tablet exactly as macOS recognised it, so the Mac's tap-to-click setting
-  governs two-finger taps over the VM, as it does one-finger ones. That includes its latency:
-  macOS delivered each one-finger tap's click 220–250 ms after the lift (`battery-2`, with
-  tap-to-drag on), and limina forwards it as it arrives.
+- **Two recognizers see the same fingers, and each tap or click must reach the guest once.**
+  macOS turns taps and clicks into mouse clicks; libinput reads its own taps from the
+  contacts. Their events arrive on separate, unordered streams: a click can reach limina 2–5
+  ms *before* the touches it belongs to, touches vanish while the pad is pressed and reappear
+  after, and macOS's tap click lands 220–340 ms after the fingers lift (it waits out the
+  double-tap window; `battery-1`, `battery-2`). One finger's taps and clicks are always
+  macOS's, through the tablet. Two and three fingers' go one of two ways, by the Input menu's
+  **Taps and Clicks with Two or More Fingers in the VM** (per VM, default on):
+  - **On: the guest reads them** (`TrackpadSeq::guest_taps`), so its own settings — click
+    method (clickfinger: a three-finger click is the middle button), `clickfinger-button-map`,
+    left-handed, tap-to-click and the tap button map — apply as on bare metal. Stock GNOME
+    ships tap-to-click **off**, so there a two-finger tap clicks nothing until the guest turns
+    it on; a physical two-finger click still right-clicks. The rules, each from a recording:
+    - **Fingers that land together reach the guest as they land** — the second within 180 ms
+      of the first. A second finger landing beside one that was already down (moving the
+      pointer, as the tablet's) is not a tap to macOS, and the guest never saw the first
+      land: that sequence takes the commit path below and can never be a tap (`battery-4`).
+    - **A physical click while the guest holds the fingers is the touchpad's `BTN_LEFT`**,
+      in a frame with them down, and macOS's click is not sent. "Physical" is a finger on the
+      pad within 100 ms (`TAP_CLICK_GAP`, as in raw mode).
+    - **macOS's click for a guest tap is dropped**: a click with no finger on the pad within
+      500 ms of a guest touch that lifted, unpressed, inside libinput's 180 ms
+      (`HOST_TAP_CLICK_LATE`, `GUEST_TAP_TIMEOUT`). A release follows its press wherever the
+      press went.
+    - **Any trackpad click in flight holds the guest's fingers down**, and their 50 ms
+      flicker grace starts at the release. A click that reached limina before its second
+      finger went to the tablet; lifted on the grace while the pad was down, the fingers
+      landed again after the release as a touch short enough to be a tap (`battery-2`). Such a
+      sequence also takes the commit path.
+    - **After every finger lifted, what lands before the sequence ends is a flicker**: AppKit
+      reports the fingers back for a sample or two, and shown to the guest that is a touch of
+      under 10 ms — a tap (`battery-3`, `-4`, `-5`). It is ignored.
+    - **Tap-and-drag** (Input ▸ **Tap-and-Drag in the VM**, per VM, default on, greyed out
+      without guest taps): one finger landing within 180 ms of a guest tap's lift is the
+      guest's too, from its first sample, so libinput's tap-and-drag takes it — a
+      three-finger tap then a one-finger drag is a middle-button drag. Meanwhile the
+      trackpad's pointer motion does not drive the tablet (`TrackpadSeq::owns_pointer`), so
+      the guest's pointer moves with the guest's acceleration and, uncaptured, apart from
+      the visible macOS cursor; the next tablet motion brings it back.
+    - **Limits.** Three-finger taps and clicks reach the guest only while three fingers are
+      the guest's — Input ▸ Three-Finger Gestures in the VM on, and the gesture tap installed
+      (it needs Accessibility; without it AppKit attaches three touches to almost no gesture
+      event): otherwise a three-finger click is macOS's left click again. "Landed together"
+      is judged from when the first finger touched the pad, a resting thumb included, so with
+      a thumb resting on the pad every sequence takes the commit path and its clicks are
+      macOS's.
+    - The recordings agree with these rules click for click, but for one touch: two still
+      fingers 18 mm apart, down 84 ms, that macOS made no click of and libinput reads as a
+      tap (`battery_1_with_guest_taps_…`). Where the recognizers disagree, the guest's reading
+      stands.
+  - **Off: taps and clicks are macOS's alone, and the guest never sees a touch it could read
+    as a tap.** A guest-owned sequence's contacts reach the guest only once it **commits**: a
+    finger moved ≥ 1 mm (`COMMIT_MOVE_MM`; the guest gets the landing positions first and the
+    motion after), or two fingers stayed down 200 ms (`COMMIT_HOLD`). Either way the guest
+    holds the touch at least 200 ms (`TAP_GUARD`, past libinput's 180 ms tap timeout) until
+    it has seen a finger move 1.6 mm (`TAP_MOVE_MM`: libinput's 1.3 mm tap threshold,
+    measured behind its 0.16 mm hysteresis, with margin); from then on the touch lifts with
+    the fingers. Every click goes to the tablet exactly as macOS recognised it, so the Mac's
+    tap-to-click setting governs two-finger taps over the VM, as it does one-finger ones.
+    Routing each click to whichever recognizer seemed right per click, before these rules,
+    lost the race visibly (a menu opened and closed by two right-clicks).
+  - **The commit distance** sits above the most a two-finger tap wiggles in the recordings
+    (0.5 mm) and as low as that allows, because what the guest does not see is gone from the
+    scroll: libinput tells a two-finger scroll once both fingers are 1.5 mm from where it saw
+    them land, and scrolls nothing in that frame (`tp_gesture_handle_state_scroll_start`), so
+    a quick flick needs a motion frame after that one before the lift. Committing at 3 mm
+    lost 4 of the 13 small flicks of `battery-5`; at 1 mm one is lost, and libinput would not
+    scroll that one from the trackpad's own frames either.
 - **Lift the moment every finger is up; wait 50 ms on a drop to one** (`THIN_GRACE`). A
   kinetic scroll's velocity is read from the motion just before the lift, so fingers held
   still in the guest past the real lift read as a stop and kill the momentum. AppKit's count
@@ -263,11 +310,12 @@ guest never sees stuck fingers. Same discipline as the soft-grab modifier flush
 libinput's tap-and-drag + drag-lock grace period is a **touchpad-class** feature; the
 tablet is a generic pointer and can never engage it. The answer is layered by mode:
 
-- **Seamless/soft:** the host owns pointer ballistics, so the host owns drag semantics —
-  macOS Accessibility → Pointer Control → Trackpad Options → "Use trackpad for
-  dragging" with **drag lock** keeps the virtual button down across finger lifts, and
-  the guest sees one unbroken `BTN_LEFT` through the tablet. Works today, zero code;
-  document it.
+- **Seamless/soft, after a one-finger tap:** the host owns pointer ballistics, so the host
+  owns drag semantics — macOS Accessibility → Pointer Control → Trackpad Options → "Use
+  trackpad for dragging" with **drag lock** keeps the virtual button down across finger
+  lifts, and the guest sees one unbroken `BTN_LEFT` through the tablet.
+- **After a two- or three-finger tap:** the guest's own tap-and-drag, with Input ▸
+  Tap-and-Drag in the VM (§Dedupe and teardown).
 - **Hard capture (future full-MT):** guest libinput provides tap-and-drag natively.
 - macOS *three-finger drag* (an Accessibility setting, `TrackpadThreeFingerDrag`) claims
   three fingers that the guest now owns. When it is on, limina should leave three fingers

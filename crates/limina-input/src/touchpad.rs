@@ -6,8 +6,9 @@
 //!
 //! The guest's libinput classifies the device as a clickpad and does its own gesture
 //! processing (scroll, pinch, swipes) from raw contacts, so the host only reports where each
-//! finger is. It carries two or three fingers, never one or four: a single finger stays the
-//! host tablet's and four are the host's gestures (`docs/design/trackpad-gestures.md`).
+//! finger is. It carries up to three fingers, never four, which are the host's gestures; one
+//! finger only in raw mode and the guest's tap-and-drag, a single finger being otherwise the
+//! host tablet's (`docs/design/trackpad-gestures.md`).
 //!
 //! The encoder is pure and host-side; the worker only advertises the device
 //! ([`crate::backends`]) and forwards the events the supervisor writes.
@@ -111,6 +112,16 @@ pub struct Touchpad {
 impl Touchpad {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An encoder whose tracking ids start at `id` (wrapping at [`MAX_TRACKING_ID`]): a second
+    /// writer to the same device (`limina input`) keeps its touches' ids apart from the
+    /// window's.
+    pub fn with_tracking_ids_from(id: i32) -> Self {
+        Self {
+            next_tracking_id: id.clamp(0, MAX_TRACKING_ID),
+            ..Self::default()
+        }
     }
 
     /// How many contacts the guest believes are down.

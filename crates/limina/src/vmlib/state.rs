@@ -60,6 +60,14 @@ pub struct VmState {
     /// The Input menu's "Raw Trackpad While Captured" switch. Default off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub raw_trackpad: bool,
+    /// The Input menu's "Taps and Clicks with Two or More Fingers in the VM" switch. Default
+    /// on, so absent means never touched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_taps: Option<bool>,
+    /// The Input menu's "Tap-and-Drag in the VM" switch. Default on, so absent means never
+    /// touched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tap_drag: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -211,6 +219,26 @@ pub fn set_raw_trackpad(path: &Path, on: bool) -> std::io::Result<()> {
     save(path, &state)
 }
 
+/// Merge-save the guest-taps switch, leaving everything else alone.
+pub fn set_guest_taps(path: &Path, on: bool) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.guest_taps == Some(on) {
+        return Ok(());
+    }
+    state.guest_taps = Some(on);
+    save(path, &state)
+}
+
+/// Merge-save the tap-and-drag switch, leaving everything else alone.
+pub fn set_tap_drag(path: &Path, on: bool) -> std::io::Result<()> {
+    let mut state = load(path).unwrap_or_default();
+    if state.tap_drag == Some(on) {
+        return Ok(());
+    }
+    state.tap_drag = Some(on);
+    save(path, &state)
+}
+
 /// Atomic save (tmp + rename, the `VmBundle::save` pattern). Best-effort at the
 /// call sites — losing a window-placement save is not worth failing anything.
 pub fn save(path: &Path, state: &VmState) -> std::io::Result<()> {
@@ -256,6 +284,8 @@ mod tests {
             modifier_normalize: None,
             three_finger_gestures: None,
             raw_trackpad: false,
+            guest_taps: None,
+            tap_drag: None,
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));
@@ -284,6 +314,8 @@ mod tests {
             modifier_normalize: None,
             three_finger_gestures: None,
             raw_trackpad: false,
+            guest_taps: None,
+            tap_drag: None,
         };
         save(&path, &state).expect("a top-bit identity key must be persistable");
         assert_eq!(load(&path), Some(state));
@@ -353,6 +385,8 @@ mod tests {
                 modifier_normalize: None,
                 three_finger_gestures: None,
                 raw_trackpad: false,
+                guest_taps: None,
+                tap_drag: None,
             },
         )
         .unwrap();
@@ -458,6 +492,23 @@ mod tests {
         assert_eq!(back.display_slots, vec![(7, 1)], "merged, not clobbered");
         set_raw_trackpad(&path, false).unwrap();
         assert!(!load(&path).unwrap().raw_trackpad);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_guest_taps_and_tap_drag_switches_remember_off_and_absence() {
+        let dir = scratch("guesttaps");
+        let path = dir.join("state.toml");
+        set_display_slots(&path, vec![(7, 1)]).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!((back.guest_taps, back.tap_drag), (None, None));
+        set_guest_taps(&path, false).unwrap();
+        set_tap_drag(&path, false).unwrap();
+        let back = load(&path).unwrap();
+        assert_eq!((back.guest_taps, back.tap_drag), (Some(false), Some(false)));
+        assert_eq!(back.display_slots, vec![(7, 1)], "merged, not clobbered");
+        set_guest_taps(&path, true).unwrap();
+        assert_eq!(load(&path).unwrap().guest_taps, Some(true));
         std::fs::remove_dir_all(&dir).ok();
     }
 

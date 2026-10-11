@@ -553,11 +553,11 @@ extern "C" fn tap_callback(
     };
     let from_trackpad = geti(FIELD_MOUSE_SUBTYPE) == MOUSE_SUBTYPE_TOUCH;
     match etype {
-        // Raw trackpad mode: the guest touchpad drives the pointer and reads the clicks; the
+        // Raw trackpad mode, or a guest tap-and-drag: the guest touchpad drives the pointer; the
         // hidden host cursor only stays parked. The motion still charges the edge press, judged
         // where the guest's own cursor is.
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG
-            if ctx.input.raw_trackpad_owns(from_trackpad) =>
+            if ctx.input.trackpad_owns_pointer(from_trackpad) =>
         {
             let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
             let (dx, dy) = ctx
@@ -570,13 +570,6 @@ extern "C" fn tap_callback(
             {
                 release_grab(ctx, &s, edge, release);
             }
-        }
-        LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP if ctx.input.raw_trackpad_owns(from_trackpad) => {
-            let down = matches!(etype, LMB_DOWN | RMB_DOWN);
-            if let Some(ns) = NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) }) {
-                ctx.input.record_trackpad_click(&ns, down);
-            }
-            ctx.input.raw_trackpad_click(down);
         }
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG => {
             // The deltas carry the pointer-ballistics-processed motion the macOS cursor would
@@ -653,24 +646,25 @@ extern "C" fn tap_callback(
                 release_grab(ctx, s, edge, release);
             }
         }
-        LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP if ctx.input.recording_trackpad() => {
-            // `LIMINA_TRACKPAD_RECORD` wants captured trackpad clicks too; the click itself
-            // goes to the tablet as always.
+        LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP => {
             let down = matches!(etype, LMB_DOWN | RMB_DOWN);
-            if let Some(ns) = NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) }) {
+            // `LIMINA_TRACKPAD_RECORD` wants captured trackpad clicks too.
+            if ctx.input.recording_trackpad()
+                && let Some(ns) = NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) })
+            {
                 ctx.input.record_trackpad_click(&ns, down);
             }
-            let btn = if matches!(etype, LMB_DOWN | LMB_UP) {
-                BTN_LEFT
-            } else {
-                BTN_RIGHT
-            };
-            send_click(btn, down);
+            // The guest touchpad takes its own clicks (raw mode, a guest sequence's); the rest
+            // go to the tablet as macOS recognised them.
+            if !ctx.input.trackpad_click(from_trackpad, down) {
+                let btn = if matches!(etype, LMB_DOWN | LMB_UP) {
+                    BTN_LEFT
+                } else {
+                    BTN_RIGHT
+                };
+                send_click(btn, down);
+            }
         }
-        LMB_DOWN => send_click(BTN_LEFT, true),
-        LMB_UP => send_click(BTN_LEFT, false),
-        RMB_DOWN => send_click(BTN_RIGHT, true),
-        RMB_UP => send_click(BTN_RIGHT, false),
         OMB_DOWN | OMB_UP => {
             // Middle button only (buttonNumber 2); ignore higher buttons for now.
             if geti(FIELD_BUTTON_NUMBER) == 2 {

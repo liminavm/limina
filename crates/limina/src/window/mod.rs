@@ -434,6 +434,22 @@ fn save_three_finger_gestures(path: Option<&Path>, on: bool) {
     }
 }
 
+/// The Input menu's guest-taps switch, saved beside the display state.
+fn save_guest_taps(path: Option<&Path>, on: bool) {
+    let Some(path) = path else { return };
+    if let Err(e) = crate::vmlib::state::set_guest_taps(path, on) {
+        log::warn!("guest taps save failed: {e}");
+    }
+}
+
+/// The Input menu's tap-and-drag switch, saved beside the display state.
+fn save_tap_drag(path: Option<&Path>, on: bool) {
+    let Some(path) = path else { return };
+    if let Err(e) = crate::vmlib::state::set_tap_drag(path, on) {
+        log::warn!("tap-and-drag save failed: {e}");
+    }
+}
+
 /// The Input menu's raw trackpad switch, saved beside the display state.
 fn save_raw_trackpad(path: Option<&Path>, on: bool) {
     let Some(path) = path else { return };
@@ -694,6 +710,18 @@ thread_local! {
     /// translator and persists it.
     static RAW_TRACKPAD: Cell<bool> = const { Cell::new(false) };
 
+    /// The Input menu's "Taps and Clicks with Two or More Fingers in the VM" switch: whether a
+    /// guest-owned two- or three-finger sequence reaches the guest as its fingers land, its taps
+    /// and physical clicks read by the guest's own settings, macOS's clicks for them dropped.
+    /// One finger stays macOS's. On by default, overridden by a remembered menu choice; the
+    /// render timer hands each change to the trackpad policy and persists it.
+    static GUEST_TAPS: Cell<bool> = const { Cell::new(true) };
+
+    /// The Input menu's "Tap-and-Drag in the VM" switch: with guest taps, one finger landing
+    /// just after a guest tap is the guest's too, for its tap-and-drag. On by default, as
+    /// [`GUEST_TAPS`].
+    static TAP_DRAG: Cell<bool> = const { Cell::new(true) };
+
     /// Whether the tick has made its one quiet attempt at the gesture tap. Retrying every tick
     /// without Accessibility would ask TCC sixty times a second; the menu retries on demand.
     static GESTURE_TAP_TRIED: Cell<bool> = const { Cell::new(false) };
@@ -826,6 +854,9 @@ define_class!(
                     .with(|r| menu_row_for_tag(&r.borrow(), tag).is_some_and(|row| row.primary));
                 return (!primary).into();
             }
+            if action == Some(objc2::sel!(toggleTapDrag:)) {
+                return GUEST_TAPS.with(|f| f.get()).into();
+            }
             objc2::runtime::Bool::YES
         }
 
@@ -913,6 +944,27 @@ define_class!(
                 "menu: raw trackpad while captured {}",
                 if on { "on" } else { "off" }
             );
+        }
+
+        // Input ▸ Taps and Clicks with Two or More Fingers in the VM: whether the guest reads
+        // those taps and clicks itself, or macOS does. The render timer adopts it.
+        #[unsafe(method(toggleGuestTaps:))]
+        fn toggle_guest_taps(&self, _sender: &NSMenuItem) {
+            let on = !GUEST_TAPS.with(|f| f.get());
+            GUEST_TAPS.with(|f| f.set(on));
+            log::info!(
+                "menu: two- and three-finger taps and clicks go to {}",
+                if on { "the VM" } else { "macOS" }
+            );
+        }
+
+        // Input ▸ Tap-and-Drag in the VM: whether one finger landing just after a guest tap is
+        // the guest's tap-and-drag. The render timer adopts it.
+        #[unsafe(method(toggleTapDrag:))]
+        fn toggle_tap_drag(&self, _sender: &NSMenuItem) {
+            let on = !TAP_DRAG.with(|f| f.get());
+            TAP_DRAG.with(|f| f.set(on));
+            log::info!("menu: tap-and-drag in the VM {}", if on { "on" } else { "off" });
         }
 
         // Debug ▸ a log preset: both processes' filter, for this run.
@@ -1099,6 +1151,40 @@ fn populate_input_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
         )
     };
     item.setState(if THREE_FINGER_GESTURES.with(|f| f.get()) {
+        objc2_app_kit::NSControlStateValueOn
+    } else {
+        objc2_app_kit::NSControlStateValueOff
+    });
+    unsafe { item.setTarget(Some(actions)) };
+    menu.addItem(&item);
+
+    let item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Taps and Clicks with Two or More Fingers in the VM"),
+            Some(objc2::sel!(toggleGuestTaps:)),
+            &NSString::from_str(""),
+        )
+    };
+    item.setState(if GUEST_TAPS.with(|f| f.get()) {
+        objc2_app_kit::NSControlStateValueOn
+    } else {
+        objc2_app_kit::NSControlStateValueOff
+    });
+    unsafe { item.setTarget(Some(actions)) };
+    menu.addItem(&item);
+
+    // Only meaningful while the guest reads its own taps; `validateMenuItem:` greys it out
+    // otherwise.
+    let item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Tap-and-Drag in the VM"),
+            Some(objc2::sel!(toggleTapDrag:)),
+            &NSString::from_str(""),
+        )
+    };
+    item.setState(if TAP_DRAG.with(|f| f.get()) {
         objc2_app_kit::NSControlStateValueOn
     } else {
         objc2_app_kit::NSControlStateValueOff
@@ -2495,6 +2581,12 @@ pub fn run(
                 THREE_FINGER_GESTURES.with(|f| f.set(on));
             }
             RAW_TRACKPAD.with(|f| f.set(saved.raw_trackpad));
+            if let Some(on) = saved.guest_taps {
+                GUEST_TAPS.with(|f| f.set(on));
+            }
+            if let Some(on) = saved.tap_drag {
+                TAP_DRAG.with(|f| f.set(on));
+            }
         }
         std::rc::Rc::new(RefCell::new(table))
     };
@@ -2513,6 +2605,8 @@ pub fn run(
         let normalize_saved: Cell<bool> = Cell::new(MODIFIER_NORMALIZE.with(|f| f.get()));
         let three_saved: Cell<bool> = Cell::new(THREE_FINGER_GESTURES.with(|f| f.get()));
         let raw_saved: Cell<bool> = Cell::new(RAW_TRACKPAD.with(|f| f.get()));
+        let taps_saved: Cell<bool> = Cell::new(GUEST_TAPS.with(|f| f.get()));
+        let drag_saved: Cell<bool> = Cell::new(TAP_DRAG.with(|f| f.get()));
         let panel_names: RefCell<Vec<(u64, String)>> = RefCell::new(Vec::new());
         let window = window.clone();
         let ack_tx = ack_tx.clone();
@@ -2695,6 +2789,16 @@ pub fn run(
                     if raw_saved.get() != raw {
                         save_raw_trackpad(slots_state_path.as_deref(), raw);
                         raw_saved.set(raw);
+                    }
+                    let taps = GUEST_TAPS.with(|f| f.get());
+                    if taps_saved.get() != taps {
+                        save_guest_taps(slots_state_path.as_deref(), taps);
+                        taps_saved.set(taps);
+                    }
+                    let drag = TAP_DRAG.with(|f| f.get());
+                    if drag_saved.get() != drag {
+                        save_tap_drag(slots_state_path.as_deref(), drag);
+                        drag_saved.set(drag);
                     }
                 }
 
@@ -3536,6 +3640,8 @@ pub fn run(
         }
         timer_input.set_three_fingers(three);
         timer_input.set_raw_trackpad(RAW_TRACKPAD.with(|f| f.get()));
+        timer_input.set_guest_taps(GUEST_TAPS.with(|f| f.get()));
+        timer_input.set_tap_drag(TAP_DRAG.with(|f| f.get()));
         let facts = timer_input.window_facts(&timer_view);
         let pf = grab_policy::primary_facts(&facts);
         // App-level, like every other key question here: focus moving from the primary to a

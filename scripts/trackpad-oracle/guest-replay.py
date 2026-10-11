@@ -6,12 +6,14 @@ it with the real libinput.
 
 Run in the guest as root: guest-replay.py <replay.txt> <width> <height> [fuzz] [--verbose]
 The replay (from the `dump_replay` test) is `t_us dev type code value` lines, dev being
-`touchpad` or `pointer`, under a `# intended right=N left=M` header. Two uinput devices are
-created — a clickpad with the touchpad's capabilities, axes and resolution, and a mouse
-cloning the tablet limina clicks through — the events are written at their recorded times, and
-`libinput debug-events --enable-tap --set-click-method=clickfinger` (GNOME's defaults) counts
-the button presses each device produced. Prints a verdict line and exits 0 on a pass: every
-intended click reached the guest once, through the pointer, and the touchpad produced none.
+`touchpad` or `pointer`, under a `# intended right=N left=M guest_taps=0|1` header. Two uinput
+devices are created — a clickpad with the touchpad's capabilities, axes and resolution, and a
+mouse cloning the tablet limina clicks through — the events are written at their recorded
+times, and `libinput debug-events --enable-tap --set-click-method=clickfinger` (GNOME's
+defaults, tapping on) counts the button presses each device produced. Prints a verdict line and
+exits 0 on a pass: every intended click reached the guest once. With `guest_taps=0` (macOS owns
+taps and clicks) that is through the pointer, the touchpad producing none; with `guest_taps=1`
+it is through either, the touchpad's taps and clicks counting with the pointer's.
 
 It also measures the touchpad's two-finger scroll, as a client would see it: for each scroll
 (libinput's finger scroll events up to its stop), the event count and span, the velocity GTK's
@@ -259,16 +261,27 @@ def main():
     right = counts.get(("limina replay pointer", "BTN_RIGHT"), 0)
     left = counts.get(("limina replay pointer", "BTN_LEFT"), 0)
     pad_clicks = sum(v for (n, _), v in counts.items() if n == "limina replay touchpad")
-    ok = right == int(intended["right"]) and left == int(intended["left"]) and pad_clicks == 0
+    guest_taps = intended.get("guest_taps") == "1"
+    want = int(intended["right"]) + int(intended["left"])
+    if guest_taps:
+        ok = right + left + pad_clicks == want
+    else:
+        ok = right == int(intended["right"]) and left == int(intended["left"]) and pad_clicks == 0
     jumps = out.count("Touch jump detected")
     print(f"TIMING: {late} touchpad frames written over 2 ms late (worst {worst * 1000:.1f} ms); "
           f"libinput touch jumps {jumps} (it logs at most 5 a day)")
     pad_node = next((n for n, name in names.items() if name == "limina replay touchpad"), None)
     report_scroll(out, pad_node)
-    print(
-        f"{'PASS' if ok else 'FAIL'}: pointer right={right}/{intended['right']} "
-        f"left={left}/{intended['left']}, touchpad clicks={pad_clicks} (want 0); all={counts}"
-    )
+    if guest_taps:
+        print(
+            f"{'PASS' if ok else 'FAIL'}: clicks pointer={right + left} + touchpad={pad_clicks} "
+            f"/ {want} intended (guest taps); all={counts}"
+        )
+    else:
+        print(
+            f"{'PASS' if ok else 'FAIL'}: pointer right={right}/{intended['right']} "
+            f"left={left}/{intended['left']}, touchpad clicks={pad_clicks} (want 0); all={counts}"
+        )
     sys.exit(0 if ok else 1)
 
 

@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::trackpad::{Recorded, TouchSample, TrackpadSeq};
+use super::trackpad::{Click, Recorded, TouchSample, TrackpadSeq};
 use super::{InputDev, WorkerConn};
 
 use objc2::Message;
@@ -1723,7 +1723,8 @@ impl InputState {
                 let t = self.target_of(event, view);
                 self.host_cursor
                     .on_motion(t.inside, event_off_view_window(event, view));
-                if t.inside {
+                if t.inside && !self.trackpad_owns_pointer(event.subtype() == NSEventSubtype::Touch)
+                {
                     self.emit_motion_to(event, view, t);
                 }
                 false
@@ -1740,39 +1741,37 @@ impl InputState {
                     .on_motion(t.inside, event_off_view_window(event, view));
                 // A drag continues a press: forward it (clamped) even outside the view,
                 // but only if the press itself went to the guest.
-                if self.buttons.get().guest_holds() || t.inside {
+                if (self.buttons.get().guest_holds() || t.inside)
+                    && !self.trackpad_owns_pointer(event.subtype() == NSEventSubtype::Touch)
+                {
                     self.emit_motion_to(event, view, t);
                 }
                 false
             }
             NSEventType::LeftMouseDown => {
                 self.record_trackpad_click(event, true);
-                if self.raw_trackpad_owns(event.subtype() == NSEventSubtype::Touch) {
-                    self.raw_trackpad_click(true);
+                if self.trackpad_click(event.subtype() == NSEventSubtype::Touch, true) {
                     return true;
                 }
                 self.emit_press(event, view, BTN_LEFT)
             }
             NSEventType::LeftMouseUp => {
                 self.record_trackpad_click(event, false);
-                if self.raw_trackpad_owns(event.subtype() == NSEventSubtype::Touch) {
-                    self.raw_trackpad_click(false);
+                if self.trackpad_click(event.subtype() == NSEventSubtype::Touch, false) {
                     return true;
                 }
                 self.emit_release(BTN_LEFT)
             }
             NSEventType::RightMouseDown => {
                 self.record_trackpad_click(event, true);
-                if self.raw_trackpad_owns(event.subtype() == NSEventSubtype::Touch) {
-                    self.raw_trackpad_click(true);
+                if self.trackpad_click(event.subtype() == NSEventSubtype::Touch, true) {
                     return true;
                 }
                 self.emit_press(event, view, BTN_RIGHT)
             }
             NSEventType::RightMouseUp => {
                 self.record_trackpad_click(event, false);
-                if self.raw_trackpad_owns(event.subtype() == NSEventSubtype::Touch) {
-                    self.raw_trackpad_click(false);
+                if self.trackpad_click(event.subtype() == NSEventSubtype::Touch, false) {
                     return true;
                 }
                 self.emit_release(BTN_RIGHT)
@@ -2513,7 +2512,7 @@ impl InputState {
         // us — CGAssociate(false) alone doesn't reliably freeze it. Zero-length (the cursor is
         // already at the park), so it injects nothing.
         self.repin_park(view);
-        if self.raw_trackpad_owns(event.subtype() == NSEventSubtype::Touch) {
+        if self.trackpad_owns_pointer(event.subtype() == NSEventSubtype::Touch) {
             return;
         }
         let (dx, dy) = self.swallow_warp(event.deltaX(), event.deltaY());
@@ -3461,11 +3460,13 @@ impl InputState {
         self.send_touchpad(&events);
     }
 
-    /// Whether raw mode takes a pointer event whose source is (or is not) the trackpad — the
-    /// mouse subtype `Touch` (3; measured, `spikes/raw-trackpad/`). A mouse's, a Universal
-    /// Control mouse's included, carries 0 and still drives the tablet.
-    pub(crate) fn raw_trackpad_owns(&self, from_trackpad: bool) -> bool {
-        from_trackpad && self.trackpad.borrow().raw()
+    /// Whether the guest touchpad, not the tablet, takes the motion of a pointer event whose
+    /// source is (or is not) the trackpad — the mouse subtype `Touch` (3; measured,
+    /// `spikes/raw-trackpad/`): in raw mode, and during a guest tap-and-drag
+    /// ([`TrackpadSeq::owns_pointer`]). A mouse's, a Universal Control mouse's included,
+    /// carries 0 and still drives the tablet.
+    pub(crate) fn trackpad_owns_pointer(&self, from_trackpad: bool) -> bool {
+        from_trackpad && self.trackpad.borrow().owns_pointer()
     }
 
     /// Raw mode's edge press: where the guest's own cursor is, from its echo, in the capture
@@ -3491,21 +3492,43 @@ impl InputState {
         })
     }
 
-    /// A trackpad click in raw mode ([`TrackpadSeq::on_click`]).
-    pub(crate) fn raw_trackpad_click(&self, down: bool) {
-        if down {
-            self.cancel_ungrab_chord();
+    /// A mouse-button edge whose source is (or is not) the trackpad: whether the guest touchpad
+    /// took it — sent as its own button, or dropped as macOS's click for a tap the guest read
+    /// itself ([`TrackpadSeq::on_click`]). `false` leaves it to the tablet, as macOS recognised
+    /// it.
+    pub(crate) fn trackpad_click(&self, from_trackpad: bool, down: bool) -> bool {
+        if !from_trackpad {
+            return false;
         }
-        let events = self
+        let click = self
             .trackpad
             .borrow_mut()
             .on_click(down, std::time::Instant::now());
+        let Click::Guest(events) = click else {
+            return false;
+        };
+        if down {
+            self.cancel_ungrab_chord();
+        }
         self.send_touchpad(&events);
+        true
     }
 
     /// The Input menu's three-finger switch, adopted by the render tick.
     pub(crate) fn set_three_fingers(&self, on: bool) {
         let events = self.trackpad.borrow_mut().set_three_fingers(on);
+        self.send_touchpad(&events);
+    }
+
+    /// The Input menu's guest-taps switch, adopted by the render tick.
+    pub(crate) fn set_guest_taps(&self, on: bool) {
+        let events = self.trackpad.borrow_mut().set_guest_taps(on);
+        self.send_touchpad(&events);
+    }
+
+    /// The Input menu's tap-and-drag switch, adopted by the render tick.
+    pub(crate) fn set_tap_drag(&self, on: bool) {
+        let events = self.trackpad.borrow_mut().set_tap_drag(on);
         self.send_touchpad(&events);
     }
 
@@ -3578,10 +3601,9 @@ impl InputState {
         self.trackpad_record.borrow().is_some()
     }
 
-    /// Record a trackpad click for `LIMINA_TRACKPAD_RECORD`. Clicks themselves are always the
-    /// host's — macOS's recognition of a tap or click is the one the guest gets, through the
-    /// tablet ([`TrackpadSeq`]) — but a recording needs them: they are the ground truth for
-    /// what the user meant.
+    /// Record a trackpad click for `LIMINA_TRACKPAD_RECORD`, as macOS recognised it, wherever
+    /// the policy then sends it ([`TrackpadSeq::on_click`]): macOS's recognition is the ground
+    /// truth for what the user meant, and the replay routes it again.
     pub(crate) fn record_trackpad_click(&self, event: &NSEvent, down: bool) {
         if !self.recording_trackpad() || event.subtype() != NSEventSubtype::Touch {
             return;
