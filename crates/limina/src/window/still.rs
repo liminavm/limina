@@ -198,8 +198,9 @@ pub(crate) fn take(path: &Path, slot: Option<usize>) -> Result<String, String> {
             epoch: p.tag.epoch,
             guest_flip: p.tag.cause.is_none(),
             cause: p.tag.cause,
+            headless: false,
             presented_iosurface: p.presented,
-            layer_iosurface: layer.id(),
+            layer_iosurface: Some(layer.id()),
             guest_resource: p.tag.guest_resource(p.tag.cause),
             width: w as u32,
             height: h as u32,
@@ -304,7 +305,7 @@ mod tests {
         );
         assert_eq!(
             (still.presented_iosurface, still.layer_iosurface),
-            (44, surface.id())
+            (44, Some(surface.id()))
         );
         assert_eq!((still.width, still.height), (8, 4));
         assert!(still.taken_t_realtime_ns >= still.t_realtime_ns);

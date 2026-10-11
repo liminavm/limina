@@ -178,11 +178,16 @@ pub struct Record {
     pub count: Option<u64>,
     /// Which worker the flip came from; bumped by every reboot or resume.
     pub epoch: u64,
+    /// `true` when the VM has no window (`--headless-capture`): "on glass" then means the frame
+    /// the guest flipped, as the supervisor received it, and there is no `layer_iosurface`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub headless: bool,
     /// The IOSurface id the worker named for this frame (the guest's scanout buffer).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presented_iosurface: Option<u32>,
     /// The IOSurface id the window put on its layer, which is what the image is read from: the
-    /// window's private copy when it shows one, else the same as `presented_iosurface`.
+    /// window's private copy when it shows one, else the same as `presented_iosurface`. Absent
+    /// on a `headless` record, whose image is read from `presented_iosurface`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer_iosurface: Option<u32>,
     /// The guest's virtio-gpu resource id whose flush produced this frame: what the guest's
@@ -222,6 +227,7 @@ impl Default for Record {
             flip_to: None,
             count: None,
             epoch: 0,
+            headless: false,
             presented_iosurface: None,
             layer_iosurface: None,
             guest_resource: None,
@@ -276,7 +282,11 @@ pub struct Summary {
     pub format: u32,
     /// Always `true`: what tells this line from a [`Record`].
     pub summary: bool,
-    /// Frames a window put on glass while capturing.
+    /// As a [`Record`]'s: the capture ran with no window.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub headless: bool,
+    /// Frames a window put on glass while capturing; on a `headless` capture, guest flips the
+    /// supervisor received.
     pub presented: u64,
     /// Of those, frames written to an image.
     pub captured: u64,
@@ -508,8 +518,13 @@ pub struct Still {
     pub guest_flip: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cause: Option<Cause>,
+    /// As a [`Record`]'s.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub headless: bool,
     pub presented_iosurface: u32,
-    pub layer_iosurface: u32,
+    /// As a [`Record`]'s: absent on a `headless` still.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_iosurface: Option<u32>,
     /// As a [`Record`]'s: absent when the frame on glass is no guest flip or the worker did not
     /// name it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -682,6 +697,7 @@ impl Tally {
         Summary {
             format: FORMAT,
             summary: true,
+            headless: false,
             presented: self.presented,
             captured: self.captured,
             dropped,
@@ -836,8 +852,9 @@ mod tests {
             epoch: 1,
             guest_flip: false,
             cause: Some(Cause::ScanoutConfigured),
+            headless: false,
             presented_iosurface: 44,
-            layer_iosurface: 170,
+            layer_iosurface: Some(170),
             guest_resource: Some(12),
             width: 1280,
             height: 800,
@@ -858,9 +875,41 @@ mod tests {
         };
         let line = unnamed.to_line();
         assert!(!line.contains("guest_resource"), "{line}");
-        assert_eq!(Still::parse(&line), Ok(unnamed));
+        assert_eq!(Still::parse(&line), Ok(unnamed.clone()));
+        assert!(!line.contains("headless"), "{line}");
         // A record is not a still.
         assert!(Still::parse(&presented(0, 1, 1).to_line()).is_err());
+        // A headless still says so and has no layer.
+        let headless = Still {
+            headless: true,
+            layer_iosurface: None,
+            ..unnamed
+        };
+        let line = headless.to_line();
+        assert!(line.contains(r#""headless":true"#), "{line}");
+        assert!(!line.contains("layer_iosurface"), "{line}");
+        assert_eq!(Still::parse(&line), Ok(headless));
+    }
+
+    #[test]
+    fn headless_records_and_summaries_say_so_and_windowed_ones_do_not() {
+        let windowed = presented(0, 3, 9);
+        assert!(!windowed.to_line().contains("headless"));
+        let headless = Record {
+            headless: true,
+            layer_iosurface: None,
+            ..windowed
+        };
+        let line = headless.to_line();
+        assert!(line.contains(r#""headless":true"#), "{line}");
+        assert!(!line.contains("layer_iosurface"), "{line}");
+        assert_eq!(parse_line(&line), Ok(Line::Frame(headless)));
+        let mut summary = Tally::default().summary(1.0);
+        assert!(!summary.to_line().contains("headless"));
+        summary.headless = true;
+        let line = summary.to_line();
+        assert!(line.contains(r#""headless":true"#), "{line}");
+        assert_eq!(parse_line(&line), Ok(Line::Summary(summary)));
     }
 
     #[test]

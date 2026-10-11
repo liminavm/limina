@@ -562,14 +562,27 @@ pub struct DisplayCfg {
     /// venus 3D is available (the enhanced-tier path). A display is required for the GPU
     /// device to exist at all, even when a test only probes 3D over SSH.
     pub software_2d: bool,
-    /// Open a real native window (`--window`) instead of capturing frames. Required by any
-    /// test whose subject is the SUPERVISOR's frame-apply path: `--display-capture` never
-    /// runs `window::run`, so a capture boot would exercise none of it and pass against a
-    /// broken window. Mutually exclusive with capture in the CLI, so there is no PNG.
-    pub windowed: bool,
+    /// Where the guest's frames go on the host.
+    pub sink: DisplaySink,
     /// How many virtio-gpu scanouts to configure (`--display-pool`). 1 is the single-display
     /// device every test but the multi-display ones wants. Slots above 0 boot disconnected.
     pub pool: u32,
+}
+
+/// The host sink a [`DisplayCfg`] sends the guest's frames to. The CLI makes the three mutually
+/// exclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplaySink {
+    /// `--display-capture <png>`: the worker writes the latest frame to a PNG in the scratch dir
+    /// ([`Guest::read_capture`]). No window, and no `limina debug <vm> capture`.
+    Png,
+    /// `--window`: a real native window. Required by any test whose subject is the SUPERVISOR's
+    /// frame-apply path: `--display-capture` never runs `window::run`, so a capture boot would
+    /// exercise none of it and pass against a broken window. No PNG.
+    Window,
+    /// `--headless-capture`: no window, but the worker hands its frames to the supervisor, so
+    /// `limina debug <vm> capture start|stop|still` work ([`Guest::stills`]). No PNG.
+    HeadlessCapture,
 }
 
 /// Which guest console device an interactive (`console_input`) session is wired through.
@@ -1201,7 +1214,7 @@ impl GuestConfig {
             width,
             height,
             software_2d: true,
-            windowed: false,
+            sink: DisplaySink::Png,
             pool: 1,
         });
         self
@@ -1230,7 +1243,7 @@ impl GuestConfig {
             width,
             height,
             software_2d: false,
-            windowed: false,
+            sink: DisplaySink::Png,
             pool: 1,
         });
         // A coexist display runs virglrenderer's `vrend` half (host GL via zink-on-KK), whose
@@ -1261,7 +1274,21 @@ impl GuestConfig {
             width,
             height,
             software_2d: false,
-            windowed: true,
+            sink: DisplaySink::Window,
+            pool: 1,
+        });
+        self.with_virgl_host_gl()
+    }
+
+    /// A coexist display with no window whose frames still reach the supervisor
+    /// (`--headless-capture`), so [`Guest::stills`] and `limina debug <vm> capture start|stop`
+    /// work on a headless run. There is no PNG: [`Guest::read_capture`] fails on it.
+    pub fn with_headless_capture_display(mut self, width: u32, height: u32) -> GuestConfig {
+        self.display = Some(DisplayCfg {
+            width,
+            height,
+            software_2d: false,
+            sink: DisplaySink::HeadlessCapture,
             pool: 1,
         });
         self.with_virgl_host_gl()
@@ -1738,7 +1765,8 @@ pub fn is_kmschurn_frame(frame: &CapturedFrame) -> bool {
 /// the pid and a directory, so it can be moved to a thread that watches the window while the
 /// test drives the guest over ssh. Get one from [`Guest::stills`].
 ///
-/// A headless (`--display-capture`) guest has no window, and the CLI refuses the still.
+/// Works on a windowed guest and on a `--headless-capture` one. A `--display-capture` guest's
+/// frames never reach the supervisor, and the CLI refuses the still.
 #[derive(Debug, Clone)]
 pub struct Stills {
     limina_bin: PathBuf,
@@ -2065,7 +2093,7 @@ impl Guest {
                 // The two flags are mutually exclusive in the CLI, so there is no capture
                 // PNG for a windowed boot.
                 let png = scratch.join("scanout.png");
-                if d.windowed {
+                if d.sink == DisplaySink::Window {
                     cmd.arg("--window")
                         .arg("--display-resolution")
                         .arg(format!("{}x{}", d.width, d.height))
@@ -2076,9 +2104,12 @@ impl Guest {
                                 .expect("resize_socket set with a display"),
                         );
                 } else {
-                    cmd.arg("--display-capture")
-                        .arg(&png)
-                        .arg("--display-size")
+                    if d.sink == DisplaySink::HeadlessCapture {
+                        cmd.arg("--headless-capture");
+                    } else {
+                        cmd.arg("--display-capture").arg(&png);
+                    }
+                    cmd.arg("--display-size")
                         .arg(format!("{}x{}", d.width, d.height))
                         .arg("--display-control-socket")
                         .arg(
@@ -2120,9 +2151,9 @@ impl Guest {
                         }
                     }
                 }
-                // No capture path for a windowed boot: the pixels go to a real window, so
-                // `wait_for_capture` must fail loudly rather than wait on a PNG nothing writes.
-                (!d.windowed).then_some(png)
+                // A PNG only for the PNG sink: the others hand their pixels to the supervisor,
+                // so `wait_for_capture` must fail loudly rather than wait on a PNG nothing writes.
+                (d.sink == DisplaySink::Png).then_some(png)
             }
             None => None,
         };
