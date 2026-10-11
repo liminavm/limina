@@ -38,6 +38,12 @@ check "a released name is free again" "Limina-$DATE-1.dmg" "$("$PARK" --reserve)
 if "$PARK" --release "../escape.dmg" 2>/dev/null; then got=accepted; else got=refused; fi
 check "a release names only the lot's own files" refused "$got"
 
+# A lot that refuses writes fails the reservation instead of trying ordinals forever.
+chmod a-w "$LIMINA_PARKING_LOT"
+if timeout_out=$(gtimeout --kill-after=5 20 "$PARK" --reserve 2>/dev/null); then got="reserved $timeout_out"; else got="refused ($?)"; fi
+chmod u+w "$LIMINA_PARKING_LOT"
+check "an unwritable lot refuses the reservation" "refused (1)" "$got"
+
 # Sixteen at once: every one gets a name of its own.
 rm -rf "$LIMINA_PARKING_LOT"
 for i in $(seq 1 16); do "$PARK" --reserve > "$TMP/r$i" & done

@@ -44,14 +44,19 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # name. Scanning the directory rather than keeping a counter means a manually deleted or
 # copied-in bundle cannot desynchronise it.
 reserve() {
-  mkdir -p "$LOT"
+  mkdir -p "$LOT" || return 1
   local date n=0 name
   date=$(date +%Y-%m-%d)
   while :; do
     name="Limina-$date-$n.dmg"
-    if [ ! -e "$LOT/$name" ] && (set -C; : > "$LOT/$name.reserved") 2>/dev/null; then
-      echo "$name"
-      return
+    if [ ! -e "$LOT/$name" ]; then
+      if (set -C; : > "$LOT/$name.reserved") 2>/dev/null; then
+        echo "$name"
+        return
+      fi
+      # Lost a race only if the marker is now there; otherwise the lot refuses every create, and
+      # trying the next ordinal would spin forever.
+      [ -e "$LOT/$name.reserved" ] || { echo "park-bundle: cannot reserve in $LOT" >&2; return 1; }
     fi
     n=$((n + 1))
   done
