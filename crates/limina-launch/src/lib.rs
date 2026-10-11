@@ -889,8 +889,23 @@ fn run_launcher(label: &str, supervisor: libc::pid_t) -> io::Result<i32> {
 
     let status = child.wait()?;
     reaped.store(true, Ordering::Release);
+    // Let go of the supervisor's stdout and stderr before reporting: the supervisor exits on the
+    // report, and whoever reads its output waits for every writer to close. The job unload after
+    // it would otherwise keep them open past the supervisor's exit.
+    release_stdio();
     let _ = lifeline.write_all(format!("exit {}\n", status.into_raw()).as_bytes());
     Ok(0)
+}
+
+/// Point this process's stdout and stderr at `/dev/null`, closing the descriptors they held.
+fn release_stdio() {
+    let Ok(null) = std::fs::OpenOptions::new().write(true).open("/dev/null") else {
+        return;
+    };
+    for target in [1, 2] {
+        // SAFETY: dup2 onto this process's own stdout/stderr.
+        unsafe { libc::dup2(null.as_raw_fd(), target) };
+    }
 }
 
 /// Is this `limina-vmm` invocation the launcher?
