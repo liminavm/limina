@@ -48,6 +48,9 @@ fn still_key(slot: usize) -> usize {
 /// A headless run's display: the surface-port receiver and the present state, kept across worker
 /// relaunches, and the size the worker is told.
 pub struct HeadlessDisplay {
+    /// Whether a worker has been attached yet: the first one reads at the state's starting epoch
+    /// (0, as a window's first worker does), and only a relaunch swaps.
+    attached: std::sync::atomic::AtomicBool,
     surface_port_name: Option<String>,
     map: SurfaceMap,
     shared: Arc<Mutex<Shared>>,
@@ -80,6 +83,7 @@ impl HeadlessDisplay {
         frame_capture::set_source(Source::Headless);
         super::still::set_primary(still_key(0));
         HeadlessDisplay {
+            attached: std::sync::atomic::AtomicBool::new(false),
             surface_port_name,
             map,
             shared: Shared::new(),
@@ -110,7 +114,12 @@ impl HeadlessDisplay {
         let HeadlessSpawn { worker_fd, sup } = spawn;
         drop(worker_fd);
         let ack = sup.try_clone()?;
-        present::mark_headless_worker_swapped(&self.shared);
+        if self
+            .attached
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            present::mark_headless_worker_swapped(&self.shared);
+        }
         let epoch = self.shared.lock().unwrap().reader_epoch;
         let (tx, rx) = sync_channel::<AckMsg>(64);
         std::thread::Builder::new()
