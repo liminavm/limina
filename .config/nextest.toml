@@ -17,6 +17,10 @@
 test-threads = 3
 # VM boots are slow; don't let nextest's default slow-timeout warnings spam the run.
 slow-timeout = { period = "120s" }
+# How long a finished test's stdout/stderr may stay open before nextest reports a leaked
+# process. The default 100 ms is shorter than the load of three booting guests can delay a
+# pipe's close: a test that only reads a file was flagged at it.
+leak-timeout = "500ms"
 
 [[profile.default.overrides]]
 filter = '''
