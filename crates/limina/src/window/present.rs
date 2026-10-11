@@ -720,6 +720,12 @@ pub fn mark_worker_swapped(shared: &Arc<Mutex<Shared>>, resuming: bool) {
     super::echo::forget();
 }
 
+/// A headless run's fresh worker: the slots and the reader epoch, and nothing a window owns.
+/// Called before the new worker's reader starts, as [`mark_worker_swapped`] is.
+pub(super) fn mark_headless_worker_swapped(shared: &Arc<Mutex<Shared>>) {
+    shared.lock().unwrap().swap_worker(false);
+}
+
 /// Take the "a fresh worker is up and knows nothing" flag, if it is set. Take-once: the tick
 /// re-asserts the arrangement on the pass that observes it, and must not do so every frame
 /// afterwards.
@@ -767,7 +773,7 @@ pub fn spawn_reader(fd: OwnedFd, shared: Arc<Mutex<Shared>>, surface_map: Surfac
 /// surfaces the fresh worker never had. Read after the swap, a `frame` line would point a slot
 /// at a dead surface, and a window on a static screen would stay there. The check and the
 /// change are under one lock, so a swap cannot fall between them.
-fn deliver_line<S: Clone>(
+pub(super) fn deliver_line<S: Clone>(
     shared: &Mutex<Shared>,
     epoch: u64,
     surface_map: &Mutex<SurfaceStore<S>>,
@@ -976,7 +982,7 @@ fn publish_echo(s: &Shared, slot: usize) {
 /// a worker that predates the pool — or a log from one — reads correctly. A slot past the pool
 /// is dropped rather than clamped: routing a stray frame onto slot 0's window would show one
 /// display's pixels on another, which is worse than showing nothing.
-fn parse_slot(field: Option<&str>) -> Option<usize> {
+pub(super) fn parse_slot(field: Option<&str>) -> Option<usize> {
     match field {
         None => Some(0),
         Some(s) => s.parse::<usize>().ok().filter(|n| *n < MAX_SCANOUTS),

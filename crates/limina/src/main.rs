@@ -203,6 +203,15 @@ struct Cli {
     #[arg(long)]
     display_capture: Option<PathBuf>,
 
+    /// Attach a virtio-gpu display (at --display-size) with no window, whose frames the worker
+    /// hands to this supervisor as a windowed one does, so `limina debug <vm> capture still|start|
+    /// stop` work on a headless run. Off by default: without it a headless worker publishes no
+    /// surfaces, and since the worker's display sink is chosen when it launches, capture cannot be
+    /// turned on later. `LIMINA_HEADLESS_CAPTURE=1` asks for it too, on a run that names no other
+    /// display.
+    #[arg(long, conflicts_with_all = ["window", "display_capture"])]
+    headless_capture: bool,
+
     /// Give a headless run the virtio keyboard, pointer, mouse and touchpad a windowed run
     /// always has, so `limina input` can drive it. Changes the guest's device set, so a
     /// suspend taken with it resumes only with it. Implied by --window.
@@ -1540,6 +1549,7 @@ fn cli_from_definition(
         virtio_console_input: None,
         window,
         display_capture: None,
+        headless_capture: false,
         input: false,
         // Dynamic-mode first-boot fallback only; the real initial size is derived per
         // display mode (and remembered state) in run_vm's windowed branch.
@@ -1610,6 +1620,23 @@ fn exit_cleanup() {
     debug_ctl::cleanup();
     runtime_ctl::cleanup();
     window::frame_capture::finish_at_exit();
+}
+
+/// Whether a run frames for a headless capture: the flag, or `LIMINA_HEADLESS_CAPTURE=1` on a run
+/// that names no other display (`other_display`: `--window` or `--display-capture`). The variable
+/// never overrides a display the command line chose; a run that ignores it says so.
+fn headless_capture_wanted(flag: bool, env: Option<&std::ffi::OsStr>, other_display: bool) -> bool {
+    if flag {
+        return true;
+    }
+    if env.is_none_or(|v| v != "1") {
+        return false;
+    }
+    if other_display {
+        log::info!("LIMINA_HEADLESS_CAPTURE ignored: this run names its own display");
+        return false;
+    }
+    true
 }
 
 /// A file that belongs to this run alone, removed when the run ends.
@@ -2095,10 +2122,17 @@ fn run_vm(mut cli: Cli) -> Result<()> {
 
     // What the debug port reports about this run (every spawn adds its own launch facts).
     // (`cli` is partly moved by now, so the fields are read one by one.)
+    let headless_capture = headless_capture_wanted(
+        cli.headless_capture,
+        std::env::var_os("LIMINA_HEADLESS_CAPTURE").as_deref(),
+        cli.window || cli.display_capture.is_some(),
+    );
     let display = if cli.window {
         "window"
     } else if cli.display_capture.is_some() {
         "capture"
+    } else if headless_capture {
+        "headless-capture"
     } else {
         "none"
     };
@@ -2134,6 +2168,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // Windowed mode: open a native window in the supervisor and stream the guest scanout
     // from the worker over a control socketpair (the worker publishes shared IOSurfaces).
     if cli.window {
+        window::frame_capture::set_source(window::frame_capture::Source::Window);
         // Remembered window state (managed VMs: the bundle's state.toml). Loaded before the
         // worker spawns because the initial --display-size derives from it (dynamic mode) or
         // from the screen the remembered frame is on (host mode).
@@ -2267,6 +2302,21 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         // What `limina input abs-px` maps against when it is not told a mode.
         inject::set_headless_mode(parse_display_size(&cli.display_size)?);
     }
+    // A display whose frames reach this supervisor with no window. The worker's control channel
+    // and `--display-size` are added per spawn (`supervisor::run`).
+    let headless_display = if headless_capture {
+        let (w, h) = parse_display_size(&cli.display_size)?;
+        inject::set_headless_mode((w, h));
+        Some(window::headless::HeadlessDisplay::new(w, h))
+    } else {
+        if std::env::var_os("LIMINA_WINDOW_CAPTURE_DIR").is_some() {
+            log::warn!(
+                "LIMINA_WINDOW_CAPTURE_DIR ignored: {}",
+                window::frame_capture::no_source()
+            );
+        }
+        None
+    };
 
     let spec = WorkerSpec {
         vmm_bin,
@@ -2277,7 +2327,13 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         links,
     };
 
-    let code = supervisor::run(&spec, control.as_ref(), gateway.as_ref(), cli.input)?;
+    let code = supervisor::run(
+        &spec,
+        control.as_ref(),
+        gateway.as_ref(),
+        cli.input,
+        headless_display.as_ref(),
+    )?;
     // M9.2: the worker exited 126 → the guest was snapshotted and torn down by the suspend bracket.
     // Persist the `[suspended]` record (UI status; the snapshot file itself is what the next
     // start's auto-resume detects). Managed VMs only (a flat `--disk` run sets no
@@ -2828,6 +2884,34 @@ fn create_disk_image(path: &Path, size: u64) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn headless_capture_is_its_own_display_and_off_unless_asked() {
+        let disk = "/tmp/limina-headless-capture-test.raw";
+        let cli = Cli::try_parse_from(["limina", "--disk", disk]).unwrap();
+        assert!(!cli.headless_capture);
+        let cli = Cli::try_parse_from(["limina", "--disk", disk, "--headless-capture"]).unwrap();
+        assert!(cli.headless_capture);
+        for other in [&["--window"][..], &["--display-capture", "/tmp/x.png"][..]] {
+            let mut argv = vec!["limina", "--disk", disk, "--headless-capture"];
+            argv.extend_from_slice(other);
+            assert!(
+                Cli::try_parse_from(&argv).is_err(),
+                "--headless-capture accepted with {other:?}"
+            );
+        }
+        let one = Some(std::ffi::OsStr::new("1"));
+        assert!(headless_capture_wanted(true, None, false));
+        assert!(!headless_capture_wanted(false, None, false));
+        assert!(headless_capture_wanted(false, one, false));
+        assert!(!headless_capture_wanted(
+            false,
+            Some(std::ffi::OsStr::new("0")),
+            false
+        ));
+        // The variable never overrides a display the command line chose.
+        assert!(!headless_capture_wanted(false, one, true));
+    }
 
     #[test]
     fn a_parked_supervisor_is_not_a_suspend_target() {

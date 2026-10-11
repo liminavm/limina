@@ -1004,34 +1004,54 @@ pub fn force_stop_requested() -> bool {
 /// [`MIN_HEALTHY_UPTIME`]) is capped at [`MAX_RAPID_REBOOTS`] so we don't spin forever.
 ///
 /// `input` wires the virtio keyboard, pointer, mouse and touchpad as a windowed session does,
-/// fresh for every spawn, and publishes them for `limina input` (`crate::inject`).
+/// fresh for every spawn, and publishes them for `limina input` (`crate::inject`). `display`
+/// (`--headless-capture`) gives every spawn a control channel its frames arrive on.
 pub fn run(
     spec: &WorkerSpec,
     control: Option<&crate::control::ControlPlane>,
     gateway: Option<&crate::gateway::Gateway>,
     input: bool,
+    display: Option<&crate::window::headless::HeadlessDisplay>,
 ) -> Result<i32> {
     let mut guard = RebootGuard::new();
     loop {
         let started = Instant::now();
-        let spawned = if input {
+        let mut args = spec.args.clone();
+        let mut inherit = Vec::new();
+        let pipes = if input {
             let pipes = crate::inject::WorkerPipes::new()?;
-            let mut args = spec.args.clone();
             args.extend(pipes.args());
-            let with_input = WorkerSpec {
-                vmm_bin: spec.vmm_bin.clone(),
-                args,
-                shutdown_grace: spec.shutdown_grace,
-                snapshot_file: spec.snapshot_file.clone(),
-                suspend_state_file: spec.suspend_state_file.clone(),
-                links: spec.links.clone(),
-            };
-            let spawned = spawn_worker(&with_input, &pipes.worker_fds())?;
-            crate::inject::publish(pipes.into_io(spawned.child.id() as i32));
-            spawned
+            inherit.extend(pipes.worker_fds());
+            Some(pipes)
         } else {
-            spawn_worker(spec, &[])?
+            None
         };
+        let frames = match display {
+            Some(d) => {
+                let (frames, frame_args) = d.prepare()?;
+                args.extend(frame_args);
+                inherit.push(frames.worker_fd.as_raw_fd());
+                Some(frames)
+            }
+            None => None,
+        };
+        let this_spawn = WorkerSpec {
+            vmm_bin: spec.vmm_bin.clone(),
+            args,
+            shutdown_grace: spec.shutdown_grace,
+            snapshot_file: spec.snapshot_file.clone(),
+            suspend_state_file: spec.suspend_state_file.clone(),
+            links: spec.links.clone(),
+        };
+        let spawned = spawn_worker(&this_spawn, &inherit)?;
+        if let Some(pipes) = pipes {
+            crate::inject::publish(pipes.into_io(spawned.child.id() as i32));
+        }
+        if let (Some(d), Some(frames)) = (display, frames)
+            && let Err(e) = d.attach(frames)
+        {
+            log::error!("headless capture: not reading this worker's frames: {e:#}");
+        }
         // Clipboard for a stock guest: hand the fresh port to the broker. A relaunch
         // (reboot) replaces the previous one — the guest that owned it is gone.
         if let Some(cp) = control {

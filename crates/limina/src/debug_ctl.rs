@@ -227,9 +227,13 @@ fn status() -> Vec<String> {
             l.about()
         ));
     }
-    lines.push(match crate::window::frame_capture::status() {
-        Some(dir) => format!("capture on {}", dir.display()),
-        None => "capture off".into(),
+    use crate::window::frame_capture::{Source, source, status};
+    lines.push(match (status(), source()) {
+        (Some(dir), _) => format!("capture on {}", dir.display()),
+        (None, Source::None) => "capture unavailable (no frame source; start the VM with \
+                                 --headless-capture)"
+            .into(),
+        (None, _) => "capture off".into(),
     });
     lines
 }

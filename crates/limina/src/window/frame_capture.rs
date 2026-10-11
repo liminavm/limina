@@ -11,7 +11,10 @@
 //!
 //! **Where it hooks.** [`on_present`] runs from `GuestWindow::show_with_ack`, the one place every
 //! window — primary or secondary, zero-copy or copied — puts a surface on its layer. A frame the
-//! window shows through a private copy is captured from the copy, which nothing else writes.
+//! window shows through a private copy is captured from the copy, which nothing else writes. A
+//! run with no window has frames to capture only when started with `--headless-capture`; then
+//! `super::headless` calls it for every guest flip it receives, from its reader thread, and the
+//! records say `headless`. A run with neither ([`Source::None`]) refuses every capture.
 //!
 //! **What the main thread pays.** One GPU blit of the surface on glass into a capture buffer of
 //! our own, encoded and committed, plus a message per record to the sidecar's writer thread:
@@ -42,7 +45,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -117,6 +120,45 @@ const DRAIN_AT_EXIT: Duration = Duration::from_secs(3);
 
 /// Whether a capture is running: the one load a present pays when none is.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Where this VM's frames reach the supervisor, if anywhere: [`Source`] as a `u8`.
+static SOURCE: AtomicU8 = AtomicU8::new(Source::None as u8);
+
+/// Where this VM's frames reach the supervisor. Fixed when the run starts: the worker's display
+/// sink is chosen when it launches, so a run without a source cannot gain one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum Source {
+    /// No frame ever reaches the supervisor: a run with no display, or a `--display-capture` one
+    /// (the worker writes its PNG itself).
+    None = 0,
+    /// Windows put the frames on glass (`--window`).
+    Window = 1,
+    /// No window, and the worker hands every frame to the supervisor (`--headless-capture`).
+    /// "On glass" then means the guest flip as the supervisor received it.
+    Headless = 2,
+}
+
+/// Say where this run's frames come from. Called once, before the first frame.
+pub(crate) fn set_source(source: Source) {
+    SOURCE.store(source as u8, Ordering::Release);
+}
+
+pub(crate) fn source() -> Source {
+    match SOURCE.load(Ordering::Acquire) {
+        1 => Source::Window,
+        2 => Source::Headless,
+        _ => Source::None,
+    }
+}
+
+/// Why a run with no [`Source`] refuses every capture, and how to get one.
+pub(crate) fn no_source() -> String {
+    "this VM shows the supervisor none of its frames: it has no window, and a headless run hands \
+     them over only when started with --headless-capture (or LIMINA_HEADLESS_CAPTURE=1). The \
+     worker's display sink is chosen when it launches, so capture cannot be turned on at runtime"
+        .to_string()
+}
 
 static SESSION: Mutex<Option<Arc<Session>>> = Mutex::new(None);
 
@@ -352,6 +394,7 @@ fn write_sidecar(rx: Receiver<Msg>, sidecar: std::fs::File) {
             } => {
                 let mut summary = tally.summary(duration);
                 summary.incomplete = incomplete;
+                summary.headless = source() == Source::Headless;
                 if let Err(e) = writeln!(file, "{}", summary.to_line()).and_then(|()| file.flush())
                 {
                     log::error!("frame capture: writing the summary: {e}");
@@ -404,7 +447,8 @@ pub(crate) fn on_host_state(state: HostState) {
 }
 
 /// `frame` went on glass on its window as guest surface `id`, showing `shown` (the guest's
-/// surface, or the window's private copy of it). Main thread only; costs one atomic load when no
+/// surface, or the window's private copy of it). The main thread (the headless reader's thread on
+/// a run with no window: one thread either way); costs one atomic load when no
 /// capture is running.
 pub(crate) fn on_present(tag: FrameTag, id: u32, shown: &CFRetained<IOSurfaceRef>) {
     if !ACTIVE.load(Ordering::Acquire) {
@@ -448,6 +492,7 @@ impl Session {
         }
         let geom = (shown.width(), shown.height());
         let ord = self.take_ord(&mut m);
+        let headless = source() == Source::Headless;
         let record = Record {
             slot,
             seq: Some(seq),
@@ -455,8 +500,9 @@ impl Session {
             guest_flip: cause.is_none(),
             cause,
             epoch,
+            headless,
             presented_iosurface: Some(id),
-            layer_iosurface: Some(shown.id()),
+            layer_iosurface: (!headless).then(|| shown.id()),
             guest_resource: tag.guest_resource(cause),
             width: Some(geom.0 as u32),
             height: Some(geom.1 as u32),
@@ -681,6 +727,9 @@ fn holds_a_capture(dir: &Path) -> bool {
 
 /// Start capturing into `dir`, which must not already hold a capture.
 pub(crate) fn start(dir: &Path) -> Result<String, String> {
+    if source() == Source::None {
+        return Err(no_source());
+    }
     let mut slot = lock(&SESSION);
     if let Some(s) = slot.as_ref() {
         return Err(format!(
@@ -827,7 +876,8 @@ pub(crate) fn status() -> Option<PathBuf> {
     lock(&SESSION).as_ref().map(|s| s.dir.clone())
 }
 
-/// `LIMINA_WINDOW_CAPTURE_DIR`: capture for the whole run. Called once as the window comes up.
+/// `LIMINA_WINDOW_CAPTURE_DIR`: capture for the whole run. Called once as the window comes up,
+/// or as a headless run's frames start to arrive; a run with no [`Source`] says why it is ignored.
 pub(crate) fn start_from_env() {
     if let Some(dir) = std::env::var_os("LIMINA_WINDOW_CAPTURE_DIR")
         && let Err(e) = start(Path::new(&dir))

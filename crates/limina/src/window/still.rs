@@ -18,6 +18,10 @@
 //! or by the window's copy ring two presents later). So the note carries a present count, and a
 //! still whose display presented during its blit is taken again, up to [`TRIES`] times.
 //!
+//! **With no window.** A `--headless-capture` run notes every guest flip it receives, keyed by
+//! slot (`super::headless`), and its stills say `headless` and carry no `layer_iosurface`. A run
+//! with no frame source at all refuses, naming the launch flag (`frame_capture::no_source`).
+//!
 //! `LIMINA_WINDOW_CAPTURE` (one PNG, overwritten once a second) is a separate diagnostic and is
 //! untouched by this.
 
@@ -30,7 +34,7 @@ use objc2_core_foundation::CFRetained;
 use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
 use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
 
-use super::frame_capture::{FrameTag, clock_ns, gpu_copy, pixel_order};
+use super::frame_capture::{FrameTag, Source, clock_ns, gpu_copy, pixel_order};
 use super::present::SendSurface;
 
 /// How many times a still is taken before giving up on a display that keeps presenting during
@@ -124,8 +128,12 @@ fn pick(slot: Option<usize>) -> Result<Pick, String> {
                 if all.is_empty() {
                     no_window()
                 } else {
+                    let what = match super::frame_capture::source() {
+                        Source::Headless => "the guest has flipped no frame on",
+                        _ => "no window shows",
+                    };
                     format!(
-                        "no window shows guest display {slot} (displays on glass: {})",
+                        "{what} guest display {slot} (displays on glass: {})",
                         shown()
                     )
                 }
@@ -135,6 +143,8 @@ fn pick(slot: Option<usize>) -> Result<Pick, String> {
             all.iter().find(|(k, _)| *k == primary).ok_or_else(|| {
                 if primary == 0 {
                     no_window()
+                } else if super::frame_capture::source() == Source::Headless {
+                    "the guest has not flipped a frame on display 0 yet".to_string()
                 } else {
                     "the main window has not put a frame on glass yet".to_string()
                 }
@@ -154,9 +164,12 @@ fn pick(slot: Option<usize>) -> Result<Pick, String> {
 }
 
 fn no_window() -> String {
-    "this VM has no window on glass (a headless run has none; a windowed one shows its first \
-     frame once the guest presents)"
-        .to_string()
+    match super::frame_capture::source() {
+        Source::Headless => "the guest has not flipped a frame yet".to_string(),
+        _ => "this VM has no window on glass yet (it shows its first frame once the guest \
+              presents)"
+            .to_string(),
+    }
 }
 
 /// Whether the window that showed `p` has presented again since.
@@ -171,6 +184,11 @@ fn moved_on(p: &Pick) -> bool {
 /// and return its tag line. `path` is used as given, like `capture start`'s directory: a relative
 /// one is this process's, which is why `limina debug` makes it absolute before sending it.
 pub(crate) fn take(path: &Path, slot: Option<usize>) -> Result<String, String> {
+    let source = super::frame_capture::source();
+    if source == Source::None {
+        return Err(super::frame_capture::no_source());
+    }
+    let headless = source == Source::Headless;
     for _ in 0..TRIES {
         let p = pick(slot)?;
         let layer = p.layer.clone().into_inner();
@@ -198,9 +216,9 @@ pub(crate) fn take(path: &Path, slot: Option<usize>) -> Result<String, String> {
             epoch: p.tag.epoch,
             guest_flip: p.tag.cause.is_none(),
             cause: p.tag.cause,
-            headless: false,
+            headless,
             presented_iosurface: p.presented,
-            layer_iosurface: Some(layer.id()),
+            layer_iosurface: (!headless).then(|| layer.id()),
             guest_resource: p.tag.guest_resource(p.tag.cause),
             width: w as u32,
             height: h as u32,
@@ -248,7 +266,17 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let png = dir.join("still.png");
 
+        // No frame source: refused, saying how to get one.
+        let gate = super::super::frame_capture::source();
+        super::super::frame_capture::set_source(Source::None);
+        let err = take(&png, None).unwrap_err();
+        assert!(
+            err.contains("--headless-capture") && err.contains("at runtime"),
+            "{err}"
+        );
+
         // No window at all.
+        super::super::frame_capture::set_source(Source::Window);
         let err = take(&png, None).unwrap_err();
         assert!(err.contains("no window"), "{err}");
         assert!(take(&png, Some(0)).unwrap_err().contains("no window"));
@@ -341,6 +369,32 @@ mod tests {
         forget(0xa);
         set_primary(0);
         assert!(take(&png, None).unwrap_err().contains("no window"));
+
+        // Headless: the same frame says so and names no layer.
+        super::super::frame_capture::set_source(Source::Headless);
+        set_primary(1);
+        let err = take(&png, None).unwrap_err();
+        assert!(err.contains("not flipped"), "{err}");
+        note(
+            1,
+            FrameTag::new(0, 4, 1).with_resource(Some(9)),
+            50,
+            &surface,
+        );
+        let headless = Still::parse(&take(&png, None).unwrap()).unwrap();
+        assert!(headless.headless, "{headless:?}");
+        assert_eq!(
+            (headless.layer_iosurface, headless.guest_resource),
+            (None, Some(9))
+        );
+        assert!(
+            take(&png, Some(3))
+                .unwrap_err()
+                .contains("flipped no frame")
+        );
+        forget(1);
+        set_primary(0);
+        super::super::frame_capture::set_source(gate);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

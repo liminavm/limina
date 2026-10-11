@@ -58,6 +58,7 @@ mod gesture_tap;
 mod grab_fixture;
 mod grab_policy;
 mod guestwindow;
+pub(crate) mod headless;
 mod host_observe;
 mod hostdisplay;
 mod input;

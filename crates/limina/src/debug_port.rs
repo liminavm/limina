@@ -71,7 +71,8 @@ pub struct RunFacts {
     /// The virtio-gpu the guest gets: `coexist` (software-2D + venus/vrend), `software-2d`, or
     /// `none` (a headless run with no display device).
     pub gpu: &'static str,
-    /// Where the scanout goes: `window`, `capture` (`--display-capture`), or `none`.
+    /// Where the scanout goes: `window`, `capture` (`--display-capture`), `headless-capture`
+    /// (`--headless-capture`), or `none`.
     pub display: &'static str,
     /// Scanouts on the virtio-gpu (`--display-pool`); 0 without a display device.
     pub display_pool: u32,

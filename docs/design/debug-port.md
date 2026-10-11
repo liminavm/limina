@@ -118,7 +118,7 @@ sees an error, as it would for any refused request.
 | `vm` | the managed VM's name, or the first disk's file name |
 | `boot` | `efi` (firmware, the guest's own bootloader) or `kernel` (`--kernel` direct boot) |
 | `gpu` | `coexist` (software-2D + venus/vrend), `software-2d`, or `none` (no display device) |
-| `display` | `window`, `capture` (`--display-capture`), or `none` |
+| `display` | `window`, `capture` (`--display-capture`), `headless-capture` (`--headless-capture`), or `none` |
 | `display_pool` | scanouts on the virtio-gpu; `0` without one |
 | `cpus` | vCPUs |
 | `ram_mib` | guest RAM as allocated (the top of a `--memory` range) |
