@@ -215,7 +215,8 @@ struct Cli {
 
     /// Give a headless run the virtio keyboard, pointer, mouse and touchpad a windowed run
     /// always has, so `limina input` can drive it. Changes the guest's device set, so a
-    /// suspend taken with it resumes only with it. Implied by --window.
+    /// suspend taken with it resumes only with it. Implied by --window. A managed VM sets it
+    /// with `[hardware] input = true`, or `limina start <vm> --input` for one run.
     #[arg(long)]
     input: bool,
 
@@ -713,6 +714,10 @@ struct StartOverrides {
     /// Run headless even if the definition wants a window.
     #[arg(long, overrides_with = "window")]
     no_window: bool,
+    /// Give a headless run its input devices for this run, as `[hardware] input = true` does
+    /// (no effect windowed). A suspend taken with them resumes only with them.
+    #[arg(long)]
+    input: bool,
     /// Override the vCPU count for this run.
     #[arg(long)]
     cpus: Option<u8>,
@@ -979,6 +984,9 @@ fn cfg_with_overrides(
     }
     if ov.no_window {
         cfg.display.window = false;
+    }
+    if ov.input {
+        cfg.hardware.input = true;
     }
     cfg
 }
@@ -1551,7 +1559,9 @@ fn cli_from_definition(
         window,
         display_capture: None,
         headless_capture: false,
-        input: false,
+        // Read only on the headless path (`supervisor::run`): a windowed run wires its own
+        // devices, so this never changes a windowed VM's device set.
+        input: ov.input || cfg.hardware.input,
         // Dynamic-mode first-boot fallback only; the real initial size is derived per
         // display mode (and remembered state) in run_vm's windowed branch.
         display_size: "1280x800".into(),
@@ -3681,6 +3691,68 @@ mod tests {
             ..Default::default()
         };
         assert!(cli_from_definition(&no_net, &bundle, &ov).is_err());
+    }
+
+    /// `[hardware] input` gives a headless managed VM the input devices `limina input` needs;
+    /// `start --input` does it for one run. A windowed VM has them regardless, and the setting
+    /// reaches only the headless supervisor path (`supervisor::run`), so it cannot change a
+    /// windowed VM's device set.
+    #[test]
+    fn headless_input_flows_from_definition_and_override() {
+        use crate::vmlib::bundle::VmBundle;
+        use crate::vmlib::schema::*;
+
+        let bundle = VmBundle::new("/lib/vm.liminavm");
+        let mut cfg = VmConfig {
+            config_version: CONFIG_VERSION,
+            identity: Identity {
+                name: None,
+                uuid: "u".into(),
+                created: "t".into(),
+            },
+            hardware: Hardware::default(),
+            disks: vec![],
+            cdroms: vec![],
+            networks: vec![],
+            shares: vec![],
+            boot: BootCfg::default(),
+            display: DisplayCfg {
+                window: false,
+                ..DisplayCfg::default()
+            },
+            input: InputCfg::default(),
+            power: PowerCfg::default(),
+        };
+
+        let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
+        assert!(!cli.input, "no input devices unless the definition asks");
+
+        let ov = StartOverrides {
+            input: true,
+            ..Default::default()
+        };
+        let cli = cli_from_definition(&cfg, &bundle, &ov).unwrap();
+        assert!(cli.input, "`start --input` adds them for this run");
+        assert!(
+            cfg_with_overrides(&cfg, &ov).hardware.input,
+            "pre-flight sees the run's devices"
+        );
+
+        cfg.hardware.input = true;
+        let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
+        assert!(cli.input, "the definition's input = true reaches the flag");
+        assert!(!cli.window);
+
+        // Windowed: the window's own devices, whatever the setting says.
+        cfg.display.window = true;
+        let cli = cli_from_definition(&cfg, &bundle, &StartOverrides::default()).unwrap();
+        assert!(cli.window);
+
+        let parsed = Cli::try_parse_from(["limina", "start", "fedora", "--input"]).unwrap();
+        match parsed.cmd {
+            Some(Cmd::Start(a)) => assert!(a.overrides.input),
+            other => panic!("expected start, got {other:?}"),
+        }
     }
 
     #[test]

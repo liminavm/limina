@@ -1108,7 +1108,9 @@ fn release_held(held: Held, ledger: &Mutex<Held>) {
 fn send_frames(frames: &[Frame], held: &Mutex<Held>) -> Result<(), (usize, String)> {
     let conn = lock(&CONN).clone().ok_or((
         0,
-        "this VM has no input devices to inject into (a headless run needs --input)".to_string(),
+        "this VM has no input devices to inject into (a headless run needs --input; a managed \
+         VM, [hardware] input = true or `limina start <vm> --input`)"
+            .to_string(),
     ))?;
     // Snapshot rule as everywhere: hold the Arc so the fds stay open across the sends, and
     // a relaunch mid-verb leaves this verb on the worker it started on.

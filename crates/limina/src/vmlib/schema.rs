@@ -133,6 +133,13 @@ pub struct Hardware {
     /// `tpm.state`, made with a new TPM on the first boot. See `--tpm-state`.
     #[serde(default)]
     pub tpm: bool,
+    /// Attach the virtio keyboard, pointer, mouse and touchpad to a headless run too, so
+    /// `limina input` can drive it (default false). A windowed run always has them, so this
+    /// changes nothing there. It changes a headless guest's device set, so a suspend taken with
+    /// it resumes only with it — the worker refuses the other combination and keeps the
+    /// snapshot. Injection itself stays behind the `input-inject` lever. See `--input`.
+    #[serde(default)]
+    pub input: bool,
     /// Advertise `VIRTIO_BALLOON_F_DEFLATE_ON_OOM` to the guest (default false; M6
     /// addendum). The bit makes Linux keep ballooned pages inside `MemTotal`, so an inflated
     /// dynamic VM reads as nearly out of memory and systemd-oomd fires; without it accounting
@@ -194,6 +201,7 @@ impl Default for Hardware {
             fingerprint: true,
             fido: true,
             tpm: false,
+            input: false,
             balloon_deflate_on_oom: false,
             ipa_granule: IpaGranule::default(),
         }
@@ -898,6 +906,23 @@ mod tests {
                 "{back}"
             );
         }
+    }
+
+    /// Input devices on a headless VM change its device set, so a definition that says nothing
+    /// (every existing vm.toml) must keep the set it was suspended with: off.
+    #[test]
+    fn headless_input_defaults_off_and_round_trips() {
+        let h: Hardware = toml::from_str("").unwrap();
+        assert!(
+            !h.input,
+            "a definition that says nothing gets no headless input devices"
+        );
+        assert!(!Hardware::default().input);
+
+        let h: Hardware = toml::from_str("input = true").unwrap();
+        assert!(h.input);
+        let back: Hardware = toml::from_str(&toml::to_string(&h).unwrap()).unwrap();
+        assert!(back.input, "the setting survives a save/load cycle");
     }
 
     #[test]
