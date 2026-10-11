@@ -131,9 +131,19 @@ impl Host {
     }
 }
 
+/// Which bundle the supervisor runs from (`crate::bundle_id`).
+#[derive(Clone, Debug)]
+pub struct Bundle {
+    /// The parking-lot dmg name, or `none` / `unparked` / `malformed`.
+    pub name: String,
+    /// The supervisor's CDHash in hex, or `none`.
+    pub cdhash: String,
+}
+
 /// Everything one launch's identity answer carries.
 pub struct Identity {
     pub build: crate::about::BuildInfo,
+    pub bundle: Bundle,
     pub host: Host,
     pub run: RunFacts,
     pub launch: Launch,
@@ -144,13 +154,19 @@ impl Identity {
     pub fn for_launch(launch: Launch) -> Identity {
         Identity {
             build: crate::about::build_info(),
+            bundle: Bundle {
+                name: crate::bundle_id::name().into(),
+                cdhash: crate::bundle_id::cdhash().into(),
+            },
             host: Host::current(),
             run: RUN.get().cloned().unwrap_or_default(),
             launch,
         }
     }
 
-    /// The identity as ordered `(key, value)` pairs, `format` first. New keys go at the end.
+    /// The identity as ordered `(key, value)` pairs, `format` first and `worker_pid` last: the
+    /// test harness reads a host-log block as complete once it has `worker_pid`
+    /// (`limina_test::logged_identities`), so a new key goes anywhere before it.
     pub fn fields(&self) -> Vec<(String, String)> {
         let mut f: Vec<(String, String)> = Vec::new();
         let mut put = |k: &str, v: String| f.push((k.to_string(), v));
@@ -161,6 +177,8 @@ impl Identity {
         for dep in &self.build.deps {
             put(&format!("dep.{}", dep.name), dep.rev.clone());
         }
+        put("limina_bundle", self.bundle.name.clone());
+        put("limina_cdhash", self.bundle.cdhash.clone());
         put("launch_id", self.launch.launch_id.clone());
         put("resumed", yes_no(self.launch.resumed).into());
         put("vm_kind", or_unknown(self.run.vm_kind));
@@ -409,6 +427,10 @@ mod tests {
                     },
                 ],
             },
+            bundle: Bundle {
+                name: "Limina-2026-10-11-0.dmg".into(),
+                cdhash: "00112233445566778899aabbccddeeff00112233".into(),
+            },
             host: Host {
                 os: "macOS 26.6.2".into(),
                 model: "Mac14,6".into(),
@@ -481,6 +503,11 @@ mod tests {
         assert_eq!(get("limina_build_date"), Some("2026-10-10"));
         assert_eq!(get("dep.libkrun"), Some("aaaa"));
         assert_eq!(get("dep.virglrs"), Some("bbbb"));
+        assert_eq!(get("limina_bundle"), Some("Limina-2026-10-11-0.dmg"));
+        assert_eq!(
+            get("limina_cdhash"),
+            Some("00112233445566778899aabbccddeeff00112233")
+        );
         assert_eq!(
             get("launch_id"),
             Some("11111111-2222-4333-8444-555555555555")
@@ -586,6 +613,11 @@ mod tests {
         assert_eq!(text.lines().count(), id.fields().len());
         assert!(text.lines().all(|l| l.starts_with("limina: identity ")));
         assert!(text.contains("limina: identity limina_git_rev=0123456789ab\n"));
+        assert!(text.contains("limina: identity limina_bundle=Limina-2026-10-11-0.dmg\n"));
+        assert!(
+            text.ends_with("limina: identity worker_pid=200\n"),
+            "{text}"
+        );
     }
 
     #[test]

@@ -112,6 +112,8 @@ sees an error, as it would for any refused request.
 | `limina_git_rev` | limina's source revision (12 hex digits), `unknown` outside a checkout |
 | `limina_build_date` | build date, UTC (the minute for a release bundle, the day for a dev build) |
 | `dep.<name>` | full revision of each host dependency this build carries: `libkrun`, `virglrs`, `imago`, `kosmickrisp`, `edk2` (`crates/limina/build.rs` resolves them) |
+| `limina_bundle` | the parking-lot dmg this app came from (`Limina-<YYYY-MM-DD>-<n>.dmg`, the heading of its entry in the lot's `INDEX.md`); `none` for a binary not run from a bundle, `unparked` for a bundle whose build could not reserve a name, `malformed` for a stamp that is not such a name |
+| `limina_cdhash` | the running `limina`'s CDHash (40 hex digits; what `codesign -dvvv Limina.app` prints as `CDHash=`, and what `INDEX.md` records as *Supervisor CDHash*); `none` when unsigned |
 | `launch_id` | a random UUID, fresh for every worker launch: cold boot, guest-reboot relaunch, and resume each get a new one |
 | `resumed` | `yes` when this launch restored a suspended VM, else `no` |
 | `vm_kind` | `managed` (`limina start <vm>`) or `flat` (`limina --disk …`) |
@@ -129,7 +131,16 @@ sees an error, as it would for any refused request.
 
 There is deliberately **no dirty-tree flag**: `crates/limina/build.rs` explains why one baked in
 at compile time would be wrong in both directions. Whether a bundle was cut from a dirty tree is
-recorded where it can be observed, by `scripts/park-bundle.sh`.
+recorded where it can be observed, by `scripts/park-bundle.sh`, under the name `limina_bundle`
+reports.
+
+`limina_bundle` comes from `Contents/Resources/bundle-id`: `scripts/build-app.sh` reserves the
+parking-lot name (`park-bundle.sh --reserve`, atomic, so concurrent builds never share one) and
+writes it there before signing, so the stamp is sealed into the signature and `limina_cdhash`
+covers it. `crates/limina/src/bundle_id.rs` reads both. The CDHash also identifies a build that
+was never parked, a cargo binary included (the linker signs it ad hoc).
+
+`worker_pid` is always the last key: the test harness takes it as the end of a host-log block.
 
 ## The `host-state` answer (format 1)
 

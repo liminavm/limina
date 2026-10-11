@@ -12,6 +12,8 @@
 // (the About menu).
 mod about;
 mod balloon_policy;
+// Which bundle this is: its parking-lot name and CDHash (the identity's `limina_bundle`).
+mod bundle_id;
 mod center;
 mod clipboard;
 mod control;
