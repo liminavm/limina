@@ -724,3 +724,263 @@ fn managed_windowed_vm_cli_suspend_reports_success() {
     drop(boot);
     let _ = std::fs::remove_dir_all(&scratch);
 }
+
+/// The in-guest evdev reader `l2_input_inject` uses (see its module docs for the traps).
+const INJECT_READER: &str = include_str!("../guest/injectreader.py");
+
+/// Run `limina <args>` against the scratch library; whether it succeeded, and what it printed.
+fn limina_out(
+    limina_bin: &Path,
+    library: &Path,
+    args: &[&str],
+    stdin: Option<&str>,
+) -> (bool, String) {
+    use std::io::Write;
+    let mut child = limina_cmd(limina_bin, library)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawning limina");
+    let mut pipe = child.stdin.take().unwrap();
+    if let Some(text) = stdin {
+        pipe.write_all(text.as_bytes()).unwrap();
+    }
+    drop(pipe);
+    let out = child.wait_with_output().expect("limina did not run");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+/// A **headless managed VM** asked for input devices in its definition (`[hardware] input =
+/// true`) gets the virtio keyboard, tablet and mouse, and `limina input` reaches them — the shape
+/// a guest-compositor harness runs unattended. Without the field a headless managed VM has none
+/// (`limina input` answers that there is nothing to inject into), so the devices appearing at all
+/// is the field taking effect. Injection stays behind the `input-inject` lever: a verb is refused
+/// first, then the lever is turned on at runtime, as a harness would.
+///
+/// Oracle: the guest's own evdev nodes, grabbed and read raw, must carry exactly the injected
+/// events (`guest/injectreader.py`).
+#[test]
+fn managed_headless_vm_with_input_takes_injection() {
+    let name = "managed_headless_vm_with_input_takes_injection";
+    if !limina_test::require_hvf_or_skip(name) {
+        return;
+    }
+    assert!(
+        std::env::var_os("LIMINA_INPUT_INJECT").is_none(),
+        "{name}: unset LIMINA_INPUT_INJECT; this test owns the lever's starting value"
+    );
+    let cfg = GuestConfig::fedora_from_env().expect("resolving guest config");
+    let Boot::Firmware { firmware, disk, .. } = &cfg.boot else {
+        panic!("fedora_from_env must give a firmware boot");
+    };
+    const PORT: &str = "2248";
+
+    let scratch = std::env::temp_dir().join(format!("limina-vmdef-in-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).expect("creating the scratch library");
+    run_ok(
+        limina_cmd(&cfg.limina_bin, &scratch)
+            .args(["create", "input-test", "--no-window", "--disk"])
+            .arg(disk),
+        "limina create",
+    );
+    let bundle = scratch.join("input-test.liminavm");
+
+    // The definition is the subject: set the field the way a user would, by editing vm.toml.
+    let toml_path = bundle.join("vm.toml");
+    let text = std::fs::read_to_string(&toml_path).expect("reading vm.toml");
+    assert!(
+        text.contains("[hardware]\n"),
+        "vm.toml has no [hardware] table:\n{text}"
+    );
+    // `create` writes the default out (`input = false`); a definition from before the field has
+    // no line at all.
+    let edited = if text.contains("\ninput = false\n") {
+        text.replacen("\ninput = false\n", "\ninput = true\n", 1)
+    } else {
+        text.replacen("[hardware]\n", "[hardware]\ninput = true\n", 1)
+    };
+    std::fs::write(&toml_path, edited).expect("writing vm.toml");
+
+    let sup_log = scratch.join("start.log");
+    let log_file = std::fs::File::create(&sup_log).expect("creating the start log");
+    let mut start = limina_cmd(&cfg.limina_bin, &scratch);
+    start
+        .args([
+            "start",
+            "input-test",
+            "--shutdown-grace-secs",
+            "5",
+            "--ssh-port",
+            PORT,
+        ])
+        .arg("--firmware")
+        .arg(firmware)
+        .arg("--vmm-bin")
+        .arg(&cfg.vmm_bin)
+        .env(
+            "RUST_LOG",
+            "warn,limina=info,krun::vmm=info,krun_devices=info",
+        )
+        .stdin(Stdio::null())
+        .stdout(log_file.try_clone().expect("cloning the log fd"))
+        .stderr(log_file);
+    let mut boot = KillOnDrop::new(start.spawn().expect("spawning limina start"), &cfg);
+    // `limina input` and `limina debug` name the VM as a harness would: by its definition.
+    let pid = "input-test";
+    let log = || std::fs::read_to_string(&sup_log).unwrap_or_default();
+    assert!(
+        wait_ssh(PORT, Duration::from_secs(180)),
+        "{name}: guest did not reach SSH\n{}",
+        log()
+    );
+
+    // The devices exist, and the driver bound them (the key router needs that before the first
+    // key, or keys go to the USB HID gadget instead).
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while ssh_exec(
+        PORT,
+        "grep -q 'limina Virtual Keyboard' /proc/bus/input/devices && \
+         grep -q 'limina Virtual Pointer' /proc/bus/input/devices && \
+         grep -q 'limina Virtual Mouse' /proc/bus/input/devices",
+    )
+    .is_none()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "{name}: the virtio input devices never appeared in a headless managed VM with \
+             [hardware] input = true:\n{}\nsupervisor log:\n{}",
+            ssh_exec(PORT, "cat /proc/bus/input/devices").unwrap_or_default(),
+            log()
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    }
+
+    ssh_exec(
+        PORT,
+        &format!(
+            "rm -f /tmp/limina-inject-ready; cat > /tmp/inject-reader.py <<'INJECT_READER_EOF'\n\
+             {INJECT_READER}\nINJECT_READER_EOF"
+        ),
+    )
+    .expect("staging the reader in the guest");
+    let reader = Command::new("ssh")
+        .args([
+            "-p",
+            PORT,
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "LogLevel=ERROR",
+            "claude@127.0.0.1",
+            "sudo -n python3 /tmp/inject-reader.py 60",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawning the guest reader");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while ssh_exec(PORT, "test -e /tmp/limina-inject-ready").is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "{name}: the reader never opened the nodes"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    // Lever off: refused, and nothing reaches the guest (the exact comparison below proves it).
+    let (ok, said) = limina_out(
+        &cfg.limina_bin,
+        &scratch,
+        &["input", pid, "key", "tap", "KEY_F15"],
+        None,
+    );
+    eprintln!("{name}: with the lever off, limina input said: {said}");
+    assert!(
+        !ok && said.contains("input injection is off"),
+        "{name}: injection was not refused with the lever off: {said}"
+    );
+    let (ok, said) = limina_out(
+        &cfg.limina_bin,
+        &scratch,
+        &["debug", pid, "lever", "input-inject", "on"],
+        None,
+    );
+    assert!(ok, "{name}: turning the lever on failed: {said}");
+
+    let script = "key tap KEY_F13\nabs 16384 8192\nrel 7 -3\nsleep 50\nkey tap KEY_F14\n";
+    let (ok, said) = limina_out(
+        &cfg.limina_bin,
+        &scratch,
+        &["input", pid, "-"],
+        Some(script),
+    );
+    eprintln!("{name}: limina input said: {said}");
+    assert!(ok, "{name}: `limina input` failed: {said}");
+
+    let out = reader.wait_with_output().expect("the guest reader failed");
+    let output = String::from_utf8_lossy(&out.stdout).into_owned();
+    eprintln!(
+        "{name}: the guest read:\n{output}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        output.contains("END"),
+        "{name}: the end marker never reached the virtio keyboard:\n{output}"
+    );
+    let events = |dev: &str| -> Vec<(u16, u16, i32)> {
+        output
+            .lines()
+            .filter_map(|l| {
+                let mut w = l.split_whitespace();
+                (w.next()? == dev).then_some(())?;
+                Some((
+                    w.next()?.parse().ok()?,
+                    w.next()?.parse().ok()?,
+                    w.next()?.parse().ok()?,
+                ))
+            })
+            .collect()
+    };
+    const SYN: (u16, u16, i32) = (0, 0, 0);
+    let tap = |k: u16| vec![(1, k, 1), SYN, (1, k, 0), SYN];
+    let mut kbd = tap(183); // KEY_F13; KEY_F15 was refused and must be absent
+    kbd.extend(tap(184)); // KEY_F14, the end marker
+    assert_eq!(events("kbd"), kbd, "{name}: the keyboard node");
+    assert_eq!(
+        events("ptr"),
+        vec![(3, 0, 16384), (3, 1, 8192), SYN],
+        "{name}: the tablet node"
+    );
+    assert_eq!(
+        events("rel"),
+        vec![(2, 0, 7), (2, 1, -3), SYN],
+        "{name}: the mouse node"
+    );
+
+    run_ok(
+        limina_cmd(&cfg.limina_bin, &scratch).args(["stop", "input-test"]),
+        "limina stop",
+    );
+    let _ = boot.0.wait();
+    run_ok(
+        limina_cmd(&cfg.limina_bin, &scratch).args(["rm", "input-test"]),
+        "limina rm",
+    );
+    assert!(disk.exists(), "the shared source image must survive");
+    let _ = std::fs::remove_dir_all(&scratch);
+}
