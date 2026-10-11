@@ -52,10 +52,12 @@ VERBS (one per line on stdin, or one on the command line):
                                  (escapes: \\n \\t \\\\); each shifted character is
                                  wrapped in its own LEFTSHIFT press
   abs X Y                        absolute pointer, device units 0..=32767
-  abs-norm U V                   absolute pointer, 0..1 of the device range
-  abs-px X Y [WxH]               absolute pointer at scanout pixel (X,Y) of a WxH mode;
-                                 WxH defaults to the guest's current mode (windowed) or
-                                 the boot's --display-size (headless)
+  abs-norm [--display N] U V     absolute pointer, 0..1 of the device range; with
+                                 --display, 0..1 of display N
+  abs-px [--display N] X Y [WxH] absolute pointer at scanout pixel (X,Y) of a WxH mode;
+                                 with --display, a pixel of display N. WxH defaults to the
+                                 guest's current mode (windowed) or the boot's
+                                 --display-size (headless, display 0 only)
   rel DX DY                      relative motion on the virtual mouse
   button down|up|click BTN [N]   BTN_LEFT|BTN_RIGHT|BTN_MIDDLE (or left/right/middle);
                                  click N times, transitions 30 ms apart
@@ -66,16 +68,25 @@ VERBS (one per line on stdin, or one on the command line):
   release                        release what this connection holds, and what
                                  keep-held connections left pressed
   keep-held                      keep what this connection holds pressed after it closes
-  info                           the devices and the absolute pointer's mapping
+  info                           the devices, and one line per display: its scanout,
+                                 its guest connector, its rect in the guest's layout,
+                                 and its share of the absolute pointer's range
   sleep MS                       (client side) pause between verbs
   keys                           (client side) every KEY name `key` accepts and its
                                  code, one `NAME CODE` per line: exactly the keys the
                                  virtual keyboard advertises; needs no VM and no lever
 
 Every verb but `ev` ends each of its frames with a SYN_REPORT. The absolute device spans
-the guest's WHOLE desktop: with one display, abs-norm/abs-px are that display's
-coordinates; with several, only `abs` is well defined. Keys are evdev codes, not macOS
-keys: no modifier normalization applies (KEY_LEFTMETA is Super, KEY_LEFTALT is Alt).
+the guest's WHOLE desktop: without --display, abs-norm/abs-px are that whole range, which
+is one display's coordinates only while the guest has one. --display N (the scanout slot,
+0-based: the guest's connector Virtual-(N+1)) maps a point on display N exactly as the
+window showing it would: through the layout the guest's agent reports, else the mapping
+the window learned from the guest's cursor echo, else -- with one display only -- the
+whole range. A display that does not exist, or whose place in a multi-display desktop
+is not known, is refused; `info` says which displays exist and how each maps.
+
+Keys are evdev codes, not macOS keys: no modifier normalization applies (KEY_LEFTMETA is
+Super, KEY_LEFTALT is Alt).
 Keys and buttons a connection leaves pressed are released when it closes, unless
 `keep-held` (or --keep-held) was sent.
 
@@ -245,11 +256,15 @@ pub enum Verb {
     AbsNorm {
         u: f64,
         v: f64,
+        /// `--display N`: a fraction of that display, not of the whole device range.
+        display: Option<usize>,
     },
     AbsPx {
         x: f64,
         y: f64,
         mode: Option<(u32, u32)>,
+        /// `--display N`: a pixel of that display, wherever the guest put it in its desktop.
+        display: Option<usize>,
     },
     Rel {
         dx: i32,
@@ -296,6 +311,42 @@ fn action(s: Option<&str>, click: &str) -> Result<Action, String> {
         Some(w) if w == click => Ok(Action::Tap),
         other => Err(format!("expected down|up|{click}, got {other:?}")),
     }
+}
+
+/// The rest of a verb's words with `--display N` (or `--display=N`) taken out of them, wherever
+/// it stands, and N: a scanout slot, 0-based — the `display_id` the display control speaks and
+/// the `slot N` the logs name, one less than the guest's `Virtual-N` connector.
+fn take_display<'a>(
+    words: &mut impl Iterator<Item = &'a str>,
+) -> Result<(Option<usize>, Vec<&'a str>), String> {
+    let mut display = None;
+    let mut rest = Vec::new();
+    while let Some(word) = words.next() {
+        let value = match word.strip_prefix("--display") {
+            Some("") => Some(words.next().ok_or("--display needs a display number")?),
+            Some(v) if v.starts_with('=') => Some(&v[1..]),
+            _ => None,
+        };
+        let Some(value) = value else {
+            rest.push(word);
+            continue;
+        };
+        if display.is_some() {
+            return Err("--display given twice".into());
+        }
+        let n = value
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n < crate::window::echo::MAX_SCANOUTS)
+            .ok_or_else(|| {
+                format!(
+                    "--display {value:?} is not a display number 0..{}",
+                    crate::window::echo::MAX_SCANOUTS - 1
+                )
+            })?;
+        display = Some(n);
+    }
+    Ok((display, rest))
 }
 
 /// `WxH`.
@@ -362,18 +413,37 @@ impl Verb {
                 }
                 Verb::Abs { x, y }
             }
-            "abs-norm" => Verb::AbsNorm {
-                u: unit(w.next(), "u")?,
-                v: unit(w.next(), "v")?,
-            },
+            "abs-norm" => {
+                let (display, rest) = take_display(&mut w)?;
+                let mut w = rest.into_iter();
+                let verb = Verb::AbsNorm {
+                    u: unit(w.next(), "u")?,
+                    v: unit(w.next(), "v")?,
+                    display,
+                };
+                if let Some(extra) = w.next() {
+                    return Err(format!("unexpected {extra:?} after the verb"));
+                }
+                verb
+            }
             "abs-px" => {
+                let (display, rest) = take_display(&mut w)?;
+                let mut w = rest.into_iter();
                 let x: f64 = num(w.next(), "x")?;
                 let y: f64 = num(w.next(), "y")?;
                 let mode = w.next().map(parse_mode).transpose()?;
                 if x < 0.0 || y < 0.0 || !x.is_finite() || !y.is_finite() {
                     return Err("abs-px takes non-negative pixels".into());
                 }
-                Verb::AbsPx { x, y, mode }
+                if let Some(extra) = w.next() {
+                    return Err(format!("unexpected {extra:?} after the verb"));
+                }
+                Verb::AbsPx {
+                    x,
+                    y,
+                    mode,
+                    display,
+                }
             }
             "rel" => Verb::Rel {
                 dx: num(w.next(), "dx")?,
@@ -447,8 +517,7 @@ pub fn norm_to_device(u: f64) -> i32 {
 /// division is exact.) With one display at any scale this holds: the range spreads over the
 /// logical desktop and the scale cancels on the way back to pixels.
 pub fn px_to_device(p: f64, size: u32) -> i32 {
-    let v = ((p + 0.25) * f64::from(ABS_MAX + 1) / f64::from(size)).floor();
-    v.clamp(0.0, f64::from(ABS_MAX)) as i32
+    px_in_share(p, size, 0.0, 1.0)
 }
 
 /// Keys and buttons pressed and not yet released, each in the order it was pressed — so a
@@ -583,13 +652,162 @@ fn current_mode() -> Result<(u32, u32), String> {
         many => {
             return Err(format!(
                 "the guest has {} displays and the absolute device spans all of them; \
-                 abs-px is only defined for one (use `abs` in device units)",
+                 name one: abs-px --display N X Y (see `limina input <vm> info`)",
                 many.len()
             ));
         }
     }
     lock(&HEADLESS_MODE)
         .ok_or_else(|| "the guest's mode is not known yet; give it: abs-px X Y WxH".into())
+}
+
+/// The device value that lands on pixel `p` of a `size`-pixel axis whose content spans
+/// `f0..f1` of the device range (fractions of it): [`px_to_device`]'s ¼-pixel aim, placed in
+/// that share. With the whole range (`0..1`) it *is* `px_to_device`.
+///
+/// The guest maps a value back as `v · desktop / 32768` and then onto the display's pixels at
+/// its scale, so the image lands in `(p + ¼ − desktop·scale/32768, p + ¼]`: pixel `p` under
+/// truncation and rounding alike while the desktop is under 8192 pixels wide at that scale.
+pub fn px_in_share(p: f64, size: u32, f0: f64, f1: f64) -> i32 {
+    let at = f0 + (p + 0.25) / f64::from(size) * (f1 - f0);
+    (at * f64::from(ABS_MAX + 1))
+        .floor()
+        .clamp(0.0, f64::from(ABS_MAX)) as i32
+}
+
+/// One guest display as the supervisor knows it, for `--display` and `info`.
+#[derive(Clone, Debug, PartialEq)]
+struct Display {
+    /// The scanout slot: `--display`'s number, the guest's `Virtual-{slot + 1}`.
+    slot: usize,
+    /// Its mode in guest pixels, where the supervisor knows it: from the worker's scanout
+    /// announcements in a windowed run, from `--display-size` for a headless run's slot 0.
+    scanout: Option<(u32, u32)>,
+    /// Its rect in the guest's logical desktop, where the guest's agent reported one.
+    logical: Option<crate::window::arrangement::GuestRect>,
+    /// How the window maps a point on it into the device range (`absfit::Mapping`).
+    mapping: crate::window::absfit::Mapping,
+}
+
+/// Every display the supervisor knows of, taken once per verb.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Displays(Vec<Display>);
+
+impl Displays {
+    /// What the supervisor knows now: the live scanouts (windowed), the `--display-size` slot
+    /// (headless), and every slot the guest's layout report names.
+    fn now() -> Self {
+        let sizes = crate::window::echo::scanout_sizes();
+        let report = crate::window::arrangement::reported_layout();
+        let mut slots: std::collections::BTreeMap<usize, Option<(u32, u32)>> = sizes
+            .iter()
+            .enumerate()
+            .filter(|(_, (w, h))| *w > 0 && *h > 0)
+            .map(|(s, m)| (s, Some(*m)))
+            .collect();
+        if let Some(mode) = *lock(&HEADLESS_MODE) {
+            slots.entry(0).or_insert(Some(mode));
+        }
+        for (s, _) in report.iter().flatten() {
+            slots.entry(*s).or_insert(None);
+        }
+        Displays(
+            slots
+                .into_iter()
+                .map(|(slot, scanout)| Display {
+                    slot,
+                    scanout,
+                    logical: report
+                        .iter()
+                        .flatten()
+                        .find(|(s, _)| *s == slot)
+                        .map(|(_, r)| *r),
+                    mapping: crate::window::absfit::mapping(slot),
+                })
+                .collect(),
+        )
+    }
+
+    fn known(&self) -> String {
+        if self.0.is_empty() {
+            return "this VM knows of no display".into();
+        }
+        let names: Vec<String> = self.0.iter().map(|d| d.slot.to_string()).collect();
+        format!("the displays are {}", names.join(", "))
+    }
+
+    /// The display `--display n` names, if a point on it can be mapped exactly the way the
+    /// window maps one: refused when it does not exist, and when the window's only answer for
+    /// it is the identity floor (several displays and nothing says where this one is).
+    fn target(&self, n: usize) -> Result<&Display, String> {
+        let d = self.0.iter().find(|d| d.slot == n).ok_or_else(|| {
+            format!(
+                "display {n} does not exist or has no scanout ({}; see `limina input <vm> info`)",
+                self.known()
+            )
+        })?;
+        if let Some(why) = self.unmapped(d) {
+            return Err(format!("display {n} cannot be pointed at: {why}"));
+        }
+        Ok(d)
+    }
+
+    /// Why a point on `d` has no exact place in the device range, or `None` when it has one.
+    fn unmapped(&self, d: &Display) -> Option<String> {
+        use crate::window::absfit::Mapping;
+        match &d.mapping {
+            Mapping::Report(_) if d.logical.is_none() => Some(format!(
+                "the layout the guest reported does not place Virtual-{}",
+                d.slot + 1
+            )),
+            Mapping::Identity if self.0.len() > 1 => Some(format!(
+                "the guest has {} displays and the absolute device spans all of them, but the \
+                 guest has reported no layout (limina-agent-session) and none has been learned \
+                 from its cursor echo, so where this one sits is unknown",
+                self.0.len()
+            )),
+            _ => None,
+        }
+    }
+
+    /// `info`'s line for each display.
+    fn report(&self) -> Vec<String> {
+        self.0
+            .iter()
+            .map(|d| {
+                let scanout = d
+                    .scanout
+                    .map_or("unknown".to_string(), |(w, h)| format!("{w}x{h}"));
+                let logical = d.logical.map_or("unreported".to_string(), |r| {
+                    format!("{}x{}+{}+{}", r.w, r.h, r.x, r.y)
+                });
+                let mapping = match self.unmapped(d) {
+                    Some(why) => format!("none ({why})"),
+                    None => {
+                        let range = f64::from(ABS_MAX);
+                        let at = |f: f64| (f * range).round() as i32;
+                        match d.mapping.share(d.slot) {
+                            Some(s) => format!(
+                                "{} x {}..{} y {}..{}",
+                                d.mapping.name(),
+                                at(s.x0),
+                                at(s.x1),
+                                at(s.y0),
+                                at(s.y1)
+                            ),
+                            None => d.mapping.name().to_string(),
+                        }
+                    }
+                };
+                format!(
+                    "display {} connector Virtual-{} scanout {scanout} logical {logical} \
+                     device ptr mapping {mapping}",
+                    d.slot,
+                    d.slot + 1
+                )
+            })
+            .collect()
+    }
 }
 
 impl Default for Session {
@@ -608,9 +826,20 @@ impl Default for Session {
 }
 
 impl Session {
-    /// The frames a verb sends, and the report lines it answers with. Pure but for the mode
-    /// lookup and the held-set bookkeeping, so it is what the tests drive.
+    /// The frames a verb sends, and the report lines it answers with, against the displays as
+    /// the supervisor knows them now.
     fn plan(&mut self, verb: Verb) -> Result<(Vec<Frame>, Vec<String>), String> {
+        self.plan_in(verb, Displays::now)
+    }
+
+    /// [`Self::plan`] against the displays `displays` describes (read only by the verbs that
+    /// need them). Pure but for the mode lookup and the held-set bookkeeping, so it is what the
+    /// tests drive.
+    fn plan_in(
+        &mut self,
+        verb: Verb,
+        displays: impl FnOnce() -> Displays,
+    ) -> Result<(Vec<Frame>, Vec<String>), String> {
         let abs = |x: i32, y: i32| {
             vec![Frame::new(
                 Device::Ptr,
@@ -646,8 +875,53 @@ impl Session {
                 })
                 .collect(),
             Verb::Abs { x, y } => abs(x, y),
-            Verb::AbsNorm { u, v } => abs(norm_to_device(u), norm_to_device(v)),
-            Verb::AbsPx { x, y, mode } => {
+            Verb::AbsNorm {
+                u,
+                v,
+                display: None,
+            } => abs(norm_to_device(u), norm_to_device(v)),
+            Verb::AbsNorm {
+                u,
+                v,
+                display: Some(n),
+            } => {
+                let displays = displays();
+                let d = displays.target(n)?;
+                let (x, y) = d
+                    .mapping
+                    .place(n, (u, v), ABS_MAX as i32)
+                    .ok_or_else(|| format!("display {n} has no place in the device range"))?;
+                abs(x, y)
+            }
+            Verb::AbsPx {
+                x,
+                y,
+                mode,
+                display: Some(n),
+            } => {
+                let displays = displays();
+                let d = displays.target(n)?;
+                let (w, h) = mode.or(d.scanout).ok_or_else(|| {
+                    format!(
+                        "display {n}'s mode is not known to this VM (a headless run knows only \
+                         display 0's --display-size); give it: abs-px --display {n} X Y WxH"
+                    )
+                })?;
+                if x >= f64::from(w) || y >= f64::from(h) {
+                    return Err(format!("({x},{y}) is outside display {n}'s {w}x{h} mode"));
+                }
+                let s = d
+                    .mapping
+                    .share(n)
+                    .ok_or_else(|| format!("display {n} has no place in the device range"))?;
+                abs(px_in_share(x, w, s.x0, s.x1), px_in_share(y, h, s.y0, s.y1))
+            }
+            Verb::AbsPx {
+                x,
+                y,
+                mode,
+                display: None,
+            } => {
                 let (w, h) = match mode {
                     Some(m) => m,
                     None => current_mode()?,
@@ -747,6 +1021,7 @@ impl Session {
                     format!("abs-max {ABS_MAX}"),
                     format!("mode {mode}"),
                 ];
+                report.extend(displays().report());
                 let (keys, buttons) = {
                     let held = lock(&self.held);
                     (held.keys.clone(), held.buttons.clone())
@@ -1201,6 +1476,311 @@ mod tests {
             Session::default()
                 .plan(Verb::parse("abs-px 1280 0 1280x800").unwrap())
                 .is_err()
+        );
+    }
+
+    use crate::window::absfit::{Line, Mapping};
+    use crate::window::arrangement::GuestRect;
+
+    fn rect(x: u32, y: u32, w: u32, h: u32) -> GuestRect {
+        GuestRect { x, y, w, h }
+    }
+
+    /// Two displays side by side as a guest's agent reports them: slot 0 a 2000x1250 scanout
+    /// at scale 2 (logical 1000x625), slot 1 a 1280x800 scanout at scale 1 to its right. The
+    /// desktop's bounding box is 2280x800 logical.
+    fn side_by_side() -> (Vec<(usize, GuestRect)>, Displays) {
+        let rects = vec![(0, rect(0, 0, 1000, 625)), (1, rect(1000, 0, 1280, 800))];
+        let displays = Displays(
+            [(0, (2000, 1250)), (1, (1280, 800))]
+                .into_iter()
+                .map(|(slot, scanout)| Display {
+                    slot,
+                    scanout: Some(scanout),
+                    logical: rects.iter().find(|(s, _)| *s == slot).map(|(_, r)| *r),
+                    mapping: Mapping::Report(rects.clone()),
+                })
+                .collect(),
+        );
+        (rects, displays)
+    }
+
+    fn plan_on(displays: &Displays, line: &str) -> Result<Vec<Frame>, String> {
+        Session::default()
+            .plan_in(Verb::parse(line)?, || displays.clone())
+            .map(|(f, _)| f)
+    }
+
+    /// The `(ABS_X, ABS_Y)` one planned position frame carries.
+    fn xy(frames: &[Frame]) -> (i32, i32) {
+        let [f] = frames else {
+            panic!("expected one frame, got {frames:?}")
+        };
+        assert_eq!(f.dev, Device::Ptr);
+        let get = |code| f.events.iter().find(|e| e.code == code).unwrap().value;
+        (get(ABS_X), get(ABS_Y))
+    }
+
+    #[test]
+    fn display_is_selected_by_slot_anywhere_in_the_verb() {
+        let px = |line: &str| match Verb::parse(line).unwrap() {
+            Verb::AbsPx {
+                x,
+                y,
+                mode,
+                display,
+            } => (x, y, mode, display),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(px("abs-px --display 1 10 20"), (10.0, 20.0, None, Some(1)));
+        assert_eq!(
+            px("abs-px 10 20 640x480 --display=2"),
+            (10.0, 20.0, Some((640, 480)), Some(2))
+        );
+        assert_eq!(px("abs-px 10 20"), (10.0, 20.0, None, None));
+        assert_eq!(
+            Verb::parse("abs-norm 0.5 --display 0 0.25"),
+            Ok(Verb::AbsNorm {
+                u: 0.5,
+                v: 0.25,
+                display: Some(0)
+            })
+        );
+        for bad in [
+            "abs-px --display",
+            "abs-px --display x 1 1",
+            "abs-px --display 16 1 1",
+            "abs-px --display 1 --display 1 1 1",
+            "abs-norm --display 0 0.5",
+            "abs-norm --display 0 0.5 0.5 0.5",
+            "abs --display 1 0 0",
+        ] {
+            assert!(Verb::parse(bad).is_err(), "{bad:?} parsed");
+        }
+    }
+
+    /// `abs-norm --display N` is the window's own mapping for a unit point on slot N: through
+    /// the guest's reported layout, the display's share of the bounding box.
+    #[test]
+    fn a_unit_point_on_a_reported_display_lands_where_the_window_puts_it() {
+        let (rects, displays) = side_by_side();
+        // Slot 1 starts 1000 of 2280 logical units in; slot 0 is 625 of 800 tall.
+        let seam = (1000.0 / 2280.0 * f64::from(ABS_MAX)).round() as i32;
+        let foot = (625.0 / 800.0 * f64::from(ABS_MAX)).round() as i32;
+        assert_eq!(
+            xy(&plan_on(&displays, "abs-norm --display 1 0 0").unwrap()),
+            (seam, 0)
+        );
+        assert_eq!(
+            xy(&plan_on(&displays, "abs-norm --display 0 1 1").unwrap()),
+            (seam, foot)
+        );
+        assert_eq!(
+            xy(&plan_on(&displays, "abs-norm --display 1 1 1").unwrap()),
+            (ABS_MAX as i32, ABS_MAX as i32)
+        );
+        // Exactly what the window sends for the same point on the same slot.
+        for (slot, u, v) in [(0, 0.3, 0.6), (1, 0.7, 0.2)] {
+            let line = format!("abs-norm --display {slot} {u} {v}");
+            assert_eq!(
+                Some(xy(&plan_on(&displays, &line).unwrap())),
+                crate::window::arrangement::abs_in_layout(&rects, slot, u, v, ABS_MAX as i32)
+            );
+        }
+    }
+
+    /// The guest maps a value back as libinput and mutter do: `v · desktop / 32768` logical
+    /// units across the bounding box, then onto the display's pixels at its scale. A pixel of
+    /// display N sent with `abs-px --display N` must come back as that pixel, whether the
+    /// compositor truncates or rounds — on both displays, at their different scales.
+    #[test]
+    fn a_pixel_on_a_reported_display_comes_back_as_that_pixel() {
+        let (rects, displays) = side_by_side();
+        let (dw, dh) = (2280.0, 800.0);
+        for (slot, (sw, sh)) in [(0usize, (2000u32, 1250u32)), (1, (1280, 800))] {
+            let r = rects[slot].1;
+            let (sx, sy) = (
+                f64::from(sw) / f64::from(r.w),
+                f64::from(sh) / f64::from(r.h),
+            );
+            let back = |v: i32, d: f64, origin: u32, scale: f64| {
+                (f64::from(v) * d / f64::from(ABS_MAX + 1) - f64::from(origin)) * scale
+            };
+            for (px, py) in (0..sw)
+                .step_by(37)
+                .chain([sw - 1])
+                .zip((0..sh).step_by(23).chain([sh - 1]).cycle())
+            {
+                let line = format!("abs-px --display {slot} {px} {py}");
+                let (x, y) = xy(&plan_on(&displays, &line).unwrap());
+                let (ix, iy) = (back(x, dw, r.x, sx), back(y, dh, r.y, sy));
+                for (image, p) in [(ix, px), (iy, py)] {
+                    assert_eq!(image.floor(), f64::from(p), "{line}: floor of {image}");
+                    assert_eq!(image.round(), f64::from(p), "{line}: round of {image}");
+                }
+                // And it is the same point `abs-norm` names, to within the ¼-pixel aim.
+                let u = (f64::from(px) + 0.25) / f64::from(sw);
+                let v = (f64::from(py) + 0.25) / f64::from(sh);
+                let norm =
+                    xy(&plan_on(&displays, &format!("abs-norm --display {slot} {u} {v}")).unwrap());
+                assert!(
+                    (norm.0 - x).abs() <= 2 && (norm.1 - y).abs() <= 2,
+                    "{line}: {x},{y} vs abs-norm {norm:?}"
+                );
+            }
+        }
+    }
+
+    /// With one display its share is the whole range, and `--display 0` is today's verb.
+    #[test]
+    fn the_only_display_is_the_whole_range() {
+        let one = Displays(vec![Display {
+            slot: 0,
+            scanout: Some((1280, 800)),
+            logical: None,
+            mapping: Mapping::Identity,
+        }]);
+        assert_eq!(
+            plan_on(&one, "abs-px --display 0 640 400").unwrap(),
+            plan_on(&one, "abs-px 640 400 1280x800").unwrap()
+        );
+        assert_eq!(
+            plan_on(&one, "abs-norm --display 0 0.25 0.75").unwrap(),
+            plan_on(&one, "abs-norm 0.25 0.75").unwrap()
+        );
+        assert_eq!(
+            xy(&plan_on(&one, "abs-px --display 0 640 400").unwrap()),
+            (16390, 16394)
+        );
+    }
+
+    /// No report, two live scanouts, and the window's echo fitted slot 1's share: a pixel lands
+    /// on itself under the fitted lines (`pixel = a·u + b`, `u = value / ABS_MAX`).
+    #[test]
+    fn a_pixel_on_a_fitted_display_lands_on_its_line() {
+        let fitted = Mapping::Fitted {
+            x: Line {
+                a: 2560.0,
+                b: -1280.0,
+            },
+            y: Line { a: 800.0, b: 0.0 },
+            scanout: (1280, 800),
+        };
+        let displays = Displays(vec![
+            Display {
+                slot: 0,
+                scanout: Some((1280, 800)),
+                logical: None,
+                mapping: Mapping::Fitted {
+                    x: Line { a: 2560.0, b: 0.0 },
+                    y: Line { a: 800.0, b: 0.0 },
+                    scanout: (1280, 800),
+                },
+            },
+            Display {
+                slot: 1,
+                scanout: Some((1280, 800)),
+                logical: None,
+                mapping: fitted.clone(),
+            },
+        ]);
+        for p in (0..1280u32).step_by(31).chain([1279]) {
+            let q = p.min(799);
+            let (x, y) = xy(&plan_on(&displays, &format!("abs-px --display 1 {p} {q}")).unwrap());
+            let lx = 2560.0 * f64::from(x) / f64::from(ABS_MAX) - 1280.0;
+            assert_eq!(lx.floor(), f64::from(p), "x {p}: {lx}");
+            let ly = 800.0 * f64::from(y) / f64::from(ABS_MAX);
+            assert_eq!(ly.floor(), f64::from(q), "y {q}: {ly}");
+        }
+        // abs-norm is the window's fitted placement exactly.
+        assert_eq!(
+            Some(xy(
+                &plan_on(&displays, "abs-norm --display 1 0.5 0.5").unwrap()
+            )),
+            fitted.place(1, (0.5, 0.5), ABS_MAX as i32)
+        );
+    }
+
+    #[test]
+    fn a_display_that_cannot_be_pointed_at_is_refused_and_says_why() {
+        let (_, two) = side_by_side();
+        let err = plan_on(&two, "abs-px --display 3 1 1").unwrap_err();
+        assert!(err.contains("display 3 does not exist"), "{err}");
+        assert!(err.contains("the displays are 0, 1"), "{err}");
+        assert!(err.contains("limina input <vm> info"), "{err}");
+        let err = plan_on(&two, "abs-px --display 1 1280 0").unwrap_err();
+        assert!(err.contains("outside display 1's 1280x800 mode"), "{err}");
+
+        // Two live scanouts, no report, nothing learned: the window's identity floor is no
+        // place at all for either display.
+        let unknown = Displays(
+            [0, 1]
+                .into_iter()
+                .map(|slot| Display {
+                    slot,
+                    scanout: Some((1280, 800)),
+                    logical: None,
+                    mapping: Mapping::Identity,
+                })
+                .collect(),
+        );
+        for line in ["abs-px --display 1 1 1", "abs-norm --display 0 0.5 0.5"] {
+            let err = plan_on(&unknown, line).unwrap_err();
+            assert!(err.contains("cannot be pointed at"), "{line}: {err}");
+            assert!(err.contains("reported no layout"), "{line}: {err}");
+        }
+        // The plain verbs keep their meaning: a fraction of the whole range.
+        assert!(plan_on(&unknown, "abs-norm 0.5 0.5").is_ok());
+
+        // A report that leaves out a live scanout does not place it.
+        let mut partial = two.clone();
+        partial.0[1].logical = None;
+        let err = plan_on(&partial, "abs-norm --display 1 0.5 0.5").unwrap_err();
+        assert!(err.contains("does not place Virtual-2"), "{err}");
+
+        // Headless: a reported display whose mode the supervisor was never told.
+        let mut headless = two;
+        headless.0[1].scanout = None;
+        let err = plan_on(&headless, "abs-px --display 1 10 10").unwrap_err();
+        assert!(err.contains("abs-px --display 1 X Y WxH"), "{err}");
+        assert!(plan_on(&headless, "abs-px --display 1 10 10 1280x800").is_ok());
+        assert!(plan_on(&headless, "abs-norm --display 1 0.5 0.5").is_ok());
+    }
+
+    #[test]
+    fn info_lists_each_display_with_its_device_and_share() {
+        let (_, mut displays) = side_by_side();
+        displays.0.push(Display {
+            slot: 2,
+            scanout: Some((640, 480)),
+            logical: None,
+            mapping: Mapping::Report(Vec::new()),
+        });
+        let (_, report) = Session::default()
+            .plan_in(Verb::Info, || displays.clone())
+            .unwrap();
+        let line = |n: usize| {
+            report
+                .iter()
+                .find(|l| l.starts_with(&format!("display {n} ")))
+                .unwrap_or_else(|| panic!("no display {n} in {report:?}"))
+                .clone()
+        };
+        assert_eq!(
+            line(0),
+            "display 0 connector Virtual-1 scanout 2000x1250 logical 1000x625+0+0 device ptr \
+             mapping report x 0..14371 y 0..25599"
+        );
+        assert_eq!(
+            line(1),
+            "display 1 connector Virtual-2 scanout 1280x800 logical 1280x800+1000+0 device ptr \
+             mapping report x 14371..32767 y 0..32767"
+        );
+        assert!(
+            line(2)
+                .contains("mapping none (the layout the guest reported does not place Virtual-3)"),
+            "{}",
+            line(2)
         );
     }
 

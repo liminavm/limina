@@ -287,7 +287,7 @@ pub(crate) fn forget_guest_layout() {
 /// the only tie between a monitor the compositor is arranging and a scanout we are driving.
 /// Connectors outside the scanout pool are dropped rather than guessed at; a report naming
 /// none we could drive is no report.
-fn reported_layout() -> Option<Vec<(usize, GuestRect)>> {
+pub(crate) fn reported_layout() -> Option<Vec<(usize, GuestRect)>> {
     let cur = REPORTED.lock().unwrap();
     let layout = cur.as_ref()?;
     let slots: Vec<(usize, GuestRect)> = layout
@@ -339,11 +339,30 @@ pub(crate) fn has_report() -> bool {
 /// does not place (a connector mid-handshake): the caller drops the event, which is a pointer
 /// that briefly does not move rather than one that jumps.
 pub(crate) fn abs_through_report(slot: usize, u: f64, v: f64, abs_max: i32) -> Option<(i32, i32)> {
+    match reported_layout() {
+        Some(rects) => abs_in_layout(&rects, slot, u, v, abs_max),
+        None => Some(abs_whole_range(u, v, abs_max)),
+    }
+}
+
+/// A unit position straight over the whole range: the single-display mapping.
+pub(crate) fn abs_whole_range(u: f64, v: f64, abs_max: i32) -> (i32, i32) {
     let (u, v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
     let range = f64::from(abs_max);
-    let Some(rects) = reported_layout() else {
-        return Some(((u * range).round() as i32, (v * range).round() as i32));
-    };
+    ((u * range).round() as i32, (v * range).round() as i32)
+}
+
+/// [`abs_through_report`] against a given layout (a report's rects, keyed by slot): pure, so a
+/// caller that took one snapshot of the report maps every point through that same snapshot.
+pub(crate) fn abs_in_layout(
+    rects: &[(usize, GuestRect)],
+    slot: usize,
+    u: f64,
+    v: f64,
+    abs_max: i32,
+) -> Option<(i32, i32)> {
+    let (u, v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+    let range = f64::from(abs_max);
     let r = rects.iter().find(|(s, _)| *s == slot).map(|(_, r)| *r)?;
     let dw = rects.iter().map(|(_, r)| r.x + r.w).max()?;
     let dh = rects.iter().map(|(_, r)| r.y + r.h).max()?;
@@ -504,7 +523,11 @@ impl Desktop {
 /// the range is then the single-display mapping ([`abs_through_report`]) and all of it is
 /// desktop, which is exactly true for one display and the stock tier's known floor for more.
 pub(crate) fn desktop_in_range(abs_max: f64) -> Option<Desktop> {
-    let rects = reported_layout()?;
+    layout_in_range(&reported_layout()?, abs_max)
+}
+
+/// [`desktop_in_range`] for a given layout (a report's rects, keyed by slot).
+pub(crate) fn layout_in_range(rects: &[(usize, GuestRect)], abs_max: f64) -> Option<Desktop> {
     let dw = f64::from(rects.iter().map(|(_, r)| r.x + r.w).max()?);
     let dh = f64::from(rects.iter().map(|(_, r)| r.y + r.h).max()?);
     if dw <= 0.0 || dh <= 0.0 {

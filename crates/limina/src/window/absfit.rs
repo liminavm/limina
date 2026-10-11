@@ -279,32 +279,6 @@ pub(crate) fn observe(device: (f64, f64), echo: &[CursorEcho; MAX_SCANOUTS]) {
     }
 }
 
-/// The value to send so the guest's cursor lands on `unit` of `slot`'s own scanout, or `None`
-/// while that slot's mapping is not known.
-pub(crate) fn place(
-    slot: usize,
-    unit: (f64, f64),
-    scanout: (u32, u32),
-    abs_max: i32,
-) -> Option<(i32, i32)> {
-    if scanout.0 == 0 || scanout.1 == 0 {
-        return None;
-    }
-    let fits = FITS.lock().unwrap();
-    let f = fits.get(slot)?;
-    let u =
-        f.x.line?
-            .unit(unit.0.clamp(0.0, 1.0) * f64::from(scanout.0))?;
-    let v =
-        f.y.line?
-            .unit(unit.1.clamp(0.0, 1.0) * f64::from(scanout.1))?;
-    let range = f64::from(abs_max);
-    Some((
-        (u.clamp(0.0, 1.0) * range).round() as i32,
-        (v.clamp(0.0, 1.0) * range).round() as i32,
-    ))
-}
-
 /// Where to put the guest's pointer for a unit position on one slot: the guest's own report
 /// when it makes one, else the mapping learned from its echo, else straight onto the range.
 ///
@@ -312,16 +286,116 @@ pub(crate) fn place(
 /// has moved the pointer enough to learn from — the behaviour that shipped before this module,
 /// so nothing regresses while the fit converges.
 pub(crate) fn abs_position(slot: usize, u: f64, v: f64, abs_max: i32) -> Option<(i32, i32)> {
-    if !super::arrangement::has_report() {
-        let sizes = super::echo::scanout_sizes();
-        // One display's share IS the range: there is nothing to learn, and identity is exact.
-        if sizes.iter().filter(|s| s.0 > 0 && s.1 > 0).count() > 1
-            && let Some(p) = place(slot, (u, v), sizes[slot], abs_max)
-        {
-            return Some(p);
+    match mapping(slot) {
+        fitted @ Mapping::Fitted { .. } => fitted.place(slot, (u, v), abs_max),
+        // The report when there is one, the whole range when there is not.
+        Mapping::Report(_) | Mapping::Identity => {
+            super::arrangement::abs_through_report(slot, u, v, abs_max)
         }
     }
-    super::arrangement::abs_through_report(slot, u, v, abs_max)
+}
+
+/// Which of [`abs_position`]'s three rules places a slot right now, with what that rule needs —
+/// one snapshot of the report or the fitted lines, so every point mapped through it agrees.
+///
+/// `limina input --display` maps through this so an injected position is exactly what the
+/// window would send for the same point, and so it can tell an exact mapping from the identity
+/// floor, which it refuses wherever the window would merely be wrong (`inject.rs`).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Mapping {
+    /// The guest's agent reported its arrangement: these rects, keyed by slot.
+    Report(Vec<(usize, super::arrangement::GuestRect)>),
+    /// No report, several live scanouts, and this slot's lines are fitted from the echo.
+    Fitted {
+        x: Line,
+        y: Line,
+        scanout: (u32, u32),
+    },
+    /// The unit position straight over the range: exact for one display, and the stock floor
+    /// — no correct mapping at all — for a slot of several with nothing learned.
+    Identity,
+}
+
+/// [`Mapping`] for one slot, by [`abs_position`]'s precedence.
+pub(crate) fn mapping(slot: usize) -> Mapping {
+    if let Some(rects) = super::arrangement::reported_layout() {
+        return Mapping::Report(rects);
+    }
+    let sizes = super::echo::scanout_sizes();
+    // One display's share IS the range: there is nothing to learn, and identity is exact.
+    if sizes.iter().filter(|s| s.0 > 0 && s.1 > 0).count() > 1
+        && let Some(&scanout) = sizes.get(slot)
+        && scanout.0 > 0
+        && scanout.1 > 0
+    {
+        let fits = FITS.lock().unwrap();
+        if let Some(f) = fits.get(slot)
+            && let (Some(x), Some(y)) = (f.x.line(), f.y.line())
+        {
+            return Mapping::Fitted { x, y, scanout };
+        }
+    }
+    Mapping::Identity
+}
+
+impl Mapping {
+    /// The device value for a unit position on `slot`'s own content; `None` where this mapping
+    /// cannot place the slot (a report that does not name it).
+    pub(crate) fn place(&self, slot: usize, unit: (f64, f64), abs_max: i32) -> Option<(i32, i32)> {
+        let (u, v) = unit;
+        match self {
+            Mapping::Report(rects) => super::arrangement::abs_in_layout(rects, slot, u, v, abs_max),
+            // The value to send so the guest's cursor lands on `unit` of the slot's own
+            // scanout, through the lines its echo taught us.
+            Mapping::Fitted { x, y, scanout } => {
+                let range = f64::from(abs_max);
+                let u = x.unit(u.clamp(0.0, 1.0) * f64::from(scanout.0));
+                let v = y.unit(v.clamp(0.0, 1.0) * f64::from(scanout.1));
+                match (u, v) {
+                    (Some(u), Some(v)) => Some((
+                        (u.clamp(0.0, 1.0) * range).round() as i32,
+                        (v.clamp(0.0, 1.0) * range).round() as i32,
+                    )),
+                    // A degenerate line places nothing; the identity is what the window
+                    // falls back to then.
+                    _ => Mapping::Identity.place(slot, unit, abs_max),
+                }
+            }
+            Mapping::Identity => Some(super::arrangement::abs_whole_range(u, v, abs_max)),
+        }
+    }
+
+    /// `slot`'s share of the device range as fractions of it (`0.0..=1.0`, top-left origin):
+    /// where its content's left/top and right/bottom edges land. The same relation
+    /// [`Self::place`] applies, as a rectangle.
+    pub(crate) fn share(&self, slot: usize) -> Option<super::arrangement::RangeRect> {
+        match self {
+            Mapping::Report(rects) => {
+                super::arrangement::layout_in_range(rects, 1.0)?.rect_of(slot)
+            }
+            Mapping::Fitted { x, y, scanout } => Some(super::arrangement::RangeRect {
+                x0: x.unit(0.0)?,
+                y0: y.unit(0.0)?,
+                x1: x.unit(f64::from(scanout.0))?,
+                y1: y.unit(f64::from(scanout.1))?,
+            }),
+            Mapping::Identity => Some(super::arrangement::RangeRect {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 1.0,
+                y1: 1.0,
+            }),
+        }
+    }
+
+    /// The rule's name, as `limina input info` and its refusals print it.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Mapping::Report(_) => "report",
+            Mapping::Fitted { .. } => "fitted",
+            Mapping::Identity => "identity",
+        }
+    }
 }
 
 /// Every live slot's share of the range, as far as the fitted lines know it — the seam rule's

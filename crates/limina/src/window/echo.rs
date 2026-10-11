@@ -21,7 +21,7 @@
 
 use std::sync::Mutex;
 
-use super::present::MAX_SCANOUTS;
+pub(crate) use super::present::MAX_SCANOUTS;
 
 /// One scanout's cursor plane as last echoed by the guest.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
