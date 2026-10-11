@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-"""The in-guest oracle for `limina input`: grab the three virtio input nodes (found by name),
+"""The in-guest oracle for `limina input`: grab the four virtio input nodes (found by name),
 print every event as `<dev> <type> <code> <value>`, and stop on the end marker (KEY_F14
 released). Writes /tmp/limina-inject-ready once the nodes are grabbed. Argument: seconds to
 wait for the marker."""
 
 import fcntl, os, select, struct, sys, time
 NAMES = {"kbd": "limina Virtual Keyboard", "ptr": "limina Virtual Pointer",
-         "rel": "limina Virtual Mouse"}
+         "rel": "limina Virtual Mouse", "pad": "limina Virtual Touchpad"}
 nodes = {}
 for block in open("/proc/bus/input/devices").read().split("\n\n"):
     name = ev = None
@@ -21,7 +21,7 @@ for block in open("/proc/bus/input/devices").read().split("\n\n"):
     for k, v in NAMES.items():
         if name == v and ev:
             nodes[k] = "/dev/input/" + ev
-assert len(nodes) == 3, nodes
+assert len(nodes) == 4, nodes
 fds = {}
 for k, p in nodes.items():
     fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)

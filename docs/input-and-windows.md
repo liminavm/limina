@@ -623,8 +623,11 @@ injector skips and a system-compositor test needs; osascript into the window is 
 alternative, and it needs the window key and loses lone modifiers.
 
 - **Which devices.** Keys go to the virtio keyboard; positions, buttons and wheel to the absolute
-  tablet (as the window sends them); `rel` to the virtual mouse; `ev touchpad …` reaches the
-  multitouch touchpad raw. Until the guest binds `virtio_input` the key router sends keys to the
+  tablet (as the window sends them); `rel` to the virtual mouse; `touchpad click|tap N` lands N
+  fingers on the multitouch touchpad and presses its own button (a click) or lifts them inside
+  the tap timeout (a tap), leaving what that means to the guest's settings, and `ev touchpad …`
+  reaches it raw. Injected touches take tracking ids from the upper half of the range, so they
+  never reuse one the window's touches hold; the two must still not touch at once. Until the guest binds `virtio_input` the key router sends keys to the
   USB HID gadget instead (`limina_input::router`) — a harness that needs the virtio node waits for
   it (`limina Virtual Keyboard` in `/proc/bus/input/devices`). Keys are evdev codes, by kernel
   name or number, and only the ones the keyboard advertises: no modifier normalization (§6b)
@@ -728,7 +731,8 @@ alternative, and it needs the window key and loses lone modifiers.
 - `LIMINA_POINTER_WIRE_TRACE` prints injected events as `[WIRE] … dev=inject-<device>`. The L2
   oracle is `crates/limina-test/tests/l2_input_inject.rs`: it reads the guest's virtio evdev nodes
   raw (found by name, grabbed so the greeter sees nothing) and compares them event for event,
-  headless and windowed. The headless run starts with the lever off and checks the refusal
+  headless and windowed — the touchpad by the shape of its stream (fingers, spacing, button,
+  lifts), since its positions follow the host trackpad's size. The headless run starts with the lever off and checks the refusal
   before turning it on at runtime; the windowed one starts with `LIMINA_INPUT_INJECT=1`. Both
   check that `keys` lists `KEY_ESC`, and that a script failing on its second verb exits nonzero
   with its first verb delivered and its third never sent. The per-display run boots headless

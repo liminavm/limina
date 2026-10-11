@@ -40,6 +40,9 @@ use limina_debug::wire;
 use limina_input::InputEvent;
 use limina_input::constants::*;
 use limina_input::names;
+use limina_input::touchpad::{
+    Contact, MAX_SLOTS, MAX_TRACKING_ID, TOUCHPAD_RES, Touchpad, TouchpadGeometry,
+};
 
 use crate::window::{InputDev, WorkerConn, WorkerIo};
 
@@ -63,6 +66,14 @@ VERBS (one per line on stdin, or one on the command line):
                                  click N times, transitions 30 ms apart
   scroll V [H]                   wheel, in detents (fractions allowed): V>0 is up/away,
                                  H>0 is right; sends hi-res (v120) and detent events
+  touchpad click|tap N [--at U,V]
+                                 N fingers (1-3) on the virtual touchpad, side by side
+                                 18 mm apart around (U,V) of its surface (0..1; default
+                                 the centre). click: land, press and release the pad's
+                                 button, lift. tap: land, lift 60 ms later. The guest
+                                 decides what it is (its click method; a tap does
+                                 nothing with tap-to-click off). Not while a real
+                                 finger is on the trackpad
   ev DEV TYPE CODE VALUE         raw event, no SYN (DEV: kbd|ptr|rel|touchpad)
   syn [DEV]                      a SYN_REPORT on DEV, or on every device
   release                        release what this connection holds, and what
@@ -279,6 +290,13 @@ pub enum Verb {
         v: f64,
         h: f64,
     },
+    /// Fingers on the virtual touchpad: a physical click, or a tap.
+    Touchpad {
+        tap: bool,
+        fingers: usize,
+        /// Where on the surface, as fractions of it (top-left origin).
+        at: (f64, f64),
+    },
     Ev {
         dev: Device,
         ev: InputEvent,
@@ -478,6 +496,35 @@ impl Verb {
                 }
                 Verb::Scroll { v, h }
             }
+            "touchpad" => {
+                let tap = match w.next() {
+                    Some("click") => false,
+                    Some("tap") => true,
+                    other => return Err(format!("expected touchpad click|tap, got {other:?}")),
+                };
+                let fingers = w
+                    .next()
+                    .ok_or("touchpad needs a finger count")?
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| (1..=MAX_SLOTS).contains(n))
+                    .ok_or_else(|| format!("touchpad takes 1..={MAX_SLOTS} fingers"))?;
+                let at = match w.next() {
+                    None => (0.5, 0.5),
+                    Some(word) => {
+                        let spot = match word.strip_prefix("--at") {
+                            Some("") => w.next().ok_or("--at needs U,V")?,
+                            Some(v) if v.starts_with('=') => &v[1..],
+                            _ => return Err(format!("unexpected {word:?} after the verb")),
+                        };
+                        let (u, v) = spot
+                            .split_once(',')
+                            .ok_or_else(|| format!("--at {spot:?} is not U,V"))?;
+                        (unit(Some(u), "u")?, unit(Some(v), "v")?)
+                    }
+                };
+                Verb::Touchpad { tap, fingers, at }
+            }
             "ev" => {
                 let dev = Device::parse(w.next().ok_or("ev needs DEV TYPE CODE VALUE")?)?;
                 let type_ = names::event_type(w.next().ok_or("ev needs TYPE")?)?;
@@ -521,11 +568,14 @@ pub fn px_to_device(p: f64, size: u32) -> i32 {
 }
 
 /// Keys and buttons pressed and not yet released, each in the order it was pressed — so a
-/// release can undo them in reverse, as a hand would (Super-Tab lets go of Tab first).
+/// release can undo them in reverse, as a hand would (Super-Tab lets go of Tab first) — and
+/// the touchpad's button and fingers (`BTN_LEFT`, `BTN_TOUCH`), should a `touchpad` verb stop
+/// halfway.
 #[derive(Debug, Default)]
 pub struct Held {
     keys: Vec<u16>,
     buttons: Vec<u16>,
+    pad: Vec<u16>,
 }
 
 fn press(set: &mut Vec<u16>, code: u16) {
@@ -539,6 +589,7 @@ impl Held {
         Held {
             keys: Vec::new(),
             buttons: Vec::new(),
+            pad: Vec::new(),
         }
     }
 
@@ -549,6 +600,7 @@ impl Held {
         let set = match dev {
             Device::Kbd => &mut self.keys,
             Device::Ptr => &mut self.buttons,
+            Device::Touchpad if matches!(ev.code, BTN_LEFT | BTN_TOUCH) => &mut self.pad,
             _ => return,
         };
         if ev.value == 0 {
@@ -559,7 +611,7 @@ impl Held {
     }
 
     fn is_empty(&self) -> bool {
-        self.keys.is_empty() && self.buttons.is_empty()
+        self.keys.is_empty() && self.buttons.is_empty() && self.pad.is_empty()
     }
 
     fn absorb(&mut self, other: Held) {
@@ -569,15 +621,37 @@ impl Held {
         for b in other.buttons {
             press(&mut self.buttons, b);
         }
+        for p in other.pad {
+            press(&mut self.pad, p);
+        }
     }
 
-    /// The frames that release all of it: keys last-pressed first, then buttons likewise.
+    /// The frames that release all of it: keys last-pressed first, then buttons likewise, then
+    /// the touchpad's button and its fingers.
     fn release_frames(&self) -> Vec<Frame> {
         let keys = self.keys.iter().rev().map(|&k| (Device::Kbd, k));
         let buttons = self.buttons.iter().rev().map(|&b| (Device::Ptr, b));
-        keys.chain(buttons)
+        let pad_button = self
+            .pad
+            .contains(&BTN_LEFT)
+            .then_some((Device::Touchpad, BTN_LEFT));
+        let mut frames: Vec<Frame> = keys
+            .chain(buttons)
+            .chain(pad_button)
             .map(|(dev, code)| Frame::one(dev, InputEvent::new(EV_KEY, code, 0)))
-            .collect()
+            .collect();
+        if self.pad.contains(&BTN_TOUCH)
+            && let Some(pad) = lock(&TOUCHPAD).as_mut()
+        {
+            // The encoder's lift ends in its own SYN_REPORT.
+            frames.push(Frame {
+                dev: Device::Touchpad,
+                events: pad.release_all(),
+                syn: false,
+                pause: Duration::ZERO,
+            });
+        }
+        frames
     }
 
     /// What release frames that were never sent still hold, in press order again.
@@ -628,6 +702,64 @@ const BUTTON_PACE: Duration = Duration::from_millis(30);
 
 fn key(code: u16, down: bool) -> Frame {
     Frame::one(Device::Kbd, InputEvent::new(EV_KEY, code, i32::from(down)))
+}
+
+/// How far apart `touchpad`'s fingers land, side by side: about where two fingertips rest.
+const FINGER_SPACING_MM: i32 = 18;
+
+/// How long `touchpad tap`'s fingers stay down: well inside libinput's 180 ms tap timeout.
+const TAP_HOLD: Duration = Duration::from_millis(60);
+
+/// How long `touchpad click`'s fingers rest before the press, and after the release.
+const CLICK_SETTLE: Duration = Duration::from_millis(20);
+
+/// The touchpad encoder injection writes with: its tracking ids start halfway up the range, away
+/// from the ones the window's touches take from zero.
+static TOUCHPAD: Mutex<Option<Touchpad>> = Mutex::new(None);
+
+/// `touchpad click|tap`'s frames: `fingers` contacts landing side by side around `at`, then
+/// either the pad's button pressed and released, or nothing, and the lift.
+fn touchpad_frames(
+    pad: &mut Touchpad,
+    geometry: TouchpadGeometry,
+    tap: bool,
+    fingers: usize,
+    at: (f64, f64),
+) -> Vec<Frame> {
+    let (cx, cy) = geometry.to_units(at.0, at.1);
+    let spacing = FINGER_SPACING_MM * TOUCHPAD_RES as i32;
+    let contacts: Vec<Contact> = (0..fingers)
+        .map(|i| {
+            let offset = (2 * i as i32 - (fingers as i32 - 1)) * spacing / 2;
+            Contact {
+                id: i as u64,
+                x: (cx + offset).clamp(0, geometry.width as i32),
+                y: cy,
+            }
+        })
+        .collect();
+    // The encoder's frames end in their own SYN_REPORT.
+    let raw = |events: Vec<InputEvent>| Frame {
+        dev: Device::Touchpad,
+        events,
+        syn: false,
+        pause: Duration::ZERO,
+    };
+    let button = |down: bool| {
+        Frame::one(
+            Device::Touchpad,
+            InputEvent::new(EV_KEY, BTN_LEFT, i32::from(down)),
+        )
+    };
+    let mut frames = vec![raw(pad.frame(&contacts))];
+    if tap {
+        frames.push(raw(pad.release_all()).after(TAP_HOLD));
+    } else {
+        frames.push(button(true).after(CLICK_SETTLE));
+        frames.push(button(false).after(BUTTON_PACE));
+        frames.push(raw(pad.release_all()).after(CLICK_SETTLE));
+    }
+    frames
 }
 
 /// One connection's injection state: what it holds, and the scroll remainders.
@@ -980,6 +1112,13 @@ impl Session {
                     return Err("scroll 0 moves nothing".into());
                 }
                 vec![Frame::new(Device::Ptr, events)]
+            }
+            Verb::Touchpad { tap, fingers, at } => {
+                let mut pad = lock(&TOUCHPAD);
+                let pad = pad.get_or_insert_with(|| {
+                    Touchpad::with_tracking_ids_from(MAX_TRACKING_ID / 2 + 1)
+                });
+                touchpad_frames(pad, crate::hosttrackpad::geometry(), tap, fingers, at)
             }
             Verb::Ev { dev, ev } => vec![Frame {
                 dev,
@@ -1389,6 +1528,111 @@ mod tests {
                     .map(move |e| (f.dev, e.type_, e.code, e.value))
             })
             .collect()
+    }
+
+    #[test]
+    fn touchpad_verbs_parse() {
+        let tp = |l: &str| Verb::parse(l);
+        assert_eq!(
+            tp("touchpad click 3").unwrap(),
+            Verb::Touchpad {
+                tap: false,
+                fingers: 3,
+                at: (0.5, 0.5)
+            }
+        );
+        assert_eq!(
+            tp("touchpad tap 2 --at 0.25,0.75").unwrap(),
+            Verb::Touchpad {
+                tap: true,
+                fingers: 2,
+                at: (0.25, 0.75)
+            }
+        );
+        assert_eq!(
+            tp("touchpad tap 1 --at=0,1").unwrap(),
+            Verb::Touchpad {
+                tap: true,
+                fingers: 1,
+                at: (0.0, 1.0)
+            }
+        );
+        for bad in [
+            "touchpad",
+            "touchpad press 2",
+            "touchpad click",
+            "touchpad click 0",
+            "touchpad click 4",
+            "touchpad click 2 --at",
+            "touchpad click 2 --at 0.5",
+            "touchpad click 2 --at 1.5,0.5",
+            "touchpad click 2 0.5,0.5",
+            "touchpad click 2 --at 0.5,0.5 extra",
+        ] {
+            assert!(tp(bad).is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    /// 100 x 50 mm.
+    const PAD: TouchpadGeometry = TouchpadGeometry {
+        width: 10_000,
+        height: 5_000,
+    };
+
+    #[test]
+    fn a_touchpad_click_lands_presses_releases_and_lifts_on_the_touchpad() {
+        let mut pad = Touchpad::with_tracking_ids_from(100);
+        let frames = touchpad_frames(&mut pad, PAD, false, 3, (0.5, 0.5));
+        assert!(frames.iter().all(|f| f.dev == Device::Touchpad));
+        let ev = evs(&frames);
+        let x = |v| (Device::Touchpad, EV_ABS, ABS_MT_POSITION_X, v);
+        // Three fingers 18 mm apart around the centre, all at the centre's height.
+        for v in [3200, 5000, 6800] {
+            assert!(ev.contains(&x(v)), "a finger at x={v}: {ev:?}");
+        }
+        assert!(ev.contains(&(Device::Touchpad, EV_ABS, ABS_MT_TRACKING_ID, 100)));
+        let at = |e: (Device, u16, u16, i32)| ev.iter().position(|&x| x == e).unwrap();
+        let tool = at((Device::Touchpad, EV_KEY, BTN_TOOL_TRIPLETAP, 1));
+        let press = at((Device::Touchpad, EV_KEY, BTN_LEFT, 1));
+        let release = at((Device::Touchpad, EV_KEY, BTN_LEFT, 0));
+        let lift = at((Device::Touchpad, EV_KEY, BTN_TOUCH, 0));
+        assert!(tool < press && press < release && release < lift, "{ev:?}");
+        assert_eq!(pad.active(), 0, "every finger lifted");
+        assert!(frames[1].pause > Duration::ZERO && frames[2].pause >= BUTTON_PACE);
+    }
+
+    #[test]
+    fn a_touchpad_click_stopped_halfway_is_released_with_its_fingers() {
+        let mut held = Held::new();
+        let ev = |code, value| InputEvent::new(EV_KEY, code, value);
+        held.note(Device::Touchpad, ev(BTN_TOOL_DOUBLETAP, 1));
+        held.note(Device::Touchpad, ev(BTN_TOUCH, 1));
+        held.note(Device::Touchpad, ev(BTN_LEFT, 1));
+        assert!(!held.is_empty());
+        let frames = held.release_frames();
+        assert_eq!(
+            frames[0],
+            Frame::one(Device::Touchpad, ev(BTN_LEFT, 0)),
+            "the button first"
+        );
+        held.note(Device::Touchpad, ev(BTN_LEFT, 0));
+        held.note(Device::Touchpad, ev(BTN_TOUCH, 0));
+        assert!(held.is_empty(), "a lifted, released touchpad holds nothing");
+    }
+
+    #[test]
+    fn a_touchpad_tap_lifts_inside_the_tap_timeout_and_presses_nothing() {
+        let mut pad = Touchpad::new();
+        let frames = touchpad_frames(&mut pad, PAD, true, 2, (0.0, 0.0));
+        let ev = evs(&frames);
+        assert!(!ev.iter().any(|e| e.2 == BTN_LEFT), "{ev:?}");
+        assert!(ev.contains(&(Device::Touchpad, EV_KEY, BTN_TOOL_DOUBLETAP, 1)));
+        // At the corner, the left finger is clamped onto the surface.
+        assert!(ev.contains(&(Device::Touchpad, EV_ABS, ABS_MT_POSITION_X, 0)));
+        assert!(ev.contains(&(Device::Touchpad, EV_ABS, ABS_MT_POSITION_X, 900)));
+        assert_eq!(frames.len(), 2);
+        assert!(frames[1].pause < Duration::from_millis(180));
+        assert_eq!(pad.active(), 0);
     }
 
     const SYN_K: (Device, u16, u16, i32) = (Device::Kbd, EV_SYN, SYN_REPORT, 0);

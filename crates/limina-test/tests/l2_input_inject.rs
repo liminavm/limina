@@ -8,8 +8,10 @@
 //! system-compositor test needs from that is the *real* device path — the kernel's
 //! `virtio_input` driver, the evdev node, logind's TakeDevice — which an in-guest uinput
 //! injector bypasses. So the oracle here is the guest's own `/dev/input/event*` nodes for the
-//! virtio keyboard, tablet and mouse, read raw (`struct input_event`) and compared event for
-//! event with what each verb promises to send.
+//! virtio keyboard, tablet, mouse and touchpad, read raw (`struct input_event`) and compared
+//! event for event with what each verb promises to send. The touchpad's positions follow the
+//! host's trackpad size, so its stream is checked for its shape: the fingers, their spacing,
+//! the button and the lifts.
 //!
 //! # Traps this test is shaped around
 //!
@@ -52,7 +54,7 @@ use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
-/// The in-guest reader: grab the three virtio nodes (found by name), print every event as
+/// The in-guest reader: grab the four virtio nodes (found by name), print every event as
 /// `<dev> <type> <code> <value>`, and stop on the end marker (KEY_F14 released).
 const READER: &str = include_str!("../guest/injectreader.py");
 
@@ -77,6 +79,8 @@ abs-px 640 400 1280x800
 rel 7 -3
 button click right
 scroll 1
+touchpad click 2 --at 0.5,0.5
+touchpad tap 1 --at 0.25,0.75
 sleep 50
 key tap KEY_F14
 ";
@@ -134,6 +138,75 @@ fn expected() -> [(&'static str, Vec<Event>); 3] {
     ];
     let rel = vec![(EV_REL, 0, 7), (EV_REL, 1, -3), SYN];
     [("kbd", kbd), ("ptr", ptr), ("rel", rel)]
+}
+
+/// The touchpad verbs' stream, by its shape: `touchpad click 2` lands two fingers side by side
+/// 18 mm apart (tracking ids from 32768, the half of the range injection takes), presses and
+/// releases the pad's button with them down, and lifts them; `touchpad tap 1` lands one and
+/// lifts it, pressing nothing.
+fn check_touchpad(name: &str, got: &[Event]) {
+    const ABS_MT_SLOT: u16 = 0x2f;
+    const ABS_MT_POSITION_X: u16 = 0x35;
+    const ABS_MT_POSITION_Y: u16 = 0x36;
+    const ABS_MT_TRACKING_ID: u16 = 0x39;
+    const BTN_LEFT: u16 = 0x110;
+    const BTN_TOOL_FINGER: u16 = 0x145;
+    const BTN_TOUCH: u16 = 0x14a;
+    const BTN_TOOL_DOUBLETAP: u16 = 0x14d;
+    let at = |e: Event| got.iter().position(|&g| g == e);
+    let must = |e: Event, what: &str| {
+        at(e).unwrap_or_else(|| panic!("{name}: the touchpad never carried {what} {e:?}: {got:?}"))
+    };
+    let two = must((EV_KEY, BTN_TOOL_DOUBLETAP, 1), "two fingers");
+    let first = must((EV_ABS, ABS_MT_TRACKING_ID, 32768), "the first finger");
+    let second = must((EV_ABS, ABS_MT_TRACKING_ID, 32769), "the second finger");
+    let press = must((EV_KEY, BTN_LEFT, 1), "the press");
+    let release = must((EV_KEY, BTN_LEFT, 0), "the release");
+    let lift = must((EV_KEY, BTN_TOUCH, 0), "the lift");
+    assert!(
+        first < second && second < two && two < press && press < release && release < lift,
+        "{name}: the click is out of order: {got:?}"
+    );
+    // The two fingers' positions, from the landing frame (slot 0, then slot 1).
+    let landing = &got[..two];
+    let xs: Vec<i32> = landing
+        .iter()
+        .filter(|e| e.0 == EV_ABS && e.1 == ABS_MT_POSITION_X)
+        .map(|e| e.2)
+        .collect();
+    let ys: Vec<i32> = landing
+        .iter()
+        .filter(|e| e.0 == EV_ABS && e.1 == ABS_MT_POSITION_Y)
+        .map(|e| e.2)
+        .collect();
+    assert!(
+        landing.contains(&(EV_ABS, ABS_MT_SLOT, 1)) && xs.len() == 2 && ys.len() == 2,
+        "{name}: two fingers did not land in two slots: {landing:?}"
+    );
+    assert_eq!(
+        xs[1] - xs[0],
+        1800,
+        "{name}: the fingers are not 18 mm apart"
+    );
+    assert_eq!(ys[0], ys[1], "{name}: the fingers are not side by side");
+    // The tap: one finger, no button, lifted.
+    let tap = &got[lift + 1..];
+    let one = tap
+        .iter()
+        .position(|&e| e == (EV_KEY, BTN_TOOL_FINGER, 1))
+        .unwrap_or_else(|| panic!("{name}: the tap's finger never landed: {tap:?}"));
+    assert!(
+        tap.contains(&(EV_ABS, ABS_MT_TRACKING_ID, 32770)),
+        "{name}: the tap took no fresh tracking id: {tap:?}"
+    );
+    assert!(
+        tap[one..].contains(&(EV_KEY, BTN_TOUCH, 0)),
+        "{name}: the tap never lifted: {tap:?}"
+    );
+    assert!(
+        !tap.iter().any(|e| e.0 == EV_KEY && e.1 == BTN_LEFT),
+        "{name}: the tap pressed the button: {tap:?}"
+    );
 }
 
 fn parse_reader(out: &str, dev: &str) -> Vec<Event> {
@@ -264,7 +337,8 @@ fn run(name: &str, cfg: GuestConfig, window_live: bool, enabled: bool) {
         .ssh_poll(
             "grep -q 'limina Virtual Keyboard' /proc/bus/input/devices && \
              grep -q 'limina Virtual Pointer' /proc/bus/input/devices && \
-             grep -q 'limina Virtual Mouse' /proc/bus/input/devices",
+             grep -q 'limina Virtual Mouse' /proc/bus/input/devices && \
+             grep -q 'limina Virtual Touchpad' /proc/bus/input/devices",
             Duration::from_secs(120),
         )
         .unwrap_or_else(|e| panic!("{name}: the virtio input devices never appeared: {e:#}"));
@@ -300,6 +374,7 @@ fn run(name: &str, cfg: GuestConfig, window_live: bool, enabled: bool) {
         output.contains("END"),
         "{name}: the end marker never reached the virtio keyboard:\n{output}"
     );
+    check_touchpad(name, &parse_reader(&output, "pad"));
     for (dev, want) in expected() {
         let got = parse_reader(&output, dev);
         if !window_live || dev == "kbd" {
@@ -454,7 +529,9 @@ fn l2_input_inject_per_display_headless() {
     guest
         .ssh_poll(
             "grep -q 'limina Virtual Pointer' /proc/bus/input/devices && \
-             grep -q 'limina Virtual Keyboard' /proc/bus/input/devices",
+             grep -q 'limina Virtual Keyboard' /proc/bus/input/devices && \
+             grep -q 'limina Virtual Mouse' /proc/bus/input/devices && \
+             grep -q 'limina Virtual Touchpad' /proc/bus/input/devices",
             Duration::from_secs(120),
         )
         .unwrap_or_else(|e| panic!("{name}: the virtio input devices never appeared: {e:#}"));
