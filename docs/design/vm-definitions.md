@@ -80,6 +80,10 @@ cpus   = 4
 memory = "8G"        # the MAXIMUM; managed VMs always boot dynamic with a 1 GiB floor
 reclaim = "moderate" # disabled|light|moderate|aggressive (how hard idle memory is clawed back)
 battery = true       # mirror the host battery into the guest (virtio-i2c SBS); default true
+input  = false       # virtio keyboard/pointer/mouse/touchpad on a HEADLESS run too, for
+                     # `limina input` (= --input; a window always has them). Changes the
+                     # device set: a suspend resumes only with the same value (the worker
+                     # refuses the other and keeps the snapshot). `start --input` = one run.
 
 [[disk]]                        # ordered — attach order IS device order (M10)
 path  = "disks/root.raw"        # relative = inside the bundle

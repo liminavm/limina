@@ -699,7 +699,13 @@ alternative, and it needs the window key and loses lone modifiers.
 - **Headless needs `--input`.** A windowed run always has the four devices. A headless run gets
   them only with `--input`, which wires the same socketpairs per spawn (`inject::WorkerPipes`) —
   opt-in because it changes the guest's device set, and a snapshot restores only onto the device
-  set it was taken with. Without it, `limina input` answers that the VM has no input devices.
+  set it was taken with. A managed VM asks for them in its definition, `[hardware] input = true`
+  (default false), or for one run with `limina start <vm> --input`; both are no-ops windowed,
+  where only the headless path reads the setting, so a windowed VM's device set never changes.
+  Started with the other value than its suspend was taken with, a managed VM is refused by the
+  worker's device-slot check (`resume refused: …`; the worker exits 124) and keeps its suspended session;
+  started again with the value it was suspended with, it resumes. Without the devices,
+  `limina input` answers that the VM has no input devices and names both spellings.
 - **Reboots and resumes are followed for free.** A relaunch swaps the worker's endpoints into the
   same `WorkerConn`; each verb takes one snapshot of it, so a verb lands whole on one worker. A
   send to a worker that is gone, or a full queue, is an `err` answer, never a silent drop; a
