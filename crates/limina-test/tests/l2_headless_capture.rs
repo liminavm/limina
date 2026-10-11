@@ -17,7 +17,9 @@
 //!   `headless` with no `layer_iosurface`, every guest flip naming its resource (and every resource
 //!   the guest scanned out during the capture among them), `seq` increasing, every image present,
 //!   decodable, of its record's size and not blank, and a summary that agrees and says `headless`;
-//! - a still of a display the guest does not drive is refused.
+//! - a still of a display the guest does not drive is refused;
+//! - after `limina reset`, a still never shows the dead worker's frame: it is refused until the
+//!   fresh guest flips, and then names the new epoch (the first worker's is 0, as a window's).
 //!
 //! Oracle for the ungated runs: `capture start` and `capture still` are refused, naming the gate,
 //! on a run with a `--display-capture` display and on one with no display at all. Those boots are
@@ -219,6 +221,10 @@ fn a_headless_capture_run_takes_stills_and_sequences_of_real_frames() {
     );
     assert_eq!(still.layer_iosurface, None, "{still:?}");
     assert_eq!((still.width, still.height), DISPLAY, "{still:?}");
+    assert_eq!(
+        still.epoch, 0,
+        "a headless run's first worker is not epoch 0, as a windowed run's is: {still:?}"
+    );
     assert_eq!((frame.width, frame.height), DISPLAY);
     let before = scanout_resources(&guest, 1, 0);
     let (still, _) = stills
@@ -377,6 +383,36 @@ fn a_headless_capture_run_takes_stills_and_sequences_of_real_frames() {
         summary.present_hook_us_p99,
         summary.present_hook_us_max
     );
+
+    // A fresh worker (`limina reset`): its frames, never the dead worker's. A still before the
+    // new guest's first flip is refused; one after it names the new epoch.
+    let old_epoch = still.epoch;
+    let (ok, out) = limina_debug(pid, &["lever", "lifecycle-control", "on"]);
+    assert!(ok, "turning lifecycle-control on: {out}");
+    let reset = std::process::Command::new(limina_test::limina_bin().expect("the limina binary"))
+        .args(["reset", &pid.to_string()])
+        .output()
+        .expect("running limina reset");
+    assert!(
+        reset.status.success(),
+        "limina reset failed: {}",
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    match stills.take(None) {
+        Err(e) => eprintln!("still right after the reset, refused: {e:#}"),
+        Ok((s, _)) => assert!(
+            s.epoch > old_epoch,
+            "a still right after the reset shows the dead worker's frame: {s:?}"
+        ),
+    }
+    let (after, _) = stills
+        .wait_for(Duration::from_secs(240), |s, f| {
+            let (colors, dominance) = f.richness();
+            s.epoch > old_epoch && colors >= 1000 && dominance < 0.90
+        })
+        .expect("no rich still of the reset guest's desktop");
+    eprintln!("still after the reset: {after:?}");
+    assert!(after.headless && after.guest_flip, "{after:?}");
 
     let outcome = guest
         .shutdown(Duration::from_secs(30))
