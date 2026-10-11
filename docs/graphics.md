@@ -933,8 +933,8 @@ running — and prints one JSON line tagging it in the record vocabulary: `"form
 `layer_iosurface`, `guest_resource` (as a record's, so absent when `guest_flip` is false), `width`,
 `height`, `t_monotonic_raw_ns`/`t_realtime_ns` (when that frame went on
 glass, as in a record), `taken_t_monotonic_raw_ns`/`taken_t_realtime_ns` (when the still was read),
-and `file` (absolute). It refuses, with the reason, a display no window shows and a VM with no
-window (`limina_framecap::Still` parses the line). Every present notes the surface it put on the
+and `file` (absolute). It refuses, with the reason, a display no window shows and a VM whose frames
+never reach the supervisor (`limina_framecap::Still` parses the line). Every present notes the surface it put on the
 layer, per window; the still blits that surface on the asking thread with the capture's own copy
 and encoder, so the main thread never waits on it, and it retakes the still if the display
 presented during the blit. `LIMINA_WINDOW_CAPTURE` is unaffected (`crates/limina/src/window/still.rs`).
@@ -948,9 +948,43 @@ flip completion by up to the blit's length (about 1 ms). A frame whose blit has 
 dropped as `overtaken`, because from then on the guest may be handed that buffer back. At most 8
 frames are in flight (memory: 8 scanout-sized buffers, kept per size so two displays of different
 sizes each reuse their own), and images stop after
-`LIMINA_WINDOW_CAPTURE_DIR_MAX_MB` (default 4096) with every later frame still recorded. The virtio-gpu
-resource id is not on the worker→supervisor wire, so records carry IOSurface ids only. A headless
-`--display-capture` boot has no window and so no frame-sequence capture.
+`LIMINA_WINDOW_CAPTURE_DIR_MAX_MB` (default 4096) with every later frame still recorded.
+
+**Without a window: `--headless-capture`.** A run with no window shows the supervisor its frames
+only when started with `--headless-capture` (or `LIMINA_HEADLESS_CAPTURE=1`, which a run naming
+`--window` or `--display-capture` ignores). The flag attaches a display at `--display-size` and
+launches the worker exactly as a windowed one — `--display-window`, a control channel, the surface
+port — and a reader thread in the supervisor (`crates/limina/src/window/headless.rs`, no AppKit)
+hands every `frame` line's surface to the same capture and still; `LIMINA_WINDOW_CAPTURE_DIR` works
+there too. It is off by default and cannot be turned on at runtime: the worker's display sink is
+chosen when it launches, so a headless run without it (no display, or `--display-capture`, whose
+PNG the worker writes itself) never hands a frame over, and `capture start` and `capture still`
+refuse, naming the flag. `limina debug <vm> status` says `capture unavailable` there.
+
+What changes in the vocabulary, all within format 1 (new fields an old reader ignores):
+
+- **"Presented" means the guest flip as the supervisor received it.** Nothing composites it, so
+  every received flip is a record — none are coalesced, and `not_presented` appears only for a
+  flip whose surface could not be resolved. The summary's `presented` counts them, and
+  `present_hook_us_*` is the reader thread's cost per flip rather than the main thread's.
+- Every record, still and summary carries `"headless": true`; a window's never carry the field.
+- `layer_iosurface` is absent: the image is read from `presented_iosurface`, the guest's own
+  buffer. A guest that is not held off its scanout (stock GNOME through vrend, §4) may draw into
+  that buffer while the capture's blit reads it — the race a window avoids with its private copy.
+- No `host_state` lines: they describe windows and App Nap, and there are none.
+- The still's slot defaults to 0; a slot the guest has flipped nothing on is refused.
+
+Every flip is still acknowledged to the worker (`shown <id>`), after the surface it replaced on its
+slot has left use (bounded at 20 ms, a window's cap), because a worker with a control channel
+holds a fenced guest flush until then and otherwise falls back after 150 ms per frame. The guest
+is paced by its own compositor's frame clock, not by a host display.
+
+What it costs (stock F44, 1280x800, `vkcube` timed in the guest, debug builds;
+`spikes/headless-capture/RESULTS.md`): the supervisor's share of the gate is 1-2% of a core. The
+guest runs slower under the gate (41-58 fps) than on the PNG sink (60 fps), because the worker
+then presents through the window path, which a windowed run pays too (41-42 fps on the same
+boot); the acks never waited. A running sequence capture took the guest to 41-45 fps and the
+supervisor to ~43% of a core, nearly all PNG encoding, with 0-2 of ~600 frames dropped.
 
 ### Full validation
 

@@ -213,6 +213,7 @@ limina debug <vm> lever lifecycle-control on     # allow `limina reset` (off by 
 limina debug <vm> lever no-throttle on           # keep App Nap off the supervisor (off by default)
 limina debug <vm> capture start <dir>            # every presented frame, tagged (docs/graphics.md §8)
 limina debug <vm> capture stop
+limina debug <vm> capture still <png> [slot]     # the frame on glass now
 ```
 
 `<vm>` is a managed VM's name or bundle, a flat run's boot-disk path, or the supervisor's pid.
@@ -246,6 +247,11 @@ limina reset <img>                                    # power-cycle (needs the l
 limina stop <img> [--timeout SECS]                    # ask the guest to power off, wait, report
 limina stop --force <img>                             # kill it, wedged guest or not
 ```
+
+To see what such a run scans out, start it with `--headless-capture` (and `--display-size WxH`,
+default 1280x800): it has no window, but `limina debug <vm> capture still|start|stop` work as on a
+windowed run, with records marked `headless` (`docs/graphics.md` §8). It is off by default and is
+chosen at launch; a run started without it refuses every capture and says so.
 
 A flat run in the foreground holds its terminal: every process of the run — the supervisor,
 gvproxy and its reaper, and the worker, whose stdio the supervisor hands launchd — inherits the

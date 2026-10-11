@@ -138,8 +138,12 @@ NET_FLAG=--net
 # CLAUDE.md — windowed is the default vehicle), and it is here rather than in a forked copy of this
 # script because the two boots must differ in NOTHING ELSE for a windowed-vs-headless A/B to mean
 # anything. --window and --display-capture are mutually exclusive, so this replaces the flag.
+# LIMINA_HEADLESS_CAPTURE=1 boots headless too, but hands the supervisor every frame so
+# `limina debug <vm> capture still|start|stop` work (docs/graphics.md §8); size it with
+# LIMINA_EXTRA_ARGS="--display-size WxH".
 DISPLAY_FLAG=(--window)
 [ -n "${LIMINA_DISPLAY_CAPTURE:-}" ] && DISPLAY_FLAG=(--display-capture "$LIMINA_DISPLAY_CAPTURE")
+[ "${LIMINA_HEADLESS_CAPTURE:-}" = 1 ] && DISPLAY_FLAG=(--headless-capture)
 EXTRA_ARGS=()
 [ -n "${LIMINA_EXTRA_ARGS:-}" ] && read -ra EXTRA_ARGS <<<"$LIMINA_EXTRA_ARGS"
 # LIMINA_BIN runs a different supervisor binary with this same env — in practice the one inside a
