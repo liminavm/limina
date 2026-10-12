@@ -3508,9 +3508,8 @@ impl InputState {
 
     /// Whether the guest touchpad, not the tablet, takes the motion of a pointer event whose
     /// source is (or is not) the trackpad — the mouse subtype `Touch` (3; measured,
-    /// `spikes/raw-trackpad/`): in raw mode, and during a guest tap-and-drag
-    /// ([`TrackpadSeq::owns_pointer`]). A mouse's, a Universal Control mouse's included,
-    /// carries 0 and still drives the tablet.
+    /// `spikes/raw-trackpad/`): in raw mode ([`TrackpadSeq::owns_pointer`]). A mouse's, a
+    /// Universal Control mouse's included, carries 0 and still drives the tablet.
     pub(crate) fn trackpad_owns_pointer(&self, from_trackpad: bool) -> bool {
         from_trackpad && self.trackpad.borrow().owns_pointer()
     }

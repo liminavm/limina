@@ -265,7 +265,8 @@ pub struct TrackpadSeq {
     guest_taps: bool,
     /// **Tap-and-drag** (the Input menu's "Tap-and-Drag in the VM", with guest taps): one
     /// finger landing just after a guest tap ([`GUEST_TAP_TIMEOUT`]) is the guest's too, so
-    /// the guest's tap-and-drag can take it; the tablet leaves the pointer to it meanwhile.
+    /// the guest's tap-and-drag can take it. It holds the drag still where it landed, and the
+    /// tablet moves the pointer ([`Self::owns_pointer`]).
     tap_drag: bool,
     /// The current sequence is a one-finger tap-and-drag continuation ([`Self::tap_drag`]).
     dragging: bool,
@@ -565,11 +566,12 @@ impl TrackpadSeq {
         events
     }
 
-    /// Whether the trackpad's own pointer motion is the guest touchpad's, not the tablet's:
-    /// in raw mode, and during a guest tap-and-drag.
+    /// Whether the trackpad's own pointer motion is the guest touchpad's, not the tablet's: in
+    /// raw mode. A guest tap-and-drag's finger stays still on the touchpad, holding the drag,
+    /// and the tablet moves the pointer: moved by the guest's touchpad acceleration instead,
+    /// what was dragged ran ahead of the macOS pointer uncaptured.
     pub fn owns_pointer(&self) -> bool {
         self.raw
-            || (self.dragging && self.owner == Some(Owner::Guest) && self.touchpad.active() > 0)
     }
 
     /// The most fingers a guest-owned sequence may reach.
@@ -704,6 +706,18 @@ impl TrackpadSeq {
                 Contact { id: t.id, x, y }
             })
             .collect();
+        // A tap-and-drag's finger holds the drag where it landed ([`Self::owns_pointer`]).
+        let contacts: Vec<Contact> = if self.dragging {
+            contacts
+                .into_iter()
+                .map(|c| match self.touchpad.position(c.id) {
+                    Some((x, y)) => Contact { x, y, ..c },
+                    None => c,
+                })
+                .collect()
+        } else {
+            contacts
+        };
 
         if self.touchpad.active() == 0 {
             return self.try_commit(contacts, now);
@@ -2459,12 +2473,15 @@ mod tests {
         s.tick(up + THIN_GRACE);
         let land = up + Duration::from_millis(120);
         assert_eq!(slots_down(&s.on_touches(&[t(4, 0.5, 0.5)], true, land)), 1);
-        assert!(
-            s.owns_pointer(),
-            "the tablet leaves the pointer to the drag"
-        );
+        // The finger holds the guest's drag where it landed; the tablet moves the pointer, so
+        // what is dragged follows the macOS pointer exactly.
+        assert!(!s.owns_pointer(), "the tablet keeps the pointer");
         let ev = s.on_touches(&[t(4, 0.6, 0.5)], true, land + MIN_FRAME_INTERVAL);
-        assert!(ev.contains(&InputEvent::new(EV_ABS, ABS_MT_POSITION_X, 6000)));
+        assert!(
+            !ev.iter()
+                .any(|e| e.type_ == EV_ABS && e.code == ABS_MT_POSITION_X),
+            "the drag finger stays still on the touchpad: {ev:?}"
+        );
         let off = land + Duration::from_millis(400);
         assert!(lifted(&s.on_touches(&[], true, off)));
         assert!(!s.owns_pointer());
@@ -2686,7 +2703,7 @@ mod tests {
         s.tick(up + SYNTHETIC_TAP_HOLD);
         let land = up + Duration::from_millis(120);
         assert_eq!(slots_down(&s.on_touches(&[t(2, 0.4, 0.4)], true, land)), 1);
-        assert!(s.owns_pointer());
+        assert!(!s.owns_pointer());
         s.on_touches(&[t(2, 0.45, 0.4)], true, land + Duration::from_millis(20));
         // macOS's tap-click, 260 ms after the tap's lift, with the drag finger on the pad.
         let click = up + Duration::from_millis(260);

@@ -57,8 +57,8 @@ gesture suppression). With it, the partition is:
 - **Single-finger sequences are not forwarded**, so the MT device does not drive the guest
   cursor and fight the tablet for it. That restriction is what makes a guest-side touchpad
   compatible with the seamless host-cursor = guest-cursor model. The one exception is the
-  guest's tap-and-drag (§Dedupe and teardown), which takes the pointer from the tablet until
-  the finger lifts.
+  guest's tap-and-drag (§Dedupe and teardown), whose finger reaches the touchpad but stays
+  still there, holding the drag, while the tablet moves the pointer.
   - Full MT forwarding (1-finger motion included) is a possible *hard-capture* refinement
     later.
 - **Four-finger guest gestures** (KDE Plasma binds some) are out of scope. If they are
@@ -233,10 +233,11 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
     - **Tap-and-drag** (Input ▸ **Tap-and-Drag in the VM**, per VM, default on, greyed out
       without guest taps): one finger landing within 180 ms of a guest tap's lift is the
       guest's too, from its first sample, so libinput's tap-and-drag takes it — a
-      three-finger tap then a one-finger drag is a middle-button drag. Meanwhile the
-      trackpad's pointer motion does not drive the tablet (`TrackpadSeq::owns_pointer`), so
-      the guest's pointer moves with the guest's acceleration and, uncaptured, apart from
-      the visible macOS cursor; the next tablet motion brings it back.
+      three-finger tap then a one-finger drag is a middle-button drag. The finger stays where
+      it landed on the touchpad — it only holds libinput's drag button down — and the tablet
+      moves the pointer, as for any other drag: moved by the touchpad instead, with the
+      guest's touchpad acceleration, what was dragged ran visibly ahead of the macOS pointer
+      uncaptured (`TrackpadSeq::owns_pointer`).
     - **Limits.** Three-finger taps and clicks reach the guest only while three fingers are
       the guest's — Input ▸ Three-Finger Gestures in the VM on, and the gesture tap installed
       (it needs Accessibility; without it AppKit attaches three touches to almost no gesture

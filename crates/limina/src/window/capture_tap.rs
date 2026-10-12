@@ -553,10 +553,10 @@ extern "C" fn tap_callback(
     };
     let from_trackpad = geti(FIELD_MOUSE_SUBTYPE) == MOUSE_SUBTYPE_TOUCH;
     match etype {
-        // The guest moves the pointer — the guest-controlled pointer (the trackpad's fingers on
-        // the guest touchpad, the mouse's own counts on its relative mouse), or a guest
-        // tap-and-drag: the hidden host cursor only stays parked. The motion still charges the
-        // edge press, judged where the guest's own cursor is.
+        // The guest moves the pointer — the guest-controlled pointer: the trackpad's fingers on
+        // the guest touchpad, the mouse's own counts on its relative mouse. The hidden host
+        // cursor only stays parked. The motion still charges the edge press, judged where the
+        // guest's own cursor is.
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG
             if ctx.input.guest_owns_captured_motion(from_trackpad) =>
         {
