@@ -38,7 +38,8 @@
 
 /*
  * mmap offsets live far above the GEM fake-offset range, so drm_gem_mmap keeps everything below
- * LIMINA_MMAP_BASE. Arena n is at LIMINA_MMAP_ARENAS + n * LIMINA_ARENA_STRIDE.
+ * LIMINA_MMAP_BASE. Arena n is at LIMINA_MMAP_ARENAS + n * LIMINA_ARENA_STRIDE; a mapping may
+ * start at any page inside it.
  */
 #define LIMINA_MMAP_BASE	(1ULL << 50)
 #define LIMINA_MMAP_DOORBELL	LIMINA_MMAP_BASE
@@ -424,7 +425,7 @@ int virtio_gpu_limina_mmap(struct file *filp, struct vm_area_struct *vma)
 	struct virtio_gpu_limina_file *lf;
 	struct limina_arena *a;
 	phys_addr_t phys;
-	u64 id;
+	u64 id, rel;
 	int ret;
 
 	if (off < LIMINA_MMAP_BASE)
@@ -447,13 +448,15 @@ int virtio_gpu_limina_mmap(struct file *filp, struct vm_area_struct *vma)
 					 vma->vm_page_prot);
 		goto out;
 	}
-	if (off < LIMINA_MMAP_ARENAS || (off - LIMINA_MMAP_ARENAS) % LIMINA_ARENA_STRIDE)
+	if (off < LIMINA_MMAP_ARENAS)
 		goto out;
 	id = (off - LIMINA_MMAP_ARENAS) / LIMINA_ARENA_STRIDE;
+	/* Userspace sub-allocates arenas, so a mapping may start anywhere inside one. */
+	rel = (off - LIMINA_MMAP_ARENAS) % LIMINA_ARENA_STRIDE;
 	a = id < VIRTGPU_LIMINA_MAX_ARENAS ? limina_find(lf, id) : NULL;
-	if (!a || size > a->size)
+	if (!a || rel >= a->size || size > a->size - rel)
 		goto out;
-	phys = vgdev->limina_arenas.addr + a->shm_offset;
+	phys = vgdev->limina_arenas.addr + a->shm_offset + rel;
 	vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_DONTCOPY);
 	vma->vm_ops = &limina_arena_vm_ops;
 	vma->vm_private_data = a;

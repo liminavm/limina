@@ -6,13 +6,14 @@ and the host's `limina-replayer` making the Metal 4 calls.
 
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
-`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `026f0c12954`.
+`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `99e1ba6ea16`.
 
 | check | result |
 |---|---|
 | `vulkaninfo --summary` / full `vulkaninfo` | `Apple M1 Max`, driver KosmicKrisp, API 1.4.363; the full dump completes with no errors |
 | `kk-probe compute` | 256/256 words right |
 | `kk-probe triangle` | 2016 green (64·63/2, the top-left rule) and 2080 blue of 64×64, nothing else |
+| `kk-probe allocs` | 6000 separately allocated, mapped 4 KiB buffers keep their own contents (past the 4096 arenas a context may have); compute into the last one right |
 | `vkcube --wsi wayland` on the seated GNOME desktop | renders correctly (textured, depth-tested; window capture checked by eye), runs 40 s without fault, 600 frames in 9.96 s FIFO (vsync-bound) |
 
 ## Recipe
@@ -35,13 +36,15 @@ also needed:
 - the software WSI path (`sw_device`) and no `VK_EXT_external_memory_host`, which needs Metal's
   bytes-no-copy buffers.
 
+KosmicKrisp makes a Metal heap per allocation, and a guest context has at most 4096 arenas
+(`VIRTGPU_LIMINA_MAX_ARENAS`), while KK on macOS holds ~3.8k heaps on an idle desktop and 28k
+after one WebGL open/close. So the bridge carves heaps of up to 16 MiB out of shared 64 MiB
+arenas (larger ones get their own), and the guest module maps an arena from any page inside it,
+which a mapped pooled heap needs. The guest module must be at least that version
+(`scripts/build-virtio-gpu-limina.sh`; on F44 it loads from `/lib/modules/<krel>/updates/`).
+
 ## Open
 
-- **Arena ids run out before zink does anything big.** Every `kk_alloc_bo` is one heap and one
-  arena, and `VIRTGPU_LIMINA_MAX_ARENAS` is 4096. On macOS, KK's own BO census counts ~3.8k heaps
-  on an idle desktop and 28k after one WebGL open/close. A GL desktop on zink will exhaust ids,
-  and the failure will read as out of device memory. Decide between sub-allocating BOs from
-  large arenas and a much larger cap before starting zink.
 - Completion and reply waits poll; an idle guest process with a pending commit burns CPU.
 - `[LIMINA-KK-GUARD]` prints its periodic encoder-guard line, which means nothing on this
   transport.

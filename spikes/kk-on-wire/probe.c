@@ -6,6 +6,8 @@
  *   compute   one dispatch writes data[i] = 3 * i + 1 into a host-visible buffer
  *   triangle  a 64x64 clear to blue plus one green triangle, copied to a buffer; the green and
  *             blue pixel counts are checked and the image is written to kk-probe.ppm
+ *   allocs    6000 separately allocated, mapped 4 KiB buffers, each written and checked through
+ *             its own mapping, then a dispatch into the last one
  *
  * Exit status 0 only if every part ran and checked out.
  */
@@ -73,6 +75,14 @@ host_buffer(VkDeviceSize size, VkBufferUsageFlags usage)
    return r;
 }
 
+static void
+free_buf(struct buf b)
+{
+   vkUnmapMemory(dev, b.m);
+   vkDestroyBuffer(dev, b.b, NULL);
+   vkFreeMemory(dev, b.m, NULL);
+}
+
 static VkShaderModule
 shader(const uint32_t *code, size_t size)
 {
@@ -116,10 +126,9 @@ submit_and_wait(VkCommandBuffer cb)
 }
 
 static int
-compute(void)
+compute_into(struct buf out)
 {
    const uint32_t n = 256;
-   struct buf out = host_buffer(n * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
    memset(out.map, 0xff, n * 4);
 
    VkDescriptorSetLayoutBinding b = {.binding = 0,
@@ -185,7 +194,48 @@ compute(void)
    for (uint32_t i = 0; i < n; i++)
       good += d[i] == 3 * i + 1;
    printf("compute: %u/%u words right (data[0]=%u data[255]=%u)\n", good, n, d[0], d[n - 1]);
+   vkDestroyPipeline(dev, p, NULL);
+   vkDestroyDescriptorPool(dev, dp, NULL);
+   vkDestroyPipelineLayout(dev, pl, NULL);
+   vkDestroyDescriptorSetLayout(dev, dsl, NULL);
    return good == n ? 0 : 1;
+}
+
+static int
+compute(void)
+{
+   struct buf out = host_buffer(256 * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+   int fails = compute_into(out);
+   free_buf(out);
+   return fails;
+}
+
+/* More separately allocated, mapped buffers than a guest context has arenas, each written
+ * through its own mapping and checked, then a dispatch into the last one. */
+static int
+allocs(void)
+{
+   enum { N = 6000 };
+   static struct buf b[N];
+   for (uint32_t i = 0; i < N; i++) {
+      b[i] = host_buffer(4096, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+      memset(b[i].map, 0, 4096);
+      ((uint32_t *)b[i].map)[i % 1024] = i;
+   }
+   uint32_t good = 0;
+   for (uint32_t i = 0; i < N; i++) {
+      const uint32_t *w = b[i].map;
+      uint32_t nonzero = 0;
+      for (uint32_t j = 0; j < 1024; j++)
+         nonzero += w[j] != 0;
+      good += w[i % 1024] == i && nonzero == (i ? 1u : 0u);
+   }
+   printf("allocs: %u/%u buffers kept their own contents\n", good, N);
+   int fails = good == N ? 0 : 1;
+   fails += compute_into(b[N - 1]);
+   for (uint32_t i = 0; i < N; i++)
+      free_buf(b[i]);
+   return fails;
 }
 
 static int
@@ -369,6 +419,14 @@ triangle(void)
    /* The triangle covers half the image: (-1,-1), (1,-1), (-1,1) in NDC. */
    printf("triangle: green %u blue %u other %u (green expected ~%u)\n", green, blue, other,
           W * H / 2);
+   free_buf(out);
+   vkDestroyPipeline(dev, p, NULL);
+   vkDestroyPipelineLayout(dev, pl, NULL);
+   vkDestroyFramebuffer(dev, fb, NULL);
+   vkDestroyRenderPass(dev, rp, NULL);
+   vkDestroyImageView(dev, view, NULL);
+   vkDestroyImage(dev, img, NULL);
+   vkFreeMemory(dev, mem, NULL);
    return green > W * H * 2 / 5 && blue > W * H * 2 / 5 && green + blue == W * H ? 0 : 1;
 }
 
@@ -422,6 +480,8 @@ main(int argc, char **argv)
       fails += compute();
    if (!only || !strcmp(only, "triangle"))
       fails += triangle();
+   if (!only || !strcmp(only, "allocs"))
+      fails += allocs();
 
    vkDeviceWaitIdle(dev);
    vkDestroyCommandPool(dev, pool, NULL);

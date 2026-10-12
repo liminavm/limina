@@ -35,7 +35,7 @@ struct drm_virtgpu_limina_arena_create {
 	__u32 pad;
 	__u64 size;		/* in: wanted; out: allocated (rounded up by the host) */
 	__u64 gpu_base;		/* out: GPU address of the arena's first byte */
-	__u64 mmap_offset;	/* out */
+	__u64 mmap_offset;	/* out: mmap offset of the arena; offset + n maps from byte n, page-aligned */
 };
 
 /* Fails with EBUSY while any mapping of the arena exists. */
