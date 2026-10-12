@@ -4,8 +4,9 @@
  *
  * Behind VIRTIO_GPU_F_LIMINA_EXT the device offers two more shared-memory regions and a handful of
  * control commands. A guest context gets a doorbell page (stores to it reach the host renderer on
- * the vCPU thread, without a virtqueue) and arenas (host GPU memory mapped into a window of guest
- * physical space). Userspace writes its commands into a ring inside an arena and rings the
+ * the vCPU thread, without a virtqueue) and arenas: host GPU memory either mapped into a window of
+ * guest physical space, or, for a shared arena, exported as a host-visible blob GEM object that
+ * other processes receive as a dma-buf and import into their own context. Userspace writes its commands into a ring inside an arena and rings the
  * doorbell only when the host says it is asleep; nothing here is on that path.
  *
  * This file is what the kernel adds: it creates contexts and arenas on the host for each open
@@ -437,6 +438,13 @@ int virtio_gpu_limina_arena_export_ioctl(struct drm_device *dev, void *data,
 	bo->blob_mem = params.blob_mem;
 	bo->blob_flags = params.blob_flags;
 	obj = &bo->base.base;
+	/* Neither creation nor MAP_BLOB waits for the host; a refused export fails here. */
+	wait_event(vgdev->resp_wq, to_virtio_gpu_vram(bo)->map_state != STATE_INITIALIZING);
+	if (to_virtio_gpu_vram(bo)->map_state != STATE_OK) {
+		drm_gem_object_put(obj);
+		ret = -EIO;
+		goto out;
+	}
 	ret = drm_gem_handle_create(file, obj, &handle);
 	/* The handle owns the object now, or nothing does and this frees it. */
 	drm_gem_object_put(obj);
