@@ -424,7 +424,7 @@ extern "C" fn matched(_: *mut c_void, _: IOReturn, _: *mut c_void, device: *mut 
         if r.devices.iter().any(|&(_, e)| e == entry) {
             return;
         }
-        log::info!("guest-controlled pointer: reading \"{product}\"");
+        log::info!("guest-controlled pointer: found \"{product}\"");
         r.devices.push((device as usize, entry));
     });
 }

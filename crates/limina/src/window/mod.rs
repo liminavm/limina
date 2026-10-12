@@ -1174,7 +1174,9 @@ fn populate_input_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
             &NSString::from_str(""),
         )
     };
-    item.setState(if GUEST_TAPS.with(|f| f.get()) {
+    // The guest-controlled pointer turns both tap switches on: say so, greyed.
+    let guest_pointer = GUEST_POINTER.with(|f| f.get());
+    item.setState(if GUEST_TAPS.with(|f| f.get()) || guest_pointer {
         objc2_app_kit::NSControlStateValueOn
     } else {
         objc2_app_kit::NSControlStateValueOff
@@ -1192,7 +1194,7 @@ fn populate_input_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
             &NSString::from_str(""),
         )
     };
-    item.setState(if TAP_DRAG.with(|f| f.get()) {
+    item.setState(if TAP_DRAG.with(|f| f.get()) || guest_pointer {
         objc2_app_kit::NSControlStateValueOn
     } else {
         objc2_app_kit::NSControlStateValueOff

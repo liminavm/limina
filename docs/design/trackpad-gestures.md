@@ -216,9 +216,12 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
     - **macOS's click for a guest tap is dropped**: a click within 500 ms of a guest touch
       that lifted, unpressed, inside libinput's 180 ms (`HOST_TAP_CLICK_LATE`,
       `GUEST_TAP_TIMEOUT`), with no finger on the pad or with the guest's tap-and-drag finger
-      down — macOS's late click lands on that finger as often as not. Each guest tap is owed
-      one click, so a double tap's two are both dropped. A release follows its press wherever
-      the press went.
+      down — macOS's late click lands on that finger as often as not — and any click within
+      350 ms of the lift (`HOST_TAP_CLICK_SOON`), whatever finger is down: after a one-finger
+      tap the next finger often moves the pointer by then. Each guest tap is owed one click, so
+      a double tap's two are both dropped. A release follows its press wherever the press
+      went. The cost: a real press in those windows — during a tap-and-drag within 500 ms of
+      the tap, or anywhere within 350 ms of it — is lost.
     - **Any trackpad click in flight holds the guest's fingers down**, and their 50 ms
       flicker grace starts at the release. A click that reached limina before its second
       finger went to the tablet; lifted on the grace while the pad was down, the fingers
@@ -290,10 +293,12 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
     lift 10 ms later (`SYNTHETIC_TAP_HOLD`), and reads the tap itself; macOS's click for it is
     dropped as for any guest tap, and a finger landing within 180 ms of it is the guest's
     tap-and-drag. A touch landing within 50 ms of the last lift is AppKit restoring a finger
-    it dropped mid-motion and is never a tap. The recordings agree click for click but for
-    eight still, quick one-finger touches macOS made no click for, several 190–250 ms after
-    the pointer stopped moving, which libinput reads as taps
-    (`battery_N_with_one_finger_taps_…`); the guest's reading stands.
+    it dropped mid-motion and is never a tap; nor is one during or within 100 ms of a click,
+    whose touches can arrive after the press and reappear after the release. The recordings, judged by the guest's real libinput,
+    agree click for click but for four still, quick one-finger touches mid-pad that macOS made
+    no click for, three of them 190–250 ms after the pointer stopped moving, which libinput
+    reads as taps (`battery_N_with_one_finger_taps_…`); the guest's reading stands. Touches
+    landing in libinput's 8 mm edge palm zone are no taps to either.
   - **Captured, the guest moves the pointer** — the mouse as `docs/input-and-windows.md` §4
     says, the trackpad in raw mode. Every sequence of one to three
     fingers is the guest's from its first finger, with no commit and no tap guard; macOS's

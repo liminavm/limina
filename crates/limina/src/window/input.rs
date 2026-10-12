@@ -3547,9 +3547,10 @@ impl InputState {
     }
 
     /// A mouse button edge whose source is (or is not) the trackpad: with the guest moving the
-    /// captured pointer, a mouse's button is the relative mouse's, where the pointer is. Its
-    /// release follows its press there even if the mode ended between them. `false` leaves it
-    /// to the tablet.
+    /// captured pointer, a mouse's button is the relative mouse's, where the pointer is. Leaving
+    /// the mode (a released grab, the switch) releases what it holds there, so a drag across a
+    /// grab's release ends in the guest; the physical release then finds nothing to release.
+    /// `false` leaves it to the tablet.
     pub(crate) fn guest_mouse_button(&self, from_trackpad: bool, btn: u16, down: bool) -> bool {
         let bit = btn_bit(btn);
         if !down {
