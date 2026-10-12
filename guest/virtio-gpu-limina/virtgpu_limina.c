@@ -13,8 +13,11 @@
  * file, and maps them into the file's process. Display and the upstream 3D paths are untouched.
  */
 
+#include <linux/dma-fence.h>
+#include <linux/file.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
+#include <linux/sync_file.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_file.h>
@@ -114,6 +117,9 @@ struct limina_arena {
 struct virtio_gpu_limina_file {
 	struct mutex lock;
 	bool created;
+	/* dma-fence context of this file's fences: they signal in order, and apart from every
+	 * other context's. */
+	u64 fence_ctx;
 	u32 doorbell;
 	struct list_head arenas;
 };
@@ -184,6 +190,7 @@ static struct virtio_gpu_limina_file *limina_file(struct virtio_gpu_device *vgde
 		if (lf) {
 			mutex_init(&lf->lock);
 			INIT_LIST_HEAD(&lf->arenas);
+			lf->fence_ctx = dma_fence_context_alloc(1);
 			vfpriv->limina = lf;
 		}
 	}
@@ -518,6 +525,91 @@ int virtio_gpu_limina_arena_import_ioctl(struct drm_device *dev, void *data,
 err:
 	mutex_unlock(&lf->lock);
 	kfree(a);
+	return ret;
+}
+
+int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct virtio_gpu_fpriv *vfpriv = file->driver_priv;
+	struct drm_virtgpu_limina_fence *args = data;
+	struct virtio_gpu_object_array *objs = NULL;
+	struct virtio_gpu_limina_file *lf;
+	struct virtio_gpu_fence *fence;
+	struct sync_file *sync_file;
+	int fd = -1;
+	bool created;
+	int ret;
+
+	if (!vgdev->has_limina)
+		return -ENODEV;
+	if (args->flags & ~VIRTGPU_LIMINA_FENCE_FD || args->pad)
+		return -EINVAL;
+	lf = limina_file(vgdev, file);
+	if (!lf)
+		return -ENOMEM;
+	mutex_lock(&lf->lock);
+	created = lf->created;
+	mutex_unlock(&lf->lock);
+	if (!created)
+		return -ENOENT;
+
+	if (args->num_handles) {
+		u32 *handles = vmemdup_array_user(u64_to_user_ptr(args->handles),
+						  args->num_handles, sizeof(u32));
+
+		if (IS_ERR(handles))
+			return PTR_ERR(handles);
+		objs = virtio_gpu_array_from_handles(file, handles, args->num_handles);
+		kvfree(handles);
+		if (!objs)
+			return -ENOENT;
+		ret = virtio_gpu_array_lock_resv(objs);
+		if (ret) {
+			virtio_gpu_array_put_free(objs);
+			return ret;
+		}
+	}
+	fence = virtio_gpu_fence_alloc(vgdev, lf->fence_ctx, 0);
+	if (!fence) {
+		ret = -ENOMEM;
+		goto err_objs;
+	}
+	if (args->flags & VIRTGPU_LIMINA_FENCE_FD) {
+		fd = get_unused_fd_flags(O_CLOEXEC);
+		if (fd < 0) {
+			ret = fd;
+			goto err_fence;
+		}
+	}
+	/* From here the command owns `objs`, and the reservations get unlocked with the fence in. */
+	ret = virtio_gpu_cmd_limina_fence(vgdev, vfpriv->ctx_id, args->seqno, objs, fence);
+	if (ret)
+		goto err_fd;
+	if (fd >= 0) {
+		sync_file = sync_file_create(&fence->f);
+		if (!sync_file) {
+			ret = -ENOMEM;
+			goto err_fd;
+		}
+		fd_install(fd, sync_file->file);
+		args->fence_fd = fd;
+	}
+	dma_fence_put(&fence->f);
+	return 0;
+
+err_fd:
+	if (fd >= 0)
+		put_unused_fd(fd);
+	dma_fence_put(&fence->f);
+	return ret;
+err_fence:
+	dma_fence_put(&fence->f);
+err_objs:
+	if (objs) {
+		virtio_gpu_array_unlock_resv(objs);
+		virtio_gpu_array_put_free(objs);
+	}
 	return ret;
 }
 

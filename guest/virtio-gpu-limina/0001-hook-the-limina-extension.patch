@@ -32,7 +32,7 @@ index a5ce96f..942451a 100644
  static const struct drm_driver driver = {
  	/*
 diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.h b/drivers/gpu/drm/virtio/virtgpu_drv.h
-index f17660a..f0446da 100644
+index f17660a..d7d87f0 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_drv.h
 +++ b/drivers/gpu/drm/virtio/virtgpu_drv.h
 @@ -42,6 +42,7 @@
@@ -55,7 +55,7 @@ index f17660a..f0446da 100644
  	struct work_struct config_changed_work;
  
  	struct work_struct obj_free_work;
-@@ -287,13 +293,43 @@ struct virtio_gpu_fpriv {
+@@ -287,13 +293,45 @@ struct virtio_gpu_fpriv {
  	struct mutex context_lock;
  	char debug_name[DEBUG_NAME_MAX_LEN];
  	bool explicit_debug_name;
@@ -65,7 +65,7 @@ index f17660a..f0446da 100644
  /* virtgpu_ioctl.c */
 -#define DRM_VIRTIO_NUM_IOCTLS 12
 +/* limina's ioctls sit at 0x20.., clear of upstream's */
-+#define DRM_VIRTIO_NUM_IOCTLS 0x26
++#define DRM_VIRTIO_NUM_IOCTLS 0x27
  extern struct drm_ioctl_desc virtio_gpu_ioctls[DRM_VIRTIO_NUM_IOCTLS];
  void virtio_gpu_create_context(struct drm_device *dev, struct drm_file *file);
  
@@ -96,21 +96,26 @@ index f17660a..f0446da 100644
 +					 struct drm_file *file);
 +int virtio_gpu_limina_arena_import_ioctl(struct drm_device *dev, void *data,
 +					 struct drm_file *file);
++int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data,
++				  struct drm_file *file);
 +
  /* virtgpu_kms.c */
  int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev);
  void virtio_gpu_deinit(struct drm_device *dev);
-@@ -379,6 +415,8 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
+@@ -379,6 +417,11 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
  void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
  				   uint32_t context_init, uint32_t nlen,
  				   const char *name);
 +int virtio_gpu_cmd_limina(struct virtio_gpu_device *vgdev,
 +			  struct virtio_gpu_limina_call *call);
++int virtio_gpu_cmd_limina_fence(struct virtio_gpu_device *vgdev, u32 ctx_id, u64 seqno,
++				struct virtio_gpu_object_array *objs,
++				struct virtio_gpu_fence *fence);
  void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
  				    uint32_t id);
  void virtio_gpu_cmd_context_attach_resource(struct virtio_gpu_device *vgdev,
 diff --git a/drivers/gpu/drm/virtio/virtgpu_ioctl.c b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
-index c33c057..e9c582f 100644
+index c33c057..1f9fcc9 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_ioctl.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
 @@ -33,6 +33,7 @@
@@ -121,7 +126,7 @@ index c33c057..e9c582f 100644
  
  #define VIRTGPU_BLOB_FLAG_USE_MASK (VIRTGPU_BLOB_FLAG_USE_MAPPABLE | \
  				    VIRTGPU_BLOB_FLAG_USE_SHAREABLE | \
-@@ -732,4 +733,22 @@ struct drm_ioctl_desc virtio_gpu_ioctls[DRM_VIRTIO_NUM_IOCTLS] = {
+@@ -732,4 +733,25 @@ struct drm_ioctl_desc virtio_gpu_ioctls[DRM_VIRTIO_NUM_IOCTLS] = {
  
  	DRM_IOCTL_DEF_DRV(VIRTGPU_CONTEXT_INIT, virtio_gpu_context_init_ioctl,
  			  DRM_RENDER_ALLOW),
@@ -142,6 +147,9 @@ index c33c057..e9c582f 100644
 +			  DRM_RENDER_ALLOW),
 +
 +	DRM_IOCTL_DEF_DRV(VIRTGPU_LIMINA_ARENA_IMPORT, virtio_gpu_limina_arena_import_ioctl,
++			  DRM_RENDER_ALLOW),
++
++	DRM_IOCTL_DEF_DRV(VIRTGPU_LIMINA_FENCE, virtio_gpu_limina_fence_ioctl,
 +			  DRM_RENDER_ALLOW),
  };
 diff --git a/drivers/gpu/drm/virtio/virtgpu_kms.c b/drivers/gpu/drm/virtio/virtgpu_kms.c
@@ -166,10 +174,10 @@ index f359469..24e7edc 100644
  	mutex_destroy(&vfpriv->context_lock);
  	kfree(vfpriv);
 diff --git a/drivers/gpu/drm/virtio/virtgpu_vq.c b/drivers/gpu/drm/virtio/virtgpu_vq.c
-index 0c194b4..1f38cba 100644
+index 0c194b4..043ad21 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_vq.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_vq.c
-@@ -1098,6 +1098,46 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
+@@ -1098,6 +1098,73 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
  	virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
  }
  
@@ -211,6 +219,33 @@ index 0c194b4..1f38cba 100644
 +	virtio_gpu_notify(vgdev);
 +	wait_for_completion(&call->done);
 +	return 0;
++}
++
++/*
++ * Sends a limina FENCE: the host answers it once the context's ring has completed `seqno`, which
++ * signals `fence`. The reservations of `objs`, if any, must be locked; they get the fence and are
++ * unlocked here.
++ */
++int virtio_gpu_cmd_limina_fence(struct virtio_gpu_device *vgdev, u32 ctx_id, u64 seqno,
++				struct virtio_gpu_object_array *objs,
++				struct virtio_gpu_fence *fence)
++{
++	struct {
++		struct virtio_gpu_ctrl_hdr hdr;
++		__le64 seqno;
++	} *cmd_p;
++	struct virtio_gpu_vbuffer *vbuf;
++	int ret;
++
++	cmd_p = virtio_gpu_alloc_cmd(vgdev, &vbuf, sizeof(*cmd_p));
++	memset(cmd_p, 0, sizeof(*cmd_p));
++	cmd_p->hdr.type = cpu_to_le32(0x4c06);
++	cmd_p->hdr.ctx_id = cpu_to_le32(ctx_id);
++	cmd_p->seqno = cpu_to_le64(seqno);
++	vbuf->objs = objs;
++	ret = virtio_gpu_queue_fenced_ctrl_buffer(vgdev, vbuf, fence);
++	virtio_gpu_notify(vgdev);
++	return ret;
 +}
 +
  void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,

@@ -5,7 +5,10 @@
 //! and has a kernel write through a GPU address it computed itself, and checks both results in
 //! arena memory. Last, it shares an arena with another process the way a dma-buf travels: export
 //! as a GEM object, PRIME to an fd, import in a child with its own context, and a kernel there
-//! writes what the parent reads back. Exit status 0 means everything came back right.
+//! writes what the parent reads back. Then a fence: a commit that waits on a shared event
+//! nobody has set, fenced as a sync_file and on a shared arena's dma-buf, must leave both
+//! unsignaled until the guest sets the event, and both signaled after. Exit status 0 means
+//! everything came back right.
 //!
 //! Usage: limina-gpu-smoke [/dev/dri/renderDN]   (default: the first render node that has the
 //! extension)
@@ -78,6 +81,18 @@ mod uapi {
     }
 
     pub const ARENA_SHARED: u32 = 1;
+    pub const FENCE_FD: u32 = 1;
+
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct Fence {
+        pub seqno: u64,
+        pub handles: u64,
+        pub num_handles: u32,
+        pub flags: u32,
+        pub fence_fd: i32,
+        pub pad: u32,
+    }
 
     #[repr(C)]
     #[derive(Default)]
@@ -137,6 +152,7 @@ mod uapi {
     pub const RING_ATTACH: libc::c_ulong = iow(0x23, size_of::<RingAttach>());
     pub const ARENA_EXPORT: libc::c_ulong = iowr(0x24, size_of::<ArenaExport>());
     pub const ARENA_IMPORT: libc::c_ulong = iowr(0x25, size_of::<ArenaImport>());
+    pub const FENCE: libc::c_ulong = iowr(0x26, size_of::<Fence>());
     pub const VIRTGPU_MAP: libc::c_ulong = iowr(0x01, size_of::<Map>());
     pub const PRIME_HANDLE_TO_FD: libc::c_ulong = core_iowr(0x2d, size_of::<PrimeHandle>());
     pub const PRIME_FD_TO_HANDLE: libc::c_ulong = core_iowr(0x2e, size_of::<PrimeHandle>());
@@ -263,9 +279,25 @@ impl Arena {
     }
 }
 
+/// A mapping keeps the device file open; unmapping is what lets closing it end the context.
+impl Drop for Arena {
+    fn drop(&mut self) {
+        // SAFETY: the mapping `create`/`import` made, unused once the arena is dropped.
+        unsafe { libc::munmap(self.ptr.as_ptr().cast(), self.size as usize) };
+    }
+}
+
+impl Drop for Gpu {
+    fn drop(&mut self) {
+        // SAFETY: the doorbell mapping `open` made; nothing stores to it after this.
+        unsafe { libc::munmap(self.doorbell.as_ptr().cast(), self.doorbell_len) };
+    }
+}
+
 struct Gpu {
     _file: File,
     doorbell: NonNull<u32>,
+    doorbell_len: usize,
     ring: Producer,
     main: Arena,
     seqno: u64,
@@ -292,6 +324,7 @@ impl Gpu {
         Ok(Self {
             _file: file,
             doorbell,
+            doorbell_len: page,
             ring,
             main,
             seqno: 0,
@@ -324,6 +357,29 @@ impl Gpu {
             },
             &[cmd::bytes_of(&b)],
         );
+    }
+
+    /// Commits what was pushed without waiting for it; returns its seqno.
+    fn commit_nowait(&mut self) -> u64 {
+        self.seqno += 1;
+        self.push(
+            cmd::Commit {
+                seqno: self.seqno,
+                feedback: BufRef::NONE,
+            },
+            &[],
+        );
+        self.kick();
+        self.seqno
+    }
+
+    /// Publishes what was pushed, ringing the doorbell if the host parked.
+    fn kick(&mut self) {
+        if self.ring.publish() {
+            self.kicks += 1;
+            // SAFETY: the doorbell page is mapped for the life of `Gpu`; the store is the kick.
+            unsafe { self.doorbell.as_ptr().write_volatile(1) };
+        }
     }
 
     fn commit_and_wait(&mut self) -> Result<Duration, String> {
@@ -670,6 +726,149 @@ fn share(path: &str, f: &File) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether `fd` polls readable within `ms`: a signaled sync_file, or a dma-buf with no pending
+/// write.
+fn ready(fd: i32, ms: i32) -> bool {
+    let mut p = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd.
+    unsafe { libc::poll(&mut p, 1, ms) == 1 }
+}
+
+/// A commit held back by a queue wait on a shared event, fenced: neither the sync_file nor the
+/// shared arena's dma-buf may be ready until the guest sets the event.
+fn fence(g: &mut Gpu) -> Result<(), String> {
+    const EVENT: u32 = 30;
+    let f = &g._file;
+    let (_shared, handle) =
+        Arena::create_shared(f, 4, MIB).map_err(|e| format!("shared arena: {e}"))?;
+    let mut p = uapi::PrimeHandle {
+        handle,
+        flags: uapi::DRM_CLOEXEC | uapi::DRM_RDWR,
+        fd: -1,
+    };
+    ioctl(f, uapi::PRIME_HANDLE_TO_FD, &mut p).map_err(|e| format!("PRIME export: {e}"))?;
+    let dmabuf = p.fd;
+
+    g.push(
+        cmd::SyncObject {
+            handle: EVENT,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            initial: 0,
+            mirror: BufRef::NONE,
+        },
+        &[],
+    );
+    g.push(
+        cmd::QueueEvent {
+            event: EVENT,
+            wait: 1,
+            value: 1,
+        },
+        &[],
+    );
+    let seqno = g.commit_nowait();
+    let mut fence = uapi::Fence {
+        seqno,
+        handles: &handle as *const u32 as u64,
+        num_handles: 1,
+        flags: uapi::FENCE_FD,
+        fence_fd: -1,
+        pad: 0,
+    };
+    ioctl(&g._file, uapi::FENCE, &mut fence).map_err(|e| format!("FENCE: {e}"))?;
+    let early = (ready(fence.fence_fd, 300), ready(dmabuf, 0));
+
+    g.push(
+        cmd::SetSharedEvent {
+            handle: EVENT,
+            _pad: 0,
+            value: 1,
+        },
+        &[],
+    );
+    g.kick();
+    let start = Instant::now();
+    let signaled = ready(fence.fence_fd, 3000);
+    let took = start.elapsed();
+    let readable = ready(dmabuf, 0);
+    let completed = g.ring.completed();
+    println!(
+        "fence: before the event sync_file {} dma-buf {}; after, sync_file {} in {took:?}, \
+         dma-buf {}, completed {completed} of {seqno}",
+        if early.0 { "signaled" } else { "pending" },
+        if early.1 { "readable" } else { "busy" },
+        if signaled { "signaled" } else { "pending" },
+        if readable { "readable" } else { "busy" },
+    );
+    // SAFETY: fds this function got.
+    unsafe {
+        libc::close(fence.fence_fd);
+        libc::close(dmabuf);
+    }
+    if early.0 || early.1 {
+        return Err("signaled before its commit could complete".into());
+    }
+    if !signaled || !readable || completed < seqno {
+        return Err("not signaled after its commit completed".into());
+    }
+    Ok(())
+}
+
+/// A fence still pending when its context goes away (the file is closed) is signaled then.
+fn orphan_fence(path: &str) -> Result<(), String> {
+    const EVENT: u32 = 31;
+    let mut g = Gpu::open(path).map_err(|e| format!("second context: {e}"))?;
+    g.push(
+        cmd::SyncObject {
+            handle: EVENT,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            initial: 0,
+            mirror: BufRef::NONE,
+        },
+        &[],
+    );
+    g.push(
+        cmd::QueueEvent {
+            event: EVENT,
+            wait: 1,
+            value: 1,
+        },
+        &[],
+    );
+    let seqno = g.commit_nowait();
+    let mut fence = uapi::Fence {
+        seqno,
+        flags: uapi::FENCE_FD,
+        fence_fd: -1,
+        ..Default::default()
+    };
+    ioctl(&g._file, uapi::FENCE, &mut fence).map_err(|e| format!("FENCE: {e}"))?;
+    let early = ready(fence.fence_fd, 100);
+    let start = Instant::now();
+    drop(g);
+    let signaled = ready(fence.fence_fd, 5000);
+    println!(
+        "orphan fence: {} while its context lived, {} {:?} after it was closed",
+        if early { "signaled" } else { "pending" },
+        if signaled {
+            "signaled"
+        } else {
+            "still pending"
+        },
+        start.elapsed()
+    );
+    // SAFETY: the fd FENCE gave us.
+    unsafe { libc::close(fence.fence_fd) };
+    if early || !signaled {
+        return Err("an orphaned fence must signal when its context goes, and not before".into());
+    }
+    Ok(())
+}
+
 /// Round trips of an empty commit (a Metal command buffer with no work, retired by its completion
 /// handler) after each of three idle gaps: none, a short one, and one long enough for the host to
 /// have parked, which needs the doorbell. The gaps match the venus probe's
@@ -730,6 +929,8 @@ fn main() {
     let result = triangle(&mut g)
         .and_then(|()| poke(&mut g, &other))
         .and_then(|()| share(&path, &g._file))
+        .and_then(|()| fence(&mut g))
+        .and_then(|()| orphan_fence(&path))
         .and_then(|()| round_trips(&mut g));
     match result {
         Ok(()) => println!("PASS"),

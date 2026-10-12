@@ -22,6 +22,7 @@ extern "C" {
 #define DRM_VIRTGPU_LIMINA_RING_ATTACH   0x23
 #define DRM_VIRTGPU_LIMINA_ARENA_EXPORT  0x24
 #define DRM_VIRTGPU_LIMINA_ARENA_IMPORT  0x25
+#define DRM_VIRTGPU_LIMINA_FENCE         0x26
 
 /* Arena ids are below this. */
 #define VIRTGPU_LIMINA_MAX_ARENAS 4096
@@ -75,6 +76,23 @@ struct drm_virtgpu_limina_arena_import {
 	__u64 gpu_base;		/* out: the same address as in the exporting context */
 };
 
+/*
+ * A fence that signals once this context's ring has completed commit `seqno` (or the context is
+ * gone). It is added, as a write, to the reservation of each GEM object in `handles` (implicit
+ * sync for whoever reads them as dma-bufs), and with VIRTGPU_LIMINA_FENCE_FD it is returned as a
+ * sync_file too. Fences of one context signal in the order they were made.
+ */
+#define VIRTGPU_LIMINA_FENCE_FD 1
+
+struct drm_virtgpu_limina_fence {
+	__u64 seqno;
+	__u64 handles;		/* in: pointer to num_handles __u32 GEM handles */
+	__u32 num_handles;
+	__u32 flags;		/* VIRTGPU_LIMINA_FENCE_* */
+	__s32 fence_fd;		/* out, with VIRTGPU_LIMINA_FENCE_FD */
+	__u32 pad;
+};
+
 /* Starts the host consuming the command ring userspace initialised in an arena. */
 struct drm_virtgpu_limina_ring_attach {
 	__u32 arena_id;
@@ -100,6 +118,9 @@ struct drm_virtgpu_limina_ring_attach {
 #define DRM_IOCTL_VIRTGPU_LIMINA_ARENA_IMPORT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_LIMINA_ARENA_IMPORT, \
 		 struct drm_virtgpu_limina_arena_import)
+#define DRM_IOCTL_VIRTGPU_LIMINA_FENCE \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_LIMINA_FENCE, \
+		 struct drm_virtgpu_limina_fence)
 
 #if defined(__cplusplus)
 }
