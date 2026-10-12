@@ -90,6 +90,10 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
   picture into them before it lands. An imported surface's memory is device-local only. A
   single-object picture (enhanced guest Mesa's composite
   target) and 10-bit P010 wait on a plane index in `CREATE_TEXTURE_FROM_SURFACE`, with HDR.
+- **Buffers stay within the Metal transport.** A KK buffer exports and imports as a dma-buf or an
+  opaque fd between KK contexts, and so reaches GL through zink on KK (`GL_EXT_memory_object_fd`).
+  Stock venus offers no external memory for buffers and stock virgl GL no memory objects, so no
+  other transport has a buffer to meet it with.
 
 To verify before building: that an IOSurface's pages can back a guest-visible mapping of an
 extension blob the way venus's IOSurface blobs do (rutabaga's Apple `get_map_ptr` path).

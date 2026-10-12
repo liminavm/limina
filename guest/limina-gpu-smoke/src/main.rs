@@ -1085,7 +1085,8 @@ fn round_trips(g: &mut Gpu) -> Result<(), String> {
 
 /// Exports of fresh shared arenas, spaced so the control queue goes quiet before each: every one
 /// must come back within `EXPORT_BOUND`. An export waits for the host to map the arena, so a
-/// command queued without a kick leaves it waiting for whatever traffic comes along next.
+/// command queued without a kick leaves it waiting for whatever traffic comes along next. The
+/// arenas (ids 100 on) and their GEM handles live until the file closes.
 fn export_latency(f: &File) -> Result<(), String> {
     const EXPORTS: u32 = 20;
     const EXPORT_BOUND: Duration = Duration::from_millis(500);
