@@ -1,0 +1,495 @@
+//! First light for limina's Metal-level GPU transport, from inside a guest.
+//!
+//! Drives the virtio-gpu extension through the limina DRM ioctls (guest/virtio-gpu-limina): one
+//! context, its doorbell page, two arenas, a command ring in the first. Then it draws a triangle
+//! and has a kernel write through a GPU address it computed itself, and checks both results in
+//! arena memory. Exit status 0 means both came back right.
+//!
+//! Usage: limina-gpu-smoke [/dev/dri/renderDN]   (default: the first render node that has the
+//! extension)
+
+use std::fs::{File, OpenOptions};
+use std::io;
+use std::os::fd::AsRawFd;
+use std::ptr::NonNull;
+use std::time::{Duration, Instant};
+
+use limina_gpu_wire::cmd::{self, BufRef};
+use limina_gpu_wire::ring::Producer;
+
+const RING_DATA: u32 = 1 << 18;
+const MIB: u64 = 1 << 20;
+
+const RGBA8_UNORM: u32 = 70;
+const TEX_2D: u32 = 2;
+const USAGE_SHADER_READ: u32 = 1;
+const USAGE_RENDER_TARGET: u32 = 4;
+const LOAD_CLEAR: u32 = 2;
+const STORE_STORE: u32 = 1;
+const PRIM_TRIANGLE: u32 = 3;
+
+const MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct VOut { float4 pos [[position]]; };
+
+vertex VOut vs(uint vid [[vertex_id]], const device float4* pos [[buffer(0)]]) {
+    VOut o;
+    o.pos = pos[vid];
+    return o;
+}
+
+fragment float4 fs(VOut in [[stage_in]]) {
+    return float4(0.0, 1.0, 0.0, 1.0);
+}
+
+struct Ptrs { device uint* dst; };
+
+kernel void poke(constant Ptrs& p [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    p.dst[tid] = 0xC0FFEE00u + tid;
+}
+"#;
+
+/// The UAPI of guest/virtio-gpu-limina/virtgpu_limina_drm.h.
+mod uapi {
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct CtxCreate {
+        pub flags: u32,
+        pub pad: u32,
+        pub doorbell_offset: u64,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct ArenaCreate {
+        pub arena_id: u32,
+        pub pad: u32,
+        pub size: u64,
+        pub gpu_base: u64,
+        pub mmap_offset: u64,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct RingAttach {
+        pub arena_id: u32,
+        pub data_size: u32,
+        pub offset: u64,
+    }
+
+    const fn iowr(nr: u32, size: usize) -> libc::c_ulong {
+        // _IOC(_IOC_READ|_IOC_WRITE, 'd', DRM_COMMAND_BASE + nr, size)
+        ((3u32 << 30) | ((size as u32) << 16) | ((b'd' as u32) << 8) | (0x40 + nr)) as libc::c_ulong
+    }
+    const fn iow(nr: u32, size: usize) -> libc::c_ulong {
+        ((1u32 << 30) | ((size as u32) << 16) | ((b'd' as u32) << 8) | (0x40 + nr)) as libc::c_ulong
+    }
+
+    pub const CTX_CREATE: libc::c_ulong = iowr(0x20, size_of::<CtxCreate>());
+    pub const ARENA_CREATE: libc::c_ulong = iowr(0x21, size_of::<ArenaCreate>());
+    pub const RING_ATTACH: libc::c_ulong = iow(0x23, size_of::<RingAttach>());
+}
+
+fn ioctl<T>(f: &File, req: libc::c_ulong, arg: &mut T) -> io::Result<()> {
+    // SAFETY: `arg` is the struct `req` encodes, alive for the call.
+    let r = unsafe { libc::ioctl(f.as_raw_fd(), req as _, arg as *mut T) };
+    if r < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn map(f: &File, offset: u64, len: usize) -> io::Result<NonNull<u8>> {
+    // SAFETY: a fresh shared mapping of the device file; nothing else is at the address.
+    let p = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            f.as_raw_fd(),
+            offset as libc::off_t,
+        )
+    };
+    if p == libc::MAP_FAILED {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(NonNull::new(p.cast()).expect("mmap returned null"))
+}
+
+struct Arena {
+    ptr: NonNull<u8>,
+    size: u64,
+    gpu_base: u64,
+}
+
+impl Arena {
+    fn create(f: &File, id: u32, size: u64) -> io::Result<Self> {
+        let mut a = uapi::ArenaCreate {
+            arena_id: id,
+            size,
+            ..Default::default()
+        };
+        ioctl(f, uapi::ARENA_CREATE, &mut a)?;
+        let ptr = map(f, a.mmap_offset, a.size as usize)?;
+        Ok(Self {
+            ptr,
+            size: a.size,
+            gpu_base: a.gpu_base,
+        })
+    }
+
+    fn write(&self, offset: u64, data: &[u8]) {
+        assert!(offset + data.len() as u64 <= self.size);
+        // SAFETY: inside the mapping, checked above.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.ptr.as_ptr().add(offset as usize),
+                data.len(),
+            )
+        }
+    }
+
+    fn read(&self, offset: u64, len: usize) -> &[u8] {
+        assert!(offset + len as u64 <= self.size);
+        // SAFETY: inside the mapping, checked above; read only after the GPU finished.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().add(offset as usize), len) }
+    }
+}
+
+struct Gpu {
+    _file: File,
+    doorbell: NonNull<u32>,
+    ring: Producer,
+    main: Arena,
+    seqno: u64,
+    kicks: u64,
+}
+
+impl Gpu {
+    fn open(path: &str) -> io::Result<Self> {
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        let mut c = uapi::CtxCreate::default();
+        ioctl(&file, uapi::CTX_CREATE, &mut c)?;
+        let page = 4096.max(unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize);
+        let doorbell = map(&file, c.doorbell_offset, page)?.cast();
+        let main = Arena::create(&file, 1, 64 * MIB)?;
+        // SAFETY: the arena mapping lives as long as `Gpu`; offset 0 is page-aligned and the ring
+        // region is far smaller than the arena.
+        let ring = unsafe { Producer::init(main.ptr, RING_DATA) };
+        let mut at = uapi::RingAttach {
+            arena_id: 1,
+            data_size: RING_DATA,
+            offset: 0,
+        };
+        ioctl(&file, uapi::RING_ATTACH, &mut at)?;
+        Ok(Self {
+            _file: file,
+            doorbell,
+            ring,
+            main,
+            seqno: 0,
+            kicks: 0,
+        })
+    }
+
+    fn push<T: cmd::Command>(&mut self, c: T, extra: &[&[u8]]) {
+        self.ring.push(&c, extra).expect("ring space");
+    }
+
+    fn commit_and_wait(&mut self) -> Result<Duration, String> {
+        self.seqno += 1;
+        self.push(cmd::Commit { seqno: self.seqno }, &[]);
+        let start = Instant::now();
+        if self.ring.publish() {
+            self.kicks += 1;
+            // SAFETY: the doorbell page is mapped for the life of `Gpu`; the store is the kick.
+            unsafe { self.doorbell.as_ptr().write_volatile(1) };
+        }
+        while self.ring.completed() < self.seqno {
+            if let Some((e, at)) = self.ring.error() {
+                return Err(format!("context lost: error {e} at ring position {at}"));
+            }
+            if start.elapsed() > Duration::from_secs(10) {
+                return Err(format!(
+                    "seqno {} not complete after 10 s (completed {})",
+                    self.seqno,
+                    self.ring.completed()
+                ));
+            }
+            std::hint::spin_loop();
+        }
+        Ok(start.elapsed())
+    }
+}
+
+fn find_node() -> Option<(String, Gpu)> {
+    (128..136).find_map(|n| {
+        let path = format!("/dev/dri/renderD{n}");
+        match Gpu::open(&path) {
+            Ok(g) => Some((path, g)),
+            Err(e) => {
+                if e.kind() != io::ErrorKind::NotFound {
+                    eprintln!("{path}: {e}");
+                }
+                None
+            }
+        }
+    })
+}
+
+fn triangle(g: &mut Gpu) -> Result<(), String> {
+    const VB: u64 = MIB;
+    const READBACK: u64 = 2 * MIB;
+    const TEX: u64 = 4 * MIB;
+    const W: u32 = 64;
+
+    let verts: [[f32; 4]; 3] = [
+        [0.0, 0.8, 0.0, 1.0],
+        [-0.8, -0.8, 0.0, 1.0],
+        [0.8, -0.8, 0.0, 1.0],
+    ];
+    let vb: Vec<u8> = verts
+        .iter()
+        .flatten()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    g.main.write(VB, &vb);
+
+    g.push(
+        cmd::CreateLibrary {
+            handle: 1,
+            source_len: MSL.len() as u32,
+        },
+        &[MSL.as_bytes()],
+    );
+    let mut colors = [0u32; cmd::MAX_COLOR_ATTACHMENTS];
+    colors[0] = RGBA8_UNORM;
+    g.push(
+        cmd::CreateRenderPipeline {
+            handle: 2,
+            library: 1,
+            vertex_name_len: 2,
+            fragment_name_len: 2,
+            color_formats: colors,
+            sample_count: 1,
+            ..Default::default()
+        },
+        &[b"vs", b"fs"],
+    );
+    g.push(
+        cmd::CreateTexture {
+            handle: 3,
+            arena: 1,
+            offset: TEX,
+            texture_type: TEX_2D,
+            pixel_format: RGBA8_UNORM,
+            width: W,
+            height: W,
+            depth: 1,
+            mip_levels: 1,
+            array_length: 1,
+            sample_count: 1,
+            usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+            _pad: 0,
+        },
+        &[],
+    );
+    let mut pass = cmd::BeginRenderPass::default();
+    pass.colors[0] = cmd::ColorAttachment {
+        texture: 3,
+        load_action: LOAD_CLEAR,
+        store_action: STORE_STORE,
+        clear: [1.0, 0.0, 0.0, 1.0],
+        ..Default::default()
+    };
+    g.push(pass, &[]);
+    g.push(cmd::SetRenderPipeline { handle: 2, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetBuffer {
+            stage: cmd::stage::VERTEX,
+            index: 0,
+            buffer: BufRef::new(1, VB),
+        },
+        &[],
+    );
+    g.push(
+        cmd::SetViewport {
+            x: 0.0,
+            y: 0.0,
+            width: W as f32,
+            height: W as f32,
+            znear: 0.0,
+            zfar: 1.0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DrawPrimitives {
+            primitive: PRIM_TRIANGLE,
+            vertex_count: 3,
+            instance_count: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::BeginBlit {}, &[]);
+    g.push(
+        cmd::CopyTextureToBuffer {
+            texture: 3,
+            size: [W, W, 1],
+            dst: BufRef::new(1, READBACK),
+            bytes_per_row: W as u64 * 4,
+            bytes_per_image: (W * W) as u64 * 4,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    let took = g.commit_and_wait()?;
+
+    let px = |x: u32, y: u32| {
+        let at = READBACK + ((y * W + x) * 4) as u64;
+        <[u8; 4]>::try_from(g.main.read(at, 4)).unwrap()
+    };
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    for row in (0..W).step_by(4) {
+        let line: String = (0..W)
+            .step_by(2)
+            .map(|x| match px(x, row) {
+                GREEN => '#',
+                RED => '.',
+                _ => '?',
+            })
+            .collect();
+        println!("  {line}");
+    }
+    let green = (0..W)
+        .flat_map(|y| (0..W).map(move |x| (x, y)))
+        .filter(|&(x, y)| px(x, y) == GREEN)
+        .count();
+    let expect = (W * W) as f64 * 0.32;
+    println!("triangle: {green} green pixels (expected ~{expect:.0}), frame took {took:?}");
+    if px(W / 2, W / 2) != GREEN || px(0, 0) != RED || (green as f64 - expect).abs() > expect * 0.1
+    {
+        return Err("triangle pixels are wrong".into());
+    }
+    Ok(())
+}
+
+fn poke(g: &mut Gpu, other: &Arena) -> Result<(), String> {
+    const PTRS: u64 = 3 * MIB;
+    const DST: u64 = 4096;
+    const N: u32 = 256;
+    g.main.write(PTRS, &(other.gpu_base + DST).to_le_bytes());
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 4,
+            library: 1,
+            name_len: 4,
+            _pad: 0,
+        },
+        &[b"poke"],
+    );
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(cmd::SetComputePipeline { handle: 4, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetBuffer {
+            stage: cmd::stage::COMPUTE,
+            index: 0,
+            buffer: BufRef::new(1, PTRS),
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [N / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    let took = g.commit_and_wait()?;
+    let words = other.read(DST, N as usize * 4);
+    let bad = words
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .filter(|&(i, w)| u32::from_le_bytes(*w) != 0xC0FFEE00 + i as u32)
+        .count();
+    println!(
+        "poke: {} of {N} words written through 0x{:x}, took {took:?}",
+        N as usize - bad,
+        other.gpu_base + DST
+    );
+    if bad != 0 {
+        return Err(format!("{bad} words wrong"));
+    }
+    Ok(())
+}
+
+/// Round trips with an empty commit: the doorbell path when the host has parked, and the
+/// spinning path when it has not.
+fn round_trips(g: &mut Gpu) -> Result<(), String> {
+    let mut times = Vec::new();
+    let kicks = g.kicks;
+    for i in 0..200 {
+        if i % 2 == 0 {
+            // Long enough for the host consumer to park.
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        times.push(g.commit_and_wait()?);
+    }
+    times.sort();
+    println!(
+        "round trips: min {:?} p50 {:?} p99 {:?}, {} doorbell kicks in 200 commits",
+        times[0],
+        times[times.len() / 2],
+        times[times.len() * 99 / 100],
+        g.kicks - kicks
+    );
+    Ok(())
+}
+
+fn main() {
+    let found = match std::env::args().nth(1) {
+        Some(p) => Gpu::open(&p).map(|g| (p, g)).map_err(|e| e.to_string()),
+        None => find_node().ok_or_else(|| "no render node has the limina extension".to_string()),
+    };
+    let (path, mut g) = match found {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("limina-gpu-smoke: {e}");
+            std::process::exit(2);
+        }
+    };
+    println!(
+        "{path}: context up, arena 1 at gpu 0x{:x} ({} MiB)",
+        g.main.gpu_base,
+        g.main.size / MIB
+    );
+    let other = match Arena::create(&g._file, 2, MIB) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("limina-gpu-smoke: second arena: {e}");
+            std::process::exit(2);
+        }
+    };
+    let result = triangle(&mut g)
+        .and_then(|()| poke(&mut g, &other))
+        .and_then(|()| round_trips(&mut g));
+    match result {
+        Ok(()) => println!("PASS"),
+        Err(e) => {
+            println!("FAIL: {e}");
+            std::process::exit(1);
+        }
+    }
+}

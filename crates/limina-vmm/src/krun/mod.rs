@@ -13,6 +13,7 @@
 mod battery;
 mod console;
 mod display_update;
+mod metal_ext;
 
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::unbounded;
@@ -513,7 +514,12 @@ fn gpu_device(display: &DisplaySpec, disks: &[DiskSpec]) -> GpuDevice {
 
     // The renderer flags pass through whole: the named set covers only what upstream's C API
     // offers, and the GLES/surfaceless/video bits are ours to set.
-    GpuDevice::new(VirglRendererFlags::from_bits_retain(flags), backend).software_2d(software_2d)
+    let gpu = GpuDevice::new(VirglRendererFlags::from_bits_retain(flags), backend)
+        .software_2d(software_2d);
+    match (software_2d, metal_ext::start()) {
+        (false, Some(ext)) => gpu.extension(ext, metal_ext::ARENA_WINDOW),
+        _ => gpu,
+    }
 }
 
 /// Attach a virtio-keyboard and a virtio-absolute-pointer, plus the optional relative mouse

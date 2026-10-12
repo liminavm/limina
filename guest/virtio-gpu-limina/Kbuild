@@ -1,0 +1,13 @@
+# Out-of-tree build of the in-tree virtio-gpu DRM driver plus limina's native-context extension
+# (virtgpu_limina.c). The upstream object list mirrors drivers/gpu/drm/virtio/Makefile for the
+# kernel series scripts/build-virtio-gpu-limina.sh vendored.
+virtio-gpu-y := virtgpu_drv.o virtgpu_kms.o virtgpu_gem.o virtgpu_vram.o \
+	virtgpu_display.o virtgpu_vq.o \
+	virtgpu_fence.o virtgpu_object.o virtgpu_debugfs.o virtgpu_plane.o \
+	virtgpu_ioctl.o virtgpu_prime.o virtgpu_trace_points.o virtgpu_submit.o \
+	virtgpu_limina.o
+
+obj-m := virtio-gpu.o
+
+# Resolves the tracepoint header (TRACE_INCLUDE_PATH is rewritten to ".") and our UAPI header.
+ccflags-y += -I$(src)

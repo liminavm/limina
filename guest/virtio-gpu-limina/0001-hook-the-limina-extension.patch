@@ -1,0 +1,204 @@
+diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.c b/drivers/gpu/drm/virtio/virtgpu_drv.c
+index a5ce96f..942451a 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_drv.c
++++ b/drivers/gpu/drm/virtio/virtgpu_drv.c
+@@ -163,6 +163,7 @@ static unsigned int features[] = {
+ 	VIRTIO_GPU_F_RESOURCE_UUID,
+ 	VIRTIO_GPU_F_RESOURCE_BLOB,
+ 	VIRTIO_GPU_F_CONTEXT_INIT,
++	VIRTIO_GPU_F_LIMINA_EXT,
+ };
+ static struct virtio_driver virtio_gpu_driver = {
+ 	.feature_table = features,
+@@ -220,7 +221,19 @@ MODULE_AUTHOR("Dave Airlie <airlied@redhat.com>");
+ MODULE_AUTHOR("Gerd Hoffmann <kraxel@redhat.com>");
+ MODULE_AUTHOR("Alon Levy");
+ 
+-DEFINE_DRM_GEM_FOPS(virtio_gpu_driver_fops);
++/* DEFINE_DRM_GEM_FOPS, with mmap routed through the limina extension first. */
++static const struct file_operations virtio_gpu_driver_fops = {
++	.owner		= THIS_MODULE,
++	.open		= drm_open,
++	.release	= drm_release,
++	.unlocked_ioctl	= drm_ioctl,
++	.compat_ioctl	= drm_compat_ioctl,
++	.poll		= drm_poll,
++	.read		= drm_read,
++	.llseek		= noop_llseek,
++	.mmap		= virtio_gpu_limina_mmap,
++	.fop_flags	= FOP_UNSIGNED_OFFSET,
++};
+ 
+ static const struct drm_driver driver = {
+ 	/*
+diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.h b/drivers/gpu/drm/virtio/virtgpu_drv.h
+index f17660a..f0446da 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_drv.h
++++ b/drivers/gpu/drm/virtio/virtgpu_drv.h
+@@ -42,6 +42,7 @@
+ #include <drm/drm_ioctl.h>
+ #include <drm/drm_probe_helper.h>
+ #include <drm/virtgpu_drm.h>
++#include <linux/completion.h>
+ 
+ #define DRIVER_NAME "virtio_gpu"
+ #define DRIVER_DESC "virtio GPU"
+@@ -260,6 +261,11 @@ struct virtio_gpu_device {
+ 	struct virtio_shm_region host_visible_region;
+ 	struct drm_mm host_visible_mm;
+ 
++	/* limina extension (virtgpu_limina.c) */
++	bool has_limina;
++	struct virtio_shm_region limina_arenas;
++	struct virtio_shm_region limina_doorbells;
++
+ 	struct work_struct config_changed_work;
+ 
+ 	struct work_struct obj_free_work;
+@@ -287,13 +293,39 @@ struct virtio_gpu_fpriv {
+ 	struct mutex context_lock;
+ 	char debug_name[DEBUG_NAME_MAX_LEN];
+ 	bool explicit_debug_name;
++	struct virtio_gpu_limina_file *limina;
+ };
+ 
+ /* virtgpu_ioctl.c */
+-#define DRM_VIRTIO_NUM_IOCTLS 12
++/* limina's ioctls sit at 0x20.., clear of upstream's */
++#define DRM_VIRTIO_NUM_IOCTLS 0x24
+ extern struct drm_ioctl_desc virtio_gpu_ioctls[DRM_VIRTIO_NUM_IOCTLS];
+ void virtio_gpu_create_context(struct drm_device *dev, struct drm_file *file);
+ 
++/* virtgpu_limina.c */
++#define VIRTIO_GPU_F_LIMINA_EXT 23
++
++struct virtio_gpu_limina_call {
++	const void *cmd;
++	int cmd_size;
++	void *resp;
++	int resp_size;
++	struct completion done;
++};
++
++void virtio_gpu_limina_init(struct virtio_gpu_device *vgdev);
++void virtio_gpu_limina_postclose(struct virtio_gpu_device *vgdev,
++				 struct virtio_gpu_fpriv *vfpriv);
++int virtio_gpu_limina_mmap(struct file *filp, struct vm_area_struct *vma);
++int virtio_gpu_limina_ctx_create_ioctl(struct drm_device *dev, void *data,
++				       struct drm_file *file);
++int virtio_gpu_limina_arena_create_ioctl(struct drm_device *dev, void *data,
++					 struct drm_file *file);
++int virtio_gpu_limina_arena_destroy_ioctl(struct drm_device *dev, void *data,
++					  struct drm_file *file);
++int virtio_gpu_limina_ring_attach_ioctl(struct drm_device *dev, void *data,
++					struct drm_file *file);
++
+ /* virtgpu_kms.c */
+ int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev);
+ void virtio_gpu_deinit(struct drm_device *dev);
+@@ -379,6 +411,8 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
+ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
+ 				   uint32_t context_init, uint32_t nlen,
+ 				   const char *name);
++int virtio_gpu_cmd_limina(struct virtio_gpu_device *vgdev,
++			  struct virtio_gpu_limina_call *call);
+ void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
+ 				    uint32_t id);
+ void virtio_gpu_cmd_context_attach_resource(struct virtio_gpu_device *vgdev,
+diff --git a/drivers/gpu/drm/virtio/virtgpu_ioctl.c b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
+index c33c057..e9c582f 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_ioctl.c
++++ b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
+@@ -33,6 +33,7 @@
+ #include <drm/virtgpu_drm.h>
+ 
+ #include "virtgpu_drv.h"
++#include "virtgpu_limina_drm.h"
+ 
+ #define VIRTGPU_BLOB_FLAG_USE_MASK (VIRTGPU_BLOB_FLAG_USE_MAPPABLE | \
+ 				    VIRTGPU_BLOB_FLAG_USE_SHAREABLE | \
+@@ -732,4 +733,16 @@ struct drm_ioctl_desc virtio_gpu_ioctls[DRM_VIRTIO_NUM_IOCTLS] = {
+ 
+ 	DRM_IOCTL_DEF_DRV(VIRTGPU_CONTEXT_INIT, virtio_gpu_context_init_ioctl,
+ 			  DRM_RENDER_ALLOW),
++
++	DRM_IOCTL_DEF_DRV(VIRTGPU_LIMINA_CTX_CREATE, virtio_gpu_limina_ctx_create_ioctl,
++			  DRM_RENDER_ALLOW),
++
++	DRM_IOCTL_DEF_DRV(VIRTGPU_LIMINA_ARENA_CREATE, virtio_gpu_limina_arena_create_ioctl,
++			  DRM_RENDER_ALLOW),
++
++	DRM_IOCTL_DEF_DRV(VIRTGPU_LIMINA_ARENA_DESTROY, virtio_gpu_limina_arena_destroy_ioctl,
++			  DRM_RENDER_ALLOW),
++
++	DRM_IOCTL_DEF_DRV(VIRTGPU_LIMINA_RING_ATTACH, virtio_gpu_limina_ring_attach_ioctl,
++			  DRM_RENDER_ALLOW),
+ };
+diff --git a/drivers/gpu/drm/virtio/virtgpu_kms.c b/drivers/gpu/drm/virtio/virtgpu_kms.c
+index f359469..24e7edc 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_kms.c
++++ b/drivers/gpu/drm/virtio/virtgpu_kms.c
+@@ -198,6 +198,8 @@ int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev)
+ 	if (virtio_has_feature(vgdev->vdev, VIRTIO_GPU_F_CONTEXT_INIT))
+ 		vgdev->has_context_init = true;
+ 
++	virtio_gpu_limina_init(vgdev);
++
+ 	DRM_INFO("features: %cvirgl %cedid %cresource_blob %chost_visible",
+ 		 vgdev->has_virgl_3d    ? '+' : '-',
+ 		 vgdev->has_edid        ? '+' : '-',
+@@ -346,6 +348,7 @@ void virtio_gpu_driver_postclose(struct drm_device *dev, struct drm_file *file)
+ 		virtio_gpu_notify(vgdev);
+ 	}
+ 
++	virtio_gpu_limina_postclose(vgdev, vfpriv);
+ 	ida_free(&vgdev->ctx_id_ida, vfpriv->ctx_id - 1);
+ 	mutex_destroy(&vfpriv->context_lock);
+ 	kfree(vfpriv);
+diff --git a/drivers/gpu/drm/virtio/virtgpu_vq.c b/drivers/gpu/drm/virtio/virtgpu_vq.c
+index 0c194b4..b6b6faa 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_vq.c
++++ b/drivers/gpu/drm/virtio/virtgpu_vq.c
+@@ -1098,6 +1098,42 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
+ 	virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
+ }
+ 
++static void virtio_gpu_cmd_limina_cb(struct virtio_gpu_device *vgdev,
++				     struct virtio_gpu_vbuffer *vbuf)
++{
++	struct virtio_gpu_limina_call *call = vbuf->resp_cb_data;
++
++	memcpy(call->resp, vbuf->resp_buf, call->resp_size);
++	complete(&call->done);
++}
++
++/*
++ * Sends a limina extension command and waits for its response. The wait is not interruptible:
++ * `call` lives on the caller's stack and the response callback writes into it.
++ */
++int virtio_gpu_cmd_limina(struct virtio_gpu_device *vgdev,
++			  struct virtio_gpu_limina_call *call)
++{
++	struct virtio_gpu_vbuffer *vbuf;
++	void *resp_buf = NULL;
++	void *cmd_p;
++
++	if (call->resp_size > MAX_INLINE_RESP_SIZE) {
++		resp_buf = kzalloc(call->resp_size, GFP_KERNEL);
++		if (!resp_buf)
++			return -ENOMEM;
++	}
++	init_completion(&call->done);
++	cmd_p = virtio_gpu_alloc_cmd_resp(vgdev, virtio_gpu_cmd_limina_cb, &vbuf,
++					  call->cmd_size, call->resp_size, resp_buf);
++	memcpy(cmd_p, call->cmd, call->cmd_size);
++	vbuf->resp_cb_data = call;
++	virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
++	virtio_gpu_notify(vgdev);
++	wait_for_completion(&call->done);
++	return 0;
++}
++
+ void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
+ 				    uint32_t id)
+ {

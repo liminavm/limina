@@ -1161,6 +1161,7 @@ dependencies = [
  "limina-input",
  "limina-launch",
  "limina-paniclog",
+ "limina-replayer",
  "limina-surfaceport",
  "log",
  "tracing-appender",
