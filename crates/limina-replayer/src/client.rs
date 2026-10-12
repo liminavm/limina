@@ -160,6 +160,36 @@ impl Replayer {
         )
     }
 
+    /// Makes `arena` of `ctx` importable as `export`, by any context, until released.
+    pub fn export_arena(&self, ctx: u32, arena: u32, export: u32) -> io::Result<()> {
+        self.simple(
+            "arena export",
+            ipc::EXPORT_ARENA,
+            ipc::ExportArena { ctx, arena, export }.bytes(),
+        )
+    }
+
+    /// Makes `arena` of `ctx` the memory of `export`; answers its size and GPU address.
+    pub fn import_arena(&self, ctx: u32, arena: u32, export: u32) -> io::Result<(u64, u64)> {
+        let r = self.call(
+            ipc::IMPORT_ARENA,
+            ipc::ImportArena { ctx, arena, export }.bytes(),
+        )?;
+        let a = ipc::ArenaReply::read(&r.data).ok_or_else(|| io::Error::other("short reply"))?;
+        if a.status != ipc::OK {
+            return Err(status_err("arena import", a.status));
+        }
+        Ok((a.size, a.gpu_base))
+    }
+
+    pub fn release_export(&self, export: u32) -> io::Result<()> {
+        self.simple(
+            "export release",
+            ipc::RELEASE_EXPORT,
+            ipc::ExportRequest { export }.bytes(),
+        )
+    }
+
     /// Starts consuming the ring the guest initialised at `offset` in `arena`.
     pub fn attach_ring(&self, ctx: u32, arena: u32, offset: u64, data_size: u32) -> io::Result<()> {
         self.simple(

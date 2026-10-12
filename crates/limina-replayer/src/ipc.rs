@@ -15,6 +15,13 @@ pub const CREATE_ARENA: i32 = 0x4c47_0003;
 pub const DESTROY_ARENA: i32 = 0x4c47_0004;
 /// [`AttachRing`] → `{status}`.
 pub const ATTACH_RING: i32 = 0x4c47_0005;
+/// [`ExportArena`] → `{status}`: `{ctx, arena}` becomes reachable as `export` from any context,
+/// and stays alive while exported even if its context goes.
+pub const EXPORT_ARENA: i32 = 0x4c47_0006;
+/// [`ImportArena`] → [`ArenaReply`]: arena `arena` of `ctx` is export `export`'s memory.
+pub const IMPORT_ARENA: i32 = 0x4c47_0007;
+/// `{export}` → `{status}`.
+pub const RELEASE_EXPORT: i32 = 0x4c47_0008;
 
 /// Request statuses.
 pub const OK: i32 = 0;
@@ -93,6 +100,28 @@ pub struct AttachRing {
     pub _pad: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExportArena {
+    pub ctx: u32,
+    pub arena: u32,
+    pub export: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ImportArena {
+    pub ctx: u32,
+    pub arena: u32,
+    pub export: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExportRequest {
+    pub export: u32,
+}
+
 // SAFETY: all of these are repr(C) integers with explicit padding.
 unsafe impl Pod for CtxRequest {}
 unsafe impl Pod for Status {}
@@ -100,3 +129,6 @@ unsafe impl Pod for CreateArena {}
 unsafe impl Pod for ArenaReply {}
 unsafe impl Pod for ArenaRequest {}
 unsafe impl Pod for AttachRing {}
+unsafe impl Pod for ExportArena {}
+unsafe impl Pod for ImportArena {}
+unsafe impl Pod for ExportRequest {}

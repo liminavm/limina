@@ -438,6 +438,79 @@ fn a_kernel_writes_through_an_address_the_guest_computed() {
     }
 }
 
+/// Writes `0xC0FFEE00 + i` into `n` words at GPU address `dst` with the poke kernel.
+fn poke(g: &mut Guest, dst: u64, n: u32) {
+    const PTRS: u64 = 3 * MIB;
+    g.write(PTRS, &dst.to_le_bytes());
+    create_library(g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    g.reply(RECORDS);
+    let base = g.arena.gpu_base;
+    table(g, 3, &[(0, base + PTRS)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(cmd::SetComputePipeline { handle: 2, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetArgumentTable {
+            table: 3,
+            stages: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [n / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("dispatch");
+}
+
+#[test]
+fn an_exported_arena_outlives_its_context_and_imports_elsewhere() {
+    let mut g = start();
+    g.replayer.create_context(2).expect("second context");
+    let theirs = g.replayer.create_arena(2, 1, MIB).expect("their arena");
+    g.replayer.export_arena(2, 1, 77).expect("export");
+    g.replayer.destroy_context(2).expect("context gone");
+
+    let (size, gpu_base) = g.replayer.import_arena(1, 5, 77).expect("import");
+    assert_eq!(size, theirs.mapping.size());
+    assert_eq!(
+        gpu_base, theirs.gpu_base,
+        "an import is the same memory, at the same address"
+    );
+    const N: u32 = 256;
+    poke(&mut g, gpu_base + 4096, N);
+    // SAFETY: inside the exporting context's mapping, which the test still holds; the GPU is done.
+    let words = unsafe {
+        std::slice::from_raw_parts(theirs.mapping.as_ptr().add(4096).cast::<u32>(), N as usize)
+    };
+    for (i, &w) in words.iter().enumerate() {
+        assert_eq!(w, 0xC0FFEE00 + i as u32, "word {i}");
+    }
+
+    g.replayer.release_export(77).expect("release");
+    assert!(
+        g.replayer.import_arena(1, 6, 77).is_err(),
+        "a released export is gone"
+    );
+    assert!(g.replayer.export_arena(1, 99, 78).is_err(), "no such arena");
+}
+
 #[test]
 fn the_device_answers_queries() {
     let mut g = start();

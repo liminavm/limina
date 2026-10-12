@@ -40,6 +40,9 @@ impl Drop for Context {
 struct Server {
     device: Retained<Device>,
     contexts: HashMap<u32, Context>,
+    /// Arenas other contexts may import, by export id (the guest resource that names them).
+    /// An export holds its arena whether or not the context that made it is still there.
+    exports: HashMap<u32, Arc<Arena>>,
 }
 
 /// The replayer's `main`. Never returns.
@@ -70,6 +73,7 @@ fn serve() -> std::io::Result<()> {
     let mut server = Server {
         device,
         contexts: HashMap::new(),
+        exports: HashMap::new(),
     };
     loop {
         let Some(msg) = service.receive(None)? else {
@@ -135,6 +139,31 @@ impl Server {
             ipc::ATTACH_RING => match ipc::AttachRing::read(&msg.data) {
                 None => (status(ipc::ERR_MALFORMED), vec![]),
                 Some(r) => (status(self.attach_ring(r)), vec![]),
+            },
+            ipc::EXPORT_ARENA => match ipc::ExportArena::read(&msg.data) {
+                None => (status(ipc::ERR_MALFORMED), vec![]),
+                Some(r) => (status(self.export_arena(r)), vec![]),
+            },
+            ipc::IMPORT_ARENA => match ipc::ImportArena::read(&msg.data) {
+                None => (status(ipc::ERR_MALFORMED), vec![]),
+                Some(r) => {
+                    let reply = self.import_arena(r).unwrap_or_else(|s| ipc::ArenaReply {
+                        status: s,
+                        ..Default::default()
+                    });
+                    (Message::new(0, reply.bytes()), vec![])
+                }
+            },
+            ipc::RELEASE_EXPORT => match ipc::ExportRequest::read(&msg.data) {
+                None => (status(ipc::ERR_MALFORMED), vec![]),
+                Some(r) => {
+                    let s = if self.exports.remove(&r.export).is_some() {
+                        ipc::OK
+                    } else {
+                        ipc::ERR_NO_ARENA
+                    };
+                    (status(s), vec![])
+                }
             },
             other => {
                 log::warn!("unknown request {other:#x}");
@@ -203,6 +232,47 @@ impl Server {
         } else {
             ipc::ERR_NO_ARENA
         }
+    }
+
+    fn export_arena(&mut self, r: ipc::ExportArena) -> i32 {
+        let Some(ctx) = self.contexts.get(&r.ctx) else {
+            return ipc::ERR_NO_CONTEXT;
+        };
+        if self.exports.contains_key(&r.export) {
+            return ipc::ERR_EXISTS;
+        }
+        let Some(arena) = ctx
+            .arenas
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&r.arena)
+            .cloned()
+        else {
+            return ipc::ERR_NO_ARENA;
+        };
+        self.exports.insert(r.export, arena);
+        ipc::OK
+    }
+
+    fn import_arena(&mut self, r: ipc::ImportArena) -> Result<ipc::ArenaReply, i32> {
+        let ctx = self.contexts.get(&r.ctx).ok_or(ipc::ERR_NO_CONTEXT)?;
+        let arena = self
+            .exports
+            .get(&r.export)
+            .ok_or(ipc::ERR_NO_ARENA)?
+            .clone();
+        let mut arenas = ctx.arenas.lock().unwrap_or_else(|e| e.into_inner());
+        if arenas.contains_key(&r.arena) {
+            return Err(ipc::ERR_EXISTS);
+        }
+        let reply = ipc::ArenaReply {
+            status: ipc::OK,
+            _pad: 0,
+            size: arena.size,
+            gpu_base: arena.gpu_base,
+        };
+        arenas.insert(r.arena, arena);
+        Ok(reply)
     }
 
     fn attach_ring(&mut self, r: ipc::AttachRing) -> i32 {

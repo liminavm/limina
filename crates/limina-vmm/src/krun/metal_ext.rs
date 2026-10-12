@@ -24,8 +24,20 @@ struct ReplayerExtension {
     doorbells: RwLock<Vec<Option<Doorbell>>>,
     /// ctx → its slot, to clear it on destroy.
     slots: Mutex<HashMap<u32, u32>>,
-    /// (ctx, arena) → the worker's mapping of it, which the guest's mapping is made from.
-    arenas: Mutex<HashMap<(u32, u32), MappedArena>>,
+    /// (ctx, arena) → the worker's mapping of it, which the guest's mapping is made from. An
+    /// import shares its export's mapping.
+    arenas: Mutex<HashMap<(u32, u32), Arc<MappedArena>>>,
+    /// Exported arenas by blob resource: each keeps its mapping (and, in the replayer, its
+    /// arena) whatever happens to the context that made it.
+    exports: Mutex<HashMap<u32, Arc<MappedArena>>>,
+}
+
+fn info(a: &MappedArena) -> ExtArena {
+    ExtArena {
+        host_addr: a.mapping.addr(),
+        size: a.mapping.size(),
+        gpu_base: a.gpu_base,
+    }
 }
 
 impl GpuExtension for ReplayerExtension {
@@ -75,16 +87,12 @@ impl GpuExtension for ReplayerExtension {
             .replayer
             .create_arena(ctx, arena, size)
             .map_err(|e| e.to_string())?;
-        let info = ExtArena {
-            host_addr: a.mapping.addr(),
-            size: a.mapping.size(),
-            gpu_base: a.gpu_base,
-        };
+        let i = info(&a);
         self.arenas
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert((ctx, arena), a);
-        Ok(info)
+            .insert((ctx, arena), Arc::new(a));
+        Ok(i)
     }
 
     fn destroy_arena(&self, ctx: u32, arena: u32) {
@@ -101,6 +109,54 @@ impl GpuExtension for ReplayerExtension {
         self.replayer
             .attach_ring(ctx, arena, offset, data_size)
             .map_err(|e| e.to_string())
+    }
+
+    fn export_arena(&self, ctx: u32, arena: u32, export: u32) -> Result<ExtArena, String> {
+        let a = self
+            .arenas
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(ctx, arena))
+            .cloned()
+            .ok_or("no such arena")?;
+        self.replayer
+            .export_arena(ctx, arena, export)
+            .map_err(|e| e.to_string())?;
+        let i = info(&a);
+        self.exports
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(export, a);
+        Ok(i)
+    }
+
+    fn import_arena(&self, ctx: u32, arena: u32, export: u32) -> Result<ExtArena, String> {
+        let a = self
+            .exports
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&export)
+            .cloned()
+            .ok_or("no such export")?;
+        self.replayer
+            .import_arena(ctx, arena, export)
+            .map_err(|e| e.to_string())?;
+        let i = info(&a);
+        self.arenas
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((ctx, arena), a);
+        Ok(i)
+    }
+
+    fn release_export(&self, export: u32) {
+        self.exports
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&export);
+        if let Err(e) = self.replayer.release_export(export) {
+            log::warn!("metal ext: release export {export}: {e}");
+        }
     }
 
     fn doorbell(&self, doorbell: u32) {
@@ -138,6 +194,7 @@ pub fn start() -> Option<Arc<dyn GpuExtension>> {
                 doorbells: RwLock::new(Vec::new()),
                 slots: Mutex::new(HashMap::new()),
                 arenas: Mutex::new(HashMap::new()),
+                exports: Mutex::new(HashMap::new()),
             }))
         }
         Err(e) => {
