@@ -71,8 +71,12 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
   (`wsi_device::can_share_format`), since an import the compositor cannot make ends its context.
   Wider formats (RGBA16F, 10-bit) come with HDR and deep colour (`docs/roadmap.md` M15 wave 7),
   which adds them to surfaces, vrend's adoption and the guest driver's list together.
-- **vrend/venus → Metal transport — to build.** The worker hands the resource's IOSurface port to
-  the replayer, which makes a texture over it.
+- **vrend/venus → Metal transport — built for images.** A guest driver importing a dma-buf as a
+  dedicated image asks the module what surface its resource is (`SURFACE_IMPORT`); the worker
+  resolves the resource to the IOSurface it is presented from (`Renderer::resource_surface_port`:
+  vrend's SCANOUT/SHARED textures, venus exports, the transport's own surfaces), binds its port to
+  the context, and the replayer makes a texture over it. Each context importing a resource is a
+  holder of its own, released when the resource goes or the context detaches it.
 
 To verify before building: that an IOSurface's pages can back a guest-visible mapping of an
 extension blob the way venus's IOSurface blobs do (rutabaga's Apple `get_map_ptr` path).

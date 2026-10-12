@@ -18,6 +18,7 @@ surfaces: `08e0f2b62a7`).
 | `vkcube --wsi wayland` on the seated GNOME desktop | renders correctly (textured, depth-tested; window capture checked by eye), runs 40 s without fault, 600 frames in 9.96 s FIFO (vsync-bound) |
 | `vkcube` under stock gnome-shell, windows as surfaces | dma-buf swapchain (`zwp_linux_buffer_params_v1`, XR24, no `wl_shm`), imported by gnome-shell's vrend context with no refusal; renders correctly (capture checked by eye), ~1800 commits in 15 s |
 | `vkgears` (mesa-demos) the same way | XR24 surfaces, 60 FPS, renders correctly (capture checked by eye) |
+| `kk-probe import` | a linear XRGB8888 scanout buffer from stock gbm (virgl), written through `gbm_bo_map`, imported as a dedicated LINEAR-modifier image at gbm's pitch: 1024/1024 pixels right |
 | stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
 | `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps |
 | `kk-probe share` | a buffer exported as dma-buf, dispatched into through a self-import and through an import in a child process: the exporter's mapping shows 256/256 words right for both; the child reads the parent's mark |
@@ -102,8 +103,8 @@ buffer scene with guest and host both idle. Queue events now publish like commit
 - **Only windows cross to the compositor.** A non-window exported KK heap is still a blob the
   extension owns, invisible to virglrs. Windows in RGBA16F or 10-bit formats are withheld until
   surfaces take them; X11 WSI's format list is not filtered.
-- **The other direction is not built:** KK cannot import a vrend or venus buffer (the replayer
-  has no texture over another renderer's IOSurface yet).
+- **Imports are images only.** A dma-buf from vrend or venus imports as a dedicated
+  single-plane image over its surface; as a buffer, or a planar (YUV) image, it is still refused.
 - **A bad client import ends the compositor's context.** vrend poisons a context on a SET_TYPE of
   a resource it does not know; the format filter keeps KK from causing one.
 - No DRM format modifiers: a dma-buf image means KosmicKrisp's own layout, so only another
