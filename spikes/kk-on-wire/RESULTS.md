@@ -20,7 +20,7 @@ surfaces: `08e0f2b62a7`).
 | `vkgears` (mesa-demos) the same way | XR24 surfaces, 60 FPS, renders correctly (capture checked by eye) |
 | `kk-probe export` | an image made for dma-buf export with the LINEAR modifier, filled by a buffer copy, sampled texel for texel by stock virgl GL (EGL on gbm) into a texture of its own: 1024/1024 pixels right |
 | `kk-probe nv12` | a 100×16 4:2:0 picture from stock virgl VA (`vaPutImage` into DRM_PRIME_2 surfaces, padded to 112 wide), exported as two dma-bufs and imported as a disjoint 2-plane LINEAR image, each plane copied out: 1600/1600 luma and 800/800 chroma bytes right. Needs the host GL from `limina-kk-surfaces` |
-| stock VA decode, plane surfaces on vs off | GStreamer `vavp9dec` to DMABuf then `vapostproc`, plain `vavp9dec`, and `vp9dec`, 60 frames of 854×480 VP9 each: per-frame checksums identical with and without the plane surfaces (`limina-kk-surfaces` vs stock host GL) |
+| stock VA decode on both host GLs | GStreamer `vavp9dec` to DMABuf then `vapostproc`, plain `vavp9dec`, and `vp9dec`, 60 frames of 854×480 VP9 each: per-frame checksums identical on `limina-kk-surfaces` and the stock host GL. None of these decodes made a shared plane (the worker's `shared video planes are IOSurfaces` line stays silent; kk-probe nv12 prints it), so this shows only that ordinary decodes are untouched |
 | `kk-probe import` | a linear XRGB8888 scanout buffer from stock gbm (virgl), written through `gbm_bo_map`, imported as a dedicated LINEAR-modifier image at gbm's pitch: 1024/1024 pixels right |
 | stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
 | `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps |
@@ -117,6 +117,12 @@ buffer scene with guest and host both idle. Queue events now publish like commit
 - **Imports are images only.** A dma-buf from vrend or venus imports as a dedicated image over
   its surface, single-plane or a 4:2:0 picture shared one dma-buf per plane; as a buffer, or a
   picture in one dma-buf (enhanced guest Mesa's composite decode target), it is still refused.
+- **A real player's frames do not reach KK yet.** Stock decoders (ffmpeg's VA hwaccel,
+  GStreamer's VA decoders asked for DMABuf) create surfaces without the DRM_PRIME_2 memory
+  type, so their planes are not SHARED, keep GL storage, and are refused on import; only a
+  surface made for export (kk-probe nv12) is a surface. A decode writing into surface-backed
+  planes is untested. Reaching players needs vrend to back a plane by a surface when it is first
+  imported, not only when it is made SHARED.
 - **Hardware VP9 decode is not bit-exact against software**, with or without plane surfaces:
   plain `vavp9dec` differs from `vp9dec` in 30 of 60 frames of the test clip, and a DMABuf
   decode through `vapostproc` in all 60.
