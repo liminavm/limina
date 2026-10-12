@@ -362,7 +362,7 @@ struct Cli {
     /// Give the guest EL2, so it can run KVM and VMs of its own (nested virtualization). Needs
     /// an M3 or later Mac; the worker refuses it elsewhere. A resumed guest gets what it was
     /// suspended with instead, whatever this says. A managed VM takes it from
-    /// `hardware.nested_virt`, on by default wherever the Mac supports it.
+    /// `hardware.nested_virt` (off by default), ignored where the Mac cannot offer it.
     #[arg(long)]
     nested_virt: bool,
 

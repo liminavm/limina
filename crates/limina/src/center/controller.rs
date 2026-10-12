@@ -1341,9 +1341,11 @@ impl CenterController {
             &nested_checkbox,
             "Lets the guest run virtual machines of its own: KVM, and everything built on it — \
              QEMU, libvirt, Kata containers, Android emulators, Firecracker. Needs a Mac with an \
-             M3 or later. The guest's own VMs get at most 64 GB of address space, so a tool \
-             that asks for more by default has to be told to ask for less. A suspended VM \
-             resumes the way it was saved; a change applies from the next full start.",
+             M3 or later. It has a price even when no VM runs: every context switch in the \
+             guest costs several times as much, so turn it on only where you need it. The \
+             guest's own VMs get at most 64 GB of address space, so a tool that asks for more \
+             by default has to be told to ask for less. A suspended VM resumes the way it was \
+             saved; a change applies from the next full start.",
         );
 
         // Security: the vTPM toggle plus a reset. Built inline rather than with labeled_popup so

@@ -497,6 +497,31 @@ crossing exactly, since the agent reports every 1 s.
 
 ---
 
+## Nested virtualization
+
+### About one L2 boot in ten hangs on an interrupt the L2 is never shown
+Measured 2026-10-12 on an M4 Pro, macOS 27.0.1 (`spikes/nested-virt-probe/RESULTS.md`, *A real
+L2*): a QEMU+KVM guest inside a nested limina guest hangs in 2-3 of 25 boots, spinning on `WFI`
+with its virtual timer (PPI 27, hardware-mapped) pending in the L1 KVM's list register. Booting the
+L1 kernel with `kvm-arm.vgic_v3_group1_trap=1` (KVM emulates the L2's CPU interface itself) makes
+75 of 75 pass. That needs a guest change, and every guest that runs VMs would need it: find the
+host-side cause instead. A fault this visible in HVF itself would hit every VZ guest that nests,
+so first rule libkrun out:
+- **A/B against VZ.** Boot the same image under Virtualization.framework with
+  `VZGenericPlatformConfiguration.isNestedVirtualizationEnabled` and run `l2/hang-catch.sh`. If it
+  does not hang, diff what VZ presents against libkrun: the ID registers (`ID_AA64PFR0_EL1` GIC
+  field, `ICH_VTR_EL2`), the GIC configuration and the devicetree's maintenance interrupt, the
+  timer PPIs. QEMU >= 11.1 (HVF nested over Apple's vGIC) is a second comparison.
+- **What reaches libkrun while an L2 runs.** Every L2 entry and exit traps `CNTHCTL_EL2` to
+  libkrun, which writes it through (`devices/src/legacy/vcpu.rs`, `handle_sysreg_read/write`);
+  check the value HVF expects there, whether it should be masked, and whether the hang rate
+  follows the round-trip's latency (3 of 6 boots hung with libkrun's debug logging on).
+- **The timer's mapped interrupt.** KVM drives PPI 27 through its active state on HVF's GIC
+  (`irq_set_irqchip_state`); trace the L1 KVM's `kvm_timer_*` and `vgic_*` events at a hang to see
+  whether the L2 ever reads `ICC_IAR1_EL1`, and what the LR holds when it does.
+
+---
+
 ## GPU robustness — guest-reachable aborts & containment
 
 ### The "no guest-reachable aborts" audit, restated for virglrs
