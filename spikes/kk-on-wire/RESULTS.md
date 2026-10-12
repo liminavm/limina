@@ -6,7 +6,8 @@ and the host's `limina-replayer` making the Metal 4 calls.
 
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
-`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `d71a3c39f85`.
+`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `d71a3c39f85` (window
+surfaces: `08e0f2b62a7`).
 
 | check | result |
 |---|---|
@@ -15,6 +16,8 @@ Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal
 | `kk-probe triangle` | 2016 green (64·63/2, the top-left rule) and 2080 blue of 64×64, nothing else |
 | `kk-probe allocs` | 6000 separately allocated, mapped 4 KiB buffers keep their own contents (past the 4096 arenas a context may have); compute into the last one right |
 | `vkcube --wsi wayland` on the seated GNOME desktop | renders correctly (textured, depth-tested; window capture checked by eye), runs 40 s without fault, 600 frames in 9.96 s FIFO (vsync-bound) |
+| `vkcube` under stock gnome-shell, windows as surfaces | dma-buf swapchain (`zwp_linux_buffer_params_v1`, XR24, no `wl_shm`), imported by gnome-shell's vrend context with no refusal; renders correctly (capture checked by eye), ~1800 commits in 15 s |
+| `vkgears` (mesa-demos) the same way | XR24 surfaces, 60 FPS, renders correctly (capture checked by eye) |
 | stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
 | `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps |
 | `kk-probe share` | a buffer exported as dma-buf, dispatched into through a self-import and through an import in a child process: the exporter's mapping shows 256/256 words right for both; the child reads the parent's mark |
@@ -39,8 +42,20 @@ also needed:
 - a placed BO map that is a second `mmap` of the heap's arena (`mtl_heap_map_at`);
 - a 20-byte GNU build-id accepted where KK required the 16-byte `LC_UUID`;
 - WSI given no KMS display fd (it was handed 0, stdin);
-- the software WSI path (`sw_device`) and no `VK_EXT_external_memory_host`, which needs Metal's
-  bytes-no-copy buffers.
+- no `VK_EXT_external_memory_host`, which needs Metal's bytes-no-copy buffers.
+
+**Windows are surfaces the compositor imports.** When the module and host make surfaces (the
+bridge tries a 1×1 one at init), WSI runs its native-image path: a window-system image is laid out
+linear, and its exported dedicated memory is a texture over a host surface
+(`DRM_IOCTL_VIRTGPU_LIMINA_SURFACE_CREATE`, then `CREATE_TEXTURE_FROM_SURFACE`) whose dma-buf
+gnome-shell's virgl driver imports as a host3d blob; vrend adopts the same IOSurface. Surfaces
+take 32-bit BGRA/RGBA only, so WSI withholds every other format through
+`wsi_device::can_share_format` (Wayland only), and a window-system image in another format fails
+its allocation: an import the compositor cannot make poisons the compositor's own context, as in
+C virglrenderer. Without surfaces the software WSI path (a copy) stays. Implicit sync needs
+sync_file import into binary semaphores (a CPU wait) and exports that always return a real fd,
+signaled when the value is already reached: WSI passes it to `DMA_BUF_IOCTL_IMPORT_SYNC_FILE`,
+which refuses -1.
 
 KosmicKrisp makes a Metal heap per allocation, and a guest context has at most 4096 arenas
 (`VIRTGPU_LIMINA_MAX_ARENAS`), while KK on macOS holds ~3.8k heaps on an idle desktop and 28k
@@ -84,10 +99,13 @@ buffer scene with guest and host both idle. Queue events now publish like commit
   sync_file into a KK semaphore still waits on the CPU (the host cannot wait on a guest fence).
 - The worker answers fences by polling ring control blocks every 100 µs while one is pending;
   a replayer-posted wake would remove the poll.
-- **The compositor cannot import a KK buffer.** An exported KK heap is a blob the extension owns,
-  invisible to virglrs, so gnome-shell (vrend/venus) cannot take it as a client buffer; windows
-  present through the software WSI (a copy). Zero-copy presentation needs the host to register
-  extension blobs with the renderer, or a compositor on this transport.
+- **Only windows cross to the compositor.** A non-window exported KK heap is still a blob the
+  extension owns, invisible to virglrs. Windows in RGBA16F or 10-bit formats are withheld until
+  surfaces take them; X11 WSI's format list is not filtered.
+- **The other direction is not built:** KK cannot import a vrend or venus buffer (the replayer
+  has no texture over another renderer's IOSurface yet).
+- **A bad client import ends the compositor's context.** vrend poisons a context on a SET_TYPE of
+  a resource it does not know; the format filter keeps KK from causing one.
 - No DRM format modifiers: a dma-buf image means KosmicKrisp's own layout, so only another
   KosmicKrisp context can make sense of it.
 

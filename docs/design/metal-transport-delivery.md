@@ -62,14 +62,14 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
   those). Heap-placed images in KK's own layout stay within the Metal transport.
 - **The worker keeps the registry**: virtio-gpu resource id → its IOSurface, whichever renderer
   made it. virglrs already registers the surfaces it mints (`metal::republish`).
-- **Metal transport → vrend/venus — to build.** Today the import fails: a guest virgl or venus
-  context names the buffer by resource id, and virglrs has no resource under an extension blob's
-  id. Its only import, `Renderer::resource_import` (`third_party/virglrs/src/renderer.rs`), takes
-  a shm or dma-buf descriptor, and libkrun does not call it. Two pieces are needed: an image the
-  transport exports for sharing beyond itself is a dedicated IOSurface-backed texture (a new
-  replayer object, not heap-placed), and virglrs gains an import of a resource backed by a given
-  IOSurface, which vrend adopts as texture storage (`EGL_IOSURFACE_LIMINA`) and venus imports as
-  it does its own scanouts. The virglrs half is an API addition to coordinate with that tree.
+- **Metal transport → vrend/venus — built for windows.** A window-system image is a dedicated
+  texture over a *surface*: the guest module's `SURFACE_CREATE` makes a host3d resource the worker
+  backs with an IOSurface minted by virglrs (`Renderer::resource_create_surface`), whose Mach port
+  goes to the replayer (`CREATE_TEXTURE_FROM_SURFACE`). vrend adopts the IOSurface when a context
+  types the resource; venus imports it as it does its own scanouts. Surfaces take 32-bit
+  BGRA/RGBA, and the guest driver offers the window system nothing else
+  (`wsi_device::can_share_format`), since an import the compositor cannot make ends its context.
+  Wider formats (RGBA16F, 10-bit) need surfaces and vrend adoption to take them.
 - **vrend/venus → Metal transport — to build.** The worker hands the resource's IOSurface port to
   the replayer, which makes a texture over it.
 
