@@ -18,7 +18,7 @@ use limina_gpu_wire::cmd::{self, BufRef, Command, Feedback, REPLY_DONE, Reply, o
 use limina_gpu_wire::ring::{Consumer, Error, RingControl};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::{NSRange, NSString};
+use objc2_foundation::{NSProcessInfo, NSRange, NSString};
 use objc2_metal::{
     MTL4ArgumentTable, MTL4ArgumentTableDescriptor, MTL4CommandAllocator, MTL4CommandBuffer,
     MTL4CommandEncoder, MTL4CommandQueue, MTL4CommitFeedback, MTL4CommitOptions, MTL4Compiler,
@@ -1488,6 +1488,12 @@ impl Executor {
         info.heap_buffer_align = d
             .heapBufferSizeAndAlignWithLength_options(1, metal::arena_options())
             .align as u32;
+        let v = NSProcessInfo::processInfo().operatingSystemVersion();
+        info.os_version = [
+            v.majorVersion as u32,
+            v.minorVersion as u32,
+            v.patchVersion as u32,
+        ];
         let (_a, p) = self.host(dst, size_of::<cmd::DeviceInfo>() as u64, 8)?;
         // SAFETY: in the arena, aligned and in bounds.
         unsafe { p.cast::<cmd::DeviceInfo>().write(info) };

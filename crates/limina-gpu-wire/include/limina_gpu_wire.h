@@ -169,8 +169,10 @@ struct lmn_device_info {
    uint64_t timestamp_frequency;
    uint32_t sparse_tile_bytes;
    uint32_t heap_buffer_align;
+   uint32_t os_version[3];
+   uint32_t _pad;
 };
-_Static_assert(sizeof(struct lmn_device_info) == 136, "lmn_device_info size");
+_Static_assert(sizeof(struct lmn_device_info) == 152, "lmn_device_info size");
 _Static_assert(offsetof(struct lmn_device_info, version) == 0, "lmn_device_info.version");
 _Static_assert(offsetof(struct lmn_device_info, apple_family) == 4, "lmn_device_info.apple_family");
 _Static_assert(offsetof(struct lmn_device_info, name) == 8, "lmn_device_info.name");
@@ -185,6 +187,8 @@ _Static_assert(offsetof(struct lmn_device_info, recommended_max_working_set) == 
 _Static_assert(offsetof(struct lmn_device_info, timestamp_frequency) == 120, "lmn_device_info.timestamp_frequency");
 _Static_assert(offsetof(struct lmn_device_info, sparse_tile_bytes) == 128, "lmn_device_info.sparse_tile_bytes");
 _Static_assert(offsetof(struct lmn_device_info, heap_buffer_align) == 132, "lmn_device_info.heap_buffer_align");
+_Static_assert(offsetof(struct lmn_device_info, os_version) == 136, "lmn_device_info.os_version");
+_Static_assert(offsetof(struct lmn_device_info, _pad) == 148, "lmn_device_info._pad");
 
 /* The fields of an `MTLTextureDescriptor` the guest chooses. */
 struct lmn_texture_desc {
@@ -615,13 +619,13 @@ struct lmn_barrier {
    uint32_t kind;
    uint32_t after;
    uint32_t before;
-   uint32_t _pad;
+   uint32_t visibility;
 };
 _Static_assert(sizeof(struct lmn_barrier) == 16, "lmn_barrier size");
 _Static_assert(offsetof(struct lmn_barrier, kind) == 0, "lmn_barrier.kind");
 _Static_assert(offsetof(struct lmn_barrier, after) == 4, "lmn_barrier.after");
 _Static_assert(offsetof(struct lmn_barrier, before) == 8, "lmn_barrier.before");
-_Static_assert(offsetof(struct lmn_barrier, _pad) == 12, "lmn_barrier._pad");
+_Static_assert(offsetof(struct lmn_barrier, visibility) == 12, "lmn_barrier.visibility");
 
 /* `updateFence:afterEncoderStages:` (`wait` zero) or `waitForFence:beforeEncoderStages:`. */
 struct lmn_fence_op {
@@ -923,7 +927,9 @@ _Static_assert(sizeof(struct lmn_commit) == 24, "lmn_commit size");
 _Static_assert(offsetof(struct lmn_commit, seqno) == 0, "lmn_commit.seqno");
 _Static_assert(offsetof(struct lmn_commit, feedback) == 8, "lmn_commit.feedback");
 
-/* `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on the queue, in queue order. */
+/* `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on the queue, between */
+/* commits: no command buffer may be ended and not yet committed. A signal of a shared event */
+/* also updates its mirror once the value is reached. */
 struct lmn_queue_event {
    uint32_t event;
    uint32_t wait;

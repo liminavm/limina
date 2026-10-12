@@ -467,6 +467,7 @@ fn the_device_answers_queries() {
     assert!(info.sample_counts & (1 << 1 | 1 << 4) == (1 << 1 | 1 << 4));
     assert!(info.heap_buffer_align.is_power_of_two());
     assert!(info.max_threads_per_threadgroup[0] >= 256);
+    assert!(info.os_version[0] >= 26, "{:?}", info.os_version);
 
     let reply = g.reply_slot(RECORDS);
     g.push(

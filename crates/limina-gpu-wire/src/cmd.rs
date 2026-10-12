@@ -277,6 +277,10 @@ wire! {
         /// `heapBufferSizeAndAlignWithLength:options:`'s alignment for the arena options; a
         /// buffer's size in an arena is its length.
         heap_buffer_align: u32,
+        /// The host's macOS version (`NSProcessInfo.operatingSystemVersion`): Metal's behaviour
+        /// changes with it, and KosmicKrisp works around some of it by version.
+        os_version: [u32; 3],
+        _pad: u32,
     }
 
     /// The fields of an `MTLTextureDescriptor` the guest chooses.
