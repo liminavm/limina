@@ -7,7 +7,8 @@
 //! as a GEM object, PRIME to an fd, import in a child with its own context, and a kernel there
 //! writes what the parent reads back. Then a fence: a commit that waits on a shared event
 //! nobody has set, fenced as a sync_file and on a shared arena's dma-buf, must leave both
-//! unsignaled until the guest sets the event, and both signaled after. Exit status 0 means
+//! unsignaled until the guest sets the event, and both signaled after. Exports must also come back
+//! promptly on a quiet device, with nothing else kicking the control queue. Exit status 0 means
 //! everything came back right.
 //!
 //! Usage: limina-gpu-smoke [/dev/dri/renderDN]   (default: the first render node that has the
@@ -1082,6 +1083,42 @@ fn round_trips(g: &mut Gpu) -> Result<(), String> {
     Ok(())
 }
 
+/// Exports of fresh shared arenas, spaced so the control queue goes quiet before each: every one
+/// must come back within `EXPORT_BOUND`. An export waits for the host to map the arena, so a
+/// command queued without a kick leaves it waiting for whatever traffic comes along next.
+fn export_latency(f: &File) -> Result<(), String> {
+    const EXPORTS: u32 = 20;
+    const EXPORT_BOUND: Duration = Duration::from_millis(500);
+    let mut worst = Duration::ZERO;
+    for i in 0..EXPORTS {
+        std::thread::sleep(Duration::from_millis(50));
+        let id = 100 + i;
+        let mut a = uapi::ArenaCreate {
+            arena_id: id,
+            flags: uapi::ARENA_SHARED,
+            size: 64 * 1024,
+            ..Default::default()
+        };
+        ioctl(f, uapi::ARENA_CREATE, &mut a).map_err(|e| format!("export latency: create: {e}"))?;
+        let mut e = uapi::ArenaExport {
+            arena_id: id,
+            handle: 0,
+        };
+        let t = Instant::now();
+        ioctl(f, uapi::ARENA_EXPORT, &mut e).map_err(|e| format!("export latency: export: {e}"))?;
+        let took = t.elapsed();
+        worst = worst.max(took);
+        if took > EXPORT_BOUND {
+            return Err(format!(
+                "export latency: export {} of {EXPORTS} took {took:?} (bound {EXPORT_BOUND:?})",
+                i + 1
+            ));
+        }
+    }
+    println!("export latency: {EXPORTS} exports, worst {worst:?}");
+    Ok(())
+}
+
 fn main() {
     let found = match std::env::args().nth(1) {
         Some(p) => Gpu::open(&p).map(|g| (p, g)).map_err(|e| e.to_string()),
@@ -1108,6 +1145,7 @@ fn main() {
     };
     let result = triangle(&mut g)
         .and_then(|()| poke(&mut g, &other))
+        .and_then(|()| export_latency(&g._file))
         .and_then(|()| share(&path, &g._file))
         .and_then(|()| surface(&path, &mut g))
         .and_then(|()| fence(&mut g))

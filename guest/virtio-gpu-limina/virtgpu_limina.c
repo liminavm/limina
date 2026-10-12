@@ -474,7 +474,12 @@ int virtio_gpu_limina_arena_export_ioctl(struct drm_device *dev, void *data,
 	bo->blob_mem = params.blob_mem;
 	bo->blob_flags = params.blob_flags;
 	obj = &bo->base.base;
-	/* Neither creation nor MAP_BLOB waits for the host; a refused export fails here. */
+	/*
+	 * Neither creation nor MAP_BLOB waits for the host; a refused export fails here. Both are
+	 * only queued: without the kick they wait for whatever traffic comes along next, and a
+	 * quiet desktop has none for up to a minute.
+	 */
+	virtio_gpu_notify(vgdev);
 	wait_event(vgdev->resp_wq, to_virtio_gpu_vram(bo)->map_state != STATE_INITIALIZING);
 	if (to_virtio_gpu_vram(bo)->map_state != STATE_OK) {
 		drm_gem_object_put(obj);
