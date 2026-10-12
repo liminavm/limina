@@ -243,6 +243,9 @@ here yet.
 | `d113bd5b` | vmm: write snapshots readable by their owner only | **limina-only** — our snapshot writer; 0600 since it holds guest RAM and TPM seeds |
 | `3e90feda` | fuzz: restore the TPM device mid-sequence and compare | **limina-only** — fuzz target |
 | `585fae52` | vmm: refuse by name a resume into a VM without its TPM | **limina-only, rides `0e29fa0c`** |
+| `c5076f43` | hvf: give MDCR_EL2 its real register id | **upstream-now** — upstream's `bindings.rs` has `HV_SYS_REG_MDCR_EL2 = 0xe019`; the SDK's is `0xe089`, and HVF answers the wrong id with `HV_BAD_ARGUMENT`. The only one of the 186 register ids that disagrees with the SDK (checked by `spikes/nested-virt-probe/el2-regs.c`). Upstream sets the register at nested vCPU init, so the write fails there too |
+| `d6a2b1ca` | hvf/vmm: carry a nested guest's EL2 state through a snapshot | **limina-only** — rides our snapshot machinery: EL2 system registers, `ICC_SRE_EL2`, ICH control and list registers appended to the vCPU state, a restore refused by name across an EL2 mismatch, and the IRQ/FIQ line read skipped with EL2 (HVF answers `HV_UNSUPPORTED`). The register list (measured on an M4 Pro) would serve #762's successor if upstream snapshots nested guests |
+| `d58f8366` | hvf: name the system register a read failed on | **upstream-worthy** — a `warn!` with the register id and HVF's return code at each failing register read; it is what found `c5076f43` |
 
 ### Series verdict (all 126 rows researched 2026-08-03, vs main `c652b56`) — COMPLETE
 

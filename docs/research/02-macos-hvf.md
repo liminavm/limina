@@ -290,7 +290,7 @@ low-host-CPU-at-idle goal; worth measuring (§6).
 
 | Limit | Reality in this tree | Impact |
 |---|---|---|
-| Nested virt | **Works on M3+/macOS 15+** via `limina-vmm --nested-virt` (libkrun `nested_enabled` → `set_el2_enabled`); M1/M2 = **no**, the worker refuses. Measured on M4 Pro (`spikes/nested-virt-probe/RESULTS.md`): guest KVM comes up nVHE with a 36-bit IPA limit through direct boot and firmware + GRUB alike; ~33 µs per nested exit. | KVM-in-guest (containers with KVM, nested VMs) on M3+ only. Snapshot of a nested VM is unsupported until the vCPU save list carries EL2 state. |
+| Nested virt | **Works on M3+/macOS 15+** via `limina-vmm --nested-virt` (libkrun `nested_enabled` → `set_el2_enabled`); M1/M2 = **no**, the worker refuses. Measured on M4 Pro (`spikes/nested-virt-probe/RESULTS.md`): guest KVM comes up nVHE with a 36-bit IPA limit through direct boot and firmware + GRUB alike; ~33 µs per nested exit; an L2 Linux under QEMU+KVM boots in ~4 s; suspend/resume carries the EL2 state. EL2 makes every guest context switch ~5x dearer (HVF-side), and ~1 L2 boot in 10 hangs on an undelivered list-register interrupt (`docs/hardening-backlog.md`). | KVM-in-guest (containers with KVM, nested VMs) on M3+ only, per VM: `hardware.nested_virt`, off by default for the cost. |
 | In-kernel GIC | **Used by default** (`hv_gic` via `HvfGicV3`), userspace GICv3 is fallback (`builder.rs:895-899`). | Perf win already in place; no patch needed. |
 | Dirty-page log | No API used; HVF historically exposes none. | Live migration/incremental snapshot hard; stop-the-world only. **[VERIFY]** macOS 26 headers for any new symbol. |
 | P/E core pinning | No HVF API; vCPU = host thread, macOS schedules it. | Use QoS hints only (e.g. `QOS_CLASS_USER_INTERACTIVE`). |
@@ -470,8 +470,10 @@ USB passthrough, fine-grained dynamic memory, and custom guest agents.
    unprivileged gvproxy NAT for the Fedora guest; defer bridged.
 8. **Exit-path hardening** — enumerate which ECs/PSCI fns a real Fedora desktop
    actually triggers, so we know which `panic!`s (`lib.rs:549,728`) are reachable.
-9. **Nested virt** — works on M3+ (`spikes/nested-virt-probe/`), unavailable on M1/M2. Owed:
-   EL2 state in snapshot/suspend, an L2 Linux boot with device I/O, and a user-facing switch.
+9. **Nested virt** — works on M3+ (`spikes/nested-virt-probe/`), unavailable on M1/M2: a per-VM
+   setting (`hardware.nested_virt`, the Configure sheet's *Nested VMs*), off by default because
+   EL2 costs every guest ~5x per context switch; snapshots carry the EL2 state. Owed: the L2
+   interrupt hang (`docs/hardening-backlog.md`, *Nested virtualization*).
 
 ---
 
