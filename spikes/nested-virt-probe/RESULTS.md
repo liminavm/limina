@@ -36,8 +36,8 @@ Test kernels `target/test-guest/kernel/Image-16k` and `Image` (4 KiB pages), wor
 - KVM runs **nVHE**, and reports `IPA Size Limit: 36 bits (Reduced IPA size, limited VM/VMM
   compatibility)`: VMMs inside the guest must ask for a ≤ 36-bit IPA space (the probe asks
   for `KVM_CAP_ARM_VM_IPA_SIZE`; one that hard-codes the 40-bit default gets `EINVAL`).
-- ~33 µs per nested exit, round trip to the L1 VMM's userspace. Not measured: the same exit
-  without nesting for comparison, an L2 Linux boot, or L2 device I/O.
+- ~33 µs per nested exit, round trip to the L1 VMM's userspace. An L2 Linux boot and its device
+  I/O: see *A real L2* below.
 - 4 KiB stage-2 granule and EL2 combine fine.
 
 ## EL2 state in a snapshot: which registers round-trip
@@ -63,7 +63,68 @@ Measured 2026-10-12, dogfood Mac (M4 Pro, macOS 27.0.1):
 - The `ICV_*` registers read with EL2 on and are views of the ICH state (`ICV_AP0R0` = the
   planted `ICH_AP0R0`); `ICV_RPR_EL1` refuses a write.
 - The VM-wide GIC state blob is 126314 bytes with and without EL2: no nested state in it.
+- With EL2, `hv_vcpu_get_pending_interrupt` answers `HV_UNSUPPORTED`: the in-kernel GIC owns the
+  vCPU's IRQ/FIQ lines. Every EL1 register of the non-nested snapshot, the ICC registers, the
+  vtimer offset and mask still read.
+- libkrun's binding for `MDCR_EL2` was `0xe019`; the SDK's is `0xe089` (`HV_BAD_ARGUMENT`
+  otherwise). It was the only one of the 186 register ids that disagreed with the SDK.
 
 libkrun's snapshot carries exactly the round-tripping set when a vCPU has EL2
 (`SNAPSHOT_EL2_SYS_REGS`, `SNAPSHOT_ICH_REGS`, `ICH_LIST_REGS` in `hvf/src/lib.rs`), and a
 restore refuses a snapshot saved with EL2 into a VM without it, or the reverse.
+
+## A real L2: Fedora's KVM running QEMU guests
+
+`l2/` drives it, from a limina checkout on an M3+ Mac: `l2/host-run.sh boot <disk> <log>
+--nested-virt` boots a headless clone, `l2/setup.sh` (as root in the guest) builds a busybox
+initramfs and an 8 MiB random disk, and `l2/boot.sh` boots the guest's own kernel as an L2 under
+`qemu-system-aarch64 -accel kvm -M virt,gic-version=3,highmem=off` (the 36-bit IPA puts the virt
+machine's high MMIO out of reach), with a virtio-blk disk the L2 checksums. `l2/hang-catch.sh`
+loops one-vCPU L2 boots until one hangs and records the L1 KVM's view of it; `l2/l1-bench.sh`
+is the L1 workload set below.
+
+Measured 2026-10-12, dogfood Mac (M4 Pro, macOS 27.0.1), F44 enhanced test image (kernel
+7.1.8-limina16k.4), 4 vCPU / 6 GiB:
+
+- An L2 boots, reads its disk with the right checksum and powers off in 3.7-4.9 s.
+- **Suspend and resume of a nested guest work**, with an L2 running across it: the L2's console
+  kept ticking after the resume, its clock jumping by the suspended interval, and a fresh L2 boots
+  after the resume. A managed VM records `nested_virt = true` in its suspend record and its resume
+  is started with `--nested-virt`; a flat run started without the flag refuses the snapshot by
+  name and keeps it.
+- Offlining and re-onlining vCPUs leaves KVM working on them.
+
+### L2 boots hang about one time in ten, in HVF's list-register delivery
+
+Of 25 L2 boots, 2-3 never finish, at any point of the boot, on any L1 CPU, with one L2 vCPU or
+two. A hung L2's vCPU thread spins at 97% CPU, executing `WFI` ~27 000 times a second. The L1
+KVM's `vgic-state` shows why it never sleeps: the L2's virtual timer (PPI 27, hardware-mapped,
+level) has its line high and enabled, so KVM sees an interrupt pending, re-enters the L2 at
+once, and the L2 idles again without ever acknowledging it. The interrupt is in KVM's list
+register; the L2 is never shown it.
+
+With the L1 kernel booted with **`kvm-arm.vgic_v3_group1_trap=1`**, KVM traps the L2's group-1
+CPU-interface accesses and emulates them from its own list-register state instead of leaving them
+to HVF's emulated `ICV_*` registers: **75 of 75 L2 boots** pass (25 two-vCPU, 50 of the one-vCPU
+`hang-catch.sh` loop that otherwise hangs on its first runs). That places the fault in HVF's
+presentation of list registers to the nested guest; nothing in libkrun touches ICH state while
+the guest runs. QEMU's HVF backend (10.2 there) has no nested support to compare against.
+
+### What EL2 costs a guest that runs no VM
+
+`l1-bench.sh`, the same clone booted with and without `--nested-virt` (two runs each):
+
+| Workload | EL2 off | EL2 on |
+|---|---|---|
+| `perf bench sched pipe`, two CPUs (µs/op) | 5.9-6.4 | 25.0 |
+| `perf bench sched pipe`, both tasks on one CPU (µs/op) | 1.06-1.11 | 4.9-5.2 |
+| 3000 fork+exec (s) | 0.45-0.47 | 0.63-0.69 |
+| 2000 × 1 ms sleep (s) | 2.23-2.30 | 2.59 |
+| 1 GiB direct-I/O disk read (s) | 0.17-0.19 | 0.21-0.28 |
+| 4 M 512-byte `dd` syscalls, 1 GiB sha256 | same | same |
+
+A context switch costs ~5x as much with EL2, on one CPU as across two, and the L1's KVM is not
+the cause: booted with `kvm-arm.mode=none` the numbers are the same (4.9-5.3 / 24.9-26.0). With
+EL2, HVF also takes the guest's `WFI` itself (libkrun saw none), so the cost is inside HVF.
+System-register traps reaching libkrun are rare at L1 (a handful at boot); each L2 entry and
+exit costs one `CNTHCTL_EL2` read and write through libkrun, ~23 000 pairs per L2 boot.
