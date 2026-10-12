@@ -156,6 +156,26 @@ impl Replayer {
         })
     }
 
+    /// Context `ctx` as it travels across a snapshot (an encoded
+    /// [`ContextExport`](crate::journal::ContextExport)).
+    pub fn export_context(&self, ctx: u32) -> io::Result<Vec<u8>> {
+        let r = self.call(ipc::EXPORT_CONTEXT, ipc::CtxRequest { ctx }.bytes())?;
+        let a = ipc::ExportReply::read(&r.data).ok_or_else(|| io::Error::other("short reply"))?;
+        if a.status != ipc::OK {
+            return Err(status_err("export", a.status));
+        }
+        let entry = r
+            .ports
+            .into_iter()
+            .next()
+            .ok_or_else(|| io::Error::other("no memory entry in reply"))?;
+        // SAFETY: `vm_page_size` is set by the kernel before any code runs.
+        let page = unsafe { libc::vm_page_size } as u64;
+        let mapping = Mapping::map(&entry, a.len.max(1).next_multiple_of(page))?;
+        // SAFETY: the mapping holds at least `len` bytes.
+        Ok(unsafe { std::slice::from_raw_parts(mapping.as_ptr(), a.len as usize) }.to_vec())
+    }
+
     pub fn destroy_arena(&self, ctx: u32, arena: u32) -> io::Result<()> {
         self.simple(
             "arena destroy",

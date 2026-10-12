@@ -6,7 +6,7 @@
 //! can dereference any address it computes, so checking the ones a command names would buy no
 //! isolation, and they pass through as given.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -42,6 +42,7 @@ use objc2_metal::{
     MTLViewport, MTLVisibilityResultMode, MTLWinding,
 };
 
+use crate::journal::{ContextExport, ObjectOut, Record};
 use crate::mach::Semaphore;
 use crate::metal::{self, Arena, Device, FormatInfo};
 
@@ -71,6 +72,15 @@ const ALL_RENDER_STAGES: u32 = (MTLRenderStages::Vertex.0
     | MTLRenderStages::Mesh.0) as u32;
 
 pub type Arenas = Arc<Mutex<HashMap<u32, Arc<Arena>>>>;
+
+/// How long an export waits for a context's committed work to finish.
+const EXPORT_DRAIN: Duration = Duration::from_secs(2);
+
+/// Requests the server makes of a context's ring thread, answered when the ring is idle.
+#[derive(Default)]
+pub struct Mailbox {
+    pub export: Mutex<Option<std::sync::mpsc::Sender<ContextExport>>>,
+}
 /// The surfaces the worker filed for a context, by the guest resource that names each.
 pub type Surfaces = Arc<Mutex<HashMap<u32, metal::Surface>>>;
 
@@ -105,9 +115,11 @@ enum Object {
     RenderPipeline(Po<dyn MTLRenderPipelineState>),
     ComputePipeline(Po<dyn MTLComputePipelineState>),
     DepthStencil(Po<dyn MTLDepthStencilState>),
-    ArgumentTable(Po<dyn MTL4ArgumentTable>, u32),
+    /// The table, its bind count, and the addresses it was set to: Metal cannot be asked.
+    ArgumentTable(Po<dyn MTL4ArgumentTable>, u32, Vec<u64>),
     Fence(Po<dyn MTLFence>),
-    Event(Po<dyn MTLEvent>),
+    /// The event and the highest value queued to signal it: an `MTLEvent` cannot be read.
+    Event(Po<dyn MTLEvent>, u64),
     SharedEvent(Po<dyn MTLSharedEvent>, Option<Mirror>),
     /// A timestamp counter heap and its entry count.
     CounterHeap(Po<dyn MTL4CounterHeap>, u32),
@@ -115,6 +127,202 @@ enum Object {
 
 /// Destroyed objects, held until the GPU can no longer be using them.
 struct Grave(Vec<Object>);
+
+/// A host object and the record of the command that made it.
+struct Entry {
+    obj: Object,
+    rec: Arc<Record>,
+}
+
+/// The commands of command buffers begun and not yet committed, and what the context was as the
+/// first of them began. An export made while command buffers are open describes the context as it
+/// was then, and carries the commands to run again on top.
+#[derive(Default)]
+struct Window {
+    commands: Vec<(u16, Box<[u8]>)>,
+    /// Objects created inside the window: the window's commands make them again.
+    created: HashSet<u32>,
+    /// Objects from before the window that it destroyed, which an export still holds.
+    destroyed: Vec<(u32, Arc<Record>)>,
+    /// Argument tables' addresses as the window began, for tables it changed.
+    tables: HashMap<u32, Vec<u64>>,
+}
+
+/// A context's host objects by guest handle, each owning the record of its creation.
+#[derive(Default)]
+struct Objects {
+    map: HashMap<u32, Entry>,
+    window: Option<Window>,
+}
+
+impl Objects {
+    fn get(&self, h: &u32) -> Option<&Object> {
+        self.map.get(h).map(|e| &e.obj)
+    }
+
+    fn contains_key(&self, h: &u32) -> bool {
+        self.map.contains_key(h)
+    }
+
+    fn record(&self, h: u32) -> Result<Arc<Record>, Error> {
+        self.map
+            .get(&h)
+            .map(|e| e.rec.clone())
+            .ok_or(Error::BadHandle)
+    }
+
+    fn values(&self) -> impl Iterator<Item = &Object> {
+        self.map.values().map(|e| &e.obj)
+    }
+
+    fn insert(&mut self, h: u32, obj: Object, rec: Record) {
+        if let Some(w) = &mut self.window {
+            w.created.insert(h);
+        }
+        self.map.insert(
+            h,
+            Entry {
+                obj,
+                rec: Arc::new(rec),
+            },
+        );
+    }
+
+    fn remove(&mut self, h: &u32) -> Option<Object> {
+        let e = self.map.remove(h)?;
+        if let Some(w) = &mut self.window
+            && !w.created.remove(h)
+        {
+            if let Object::ArgumentTable(_, _, addrs) = &e.obj {
+                w.tables.entry(*h).or_insert_with(|| addrs.clone());
+            }
+            w.destroyed.push((*h, e.rec));
+        }
+        Some(e.obj)
+    }
+
+    fn take_all(&mut self) -> Vec<Object> {
+        self.window = None;
+        std::mem::take(&mut self.map)
+            .into_values()
+            .map(|e| e.obj)
+            .collect()
+    }
+
+    /// Sets entries of argument table `h`, keeping what it held as a window began.
+    fn set_addresses(&mut self, h: u32, set: &[cmd::AddressBinding]) -> R {
+        let Some(Entry {
+            obj: Object::ArgumentTable(t, max, addrs),
+            ..
+        }) = self.map.get_mut(&h)
+        else {
+            return Err(Error::BadHandle);
+        };
+        check(set.iter().all(|b| b.index < *max))?;
+        if let Some(w) = &mut self.window
+            && !w.created.contains(&h)
+        {
+            w.tables.entry(h).or_insert_with(|| addrs.clone());
+        }
+        for b in set {
+            // SAFETY: the index is within the table; addresses are the guest's own (see the
+            // module comment). Encoders capture the table's state as they encode.
+            unsafe { t.setAddress_atIndex(b.address, b.index as usize) };
+            addrs[b.index as usize] = b.address;
+        }
+        Ok(())
+    }
+
+    /// Notes that the queue was asked to signal event `h` to `value`.
+    fn note_signal(&mut self, h: u32, value: u64) {
+        if let Some(Entry {
+            obj: Object::Event(_, high),
+            ..
+        }) = self.map.get_mut(&h)
+        {
+            *high = (*high).max(value);
+        }
+    }
+
+    /// Records `op` if a window is open, opening one at a command buffer's beginning.
+    fn note_command(&mut self, op: u16, payload: &[u8]) {
+        if op == op::BEGIN_COMMAND_BUFFER && self.window.is_none() {
+            self.window = Some(Window::default());
+        }
+        if let Some(w) = &mut self.window {
+            w.commands.push((op, payload.into()));
+        }
+    }
+
+    fn close_window(&mut self) {
+        self.window = None;
+    }
+
+    /// The objects, their state and the open window, as an export carries them.
+    fn export(&self, e: &mut ContextExport) {
+        let empty = Window::default();
+        let w = self.window.as_ref().unwrap_or(&empty);
+        let mut roots: Vec<(u32, Arc<Record>)> = self
+            .map
+            .iter()
+            .filter(|(h, _)| !w.created.contains(h))
+            .map(|(&h, e)| (h, e.rec.clone()))
+            .chain(w.destroyed.iter().cloned())
+            .collect();
+        roots.sort_by_key(|(h, _)| *h);
+        let mut index: HashMap<*const Record, u32> = HashMap::new();
+        fn visit(
+            rec: &Arc<Record>,
+            handle: u32,
+            index: &mut HashMap<*const Record, u32>,
+            out: &mut Vec<ObjectOut>,
+        ) -> u32 {
+            if let Some(&at) = index.get(&Arc::as_ptr(rec)) {
+                if handle != 0 {
+                    out[at as usize].handle = handle;
+                }
+                return at;
+            }
+            let refs = rec.refs.iter().map(|r| visit(r, 0, index, out)).collect();
+            let at = out.len() as u32;
+            out.push(ObjectOut {
+                handle,
+                op: rec.op,
+                payload: rec.payload.to_vec(),
+                value: rec.value,
+                refs,
+            });
+            index.insert(Arc::as_ptr(rec), at);
+            at
+        }
+        for (h, rec) in &roots {
+            visit(rec, *h, &mut index, &mut e.objects);
+        }
+        for (&h, entry) in &self.map {
+            if w.created.contains(&h) {
+                continue;
+            }
+            match &entry.obj {
+                Object::ArgumentTable(_, _, addrs) => {
+                    let addrs = w.tables.get(&h).unwrap_or(addrs);
+                    e.tables.push((h, addrs.clone()));
+                }
+                Object::Event(_, high) => e.events.push((h, *high)),
+                Object::SharedEvent(ev, _) => e.shared_events.push((h, ev.signaledValue())),
+                _ => {}
+            }
+        }
+        for (h, _) in &w.destroyed {
+            if let Some(addrs) = w.tables.get(h) {
+                e.tables.push((*h, addrs.clone()));
+            }
+        }
+        e.tables.sort_by_key(|(h, _)| *h);
+        e.events.sort_by_key(|(h, _)| *h);
+        e.shared_events.sort_by_key(|(h, _)| *h);
+        e.recording = w.commands.iter().map(|(op, p)| (*op, p.to_vec())).collect();
+    }
+}
 // SAFETY: Metal objects may be released from any thread.
 unsafe impl Send for Grave {}
 
@@ -163,7 +371,7 @@ pub struct Executor {
     ring_arena: Arc<Arena>,
     arenas: Arenas,
     surfaces: Surfaces,
-    objects: HashMap<u32, Object>,
+    objects: Objects,
     /// The command buffer being recorded.
     open: Option<(Po<dyn MTL4CommandBuffer>, Allocator)>,
     /// Command buffers ended and waiting for the next commit.
@@ -177,6 +385,7 @@ pub struct Executor {
     /// Destroyed objects with the commit that may still use them; see [`Self::reap`].
     graveyard: Vec<(u64, Grave)>,
     lost: bool,
+    mailbox: Arc<Mailbox>,
 }
 
 // SAFETY: the executor runs on one thread at a time; Metal objects are usable from any thread.
@@ -310,6 +519,7 @@ impl Executor {
         ring_arena: Arc<Arena>,
         arenas: Arenas,
         surfaces: Surfaces,
+        mailbox: Arc<Mailbox>,
     ) -> Option<Self> {
         let queue = device.newMTL4CommandQueue()?;
         let compiler = device
@@ -331,7 +541,7 @@ impl Executor {
             consumer,
             arenas,
             surfaces,
-            objects: HashMap::new(),
+            objects: Objects::default(),
             open: None,
             ended: Vec::new(),
             enc: Encoder::None,
@@ -340,6 +550,7 @@ impl Executor {
             in_flight: Arc::new(Mutex::new(BTreeSet::new())),
             graveyard: Vec::new(),
             lost: false,
+            mailbox,
         })
     }
 
@@ -355,6 +566,7 @@ impl Executor {
                     if self.lost {
                         continue;
                     }
+                    self.objects.note_command(n.op, n.payload);
                     if let Err(e) = self.exec(n.op, n.payload) {
                         log::warn!(
                             "context lost: {e:?} at ring position {} (op {:#x})",
@@ -365,6 +577,7 @@ impl Executor {
                     }
                 }
                 Ok(None) => {
+                    self.answer_mailbox();
                     self.reap();
                     let since = *idle_since.get_or_insert_with(Instant::now);
                     if since.elapsed() < SPIN {
@@ -383,6 +596,7 @@ impl Executor {
                     // The ring cannot be parsed any further; sleep until destroyed.
                     while !stop.load(Ordering::Acquire) {
                         doorbell.wait();
+                        self.answer_mailbox();
                     }
                 }
             }
@@ -401,7 +615,7 @@ impl Executor {
         for o in self.objects.values().chain(graves) {
             match o {
                 Object::SharedEvent(e, _) => e.setSignaledValue(u64::MAX),
-                Object::Event(e) => {
+                Object::Event(e, _) => {
                     if let Some(q) = &release {
                         q.signalEvent_value(e, u64::MAX);
                     }
@@ -416,6 +630,39 @@ impl Executor {
         }
     }
 
+    fn answer_mailbox(&mut self) {
+        let export = lock(&self.mailbox.export).take();
+        if let Some(tx) = export {
+            let _ = tx.send(self.export());
+        }
+    }
+
+    /// The context as it travels across a snapshot. Waits a bounded time for committed work: a
+    /// commit still in flight may have partly run and cannot be taken back, so the context is
+    /// exported lost.
+    fn export(&mut self) -> ContextExport {
+        let deadline = Instant::now() + EXPORT_DRAIN;
+        while !lock(&self.in_flight).is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.reap();
+        let mut e = ContextExport {
+            position: self.consumer.position(),
+            last_seqno: self.last_seqno,
+            lost: self.lost,
+            ..Default::default()
+        };
+        let pending = lock(&self.in_flight).len();
+        if pending != 0 {
+            log::warn!("export: {pending} commit(s) still running; the context is exported lost");
+            e.lost = true;
+        }
+        if !e.lost {
+            self.objects.export(&mut e);
+        }
+        e
+    }
+
     fn lose(&mut self, e: Error, at: u64) {
         self.consumer.control().fail(e, at);
         self.lost = true;
@@ -428,7 +675,7 @@ impl Executor {
         for (_, alloc) in self.ended.drain(..) {
             lock(&self.allocators).push(alloc);
         }
-        let all = std::mem::take(&mut self.objects).into_values().collect();
+        let all = self.objects.take_all();
         self.bury(Grave(all));
     }
 
@@ -513,6 +760,51 @@ impl Executor {
             (*(&raw mut (*p).done).cast::<AtomicU32>()).store(REPLY_DONE, Ordering::Release);
         }
         Ok(())
+    }
+
+    /// Files what a create made under `h`, with the record of `op` and `payload` and of the objects
+    /// named by `refs` (0 names none), and passes its answer on.
+    fn file(
+        &mut self,
+        h: u32,
+        op: u16,
+        payload: &[u8],
+        refs: &[u32],
+        made: Result<(Object, [u64; 6]), Error>,
+    ) -> Result<[u64; 6], Error> {
+        let (obj, value) = made?;
+        let refs = refs
+            .iter()
+            .filter(|&&r| r != 0)
+            .map(|&r| self.objects.record(r))
+            .collect::<Result<_, _>>()?;
+        let rec = Record {
+            op,
+            payload: payload.into(),
+            value,
+            refs,
+        };
+        self.objects.insert(h, obj, rec);
+        Ok(value)
+    }
+
+    fn create_argument_table(
+        &mut self,
+        c: &cmd::CreateArgumentTable,
+    ) -> Result<(Object, [u64; 6]), Error> {
+        self.new_handle(c.handle)?;
+        check((1..=MAX_BUFFER_BINDS).contains(&c.max_buffer_bind_count))?;
+        let desc = MTL4ArgumentTableDescriptor::new();
+        desc.setMaxBufferBindCount(c.max_buffer_bind_count as usize);
+        let t = self
+            .device
+            .newArgumentTableWithDescriptor_error(&desc)
+            .map_err(|_| Error::OutOfMemory)?;
+        let addrs = vec![0; c.max_buffer_bind_count as usize];
+        Ok((
+            Object::ArgumentTable(t, c.max_buffer_bind_count, addrs),
+            [0; 6],
+        ))
     }
 
     fn new_handle(&self, h: u32) -> R {
@@ -628,27 +920,32 @@ impl Executor {
             op::CREATE_TEXTURE => {
                 let c = arg::<cmd::CreateTexture>(p)?.0;
                 let r = self.create_texture(&c);
+                let r = self.file(c.handle, opcode, p, &[], r);
                 self.answer(c.reply, r)
             }
             op::CREATE_TEXTURE_FROM_SURFACE => {
                 let c = arg::<cmd::CreateTextureFromSurface>(p)?.0;
                 let r = self.create_texture_from_surface(&c);
+                let r = self.file(c.handle, opcode, p, &[], r);
                 self.answer(c.reply, r)
             }
             op::CREATE_TEXTURE_VIEW => {
                 let c = arg::<cmd::CreateTextureView>(p)?.0;
                 let r = self.create_texture_view(&c);
+                let r = self.file(c.handle, opcode, p, &[c.parent], r);
                 self.answer(c.reply, r)
             }
             op::CREATE_SAMPLER => {
                 let c = arg::<cmd::CreateSampler>(p)?.0;
                 let r = self.create_sampler(c.handle, &c.desc);
+                let r = self.file(c.handle, opcode, p, &[], r);
                 self.answer(c.reply, r)
             }
             op::CREATE_LIBRARY => {
                 let (c, rest) = arg::<cmd::CreateLibrary>(p)?;
                 let (src, _) = take(rest, c.source_len)?;
                 let r = self.create_library(&c, src);
+                let r = self.file(c.handle, opcode, p, &[], r);
                 self.answer(c.reply, r)
             }
             op::CREATE_RENDER_PIPELINE => {
@@ -656,33 +953,36 @@ impl Executor {
                 let (v, rest) = take(rest, c.vertex_name_len)?;
                 let (f, _) = take(rest, c.fragment_name_len)?;
                 let r = self.create_render_pipeline(&c, v, f);
+                let libraries = [c.vertex_library, c.fragment_library];
+                let r = self.file(c.handle, opcode, p, &libraries, r);
                 self.answer(c.reply, r)
             }
             op::CREATE_COMPUTE_PIPELINE => {
                 let (c, rest) = arg::<cmd::CreateComputePipeline>(p)?;
                 let (name, _) = take(rest, c.name_len)?;
                 let r = self.create_compute_pipeline(&c, name);
+                let r = self.file(c.handle, opcode, p, &[c.library], r);
                 self.answer(c.reply, r)
             }
-            op::CREATE_DEPTH_STENCIL => self.create_depth_stencil(&arg(p)?.0),
+            op::CREATE_DEPTH_STENCIL => {
+                let c = arg::<cmd::CreateDepthStencil>(p)?.0;
+                let r = self.create_depth_stencil(&c);
+                self.file(c.handle, opcode, p, &[], r).map(|_| ())
+            }
             op::CREATE_ARGUMENT_TABLE => {
                 let c = arg::<cmd::CreateArgumentTable>(p)?.0;
-                self.new_handle(c.handle)?;
-                check((1..=MAX_BUFFER_BINDS).contains(&c.max_buffer_bind_count))?;
-                let desc = MTL4ArgumentTableDescriptor::new();
-                desc.setMaxBufferBindCount(c.max_buffer_bind_count as usize);
-                let t = self
-                    .device
-                    .newArgumentTableWithDescriptor_error(&desc)
-                    .map_err(|_| Error::OutOfMemory)?;
-                self.objects
-                    .insert(c.handle, Object::ArgumentTable(t, c.max_buffer_bind_count));
-                Ok(())
+                let r = self.create_argument_table(&c);
+                self.file(c.handle, opcode, p, &[], r).map(|_| ())
             }
-            op::CREATE_SYNC => self.create_sync(&arg(p)?.0),
+            op::CREATE_SYNC => {
+                let c = arg::<cmd::SyncObject>(p)?.0;
+                let r = self.create_sync(&c);
+                self.file(c.handle, opcode, p, &[], r).map(|_| ())
+            }
             op::CREATE_COUNTER_HEAP => {
                 let c = arg::<cmd::CreateCounterHeap>(p)?.0;
-                let r = self.create_counter_heap(c.handle, c.count).map(|()| [0; 6]);
+                let r = self.create_counter_heap(c.handle, c.count);
+                let r = self.file(c.handle, opcode, p, &[], r);
                 self.answer(c.reply, r)
             }
             op::DESTROY => {
@@ -693,18 +993,10 @@ impl Executor {
             }
             op::SET_ADDRESSES => {
                 let (c, rest) = arg::<cmd::SetAddresses>(p)?;
-                let Some(Object::ArgumentTable(t, max)) = self.objects.get(&c.table) else {
-                    return Err(Error::BadHandle);
-                };
                 let (items, _) = cmd::decode_array::<cmd::AddressBinding>(rest, c.count as usize)
                     .ok_or(Error::BadPayload)?;
-                for b in items {
-                    check(b.index < *max)?;
-                    // SAFETY: the index is within the table; addresses are the guest's own (see
-                    // the module comment). Encoders capture the table's state as they encode.
-                    unsafe { t.setAddress_atIndex(b.address, b.index as usize) };
-                }
-                Ok(())
+                self.objects
+                    .set_addresses(c.table, &items.collect::<Vec<_>>())
             }
             op::SET_SHARED_EVENT => {
                 let c = arg::<cmd::SetSharedEvent>(p)?.0;
@@ -896,7 +1188,7 @@ impl Executor {
             }
             op::SET_ARGUMENT_TABLE => {
                 let s = arg::<cmd::SetArgumentTable>(p)?.0;
-                let Some(Object::ArgumentTable(t, _)) = self.objects.get(&s.table) else {
+                let Some(Object::ArgumentTable(t, _, _)) = self.objects.get(&s.table) else {
                     return Err(Error::BadHandle);
                 };
                 match &self.enc {
@@ -1148,6 +1440,7 @@ impl Executor {
                 Ok(())
             }
             op::COMMIT => {
+                self.objects.close_window();
                 let c = arg::<cmd::Commit>(p)?.0;
                 self.commit(c.seqno, c.feedback)
             }
@@ -1192,7 +1485,7 @@ impl Executor {
         Ok(desc)
     }
 
-    fn create_texture(&mut self, c: &cmd::CreateTexture) -> Result<[u64; 6], Error> {
+    fn create_texture(&mut self, c: &cmd::CreateTexture) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         let a = self.arena(c.arena)?;
         let mut d = c.desc;
@@ -1247,14 +1540,13 @@ impl Executor {
         }
         .ok_or(Error::BadValue)?;
         let id = resource_id(t.gpuResourceID());
-        self.objects.insert(c.handle, Object::Texture(t));
-        Ok([id, 0, 0, 0, 0, 0])
+        Ok((Object::Texture(t), [id, 0, 0, 0, 0, 0]))
     }
 
     fn create_texture_from_surface(
         &mut self,
         c: &cmd::CreateTextureFromSurface,
-    ) -> Result<[u64; 6], Error> {
+    ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         let surface = lock(&self.surfaces)
             .get(&c.surface)
@@ -1285,11 +1577,13 @@ impl Executor {
         self.residency.commit();
         self.residency.requestResidency();
         let id = resource_id(t.gpuResourceID());
-        self.objects.insert(c.handle, Object::Texture(t));
-        Ok([id, 0, 0, 0, 0, 0])
+        Ok((Object::Texture(t), [id, 0, 0, 0, 0, 0]))
     }
 
-    fn create_texture_view(&mut self, c: &cmd::CreateTextureView) -> Result<[u64; 6], Error> {
+    fn create_texture_view(
+        &mut self,
+        c: &cmd::CreateTextureView,
+    ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         let parent = self.texture(c.parent)?;
         let slices = parent.arrayLength()
@@ -1333,11 +1627,14 @@ impl Executor {
         }
         .ok_or(Error::BadValue)?;
         let id = resource_id(v.gpuResourceID());
-        self.objects.insert(c.handle, Object::Texture(v));
-        Ok([id, 0, 0, 0, 0, 0])
+        Ok((Object::Texture(v), [id, 0, 0, 0, 0, 0]))
     }
 
-    fn create_sampler(&mut self, handle: u32, s: &cmd::SamplerDesc) -> Result<[u64; 6], Error> {
+    fn create_sampler(
+        &mut self,
+        handle: u32,
+        s: &cmd::SamplerDesc,
+    ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(handle)?;
         check(
             s.min_filter <= 1
@@ -1374,11 +1671,14 @@ impl Executor {
             .newSamplerStateWithDescriptor(&d)
             .ok_or(Error::BadValue)?;
         let id = resource_id(st.gpuResourceID());
-        self.objects.insert(handle, Object::Sampler(st));
-        Ok([id, 0, 0, 0, 0, 0])
+        Ok((Object::Sampler(st), [id, 0, 0, 0, 0, 0]))
     }
 
-    fn create_library(&mut self, c: &cmd::CreateLibrary, src: &[u8]) -> Result<[u64; 6], Error> {
+    fn create_library(
+        &mut self,
+        c: &cmd::CreateLibrary,
+        src: &[u8],
+    ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         check(
             valid_language_version(c.language_version)
@@ -1397,10 +1697,7 @@ impl Executor {
         desc.setSource(Some(&*text(src)?));
         desc.setOptions(Some(&opts));
         match self.compiler.newLibraryWithDescriptor_error(&desc) {
-            Ok(l) => {
-                self.objects.insert(c.handle, Object::Library(l));
-                Ok([0; 6])
-            }
+            Ok(l) => Ok((Object::Library(l), [0; 6])),
             Err(e) => {
                 log::warn!("MSL compile failed: {}", e.localizedDescription());
                 Err(Error::ShaderCompile)
@@ -1413,7 +1710,7 @@ impl Executor {
         c: &cmd::CreateRenderPipeline,
         vertex: &[u8],
         fragment: &[u8],
-    ) -> Result<[u64; 6], Error> {
+    ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         check(
             c.topology_class <= 3
@@ -1457,10 +1754,7 @@ impl Executor {
             .compiler
             .newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(&desc, None)
         {
-            Ok(ps) => {
-                self.objects.insert(c.handle, Object::RenderPipeline(ps));
-                Ok([0; 6])
-            }
+            Ok(ps) => Ok((Object::RenderPipeline(ps), [0; 6])),
             Err(e) => {
                 log::warn!("render pipeline failed: {}", e.localizedDescription());
                 Err(Error::PipelineCreate)
@@ -1472,7 +1766,7 @@ impl Executor {
         &mut self,
         c: &cmd::CreateComputePipeline,
         name: &[u8],
-    ) -> Result<[u64; 6], Error> {
+    ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         check(c.max_total_threads <= 1024)?;
         let desc = MTL4ComputePipelineDescriptor::new();
@@ -1486,8 +1780,7 @@ impl Executor {
         {
             Ok(ps) => {
                 let max = ps.maxTotalThreadsPerThreadgroup() as u64;
-                self.objects.insert(c.handle, Object::ComputePipeline(ps));
-                Ok([max, 0, 0, 0, 0, 0])
+                Ok((Object::ComputePipeline(ps), [max, 0, 0, 0, 0, 0]))
             }
             Err(e) => {
                 log::warn!("compute pipeline failed: {}", e.localizedDescription());
@@ -1496,7 +1789,10 @@ impl Executor {
         }
     }
 
-    fn create_depth_stencil(&mut self, c: &cmd::CreateDepthStencil) -> R {
+    fn create_depth_stencil(
+        &mut self,
+        c: &cmd::CreateDepthStencil,
+    ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         check(c.depth_compare <= 7)?;
         let stencil = |s: &cmd::StencilDesc| -> Result<Retained<MTLStencilDescriptor>, Error> {
@@ -1528,11 +1824,14 @@ impl Executor {
             .device
             .newDepthStencilStateWithDescriptor(&d)
             .ok_or(Error::BadValue)?;
-        self.objects.insert(c.handle, Object::DepthStencil(s));
-        Ok(())
+        Ok((Object::DepthStencil(s), [0; 6]))
     }
 
-    fn create_counter_heap(&mut self, handle: u32, count: u32) -> R {
+    fn create_counter_heap(
+        &mut self,
+        handle: u32,
+        count: u32,
+    ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(handle)?;
         check(count != 0)?;
         let desc = MTL4CounterHeapDescriptor::new();
@@ -1543,9 +1842,7 @@ impl Executor {
             .device
             .newCounterHeapWithDescriptor_error(&desc)
             .map_err(|_| Error::OutOfMemory)?;
-        self.objects
-            .insert(handle, Object::CounterHeap(heap, count));
-        Ok(())
+        Ok((Object::CounterHeap(heap, count), [0; 6]))
     }
 
     /// Fence `h`, or none for `0`.
@@ -1571,14 +1868,14 @@ impl Executor {
         Ok(heap)
     }
 
-    fn create_sync(&mut self, c: &cmd::SyncObject) -> R {
+    fn create_sync(&mut self, c: &cmd::SyncObject) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         let o = match c.kind {
             cmd::sync_kind::FENCE => {
                 Object::Fence(self.device.newFence().ok_or(Error::OutOfMemory)?)
             }
             cmd::sync_kind::EVENT => {
-                Object::Event(self.device.newEvent().ok_or(Error::OutOfMemory)?)
+                Object::Event(self.device.newEvent().ok_or(Error::OutOfMemory)?, 0)
             }
             cmd::sync_kind::SHARED_EVENT => {
                 let e = self.device.newSharedEvent().ok_or(Error::OutOfMemory)?;
@@ -1598,8 +1895,7 @@ impl Executor {
             }
             _ => return Err(Error::BadValue),
         };
-        self.objects.insert(c.handle, o);
-        Ok(())
+        Ok((o, [0; 6]))
     }
 
     fn texture_transfer(&self, c: &cmd::TextureTransfer) -> R {
@@ -1920,12 +2216,12 @@ impl Executor {
         Ok(())
     }
 
-    fn queue_event(&self, c: &cmd::QueueEvent) -> R {
+    fn queue_event(&mut self, c: &cmd::QueueEvent) -> R {
         if !self.ended.is_empty() {
             return Err(Error::BadState);
         }
         let event: &ProtocolObject<dyn MTLEvent> = match self.objects.get(&c.event) {
-            Some(Object::Event(e)) => e,
+            Some(Object::Event(e, _)) => e,
             Some(Object::SharedEvent(e, _)) => ProtocolObject::from_ref(&**e),
             _ => return Err(Error::BadHandle),
         };
@@ -1934,6 +2230,7 @@ impl Executor {
             return Ok(());
         }
         self.queue.signalEvent_value(event, c.value);
+        self.objects.note_signal(c.event, c.value);
         if let Some(Object::SharedEvent(e, Some(m))) = self.objects.get(&c.event) {
             let m = m.clone();
             let block = RcBlock::new(

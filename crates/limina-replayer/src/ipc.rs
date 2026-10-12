@@ -27,6 +27,10 @@ pub const RELEASE_EXPORT: i32 = 0x4c47_0008;
 pub const BIND_SURFACE: i32 = 0x4c47_0009;
 /// [`SurfaceRequest`] → `{status}`. Textures already made over the surface keep it.
 pub const RELEASE_SURFACE: i32 = 0x4c47_000a;
+/// `{ctx}` → [`ExportReply`] + a memory entry holding the context as it travels across a snapshot
+/// ([`crate::journal::ContextExport`], encoded, `len` bytes). Answered once the context's ring is
+/// idle and its committed work has finished, or given up on (the export says lost).
+pub const EXPORT_CONTEXT: i32 = 0x4c47_000b;
 
 /// Request statuses.
 pub const OK: i32 = 0;
@@ -129,6 +133,14 @@ pub struct ExportRequest {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct ExportReply {
+    pub status: i32,
+    pub _pad: u32,
+    pub len: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct SurfaceRequest {
     pub ctx: u32,
     pub surface: u32,
@@ -145,3 +157,4 @@ unsafe impl Pod for ExportArena {}
 unsafe impl Pod for ImportArena {}
 unsafe impl Pod for ExportRequest {}
 unsafe impl Pod for SurfaceRequest {}
+unsafe impl Pod for ExportReply {}

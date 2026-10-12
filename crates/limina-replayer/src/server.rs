@@ -11,8 +11,9 @@ use limina_gpu_wire::ring::{self, Consumer};
 use objc2::rc::Retained;
 use objc2_metal::MTLDevice;
 
-use crate::exec::{Arenas, Executor, Surfaces};
+use crate::exec::{Arenas, Executor, Mailbox, Surfaces};
 use crate::ipc::{self, Pod};
+use crate::journal::ContextExport;
 use crate::mach::{self, Message, ReceivePort, Semaphore};
 use crate::metal::{self, Arena, Device};
 
@@ -25,8 +26,12 @@ struct Context {
     doorbell: Arc<Semaphore>,
     arenas: Arenas,
     surfaces: Surfaces,
+    mailbox: Arc<Mailbox>,
     ring: Option<RingThread>,
 }
+
+/// How long the server waits for a ring thread to answer an export: longer than its drain.
+const EXPORT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Drop for Context {
     fn drop(&mut self) {
@@ -184,6 +189,26 @@ impl Server {
                 None => (status(ipc::ERR_MALFORMED), vec![]),
                 Some(r) => (status(self.release_surface(r)), vec![]),
             },
+            ipc::EXPORT_CONTEXT => match ipc::CtxRequest::read(&msg.data) {
+                None => (status(ipc::ERR_MALFORMED), vec![]),
+                Some(r) => match self.export_context(r.ctx) {
+                    Ok((reply, entry)) => (
+                        Message::new(0, reply.bytes()),
+                        vec![(entry.into_name(), mach::MSG_TYPE_MOVE_SEND)],
+                    ),
+                    Err(s) => (
+                        Message::new(
+                            0,
+                            ipc::ExportReply {
+                                status: s,
+                                ..Default::default()
+                            }
+                            .bytes(),
+                        ),
+                        vec![],
+                    ),
+                },
+            },
             other => {
                 log::warn!("unknown request {other:#x}");
                 (status(ipc::ERR_MALFORMED), vec![])
@@ -207,6 +232,7 @@ impl Server {
                 doorbell,
                 arenas: Arc::new(Mutex::new(HashMap::new())),
                 surfaces: Arc::new(Mutex::new(HashMap::new())),
+                mailbox: Arc::new(Mailbox::default()),
                 ring: None,
             },
         );
@@ -236,6 +262,41 @@ impl Server {
         };
         arenas.insert(r.arena, Arc::new(arena));
         Ok((reply, entry))
+    }
+
+    fn export_context(&mut self, ctx: u32) -> Result<(ipc::ExportReply, mach::Port), i32> {
+        let c = self.contexts.get(&ctx).ok_or(ipc::ERR_NO_CONTEXT)?;
+        let export = if c.ring.is_some() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            *c.mailbox.export.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+            c.doorbell.signal();
+            rx.recv_timeout(EXPORT_WAIT).map_err(|_| {
+                log::warn!("context {ctx}: no export from its ring thread");
+                ipc::ERR_INTERNAL
+            })?
+        } else {
+            ContextExport::default()
+        };
+        let bytes = export.encode();
+        let blob = mach::Anonymous::new(bytes.len() as u64).map_err(|e| {
+            log::warn!("export memory: {e}");
+            ipc::ERR_NO_MEMORY
+        })?;
+        // SAFETY: the mapping is at least `bytes.len()` long and ours alone.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), blob.as_ptr(), bytes.len()) };
+        // The entry keeps the pages once the mapping goes.
+        let (entry, _) = mach::make_memory_entry(blob.addr(), blob.size()).map_err(|e| {
+            log::warn!("export memory entry: {e}");
+            ipc::ERR_INTERNAL
+        })?;
+        Ok((
+            ipc::ExportReply {
+                status: ipc::OK,
+                _pad: 0,
+                len: bytes.len() as u64,
+            },
+            entry,
+        ))
     }
 
     fn destroy_arena(&mut self, r: ipc::ArenaRequest) -> i32 {
@@ -364,6 +425,7 @@ impl Server {
             arena,
             ctx.arenas.clone(),
             ctx.surfaces.clone(),
+            ctx.mailbox.clone(),
         ) else {
             return ipc::ERR_INTERNAL;
         };

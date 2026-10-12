@@ -91,6 +91,7 @@ unsafe extern "C" {
         inheritance: u32,
     ) -> i32;
     fn mach_vm_deallocate(task: mach_port_t, address: u64, size: u64) -> i32;
+    fn mach_vm_allocate(task: mach_port_t, address: *mut u64, size: u64, flags: i32) -> i32;
 }
 
 pub fn task() -> mach_port_t {
@@ -532,6 +533,47 @@ pub fn make_memory_entry(addr: u64, size: u64) -> io::Result<(Port, u64)> {
     })?;
     // SAFETY: the entry's send right is ours.
     Ok((unsafe { Port::from_send(entry) }, len))
+}
+
+/// Zeroed memory of this task's own, page-rounded, freed on drop. A memory entry made over it
+/// keeps its pages after the drop.
+#[derive(Debug)]
+pub struct Anonymous {
+    addr: u64,
+    size: u64,
+}
+
+impl Anonymous {
+    pub fn new(len: u64) -> io::Result<Self> {
+        // SAFETY: `vm_page_size` is set by the kernel before any code runs.
+        let page = unsafe { libc::vm_page_size } as u64;
+        let size = len.max(1).next_multiple_of(page);
+        let mut addr = 0u64;
+        // SAFETY: out-pointer to a local; the kernel picks the address.
+        check("mach_vm_allocate", unsafe {
+            mach_vm_allocate(task(), &mut addr, size, VM_FLAGS_ANYWHERE)
+        })?;
+        Ok(Self { addr, size })
+    }
+
+    pub fn addr(&self) -> u64 {
+        self.addr
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub fn as_ptr(&self) -> *mut u8 {
+        self.addr as *mut u8
+    }
+}
+
+impl Drop for Anonymous {
+    fn drop(&mut self) {
+        // SAFETY: we allocated exactly this range.
+        unsafe { mach_vm_deallocate(task(), self.addr, self.size) };
+    }
 }
 
 /// A mapping of a memory entry into this task, unmapped on drop.

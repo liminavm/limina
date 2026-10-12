@@ -1322,3 +1322,146 @@ fn does_a_context_start_move_arenas() {
         }
     }
 }
+
+fn export(g: &mut Guest) -> limina_replayer::journal::ContextExport {
+    let bytes = g.replayer.export_context(1).expect("export");
+    limina_replayer::journal::ContextExport::decode(&bytes).expect("decodes")
+}
+
+/// Builds a little of everything a context holds, including objects the guest destroyed while
+/// something it made still names them. Returns the texture's and the sampler's resource IDs.
+fn populate(g: &mut Guest) -> (u64, u64) {
+    create_library(g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    g.push(cmd::Destroy { handle: 1, _pad: 0 }, &[]);
+    let texture = churn_texture(g, 3);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTextureView {
+            handle: 4,
+            parent: 3,
+            pixel_format: RGBA8_UNORM,
+            texture_type: TEX_2D,
+            level_count: 1,
+            slice_count: 1,
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    g.push(cmd::Destroy { handle: 3, _pad: 0 }, &[]);
+    let sampler = churn_sampler(g, 5);
+    let base = g.arena.gpu_base;
+    table(g, 6, &[(0, base + MIB)]);
+    g.push(
+        cmd::SyncObject {
+            handle: 7,
+            kind: cmd::sync_kind::EVENT,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(
+        cmd::QueueEvent {
+            event: 7,
+            wait: 0,
+            value: 5,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit");
+    (texture, sampler)
+}
+
+#[test]
+fn an_export_holds_every_object_and_what_it_answered() {
+    let mut g = start();
+    let (texture, sampler) = populate(&mut g);
+    let e = export(&mut g);
+    assert!(!e.lost);
+    assert_eq!(e.last_seqno, g.seqno);
+    assert_eq!(e.position, g.ring.position());
+    assert!(e.recording.is_empty(), "{:?}", e.recording);
+    let by_handle = |h: u32| e.objects.iter().find(|o| o.handle == h).expect("listed");
+    // The pipeline still names its library, which only it keeps.
+    let pipeline = by_handle(2);
+    assert_eq!(pipeline.op, cmd::op::CREATE_COMPUTE_PIPELINE);
+    let library = &e.objects[pipeline.refs[0] as usize];
+    assert_eq!((library.handle, library.op), (0, cmd::op::CREATE_LIBRARY));
+    assert!(pipeline.value[0] >= 64);
+    // The view names its parent, and the parent's answer is the resource ID the guest holds.
+    let view = by_handle(4);
+    let parent = &e.objects[view.refs[0] as usize];
+    assert_eq!((parent.handle, parent.op), (0, cmd::op::CREATE_TEXTURE));
+    assert_eq!(parent.value[0], texture);
+    assert_ne!(view.value[0], 0);
+    assert_eq!(by_handle(5).value[0], sampler);
+    assert_eq!(e.objects.iter().filter(|o| o.handle != 0).count(), 5);
+    let base = g.arena.gpu_base;
+    assert_eq!(e.tables, vec![(6, vec![base + MIB, 0, 0, 0])]);
+    assert_eq!(e.events, vec![(7, 5)]);
+}
+
+/// Command buffers begun and not committed: the export describes the context as the first began,
+/// and carries their commands to run again.
+#[test]
+fn an_export_inside_open_command_buffers_carries_their_commands() {
+    let mut g = start();
+    populate(&mut g);
+    let base = g.arena.gpu_base;
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    table(&mut g, 8, &[(1, base + 2 * MIB)]);
+    g.push(
+        cmd::SetAddresses { table: 6, count: 1 },
+        &[cmd::bytes_of_slice(&[cmd::AddressBinding {
+            index: 0,
+            _pad: 0,
+            address: base + 3 * MIB,
+        }])],
+    );
+    g.push(cmd::Destroy { handle: 5, _pad: 0 }, &[]);
+    // Answered once the replayer has consumed everything before it.
+    let texture = churn_texture(&mut g, 9);
+    assert_ne!(texture, 0);
+    let e = export(&mut g);
+    assert!(!e.lost);
+    let handles: Vec<u32> = e
+        .objects
+        .iter()
+        .map(|o| o.handle)
+        .filter(|&h| h != 0)
+        .collect();
+    assert!(
+        handles.contains(&5),
+        "a destroy inside the window runs again: {handles:?}"
+    );
+    assert!(
+        !handles.contains(&8) && !handles.contains(&9),
+        "{handles:?}"
+    );
+    assert_eq!(e.tables, vec![(6, vec![base + MIB, 0, 0, 0])]);
+    let ops: Vec<u16> = e.recording.iter().map(|(op, _)| *op).collect();
+    assert_eq!(
+        ops,
+        vec![
+            cmd::op::BEGIN_COMMAND_BUFFER,
+            cmd::op::CREATE_ARGUMENT_TABLE,
+            cmd::op::SET_ADDRESSES,
+            cmd::op::SET_ADDRESSES,
+            cmd::op::DESTROY,
+            cmd::op::CREATE_TEXTURE,
+        ]
+    );
+}

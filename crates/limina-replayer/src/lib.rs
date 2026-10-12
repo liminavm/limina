@@ -13,6 +13,7 @@
 pub mod client;
 mod exec;
 pub mod ipc;
+pub mod journal;
 pub mod mach;
 mod metal;
 pub mod server;
