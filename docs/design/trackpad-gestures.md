@@ -95,8 +95,13 @@ gesture suppression). With it, the partition is:
   empty.
 - **The policy** — `window/trackpad.rs`, pure and unit-tested: sequence ownership, the scroll
   dedupe, and the timing rules in §Dedupe and teardown.
-- **The recordings** — `LIMINA_TRACKPAD_RECORD=<file>` writes every input the policy consumes
-  (each gesture event's local touches, each trackpad click) as JSON lines. Recorded batteries
+- **The recordings** — the `trackpad-record` lever (the window's Debug menu, `limina debug
+  <vm> lever trackpad-record on`, or `LIMINA_TRACKPAD_RECORD=<file>|1` at start) writes every
+  input the policy consumes (each gesture event's local touches, each trackpad click) as JSON
+  lines, each after a `mode` line whenever the policy's switches changed (guest taps,
+  tap-and-drag, one-finger taps, raw), which the replay follows. A file the variable does not
+  name is a new `trackpad-<pid>-<seconds>.jsonl` beside the log — the VM's `logs/` under the
+  control center. Recorded batteries
   of real hands live in `crates/limina/testdata/trackpad/` and are the policy's fixtures:
   `window::trackpad::recordings` replays each through the policy, with the guest taking two-
   and three-finger taps and clicks and without, and checks against libinput's tap rules

@@ -650,7 +650,7 @@ extern "C" fn tap_callback(
         }
         LMB_DOWN | LMB_UP | RMB_DOWN | RMB_UP => {
             let down = matches!(etype, LMB_DOWN | RMB_DOWN);
-            // `LIMINA_TRACKPAD_RECORD` wants captured trackpad clicks too.
+            // The `trackpad-record` lever wants captured trackpad clicks too.
             if ctx.input.recording_trackpad()
                 && let Some(ns) = NSEvent::eventWithCGEvent(unsafe { &*(event as *const CGEvent) })
             {

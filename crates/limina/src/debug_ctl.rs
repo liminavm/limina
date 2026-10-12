@@ -63,6 +63,14 @@ pub static PRESENT_COPY_TRACE: Lever = Lever::new(
     "LIMINA_PRESENT_COPY_TRACE",
     "frame copies: first pixel as a frame arrives and as its copy goes up (logged at info)",
 );
+/// Records every input the trackpad policy reads (`window::input`'s recorder): to
+/// `LIMINA_TRACKPAD_RECORD`'s file when that names one, otherwise a new file beside the log.
+pub static TRACKPAD_RECORD: Lever = Lever::new(
+    "trackpad-record",
+    "LIMINA_TRACKPAD_RECORD",
+    "trackpad: every touch, click and tap switch the policy reads, replayable offline (a new \
+     trackpad-*.jsonl beside the log)",
+);
 /// Harness access: `input …` requests on the runtime socket (`limina input`). Off, every one is
 /// refused, and turning it off releases what injection holds pressed (`inject::lever_off`).
 pub static INPUT_INJECT: Lever = Lever::new(
@@ -101,6 +109,7 @@ pub static LEVERS: &[&Lever] = &[
     &OVERLAY_TRACE,
     &QGA_TRACE,
     &PRESENT_COPY_TRACE,
+    &TRACKPAD_RECORD,
     &INPUT_INJECT,
     &DEBUG_PORT,
     &LIFECYCLE_CONTROL,

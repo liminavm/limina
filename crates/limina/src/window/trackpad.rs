@@ -549,6 +549,29 @@ impl TrackpadSeq {
         Vec::new()
     }
 
+    /// The switches the policy reads taps, clicks and motion by, as a recording notes them.
+    pub fn mode(&self) -> Mode {
+        Mode {
+            guest_taps: self.guest_taps,
+            tap_drag: self.tap_drag,
+            one_finger_taps: self.one_finger_taps,
+            raw: self.raw,
+        }
+    }
+
+    /// Adopt `mode`, each switch through its own setter, in the order the render tick sets them
+    /// (a replay of a recording's [`Recorded::Mode`]).
+    #[cfg(test)]
+    pub fn set_mode(&mut self, mode: Mode) -> Vec<InputEvent> {
+        if self.one_finger_taps != mode.one_finger_taps {
+            self.set_one_finger_taps(mode.one_finger_taps);
+        }
+        let mut events = self.set_raw(mode.raw);
+        events.extend(self.set_guest_taps(mode.guest_taps));
+        events.extend(self.set_tap_drag(mode.tap_drag));
+        events
+    }
+
     /// Release the touchpad's button and give the sequence in flight to the host, unless raw
     /// mode owns them.
     fn end_guest_click(&mut self) -> Vec<InputEvent> {
@@ -1128,7 +1151,17 @@ impl TrackpadSeq {
     }
 }
 
-/// One input the policy consumed, as `LIMINA_TRACKPAD_RECORD` writes it (one JSON object per
+/// The switches of [`TrackpadSeq`] that change what an input does: the Input menu's, as the
+/// render tick applies them, and raw mode (the guest-controlled pointer, captured).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mode {
+    pub guest_taps: bool,
+    pub tap_drag: bool,
+    pub one_finger_taps: bool,
+    pub raw: bool,
+}
+
+/// One input the policy consumed, as the `trackpad-record` lever writes it (one JSON object per
 /// line). A recording of real hands is the fixture the policy is tested against: AppKit's
 /// quirks — touches vanishing while the pad is pressed, a click arriving before its touches,
 /// counts flickering — are in the data, where no synthetic gesture would think to put them.
@@ -1147,6 +1180,13 @@ pub enum Recorded {
         down: bool,
         secondary: bool,
     },
+    /// The policy's switches, written before the first input and before any input they changed
+    /// for, so a replay reads every input by the rules it met.
+    Mode {
+        t_us: u64,
+        #[serde(flatten)]
+        mode: Mode,
+    },
 }
 
 /// Replaying a [`Recorded`] input stream through the policy — the test harness, and the
@@ -1159,7 +1199,9 @@ pub(crate) mod replay {
     impl Recorded {
         pub fn t_us(&self) -> u64 {
             match self {
-                Recorded::Touches { t_us, .. } | Recorded::Click { t_us, .. } => *t_us,
+                Recorded::Touches { t_us, .. }
+                | Recorded::Click { t_us, .. }
+                | Recorded::Mode { t_us, .. } => *t_us,
             }
         }
     }
@@ -1201,7 +1243,8 @@ pub(crate) mod replay {
     /// Drive the policy through a recording exactly as `InputState` does — each input at its
     /// recorded time, [`TrackpadSeq::tick`] at the render tick's cadence in between — and return
     /// what the guest's touchpad and tablet would have received, with taps and clicks read as
-    /// `taps` says. A click the policy leaves to the host becomes a tablet button press or
+    /// `taps` says until the recording's first [`Recorded::Mode`], and as its mode lines say
+    /// from there. A click the policy leaves to the host becomes a tablet button press or
     /// release.
     pub fn replay(geometry: TouchpadGeometry, records: &[Recorded], taps: Taps) -> Vec<Delivered> {
         let base = Instant::now();
@@ -1250,6 +1293,9 @@ pub(crate) mod replay {
                         );
                     }
                 },
+                Some(Recorded::Mode { t_us, mode }) => {
+                    emit(*t_us, Dev::Touchpad, seq.set_mode(*mode));
+                }
                 None => {}
             }
         }
@@ -1707,7 +1753,8 @@ mod recordings {
     /// `TRACKPAD_RECORDING`, writes `TRACKPAD_REPLAY_OUT` as `t_us dev type code value` lines
     /// under a `# intended right=N left=M guest_taps=0|1` header. Replays as the app runs, with
     /// the guest owning two- and three-finger taps and clicks; `TRACKPAD_MACOS_TAPS=1` leaves
-    /// them to macOS, and `TRACKPAD_ONE_FINGER_TAPS=1` gives the guest one-finger taps too.
+    /// them to macOS, and `TRACKPAD_ONE_FINGER_TAPS=1` gives the guest one-finger taps too. A
+    /// recording that notes its mode replays by its own mode lines from the first one on.
     #[test]
     #[ignore = "a tool for scripts/trackpad-oracle.sh, not a check"]
     fn dump_replay() {
@@ -1735,7 +1782,12 @@ mod recordings {
             "# intended right={} left={} guest_taps={}\n",
             intended(true),
             intended(false),
-            u8::from(taps != Taps::Macos)
+            u8::from(
+                taps != Taps::Macos
+                    || records
+                        .iter()
+                        .any(|r| matches!(r, Recorded::Mode { mode, .. } if mode.guest_taps))
+            )
         );
         for d in replay(geometry(), &records, taps) {
             let dev = match d.dev {
@@ -1764,6 +1816,72 @@ mod tests {
             y,
             resting: false,
         }
+    }
+
+    #[test]
+    fn set_mode_adopts_every_switch_and_mode_reads_them_back() {
+        let mut s = seq();
+        for mode in [
+            Mode {
+                guest_taps: true,
+                tap_drag: true,
+                one_finger_taps: true,
+                raw: false,
+            },
+            Mode {
+                guest_taps: false,
+                tap_drag: false,
+                one_finger_taps: false,
+                raw: true,
+            },
+        ] {
+            s.set_mode(mode);
+            assert_eq!(s.mode(), mode);
+        }
+    }
+
+    /// A recording made with one-finger taps on replays them only by its own mode line: the same
+    /// inputs replayed with the default switches give the guest no tap.
+    #[test]
+    fn a_recorded_mode_line_round_trips_and_the_replay_follows_it() {
+        use super::replay::{Dev, Taps, parse_recording, replay};
+        let mode = Mode {
+            guest_taps: true,
+            tap_drag: true,
+            one_finger_taps: true,
+            raw: false,
+        };
+        let line = serde_json::to_string(&Recorded::Mode { t_us: 0, mode }).unwrap();
+        assert_eq!(
+            line,
+            r#"{"k":"mode","t_us":0,"guest_taps":true,"tap_drag":true,"one_finger_taps":true,"raw":false}"#
+        );
+        assert_eq!(
+            parse_recording(&line).unwrap(),
+            vec![Recorded::Mode { t_us: 0, mode }]
+        );
+        let tap = [
+            Recorded::Touches {
+                t_us: 100_000,
+                in_view: true,
+                touches: vec![t(1, 0.4, 0.4)],
+            },
+            Recorded::Touches {
+                t_us: 180_000,
+                in_view: true,
+                touches: vec![],
+            },
+        ];
+        let touched = |records: &[Recorded]| {
+            replay(TouchpadGeometry::BUILT_IN, records, Taps::Guest)
+                .iter()
+                .any(|d| d.dev == Dev::Touchpad && d.ev == InputEvent::new(EV_KEY, BTN_TOUCH, 1))
+        };
+        assert!(!touched(&tap), "default switches: macOS's tap");
+        let with_mode: Vec<Recorded> = std::iter::once(Recorded::Mode { t_us: 0, mode })
+            .chain(tap.iter().cloned())
+            .collect();
+        assert!(touched(&with_mode), "the recorded mode: the guest's tap");
     }
 
     fn resting(id: u64, x: f64, y: f64) -> TouchSample {

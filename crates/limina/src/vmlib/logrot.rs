@@ -161,13 +161,23 @@ const LIVE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(30)
 /// The path of the file behind `fd` when it can be bounded in place: a regular file opened for
 /// append (see [`bound_in_place`] for why nothing else can be).
 fn boundable(fd: std::os::fd::RawFd) -> Option<PathBuf> {
+    let path = regular_file(fd)?;
+    // SAFETY: fcntl only reads the descriptor's state.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    (flags >= 0 && flags & libc::O_APPEND != 0).then_some(path)
+}
+
+/// The file this run's stderr is written to, when it is a regular file: the control center's
+/// `logs/supervisor.log`, or whatever a caller redirected it to.
+pub fn stderr_file() -> Option<PathBuf> {
+    regular_file(libc::STDERR_FILENO)
+}
+
+/// The path of the regular file behind `fd`.
+fn regular_file(fd: std::os::fd::RawFd) -> Option<PathBuf> {
     // SAFETY: fstat/fcntl only read the descriptor's state.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstat(fd, &mut st) } != 0 || (st.st_mode & libc::S_IFMT) != libc::S_IFREG {
-        return None;
-    }
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 || flags & libc::O_APPEND == 0 {
         return None;
     }
     let mut buf = vec![0u8; libc::PATH_MAX as usize];

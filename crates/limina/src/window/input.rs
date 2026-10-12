@@ -758,8 +758,8 @@ pub struct InputState {
     /// The local touch and resting counts the last `[TOUCH]` trace line reported (it logs
     /// changes only).
     touch_trace_count: Cell<(usize, usize)>,
-    /// `LIMINA_TRACKPAD_RECORD`: every input the trackpad policy consumes, as a replayable
-    /// recording ([`super::trackpad::Recorded`]).
+    /// The `trackpad-record` lever's recording: every input the trackpad policy consumes, as a
+    /// replayable recording ([`super::trackpad::Recorded`]). Open while the lever is on.
     trackpad_record: RefCell<Option<TrackpadRecorder>>,
     /// Whether the guest is hosted in the is hosted in the `notch = extend` overlay, and the flag that asks for it
     /// to stand down so the menu bar and the window's controls are reachable. See
@@ -1003,7 +1003,7 @@ impl InputState {
             rel_rest: Cell::new((0.0, 0.0)),
             button_pace: RefCell::new(super::button_pace::ButtonPacer::default()),
             touch_trace_count: Cell::new((0, 0)),
-            trackpad_record: RefCell::new(TrackpadRecorder::from_env()),
+            trackpad_record: RefCell::new(None),
             overlay_active,
             reveal_chrome,
             reveal: Cell::new(super::grab_policy::RevealState::default()),
@@ -3474,6 +3474,14 @@ impl InputState {
     /// guest reads one-finger taps too.
     pub(crate) fn set_guest_pointer(&self, on: bool) {
         if self.guest_pointer.replace(on) != on {
+            log::info!(
+                "guest-controlled pointer: {}",
+                if on {
+                    "on (one-finger taps are the guest's; captured, so is the motion)"
+                } else {
+                    "off"
+                }
+            );
             self.trackpad.borrow_mut().set_one_finger_taps(on);
         }
         self.sync_guest_pointer();
@@ -3485,6 +3493,16 @@ impl InputState {
     /// Idempotent.
     fn sync_guest_pointer(&self) {
         let on = self.guest_pointer.get() && self.is_captured();
+        if self.trackpad.borrow().mode().raw != on {
+            log::info!(
+                "guest-controlled pointer: {}",
+                if on {
+                    "the guest moves the captured pointer (trackpad raw, mouse counts relative)"
+                } else {
+                    "the tablet moves the pointer"
+                }
+            );
+        }
         let events = self.trackpad.borrow_mut().set_raw(on);
         self.send_touchpad(&events);
         if on && self.hid_mouse.get().is_none() {
@@ -3722,18 +3740,25 @@ impl InputState {
         self.send_touchpad(&events);
     }
 
+    /// Record one input, after the policy's mode when the mode is not the one last recorded.
     fn record_trackpad(&self, now: std::time::Instant, record: impl FnOnce(u64) -> Recorded) {
-        if let Some(r) = self.trackpad_record.borrow_mut().as_mut() {
+        let mut recorder = self.trackpad_record.borrow_mut();
+        TrackpadRecorder::follow_lever(&mut recorder);
+        if let Some(r) = recorder.as_mut() {
+            let mode = self.trackpad.borrow().mode();
+            if r.mode.replace(mode) != Some(mode) {
+                r.write(now, |t_us| Recorded::Mode { t_us, mode });
+            }
             r.write(now, record);
         }
     }
 
-    /// Whether `LIMINA_TRACKPAD_RECORD` is recording.
+    /// Whether the `trackpad-record` lever is on.
     pub(crate) fn recording_trackpad(&self) -> bool {
-        self.trackpad_record.borrow().is_some()
+        crate::debug_ctl::TRACKPAD_RECORD.on()
     }
 
-    /// Record a trackpad click for `LIMINA_TRACKPAD_RECORD`, as macOS recognised it, wherever
+    /// Record a trackpad click for the `trackpad-record` lever, as macOS recognised it, wherever
     /// the policy then sends it ([`TrackpadSeq::on_click`]): macOS's recognition is the ground
     /// truth for what the user meant, and the replay routes it again.
     pub(crate) fn record_trackpad_click(&self, event: &NSEvent, down: bool) {
@@ -3755,6 +3780,10 @@ impl InputState {
     /// past the flicker grace, and a lift if the touch stream went silent (focus moved away
     /// mid-gesture, so the lift never arrived). Called from the render tick.
     pub fn touchpad_watchdog(&self) {
+        // A recording the lever stopped is closed here, not at the next touch.
+        if !self.recording_trackpad() {
+            TrackpadRecorder::follow_lever(&mut self.trackpad_record.borrow_mut());
+        }
         let events = self.trackpad.borrow_mut().tick(std::time::Instant::now());
         self.send_touchpad(&events);
     }
@@ -4059,29 +4088,81 @@ pub(crate) fn send_event(fd: RawFd, ev: InputEvent) {
     }
 }
 
-/// Writes `LIMINA_TRACKPAD_RECORD`'s recording: one JSON line per input, stamped in
-/// microseconds from the first. Replay it with `super::trackpad::replay`.
+/// Writes the `trackpad-record` lever's recording: one JSON line per input, stamped in
+/// microseconds from the first, each input after the policy's mode whenever that changed. Replay
+/// it with `super::trackpad::replay`.
 struct TrackpadRecorder {
     out: std::io::LineWriter<std::fs::File>,
+    path: std::path::PathBuf,
     base: Option<std::time::Instant>,
+    /// The mode last written ([`Recorded::Mode`]).
+    mode: Option<super::trackpad::Mode>,
 }
 
+/// Whether a recording has used the file `LIMINA_TRACKPAD_RECORD` names. Every later one gets
+/// a new file, so turning the lever off and on again never overwrites a recording.
+static TRACKPAD_RECORD_ENV_USED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 impl TrackpadRecorder {
-    fn from_env() -> Option<Self> {
-        let path = std::env::var_os("LIMINA_TRACKPAD_RECORD")?;
+    /// Open a recording when the lever is on and none is, close it when the lever is off.
+    fn follow_lever(recorder: &mut Option<Self>) {
+        let lever = &crate::debug_ctl::TRACKPAD_RECORD;
+        match (lever.on(), recorder.is_some()) {
+            (true, false) => {
+                *recorder = Self::open();
+                if recorder.is_none() {
+                    // Not on: a lever left on would retry, and warn, at every touch.
+                    lever.set(false);
+                }
+            }
+            (false, true) => {
+                if let Some(r) = recorder.take() {
+                    log::info!("trackpad: recording stopped: {}", r.path.display());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn open() -> Option<Self> {
+        let path = Self::path();
         match std::fs::File::create(&path) {
             Ok(f) => {
-                log::info!("trackpad: recording inputs to {}", path.to_string_lossy());
+                log::info!("trackpad: recording inputs to {}", path.display());
                 Some(Self {
                     out: std::io::LineWriter::new(f),
+                    path,
                     base: None,
+                    mode: None,
                 })
             }
             Err(e) => {
-                log::warn!("trackpad: cannot record to {}: {e}", path.to_string_lossy());
+                log::warn!("trackpad: cannot record to {}: {e}", path.display());
                 None
             }
         }
+    }
+
+    /// `LIMINA_TRACKPAD_RECORD`'s file the first time, when it names one rather than saying
+    /// `1`; otherwise a new `trackpad-<pid>-<unix seconds>.jsonl` beside the log (the VM's
+    /// `logs/` under the control center), or in the temporary directory.
+    fn path() -> std::path::PathBuf {
+        use std::sync::atomic::Ordering;
+        if let Some(named) = std::env::var_os("LIMINA_TRACKPAD_RECORD")
+            && named != "1"
+            && named != "0"
+            && !TRACKPAD_RECORD_ENV_USED.swap(true, Ordering::Relaxed)
+        {
+            return named.into();
+        }
+        let dir = crate::vmlib::logrot::stderr_file()
+            .and_then(|log| log.parent().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(std::env::temp_dir);
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        dir.join(format!("trackpad-{}-{secs}.jsonl", std::process::id()))
     }
 
     fn write(&mut self, now: std::time::Instant, record: impl FnOnce(u64) -> Recorded) {
