@@ -1614,13 +1614,60 @@ fn a_context_restored_inside_open_command_buffers_runs_them_again() {
     let after = export(&mut g);
     assert!(!after.lost, "restored lost: {:?}", g.ring.error());
     assert_eq!(after, before);
-    let made = after.recording.iter().find(|(op, _, _)| *op == cmd::op::CREATE_TEXTURE);
+    let made = after
+        .recording
+        .iter()
+        .find(|(op, _, _)| *op == cmd::op::CREATE_TEXTURE);
     assert_eq!(made.expect("recorded").2[0], texture);
     g.push(cmd::EndCommandBuffer {}, &[]);
-    g.commit_and_wait().expect("the open command buffer commits");
+    g.commit_and_wait()
+        .expect("the open command buffer commits");
     let e = export(&mut g);
     assert!(e.recording.is_empty());
     let handles: Vec<u32> = e.objects.iter().map(|o| o.handle).collect();
     assert!(handles.contains(&8) && handles.contains(&9) && !handles.contains(&5));
-    assert_eq!(e.tables.iter().find(|(h, _)| *h == 8).unwrap().1[1], base + 2 * MIB);
+    assert_eq!(
+        e.tables.iter().find(|(h, _)| *h == 8).unwrap().1[1],
+        base + 2 * MIB
+    );
+}
+
+/// A commit the frozen guest would have unblocked cannot finish before a snapshot: the export
+/// gives up on it and loses the context there and then, so its waiters are answered.
+#[test]
+fn an_export_that_cannot_drain_loses_the_context() {
+    let mut g = start();
+    g.push(
+        cmd::SyncObject {
+            handle: 1,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(
+        cmd::QueueEvent {
+            event: 1,
+            wait: 1,
+            value: 1,
+        },
+        &[],
+    );
+    g.seqno += 1;
+    g.push(
+        cmd::Commit {
+            seqno: g.seqno,
+            feedback: BufRef::NONE,
+        },
+        &[],
+    );
+    g.kick();
+    let e = export(&mut g);
+    assert!(e.lost);
+    assert!(e.objects.is_empty());
+    assert_eq!(
+        g.ring.error().map(|(code, _)| code),
+        Some(13),
+        "the ring says why"
+    );
 }

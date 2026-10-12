@@ -107,7 +107,8 @@ pub enum Error {
     GpuFault = 11,
     /// The host could not allocate what a command needed.
     OutOfMemory = 12,
-    /// A snapshot restore could not rebuild the context as the guest knew it.
+    /// A snapshot could not carry the context: its work did not finish before the snapshot, or
+    /// the restore could not rebuild it as the guest knew it.
     Restore = 13,
 }
 

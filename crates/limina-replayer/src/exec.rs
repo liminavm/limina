@@ -923,7 +923,7 @@ impl Executor {
 
     /// The context as it travels across a snapshot. Waits a bounded time for committed work: a
     /// commit still in flight may have partly run and cannot be taken back, so the context is
-    /// exported lost.
+    /// lost, here and in the export. Losing it here answers whatever waits on its ring.
     fn export(&mut self) -> ContextExport {
         let deadline = Instant::now() + EXPORT_DRAIN;
         while !lock(&self.in_flight).is_empty() && Instant::now() < deadline {
@@ -937,10 +937,11 @@ impl Executor {
             ..Default::default()
         };
         let pending = lock(&self.in_flight).len();
-        if pending != 0 {
-            log::warn!("export: {pending} commit(s) still running; the context is exported lost");
-            e.lost = true;
+        if pending != 0 && !self.lost {
+            log::warn!("export: {pending} commit(s) still running; the context is lost");
+            self.lose(Error::Restore, e.position);
         }
+        e.lost = self.lost;
         if !e.lost {
             self.objects.export(&mut e);
         }
