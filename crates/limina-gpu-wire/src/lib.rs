@@ -19,5 +19,8 @@
 pub mod cmd;
 pub mod ring;
 
+#[cfg(test)]
+mod c_header;
+
 /// Protocol version. Both ends refuse a ring whose control block names another one.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;

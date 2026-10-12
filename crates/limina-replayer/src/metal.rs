@@ -72,24 +72,97 @@ impl Arena {
     }
 }
 
-/// The pixel formats the replayer accepts, with their bytes per texel. A guest naming any other
-/// loses its context: Metal aborts on some invalid formats rather than failing the call.
-pub fn bytes_per_texel(format: u32) -> Option<u64> {
+/// How a pixel format lays out in memory: bytes per block and the block's size in texels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FormatInfo {
+    pub bytes: u64,
+    pub block_w: u32,
+    pub block_h: u32,
+}
+
+const fn texel(bytes: u64) -> FormatInfo {
+    FormatInfo {
+        bytes,
+        block_w: 1,
+        block_h: 1,
+    }
+}
+
+const fn block(bytes: u64, w: u32, h: u32) -> FormatInfo {
+    FormatInfo {
+        bytes,
+        block_w: w,
+        block_h: h,
+    }
+}
+
+/// The `MTLPixelFormat`s the replayer accepts, with their layout. A guest naming any other loses
+/// its context: Metal aborts on some invalid formats rather than failing the call. Formats Apple
+/// GPUs lack (PVRTC aside, which they have but no guest API asks for; Depth24Unorm_Stencil8;
+/// the 4:2:2 formats) are left out.
+///
+/// The combined depth-stencil formats report their depth plane; copies name a plane with
+/// `MTLBlitOption`, see [`copy_format_info`].
+pub fn format_info(format: u32) -> Option<FormatInfo> {
     Some(match format {
-        10 | 13 => 1,                                         // R8Unorm, R8Uint
-        25 | 30 => 2,                                         // R16Float, RG8Unorm
-        53 | 54 | 55 | 65 | 70 | 71 | 73 | 80 | 81 | 90 => 4, // R32*, RG16Float, RGBA8*, BGRA8*, RGB10A2
-        252 => 4,                                             // Depth32Float
-        105 | 115 => 8,                                       // RG32Float, RGBA16Float
-        125 => 16,                                            // RGBA32Float
+        1 | 10..=14 | 253 => texel(1), // A8, R8*, Stencil8
+        20 | 22..=25 | 30..=34 | 40..=43 | 250 => texel(2), // R16*, RG8*, 16-bit packed, Depth16
+        53..=55 | 60 | 62..=65 | 70..=74 | 80 | 81 | 90..=94 | 252 | 261 => texel(4),
+        554 | 555 => texel(4),                                // BGR10_XR
+        103..=105 | 110 | 112..=115 | 552 | 553 => texel(8),  // RG32*, RGBA16*, BGRA10_XR
+        260 => texel(4),        // Depth32Float_Stencil8: the depth plane
+        123..=125 => texel(16), // RGBA32*
+        130 | 131 | 140 | 141 => block(8, 4, 4), // BC1, BC4
+        132..=135 | 142 | 143 | 150..=153 => block(16, 4, 4), // BC2, BC3, BC5, BC6H, BC7
+        170 | 172 | 180..=183 => block(8, 4, 4), // EAC R11, ETC2 RGB8 and RGB8A1
+        174 | 176 | 178 | 179 => block(16, 4, 4), // EAC RG11, EAC RGBA8
+        186..=236 => {
+            let (w, h) = astc_block((format - 186) % 18)?;
+            block(16, w, h)
+        }
         _ => return None,
     })
 }
 
-/// `MTLTextureType` values the replayer accepts.
-pub fn valid_texture_type(t: u32) -> bool {
-    matches!(t, 0..=7)
+/// ASTC footprints, by the index of a format within its 18-value run (sRGB from 186, LDR from
+/// 204, HDR from 222).
+fn astc_block(i: u32) -> Option<(u32, u32)> {
+    Some(match i {
+        0 => (4, 4),
+        1 => (5, 4),
+        2 => (5, 5),
+        3 => (6, 5),
+        4 => (6, 6),
+        6 => (8, 5),
+        7 => (8, 6),
+        8 => (8, 8),
+        9 => (10, 5),
+        10 => (10, 6),
+        11 => (10, 8),
+        12 => (10, 10),
+        13 => (12, 10),
+        14 => (12, 12),
+        _ => return None,
+    })
 }
 
-/// `MTLTextureUsage` bits the replayer passes through.
-pub const TEXTURE_USAGE_MASK: u32 = 0x17;
+/// The layout a buffer<->texture copy with `MTLBlitOption` `options` uses for `format`: one
+/// plane of a combined depth-stencil format, or the format itself.
+pub fn copy_format_info(format: u32, options: u32) -> Option<FormatInfo> {
+    match (format, options) {
+        (_, 0) => format_info(format),
+        (260, 1) => Some(texel(4)), // DepthFromDepthStencil
+        (260, 2) => Some(texel(1)), // StencilFromDepthStencil
+        _ => None,
+    }
+}
+
+/// `MTLTextureType` values the replayer accepts (1D through 2DMultisampleArray; not
+/// TextureBuffer).
+pub fn valid_texture_type(t: u32) -> bool {
+    matches!(t, 0..=8)
+}
+
+/// `MTLTextureUsage` bits the replayer passes through: ShaderRead, ShaderWrite, RenderTarget,
+/// PixelFormatView, ShaderAtomic.
+pub const TEXTURE_USAGE_MASK: u32 = 0x37;

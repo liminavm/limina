@@ -365,6 +365,11 @@ impl Consumer {
         self.ctrl
     }
 
+    /// Size of the data area; a command's payload is at most half of it.
+    pub fn data_size(&self) -> u64 {
+        self.size
+    }
+
     /// Bytes consumed.
     pub fn position(&self) -> u64 {
         self.head
@@ -477,7 +482,14 @@ mod tests {
         let mut seen: Vec<u64> = Vec::new();
         for i in 0..1000u64 {
             let name = [i as u8; 13];
-            prod.push(&Commit { seqno: i }, &[&name]).unwrap();
+            prod.push(
+                &Commit {
+                    seqno: i,
+                    ..Default::default()
+                },
+                &[&name],
+            )
+            .unwrap();
             prod.push(
                 &FillBuffer {
                     buffer: crate::cmd::BufRef {
@@ -515,21 +527,55 @@ mod tests {
     fn a_full_ring_refuses_until_the_consumer_frees_space() {
         let (_r, mut prod, mut cons) = ring();
         let mut n = 0;
-        while prod.push(&Commit { seqno: n }, &[]).is_ok() {
+        while prod
+            .push(
+                &Commit {
+                    seqno: n,
+                    ..Default::default()
+                },
+                &[],
+            )
+            .is_ok()
+        {
             n += 1;
         }
-        assert_eq!(prod.push(&Commit { seqno: n }, &[]), Err(PushError::Full));
+        assert_eq!(
+            prod.push(
+                &Commit {
+                    seqno: n,
+                    ..Default::default()
+                },
+                &[]
+            ),
+            Err(PushError::Full)
+        );
         prod.publish();
         let mut scratch = vec![0u8; 2048];
         assert!(cons.next(&mut scratch).unwrap().is_some());
-        assert!(prod.push(&Commit { seqno: n }, &[]).is_ok());
+        assert!(
+            prod.push(
+                &Commit {
+                    seqno: n,
+                    ..Default::default()
+                },
+                &[]
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn parking_is_seen_by_the_producer_and_refused_with_work_pending() {
         let (_r, mut prod, cons) = ring();
         assert!(cons.park());
-        prod.push(&Commit { seqno: 1 }, &[]).unwrap();
+        prod.push(
+            &Commit {
+                seqno: 1,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
         assert!(prod.publish(), "a parked consumer must be kicked");
         cons.unpark();
         assert!(!cons.park(), "work is pending");
@@ -539,7 +585,14 @@ mod tests {
     #[test]
     fn a_lying_header_is_malformed() {
         let (base, mut prod, mut cons) = ring();
-        prod.push(&Commit { seqno: 1 }, &[]).unwrap();
+        prod.push(
+            &Commit {
+                seqno: 1,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
         prod.publish();
         // Rewrite the length to run past the published tail.
         unsafe { base.add(DATA_OFFSET + 4).cast::<u32>().write(64) };

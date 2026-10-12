@@ -4,9 +4,10 @@
 
 use std::path::Path;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use limina_gpu_wire::cmd::{self, BufRef};
+use limina_gpu_wire::cmd::{self, BufRef, REPLY_DONE};
 use limina_gpu_wire::ring::{self, Producer};
 use limina_replayer::client::{Doorbell, MappedArena, Replayer};
 
@@ -20,6 +21,15 @@ const USAGE_RENDER_TARGET: u32 = 4;
 const LOAD_CLEAR: u32 = 2;
 const STORE_STORE: u32 = 1;
 const PRIM_TRIANGLE: u32 = 3;
+const RENDER_VERTEX: u32 = 1;
+const STAGE_VERTEX: u32 = 1 << 0;
+const STAGE_FRAGMENT: u32 = 1 << 1;
+const STAGE_DISPATCH: u32 = 1 << 26;
+const STAGE_BLIT: u32 = 1 << 27;
+const VISIBILITY_DEVICE: u32 = 1;
+
+/// Where the tests keep replies, feedback and other host-written records.
+const RECORDS: u64 = 8 * MIB;
 
 const MSL: &str = r#"
 #include <metal_stdlib>
@@ -27,6 +37,8 @@ using namespace metal;
 
 struct VOut { float4 pos [[position]]; };
 
+// The vertex positions arrive as a raw GPU address in an argument table, as KosmicKrisp binds
+// everything.
 vertex VOut vs(uint vid [[vertex_id]], const device float4* pos [[buffer(0)]]) {
     VOut o;
     o.pos = pos[vid];
@@ -37,8 +49,8 @@ fragment float4 fs(VOut in [[stage_in]]) {
     return float4(0.0, 1.0, 0.0, 1.0);
 }
 
-// The destination arrives as a raw GPU address the guest computed (arena base + offset); no
-// buffer is bound for it.
+// The destination arrives as a raw GPU address the guest computed (arena base + offset), read from
+// arena memory.
 struct Ptrs { device uint* dst; };
 
 kernel void poke(constant Ptrs& p [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
@@ -76,13 +88,23 @@ impl Guest {
         self.ring.push(&c, extra).expect("ring space");
     }
 
-    /// Commits, kicks if the consumer parked, and waits for the GPU to finish.
-    fn commit_and_wait(&mut self) -> Result<(), (u32, u64)> {
-        self.seqno += 1;
-        self.push(cmd::Commit { seqno: self.seqno }, &[]);
+    fn kick(&mut self) {
         if self.ring.publish() {
             self.bell.ring();
         }
+    }
+
+    /// Commits with `feedback`, kicks if the consumer parked, and waits for the GPU to finish.
+    fn commit_with(&mut self, feedback: BufRef) -> Result<(), (u32, u64)> {
+        self.seqno += 1;
+        self.push(
+            cmd::Commit {
+                seqno: self.seqno,
+                feedback,
+            },
+            &[],
+        );
+        self.kick();
         let start = Instant::now();
         while self.ring.completed() < self.seqno {
             if let Some(e) = self.ring.error() {
@@ -97,22 +119,54 @@ impl Guest {
         self.ring.error().map_or(Ok(()), Err)
     }
 
-    fn bytes(&self, offset: u64, len: usize) -> &[u8] {
+    fn commit_and_wait(&mut self) -> Result<(), (u32, u64)> {
+        self.commit_with(BufRef::NONE)
+    }
+
+    fn ptr(&self, offset: u64, len: usize) -> *mut u8 {
         assert!(offset + len as u64 <= self.arena.mapping.size());
-        // SAFETY: inside the mapping, checked above; the GPU has finished writing.
-        unsafe { std::slice::from_raw_parts(self.arena.mapping.as_ptr().add(offset as usize), len) }
+        // SAFETY: inside the mapping, checked above.
+        unsafe { self.arena.mapping.as_ptr().add(offset as usize) }
+    }
+
+    fn bytes(&self, offset: u64, len: usize) -> &[u8] {
+        // SAFETY: inside the mapping; the writer has finished.
+        unsafe { std::slice::from_raw_parts(self.ptr(offset, len), len) }
     }
 
     fn write(&mut self, offset: u64, data: &[u8]) {
-        assert!(offset + data.len() as u64 <= self.arena.mapping.size());
-        // SAFETY: inside the mapping, checked above.
+        // SAFETY: inside the mapping.
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                data.as_ptr(),
-                self.arena.mapping.as_ptr().add(offset as usize),
-                data.len(),
-            )
+            std::ptr::copy_nonoverlapping(data.as_ptr(), self.ptr(offset, data.len()), data.len())
         }
+    }
+
+    /// Clears the reply at `offset` and returns its reference.
+    fn reply_slot(&mut self, offset: u64) -> BufRef {
+        self.write(offset, &[0; size_of::<cmd::Reply>()]);
+        BufRef::new(1, offset)
+    }
+
+    /// Waits for the reply at `offset`, kicking the ring first.
+    fn reply(&mut self, offset: u64) -> cmd::Reply {
+        self.kick();
+        let p = self
+            .ptr(offset, size_of::<cmd::Reply>())
+            .cast::<cmd::Reply>();
+        // SAFETY: an aligned u32 in the mapping, written by the host.
+        let done = unsafe { &*(&raw const (*p).done).cast::<AtomicU32>() };
+        let start = Instant::now();
+        while done.load(Ordering::Acquire) != REPLY_DONE {
+            assert!(
+                self.ring.error().is_none(),
+                "context lost: {:?}",
+                self.ring.error()
+            );
+            assert!(start.elapsed() < Duration::from_secs(10), "no reply");
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        // SAFETY: the host wrote it before `done`.
+        unsafe { p.read() }
     }
 }
 
@@ -121,13 +175,52 @@ fn start() -> Guest {
     Guest::new(Replayer::spawn(Path::new(exe)).expect("spawn replayer"))
 }
 
-fn create_library(g: &mut Guest, handle: u32) {
+fn create_library(g: &mut Guest, handle: u32, src: &str, reply: BufRef) {
     g.push(
         cmd::CreateLibrary {
             handle,
-            source_len: MSL.len() as u32,
+            source_len: src.len() as u32,
+            reply,
+            ..Default::default()
         },
-        &[MSL.as_bytes()],
+        &[src.as_bytes()],
+    );
+}
+
+fn barrier(g: &mut Guest, after: u32, before: u32) {
+    g.push(
+        cmd::Barrier {
+            kind: cmd::barrier_kind::AFTER_QUEUE_STAGES,
+            after,
+            before,
+            visibility: VISIBILITY_DEVICE,
+        },
+        &[],
+    );
+}
+
+fn table(g: &mut Guest, handle: u32, bindings: &[(u32, u64)]) {
+    g.push(
+        cmd::CreateArgumentTable {
+            handle,
+            max_buffer_bind_count: 4,
+        },
+        &[],
+    );
+    let b: Vec<cmd::AddressBinding> = bindings
+        .iter()
+        .map(|&(index, address)| cmd::AddressBinding {
+            index,
+            _pad: 0,
+            address,
+        })
+        .collect();
+    g.push(
+        cmd::SetAddresses {
+            table: handle,
+            count: b.len() as u32,
+        },
+        &[cmd::bytes_of_slice(&b)],
     );
 }
 
@@ -151,42 +244,56 @@ fn a_triangle_drawn_into_an_arena_texture_reads_back() {
         .collect();
     g.write(VB, &vb);
 
-    create_library(&mut g, 1);
+    create_library(&mut g, 1, MSL, BufRef::NONE);
     let (vs, fs) = (b"vs", b"fs");
     let mut colors = [0u32; cmd::MAX_COLOR_ATTACHMENTS];
     colors[0] = RGBA8_UNORM;
     g.push(
         cmd::CreateRenderPipeline {
             handle: 2,
-            library: 1,
+            vertex_library: 1,
+            fragment_library: 1,
             vertex_name_len: 2,
             fragment_name_len: 2,
             color_formats: colors,
-            sample_count: 1,
+            raster_sample_count: 1,
+            rasterization_enabled: 1,
             ..Default::default()
         },
         &[vs, fs],
     );
+    let reply = g.reply_slot(RECORDS);
     g.push(
         cmd::CreateTexture {
             handle: 3,
             arena: 1,
             offset: TEX,
-            texture_type: TEX_2D,
-            pixel_format: RGBA8_UNORM,
-            width: W,
-            height: W,
-            depth: 1,
-            mip_levels: 1,
-            array_length: 1,
-            sample_count: 1,
-            usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
-            _pad: 0,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: RGBA8_UNORM,
+                width: W,
+                height: W,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            reply,
+            ..Default::default()
         },
         &[],
     );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0);
+    assert_ne!(r.values[0], 0, "a texture has a resource ID");
+    let base = g.arena.gpu_base;
+    table(&mut g, 4, &[(0, base + VB)]);
+
+    g.push(cmd::BeginCommandBuffer {}, &[]);
     let mut pass = cmd::BeginRenderPass::default();
-    pass.colors[0] = cmd::ColorAttachment {
+    pass.colors[0] = cmd::RenderAttachment {
         texture: 3,
         load_action: LOAD_CLEAR,
         store_action: STORE_STORE,
@@ -196,26 +303,25 @@ fn a_triangle_drawn_into_an_arena_texture_reads_back() {
     g.push(pass, &[]);
     g.push(cmd::SetRenderPipeline { handle: 2, _pad: 0 }, &[]);
     g.push(
-        cmd::SetBuffer {
-            stage: cmd::stage::VERTEX,
-            index: 0,
-            buffer: BufRef::new(1, VB),
+        cmd::SetArgumentTable {
+            table: 4,
+            stages: RENDER_VERTEX,
         },
         &[],
     );
     g.push(
-        cmd::SetViewport {
+        cmd::SetViewports { count: 1, _pad: 0 },
+        &[cmd::bytes_of(&cmd::Viewport {
             x: 0.0,
             y: 0.0,
-            width: W as f32,
-            height: W as f32,
+            width: W as f64,
+            height: W as f64,
             znear: 0.0,
             zfar: 1.0,
-        },
-        &[],
+        })],
     );
     g.push(
-        cmd::DrawPrimitives {
+        cmd::Draw {
             primitive: PRIM_TRIANGLE,
             vertex_count: 3,
             instance_count: 1,
@@ -224,12 +330,13 @@ fn a_triangle_drawn_into_an_arena_texture_reads_back() {
         &[],
     );
     g.push(cmd::EndEncoding {}, &[]);
-    g.push(cmd::BeginBlit {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    barrier(&mut g, STAGE_FRAGMENT, STAGE_BLIT);
     g.push(
-        cmd::CopyTextureToBuffer {
+        cmd::CopyBufferTexture {
             texture: 3,
             size: [W, W, 1],
-            dst: BufRef::new(1, READBACK),
+            buffer: BufRef::new(1, READBACK),
             bytes_per_row: W as u64 * 4,
             bytes_per_image: (W * W) as u64 * 4,
             ..Default::default()
@@ -237,7 +344,19 @@ fn a_triangle_drawn_into_an_arena_texture_reads_back() {
         &[],
     );
     g.push(cmd::EndEncoding {}, &[]);
-    g.commit_and_wait().expect("frame");
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    let fb = BufRef::new(1, RECORDS + 256);
+    g.write(fb.offset, &[0; size_of::<cmd::Feedback>()]);
+    g.commit_with(fb).expect("frame");
+
+    // SAFETY: written by the host before the seqno was published.
+    let f = unsafe {
+        g.ptr(fb.offset, size_of::<cmd::Feedback>())
+            .cast::<cmd::Feedback>()
+            .read()
+    };
+    assert_eq!((f.done, f.error), (REPLY_DONE, 0));
+    assert!(f.gpu_end >= f.gpu_start && f.gpu_start > 0.0, "{f:?}");
 
     let px = |x: u32, y: u32| {
         let at = READBACK + ((y * W + x) * 4) as u64;
@@ -270,23 +389,29 @@ fn a_kernel_writes_through_an_address_the_guest_computed() {
     const N: u32 = 256;
     g.write(PTRS, &(other.gpu_base + DST).to_le_bytes());
 
-    create_library(&mut g, 1);
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
     g.push(
         cmd::CreateComputePipeline {
             handle: 2,
             library: 1,
             name_len: 4,
-            _pad: 0,
+            reply,
+            ..Default::default()
         },
         &[b"poke"],
     );
+    let max = g.reply(RECORDS).values[0];
+    assert!(max >= 64, "max threads per group {max}");
+    let base = g.arena.gpu_base;
+    table(&mut g, 3, &[(0, base + PTRS)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
     g.push(cmd::BeginCompute {}, &[]);
     g.push(cmd::SetComputePipeline { handle: 2, _pad: 0 }, &[]);
     g.push(
-        cmd::SetBuffer {
-            stage: cmd::stage::COMPUTE,
-            index: 0,
-            buffer: BufRef::new(1, PTRS),
+        cmd::SetArgumentTable {
+            table: 3,
+            stages: 0,
         },
         &[],
     );
@@ -298,6 +423,7 @@ fn a_kernel_writes_through_an_address_the_guest_computed() {
         &[],
     );
     g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
     g.commit_and_wait().expect("dispatch");
 
     // SAFETY: inside the second arena's mapping; the GPU has finished.
@@ -310,6 +436,119 @@ fn a_kernel_writes_through_an_address_the_guest_computed() {
     for (i, &w) in words.iter().enumerate() {
         assert_eq!(w, 0xC0FFEE00 + i as u32, "word {i}");
     }
+}
+
+#[test]
+fn the_device_answers_queries() {
+    let mut g = start();
+    const INFO: u64 = RECORDS + 1024;
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::QueryDevice {
+            dst: BufRef::new(1, INFO),
+            reply,
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    // SAFETY: written by the host before the reply.
+    let info = unsafe {
+        g.ptr(INFO, size_of::<cmd::DeviceInfo>())
+            .cast::<cmd::DeviceInfo>()
+            .read()
+    };
+    let name = std::str::from_utf8(&info.name)
+        .unwrap()
+        .trim_end_matches('\0');
+    eprintln!("{name}: {info:?}");
+    assert_eq!(info.version, limina_gpu_wire::VERSION);
+    assert!(name.starts_with("Apple"), "{name}");
+    assert!(info.apple_family >= 7, "Metal 4 needs Apple7 or later");
+    assert!(info.sample_counts & (1 << 1 | 1 << 4) == (1 << 1 | 1 << 4));
+    assert!(info.heap_buffer_align.is_power_of_two());
+    assert!(info.max_threads_per_threadgroup[0] >= 256);
+
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::QueryTextureSize {
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: RGBA8_UNORM,
+                width: 256,
+                height: 256,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            reply,
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0);
+    assert!(
+        r.values[0] >= 256 * 256 * 4 && r.values[1].is_power_of_two(),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_failed_create_with_a_reply_keeps_the_context() {
+    let mut g = start();
+    let reply = g.reply_slot(RECORDS);
+    create_library(&mut g, 1, "this is not MSL", reply);
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, ring::Error::ShaderCompile as u32);
+    // The context lives on, and the handle was never taken.
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    g.commit_and_wait().expect("still alive");
+}
+
+#[test]
+fn a_shared_event_signal_reaches_its_mirror() {
+    let mut g = start();
+    const MIRROR: u64 = RECORDS + 512;
+    g.push(
+        cmd::SyncObject {
+            handle: 1,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            initial: 3,
+            mirror: BufRef::new(1, MIRROR),
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("create");
+    // SAFETY: an aligned u64 in the mapping, written by the host.
+    let mirror = unsafe { &*g.ptr(MIRROR, 8).cast::<AtomicU64>() };
+    assert_eq!(mirror.load(Ordering::Acquire), 3);
+    g.push(
+        cmd::QueueEvent {
+            event: 1,
+            wait: 0,
+            value: 7,
+        },
+        &[],
+    );
+    g.kick();
+    let start = Instant::now();
+    while mirror.load(Ordering::Acquire) < 7 {
+        assert!(start.elapsed() < Duration::from_secs(5), "mirror stuck");
+        std::thread::sleep(Duration::from_micros(50));
+    }
+    eprintln!("mirror raised after {:?}", start.elapsed());
+    g.push(
+        cmd::SetSharedEvent {
+            handle: 1,
+            _pad: 0,
+            value: 9,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("set");
+    assert_eq!(mirror.load(Ordering::Acquire), 9);
 }
 
 #[test]
@@ -331,7 +570,13 @@ fn a_bad_handle_loses_the_context_and_says_where() {
 fn many_small_commits_retire_in_order() {
     let mut g = start();
     for _ in 0..2000 {
-        g.push(cmd::BeginBlit {}, &[]);
+        g.push(cmd::BeginCommandBuffer {}, &[]);
+        g.push(cmd::BeginCompute {}, &[]);
+        barrier(
+            &mut g,
+            STAGE_BLIT | STAGE_DISPATCH | STAGE_VERTEX,
+            STAGE_BLIT,
+        );
         g.push(
             cmd::FillBuffer {
                 buffer: BufRef::new(1, MIB),
@@ -342,6 +587,7 @@ fn many_small_commits_retire_in_order() {
             &[],
         );
         g.push(cmd::EndEncoding {}, &[]);
+        g.push(cmd::EndCommandBuffer {}, &[]);
         g.commit_and_wait().expect("commit");
     }
     assert!(g.bytes(MIB, 4096).iter().all(|&b| b == (1999 & 0xff) as u8));

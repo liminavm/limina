@@ -27,6 +27,10 @@ const USAGE_RENDER_TARGET: u32 = 4;
 const LOAD_CLEAR: u32 = 2;
 const STORE_STORE: u32 = 1;
 const PRIM_TRIANGLE: u32 = 3;
+const RENDER_VERTEX: u32 = 1;
+const STAGE_FRAGMENT: u32 = 1 << 1;
+const STAGE_BLIT: u32 = 1 << 27;
+const VISIBILITY_DEVICE: u32 = 1;
 
 const MSL: &str = r#"
 #include <metal_stdlib>
@@ -201,9 +205,38 @@ impl Gpu {
         self.ring.push(&c, extra).expect("ring space");
     }
 
+    /// An argument table `handle` whose binding 0 is `address`.
+    fn table(&mut self, handle: u32, address: u64) {
+        self.push(
+            cmd::CreateArgumentTable {
+                handle,
+                max_buffer_bind_count: 1,
+            },
+            &[],
+        );
+        let b = cmd::AddressBinding {
+            index: 0,
+            _pad: 0,
+            address,
+        };
+        self.push(
+            cmd::SetAddresses {
+                table: handle,
+                count: 1,
+            },
+            &[cmd::bytes_of(&b)],
+        );
+    }
+
     fn commit_and_wait(&mut self) -> Result<Duration, String> {
         self.seqno += 1;
-        self.push(cmd::Commit { seqno: self.seqno }, &[]);
+        self.push(
+            cmd::Commit {
+                seqno: self.seqno,
+                feedback: BufRef::NONE,
+            },
+            &[],
+        );
         let start = Instant::now();
         if self.ring.publish() {
             self.kicks += 1;
@@ -264,6 +297,7 @@ fn triangle(g: &mut Gpu) -> Result<(), String> {
         cmd::CreateLibrary {
             handle: 1,
             source_len: MSL.len() as u32,
+            ..Default::default()
         },
         &[MSL.as_bytes()],
     );
@@ -272,11 +306,13 @@ fn triangle(g: &mut Gpu) -> Result<(), String> {
     g.push(
         cmd::CreateRenderPipeline {
             handle: 2,
-            library: 1,
+            vertex_library: 1,
+            fragment_library: 1,
             vertex_name_len: 2,
             fragment_name_len: 2,
             color_formats: colors,
-            sample_count: 1,
+            raster_sample_count: 1,
+            rasterization_enabled: 1,
             ..Default::default()
         },
         &[b"vs", b"fs"],
@@ -286,21 +322,27 @@ fn triangle(g: &mut Gpu) -> Result<(), String> {
             handle: 3,
             arena: 1,
             offset: TEX,
-            texture_type: TEX_2D,
-            pixel_format: RGBA8_UNORM,
-            width: W,
-            height: W,
-            depth: 1,
-            mip_levels: 1,
-            array_length: 1,
-            sample_count: 1,
-            usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
-            _pad: 0,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: RGBA8_UNORM,
+                width: W,
+                height: W,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            ..Default::default()
         },
         &[],
     );
+    let vb_address = g.main.gpu_base + VB;
+    g.table(5, vb_address);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
     let mut pass = cmd::BeginRenderPass::default();
-    pass.colors[0] = cmd::ColorAttachment {
+    pass.colors[0] = cmd::RenderAttachment {
         texture: 3,
         load_action: LOAD_CLEAR,
         store_action: STORE_STORE,
@@ -310,26 +352,26 @@ fn triangle(g: &mut Gpu) -> Result<(), String> {
     g.push(pass, &[]);
     g.push(cmd::SetRenderPipeline { handle: 2, _pad: 0 }, &[]);
     g.push(
-        cmd::SetBuffer {
-            stage: cmd::stage::VERTEX,
-            index: 0,
-            buffer: BufRef::new(1, VB),
+        cmd::SetArgumentTable {
+            table: 5,
+            stages: RENDER_VERTEX,
         },
         &[],
     );
+    let vp = cmd::Viewport {
+        x: 0.0,
+        y: 0.0,
+        width: W as f64,
+        height: W as f64,
+        znear: 0.0,
+        zfar: 1.0,
+    };
     g.push(
-        cmd::SetViewport {
-            x: 0.0,
-            y: 0.0,
-            width: W as f32,
-            height: W as f32,
-            znear: 0.0,
-            zfar: 1.0,
-        },
-        &[],
+        cmd::SetViewports { count: 1, _pad: 0 },
+        &[cmd::bytes_of(&vp)],
     );
     g.push(
-        cmd::DrawPrimitives {
+        cmd::Draw {
             primitive: PRIM_TRIANGLE,
             vertex_count: 3,
             instance_count: 1,
@@ -338,12 +380,21 @@ fn triangle(g: &mut Gpu) -> Result<(), String> {
         &[],
     );
     g.push(cmd::EndEncoding {}, &[]);
-    g.push(cmd::BeginBlit {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
     g.push(
-        cmd::CopyTextureToBuffer {
+        cmd::Barrier {
+            kind: cmd::barrier_kind::AFTER_QUEUE_STAGES,
+            after: STAGE_FRAGMENT,
+            before: STAGE_BLIT,
+            visibility: VISIBILITY_DEVICE,
+        },
+        &[],
+    );
+    g.push(
+        cmd::CopyBufferTexture {
             texture: 3,
             size: [W, W, 1],
-            dst: BufRef::new(1, READBACK),
+            buffer: BufRef::new(1, READBACK),
             bytes_per_row: W as u64 * 4,
             bytes_per_image: (W * W) as u64 * 4,
             ..Default::default()
@@ -351,6 +402,7 @@ fn triangle(g: &mut Gpu) -> Result<(), String> {
         &[],
     );
     g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
     let took = g.commit_and_wait()?;
 
     let px = |x: u32, y: u32| {
@@ -393,17 +445,19 @@ fn poke(g: &mut Gpu, other: &Arena) -> Result<(), String> {
             handle: 4,
             library: 1,
             name_len: 4,
-            _pad: 0,
+            ..Default::default()
         },
         &[b"poke"],
     );
+    let ptrs = g.main.gpu_base + PTRS;
+    g.table(6, ptrs);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
     g.push(cmd::BeginCompute {}, &[]);
     g.push(cmd::SetComputePipeline { handle: 4, _pad: 0 }, &[]);
     g.push(
-        cmd::SetBuffer {
-            stage: cmd::stage::COMPUTE,
-            index: 0,
-            buffer: BufRef::new(1, PTRS),
+        cmd::SetArgumentTable {
+            table: 6,
+            stages: 0,
         },
         &[],
     );
@@ -415,6 +469,7 @@ fn poke(g: &mut Gpu, other: &Arena) -> Result<(), String> {
         &[],
     );
     g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
     let took = g.commit_and_wait()?;
     let words = other.read(DST, N as usize * 4);
     let bad = words
