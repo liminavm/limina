@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define LMN_WIRE_VERSION 3u
+#define LMN_WIRE_VERSION 4u
 
 /* Ring (crates/limina-gpu-wire/src/ring.rs). */
 #define LMN_RING_MAGIC 0x52474d4cu
@@ -74,6 +74,7 @@
 #define LMN_OP_CREATE_DEPTH_STENCIL 0x0106u
 #define LMN_OP_CREATE_ARGUMENT_TABLE 0x0107u
 #define LMN_OP_CREATE_SYNC 0x0108u
+#define LMN_OP_CREATE_COUNTER_HEAP 0x010au
 #define LMN_OP_DESTROY 0x01ffu
 #define LMN_OP_SET_ADDRESSES 0x0180u
 #define LMN_OP_SET_SHARED_EVENT 0x0181u
@@ -89,6 +90,8 @@
 #define LMN_OP_END_ENCODING 0x0204u
 #define LMN_OP_BARRIER 0x0205u
 #define LMN_OP_FENCE 0x0206u
+#define LMN_OP_WRITE_TIMESTAMP 0x0207u
+#define LMN_OP_RESOLVE_COUNTER_HEAP 0x0208u
 #define LMN_OP_SET_COMPUTE_PIPELINE 0x0210u
 #define LMN_OP_SET_ARGUMENT_TABLE 0x0211u
 #define LMN_OP_DISPATCH_THREADS 0x0212u
@@ -459,6 +462,17 @@ _Static_assert(offsetof(struct lmn_sync_object, kind) == 4, "lmn_sync_object.kin
 _Static_assert(offsetof(struct lmn_sync_object, initial) == 8, "lmn_sync_object.initial");
 _Static_assert(offsetof(struct lmn_sync_object, mirror) == 16, "lmn_sync_object.mirror");
 
+/* An `MTL4CounterHeap` of `count` timestamp entries (`MTL4CounterHeapTypeTimestamp`). */
+struct lmn_create_counter_heap {
+   uint32_t handle;
+   uint32_t count;
+   struct lmn_buf_ref reply;
+};
+_Static_assert(sizeof(struct lmn_create_counter_heap) == 24, "lmn_create_counter_heap size");
+_Static_assert(offsetof(struct lmn_create_counter_heap, handle) == 0, "lmn_create_counter_heap.handle");
+_Static_assert(offsetof(struct lmn_create_counter_heap, count) == 4, "lmn_create_counter_heap.count");
+_Static_assert(offsetof(struct lmn_create_counter_heap, reply) == 8, "lmn_create_counter_heap.reply");
+
 /* Releases the guest's handle. Metal 4 does not retain what command buffers reference, so */
 /* the host keeps the object until every commit made before the destroy has completed; the */
 /* handle is free for reuse at once. */
@@ -656,6 +670,45 @@ _Static_assert(offsetof(struct lmn_fence_op, fence) == 0, "lmn_fence_op.fence");
 _Static_assert(offsetof(struct lmn_fence_op, stages) == 4, "lmn_fence_op.stages");
 _Static_assert(offsetof(struct lmn_fence_op, wait) == 8, "lmn_fence_op.wait");
 _Static_assert(offsetof(struct lmn_fence_op, _pad) == 12, "lmn_fence_op._pad");
+
+/* `writeTimestampWithGranularity:intoHeap:atIndex:` on the open compute encoder (`stage` */
+/* zero), or `writeTimestampWithGranularity:afterStage:intoHeap:atIndex:` with the one */
+/* `MTLRenderStages` bit `stage` on the open render encoder. `granularity` is an */
+/* `MTL4TimestampGranularity`. */
+struct lmn_write_timestamp {
+   uint32_t heap;
+   uint32_t index;
+   uint32_t stage;
+   uint32_t granularity;
+};
+_Static_assert(sizeof(struct lmn_write_timestamp) == 16, "lmn_write_timestamp size");
+_Static_assert(offsetof(struct lmn_write_timestamp, heap) == 0, "lmn_write_timestamp.heap");
+_Static_assert(offsetof(struct lmn_write_timestamp, index) == 4, "lmn_write_timestamp.index");
+_Static_assert(offsetof(struct lmn_write_timestamp, stage) == 8, "lmn_write_timestamp.stage");
+_Static_assert(offsetof(struct lmn_write_timestamp, granularity) == 12, "lmn_write_timestamp.granularity");
+
+/* `resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:` on the open command */
+/* buffer, with no encoder open: entries `first..first + count` of `heap`, as 8-byte */
+/* `MTL4TimestampHeapEntry`s, to GPU address `dst`. The fences (`0` for none) are the only */
+/* ordering a resolve has: no barrier reaches it, so it waits on a fence the encoders that */
+/* wrote the entries update, and updates one for whatever reads `dst` next. */
+struct lmn_resolve_counter_heap {
+   uint32_t heap;
+   uint32_t first;
+   uint32_t count;
+   uint32_t wait_fence;
+   uint32_t update_fence;
+   uint32_t _pad;
+   uint64_t dst;
+};
+_Static_assert(sizeof(struct lmn_resolve_counter_heap) == 32, "lmn_resolve_counter_heap size");
+_Static_assert(offsetof(struct lmn_resolve_counter_heap, heap) == 0, "lmn_resolve_counter_heap.heap");
+_Static_assert(offsetof(struct lmn_resolve_counter_heap, first) == 4, "lmn_resolve_counter_heap.first");
+_Static_assert(offsetof(struct lmn_resolve_counter_heap, count) == 8, "lmn_resolve_counter_heap.count");
+_Static_assert(offsetof(struct lmn_resolve_counter_heap, wait_fence) == 12, "lmn_resolve_counter_heap.wait_fence");
+_Static_assert(offsetof(struct lmn_resolve_counter_heap, update_fence) == 16, "lmn_resolve_counter_heap.update_fence");
+_Static_assert(offsetof(struct lmn_resolve_counter_heap, _pad) == 20, "lmn_resolve_counter_heap._pad");
+_Static_assert(offsetof(struct lmn_resolve_counter_heap, dst) == 24, "lmn_resolve_counter_heap.dst");
 
 /* `setComputePipelineState:`. */
 struct lmn_set_compute_pipeline {

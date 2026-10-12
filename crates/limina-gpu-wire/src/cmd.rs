@@ -3,7 +3,7 @@
 //!
 //! The model is Metal 4's, as KosmicKrisp's bridge drives it on the host:
 //! - **Objects** (textures, views, samplers, libraries, pipelines, depth-stencil states, argument
-//!   tables, fences, events) are named by `u32` handles the guest assigns per context, in one
+//!   tables, fences, events, counter heaps) are named by `u32` handles the guest assigns per context, in one
 //!   namespace for every kind. `0` is "none". Buffers have no objects: a buffer is a range of an
 //!   arena, named by a [`BufRef`] or a GPU address (arena base + offset).
 //! - **Command buffers** are explicit: [`BeginCommandBuffer`] … [`EndCommandBuffer`], with
@@ -452,6 +452,13 @@ wire! {
         mirror: BufRef,
     }
 
+    /// An `MTL4CounterHeap` of `count` timestamp entries (`MTL4CounterHeapTypeTimestamp`).
+    struct CreateCounterHeap = CREATE_COUNTER_HEAP(0x010a) {
+        handle: u32,
+        count: u32,
+        reply: BufRef,
+    }
+
     /// Releases the guest's handle. Metal 4 does not retain what command buffers reference, so
     /// the host keeps the object until every commit made before the destroy has completed; the
     /// handle is free for reuse at once.
@@ -586,6 +593,32 @@ wire! {
         stages: u32,
         wait: u32,
         _pad: u32,
+    }
+
+    /// `writeTimestampWithGranularity:intoHeap:atIndex:` on the open compute encoder (`stage`
+    /// zero), or `writeTimestampWithGranularity:afterStage:intoHeap:atIndex:` with the one
+    /// `MTLRenderStages` bit `stage` on the open render encoder. `granularity` is an
+    /// `MTL4TimestampGranularity`.
+    struct WriteTimestamp = WRITE_TIMESTAMP(0x0207) {
+        heap: u32,
+        index: u32,
+        stage: u32,
+        granularity: u32,
+    }
+
+    /// `resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:` on the open command
+    /// buffer, with no encoder open: entries `first..first + count` of `heap`, as 8-byte
+    /// `MTL4TimestampHeapEntry`s, to GPU address `dst`. The fences (`0` for none) are the only
+    /// ordering a resolve has: no barrier reaches it, so it waits on a fence the encoders that
+    /// wrote the entries update, and updates one for whatever reads `dst` next.
+    struct ResolveCounterHeap = RESOLVE_COUNTER_HEAP(0x0208) {
+        heap: u32,
+        first: u32,
+        count: u32,
+        wait_fence: u32,
+        update_fence: u32,
+        _pad: u32,
+        dst: u64,
     }
 
     /// `setComputePipelineState:`.

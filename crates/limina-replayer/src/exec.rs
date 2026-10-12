@@ -20,11 +20,12 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSProcessInfo, NSRange, NSString};
 use objc2_metal::{
-    MTL4ArgumentTable, MTL4ArgumentTableDescriptor, MTL4CommandAllocator, MTL4CommandBuffer,
-    MTL4CommandEncoder, MTL4CommandQueue, MTL4CommitFeedback, MTL4CommitOptions, MTL4Compiler,
-    MTL4CompilerDescriptor, MTL4ComputeCommandEncoder, MTL4ComputePipelineDescriptor,
-    MTL4FunctionDescriptor, MTL4LibraryDescriptor, MTL4LibraryFunctionDescriptor,
-    MTL4RenderCommandEncoder, MTL4RenderPassDescriptor, MTL4RenderPipelineDescriptor,
+    MTL4ArgumentTable, MTL4ArgumentTableDescriptor, MTL4BufferRange, MTL4CommandAllocator,
+    MTL4CommandBuffer, MTL4CommandEncoder, MTL4CommandQueue, MTL4CommitFeedback, MTL4CommitOptions,
+    MTL4Compiler, MTL4CompilerDescriptor, MTL4ComputeCommandEncoder, MTL4ComputePipelineDescriptor,
+    MTL4CounterHeap, MTL4CounterHeapDescriptor, MTL4CounterHeapType, MTL4FunctionDescriptor,
+    MTL4LibraryDescriptor, MTL4LibraryFunctionDescriptor, MTL4RenderCommandEncoder,
+    MTL4RenderPassDescriptor, MTL4RenderPipelineDescriptor, MTL4TimestampGranularity,
     MTL4VisibilityOptions, MTLAllocation, MTLBlitOption, MTLBuffer, MTLClearColor,
     MTLCompareFunction, MTLCompileOptions, MTLComputePipelineState, MTLCullMode, MTLDepthClipMode,
     MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice, MTLEvent, MTLFence, MTLGPUFamily,
@@ -108,6 +109,8 @@ enum Object {
     Fence(Po<dyn MTLFence>),
     Event(Po<dyn MTLEvent>),
     SharedEvent(Po<dyn MTLSharedEvent>, Option<Mirror>),
+    /// A timestamp counter heap and its entry count.
+    CounterHeap(Po<dyn MTL4CounterHeap>, u32),
 }
 
 /// Destroyed objects, held until the GPU can no longer be using them.
@@ -677,6 +680,11 @@ impl Executor {
                 Ok(())
             }
             op::CREATE_SYNC => self.create_sync(&arg(p)?.0),
+            op::CREATE_COUNTER_HEAP => {
+                let c = arg::<cmd::CreateCounterHeap>(p)?.0;
+                let r = self.create_counter_heap(c.handle, c.count).map(|()| [0; 6]);
+                self.answer(c.reply, r)
+            }
             op::DESTROY => {
                 let h = arg::<cmd::Destroy>(p)?.0.handle;
                 let o = self.objects.remove(&h).ok_or(Error::BadHandle)?;
@@ -816,6 +824,62 @@ impl Executor {
                 } else {
                     enc.waitForFence_beforeEncoderStages(fence, st);
                 }
+                Ok(())
+            }
+            op::WRITE_TIMESTAMP => {
+                let t = arg::<cmd::WriteTimestamp>(p)?.0;
+                let heap = self.counter_heap(t.heap, t.index, 1)?;
+                check(t.granularity <= 1)?;
+                let granularity = MTL4TimestampGranularity(t.granularity as isize);
+                match &self.enc {
+                    Encoder::Compute { enc, .. } if t.stage == 0 => {
+                        // SAFETY: the index is inside the heap, checked above.
+                        unsafe {
+                            enc.writeTimestampWithGranularity_intoHeap_atIndex(
+                                granularity,
+                                heap,
+                                t.index as usize,
+                            )
+                        }
+                    }
+                    Encoder::Render { enc, .. } => {
+                        check(t.stage.is_power_of_two() && t.stage & ALL_RENDER_STAGES != 0)?;
+                        // SAFETY: as above; the stage is one render stage.
+                        unsafe {
+                            enc.writeTimestampWithGranularity_afterStage_intoHeap_atIndex(
+                                granularity,
+                                MTLRenderStages(t.stage as usize),
+                                heap,
+                                t.index as usize,
+                            )
+                        }
+                    }
+                    Encoder::Compute { .. } => return Err(Error::BadValue),
+                    Encoder::None => return Err(Error::BadState),
+                }
+                Ok(())
+            }
+            op::RESOLVE_COUNTER_HEAP => {
+                let r = arg::<cmd::ResolveCounterHeap>(p)?.0;
+                let heap = self.counter_heap(r.heap, r.first, r.count)?;
+                let wait = self.fence(r.wait_fence)?;
+                let update = self.fence(r.update_fence)?;
+                let cb = self.open_cb()?;
+                let range = MTL4BufferRange {
+                    bufferAddress: r.dst,
+                    length: r.count as u64 * 8,
+                };
+                // SAFETY: the entries are inside the heap, checked above; the address is the
+                // guest's own, as every GPU address is.
+                unsafe {
+                    cb.resolveCounterHeap_withRange_intoBuffer_waitFence_updateFence(
+                        heap,
+                        NSRange::new(r.first as usize, r.count as usize),
+                        range,
+                        wait,
+                        update,
+                    )
+                };
                 Ok(())
             }
             op::SET_COMPUTE_PIPELINE => {
@@ -1466,6 +1530,45 @@ impl Executor {
             .ok_or(Error::BadValue)?;
         self.objects.insert(c.handle, Object::DepthStencil(s));
         Ok(())
+    }
+
+    fn create_counter_heap(&mut self, handle: u32, count: u32) -> R {
+        self.new_handle(handle)?;
+        check(count != 0)?;
+        let desc = MTL4CounterHeapDescriptor::new();
+        desc.setType(MTL4CounterHeapType::Timestamp);
+        // SAFETY: a positive count; Metal refuses one it cannot make with an error.
+        unsafe { desc.setCount(count as usize) };
+        let heap = self
+            .device
+            .newCounterHeapWithDescriptor_error(&desc)
+            .map_err(|_| Error::OutOfMemory)?;
+        self.objects
+            .insert(handle, Object::CounterHeap(heap, count));
+        Ok(())
+    }
+
+    /// Fence `h`, or none for `0`.
+    fn fence(&self, h: u32) -> Result<Option<&ProtocolObject<dyn MTLFence>>, Error> {
+        match (h, self.objects.get(&h)) {
+            (0, _) => Ok(None),
+            (_, Some(Object::Fence(f))) => Ok(Some(f)),
+            _ => Err(Error::BadHandle),
+        }
+    }
+
+    /// Counter heap `h`, checked to hold entries `first..first + count`.
+    fn counter_heap(
+        &self,
+        h: u32,
+        first: u32,
+        count: u32,
+    ) -> Result<&Po<dyn MTL4CounterHeap>, Error> {
+        let Some(Object::CounterHeap(heap, len)) = self.objects.get(&h) else {
+            return Err(Error::BadHandle);
+        };
+        check(count != 0 && first.checked_add(count).is_some_and(|end| end <= *len))?;
+        Ok(heap)
     }
 
     fn create_sync(&mut self, c: &cmd::SyncObject) -> R {

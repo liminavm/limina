@@ -888,3 +888,114 @@ fn a_texture_over_a_bound_surface_renders_into_the_surface() {
     g.replayer.release_surface(1, 7).expect("released");
     assert!(g.replayer.release_surface(1, 7).is_err(), "only once");
 }
+
+/// Timestamps written around a compute fill and resolved into arena memory read back as two GPU
+/// times in order, as KosmicKrisp's timestamp queries read them.
+#[test]
+fn timestamps_resolve_into_arena_memory_in_order() {
+    let mut g = start();
+    const OUT: u64 = RECORDS + 1024;
+    g.write(OUT, &[0; 16]);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateCounterHeap {
+            handle: 60,
+            count: 4,
+            reply,
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0, "a counter heap of 4 entries");
+    g.push(
+        cmd::SyncObject {
+            handle: 61,
+            kind: cmd::sync_kind::FENCE,
+            ..Default::default()
+        },
+        &[],
+    );
+    let stamp = |g: &mut Guest, index| {
+        g.push(
+            cmd::WriteTimestamp {
+                heap: 60,
+                index,
+                stage: 0,
+                granularity: 0,
+            },
+            &[],
+        )
+    };
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    stamp(&mut g, 0);
+    g.push(
+        cmd::FillBuffer {
+            buffer: BufRef::new(1, MIB),
+            length: 16 * MIB,
+            value: 7,
+            _pad: 0,
+        },
+        &[],
+    );
+    stamp(&mut g, 1);
+    // A fence is the only thing that orders a resolve after the stamps: no barrier reaches it.
+    g.push(
+        cmd::FenceOp {
+            fence: 61,
+            stages: STAGE_DISPATCH | STAGE_BLIT,
+            wait: 0,
+            _pad: 0,
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(
+        cmd::ResolveCounterHeap {
+            heap: 60,
+            first: 0,
+            count: 2,
+            wait_fence: 61,
+            update_fence: 0,
+            _pad: 0,
+            dst: g.arena.gpu_base + OUT,
+        },
+        &[],
+    );
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("commit");
+    let t: Vec<u64> = g
+        .bytes(OUT, 16)
+        .chunks(8)
+        .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+        .collect();
+    eprintln!("timestamps {t:?}");
+    assert!(t[0] != 0 && t[1] >= t[0], "two GPU times in order: {t:?}");
+}
+
+/// A timestamp written past the end of its heap loses the context instead of reaching Metal.
+#[test]
+fn a_timestamp_past_its_heap_loses_the_context() {
+    let mut g = start();
+    g.push(
+        cmd::CreateCounterHeap {
+            handle: 60,
+            count: 2,
+            reply: BufRef::NONE,
+        },
+        &[],
+    );
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(
+        cmd::WriteTimestamp {
+            heap: 60,
+            index: 2,
+            stage: 0,
+            granularity: 0,
+        },
+        &[],
+    );
+    let at = g.ring.position() - ring::encoded_len::<cmd::WriteTimestamp>(0) as u64;
+    let err = g.commit_and_wait().expect_err("must fail");
+    assert_eq!(err, (ring::Error::BadValue as u32, at));
+}
