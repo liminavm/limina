@@ -999,3 +999,149 @@ fn a_timestamp_past_its_heap_loses_the_context() {
     let err = g.commit_and_wait().expect_err("must fail");
     assert_eq!(err, (ring::Error::BadValue as u32, at));
 }
+
+/// What a guest is told by one fresh replayer running a fixed sequence of arena and texture
+/// creates: each arena's GPU base and each texture's resource ID, in order. With `destroy_mid`,
+/// one arena and one texture are destroyed partway through, as they are in a live guest.
+fn host_values(destroy_mid: bool) -> Vec<u64> {
+    let mut g = start();
+    let mut seen = vec![g.arena.gpu_base];
+    for (id, mib) in [(2, 8), (3, 1), (4, 32)] {
+        seen.push(
+            g.replayer
+                .create_arena(1, id, mib * MIB)
+                .expect("arena")
+                .gpu_base,
+        );
+    }
+    if destroy_mid {
+        g.replayer.destroy_arena(1, 3).expect("destroy");
+    }
+    seen.push(
+        g.replayer
+            .create_arena(1, 5, 2 * MIB)
+            .expect("arena")
+            .gpu_base,
+    );
+    let texture = |g: &mut Guest, handle: u32| {
+        let reply = g.reply_slot(RECORDS);
+        g.push(
+            cmd::CreateTexture {
+                handle,
+                arena: 1,
+                offset: 16 * MIB + u64::from(handle) * MIB,
+                desc: cmd::TextureDesc {
+                    texture_type: TEX_2D,
+                    pixel_format: RGBA8_UNORM,
+                    width: 64,
+                    height: 64,
+                    depth: 1,
+                    mip_levels: 1,
+                    array_length: 1,
+                    sample_count: 1,
+                    usage: USAGE_SHADER_READ,
+                    ..Default::default()
+                },
+                reply,
+                ..Default::default()
+            },
+            &[],
+        );
+        g.reply(RECORDS).values[0]
+    };
+    for h in 10..15 {
+        seen.push(texture(&mut g, h));
+    }
+    if destroy_mid {
+        g.push(
+            cmd::Destroy {
+                handle: 12,
+                _pad: 0,
+            },
+            &[],
+        );
+    }
+    seen.push(texture(&mut g, 15));
+    seen
+}
+
+/// Measurement, not a check: whether two fresh replayers tell the guest the same arena bases and
+/// texture IDs for the same sequence, with and without destroys in the middle, and what a replay
+/// of only the survivors would be told. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn are_host_values_reproducible_across_replayers() {
+    for destroy_mid in [false, true] {
+        let a = host_values(destroy_mid);
+        let b = host_values(destroy_mid);
+        eprintln!("destroy_mid={destroy_mid}");
+        eprintln!("  run 1: {:x?}", a);
+        eprintln!("  run 2: {:x?}", b);
+        eprintln!("  equal: {}", a == b);
+    }
+}
+
+/// Measurement: how texture IDs and arena bases are reused under churn, in one replayer. Run with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn how_host_values_are_reused_under_churn() {
+    let run = || {
+        let mut g = start();
+        let mut ids = Vec::new();
+        for round in 0..400u32 {
+            let reply = g.reply_slot(RECORDS);
+            g.push(
+                cmd::CreateTexture {
+                    handle: 100,
+                    arena: 1,
+                    offset: 16 * MIB,
+                    desc: cmd::TextureDesc {
+                        texture_type: TEX_2D,
+                        pixel_format: RGBA8_UNORM,
+                        width: 64,
+                        height: 64,
+                        depth: 1,
+                        mip_levels: 1,
+                        array_length: 1,
+                        sample_count: 1,
+                        usage: USAGE_SHADER_READ,
+                        ..Default::default()
+                    },
+                    reply,
+                    ..Default::default()
+                },
+                &[],
+            );
+            let id = g.reply(RECORDS).values[0];
+            if round < 6 || round % 50 == 0 || round == 399 {
+                ids.push((round, id));
+            }
+            g.push(
+                cmd::Destroy {
+                    handle: 100,
+                    _pad: 0,
+                },
+                &[],
+            );
+            g.commit_and_wait().expect("destroy");
+        }
+        let mut bases = Vec::new();
+        for round in 0..6u32 {
+            let a = g.replayer.create_arena(1, 50, 4 * MIB).expect("arena");
+            bases.push((round, a.gpu_base));
+            drop(a);
+            g.replayer.destroy_arena(1, 50).expect("destroy");
+        }
+        (ids, bases)
+    };
+    let (ids1, bases1) = run();
+    let (ids2, bases2) = run();
+    eprintln!("texture ids (round, id): {ids1:x?}");
+    eprintln!("arena bases (round, base): {bases1:x?}");
+    eprintln!(
+        "second replayer equal: ids {} bases {}",
+        ids1 == ids2,
+        bases1 == bases2
+    );
+}
