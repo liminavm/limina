@@ -1205,45 +1205,45 @@ impl CenterController {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 362.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 392.0));
         let name_field = labeled_field(
             mtm,
             &accessory,
-            332.0,
+            362.0,
             "Name:",
             cfg.identity.name.as_deref().unwrap_or_default(),
         );
         name_field.setPlaceholderString(Some(&NSString::from_str(&row.bundle.dir_name())));
         self.row_help(
             &accessory,
-            332.0,
+            362.0,
             &name_field,
             "Shown in the control center and the VM window. Leave empty to use the VM's name.",
         );
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            302.0,
+            332.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
         self.row_help(
             &accessory,
-            302.0,
+            332.0,
             &cpus_field,
             "How many virtual CPUs the guest sees.",
         );
         let cpu_reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            272.0,
+            302.0,
             "CPU reclaim:",
             &CPU_RECLAIM_CHOICES,
             cpu_reclaim_index(cfg.hardware.cpu_reclaim),
         );
         self.row_help(
             &accessory,
-            272.0,
+            302.0,
             &cpu_reclaim_popup,
             "Whether idle virtual CPUs are handed back to the Mac while the guest has \
              nothing to run, and taken up again as soon as it has work. Off keeps every \
@@ -1252,10 +1252,10 @@ impl CenterController {
              the smaller number and stay there for its whole run. Light gives back at most \
              half of them; Moderate goes down to two; Aggressive to one.",
         );
-        let mem_field = labeled_field(mtm, &accessory, 242.0, "Memory:", &mem_now);
+        let mem_field = labeled_field(mtm, &accessory, 272.0, "Memory:", &mem_now);
         self.row_help(
             &accessory,
-            242.0,
+            272.0,
             &mem_field,
             "The maximum guest RAM — \"4G\", \"8GiB\", or a bare MiB count. Idle guest \
              memory is returned to the Mac according to Reclaim.",
@@ -1263,14 +1263,14 @@ impl CenterController {
         let reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            212.0,
+            242.0,
             "Reclaim:",
             &RECLAIM_CHOICES,
             reclaim_index(cfg.hardware.reclaim),
         );
         self.row_help(
             &accessory,
-            212.0,
+            242.0,
             &reclaim_popup,
             "How hard idle guest memory is returned to the Mac. Moderate keeps some \
              guest disk cache unless the Mac is under memory pressure; Light engages \
@@ -1279,14 +1279,14 @@ impl CenterController {
         let granule_popup = labeled_popup(
             mtm,
             &accessory,
-            182.0,
+            212.0,
             "Memory pages:",
             &GRANULE_CHOICES,
             granule_index(cfg.hardware.ipa_granule),
         );
         self.row_help(
             &accessory,
-            182.0,
+            212.0,
             &granule_popup,
             "How finely the Mac maps this VM's memory. 4 KB suits any guest, including a \
              stock Linux distro whose own pages are 4 KB — such a guest gets no hardware \
@@ -1306,6 +1306,45 @@ impl CenterController {
                  the suspended session, to change the memory page size.",
             )));
         }
+
+        // Nested virtualization: a checkbox, greyed out (and left alone on Save) on a Mac whose
+        // Hypervisor.framework cannot give a guest EL2, where the setting does nothing.
+        let nested_supported = crate::nested_virt::host_supports();
+        let nested_label = NSTextField::labelWithString(&NSString::from_str("Nested VMs:"), mtm);
+        nested_label.setFrame(rect(0.0, 182.0 + 3.0, 84.0, 18.0));
+        accessory.addSubview(&nested_label);
+        // SAFETY: standard checkbox constructor; no target/action (its state is read on Save).
+        let nested_checkbox = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Enabled"),
+                None,
+                None,
+                mtm,
+            )
+        };
+        nested_checkbox.setFrame(rect(88.0, 182.0, 200.0, 24.0));
+        nested_checkbox.setState(if cfg.hardware.nested_virt && nested_supported {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        if !nested_supported {
+            nested_checkbox.setEnabled(false);
+            nested_checkbox.setToolTip(Some(&NSString::from_str(
+                "This Mac cannot run VMs inside a VM: it needs an M3 or later.",
+            )));
+        }
+        accessory.addSubview(&nested_checkbox);
+        self.row_help(
+            &accessory,
+            182.0,
+            &nested_checkbox,
+            "Lets the guest run virtual machines of its own: KVM, and everything built on it — \
+             QEMU, libvirt, Kata containers, Android emulators, Firecracker. Needs a Mac with an \
+             M3 or later. The guest's own VMs get at most 64 GB of address space, so a tool \
+             that asks for more by default has to be told to ask for less. A suspended VM \
+             resumes the way it was saved; a change applies from the next full start.",
+        );
 
         // Security: the vTPM toggle plus a reset. Built inline rather than with labeled_popup so
         // the one row can carry both the Enabled checkbox and the Reset button.
@@ -1523,6 +1562,9 @@ impl CenterController {
                 cpu_reclaim_from_index(cpu_reclaim_popup.indexOfSelectedItem());
             cfg.hardware.ipa_granule = granule_from_index(granule_popup.indexOfSelectedItem());
             cfg.hardware.tpm = tpm_checkbox.state() == NSControlStateValueOn;
+            if nested_supported {
+                cfg.hardware.nested_virt = nested_checkbox.state() == NSControlStateValueOn;
+            }
             cfg.display.resolution = resolution;
             cfg.display.notch = notch_from_index(notch_popup.indexOfSelectedItem());
             cfg.display.edge_resistance = hold_from_index(

@@ -577,6 +577,7 @@ pub(crate) mod tests {
             Some(state::Suspended {
                 snapshot: b.snapshot_bin(),
                 ipa_granule: None,
+                nested_virt: None,
             }),
         )
         .unwrap();

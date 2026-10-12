@@ -134,6 +134,12 @@ pub struct Suspended {
     /// record written before the granule was recorded: nothing is known, so nothing is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ipa_granule: Option<super::schema::IpaGranule>,
+    /// Whether the guest was saved with EL2 (nested virtualization). A guest's own hypervisor
+    /// lives in EL2 registers, so the resume must give it EL2 again, and one saved without it
+    /// cannot be handed EL2 mid-run: the resume follows this, whatever `hardware.nested_virt`
+    /// says now. `None` in a record written before it was kept, when no managed VM ran nested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nested_virt: Option<bool>,
 }
 
 /// Load the state file. Missing, unreadable, or corrupt → `None` (state is
@@ -402,6 +408,7 @@ mod tests {
             Some(Suspended {
                 snapshot: snap.clone(),
                 ipa_granule: None,
+                nested_virt: None,
             }),
         )
         .unwrap();
@@ -411,7 +418,8 @@ mod tests {
             loaded.suspended,
             Some(Suspended {
                 snapshot: snap,
-                ipa_granule: None
+                ipa_granule: None,
+                nested_virt: None,
             })
         );
         // Clear it — window still preserved.
@@ -581,6 +589,7 @@ mod tests {
             Some(Suspended {
                 snapshot: snap.clone(),
                 ipa_granule: None,
+                nested_virt: None,
             }),
         )
         .unwrap();
@@ -596,7 +605,8 @@ mod tests {
             loaded.suspended,
             Some(Suspended {
                 snapshot: snap,
-                ipa_granule: None
+                ipa_granule: None,
+                nested_virt: None,
             }),
             "suspend record survives a window save"
         );
@@ -616,6 +626,7 @@ mod tests {
         let rec = Suspended {
             snapshot: PathBuf::from("/b/run/snapshot.bin"),
             ipa_granule: Some(IpaGranule::FourK),
+            nested_virt: None,
         };
         set_suspended(&path, Some(rec.clone())).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();

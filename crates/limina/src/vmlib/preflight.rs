@@ -580,6 +580,7 @@ mod tests {
                 Some(Suspended {
                     snapshot: bundle.snapshot_bin(),
                     ipa_granule: g,
+                    nested_virt: None,
                 }),
             )
             .unwrap()

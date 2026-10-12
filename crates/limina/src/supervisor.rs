@@ -87,6 +87,7 @@ pub fn keep_refused_snapshot(snapshot: &std::path::Path, state_file: Option<&std
             .unwrap_or(crate::vmlib::state::Suspended {
                 snapshot: snapshot.to_path_buf(),
                 ipa_granule: None,
+                nested_virt: None,
             });
         if let Err(e) = crate::vmlib::state::set_suspended(state, Some(sus)) {
             log::error!("re-recording the suspended state failed: {e}");
@@ -317,6 +318,10 @@ pub struct WorkerSpec {
     /// Managed-VM `state.toml` whose `[suspended]` record is cleared when a pending resume
     /// is consumed (the record is UI status; the snapshot file is the source of truth).
     pub suspend_state_file: Option<PathBuf>,
+    /// Give a cold-booted guest EL2 (`--nested-virt`). Like `--restore`, decided per spawn and
+    /// never carried in [`Self::args`]: a resume follows what the snapshot was saved with
+    /// ([`nested_virt_for_spawn`]).
+    pub nested_virt: bool,
     /// Worker listeners reached over a link instead of a path (`limina_launch::connect`), as
     /// `(worker flag, connector)`. Every spawn arms a fresh link for each and passes its end as
     /// `<flag> <fd>`, so a relaunched worker is reachable through the same connector.
@@ -341,6 +346,33 @@ static CONSUMED_RECORD: std::sync::Mutex<Option<crate::vmlib::state::Suspended>>
 
 fn lock_consumed() -> std::sync::MutexGuard<'static, Option<crate::vmlib::state::Suspended>> {
     CONSUMED_RECORD.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Whether the worker last spawned runs with EL2, which is what a suspend of it must record.
+static SPAWNED_NESTED_VIRT: AtomicBool = AtomicBool::new(false);
+
+/// Whether the running worker's guest has EL2 (nested virtualization), for the `[suspended]`
+/// record a suspend writes.
+pub fn spawned_nested_virt() -> bool {
+    SPAWNED_NESTED_VIRT.load(Ordering::SeqCst)
+}
+
+/// Whether this spawn gives the guest EL2. A cold boot takes what the VM is configured with. A
+/// resume takes what the snapshot was saved with, because the guest's hypervisor state lives in
+/// EL2 registers a VM without EL2 does not have, and a guest that booted without EL2 cannot be
+/// handed it mid-run (the worker refuses either mismatch and keeps the snapshot). A managed
+/// record that does not say predates the setting, when no managed VM ran nested; a flat run has
+/// no record and resumes with what it was started with.
+fn nested_virt_for_spawn(
+    configured: bool,
+    resumed: bool,
+    record: Option<&crate::vmlib::state::Suspended>,
+) -> bool {
+    match (resumed, record) {
+        (false, _) => configured,
+        (true, Some(rec)) => rec.nested_virt.unwrap_or(false),
+        (true, None) => configured,
+    }
 }
 
 /// M9.4 auto-resume: the armed snapshot path IS the resume-pending record. If `snapshot`
@@ -609,6 +641,22 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         args.push(pending.into_os_string());
         resumed = true;
     }
+    let record = if spec.suspend_state_file.is_some() {
+        lock_consumed().clone()
+    } else {
+        None
+    };
+    let nested_virt = nested_virt_for_spawn(spec.nested_virt, resumed, record.as_ref());
+    if nested_virt != spec.nested_virt {
+        log::info!(
+            "resuming with nested virtualization {}, as the guest was suspended",
+            if nested_virt { "on" } else { "off" }
+        );
+    }
+    if nested_virt {
+        args.push("--nested-virt".into());
+    }
+    SPAWNED_NESTED_VIRT.store(nested_virt, Ordering::SeqCst);
 
     // When running from an assembled limina.app, hand the worker the bundle-relative venus
     // env (KK ICD + zink-on-KK Mesa selectors). In a dev/cargo run no bundle is present, so
@@ -1044,6 +1092,7 @@ pub fn run(
             snapshot_file: spec.snapshot_file.clone(),
             suspend_state_file: spec.suspend_state_file.clone(),
             links: spec.links.clone(),
+            nested_virt: spec.nested_virt,
         };
         let spawned = spawn_worker(&this_spawn, &inherit)?;
         if let Some(pipes) = pipes {
@@ -1120,6 +1169,26 @@ mod tests {
 
     use super::*;
 
+    /// A resume must give the guest the EL2 it was saved with, or the worker refuses it: a
+    /// VM that was suspended before the setting existed resumes without, one saved nested
+    /// resumes nested even after the setting is turned off, and only a cold boot takes the
+    /// configured value. A flat run keeps no record and resumes as it was started.
+    #[test]
+    fn a_resume_follows_the_snapshot_and_a_cold_boot_the_setting() {
+        let rec = |nested_virt| crate::vmlib::state::Suspended {
+            snapshot: PathBuf::from("/b/run/snapshot.bin"),
+            ipa_granule: None,
+            nested_virt,
+        };
+        assert!(nested_virt_for_spawn(true, false, None));
+        assert!(!nested_virt_for_spawn(false, false, Some(&rec(Some(true)))));
+        assert!(!nested_virt_for_spawn(true, true, Some(&rec(None))));
+        assert!(!nested_virt_for_spawn(true, true, Some(&rec(Some(false)))));
+        assert!(nested_virt_for_spawn(false, true, Some(&rec(Some(true)))));
+        assert!(nested_virt_for_spawn(true, true, None));
+        assert!(!nested_virt_for_spawn(false, true, None));
+    }
+
     /// The stop ladder's rungs must stay in order: agent, then power button, then the stock
     /// guest agent. Each of the first two needs room to work, so the guest-agent rung only
     /// comes up when the grace can still hold it *and* leave the button its own chance.
@@ -1183,6 +1252,7 @@ mod tests {
             Some(crate::vmlib::state::Suspended {
                 snapshot: snap.clone(),
                 ipa_granule: None,
+                nested_virt: None,
             }),
         )
         .unwrap();
@@ -1247,6 +1317,7 @@ mod tests {
         let rec = crate::vmlib::state::Suspended {
             snapshot: snap.clone(),
             ipa_granule: Some(crate::vmlib::schema::IpaGranule::FourK),
+            nested_virt: None,
         };
         crate::vmlib::state::set_suspended(&state, Some(rec.clone())).unwrap();
         take_pending_resume(&snap, Some(&state)).expect("a pending resume");
@@ -1269,6 +1340,7 @@ mod tests {
             Some(crate::vmlib::state::Suspended {
                 snapshot: snap.clone(),
                 ipa_granule: None,
+                nested_virt: None,
             }),
         )
         .unwrap();

@@ -152,6 +152,12 @@ pub struct Hardware {
     /// host-visible memory entirely.
     #[serde(default)]
     pub ipa_granule: IpaGranule,
+    /// Give the guest EL2, so it can run KVM and VMs of its own (default true). Only a Mac whose
+    /// Hypervisor.framework offers EL2 (M3 or later) can; elsewhere this is ignored and the guest
+    /// boots without it. A suspended session resumes with the setting it was saved with, so a
+    /// change applies from the next full boot. See `--nested-virt`.
+    #[serde(default = "default_true")]
+    pub nested_virt: bool,
 }
 
 fn default_true() -> bool {
@@ -204,6 +210,7 @@ impl Default for Hardware {
             input: false,
             balloon_deflate_on_oom: false,
             ipa_granule: IpaGranule::default(),
+            nested_virt: true,
         }
     }
 }
@@ -906,6 +913,18 @@ mod tests {
                 "{back}"
             );
         }
+    }
+
+    /// Nested virtualization is on unless a definition turns it off, including every vm.toml
+    /// written before the key existed; where the Mac cannot offer it, `nested_virt` decides.
+    #[test]
+    fn nested_virt_defaults_on_and_round_trips() {
+        let h: Hardware = toml::from_str("").unwrap();
+        assert!(h.nested_virt);
+        let h: Hardware = toml::from_str("nested_virt = false").unwrap();
+        assert!(!h.nested_virt);
+        let back = toml::to_string(&h).unwrap();
+        assert!(back.contains("nested_virt = false"), "{back}");
     }
 
     /// Input devices on a headless VM change its device set, so a definition that says nothing

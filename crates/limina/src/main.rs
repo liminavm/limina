@@ -28,6 +28,7 @@ mod hosttrackpad;
 mod inject;
 mod lifecycle;
 mod moc;
+mod nested_virt;
 mod no_throttle;
 mod power_profile;
 mod qga;
@@ -357,6 +358,13 @@ struct Cli {
     /// and cannot change while a VM runs.
     #[arg(long, value_enum, default_value_t = vmlib::schema::IpaGranule::FourK)]
     ipa_granule: vmlib::schema::IpaGranule,
+
+    /// Give the guest EL2, so it can run KVM and VMs of its own (nested virtualization). Needs
+    /// an M3 or later Mac; the worker refuses it elsewhere. A resumed guest gets what it was
+    /// suspended with instead, whatever this says. A managed VM takes it from
+    /// `hardware.nested_virt`, on by default wherever the Mac supports it.
+    #[arg(long)]
+    nested_virt: bool,
 
     /// Do NOT mirror the host battery into the guest. By default the worker attaches a
     /// virtio-i2c SBS battery mirroring the host's whenever the host has one (stock guests
@@ -1583,6 +1591,9 @@ fn cli_from_definition(
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         gpu_cache_key: Some(bundle.pipeline_cache_key()),
         ipa_granule: cfg.hardware.ipa_granule,
+        // A definition that asks for it on a Mac that cannot do it boots without it, like any
+        // other host capability the guest is offered only where it exists.
+        nested_virt: cfg.hardware.nested_virt && nested_virt::host_supports(),
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
         mic: cfg.hardware.mic,
@@ -2305,6 +2316,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             suspend_state_file: cli.suspend_state_file.clone(),
             snapshot_file: cli.snapshot_file.clone(),
             ipa_granule: cli.ipa_granule,
+            nested_virt: cli.nested_virt,
             on_window_close: cli.on_window_close,
             // The restore splash lives beside the snapshot (`splash_beside`).
             splash_save_path: cli
@@ -2356,6 +2368,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         shutdown_grace: grace,
         snapshot_file: cli.snapshot_file.clone(),
         suspend_state_file: cli.suspend_state_file.clone(),
+        nested_virt: cli.nested_virt,
         links,
     };
 
@@ -2375,6 +2388,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             let sus = vmlib::state::Suspended {
                 snapshot: snapshot.clone(),
                 ipa_granule: Some(cli.ipa_granule),
+                nested_virt: Some(supervisor::spawned_nested_virt()),
             };
             match vmlib::state::set_suspended(state_file, Some(sus)) {
                 Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
@@ -3089,6 +3103,7 @@ mod tests {
             Some(vmlib::state::Suspended {
                 snapshot: snap.clone(),
                 ipa_granule: None,
+                nested_virt: None,
             }),
         )
         .unwrap();
