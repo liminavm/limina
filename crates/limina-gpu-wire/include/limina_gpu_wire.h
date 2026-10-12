@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define LMN_WIRE_VERSION 2u
+#define LMN_WIRE_VERSION 3u
 
 /* Ring (crates/limina-gpu-wire/src/ring.rs). */
 #define LMN_RING_MAGIC 0x52474d4cu
@@ -65,6 +65,7 @@
 /* Opcodes. */
 #define LMN_OP_PAD 0x0000u
 #define LMN_OP_CREATE_TEXTURE 0x0100u
+#define LMN_OP_CREATE_TEXTURE_FROM_SURFACE 0x0109u
 #define LMN_OP_CREATE_TEXTURE_VIEW 0x0101u
 #define LMN_OP_CREATE_SAMPLER 0x0102u
 #define LMN_OP_CREATE_LIBRARY 0x0103u
@@ -236,6 +237,22 @@ _Static_assert(offsetof(struct lmn_create_texture, offset) == 8, "lmn_create_tex
 _Static_assert(offsetof(struct lmn_create_texture, bytes_per_row) == 16, "lmn_create_texture.bytes_per_row");
 _Static_assert(offsetof(struct lmn_create_texture, desc) == 24, "lmn_create_texture.desc");
 _Static_assert(offsetof(struct lmn_create_texture, reply) == 72, "lmn_create_texture.reply");
+
+/* A texture whose storage is surface `surface` of the context (`newTextureWithDescriptor: */
+/* iosurface:plane:`), as the worker filed it for a buffer shared beyond this transport: a 2D */
+/* texture of one level and one sample, no larger than the surface, in the surface's own pixel */
+/* layout. The reply's `values[0]` is its `gpuResourceID`. */
+struct lmn_create_texture_from_surface {
+   uint32_t handle;
+   uint32_t surface;
+   struct lmn_texture_desc desc;
+   struct lmn_buf_ref reply;
+};
+_Static_assert(sizeof(struct lmn_create_texture_from_surface) == 72, "lmn_create_texture_from_surface size");
+_Static_assert(offsetof(struct lmn_create_texture_from_surface, handle) == 0, "lmn_create_texture_from_surface.handle");
+_Static_assert(offsetof(struct lmn_create_texture_from_surface, surface) == 4, "lmn_create_texture_from_surface.surface");
+_Static_assert(offsetof(struct lmn_create_texture_from_surface, desc) == 8, "lmn_create_texture_from_surface.desc");
+_Static_assert(offsetof(struct lmn_create_texture_from_surface, reply) == 56, "lmn_create_texture_from_surface.reply");
 
 /* `newTextureViewWithPixelFormat:textureType:levels:slices:[swizzle:]` of `parent`. The */
 /* reply's `values[0]` is its `gpuResourceID`. */

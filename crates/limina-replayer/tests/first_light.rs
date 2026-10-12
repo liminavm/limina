@@ -721,3 +721,170 @@ fn destroying_a_context_wedged_on_an_event_answers_at_once() {
     // The replayer still serves other contexts.
     g.replayer.create_context(2).expect("a new context");
 }
+
+/// A texture made over an IOSurface the worker filed for the context renders into the surface's
+/// own pages: what makes a buffer this transport draws reachable by vrend and venus, which adopt
+/// the same surface.
+#[test]
+#[allow(deprecated)]
+fn a_texture_over_a_bound_surface_renders_into_the_surface() {
+    use std::ffi::c_void;
+
+    use objc2_core_foundation::{
+        CFDictionary, CFNumber, CFNumberType, CFRetained, CFString, kCFTypeDictionaryKeyCallBacks,
+        kCFTypeDictionaryValueCallBacks,
+    };
+    use objc2_io_surface::{
+        IOSurfaceCreate, IOSurfaceCreateMachPort, IOSurfaceGetBaseAddress, IOSurfaceLock,
+        IOSurfaceLockOptions, IOSurfaceUnlock, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow,
+        kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
+    };
+
+    const BGRA8_UNORM: u32 = 80;
+    const W: u32 = 64;
+    const H: u32 = 8;
+    const PITCH: i32 = 256;
+
+    let num = |v: i32| -> CFRetained<CFNumber> {
+        // SAFETY: a pointer to an i32 for the SInt32 type.
+        unsafe { CFNumber::new(None, CFNumberType::SInt32Type, (&v as *const i32).cast()) }
+            .expect("a number")
+    };
+    let values = [
+        num(W as i32),
+        num(H as i32),
+        num(4),
+        num(PITCH),
+        num(i32::from_be_bytes(*b"BGRA")),
+    ];
+    // SAFETY: framework key constants and live CFNumbers; the dictionary retains both.
+    let surface = unsafe {
+        let mut keys: [*const c_void; 5] = [
+            (kIOSurfaceWidth as *const CFString).cast(),
+            (kIOSurfaceHeight as *const CFString).cast(),
+            (kIOSurfaceBytesPerElement as *const CFString).cast(),
+            (kIOSurfaceBytesPerRow as *const CFString).cast(),
+            (kIOSurfacePixelFormat as *const CFString).cast(),
+        ];
+        let mut vals: [*const c_void; 5] =
+            values.each_ref().map(|v| (&**v as *const CFNumber).cast());
+        let dict = CFDictionary::new(
+            None,
+            keys.as_mut_ptr(),
+            vals.as_mut_ptr(),
+            keys.len() as isize,
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks,
+        )
+        .expect("a dictionary");
+        IOSurfaceCreate(&dict).expect("a surface")
+    };
+
+    let mut g = start();
+    // The right is ours and moves to the replayer.
+    let port = IOSurfaceCreateMachPort(&surface);
+    g.replayer
+        .bind_surface(1, 7, port)
+        .expect("the surface is filed");
+
+    let desc = cmd::TextureDesc {
+        texture_type: TEX_2D,
+        pixel_format: BGRA8_UNORM,
+        width: W,
+        height: H,
+        depth: 1,
+        mip_levels: 1,
+        array_length: 1,
+        sample_count: 1,
+        usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+        ..Default::default()
+    };
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTextureFromSurface {
+            handle: 3,
+            surface: 7,
+            desc,
+            reply,
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0, "a texture over the surface");
+    assert_ne!(r.values[0], 0, "with a resource ID");
+
+    // Larger than the surface, and over a surface the context was never given: both refused.
+    let reply = g.reply_slot(RECORDS + 256);
+    g.push(
+        cmd::CreateTextureFromSurface {
+            handle: 4,
+            surface: 7,
+            desc: cmd::TextureDesc {
+                width: W + 1,
+                ..desc
+            },
+            reply,
+        },
+        &[],
+    );
+    assert_ne!(g.reply(RECORDS + 256).status, 0, "wider than the surface");
+    let reply = g.reply_slot(RECORDS + 512);
+    g.push(
+        cmd::CreateTextureFromSurface {
+            handle: 5,
+            surface: 8,
+            desc,
+            reply,
+        },
+        &[],
+    );
+    assert_ne!(g.reply(RECORDS + 512).status, 0, "no such surface");
+
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    let mut pass = cmd::BeginRenderPass::default();
+    pass.colors[0] = cmd::RenderAttachment {
+        texture: 3,
+        load_action: LOAD_CLEAR,
+        store_action: STORE_STORE,
+        clear: [0.0, 1.0, 0.0, 1.0],
+        ..Default::default()
+    };
+    g.push(pass, &[]);
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("the clear ran");
+
+    // SAFETY: a live surface, locked read-only for the read; rows are PITCH bytes apart.
+    let pixels = unsafe {
+        IOSurfaceLock(
+            &surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+        let base = IOSurfaceGetBaseAddress(&surface).as_ptr() as *const u8;
+        let rows: Vec<Vec<u8>> = (0..H as usize)
+            .map(|y| {
+                std::slice::from_raw_parts(base.add(y * PITCH as usize), W as usize * 4).to_vec()
+            })
+            .collect();
+        IOSurfaceUnlock(
+            &surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+        rows
+    };
+    let green = pixels
+        .iter()
+        .flat_map(|row| row.chunks(4))
+        .filter(|p| *p == [0, 255, 0, 255])
+        .count();
+    assert_eq!(
+        green,
+        (W * H) as usize,
+        "every pixel of the surface is the clear colour"
+    );
+
+    g.replayer.release_surface(1, 7).expect("released");
+    assert!(g.replayer.release_surface(1, 7).is_err(), "only once");
+}

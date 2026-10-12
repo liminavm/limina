@@ -28,7 +28,7 @@ use objc2_metal::{
     MTL4VisibilityOptions, MTLAllocation, MTLBlitOption, MTLBuffer, MTLClearColor,
     MTLCompareFunction, MTLCompileOptions, MTLComputePipelineState, MTLCullMode, MTLDepthClipMode,
     MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice, MTLEvent, MTLFence, MTLGPUFamily,
-    MTLHeap, MTLIndexType, MTLLanguageVersion, MTLLibrary, MTLLoadAction,
+    MTLHazardTrackingMode, MTLHeap, MTLIndexType, MTLLanguageVersion, MTLLibrary, MTLLoadAction,
     MTLMathFloatingPointFunctions, MTLMathMode, MTLMultisampleDepthResolveFilter,
     MTLMultisampleStencilResolveFilter, MTLOrigin, MTLPixelFormat, MTLPrimitiveTopologyClass,
     MTLPrimitiveType, MTLRegion, MTLRenderPassAttachmentDescriptor, MTLRenderPipelineState,
@@ -36,9 +36,9 @@ use objc2_metal::{
     MTLSamplerAddressMode, MTLSamplerBorderColor, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
     MTLSamplerMipFilter, MTLSamplerReductionMode, MTLSamplerState, MTLScissorRect, MTLSharedEvent,
     MTLSharedEventListener, MTLSize, MTLStages, MTLStencilDescriptor, MTLStencilOperation,
-    MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureSwizzle, MTLTextureSwizzleChannels,
-    MTLTextureType, MTLTextureUsage, MTLVertexAmplificationViewMapping, MTLViewport,
-    MTLVisibilityResultMode, MTLWinding,
+    MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureSwizzle,
+    MTLTextureSwizzleChannels, MTLTextureType, MTLTextureUsage, MTLVertexAmplificationViewMapping,
+    MTLViewport, MTLVisibilityResultMode, MTLWinding,
 };
 
 use crate::mach::Semaphore;
@@ -70,6 +70,8 @@ const ALL_RENDER_STAGES: u32 = (MTLRenderStages::Vertex.0
     | MTLRenderStages::Mesh.0) as u32;
 
 pub type Arenas = Arc<Mutex<HashMap<u32, Arc<Arena>>>>;
+/// The surfaces the worker filed for a context, by the guest resource that names each.
+pub type Surfaces = Arc<Mutex<HashMap<u32, metal::Surface>>>;
 
 type Po<T> = Retained<ProtocolObject<T>>;
 
@@ -157,6 +159,7 @@ pub struct Executor {
     /// The arena the ring lives in: its memory must outlive the consumer.
     ring_arena: Arc<Arena>,
     arenas: Arenas,
+    surfaces: Surfaces,
     objects: HashMap<u32, Object>,
     /// The command buffer being recorded.
     open: Option<(Po<dyn MTL4CommandBuffer>, Allocator)>,
@@ -303,6 +306,7 @@ impl Executor {
         consumer: Consumer,
         ring_arena: Arc<Arena>,
         arenas: Arenas,
+        surfaces: Surfaces,
     ) -> Option<Self> {
         let queue = device.newMTL4CommandQueue()?;
         let compiler = device
@@ -323,6 +327,7 @@ impl Executor {
             device,
             consumer,
             arenas,
+            surfaces,
             objects: HashMap::new(),
             open: None,
             ended: Vec::new(),
@@ -436,8 +441,26 @@ impl Executor {
         }
         let oldest = lock(&self.in_flight).first().copied().unwrap_or(u64::MAX);
         let commits = self.commits;
-        self.graveyard
-            .retain(|(tag, _)| !(commits >= *tag && oldest > *tag));
+        let (done, kept) = std::mem::take(&mut self.graveyard)
+            .into_iter()
+            .partition(|(tag, _)| commits >= *tag && oldest > *tag);
+        self.graveyard = kept;
+        // A surface's texture was made resident on its own; it leaves the set with it.
+        let mut changed = false;
+        for (_, grave) in &done {
+            for o in &grave.0 {
+                if let Object::Texture(t) = o
+                    && t.iosurface().is_some()
+                {
+                    self.residency
+                        .removeAllocation(ProtocolObject::<dyn MTLAllocation>::from_ref(&**t));
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.residency.commit();
+        }
     }
 
     fn arena(&self, id: u32) -> Result<Arc<Arena>, Error> {
@@ -602,6 +625,11 @@ impl Executor {
             op::CREATE_TEXTURE => {
                 let c = arg::<cmd::CreateTexture>(p)?.0;
                 let r = self.create_texture(&c);
+                self.answer(c.reply, r)
+            }
+            op::CREATE_TEXTURE_FROM_SURFACE => {
+                let c = arg::<cmd::CreateTextureFromSurface>(p)?.0;
+                let r = self.create_texture_from_surface(&c);
                 self.answer(c.reply, r)
             }
             op::CREATE_TEXTURE_VIEW => {
@@ -1154,6 +1182,44 @@ impl Executor {
             )
         }
         .ok_or(Error::BadValue)?;
+        let id = resource_id(t.gpuResourceID());
+        self.objects.insert(c.handle, Object::Texture(t));
+        Ok([id, 0, 0, 0, 0, 0])
+    }
+
+    fn create_texture_from_surface(
+        &mut self,
+        c: &cmd::CreateTextureFromSurface,
+    ) -> Result<[u64; 6], Error> {
+        self.new_handle(c.handle)?;
+        let surface = lock(&self.surfaces)
+            .get(&c.surface)
+            .cloned()
+            .ok_or(Error::BadHandle)?;
+        let d = c.desc;
+        let fmt = metal::format_info(d.pixel_format).ok_or(Error::BadValue)?;
+        check(
+            d.texture_type == MTLTextureType::Type2D.0 as u32
+                && d.mip_levels == 1
+                && d.sample_count == 1
+                && d.depth == 1
+                && d.array_length == 1
+                && d.width <= surface.width()
+                && d.height <= surface.height()
+                && fmt.block_w == 1
+                && fmt.bytes == surface.bytes_per_element(),
+        )?;
+        let desc = self.texture_descriptor(&d)?;
+        desc.setStorageMode(MTLStorageMode::Shared);
+        desc.setHazardTrackingMode(MTLHazardTrackingMode::Untracked);
+        let t = self
+            .device
+            .newTextureWithDescriptor_iosurface_plane(&desc, &surface.0, 0)
+            .ok_or(Error::BadValue)?;
+        self.residency
+            .addAllocation(ProtocolObject::<dyn MTLAllocation>::from_ref(&*t));
+        self.residency.commit();
+        self.residency.requestResidency();
         let id = resource_id(t.gpuResourceID());
         self.objects.insert(c.handle, Object::Texture(t));
         Ok([id, 0, 0, 0, 0, 0])

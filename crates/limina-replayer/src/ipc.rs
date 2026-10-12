@@ -22,6 +22,11 @@ pub const EXPORT_ARENA: i32 = 0x4c47_0006;
 pub const IMPORT_ARENA: i32 = 0x4c47_0007;
 /// `{export}` → `{status}`.
 pub const RELEASE_EXPORT: i32 = 0x4c47_0008;
+/// [`SurfaceRequest`] + a send right for an IOSurface → `{status}`: the context may make textures
+/// over the surface under that id (`CREATE_TEXTURE_FROM_SURFACE`).
+pub const BIND_SURFACE: i32 = 0x4c47_0009;
+/// [`SurfaceRequest`] → `{status}`. Textures already made over the surface keep it.
+pub const RELEASE_SURFACE: i32 = 0x4c47_000a;
 
 /// Request statuses.
 pub const OK: i32 = 0;
@@ -122,6 +127,13 @@ pub struct ExportRequest {
     pub export: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SurfaceRequest {
+    pub ctx: u32,
+    pub surface: u32,
+}
+
 // SAFETY: all of these are repr(C) integers with explicit padding.
 unsafe impl Pod for CtxRequest {}
 unsafe impl Pod for Status {}
@@ -132,3 +144,4 @@ unsafe impl Pod for AttachRing {}
 unsafe impl Pod for ExportArena {}
 unsafe impl Pod for ImportArena {}
 unsafe impl Pod for ExportRequest {}
+unsafe impl Pod for SurfaceRequest {}

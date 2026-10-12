@@ -11,7 +11,7 @@ use limina_gpu_wire::ring::{self, Consumer};
 use objc2::rc::Retained;
 use objc2_metal::MTLDevice;
 
-use crate::exec::{Arenas, Executor};
+use crate::exec::{Arenas, Executor, Surfaces};
 use crate::ipc::{self, Pod};
 use crate::mach::{self, Message, ReceivePort, Semaphore};
 use crate::metal::{self, Arena, Device};
@@ -24,6 +24,7 @@ struct RingThread {
 struct Context {
     doorbell: Arc<Semaphore>,
     arenas: Arenas,
+    surfaces: Surfaces,
     ring: Option<RingThread>,
 }
 
@@ -175,6 +176,14 @@ impl Server {
                     (status(s), vec![])
                 }
             },
+            ipc::BIND_SURFACE => match (ipc::SurfaceRequest::read(&msg.data), msg.ports.first()) {
+                (Some(r), Some(port)) => (status(self.bind_surface(r, port.name())), vec![]),
+                _ => (status(ipc::ERR_MALFORMED), vec![]),
+            },
+            ipc::RELEASE_SURFACE => match ipc::SurfaceRequest::read(&msg.data) {
+                None => (status(ipc::ERR_MALFORMED), vec![]),
+                Some(r) => (status(self.release_surface(r)), vec![]),
+            },
             other => {
                 log::warn!("unknown request {other:#x}");
                 (status(ipc::ERR_MALFORMED), vec![])
@@ -197,6 +206,7 @@ impl Server {
             Context {
                 doorbell,
                 arenas: Arc::new(Mutex::new(HashMap::new())),
+                surfaces: Arc::new(Mutex::new(HashMap::new())),
                 ring: None,
             },
         );
@@ -285,6 +295,37 @@ impl Server {
         Ok(reply)
     }
 
+    fn bind_surface(&mut self, r: ipc::SurfaceRequest, port: u32) -> i32 {
+        let Some(ctx) = self.contexts.get(&r.ctx) else {
+            return ipc::ERR_NO_CONTEXT;
+        };
+        let Some(surface) = metal::Surface::from_port(port) else {
+            return ipc::ERR_BAD_VALUE;
+        };
+        let mut surfaces = ctx.surfaces.lock().unwrap_or_else(|e| e.into_inner());
+        if surfaces.contains_key(&r.surface) {
+            return ipc::ERR_EXISTS;
+        }
+        surfaces.insert(r.surface, surface);
+        ipc::OK
+    }
+
+    fn release_surface(&mut self, r: ipc::SurfaceRequest) -> i32 {
+        let Some(ctx) = self.contexts.get(&r.ctx) else {
+            return ipc::ERR_NO_CONTEXT;
+        };
+        let removed = ctx
+            .surfaces
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&r.surface);
+        if removed.is_some() {
+            ipc::OK
+        } else {
+            ipc::ERR_NO_ARENA
+        }
+    }
+
     fn attach_ring(&mut self, r: ipc::AttachRing) -> i32 {
         let Some(ctx) = self.contexts.get_mut(&r.ctx) else {
             return ipc::ERR_NO_CONTEXT;
@@ -317,8 +358,13 @@ impl Server {
                 return ipc::ERR_BAD_VALUE;
             }
         };
-        let Some(exec) = Executor::new(self.device.clone(), consumer, arena, ctx.arenas.clone())
-        else {
+        let Some(exec) = Executor::new(
+            self.device.clone(),
+            consumer,
+            arena,
+            ctx.arenas.clone(),
+            ctx.surfaces.clone(),
+        ) else {
             return ipc::ERR_INTERNAL;
         };
         let stop = Arc::new(AtomicBool::new(false));

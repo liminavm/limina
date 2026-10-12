@@ -315,6 +315,17 @@ wire! {
         reply: BufRef,
     }
 
+    /// A texture whose storage is surface `surface` of the context (`newTextureWithDescriptor:
+    /// iosurface:plane:`), as the worker filed it for a buffer shared beyond this transport: a 2D
+    /// texture of one level and one sample, no larger than the surface, in the surface's own pixel
+    /// layout. The reply's `values[0]` is its `gpuResourceID`.
+    struct CreateTextureFromSurface = CREATE_TEXTURE_FROM_SURFACE(0x0109) {
+        handle: u32,
+        surface: u32,
+        desc: TextureDesc,
+        reply: BufRef,
+    }
+
     /// `newTextureViewWithPixelFormat:textureType:levels:slices:[swizzle:]` of `parent`. The
     /// reply's `values[0]` is its `gpuResourceID`.
     struct CreateTextureView = CREATE_TEXTURE_VIEW(0x0101) {
@@ -798,6 +809,17 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No two commands share an op: a duplicate would make the later one's handler unreachable.
+    #[test]
+    fn ops_are_unique() {
+        let ops = || C_STRUCTS.iter().filter_map(|s| s.op);
+        for (i, (name, op)) in ops().enumerate() {
+            if let Some((other, _)) = ops().skip(i + 1).find(|(_, o)| *o == op) {
+                panic!("{name} and {other} are both op {op:#06x}");
+            }
+        }
+    }
 
     /// Every wire struct's fields add up to its size, so there is no implicit padding anywhere.
     #[test]

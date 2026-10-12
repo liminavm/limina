@@ -89,12 +89,16 @@ impl Replayer {
     }
 
     fn call(&self, id: i32, data: &[u8]) -> io::Result<Message> {
+        self.call_with(id, data, &[])
+    }
+
+    fn call_with(&self, id: i32, data: &[u8], ports: &[(u32, u8)]) -> io::Result<Message> {
         let reply_port = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         mach::call(
             &self.service,
             &reply_port,
             &Message::new(id, data),
-            &[],
+            ports,
             CALL_TIMEOUT_MS,
         )
     }
@@ -180,6 +184,29 @@ impl Replayer {
             return Err(status_err("arena import", a.status));
         }
         Ok((a.size, a.gpu_base))
+    }
+
+    /// Files the IOSurface `port` names for `ctx` under `surface`, for the context to make
+    /// textures over. The send right travels with the request.
+    pub fn bind_surface(&self, ctx: u32, surface: u32, port: u32) -> io::Result<()> {
+        let r = self.call_with(
+            ipc::BIND_SURFACE,
+            ipc::SurfaceRequest { ctx, surface }.bytes(),
+            &[(port, mach::MSG_TYPE_MOVE_SEND)],
+        )?;
+        let s = ipc::Status::read(&r.data).ok_or_else(|| io::Error::other("short reply"))?;
+        if s.status != ipc::OK {
+            return Err(status_err("surface bind", s.status));
+        }
+        Ok(())
+    }
+
+    pub fn release_surface(&self, ctx: u32, surface: u32) -> io::Result<()> {
+        self.simple(
+            "surface release",
+            ipc::RELEASE_SURFACE,
+            ipc::SurfaceRequest { ctx, surface }.bytes(),
+        )
     }
 
     pub fn release_export(&self, export: u32) -> io::Result<()> {

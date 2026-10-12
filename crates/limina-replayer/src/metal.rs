@@ -20,6 +20,32 @@ pub fn arena_options() -> MTLResourceOptions {
     MTLResourceOptions::StorageModeShared | MTLResourceOptions::HazardTrackingModeUntracked
 }
 
+/// An IOSurface the worker handed over: textures can be made over it.
+#[derive(Clone)]
+pub struct Surface(pub objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>);
+// SAFETY: IOSurfaces are thread-safe and reference counted atomically.
+unsafe impl Send for Surface {}
+unsafe impl Sync for Surface {}
+
+impl Surface {
+    /// The surface a send right names; the right is only borrowed.
+    pub fn from_port(port: u32) -> Option<Self> {
+        objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(port).map(Surface)
+    }
+
+    pub fn width(&self) -> u32 {
+        self.0.width() as u32
+    }
+
+    pub fn height(&self) -> u32 {
+        self.0.height() as u32
+    }
+
+    pub fn bytes_per_element(&self) -> u64 {
+        self.0.bytes_per_element() as u64
+    }
+}
+
 pub fn system_device() -> Option<Retained<Device>> {
     MTLCreateSystemDefaultDevice()
 }
