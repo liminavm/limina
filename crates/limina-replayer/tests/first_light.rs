@@ -666,3 +666,58 @@ fn many_small_commits_retire_in_order() {
     }
     assert!(g.bytes(MIB, 4096).iter().all(|&b| b == (1999 & 0xff) as u8));
 }
+
+/// A context destroyed while its queue waits on events the guest will never signal: the destroy
+/// answers at once (the worker's control queue waits on it), and the wedged work is released.
+#[test]
+fn destroying_a_context_wedged_on_an_event_answers_at_once() {
+    let mut g = start();
+    for (handle, kind) in [
+        (40, cmd::sync_kind::EVENT),
+        (41, cmd::sync_kind::SHARED_EVENT),
+    ] {
+        g.push(
+            cmd::SyncObject {
+                handle,
+                kind,
+                initial: 0,
+                mirror: BufRef::NONE,
+            },
+            &[],
+        );
+        g.push(
+            cmd::QueueEvent {
+                event: handle,
+                wait: 1,
+                value: 1,
+            },
+            &[],
+        );
+    }
+    g.seqno += 1;
+    g.push(
+        cmd::Commit {
+            seqno: g.seqno,
+            feedback: BufRef::NONE,
+        },
+        &[],
+    );
+    g.kick();
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(g.ring.completed(), 0, "the commit is held by the waits");
+
+    let start = Instant::now();
+    g.replayer.destroy_context(1).expect("context gone");
+    let took = start.elapsed();
+    assert!(took < Duration::from_millis(500), "destroy took {took:?}");
+    // The waits were released, so the commit ran and retired instead of being abandoned.
+    while g.ring.completed() < g.seqno {
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "the wedged commit never completed"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // The replayer still serves other contexts.
+    g.replayer.create_context(2).expect("a new context");
+}

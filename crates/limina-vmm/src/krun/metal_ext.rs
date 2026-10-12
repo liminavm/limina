@@ -3,13 +3,17 @@
 //!
 //! The device decides where things go in guest-physical space and keeps the guest's books; this
 //! decides what they are: contexts and arenas live in the replayer, arena pages are mapped here so
-//! the device can hand them to the guest, and a doorbell store becomes a semaphore signal.
+//! the device can hand them to the guest, and a doorbell store becomes a semaphore signal. Fences
+//! are answered here too, by watching each ring's `completed` in the mapping of its arena.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::time::Duration;
 
-use devices::virtio::gpu::ext::{ExtArena, GpuExtension};
+use devices::virtio::gpu::ext::{ExtArena, GpuExtension, Signal};
+use limina_gpu_wire::ring::RingControl;
 use limina_replayer::client::{Doorbell, MappedArena, Replayer};
 
 /// Off by default until a guest driver exists: a stock guest would only pay for an idle process.
@@ -30,6 +34,76 @@ struct ReplayerExtension {
     /// Exported arenas by blob resource: each keeps its mapping (and, in the replayer, its
     /// arena) whatever happens to the context that made it.
     exports: Mutex<HashMap<u32, Arc<MappedArena>>>,
+    fences: Arc<Fences>,
+}
+
+/// A context's ring control block: in the mapping of the arena it was attached in.
+struct Ring {
+    arena: Arc<MappedArena>,
+    offset: usize,
+}
+
+impl Ring {
+    fn control(&self) -> &RingControl {
+        // SAFETY: `offset` was checked to leave a whole, aligned control block inside the
+        // mapping, which `arena` keeps alive. The guest writes only the producer's fields.
+        unsafe { &*((self.arena.mapping.addr() as usize + self.offset) as *const RingControl) }
+    }
+}
+
+/// Fences waiting for their seqno, and the rings they wait on.
+#[derive(Default)]
+struct Fences {
+    pending: Mutex<Vec<(u32, u64, Signal)>>,
+    wake: Condvar,
+    rings: Mutex<HashMap<u32, Ring>>,
+}
+
+/// How often the watch looks at the rings while a fence waits. Fences guard only buffers that
+/// cross processes, so a few per frame at most.
+const FENCE_POLL: Duration = Duration::from_micros(100);
+
+impl Fences {
+    /// Answers each fence whose ring has completed its seqno, lost its context, or gone.
+    fn watch(&self) {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            while pending.is_empty() {
+                pending = self.wake.wait(pending).unwrap_or_else(|e| e.into_inner());
+            }
+            let mut done = Vec::new();
+            {
+                let rings = self.rings.lock().unwrap_or_else(|e| e.into_inner());
+                let mut i = 0;
+                while i < pending.len() {
+                    let (ctx, seqno, _) = pending[i];
+                    let answered = rings.get(&ctx).is_none_or(|r| {
+                        let c = r.control();
+                        c.completed.load(Ordering::Acquire) >= seqno
+                            || c.error.load(Ordering::Acquire) != 0
+                    });
+                    if answered {
+                        done.push(pending.swap_remove(i).2);
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            if !done.is_empty() {
+                drop(pending);
+                for signal in done {
+                    signal();
+                }
+                pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+                continue;
+            }
+            pending = self
+                .wake
+                .wait_timeout(pending, FENCE_POLL)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
 }
 
 fn info(a: &MappedArena) -> ExtArena {
@@ -77,6 +151,12 @@ impl GpuExtension for ReplayerExtension {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|&(c, _), _| c != ctx);
+        self.fences
+            .rings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&ctx);
+        self.fences.wake.notify_one();
         if let Err(e) = self.replayer.destroy_context(ctx) {
             log::warn!("metal ext: destroy context {ctx}: {e}");
         }
@@ -106,9 +186,43 @@ impl GpuExtension for ReplayerExtension {
     }
 
     fn attach_ring(&self, ctx: u32, arena: u32, offset: u64, data_size: u32) -> Result<(), String> {
+        let a = self
+            .arenas
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(ctx, arena))
+            .cloned()
+            .ok_or("no such arena")?;
+        let end = offset.checked_add(size_of::<RingControl>() as u64);
+        if !offset.is_multiple_of(align_of::<RingControl>() as u64)
+            || end.is_none_or(|e| e > a.mapping.size())
+        {
+            return Err("ring control block outside its arena".into());
+        }
         self.replayer
             .attach_ring(ctx, arena, offset, data_size)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        self.fences
+            .rings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                ctx,
+                Ring {
+                    arena: a,
+                    offset: offset as usize,
+                },
+            );
+        Ok(())
+    }
+
+    fn fence(&self, ctx: u32, seqno: u64, signal: Signal) {
+        self.fences
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((ctx, seqno, signal));
+        self.fences.wake.notify_one();
     }
 
     fn export_arena(&self, ctx: u32, arena: u32, export: u32) -> Result<ExtArena, String> {
@@ -189,7 +303,17 @@ pub fn start() -> Option<Arc<dyn GpuExtension>> {
                 exe.display(),
                 replayer.pid()
             );
+            let fences = Arc::new(Fences::default());
+            let watched = fences.clone();
+            if let Err(e) = std::thread::Builder::new()
+                .name("metal-fences".into())
+                .spawn(move || watched.watch())
+            {
+                log::warn!("metal ext: fence watch did not start: {e}");
+                return None;
+            }
             Some(Arc::new(ReplayerExtension {
+                fences,
                 replayer,
                 doorbells: RwLock::new(Vec::new()),
                 slots: Mutex::new(HashMap::new()),

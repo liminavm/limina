@@ -109,7 +109,7 @@ enum Object {
 }
 
 /// Destroyed objects, held until the GPU can no longer be using them.
-struct Grave(#[allow(dead_code)] Vec<Object>);
+struct Grave(Vec<Object>);
 // SAFETY: Metal objects may be released from any thread.
 unsafe impl Send for Grave {}
 
@@ -384,6 +384,23 @@ impl Executor {
             cb.endCommandBuffer();
         }
         self.ended.clear();
+        // Nothing will signal this context's events any more, and a queue waiting on one would
+        // hold its commits, and everything they use, until the deadline: raise them all past any
+        // wait. An MTLEvent can only be signaled from a queue, and this one is stuck behind the
+        // wait, so another queue does it.
+        let release = self.device.newMTL4CommandQueue();
+        let graves = self.graveyard.iter().flat_map(|(_, g)| g.0.iter());
+        for o in self.objects.values().chain(graves) {
+            match o {
+                Object::SharedEvent(e, _) => e.setSignaledValue(u64::MAX),
+                Object::Event(e) => {
+                    if let Some(q) = &release {
+                        q.signalEvent_value(e, u64::MAX);
+                    }
+                }
+                _ => {}
+            }
+        }
         // Wait for in-flight work before the objects it uses are released.
         let deadline = Instant::now() + Duration::from_secs(5);
         while !lock(&self.in_flight).is_empty() && Instant::now() < deadline {

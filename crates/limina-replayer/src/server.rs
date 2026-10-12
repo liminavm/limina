@@ -104,10 +104,20 @@ impl Server {
             ipc::DESTROY_CONTEXT => match ipc::CtxRequest::read(&msg.data) {
                 None => (status(ipc::ERR_MALFORMED), vec![]),
                 Some(r) => {
-                    let s = if self.contexts.remove(&r.ctx).is_some() {
-                        ipc::OK
-                    } else {
-                        ipc::ERR_NO_CONTEXT
+                    let s = match self.contexts.remove(&r.ctx) {
+                        // Tearing down waits for the context's GPU work; the worker's control
+                        // queue waits on this answer, so the context goes on a thread of its own.
+                        Some(ctx) => match std::thread::Builder::new()
+                            .name(format!("teardown-{}", r.ctx))
+                            .spawn(move || drop(ctx))
+                        {
+                            Ok(_) => ipc::OK,
+                            Err(e) => {
+                                log::warn!("context {}: torn down inline: {e}", r.ctx);
+                                ipc::OK
+                            }
+                        },
+                        None => ipc::ERR_NO_CONTEXT,
                     };
                     (status(s), vec![])
                 }
