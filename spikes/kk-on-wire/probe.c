@@ -16,10 +16,15 @@
  *   signal    a submit that only signals a timeline semaphore, then the counter polled with
  *             vkGetSemaphoreCounterValue, which pushes nothing: the signal must reach the host on
  *             its own. Not part of the default run.
+ *   syncfd    a submit held by a wait on a timeline value nobody has signaled, signaling a
+ *             binary semaphore: its exported sync_file (VK_KHR_external_semaphore_fd) is a real
+ *             fence, pending until the CPU signals the timeline and signaled after. Not part of
+ *             the default run.
  *
  * Exit status 0 only if every part ran and checked out.
  */
 #include <fcntl.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -618,6 +623,81 @@ signal_reaches_host(void)
    return v >= 1 ? 0 : 1;
 }
 
+/* -- syncfd -- */
+
+static bool
+fd_ready(int fd, int ms)
+{
+   struct pollfd p = {.fd = fd, .events = POLLIN};
+   return poll(&p, 1, ms) == 1;
+}
+
+static int
+sync_fd_follows_work(void)
+{
+   PFN_vkGetSemaphoreFdKHR get_semaphore_fd =
+      (PFN_vkGetSemaphoreFdKHR)vkGetDeviceProcAddr(dev, "vkGetSemaphoreFdKHR");
+   VkSemaphoreTypeCreateInfo ti = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+                                   .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE};
+   VkSemaphoreCreateInfo tci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &ti};
+   VkSemaphore gate;
+   CHECK(vkCreateSemaphore(dev, &tci, NULL, &gate));
+   VkExportSemaphoreCreateInfo ex = {.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+                                     .handleTypes =
+                                        VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT};
+   VkSemaphoreCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &ex};
+   VkSemaphore done;
+   CHECK(vkCreateSemaphore(dev, &bci, NULL, &done));
+
+   struct buf b = host_buffer(4096, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+   memset(b.map, 0, 4096);
+   VkCommandBuffer cb = begin();
+   vkCmdFillBuffer(cb, b.b, 0, 4096, 0xabcdabcd);
+   CHECK(vkEndCommandBuffer(cb));
+
+   uint64_t one = 1, unused = 0;
+   VkTimelineSemaphoreSubmitInfo tsi = {.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+                                        .waitSemaphoreValueCount = 1,
+                                        .pWaitSemaphoreValues = &one,
+                                        .signalSemaphoreValueCount = 1,
+                                        .pSignalSemaphoreValues = &unused};
+   VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+   VkSubmitInfo sub = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                       .pNext = &tsi,
+                       .waitSemaphoreCount = 1,
+                       .pWaitSemaphores = &gate,
+                       .pWaitDstStageMask = &stage,
+                       .commandBufferCount = 1,
+                       .pCommandBuffers = &cb,
+                       .signalSemaphoreCount = 1,
+                       .pSignalSemaphores = &done};
+   CHECK(vkQueueSubmit(queue, 1, &sub, VK_NULL_HANDLE));
+
+   VkSemaphoreGetFdInfoKHR gi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
+                                 .semaphore = done,
+                                 .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT};
+   int fd = -1;
+   CHECK(get_semaphore_fd(dev, &gi, &fd));
+   bool early = fd >= 0 && fd_ready(fd, 300);
+
+   VkSemaphoreSignalInfo si = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
+                               .semaphore = gate,
+                               .value = 1};
+   CHECK(vkSignalSemaphore(dev, &si));
+   bool after = fd >= 0 && fd_ready(fd, 3000);
+   vkQueueWaitIdle(queue);
+   uint32_t word = ((uint32_t *)b.map)[1023];
+   printf("syncfd: fd %d, %s before the gate opened, %s after; the fill wrote 0x%x\n", fd,
+          early ? "signaled" : "pending", after ? "signaled" : "pending", word);
+   if (fd >= 0)
+      close(fd);
+   vkFreeCommandBuffers(dev, pool, 1, &cb);
+   free_buf(b);
+   vkDestroySemaphore(dev, done, NULL);
+   vkDestroySemaphore(dev, gate, NULL);
+   return fd >= 0 && !early && after && word == 0xabcdabcd ? 0 : 1;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -655,17 +735,19 @@ main(int argc, char **argv)
                                  .pQueuePriorities = &prio};
    const char *only = argc > 1 ? argv[1] : NULL;
    bool sharing = only && !strncmp(only, "share", 5);
+   bool syncfd = only && !strcmp(only, "syncfd");
    const char *exts[] = {"VK_KHR_external_memory", "VK_KHR_external_memory_fd",
                          "VK_EXT_external_memory_dma_buf"};
+   const char *sem_exts[] = {"VK_KHR_external_semaphore", "VK_KHR_external_semaphore_fd"};
    VkPhysicalDeviceVulkan12Features f12 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-      .timelineSemaphore = only && !strcmp(only, "signal")};
+      .timelineSemaphore = only && (!strcmp(only, "signal") || !strcmp(only, "syncfd"))};
    VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                             .pNext = &f12,
                             .queueCreateInfoCount = 1,
                             .pQueueCreateInfos = &qi,
-                            .enabledExtensionCount = sharing ? 3 : 0,
-                            .ppEnabledExtensionNames = exts};
+                            .enabledExtensionCount = sharing ? 3 : syncfd ? 2 : 0,
+                            .ppEnabledExtensionNames = syncfd ? sem_exts : exts};
    CHECK(vkCreateDevice(pdev, &di, NULL, &dev));
    if (sharing) {
       get_memory_fd = (PFN_vkGetMemoryFdKHR)vkGetDeviceProcAddr(dev, "vkGetMemoryFdKHR");
@@ -680,6 +762,8 @@ main(int argc, char **argv)
    int fails = 0;
    if (only && !strcmp(only, "signal"))
       fails += signal_reaches_host();
+   else if (syncfd)
+      fails += sync_fd_follows_work();
    else if (only && !strcmp(only, "share"))
       fails += share(argv[0]);
    else if (only && !strcmp(only, "share-child") && argc > 2)

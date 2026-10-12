@@ -107,10 +107,10 @@ cited below are measured in `RESULTS.md` (this directory) unless marked otherwis
   today. §4's query lane carries these across the process boundary at about 4–10 µs each.
 - **Sharing**: display stays on the same device (§6). Guest processes share memory as dma-bufs:
   a shared arena is a host-visible blob resource of its context, which other contexts import as
-  the same heap at the same GPU address (`spikes/kk-on-wire/RESULTS.md`). Two parts are left open:
-  fences on that memory, which belong in the guest module, and consumers on other renderers
-  (video, screen capture, a vrend/venus compositor), which need the host to register these blobs
-  with them.
+  the same heap at the same GPU address, and `dma_fence`s for a context's commits come from the
+  guest module (`spikes/kk-on-wire/RESULTS.md`). Left open: consumers on other renderers (video,
+  screen capture, a vrend/venus compositor), which need the host to register these blobs with
+  them.
 
 ## 4. Process layout: the replayer is its own process from the start
 

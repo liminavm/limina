@@ -6,7 +6,7 @@ and the host's `limina-replayer` making the Metal 4 calls.
 
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
-`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `4aae0c0a9a2`.
+`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `d71a3c39f85`.
 
 | check | result |
 |---|---|
@@ -18,6 +18,7 @@ Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal
 | stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
 | `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps |
 | `kk-probe share` | a buffer exported as dma-buf, dispatched into through a self-import and through an import in a child process: the exporter's mapping shows 256/256 words right for both; the child reads the parent's mark |
+| `kk-probe syncfd` | a submit held by a wait on an unsignaled timeline exports its binary semaphore as a real sync_file: pending before the CPU opens the gate, signaled after, and the fill behind it landed |
 | `kk-probe signal` | a submit that only signals a timeline semaphore reaches the host without any later push: the counter reads 1 after 1 ms |
 | `glmark2-wayland` on that zink (`MESA_LOADER_DRIVER_OVERRIDE=zink`) | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))` through Wayland EGL; phong scene correct (capture checked by eye); the full default run completes, score 456 at 800×600 (most scenes ~520 fps, terrain 76, refract 202) |
 
@@ -63,6 +64,14 @@ the render node it opened through `VK_EXT_physical_device_drm`, which is how zin
 its device. And its EGL DRM screen requires `VK_KHR_external_memory_fd`, without which Wayland EGL
 fell back to llvmpipe. Run zink with `MESA_LOADER_DRIVER_OVERRIDE=zink`.
 
+Fences come from the guest module: `DRM_IOCTL_VIRTGPU_LIMINA_FENCE` makes a `dma_fence` for a
+commit seqno of the context's ring (the host holds a fenced control-queue command until the ring
+completes it), adds it to GEM reservations, and returns it as a sync_file. KosmicKrisp's binary
+semaphores export through it: a queue signal of a shared event is noted with the commit it
+follows, and the export is a fence for that commit. Where that commit is not known (a queue wait
+was pushed since the last commit) the export still waits on the CPU, as the runtime's generic
+one always did. `guest/limina-gpu-smoke` checks the kernel and host halves alone.
+
 Anything a wait on another thread may be polling for must be published when it is pushed, not
 left for a later flush: KosmicKrisp signals a submit's timeline semaphores after its last commit,
 and zink waits on its batches from another thread, so an unpublished signal hung glmark2's
@@ -70,9 +79,11 @@ buffer scene with guest and host both idle. Queue events now publish like commit
 
 ## Open
 
-- **No fences on shared memory.** A dma-buf of a KK heap carries no implicit or explicit fence;
-  a consumer in another process can read before the producer's GPU work lands. The guest module
-  is where `dma_fence`s for these objects belong.
+- **Implicit sync is up to userspace.** The bridge attaches no fence to a dma-buf by itself; the
+  WSI and zink do, from exported sync_files (`DMA_BUF_IOCTL_IMPORT_SYNC_FILE`). Importing a
+  sync_file into a KK semaphore still waits on the CPU (the host cannot wait on a guest fence).
+- The worker answers fences by polling ring control blocks every 100 µs while one is pending;
+  a replayer-posted wake would remove the poll.
 - **The compositor cannot import a KK buffer.** An exported KK heap is a blob the extension owns,
   invisible to virglrs, so gnome-shell (vrend/venus) cannot take it as a client buffer; windows
   present through the software WSI (a copy). Zero-copy presentation needs the host to register
