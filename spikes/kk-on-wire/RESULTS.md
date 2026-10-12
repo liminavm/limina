@@ -6,7 +6,7 @@ and the host's `limina-replayer` making the Metal 4 calls.
 
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
-`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `99e1ba6ea16`.
+`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `3264e1d207d`.
 
 | check | result |
 |---|---|
@@ -15,6 +15,9 @@ Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal
 | `kk-probe triangle` | 2016 green (64·63/2, the top-left rule) and 2080 blue of 64×64, nothing else |
 | `kk-probe allocs` | 6000 separately allocated, mapped 4 KiB buffers keep their own contents (past the 4096 arenas a context may have); compute into the last one right |
 | `vkcube --wsi wayland` on the seated GNOME desktop | renders correctly (textured, depth-tested; window capture checked by eye), runs 40 s without fault, 600 frames in 9.96 s FIFO (vsync-bound) |
+| stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
+| `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps |
+| `glmark2-wayland` on that zink | **not on KK**: EGL falls back to llvmpipe (see Open) |
 
 ## Recipe
 
@@ -43,7 +46,22 @@ arenas (larger ones get their own), and the guest module maps an arena from any 
 which a mapped pooled heap needs. The guest module must be at least that version
 (`scripts/build-virtio-gpu-limina.sh`; on F44 it loads from `/lib/modules/<krel>/updates/`).
 
+zink needed two more things from the bridge. KK releases depth-stencil states and meta pipelines
+while still recording, as Metal encoders retain what they are set, so a command buffer holds every
+object its stream names until it is recorded again: otherwise the DESTROY reaches the ring before
+the commit that uses the object, and the host drops the context with `BadHandle`. And KK reports
+the render node it opened through `VK_EXT_physical_device_drm`, which is how zink's EGL path picks
+its device. Run zink with `MESA_LOADER_DRIVER_OVERRIDE=zink`.
+
 ## Open
+
+- **GL on Wayland stays on llvmpipe.** EGL first opens zink on the render node, and
+  `zink_drm_create_screen` refuses a device without `KHR_external_memory_fd`, although on that
+  path zink presents through kopper (Vulkan WSI), which works. EGL's fallback then turns zink off.
+  X11 (GLX) takes the fd-less kopper path and works. Two ways forward:
+  - patch zink to accept a kopper screen without dma-buf export; this needs our own guest zink;
+  - give arenas dma-buf export, which the compositor would need anyway to take client buffers
+    without a copy.
 
 - Completion and reply waits poll; an idle guest process with a pending commit burns CPU.
 - `[LIMINA-KK-GUARD]` prints its periodic encoder-guard line, which means nothing on this
