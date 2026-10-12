@@ -1145,3 +1145,148 @@ fn how_host_values_are_reused_under_churn() {
         bases1 == bases2
     );
 }
+
+fn churn_texture(g: &mut Guest, handle: u32) -> u64 {
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTexture {
+            handle,
+            arena: 1,
+            offset: 16 * MIB,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: RGBA8_UNORM,
+                width: 64,
+                height: 64,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0, "texture {handle}");
+    r.values[0]
+}
+
+fn churn_sampler(g: &mut Guest, handle: u32) -> u64 {
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateSampler {
+            handle,
+            _pad: 0,
+            desc: cmd::SamplerDesc {
+                lod_max_clamp: 1000.0,
+                normalized_coordinates: 1,
+                ..Default::default()
+            },
+            reply,
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0, "sampler {handle}");
+    r.values[0]
+}
+
+fn churn_destroy(g: &mut Guest, handle: u32) {
+    g.push(cmd::Destroy { handle, _pad: 0 }, &[]);
+    g.commit_and_wait().expect("destroy");
+}
+
+/// Measurement: whether a fresh replayer can be brought to hand out recorded resource IDs again,
+/// by filling the slots below each one with placeholders. Also whether textures and samplers
+/// draw from one ID space. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn can_placeholders_reproduce_recorded_ids() {
+    let mut g = start();
+    let t1 = churn_texture(&mut g, 1000);
+    let s1 = churn_sampler(&mut g, 1001);
+    let t2 = churn_texture(&mut g, 1002);
+    eprintln!("texture {t1}, sampler {s1}, texture {t2}");
+    churn_destroy(&mut g, 1000);
+    churn_destroy(&mut g, 1001);
+    churn_destroy(&mut g, 1002);
+
+    // The recorded run: twelve textures, three destroyed partway, two more after.
+    let mut live = std::collections::BTreeMap::new();
+    for h in 10..22 {
+        live.insert(h, churn_texture(&mut g, h));
+    }
+    for h in [12, 13, 15] {
+        churn_destroy(&mut g, h);
+        live.remove(&h);
+    }
+    for h in 22..24 {
+        live.insert(h, churn_texture(&mut g, h));
+    }
+    eprintln!("recorded (handle, id): {live:?}");
+
+    // A fresh replayer, survivors only, each brought to its recorded id.
+    let mut g = start();
+    let mut by_id: Vec<(u64, u32)> = live.iter().map(|(&h, &id)| (id, h)).collect();
+    by_id.sort();
+    let mut placeholders = Vec::new();
+    let mut next_placeholder = 5000;
+    let (mut matched, mut retries) = (0, 0);
+    for (target, handle) in by_id {
+        loop {
+            let p = next_placeholder;
+            next_placeholder += 1;
+            let id = churn_texture(&mut g, p);
+            if id < target {
+                placeholders.push(p);
+                continue;
+            }
+            assert_eq!(id, target, "overshot: the slot for {handle} was taken");
+            // Every lower slot is held: free this one and take it with the real handle.
+            churn_destroy(&mut g, p);
+            let got = churn_texture(&mut g, handle);
+            if got == target {
+                matched += 1;
+                break;
+            }
+            retries += 1;
+            assert!(retries < 100, "{handle}: got {got}, wanted {target}");
+            churn_destroy(&mut g, handle);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    for p in &placeholders {
+        churn_destroy(&mut g, *p);
+    }
+    eprintln!(
+        "fill: {matched}/{} matched, {retries} retries, {} placeholders",
+        live.len(),
+        placeholders.len()
+    );
+}
+
+/// Measurement: where a fresh arena lands once others have been destroyed. Run with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn where_arenas_land_after_holes() {
+    let g = start();
+    let base = |id: u32, mib: u64| {
+        let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+        eprintln!("arena {id} ({mib} MiB) at 0x{:x}", a.gpu_base);
+    };
+    for (id, mib) in [(2, 8), (3, 1), (4, 32), (5, 2)] {
+        base(id, mib);
+    }
+    for id in [3, 4] {
+        g.replayer.destroy_arena(1, id).expect("destroy");
+        eprintln!("destroyed arena {id}");
+    }
+    for (id, mib) in [(6, 4), (7, 16), (8, 1), (9, 64)] {
+        base(id, mib);
+    }
+}
