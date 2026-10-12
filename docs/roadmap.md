@@ -881,6 +881,27 @@ host-side copy**. The naming symptom of a break is `Illegal resource`.
   pattern), zero guest-side copies, a measured before/after on software-decoded playback — including a
   stock 4k guest on a THP-backed memfd, tested rather than assumed.
 
+### Wave 7 — HDR and deep colour
+
+Today every stage is 8-bit SDR: the EDID advertises no HDR or deep-colour capability, scanout
+surfaces are `BGRA` IOSurfaces, the window path composites `BGRA8Unorm` in device RGB, and no layer
+asks for EDR. 10-bit formats (`XR30`/`AR30`) alone are deep colour; HDR is a transfer function and
+primaries (PQ/HLG, BT.2020) plus luminance metadata on top, which the guest compositor learns from
+the display and passes on through `wp_color_manager_v1`. End to end that needs:
+- **The display:** EDID/DisplayID HDR static metadata and colorimetry blocks, from the host panel's
+  EDR headroom; the guest kernel's `HDR_OUTPUT_METADATA` and `Colorspace` connector properties.
+- **Scanout:** 10-bit and FP16 primary-plane formats (with Wave 2's device-advertised format list),
+  scanned out as `l10r`/`RGhA` IOSurfaces.
+- **The host window:** an EDR `CAMetalLayer` (`wantsExtendedDynamicRangeContent`) in the matching
+  colour space, tone-mapped by macOS to the panel's current headroom.
+- **Every renderer that shares window buffers takes the wider formats:** vrend's IOSurface adoption,
+  venus's imports, and the Metal-level transport's surfaces, which take 32-bit BGRA/RGBA only and so
+  keep the guest Vulkan driver from offering FP16/10-bit swapchains
+  (`docs/design/metal-transport-delivery.md` §3).
+
+Done test: an HDR video or test pattern in a seated guest reaches the MacBook panel above SDR white,
+checked on the panel, with SDR content beside it unchanged.
+
 ---
 
 ## Milestone 16 — LiminaOS: a purpose-built guest distribution + system compositor (moonshot)

@@ -69,7 +69,8 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
   types the resource; venus imports it as it does its own scanouts. Surfaces take 32-bit
   BGRA/RGBA, and the guest driver offers the window system nothing else
   (`wsi_device::can_share_format`), since an import the compositor cannot make ends its context.
-  Wider formats (RGBA16F, 10-bit) need surfaces and vrend adoption to take them.
+  Wider formats (RGBA16F, 10-bit) come with HDR and deep colour (`docs/roadmap.md` M15 wave 7),
+  which adds them to surfaces, vrend's adoption and the guest driver's list together.
 - **vrend/venus → Metal transport — to build.** The worker hands the resource's IOSurface port to
   the replayer, which makes a texture over it.
 
