@@ -24,6 +24,10 @@
  *             with a pattern by a buffer copy, exported and sampled by the render node's GL
  *             driver (EGL on gbm: stock virgl in a limina guest) into a texture of its own, read
  *             back from there: every pixel is checked. Not part of the default run.
+ *   nv12      a 4:2:0 video surface from the render node's VA driver (stock virgl), written with
+ *             a Y and a CbCr pattern through vaPutImage and exported as a dma-buf
+ *             (vaExportSurfaceHandle), imported as a 2-plane image at VA's plane layouts; each
+ *             plane is copied to a buffer and checked. Not part of the default run.
  *   syncfd    a submit held by a wait on a timeline value nobody has signaled, signaling a
  *             binary semaphore: its exported sync_file (VK_KHR_external_semaphore_fd) is a real
  *             fence, pending until the CPU signals the timeline and signaled after. Not part of
@@ -38,6 +42,11 @@
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 #include <gbm.h>
+#include <va/va.h>
+#include <va/va_drm.h>
+#include <va/va_drmcommon.h>
+#include <xf86drm.h>
+#include <virtgpu_drm.h>
 #include <linux/dma-buf.h>
 #include <poll.h>
 #include <sys/ioctl.h>
@@ -966,6 +975,225 @@ export_to_foreign(void)
    return good == IMPORT_W * IMPORT_H ? 0 : 1;
 }
 
+/* -- nv12 -- */
+
+#define NV12_W 100
+#define NV12_H 16
+
+static uint8_t
+nv12_y(uint32_t x, uint32_t y)
+{
+   return (uint8_t)(x * 3 + y * 7);
+}
+
+static uint8_t
+nv12_c(uint32_t x, uint32_t y, uint32_t c)
+{
+   return c ? (uint8_t)(0xc0 - x - y) : (uint8_t)(0x40 + x + y);
+}
+
+static int
+nv12_from_va(void)
+{
+   int drm = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+   VADisplay va = vaGetDisplayDRM(drm);
+   int major, minor;
+   if (!va || vaInitialize(va, &major, &minor) != VA_STATUS_SUCCESS) {
+      fprintf(stderr, "nv12: no VA display\n");
+      return 1;
+   }
+   VASurfaceID surf;
+   /* Asked for as a player asks for one it will export, which makes its planes shared. */
+   VASurfaceAttrib attr = {.type = VASurfaceAttribMemoryType,
+                           .flags = VA_SURFACE_ATTRIB_SETTABLE,
+                           .value = {.type = VAGenericValueTypeInteger,
+                                     .value.i = VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2}};
+   if (vaCreateSurfaces(va, VA_RT_FORMAT_YUV420, NV12_W, NV12_H, &surf, 1, &attr, 1) !=
+       VA_STATUS_SUCCESS) {
+      fprintf(stderr, "nv12: VA made no surface\n");
+      return 1;
+   }
+   /* Written through an image put onto the surface: virgl's VA driver derives none. */
+   VAImageFormat nv12_fmt = {.fourcc = VA_FOURCC_NV12, .byte_order = VA_LSB_FIRST,
+                             .bits_per_pixel = 12};
+   VAImage im;
+   uint8_t *p = NULL;
+   if (vaCreateImage(va, &nv12_fmt, NV12_W, NV12_H, &im) != VA_STATUS_SUCCESS ||
+       vaMapBuffer(va, im.buf, (void **)&p) != VA_STATUS_SUCCESS) {
+      fprintf(stderr, "nv12: VA made no image to write\n");
+      return 1;
+   }
+   for (uint32_t y = 0; y < NV12_H; y++)
+      for (uint32_t x = 0; x < NV12_W; x++)
+         p[im.offsets[0] + y * im.pitches[0] + x] = nv12_y(x, y);
+   for (uint32_t y = 0; y < NV12_H / 2; y++)
+      for (uint32_t x = 0; x < NV12_W / 2; x++)
+         for (uint32_t c = 0; c < 2; c++)
+            p[im.offsets[1] + y * im.pitches[1] + x * 2 + c] = nv12_c(x, y, c);
+   vaUnmapBuffer(va, im.buf);
+   if (vaPutImage(va, surf, im.image_id, 0, 0, NV12_W, NV12_H, 0, 0, NV12_W, NV12_H) !=
+       VA_STATUS_SUCCESS) {
+      fprintf(stderr, "nv12: VA would not put the image onto the surface\n");
+      return 1;
+   }
+   vaDestroyImage(va, im.image_id);
+   vaSyncSurface(va, surf);
+
+   VADRMPRIMESurfaceDescriptor d;
+   if (vaExportSurfaceHandle(va, surf, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+                             VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_COMPOSED_LAYERS,
+                             &d) != VA_STATUS_SUCCESS) {
+      fprintf(stderr, "nv12: VA would not export the surface\n");
+      return 1;
+   }
+   printf("nv12: VA exported fourcc %.4s, %u object(s), %u layer(s)\n", (char *)&d.fourcc,
+          d.num_objects, d.num_layers);
+   for (uint32_t o = 0; o < d.num_objects; o++) {
+      uint32_t h = 0;
+      struct drm_virtgpu_resource_info ri = {0};
+      if (drmPrimeFDToHandle(drm, d.objects[o].fd, &h) == 0) {
+         ri.bo_handle = h;
+         ioctl(drm, DRM_IOCTL_VIRTGPU_RESOURCE_INFO, &ri);
+      }
+      printf("nv12:  object %u: size %u, modifier 0x%llx, resource %u, blob_mem %u\n", o,
+             d.objects[o].size, (unsigned long long)d.objects[o].drm_format_modifier,
+             ri.res_handle, ri.blob_mem);
+   }
+   for (uint32_t pl = 0; pl < d.layers[0].num_planes; pl++)
+      printf("nv12:  plane %u: object %u offset %u pitch %u\n", pl,
+             d.layers[0].object_index[pl], d.layers[0].offset[pl], d.layers[0].pitch[pl]);
+   if (d.layers[0].num_planes != 2 || d.num_objects > 2) {
+      fprintf(stderr, "nv12: not two planes in at most two objects\n");
+      return 1;
+   }
+   /* One object per plane is a disjoint image; one object for both, a plain one. */
+   const bool disjoint = d.num_objects == 2;
+
+   VkSubresourceLayout planes[2] = {
+      {.offset = d.layers[0].offset[0], .rowPitch = d.layers[0].pitch[0]},
+      {.offset = d.layers[0].offset[1], .rowPitch = d.layers[0].pitch[1]}};
+   VkImageDrmFormatModifierExplicitCreateInfoEXT mod = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+      .drmFormatModifier = DRM_FORMAT_MOD_LINEAR,
+      .drmFormatModifierPlaneCount = 2,
+      .pPlaneLayouts = planes};
+   VkExternalMemoryImageCreateInfo ext = {
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+      .pNext = &mod,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+   VkImageCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                            .pNext = &ext,
+                            .flags = disjoint ? VK_IMAGE_CREATE_DISJOINT_BIT : 0,
+                            .imageType = VK_IMAGE_TYPE_2D,
+                            .format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+                            .extent = {NV12_W, NV12_H, 1},
+                            .mipLevels = 1,
+                            .arrayLayers = 1,
+                            .samples = VK_SAMPLE_COUNT_1_BIT,
+                            .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+                            .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                     VK_IMAGE_USAGE_SAMPLED_BIT};
+   VkImage img;
+   VkResult r = vkCreateImage(dev, &ici, NULL, &img);
+   if (r != VK_SUCCESS) {
+      fprintf(stderr, "nv12: no 2-plane image at VA's layout: %d\n", r);
+      return 1;
+   }
+   VkDeviceMemory mem[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+   VkBindImagePlaneMemoryInfo plane_bind[2];
+   VkBindImageMemoryInfo binds[2];
+   for (uint32_t o = 0; o < d.num_objects; o++) {
+      VkImagePlaneMemoryRequirementsInfo preq = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO,
+         .planeAspect = o ? VK_IMAGE_ASPECT_PLANE_1_BIT : VK_IMAGE_ASPECT_PLANE_0_BIT};
+      VkImageMemoryRequirementsInfo2 rinfo = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
+         .pNext = disjoint ? &preq : NULL,
+         .image = img};
+      VkMemoryRequirements2 req = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+      vkGetImageMemoryRequirements2(dev, &rinfo, &req);
+      int fd = dup(d.objects[o].fd);
+      VkMemoryFdPropertiesKHR fp = {.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+      CHECK(get_memory_fd_properties(dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd,
+                                     &fp));
+      VkMemoryDedicatedAllocateInfo ded = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, .image = img};
+      VkImportMemoryFdInfoKHR imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+                                     .pNext = &ded,
+                                     .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                                     .fd = fd};
+      VkMemoryAllocateInfo ai = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+         .pNext = &imp,
+         .allocationSize = req.memoryRequirements.size,
+         .memoryTypeIndex =
+            memory_type(req.memoryRequirements.memoryTypeBits & fp.memoryTypeBits, 0)};
+      r = vkAllocateMemory(dev, &ai, NULL, &mem[o]);
+      if (r != VK_SUCCESS) {
+         fprintf(stderr, "nv12: object %u was not imported: %d\n", o, r);
+         close(fd);
+         return 1;
+      }
+      plane_bind[o] = (VkBindImagePlaneMemoryInfo){
+         .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO,
+         .planeAspect = preq.planeAspect};
+      binds[o] = (VkBindImageMemoryInfo){.sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
+                                         .pNext = disjoint ? &plane_bind[o] : NULL,
+                                         .image = img,
+                                         .memory = mem[o]};
+   }
+   r = vkBindImageMemory2(dev, d.num_objects, binds);
+   if (r != VK_SUCCESS) {
+      fprintf(stderr, "nv12: the planes were not bound: %d\n", r);
+      return 1;
+   }
+
+   struct buf ybuf = host_buffer(NV12_W * NV12_H, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+   struct buf cbuf = host_buffer(NV12_W * NV12_H / 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+   memset(ybuf.map, 0, NV12_W * NV12_H);
+   memset(cbuf.map, 0, NV12_W * NV12_H / 2);
+   VkCommandBuffer cb = begin();
+   VkImageMemoryBarrier acquire = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                   .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                                   .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                   .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL,
+                                   .dstQueueFamilyIndex = qfam,
+                                   .image = img,
+                                   .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                        0, NULL, 0, NULL, 1, &acquire);
+   VkBufferImageCopy y = {.imageSubresource = {VK_IMAGE_ASPECT_PLANE_0_BIT, 0, 0, 1},
+                          .imageExtent = {NV12_W, NV12_H, 1}};
+   VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_PLANE_1_BIT, 0, 0, 1},
+                          .imageExtent = {NV12_W / 2, NV12_H / 2, 1}};
+   vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ybuf.b, 1, &y);
+   vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cbuf.b, 1, &c);
+   submit_and_wait(cb);
+
+   uint32_t ygood = 0, cgood = 0;
+   for (uint32_t yy = 0; yy < NV12_H; yy++)
+      for (uint32_t x = 0; x < NV12_W; x++)
+         ygood += ((uint8_t *)ybuf.map)[yy * NV12_W + x] == nv12_y(x, yy);
+   for (uint32_t yy = 0; yy < NV12_H / 2; yy++)
+      for (uint32_t x = 0; x < NV12_W / 2; x++)
+         for (uint32_t k = 0; k < 2; k++)
+            cgood += ((uint8_t *)cbuf.map)[(yy * NV12_W / 2 + x) * 2 + k] == nv12_c(x, yy, k);
+   printf("nv12: luma %u/%u, chroma %u/%u bytes as VA wrote them\n", ygood, NV12_W * NV12_H,
+          cgood, NV12_W * NV12_H / 2);
+   free_buf(ybuf);
+   free_buf(cbuf);
+   vkDestroyImage(dev, img, NULL);
+   for (uint32_t o = 0; o < d.num_objects; o++) {
+      vkFreeMemory(dev, mem[o], NULL);
+      close(d.objects[o].fd);
+   }
+   vaDestroySurfaces(va, &surf, 1);
+   vaTerminate(va);
+   close(drm);
+   return ygood == NV12_W * NV12_H && cgood == NV12_W * NV12_H / 2 ? 0 : 1;
+}
+
 /* -- syncfd -- */
 
 static int
@@ -1071,14 +1299,19 @@ main(int argc, char **argv)
                                  .pQueuePriorities = &prio};
    const char *only = argc > 1 ? argv[1] : NULL;
    bool exporting = only && !strcmp(only, "export");
-   bool importing = exporting || (only && !strcmp(only, "import"));
+   bool nv12 = only && !strcmp(only, "nv12");
+   bool importing = exporting || nv12 || (only && !strcmp(only, "import"));
    bool sharing = importing || (only && !strncmp(only, "share", 5));
    bool syncfd = only && !strcmp(only, "syncfd");
    const char *exts[] = {"VK_KHR_external_memory", "VK_KHR_external_memory_fd",
                          "VK_EXT_external_memory_dma_buf", "VK_EXT_image_drm_format_modifier"};
    const char *sem_exts[] = {"VK_KHR_external_semaphore", "VK_KHR_external_semaphore_fd"};
+   VkPhysicalDeviceVulkan11Features f11 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+      .samplerYcbcrConversion = nv12};
    VkPhysicalDeviceVulkan12Features f12 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+      .pNext = &f11,
       .timelineSemaphore = only && (!strcmp(only, "signal") || !strcmp(only, "syncfd"))};
    VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                             .pNext = &f12,
@@ -1104,6 +1337,8 @@ main(int argc, char **argv)
       fails += sync_fd_follows_work();
    else if (exporting)
       fails += export_to_foreign();
+   else if (nv12)
+      fails += nv12_from_va();
    else if (importing)
       fails += import_foreign();
    else if (only && !strcmp(only, "share"))

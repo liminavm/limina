@@ -76,7 +76,16 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
   resolves the resource to the IOSurface it is presented from (`Renderer::resource_surface_port`:
   vrend's SCANOUT/SHARED textures, venus exports, the transport's own surfaces), binds its port to
   the context, and the replayer makes a texture over it. Each context importing a resource is a
-  holder of its own, released when the resource goes or the context detaches it.
+  holder of its own, released when the resource goes or the context detaches it. A surface may be
+  larger than the image over it (a decoder pads its planes); pitch and format must match.
+- **Video pictures cross plane by plane.** A stock VA driver exports a 4:2:0 picture as two
+  SHARED resources, R8 luma and R8G8 chroma, in a dma-buf each. vrend backs each with a plain
+  one- or two-channel IOSurface (`'L008'`, `'2C08'`; DRM R8 and GR88), which needs a host GL that
+  imports them and names their sized internal format (`limina-kk-surfaces`, not yet the
+  `[kosmickrisp]` pin; a host GL without it keeps the planes in GL storage). The guest driver
+  imports the picture as a disjoint `G8_B8R8_2PLANE_420` image at the LINEAR modifier, matching
+  each object's surface to its plane. A single-object picture (enhanced guest Mesa's composite
+  target) and 10-bit P010 wait on a plane index in `CREATE_TEXTURE_FROM_SURFACE`, with HDR.
 
 To verify before building: that an IOSurface's pages can back a guest-visible mapping of an
 extension blob the way venus's IOSurface blobs do (rutabaga's Apple `get_map_ptr` path).
