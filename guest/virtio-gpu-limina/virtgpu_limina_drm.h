@@ -24,6 +24,7 @@ extern "C" {
 #define DRM_VIRTGPU_LIMINA_ARENA_IMPORT  0x25
 #define DRM_VIRTGPU_LIMINA_FENCE         0x26
 #define DRM_VIRTGPU_LIMINA_SURFACE_CREATE 0x27
+#define DRM_VIRTGPU_LIMINA_SURFACE_IMPORT 0x28
 
 /* Arena ids are below this. */
 #define VIRTGPU_LIMINA_MAX_ARENAS 4096
@@ -110,6 +111,21 @@ struct drm_virtgpu_limina_surface_create {
 	__u32 res_handle;	/* out: the resource, which names the surface on the ring */
 };
 
+/*
+ * The surface GEM object `handle` is presented from, whichever driver made it (typically received
+ * as a dma-buf from another process), given to this context: a texture made over surface
+ * `res_handle` on the ring reads and writes its pixels. Answered with its shape; -EINVAL for an
+ * object with no surface the host can share.
+ */
+struct drm_virtgpu_limina_surface_import {
+	__u32 handle;
+	__u32 width;		/* out */
+	__u32 height;		/* out */
+	__u32 drm_fourcc;	/* out */
+	__u32 stride;		/* out */
+	__u32 res_handle;	/* out */
+};
+
 /* Starts the host consuming the command ring userspace initialised in an arena. */
 struct drm_virtgpu_limina_ring_attach {
 	__u32 arena_id;
@@ -141,6 +157,9 @@ struct drm_virtgpu_limina_ring_attach {
 #define DRM_IOCTL_VIRTGPU_LIMINA_SURFACE_CREATE \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_LIMINA_SURFACE_CREATE, \
 		 struct drm_virtgpu_limina_surface_create)
+#define DRM_IOCTL_VIRTGPU_LIMINA_SURFACE_IMPORT \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_LIMINA_SURFACE_IMPORT, \
+		 struct drm_virtgpu_limina_surface_import)
 
 #if defined(__cplusplus)
 }

@@ -16,6 +16,10 @@
  *   signal    a submit that only signals a timeline semaphore, then the counter polled with
  *             vkGetSemaphoreCounterValue, which pushes nothing: the signal must reach the host on
  *             its own. Not part of the default run.
+ *   import    a linear XRGB8888 scanout buffer another driver made (gbm on the render node, stock
+ *             virgl in a limina guest) and wrote a pattern into, imported as a dedicated image
+ *             with the LINEAR modifier at the producer's pitch, copied to a buffer: every pixel
+ *             is checked. Not part of the default run.
  *   syncfd    a submit held by a wait on a timeline value nobody has signaled, signaling a
  *             binary semaphore: its exported sync_file (VK_KHR_external_semaphore_fd) is a real
  *             fence, pending until the CPU signals the timeline and signaled after. Not part of
@@ -23,8 +27,12 @@
  *
  * Exit status 0 only if every part ran and checked out.
  */
+#include <drm_fourcc.h>
 #include <fcntl.h>
+#include <gbm.h>
+#include <linux/dma-buf.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -623,7 +631,7 @@ signal_reaches_host(void)
    return v >= 1 ? 0 : 1;
 }
 
-/* -- syncfd -- */
+/* -- import -- */
 
 static bool
 fd_ready(int fd, int ms)
@@ -631,6 +639,133 @@ fd_ready(int fd, int ms)
    struct pollfd p = {.fd = fd, .events = POLLIN};
    return poll(&p, 1, ms) == 1;
 }
+
+#define IMPORT_W 64
+#define IMPORT_H 16
+
+static uint32_t
+import_pixel(uint32_t x, uint32_t y)
+{
+   return 0xff000000u | (x * 4) << 16 | (y * 16) << 8 | 0x5a;
+}
+
+static int
+import_foreign(void)
+{
+   int drm = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+   struct gbm_device *gbm = drm >= 0 ? gbm_create_device(drm) : NULL;
+   struct gbm_bo *bo =
+      gbm ? gbm_bo_create(gbm, IMPORT_W, IMPORT_H, GBM_FORMAT_XRGB8888,
+                          GBM_BO_USE_SCANOUT | GBM_BO_USE_LINEAR | GBM_BO_USE_RENDERING)
+          : NULL;
+   if (!bo) {
+      fprintf(stderr, "import: gbm made no buffer\n");
+      return 1;
+   }
+   printf("import: gbm backend %s\n", gbm_device_get_backend_name(gbm));
+   uint32_t map_stride = 0;
+   void *map_data = NULL;
+   uint8_t *px = gbm_bo_map(bo, 0, 0, IMPORT_W, IMPORT_H, GBM_BO_TRANSFER_WRITE, &map_stride,
+                            &map_data);
+   if (!px) {
+      fprintf(stderr, "import: gbm would not map the buffer\n");
+      return 1;
+   }
+   for (uint32_t y = 0; y < IMPORT_H; y++)
+      for (uint32_t x = 0; x < IMPORT_W; x++)
+         ((uint32_t *)(px + y * map_stride))[x] = import_pixel(x, y);
+   gbm_bo_unmap(bo, map_data);
+   int fd = gbm_bo_get_fd(bo);
+   uint32_t stride = gbm_bo_get_stride(bo);
+   /* The producer's writes are fenced on the buffer: wait for them, as an importer must. */
+   struct dma_buf_export_sync_file ex = {.flags = DMA_BUF_SYNC_READ, .fd = -1};
+   if (ioctl(fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &ex) == 0) {
+      fd_ready(ex.fd, 3000);
+      close(ex.fd);
+   }
+
+   VkSubresourceLayout plane = {.rowPitch = stride};
+   VkImageDrmFormatModifierExplicitCreateInfoEXT mod = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+      .drmFormatModifier = DRM_FORMAT_MOD_LINEAR,
+      .drmFormatModifierPlaneCount = 1,
+      .pPlaneLayouts = &plane};
+   VkExternalMemoryImageCreateInfo ext = {
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+      .pNext = &mod,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+   VkImageCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                            .pNext = &ext,
+                            .imageType = VK_IMAGE_TYPE_2D,
+                            .format = VK_FORMAT_B8G8R8A8_UNORM,
+                            .extent = {IMPORT_W, IMPORT_H, 1},
+                            .mipLevels = 1,
+                            .arrayLayers = 1,
+                            .samples = VK_SAMPLE_COUNT_1_BIT,
+                            .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+                            .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                     VK_IMAGE_USAGE_SAMPLED_BIT};
+   VkImage img;
+   CHECK(vkCreateImage(dev, &ici, NULL, &img));
+   VkMemoryRequirements req;
+   vkGetImageMemoryRequirements(dev, img, &req);
+   VkMemoryFdPropertiesKHR fp = {.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+   CHECK(get_memory_fd_properties(dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fp));
+   VkMemoryDedicatedAllocateInfo ded = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+                                        .image = img};
+   VkImportMemoryFdInfoKHR im = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+                                 .pNext = &ded,
+                                 .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                                 .fd = fd};
+   VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                              .pNext = &im,
+                              .allocationSize = req.size,
+                              .memoryTypeIndex =
+                                 memory_type(req.memoryTypeBits & fp.memoryTypeBits, 0)};
+   VkDeviceMemory mem;
+   VkResult r = vkAllocateMemory(dev, &ai, NULL, &mem);
+   if (r != VK_SUCCESS) {
+      fprintf(stderr, "import: the %ux%u buffer (pitch %u) was not imported: %d\n", IMPORT_W,
+              IMPORT_H, stride, r);
+      close(fd);
+      return 1;
+   }
+   CHECK(vkBindImageMemory(dev, img, mem, 0));
+
+   struct buf out = host_buffer(IMPORT_W * IMPORT_H * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+   memset(out.map, 0, IMPORT_W * IMPORT_H * 4);
+   VkCommandBuffer cb = begin();
+   VkImageMemoryBarrier acquire = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                   .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                                   .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                   .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL,
+                                   .dstQueueFamilyIndex = qfam,
+                                   .image = img,
+                                   .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                        0, NULL, 0, NULL, 1, &acquire);
+   VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                             .imageExtent = {IMPORT_W, IMPORT_H, 1}};
+   vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, out.b, 1, &copy);
+   submit_and_wait(cb);
+
+   uint32_t good = 0;
+   for (uint32_t y = 0; y < IMPORT_H; y++)
+      for (uint32_t x = 0; x < IMPORT_W; x++)
+         good += ((uint32_t *)out.map)[y * IMPORT_W + x] == import_pixel(x, y);
+   printf("import: %ux%u at pitch %u: %u/%u pixels as the producer wrote them (first 0x%08x)\n",
+          IMPORT_W, IMPORT_H, stride, good, IMPORT_W * IMPORT_H, ((uint32_t *)out.map)[0]);
+   free_buf(out);
+   vkDestroyImage(dev, img, NULL);
+   vkFreeMemory(dev, mem, NULL);
+   gbm_bo_destroy(bo);
+   gbm_device_destroy(gbm);
+   close(drm);
+   return good == IMPORT_W * IMPORT_H ? 0 : 1;
+}
+
+/* -- syncfd -- */
 
 static int
 sync_fd_follows_work(void)
@@ -734,10 +869,11 @@ main(int argc, char **argv)
                                  .queueCount = 1,
                                  .pQueuePriorities = &prio};
    const char *only = argc > 1 ? argv[1] : NULL;
-   bool sharing = only && !strncmp(only, "share", 5);
+   bool importing = only && !strcmp(only, "import");
+   bool sharing = importing || (only && !strncmp(only, "share", 5));
    bool syncfd = only && !strcmp(only, "syncfd");
    const char *exts[] = {"VK_KHR_external_memory", "VK_KHR_external_memory_fd",
-                         "VK_EXT_external_memory_dma_buf"};
+                         "VK_EXT_external_memory_dma_buf", "VK_EXT_image_drm_format_modifier"};
    const char *sem_exts[] = {"VK_KHR_external_semaphore", "VK_KHR_external_semaphore_fd"};
    VkPhysicalDeviceVulkan12Features f12 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -746,7 +882,7 @@ main(int argc, char **argv)
                             .pNext = &f12,
                             .queueCreateInfoCount = 1,
                             .pQueueCreateInfos = &qi,
-                            .enabledExtensionCount = sharing ? 3 : syncfd ? 2 : 0,
+                            .enabledExtensionCount = importing ? 4 : sharing ? 3 : syncfd ? 2 : 0,
                             .ppEnabledExtensionNames = syncfd ? sem_exts : exts};
    CHECK(vkCreateDevice(pdev, &di, NULL, &dev));
    if (sharing) {
@@ -764,6 +900,8 @@ main(int argc, char **argv)
       fails += signal_reaches_host();
    else if (syncfd)
       fails += sync_fd_follows_work();
+   else if (importing)
+      fails += import_foreign();
    else if (only && !strcmp(only, "share"))
       fails += share(argv[0]);
    else if (only && !strcmp(only, "share-child") && argc > 2)

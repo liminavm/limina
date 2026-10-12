@@ -41,8 +41,10 @@
 #define VIRTIO_GPU_CMD_LIMINA_RING_ATTACH	0x4c04
 #define VIRTIO_GPU_CMD_LIMINA_ARENA_IMPORT	0x4c05
 #define VIRTIO_GPU_CMD_LIMINA_SURFACE_CREATE	0x4c07
+#define VIRTIO_GPU_CMD_LIMINA_SURFACE_IMPORT	0x4c08
 #define VIRTIO_GPU_RESP_OK_LIMINA_CTX		0x1180
 #define VIRTIO_GPU_RESP_OK_LIMINA_ARENA		0x1181
+#define VIRTIO_GPU_RESP_OK_LIMINA_SURFACE	0x1182
 
 /*
  * mmap offsets live far above the GEM fake-offset range, so drm_gem_mmap keeps everything below
@@ -85,6 +87,20 @@ struct virtio_gpu_limina_surface_create {
 	__le32 drm_fourcc;
 	__le32 stride;
 	__le32 padding;
+};
+
+struct virtio_gpu_limina_surface_import {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 resource_id;
+	__le32 padding;
+};
+
+struct virtio_gpu_limina_resp_surface {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 width;
+	__le32 height;
+	__le32 drm_fourcc;
+	__le32 stride;
 };
 
 struct virtio_gpu_limina_arena_destroy {
@@ -161,6 +177,7 @@ static int limina_errno(u32 type)
 	case VIRTIO_GPU_RESP_ERR_INVALID_CONTEXT_ID:
 		return -ENOENT;
 	case VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER:
+	case VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID:
 		return -EINVAL;
 	default:
 		return -EIO;
@@ -607,6 +624,52 @@ int virtio_gpu_limina_surface_create_ioctl(struct drm_device *dev, void *data,
 		return ret;
 	args->handle = handle;
 	args->res_handle = bo->hw_res_handle;
+	return 0;
+}
+
+int virtio_gpu_limina_surface_import_ioctl(struct drm_device *dev, void *data,
+					   struct drm_file *file)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct virtio_gpu_fpriv *vfpriv = file->driver_priv;
+	struct drm_virtgpu_limina_surface_import *args = data;
+	struct virtio_gpu_limina_surface_import cmd = {};
+	struct virtio_gpu_limina_resp_surface resp = {};
+	struct virtio_gpu_limina_file *lf;
+	struct drm_gem_object *obj;
+	u32 res_handle;
+	bool created;
+	int ret;
+
+	if (!vgdev->has_limina)
+		return -ENODEV;
+	lf = limina_file(vgdev, file);
+	if (!lf)
+		return -ENOMEM;
+	mutex_lock(&lf->lock);
+	created = lf->created;
+	mutex_unlock(&lf->lock);
+	if (!created)
+		return -ENOENT;
+	/* Looked up in this file's table, so a context can only ask for what it was given. */
+	obj = drm_gem_object_lookup(file, args->handle);
+	if (!obj)
+		return -ENOENT;
+	res_handle = gem_to_virtio_gpu_obj(obj)->hw_res_handle;
+	drm_gem_object_put(obj);
+
+	cmd.hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_LIMINA_SURFACE_IMPORT);
+	cmd.hdr.ctx_id = cpu_to_le32(vfpriv->ctx_id);
+	cmd.resource_id = cpu_to_le32(res_handle);
+	ret = limina_call(vgdev, &cmd, sizeof(cmd), &resp, sizeof(resp),
+			  VIRTIO_GPU_RESP_OK_LIMINA_SURFACE);
+	if (ret)
+		return ret;
+	args->width = le32_to_cpu(resp.width);
+	args->height = le32_to_cpu(resp.height);
+	args->drm_fourcc = le32_to_cpu(resp.drm_fourcc);
+	args->stride = le32_to_cpu(resp.stride);
+	args->res_handle = res_handle;
 	return 0;
 }
 
