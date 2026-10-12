@@ -1,0 +1,13 @@
+# limina-gpu-wire — the guest<->replayer protocol of limina's Metal-level GPU transport.
+#
+# Shared by the host replayer (macOS arm64) and the guest drivers (aarch64-unknown-linux-musl;
+# the guest workspace path-depends on this crate). `no_std` and dependency-free on purpose: a
+# future kernel-side or driver-side consumer must be able to take it as is.
+[package]
+name = "limina-gpu-wire"
+description = "Ring layout and command encoding of limina's Metal-level guest GPU protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
