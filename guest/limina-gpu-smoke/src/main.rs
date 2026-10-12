@@ -130,6 +130,37 @@ mod uapi {
 
     #[repr(C)]
     #[derive(Default)]
+    pub struct SurfaceCreate {
+        pub width: u32,
+        pub height: u32,
+        pub drm_fourcc: u32,
+        pub stride: u32,
+        pub handle: u32,
+        pub res_handle: u32,
+    }
+
+    /// virtgpu_drm.h's drm_virtgpu_resource_info.
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct ResourceInfo {
+        pub bo_handle: u32,
+        pub res_handle: u32,
+        pub size: u32,
+        pub blob_mem: u32,
+    }
+
+    /// drm.h's drm_gem_close.
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct GemClose {
+        pub handle: u32,
+        pub pad: u32,
+    }
+
+    pub const BLOB_MEM_HOST3D: u32 = 2;
+
+    #[repr(C)]
+    #[derive(Default)]
     pub struct RingAttach {
         pub arena_id: u32,
         pub data_size: u32,
@@ -143,6 +174,9 @@ mod uapi {
     const fn core_iowr(nr: u32, size: usize) -> libc::c_ulong {
         ((3u32 << 30) | ((size as u32) << 16) | ((b'd' as u32) << 8) | nr) as libc::c_ulong
     }
+    const fn iow_core(nr: u32, size: usize) -> libc::c_ulong {
+        ((1u32 << 30) | ((size as u32) << 16) | ((b'd' as u32) << 8) | nr) as libc::c_ulong
+    }
     const fn iow(nr: u32, size: usize) -> libc::c_ulong {
         ((1u32 << 30) | ((size as u32) << 16) | ((b'd' as u32) << 8) | (0x40 + nr)) as libc::c_ulong
     }
@@ -153,6 +187,9 @@ mod uapi {
     pub const ARENA_EXPORT: libc::c_ulong = iowr(0x24, size_of::<ArenaExport>());
     pub const ARENA_IMPORT: libc::c_ulong = iowr(0x25, size_of::<ArenaImport>());
     pub const FENCE: libc::c_ulong = iowr(0x26, size_of::<Fence>());
+    pub const SURFACE_CREATE: libc::c_ulong = iowr(0x27, size_of::<SurfaceCreate>());
+    pub const RESOURCE_INFO: libc::c_ulong = iowr(0x05, size_of::<ResourceInfo>());
+    pub const GEM_CLOSE: libc::c_ulong = iow_core(0x09, size_of::<GemClose>());
     pub const VIRTGPU_MAP: libc::c_ulong = iowr(0x01, size_of::<Map>());
     pub const PRIME_HANDLE_TO_FD: libc::c_ulong = core_iowr(0x2d, size_of::<PrimeHandle>());
     pub const PRIME_FD_TO_HANDLE: libc::c_ulong = core_iowr(0x2e, size_of::<PrimeHandle>());
@@ -726,6 +763,149 @@ fn share(path: &str, f: &File) -> Result<(), String> {
     Ok(())
 }
 
+/// A surface the host makes for sharing beyond this transport: a texture over it renders, and as
+/// a dma-buf in another file it is an ordinary host3d blob resource, the shape a compositor's
+/// driver imports (the host side, vrend adopting it, is virglrs's own test).
+fn surface(path: &str, g: &mut Gpu) -> Result<(), String> {
+    const W: u32 = 64;
+    const H: u32 = 8;
+    const STRIDE: u32 = 256;
+    const READBACK: u64 = 6 * MIB;
+    const BGRA8_UNORM: u32 = 80;
+    let xr24 = u32::from_le_bytes(*b"XR24");
+    let f = &g._file;
+    let mut bad = uapi::SurfaceCreate {
+        width: W,
+        height: H,
+        drm_fourcc: u32::from_le_bytes(*b"NV12"),
+        stride: STRIDE,
+        ..Default::default()
+    };
+    if ioctl(f, uapi::SURFACE_CREATE, &mut bad).is_ok() {
+        return Err("a surface in a format the host cannot share was made".into());
+    }
+    let mut s = uapi::SurfaceCreate {
+        width: W,
+        height: H,
+        drm_fourcc: xr24,
+        stride: STRIDE,
+        ..Default::default()
+    };
+    ioctl(f, uapi::SURFACE_CREATE, &mut s).map_err(|e| format!("SURFACE_CREATE: {e}"))?;
+
+    g.push(
+        cmd::CreateTextureFromSurface {
+            handle: 40,
+            surface: s.res_handle,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: BGRA8_UNORM,
+                width: W,
+                height: H,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            reply: BufRef::NONE,
+        },
+        &[],
+    );
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    let mut pass = cmd::BeginRenderPass::default();
+    pass.colors[0] = cmd::RenderAttachment {
+        texture: 40,
+        load_action: LOAD_CLEAR,
+        store_action: STORE_STORE,
+        clear: [0.0, 1.0, 0.0, 1.0],
+        ..Default::default()
+    };
+    g.push(pass, &[]);
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(
+        cmd::Barrier {
+            kind: cmd::barrier_kind::AFTER_QUEUE_STAGES,
+            after: STAGE_FRAGMENT,
+            before: STAGE_BLIT,
+            visibility: VISIBILITY_DEVICE,
+        },
+        &[],
+    );
+    g.push(
+        cmd::CopyBufferTexture {
+            texture: 40,
+            size: [W, H, 1],
+            buffer: BufRef::new(1, READBACK),
+            bytes_per_row: W as u64 * 4,
+            bytes_per_image: (W * H) as u64 * 4,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait()?;
+    let green = g
+        .main
+        .read(READBACK, (W * H * 4) as usize)
+        .chunks(4)
+        .filter(|p| *p == [0, 255, 0, 255])
+        .count();
+
+    let mut p = uapi::PrimeHandle {
+        handle: s.handle,
+        flags: uapi::DRM_CLOEXEC | uapi::DRM_RDWR,
+        fd: -1,
+    };
+    ioctl(&g._file, uapi::PRIME_HANDLE_TO_FD, &mut p).map_err(|e| format!("PRIME export: {e}"))?;
+    let other = File::options()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| format!("{path}: {e}"))?;
+    let mut imp = uapi::PrimeHandle {
+        fd: p.fd,
+        ..Default::default()
+    };
+    let imported = ioctl(&other, uapi::PRIME_FD_TO_HANDLE, &mut imp);
+    // SAFETY: the fd PRIME gave us.
+    unsafe { libc::close(p.fd) };
+    imported.map_err(|e| format!("PRIME import: {e}"))?;
+    let mut info = uapi::ResourceInfo {
+        bo_handle: imp.handle,
+        ..Default::default()
+    };
+    ioctl(&other, uapi::RESOURCE_INFO, &mut info).map_err(|e| format!("RESOURCE_INFO: {e}"))?;
+    println!(
+        "surface: resource {} cleared, {green} of {} pixels green; imported elsewhere as resource \
+         {}, blob_mem {}, {} bytes",
+        s.res_handle,
+        W * H,
+        info.res_handle,
+        info.blob_mem,
+        info.size
+    );
+    let mut close = uapi::GemClose {
+        handle: s.handle,
+        pad: 0,
+    };
+    ioctl(&g._file, uapi::GEM_CLOSE, &mut close).map_err(|e| format!("GEM_CLOSE: {e}"))?;
+    if green != (W * H) as usize {
+        return Err("the surface did not take the clear".into());
+    }
+    if info.res_handle != s.res_handle
+        || info.blob_mem != uapi::BLOB_MEM_HOST3D
+        // The object is page-rounded.
+        || info.size < STRIDE * H
+    {
+        return Err("the import is not the surface's resource".into());
+    }
+    Ok(())
+}
+
 /// Whether `fd` polls readable within `ms`: a signaled sync_file, or a dma-buf with no pending
 /// write.
 fn ready(fd: i32, ms: i32) -> bool {
@@ -929,6 +1109,7 @@ fn main() {
     let result = triangle(&mut g)
         .and_then(|()| poke(&mut g, &other))
         .and_then(|()| share(&path, &g._file))
+        .and_then(|()| surface(&path, &mut g))
         .and_then(|()| fence(&mut g))
         .and_then(|()| orphan_fence(&path))
         .and_then(|()| round_trips(&mut g));

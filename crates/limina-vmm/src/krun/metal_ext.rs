@@ -273,6 +273,18 @@ impl GpuExtension for ReplayerExtension {
         }
     }
 
+    fn bind_surface(&self, ctx: u32, surface: u32, port: u32) -> Result<(), String> {
+        self.replayer
+            .bind_surface(ctx, surface, port)
+            .map_err(|e| e.to_string())
+    }
+
+    fn release_surface(&self, ctx: u32, surface: u32) {
+        if let Err(e) = self.replayer.release_surface(ctx, surface) {
+            log::warn!("metal ext: release surface {surface} of {ctx}: {e}");
+        }
+    }
+
     fn doorbell(&self, doorbell: u32) {
         if let Some(Some(b)) = self
             .doorbells

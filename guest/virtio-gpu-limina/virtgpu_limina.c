@@ -16,6 +16,7 @@
 #include <linux/dma-fence.h>
 #include <linux/file.h>
 #include <linux/mm.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/sync_file.h>
 
@@ -39,6 +40,7 @@
 #define VIRTIO_GPU_CMD_LIMINA_ARENA_DESTROY	0x4c03
 #define VIRTIO_GPU_CMD_LIMINA_RING_ATTACH	0x4c04
 #define VIRTIO_GPU_CMD_LIMINA_ARENA_IMPORT	0x4c05
+#define VIRTIO_GPU_CMD_LIMINA_SURFACE_CREATE	0x4c07
 #define VIRTIO_GPU_RESP_OK_LIMINA_CTX		0x1180
 #define VIRTIO_GPU_RESP_OK_LIMINA_ARENA		0x1181
 
@@ -73,6 +75,16 @@ struct virtio_gpu_limina_arena_import {
 	struct virtio_gpu_ctrl_hdr hdr;
 	__le32 arena_id;
 	__le32 resource_id;
+};
+
+struct virtio_gpu_limina_surface_create {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 resource_id;
+	__le32 width;
+	__le32 height;
+	__le32 drm_fourcc;
+	__le32 stride;
+	__le32 padding;
 };
 
 struct virtio_gpu_limina_arena_destroy {
@@ -526,6 +538,76 @@ err:
 	mutex_unlock(&lf->lock);
 	kfree(a);
 	return ret;
+}
+
+int virtio_gpu_limina_surface_create_ioctl(struct drm_device *dev, void *data,
+					   struct drm_file *file)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct virtio_gpu_fpriv *vfpriv = file->driver_priv;
+	struct drm_virtgpu_limina_surface_create *args = data;
+	struct virtio_gpu_limina_surface_create cmd = {};
+	struct virtio_gpu_object_params params = {};
+	struct virtio_gpu_ctrl_hdr resp = {};
+	struct virtio_gpu_limina_file *lf;
+	struct virtio_gpu_object *bo;
+	struct drm_gem_object *obj;
+	bool created;
+	u32 handle;
+	int ret;
+
+	if (!vgdev->has_limina)
+		return -ENODEV;
+	/* The host checks the format and that the pitch is one it can lay rows out at. */
+	if (!args->width || !args->height || args->stride / 4 < args->width ||
+	    (u64)args->stride * args->height > SZ_1G)
+		return -EINVAL;
+	lf = limina_file(vgdev, file);
+	if (!lf)
+		return -ENOMEM;
+	mutex_lock(&lf->lock);
+	created = lf->created;
+	mutex_unlock(&lf->lock);
+	if (!created)
+		return -ENOENT;
+
+	/* A blob of host3d memory, for RESOURCE_INFO; shareable, never mappable. */
+	params.size = (u64)args->stride * args->height;
+	params.blob = true;
+	params.ctx_id = vfpriv->ctx_id;
+	params.blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
+	params.blob_flags = VIRTGPU_BLOB_FLAG_USE_SHAREABLE;
+	ret = virtio_gpu_vram_init(vgdev, &params, &bo);
+	if (ret)
+		return ret;
+	bo->host3d_blob = true;
+	bo->blob_mem = params.blob_mem;
+	bo->blob_flags = params.blob_flags;
+	obj = &bo->base.base;
+
+	cmd.hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_LIMINA_SURFACE_CREATE);
+	cmd.hdr.ctx_id = cpu_to_le32(vfpriv->ctx_id);
+	cmd.resource_id = cpu_to_le32(bo->hw_res_handle);
+	cmd.width = cpu_to_le32(args->width);
+	cmd.height = cpu_to_le32(args->height);
+	cmd.drm_fourcc = cpu_to_le32(args->drm_fourcc);
+	cmd.stride = cpu_to_le32(args->stride);
+	ret = limina_call(vgdev, &cmd, sizeof(cmd), &resp, sizeof(resp),
+			  VIRTIO_GPU_RESP_OK_NODATA);
+	/* Made or refused, the unref that freeing the object sends is what returns its id. */
+	bo->created = true;
+	if (ret) {
+		drm_gem_object_put(obj);
+		return ret;
+	}
+	ret = drm_gem_handle_create(file, obj, &handle);
+	/* The handle owns the object now, or nothing does and this frees it. */
+	drm_gem_object_put(obj);
+	if (ret)
+		return ret;
+	args->handle = handle;
+	args->res_handle = bo->hw_res_handle;
+	return 0;
 }
 
 int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data, struct drm_file *file)

@@ -23,6 +23,7 @@ extern "C" {
 #define DRM_VIRTGPU_LIMINA_ARENA_EXPORT  0x24
 #define DRM_VIRTGPU_LIMINA_ARENA_IMPORT  0x25
 #define DRM_VIRTGPU_LIMINA_FENCE         0x26
+#define DRM_VIRTGPU_LIMINA_SURFACE_CREATE 0x27
 
 /* Arena ids are below this. */
 #define VIRTGPU_LIMINA_MAX_ARENAS 4096
@@ -93,6 +94,22 @@ struct drm_virtgpu_limina_fence {
 	__u32 pad;
 };
 
+/*
+ * A GEM object whose storage is a surface the host makes: `width` x `height` of DRM format
+ * `drm_fourcc` (ARGB/XRGB/ABGR/XBGR8888), rows `stride` bytes apart. This context renders into it
+ * through a texture made over surface `res_handle` (the ring's CREATE_TEXTURE_FROM_SURFACE); any
+ * other context, of any kind, reaches it as an ordinary resource, typically received as a dma-buf.
+ * It cannot be mapped.
+ */
+struct drm_virtgpu_limina_surface_create {
+	__u32 width;
+	__u32 height;
+	__u32 drm_fourcc;
+	__u32 stride;
+	__u32 handle;		/* out: GEM handle */
+	__u32 res_handle;	/* out: the resource, which names the surface on the ring */
+};
+
 /* Starts the host consuming the command ring userspace initialised in an arena. */
 struct drm_virtgpu_limina_ring_attach {
 	__u32 arena_id;
@@ -121,6 +138,9 @@ struct drm_virtgpu_limina_ring_attach {
 #define DRM_IOCTL_VIRTGPU_LIMINA_FENCE \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_LIMINA_FENCE, \
 		 struct drm_virtgpu_limina_fence)
+#define DRM_IOCTL_VIRTGPU_LIMINA_SURFACE_CREATE \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_LIMINA_SURFACE_CREATE, \
+		 struct drm_virtgpu_limina_surface_create)
 
 #if defined(__cplusplus)
 }

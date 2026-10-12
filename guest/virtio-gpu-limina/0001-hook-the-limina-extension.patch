@@ -32,7 +32,7 @@ index a5ce96f..942451a 100644
  static const struct drm_driver driver = {
  	/*
 diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.h b/drivers/gpu/drm/virtio/virtgpu_drv.h
-index f17660a..d7d87f0 100644
+index f17660a..7df7479 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_drv.h
 +++ b/drivers/gpu/drm/virtio/virtgpu_drv.h
 @@ -42,6 +42,7 @@
@@ -55,7 +55,7 @@ index f17660a..d7d87f0 100644
  	struct work_struct config_changed_work;
  
  	struct work_struct obj_free_work;
-@@ -287,13 +293,45 @@ struct virtio_gpu_fpriv {
+@@ -287,13 +293,47 @@ struct virtio_gpu_fpriv {
  	struct mutex context_lock;
  	char debug_name[DEBUG_NAME_MAX_LEN];
  	bool explicit_debug_name;
@@ -65,7 +65,7 @@ index f17660a..d7d87f0 100644
  /* virtgpu_ioctl.c */
 -#define DRM_VIRTIO_NUM_IOCTLS 12
 +/* limina's ioctls sit at 0x20.., clear of upstream's */
-+#define DRM_VIRTIO_NUM_IOCTLS 0x27
++#define DRM_VIRTIO_NUM_IOCTLS 0x28
  extern struct drm_ioctl_desc virtio_gpu_ioctls[DRM_VIRTIO_NUM_IOCTLS];
  void virtio_gpu_create_context(struct drm_device *dev, struct drm_file *file);
  
@@ -98,11 +98,13 @@ index f17660a..d7d87f0 100644
 +					 struct drm_file *file);
 +int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data,
 +				  struct drm_file *file);
++int virtio_gpu_limina_surface_create_ioctl(struct drm_device *dev, void *data,
++					   struct drm_file *file);
 +
  /* virtgpu_kms.c */
  int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev);
  void virtio_gpu_deinit(struct drm_device *dev);
-@@ -379,6 +417,11 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
+@@ -379,6 +419,11 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
  void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
  				   uint32_t context_init, uint32_t nlen,
  				   const char *name);
@@ -114,8 +116,18 @@ index f17660a..d7d87f0 100644
  void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
  				    uint32_t id);
  void virtio_gpu_cmd_context_attach_resource(struct virtio_gpu_device *vgdev,
+@@ -498,6 +543,9 @@ void virtio_gpu_debugfs_init(struct drm_minor *minor);
+ 
+ /* virtgpu_vram.c */
+ bool virtio_gpu_is_vram(struct virtio_gpu_object *bo);
++int virtio_gpu_vram_init(struct virtio_gpu_device *vgdev,
++			 struct virtio_gpu_object_params *params,
++			 struct virtio_gpu_object **bo_ptr);
+ int virtio_gpu_vram_create(struct virtio_gpu_device *vgdev,
+ 			   struct virtio_gpu_object_params *params,
+ 			   struct virtio_gpu_object **bo_ptr);
 diff --git a/drivers/gpu/drm/virtio/virtgpu_ioctl.c b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
-index c33c057..1f9fcc9 100644
+index c33c057..bf8a772 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_ioctl.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_ioctl.c
 @@ -33,6 +33,7 @@
@@ -126,7 +138,7 @@ index c33c057..1f9fcc9 100644
  
  #define VIRTGPU_BLOB_FLAG_USE_MASK (VIRTGPU_BLOB_FLAG_USE_MAPPABLE | \
  				    VIRTGPU_BLOB_FLAG_USE_SHAREABLE | \
-@@ -732,4 +733,25 @@ struct drm_ioctl_desc virtio_gpu_ioctls[DRM_VIRTIO_NUM_IOCTLS] = {
+@@ -732,4 +733,28 @@ struct drm_ioctl_desc virtio_gpu_ioctls[DRM_VIRTIO_NUM_IOCTLS] = {
  
  	DRM_IOCTL_DEF_DRV(VIRTGPU_CONTEXT_INIT, virtio_gpu_context_init_ioctl,
  			  DRM_RENDER_ALLOW),
@@ -150,6 +162,9 @@ index c33c057..1f9fcc9 100644
 +			  DRM_RENDER_ALLOW),
 +
 +	DRM_IOCTL_DEF_DRV(VIRTGPU_LIMINA_FENCE, virtio_gpu_limina_fence_ioctl,
++			  DRM_RENDER_ALLOW),
++
++	DRM_IOCTL_DEF_DRV(VIRTGPU_LIMINA_SURFACE_CREATE, virtio_gpu_limina_surface_create_ioctl,
 +			  DRM_RENDER_ALLOW),
  };
 diff --git a/drivers/gpu/drm/virtio/virtgpu_kms.c b/drivers/gpu/drm/virtio/virtgpu_kms.c
@@ -251,3 +266,51 @@ index 0c194b4..043ad21 100644
  void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
  				    uint32_t id)
  {
+diff --git a/drivers/gpu/drm/virtio/virtgpu_vram.c b/drivers/gpu/drm/virtio/virtgpu_vram.c
+index 5ad3b7c..079d84f 100644
+--- a/drivers/gpu/drm/virtio/virtgpu_vram.c
++++ b/drivers/gpu/drm/virtio/virtgpu_vram.c
+@@ -185,9 +185,14 @@ err_remove_node:
+ 	return ret;
+ }
+ 
+-int virtio_gpu_vram_create(struct virtio_gpu_device *vgdev,
+-			   struct virtio_gpu_object_params *params,
+-			   struct virtio_gpu_object **bo_ptr)
++/*
++ * A vram object and its resource id, not yet created on the host: limina's surfaces are created
++ * by a command of their own. Set bo->created once a create has been sent, so that freeing the
++ * object sends the unref that returns the id.
++ */
++int virtio_gpu_vram_init(struct virtio_gpu_device *vgdev,
++			 struct virtio_gpu_object_params *params,
++			 struct virtio_gpu_object **bo_ptr)
+ {
+ 	struct drm_gem_object *obj;
+ 	struct virtio_gpu_object_vram *vram;
+@@ -216,6 +221,25 @@ int virtio_gpu_vram_create(struct virtio_gpu_device *vgdev,
+ 		return ret;
+ 	}
+ 
++	*bo_ptr = &vram->base;
++	return 0;
++}
++
++int virtio_gpu_vram_create(struct virtio_gpu_device *vgdev,
++			   struct virtio_gpu_object_params *params,
++			   struct virtio_gpu_object **bo_ptr)
++{
++	struct virtio_gpu_object_vram *vram;
++	struct drm_gem_object *obj;
++	struct virtio_gpu_object *bo;
++	int ret;
++
++	ret = virtio_gpu_vram_init(vgdev, params, &bo);
++	if (ret)
++		return ret;
++	vram = to_virtio_gpu_vram(bo);
++	obj = &vram->base.base.base;
++
+ 	virtio_gpu_cmd_resource_create_blob(vgdev, &vram->base, params, NULL,
+ 					    0);
+ 	if (params->blob_flags & VIRTGPU_BLOB_FLAG_USE_MAPPABLE) {
