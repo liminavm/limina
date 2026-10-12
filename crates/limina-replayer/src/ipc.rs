@@ -33,10 +33,15 @@ pub const RELEASE_SURFACE: i32 = 0x4c47_000a;
 pub const EXPORT_CONTEXT: i32 = 0x4c47_000b;
 /// [`RestoreArena`] → [`ArenaReply`] + a memory entry: an arena made at `gpu_base`, the address a
 /// restored guest holds for it. Arenas are restored in address order, before anything else; holes
-/// below the address are held by placeholders until [`RESTORE_ARENAS_DONE`].
+/// below the address are held by placeholders until [`RESTORE_DONE`].
 pub const RESTORE_ARENA: i32 = 0x4c47_000c;
-/// `{}` → `{status}`: every arena stands; the placeholders go.
-pub const RESTORE_ARENAS_DONE: i32 = 0x4c47_000d;
+/// `{}` → `{status}`: every arena and context stands; the placeholders go.
+pub const RESTORE_DONE: i32 = 0x4c47_000d;
+/// [`RestoreContext`] + a memory entry holding an encoded
+/// [`ContextExport`](crate::journal::ContextExport) → `{status}`. Starts the context's ring at
+/// the exported position with its objects rebuilt, after its arenas are restored. A context that
+/// cannot be rebuilt starts lost; the request still succeeds.
+pub const RESTORE_CONTEXT: i32 = 0x4c47_000e;
 
 /// Request statuses.
 pub const OK: i32 = 0;
@@ -148,6 +153,15 @@ pub struct RestoreArena {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct RestoreContext {
+    /// Where the ring is, as for [`AttachRing`].
+    pub ring: AttachRing,
+    /// Bytes of the export in the memory entry.
+    pub len: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ExportReply {
     pub status: i32,
     pub _pad: u32,
@@ -174,3 +188,4 @@ unsafe impl Pod for ExportRequest {}
 unsafe impl Pod for SurfaceRequest {}
 unsafe impl Pod for ExportReply {}
 unsafe impl Pod for RestoreArena {}
+unsafe impl Pod for RestoreContext {}

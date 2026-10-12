@@ -11,10 +11,10 @@ use limina_gpu_wire::ring::{self, Consumer};
 use objc2::rc::Retained;
 use objc2_metal::MTLDevice;
 
-use crate::exec::{Arenas, Executor, Mailbox, Surfaces};
+use crate::exec::{Arenas, Executor, Mailbox, Placeholders, Surfaces};
 use crate::ipc::{self, Pod};
 use crate::journal::ContextExport;
-use crate::mach::{self, Message, ReceivePort, Semaphore};
+use crate::mach::{self, Mapping, Message, ReceivePort, Semaphore};
 use crate::metal::{self, Arena, Device};
 
 struct RingThread {
@@ -51,6 +51,8 @@ struct Server {
     exports: HashMap<u32, Arc<Arena>>,
     /// Arenas holding the holes below restored arenas' addresses, until every arena stands.
     placeholders: Vec<Arena>,
+    /// Objects holding resource IDs below restored objects', until every context stands.
+    id_placeholders: Placeholders,
 }
 
 /// The address space Metal leaves after each allocation.
@@ -88,6 +90,7 @@ fn serve() -> std::io::Result<()> {
         contexts: HashMap::new(),
         exports: HashMap::new(),
         placeholders: Vec::new(),
+        id_placeholders: Placeholders::default(),
     };
     loop {
         let Some(msg) = service.receive(None)? else {
@@ -221,10 +224,16 @@ impl Server {
                     ),
                 },
             },
-            ipc::RESTORE_ARENAS_DONE => {
+            ipc::RESTORE_DONE => {
                 self.placeholders.clear();
+                self.id_placeholders = Placeholders::default();
                 (status(ipc::OK), vec![])
             }
+            ipc::RESTORE_CONTEXT => match (ipc::RestoreContext::read(&msg.data), msg.ports.first())
+            {
+                (Some(r), Some(entry)) => (status(self.restore_context(r, entry)), vec![]),
+                _ => (status(ipc::ERR_MALFORMED), vec![]),
+            },
             ipc::EXPORT_CONTEXT => match ipc::CtxRequest::read(&msg.data) {
                 None => (status(ipc::ERR_MALFORMED), vec![]),
                 Some(r) => match self.export_context(r.ctx) {
@@ -475,7 +484,51 @@ impl Server {
         }
     }
 
+    fn restore_context(&mut self, r: ipc::RestoreContext, entry: &mach::Port) -> i32 {
+        let export = match Mapping::map(entry, r.len.max(1).next_multiple_of(metal::PAGE)) {
+            // SAFETY: the mapping holds at least `len` bytes.
+            Ok(m) => ContextExport::decode(unsafe {
+                std::slice::from_raw_parts(m.as_ptr(), r.len as usize)
+            }),
+            Err(e) => {
+                log::warn!("restore: map export: {e}");
+                return ipc::ERR_MALFORMED;
+            }
+        };
+        let Some(export) = export else {
+            log::warn!("restore: context {}: malformed export", r.ring.ctx);
+            return ipc::ERR_MALFORMED;
+        };
+        let position = export.position;
+        self.start_ring(
+            r.ring,
+            |region, size| {
+                // SAFETY: as for `attach`, checked by `start_ring`.
+                unsafe { Consumer::resume(region, size, position) }
+            },
+            |exec, ids| exec.restore(&export, ids),
+        )
+    }
+
     fn attach_ring(&mut self, r: ipc::AttachRing) -> i32 {
+        self.start_ring(
+            r,
+            |region, size| {
+                // SAFETY: inside the arena, for the region's whole size, checked by `start_ring`.
+                unsafe { Consumer::attach(region, size) }
+            },
+            |_, _| {},
+        )
+    }
+
+    /// Starts context `r.ctx`'s ring thread over the ring `r` locates, consumed by what `consumer`
+    /// makes of it, once `prepare` has had the executor.
+    fn start_ring(
+        &mut self,
+        r: ipc::AttachRing,
+        consumer: impl FnOnce(NonNull<u8>, u32) -> Result<Consumer, ring::Error>,
+        prepare: impl FnOnce(&mut Executor, &mut Placeholders),
+    ) -> i32 {
         let Some(ctx) = self.contexts.get_mut(&r.ctx) else {
             return ipc::ERR_NO_CONTEXT;
         };
@@ -499,15 +552,14 @@ impl Server {
         }
         // SAFETY: inside the arena, which the executor keeps alive.
         let region = unsafe { NonNull::new_unchecked(arena.contents().add(r.offset as usize)) };
-        // SAFETY: as above, for the region's whole size.
-        let consumer = match unsafe { Consumer::attach(region, r.data_size) } {
+        let consumer = match consumer(region, r.data_size) {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("attach ring: {e:?}");
                 return ipc::ERR_BAD_VALUE;
             }
         };
-        let Some(exec) = Executor::new(
+        let Some(mut exec) = Executor::new(
             self.device.clone(),
             consumer,
             arena,
@@ -517,6 +569,7 @@ impl Server {
         ) else {
             return ipc::ERR_INTERNAL;
         };
+        prepare(&mut exec, &mut self.id_placeholders);
         let stop = Arc::new(AtomicBool::new(false));
         let doorbell = ctx.doorbell.clone();
         let stop2 = stop.clone();

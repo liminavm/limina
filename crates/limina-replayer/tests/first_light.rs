@@ -1452,7 +1452,7 @@ fn an_export_inside_open_command_buffers_carries_their_commands() {
         "{handles:?}"
     );
     assert_eq!(e.tables, vec![(6, vec![base + MIB, 0, 0, 0])]);
-    let ops: Vec<u16> = e.recording.iter().map(|(op, _)| *op).collect();
+    let ops: Vec<u16> = e.recording.iter().map(|(op, _, _)| *op).collect();
     assert_eq!(
         ops,
         vec![
@@ -1494,7 +1494,7 @@ fn arenas_are_restored_at_their_addresses() {
         assert_eq!(a.mapping.size(), size, "arena {id}");
         kept.push(a);
     }
-    fresh.restore_arenas_done().expect("done");
+    fresh.restore_done().expect("done");
     let after = fresh.create_arena(1, 50, MIB).expect("arena");
     // Placeholders are gone: a new arena takes the lowest hole it fits, here arena 3's.
     let lowest_hole = live
@@ -1504,4 +1504,123 @@ fn arenas_are_restored_at_their_addresses() {
         .expect("a hole")
         .0;
     assert_eq!(after.gpu_base, lowest_hole);
+}
+
+/// Moves the guest's context into a fresh replayer the way a snapshot restore does: the arena at
+/// its address with its contents, then the context's objects and ring.
+fn restore_into_fresh(g: Guest) -> Guest {
+    let export = g.replayer.export_context(1).expect("export");
+    let Guest {
+        replayer: old,
+        ring,
+        arena: old_arena,
+        seqno,
+        ..
+    } = g;
+    let fresh = Replayer::spawn(Path::new(env!("CARGO_BIN_EXE_limina-replayer"))).expect("spawn");
+    let bell = fresh.create_context(1).expect("context");
+    let arena = fresh
+        .restore_arena(1, 1, old_arena.mapping.size(), old_arena.gpu_base)
+        .expect("arena");
+    // SAFETY: both mappings are the arena's size; the old replayer no longer writes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            old_arena.mapping.as_ptr(),
+            arena.mapping.as_ptr(),
+            arena.mapping.size() as usize,
+        )
+    };
+    drop(old);
+    fresh
+        .restore_context(1, 1, 0, RING_DATA, &export)
+        .expect("restore");
+    fresh.restore_done().expect("done");
+    // SAFETY: the new mapping holds a copy of the ring and lives as long as the producer.
+    let ring = unsafe { ring.moved_to(NonNull::new(arena.mapping.as_ptr()).unwrap()) };
+    Guest {
+        replayer: fresh,
+        bell,
+        ring,
+        arena,
+        seqno,
+    }
+}
+
+/// Textures and samplers made and destroyed first, so the IDs a context holds have holes below.
+fn churn_ids(g: &mut Guest) {
+    for h in 100..106 {
+        churn_texture(g, h);
+    }
+    for h in 106..110 {
+        churn_sampler(g, h);
+    }
+    for h in [100, 102, 103, 107] {
+        churn_destroy(g, h);
+    }
+}
+
+#[test]
+fn a_context_restored_in_a_fresh_replayer_is_the_one_the_guest_knew() {
+    let mut g = start();
+    churn_ids(&mut g);
+    populate(&mut g);
+    let before = export(&mut g);
+    let mut g = restore_into_fresh(g);
+    let after = export(&mut g);
+    assert!(!after.lost, "restored lost: {:?}", g.ring.error());
+    assert_eq!(after, before);
+
+    // The restored objects work: a view of the restored view, a library for the pipeline's name,
+    // and a commit that waits for the event to have reached its restored value.
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTextureView {
+            handle: 20,
+            parent: 4,
+            pixel_format: RGBA8_UNORM,
+            texture_type: TEX_2D,
+            level_count: 1,
+            slice_count: 1,
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    g.push(
+        cmd::QueueEvent {
+            event: 7,
+            wait: 1,
+            value: 5,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit after restore");
+    assert!(g.ring.error().is_none());
+}
+
+#[test]
+fn a_context_restored_inside_open_command_buffers_runs_them_again() {
+    let mut g = start();
+    churn_ids(&mut g);
+    populate(&mut g);
+    let base = g.arena.gpu_base;
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    table(&mut g, 8, &[(1, base + 2 * MIB)]);
+    g.push(cmd::Destroy { handle: 5, _pad: 0 }, &[]);
+    let texture = churn_texture(&mut g, 9);
+    let before = export(&mut g);
+    let mut g = restore_into_fresh(g);
+    let after = export(&mut g);
+    assert!(!after.lost, "restored lost: {:?}", g.ring.error());
+    assert_eq!(after, before);
+    let made = after.recording.iter().find(|(op, _, _)| *op == cmd::op::CREATE_TEXTURE);
+    assert_eq!(made.expect("recorded").2[0], texture);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("the open command buffer commits");
+    let e = export(&mut g);
+    assert!(e.recording.is_empty());
+    let handles: Vec<u32> = e.objects.iter().map(|o| o.handle).collect();
+    assert!(handles.contains(&8) && handles.contains(&9) && !handles.contains(&5));
+    assert_eq!(e.tables.iter().find(|(h, _)| *h == 8).unwrap().1[1], base + 2 * MIB);
 }

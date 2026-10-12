@@ -202,8 +202,46 @@ impl Replayer {
         self.mapped_arena(r)
     }
 
-    pub fn restore_arenas_done(&self) -> io::Result<()> {
-        self.simple("restore done", ipc::RESTORE_ARENAS_DONE, &[])
+    /// Starts context `ctx`'s ring where `export` (an encoded
+    /// [`ContextExport`](crate::journal::ContextExport)) left it, with its objects rebuilt.
+    /// Its arenas, and any surfaces it uses, must be in place.
+    pub fn restore_context(
+        &self,
+        ctx: u32,
+        arena: u32,
+        offset: u64,
+        data_size: u32,
+        export: &[u8],
+    ) -> io::Result<()> {
+        let blob = mach::Anonymous::new(export.len() as u64)?;
+        // SAFETY: the allocation is at least `export.len()` long and ours alone.
+        unsafe { std::ptr::copy_nonoverlapping(export.as_ptr(), blob.as_ptr(), export.len()) };
+        let (entry, _) = mach::make_memory_entry(blob.addr(), blob.size())?;
+        let req = ipc::RestoreContext {
+            ring: ipc::AttachRing {
+                ctx,
+                arena,
+                offset,
+                data_size,
+                _pad: 0,
+            },
+            len: export.len() as u64,
+        };
+        let r = self.call_with(
+            ipc::RESTORE_CONTEXT,
+            req.bytes(),
+            &[(entry.into_name(), mach::MSG_TYPE_MOVE_SEND)],
+        )?;
+        let s = ipc::Status::read(&r.data).ok_or_else(|| io::Error::other("short reply"))?;
+        if s.status != ipc::OK {
+            return Err(status_err("context restore", s.status));
+        }
+        Ok(())
+    }
+
+    /// Every arena and context is restored: the replayer lets go of what held their places.
+    pub fn restore_done(&self) -> io::Result<()> {
+        self.simple("restore done", ipc::RESTORE_DONE, &[])
     }
 
     pub fn destroy_arena(&self, ctx: u32, arena: u32) -> io::Result<()> {

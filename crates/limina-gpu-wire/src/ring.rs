@@ -107,6 +107,8 @@ pub enum Error {
     GpuFault = 11,
     /// The host could not allocate what a command needed.
     OutOfMemory = 12,
+    /// A snapshot restore could not rebuild the context as the guest knew it.
+    Restore = 13,
 }
 
 impl Error {
@@ -124,6 +126,7 @@ impl Error {
             10 => Self::BadState,
             11 => Self::GpuFault,
             12 => Self::OutOfMemory,
+            13 => Self::Restore,
             _ => return None,
         })
     }
@@ -192,6 +195,19 @@ impl Producer {
             size: data_size as u64,
             tail: 0,
             head_seen: 0,
+        }
+    }
+
+    /// The same producer over a copy of its ring at `region`, as a snapshot restore leaves it.
+    ///
+    /// # Safety
+    /// As for [`Self::init`], and `region` must hold a copy of the ring's bytes.
+    pub unsafe fn moved_to(self, region: NonNull<u8>) -> Self {
+        Self {
+            ctrl: region.cast(),
+            // SAFETY: DATA_OFFSET is inside the region.
+            data: unsafe { region.add(DATA_OFFSET) },
+            ..self
         }
     }
 
@@ -351,6 +367,47 @@ impl Consumer {
             data: unsafe { region.add(DATA_OFFSET) },
             size: data_size as u64,
             head: 0,
+        })
+    }
+
+    /// Picks a ring up at `position`, where a consumer before a snapshot left it. The host-written
+    /// fields are the ring's own, restored with it.
+    ///
+    /// # Safety
+    /// As for [`Self::attach`].
+    pub unsafe fn resume(
+        region: NonNull<u8>,
+        data_size: u32,
+        position: u64,
+    ) -> Result<Self, Error> {
+        if !valid_data_size(data_size) || !position.is_multiple_of(CMD_ALIGN as u64) {
+            return Err(Error::BadValue);
+        }
+        let ctrl = region.cast::<RingControl>();
+        // SAFETY: by the caller's contract.
+        let c = unsafe { ctrl.as_ref() };
+        // SAFETY: in bounds and aligned.
+        let (magic, version) = unsafe {
+            (
+                core::ptr::read_volatile(&c.magic),
+                core::ptr::read_volatile(&c.version),
+            )
+        };
+        let tail = c.tail.load(Ordering::Acquire);
+        if magic != MAGIC
+            || version != crate::VERSION
+            || tail < position
+            || tail - position > data_size as u64
+        {
+            return Err(Error::Corrupt);
+        }
+        c.head.store(position, Ordering::Release);
+        Ok(Self {
+            ctrl,
+            // SAFETY: inside the region.
+            data: unsafe { region.add(DATA_OFFSET) },
+            size: data_size as u64,
+            head: position,
         })
     }
 

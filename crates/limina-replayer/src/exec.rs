@@ -6,7 +6,7 @@
 //! can dereference any address it computes, so checking the ones a command names would buy no
 //! isolation, and they pass through as given.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -139,7 +139,8 @@ struct Entry {
 /// was then, and carries the commands to run again on top.
 #[derive(Default)]
 struct Window {
-    commands: Vec<(u16, Box<[u8]>)>,
+    /// Each with what it answered, if it made an object.
+    commands: Vec<(u16, Box<[u8]>, [u64; 6])>,
     /// Objects created inside the window: the window's commands make them again.
     created: HashSet<u32>,
     /// Objects from before the window that it destroyed, which an export still holds.
@@ -175,9 +176,13 @@ impl Objects {
         self.map.values().map(|e| &e.obj)
     }
 
+    /// Files a create's object; inside a window, also what the create answered.
     fn insert(&mut self, h: u32, obj: Object, rec: Record) {
         if let Some(w) = &mut self.window {
             w.created.insert(h);
+            if let Some(last) = w.commands.last_mut() {
+                last.2 = rec.value;
+            }
         }
         self.map.insert(
             h,
@@ -250,7 +255,7 @@ impl Objects {
             self.window = Some(Window::default());
         }
         if let Some(w) = &mut self.window {
-            w.commands.push((op, payload.into()));
+            w.commands.push((op, payload.into(), [0; 6]));
         }
     }
 
@@ -320,7 +325,11 @@ impl Objects {
         e.tables.sort_by_key(|(h, _)| *h);
         e.events.sort_by_key(|(h, _)| *h);
         e.shared_events.sort_by_key(|(h, _)| *h);
-        e.recording = w.commands.iter().map(|(op, p)| (*op, p.to_vec())).collect();
+        e.recording = w
+            .commands
+            .iter()
+            .map(|(op, p, value)| (*op, p.to_vec(), *value))
+            .collect();
     }
 }
 // SAFETY: Metal objects may be released from any thread.
@@ -511,6 +520,122 @@ fn check_region(
     Ok(())
 }
 
+fn is_create(op: u16) -> bool {
+    matches!(
+        op,
+        op::CREATE_TEXTURE
+            | op::CREATE_TEXTURE_FROM_SURFACE
+            | op::CREATE_TEXTURE_VIEW
+            | op::CREATE_SAMPLER
+            | op::CREATE_LIBRARY
+            | op::CREATE_RENDER_PIPELINE
+            | op::CREATE_COMPUTE_PIPELINE
+            | op::CREATE_DEPTH_STENCIL
+            | op::CREATE_ARGUMENT_TABLE
+            | op::CREATE_SYNC
+            | op::CREATE_COUNTER_HEAP
+    )
+}
+
+/// Tries an import makes at bringing one object to its recorded resource ID.
+const FILL_TRIES: usize = 100;
+
+/// Objects holding resource IDs while a restore brings objects to their recorded ones. Shared by
+/// every context restored into a replayer, since contexts share the ID spaces; dropped once all
+/// stand.
+#[derive(Default)]
+pub struct Placeholders {
+    textures: BTreeMap<u64, Po<dyn MTLTexture>>,
+    samplers: BTreeMap<u64, Po<dyn MTLSamplerState>>,
+}
+
+/// The two resource ID spaces: textures (views included) and samplers.
+#[derive(Clone, Copy)]
+enum Space {
+    Texture,
+    Sampler,
+}
+
+impl Space {
+    fn of(op: u16) -> Option<Self> {
+        match op {
+            op::CREATE_TEXTURE | op::CREATE_TEXTURE_FROM_SURFACE | op::CREATE_TEXTURE_VIEW => {
+                Some(Self::Texture)
+            }
+            op::CREATE_SAMPLER => Some(Self::Sampler),
+            _ => None,
+        }
+    }
+}
+
+impl Placeholders {
+    /// Frees the placeholder holding `id`, if one does.
+    fn release(&mut self, space: Space, id: u64) -> bool {
+        match space {
+            Space::Texture => self.textures.remove(&id).is_some(),
+            Space::Sampler => self.samplers.remove(&id).is_some(),
+        }
+    }
+
+    /// Makes one more placeholder and returns the ID it took.
+    fn grow(&mut self, space: Space, device: &Device) -> Result<u64, Error> {
+        match space {
+            Space::Texture => {
+                // SAFETY: plain descriptor construction.
+                let d = unsafe {
+                    MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                        MTLPixelFormat::RGBA8Unorm,
+                        1,
+                        1,
+                        false,
+                    )
+                };
+                d.setStorageMode(MTLStorageMode::Private);
+                let t = device
+                    .newTextureWithDescriptor(&d)
+                    .ok_or(Error::OutOfMemory)?;
+                let id = resource_id(t.gpuResourceID());
+                self.textures.insert(id, t);
+                Ok(id)
+            }
+            Space::Sampler => {
+                let d = MTLSamplerDescriptor::new();
+                d.setSupportArgumentBuffers(true);
+                let st = device
+                    .newSamplerStateWithDescriptor(&d)
+                    .ok_or(Error::OutOfMemory)?;
+                let id = resource_id(st.gpuResourceID());
+                self.samplers.insert(id, st);
+                Ok(id)
+            }
+        }
+    }
+}
+
+/// A second hold on an object another create names: textures (a view's parent) and libraries
+/// (a pipeline's).
+fn share(o: &Object) -> Option<Object> {
+    match o {
+        Object::Texture(t) => Some(Object::Texture(t.clone())),
+        Object::Library(l) => Some(Object::Library(l.clone())),
+        _ => None,
+    }
+}
+
+/// The handles create `op` names, in order, leaving out the ones it leaves unset (0).
+fn named(op: u16, p: &[u8]) -> Result<Vec<u32>, Error> {
+    let named = match op {
+        op::CREATE_TEXTURE_VIEW => vec![arg::<cmd::CreateTextureView>(p)?.0.parent],
+        op::CREATE_RENDER_PIPELINE => {
+            let c = arg::<cmd::CreateRenderPipeline>(p)?.0;
+            vec![c.vertex_library, c.fragment_library]
+        }
+        op::CREATE_COMPUTE_PIPELINE => vec![arg::<cmd::CreateComputePipeline>(p)?.0.library],
+        _ => vec![],
+    };
+    Ok(named.into_iter().filter(|&h| h != 0).collect())
+}
+
 impl Executor {
     /// `consumer` must be attached to a ring inside `ring_arena`.
     pub fn new(
@@ -552,6 +677,165 @@ impl Executor {
             lost: false,
             mailbox,
         })
+    }
+
+    /// Rebuilds the context `e` describes, before the ring thread starts. Resource IDs are brought
+    /// to the recorded ones with `placeholders`; anything that cannot be rebuilt as the guest knew
+    /// it loses the context, and only it.
+    pub fn restore(&mut self, e: &ContextExport, placeholders: &mut Placeholders) {
+        self.last_seqno = e.last_seqno;
+        let at = self.consumer.position();
+        let r = if e.lost {
+            Err(Error::Restore)
+        } else {
+            self.import(e, placeholders)
+        };
+        if let Err(err) = r {
+            log::warn!("restore: context lost: {err:?}");
+            self.lose(err, at);
+        }
+    }
+
+    fn import(&mut self, e: &ContextExport, placeholders: &mut Placeholders) -> R {
+        // Every object, by its index in the export: a hold on it for the creates that name it.
+        let mut made: Vec<(Option<Object>, Arc<Record>)> = Vec::with_capacity(e.objects.len());
+        for o in &e.objects {
+            let named = named(o.op, &o.payload)?;
+            if named.len() != o.refs.len() {
+                return Err(Error::Restore);
+            }
+            // The create runs against what its record names, under the handles its payload uses:
+            // those handles may belong to other objects by now.
+            let mut scratch = Objects::default();
+            let mut refs = Vec::with_capacity(named.len());
+            for (&h, &at) in named.iter().zip(&o.refs) {
+                let (obj, rec) = &made[at as usize];
+                let obj = obj.as_ref().and_then(share).ok_or(Error::Restore)?;
+                scratch.map.insert(
+                    h,
+                    Entry {
+                        obj,
+                        rec: rec.clone(),
+                    },
+                );
+                refs.push(rec.clone());
+            }
+            let live = std::mem::replace(&mut self.objects, scratch);
+            let r = self.remake(o, placeholders);
+            self.objects = live;
+            let (_, obj) = r?;
+            let rec = Arc::new(Record {
+                op: o.op,
+                payload: o.payload.clone().into(),
+                value: o.value,
+                refs,
+            });
+            let held = share(&obj);
+            if o.handle != 0 {
+                if self.objects.contains_key(&o.handle) {
+                    return Err(Error::Restore);
+                }
+                self.objects.map.insert(
+                    o.handle,
+                    Entry {
+                        obj,
+                        rec: rec.clone(),
+                    },
+                );
+            }
+            made.push((held, rec));
+        }
+        for (h, addrs) in &e.tables {
+            let set: Vec<cmd::AddressBinding> = addrs
+                .iter()
+                .enumerate()
+                .map(|(i, &address)| cmd::AddressBinding {
+                    index: i as u32,
+                    _pad: 0,
+                    address,
+                })
+                .collect();
+            self.objects.set_addresses(*h, &set)?;
+        }
+        for &(h, value) in &e.events {
+            let Some(Object::Event(ev, _)) = self.objects.get(&h) else {
+                return Err(Error::Restore);
+            };
+            if value != 0 {
+                self.queue.signalEvent_value(ev, value);
+            }
+            self.objects.note_signal(h, value);
+        }
+        for &(h, value) in &e.shared_events {
+            let Some(Object::SharedEvent(ev, _)) = self.objects.get(&h) else {
+                return Err(Error::Restore);
+            };
+            ev.setSignaledValue(value);
+        }
+        for (op, p, value) in &e.recording {
+            self.objects.note_command(*op, p);
+            if !is_create(*op) {
+                self.exec(*op, p)?;
+                continue;
+            }
+            // The guest already has this create's answer: it must hold again.
+            let o = ObjectOut {
+                handle: 0,
+                op: *op,
+                payload: p.clone(),
+                value: *value,
+                refs: Vec::new(),
+            };
+            let (h, obj) = self.remake(&o, placeholders)?;
+            self.file(h, *op, p, &named(*op, p)?, Ok((obj, *value)))?;
+        }
+        Ok(())
+    }
+
+    /// Makes `o` again, with the value it answered before.
+    fn remake(
+        &mut self,
+        o: &ObjectOut,
+        placeholders: &mut Placeholders,
+    ) -> Result<(u32, Object), Error> {
+        let Some(space) = Space::of(o.op) else {
+            let (h, _, made) = self.make(o.op, &o.payload)?;
+            let (obj, value) = made?;
+            return if value == o.value {
+                Ok((h, obj))
+            } else {
+                log::warn!(
+                    "restore: op {:#x} answered {value:?}, not {:?}",
+                    o.op,
+                    o.value
+                );
+                Err(Error::Restore)
+            };
+        };
+        let want = o.value[0];
+        for _ in 0..FILL_TRIES {
+            // Every lower slot is held, by a placeholder or a restored object: free the one for
+            // `want` and take it.
+            if !placeholders.release(space, want) {
+                loop {
+                    let id = placeholders.grow(space, &self.device)?;
+                    if id >= want {
+                        placeholders.release(space, want);
+                        break;
+                    }
+                }
+            }
+            let (h, _, made) = self.make(o.op, &o.payload)?;
+            let (obj, value) = made?;
+            if value[0] == want {
+                return Ok((h, obj));
+            }
+            // Metal has not released the slot yet; hold what was taken and go again.
+            drop(obj);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        log::warn!("restore: op {:#x} could not have resource ID {want}", o.op);
+        Err(Error::Restore)
     }
 
     /// Drains the ring until `stop`, parking on `doorbell` when idle.
@@ -762,6 +1046,87 @@ impl Executor {
         Ok(())
     }
 
+    /// Makes the object create `op` describes: its handle, the slot its answer goes to (`None`
+    /// for creates that fail the context instead), and the object with its answer.
+    #[allow(clippy::type_complexity)]
+    fn make(
+        &mut self,
+        op: u16,
+        p: &[u8],
+    ) -> Result<(u32, Option<BufRef>, Result<(Object, [u64; 6]), Error>), Error> {
+        Ok(match op {
+            op::CREATE_TEXTURE => {
+                let c = arg::<cmd::CreateTexture>(p)?.0;
+                (c.handle, Some(c.reply), self.create_texture(&c))
+            }
+            op::CREATE_TEXTURE_FROM_SURFACE => {
+                let c = arg::<cmd::CreateTextureFromSurface>(p)?.0;
+                (
+                    c.handle,
+                    Some(c.reply),
+                    self.create_texture_from_surface(&c),
+                )
+            }
+            op::CREATE_TEXTURE_VIEW => {
+                let c = arg::<cmd::CreateTextureView>(p)?.0;
+                (c.handle, Some(c.reply), self.create_texture_view(&c))
+            }
+            op::CREATE_SAMPLER => {
+                let c = arg::<cmd::CreateSampler>(p)?.0;
+                (
+                    c.handle,
+                    Some(c.reply),
+                    self.create_sampler(c.handle, &c.desc),
+                )
+            }
+            op::CREATE_LIBRARY => {
+                let (c, rest) = arg::<cmd::CreateLibrary>(p)?;
+                let (src, _) = take(rest, c.source_len)?;
+                (c.handle, Some(c.reply), self.create_library(&c, src))
+            }
+            op::CREATE_RENDER_PIPELINE => {
+                let (c, rest) = arg::<cmd::CreateRenderPipeline>(p)?;
+                let (v, rest) = take(rest, c.vertex_name_len)?;
+                let (f, _) = take(rest, c.fragment_name_len)?;
+                (
+                    c.handle,
+                    Some(c.reply),
+                    self.create_render_pipeline(&c, v, f),
+                )
+            }
+            op::CREATE_COMPUTE_PIPELINE => {
+                let (c, rest) = arg::<cmd::CreateComputePipeline>(p)?;
+                let (name, _) = take(rest, c.name_len)?;
+                (
+                    c.handle,
+                    Some(c.reply),
+                    self.create_compute_pipeline(&c, name),
+                )
+            }
+            op::CREATE_DEPTH_STENCIL => {
+                let c = arg::<cmd::CreateDepthStencil>(p)?.0;
+                (c.handle, None, self.create_depth_stencil(&c))
+            }
+            op::CREATE_ARGUMENT_TABLE => {
+                let c = arg::<cmd::CreateArgumentTable>(p)?.0;
+                (c.handle, None, self.create_argument_table(&c))
+            }
+            op::CREATE_SYNC => {
+                let c = arg::<cmd::SyncObject>(p)?.0;
+                (c.handle, None, self.create_sync(&c))
+            }
+            op::CREATE_COUNTER_HEAP => {
+                let c = arg::<cmd::CreateCounterHeap>(p)?.0;
+                (
+                    c.handle,
+                    Some(c.reply),
+                    self.create_counter_heap(c.handle, c.count),
+                )
+            }
+            _ => return Err(Error::UnknownOp),
+        })
+    }
+
     /// Files what a create made under `h`, with the record of `op` and `payload` and of the objects
     /// named by `refs` (0 names none), and passes its answer on.
     fn file(
@@ -917,73 +1282,13 @@ impl Executor {
 
     fn exec(&mut self, opcode: u16, p: &[u8]) -> R {
         match opcode {
-            op::CREATE_TEXTURE => {
-                let c = arg::<cmd::CreateTexture>(p)?.0;
-                let r = self.create_texture(&c);
-                let r = self.file(c.handle, opcode, p, &[], r);
-                self.answer(c.reply, r)
-            }
-            op::CREATE_TEXTURE_FROM_SURFACE => {
-                let c = arg::<cmd::CreateTextureFromSurface>(p)?.0;
-                let r = self.create_texture_from_surface(&c);
-                let r = self.file(c.handle, opcode, p, &[], r);
-                self.answer(c.reply, r)
-            }
-            op::CREATE_TEXTURE_VIEW => {
-                let c = arg::<cmd::CreateTextureView>(p)?.0;
-                let r = self.create_texture_view(&c);
-                let r = self.file(c.handle, opcode, p, &[c.parent], r);
-                self.answer(c.reply, r)
-            }
-            op::CREATE_SAMPLER => {
-                let c = arg::<cmd::CreateSampler>(p)?.0;
-                let r = self.create_sampler(c.handle, &c.desc);
-                let r = self.file(c.handle, opcode, p, &[], r);
-                self.answer(c.reply, r)
-            }
-            op::CREATE_LIBRARY => {
-                let (c, rest) = arg::<cmd::CreateLibrary>(p)?;
-                let (src, _) = take(rest, c.source_len)?;
-                let r = self.create_library(&c, src);
-                let r = self.file(c.handle, opcode, p, &[], r);
-                self.answer(c.reply, r)
-            }
-            op::CREATE_RENDER_PIPELINE => {
-                let (c, rest) = arg::<cmd::CreateRenderPipeline>(p)?;
-                let (v, rest) = take(rest, c.vertex_name_len)?;
-                let (f, _) = take(rest, c.fragment_name_len)?;
-                let r = self.create_render_pipeline(&c, v, f);
-                let libraries = [c.vertex_library, c.fragment_library];
-                let r = self.file(c.handle, opcode, p, &libraries, r);
-                self.answer(c.reply, r)
-            }
-            op::CREATE_COMPUTE_PIPELINE => {
-                let (c, rest) = arg::<cmd::CreateComputePipeline>(p)?;
-                let (name, _) = take(rest, c.name_len)?;
-                let r = self.create_compute_pipeline(&c, name);
-                let r = self.file(c.handle, opcode, p, &[c.library], r);
-                self.answer(c.reply, r)
-            }
-            op::CREATE_DEPTH_STENCIL => {
-                let c = arg::<cmd::CreateDepthStencil>(p)?.0;
-                let r = self.create_depth_stencil(&c);
-                self.file(c.handle, opcode, p, &[], r).map(|_| ())
-            }
-            op::CREATE_ARGUMENT_TABLE => {
-                let c = arg::<cmd::CreateArgumentTable>(p)?.0;
-                let r = self.create_argument_table(&c);
-                self.file(c.handle, opcode, p, &[], r).map(|_| ())
-            }
-            op::CREATE_SYNC => {
-                let c = arg::<cmd::SyncObject>(p)?.0;
-                let r = self.create_sync(&c);
-                self.file(c.handle, opcode, p, &[], r).map(|_| ())
-            }
-            op::CREATE_COUNTER_HEAP => {
-                let c = arg::<cmd::CreateCounterHeap>(p)?.0;
-                let r = self.create_counter_heap(c.handle, c.count);
-                let r = self.file(c.handle, opcode, p, &[], r);
-                self.answer(c.reply, r)
+            opcode if is_create(opcode) => {
+                let (handle, reply, made) = self.make(opcode, p)?;
+                let r = self.file(handle, opcode, p, &named(opcode, p)?, made);
+                match reply {
+                    Some(reply) => self.answer(reply, r),
+                    None => r.map(|_| ()),
+                }
             }
             op::DESTROY => {
                 let h = arg::<cmd::Destroy>(p)?.0.handle;

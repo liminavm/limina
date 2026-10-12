@@ -47,8 +47,9 @@ pub struct ContextExport {
     pub events: Vec<(u32, u64)>,
     /// Shared events' values, by handle.
     pub shared_events: Vec<(u32, u64)>,
-    /// The commands of command buffers begun and not yet committed, run again after the rest.
-    pub recording: Vec<(u16, Vec<u8>)>,
+    /// The commands of command buffers begun and not yet committed, run again after the rest,
+    /// each with what it answered if it made an object.
+    pub recording: Vec<(u16, Vec<u8>, [u64; 6])>,
 }
 
 const MAGIC: u32 = 0x4c4d_4a31; // "LMJ1"
@@ -138,9 +139,12 @@ impl ContextExport {
             }
         }
         w.u32(self.recording.len() as u32);
-        for (op, p) in &self.recording {
+        for (op, p, value) in &self.recording {
             w.u16(*op);
             w.bytes(p);
+            for &v in value {
+                w.u64(v);
+            }
         }
         w.0
     }
@@ -194,9 +198,14 @@ impl ContextExport {
                 list.push((r.u32()?, r.u64()?));
             }
         }
-        for _ in 0..r.count(6)? {
+        for _ in 0..r.count(2 + 4 + 48)? {
             let op = r.u16()?;
-            e.recording.push((op, r.bytes()?));
+            let payload = r.bytes()?;
+            let mut value = [0; 6];
+            for v in &mut value {
+                *v = r.u64()?;
+            }
+            e.recording.push((op, payload, value));
         }
         r.0.is_empty().then_some(e)
     }
@@ -230,7 +239,10 @@ mod tests {
             tables: vec![(4, vec![0x1500000000, 0])],
             events: vec![(5, 3)],
             shared_events: vec![(6, 11)],
-            recording: vec![(0x200, vec![]), (0x201, vec![9; 16])],
+            recording: vec![
+                (0x200, vec![], [0; 6]),
+                (0x201, vec![9; 16], [3, 0, 0, 0, 0, 0]),
+            ],
         }
     }
 
