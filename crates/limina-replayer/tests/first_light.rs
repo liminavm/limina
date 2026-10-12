@@ -1290,3 +1290,35 @@ fn where_arenas_land_after_holes() {
         base(id, mib);
     }
 }
+
+/// Measurement: whether starting a context (its queue, compiler and residency set) takes GPU
+/// addresses from the space arenas are placed in. The same three arenas, with a second context
+/// started before them and after them. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn does_a_context_start_move_arenas() {
+    for context_first in [true, false] {
+        let g = start();
+        let second = |g: &Guest| {
+            let _bell = g.replayer.create_context(2).expect("context");
+            let a = g.replayer.create_arena(2, 1, 4 * MIB).expect("ring arena");
+            eprintln!("  context 2 ring arena at 0x{:x}", a.gpu_base);
+            // SAFETY: the arena's mapping is leaked below, so it outlives the producer.
+            let ring =
+                unsafe { Producer::init(NonNull::new(a.mapping.as_ptr()).unwrap(), RING_DATA) };
+            g.replayer.attach_ring(2, 1, 0, RING_DATA).expect("attach");
+            std::mem::forget((a, ring));
+        };
+        eprintln!("context_first={context_first}");
+        if context_first {
+            second(&g);
+        }
+        for (id, mib) in [(2, 8), (3, 1), (4, 32)] {
+            let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+            eprintln!("  arena {id} at 0x{:x}", a.gpu_base);
+        }
+        if !context_first {
+            second(&g);
+        }
+    }
+}
