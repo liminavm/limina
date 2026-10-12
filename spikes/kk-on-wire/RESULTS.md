@@ -7,7 +7,7 @@ and the host's `limina-replayer` making the Metal 4 calls.
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
 `/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `d71a3c39f85` (window
-surfaces: `08e0f2b62a7`).
+surfaces: `08e0f2b62a7`; video planes, imports and timestamps: `0faceb1acdd`).
 
 | check | result |
 |---|---|
@@ -27,8 +27,8 @@ surfaces: `08e0f2b62a7`).
 | `kk-probe timestamps` | no timestamps advertised (the transport carries no counter heaps); a timestamp pool is refused, not an abort |
 | stock VA decode, planes promoted vs not | GStreamer `vavp9dec` to DMABuf then `vapostproc`, plain `vavp9dec`, and `vp9dec`, 60 frames of 854×480 VP9 each: per-frame checksums identical with every VA surface's planes promoted to surfaces (`limina-kk-surfaces`, virglrs `f70dcb5`) and on the stock host GL, where they keep GL storage |
 | `kk-probe import` | a linear XRGB8888 scanout buffer from stock gbm (virgl), written through `gbm_bo_map`, imported as a dedicated LINEAR-modifier image at gbm's pitch: 1024/1024 pixels right |
-| stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
-| `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps |
+| stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.2 core at `0faceb1acdd` (3.3 needs timer queries, and KK advertises no timestamps there; 3.3 core / compat and GLES 3.1 before it); warns that `EXT_custom_border_color` is missing |
+| `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps; at `0faceb1acdd`, 59.6 fps vsync-bound over 5 s |
 | `kk-probe share` | a buffer exported as dma-buf, dispatched into through a self-import and through an import in a child process: the exporter's mapping shows 256/256 words right for both; the child reads the parent's mark |
 | `kk-probe syncfd` | a submit held by a wait on an unsignaled timeline exports its binary semaphore as a real sync_file: pending before the CPU opens the gate, signaled after, and the fill behind it landed |
 | `kk-probe signal` | a submit that only signals a timeline semaphore reaches the host without any later push: the counter reads 1 after 1 ms |
@@ -136,7 +136,8 @@ buffer scene with guest and host both idle. Queue events now publish like commit
   would show the dma-buf's guest backing, not the host's pixels); an imported KK heap stays
   mappable.
 - **No timestamps.** The transport carries no counter heaps, so KK advertises
-  `timestampValidBits` 0; GPU timing in apps (libplacebo's) is off.
+  `timestampValidBits` 0: GPU timing in apps (libplacebo's) is off, and zink drops from GL 3.3
+  to 3.2, since 3.3 requires timer queries.
 - **One wrong frame, not reproduced.** An early `vadecode` run on a fresh worker read one frame
   (of 10) wrong in 839 of 960 rows. The picture then reached the surfaces by a GL upload on the
   render thread, ordered against KK's Metal queue only by the guest's fence; that path is gone,
