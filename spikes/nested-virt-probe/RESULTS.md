@@ -40,11 +40,30 @@ Test kernels `target/test-guest/kernel/Image-16k` and `Image` (4 KiB pages), wor
   without nesting for comparison, an L2 Linux boot, or L2 device I/O.
 - 4 KiB stage-2 granule and EL2 combine fine.
 
-## Known gap
+## EL2 state in a snapshot: which registers round-trip
 
-Snapshot/suspend does not carry EL2 state: libkrun's vCPU save list (`SNAPSHOT_SYS_REGS`,
-`SNAPSHOT_ICC_REGS` in `hvf/src/lib.rs`) deliberately excludes the `*_EL2`, `CNTHP_*`,
-`ICC_SRE_EL2` and `ICH_*` registers, because they read `HV_UNSUPPORTED` without nesting. With
-`--nested-virt` those registers hold live guest state (the guest's own hypervisor), so a
-snapshot or suspend of a nested VM is not expected to restore correctly until the list is made
-conditional on `nested_enabled`. Not tested.
+`el2-regs.c` (`build-el2-regs.sh` builds, signs and runs it): with EL2 enabled, plant
+distinctive values, run the vCPU at EL2 to an MMIO exit, read every EL2 / GIC-hypervisor
+register, then set each into a fresh nested VM's vCPU and read it back.
+
+Measured 2026-10-12, dogfood Mac (M4 Pro, macOS 27.0.1):
+
+- **Every EL2 system register HVF names round-trips**, planted values included: `HCR`, `SCTLR`,
+  `TCR`, `TTBR0/1`, `VTCR`, `VTTBR`, `VBAR`, `MAIR`, `ELR`, `SPSR`, `ESR`, `FAR`, `HPFAR`,
+  `SP`, `TPIDR`, `CPTR`, `MDCR`, `VPIDR`, `VMPIDR`, `CNTHCTL`, `CNTHP_CTL/CVAL`, `CNTVOFF`
+  (all `_EL2`). `CNTHP_TVAL_EL2` reads back a few ticks lower: it is derived from the CVAL and
+  the counter, like `CNTP_TVAL_EL0`, and is not restored.
+- **`CNTVOFF_EL2` is not HVF's vtimer offset.** Setting one leaves the other alone: it is the
+  guest hypervisor's offset for its own guests, so a snapshot keeps both.
+- **`ICC_SRE_EL2` and the ICH registers** (`HCR`, `VMCR`, `AP0R0`, `AP1R0`, `LR0-7`) round-trip.
+  `ICH_VTR_EL2` reads `0x90580007`: eight list registers, and `LR8-15` read `HV_UNSUPPORTED`.
+  `ICH_VTR/MISR/EISR/ELRSR_EL2` are read-only status and refuse a write with `HV_DENIED`.
+  `ICH_VMCR_EL2` normalises a planted value on the run (`0xf0000003` → `0xf04c000b`) and then
+  round-trips.
+- The `ICV_*` registers read with EL2 on and are views of the ICH state (`ICV_AP0R0` = the
+  planted `ICH_AP0R0`); `ICV_RPR_EL1` refuses a write.
+- The VM-wide GIC state blob is 126314 bytes with and without EL2: no nested state in it.
+
+libkrun's snapshot carries exactly the round-tripping set when a vCPU has EL2
+(`SNAPSHOT_EL2_SYS_REGS`, `SNAPSHOT_ICH_REGS`, `ICH_LIST_REGS` in `hvf/src/lib.rs`), and a
+restore refuses a snapshot saved with EL2 into a VM without it, or the reverse.
