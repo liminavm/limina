@@ -35,6 +35,9 @@
  *             2- or 3-plane image and copied out, against the same frame read back by ffmpeg
  *             (av_hwframe_transfer_data). The clip is $KK_CLIP (default ~/vab/clip.webm). Not
  *             part of the default run.
+ *   timestamps the queue's timestamps as an app sees them (libplacebo times every frame): with
+ *             timestampValidBits, two writes around a submit read back in order; without, a
+ *             timestamp pool is refused or made, never an abort.
  *   syncfd    a submit held by a wait on a timeline value nobody has signaled, signaling a
  *             binary semaphore: its exported sync_file (VK_KHR_external_semaphore_fd) is a real
  *             fence, pending until the CPU signals the timeline and signaled after. Not part of
@@ -1087,6 +1090,19 @@ yuv_import(uint32_t w, uint32_t h, uint32_t nplanes, uint32_t nobj, const int *f
          close(fd);
          return 1;
       }
+      /* A type that says host-visible promises the memory can be mapped, and players take the
+       * promise (libplacebo maps every host-visible import). Mapping a plane whose pixels are a
+       * host surface could show nothing true, so the import must not say it. */
+      VkPhysicalDeviceMemoryProperties mp;
+      vkGetPhysicalDeviceMemoryProperties(pdev, &mp);
+      if (mp.memoryTypes[ai.memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+         void *map = NULL;
+         r = vkMapMemory(dev, mem[o], 0, VK_WHOLE_SIZE, 0, &map);
+         fprintf(stderr, "yuv: dma-buf %u was imported host-visible (mapping it: %d)\n", o, r);
+         if (r == VK_SUCCESS)
+            vkUnmapMemory(dev, mem[o]);
+         return 1;
+      }
       plane_bind[o] = (VkBindImagePlaneMemoryInfo){
          .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO, .planeAspect = aspect[o]};
       binds[o] = (VkBindImageMemoryInfo){.sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
@@ -1299,6 +1315,44 @@ out:
    av_frame_free(&drm);
    av_frame_free(&ref);
    return wrong;
+}
+
+static int
+timestamps(void)
+{
+   uint32_t n = 0;
+   vkGetPhysicalDeviceQueueFamilyProperties(pdev, &n, NULL);
+   VkQueueFamilyProperties *families = calloc(n, sizeof(*families));
+   vkGetPhysicalDeviceQueueFamilyProperties(pdev, &n, families);
+   const uint32_t bits = families[qfam].timestampValidBits;
+   free(families);
+   VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                               .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                               .queryCount = 2};
+   VkQueryPool qp;
+   VkResult r = vkCreateQueryPool(dev, &qi, NULL, &qp);
+   if (!bits) {
+      printf("timestamps: none advertised; a timestamp pool: %d\n", r);
+      if (r == VK_SUCCESS)
+         vkDestroyQueryPool(dev, qp, NULL);
+      return 0;
+   }
+   if (r != VK_SUCCESS) {
+      fprintf(stderr, "timestamps: %u valid bits advertised, but no pool: %d\n", bits, r);
+      return 1;
+   }
+   VkCommandBuffer cb = begin();
+   vkCmdResetQueryPool(cb, qp, 0, 2);
+   vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qp, 0);
+   vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qp, 1);
+   submit_and_wait(cb);
+   uint64_t t[2] = {0, 0};
+   r = vkGetQueryPoolResults(dev, qp, 0, 2, sizeof(t), t, sizeof(t[0]),
+                             VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+   vkDestroyQueryPool(dev, qp, NULL);
+   printf("timestamps: %u valid bits, read %d: %" PRIu64 " then %" PRIu64 "\n", bits, r, t[0],
+          t[1]);
+   return r != VK_SUCCESS || !t[1] || t[1] < t[0];
 }
 
 static int
@@ -1527,6 +1581,8 @@ main(int argc, char **argv)
       fails += triangle();
    if (!only || !strcmp(only, "allocs"))
       fails += allocs();
+   if (!only || !strcmp(only, "timestamps"))
+      fails += timestamps();
 
    vkDeviceWaitIdle(dev);
    vkDestroyCommandPool(dev, pool, NULL);

@@ -86,7 +86,9 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
   imports the picture as a disjoint `G8_B8R8_2PLANE_420` image at the LINEAR modifier, matching
   each object's surface to its plane (NV12, or three-plane I420 as ffmpeg's VA frames come).
   Players make no SHARED planes, so vrend also promotes every video buffer's R8/RG8 planes to
-  surfaces at CREATE_VIDEO_BUFFER, when they are fresh. A single-object picture (enhanced guest Mesa's composite
+  surfaces at CREATE_VIDEO_BUFFER, when they are fresh, and the decode thread writes each
+  picture into them before it lands. An imported surface's memory is device-local only. A
+  single-object picture (enhanced guest Mesa's composite
   target) and 10-bit P010 wait on a plane index in `CREATE_TEXTURE_FROM_SURFACE`, with HDR.
 
 To verify before building: that an IOSurface's pages can back a guest-visible mapping of an

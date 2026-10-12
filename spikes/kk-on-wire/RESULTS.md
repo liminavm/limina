@@ -21,7 +21,10 @@ surfaces: `08e0f2b62a7`).
 | `kk-probe export` | an image made for dma-buf export with the LINEAR modifier, filled by a buffer copy, sampled texel for texel by stock virgl GL (EGL on gbm) into a texture of its own: 1024/1024 pixels right |
 | `kk-probe nv12` | a 100×16 4:2:0 picture from stock virgl VA (`vaPutImage` into DRM_PRIME_2 surfaces, padded to 112 wide), exported as two dma-bufs and imported as a disjoint 2-plane LINEAR image, each plane copied out: 1600/1600 luma and 800/800 chroma bytes right. Needs the host GL from `limina-kk-surfaces` |
 | `kk-probe nv12-plain` | the same picture in surfaces made as players make theirs (no DRM_PRIME_2 memory type): its planes become surfaces when Mesa makes it a video buffer, and import: 1600/1600 and 800/800 |
-| `kk-probe vadecode` | 60 frames of 854×480 VP9 decoded by ffmpeg's VA hwaccel (stock virgl), each mapped to DRM PRIME as a player maps it: three-plane I420 in three dma-bufs, imported plane by plane and copied out, identical to ffmpeg's own read of the frame; 15 runs, 900/900 frames. One earlier run on a fresh worker had one frame (of 10) wrong in 839 of 960 rows, not seen again |
+| `kk-probe vadecode` | 60 frames of 854×480 VP9 decoded by ffmpeg's VA hwaccel (stock virgl), each mapped to DRM PRIME as a player maps it: three-plane I420 in three dma-bufs, imported plane by plane and copied out, identical to ffmpeg's own read of the frame: 15 runs, 900/900 frames; 3 runs first thing after a cold boot, 180/180; 1920×1080 (`$KK_CLIP`), 3 runs, 180/180 |
+| `mpv --vo=gpu-next --gpu-api=vulkan --hwdec=vaapi` on the seated desktop | 1080p VP9 clip decoded by VA and imported through libplacebo's dma-buf interop: plays 20 s looping, 3 frames dropped, the frame on screen correct (capture checked by eye) |
+| decode stays asynchronous with plane surfaces (`VIRGLRS_SUBMIT_STATS=2`, ffmpeg VA decode of 1080p with readback) | END_FRAME costs the render thread 0.10 ms per frame against a 2.03 ms mean decode session; the decode thread's write into the plane surfaces is 0.13 ms mean |
+| `kk-probe timestamps` | no timestamps advertised (the transport carries no counter heaps); a timestamp pool is refused, not an abort |
 | stock VA decode, planes promoted vs not | GStreamer `vavp9dec` to DMABuf then `vapostproc`, plain `vavp9dec`, and `vp9dec`, 60 frames of 854×480 VP9 each: per-frame checksums identical with every VA surface's planes promoted to surfaces (`limina-kk-surfaces`, virglrs `f70dcb5`) and on the stock host GL, where they keep GL storage |
 | `kk-probe import` | a linear XRGB8888 scanout buffer from stock gbm (virgl), written through `gbm_bo_map`, imported as a dedicated LINEAR-modifier image at gbm's pitch: 1024/1024 pixels right |
 | stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
@@ -39,7 +42,12 @@ spikes/kk-on-wire/build.sh                  # kk-probe -> out/kk-probe
 spikes/kk-on-wire/kk-deploy.sh <port> ./kk-probe     # copy into /tmp/kk in the guest and run
 ```
 
-`kk-deploy.sh` selects the driver with `VK_DRIVER_FILES`; nothing is installed in the guest. For
+`kk-deploy.sh` selects the driver with `VK_DRIVER_FILES`; nothing is installed in the guest.
+`vadecode` and the mpv check need a VP9 clip in the guest, made there with
+`ffmpeg -f lavfi -i testsrc2=size=1920x1080:rate=30 -t 4 -c:v libvpx-vp9 -deadline realtime
+-cpu-used 8 -b:v 4M ~/vab/clip1080.webm` (the 854×480 one is any VP9 WebM at
+`~/vab/clip.webm`); the host must run the GL from `limina-kk-surfaces`
+(`MESA_PREFIX=<its prefix> LIMINA_HOST_GALLIUM=zink`). For
 a window, add `XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0` to the command.
 
 The Mesa side is `-Dkosmickrisp-bridge=limina` (`src/kosmickrisp/bridge/limina/`). A Linux build
@@ -122,11 +130,17 @@ buffer scene with guest and host both idle. Queue events now publish like commit
 - **Every VA surface's planes are IOSurfaces** on a host GL that takes them: vrend promotes an
   R8/RG8 plane at CREATE_VIDEO_BUFFER, whatever its binds, since players do not ask for
   exportable memory. That is one IOSurface per plane of every pool slot of every stock guest's
-  decoder, and every decode delivers into surface-backed textures.
-- **One unexplained wrong frame.** The first `vadecode` run on a fresh worker read one frame
-  (of 10) wrong in 839 of 960 rows; 900 frames since read right. A decoded plane reaches its
-  surface by a GL upload at END_FRAME (synchronous for a surface-backed target), and KK reads
-  the surface on its own Metal queue; nothing beyond the guest's fence orders the two.
+  decoder. The decode thread writes each picture into its planes' surfaces before the picture
+  lands, so the guest's fence covers the write and END_FRAME does not wait for it.
+- **An imported surface is not CPU-visible.** Its memory type is device-local only (mapping it
+  would show the dma-buf's guest backing, not the host's pixels); an imported KK heap stays
+  mappable.
+- **No timestamps.** The transport carries no counter heaps, so KK advertises
+  `timestampValidBits` 0; GPU timing in apps (libplacebo's) is off.
+- **One wrong frame, not reproduced.** An early `vadecode` run on a fresh worker read one frame
+  (of 10) wrong in 839 of 960 rows. The picture then reached the surfaces by a GL upload on the
+  render thread, ordered against KK's Metal queue only by the guest's fence; that path is gone,
+  and no frame has read wrong since.
 - **GStreamer's VA decoders hand DMABuf only to `vapostproc`**: a generic sink does not
   negotiate it, so the import is tested through ffmpeg, which is what players use.
 - **Hardware VP9 decode is not bit-exact against software**, with or without plane surfaces:
