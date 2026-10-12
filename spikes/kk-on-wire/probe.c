@@ -13,6 +13,9 @@
  *             exec'd as `share-child <fd>`) that checks what the parent wrote and dispatches
  *             into it; the parent checks each result through its own mapping. Not part of the
  *             default run.
+ *   signal    a submit that only signals a timeline semaphore, then the counter polled with
+ *             vkGetSemaphoreCounterValue, which pushes nothing: the signal must reach the host on
+ *             its own. Not part of the default run.
  *
  * Exit status 0 only if every part ran and checked out.
  */
@@ -22,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <vulkan/vulkan.h>
 
@@ -581,12 +585,45 @@ share(const char *self)
    return fails;
 }
 
+/* -- signal -- */
+
+static int
+signal_reaches_host(void)
+{
+   VkSemaphoreTypeCreateInfo ti = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+                                   .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE};
+   VkSemaphoreCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &ti};
+   VkSemaphore sem;
+   CHECK(vkCreateSemaphore(dev, &si, NULL, &sem));
+   uint64_t one = 1;
+   VkTimelineSemaphoreSubmitInfo tsi = {.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+                                        .signalSemaphoreValueCount = 1,
+                                        .pSignalSemaphoreValues = &one};
+   VkSubmitInfo sub = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                       .pNext = &tsi,
+                       .signalSemaphoreCount = 1,
+                       .pSignalSemaphores = &sem};
+   CHECK(vkQueueSubmit(queue, 1, &sub, VK_NULL_HANDLE));
+   uint64_t v = 0;
+   struct timespec start, now;
+   clock_gettime(CLOCK_MONOTONIC, &start);
+   double s = 0;
+   while (v < 1 && s < 3.0) {
+      CHECK(vkGetSemaphoreCounterValue(dev, sem, &v));
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      s = (now.tv_sec - start.tv_sec) + (now.tv_nsec - start.tv_nsec) / 1e9;
+   }
+   printf("signal: the counter reads %llu after %.3f s\n", (unsigned long long)v, s);
+   vkDestroySemaphore(dev, sem, NULL);
+   return v >= 1 ? 0 : 1;
+}
+
 int
 main(int argc, char **argv)
 {
    VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                             .pApplicationName = "kk-probe",
-                            .apiVersion = VK_API_VERSION_1_0};
+                            .apiVersion = VK_API_VERSION_1_2};
    VkInstanceCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                                .pApplicationInfo = &app};
    VkInstance inst;
@@ -620,7 +657,11 @@ main(int argc, char **argv)
    bool sharing = only && !strncmp(only, "share", 5);
    const char *exts[] = {"VK_KHR_external_memory", "VK_KHR_external_memory_fd",
                          "VK_EXT_external_memory_dma_buf"};
+   VkPhysicalDeviceVulkan12Features f12 = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+      .timelineSemaphore = only && !strcmp(only, "signal")};
    VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+                            .pNext = &f12,
                             .queueCreateInfoCount = 1,
                             .pQueueCreateInfos = &qi,
                             .enabledExtensionCount = sharing ? 3 : 0,
@@ -637,7 +678,9 @@ main(int argc, char **argv)
    CHECK(vkCreateCommandPool(dev, &pi, NULL, &pool));
 
    int fails = 0;
-   if (only && !strcmp(only, "share"))
+   if (only && !strcmp(only, "signal"))
+      fails += signal_reaches_host();
+   else if (only && !strcmp(only, "share"))
       fails += share(argv[0]);
    else if (only && !strcmp(only, "share-child") && argc > 2)
       fails += share_child(atoi(argv[2]));
