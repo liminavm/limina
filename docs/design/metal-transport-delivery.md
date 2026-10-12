@@ -61,13 +61,17 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
   transports (host KK implements `VK_EXT_image_drm_format_modifier` LINEAR-only over exactly
   those). Heap-placed images in KK's own layout stay within the Metal transport.
 - **The worker keeps the registry**: virtio-gpu resource id → its IOSurface, whichever renderer
-  made it. virglrs already registers its surfaces (`metal::republish`); extension blobs that are
-  IOSurface-backed join the same registry.
-- **Metal transport → vrend/venus:** an image exported for sharing outside the transport is an
-  IOSurface-backed dedicated allocation; virglrs imports it as vrend (`EGL_IOSURFACE_LIMINA`) and
-  venus already import IOSurfaces.
-- **vrend/venus → Metal transport:** the worker hands the resource's IOSurface port to the
-  replayer, which makes a texture over it (the replayer's IOSurface import is to be written).
+  made it. virglrs already registers the surfaces it mints (`metal::republish`).
+- **Metal transport → vrend/venus — to build.** Today the import fails: a guest virgl or venus
+  context names the buffer by resource id, and virglrs has no resource under an extension blob's
+  id. Its only import, `Renderer::resource_import` (`third_party/virglrs/src/renderer.rs`), takes
+  a shm or dma-buf descriptor, and libkrun does not call it. Two pieces are needed: an image the
+  transport exports for sharing beyond itself is a dedicated IOSurface-backed texture (a new
+  replayer object, not heap-placed), and virglrs gains an import of a resource backed by a given
+  IOSurface, which vrend adopts as texture storage (`EGL_IOSURFACE_LIMINA`) and venus imports as
+  it does its own scanouts. The virglrs half is an API addition to coordinate with that tree.
+- **vrend/venus → Metal transport — to build.** The worker hands the resource's IOSurface port to
+  the replayer, which makes a texture over it.
 
 To verify before building: that an IOSurface's pages can back a guest-visible mapping of an
 extension blob the way venus's IOSurface blobs do (rutabaga's Apple `get_map_ptr` path).
