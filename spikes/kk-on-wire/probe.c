@@ -433,7 +433,23 @@ triangle(void)
    struct buf out = host_buffer(W * H * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
    memset(out.map, 0, W * H * 4);
 
+   /* Two timestamps in the render pass, around the draw, where GL timer queries land. */
+   uint32_t nfam = 0;
+   vkGetPhysicalDeviceQueueFamilyProperties(pdev, &nfam, NULL);
+   VkQueueFamilyProperties *families = calloc(nfam, sizeof(*families));
+   vkGetPhysicalDeviceQueueFamilyProperties(pdev, &nfam, families);
+   const bool stamps = families[qfam].timestampValidBits != 0;
+   free(families);
+   VkQueryPool qp = VK_NULL_HANDLE;
+   VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                               .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                               .queryCount = 2};
+   if (stamps)
+      CHECK(vkCreateQueryPool(dev, &qi, NULL, &qp));
+
    VkCommandBuffer cb = begin();
+   if (stamps)
+      vkCmdResetQueryPool(cb, qp, 0, 2);
    VkClearValue clear = {.color = {.float32 = {0, 0, 1, 1}}};
    VkRenderPassBeginInfo rbi = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                                 .renderPass = rp,
@@ -443,7 +459,11 @@ triangle(void)
                                 .pClearValues = &clear};
    vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+   if (stamps)
+      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, qp, 0);
    vkCmdDraw(cb, 3, 1, 0, 0);
+   if (stamps)
+      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, qp, 1);
    vkCmdEndRenderPass(cb);
    VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                              .imageExtent = {W, H, 1}};
@@ -473,9 +493,18 @@ triangle(void)
          fwrite(px + 4 * i, 1, 3, f);
       fclose(f);
    }
+   uint64_t t[2] = {0, 0};
+   bool stamped = true;
+   if (stamps) {
+      VkResult r = vkGetQueryPoolResults(dev, qp, 0, 2, sizeof(t), t, sizeof(t[0]),
+                                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+      stamped = r == VK_SUCCESS && t[0] && t[1] >= t[0];
+      vkDestroyQueryPool(dev, qp, NULL);
+   }
    /* The triangle covers half the image: (-1,-1), (1,-1), (-1,1) in NDC. */
-   printf("triangle: green %u blue %u other %u (green expected ~%u)\n", green, blue, other,
-          W * H / 2);
+   printf("triangle: green %u blue %u other %u (green expected ~%u); in-pass timestamps %" PRIu64
+          " then %" PRIu64 "\n",
+          green, blue, other, W * H / 2, t[0], t[1]);
    free_buf(out);
    vkDestroyPipeline(dev, p, NULL);
    vkDestroyPipelineLayout(dev, pl, NULL);
@@ -484,7 +513,8 @@ triangle(void)
    vkDestroyImageView(dev, view, NULL);
    vkDestroyImage(dev, img, NULL);
    vkFreeMemory(dev, mem, NULL);
-   return green > W * H * 2 / 5 && blue > W * H * 2 / 5 && green + blue == W * H ? 0 : 1;
+   return green > W * H * 2 / 5 && blue > W * H * 2 / 5 && green + blue == W * H && stamped ? 0
+                                                                                           : 1;
 }
 
 /* -- share -- */

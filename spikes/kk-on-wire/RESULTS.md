@@ -7,7 +7,8 @@ and the host's `limina-replayer` making the Metal 4 calls.
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
 `/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `d71a3c39f85` (window
-surfaces: `08e0f2b62a7`; video planes and imports: `3ce3a0262fe`; counter heaps: `bf03b0d9245`).
+surfaces: `08e0f2b62a7`; video planes and imports: `3ce3a0262fe`; counter heaps: `bf03b0d9245`;
+X11 presentation: `8a77bbed8ff`).
 
 | check | result |
 |---|---|
@@ -25,10 +26,11 @@ surfaces: `08e0f2b62a7`; video planes and imports: `3ce3a0262fe`; counter heaps:
 | `mpv --vo=gpu-next --gpu-api=vulkan --hwdec=vaapi` on the seated desktop | 1080p VP9 clip decoded by VA and imported through libplacebo's dma-buf interop: plays 20 s looping, 3 frames dropped, the frame on screen correct (capture checked by eye) |
 | decode stays asynchronous with plane surfaces (`VIRGLRS_SUBMIT_STATS=2`, ffmpeg VA decode of 1080p with readback) | END_FRAME costs the render thread 0.10 ms per frame against a 2.03 ms mean decode session; the decode thread's write into the plane surfaces is 0.13 ms mean |
 | `kk-probe timestamps` | 64 valid bits; two timestamps around a submit resolve to GPU times in order (counter heaps on the wire, protocol 4) |
+| `kk-probe triangle`'s in-pass timestamps | after the vertex stage, then after the fragment stage of the draw: 1.1–1.3 µs apart, in order, 3 runs |
 | stock VA decode, planes promoted vs not | GStreamer `vavp9dec` to DMABuf then `vapostproc`, plain `vavp9dec`, and `vp9dec`, 60 frames of 854×480 VP9 each: per-frame checksums identical with every VA surface's planes promoted to surfaces (`limina-kk-surfaces`, virglrs `f70dcb5`) and on the stock host GL, where they keep GL storage |
 | `kk-probe import` | a linear XRGB8888 scanout buffer from stock gbm (virgl), written through `gbm_bo_map`, imported as a dedicated LINEAR-modifier image at gbm's pitch: 1024/1024 pixels right |
-| stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing. It poisons Xwayland's virgl context (`PipeResourceSetType: no such resource`) the first time it runs, reproduced on a fresh boot |
-| `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps; at `0faceb1acdd`, 59.6 fps vsync-bound over 5 s |
+| stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
+| `glxgears` on that zink over Xwayland, fresh boot | draws (capture checked by eye), ~58 fps vsync-bound, no context refused; `vkcube --wsi xcb` runs 200 frames |
 | `kk-probe share` | a buffer exported as dma-buf, dispatched into through a self-import and through an import in a child process: the exporter's mapping shows 256/256 words right for both; the child reads the parent's mark |
 | `kk-probe syncfd` | a submit held by a wait on an unsignaled timeline exports its binary semaphore as a real sync_file: pending before the CPU opens the gate, signaled after, and the fill behind it landed |
 | `kk-probe signal` | a submit that only signals a timeline semaphore reaches the host without any later push: the counter reads 1 after 1 ms |
@@ -115,8 +117,11 @@ buffer scene with guest and host both idle. Queue events now publish like commit
   a replayer-posted wake would remove the poll.
 - **Only windows cross to the compositor.** A non-window exported KK heap is still a blob the
   extension owns, invisible to virglrs. Windows in RGBA16F or 10-bit formats are withheld until
-  surfaces take them; X11 WSI's format list is not filtered, and a zink-on-KK client over
-  Xwayland (`glxinfo -B`) poisons Xwayland's context.
+  surfaces take them; X11 WSI's format list is not filtered.
+- **X11 presents native images because KK says the X server's device is its own.** Mesa's
+  `wsi_device_matches_drm_fd` matches PCI devices only; answered no, X11 WSI presents through an
+  exported buffer, a heap blob that poisons Xwayland's and gnome-shell's contexts. KK compares
+  the DRI3 fd's sysfs device with its render node's instead.
 - **Which exports other drivers can read.** Any dedicated image whose layout is linear (LINEAR
   tiling or the LINEAR modifier, the portable ways to share with another driver) in a 32-bit
   BGRA/RGBA single-level 2D shape is a surface. An OPTIMAL-tiled export has no layout another
@@ -149,8 +154,11 @@ buffer scene with guest and host both idle. Queue events now publish like commit
   plain `vavp9dec` differs from `vp9dec` in 30 of 60 frames of the test clip, and a DMABuf
   decode through `vapostproc` in all 60.
 - **A bad client import ends the compositor's context.** vrend poisons a context on a SET_TYPE of
-  a resource it does not know; the format filter keeps KK from causing one on Wayland, but not
-  through Xwayland.
+  a resource it does not know; the format filter keeps KK from causing one on Wayland, and X11
+  is held to the formats surfaces take only by what X visuals offer.
+- **Every dma-buf memory-properties query asks the host whether it is a surface**, and for a
+  heap the worker logs `LiminaSurfaceImport -> ErrInvalidResourceId` at WARN: an expected answer
+  in an error's clothing.
 - No DRM format modifiers: a dma-buf image means KosmicKrisp's own layout, so only another
   KosmicKrisp context can make sense of it.
 
