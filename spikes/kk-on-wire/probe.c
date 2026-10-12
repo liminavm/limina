@@ -8,6 +8,11 @@
  *             blue pixel counts are checked and the image is written to kk-probe.ppm
  *   allocs    6000 separately allocated, mapped 4 KiB buffers, each written and checked through
  *             its own mapping, then a dispatch into the last one
+ *   glbuf     a buffer shared with GL as GL_EXT_memory_object_fd shares it: exported as an opaque
+ *             fd, imported by zink (on this same KosmicKrisp, GL 3.3 core through EGL on the
+ *             render node) as a memory object with buffer storage over it; GL reads what Vulkan wrote, then Vulkan
+ *             reads what GL wrote. Synchronised on the CPU (glFinish, queue idle). Not part of
+ *             the default run.
  *   share     a buffer exported as a dma-buf (VK_KHR_external_memory_fd): imported back into the
  *             same device and dispatched into, then imported by a child process (this program,
  *             exec'd as `share-child <fd>`) that checks what the parent wrote and dispatches
@@ -656,6 +661,167 @@ share(const char *self)
    }
    fails += check_filled("child", &ex);
    free_buf(ex);
+   return fails;
+}
+
+/* -- glbuf -- */
+
+#define GLBUF_WORDS 1024u
+
+typedef void(GL_APIENTRYP pfn_create_memory_objects)(GLsizei, GLuint *);
+typedef void(GL_APIENTRYP pfn_import_memory_fd)(GLuint, GLuint64, GLenum, GLint);
+typedef void(GL_APIENTRYP pfn_buffer_storage_mem)(GLenum, GLsizeiptr, GLuint, GLuint64);
+typedef void(GL_APIENTRYP pfn_get_unsigned_bytei_v)(GLenum, GLuint, GLubyte *);
+typedef void(GL_APIENTRYP pfn_copy_buffer_sub_data)(GLenum, GLenum, GLintptr, GLintptr,
+                                                    GLsizeiptr);
+typedef void *(GL_APIENTRYP pfn_map_buffer_range)(GLenum, GLintptr, GLsizeiptr, GLbitfield);
+typedef GLboolean(GL_APIENTRYP pfn_unmap_buffer)(GLenum);
+
+#define GLBUF_COPY_READ 0x8F36
+#define GLBUF_COPY_WRITE 0x8F37
+#define GLBUF_MAP_READ 0x0001
+#define GLBUF_OPAQUE_FD 0x9586
+#define GLBUF_DEVICE_UUID 0x9597
+#define GLBUF_UUID_SIZE 16
+
+static void
+print_uuid(const char *who, const uint8_t *u)
+{
+   printf("glbuf: %s device UUID ", who);
+   for (unsigned i = 0; i < GLBUF_UUID_SIZE; i++)
+      printf("%02x", u[i]);
+   printf("\n");
+}
+
+static int
+gl_buffer_interop(void)
+{
+   /* Vulkan's half: a host-visible buffer exportable as an opaque fd, pattern A. */
+   VkExternalMemoryBufferCreateInfo ext = {
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
+   VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                            .pNext = &ext,
+                            .size = GLBUF_WORDS * 4,
+                            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+   struct buf b = {0};
+   CHECK(vkCreateBuffer(dev, &bi, NULL, &b.b));
+   VkMemoryRequirements req;
+   vkGetBufferMemoryRequirements(dev, b.b, &req);
+   VkExportMemoryAllocateInfo ex = {.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+                                    .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
+   VkMemoryAllocateInfo ai = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext = &ex,
+      .allocationSize = req.size,
+      .memoryTypeIndex = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+   };
+   CHECK(vkAllocateMemory(dev, &ai, NULL, &b.m));
+   CHECK(vkBindBufferMemory(dev, b.b, b.m, 0));
+   CHECK(vkMapMemory(dev, b.m, 0, VK_WHOLE_SIZE, 0, &b.map));
+   uint32_t *words = b.map;
+   for (uint32_t i = 0; i < GLBUF_WORDS; i++)
+      words[i] = 7 * i + 3;
+   VkMemoryGetFdInfoKHR gi = {.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+                              .memory = b.m,
+                              .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
+   int fd = -1;
+   CHECK(get_memory_fd(dev, &gi, &fd));
+   VkPhysicalDeviceIDProperties id = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+   VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                                     .pNext = &id};
+   vkGetPhysicalDeviceProperties2(pdev, &p2);
+   print_uuid("Vulkan", id.deviceUUID);
+
+   /* GL's half: zink on this KosmicKrisp, surfaceless on the render node. Desktop GL: Mesa
+    * advertises the extension in GLES from 2.0 but installs its entry points only from ES 3.2,
+    * which zink on KosmicKrisp does not reach. */
+   setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1);
+   int drm = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+   struct gbm_device *gbm = drm >= 0 ? gbm_create_device(drm) : NULL;
+   PFNEGLGETPLATFORMDISPLAYEXTPROC get_display =
+      (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+   EGLDisplay dpy = gbm && get_display ? get_display(EGL_PLATFORM_GBM_KHR, gbm, NULL)
+                                       : EGL_NO_DISPLAY;
+   const EGLint cattr[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3,
+                           EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+                           EGL_NONE};
+   EGLContext ctx = EGL_NO_CONTEXT;
+   if (dpy != EGL_NO_DISPLAY && eglInitialize(dpy, NULL, NULL) && eglBindAPI(EGL_OPENGL_API))
+      ctx = eglCreateContext(dpy, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, cattr);
+   if (ctx == EGL_NO_CONTEXT || !eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
+      fprintf(stderr, "glbuf: no surfaceless GL 3.3 core context on zink\n");
+      return 1;
+   }
+   printf("glbuf: GL: %s, %s\n", (const char *)glGetString(GL_RENDERER),
+          (const char *)glGetString(GL_VERSION));
+   pfn_create_memory_objects create_mem =
+      (pfn_create_memory_objects)eglGetProcAddress("glCreateMemoryObjectsEXT");
+   pfn_import_memory_fd import_fd = (pfn_import_memory_fd)eglGetProcAddress("glImportMemoryFdEXT");
+   pfn_buffer_storage_mem storage =
+      (pfn_buffer_storage_mem)eglGetProcAddress("glBufferStorageMemEXT");
+   pfn_get_unsigned_bytei_v get_ubytei_v =
+      (pfn_get_unsigned_bytei_v)eglGetProcAddress("glGetUnsignedBytei_vEXT");
+   pfn_copy_buffer_sub_data copy = (pfn_copy_buffer_sub_data)eglGetProcAddress("glCopyBufferSubData");
+   pfn_map_buffer_range map = (pfn_map_buffer_range)eglGetProcAddress("glMapBufferRange");
+   pfn_unmap_buffer unmap = (pfn_unmap_buffer)eglGetProcAddress("glUnmapBuffer");
+   if (!create_mem || !import_fd || !storage || !get_ubytei_v || !copy || !map || !unmap) {
+      fprintf(stderr, "glbuf: the GL has no GL_EXT_memory_object_fd\n");
+      return 1;
+   }
+   uint8_t gl_uuid[GLBUF_UUID_SIZE] = {0};
+   get_ubytei_v(GLBUF_DEVICE_UUID, 0, gl_uuid); /* indexed: one UUID per device */
+   print_uuid("GL", gl_uuid);
+   int fails = memcmp(gl_uuid, id.deviceUUID, GLBUF_UUID_SIZE) != 0;
+
+   GLuint mem, shared, mine;
+   create_mem(1, &mem);
+   import_fd(mem, req.size, GLBUF_OPAQUE_FD, fd); /* GL owns the fd now */
+   glGenBuffers(1, &shared);
+   glBindBuffer(GLBUF_COPY_READ, shared);
+   storage(GLBUF_COPY_READ, GLBUF_WORDS * 4, mem, 0);
+   glGenBuffers(1, &mine);
+   glBindBuffer(GLBUF_COPY_WRITE, mine);
+   glBufferData(GLBUF_COPY_WRITE, GLBUF_WORDS * 4, NULL, GL_DYNAMIC_DRAW);
+   copy(GLBUF_COPY_READ, GLBUF_COPY_WRITE, 0, 0, GLBUF_WORDS * 4);
+   const uint32_t *seen = map(GLBUF_COPY_WRITE, 0, GLBUF_WORDS * 4, GLBUF_MAP_READ);
+   uint32_t gl_good = 0;
+   for (uint32_t i = 0; seen && i < GLBUF_WORDS; i++)
+      gl_good += seen[i] == 7 * i + 3;
+   if (seen)
+      unmap(GLBUF_COPY_WRITE);
+   printf("glbuf: GL reads %u/%u words Vulkan wrote (GL error 0x%x)\n", gl_good, GLBUF_WORDS,
+          glGetError());
+   fails += gl_good != GLBUF_WORDS;
+
+   /* The other way: pattern B copied into the shared buffer by GL, read through Vulkan's map. */
+   uint32_t *pattern = malloc(GLBUF_WORDS * 4);
+   for (uint32_t i = 0; i < GLBUF_WORDS; i++)
+      pattern[i] = 0xb0000000u | (5 * i + 1);
+   glBufferSubData(GLBUF_COPY_WRITE, 0, GLBUF_WORDS * 4, pattern);
+   free(pattern);
+   glBindBuffer(GLBUF_COPY_WRITE, shared);
+   glBindBuffer(GLBUF_COPY_READ, mine);
+   copy(GLBUF_COPY_READ, GLBUF_COPY_WRITE, 0, 0, GLBUF_WORDS * 4);
+   glFinish();
+   uint32_t vk_good = 0;
+   for (uint32_t i = 0; i < GLBUF_WORDS; i++)
+      vk_good += words[i] == (0xb0000000u | (5 * i + 1));
+   printf("glbuf: Vulkan reads %u/%u words GL wrote (GL error 0x%x)\n", vk_good, GLBUF_WORDS,
+          glGetError());
+   fails += vk_good != GLBUF_WORDS;
+
+   glDeleteBuffers(1, &mine);
+   glDeleteBuffers(1, &shared);
+   eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+   eglDestroyContext(dpy, ctx);
+   eglTerminate(dpy);
+   gbm_device_destroy(gbm);
+   close(drm);
+   free_buf(b);
    return fails;
 }
 
@@ -1559,7 +1725,7 @@ main(int argc, char **argv)
    bool nv12 = only && (!strcmp(only, "nv12") || !strcmp(only, "nv12-plain") ||
                         !strcmp(only, "vadecode"));
    bool importing = exporting || nv12 || (only && !strcmp(only, "import"));
-   bool sharing = importing || (only && !strncmp(only, "share", 5));
+   bool sharing = importing || (only && (!strncmp(only, "share", 5) || !strcmp(only, "glbuf")));
    bool syncfd = only && !strcmp(only, "syncfd");
    const char *exts[] = {"VK_KHR_external_memory", "VK_KHR_external_memory_fd",
                          "VK_EXT_external_memory_dma_buf", "VK_EXT_image_drm_format_modifier"};
@@ -1601,6 +1767,8 @@ main(int argc, char **argv)
       fails += nv12_from_va(!strcmp(only, "nv12"));
    else if (importing)
       fails += import_foreign();
+   else if (only && !strcmp(only, "glbuf"))
+      fails += gl_buffer_interop();
    else if (only && !strcmp(only, "share"))
       fails += share(argv[0]);
    else if (only && !strcmp(only, "share-child") && argc > 2)

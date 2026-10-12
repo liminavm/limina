@@ -32,6 +32,9 @@ X11 presentation: `8a77bbed8ff`).
 | stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
 | `glxgears` on that zink over Xwayland, fresh boot | draws (capture checked by eye), ~58 fps vsync-bound, no context refused; `vkcube --wsi xcb` runs 200 frames |
 | `kk-probe share` | a buffer exported as dma-buf, dispatched into through a self-import and through an import in a child process: the exporter's mapping shows 256/256 words right for both; the child reads the parent's mark |
+| `kk-probe glbuf` | a buffer exported as an opaque fd, imported by zink on this KK (EGL on gbm, GL 3.3 core) through `GL_EXT_memory_object_fd` with buffer storage over it: device UUIDs match; GL reads 1024/1024 words Vulkan wrote, Vulkan reads 1024/1024 GL wrote; 10/10 runs, 0.13 s each |
+| buffer sharing across guest drivers (`bufcaps`, `glxinfo`) | KK exports and imports buffers as dma-buf and opaque fd. Stock venus advertises no external memory for a buffer at all, and stock virgl GL has no `GL_EXT_memory_object`: zink on KK is the only GL a KK buffer can reach |
+| `guest/limina-gpu-smoke` export latency | 20 shared-arena exports on a quiet desktop, 50 ms apart: worst 7.6–9.2 ms over 3 runs (the guest module kicks the control queue before it waits for the host's map) |
 | `kk-probe syncfd` | a submit held by a wait on an unsignaled timeline exports its binary semaphore as a real sync_file: pending before the CPU opens the gate, signaled after, and the fill behind it landed |
 | `kk-probe signal` | a submit that only signals a timeline semaphore reaches the host without any later push: the counter reads 1 after 1 ms |
 | `glmark2-wayland` on that zink (`MESA_LOADER_DRIVER_OVERRIDE=zink`) | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))` through Wayland EGL; phong scene correct (capture checked by eye); the full default run completes, score 456 at 800×600 (most scenes ~520 fps, terrain 76, refract 202) |
@@ -130,6 +133,13 @@ buffer scene with guest and host both idle. Queue events now publish like commit
   through a ctrl-queue transfer into guest pages it does not have (`transfer_read: ... no pages
   attached`), as for any non-mappable host3d blob, venus exports included. GPU sampling works.
   Mappable surfaces would need the IOSurface's pages in the guest-visible region.
+- **Buffers are shared with KK and zink on it, nobody else.** Stock venus and virgl have no
+  buffer sharing to meet KK with (`bufcaps`); KK's own dma-buf and opaque-fd buffers serve
+  Vulkan↔GL interop through zink, which is the case applications have.
+- **Mesa installs the external-objects entry points from GLES 3.2** while advertising
+  `GL_EXT_memory_object` from GLES 2.0 (`src/mesa/glapi/glapi/gen/EXT_external_objects.xml`), so
+  in zink-on-KK's GLES 3.1 every call is a no-op `invalid call`; desktop GL works. An upstream
+  item.
 - **Imports are images only.** A dma-buf from vrend or venus imports as a dedicated image over
   its surface, single-plane or a 4:2:0 picture shared one dma-buf per plane; as a buffer, or a
   picture in one dma-buf (enhanced guest Mesa's composite decode target), it is still refused.

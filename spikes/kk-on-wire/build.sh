@@ -11,5 +11,6 @@ cd /src
 for s in fill.comp tri.vert tri.frag; do
   glslangValidator -V --vn "$(echo $s | tr . _)" -o "out/$s.h" "$s" >/dev/null
 done
+gcc -O2 -Wall -Werror -o out/bufcaps bufcaps.c -lvulkan
 gcc -O2 -Wall -Werror -Iout -I/usr/include/libdrm -o out/kk-probe probe.c -lvulkan -lgbm -lEGL -lGLESv2 -lva -lva-drm -ldrm $(pkg-config --cflags --libs libavcodec libavformat libavutil)
 '
