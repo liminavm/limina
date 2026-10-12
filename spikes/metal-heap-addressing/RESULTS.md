@@ -76,6 +76,32 @@ doorbell.
 Each query really crossed to the host. Over the hot phase's 5 s window the host ring served
 20,039 commands at 0.9 µs each (virglrs submit tally in `runs/rtt1/worker.stamped.log`).
 
+## 3. The same round trip on the Metal-level transport (`guest/limina-gpu-smoke`, output `runs/first-light/`)
+
+The transport `SKETCH.md` describes, built: libkrun's virtio-gpu extension, the
+`guest/virtio-gpu-limina` module and the `limina-replayer` process, with the worker started with
+`LIMINA_GPU_METAL=1`. The guest is a clone of the stock F44 test image on its own 6.19 kernel
+with 4 KiB pages; nothing else of the enhanced tier is installed. Measured 2026-10-12 on the
+same M1 Max while six other VMs ran (load average 3.0).
+
+The smoke client draws a triangle into an arena texture and reads the pixels back from arena
+memory, then runs a compute kernel that writes through a GPU address the guest computed (arena
+base + offset). Both came back right on three runs out of three. It then times an empty commit:
+one Metal command buffer with no work, retired by its completion handler, which is the
+counterpart of the venus probe's empty fenced submit.
+
+| gap | venus p50 (§2) | here p50 | here p90 | here p99 | doorbell kicks |
+|---|---|---|---|---|---|
+| 0 | 196 µs | 30–38 µs | 45–72 µs | 68 µs–1.6 ms | 1–24 of 200 |
+| 200 µs | 229 µs | 37–42 µs | 67–70 µs | 124–445 µs | 200 of 200 |
+| 5 ms | 891 µs | 110–125 µs | 147–176 µs | 190–396 µs | 200 of 200 |
+
+Ranges span the three runs. The replayer's executor spins 50 µs and then parks, so every commit
+after a 200 µs gap needed the doorbell, and the doorbell path costs a few microseconds over the
+hot one. The extra ~80 µs after 5 ms of idle is on the host, past the doorbell, and was not
+broken down. The triangle frame, which compiles its library and pipeline, took 4–8 ms; the
+first frame after the replayer starts took 64 ms.
+
 ## What it says
 
 1. **Every buffer-side round trip can be removed by construction.** That covers the browser's
@@ -96,3 +122,6 @@ Each query really crossed to the host. Over the hot phase's 5 s window the host 
 4. **Empty fenced submits take ~200 µs even when hot.** That is the floor of a blocking
    CPU wait on GPU work through venus + KK today. A design whose guest CPU waits on GPU
    completion once per frame pays it once per frame.
+5. **The Metal-level transport cuts that floor 5–8×** (§3): ~35 µs hot, ~40 µs once the host
+   has parked and the doorbell wakes it, ~120 µs after a long idle. How the remainder splits
+   between the transport and Metal's own command-buffer latency was not measured.

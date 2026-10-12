@@ -435,26 +435,36 @@ fn poke(g: &mut Gpu, other: &Arena) -> Result<(), String> {
     Ok(())
 }
 
-/// Round trips with an empty commit: the doorbell path when the host has parked, and the
-/// spinning path when it has not.
+/// Round trips of an empty commit (a Metal command buffer with no work, retired by its completion
+/// handler) after each of three idle gaps: none, a short one, and one long enough for the host to
+/// have parked, which needs the doorbell. The gaps match the venus probe's
+/// (spikes/metal-heap-addressing/rtt.c) so the two tables compare row for row.
 fn round_trips(g: &mut Gpu) -> Result<(), String> {
-    let mut times = Vec::new();
-    let kicks = g.kicks;
-    for i in 0..200 {
-        if i % 2 == 0 {
-            // Long enough for the host consumer to park.
-            std::thread::sleep(Duration::from_millis(2));
+    const N: usize = 200;
+    for gap in [
+        Duration::ZERO,
+        Duration::from_micros(200),
+        Duration::from_millis(5),
+    ] {
+        let kicks = g.kicks;
+        let mut times = Vec::with_capacity(N);
+        for _ in 0..N {
+            if !gap.is_zero() {
+                std::thread::sleep(gap);
+            }
+            times.push(g.commit_and_wait()?);
         }
-        times.push(g.commit_and_wait()?);
+        times.sort();
+        let q = |p: usize| times[(times.len() * p / 100).min(times.len() - 1)];
+        println!(
+            "round trips, gap {gap:?}: p50 {:?} p90 {:?} p99 {:?} max {:?}, {} kicks in {N}",
+            q(50),
+            q(90),
+            q(99),
+            times[N - 1],
+            g.kicks - kicks
+        );
     }
-    times.sort();
-    println!(
-        "round trips: min {:?} p50 {:?} p99 {:?}, {} doorbell kicks in 200 commits",
-        times[0],
-        times[times.len() / 2],
-        times[times.len() * 99 / 100],
-        g.kicks - kicks
-    );
     Ok(())
 }
 

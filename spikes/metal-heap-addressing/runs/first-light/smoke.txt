@@ -1,0 +1,28 @@
+7.56 36.05
+[    1.440436] [drm] limina extension: arenas 0x480400000+0x400000000, doorbells 0x480000000+0x400000
+dda01287dc3dd5b5598a2ed9edc282a7  /lib/modules/6.19.10-300.fc44.aarch64/updates/virtio-gpu.ko
+dda01287dc3dd5b5598a2ed9edc282a7  /home/claude/virtio-gpu.ko
+== run 1
+/dev/dri/renderD128: context up, arena 1 at gpu 0x1500000000 (64 MiB)
+triangle: 1352 green pixels (expected ~1311), frame took 8.107262ms
+poke: 256 of 256 words written through 0x1504071000, took 795.709µs
+round trips, gap 0ns: p50 33.917µs p90 44.834µs p99 67.584µs max 74.667µs, 1 kicks in 200
+round trips, gap 200µs: p50 42.25µs p90 66.75µs p99 123.584µs max 124.334µs, 200 kicks in 200
+round trips, gap 5ms: p50 118.583µs p90 173.334µs p99 396.168µs max 865.668µs, 200 kicks in 200
+PASS
+== run 2
+/dev/dri/renderD128: context up, arena 1 at gpu 0x1500000000 (64 MiB)
+triangle: 1352 green pixels (expected ~1311), frame took 6.062634ms
+poke: 256 of 256 words written through 0x1504071000, took 619.209µs
+round trips, gap 0ns: p50 29.792µs p90 51.459µs p99 1.577253ms max 2.012919ms, 9 kicks in 200
+round trips, gap 200µs: p50 37.209µs p90 69.708µs p99 442.543µs max 609.96µs, 200 kicks in 200
+round trips, gap 5ms: p50 124.584µs p90 176.208µs p99 358.626µs max 1.325502ms, 200 kicks in 200
+PASS
+== run 3
+/dev/dri/renderD128: context up, arena 1 at gpu 0x1500000000 (64 MiB)
+triangle: 1352 green pixels (expected ~1311), frame took 3.777589ms
+poke: 256 of 256 words written through 0x1504071000, took 1.323044ms
+round trips, gap 0ns: p50 38.125µs p90 71.959µs p99 97.416µs max 104.875µs, 24 kicks in 200
+round trips, gap 200µs: p50 38µs p90 67.208µs p99 445.251µs max 1.008168ms, 200 kicks in 200
+round trips, gap 5ms: p50 109.667µs p90 147.167µs p99 189.667µs max 193.417µs, 200 kicks in 200
+PASS

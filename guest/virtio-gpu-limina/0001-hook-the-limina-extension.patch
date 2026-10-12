@@ -156,10 +156,10 @@ index f359469..24e7edc 100644
  	mutex_destroy(&vfpriv->context_lock);
  	kfree(vfpriv);
 diff --git a/drivers/gpu/drm/virtio/virtgpu_vq.c b/drivers/gpu/drm/virtio/virtgpu_vq.c
-index 0c194b4..b6b6faa 100644
+index 0c194b4..1f38cba 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_vq.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_vq.c
-@@ -1098,6 +1098,42 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
+@@ -1098,6 +1098,46 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
  	virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
  }
  
@@ -182,6 +182,7 @@ index 0c194b4..b6b6faa 100644
 +	struct virtio_gpu_vbuffer *vbuf;
 +	void *resp_buf = NULL;
 +	void *cmd_p;
++	int ret;
 +
 +	if (call->resp_size > MAX_INLINE_RESP_SIZE) {
 +		resp_buf = kzalloc(call->resp_size, GFP_KERNEL);
@@ -193,7 +194,10 @@ index 0c194b4..b6b6faa 100644
 +					  call->cmd_size, call->resp_size, resp_buf);
 +	memcpy(cmd_p, call->cmd, call->cmd_size);
 +	vbuf->resp_cb_data = call;
-+	virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
++	/* On failure (an unplugged device) the buffer is already freed and no response will come. */
++	ret = virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
++	if (ret)
++		return ret;
 +	virtio_gpu_notify(vgdev);
 +	wait_for_completion(&call->done);
 +	return 0;
