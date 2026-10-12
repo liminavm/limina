@@ -2,7 +2,9 @@
 
 Status: the guest touchpad, its `NSTouch` feed and the HID-level gesture tap are BUILT
 (§What is built); two-finger scroll, pinch, taps and clicks work on the stock tier, and two-
-and three-finger taps and clicks are the guest's to read by default (§Dedupe and teardown). The tap
+and three-finger taps and clicks are the guest's to read by default (§Dedupe and teardown); with
+the guest-controlled pointer, one-finger taps too, and the captured pointer is the guest's to move.
+The tap
 takes guest three-finger sequences from macOS while four fingers stay macOS's (user-poked on
 the default "three or four" setting). Two-finger system
 gestures (smart zoom, the right-edge Notification Center swipe) are not taken. Ownership decided (§The ownership rule): the guest owns 2-
@@ -40,7 +42,7 @@ gesture suppression). With it, the partition is:
 
 | physical contacts | owner | delivered to guest as |
 |---|---|---|
-| 1 finger | **host** (tablet, host pointer ballistics), taps and clicks included | `ABS_X/Y` tablet motion and buttons; a one-finger drag just after a guest tap is the guest's (tap-and-drag) |
+| 1 finger | **host** (tablet, host pointer ballistics), taps and clicks included | `ABS_X/Y` tablet motion and buttons; a one-finger drag just after a guest tap is the guest's (tap-and-drag); with the guest-controlled pointer a one-finger tap is the guest's, and captured every finger is |
 | 2 fingers | **guest** — scroll, pinch, rotate, taps and clicks | real MT contacts on the new device, and its `BTN_LEFT` |
 | 3 fingers | **guest** — swipes (GNOME ≥40 binds everything to 3), taps and clicks | real MT contacts on the new device, and its `BTN_LEFT` |
 | 4+ fingers | **host** — Spaces, Mission Control stay usable | nothing |
@@ -195,9 +197,10 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   contacts. Their events arrive on separate, unordered streams: a click can reach limina 2–5
   ms *before* the touches it belongs to, touches vanish while the pad is pressed and reappear
   after, and macOS's tap click lands 220–340 ms after the fingers lift (it waits out the
-  double-tap window; `battery-1`, `battery-2`). One finger's taps and clicks are always
-  macOS's, through the tablet. Two and three fingers' go one of two ways, by the Input menu's
-  **Taps and Clicks with Two or More Fingers in the VM** (per VM, default on):
+  double-tap window; `battery-1`, `battery-2`). One finger's taps and clicks are macOS's,
+  through the tablet, unless the guest-controlled pointer is on (below). Two and three
+  fingers' go one of two ways, by the Input menu's **Taps and Clicks with Two or More Fingers
+  in the VM** (per VM, default on):
   - **On: the guest reads them** (`TrackpadSeq::guest_taps`), so its own settings — click
     method (clickfinger: a three-finger click is the middle button), `clickfinger-button-map`,
     left-handed, tap-to-click and the tap button map — apply as on bare metal. Stock GNOME
@@ -210,10 +213,12 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
     - **A physical click while the guest holds the fingers is the touchpad's `BTN_LEFT`**,
       in a frame with them down, and macOS's click is not sent. "Physical" is a finger on the
       pad within 100 ms (`TAP_CLICK_GAP`, as in raw mode).
-    - **macOS's click for a guest tap is dropped**: a click with no finger on the pad within
-      500 ms of a guest touch that lifted, unpressed, inside libinput's 180 ms
-      (`HOST_TAP_CLICK_LATE`, `GUEST_TAP_TIMEOUT`). A release follows its press wherever the
-      press went.
+    - **macOS's click for a guest tap is dropped**: a click within 500 ms of a guest touch
+      that lifted, unpressed, inside libinput's 180 ms (`HOST_TAP_CLICK_LATE`,
+      `GUEST_TAP_TIMEOUT`), with no finger on the pad or with the guest's tap-and-drag finger
+      down — macOS's late click lands on that finger as often as not. Each guest tap is owed
+      one click, so a double tap's two are both dropped. A release follows its press wherever
+      the press went.
     - **Any trackpad click in flight holds the guest's fingers down**, and their 50 ms
       flicker grace starts at the release. A click that reached limina before its second
       finger went to the tablet; lifted on the grace while the pad was down, the fingers
@@ -275,30 +280,43 @@ must not also act on it. Momentum-end events land up to ~1 s after the last fing
   setting), AppKit stops attaching touches to the app's gesture events: of ~8 000 gesture
   events in one poke, 57 carried three touches. The guest cannot see the swipe until the
   host's recognizer is suppressed.
-- **Raw mode** (Input ▸ "Raw Trackpad While Captured", per VM, default off) hands the guest
-  everything up to three fingers while the pointer is captured, for users who prefer the
-  guest's own pointer acceleration and tap and click settings. Every sequence of one to three
-  fingers is the guest's from its first finger, with no commit and no tap guard; macOS's
-  gestures are taken from two fingers up. Captured only: the host cursor is hidden and parked
-  then, so the guest's pointer is the only one. The capture tap tells the trackpad's pointer
-  events by their mouse subtype (3, touch; a mouse's, a Universal Control mouse's included,
-  is 0) and stops them driving the tablet. A trackpad click with a finger on the pad, or off
-  it for at most 100 ms (`TAP_CLICK_GAP`), is the physical button and becomes the guest
-  touchpad's `BTN_LEFT` (the guest's click method decides left or right); anything later is
-  macOS's tap-to-click — 220–340 ms after the lift, against 0–30 ms for a physical click
-  (`spikes/raw-trackpad/`, the recordings) — and is dropped, the guest having read the tap
-  itself. So is macOS's tap-to-drag: after a tap (under 150 ms, no press), a landing within
-  300 ms of its lift makes macOS press within 40 ms of that landing (7–32 ms measured), with
-  the finger down; physical presses come later after a landing, and a quick one after a
-  physical click follows a touch that pressed (`DRAG_TAP`, `DRAG_LANDING`, `DRAG_PRESS`).
-  No event field tells the two apart (fields 89/90 are set on tap-drag presses and on
-  two-finger physical clicks alike). The guest's own taps follow its settings: GNOME ships
-  tap-to-click off. While the pad is pressed the guest's fingers never lift, since touches can vanish
-  mid-press; the release lifts them. The fullscreen grab's edge release still works:
-  the trackpad's motion charges the press as it does outside raw mode, judged where the
-  guest's cursor echo puts the pointer (the guest's acceleration moves it, so the tablet's
-  estimate is not it), its last pixel counting as the edge (`fit_point_of_echo`). A guest that
-  draws its own cursor sends no echo, and only the ungrab chord releases it.
+- **The guest-controlled pointer** (Input ▸ "Guest-Controlled Pointer", per VM, default off;
+  it took over the "Raw Trackpad While Captured" switch and its saved choice) is for users who
+  prefer the guest's own pointer acceleration and tap and click settings throughout. It turns
+  both tap switches on, greyed out, and adds two things:
+  - **One-finger taps are the guest's, uncaptured too.** A one-finger touch is the tablet's
+    while it is down — the macOS pointer moves it — and when it lifts within 180 ms without
+    moving 1.6 mm or pressing the pad, the guest touchpad sees a still touch land there and
+    lift 10 ms later (`SYNTHETIC_TAP_HOLD`), and reads the tap itself; macOS's click for it is
+    dropped as for any guest tap, and a finger landing within 180 ms of it is the guest's
+    tap-and-drag. A touch landing within 50 ms of the last lift is AppKit restoring a finger
+    it dropped mid-motion and is never a tap. The recordings agree click for click but for
+    eight still, quick one-finger touches macOS made no click for, several 190–250 ms after
+    the pointer stopped moving, which libinput reads as taps
+    (`battery_N_with_one_finger_taps_…`); the guest's reading stands.
+  - **Captured, the guest moves the pointer** — the mouse as `docs/input-and-windows.md` §4
+    says, the trackpad in raw mode. Every sequence of one to three
+    fingers is the guest's from its first finger, with no commit and no tap guard; macOS's
+    gestures are taken from two fingers up. Captured only: the host cursor is hidden and parked
+    then, so the guest's pointer is the only one. The capture tap tells the trackpad's pointer
+    events by their mouse subtype (3, touch; a mouse's, a Universal Control mouse's included,
+    is 0) and stops them driving the tablet. A trackpad click with a finger on the pad, or off
+    it for at most 100 ms (`TAP_CLICK_GAP`), is the physical button and becomes the guest
+    touchpad's `BTN_LEFT` (the guest's click method decides left or right); anything later is
+    macOS's tap-to-click — 220–340 ms after the lift, against 0–30 ms for a physical click
+    (`spikes/raw-trackpad/`, the recordings) — and is dropped, the guest having read the tap
+    itself. So is macOS's tap-to-drag: after a tap (under 150 ms, no press), a landing within
+    300 ms of its lift makes macOS press within 40 ms of that landing (7–32 ms measured), with
+    the finger down; physical presses come later after a landing, and a quick one after a
+    physical click follows a touch that pressed (`DRAG_TAP`, `DRAG_LANDING`, `DRAG_PRESS`).
+    No event field tells the two apart (fields 89/90 are set on tap-drag presses and on
+    two-finger physical clicks alike). The guest's own taps follow its settings: GNOME ships
+    tap-to-click off. While the pad is pressed the guest's fingers never lift, since touches can vanish
+    mid-press; the release lifts them. The fullscreen grab's edge release still works:
+    the trackpad's motion charges the press as it does outside raw mode, judged where the
+    guest's cursor echo puts the pointer (the guest's acceleration moves it, so the tablet's
+    estimate is not it), its last pixel counting as the edge (`fit_point_of_echo`). A guest that
+    draws its own cursor sends no echo, and only the ungrab chord releases it.
 
 Teardown: on *any* transition — cursor leaves the view, window loses key, capture
 toggles, a fourth physical finger lands (the host is taking over), or the fingers lift — release every guest slot cleanly (`tracking_id` −1, `BTN_TOUCH` up, SYN) so the
@@ -313,10 +331,12 @@ tablet is a generic pointer and can never engage it. The answer is layered by mo
 - **Seamless/soft, after a one-finger tap:** the host owns pointer ballistics, so the host
   owns drag semantics — macOS Accessibility → Pointer Control → Trackpad Options → "Use
   trackpad for dragging" with **drag lock** keeps the virtual button down across finger
-  lifts, and the guest sees one unbroken `BTN_LEFT` through the tablet.
+  lifts, and the guest sees one unbroken `BTN_LEFT` through the tablet. With the
+  guest-controlled pointer, the guest's own, as after any guest tap.
 - **After a two- or three-finger tap:** the guest's own tap-and-drag, with Input ▸
   Tap-and-Drag in the VM (§Dedupe and teardown).
-- **Hard capture (future full-MT):** guest libinput provides tap-and-drag natively.
+- **Captured, with the guest-controlled pointer:** guest libinput provides tap-and-drag
+  natively.
 - macOS *three-finger drag* (an Accessibility setting, `TrackpadThreeFingerDrag`) claims
   three fingers that the guest now owns. When it is on, limina should leave three fingers
   to the host rather than take them: read the setting, as with the swipe prefs.

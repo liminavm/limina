@@ -14,7 +14,8 @@
 # per-scroll table is left in the guest's /tmp/trackpad-oracle-scroll.txt). `fuzz` sets the
 # clone's MT position fuzz; `--verbose` logs libinput's gesture state machine into
 # /tmp/trackpad-oracle-libinput.log. The replay is the app's default, the guest owning two- and
-# three-finger taps and clicks; TRACKPAD_MACOS_TAPS=1 in the environment leaves them to macOS.
+# three-finger taps and clicks; TRACKPAD_MACOS_TAPS=1 in the environment leaves them to macOS,
+# and TRACKPAD_ONE_FINGER_TAPS=1 gives the guest one-finger taps too (the guest-controlled pointer).
 # The guest needs only stock libinput and python3.
 set -euo pipefail
 

@@ -553,16 +553,18 @@ extern "C" fn tap_callback(
     };
     let from_trackpad = geti(FIELD_MOUSE_SUBTYPE) == MOUSE_SUBTYPE_TOUCH;
     match etype {
-        // Raw trackpad mode, or a guest tap-and-drag: the guest touchpad drives the pointer; the
-        // hidden host cursor only stays parked. The motion still charges the edge press, judged
-        // where the guest's own cursor is.
+        // The guest moves the pointer — the guest-controlled pointer (the trackpad's fingers on
+        // the guest touchpad, the mouse's own counts on its relative mouse), or a guest
+        // tap-and-drag: the hidden host cursor only stays parked. The motion still charges the
+        // edge press, judged where the guest's own cursor is.
         MOUSE_MOVED | LMB_DRAG | RMB_DRAG | OMB_DRAG
-            if ctx.input.trackpad_owns_pointer(from_trackpad) =>
+            if ctx.input.guest_owns_captured_motion(from_trackpad) =>
         {
             let getd = |field: u32| unsafe { CGEventGetDoubleValueField(event, field) };
             let (dx, dy) = ctx
                 .input
                 .swallow_warp(getd(FIELD_DELTA_X), getd(FIELD_DELTA_Y));
+            ctx.input.guest_mouse_motion(from_trackpad, dx, dy);
             ctx.input.repin_park(&ctx.view);
             if let Some(s) = ctx.input.raw_press_step(&ctx.view)
                 && let Some((edge, release)) =
@@ -654,21 +656,29 @@ extern "C" fn tap_callback(
             {
                 ctx.input.record_trackpad_click(&ns, down);
             }
-            // The guest touchpad takes its own clicks (raw mode, a guest sequence's); the rest
-            // go to the tablet as macOS recognised them.
-            if !ctx.input.trackpad_click(from_trackpad, down) {
-                let btn = if matches!(etype, LMB_DOWN | LMB_UP) {
-                    BTN_LEFT
-                } else {
-                    BTN_RIGHT
-                };
+            // The guest touchpad takes its own clicks (raw mode, a guest sequence's), and the
+            // relative mouse the mouse's while the guest moves the pointer; the rest go to the
+            // tablet as macOS recognised them.
+            let btn = if matches!(etype, LMB_DOWN | LMB_UP) {
+                BTN_LEFT
+            } else {
+                BTN_RIGHT
+            };
+            if !ctx.input.trackpad_click(from_trackpad, down)
+                && !ctx.input.guest_mouse_button(from_trackpad, btn, down)
+            {
                 send_click(btn, down);
             }
         }
         OMB_DOWN | OMB_UP => {
             // Middle button only (buttonNumber 2); ignore higher buttons for now.
-            if geti(FIELD_BUTTON_NUMBER) == 2 {
-                send_click(BTN_MIDDLE, etype == OMB_DOWN);
+            let down = etype == OMB_DOWN;
+            if geti(FIELD_BUTTON_NUMBER) == 2
+                && !ctx
+                    .input
+                    .guest_mouse_button(from_trackpad, BTN_MIDDLE, down)
+            {
+                send_click(BTN_MIDDLE, down);
             }
         }
         SCROLL => {

@@ -22,6 +22,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::hidmouse::HidMouse;
 use super::trackpad::{Click, Recorded, TouchSample, TrackpadSeq};
 use super::{InputDev, WorkerConn};
 
@@ -739,9 +740,18 @@ pub struct InputState {
     /// Which trackpad touch sequences the guest's multitouch touchpad owns, and the contacts
     /// it was told about. See [`super::trackpad`].
     trackpad: RefCell<TrackpadSeq>,
-    /// The Input menu's "Raw Trackpad While Captured" switch; raw mode is on while it is and
-    /// the pointer is captured ([`Self::sync_raw_trackpad`]).
-    raw_trackpad: Cell<bool>,
+    /// The Input menu's "Guest-Controlled Pointer" switch: while it is on and the pointer is
+    /// captured, the guest moves the pointer ([`Self::sync_guest_pointer`]); on, the guest reads
+    /// every tap.
+    guest_pointer: Cell<bool>,
+    /// The mouse's own counts, read once the guest-controlled pointer is first wanted.
+    hid_mouse: Cell<Option<&'static HidMouse>>,
+    /// The mouse buttons the guest-controlled pointer pressed on the relative mouse ([`btn_bit`]
+    /// encoding), so a release follows its press there and leaving the mode releases them.
+    rel_buttons: Cell<u8>,
+    /// macOS's deltas not yet sent whole to the relative mouse, when they stand in for the
+    /// mouse's own ([`HidMouse::moving`]).
+    rel_rest: Cell<(f64, f64)>,
     /// The tablet's button events, spaced so the guest never reads two clicks as one bounce
     /// ([`super::button_pace`]).
     button_pace: RefCell<super::button_pace::ButtonPacer>,
@@ -987,7 +997,10 @@ impl InputState {
             scroll_y: Cell::new(ScrollAxis::default()),
             scroll_x: Cell::new(ScrollAxis::default()),
             trackpad: RefCell::new(TrackpadSeq::new(crate::hosttrackpad::geometry())),
-            raw_trackpad: Cell::new(false),
+            guest_pointer: Cell::new(false),
+            hid_mouse: Cell::new(None),
+            rel_buttons: Cell::new(0),
+            rel_rest: Cell::new((0.0, 0.0)),
             button_pace: RefCell::new(super::button_pace::ButtonPacer::default()),
             touch_trace_count: Cell::new((0, 0)),
             trackpad_record: RefCell::new(TrackpadRecorder::from_env()),
@@ -1422,7 +1435,7 @@ impl InputState {
             self.cancel_touchpad();
             self.release_all_modifiers("grab-off");
         }
-        self.sync_raw_trackpad();
+        self.sync_guest_pointer();
         now
     }
 
@@ -2090,6 +2103,9 @@ impl InputState {
                 event.clickCount(),
             );
         }
+        if self.guest_mouse_button(event.subtype() == NSEventSubtype::Touch, btn, true) {
+            return false;
+        }
         if self.is_captured() {
             // Captured: no view gate — the virtual cursor is always over the content. Re-send
             // its position with the press (same staleness guard as the uncaptured path below).
@@ -2118,6 +2134,9 @@ impl InputState {
 
     /// Forward a release only for presses the guest saw (never leaves a button stuck).
     fn emit_release(&self, btn: u16) -> bool {
+        if self.guest_mouse_button(false, btn, false) {
+            return false;
+        }
         let (next, forward) = self.buttons.get().released(btn_bit(btn));
         self.buttons.set(next);
         if forward {
@@ -2512,10 +2531,12 @@ impl InputState {
         // us — CGAssociate(false) alone doesn't reliably freeze it. Zero-length (the cursor is
         // already at the park), so it injects nothing.
         self.repin_park(view);
-        if self.trackpad_owns_pointer(event.subtype() == NSEventSubtype::Touch) {
+        let from_trackpad = event.subtype() == NSEventSubtype::Touch;
+        let (dx, dy) = self.swallow_warp(event.deltaX(), event.deltaY());
+        if self.guest_owns_captured_motion(from_trackpad) {
+            self.guest_mouse_motion(from_trackpad, dx, dy);
             return;
         }
-        let (dx, dy) = self.swallow_warp(event.deltaX(), event.deltaY());
         self.captured_step_and_emit(dx, dy, view);
     }
 
@@ -3368,6 +3389,9 @@ impl InputState {
         if gesture_scroll && self.trackpad.borrow().swallows_scroll() {
             return;
         }
+        if self.guest_mouse_wheel_sent(event) {
+            return;
+        }
         // Trackpads and Magic Mice report precise point deltas (momentum-phase events
         // included, so guest kinetic decay comes free); those flow through the v120
         // accumulators for pixel-smooth guest scrolling. Physical wheels don't, and keep
@@ -3446,18 +3470,40 @@ impl InputState {
         self.trackpad.borrow().swallows_gestures()
     }
 
-    /// The Input menu's raw trackpad switch, adopted by the render tick.
-    pub(crate) fn set_raw_trackpad(&self, on: bool) {
-        self.raw_trackpad.set(on);
-        self.sync_raw_trackpad();
+    /// The Input menu's guest-controlled pointer switch, adopted by the render tick. On, the
+    /// guest reads one-finger taps too.
+    pub(crate) fn set_guest_pointer(&self, on: bool) {
+        if self.guest_pointer.replace(on) != on {
+            self.trackpad.borrow_mut().set_one_finger_taps(on);
+        }
+        self.sync_guest_pointer();
     }
 
-    /// Raw mode is on while the switch is and the pointer is captured: the host cursor is
-    /// hidden and parked then, so the guest's own pointer can be the only one. Idempotent.
-    fn sync_raw_trackpad(&self) {
-        let on = self.raw_trackpad.get() && self.is_captured();
+    /// The guest moves the pointer while the switch is on and the pointer is captured: the host
+    /// cursor is hidden and parked then, so the guest's own pointer can be the only one. The
+    /// trackpad is in raw mode, and the mouse's own counts go to the relative mouse.
+    /// Idempotent.
+    fn sync_guest_pointer(&self) {
+        let on = self.guest_pointer.get() && self.is_captured();
         let events = self.trackpad.borrow_mut().set_raw(on);
         self.send_touchpad(&events);
+        if on && self.hid_mouse.get().is_none() {
+            self.hid_mouse.set(Some(HidMouse::start(self.conn.clone())));
+        }
+        if let Some(mouse) = self.hid_mouse.get() {
+            mouse.set_active(on);
+        }
+        if !on {
+            self.rel_rest.set((0.0, 0.0));
+            for btn in [BTN_LEFT, BTN_RIGHT, BTN_MIDDLE] {
+                self.release_rel_button(btn);
+            }
+        }
+    }
+
+    /// Whether the guest moves the captured pointer itself ([`Self::sync_guest_pointer`]).
+    fn guest_moves_captured(&self) -> bool {
+        self.guest_pointer.get() && self.is_captured()
     }
 
     /// Whether the guest touchpad, not the tablet, takes the motion of a pointer event whose
@@ -3467,6 +3513,92 @@ impl InputState {
     /// carries 0 and still drives the tablet.
     pub(crate) fn trackpad_owns_pointer(&self, from_trackpad: bool) -> bool {
         from_trackpad && self.trackpad.borrow().owns_pointer()
+    }
+
+    /// Whether the guest moves the pointer for a captured pointer event: the trackpad's as
+    /// [`Self::trackpad_owns_pointer`] says, a mouse's with the guest-controlled pointer on.
+    /// The tablet keeps out of it; the motion only charges the grab's edge press.
+    pub(crate) fn guest_owns_captured_motion(&self, from_trackpad: bool) -> bool {
+        self.trackpad_owns_pointer(from_trackpad) || (!from_trackpad && self.guest_moves_captured())
+    }
+
+    /// A captured mouse motion the guest moves the pointer for: the mouse's own counts have
+    /// already gone to the relative mouse ([`HidMouse`]), unless none came — no permission, a
+    /// Universal Control or remote mouse — and macOS's deltas stand in.
+    pub(crate) fn guest_mouse_motion(&self, from_trackpad: bool, dx: f64, dy: f64) {
+        if from_trackpad
+            || !self.guest_moves_captured()
+            || self.hid_mouse.get().is_some_and(HidMouse::moving)
+        {
+            return;
+        }
+        let (rx, ry) = self.rel_rest.get();
+        let (x, y) = (rx + dx, ry + dy);
+        let (sx, sy) = (x.trunc(), y.trunc());
+        self.rel_rest.set((x - sx, y - sy));
+        if sx == 0.0 && sy == 0.0 {
+            return;
+        }
+        self.send_rel(&[
+            InputEvent::new(EV_REL, REL_X, sx as i32),
+            InputEvent::new(EV_REL, REL_Y, sy as i32),
+            InputEvent::syn(),
+        ]);
+    }
+
+    /// A mouse button edge whose source is (or is not) the trackpad: with the guest moving the
+    /// captured pointer, a mouse's button is the relative mouse's, where the pointer is. Its
+    /// release follows its press there even if the mode ended between them. `false` leaves it
+    /// to the tablet.
+    pub(crate) fn guest_mouse_button(&self, from_trackpad: bool, btn: u16, down: bool) -> bool {
+        let bit = btn_bit(btn);
+        if !down {
+            return self.release_rel_button(btn);
+        }
+        if from_trackpad || !self.guest_moves_captured() || bit == 0 {
+            return false;
+        }
+        self.cancel_ungrab_chord();
+        self.rel_buttons.set(self.rel_buttons.get() | bit);
+        self.send_rel(&[InputEvent::new(EV_KEY, btn, 1), InputEvent::syn()]);
+        true
+    }
+
+    /// Release a button the relative mouse holds. `false` if it holds none.
+    fn release_rel_button(&self, btn: u16) -> bool {
+        let bit = btn_bit(btn);
+        if bit == 0 || self.rel_buttons.get() & bit == 0 {
+            return false;
+        }
+        self.rel_buttons.set(self.rel_buttons.get() & !bit);
+        self.send_rel(&[InputEvent::new(EV_KEY, btn, 0), InputEvent::syn()]);
+        true
+    }
+
+    /// Whether a wheel event (not a trackpad's gesture scroll) is the mouse's that the reader
+    /// already sent to the relative mouse, in its own detents.
+    pub(crate) fn guest_mouse_wheel_sent(&self, event: &NSEvent) -> bool {
+        let wheel =
+            event.phase() == NSEventPhase::None && event.momentumPhase() == NSEventPhase::None;
+        wheel && self.guest_moves_captured() && self.hid_mouse.get().is_some_and(HidMouse::wheeling)
+    }
+
+    /// One whole frame to the relative mouse.
+    fn send_rel(&self, events: &[InputEvent]) {
+        let io = self.conn.io();
+        let _frame = io.frame(InputDev::Rel);
+        for &ev in events {
+            if wire_trace() {
+                eprintln!(
+                    "[WIRE] t={} dev=rel type={} code={} value={}",
+                    wire_now_us(),
+                    ev.type_,
+                    ev.code,
+                    ev.value
+                );
+            }
+            send_event(io.rel_ptr_fd(), ev);
+        }
     }
 
     /// Raw mode's edge press: where the guest's own cursor is, from its echo, in the capture

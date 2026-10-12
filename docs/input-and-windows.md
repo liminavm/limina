@@ -240,6 +240,16 @@ the guess, on the wrong display.) Consequences that keep catching people:
   against another window's geometry was the fault class behind every multi-display capture bug.
   `capture_range` is the position the guest actually receives; `capture_pos` is derived from
   the guest's echo, never the other way round.
+- **With Input ▸ Guest-Controlled Pointer** (per VM, default off) none of the above moves the
+  guest's pointer: the guest does, with its own acceleration. The trackpad's fingers reach the
+  guest touchpad (raw mode, `docs/design/trackpad-gestures.md`), and a mouse's own counts — read
+  from HID (`window/hidmouse.rs`; macOS's event deltas are already accelerated) — its relative
+  mouse, with its buttons and wheel. The built-in trackpad is a HID mouse too and is left out by
+  its Apple vendor usage page (`spikes/hid-mouse/RESULTS.md`). A mouse the reader does not see —
+  no permission, a Universal Control or remote mouse — moves the guest by macOS's deltas instead:
+  any motion with no HID report in the last 100 ms (`hidmouse::HID_RECENT`). The tablet stays
+  silent; the estimate only charges the grab's edge press, from the guest's echo, and the
+  grab still starts the guest's pointer where the host's was.
 
 ## 5. The grab, and the edge that releases it
 

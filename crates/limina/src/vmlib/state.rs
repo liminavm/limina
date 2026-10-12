@@ -57,9 +57,14 @@ pub struct VmState {
     /// never touched, as with [`Self::modifier_normalize`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub three_finger_gestures: Option<bool>,
-    /// The Input menu's "Raw Trackpad While Captured" switch. Default off.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub raw_trackpad: bool,
+    /// The Input menu's "Guest-Controlled Pointer" switch. Default off. It took over the "Raw
+    /// Trackpad While Captured" switch, whose saved choice it reads.
+    #[serde(
+        default,
+        alias = "raw_trackpad",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub guest_pointer: bool,
     /// The Input menu's "Taps and Clicks with Two or More Fingers in the VM" switch. Default
     /// on, so absent means never touched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,13 +214,13 @@ pub fn set_three_finger_gestures(path: &Path, on: bool) -> std::io::Result<()> {
     save(path, &state)
 }
 
-/// Merge-save the raw trackpad switch, leaving everything else alone.
-pub fn set_raw_trackpad(path: &Path, on: bool) -> std::io::Result<()> {
+/// Merge-save the guest-controlled pointer switch, leaving everything else alone.
+pub fn set_guest_pointer(path: &Path, on: bool) -> std::io::Result<()> {
     let mut state = load(path).unwrap_or_default();
-    if state.raw_trackpad == on {
+    if state.guest_pointer == on {
         return Ok(());
     }
-    state.raw_trackpad = on;
+    state.guest_pointer = on;
     save(path, &state)
 }
 
@@ -283,7 +288,7 @@ mod tests {
             fullscreen_all_displays: true,
             modifier_normalize: None,
             three_finger_gestures: None,
-            raw_trackpad: false,
+            guest_pointer: false,
             guest_taps: None,
             tap_drag: None,
         };
@@ -313,7 +318,7 @@ mod tests {
             fullscreen_all_displays: false,
             modifier_normalize: None,
             three_finger_gestures: None,
-            raw_trackpad: false,
+            guest_pointer: false,
             guest_taps: None,
             tap_drag: None,
         };
@@ -384,7 +389,7 @@ mod tests {
                 fullscreen_all_displays: false,
                 modifier_normalize: None,
                 three_finger_gestures: None,
-                raw_trackpad: false,
+                guest_pointer: false,
                 guest_taps: None,
                 tap_drag: None,
             },
@@ -481,17 +486,33 @@ mod tests {
     }
 
     #[test]
-    fn the_raw_trackpad_switch_remembers_on() {
-        let dir = scratch("rawtrackpad");
+    fn the_guest_pointer_switch_remembers_on() {
+        let dir = scratch("guestpointer");
         let path = dir.join("state.toml");
         set_display_slots(&path, vec![(7, 1)]).unwrap();
-        assert!(!load(&path).unwrap().raw_trackpad);
-        set_raw_trackpad(&path, true).unwrap();
+        assert!(!load(&path).unwrap().guest_pointer);
+        set_guest_pointer(&path, true).unwrap();
         let back = load(&path).unwrap();
-        assert!(back.raw_trackpad, "on must persist");
+        assert!(back.guest_pointer, "on must persist");
         assert_eq!(back.display_slots, vec![(7, 1)], "merged, not clobbered");
-        set_raw_trackpad(&path, false).unwrap();
-        assert!(!load(&path).unwrap().raw_trackpad);
+        set_guest_pointer(&path, false).unwrap();
+        assert!(!load(&path).unwrap().guest_pointer);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_saved_raw_trackpad_choice_carries_over_to_the_guest_pointer() {
+        let dir = scratch("rawtrackpad");
+        let path = dir.join("state.toml");
+        std::fs::write(&path, "raw_trackpad = true\n").unwrap();
+        assert!(load(&path).unwrap().guest_pointer);
+        // Any merge-save rewrites the file.
+        set_tap_drag(&path, false).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("guest_pointer = true") && !text.contains("raw_trackpad"),
+            "saved under its new name: {text}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

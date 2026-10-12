@@ -59,6 +59,7 @@ mod grab_fixture;
 mod grab_policy;
 mod guestwindow;
 pub(crate) mod headless;
+mod hidmouse;
 mod host_observe;
 mod hostdisplay;
 mod input;
@@ -450,11 +451,11 @@ fn save_tap_drag(path: Option<&Path>, on: bool) {
     }
 }
 
-/// The Input menu's raw trackpad switch, saved beside the display state.
-fn save_raw_trackpad(path: Option<&Path>, on: bool) {
+/// The Input menu's guest-controlled pointer switch, saved beside the display state.
+fn save_guest_pointer(path: Option<&Path>, on: bool) {
     let Some(path) = path else { return };
-    if let Err(e) = crate::vmlib::state::set_raw_trackpad(path, on) {
-        log::warn!("raw trackpad save failed: {e}");
+    if let Err(e) = crate::vmlib::state::set_guest_pointer(path, on) {
+        log::warn!("guest-controlled pointer save failed: {e}");
     }
 }
 
@@ -703,12 +704,13 @@ thread_local! {
     /// persists it.
     static THREE_FINGER_GESTURES: Cell<bool> = const { Cell::new(true) };
 
-    /// The Input menu's "Raw Trackpad While Captured" switch: while the pointer is captured,
-    /// the guest's touchpad gets every sequence of up to three fingers from the first finger —
-    /// pointer, taps, clicks and gestures, with the guest's own acceleration. Off by default,
-    /// overridden by a remembered menu choice; the render timer hands each change to the input
-    /// translator and persists it.
-    static RAW_TRACKPAD: Cell<bool> = const { Cell::new(false) };
+    /// The Input menu's "Guest-Controlled Pointer" switch: while the pointer is captured, the
+    /// guest moves it — the trackpad's every sequence of up to three fingers reaches the guest
+    /// touchpad from the first finger, and a mouse's own counts its relative mouse, both under
+    /// the guest's acceleration — and at all times the guest reads every tap, one finger's
+    /// included. Off by default, overridden by a remembered menu choice; the render timer
+    /// hands each change to the input translator and persists it.
+    static GUEST_POINTER: Cell<bool> = const { Cell::new(false) };
 
     /// The Input menu's "Taps and Clicks with Two or More Fingers in the VM" switch: whether a
     /// guest-owned two- or three-finger sequence reaches the guest as its fingers land, its taps
@@ -854,8 +856,14 @@ define_class!(
                     .with(|r| menu_row_for_tag(&r.borrow(), tag).is_some_and(|row| row.primary));
                 return (!primary).into();
             }
+            // The guest-controlled pointer gives the guest every tap, so these two say nothing
+            // while it is on.
+            let guest_pointer = GUEST_POINTER.with(|f| f.get());
+            if action == Some(objc2::sel!(toggleGuestTaps:)) {
+                return (!guest_pointer).into();
+            }
             if action == Some(objc2::sel!(toggleTapDrag:)) {
-                return GUEST_TAPS.with(|f| f.get()).into();
+                return (GUEST_TAPS.with(|f| f.get()) && !guest_pointer).into();
             }
             objc2::runtime::Bool::YES
         }
@@ -934,14 +942,14 @@ define_class!(
             }
         }
 
-        // Input ▸ Raw Trackpad While Captured: whether the guest's touchpad takes everything
-        // up to three fingers while the pointer is captured. The render timer adopts it.
-        #[unsafe(method(toggleRawTrackpad:))]
-        fn toggle_raw_trackpad(&self, _sender: &NSMenuItem) {
-            let on = !RAW_TRACKPAD.with(|f| f.get());
-            RAW_TRACKPAD.with(|f| f.set(on));
+        // Input ▸ Guest-Controlled Pointer: whether the guest moves the captured pointer and
+        // reads every tap. The render timer adopts it.
+        #[unsafe(method(toggleGuestPointer:))]
+        fn toggle_guest_pointer(&self, _sender: &NSMenuItem) {
+            let on = !GUEST_POINTER.with(|f| f.get());
+            GUEST_POINTER.with(|f| f.set(on));
             log::info!(
-                "menu: raw trackpad while captured {}",
+                "menu: guest-controlled pointer {}",
                 if on { "on" } else { "off" }
             );
         }
@@ -1195,12 +1203,12 @@ fn populate_input_menu(menu: &NSMenu, mtm: MainThreadMarker, actions: &VmMenuAct
     let item = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
-            &NSString::from_str("Raw Trackpad While Captured"),
-            Some(objc2::sel!(toggleRawTrackpad:)),
+            &NSString::from_str("Guest-Controlled Pointer"),
+            Some(objc2::sel!(toggleGuestPointer:)),
             &NSString::from_str(""),
         )
     };
-    item.setState(if RAW_TRACKPAD.with(|f| f.get()) {
+    item.setState(if GUEST_POINTER.with(|f| f.get()) {
         objc2_app_kit::NSControlStateValueOn
     } else {
         objc2_app_kit::NSControlStateValueOff
@@ -2580,7 +2588,7 @@ pub fn run(
             if let Some(on) = saved.three_finger_gestures {
                 THREE_FINGER_GESTURES.with(|f| f.set(on));
             }
-            RAW_TRACKPAD.with(|f| f.set(saved.raw_trackpad));
+            GUEST_POINTER.with(|f| f.set(saved.guest_pointer));
             if let Some(on) = saved.guest_taps {
                 GUEST_TAPS.with(|f| f.set(on));
             }
@@ -2604,7 +2612,7 @@ pub fn run(
         // real change and not the startup value written back over the file.
         let normalize_saved: Cell<bool> = Cell::new(MODIFIER_NORMALIZE.with(|f| f.get()));
         let three_saved: Cell<bool> = Cell::new(THREE_FINGER_GESTURES.with(|f| f.get()));
-        let raw_saved: Cell<bool> = Cell::new(RAW_TRACKPAD.with(|f| f.get()));
+        let pointer_saved: Cell<bool> = Cell::new(GUEST_POINTER.with(|f| f.get()));
         let taps_saved: Cell<bool> = Cell::new(GUEST_TAPS.with(|f| f.get()));
         let drag_saved: Cell<bool> = Cell::new(TAP_DRAG.with(|f| f.get()));
         let panel_names: RefCell<Vec<(u64, String)>> = RefCell::new(Vec::new());
@@ -2785,10 +2793,10 @@ pub fn run(
                         save_three_finger_gestures(slots_state_path.as_deref(), three);
                         three_saved.set(three);
                     }
-                    let raw = RAW_TRACKPAD.with(|f| f.get());
-                    if raw_saved.get() != raw {
-                        save_raw_trackpad(slots_state_path.as_deref(), raw);
-                        raw_saved.set(raw);
+                    let pointer = GUEST_POINTER.with(|f| f.get());
+                    if pointer_saved.get() != pointer {
+                        save_guest_pointer(slots_state_path.as_deref(), pointer);
+                        pointer_saved.set(pointer);
                     }
                     let taps = GUEST_TAPS.with(|f| f.get());
                     if taps_saved.get() != taps {
@@ -3639,9 +3647,12 @@ pub fn run(
             gesture_tap::ensure();
         }
         timer_input.set_three_fingers(three);
-        timer_input.set_raw_trackpad(RAW_TRACKPAD.with(|f| f.get()));
-        timer_input.set_guest_taps(GUEST_TAPS.with(|f| f.get()));
-        timer_input.set_tap_drag(TAP_DRAG.with(|f| f.get()));
+        // The guest-controlled pointer gives the guest every tap, whatever the two tap switches
+        // say.
+        let guest_pointer = GUEST_POINTER.with(|f| f.get());
+        timer_input.set_guest_pointer(guest_pointer);
+        timer_input.set_guest_taps(GUEST_TAPS.with(|f| f.get()) || guest_pointer);
+        timer_input.set_tap_drag(TAP_DRAG.with(|f| f.get()) || guest_pointer);
         let facts = timer_input.window_facts(&timer_view);
         let pf = grab_policy::primary_facts(&facts);
         // App-level, like every other key question here: focus moving from the primary to a

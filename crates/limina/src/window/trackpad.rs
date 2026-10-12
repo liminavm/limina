@@ -16,8 +16,10 @@
 //! trackpad scroll is dropped — the guest scrolls from the contacts, and would otherwise get
 //! the gesture twice. Whose a two- or three-finger tap or click is — the guest's, by default,
 //! or macOS's — is a per-VM switch ([`TrackpadSeq::set_guest_taps`]); a one-finger one is
-//! always macOS's.
+//! macOS's unless the guest-controlled pointer gives the guest those too
+//! ([`TrackpadSeq::set_one_finger_taps`]).
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use limina_input::InputEvent;
@@ -98,6 +100,10 @@ pub const GUEST_TAP_TIMEOUT: Duration = Duration::from_millis(180);
 /// dropped: the guest has read that tap itself.
 pub const HOST_TAP_CLICK_LATE: Duration = Duration::from_millis(500);
 
+/// How long a one-finger tap shown to the guest at its lift ([`TrackpadSeq::set_one_finger_taps`])
+/// stays down before it lifts: a touch the guest reads as a tap, whatever its tap timeout.
+pub const SYNTHETIC_TAP_HOLD: Duration = Duration::from_millis(10);
+
 /// Where a trackpad click goes ([`TrackpadSeq::on_click`]).
 #[derive(Debug, PartialEq)]
 pub enum Click {
@@ -167,6 +173,16 @@ enum Owner {
     Host,
 }
 
+/// A one-finger touch that may yet be a tap for the guest ([`TrackpadSeq::set_one_finger_taps`]):
+/// the tablet has it while it is down.
+#[derive(Debug)]
+struct Single {
+    landed: Instant,
+    at: Contact,
+    /// It moved too far to be a tap ([`TAP_MOVE_MM`]), or pressed the pad.
+    spoilt: bool,
+}
+
 /// A guest-owned sequence before its contacts reach the guest ([`COMMIT_MOVE_MM`]).
 #[derive(Debug)]
 struct Uncommitted {
@@ -226,7 +242,7 @@ pub struct TrackpadSeq {
     /// Whether three-finger sequences are the guest's (the Input menu's switch). Off, they are
     /// the host's like four.
     three_fingers: bool,
-    /// **Raw mode** (the Input menu's "Raw Trackpad While Captured", while captured): every
+    /// **Raw mode** (the Input menu's "Guest-Controlled Pointer", while captured): every
     /// sequence of up to three fingers is the guest's from its first finger, with no commit —
     /// the guest drives the pointer, and reads taps, clicks and gestures itself.
     raw: bool,
@@ -253,6 +269,19 @@ pub struct TrackpadSeq {
     guest_touch: Option<(Instant, bool)>,
     /// When the last guest touch that could be a tap lifted.
     guest_tap_lift: Option<Instant>,
+    /// The guest taps macOS may still click for ([`HOST_TAP_CLICK_LATE`]), oldest first: a
+    /// double tap is owed two clicks.
+    owed_clicks: VecDeque<Instant>,
+    /// **One-finger taps** (the guest-controlled pointer, uncaptured): a one-finger touch is
+    /// the tablet's while it is down, and if it lifts as a tap, the guest touchpad sees it
+    /// land and lift at once and reads the tap itself.
+    one_finger_taps: bool,
+    single: Option<Single>,
+    /// When a one-finger tap was shown to the guest, until it lifts ([`SYNTHETIC_TAP_HOLD`]).
+    synthetic_lift: Option<Instant>,
+    /// When the last sequence ended: a finger landing within [`THIN_GRACE`] of it is AppKit
+    /// flickering the touch back, not a new touch.
+    last_lift: Option<Instant>,
     /// Where the trackpad click in flight went.
     click: Option<ClickTo>,
     /// Every finger of the guest-owned sequence lifted, and the guest saw it: what lands
@@ -287,6 +316,11 @@ impl TrackpadSeq {
             dragging: false,
             guest_touch: None,
             guest_tap_lift: None,
+            owed_clicks: VecDeque::new(),
+            one_finger_taps: false,
+            single: None,
+            synthetic_lift: None,
+            last_lift: None,
             click: None,
             lifted_out: false,
         }
@@ -355,22 +389,30 @@ impl TrackpadSeq {
         let physical = self
             .last_contact
             .is_some_and(|t| now.duration_since(t) <= TAP_CLICK_GAP);
+        while self
+            .owed_clicks
+            .front()
+            .is_some_and(|&t| now.duration_since(t) > HOST_TAP_CLICK_LATE)
+        {
+            self.owed_clicks.pop_front();
+        }
+        let owed = !self.owed_clicks.is_empty();
         let to = if !self.guest_taps {
             ClickTo::Host
+        } else if owed && (!physical || self.dragging) {
+            // macOS's click for a guest tap — with no finger on the pad, or landing on the
+            // finger already dragging after it: the next one must come from a tap of its own.
+            self.owed_clicks.pop_front();
+            ClickTo::Dropped
         } else if physical && self.owner == Some(Owner::Guest) && self.touchpad.active() > 0 {
             ClickTo::Pad
-        } else if !physical
-            && self
-                .guest_tap_lift
-                .is_some_and(|t| now.duration_since(t) <= HOST_TAP_CLICK_LATE)
-        {
-            // macOS's click for one guest tap: the next one must come from a tap of its own.
-            self.guest_tap_lift = None;
-            ClickTo::Dropped
         } else {
             ClickTo::Host
         };
         self.click = Some(to);
+        if let Some(single) = self.single.as_mut() {
+            single.spoilt = true;
+        }
         if to != ClickTo::Dropped
             && let Some((_, pressed)) = self.guest_touch.as_mut()
         {
@@ -476,7 +518,14 @@ impl TrackpadSeq {
         }
         self.guest_taps = on;
         self.guest_tap_lift = None;
+        self.owed_clicks.clear();
         self.end_guest_click()
+    }
+
+    /// Show one-finger taps to the guest ([`Self::one_finger_taps`]), or leave them to macOS.
+    pub fn set_one_finger_taps(&mut self, on: bool) {
+        self.one_finger_taps = on;
+        self.single = None;
     }
 
     /// Let one finger landing just after a guest tap be the guest's ([`Self::tap_drag`]). A
@@ -534,6 +583,17 @@ impl TrackpadSeq {
         in_view: bool,
         now: Instant,
     ) -> Vec<InputEvent> {
+        // A one-finger tap still down lifts before anything else lands.
+        let mut events = if touches.is_empty() {
+            Vec::new()
+        } else {
+            self.lift_synthetic()
+        };
+        events.extend(self.touches(touches, in_view, now));
+        events
+    }
+
+    fn touches(&mut self, touches: &[TouchSample], in_view: bool, now: Instant) -> Vec<InputEvent> {
         if !touches.is_empty() {
             self.last_contact = Some(now);
         }
@@ -558,6 +618,7 @@ impl TrackpadSeq {
                     .guest_tap_lift
                     .is_some_and(|t| now.duration_since(t) <= GUEST_TAP_TIMEOUT);
         }
+        self.track_single(touches, in_view, now);
         // Raw, or a tap-and-drag, one finger is a sequence of its own; otherwise one finger is
         // the tablet's.
         let fewest = if self.raw || self.dragging { 1 } else { 2 };
@@ -579,8 +640,20 @@ impl TrackpadSeq {
         let held = self.pending.take();
 
         if n == 0 {
+            let tap = self.single.take().filter(|s| {
+                in_view && !s.spoilt && now.duration_since(s.landed) < GUEST_TAP_TIMEOUT
+            });
             self.end_sequence(now);
-            return self.touchpad.release_all();
+            self.last_lift = Some(now);
+            let mut events = self.touchpad.release_all();
+            if let Some(tap) = tap {
+                events.extend(self.touchpad.frame(&[tap.at]));
+                self.last_frame = Some(now);
+                self.synthetic_lift = Some(now);
+                self.guest_tap_lift = Some(now);
+                self.owed_clicks.push_back(now);
+            }
+            return events;
         }
 
         let owner = *self.owner.get_or_insert_with(|| {
@@ -670,6 +743,57 @@ impl TrackpadSeq {
         self.send_frame(&contacts, now)
     }
 
+    /// Follow a one-finger touch that may end as a tap for the guest ([`Self::one_finger_taps`]):
+    /// one landing over the VM, alone, outside raw mode and a tap-and-drag, and not just after
+    /// a lift — a touch AppKit drops and restores mid-motion, a few milliseconds later and
+    /// often elsewhere, is no tap to macOS.
+    fn track_single(&mut self, touches: &[TouchSample], in_view: bool, now: Instant) {
+        if touches.is_empty() {
+            // The lift: the sequence's end judges it.
+            return;
+        }
+        if touches.len() != 1 || !in_view {
+            self.single = None;
+            return;
+        }
+        let (x, y) = self.geometry.to_units(touches[0].x, touches[0].y);
+        let at = Contact {
+            id: touches[0].id,
+            x,
+            y,
+        };
+        match self.single.as_mut() {
+            _ if self.owner.is_none() => {
+                let flicker = self
+                    .last_lift
+                    .is_some_and(|t| now.duration_since(t) < THIN_GRACE);
+                self.single = (self.one_finger_taps && !self.raw && !self.dragging && !flicker)
+                    .then_some(Single {
+                        landed: now,
+                        at,
+                        spoilt: false,
+                    });
+            }
+            Some(single) => {
+                let tap_move = (TAP_MOVE_MM * TOUCHPAD_RES as f64) as i32;
+                if single.at.id != at.id
+                    || (at.x - single.at.x).abs().max((at.y - single.at.y).abs()) >= tap_move
+                {
+                    single.spoilt = true;
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Lift a one-finger tap shown to the guest, if it is still down.
+    fn lift_synthetic(&mut self) -> Vec<InputEvent> {
+        if self.synthetic_lift.take().is_none() {
+            return Vec::new();
+        }
+        self.touchpad.release_all()
+    }
+
     /// A guest-owned sequence the guest has not seen yet: show it once it is clearly a
     /// gesture. Moved far enough → the landing positions now and the current ones as the next
     /// (paced) frame; held still long enough → the current positions. Either way it is held
@@ -757,8 +881,11 @@ impl TrackpadSeq {
     /// tap-and-drag.
     fn guest_lifted(&mut self, now: Instant) {
         if let Some((landed, pressed)) = self.guest_touch.take() {
-            self.guest_tap_lift =
-                (!pressed && now.duration_since(landed) < GUEST_TAP_TIMEOUT).then_some(now);
+            let tap = !pressed && now.duration_since(landed) < GUEST_TAP_TIMEOUT;
+            self.guest_tap_lift = tap.then_some(now);
+            if tap {
+                self.owed_clicks.push_back(now);
+            }
         }
     }
 
@@ -886,6 +1013,12 @@ impl TrackpadSeq {
     /// [`THIN_GRACE`] (and the tap guard), lift everything if the touch stream went silent
     /// ([`TOUCH_SILENCE`]), and send the motion held back by [`MIN_FRAME_INTERVAL`].
     pub fn tick(&mut self, now: Instant) -> Vec<InputEvent> {
+        if self
+            .synthetic_lift
+            .is_some_and(|t| now.duration_since(t) >= SYNTHETIC_TAP_HOLD)
+        {
+            return self.lift_synthetic();
+        }
         if self.thin.is_some() {
             return self.lift(now);
         }
@@ -937,6 +1070,9 @@ impl TrackpadSeq {
         self.held_at = None;
         self.guest_touch = None;
         self.guest_tap_lift = None;
+        self.owed_clicks.clear();
+        self.single = None;
+        self.synthetic_lift = None;
         self.dragging = false;
         self.lifted_out = false;
         if self.owner.is_some() {
@@ -998,23 +1134,36 @@ pub(crate) mod replay {
         pub ev: InputEvent,
     }
 
+    /// Who reads taps and clicks in a [`replay`], as the Input menu sets it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Taps {
+        /// macOS recognises every tap and click ("Taps and Clicks with Two or More Fingers in
+        /// the VM" off).
+        Macos,
+        /// The guest reads two- and three-finger taps and clicks (the default).
+        Guest,
+        /// The guest reads one-finger taps too (the guest-controlled pointer, uncaptured).
+        OneFinger,
+    }
+
+    impl Taps {
+        pub const ALL: [Taps; 3] = [Taps::Macos, Taps::Guest, Taps::OneFinger];
+    }
+
     /// The render tick's period, which [`replay`] reproduces between recorded inputs.
     pub const TICK: Duration = Duration::from_micros(16_667);
 
     /// Drive the policy through a recording exactly as `InputState` does — each input at its
     /// recorded time, [`TrackpadSeq::tick`] at the render tick's cadence in between — and return
-    /// what the guest's touchpad and tablet would have received, with two- and three-finger
-    /// taps and clicks the guest's or macOS's (`guest_taps`). A click the policy leaves to the
-    /// host becomes a tablet button press or release.
-    pub fn replay(
-        geometry: TouchpadGeometry,
-        records: &[Recorded],
-        guest_taps: bool,
-    ) -> Vec<Delivered> {
+    /// what the guest's touchpad and tablet would have received, with taps and clicks read as
+    /// `taps` says. A click the policy leaves to the host becomes a tablet button press or
+    /// release.
+    pub fn replay(geometry: TouchpadGeometry, records: &[Recorded], taps: Taps) -> Vec<Delivered> {
         let base = Instant::now();
         let at = |t_us: u64| base + Duration::from_micros(t_us);
         let mut seq = TrackpadSeq::new(geometry);
-        seq.set_guest_taps(guest_taps);
+        seq.set_guest_taps(taps != Taps::Macos);
+        seq.set_one_finger_taps(taps == Taps::OneFinger);
         let mut out = Vec::new();
         let mut emit = |t_us: u64, dev: Dev, events: Vec<InputEvent>| {
             out.extend(events.into_iter().map(|ev| Delivered { t_us, dev, ev }));
@@ -1172,7 +1321,7 @@ mod recordings {
                 })
                 .count()
         };
-        let out = replay(geometry(), &records, false);
+        let out = replay(geometry(), &records, Taps::Macos);
 
         // Every click macOS recognised reaches the guest once, through the tablet…
         assert_eq!(presses(&out, Dev::Tablet, BTN_RIGHT), intended(true));
@@ -1193,19 +1342,20 @@ mod recordings {
         assert!(!episodes(&out).is_empty(), "no gesture reached the guest");
     }
 
-    /// With the guest owning two- and three-finger taps and clicks: every click macOS
-    /// recognised reaches the guest exactly once — through the tablet (one finger's), as the
-    /// touchpad's own button (a physical click the guest's fingers made), or as a touch
-    /// libinput reads as a tap — and never twice. `unclicked` names the touches (by when the
-    /// guest saw them land) that macOS made no click for and libinput reads as taps: the two
-    /// recognisers disagree there, and with guest taps the guest's reading stands.
-    fn check_guest_taps(recording: &str, unclicked: &[u64]) {
+    /// With the guest owning two- and three-finger taps and clicks, and with `taps` one-finger
+    /// ones too: every click macOS recognised reaches the guest exactly once — through the
+    /// tablet (one finger's), as the touchpad's own button (a physical click the guest's
+    /// fingers made), or as a touch libinput reads as a tap — and never twice. `unclicked`
+    /// names the touches (by when the guest saw them land) that macOS made no click for and
+    /// libinput reads as taps: the two recognisers disagree there, and with guest taps the
+    /// guest's reading stands.
+    fn check_guest_taps(recording: &str, taps: Taps, unclicked: &[u64]) {
         let records = parse_recording(recording).expect("recording parses");
         let intended = records
             .iter()
             .filter(|r| matches!(r, Recorded::Click { down: true, .. }))
             .count();
-        let out = replay(geometry(), &records, true);
+        let out = replay(geometry(), &records, taps);
         let tablet = presses(&out, Dev::Tablet, BTN_LEFT) + presses(&out, Dev::Tablet, BTN_RIGHT);
         let pressed: Vec<u64> = out
             .iter()
@@ -1240,27 +1390,71 @@ mod recordings {
     #[test]
     fn battery_1_with_guest_taps_gives_one_click_per_intended_click() {
         // Two still fingers 18 mm apart, down 84 ms: macOS made no click of it.
-        check_guest_taps(BATTERY_1, &[10_286_650]);
+        check_guest_taps(BATTERY_1, Taps::Guest, &[10_286_650]);
     }
 
     #[test]
     fn battery_2_with_guest_taps_gives_one_click_per_intended_click() {
-        check_guest_taps(BATTERY_2, &[]);
+        check_guest_taps(BATTERY_2, Taps::Guest, &[]);
     }
 
     #[test]
     fn battery_3_with_guest_taps_gives_one_click_per_intended_click() {
-        check_guest_taps(BATTERY_3, &[]);
+        check_guest_taps(BATTERY_3, Taps::Guest, &[]);
     }
 
     #[test]
     fn battery_4_with_guest_taps_gives_one_click_per_intended_click() {
-        check_guest_taps(BATTERY_4, &[]);
+        check_guest_taps(BATTERY_4, Taps::Guest, &[]);
     }
 
     #[test]
     fn battery_5_with_guest_taps_gives_one_click_per_intended_click() {
-        check_guest_taps(BATTERY_5, &[]);
+        check_guest_taps(BATTERY_5, Taps::Guest, &[]);
+    }
+
+    // With one-finger taps, the touches macOS made no click for and libinput reads as taps
+    // are one-finger touches lifted inside its tap timeout without moving, by when the guest
+    // saw them (at their lift). Several came 190–250 ms after the pointer stopped moving.
+
+    #[test]
+    fn battery_1_with_one_finger_taps_gives_one_click_per_intended_click() {
+        check_guest_taps(
+            BATTERY_1,
+            Taps::OneFinger,
+            &[10_286_650, 16_923_040, 48_449_846],
+        );
+    }
+
+    #[test]
+    fn battery_2_with_one_finger_taps_gives_one_click_per_intended_click() {
+        check_guest_taps(BATTERY_2, Taps::OneFinger, &[210_211_784]);
+    }
+
+    #[test]
+    fn battery_3_with_one_finger_taps_gives_one_click_per_intended_click() {
+        check_guest_taps(BATTERY_3, Taps::OneFinger, &[]);
+    }
+
+    #[test]
+    fn battery_4_with_one_finger_taps_gives_one_click_per_intended_click() {
+        // The last four: two lone touches and a double tap, at rest before the creep tests.
+        check_guest_taps(
+            BATTERY_4,
+            Taps::OneFinger,
+            &[
+                76_850_434,
+                454_657_662,
+                461_519_215,
+                461_647_751,
+                464_724_718,
+            ],
+        );
+    }
+
+    #[test]
+    fn battery_5_with_one_finger_taps_gives_one_click_per_intended_click() {
+        check_guest_taps(BATTERY_5, Taps::OneFinger, &[]);
     }
 
     #[test]
@@ -1355,8 +1549,8 @@ mod recordings {
         // libinput's 1.5 mm only in its last two-finger sample, so libinput would not scroll
         // it from the trackpad's own frames either.
         let records = parse_recording(BATTERY_5).expect("recording parses");
-        for guest_taps in [false, true] {
-            let out = replay(geometry(), &records, guest_taps);
+        for taps in Taps::ALL {
+            let out = replay(geometry(), &records, taps);
             let flicks: Vec<_> = scrolls(&out)
                 .into_iter()
                 .filter(|&(t, _)| (10_000_000..27_000_000).contains(&t))
@@ -1364,12 +1558,12 @@ mod recordings {
             assert_eq!(
                 flicks.len(),
                 13,
-                "guest_taps={guest_taps}: flicks that reached the guest: {flicks:?}"
+                "{taps:?}: flicks that reached the guest: {flicks:?}"
             );
             let lost: Vec<u64> = flicks.iter().filter(|f| !f.1).map(|f| f.0).collect();
             assert!(
                 lost.iter().all(|t| (11_100_000..11_200_000).contains(t)) && lost.len() <= 1,
-                "guest_taps={guest_taps}: {} flick(s) libinput would not scroll (start_us): \
+                "{taps:?}: {} flick(s) libinput would not scroll (start_us): \
                  {lost:?}",
                 lost.len()
             );
@@ -1445,11 +1639,11 @@ mod recordings {
             ("5", BATTERY_5),
         ] {
             let records = parse_recording(battery).expect("recording parses");
-            for guest_taps in [false, true] {
-                let found = jumps(&replay(geometry(), &records, guest_taps));
+            for taps in Taps::ALL {
+                let found = jumps(&replay(geometry(), &records, taps));
                 assert!(
                     found.is_empty(),
-                    "battery-{name}, guest_taps={guest_taps}: {} frame(s) libinput would discard as a touch jump \
+                    "battery-{name}, {taps:?}: {} frame(s) libinput would discard as a touch jump \
                  (t_us, slot, mm): {found:?}",
                     found.len()
                 );
@@ -1462,7 +1656,7 @@ mod recordings {
     /// `TRACKPAD_RECORDING`, writes `TRACKPAD_REPLAY_OUT` as `t_us dev type code value` lines
     /// under a `# intended right=N left=M guest_taps=0|1` header. Replays as the app runs, with
     /// the guest owning two- and three-finger taps and clicks; `TRACKPAD_MACOS_TAPS=1` leaves
-    /// them to macOS.
+    /// them to macOS, and `TRACKPAD_ONE_FINGER_TAPS=1` gives the guest one-finger taps too.
     #[test]
     #[ignore = "a tool for scripts/trackpad-oracle.sh, not a check"]
     fn dump_replay() {
@@ -1479,15 +1673,20 @@ mod recordings {
                 })
                 .count()
         };
-        // The default, as the app runs; TRACKPAD_MACOS_TAPS=1 replays with macOS owning them.
-        let guest_taps = std::env::var_os("TRACKPAD_MACOS_TAPS").is_none();
+        let taps = if std::env::var_os("TRACKPAD_MACOS_TAPS").is_some() {
+            Taps::Macos
+        } else if std::env::var_os("TRACKPAD_ONE_FINGER_TAPS").is_some() {
+            Taps::OneFinger
+        } else {
+            Taps::Guest
+        };
         let mut text = format!(
             "# intended right={} left={} guest_taps={}\n",
             intended(true),
             intended(false),
-            u8::from(guest_taps)
+            u8::from(taps != Taps::Macos)
         );
-        for d in replay(geometry(), &records, guest_taps) {
+        for d in replay(geometry(), &records, taps) {
             let dev = match d.dev {
                 Dev::Touchpad => "touchpad",
                 Dev::Tablet => "pointer",
@@ -2311,5 +2510,173 @@ mod tests {
             s.on_click(false, now + Duration::from_millis(90)),
             Click::Host
         );
+    }
+
+    /// Guest taps with the guest-controlled pointer: one-finger taps are the guest's too.
+    fn one_finger() -> TrackpadSeq {
+        let mut s = taps();
+        s.set_one_finger_taps(true);
+        s
+    }
+
+    #[test]
+    fn one_finger_a_tap_reaches_the_guest_when_the_finger_lifts_and_macos_click_is_dropped() {
+        let mut s = one_finger();
+        let now = Instant::now();
+        assert!(
+            s.on_touches(&[t(1, 0.4, 0.4)], true, now).is_empty(),
+            "the tablet has the finger while it is down"
+        );
+        assert!(!s.owns_pointer());
+        let up = now + Duration::from_millis(90);
+        let ev = s.on_touches(&[], true, up);
+        assert_eq!(
+            slots_down(&ev),
+            1,
+            "the tap lands on the touchpad at the lift"
+        );
+        assert!(!lifted(&ev));
+        assert!(
+            s.tick(up + Duration::from_millis(2)).is_empty(),
+            "and stays down a moment"
+        );
+        assert!(lifted(&s.tick(up + SYNTHETIC_TAP_HOLD)));
+        // macOS's click for the tap, 250 ms after the lift.
+        let click = up + Duration::from_millis(250);
+        assert_eq!(s.on_click(true, click), Click::Guest(Vec::new()));
+        assert_eq!(
+            s.on_click(false, click + Duration::from_millis(5)),
+            Click::Guest(Vec::new())
+        );
+    }
+
+    #[test]
+    fn one_finger_a_finger_landing_before_the_synthetic_lift_lifts_it_first() {
+        let mut s = one_finger();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.4, 0.4)], true, now);
+        let up = now + Duration::from_millis(60);
+        s.on_touches(&[], true, up);
+        // The second tap of a double tap, before any tick.
+        let ev = s.on_touches(&[t(2, 0.4, 0.4)], true, up + Duration::from_millis(3));
+        assert!(lifted(&ev), "the first tap lifts before anything else");
+        assert_eq!(
+            slots_down(&ev),
+            1,
+            "and the second finger is the guest's tap-and-drag, down at once"
+        );
+    }
+
+    #[test]
+    fn one_finger_a_double_tap_is_two_guest_taps() {
+        let mut s = one_finger();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.4, 0.4)], true, now);
+        let up = now + Duration::from_millis(70);
+        s.on_touches(&[], true, up);
+        s.tick(up + SYNTHETIC_TAP_HOLD);
+        let again = up + Duration::from_millis(100);
+        assert_eq!(slots_down(&s.on_touches(&[t(2, 0.4, 0.4)], true, again)), 1);
+        let up2 = again + Duration::from_millis(70);
+        assert!(lifted(&s.on_touches(&[], true, up2)));
+        s.tick(up2 + THIN_GRACE);
+        // macOS's double click for it: both dropped.
+        for at in [
+            up + Duration::from_millis(240),
+            up2 + Duration::from_millis(240),
+        ] {
+            assert_eq!(s.on_click(true, at), Click::Guest(Vec::new()));
+            assert_eq!(s.on_click(false, at), Click::Guest(Vec::new()));
+        }
+    }
+
+    #[test]
+    fn one_finger_a_moved_long_or_pressed_touch_is_no_tap() {
+        let mut s = one_finger();
+        let now = Instant::now();
+        // Moved: a pointer motion.
+        s.on_touches(&[t(1, 0.40, 0.4)], true, now);
+        s.on_touches(&[t(1, 0.43, 0.4)], true, now + Duration::from_millis(30));
+        assert!(
+            s.on_touches(&[], true, now + Duration::from_millis(60))
+                .is_empty()
+        );
+        // Long.
+        let at = now + Duration::from_secs(1);
+        s.on_touches(&[t(2, 0.4, 0.4)], true, at);
+        assert!(s.on_touches(&[], true, at + GUEST_TAP_TIMEOUT).is_empty());
+        // Pressed: a physical click, which stays macOS's.
+        let at = now + Duration::from_secs(2);
+        s.on_touches(&[t(3, 0.4, 0.4)], true, at);
+        assert_eq!(
+            s.on_click(true, at + Duration::from_millis(30)),
+            Click::Host
+        );
+        assert_eq!(
+            s.on_click(false, at + Duration::from_millis(60)),
+            Click::Host
+        );
+        assert!(
+            s.on_touches(&[], true, at + Duration::from_millis(90))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn one_finger_a_tap_outside_the_vm_or_switched_off_stays_macos() {
+        let mut s = one_finger();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.4, 0.4)], false, now);
+        assert!(
+            s.on_touches(&[], false, now + Duration::from_millis(60))
+                .is_empty()
+        );
+        let mut s = taps();
+        s.on_touches(&[t(1, 0.4, 0.4)], true, now);
+        assert!(
+            s.on_touches(&[], true, now + Duration::from_millis(60))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn one_finger_tap_and_drag_drops_macos_late_click_landing_mid_drag() {
+        let mut s = one_finger();
+        let now = Instant::now();
+        s.on_touches(&[t(1, 0.4, 0.4)], true, now);
+        let up = now + Duration::from_millis(80);
+        s.on_touches(&[], true, up);
+        s.tick(up + SYNTHETIC_TAP_HOLD);
+        let land = up + Duration::from_millis(120);
+        assert_eq!(slots_down(&s.on_touches(&[t(2, 0.4, 0.4)], true, land)), 1);
+        assert!(s.owns_pointer());
+        s.on_touches(&[t(2, 0.45, 0.4)], true, land + Duration::from_millis(20));
+        // macOS's tap-click, 260 ms after the tap's lift, with the drag finger on the pad.
+        let click = up + Duration::from_millis(260);
+        s.on_touches(&[t(2, 0.46, 0.4)], true, click - Duration::from_millis(5));
+        assert_eq!(
+            s.on_click(true, click),
+            Click::Guest(Vec::new()),
+            "not the touchpad's button: the guest is already dragging"
+        );
+        assert_eq!(
+            s.on_click(false, click + Duration::from_millis(40)),
+            Click::Guest(Vec::new())
+        );
+    }
+
+    #[test]
+    fn guest_taps_a_two_finger_tap_then_drag_drops_macos_late_click() {
+        let mut s = taps();
+        let now = Instant::now();
+        s.on_touches(&TWO, true, now);
+        let up = now + Duration::from_millis(90);
+        s.on_touches(&[], true, up);
+        s.tick(up + THIN_GRACE);
+        let land = up + Duration::from_millis(100);
+        s.on_touches(&[t(4, 0.5, 0.5)], true, land);
+        let click = up + Duration::from_millis(280);
+        s.on_touches(&[t(4, 0.52, 0.5)], true, click - Duration::from_millis(5));
+        assert_eq!(s.on_click(true, click), Click::Guest(Vec::new()));
     }
 }
