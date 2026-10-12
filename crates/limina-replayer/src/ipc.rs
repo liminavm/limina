@@ -31,6 +31,12 @@ pub const RELEASE_SURFACE: i32 = 0x4c47_000a;
 /// ([`crate::journal::ContextExport`], encoded, `len` bytes). Answered once the context's ring is
 /// idle and its committed work has finished, or given up on (the export says lost).
 pub const EXPORT_CONTEXT: i32 = 0x4c47_000b;
+/// [`RestoreArena`] → [`ArenaReply`] + a memory entry: an arena made at `gpu_base`, the address a
+/// restored guest holds for it. Arenas are restored in address order, before anything else; holes
+/// below the address are held by placeholders until [`RESTORE_ARENAS_DONE`].
+pub const RESTORE_ARENA: i32 = 0x4c47_000c;
+/// `{}` → `{status}`: every arena stands; the placeholders go.
+pub const RESTORE_ARENAS_DONE: i32 = 0x4c47_000d;
 
 /// Request statuses.
 pub const OK: i32 = 0;
@@ -133,6 +139,15 @@ pub struct ExportRequest {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct RestoreArena {
+    pub ctx: u32,
+    pub arena: u32,
+    pub size: u64,
+    pub gpu_base: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ExportReply {
     pub status: i32,
     pub _pad: u32,
@@ -158,3 +173,4 @@ unsafe impl Pod for ImportArena {}
 unsafe impl Pod for ExportRequest {}
 unsafe impl Pod for SurfaceRequest {}
 unsafe impl Pod for ExportReply {}
+unsafe impl Pod for RestoreArena {}

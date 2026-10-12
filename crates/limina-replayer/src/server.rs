@@ -49,7 +49,14 @@ struct Server {
     /// Arenas other contexts may import, by export id (the guest resource that names them).
     /// An export holds its arena whether or not the context that made it is still there.
     exports: HashMap<u32, Arc<Arena>>,
+    /// Arenas holding the holes below restored arenas' addresses, until every arena stands.
+    placeholders: Vec<Arena>,
 }
+
+/// The address space Metal leaves after each allocation.
+const ARENA_GAP: u64 = 0x8000;
+/// Placeholders a single restored arena may need before giving up.
+const MAX_FILLS: usize = 64;
 
 /// The replayer's `main`. Never returns.
 pub fn main() -> ! {
@@ -80,6 +87,7 @@ fn serve() -> std::io::Result<()> {
         device,
         contexts: HashMap::new(),
         exports: HashMap::new(),
+        placeholders: Vec::new(),
     };
     loop {
         let Some(msg) = service.receive(None)? else {
@@ -87,6 +95,10 @@ fn serve() -> std::io::Result<()> {
         };
         server.handle(msg);
     }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn status(s: i32) -> Message {
@@ -189,6 +201,30 @@ impl Server {
                 None => (status(ipc::ERR_MALFORMED), vec![]),
                 Some(r) => (status(self.release_surface(r)), vec![]),
             },
+            ipc::RESTORE_ARENA => match ipc::RestoreArena::read(&msg.data) {
+                None => (status(ipc::ERR_MALFORMED), vec![]),
+                Some(r) => match self.restore_arena(r) {
+                    Ok((reply, entry)) => (
+                        Message::new(0, reply.bytes()),
+                        vec![(entry.into_name(), mach::MSG_TYPE_MOVE_SEND)],
+                    ),
+                    Err(s) => (
+                        Message::new(
+                            0,
+                            ipc::ArenaReply {
+                                status: s,
+                                ..Default::default()
+                            }
+                            .bytes(),
+                        ),
+                        vec![],
+                    ),
+                },
+            },
+            ipc::RESTORE_ARENAS_DONE => {
+                self.placeholders.clear();
+                (status(ipc::OK), vec![])
+            }
             ipc::EXPORT_CONTEXT => match ipc::CtxRequest::read(&msg.data) {
                 None => (status(ipc::ERR_MALFORMED), vec![]),
                 Some(r) => match self.export_context(r.ctx) {
@@ -241,11 +277,63 @@ impl Server {
 
     fn create_arena(&mut self, r: ipc::CreateArena) -> Result<(ipc::ArenaReply, mach::Port), i32> {
         let ctx = self.contexts.get(&r.ctx).ok_or(ipc::ERR_NO_CONTEXT)?;
-        let mut arenas = ctx.arenas.lock().unwrap_or_else(|e| e.into_inner());
-        if arenas.contains_key(&r.arena) {
+        if lock(&ctx.arenas).contains_key(&r.arena) {
             return Err(ipc::ERR_EXISTS);
         }
         let arena = Arena::new(&self.device, r.size).ok_or(ipc::ERR_NO_MEMORY)?;
+        self.file_arena(r.ctx, r.arena, arena)
+    }
+
+    /// An arena of `r.size` bytes at exactly `r.gpu_base`. Metal places arenas lowest-address
+    /// first-fit, so a probe that lands lower has found a hole: a placeholder fills it up to the
+    /// address, and the probe goes again.
+    fn restore_arena(
+        &mut self,
+        r: ipc::RestoreArena,
+    ) -> Result<(ipc::ArenaReply, mach::Port), i32> {
+        let ctx = self.contexts.get(&r.ctx).ok_or(ipc::ERR_NO_CONTEXT)?;
+        if lock(&ctx.arenas).contains_key(&r.arena) {
+            return Err(ipc::ERR_EXISTS);
+        }
+        for _ in 0..MAX_FILLS {
+            let probe = Arena::new(&self.device, r.size).ok_or(ipc::ERR_NO_MEMORY)?;
+            if probe.gpu_base == r.gpu_base {
+                return self.file_arena(r.ctx, r.arena, probe);
+            }
+            let hole = probe.gpu_base;
+            drop(probe);
+            if hole > r.gpu_base || r.gpu_base - hole < ARENA_GAP + metal::PAGE {
+                log::warn!(
+                    "restore: arena {} of context {} wanted at {:#x}, the space offers {hole:#x}",
+                    r.arena,
+                    r.ctx,
+                    r.gpu_base
+                );
+                return Err(ipc::ERR_BAD_VALUE);
+            }
+            let filler = Arena::new(&self.device, r.gpu_base - hole - ARENA_GAP)
+                .ok_or(ipc::ERR_NO_MEMORY)?;
+            if filler.gpu_base != hole {
+                log::warn!(
+                    "restore: a placeholder for {hole:#x} landed at {:#x}",
+                    filler.gpu_base
+                );
+                return Err(ipc::ERR_BAD_VALUE);
+            }
+            self.placeholders.push(filler);
+        }
+        Err(ipc::ERR_BAD_VALUE)
+    }
+
+    /// Files `arena` as arena `id` of context `ctx` and makes the entry the worker maps it by.
+    fn file_arena(
+        &mut self,
+        ctx: u32,
+        id: u32,
+        arena: Arena,
+    ) -> Result<(ipc::ArenaReply, mach::Port), i32> {
+        let ctx = self.contexts.get(&ctx).ok_or(ipc::ERR_NO_CONTEXT)?;
+        let mut arenas = lock(&ctx.arenas);
         let (entry, len) =
             mach::make_memory_entry(arena.contents() as u64, arena.size).map_err(|e| {
                 log::warn!("arena memory entry: {e}");
@@ -260,7 +348,7 @@ impl Server {
             size: arena.size,
             gpu_base: arena.gpu_base,
         };
-        arenas.insert(r.arena, Arc::new(arena));
+        arenas.insert(id, Arc::new(arena));
         Ok((reply, entry))
     }
 

@@ -140,6 +140,10 @@ impl Replayer {
             ipc::CREATE_ARENA,
             ipc::CreateArena { ctx, arena, size }.bytes(),
         )?;
+        self.mapped_arena(r)
+    }
+
+    fn mapped_arena(&self, r: Message) -> io::Result<MappedArena> {
         let a = ipc::ArenaReply::read(&r.data).ok_or_else(|| io::Error::other("short reply"))?;
         if a.status != ipc::OK {
             return Err(status_err("arena", a.status));
@@ -174,6 +178,32 @@ impl Replayer {
         let mapping = Mapping::map(&entry, a.len.max(1).next_multiple_of(page))?;
         // SAFETY: the mapping holds at least `len` bytes.
         Ok(unsafe { std::slice::from_raw_parts(mapping.as_ptr(), a.len as usize) }.to_vec())
+    }
+
+    /// Re-creates arena `arena` at `gpu_base`, the address a restored guest holds, and maps it
+    /// here. Arenas go in address order; [`Self::restore_arenas_done`] follows the last.
+    pub fn restore_arena(
+        &self,
+        ctx: u32,
+        arena: u32,
+        size: u64,
+        gpu_base: u64,
+    ) -> io::Result<MappedArena> {
+        let r = self.call(
+            ipc::RESTORE_ARENA,
+            ipc::RestoreArena {
+                ctx,
+                arena,
+                size,
+                gpu_base,
+            }
+            .bytes(),
+        )?;
+        self.mapped_arena(r)
+    }
+
+    pub fn restore_arenas_done(&self) -> io::Result<()> {
+        self.simple("restore done", ipc::RESTORE_ARENAS_DONE, &[])
     }
 
     pub fn destroy_arena(&self, ctx: u32, arena: u32) -> io::Result<()> {

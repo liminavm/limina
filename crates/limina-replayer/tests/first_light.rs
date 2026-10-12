@@ -1465,3 +1465,43 @@ fn an_export_inside_open_command_buffers_carries_their_commands() {
         ]
     );
 }
+
+/// Arenas re-created in a fresh replayer at the addresses a guest holds, around the holes destroyed
+/// arenas left and the space a context's start takes.
+#[test]
+fn arenas_are_restored_at_their_addresses() {
+    let g = start();
+    let mut live = Vec::new();
+    for (id, mib) in [(2, 8), (3, 1), (4, 32), (5, 2), (6, 1)] {
+        let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+        live.push((id, a.mapping.size(), a.gpu_base));
+    }
+    for id in [3, 5] {
+        g.replayer.destroy_arena(1, id).expect("destroy");
+        live.retain(|&(i, _, _)| i != id);
+    }
+    let a = g.replayer.create_arena(1, 7, 4 * MIB).expect("arena");
+    live.push((7, a.mapping.size(), a.gpu_base));
+    live.push((1, g.arena.mapping.size(), g.arena.gpu_base));
+    live.sort_by_key(|&(_, _, base)| base);
+
+    let fresh = Replayer::spawn(Path::new(env!("CARGO_BIN_EXE_limina-replayer"))).expect("spawn");
+    let _bell = fresh.create_context(1).expect("context");
+    let mut kept = Vec::new();
+    for &(id, size, base) in &live {
+        let a = fresh.restore_arena(1, id, size, base).expect("restore");
+        assert_eq!(a.gpu_base, base, "arena {id}");
+        assert_eq!(a.mapping.size(), size, "arena {id}");
+        kept.push(a);
+    }
+    fresh.restore_arenas_done().expect("done");
+    let after = fresh.create_arena(1, 50, MIB).expect("arena");
+    // Placeholders are gone: a new arena takes the lowest hole it fits, here arena 3's.
+    let lowest_hole = live
+        .windows(2)
+        .map(|w| (w[0].2 + w[0].1 + 0x8000, w[1].2))
+        .find(|&(start, next)| next >= start + MIB + 0x8000)
+        .expect("a hole")
+        .0;
+    assert_eq!(after.gpu_base, lowest_hole);
+}
