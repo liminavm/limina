@@ -16,12 +16,16 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLClearColor, MTLCommandBuffer, MTLCommandBufferStatus,
-    MTLCommandEncoder, MTLCommandQueue, MTLComputeCommandEncoder, MTLComputePipelineState,
-    MTLDevice, MTLFence, MTLHeap, MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat,
-    MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLRenderStages, MTLSize, MTLStoreAction,
-    MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage, MTLViewport,
+    MTL4ArgumentTable, MTL4ArgumentTableDescriptor, MTL4CommandAllocator, MTL4CommandBuffer,
+    MTL4CommandEncoder, MTL4CommandQueue, MTL4CommitFeedback, MTL4CommitOptions, MTL4Compiler,
+    MTL4CompilerDescriptor, MTL4ComputeCommandEncoder, MTL4ComputePipelineDescriptor,
+    MTL4FunctionDescriptor, MTL4LibraryDescriptor, MTL4LibraryFunctionDescriptor,
+    MTL4RenderCommandEncoder, MTL4RenderPassDescriptor, MTL4RenderPipelineDescriptor,
+    MTL4VisibilityOptions, MTLAllocation, MTLClearColor, MTLComputePipelineState, MTLDevice,
+    MTLHeap, MTLLibrary, MTLLoadAction, MTLOrigin, MTLPixelFormat, MTLPrimitiveType,
+    MTLRenderPipelineState, MTLRenderStages, MTLResidencySet, MTLResidencySetDescriptor, MTLSize,
+    MTLStages, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
+    MTLViewport,
 };
 
 use crate::mach::Semaphore;
@@ -30,10 +34,23 @@ use crate::metal::{self, Arena, Device};
 /// How long an idle consumer polls before it parks and needs a doorbell. Short: a doorbell costs
 /// the guest ~1 µs plus a wake, so spinning longer buys little and burns a core.
 const SPIN: Duration = Duration::from_micros(50);
-/// Largest Metal buffer index a command may bind.
+/// Largest Metal buffer index a command may bind, and the size of every argument table.
 const MAX_BUFFER_INDEX: u32 = 30;
 /// Largest texture dimension accepted.
 const MAX_DIM: u32 = 16384;
+/// Every stage a queue barrier can name: KosmicKrisp's `MTL_STAGE_ALL`.
+const ALL_STAGES: MTLStages = MTLStages(
+    MTLStages::Vertex.0
+        | MTLStages::Fragment.0
+        | MTLStages::Tile.0
+        | MTLStages::Object.0
+        | MTLStages::Mesh.0
+        | MTLStages::ResourceState.0
+        | MTLStages::Dispatch.0
+        | MTLStages::Blit.0
+        | MTLStages::AccelerationStructure.0
+        | MTLStages::MachineLearning.0,
+);
 
 pub type Arenas = Arc<Mutex<HashMap<u32, Arc<Arena>>>>;
 
@@ -49,32 +66,54 @@ enum Object {
 enum Encoder {
     None,
     Render {
-        enc: Po<dyn MTLRenderCommandEncoder>,
+        enc: Po<dyn MTL4RenderCommandEncoder>,
         pipeline: bool,
     },
-    Blit(Po<dyn MTLBlitCommandEncoder>),
+    /// Metal 4 has one compute encoder for dispatches and copies alike; `copies` marks one begun
+    /// for copies, which takes no pipeline.
     Compute {
-        enc: Po<dyn MTLComputeCommandEncoder>,
+        enc: Po<dyn MTL4ComputeCommandEncoder>,
         max_threads: u64,
+        copies: bool,
     },
 }
+
+/// A command allocator, and the pool it returns to when the GPU is done with what it holds.
+struct Allocator(Po<dyn MTL4CommandAllocator>);
+// SAFETY: Metal command allocators may be used from any thread, one at a time; the pool hands each
+// to one command buffer at a time.
+unsafe impl Send for Allocator {}
+
+type Pool = Arc<Mutex<Vec<Allocator>>>;
 
 struct SendPtr(NonNull<RingControl>);
 // SAFETY: the control block is shared memory meant to be written from any thread.
 unsafe impl Send for SendPtr {}
 unsafe impl Sync for SendPtr {}
 
+/// The argument tables an encoder binds: one per stage that takes buffers.
+struct Tables {
+    vertex: Po<dyn MTL4ArgumentTable>,
+    fragment: Po<dyn MTL4ArgumentTable>,
+    compute: Po<dyn MTL4ArgumentTable>,
+}
+
 pub struct Executor {
     device: Retained<Device>,
-    queue: Po<dyn MTLCommandQueue>,
-    /// Orders every encoder after the previous one, across command buffers.
-    fence: Po<dyn MTLFence>,
+    queue: Po<dyn MTL4CommandQueue>,
+    compiler: Po<dyn MTL4Compiler>,
+    /// Holds every arena of the context; the queue keeps it resident.
+    residency: Po<dyn MTLResidencySet>,
+    /// The arenas `residency` holds, by id, as of the last command buffer begun.
+    resident: HashMap<u32, Arc<Arena>>,
+    allocators: Pool,
+    tables: Tables,
     consumer: Consumer,
     /// The arena the ring lives in: its memory must outlive the consumer.
     ring_arena: Arc<Arena>,
     arenas: Arenas,
     objects: HashMap<u32, Object>,
-    cb: Option<Po<dyn MTLCommandBuffer>>,
+    cb: Option<(Po<dyn MTL4CommandBuffer>, Allocator)>,
     enc: Encoder,
     last_seqno: u64,
     lost: bool,
@@ -102,6 +141,22 @@ fn text(bytes: &[u8]) -> Result<Retained<NSString>, Error> {
     Ok(NSString::from_str(s))
 }
 
+fn argument_table(device: &Device) -> Option<Po<dyn MTL4ArgumentTable>> {
+    let desc = MTL4ArgumentTableDescriptor::new();
+    desc.setMaxBufferBindCount(MAX_BUFFER_INDEX as usize + 1);
+    device.newArgumentTableWithDescriptor_error(&desc).ok()
+}
+
+fn function(
+    lib: &Po<dyn MTLLibrary>,
+    name: &[u8],
+) -> Result<Retained<MTL4FunctionDescriptor>, Error> {
+    let f = MTL4LibraryFunctionDescriptor::new();
+    f.setName(Some(&*text(name)?));
+    f.setLibrary(Some(lib));
+    Ok(Retained::into_super(f))
+}
+
 impl Executor {
     /// `consumer` must be attached to a ring inside `ring_arena`.
     pub fn new(
@@ -110,10 +165,27 @@ impl Executor {
         ring_arena: Arc<Arena>,
         arenas: Arenas,
     ) -> Option<Self> {
+        let queue = device.newMTL4CommandQueue()?;
+        let compiler = device
+            .newCompilerWithDescriptor_error(&MTL4CompilerDescriptor::new())
+            .ok()?;
+        let residency = device
+            .newResidencySetWithDescriptor_error(&MTLResidencySetDescriptor::new())
+            .ok()?;
+        queue.addResidencySet(&residency);
+        let tables = Tables {
+            vertex: argument_table(&device)?,
+            fragment: argument_table(&device)?,
+            compute: argument_table(&device)?,
+        };
         Some(Self {
             ring_arena,
-            queue: device.newCommandQueue()?,
-            fence: device.newFence()?,
+            queue,
+            compiler,
+            residency,
+            resident: HashMap::new(),
+            allocators: Arc::new(Mutex::new(Vec::new())),
+            tables,
             device,
             consumer,
             arenas,
@@ -171,7 +243,14 @@ impl Executor {
         self.consumer.control().fail(e, at);
         self.lost = true;
         self.end_encoder();
-        self.cb = None;
+        // An open command buffer is dropped uncommitted; its allocator returns to the pool.
+        if let Some((cb, alloc)) = self.cb.take() {
+            cb.endCommandBuffer();
+            self.allocators
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(alloc);
+        }
         self.objects.clear();
     }
 
@@ -214,38 +293,107 @@ impl Executor {
         }
     }
 
-    fn command_buffer(&mut self) -> Result<Po<dyn MTLCommandBuffer>, Error> {
-        if self.cb.is_none() {
-            self.cb = Some(self.queue.commandBuffer().ok_or(Error::OutOfMemory)?);
+    fn snapshot_arenas(&self) -> HashMap<u32, Arc<Arena>> {
+        self.arenas
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Brings the residency set in line with the context's arenas. Arenas come and go between
+    /// command buffers, never within one, so this runs as each begins.
+    fn sync_residency(&mut self) {
+        let now = self.snapshot_arenas();
+        let mut changed = false;
+        self.resident.retain(|id, a| {
+            let keep = now.get(id).is_some_and(|b| Arc::ptr_eq(a, b));
+            if !keep {
+                self.residency
+                    .removeAllocation(ProtocolObject::<dyn MTLAllocation>::from_ref(&*a.heap));
+                changed = true;
+            }
+            keep
+        });
+        for (id, a) in now {
+            if !self.resident.contains_key(&id) {
+                self.residency
+                    .addAllocation(ProtocolObject::<dyn MTLAllocation>::from_ref(&*a.heap));
+                self.resident.insert(id, a);
+                changed = true;
+            }
         }
-        Ok(self.cb.clone().unwrap())
+        if changed {
+            self.residency.commit();
+            self.residency.requestResidency();
+        }
+    }
+
+    fn command_buffer(&mut self) -> Result<Po<dyn MTL4CommandBuffer>, Error> {
+        if let Some((cb, _)) = &self.cb {
+            return Ok(cb.clone());
+        }
+        self.sync_residency();
+        let alloc = match self
+            .allocators
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+        {
+            Some(a) => {
+                a.0.reset();
+                a
+            }
+            None => Allocator(
+                self.device
+                    .newCommandAllocator()
+                    .ok_or(Error::OutOfMemory)?,
+            ),
+        };
+        let cb = self.device.newCommandBuffer().ok_or(Error::OutOfMemory)?;
+        cb.beginCommandBufferWithAllocator(&alloc.0);
+        self.cb = Some((cb.clone(), alloc));
+        Ok(cb)
     }
 
     fn end_encoder(&mut self) {
         match std::mem::replace(&mut self.enc, Encoder::None) {
             Encoder::None => {}
-            Encoder::Render { enc, .. } => {
-                enc.updateFence_afterStages(&self.fence, MTLRenderStages::Fragment);
-                enc.endEncoding();
-            }
-            Encoder::Blit(enc) => {
-                enc.updateFence(&self.fence);
-                enc.endEncoding();
-            }
-            Encoder::Compute { enc, .. } => {
-                enc.updateFence(&self.fence);
-                enc.endEncoding();
-            }
+            Encoder::Render { enc, .. } => enc.endEncoding(),
+            Encoder::Compute { enc, .. } => enc.endEncoding(),
         }
     }
 
-    fn snapshot_arenas(&self) -> Vec<Arc<Arena>> {
-        self.arenas
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .values()
-            .cloned()
-            .collect()
+    /// Orders an encoder's work after everything committed or encoded before it on the queue.
+    /// Coarse, and correct for a stream that names no dependencies of its own.
+    fn wait_for_prior(enc: &ProtocolObject<dyn MTL4CommandEncoder>) {
+        enc.barrierAfterQueueStages_beforeStages_visibilityOptions(
+            ALL_STAGES,
+            ALL_STAGES,
+            MTL4VisibilityOptions::Device,
+        );
+    }
+
+    fn begin_compute(&mut self, copies: bool) -> R {
+        self.require_no_encoder()?;
+        let cb = self.command_buffer()?;
+        let enc = cb.computeCommandEncoder().ok_or(Error::OutOfMemory)?;
+        Self::wait_for_prior(ProtocolObject::from_ref(&*enc));
+        enc.setArgumentTable(Some(&self.tables.compute));
+        self.enc = Encoder::Compute {
+            enc,
+            max_threads: 0,
+            copies,
+        };
+        Ok(())
+    }
+
+    fn copy_encoder(&self) -> Result<&Po<dyn MTL4ComputeCommandEncoder>, Error> {
+        match &self.enc {
+            Encoder::Compute {
+                enc, copies: true, ..
+            } => Ok(enc),
+            _ => Err(Error::BadState),
+        }
     }
 
     fn exec(&mut self, opcode: u16, p: &[u8]) -> R {
@@ -272,28 +420,8 @@ impl Executor {
                 self.objects.remove(&h).map(|_| ()).ok_or(Error::BadHandle)
             }
             op::BEGIN_RENDER_PASS => self.begin_render_pass(&arg(p)?.0),
-            op::BEGIN_BLIT => {
-                self.require_no_encoder()?;
-                let cb = self.command_buffer()?;
-                let enc = cb.blitCommandEncoder().ok_or(Error::OutOfMemory)?;
-                enc.waitForFence(&self.fence);
-                self.enc = Encoder::Blit(enc);
-                Ok(())
-            }
-            op::BEGIN_COMPUTE => {
-                self.require_no_encoder()?;
-                let cb = self.command_buffer()?;
-                let enc = cb.computeCommandEncoder().ok_or(Error::OutOfMemory)?;
-                enc.waitForFence(&self.fence);
-                for a in self.snapshot_arenas() {
-                    enc.useHeap(&a.heap);
-                }
-                self.enc = Encoder::Compute {
-                    enc,
-                    max_threads: 0,
-                };
-                Ok(())
-            }
+            op::BEGIN_BLIT => self.begin_compute(true),
+            op::BEGIN_COMPUTE => self.begin_compute(false),
             op::END_ENCODING => {
                 if matches!(self.enc, Encoder::None) {
                     return Err(Error::BadState);
@@ -366,14 +494,15 @@ impl Executor {
                     return Err(Error::BadValue);
                 }
                 let a = self.range(f.buffer, f.length)?;
-                let Encoder::Blit(enc) = &self.enc else {
-                    return Err(Error::BadState);
+                let enc = self.copy_encoder()?;
+                // SAFETY: the range was checked against the arena.
+                unsafe {
+                    enc.fillBuffer_range_value(
+                        &a.buffer,
+                        NSRange::new(f.buffer.offset as usize, f.length as usize),
+                        f.value as u8,
+                    )
                 };
-                enc.fillBuffer_range_value(
-                    &a.buffer,
-                    NSRange::new(f.buffer.offset as usize, f.length as usize),
-                    f.value as u8,
-                );
                 Ok(())
             }
             op::COPY_BUFFER => {
@@ -383,9 +512,7 @@ impl Executor {
                 }
                 let src = self.range(c.src, c.length)?;
                 let dst = self.range(c.dst, c.length)?;
-                let Encoder::Blit(enc) = &self.enc else {
-                    return Err(Error::BadState);
-                };
+                let enc = self.copy_encoder()?;
                 // SAFETY: both ranges were checked against their arenas.
                 unsafe {
                     enc.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
@@ -404,7 +531,12 @@ impl Executor {
                 let Some(Object::ComputePipeline(ps)) = self.objects.get(&h) else {
                     return Err(Error::BadHandle);
                 };
-                let Encoder::Compute { enc, max_threads } = &mut self.enc else {
+                let Encoder::Compute {
+                    enc,
+                    max_threads,
+                    copies: false,
+                } = &mut self.enc
+                else {
                     return Err(Error::BadState);
                 };
                 enc.setComputePipelineState(ps);
@@ -413,7 +545,12 @@ impl Executor {
             }
             op::DISPATCH_THREADGROUPS => {
                 let d = arg::<cmd::DispatchThreadgroups>(p)?.0;
-                let Encoder::Compute { enc, max_threads } = &self.enc else {
+                let Encoder::Compute {
+                    enc,
+                    max_threads,
+                    copies: false,
+                } = &self.enc
+                else {
                     return Err(Error::BadState);
                 };
                 let t = d
@@ -498,8 +635,9 @@ impl Executor {
 
     fn create_library(&mut self, handle: u32, src: &[u8]) -> R {
         self.new_handle(handle)?;
-        let src = text(src)?;
-        match self.device.newLibraryWithSource_options_error(&src, None) {
+        let desc = MTL4LibraryDescriptor::new();
+        desc.setSource(Some(&*text(src)?));
+        match self.compiler.newLibraryWithDescriptor_error(&desc) {
             Ok(l) => {
                 self.objects.insert(handle, Object::Library(l));
                 Ok(())
@@ -519,20 +657,11 @@ impl Executor {
     ) -> R {
         self.new_handle(c.handle)?;
         let lib = self.library(c.library)?;
-        let vf = lib
-            .newFunctionWithName(&*text(vertex)?)
-            .ok_or(Error::PipelineCreate)?;
-        let ff = if fragment.is_empty() {
-            None
-        } else {
-            Some(
-                lib.newFunctionWithName(&*text(fragment)?)
-                    .ok_or(Error::PipelineCreate)?,
-            )
-        };
-        let desc = MTLRenderPipelineDescriptor::new();
-        desc.setVertexFunction(Some(&vf));
-        desc.setFragmentFunction(ff.as_deref());
+        let desc = MTL4RenderPipelineDescriptor::new();
+        desc.setVertexFunctionDescriptor(Some(&*function(lib, vertex)?));
+        if !fragment.is_empty() {
+            desc.setFragmentFunctionDescriptor(Some(&*function(lib, fragment)?));
+        }
         for (i, &fmt) in c.color_formats.iter().enumerate() {
             if fmt == 0 {
                 continue;
@@ -544,19 +673,18 @@ impl Executor {
             unsafe { desc.colorAttachments().objectAtIndexedSubscript(i) }
                 .setPixelFormat(MTLPixelFormat(fmt as usize));
         }
-        if c.depth_format != 0 {
-            if c.depth_format != 252 {
-                return Err(Error::BadValue);
-            }
-            desc.setDepthAttachmentPixelFormat(MTLPixelFormat(c.depth_format as usize));
-        }
-        if c.stencil_format != 0 || !matches!(c.sample_count, 0 | 1 | 4) {
+        // Metal 4 pipelines name no depth or stencil format; the pass's attachments decide.
+        if !matches!(c.depth_format, 0 | 252)
+            || c.stencil_format != 0
+            || !matches!(c.sample_count, 0 | 1 | 4)
+        {
             return Err(Error::BadValue);
         }
-        desc.setRasterSampleCount(c.sample_count.max(1) as usize);
+        // SAFETY: 1 or 4, checked above.
+        unsafe { desc.setRasterSampleCount(c.sample_count.max(1) as usize) };
         match self
-            .device
-            .newRenderPipelineStateWithDescriptor_error(&desc)
+            .compiler
+            .newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(&desc, None)
         {
             Ok(ps) => {
                 self.objects.insert(c.handle, Object::RenderPipeline(ps));
@@ -571,11 +699,12 @@ impl Executor {
 
     fn create_compute_pipeline(&mut self, handle: u32, library: u32, name: &[u8]) -> R {
         self.new_handle(handle)?;
-        let f = self
-            .library(library)?
-            .newFunctionWithName(&*text(name)?)
-            .ok_or(Error::PipelineCreate)?;
-        match self.device.newComputePipelineStateWithFunction_error(&f) {
+        let desc = MTL4ComputePipelineDescriptor::new();
+        desc.setComputeFunctionDescriptor(Some(&*function(self.library(library)?, name)?));
+        match self
+            .compiler
+            .newComputePipelineStateWithDescriptor_compilerTaskOptions_error(&desc, None)
+        {
             Ok(ps) => {
                 self.objects.insert(handle, Object::ComputePipeline(ps));
                 Ok(())
@@ -589,7 +718,7 @@ impl Executor {
 
     fn begin_render_pass(&mut self, c: &cmd::BeginRenderPass) -> R {
         self.require_no_encoder()?;
-        let desc = MTLRenderPassDescriptor::new();
+        let desc = MTL4RenderPassDescriptor::new();
         let mut any = false;
         for (i, ca) in c.colors.iter().enumerate() {
             if ca.texture == 0 {
@@ -630,13 +759,9 @@ impl Executor {
         let enc = cb
             .renderCommandEncoderWithDescriptor(&desc)
             .ok_or(Error::BadValue)?;
-        enc.waitForFence_beforeStages(
-            &self.fence,
-            MTLRenderStages::Vertex | MTLRenderStages::Fragment,
-        );
-        for a in self.snapshot_arenas() {
-            enc.useHeap_stages(&a.heap, MTLRenderStages::Vertex | MTLRenderStages::Fragment);
-        }
+        Self::wait_for_prior(ProtocolObject::from_ref(&*enc));
+        enc.setArgumentTable_atStages(&self.tables.vertex, MTLRenderStages::Vertex);
+        enc.setArgumentTable_atStages(&self.tables.fragment, MTLRenderStages::Fragment);
         self.enc = Encoder::Render {
             enc,
             pipeline: false,
@@ -652,20 +777,15 @@ impl Executor {
         if s.buffer.offset >= a.size {
             return Err(Error::BadRange);
         }
-        let (off, idx) = (s.buffer.offset as usize, s.index as usize);
-        // SAFETY: offset is inside the buffer and the index is within Metal's limit.
-        match (&self.enc, s.stage) {
-            (Encoder::Render { enc, .. }, cmd::stage::VERTEX) => unsafe {
-                enc.setVertexBuffer_offset_atIndex(Some(&a.buffer), off, idx)
-            },
-            (Encoder::Render { enc, .. }, cmd::stage::FRAGMENT) => unsafe {
-                enc.setFragmentBuffer_offset_atIndex(Some(&a.buffer), off, idx)
-            },
-            (Encoder::Compute { enc, .. }, cmd::stage::COMPUTE) => unsafe {
-                enc.setBuffer_offset_atIndex(Some(&a.buffer), off, idx)
-            },
+        let table = match (&self.enc, s.stage) {
+            (Encoder::Render { .. }, cmd::stage::VERTEX) => &self.tables.vertex,
+            (Encoder::Render { .. }, cmd::stage::FRAGMENT) => &self.tables.fragment,
+            (Encoder::Compute { copies: false, .. }, cmd::stage::COMPUTE) => &self.tables.compute,
             _ => return Err(Error::BadState),
-        }
+        };
+        // SAFETY: the address is inside an arena the context's residency set holds, and the index
+        // is within the table's size. Draws and dispatches capture the table as encoded.
+        unsafe { table.setAddress_atIndex(a.gpu_base + s.buffer.offset, s.index as usize) };
         Ok(())
     }
 
@@ -696,9 +816,7 @@ impl Executor {
             + (c.size[1] as u64 - 1) * c.bytes_per_row
             + row;
         let dst = self.range(c.dst, len)?;
-        let Encoder::Blit(enc) = &self.enc else {
-            return Err(Error::BadState);
-        };
+        let enc = self.copy_encoder()?;
         let v = |a: [u32; 3]| (a[0] as usize, a[1] as usize, a[2] as usize);
         let (ox, oy, oz) = v(c.origin);
         let (sx, sy, sz) = v(c.size);
@@ -726,28 +844,42 @@ impl Executor {
             return Err(Error::BadValue);
         }
         self.last_seqno = seqno;
-        let cb = match self.cb.take() {
-            Some(cb) => cb,
-            None => self.queue.commandBuffer().ok_or(Error::OutOfMemory)?,
-        };
+        self.command_buffer()?;
+        let (cb, alloc) = self.cb.take().expect("command_buffer() opened one");
+        cb.endCommandBuffer();
         // Arena memory must outlive the GPU's use of it even if the guest destroys the arena
-        // meanwhile; the completion handler holds it.
-        let mut keep = self.snapshot_arenas();
+        // meanwhile; the feedback handler holds it, and the allocator, until the GPU is done.
+        let mut keep: Vec<Arc<Arena>> = self.resident.values().cloned().collect();
         keep.push(self.ring_arena.clone());
         let ctrl = SendPtr(self.consumer.control_ptr());
-        let block = RcBlock::new(move |cb: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+        let pool = self.allocators.clone();
+        let alloc = Mutex::new(Some(alloc));
+        let block = RcBlock::new(move |fb: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
             let _keep = &keep;
             // SAFETY: the ring's arena is in `keep`, so the control block is still mapped.
             let c = unsafe { ctrl.0.as_ref() };
-            // SAFETY: Metal passes the live command buffer.
-            if unsafe { cb.as_ref() }.status() == MTLCommandBufferStatus::Error {
+            // SAFETY: Metal passes the live feedback object.
+            if let Some(e) = unsafe { fb.as_ref() }.error() {
+                log::warn!(
+                    "command buffer {seqno} failed: {}",
+                    e.localizedDescription()
+                );
                 c.fail(Error::GpuFault, 0);
+            }
+            if let Some(a) = alloc.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                pool.lock().unwrap_or_else(|e| e.into_inner()).push(a);
             }
             c.complete(seqno);
         });
+        let options = MTL4CommitOptions::new();
         // SAFETY: Metal copies the block.
-        unsafe { cb.addCompletedHandler(RcBlock::as_ptr(&block)) };
-        cb.commit();
+        unsafe { options.addFeedbackHandler(RcBlock::as_ptr(&block)) };
+        let mut cbs = [NonNull::from(&*cb)];
+        // SAFETY: one live, ended command buffer.
+        unsafe {
+            self.queue
+                .commit_count_options(NonNull::from(&mut cbs).cast(), 1, &options)
+        };
         Ok(())
     }
 }
