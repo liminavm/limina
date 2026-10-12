@@ -8,12 +8,21 @@
  *             blue pixel counts are checked and the image is written to kk-probe.ppm
  *   allocs    6000 separately allocated, mapped 4 KiB buffers, each written and checked through
  *             its own mapping, then a dispatch into the last one
+ *   share     a buffer exported as a dma-buf (VK_KHR_external_memory_fd): imported back into the
+ *             same device and dispatched into, then imported by a child process (this program,
+ *             exec'd as `share-child <fd>`) that checks what the parent wrote and dispatches
+ *             into it; the parent checks each result through its own mapping. Not part of the
+ *             default run.
  *
  * Exit status 0 only if every part ran and checked out.
  */
+#include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vulkan/vulkan.h>
 
 #include "fill.comp.h"
@@ -430,6 +439,148 @@ triangle(void)
    return green > W * H * 2 / 5 && blue > W * H * 2 / 5 && green + blue == W * H ? 0 : 1;
 }
 
+/* -- share -- */
+
+#define SHARE_SIZE (64 * 1024)
+#define SHARE_MARK 0x5eed1234u
+#define SHARE_MARK_WORD 300
+
+static PFN_vkGetMemoryFdKHR get_memory_fd;
+static PFN_vkGetMemoryFdPropertiesKHR get_memory_fd_properties;
+
+static VkBuffer
+external_buffer(void)
+{
+   VkExternalMemoryBufferCreateInfo ext = {
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+   VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                            .pNext = &ext,
+                            .size = SHARE_SIZE,
+                            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
+   VkBuffer b;
+   CHECK(vkCreateBuffer(dev, &bi, NULL, &b));
+   return b;
+}
+
+static struct buf
+exported_buffer(void)
+{
+   struct buf r = {.b = external_buffer()};
+   VkMemoryRequirements req;
+   vkGetBufferMemoryRequirements(dev, r.b, &req);
+   VkExportMemoryAllocateInfo ex = {.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+                                    .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+   VkMemoryAllocateInfo ai = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext = &ex,
+      .allocationSize = req.size,
+      .memoryTypeIndex = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+   };
+   CHECK(vkAllocateMemory(dev, &ai, NULL, &r.m));
+   CHECK(vkBindBufferMemory(dev, r.b, r.m, 0));
+   CHECK(vkMapMemory(dev, r.m, 0, VK_WHOLE_SIZE, 0, &r.map));
+   return r;
+}
+
+static int
+export_fd(VkDeviceMemory m)
+{
+   VkMemoryGetFdInfoKHR gi = {.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+                              .memory = m,
+                              .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+   int fd = -1;
+   CHECK(get_memory_fd(dev, &gi, &fd));
+   return fd;
+}
+
+/* Takes `fd`. */
+static struct buf
+imported_buffer(int fd)
+{
+   struct buf r = {.b = external_buffer()};
+   VkMemoryRequirements req;
+   vkGetBufferMemoryRequirements(dev, r.b, &req);
+   VkMemoryFdPropertiesKHR fp = {.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+   CHECK(get_memory_fd_properties(dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fp));
+   VkImportMemoryFdInfoKHR im = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+                                 .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                                 .fd = fd};
+   VkMemoryAllocateInfo ai = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext = &im,
+      .allocationSize = req.size,
+      .memoryTypeIndex =
+         memory_type(req.memoryTypeBits & fp.memoryTypeBits,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+   };
+   CHECK(vkAllocateMemory(dev, &ai, NULL, &r.m));
+   CHECK(vkBindBufferMemory(dev, r.b, r.m, 0));
+   CHECK(vkMapMemory(dev, r.m, 0, VK_WHOLE_SIZE, 0, &r.map));
+   return r;
+}
+
+/* Whether the parent's view shows what compute_into wrote through another one. */
+static int
+check_filled(const char *who, const struct buf *b)
+{
+   const uint32_t *d = b->map;
+   uint32_t good = 0;
+   for (uint32_t i = 0; i < 256; i++)
+      good += d[i] == 3 * i + 1;
+   printf("share: %s: the exporter's mapping shows %u/256 words right\n", who, good);
+   return good == 256 ? 0 : 1;
+}
+
+static int
+share_child(int fd)
+{
+   struct buf b = imported_buffer(fd);
+   uint32_t mark = ((uint32_t *)b.map)[SHARE_MARK_WORD];
+   printf("share-child: imported; the parent's mark reads 0x%x\n", mark);
+   int fails = mark != SHARE_MARK;
+   fails += compute_into(b);
+   free_buf(b);
+   return fails;
+}
+
+static int
+share(const char *self)
+{
+   struct buf ex = exported_buffer();
+   ((uint32_t *)ex.map)[SHARE_MARK_WORD] = SHARE_MARK;
+
+   /* Imported back into the device that exported it: the same GEM object twice. */
+   struct buf again = imported_buffer(export_fd(ex.m));
+   int fails = compute_into(again);
+   free_buf(again);
+   fails += check_filled("self-import", &ex);
+   memset(ex.map, 0, 256 * 4);
+
+   /* An fd without close-on-exec for the child, which gets its own device. */
+   int fd = export_fd(ex.m);
+   int inherit = fcntl(fd, F_DUPFD, 100);
+   close(fd);
+   pid_t pid = fork();
+   if (pid == 0) {
+      char arg[16];
+      snprintf(arg, sizeof(arg), "%d", inherit);
+      execl(self, self, "share-child", arg, (char *)NULL);
+      _exit(127);
+   }
+   close(inherit);
+   int status = 0;
+   waitpid(pid, &status, 0);
+   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+      printf("share: child failed (status 0x%x)\n", status);
+      fails++;
+   }
+   fails += check_filled("child", &ex);
+   free_buf(ex);
+   return fails;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -465,17 +616,31 @@ main(int argc, char **argv)
                                  .queueFamilyIndex = qfam,
                                  .queueCount = 1,
                                  .pQueuePriorities = &prio};
+   const char *only = argc > 1 ? argv[1] : NULL;
+   bool sharing = only && !strncmp(only, "share", 5);
+   const char *exts[] = {"VK_KHR_external_memory", "VK_KHR_external_memory_fd",
+                         "VK_EXT_external_memory_dma_buf"};
    VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                             .queueCreateInfoCount = 1,
-                            .pQueueCreateInfos = &qi};
+                            .pQueueCreateInfos = &qi,
+                            .enabledExtensionCount = sharing ? 3 : 0,
+                            .ppEnabledExtensionNames = exts};
    CHECK(vkCreateDevice(pdev, &di, NULL, &dev));
+   if (sharing) {
+      get_memory_fd = (PFN_vkGetMemoryFdKHR)vkGetDeviceProcAddr(dev, "vkGetMemoryFdKHR");
+      get_memory_fd_properties = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(
+         dev, "vkGetMemoryFdPropertiesKHR");
+   }
    vkGetDeviceQueue(dev, qfam, 0, &queue);
    VkCommandPoolCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
                                  .queueFamilyIndex = qfam};
    CHECK(vkCreateCommandPool(dev, &pi, NULL, &pool));
 
-   const char *only = argc > 1 ? argv[1] : NULL;
    int fails = 0;
+   if (only && !strcmp(only, "share"))
+      fails += share(argv[0]);
+   else if (only && !strcmp(only, "share-child") && argc > 2)
+      fails += share_child(atoi(argv[2]));
    if (!only || !strcmp(only, "compute"))
       fails += compute();
    if (!only || !strcmp(only, "triangle"))

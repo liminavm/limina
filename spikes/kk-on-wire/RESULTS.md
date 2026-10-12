@@ -6,7 +6,7 @@ and the host's `limina-replayer` making the Metal 4 calls.
 
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
-`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `3264e1d207d`.
+`/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `f85978f1f6f`.
 
 | check | result |
 |---|---|
@@ -17,7 +17,8 @@ Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal
 | `vkcube --wsi wayland` on the seated GNOME desktop | renders correctly (textured, depth-tested; window capture checked by eye), runs 40 s without fault, 600 frames in 9.96 s FIFO (vsync-bound) |
 | stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
 | `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps |
-| `glmark2-wayland` on that zink | **not on KK**: EGL falls back to llvmpipe (see Open) |
+| `kk-probe share` | a buffer exported as dma-buf, dispatched into through a self-import and through an import in a child process: the exporter's mapping shows 256/256 words right for both; the child reads the parent's mark |
+| `glmark2-wayland` on that zink (`MESA_LOADER_DRIVER_OVERRIDE=zink`) | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))` through Wayland EGL; phong scene correct (capture checked by eye); build 410 fps, texture 502 fps |
 
 ## Recipe
 
@@ -46,22 +47,32 @@ arenas (larger ones get their own), and the guest module maps an arena from any 
 which a mapped pooled heap needs. The guest module must be at least that version
 (`scripts/build-virtio-gpu-limina.sh`; on F44 it loads from `/lib/modules/<krel>/updates/`).
 
-zink needed two more things from the bridge. KK releases depth-stencil states and meta pipelines
+Memory allocated for export or imported from an fd is a heap of its own, shared through DRM:
+the bridge makes it a shared arena (`VIRTGPU_LIMINA_ARENA_SHARED`), which the module exports as a
+host-visible blob GEM object; PRIME carries it to other processes, and `ARENA_IMPORT` there gives
+the same Metal heap at the same GPU address. Both sides map it through the GEM object. Importing
+what the same file exported returns the same GEM handle, so the bridge counts its holders. The
+transport alone is checked by `guest/limina-gpu-smoke` (its share step).
+
+zink needed three more things from the bridge. KK releases depth-stencil states and meta pipelines
 while still recording, as Metal encoders retain what they are set, so a command buffer holds every
 object its stream names until it is recorded again: otherwise the DESTROY reaches the ring before
 the commit that uses the object, and the host drops the context with `BadHandle`. And KK reports
 the render node it opened through `VK_EXT_physical_device_drm`, which is how zink's EGL path picks
-its device. Run zink with `MESA_LOADER_DRIVER_OVERRIDE=zink`.
+its device. And its EGL DRM screen requires `VK_KHR_external_memory_fd`, without which Wayland EGL
+fell back to llvmpipe. Run zink with `MESA_LOADER_DRIVER_OVERRIDE=zink`.
 
 ## Open
 
-- **GL on Wayland stays on llvmpipe.** EGL first opens zink on the render node, and
-  `zink_drm_create_screen` refuses a device without `KHR_external_memory_fd`, although on that
-  path zink presents through kopper (Vulkan WSI), which works. EGL's fallback then turns zink off.
-  X11 (GLX) takes the fd-less kopper path and works. Two ways forward:
-  - patch zink to accept a kopper screen without dma-buf export; this needs our own guest zink;
-  - give arenas dma-buf export, which the compositor would need anyway to take client buffers
-    without a copy.
+- **No fences on shared memory.** A dma-buf of a KK heap carries no implicit or explicit fence;
+  a consumer in another process can read before the producer's GPU work lands. The guest module
+  is where `dma_fence`s for these objects belong.
+- **The compositor cannot import a KK buffer.** An exported KK heap is a blob the extension owns,
+  invisible to virglrs, so gnome-shell (vrend/venus) cannot take it as a client buffer; windows
+  present through the software WSI (a copy). Zero-copy presentation needs the host to register
+  extension blobs with the renderer, or a compositor on this transport.
+- No DRM format modifiers: a dma-buf image means KosmicKrisp's own layout, so only another
+  KosmicKrisp context can make sense of it.
 
 - Completion and reply waits poll; an idle guest process with a pending commit burns CPU.
 - `[LIMINA-KK-GUARD]` prints its periodic encoder-guard line, which means nothing on this

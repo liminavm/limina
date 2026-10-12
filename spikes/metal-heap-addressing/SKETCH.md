@@ -105,9 +105,12 @@ cited below are measured in `RESULTS.md` (this directory) unless marked otherwis
 - **The round-trip floor of the transport**, for what remains synchronous (descriptor-key
   queries, `vkDeviceWaitIdle`, query results read on the CPU). `RESULTS.md` measures venus's
   today. §4's query lane carries these across the process boundary at about 4–10 µs each.
-- **Sharing**: display stays on the same device (§6). What is left open is exporting
-  arena-backed images as dma-bufs to other guest consumers, such as video, screen capture and
-  other devices.
+- **Sharing**: display stays on the same device (§6). Guest processes share memory as dma-bufs:
+  a shared arena is a host-visible blob resource of its context, which other contexts import as
+  the same heap at the same GPU address (`spikes/kk-on-wire/RESULTS.md`). Two parts are left open:
+  fences on that memory, which belong in the guest module, and consumers on other renderers
+  (video, screen capture, a vrend/venus compositor), which need the host to register these blobs
+  with them.
 
 ## 4. Process layout: the replayer is its own process from the start
 
@@ -220,5 +223,5 @@ with one set of outputs, so display never hands over between devices.
   devices, so the host would have to hand the display between them: report virtio-gpu's output
   disconnected and steer the compositor with a primary-GPU udev tag. Every host display feature
   would also have to be carried over the new protocol.
-- **Still open: sharing with other guest consumers.** Exporting arena-backed images as dma-bufs
-  to video, screen capture and other devices (§3).
+- **Sharing with other guest consumers** goes through virtio-gpu blob resources and dma-bufs;
+  what is still open is in §3.
