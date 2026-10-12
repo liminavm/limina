@@ -18,6 +18,7 @@ surfaces: `08e0f2b62a7`).
 | `vkcube --wsi wayland` on the seated GNOME desktop | renders correctly (textured, depth-tested; window capture checked by eye), runs 40 s without fault, 600 frames in 9.96 s FIFO (vsync-bound) |
 | `vkcube` under stock gnome-shell, windows as surfaces | dma-buf swapchain (`zwp_linux_buffer_params_v1`, XR24, no `wl_shm`), imported by gnome-shell's vrend context with no refusal; renders correctly (capture checked by eye), ~1800 commits in 15 s |
 | `vkgears` (mesa-demos) the same way | XR24 surfaces, 60 FPS, renders correctly (capture checked by eye) |
+| `kk-probe export` | an image made for dma-buf export with the LINEAR modifier, filled by a buffer copy, sampled texel for texel by stock virgl GL (EGL on gbm) into a texture of its own: 1024/1024 pixels right |
 | `kk-probe import` | a linear XRGB8888 scanout buffer from stock gbm (virgl), written through `gbm_bo_map`, imported as a dedicated LINEAR-modifier image at gbm's pitch: 1024/1024 pixels right |
 | stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing |
 | `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps |
@@ -103,6 +104,14 @@ buffer scene with guest and host both idle. Queue events now publish like commit
 - **Only windows cross to the compositor.** A non-window exported KK heap is still a blob the
   extension owns, invisible to virglrs. Windows in RGBA16F or 10-bit formats are withheld until
   surfaces take them; X11 WSI's format list is not filtered.
+- **Which exports other drivers can read.** Any dedicated image whose layout is linear (LINEAR
+  tiling or the LINEAR modifier, the portable ways to share with another driver) in a 32-bit
+  BGRA/RGBA single-level 2D shape is a surface. An OPTIMAL-tiled export has no layout another
+  driver could learn, so it stays a KK heap, shared between KK contexts only.
+- **A surface cannot be CPU-mapped through virgl.** `gbm_bo_map` of an imported surface reads
+  through a ctrl-queue transfer into guest pages it does not have (`transfer_read: ... no pages
+  attached`), as for any non-mappable host3d blob, venus exports included. GPU sampling works.
+  Mappable surfaces would need the IOSurface's pages in the guest-visible region.
 - **Imports are images only.** A dma-buf from vrend or venus imports as a dedicated
   single-plane image over its surface; as a buffer, or a planar (YUV) image, it is still refused.
 - **A bad client import ends the compositor's context.** vrend poisons a context on a SET_TYPE of

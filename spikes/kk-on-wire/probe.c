@@ -20,6 +20,10 @@
  *             virgl in a limina guest) and wrote a pattern into, imported as a dedicated image
  *             with the LINEAR modifier at the producer's pitch, copied to a buffer: every pixel
  *             is checked. Not part of the default run.
+ *   export    the other way: an image made for dma-buf export with the LINEAR modifier, filled
+ *             with a pattern by a buffer copy, exported and sampled by the render node's GL
+ *             driver (EGL on gbm: stock virgl in a limina guest) into a texture of its own, read
+ *             back from there: every pixel is checked. Not part of the default run.
  *   syncfd    a submit held by a wait on a timeline value nobody has signaled, signaling a
  *             binary semaphore: its exported sync_file (VK_KHR_external_semaphore_fd) is a real
  *             fence, pending until the CPU signals the timeline and signaled after. Not part of
@@ -29,6 +33,10 @@
  */
 #include <drm_fourcc.h>
 #include <fcntl.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include <gbm.h>
 #include <linux/dma-buf.h>
 #include <poll.h>
@@ -765,6 +773,199 @@ import_foreign(void)
    return good == IMPORT_W * IMPORT_H ? 0 : 1;
 }
 
+/* Samples dma-buf `fd` (IMPORT_W x IMPORT_H ARGB8888, rows `pitch` apart) texel for texel into a
+ * texture of the render node's own GL driver, as a compositor draws a client buffer, and counts
+ * the pixels read back from that texture that match the pattern. */
+static uint32_t
+sample_foreign(int fd, uint32_t pitch)
+{
+   int drm = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+   struct gbm_device *gbm = drm >= 0 ? gbm_create_device(drm) : NULL;
+   PFNEGLGETPLATFORMDISPLAYEXTPROC get_display =
+      (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+   EGLDisplay dpy = gbm && get_display ? get_display(EGL_PLATFORM_GBM_KHR, gbm, NULL)
+                                       : EGL_NO_DISPLAY;
+   if (dpy == EGL_NO_DISPLAY || !eglInitialize(dpy, NULL, NULL) ||
+       !eglBindAPI(EGL_OPENGL_ES_API)) {
+      fprintf(stderr, "export: no EGL on the render node\n");
+      return 0;
+   }
+   const EGLint cattr[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+   EGLContext ctx = eglCreateContext(dpy, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, cattr);
+   if (ctx == EGL_NO_CONTEXT || !eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
+      fprintf(stderr, "export: no surfaceless GLES context\n");
+      return 0;
+   }
+   printf("export: consumer GL: %s\n", (const char *)glGetString(GL_RENDERER));
+   PFNEGLCREATEIMAGEKHRPROC create_image =
+      (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+   PFNGLEGLIMAGETARGETTEXTURE2DOESPROC image_target =
+      (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+   const EGLint iattr[] = {EGL_WIDTH, IMPORT_W,
+                           EGL_HEIGHT, IMPORT_H,
+                           EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ARGB8888,
+                           EGL_DMA_BUF_PLANE0_FD_EXT, fd,
+                           EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+                           EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)pitch,
+                           EGL_NONE};
+   EGLImageKHR image = create_image(dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, iattr);
+   if (image == EGL_NO_IMAGE_KHR) {
+      fprintf(stderr, "export: the GL driver did not import the buffer (0x%x)\n", eglGetError());
+      return 0;
+   }
+   GLuint src, dst, fb;
+   glGenTextures(1, &src);
+   glBindTexture(GL_TEXTURE_2D, src);
+   image_target(GL_TEXTURE_2D, image);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+   glGenTextures(1, &dst);
+   glBindTexture(GL_TEXTURE_2D, dst);
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, IMPORT_W, IMPORT_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+   glGenFramebuffers(1, &fb);
+   glBindFramebuffer(GL_FRAMEBUFFER, fb);
+   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst, 0);
+
+   static const char *vs = "attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }";
+   static const char *fs = "precision highp float; uniform sampler2D t; uniform vec2 size;\n"
+                           "void main() { gl_FragColor = texture2D(t, gl_FragCoord.xy / size); }";
+   GLuint prog = glCreateProgram();
+   const char *srcs[2] = {vs, fs};
+   GLenum kinds[2] = {GL_VERTEX_SHADER, GL_FRAGMENT_SHADER};
+   for (int i = 0; i < 2; i++) {
+      GLuint sh = glCreateShader(kinds[i]);
+      glShaderSource(sh, 1, &srcs[i], NULL);
+      glCompileShader(sh);
+      glAttachShader(prog, sh);
+   }
+   glBindAttribLocation(prog, 0, "p");
+   glLinkProgram(prog);
+   glUseProgram(prog);
+   glActiveTexture(GL_TEXTURE0);
+   glBindTexture(GL_TEXTURE_2D, src);
+   glUniform1i(glGetUniformLocation(prog, "t"), 0);
+   glUniform2f(glGetUniformLocation(prog, "size"), IMPORT_W, IMPORT_H);
+   static const float quad[] = {-1, -1, 1, -1, -1, 1, 1, 1};
+   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
+   glEnableVertexAttribArray(0);
+   glViewport(0, 0, IMPORT_W, IMPORT_H);
+   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+   static uint8_t rgba[IMPORT_W * IMPORT_H * 4];
+   glReadPixels(0, 0, IMPORT_W, IMPORT_H, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+   uint32_t good = 0;
+   for (uint32_t y = 0; y < IMPORT_H; y++)
+      for (uint32_t x = 0; x < IMPORT_W; x++) {
+         const uint8_t *q = &rgba[(y * IMPORT_W + x) * 4];
+         uint32_t want = import_pixel(x, y);
+         good += q[0] == ((want >> 16) & 0xff) && q[1] == ((want >> 8) & 0xff) &&
+                 q[2] == (want & 0xff) && q[3] == 0xff;
+      }
+   if (good != IMPORT_W * IMPORT_H)
+      fprintf(stderr, "export: first texel read back %02x %02x %02x %02x\n", rgba[0], rgba[1],
+              rgba[2], rgba[3]);
+   eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+   eglDestroyContext(dpy, ctx);
+   eglTerminate(dpy);
+   gbm_device_destroy(gbm);
+   close(drm);
+   return good;
+}
+
+static int
+export_to_foreign(void)
+{
+   PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier =
+      (PFN_vkGetImageDrmFormatModifierPropertiesEXT)vkGetDeviceProcAddr(
+         dev, "vkGetImageDrmFormatModifierPropertiesEXT");
+   uint64_t linear = DRM_FORMAT_MOD_LINEAR;
+   VkImageDrmFormatModifierListCreateInfoEXT mods = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
+      .drmFormatModifierCount = 1,
+      .pDrmFormatModifiers = &linear};
+   VkExternalMemoryImageCreateInfo ext = {
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+      .pNext = &mods,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+   VkImageCreateInfo ici = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                            .pNext = &ext,
+                            .imageType = VK_IMAGE_TYPE_2D,
+                            .format = VK_FORMAT_B8G8R8A8_UNORM,
+                            .extent = {IMPORT_W, IMPORT_H, 1},
+                            .mipLevels = 1,
+                            .arrayLayers = 1,
+                            .samples = VK_SAMPLE_COUNT_1_BIT,
+                            .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+                            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT};
+   VkImage img;
+   CHECK(vkCreateImage(dev, &ici, NULL, &img));
+   VkMemoryDedicatedRequirements dreq = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS};
+   VkMemoryRequirements2 req = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2, .pNext = &dreq};
+   VkImageMemoryRequirementsInfo2 rinfo = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2, .image = img};
+   vkGetImageMemoryRequirements2(dev, &rinfo, &req);
+   VkMemoryDedicatedAllocateInfo ded = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+                                        .image = img};
+   VkExportMemoryAllocateInfo ex = {.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+                                    .pNext = &ded,
+                                    .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+   VkMemoryAllocateInfo ai = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext = &ex,
+      .allocationSize = req.memoryRequirements.size,
+      .memoryTypeIndex = memory_type(req.memoryRequirements.memoryTypeBits, 0)};
+   VkDeviceMemory mem;
+   CHECK(vkAllocateMemory(dev, &ai, NULL, &mem));
+   CHECK(vkBindImageMemory(dev, img, mem, 0));
+   VkImageDrmFormatModifierPropertiesEXT mp = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT};
+   CHECK(get_modifier(dev, img, &mp));
+   VkImageSubresource sub = {.aspectMask = VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT};
+   VkSubresourceLayout lay;
+   vkGetImageSubresourceLayout(dev, img, &sub, &lay);
+
+   struct buf src = host_buffer(IMPORT_W * IMPORT_H * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+   for (uint32_t y = 0; y < IMPORT_H; y++)
+      for (uint32_t x = 0; x < IMPORT_W; x++)
+         ((uint32_t *)src.map)[y * IMPORT_W + x] = import_pixel(x, y);
+   VkCommandBuffer cb = begin();
+   VkImageMemoryBarrier to_dst = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                                  .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                                  .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                  .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                  .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                  .image = img,
+                                  .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                        0, NULL, 0, NULL, 1, &to_dst);
+   VkBufferImageCopy copy = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                             .imageExtent = {IMPORT_W, IMPORT_H, 1}};
+   vkCmdCopyBufferToImage(cb, src.b, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+   VkImageMemoryBarrier release = to_dst;
+   release.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+   release.dstAccessMask = 0;
+   release.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+   release.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+   release.srcQueueFamilyIndex = qfam;
+   release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+   vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                        0, 0, NULL, 0, NULL, 1, &release);
+   submit_and_wait(cb);
+   free_buf(src);
+   int fd = export_fd(mem);
+
+   uint32_t good = sample_foreign(fd, (uint32_t)lay.rowPitch);
+   close(fd);
+   printf("export: %ux%u at pitch %llu, sampled by the render node's GL: %u/%u pixels as KK "
+          "wrote them\n",
+          IMPORT_W, IMPORT_H, (unsigned long long)lay.rowPitch, good, IMPORT_W * IMPORT_H);
+   vkDestroyImage(dev, img, NULL);
+   vkFreeMemory(dev, mem, NULL);
+   return good == IMPORT_W * IMPORT_H ? 0 : 1;
+}
+
 /* -- syncfd -- */
 
 static int
@@ -869,7 +1070,8 @@ main(int argc, char **argv)
                                  .queueCount = 1,
                                  .pQueuePriorities = &prio};
    const char *only = argc > 1 ? argv[1] : NULL;
-   bool importing = only && !strcmp(only, "import");
+   bool exporting = only && !strcmp(only, "export");
+   bool importing = exporting || (only && !strcmp(only, "import"));
    bool sharing = importing || (only && !strncmp(only, "share", 5));
    bool syncfd = only && !strcmp(only, "syncfd");
    const char *exts[] = {"VK_KHR_external_memory", "VK_KHR_external_memory_fd",
@@ -900,6 +1102,8 @@ main(int argc, char **argv)
       fails += signal_reaches_host();
    else if (syncfd)
       fails += sync_fd_follows_work();
+   else if (exporting)
+      fails += export_to_foreign();
    else if (importing)
       fails += import_foreign();
    else if (only && !strcmp(only, "share"))
