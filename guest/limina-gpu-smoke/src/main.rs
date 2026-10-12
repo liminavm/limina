@@ -3,7 +3,9 @@
 //! Drives the virtio-gpu extension through the limina DRM ioctls (guest/virtio-gpu-limina): one
 //! context, its doorbell page, two arenas, a command ring in the first. Then it draws a triangle
 //! and has a kernel write through a GPU address it computed itself, and checks both results in
-//! arena memory. Exit status 0 means both came back right.
+//! arena memory. Last, it shares an arena with another process the way a dma-buf travels: export
+//! as a GEM object, PRIME to an fd, import in a child with its own context, and a kernel there
+//! writes what the parent reads back. Exit status 0 means everything came back right.
 //!
 //! Usage: limina-gpu-smoke [/dev/dri/renderDN]   (default: the first render node that has the
 //! extension)
@@ -69,10 +71,46 @@ mod uapi {
     #[derive(Default)]
     pub struct ArenaCreate {
         pub arena_id: u32,
-        pub pad: u32,
+        pub flags: u32,
         pub size: u64,
         pub gpu_base: u64,
         pub mmap_offset: u64,
+    }
+
+    pub const ARENA_SHARED: u32 = 1;
+
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct ArenaExport {
+        pub arena_id: u32,
+        pub handle: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct ArenaImport {
+        pub arena_id: u32,
+        pub handle: u32,
+        pub size: u64,
+        pub gpu_base: u64,
+    }
+
+    /// virtgpu_drm.h's drm_virtgpu_map.
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct Map {
+        pub offset: u64,
+        pub handle: u32,
+        pub pad: u32,
+    }
+
+    /// drm.h's drm_prime_handle.
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct PrimeHandle {
+        pub handle: u32,
+        pub flags: u32,
+        pub fd: i32,
     }
 
     #[repr(C)]
@@ -85,7 +123,10 @@ mod uapi {
 
     const fn iowr(nr: u32, size: usize) -> libc::c_ulong {
         // _IOC(_IOC_READ|_IOC_WRITE, 'd', DRM_COMMAND_BASE + nr, size)
-        ((3u32 << 30) | ((size as u32) << 16) | ((b'd' as u32) << 8) | (0x40 + nr)) as libc::c_ulong
+        core_iowr(0x40 + nr, size)
+    }
+    const fn core_iowr(nr: u32, size: usize) -> libc::c_ulong {
+        ((3u32 << 30) | ((size as u32) << 16) | ((b'd' as u32) << 8) | nr) as libc::c_ulong
     }
     const fn iow(nr: u32, size: usize) -> libc::c_ulong {
         ((1u32 << 30) | ((size as u32) << 16) | ((b'd' as u32) << 8) | (0x40 + nr)) as libc::c_ulong
@@ -94,6 +135,13 @@ mod uapi {
     pub const CTX_CREATE: libc::c_ulong = iowr(0x20, size_of::<CtxCreate>());
     pub const ARENA_CREATE: libc::c_ulong = iowr(0x21, size_of::<ArenaCreate>());
     pub const RING_ATTACH: libc::c_ulong = iow(0x23, size_of::<RingAttach>());
+    pub const ARENA_EXPORT: libc::c_ulong = iowr(0x24, size_of::<ArenaExport>());
+    pub const ARENA_IMPORT: libc::c_ulong = iowr(0x25, size_of::<ArenaImport>());
+    pub const VIRTGPU_MAP: libc::c_ulong = iowr(0x01, size_of::<Map>());
+    pub const PRIME_HANDLE_TO_FD: libc::c_ulong = core_iowr(0x2d, size_of::<PrimeHandle>());
+    pub const PRIME_FD_TO_HANDLE: libc::c_ulong = core_iowr(0x2e, size_of::<PrimeHandle>());
+    pub const DRM_CLOEXEC: u32 = libc::O_CLOEXEC as u32;
+    pub const DRM_RDWR: u32 = libc::O_RDWR as u32;
 }
 
 fn ioctl<T>(f: &File, req: libc::c_ulong, arg: &mut T) -> io::Result<()> {
@@ -124,6 +172,15 @@ fn map(f: &File, offset: u64, len: usize) -> io::Result<NonNull<u8>> {
     Ok(NonNull::new(p.cast()).expect("mmap returned null"))
 }
 
+fn map_gem(f: &File, handle: u32, size: u64) -> io::Result<NonNull<u8>> {
+    let mut m = uapi::Map {
+        handle,
+        ..Default::default()
+    };
+    ioctl(f, uapi::VIRTGPU_MAP, &mut m)?;
+    map(f, m.offset, size as usize)
+}
+
 struct Arena {
     ptr: NonNull<u8>,
     size: u64,
@@ -143,6 +200,47 @@ impl Arena {
             ptr,
             size: a.size,
             gpu_base: a.gpu_base,
+        })
+    }
+
+    /// A shared arena, exported as a GEM object and mapped through it; returns the GEM handle too.
+    fn create_shared(f: &File, id: u32, size: u64) -> io::Result<(Self, u32)> {
+        let mut a = uapi::ArenaCreate {
+            arena_id: id,
+            flags: uapi::ARENA_SHARED,
+            size,
+            ..Default::default()
+        };
+        ioctl(f, uapi::ARENA_CREATE, &mut a)?;
+        let mut e = uapi::ArenaExport {
+            arena_id: id,
+            handle: 0,
+        };
+        ioctl(f, uapi::ARENA_EXPORT, &mut e)?;
+        let ptr = map_gem(f, e.handle, a.size)?;
+        Ok((
+            Self {
+                ptr,
+                size: a.size,
+                gpu_base: a.gpu_base,
+            },
+            e.handle,
+        ))
+    }
+
+    /// Arena `id` made the memory of the exported GEM object `handle`, mapped through it.
+    fn import(f: &File, id: u32, handle: u32) -> io::Result<Self> {
+        let mut i = uapi::ArenaImport {
+            arena_id: id,
+            handle,
+            ..Default::default()
+        };
+        ioctl(f, uapi::ARENA_IMPORT, &mut i)?;
+        let ptr = map_gem(f, handle, i.size)?;
+        Ok(Self {
+            ptr,
+            size: i.size,
+            gpu_base: i.gpu_base,
         })
     }
 
@@ -275,6 +373,18 @@ fn find_node() -> Option<(String, Gpu)> {
     })
 }
 
+/// Library 1: the shaders in `MSL`.
+fn library(g: &mut Gpu) {
+    g.push(
+        cmd::CreateLibrary {
+            handle: 1,
+            source_len: MSL.len() as u32,
+            ..Default::default()
+        },
+        &[MSL.as_bytes()],
+    );
+}
+
 fn triangle(g: &mut Gpu) -> Result<(), String> {
     const VB: u64 = MIB;
     const READBACK: u64 = 2 * MIB;
@@ -293,14 +403,7 @@ fn triangle(g: &mut Gpu) -> Result<(), String> {
         .collect();
     g.main.write(VB, &vb);
 
-    g.push(
-        cmd::CreateLibrary {
-            handle: 1,
-            source_len: MSL.len() as u32,
-            ..Default::default()
-        },
-        &[MSL.as_bytes()],
-    );
+    library(g);
     let mut colors = [0u32; cmd::MAX_COLOR_ATTACHMENTS];
     colors[0] = RGBA8_UNORM;
     g.push(
@@ -490,6 +593,83 @@ fn poke(g: &mut Gpu, other: &Arena) -> Result<(), String> {
     Ok(())
 }
 
+/// An arena shared with a child process through a dma-buf: the child imports it into a context of
+/// its own, sees what the parent wrote, and pokes words the parent then reads.
+fn share(path: &str, f: &File) -> Result<(), String> {
+    const MARK: u64 = 0x11A1_7A5E_D000_0001;
+    let (shared, handle) =
+        Arena::create_shared(f, 3, MIB).map_err(|e| format!("shared arena: {e}"))?;
+    shared.write(0, &MARK.to_le_bytes());
+    let mut p = uapi::PrimeHandle {
+        handle,
+        flags: uapi::DRM_CLOEXEC | uapi::DRM_RDWR,
+        fd: -1,
+    };
+    ioctl(f, uapi::PRIME_HANDLE_TO_FD, &mut p).map_err(|e| format!("PRIME export: {e}"))?;
+    let dmabuf = p.fd;
+
+    // SAFETY: the child only runs the code below and leaves with _exit.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(format!("fork: {}", io::Error::last_os_error()));
+    }
+    if pid == 0 {
+        let r = (|| -> Result<(), String> {
+            let mut g = Gpu::open(path).map_err(|e| format!("child context: {e}"))?;
+            let mut p = uapi::PrimeHandle {
+                fd: dmabuf,
+                ..Default::default()
+            };
+            ioctl(&g._file, uapi::PRIME_FD_TO_HANDLE, &mut p)
+                .map_err(|e| format!("PRIME import: {e}"))?;
+            let other =
+                Arena::import(&g._file, 5, p.handle).map_err(|e| format!("arena import: {e}"))?;
+            if other.gpu_base != shared.gpu_base || other.size != shared.size {
+                return Err(format!(
+                    "import is at 0x{:x} ({} B), export at 0x{:x} ({} B)",
+                    other.gpu_base, other.size, shared.gpu_base, shared.size
+                ));
+            }
+            let mark = u64::from_le_bytes(other.read(0, 8).try_into().unwrap());
+            if mark != MARK {
+                return Err(format!("child read 0x{mark:x}, parent wrote 0x{MARK:x}"));
+            }
+            library(&mut g);
+            poke(&mut g, &other)
+        })();
+        if let Err(e) = &r {
+            println!("share (child): {e}");
+        }
+        // SAFETY: leaves the forked child without running the parent's destructors.
+        unsafe { libc::_exit(if r.is_ok() { 0 } else { 1 }) };
+    }
+    let mut status = 0;
+    // SAFETY: waits for the child forked above.
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+    if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
+        return Err(format!("child failed (status 0x{status:x})"));
+    }
+    // The child's context and its import are gone; the parent's export still holds the memory.
+    let words = shared.read(4096, 256 * 4);
+    let bad = (0..256u32)
+        .filter(|&i| {
+            let w = &words[i as usize * 4..][..4];
+            u32::from_le_bytes(w.try_into().unwrap()) != 0xC0FFEE00 + i
+        })
+        .count();
+    println!(
+        "share: child imported arena at 0x{:x}; parent reads {} of 256 words it wrote",
+        shared.gpu_base,
+        256 - bad
+    );
+    // SAFETY: the fd PRIME gave us.
+    unsafe { libc::close(dmabuf) };
+    if bad != 0 {
+        return Err(format!("{bad} shared words wrong"));
+    }
+    Ok(())
+}
+
 /// Round trips of an empty commit (a Metal command buffer with no work, retired by its completion
 /// handler) after each of three idle gaps: none, a short one, and one long enough for the host to
 /// have parked, which needs the doorbell. The gaps match the venus probe's
@@ -549,6 +729,7 @@ fn main() {
     };
     let result = triangle(&mut g)
         .and_then(|()| poke(&mut g, &other))
+        .and_then(|()| share(&path, &g._file))
         .and_then(|()| round_trips(&mut g));
     match result {
         Ok(()) => println!("PASS"),

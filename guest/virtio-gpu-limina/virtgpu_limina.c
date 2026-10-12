@@ -19,6 +19,7 @@
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_print.h>
+#include <drm/virtgpu_drm.h>
 
 #include "virtgpu_drv.h"
 #include "virtgpu_limina_drm.h"
@@ -33,6 +34,7 @@
 #define VIRTIO_GPU_CMD_LIMINA_ARENA_CREATE	0x4c02
 #define VIRTIO_GPU_CMD_LIMINA_ARENA_DESTROY	0x4c03
 #define VIRTIO_GPU_CMD_LIMINA_RING_ATTACH	0x4c04
+#define VIRTIO_GPU_CMD_LIMINA_ARENA_IMPORT	0x4c05
 #define VIRTIO_GPU_RESP_OK_LIMINA_CTX		0x1180
 #define VIRTIO_GPU_RESP_OK_LIMINA_ARENA		0x1181
 
@@ -45,6 +47,10 @@
 #define LIMINA_MMAP_DOORBELL	LIMINA_MMAP_BASE
 #define LIMINA_MMAP_ARENAS	(LIMINA_MMAP_BASE + (1ULL << 34))
 #define LIMINA_ARENA_STRIDE	(1ULL << 34)
+/* The host's shm_offset for an arena that is not in the window: a shared one. */
+#define LIMINA_NOT_IN_WINDOW	(~0ULL)
+/* ARENA_CREATE flag on the wire, as in the UAPI. */
+#define LIMINA_ARENA_FLAG_BLOB	1
 
 struct virtio_gpu_limina_ctx_create {
 	struct virtio_gpu_ctrl_hdr hdr;
@@ -55,8 +61,14 @@ struct virtio_gpu_limina_ctx_create {
 struct virtio_gpu_limina_arena_create {
 	struct virtio_gpu_ctrl_hdr hdr;
 	__le32 arena_id;
-	__le32 padding;
+	__le32 flags;
 	__le64 size;
+};
+
+struct virtio_gpu_limina_arena_import {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 arena_id;
+	__le32 resource_id;
 };
 
 struct virtio_gpu_limina_arena_destroy {
@@ -93,6 +105,9 @@ struct limina_arena {
 	u64 gpu_base;
 	/* Live mappings; the arena cannot be destroyed while any exists. */
 	atomic_t mappings;
+	/* Not in the arena window: mapped and shared through a GEM object (ARENA_EXPORT). */
+	bool shared;
+	bool exported;
 };
 
 struct virtio_gpu_limina_file {
@@ -243,8 +258,13 @@ int virtio_gpu_limina_arena_create_ioctl(struct drm_device *dev, void *data,
 
 	if (!vgdev->has_limina)
 		return -ENODEV;
-	if (args->arena_id >= VIRTGPU_LIMINA_MAX_ARENAS || !args->size)
+	if (args->arena_id >= VIRTGPU_LIMINA_MAX_ARENAS || !args->size ||
+	    args->flags & ~VIRTGPU_LIMINA_ARENA_SHARED)
 		return -EINVAL;
+	/* A shared arena is a host-visible blob. */
+	if ((args->flags & VIRTGPU_LIMINA_ARENA_SHARED) &&
+	    !(vgdev->has_resource_blob && vgdev->has_host_visible))
+		return -EOPNOTSUPP;
 	lf = limina_file(vgdev, file);
 	if (!lf)
 		return -ENOMEM;
@@ -262,6 +282,8 @@ int virtio_gpu_limina_arena_create_ioctl(struct drm_device *dev, void *data,
 	cmd.hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_LIMINA_ARENA_CREATE);
 	cmd.hdr.ctx_id = cpu_to_le32(vfpriv->ctx_id);
 	cmd.arena_id = cpu_to_le32(args->arena_id);
+	if (args->flags & VIRTGPU_LIMINA_ARENA_SHARED)
+		cmd.flags = cpu_to_le32(LIMINA_ARENA_FLAG_BLOB);
 	cmd.size = cpu_to_le64(args->size);
 	ret = limina_call(vgdev, &cmd, sizeof(cmd), &resp, sizeof(resp),
 			  VIRTIO_GPU_RESP_OK_LIMINA_ARENA);
@@ -269,7 +291,9 @@ int virtio_gpu_limina_arena_create_ioctl(struct drm_device *dev, void *data,
 		goto err;
 	off = le64_to_cpu(resp.shm_offset);
 	size = le64_to_cpu(resp.size);
-	if (!PAGE_ALIGNED(off) || !PAGE_ALIGNED(size) || size > LIMINA_ARENA_STRIDE ||
+	a->shared = args->flags & VIRTGPU_LIMINA_ARENA_SHARED;
+	if (a->shared ? off != LIMINA_NOT_IN_WINDOW || !PAGE_ALIGNED(size) :
+	    !PAGE_ALIGNED(off) || !PAGE_ALIGNED(size) || size > LIMINA_ARENA_STRIDE ||
 	    off > vgdev->limina_arenas.len || size > vgdev->limina_arenas.len - off) {
 		DRM_ERROR("limina: host placed arena %u out of its window\n", args->arena_id);
 		ret = -EIO;
@@ -283,7 +307,7 @@ int virtio_gpu_limina_arena_create_ioctl(struct drm_device *dev, void *data,
 	list_add(&a->node, &lf->arenas);
 	args->size = size;
 	args->gpu_base = a->gpu_base;
-	args->mmap_offset = LIMINA_MMAP_ARENAS + (u64)a->id * LIMINA_ARENA_STRIDE;
+	args->mmap_offset = a->shared ? 0 : LIMINA_MMAP_ARENAS + (u64)a->id * LIMINA_ARENA_STRIDE;
 	mutex_unlock(&lf->lock);
 	return 0;
 err:
@@ -364,6 +388,128 @@ int virtio_gpu_limina_ring_attach_ioctl(struct drm_device *dev, void *data,
 			  VIRTIO_GPU_RESP_OK_NODATA);
 out:
 	mutex_unlock(&lf->lock);
+	return ret;
+}
+
+int virtio_gpu_limina_arena_export_ioctl(struct drm_device *dev, void *data,
+					 struct drm_file *file)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct virtio_gpu_fpriv *vfpriv = file->driver_priv;
+	struct drm_virtgpu_limina_arena_export *args = data;
+	struct virtio_gpu_object_params params = {};
+	struct virtio_gpu_limina_file *lf;
+	struct virtio_gpu_object *bo;
+	struct drm_gem_object *obj;
+	struct limina_arena *a;
+	u32 handle;
+	int ret;
+
+	if (!vgdev->has_limina)
+		return -ENODEV;
+	lf = limina_file(vgdev, file);
+	if (!lf)
+		return -ENOMEM;
+
+	mutex_lock(&lf->lock);
+	ret = -ENOENT;
+	a = limina_find(lf, args->arena_id);
+	if (!a)
+		goto out;
+	ret = -EINVAL;
+	if (!a->shared || a->exported)
+		goto out;
+	/*
+	 * The host blob resource of this context whose blob_id is the arena: the host maps the
+	 * arena's pages for it, and keeps the arena alive while it exists. This is what
+	 * RESOURCE_CREATE_BLOB does, without creating a virtio-gpu 3D context for the file.
+	 */
+	params.size = a->size;
+	params.blob = true;
+	params.ctx_id = vfpriv->ctx_id;
+	params.blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
+	params.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE | VIRTGPU_BLOB_FLAG_USE_SHAREABLE;
+	params.blob_id = a->id;
+	ret = virtio_gpu_vram_create(vgdev, &params, &bo);
+	if (ret < 0)
+		goto out;
+	bo->host3d_blob = true;
+	bo->blob_mem = params.blob_mem;
+	bo->blob_flags = params.blob_flags;
+	obj = &bo->base.base;
+	ret = drm_gem_handle_create(file, obj, &handle);
+	/* The handle owns the object now, or nothing does and this frees it. */
+	drm_gem_object_put(obj);
+	if (ret)
+		goto out;
+	a->exported = true;
+	args->handle = handle;
+out:
+	mutex_unlock(&lf->lock);
+	return ret;
+}
+
+int virtio_gpu_limina_arena_import_ioctl(struct drm_device *dev, void *data,
+					 struct drm_file *file)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct virtio_gpu_fpriv *vfpriv = file->driver_priv;
+	struct drm_virtgpu_limina_arena_import *args = data;
+	struct virtio_gpu_limina_arena_import cmd = {};
+	struct virtio_gpu_limina_resp_arena resp = {};
+	struct virtio_gpu_limina_file *lf;
+	struct drm_gem_object *obj;
+	struct limina_arena *a;
+	u32 res;
+	int ret;
+
+	if (!vgdev->has_limina)
+		return -ENODEV;
+	if (args->arena_id >= VIRTGPU_LIMINA_MAX_ARENAS)
+		return -EINVAL;
+	obj = drm_gem_object_lookup(file, args->handle);
+	if (!obj)
+		return -ENOENT;
+	res = gem_to_virtio_gpu_obj(obj)->hw_res_handle;
+	drm_gem_object_put(obj);
+	lf = limina_file(vgdev, file);
+	if (!lf)
+		return -ENOMEM;
+	a = kzalloc(sizeof(*a), GFP_KERNEL);
+	if (!a)
+		return -ENOMEM;
+
+	mutex_lock(&lf->lock);
+	ret = -ENOENT;
+	if (!lf->created)
+		goto err;
+	ret = -EEXIST;
+	if (limina_find(lf, args->arena_id))
+		goto err;
+	cmd.hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_LIMINA_ARENA_IMPORT);
+	cmd.hdr.ctx_id = cpu_to_le32(vfpriv->ctx_id);
+	cmd.arena_id = cpu_to_le32(args->arena_id);
+	cmd.resource_id = cpu_to_le32(res);
+	ret = limina_call(vgdev, &cmd, sizeof(cmd), &resp, sizeof(resp),
+			  VIRTIO_GPU_RESP_OK_LIMINA_ARENA);
+	if (ret)
+		goto err;
+	a->id = args->arena_id;
+	a->shm_offset = LIMINA_NOT_IN_WINDOW;
+	a->size = le64_to_cpu(resp.size);
+	a->gpu_base = le64_to_cpu(resp.gpu_base);
+	a->shared = true;
+	/* Imported memory is shared through the exporter's object, not a second one. */
+	a->exported = true;
+	atomic_set(&a->mappings, 0);
+	list_add(&a->node, &lf->arenas);
+	args->size = a->size;
+	args->gpu_base = a->gpu_base;
+	mutex_unlock(&lf->lock);
+	return 0;
+err:
+	mutex_unlock(&lf->lock);
+	kfree(a);
 	return ret;
 }
 
@@ -454,7 +600,7 @@ int virtio_gpu_limina_mmap(struct file *filp, struct vm_area_struct *vma)
 	/* Userspace sub-allocates arenas, so a mapping may start anywhere inside one. */
 	rel = (off - LIMINA_MMAP_ARENAS) % LIMINA_ARENA_STRIDE;
 	a = id < VIRTGPU_LIMINA_MAX_ARENAS ? limina_find(lf, id) : NULL;
-	if (!a || rel >= a->size || size > a->size - rel)
+	if (!a || a->shared || rel >= a->size || size > a->size - rel)
 		goto out;
 	phys = vgdev->limina_arenas.addr + a->shm_offset + rel;
 	vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_DONTCOPY);
