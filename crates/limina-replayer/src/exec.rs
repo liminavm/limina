@@ -239,7 +239,7 @@ fn stages(mask: u32) -> Result<MTLStages, Error> {
 fn valid_language_version(v: u32) -> bool {
     matches!(
         v,
-        0 | 0x1_0001 | 0x1_0002 | 0x2_0000..=0x2_0004 | 0x3_0000..=0x3_0002 | 0x4_0000
+        0 | 0x1_0001 | 0x1_0002 | 0x2_0000..=0x2_0004 | 0x3_0000..=0x3_0002 | 0x4_0000 | 0x4_0001
     )
 }
 
