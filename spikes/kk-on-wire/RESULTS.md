@@ -7,7 +7,7 @@ and the host's `limina-replayer` making the Metal 4 calls.
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
 `/Volumes/mesa-cs/mesa-metal-guest`, branch `metal-native-context` at `d71a3c39f85` (window
-surfaces: `08e0f2b62a7`; video planes, imports and timestamps: `0faceb1acdd`).
+surfaces: `08e0f2b62a7`; video planes and imports: `3ce3a0262fe`; counter heaps: `bf03b0d9245`).
 
 | check | result |
 |---|---|
@@ -24,10 +24,10 @@ surfaces: `08e0f2b62a7`; video planes, imports and timestamps: `0faceb1acdd`).
 | `kk-probe vadecode` | 60 frames of 854×480 VP9 decoded by ffmpeg's VA hwaccel (stock virgl), each mapped to DRM PRIME as a player maps it: three-plane I420 in three dma-bufs, imported plane by plane and copied out, identical to ffmpeg's own read of the frame: 15 runs, 900/900 frames; 3 runs first thing after a cold boot, 180/180; 1920×1080 (`$KK_CLIP`), 3 runs, 180/180 |
 | `mpv --vo=gpu-next --gpu-api=vulkan --hwdec=vaapi` on the seated desktop | 1080p VP9 clip decoded by VA and imported through libplacebo's dma-buf interop: plays 20 s looping, 3 frames dropped, the frame on screen correct (capture checked by eye) |
 | decode stays asynchronous with plane surfaces (`VIRGLRS_SUBMIT_STATS=2`, ffmpeg VA decode of 1080p with readback) | END_FRAME costs the render thread 0.10 ms per frame against a 2.03 ms mean decode session; the decode thread's write into the plane surfaces is 0.13 ms mean |
-| `kk-probe timestamps` | no timestamps advertised (the transport carries no counter heaps); a timestamp pool is refused, not an abort |
+| `kk-probe timestamps` | 64 valid bits; two timestamps around a submit resolve to GPU times in order (counter heaps on the wire, protocol 4) |
 | stock VA decode, planes promoted vs not | GStreamer `vavp9dec` to DMABuf then `vapostproc`, plain `vavp9dec`, and `vp9dec`, 60 frames of 854×480 VP9 each: per-frame checksums identical with every VA surface's planes promoted to surfaces (`limina-kk-surfaces`, virglrs `f70dcb5`) and on the stock host GL, where they keep GL storage |
 | `kk-probe import` | a linear XRGB8888 scanout buffer from stock gbm (virgl), written through `gbm_bo_map`, imported as a dedicated LINEAR-modifier image at gbm's pitch: 1024/1024 pixels right |
-| stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.2 core at `0faceb1acdd` (3.3 needs timer queries, and KK advertises no timestamps there; 3.3 core / compat and GLES 3.1 before it); warns that `EXT_custom_border_color` is missing |
+| stock F44 zink (Mesa 26.1.8) on it, `glxinfo -B` over Xwayland | `zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))`, GL 3.3 core / compat, GLES 3.1; warns that `EXT_custom_border_color` is missing. It poisons Xwayland's virgl context (`PipeResourceSetType: no such resource`) the first time it runs, reproduced on a fresh boot |
 | `glxgears` on that zink | renders correctly (capture checked by eye), ~240 fps; at `0faceb1acdd`, 59.6 fps vsync-bound over 5 s |
 | `kk-probe share` | a buffer exported as dma-buf, dispatched into through a self-import and through an import in a child process: the exporter's mapping shows 256/256 words right for both; the child reads the parent's mark |
 | `kk-probe syncfd` | a submit held by a wait on an unsignaled timeline exports its binary semaphore as a real sync_file: pending before the CPU opens the gate, signaled after, and the fill behind it landed |
@@ -115,7 +115,8 @@ buffer scene with guest and host both idle. Queue events now publish like commit
   a replayer-posted wake would remove the poll.
 - **Only windows cross to the compositor.** A non-window exported KK heap is still a blob the
   extension owns, invisible to virglrs. Windows in RGBA16F or 10-bit formats are withheld until
-  surfaces take them; X11 WSI's format list is not filtered.
+  surfaces take them; X11 WSI's format list is not filtered, and a zink-on-KK client over
+  Xwayland (`glxinfo -B`) poisons Xwayland's context.
 - **Which exports other drivers can read.** Any dedicated image whose layout is linear (LINEAR
   tiling or the LINEAR modifier, the portable ways to share with another driver) in a 32-bit
   BGRA/RGBA single-level 2D shape is a surface. An OPTIMAL-tiled export has no layout another
@@ -135,9 +136,9 @@ buffer scene with guest and host both idle. Queue events now publish like commit
 - **An imported surface is not CPU-visible.** Its memory type is device-local only (mapping it
   would show the dma-buf's guest backing, not the host's pixels); an imported KK heap stays
   mappable.
-- **No timestamps.** The transport carries no counter heaps, so KK advertises
-  `timestampValidBits` 0: GPU timing in apps (libplacebo's) is off, and zink drops from GL 3.3
-  to 3.2, since 3.3 requires timer queries.
+- **A timestamp resolve is ordered by one device-wide fence.** No barrier reaches a resolve, so
+  an encoder that wrote a timestamp updates the fence as it ends, the resolve waits on it and
+  updates it, and the encoder after it waits on it. Metal's own bridge resolves with no fence.
 - **One wrong frame, not reproduced.** An early `vadecode` run on a fresh worker read one frame
   (of 10) wrong in 839 of 960 rows. The picture then reached the surfaces by a GL upload on the
   render thread, ordered against KK's Metal queue only by the guest's fence; that path is gone,
@@ -148,7 +149,8 @@ buffer scene with guest and host both idle. Queue events now publish like commit
   plain `vavp9dec` differs from `vp9dec` in 30 of 60 frames of the test clip, and a DMABuf
   decode through `vapostproc` in all 60.
 - **A bad client import ends the compositor's context.** vrend poisons a context on a SET_TYPE of
-  a resource it does not know; the format filter keeps KK from causing one.
+  a resource it does not know; the format filter keeps KK from causing one on Wayland, but not
+  through Xwayland.
 - No DRM format modifiers: a dma-buf image means KosmicKrisp's own layout, so only another
   KosmicKrisp context can make sense of it.
 
