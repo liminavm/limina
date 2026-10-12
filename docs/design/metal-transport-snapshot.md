@@ -12,8 +12,8 @@ rebuilt from the guest's own commands. The difference is that the guest holds ra
 | the module's contexts, arenas, rings, fences; every KK process | guest RAM | the RAM snapshot |
 | arena contents, the rings included | replayer memory mapped into the arena window (shm 0x80) | the worker, which maps it: saved beside the RAM |
 | doorbell pages (shm 0x81) | worker | nothing: stateless, re-mapped at the same offsets |
-| the extension's bookkeeping: guest context ↔ replayer context, arena ↔ window offset, exported arenas as blob resources and their maps, imports, surface bindings, doorbell pages | libkrun's GPU extension (`ext.rs`) | libkrun's GPU section, restored before anything maps the windows |
-| window surfaces (`SURFACE_CREATE`) | IOSurfaces virglrs mints for the worker | libkrun's GPU journal, re-created with their pixels **before vrend's replay**: other contexts' replay names them |
+| the extension's bookkeeping: contexts and their doorbell slots, arenas (window offset, GPU address), rings, exported arenas as blob resources and their maps, imports, surface bindings | libkrun's GPU extension (`ext.rs`) | the extension's section of the GPU payload (`ExtSnapshot`), restored before anything maps the windows |
+| window surfaces (`SURFACE_CREATE`) | IOSurfaces virglrs mints for the worker | the extension's section, with their rows, re-created **before vrend's replay**: other contexts' replay names them |
 | host objects (textures, views, samplers, libraries, pipelines, depth-stencil, argument tables, events, shared events, counter heaps) | the replayer | the replayer's journal, replayed into a fresh replayer |
 
 ## Host values the guest holds
@@ -38,7 +38,10 @@ Metal takes neither as a request. A restore reproduces them, measured in
   recorded ID: placeholders hold the slots below it, and a slot that a placeholder already holds
   is freed and taken, retrying while Metal's release is pending.
 - **Every value is verified.** A mismatch is a bug in the above, and loses that context (its
-  ring reports lost); it never touches the device or another context.
+  ring reports `LMN_ERROR_RESTORE`); it never touches the device or another context.
+- **An arena only its export still holds** (the context that made it destroyed it, or is gone)
+  is restored in a replayer context 0, which the guest can never name, exported again, and the
+  holder dropped at the end: the export keeps the arena.
 
 Compute pipelines also answer a value (max threads per threadgroup); it is a property of the
 pipeline, the same on replay, and is verified like the rest.
@@ -63,34 +66,44 @@ queue, as `Executor::run` already does at teardown.
 The ring is resumed, not re-attached: its control block lives in arena memory and is restored
 with it, and the consumer picks up at the saved position.
 
-**A command buffer recorded but not committed** is kept as bytes. The replayer copies the commands
-of an open command buffer as it consumes them and drops the copy at `COMMIT`; the export carries
-the copy, and the restore runs it again before the ring. The ring alone cannot be rewound: the
-guest may have reused the bytes it already consumed.
+**A command buffer recorded but not committed** is kept as bytes. From the first `BEGIN_COMMAND_BUFFER`
+until `COMMIT`, the replayer copies every command it consumes, with what each create answered, and
+keeps the object table as it was when the copy began (objects created since left out, objects
+destroyed since kept, argument tables' earlier addresses). The export describes the context as
+the copy began and carries the copy; the restore runs it again before the ring, bringing each
+create to the answer the guest already holds. The ring alone cannot be rewound: the guest may have
+reused the bytes it already consumed.
 
 Counter heap entries are not kept. A timestamp written before the suspend and resolved after it
 reads zero.
 
 ## Order
 
-Suspend: the guest quiesces (PSCI SYSTEM_SUSPEND); each context's committed work is given a
-bounded time to complete; each context's journal is exported; the worker saves arena contents and
-the journals with the GPU section. A commit still in flight when the time runs out (one waiting on
-a shared event the frozen guest would set) cannot be taken back, since it may have partly run:
-that context is restored lost, and the log names it.
+Suspend (the worker, with the vCPUs quiesced): each context is exported, which gives its committed
+work up to 2 s; then arena contents and surface rows are read; then the fence drain; then the rest
+of the GPU section. A commit still in flight when the time runs out (one waiting on a shared event
+the frozen guest would set) cannot be taken back, since it may have partly run: the context is
+lost there and then, so its ring reports it and the fences waiting on it are answered before the
+drain, and it is restored lost.
 
-Restore, before the guest's DRIVER_OK is released: a fresh replayer; contexts; arenas, at their
-addresses, with their contents copied in and mapped at their window offsets; rings resumed;
-window surfaces re-created and filed to their contexts; then vrend's and venus's replay; then
-each context's journal (objects, then state, then the open command buffer).
+Restore, before the guest's DRIVER_OK is released: a fresh replayer; contexts with their doorbell
+slots; every arena of every context in one address order, with its contents, window arenas mapped
+at their offsets; exports (their blobs mapped where they were) and imports; surfaces contexts made,
+re-created with their rows and given back; then vrend's and venus's replay; then surfaces contexts
+imported; then each ring, from its export (objects, then state, then the open command buffer);
+then the placeholders go. A replay that dropped any command fails the restore: a lossy restore
+must fail when it happens, not at the next frame that touches what was lost.
 
 ## Tests
 
-- `crates/limina-replayer/tests/first_light.rs`: build state in one replayer (arenas with holes,
-  two contexts, textures, views, samplers, a pipeline whose library the guest destroyed, an
-  argument table, events), export it, import it into a fresh replayer, check every recorded
-  address and ID, and draw through a restored argument table into a texture that reads back
-  right.
+- `crates/limina-replayer/tests/first_light.rs`: exports list what a context holds and carry
+  open command buffers; arenas come back at their addresses; a context with holes below its IDs,
+  a pipeline whose library is gone and a view whose parent is gone restores into a fresh replayer
+  and exports the same, and works; one restored inside an open command buffer commits it; an
+  export that cannot drain loses the context.
+- libkrun `ext.rs`: two contexts, window arenas around a hole, a ring, an export imported
+  elsewhere, an orphaned export and a surface held twice, snapshotted and restored into a fresh
+  device, snapshot the same again; the section's encoding round-trips and refuses truncation.
 - The L2 suspend test with a KosmicKrisp client on screen: after the resume, no vrend context is
   refused, the guest faults on no window, the frame keeps changing, and the client is still
   drawing.

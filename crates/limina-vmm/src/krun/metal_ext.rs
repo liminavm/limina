@@ -15,6 +15,7 @@ use std::time::Duration;
 use devices::virtio::gpu::ext::{ExtArena, GpuExtension, Signal};
 use limina_gpu_wire::ring::RingControl;
 use limina_replayer::client::{Doorbell, MappedArena, Replayer};
+use limina_replayer::journal::ContextExport;
 
 /// Off by default until a guest driver exists: a stock guest would only pay for an idle process.
 const ENABLE_ENV: &str = "LIMINA_GPU_METAL";
@@ -35,7 +36,13 @@ struct ReplayerExtension {
     /// arena) whatever happens to the context that made it.
     exports: Mutex<HashMap<u32, Arc<MappedArena>>>,
     fences: Arc<Fences>,
+    /// A restore made the replayer context that holds arenas only their exports still hold.
+    holding_orphans: Mutex<bool>,
 }
+
+/// The replayer context a restore puts orphaned exported arenas in, for as long as the restore
+/// runs: the guest's contexts are never 0.
+const ORPHANS: u32 = 0;
 
 /// A context's ring control block: in the mapping of the arena it was attached in.
 struct Ring {
@@ -285,6 +292,110 @@ impl GpuExtension for ReplayerExtension {
         }
     }
 
+    fn export_context(&self, ctx: u32) -> Result<Vec<u8>, String> {
+        self.replayer.export_context(ctx).map_err(|e| e.to_string())
+    }
+
+    fn restore_arena(
+        &self,
+        ctx: u32,
+        arena: u32,
+        size: u64,
+        gpu_base: u64,
+    ) -> Result<ExtArena, String> {
+        if ctx == ORPHANS {
+            let mut holding = self
+                .holding_orphans
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if !*holding {
+                self.replayer
+                    .create_context(ORPHANS)
+                    .map_err(|e| e.to_string())?;
+                *holding = true;
+            }
+        }
+        let a = self
+            .replayer
+            .restore_arena(ctx, arena, size, gpu_base)
+            .map_err(|e| e.to_string())?;
+        let i = info(&a);
+        self.arenas
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((ctx, arena), Arc::new(a));
+        Ok(i)
+    }
+
+    fn restore_ring(
+        &self,
+        ctx: u32,
+        arena: u32,
+        offset: u64,
+        data_size: u32,
+        export: &[u8],
+    ) -> Result<(), String> {
+        let a = self
+            .arenas
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(ctx, arena))
+            .cloned()
+            .ok_or("no such arena")?;
+        let end = offset.checked_add(size_of::<RingControl>() as u64);
+        if !offset.is_multiple_of(align_of::<RingControl>() as u64)
+            || end.is_none_or(|e| e > a.mapping.size())
+        {
+            return Err("ring control block outside its arena".into());
+        }
+        let ring = Ring {
+            arena: a,
+            offset: offset as usize,
+        };
+        // A context the snapshot could not export restarts lost, where its consumer stopped.
+        let lost;
+        let export = if export.is_empty() {
+            lost = ContextExport {
+                position: ring.control().head.load(Ordering::Acquire),
+                lost: true,
+                ..Default::default()
+            }
+            .encode();
+            &lost
+        } else {
+            export
+        };
+        self.replayer
+            .restore_context(ctx, arena, offset, data_size, export)
+            .map_err(|e| e.to_string())?;
+        self.fences
+            .rings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(ctx, ring);
+        Ok(())
+    }
+
+    fn restore_done(&self) {
+        if let Err(e) = self.replayer.restore_done() {
+            log::warn!("metal ext: restore done: {e}");
+        }
+        let mut holding = self
+            .holding_orphans
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if std::mem::take(&mut *holding) {
+            // Their exports keep the arenas, here and in the replayer.
+            self.arenas
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|&(c, _), _| c != ORPHANS);
+            if let Err(e) = self.replayer.destroy_context(ORPHANS) {
+                log::warn!("metal ext: orphan holder: {e}");
+            }
+        }
+    }
+
     fn doorbell(&self, doorbell: u32) {
         if let Some(Some(b)) = self
             .doorbells
@@ -331,6 +442,7 @@ pub fn start() -> Option<Arc<dyn GpuExtension>> {
                 slots: Mutex::new(HashMap::new()),
                 arenas: Mutex::new(HashMap::new()),
                 exports: Mutex::new(HashMap::new()),
+                holding_orphans: Mutex::new(false),
             }))
         }
         Err(e) => {
