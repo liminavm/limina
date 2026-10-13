@@ -67,7 +67,7 @@ if [ ! -x /opt/gfxreconstruct/bin/gfxrecon-replay ]; then
   cmake -B "$HOME/gfxreconstruct/build" -G Ninja -S "$HOME/gfxreconstruct" \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/gfxreconstruct \
     -DCMAKE_INSTALL_LIBDIR=lib64 -DGFXRECON_AGENT_BUILD=OFF -DBUILD_WERROR=OFF \
-    -DLZ4_OPTIONAL=ON -DZSTD_OPTIONAL=ON
+    -DLZ4_OPTIONAL=ON -DZSTD_OPTIONAL=ON -DGFXRECON_ENABLE_OPENXR=OFF
   cmake --build "$HOME/gfxreconstruct/build" -j2   # -j2: -j4 OOMs a 4 GiB guest (perf-ledger.sh)
   sudo cmake --install "$HOME/gfxreconstruct/build"
   # the layer manifest ships a relative library_path; point it at the installed absolute .so
