@@ -104,9 +104,12 @@ fn fence_present_chain_presents_and_never_wedges() {
     // stop-gdm → stop-user@ → start-gdm sequence was likewise verified live: the new
     // session's environ shows zink and gnome-shell maps libvulkan_virtio. Detached
     // (systemd-run) because stopping gdm tears down our own ssh session's scope.
+    // The Vulkan list names venus alone: on the Metal transport the vendor drivers would
+    // otherwise take the compositor, and they serve no client whose list leaves them out.
     guest
         .ssh_exec(
-            "printf 'GALLIUM_DRIVER=zink\\nMESA_LOADER_DRIVER_OVERRIDE=zink\\n' | \
+            "printf 'GALLIUM_DRIVER=zink\\nMESA_LOADER_DRIVER_OVERRIDE=zink\\n\
+             VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json\\n' | \
              sudo tee /etc/environment.d/99-fence-present-zink.conf >/dev/null && \
              sudo systemd-run --no-block sh -c \
              'systemctl stop gdm; systemctl stop user@1000; systemctl start gdm'",
