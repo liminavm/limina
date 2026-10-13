@@ -978,14 +978,6 @@ impl GuestConfig {
     /// plus the usual `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
     /// GOP firmware or the enhanced disk is missing; it does not need any test kernel.
     pub fn seated_efi_fedora_from_env() -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
         let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {
             Ok(p) => PathBuf::from(p),
             Err(_) => fedora_image("enhanced.test"),
@@ -995,6 +987,19 @@ impl GuestConfig {
             "seated enhanced disk not found at {disk:?} (set LIMINA_TEST_DISK_ENH); this is the \
              machine-local enhanced test golden, see docs/images.md"
         );
+        GuestConfig::seated_efi_fedora_from_env_with_disk(disk)
+    }
+
+    /// The seated EFI boot of [`GuestConfig::seated_efi_fedora_from_env`] on a given disk.
+    fn seated_efi_fedora_from_env_with_disk(disk: PathBuf) -> Result<GuestConfig> {
+        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
+        anyhow::ensure!(
+            firmware.exists(),
+            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
+             (or set LIMINA_GOP_FIRMWARE)"
+        );
         let mut cfg = GuestConfig::fedora_from_env()?;
         cfg.boot = Boot::Firmware {
             firmware,
@@ -1002,6 +1007,25 @@ impl GuestConfig {
             read_only: true, // with_net cow-clones to a writable disk; the source stays pristine
         };
         Ok(cfg)
+    }
+
+    /// Like [`GuestConfig::seated_efi_fedora_from_env`], but booting the **metal** test image: the
+    /// stock-kernel seated desktop with the guest half of the native-context GPU transport (the
+    /// extended virtio-gpu module and KosmicKrisp on the limina bridge) delivered into it by
+    /// `scripts/provision/deliver-metal-transport.sh`. `LIMINA_TEST_DISK_METAL` overrides.
+    pub fn metal_efi_fedora_from_env() -> Result<GuestConfig> {
+        let disk = match std::env::var("LIMINA_TEST_DISK_METAL") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => fedora_image("metal.test"),
+        };
+        anyhow::ensure!(
+            disk.exists(),
+            "metal test disk not found at {disk:?} (set LIMINA_TEST_DISK_METAL): clone the \
+             stock.test golden and run scripts/provision/deliver-metal-transport.sh on it, see \
+             docs/images.md"
+        );
+        Ok(GuestConfig::seated_efi_fedora_from_env_with_disk(disk)?
+            .with_env("LIMINA_GPU_METAL", "1"))
     }
 
     /// Like [`GuestConfig::seated_efi_fedora_from_env`], but booting the **synoik** enhanced image
