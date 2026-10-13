@@ -34,10 +34,21 @@ for p in dnf apt-get pacman zypper; do
   if command -v "$p" >/dev/null; then pm="$p"; break; fi
 done
 
-# need_packages: the prerequisites, by this distro's names. The kernel headers must be the running
-# kernel's; DKMS builds for later kernels as they are installed.
+# need_packages [user]: the prerequisites, by this distro's names: with "user", only what the
+# vendor drivers need; otherwise also what DKMS needs, whose kernel headers must be the running
+# kernel's (DKMS builds for later kernels as they are installed).
 need_packages() {
   local kver; kver="$(uname -r)"
+  if [ "${1:-}" = user ]; then
+    case "$pm" in
+      dnf) dnf install -y vulkan-loader libglvnd-egl ;;
+      apt-get) DEBIAN_FRONTEND=noninteractive apt-get install -y libvulkan1 libegl1 ;;
+      pacman) pacman -S --needed --noconfirm vulkan-icd-loader libglvnd ;;
+      zypper) zypper --non-interactive install libvulkan1 libglvnd ;;
+      *) die "no package manager this installer knows (dnf, apt-get, pacman, zypper)" ;;
+    esac
+    return
+  fi
   case "$pm" in
     # Fedora's dkms requires kernel-devel-matched, which left to itself is the newest one and
     # brings the newest kernel with it, half installed and booted by default: name the running
@@ -120,8 +131,13 @@ fi
 mkdir -p "$STATE"
 : > "$STATE/manifest.new"
 
+# A kernel with virtio-gpu built in cannot take the extended module: it either carries the
+# extension itself or cannot offer the transport, and DKMS has nothing to do for it either way.
+builtin=""
+[ "$(modinfo -n virtio_gpu 2>/dev/null)" = "(builtin)" ] && builtin=1
+
 say "prerequisites ($pm)"
-need_packages
+if [ -n "$builtin" ]; then need_packages user; else need_packages; fi
 
 # The vendor drivers: one tree per protocol version this payload carries.
 for tree in "$HERE"/drivers/opt/limina/*/; do
@@ -159,21 +175,26 @@ for f in /etc/environment.d/*.conf /etc/environment; do
   say "added the limina ICDs to the Vulkan driver list in $f"
 done
 
-# The module, through the distro's DKMS: it rebuilds for every kernel installed later.
-dkms_version="$(cat "$HERE/dkms/VERSION")"
-src="/usr/src/$DKMS_NAME-$dkms_version"
-rm -rf "$src"
-cp -a "$HERE/dkms/tree" "$src"
-record "dkms $DKMS_NAME/$dkms_version"
-dkms add "$DKMS_NAME/$dkms_version"
-kver="$(uname -r)"
-if dkms install "$DKMS_NAME/$dkms_version" -k "$kver"; then
-  # Early boot binds virtio-gpu from the initramfs, which still holds the in-tree driver.
-  rebuild_initramfs "$kver"
-  say "module installed for $kver"
+if [ -n "$builtin" ]; then
+  say "virtio-gpu is built into $(uname -r), so no module is installed: the transport is there"
+  say "only if that kernel carries the extension itself"
 else
-  say "the module did not build for $kver: the in-tree driver stays and the transport stays off"
+  # The module, through the distro's DKMS: it rebuilds for every kernel installed later.
+  dkms_version="$(cat "$HERE/dkms/VERSION")"
+  src="/usr/src/$DKMS_NAME-$dkms_version"
+  rm -rf "$src"
+  cp -a "$HERE/dkms/tree" "$src"
+  record "dkms $DKMS_NAME/$dkms_version"
+  dkms add "$DKMS_NAME/$dkms_version"
+  kver="$(uname -r)"
+  if dkms install "$DKMS_NAME/$dkms_version" -k "$kver"; then
+    # Early boot binds virtio-gpu from the initramfs, which still holds the in-tree driver.
+    rebuild_initramfs "$kver"
+    say "module installed for $kver"
+  else
+    say "the module did not build for $kver: the in-tree driver stays and the transport stays off"
+  fi
 fi
 
 mv "$STATE/manifest.new" "$STATE/manifest"
-say "installed; reboot to load the extended module"
+say "installed; reboot to load the new drivers"
