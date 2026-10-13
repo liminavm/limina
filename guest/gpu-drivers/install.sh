@@ -39,7 +39,12 @@ done
 need_packages() {
   local kver; kver="$(uname -r)"
   case "$pm" in
-    dnf) dnf install -y dkms "kernel-devel-$kver" gcc make vulkan-loader libglvnd-egl ;;
+    # Fedora's dkms requires kernel-devel-matched, which left to itself is the newest one and
+    # brings the newest kernel with it, half installed and booted by default: name the running
+    # kernel's.
+    dnf)
+      dnf install -y dkms "kernel-devel-$kver" "kernel-devel-matched-$kver" gcc make \
+        vulkan-loader libglvnd-egl ;;
     apt-get)
       DEBIAN_FRONTEND=noninteractive apt-get install -y dkms "linux-headers-$kver" gcc make \
         libvulkan1 libegl1 ;;
