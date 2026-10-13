@@ -30,7 +30,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "733e541908c5c359a0cd44b63af2fbe38b43bd07"
+rev = "7154bb3cf45b1bd17cfd43cc44d3fe478bd04f5e"
 base = "51367cfaf379a5869ca2aa78eab1cfe68a769a52"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
@@ -101,7 +101,7 @@ tree = "/Volumes/mesa-cs/mesa-guest"
 [virglrs]
 repo = "https://github.com/liminavm/virglrs.git"
 branch = "main"
-rev = "d389a0061ba593b5a3106bc43b5c5577de651c84"
+rev = "ab914558d282c436de3f3941ba9c75719b635b25"
 
 # janus: the TPM 2.0 engine behind libkrun's TIS device (docs/design/vtpm.md), ours outright and
 # consumed by libkrun's krun-devices as an optional path dependency (`tpm` feature).

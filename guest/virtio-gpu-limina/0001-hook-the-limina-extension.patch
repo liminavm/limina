@@ -198,6 +198,29 @@ index f359469..24e7edc 100644
  	ida_free(&vgdev->ctx_id_ida, vfpriv->ctx_id - 1);
  	mutex_destroy(&vfpriv->context_lock);
  	kfree(vfpriv);
+diff --git a/drivers/gpu/drm/virtio/virtgpu_plane.c b/drivers/gpu/drm/virtio/virtgpu_plane.c
+--- a/drivers/gpu/drm/virtio/virtgpu_plane.c
++++ b/drivers/gpu/drm/virtio/virtgpu_plane.c
+@@ -363,11 +363,17 @@
+ 
+ 	drm_gem_plane_helper_prepare_fb(plane, new_state);
+ 
+-	if (!bo || (plane->type == DRM_PLANE_TYPE_PRIMARY && !bo->guest_blob))
++	/*
++	 * A limina host holds a fenced primary-plane flush until the frame has left glass, so the
++	 * compositor cannot draw into a buffer still on screen; fence every one it is sent.
++	 */
++	if (!bo || (plane->type == DRM_PLANE_TYPE_PRIMARY && !bo->guest_blob &&
++		    !vgdev->has_limina))
+ 		return 0;
+ 
+ 	obj = new_state->fb->obj[0];
+-	if (bo->dumb || drm_gem_is_imported(obj)) {
++	if (bo->dumb || drm_gem_is_imported(obj) ||
++	    (plane->type == DRM_PLANE_TYPE_PRIMARY && vgdev->has_limina)) {
+ 		vgplane_st->fence = virtio_gpu_fence_alloc(vgdev,
+ 						     vgdev->fence_drv.context,
+ 						     0);
 diff --git a/drivers/gpu/drm/virtio/virtgpu_vq.c b/drivers/gpu/drm/virtio/virtgpu_vq.c
 index 0c194b4..043ad21 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_vq.c
