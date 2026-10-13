@@ -1205,45 +1205,45 @@ impl CenterController {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 392.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 422.0));
         let name_field = labeled_field(
             mtm,
             &accessory,
-            362.0,
+            392.0,
             "Name:",
             cfg.identity.name.as_deref().unwrap_or_default(),
         );
         name_field.setPlaceholderString(Some(&NSString::from_str(&row.bundle.dir_name())));
         self.row_help(
             &accessory,
-            362.0,
+            392.0,
             &name_field,
             "Shown in the control center and the VM window. Leave empty to use the VM's name.",
         );
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            332.0,
+            362.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
         self.row_help(
             &accessory,
-            332.0,
+            362.0,
             &cpus_field,
             "How many virtual CPUs the guest sees.",
         );
         let cpu_reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            302.0,
+            332.0,
             "CPU reclaim:",
             &CPU_RECLAIM_CHOICES,
             cpu_reclaim_index(cfg.hardware.cpu_reclaim),
         );
         self.row_help(
             &accessory,
-            302.0,
+            332.0,
             &cpu_reclaim_popup,
             "Whether idle virtual CPUs are handed back to the Mac while the guest has \
              nothing to run, and taken up again as soon as it has work. Off keeps every \
@@ -1252,10 +1252,10 @@ impl CenterController {
              the smaller number and stay there for its whole run. Light gives back at most \
              half of them; Moderate goes down to two; Aggressive to one.",
         );
-        let mem_field = labeled_field(mtm, &accessory, 272.0, "Memory:", &mem_now);
+        let mem_field = labeled_field(mtm, &accessory, 302.0, "Memory:", &mem_now);
         self.row_help(
             &accessory,
-            272.0,
+            302.0,
             &mem_field,
             "The maximum guest RAM — \"4G\", \"8GiB\", or a bare MiB count. Idle guest \
              memory is returned to the Mac according to Reclaim.",
@@ -1263,14 +1263,14 @@ impl CenterController {
         let reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            242.0,
+            272.0,
             "Reclaim:",
             &RECLAIM_CHOICES,
             reclaim_index(cfg.hardware.reclaim),
         );
         self.row_help(
             &accessory,
-            242.0,
+            272.0,
             &reclaim_popup,
             "How hard idle guest memory is returned to the Mac. Moderate keeps some \
              guest disk cache unless the Mac is under memory pressure; Light engages \
@@ -1279,14 +1279,14 @@ impl CenterController {
         let granule_popup = labeled_popup(
             mtm,
             &accessory,
-            212.0,
+            242.0,
             "Memory pages:",
             &GRANULE_CHOICES,
             granule_index(cfg.hardware.ipa_granule),
         );
         self.row_help(
             &accessory,
-            212.0,
+            242.0,
             &granule_popup,
             "How finely the Mac maps this VM's memory. 4 KB suits any guest, including a \
              stock Linux distro whose own pages are 4 KB — such a guest gets no hardware \
@@ -1311,7 +1311,7 @@ impl CenterController {
         // Hypervisor.framework cannot give a guest EL2, where the setting does nothing.
         let nested_supported = crate::nested_virt::host_supports();
         let nested_label = NSTextField::labelWithString(&NSString::from_str("Nested VMs:"), mtm);
-        nested_label.setFrame(rect(0.0, 182.0 + 3.0, 84.0, 18.0));
+        nested_label.setFrame(rect(0.0, 212.0 + 3.0, 84.0, 18.0));
         accessory.addSubview(&nested_label);
         // SAFETY: standard checkbox constructor; no target/action (its state is read on Save).
         let nested_checkbox = unsafe {
@@ -1322,7 +1322,7 @@ impl CenterController {
                 mtm,
             )
         };
-        nested_checkbox.setFrame(rect(88.0, 182.0, 200.0, 24.0));
+        nested_checkbox.setFrame(rect(88.0, 212.0, 200.0, 24.0));
         nested_checkbox.setState(if cfg.hardware.nested_virt && nested_supported {
             NSControlStateValueOn
         } else {
@@ -1337,7 +1337,7 @@ impl CenterController {
         accessory.addSubview(&nested_checkbox);
         self.row_help(
             &accessory,
-            182.0,
+            212.0,
             &nested_checkbox,
             "Lets the guest run virtual machines of its own: KVM, and everything built on it — \
              QEMU, libvirt, Kata containers, Android emulators, Firecracker. Needs a Mac with an \
@@ -1351,7 +1351,7 @@ impl CenterController {
         // Security: the vTPM toggle plus a reset. Built inline rather than with labeled_popup so
         // the one row can carry both the Enabled checkbox and the Reset button.
         let tpm_label = NSTextField::labelWithString(&NSString::from_str("TPM 2.0:"), mtm);
-        tpm_label.setFrame(rect(0.0, 152.0 + 3.0, 84.0, 18.0));
+        tpm_label.setFrame(rect(0.0, 182.0 + 3.0, 84.0, 18.0));
         accessory.addSubview(&tpm_label);
         // SAFETY: standard checkbox constructor; no target/action (its state is read on Save).
         let tpm_checkbox = unsafe {
@@ -1362,7 +1362,7 @@ impl CenterController {
                 mtm,
             )
         };
-        tpm_checkbox.setFrame(rect(88.0, 152.0, 92.0, 24.0));
+        tpm_checkbox.setFrame(rect(88.0, 182.0, 92.0, 24.0));
         tpm_checkbox.setState(if cfg.hardware.tpm {
             NSControlStateValueOn
         } else {
@@ -1378,7 +1378,7 @@ impl CenterController {
                 mtm,
             )
         };
-        tpm_reset.setFrame(rect(184.0, 152.0 - 2.0, 108.0, 26.0));
+        tpm_reset.setFrame(rect(184.0, 182.0 - 2.0, 108.0, 26.0));
         // Reset only means something when there is saved state, and never while suspended (the
         // TPM then lives in the snapshot, and the worker refuses to resume a VM without its TPM).
         let tpm_has_state = row.bundle.tpm_state().exists();
@@ -1397,7 +1397,7 @@ impl CenterController {
         accessory.addSubview(&tpm_reset);
         self.row_help(
             &accessory,
-            152.0,
+            182.0,
             &tpm_checkbox,
             "A virtual TPM 2.0 the guest can seal secrets to — disk-encryption keys bound to \
              boot measurements, keys, certificates. Stock Linux binds it with its built-in \
@@ -1407,10 +1407,10 @@ impl CenterController {
              and cannot be undone.",
         );
 
-        let ssh_field = labeled_field(mtm, &accessory, 122.0, "SSH port:", &ssh_now.to_string());
+        let ssh_field = labeled_field(mtm, &accessory, 152.0, "SSH port:", &ssh_now.to_string());
         self.row_help(
             &accessory,
-            122.0,
+            152.0,
             &ssh_field,
             "The host port forwarded to the guest's SSH. 0 picks a free port \
              automatically at each start.",
@@ -1419,7 +1419,7 @@ impl CenterController {
         let display_popup = labeled_popup(
             mtm,
             &accessory,
-            92.0,
+            122.0,
             "Display:",
             &DISPLAY_CHOICES,
             display_index(cfg.display.resolution),
@@ -1431,7 +1431,7 @@ impl CenterController {
         }
         self.row_help(
             &accessory,
-            92.0,
+            122.0,
             &display_popup,
             "Match Host drives the guest to the resolution of the screen the window is \
              on, letterboxing the window as needed (fullscreen fits exactly). Dynamic \
@@ -1464,14 +1464,14 @@ impl CenterController {
             }
         };
         let resolution_popup =
-            labeled_popup(mtm, &accessory, 62.0, "Resolution:", &title_refs, selected);
+            labeled_popup(mtm, &accessory, 92.0, "Resolution:", &title_refs, selected);
         resolution_popup.setEnabled(matches!(
             cfg.display.resolution,
             vmlib::schema::DisplayResolution::Fixed(..)
         ));
         self.row_help(
             &accessory,
-            62.0,
+            92.0,
             &resolution_popup,
             "The fixed guest resolution — the sizes this Mac offers for its display. \
              Only used with Fixed Size.",
@@ -1480,14 +1480,14 @@ impl CenterController {
         let notch_popup = labeled_popup(
             mtm,
             &accessory,
-            32.0,
+            62.0,
             "Notch:",
             &NOTCH_CHOICES,
             notch_index(cfg.display.notch),
         );
         self.row_help(
             &accessory,
-            32.0,
+            62.0,
             &notch_popup,
             "What a full-screen guest does with the camera housing on a MacBook's \
              built-in display. Avoid keeps the guest below it and leaves that strip \
@@ -1503,14 +1503,14 @@ impl CenterController {
         let resistance_popup = labeled_popup(
             mtm,
             &accessory,
-            2.0,
+            32.0,
             "Edge hold:",
             &resistance_refs,
             hold_index(cfg.display.edge_resistance),
         );
         self.row_help(
             &accessory,
-            2.0,
+            32.0,
             &resistance_popup,
             "In full screen the pointer is held inside the guest, so a stray flick \
              can't reveal the Mac's menu bar or land on the next display. Press it \
@@ -1520,6 +1520,45 @@ impl CenterController {
              window. Needs \
              Accessibility permission, like pointer capture; without it the pointer \
              stays free whatever this says.",
+        );
+
+        // The Metal transport: a checkbox, greyed out (and left alone on Save) on a VM whose GPU
+        // is software 2D only, which has no 3D device to extend.
+        let metal_possible = cfg.display.gpu != vmlib::schema::GpuMode::Software2d;
+        let metal_label = NSTextField::labelWithString(&NSString::from_str("GPU:"), mtm);
+        metal_label.setFrame(rect(0.0, 2.0 + 3.0, 84.0, 18.0));
+        accessory.addSubview(&metal_label);
+        // SAFETY: standard checkbox constructor; no target/action (its state is read on Save).
+        let metal_checkbox = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Metal transport"),
+                None,
+                None,
+                mtm,
+            )
+        };
+        metal_checkbox.setFrame(rect(88.0, 2.0, 200.0, 24.0));
+        metal_checkbox.setState(if cfg.display.metal_transport && metal_possible {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        if !metal_possible {
+            metal_checkbox.setEnabled(false);
+            metal_checkbox.setToolTip(Some(&NSString::from_str(
+                "This VM's GPU is software 2D only, which has no 3D device to extend.",
+            )));
+        }
+        accessory.addSubview(&metal_checkbox);
+        self.row_help(
+            &accessory,
+            2.0,
+            &metal_checkbox,
+            "Experimental. Offers the guest limina's own GPU transport, which hands its \
+             rendering to Metal with less translation than venus or virgl. Only a guest \
+             with limina's GPU drivers installed uses it; any other keeps rendering as \
+             before, so turning it on is harmless. A suspended VM resumes the way it was \
+             saved; a change applies from the next full start.",
         );
 
         alert.setAccessoryView(Some(&accessory));
@@ -1566,6 +1605,9 @@ impl CenterController {
             cfg.hardware.tpm = tpm_checkbox.state() == NSControlStateValueOn;
             if nested_supported {
                 cfg.hardware.nested_virt = nested_checkbox.state() == NSControlStateValueOn;
+            }
+            if metal_possible {
+                cfg.display.metal_transport = metal_checkbox.state() == NSControlStateValueOn;
             }
             cfg.display.resolution = resolution;
             cfg.display.notch = notch_from_index(notch_popup.indexOfSelectedItem());

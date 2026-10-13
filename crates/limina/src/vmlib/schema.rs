@@ -350,6 +350,11 @@ pub struct DisplayCfg {
     /// Ignored windowed, and needs the Accessibility grant the capture tap already asks for.
     #[serde(rename = "edge-resistance")]
     pub edge_resistance: f64,
+    /// Offer the guest limina's Metal-level GPU transport (default false). Only a guest with
+    /// limina's vendor GPU drivers uses it; any other sees a plain virtio-gpu, so this costs it
+    /// nothing but an idle GPU host process. Ignored with `gpu = "software-2d"`. A suspended
+    /// session resumes with the setting it was saved with. See `--gpu-metal`.
+    pub metal_transport: bool,
 }
 
 impl Default for DisplayCfg {
@@ -362,6 +367,7 @@ impl Default for DisplayCfg {
             hidpi: true,
             notch: NotchPolicy::default(),
             edge_resistance: DEFAULT_EDGE_RESISTANCE,
+            metal_transport: false,
         }
     }
 }
@@ -927,6 +933,18 @@ mod tests {
         assert!(h.nested_virt);
         let back = toml::to_string(&h).unwrap();
         assert!(back.contains("nested_virt = true"), "{back}");
+    }
+
+    /// The Metal transport is off unless a definition turns it on, including every vm.toml
+    /// written before the key existed.
+    #[test]
+    fn metal_transport_defaults_off_and_round_trips() {
+        let d: DisplayCfg = toml::from_str("").unwrap();
+        assert!(!d.metal_transport);
+        let d: DisplayCfg = toml::from_str("metal_transport = true").unwrap();
+        assert!(d.metal_transport);
+        let back = toml::to_string(&d).unwrap();
+        assert!(back.contains("metal_transport = true"), "{back}");
     }
 
     /// Input devices on a headless VM change its device set, so a definition that says nothing

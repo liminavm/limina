@@ -140,6 +140,12 @@ pub struct Suspended {
     /// says now. `None` in a record written before it was kept, when no managed VM ran nested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nested_virt: Option<bool>,
+    /// Whether the guest was saved with the Metal-level GPU transport offered. Its contexts and
+    /// arenas are in the snapshot's virtio-gpu state, which a worker without the transport cannot
+    /// take: the resume follows this, whatever `display.metal_transport` says now. `None` in a
+    /// record written before it was kept, when no managed VM offered the transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_metal: Option<bool>,
 }
 
 /// Load the state file. Missing, unreadable, or corrupt → `None` (state is
@@ -409,6 +415,7 @@ mod tests {
                 snapshot: snap.clone(),
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             }),
         )
         .unwrap();
@@ -420,6 +427,7 @@ mod tests {
                 snapshot: snap,
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             })
         );
         // Clear it — window still preserved.
@@ -590,6 +598,7 @@ mod tests {
                 snapshot: snap.clone(),
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             }),
         )
         .unwrap();
@@ -607,6 +616,7 @@ mod tests {
                 snapshot: snap,
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             }),
             "suspend record survives a window save"
         );
@@ -627,6 +637,7 @@ mod tests {
             snapshot: PathBuf::from("/b/run/snapshot.bin"),
             ipa_granule: Some(IpaGranule::FourK),
             nested_virt: None,
+            gpu_metal: None,
         };
         set_suspended(&path, Some(rec.clone())).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();

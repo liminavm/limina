@@ -218,6 +218,12 @@ struct Cli {
     #[arg(long)]
     gpu_software_2d: bool,
 
+    /// Offer the guest limina's Metal-level GPU transport, served by a `limina-gpu-host` beside
+    /// this binary: a virtio-gpu extension the guest's limina vendor drivers use, and that a
+    /// guest without them never sees. `LIMINA_GPU_METAL` in the environment does the same.
+    #[arg(long)]
+    gpu_metal: bool,
+
     /// Keep the key the renderer signs the guest's pipeline-cache data with in FILE (32 bytes,
     /// mode 0600), made from the OS random source when absent. The same key on every boot keeps
     /// the guest's saved shader caches warm; without it the key lives only as long as this
@@ -768,6 +774,7 @@ fn main() -> Result<()> {
                     pool: cli.display_pool,
                     sink,
                     software_2d: cli.gpu_software_2d,
+                    metal: cli.gpu_metal,
                     pipeline_cache_key: cli.gpu_cache_key.clone(),
                     control_socket: listen_at(cli.display_control_socket, cli.display_control_fd),
                 })

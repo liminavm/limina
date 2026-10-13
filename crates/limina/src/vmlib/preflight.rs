@@ -581,6 +581,7 @@ mod tests {
                     snapshot: bundle.snapshot_bin(),
                     ipa_granule: g,
                     nested_virt: None,
+                    gpu_metal: None,
                 }),
             )
             .unwrap()

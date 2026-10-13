@@ -80,6 +80,8 @@ pub struct SessionConfig {
     pub ipa_granule: crate::vmlib::schema::IpaGranule,
     /// Whether a cold boot gives the guest EL2 ([`supervisor::WorkerSpec::nested_virt`]).
     pub nested_virt: bool,
+    /// Whether a cold boot offers the Metal transport ([`supervisor::WorkerSpec::gpu_metal`]).
+    pub gpu_metal: bool,
     /// Window-close policy (M9.4). Only meaningful when suspend is armed (both paths above
     /// set); resolved to Shutdown otherwise — see [`WindowedSession::start`].
     pub on_window_close: crate::vmlib::schema::WindowCloseAction,
@@ -137,6 +139,8 @@ struct WorkerBase {
     links: Vec<(&'static str, Connector)>,
     /// See [`supervisor::WorkerSpec::nested_virt`].
     nested_virt: bool,
+    /// See [`supervisor::WorkerSpec::gpu_metal`].
+    gpu_metal: bool,
 }
 
 /// Spawn a worker in `--display-window` mode and wire fresh scanout/input/ack socketpairs to
@@ -222,6 +226,7 @@ fn spawn_windowed_worker(
         suspend_state_file: resume.suspend_state_file.map(|p| p.to_path_buf()),
         links: base.links.clone(),
         nested_virt: base.nested_virt,
+        gpu_metal: base.gpu_metal,
     };
     let spawned = supervisor::spawn_worker(
         &spec,
@@ -318,6 +323,7 @@ impl WindowedSession {
             snapshot_file,
             ipa_granule,
             nested_virt,
+            gpu_metal,
             on_window_close,
             splash_save_path,
             restoring,
@@ -332,6 +338,7 @@ impl WindowedSession {
             args: base_args,
             links,
             nested_virt,
+            gpu_metal,
         };
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
@@ -442,6 +449,7 @@ impl WindowedSession {
                                 snapshot: snapshot.clone(),
                                 ipa_granule: Some(ipa_granule),
                                 nested_virt: Some(crate::supervisor::spawned_nested_virt()),
+                                gpu_metal: Some(crate::supervisor::spawned_gpu_metal()),
                             };
                             match crate::vmlib::state::set_suspended(state_file, Some(sus)) {
                                 Ok(()) => {

@@ -578,6 +578,7 @@ pub(crate) mod tests {
                 snapshot: b.snapshot_bin(),
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             }),
         )
         .unwrap();

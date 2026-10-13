@@ -366,6 +366,12 @@ struct Cli {
     #[arg(long)]
     nested_virt: bool,
 
+    /// Offer the guest limina's Metal-level GPU transport, which only a guest with limina's
+    /// vendor GPU drivers uses. A resumed guest gets what it was suspended with instead. A
+    /// managed VM takes it from `display.metal_transport` (off by default).
+    #[arg(long)]
+    gpu_metal: bool,
+
     /// Do NOT mirror the host battery into the guest. By default the worker attaches a
     /// virtio-i2c SBS battery mirroring the host's whenever the host has one (stock guests
     /// pick it up via i2c-virtio + sbs-battery and show charge natively); desktops without
@@ -1594,6 +1600,7 @@ fn cli_from_definition(
         // A definition that asks for it on a Mac that cannot do it boots without it, like any
         // other host capability the guest is offered only where it exists.
         nested_virt: cfg.hardware.nested_virt && nested_virt::host_supports(),
+        gpu_metal: cfg.display.metal_transport && cfg.display.gpu != GpuMode::Software2d,
         no_battery: !cfg.hardware.battery,
         no_snd: !cfg.hardware.snd,
         mic: cfg.hardware.mic,
@@ -2317,6 +2324,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             snapshot_file: cli.snapshot_file.clone(),
             ipa_granule: cli.ipa_granule,
             nested_virt: cli.nested_virt,
+            gpu_metal: cli.gpu_metal,
             on_window_close: cli.on_window_close,
             // The restore splash lives beside the snapshot (`splash_beside`).
             splash_save_path: cli
@@ -2369,6 +2377,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         snapshot_file: cli.snapshot_file.clone(),
         suspend_state_file: cli.suspend_state_file.clone(),
         nested_virt: cli.nested_virt,
+        gpu_metal: cli.gpu_metal,
         links,
     };
 
@@ -2389,6 +2398,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 snapshot: snapshot.clone(),
                 ipa_granule: Some(cli.ipa_granule),
                 nested_virt: Some(supervisor::spawned_nested_virt()),
+                gpu_metal: Some(supervisor::spawned_gpu_metal()),
             };
             match vmlib::state::set_suspended(state_file, Some(sus)) {
                 Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
@@ -3104,6 +3114,7 @@ mod tests {
                 snapshot: snap.clone(),
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             }),
         )
         .unwrap();
@@ -3479,6 +3490,7 @@ mod tests {
                 hidpi: true,
                 notch: vmlib::schema::NotchPolicy::Extend,
                 edge_resistance: 0.0,
+                metal_transport: true,
             },
             input: InputCfg {
                 normalize_modifiers: false,
@@ -3521,6 +3533,8 @@ mod tests {
         );
         assert!(!cli.window);
         assert!(cli.gpu_software_2d);
+        // A software-2D GPU has no 3D device for the transport to extend.
+        assert!(!cli.gpu_metal);
         assert_eq!(
             cli.gpu_cache_key.as_deref(),
             Some(std::path::Path::new(

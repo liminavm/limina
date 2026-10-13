@@ -17,7 +17,8 @@ use limina_gpu_host::client::{Doorbell, GpuHost, MappedArena};
 use limina_gpu_host::journal::ContextExport;
 use limina_gpu_wire::ring::RingControl;
 
-/// Off by default until a guest driver exists: a stock guest would only pay for an idle process.
+/// Turns the transport on like `--gpu-metal`, for runs that cannot add a flag (the L2 tests).
+/// Off by default: a guest without the vendor drivers would only pay for an idle process.
 const ENABLE_ENV: &str = "LIMINA_GPU_METAL";
 /// Guest-physical space for arenas. Arenas are placed in it on demand; nothing is allocated up
 /// front.
@@ -415,10 +416,12 @@ fn gpu_host_exe() -> Option<PathBuf> {
     Some(exe.parent()?.join("limina-gpu-host"))
 }
 
-/// Starts a GPU host and returns the extension it serves, when enabled. A failure leaves the VM
-/// without the extension, which a guest sees as a plain virtio-gpu.
-pub fn start() -> Option<Arc<dyn GpuExtension>> {
-    std::env::var_os(ENABLE_ENV)?;
+/// Starts a GPU host and returns the extension it serves, when `enabled` or [`ENABLE_ENV`] asks.
+/// A failure leaves the VM without the extension, which a guest sees as a plain virtio-gpu.
+pub fn start(enabled: bool) -> Option<Arc<dyn GpuExtension>> {
+    if !enabled && std::env::var_os(ENABLE_ENV).is_none() {
+        return None;
+    }
     let exe = gpu_host_exe()?;
     match GpuHost::spawn(&exe) {
         Ok(host) => {

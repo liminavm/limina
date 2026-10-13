@@ -88,6 +88,7 @@ pub fn keep_refused_snapshot(snapshot: &std::path::Path, state_file: Option<&std
                 snapshot: snapshot.to_path_buf(),
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             });
         if let Err(e) = crate::vmlib::state::set_suspended(state, Some(sus)) {
             log::error!("re-recording the suspended state failed: {e}");
@@ -322,6 +323,9 @@ pub struct WorkerSpec {
     /// never carried in [`Self::args`]: a resume follows what the snapshot was saved with
     /// ([`nested_virt_for_spawn`]).
     pub nested_virt: bool,
+    /// Offer a cold-booted guest the Metal-level GPU transport (`--gpu-metal`). Decided per spawn
+    /// like [`Self::nested_virt`] ([`gpu_metal_for_spawn`]).
+    pub gpu_metal: bool,
     /// Worker listeners reached over a link instead of a path (`limina_launch::connect`), as
     /// `(worker flag, connector)`. Every spawn arms a fresh link for each and passes its end as
     /// `<flag> <fd>`, so a relaunched worker is reachable through the same connector.
@@ -355,6 +359,31 @@ static SPAWNED_NESTED_VIRT: AtomicBool = AtomicBool::new(false);
 /// record a suspend writes.
 pub fn spawned_nested_virt() -> bool {
     SPAWNED_NESTED_VIRT.load(Ordering::SeqCst)
+}
+
+/// Whether the worker last spawned offers the Metal transport, which a suspend of it must record.
+static SPAWNED_GPU_METAL: AtomicBool = AtomicBool::new(false);
+
+/// Whether the running worker offers the guest the Metal transport, for the `[suspended]`
+/// record a suspend writes.
+pub fn spawned_gpu_metal() -> bool {
+    SPAWNED_GPU_METAL.load(Ordering::SeqCst)
+}
+
+/// Whether this spawn offers the Metal transport. As with EL2 ([`nested_virt_for_spawn`]), a
+/// resume takes what the snapshot was saved with: the transport's contexts and arenas are part of
+/// the saved virtio-gpu, and a device without the extension cannot take them, nor one with it
+/// make them up. A record that does not say predates the setting, when no managed VM offered it.
+fn gpu_metal_for_spawn(
+    configured: bool,
+    resumed: bool,
+    record: Option<&crate::vmlib::state::Suspended>,
+) -> bool {
+    match (resumed, record) {
+        (false, _) => configured,
+        (true, Some(rec)) => rec.gpu_metal.unwrap_or(false),
+        (true, None) => configured,
+    }
 }
 
 /// Whether this spawn gives the guest EL2. A cold boot takes what the VM is configured with. A
@@ -657,6 +686,17 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         args.push("--nested-virt".into());
     }
     SPAWNED_NESTED_VIRT.store(nested_virt, Ordering::SeqCst);
+    let gpu_metal = gpu_metal_for_spawn(spec.gpu_metal, resumed, record.as_ref());
+    if gpu_metal != spec.gpu_metal {
+        log::info!(
+            "resuming with the Metal GPU transport {}, as the guest was suspended",
+            if gpu_metal { "on" } else { "off" }
+        );
+    }
+    if gpu_metal {
+        args.push("--gpu-metal".into());
+    }
+    SPAWNED_GPU_METAL.store(gpu_metal, Ordering::SeqCst);
 
     // When running from an assembled limina.app, hand the worker the bundle-relative venus
     // env (KK ICD + zink-on-KK Mesa selectors). In a dev/cargo run no bundle is present, so
@@ -1093,6 +1133,7 @@ pub fn run(
             suspend_state_file: spec.suspend_state_file.clone(),
             links: spec.links.clone(),
             nested_virt: spec.nested_virt,
+            gpu_metal: spec.gpu_metal,
         };
         let spawned = spawn_worker(&this_spawn, &inherit)?;
         if let Some(pipes) = pipes {
@@ -1173,12 +1214,29 @@ mod tests {
     /// VM that was suspended before the setting existed resumes without, one saved nested
     /// resumes nested even after the setting is turned off, and only a cold boot takes the
     /// configured value. A flat run keeps no record and resumes as it was started.
+    /// The Metal transport follows the snapshot on a resume, as EL2 does.
+    #[test]
+    fn a_resume_offers_the_metal_transport_the_snapshot_was_saved_with() {
+        let rec = |gpu_metal| crate::vmlib::state::Suspended {
+            snapshot: PathBuf::from("/b/run/snapshot.bin"),
+            ipa_granule: None,
+            nested_virt: None,
+            gpu_metal,
+        };
+        assert!(gpu_metal_for_spawn(true, false, Some(&rec(Some(false)))));
+        assert!(!gpu_metal_for_spawn(true, true, Some(&rec(None))));
+        assert!(!gpu_metal_for_spawn(true, true, Some(&rec(Some(false)))));
+        assert!(gpu_metal_for_spawn(false, true, Some(&rec(Some(true)))));
+        assert!(gpu_metal_for_spawn(true, true, None));
+    }
+
     #[test]
     fn a_resume_follows_the_snapshot_and_a_cold_boot_the_setting() {
         let rec = |nested_virt| crate::vmlib::state::Suspended {
             snapshot: PathBuf::from("/b/run/snapshot.bin"),
             ipa_granule: None,
             nested_virt,
+            gpu_metal: None,
         };
         assert!(nested_virt_for_spawn(true, false, None));
         assert!(!nested_virt_for_spawn(false, false, Some(&rec(Some(true)))));
@@ -1253,6 +1311,7 @@ mod tests {
                 snapshot: snap.clone(),
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             }),
         )
         .unwrap();
@@ -1318,6 +1377,7 @@ mod tests {
             snapshot: snap.clone(),
             ipa_granule: Some(crate::vmlib::schema::IpaGranule::FourK),
             nested_virt: None,
+            gpu_metal: None,
         };
         crate::vmlib::state::set_suspended(&state, Some(rec.clone())).unwrap();
         take_pending_resume(&snap, Some(&state)).expect("a pending resume");
@@ -1341,6 +1401,7 @@ mod tests {
                 snapshot: snap.clone(),
                 ipa_granule: None,
                 nested_virt: None,
+                gpu_metal: None,
             }),
         )
         .unwrap();

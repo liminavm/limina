@@ -548,7 +548,7 @@ fn gpu_device(display: &DisplaySpec, disks: &[DiskSpec]) -> GpuDevice {
         }
         None => gpu,
     };
-    match (software_2d, metal_ext::start()) {
+    match (software_2d, metal_ext::start(display.metal)) {
         (false, Some(ext)) => gpu.extension(ext, metal_ext::ARENA_WINDOW),
         _ => gpu,
     }

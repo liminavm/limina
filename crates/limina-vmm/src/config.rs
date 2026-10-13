@@ -124,6 +124,8 @@ pub struct DisplaySpec {
     /// fails). Set this for the headless 2D capture oracle and to dodge the local-Terminal
     /// GPU-init hang. `LIMINA_VIRGL_FLAGS` overrides both (forces a specific renderer flag set).
     pub software_2d: bool,
+    /// Offer the Metal-level transport (`--gpu-metal`). Ignored with `software_2d`.
+    pub metal: bool,
     /// The file the renderer's pipeline-cache key lives in; `None` makes one per process. See
     /// `--gpu-cache-key`.
     pub pipeline_cache_key: Option<PathBuf>,
