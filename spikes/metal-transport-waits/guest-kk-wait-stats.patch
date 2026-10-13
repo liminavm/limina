@@ -1,0 +1,244 @@
+diff --git a/src/kosmickrisp/bridge/limina/lmn_bridge.h b/src/kosmickrisp/bridge/limina/lmn_bridge.h
+index 26a1d1d28d5..5b7a4bc21e8 100644
+--- a/src/kosmickrisp/bridge/limina/lmn_bridge.h
++++ b/src/kosmickrisp/bridge/limina/lmn_bridge.h
+@@ -272,6 +272,26 @@ bool lmn_device_lost(struct lmn_device *dev, uint32_t *error, uint64_t *at);
+ /* Sleeps or spins between polls of host-written memory; `round` counts the polls so far. */
+ void lmn_backoff(unsigned round);
+ 
++/* SPIKE: wait accounting, LIMINA_LMN_STATS=1, one line a second. */
++struct lmn_stats {
++   _Atomic uint64_t commits;
++   _Atomic uint64_t call_n[0x400], call_ns[0x400];
++   _Atomic uint64_t wait_n, wait_ns, wait_tier[4];
++   _Atomic uint64_t comp_n, comp_ns, comp_gpu_ns, comp_tier[4];
++   _Atomic uint64_t export_n, export_fallback, import_n, import_ns;
++   _Atomic uint64_t last_print;
++};
++extern struct lmn_stats lmn_stats;
++extern bool lmn_stats_on;
++uint64_t lmn_now_ns(void);
++static inline unsigned
++lmn_tier(unsigned round)
++{
++   return round == 0 ? 0 : round < 64 ? 1 : round < 256 ? 2 : 3;
++}
++void lmn_stats_maybe_print(void);
++void lmn_stats_import(uint64_t ns);
++
+ /* -- records -- */
+ bool lmn_slot_alloc(struct lmn_device *dev, struct lmn_slot *slot);
+ void lmn_slot_free(struct lmn_device *dev, struct lmn_slot *slot);
+diff --git a/src/kosmickrisp/bridge/limina/lmn_device.c b/src/kosmickrisp/bridge/limina/lmn_device.c
+index 0fb33f155e7..4dc66e7fdaf 100644
+--- a/src/kosmickrisp/bridge/limina/lmn_device.c
++++ b/src/kosmickrisp/bridge/limina/lmn_device.c
+@@ -139,6 +139,10 @@ lmn_destroy_host_object(struct lmn_obj *obj)
+ 
+ /* -- waiting -- */
+ 
++struct lmn_stats lmn_stats;
++bool lmn_stats_on;
++bool lmn_spin;
++
+ void
+ lmn_backoff(unsigned round)
+ {
+@@ -148,7 +152,7 @@ lmn_backoff(unsigned round)
+ #endif
+       return;
+    }
+-   if (round < 256) {
++   if (round < 256 || lmn_spin) {
+       sched_yield();
+       return;
+    }
+@@ -164,6 +168,65 @@ now_ns(void)
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+ }
+ 
++
++uint64_t
++lmn_now_ns(void)
++{
++   return now_ns();
++}
++
++static uint64_t
++take(_Atomic uint64_t *v)
++{
++   return atomic_exchange(v, 0);
++}
++
++void
++lmn_stats_maybe_print(void)
++{
++   if (!lmn_stats_on)
++      return;
++   uint64_t now = now_ns(), last = atomic_load(&lmn_stats.last_print);
++   if (now - last < 1000000000ull ||
++       !atomic_compare_exchange_strong(&lmn_stats.last_print, &last, now))
++      return;
++   struct lmn_stats *s = &lmn_stats;
++   char calls[512] = "";
++   size_t off = 0;
++   for (unsigned op = 0; op < 0x400; op++) {
++      uint64_t n = take(&s->call_n[op]), ns = take(&s->call_ns[op]);
++      if (n && off < sizeof(calls) - 48)
++         off += snprintf(calls + off, sizeof(calls) - off, " %03x:%llu/%lluus", op,
++                         (unsigned long long)n, (unsigned long long)(ns / 1000));
++   }
++   uint64_t wn = take(&s->wait_n), wns = take(&s->wait_ns);
++   uint64_t wt[4], ct[4];
++   for (int i = 0; i < 4; i++) {
++      wt[i] = take(&s->wait_tier[i]);
++      ct[i] = take(&s->comp_tier[i]);
++   }
++   uint64_t cn = take(&s->comp_n), cns = take(&s->comp_ns), cgpu = take(&s->comp_gpu_ns);
++   fprintf(stderr,
++           "[LIMINA-LMN-STATS] pid=%d commits=%llu | wait n=%llu %lluus tiers=%llu/%llu/%llu/%llu "
++           "| comp n=%llu lat=%lluus gpu=%lluus tiers=%llu/%llu/%llu/%llu | export=%llu fb=%llu "
++           "import=%llu/%lluus | calls%s\n",
++           (int)getpid(), (unsigned long long)take(&s->commits), (unsigned long long)wn,
++           (unsigned long long)(wns / 1000), (unsigned long long)wt[0], (unsigned long long)wt[1],
++           (unsigned long long)wt[2], (unsigned long long)wt[3], (unsigned long long)cn,
++           (unsigned long long)(cns / 1000), (unsigned long long)(cgpu / 1000),
++           (unsigned long long)ct[0], (unsigned long long)ct[1], (unsigned long long)ct[2],
++           (unsigned long long)ct[3], (unsigned long long)take(&s->export_n),
++           (unsigned long long)take(&s->export_fallback), (unsigned long long)take(&s->import_n),
++           (unsigned long long)(take(&s->import_ns) / 1000), calls);
++}
++
++void
++lmn_stats_import(uint64_t ns)
++{
++   atomic_fetch_add(&lmn_stats.import_n, 1);
++   atomic_fetch_add(&lmn_stats.import_ns, ns);
++}
++
+ bool
+ lmn_device_lost(struct lmn_device *dev, uint32_t *error, uint64_t *at)
+ {
+@@ -270,10 +333,14 @@ lmn_call(struct lmn_device *dev, uint16_t op, const struct lmn_iov *iov, unsigne
+       out.status = e ? e : LMN_ERROR_CORRUPT;
+       return out;
+    }
+-   uint64_t start = 0;
++   uint64_t start = 0, t0 = lmn_stats_on ? now_ns() : 0;
+    for (unsigned round = 0;; round++) {
+       if (lmn_reply_done(r)) {
+          memcpy(&out, r, sizeof(out));
++         if (lmn_stats_on) {
++            atomic_fetch_add(&lmn_stats.call_n[op & 0x3ff], 1);
++            atomic_fetch_add(&lmn_stats.call_ns[op & 0x3ff], now_ns() - t0);
++         }
+          return out;
+       }
+       if (lmn_device_lost(dev, &e, NULL)) {
+@@ -453,6 +520,8 @@ mtl_device_create(void)
+    }
+    memcpy(lmn_host_os_version, dev->info.os_version, sizeof(lmn_host_os_version));
+ 
++   lmn_stats_on = getenv("LIMINA_LMN_STATS") != NULL;
++   lmn_spin = getenv("LIMINA_LMN_SPIN") != NULL;
+    lmn_completion_start(dev);
+    return dev;
+ 
+diff --git a/src/kosmickrisp/bridge/limina/lmn_memory.c b/src/kosmickrisp/bridge/limina/lmn_memory.c
+index 8d4cd6ee3d7..2a4f92a43cb 100644
+--- a/src/kosmickrisp/bridge/limina/lmn_memory.c
++++ b/src/kosmickrisp/bridge/limina/lmn_memory.c
+@@ -1260,9 +1260,16 @@ mtl_shared_event_wait_until_signaled_value(mtl_shared_event *event_handle, uint6
+ 
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
++   uint64_t t0 = lmn_stats_on ? lmn_now_ns() : 0;
+    for (unsigned round = 0;; round++) {
+-      if (__atomic_load_n(mirror(e), __ATOMIC_ACQUIRE) >= value)
++      if (__atomic_load_n(mirror(e), __ATOMIC_ACQUIRE) >= value) {
++         if (lmn_stats_on) {
++            atomic_fetch_add(&lmn_stats.wait_n, 1);
++            atomic_fetch_add(&lmn_stats.wait_ns, lmn_now_ns() - t0);
++            atomic_fetch_add(&lmn_stats.wait_tier[lmn_tier(round)], 1);
++         }
+          return 1;
++      }
+       if (lmn_device_lost(dev, NULL, NULL))
+          return 0;
+       if ((round & 63) == 63) {
+@@ -1315,6 +1322,11 @@ mtl_shared_event_export_sync_file(mtl_shared_event *event_handle, uint64_t value
+       }
+    }
+    pthread_mutex_unlock(&dev->lock);
++   if (lmn_stats_on) {
++      atomic_fetch_add(&lmn_stats.export_n, 1);
++      if (!known)
++         atomic_fetch_add(&lmn_stats.export_fallback, 1);
++   }
+    if (!known)
+       return -1;
+    /* Seqno 0 is complete from the start: an already reached value gets a signaled fence. */
+diff --git a/src/kosmickrisp/bridge/limina/lmn_queue.c b/src/kosmickrisp/bridge/limina/lmn_queue.c
+index 373366b475f..f56753e7ac5 100644
+--- a/src/kosmickrisp/bridge/limina/lmn_queue.c
++++ b/src/kosmickrisp/bridge/limina/lmn_queue.c
+@@ -19,6 +19,7 @@ struct lmn_handler {
+ struct lmn_pending {
+    struct lmn_pending *next;
+    uint64_t seqno;
++   uint64_t t_commit;
+    struct lmn_slot feedback;
+    struct lmn_handler handlers[LMN_MAX_HANDLERS];
+    unsigned handler_count;
+@@ -117,6 +118,15 @@ completion_main(void *arg)
+          pthread_mutex_lock(&dev->commit_lock);
+          continue;
+       }
++      if (lmn_stats_on) {
++         atomic_fetch_add(&lmn_stats.comp_n, 1);
++         atomic_fetch_add(&lmn_stats.comp_ns, lmn_now_ns() - c->t_commit);
++         if (!lost && fb->gpu_end > fb->gpu_start)
++            atomic_fetch_add(&lmn_stats.comp_gpu_ns,
++                             (uint64_t)((fb->gpu_end - fb->gpu_start) * 1e9));
++         atomic_fetch_add(&lmn_stats.comp_tier[lmn_tier(round)], 1);
++         lmn_stats_maybe_print();
++      }
+       round = 0;
+       run_handlers(dev, c, lost ? NULL : fb, lost);
+       lmn_slot_free(dev, &c->feedback);
+@@ -274,6 +284,10 @@ mtl_command_queue_commit(mtl_command_queue *queue, mtl_command_buffer **command_
+       ok = lmn_command_buffer_replay_locked(dev, cb);
+    }
+    c->seqno = ++dev->seqno;
++   if (lmn_stats_on) {
++      c->t_commit = lmn_now_ns();
++      atomic_fetch_add(&lmn_stats.commits, 1);
++   }
+    struct lmn_commit w = {.seqno = c->seqno, .feedback = c->feedback.ref};
+    if (ok)
+       ok = lmn_push_locked(dev, LMN_OP_COMMIT, &(struct lmn_iov){&w, sizeof(w)}, 1);
+diff --git a/src/kosmickrisp/vulkan/kk_sync.c b/src/kosmickrisp/vulkan/kk_sync.c
+index c8c97c1aec6..61c933f60f3 100644
+--- a/src/kosmickrisp/vulkan/kk_sync.c
++++ b/src/kosmickrisp/vulkan/kk_sync.c
+@@ -115,15 +115,20 @@ kk_binary_export_sync_file(struct vk_device *device, struct vk_sync *sync, int *
+ 
+ /* A queue cannot wait on a guest fence yet, so the fence is waited for here, on the CPU, and the
+  * binary is signaled once it has passed. */
++void lmn_stats_import(uint64_t ns);
++uint64_t lmn_now_ns(void);
++
+ VkResult
+ kk_binary_import_sync_file(struct vk_device *device, struct vk_sync *sync, int fd)
+ {
+    struct vk_sync_binary *binary = container_of(sync, struct vk_sync_binary, sync);
+    struct pollfd p = {.fd = fd, .events = POLLIN};
+    int r;
++   uint64_t t0 = lmn_now_ns();
+    do {
+       r = poll(&p, 1, -1);
+    } while (r < 0 && (errno == EINTR || errno == EAGAIN));
++   lmn_stats_import(lmn_now_ns() - t0);
+    if (r < 0 || (p.revents & (POLLERR | POLLNVAL)))
+       return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+    binary->next_point++;

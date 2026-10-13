@@ -48,10 +48,14 @@ Five points, one boot each, measured 2026-10-13:
   cost is where the transport was meant to win, and this is the per-command workload.
 - **vkmark is level.** Its scenes run at ~2200 fps either way, so a vkmark frame is ~0.45 ms in
   both arms.
-- **glmark2-wayland halves and vk-replay loses a fifth.** Under glmark2 the GPU host sat at ~62% of a
-  core, mostly parked in waits (`sample`: `Executor::run` is the only GPU host frame of weight), so
-  it is not throughput-bound. The lead is a per-frame wait, a round trip or a fence the guest blocks
-  on, which glmark2's ~0.5 ms frames expose and vkmark's do not. Not measured further.
+- **glmark2-wayland halves and vk-replay loses a fifth: each frame blocked the client on the CPU
+  until the GPU had finished it**, a ~200 µs Metal round trip (`spikes/metal-transport-waits/`).
+  Two waits did it. A sync-file export of the present's signal fell back to a CPU wait; fixed in
+  the guest KK (`dce6d5542a8`), which takes headless vk-replay to 2110 fps, past venus. Stock zink's
+  `implicit_sync` workaround waits on every present for any driver but venus and a list that gained
+  KosmicKrisp only upstream (`e9a87f80b2d`, after Fedora's 26.1.8 and our 26.2.3). With both gone,
+  glmark2-wayland on an all-zink desktop reads 3133-3203 on the transport against 2340-2442 on
+  venus. These rows predate both.
 - **gl-replay does not move.** It replays through Xwayland and is paced by that present path
   (tier 0 moved it, `perf/2026-10-05-tier0.md`), so the transport does not show in it.
 

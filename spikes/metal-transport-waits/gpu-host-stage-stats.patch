@@ -1,0 +1,130 @@
+diff --git a/crates/limina-gpu-host/src/exec.rs b/crates/limina-gpu-host/src/exec.rs
+index da1532ad..2e30b30b 100644
+--- a/crates/limina-gpu-host/src/exec.rs
++++ b/crates/limina-gpu-host/src/exec.rs
+@@ -75,6 +75,54 @@ const ALL_RENDER_STAGES: u32 = (MTLRenderStages::Vertex.0
+ 
+ pub type Arenas = Arc<Mutex<HashMap<u32, Arc<Arena>>>>;
+ 
++/// SPIKE: per-second stage timings, `LIMINA_GPU_HOST_STATS=1`. Times are CLOCK_UPTIME_RAW, the
++/// base of Metal's GPU timestamps.
++mod spike_stats {
++    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
++    pub static ON: AtomicBool = AtomicBool::new(false);
++    pub static COMMITS: AtomicU64 = AtomicU64::new(0);
++    pub static PARKS: AtomicU64 = AtomicU64::new(0);
++    pub static PARK_NS: AtomicU64 = AtomicU64::new(0);
++    pub static FB_N: AtomicU64 = AtomicU64::new(0);
++    pub static TO_START_NS: AtomicU64 = AtomicU64::new(0);
++    pub static GPU_NS: AtomicU64 = AtomicU64::new(0);
++    pub static END_TO_FB_NS: AtomicU64 = AtomicU64::new(0);
++    pub static COMMIT_TO_FB_NS: AtomicU64 = AtomicU64::new(0);
++    pub static EV_N: AtomicU64 = AtomicU64::new(0);
++    pub static EV_NS: AtomicU64 = AtomicU64::new(0);
++    pub static FIRST_CMD_NS: AtomicU64 = AtomicU64::new(0);
++    pub static LAST: AtomicU64 = AtomicU64::new(0);
++    pub fn now() -> f64 {
++        let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
++        // SAFETY: a valid out pointer.
++        unsafe { libc::clock_gettime(libc::CLOCK_UPTIME_RAW, &mut t) };
++        t.tv_sec as f64 + t.tv_nsec as f64 * 1e-9
++    }
++    pub fn ns(d: f64) -> u64 {
++        if d > 0.0 { (d * 1e9) as u64 } else { 0 }
++    }
++    pub fn add(a: &AtomicU64, v: u64) {
++        a.fetch_add(v, Relaxed);
++    }
++    pub fn maybe_print() {
++        let now = ns(now());
++        let last = LAST.load(Relaxed);
++        if now - last < 1_000_000_000 || LAST.compare_exchange(last, now, Relaxed, Relaxed).is_err() {
++            return;
++        }
++        let t = |a: &AtomicU64| a.swap(0, Relaxed);
++        let fb = t(&FB_N).max(1);
++        let ev = t(&EV_N);
++        eprintln!(
++            "[GPU-HOST-STATS] commits={} parks={} parked={}us | per commit: commit->gpu_start={}us gpu={}us gpu_end->feedback={}us commit->feedback={}us | events={} signal_encode->listener={}us/ev | first_cmd_after_park={}us/park",
++            t(&COMMITS), PARKS.load(Relaxed), t(&PARK_NS) / 1000,
++            t(&TO_START_NS) / fb / 1000, t(&GPU_NS) / fb / 1000, t(&END_TO_FB_NS) / fb / 1000,
++            t(&COMMIT_TO_FB_NS) / fb / 1000, ev, t(&EV_NS) / ev.max(1) / 1000,
++            t(&FIRST_CMD_NS) / PARKS.swap(0, Relaxed).max(1) / 1000,
++        );
++    }
++}
++
+ /// How long an export waits for a context's committed work to finish.
+ const EXPORT_DRAIN: Duration = Duration::from_secs(2);
+ 
+@@ -845,10 +893,15 @@ impl Executor {
+         // A payload is at most half the data area (the producer enforces it; the consumer checks).
+         let mut scratch = vec![0u8; (self.consumer.data_size() / 2) as usize];
+         let mut idle_since: Option<Instant> = None;
++        spike_stats::ON.store(std::env::var_os("LIMINA_GPU_HOST_STATS").is_some(), Ordering::Relaxed);
++        let mut woke: Option<f64> = None;
+         while !stop.load(Ordering::Acquire) {
+             match self.consumer.next(&mut scratch) {
+                 Ok(Some(n)) => {
+                     idle_since = None;
++                    if let Some(w) = woke.take() {
++                        spike_stats::add(&spike_stats::FIRST_CMD_NS, spike_stats::ns(spike_stats::now() - w));
++                    }
+                     if self.lost {
+                         continue;
+                     }
+@@ -871,8 +924,17 @@ impl Executor {
+                         continue;
+                     }
+                     if self.consumer.park() {
++                        let t0 = spike_stats::now();
+                         doorbell.wait();
+                         self.consumer.unpark();
++                        if spike_stats::ON.load(Ordering::Relaxed) {
++                            spike_stats::add(&spike_stats::PARKS, 1);
++                            spike_stats::add(&spike_stats::PARK_NS, spike_stats::ns(spike_stats::now() - t0));
++                            woke = Some(spike_stats::now());
++                        }
++                    }
++                    if spike_stats::ON.load(Ordering::Relaxed) {
++                        spike_stats::maybe_print();
+                     }
+                     idle_since = None;
+                 }
+@@ -2556,9 +2618,14 @@ impl Executor {
+         self.objects.note_signal(c.event, c.value);
+         if let Some(Object::SharedEvent(e, Some(m))) = self.objects.get(&c.event) {
+             let m = m.clone();
++            let t_enc = spike_stats::now();
+             let block = RcBlock::new(
+                 move |_e: NonNull<ProtocolObject<dyn MTLSharedEvent>>, v: u64| {
+                     m.raise(v);
++                    if spike_stats::ON.load(Ordering::Relaxed) {
++                        spike_stats::add(&spike_stats::EV_N, 1);
++                        spike_stats::add(&spike_stats::EV_NS, spike_stats::ns(spike_stats::now() - t_enc));
++                    }
+                 },
+             );
+             // SAFETY: Metal copies the block; it holds the mirror's arena.
+@@ -2600,8 +2667,21 @@ impl Executor {
+         let in_flight = self.in_flight.clone();
+         let fb = fb.map(|(a, p)| (a, SendPtr(NonNull::new(p.cast()).expect("arena pointer"))));
+         let allocs = Mutex::new(allocs);
++        let t_commit = spike_stats::now();
++        spike_stats::add(&spike_stats::COMMITS, 1);
+         let block = RcBlock::new(move |f: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
+             let _keep = &keep;
++            if spike_stats::ON.load(Ordering::Relaxed) {
++                // SAFETY: Metal passes the live feedback object.
++                let f = unsafe { f.as_ref() };
++                let now = spike_stats::now();
++                let (a, b) = (f.GPUStartTime(), f.GPUEndTime());
++                spike_stats::add(&spike_stats::FB_N, 1);
++                spike_stats::add(&spike_stats::TO_START_NS, spike_stats::ns(a - t_commit));
++                spike_stats::add(&spike_stats::GPU_NS, spike_stats::ns(b - a));
++                spike_stats::add(&spike_stats::END_TO_FB_NS, spike_stats::ns(now - b));
++                spike_stats::add(&spike_stats::COMMIT_TO_FB_NS, spike_stats::ns(now - t_commit));
++            }
+             // SAFETY: the ring's arena is in `keep`, so the control block is still mapped.
+             let c = unsafe { ctrl.0.as_ref() };
+             // SAFETY: Metal passes the live feedback object.

@@ -1,0 +1,14 @@
+diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
+index 25b2ce65174..d4d19d05a68 100644
+--- a/src/gallium/drivers/zink/zink_screen.c
++++ b/src/gallium/drivers/zink/zink_screen.c
+@@ -3015,6 +3015,9 @@ init_driver_workarounds(struct zink_screen *screen)
+    default:
+       break;
+    }
++   /* SPIKE: A/B the CPU wait kopper makes before presenting. */
++   if (getenv("LIMINA_ZINK_IMPLICIT_SYNC"))
++      screen->driver_workarounds.implicit_sync = true;
+    /* TODO: maybe compile multiple variants for different set counts for compact mode? */
+    if (screen->info.props.limits.maxBoundDescriptorSets < ZINK_DESCRIPTOR_ALL_TYPES ||
+        zink_debug & (ZINK_DEBUG_COMPACT | ZINK_DEBUG_NOSHOBJ))
