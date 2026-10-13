@@ -2,7 +2,7 @@
 # Copyright © 2026 Gustavo Noronha Silva
 
 # What Limina.app ships besides Rust crates, and where each one's licence text lives on the
-# build host. scripts/gen-third-party-notices.py reads this, adds every Rust crate the two
+# build host. scripts/gen-third-party-notices.py reads this, adds every Rust crate our
 # binaries link (from `cargo metadata`), and writes the THIRD-PARTY-NOTICES.txt that
 # build-app.sh puts in Contents/Resources and the About dialog's Licenses button shows.
 #

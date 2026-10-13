@@ -10,7 +10,7 @@ licence text.
 Two sources, one file:
   - assets/third-party/components.toml, hand-maintained: the bundled libraries, gvproxy, the
     firmware and the Rust standard library, each with the licence file it ships under.
-  - `cargo metadata`: every crate `limina` or `limina-vmm` links for aarch64-apple-darwin,
+  - `cargo metadata`: every crate `limina`, `limina-vmm` or `limina-gpu-host` links for aarch64-apple-darwin,
     following normal dependencies only (build and dev dependencies are not shipped, and
     neither is a proc-macro crate). Workspace members are ours and left out; the forks under
     third_party/ (libkrun, rutabaga, virglrs, imago) are third-party and stay in.
@@ -22,7 +22,7 @@ licence with its authors as the copyright line, and is named on stderr so the ap
 visible. Identical texts are printed once and referred to by number.
 
 --check-bundle makes the run fail when a library in the bundle's Frameworks (or an executable
-beside the two binaries) is claimed by no component: the bundler discovers the link closure
+beside our own binaries) is claimed by no component: the bundler discovers the link closure
 on its own, and this is what keeps a new dependency from shipping without its notice.
 
 Run by scripts/build-app.sh; `cargo xtask notices` wraps it. Python 3.11+ (tomllib).
@@ -41,10 +41,10 @@ import tomllib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPONENTS = os.path.join(REPO, "assets/third-party/components.toml")
-ROOTS = ("limina", "limina-vmm")
+ROOTS = ("limina", "limina-vmm", "limina-gpu-host")
 TARGET = "aarch64-apple-darwin"
 # Bundle files that are ours, so no component claims them.
-FIRST_PARTY = {"limina", "limina-vmm", "liblimina_sep.dylib"}
+FIRST_PARTY = {"limina", "limina-vmm", "limina-gpu-host", "liblimina_sep.dylib"}
 LICENCE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
 # For a crate with no licence file: which option of an OR expression to reproduce, and where
 # its standard text lives. MIT first — its text carries the copyright line the others lack.
