@@ -23,7 +23,7 @@
 # the upstream-defconfig recipe of the retired F43 builder (`git log -- scripts/build-kernel-rpm.sh`).
 #
 # Usage (in the guest):  scripts/provision/f44/build-kernel-rpm.sh
-# Output: $OUT/limina-kernel-16k-*.rpm  (default ~/limina-build/kernel)
+# Output: $OUT/limina-kernel-16k-*.rpm and its -devel  (default ~/limina-build/kernel)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -149,7 +149,10 @@ CONFIG_VIRTIO_CONSOLE=y
 CONFIG_VIRTIO_NET=y
 CONFIG_VIRTIO_INPUT=y
 CONFIG_DRM=y
-CONFIG_DRM_VIRTIO_GPU=y
+# virtio-gpu is the exception: a module, so the vendor GPU drivers' extended one (DKMS, against
+# the -devel package below) can take its place. Boot does not depend on it: the console is the
+# PL011 and root is virtio-blk, and install-enhanced.sh has dracut carry it for the splash.
+CONFIG_DRM_VIRTIO_GPU=m
 CONFIG_FUSE_FS=y
 CONFIG_VIRTIO_FS=y
 CONFIG_VSOCKETS=y
@@ -176,8 +179,15 @@ rm -f "$STAGE/lib/modules/$KREL/build" "$STAGE/lib/modules/$KREL/source"
 cp -f arch/arm64/boot/Image "$STAGE/lib/modules/$KREL/vmlinuz"
 cp -f System.map "$STAGE/lib/modules/$KREL/System.map"
 cp -f .config "$STAGE/lib/modules/$KREL/config"
+# The headers and makefiles an out-of-tree module builds against, by the kernel's own recipe (the
+# one its `make rpm-pkg` uses for kernel-devel). `build` points there, dangling until -devel is in.
+DEVEL="$BUILD/devel/usr/src/kernels/$KREL"
+rm -rf "$BUILD/devel"
+make ARCH=arm64 run-command \
+  KBUILD_RUN_COMMAND="\${srctree}/scripts/package/install-extmod-build $DEVEL"
+ln -fns "/usr/src/kernels/$KREL" "$STAGE/lib/modules/$KREL/build"
 
-echo "==> [6/6] package limina-kernel-16k RPM"
+echo "==> [6/6] package limina-kernel-16k RPMs"
 rpmdev-setuptree
 SPEC="$HOME/rpmbuild/SPECS/limina-kernel.spec"
 cat > "$SPEC" <<SPEC
@@ -204,11 +214,20 @@ Requires(preun): systemd-udev
 The limina enhanced tier kernel: F44's config + 16 KiB pages (required for venus host-visible
 blobs on the 16 KiB-page macOS host). Installs alongside stock; GRUB offers both, falling back to
 stock 4 KiB if 16k ever fails.
+%package devel
+Summary:        Headers and makefiles to build modules for the limina 16 KiB-page kernel %{krel}
+AutoReqProv:    no
+Provides:       kernel-devel-uname-r = %{krel}
+%description devel
+What an out-of-tree module (DKMS) builds against for the limina enhanced-tier kernel %{krel}.
 %install
-mkdir -p %{buildroot}/lib/modules
+mkdir -p %{buildroot}/lib/modules %{buildroot}/usr/src/kernels
 cp -a $STAGE/lib/modules/%{krel} %{buildroot}/lib/modules/
+cp -a $DEVEL %{buildroot}/usr/src/kernels/
 %files
 /lib/modules/%{krel}
+%files devel
+/usr/src/kernels/%{krel}
 %posttrans
 kernel-install add %{krel} /lib/modules/%{krel}/vmlinuz || :
 %preun
@@ -218,12 +237,17 @@ rpmbuild -bb "$SPEC"
 # Copy out ONLY the RPM this run produced. A glob over rpmbuild/RPMS/ sweeps in every kernel ever
 # built in this guest, and install-enhanced.sh picks with `head -1` — which sorts to the OLDER
 # version. That made a build "succeed" while the payload carried a stale kernel, twice (2026-08-03).
-RPM="$HOME/rpmbuild/RPMS/aarch64/limina-kernel-16k-$BASE-$RELEASE.fc$(rpm -E %{fedora}).aarch64.rpm"
-[ -f "$RPM" ] || { echo "expected RPM not found: $RPM" >&2; exit 1; }
+RPMS="$HOME/rpmbuild/RPMS/aarch64"
+NVRA="$BASE-$RELEASE.fc$(rpm -E %{fedora}).aarch64"
+RPM="$RPMS/limina-kernel-16k-$NVRA.rpm"
+DEVEL_RPM="$RPMS/limina-kernel-16k-devel-$NVRA.rpm"
+for r in "$RPM" "$DEVEL_RPM"; do
+  [ -f "$r" ] || { echo "expected RPM not found: $r" >&2; exit 1; }
+done
 # ...and CLEAN $OUT first, or the same head -1 bug returns by the other door: copying only this
 # run's RPM still leaves every PREVIOUS run's kernel sitting in $OUT, and build-all.sh globs the
 # whole directory into the payload. $OUT is this run's output, not an archive of past ones.
 rm -f "$OUT"/*.rpm
-cp -f "$RPM" "$OUT"/
+cp -f "$RPM" "$DEVEL_RPM" "$OUT"/
 ls -la "$OUT"/*.rpm 2>/dev/null || { echo "(no kernel RPM produced)"; exit 1; }
 echo "    KREL=$KREL"

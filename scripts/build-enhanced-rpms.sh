@@ -92,6 +92,7 @@ for entry in "${SCRIPTS[@]}"; do
           # Fedora ships today, which the series is not based on.
           ${MESA_SRPM_URL:+export MESA_SRPM_URL='$MESA_SRPM_URL'}
           ${LIMINA_REL:+export LIMINA_REL='$LIMINA_REL'}
+          ${RELEASE:+export RELEASE='$RELEASE'}
           $KERNEL_SRC_ENV
           # build-all.sh assembles a payload dir; the component builds take OUT directly.
           if [ '$script' = build-all.sh ]; then

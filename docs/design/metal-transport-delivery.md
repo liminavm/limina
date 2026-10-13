@@ -47,7 +47,11 @@ system's Mesa; they are installed beside it, and nothing selects them through th
   sources for every kernel series we support, each patched with the extension
   (`guest/gpu-drivers/dkms-make.sh` picks by the kernel's major.minor). A series from our own
   kernel fork is vendored from the fork, which carries virtio-gpu commits of ours. A kernel with
-  no series fails the build and keeps its in-tree driver.
+  no series fails the build and keeps its in-tree driver. The same path serves the enhanced tier:
+  its kernel builds virtio-gpu as a module (everything else boot needs stays built in) and ships
+  a `-devel` package beside it, installed in the same transaction so DKMS can build for it as it
+  lands. A kernel with virtio-gpu built in gets the drivers without the module, and so without
+  the transport.
 - **The installer is the distro-agnostic part of the guest tools** (`guest/gpu-drivers/install.sh`,
   packaged by `scripts/package-gpu-drivers.sh`). What differs per distro is confined to the
   prerequisites' package names and the initramfs tool; everything it installs is recorded in a

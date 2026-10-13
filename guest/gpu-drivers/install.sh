@@ -36,38 +36,50 @@ done
 
 # need_packages [user]: the prerequisites, by this distro's names: with "user", only what the
 # vendor drivers need; otherwise also what DKMS needs, whose kernel headers must be the running
-# kernel's (DKMS builds for later kernels as they are installed).
+# kernel's (DKMS builds for later kernels as they are installed). Headers already in place are not
+# asked for: a kernel that is not the distro's (limina's enhanced one) ships its own, under a name
+# the distro does not have.
 need_packages() {
   local kver; kver="$(uname -r)"
-  if [ "${1:-}" = user ]; then
-    case "$pm" in
-      dnf) dnf install -y vulkan-loader libglvnd-egl ;;
-      apt-get) DEBIAN_FRONTEND=noninteractive apt-get install -y libvulkan1 libegl1 ;;
-      pacman) pacman -S --needed --noconfirm vulkan-icd-loader libglvnd ;;
-      zypper) zypper --non-interactive install libvulkan1 libglvnd ;;
-      *) die "no package manager this installer knows (dnf, apt-get, pacman, zypper)" ;;
-    esac
-    return
-  fi
+  local have_headers=""
+  [ -e "/lib/modules/$kver/build/Makefile" ] && have_headers=1
+  local user=() kernel=()
   case "$pm" in
-    # Fedora's dkms requires kernel-devel-matched, which left to itself is the newest one and
-    # brings the newest kernel with it, half installed and booted by default: name the running
-    # kernel's.
     dnf)
-      dnf install -y dkms "kernel-devel-$kver" "kernel-devel-matched-$kver" gcc make \
-        vulkan-loader libglvnd-egl ;;
+      user=(vulkan-loader libglvnd-egl)
+      kernel=(dkms gcc make)
+      [ -n "$have_headers" ] || kernel+=("kernel-devel-$kver")
+      # Fedora's dkms requires kernel-devel-matched whenever kernel-core is installed. Left to dnf
+      # that is the newest one, which brings the newest kernel with it, half installed and booted
+      # by default: name an installed kernel-core's.
+      if rpm -q kernel-core >/dev/null 2>&1; then
+        kernel+=("kernel-devel-matched-$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' kernel-core \
+          | sort -V | tail -n 1)")
+      fi ;;
     apt-get)
-      DEBIAN_FRONTEND=noninteractive apt-get install -y dkms "linux-headers-$kver" gcc make \
-        libvulkan1 libegl1 ;;
+      user=(libvulkan1 libegl1)
+      kernel=(dkms gcc make)
+      [ -n "$have_headers" ] || kernel+=("linux-headers-$kver") ;;
     pacman)
+      user=(vulkan-icd-loader libglvnd)
+      kernel=(dkms gcc make)
       # Arch names the headers after the kernel package, which uname does not say: take the one
       # owning the running kernel's modules.
       local kpkg
       kpkg="$(pacman -Qqo "/usr/lib/modules/$kver" 2>/dev/null | head -n 1)"
-      pacman -S --needed --noconfirm dkms "${kpkg:-linux}-headers" gcc make vulkan-icd-loader \
-        libglvnd ;;
-    zypper) zypper --non-interactive install dkms kernel-default-devel gcc make libvulkan1 libglvnd ;;
+      [ -n "$have_headers" ] || kernel+=("${kpkg:-linux}-headers") ;;
+    zypper)
+      user=(libvulkan1 libglvnd)
+      kernel=(dkms gcc make)
+      [ -n "$have_headers" ] || kernel+=(kernel-default-devel) ;;
     *) die "no package manager this installer knows (dnf, apt-get, pacman, zypper)" ;;
+  esac
+  [ "${1:-}" = user ] && kernel=()
+  case "$pm" in
+    dnf) dnf install -y "${user[@]}" "${kernel[@]}" ;;
+    apt-get) DEBIAN_FRONTEND=noninteractive apt-get install -y "${user[@]}" "${kernel[@]}" ;;
+    pacman) pacman -S --needed --noconfirm "${user[@]}" "${kernel[@]}" ;;
+    zypper) zypper --non-interactive install "${user[@]}" "${kernel[@]}" ;;
   esac
 }
 

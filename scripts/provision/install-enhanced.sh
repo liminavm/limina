@@ -200,12 +200,20 @@ ARMUNIT
 # lexical sort picks the OLDER version — so a payload that accidentally kept a stale kernel
 # installed the stale one and the "successful" install silently ran the wrong kernel (twice on
 # 2026-08-03). One kernel per payload, or stop.
-mapfile -t KRPMS < <(ls "$PAYLOAD"/limina-kernel-16k-*.rpm 2>/dev/null)
+KRPMS=()
+for r in "$PAYLOAD"/limina-kernel-16k-*.rpm; do
+  case "$r" in *-devel-*) ;; *) [ -e "$r" ] && KRPMS+=("$r") ;; esac
+done
 [ "${#KRPMS[@]}" -gt 0 ] || { echo "no kernel RPM in payload"; exit 1; }
 [ "${#KRPMS[@]}" -eq 1 ] || {
   echo "payload carries ${#KRPMS[@]} kernel RPMs — refusing to guess which is intended:"
   printf '  %s\n' "${KRPMS[@]}"; exit 1; }
 RPM="${KRPMS[0]}"
+# Its headers, which DKMS builds the vendor GPU drivers' module against. They go in with the
+# kernel, in one transaction: DKMS builds for a new kernel inside its kernel-install add, and needs
+# them there by then. A payload from before the kernel had them carries none.
+DEVEL_RPM="$(dirname "$RPM")/$(basename "$RPM" | sed 's/^limina-kernel-16k-/limina-kernel-16k-devel-/')"
+[ -f "$DEVEL_RPM" ] || DEVEL_RPM=""
 
 # Capture the CURRENT default kernel BEFORE we install the 16k — Fedora's kernel install
 # auto-promotes the newest kernel to default, and step 6 must restore the PREVIOUS default as the
@@ -263,8 +271,9 @@ dnf versionlock delete limina-kernel-16k >/dev/null 2>&1 || true
 if [ "$KERNEL_PRESENT" = 1 ]; then
   echo "-- kernel $KNVR already installed; skipping kernel install (idempotent)"
 else
-  echo "-- installing kernel (rpm -i, co-installs beside the running kernel): $(basename "$RPM")"
-  rpm -ivh "$RPM"
+  echo "-- installing kernel (rpm -i, co-installs beside the running kernel): $(basename "$RPM")" \
+    "${DEVEL_RPM:++ $(basename "$DEVEL_RPM")}"
+  rpm -ivh "$RPM" ${DEVEL_RPM:+"$DEVEL_RPM"}
 fi
 # KREL of the kernel we just installed — from the RPM's kernel-uname-r provide, NOT a /lib/modules
 # glob: multiple limina16k kernels now co-exist, so a glob+head would pick the wrong (older) one.
