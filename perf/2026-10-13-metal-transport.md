@@ -67,10 +67,13 @@ Five points, one boot each, measured 2026-10-13:
   texel buffer (a `TextureBuffer` texture), and zink dereferences the view it did not get; WebRender
   samples a texel buffer each frame. Fixed in `26d53779`: the aquarium then runs under hardware
   WebRender on the transport.
-- **On venus, a fullscreen Firefox under hardware WebRender reads back black.** The client's
-  buffers are scanned out directly, and the host logs `SET_SCANOUT_BLOB … not IOSurface-backed;
-  using readback` per flip. The captured scanout, which is the IOSurface the window shows, has 0
-  nonzero pixels on most frames. Seen on this stock-kernel 4 KiB image. Whether the window shows
-  black too was not eyeballed. Open.
+- **On venus with stock guest Mesa, a zink client under a vrend compositor presents wrong.** Stock
+  venus WSI copies each frame into an exported linear buffer, which the host cannot give an
+  IOSurface, so mutter composites it through vrend and a direct scanout reads it back. Composited,
+  red and blue were swapped (vrend's fill from pages skipped the GLES BGRA swap; fixed in virglrs
+  `63051cf`). Scanned out before mutter ever composited it, it reads back black: vrend has no
+  type for the buffer. Also so on the pre-transport build `Limina-2026-10-09-0`. Our guest Mesa
+  allocates window buffers as dedicated images, which present zero-copy, and `enhanced.test`
+  shows neither. Left open: it needs stock guest Mesa, a vrend desktop and a zink client.
 - **The app bundles did not carry the GPU host**, so `Limina.app` could not start the transport.
   `scripts/build-app.sh` and `xtask bundle` now ship `limina-gpu-host` beside the worker.
