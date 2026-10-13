@@ -462,9 +462,9 @@ fn seated_gpu_workload_survives_restore_unchanged() {
     // so on the DIAG line above rather than by quietly passing a weaker version of this test.
     let full_workload = std::env::var_os("LIMINA_L2_WORKLOAD").is_none();
     assert!(
-        !full_workload || vk_device.contains("Venus"),
-        "vkstill is not running on venus ({vk_device}) — the Vulkan half of this test would \
-         be gating software rendering"
+        !full_workload || limina_test::metal::vk_device_is_enhanced_hardware(&vk_device),
+        "vkstill is not on the enhanced tier's hardware driver ({vk_device}) — the Vulkan half \
+         of this test would be gating software rendering"
     );
     assert!(
         !full_workload || !procs_before.contains("=0"),

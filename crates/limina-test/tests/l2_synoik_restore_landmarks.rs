@@ -424,10 +424,28 @@ fn synoik_desktop_survives_snapshot_restore() {
          || echo none",
     );
     eprintln!("workload up: {procs_before} | {vk_device}");
+    if procs_before.contains("vkstill=0") {
+        eprintln!(
+            "--- vkstill is not running; its journal ---\n{}",
+            ssh_soft(
+                &g1,
+                "journalctl --user -u l2s-vkstill --no-pager -o short-monotonic 2>&1 | tail -40"
+            )
+        );
+        eprintln!(
+            "--- what synoik said meanwhile ---\n{}",
+            ssh_soft(
+                &g1,
+                "sudo journalctl --boot=0 -t synoik --no-pager -o short-monotonic 2>&1 \
+                 | grep -viE 'frame|present' | tail -40"
+            )
+        );
+    }
     assert!(
-        vk_device.contains("Venus"),
-        "vkstill is not running on venus ({vk_device}) — on a Vulkan compositor this test is \
-         entirely about the venus world, and would be gating software rendering"
+        limina_test::metal::vk_device_is_enhanced_hardware(&vk_device),
+        "vkstill is not on the enhanced tier's hardware driver ({vk_device}) — on a Vulkan \
+         compositor this test is entirely about that world, and would be gating software \
+         rendering"
     );
 
     let pre = settled_capture(&g1, Duration::from_secs(90))

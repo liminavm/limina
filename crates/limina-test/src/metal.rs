@@ -32,6 +32,17 @@ pub fn enhanced_on_transport() -> bool {
     std::env::var("LIMINA_TEST_TRANSPORT").as_deref() == Ok("metal")
 }
 
+/// Whether a Vulkan device name is the hardware driver of the transport the enhanced tests run
+/// on. venus names `Virtio-GPU Venus (Apple M1 Max)`, KosmicKrisp the GPU alone, and a software
+/// fallback (lavapipe's `llvmpipe`) neither.
+pub fn vk_device_is_enhanced_hardware(name: &str) -> bool {
+    if enhanced_on_transport() {
+        !name.contains("Venus") && name.contains("Apple ")
+    } else {
+        name.contains("Venus")
+    }
+}
+
 /// Where the vendor drivers for this build's protocol live in the guest.
 pub fn prefix() -> String {
     format!("/opt/limina/{}", limina_gpu_wire::VERSION)
