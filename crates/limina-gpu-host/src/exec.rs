@@ -77,6 +77,12 @@ pub type Arenas = Arc<Mutex<HashMap<u32, Arc<Arena>>>>;
 
 /// How long an export waits for a context's committed work to finish.
 const EXPORT_DRAIN: Duration = Duration::from_secs(2);
+/// The most a context's open command window may keep for an export, counted as it is held.
+/// Far above any frame's commands; a guest past it is looping without committing, and the
+/// context is lost rather than this process growing until it aborts with every other one.
+const MAX_WINDOW_BYTES: usize = 64 << 20;
+/// The most command buffers a context may end before committing them, by the same reasoning.
+const MAX_ENDED: usize = 4096;
 
 /// Requests the server makes of a context's ring thread, answered when the ring is idle.
 #[derive(Default)]
@@ -143,6 +149,8 @@ struct Entry {
 struct Window {
     /// Each with what it answered, if it made an object.
     commands: Vec<(u16, Box<[u8]>, [u64; 6])>,
+    /// What `commands` holds, for [`MAX_WINDOW_BYTES`].
+    bytes: usize,
     /// Objects created inside the window: the window's commands make them again.
     created: HashSet<u32>,
     /// Objects from before the window that it destroyed, which an export still holds.
@@ -252,13 +260,18 @@ impl Objects {
     }
 
     /// Records `op` if a window is open, opening one at a command buffer's beginning.
-    fn note_command(&mut self, op: u16, payload: &[u8]) {
+    fn note_command(&mut self, op: u16, payload: &[u8]) -> R {
         if op == op::BEGIN_COMMAND_BUFFER && self.window.is_none() {
             self.window = Some(Window::default());
         }
         if let Some(w) = &mut self.window {
+            w.bytes += size_of::<(u16, Box<[u8]>, [u64; 6])>() + payload.len();
+            if w.bytes > MAX_WINDOW_BYTES {
+                return Err(Error::OutOfMemory);
+            }
             w.commands.push((op, payload.into(), [0; 6]));
         }
+        Ok(())
     }
 
     fn close_window(&mut self) {
@@ -788,7 +801,7 @@ impl Executor {
             ev.setSignaledValue(value);
         }
         for (op, p, value) in &e.recording {
-            self.objects.note_command(*op, p);
+            self.objects.note_command(*op, p)?;
             if !is_create(*op) {
                 self.exec(*op, p)?;
                 continue;
@@ -865,8 +878,11 @@ impl Executor {
                     if self.lost {
                         continue;
                     }
-                    self.objects.note_command(n.op, n.payload);
-                    if let Err(e) = self.exec(n.op, n.payload) {
+                    let r = self
+                        .objects
+                        .note_command(n.op, n.payload)
+                        .and_then(|()| self.exec(n.op, n.payload));
+                    if let Err(e) = r {
                         log::warn!(
                             "context lost: {e:?} at ring position {} (op {:#x})",
                             n.at,
@@ -1382,6 +1398,9 @@ impl Executor {
             op::BEGIN_COMMAND_BUFFER => self.begin_command_buffer(),
             op::END_COMMAND_BUFFER => {
                 self.open_cb()?;
+                if self.ended.len() >= MAX_ENDED {
+                    return Err(Error::OutOfMemory);
+                }
                 let (cb, alloc) = self.open.take().expect("open_cb checked it");
                 cb.endCommandBuffer();
                 self.ended.push((cb, alloc));

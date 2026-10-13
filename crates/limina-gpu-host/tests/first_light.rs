@@ -89,6 +89,20 @@ impl Guest {
         self.ring.push(&c, extra).expect("ring space");
     }
 
+    /// Pushes, kicking the consumer and waiting for it while the ring is full.
+    fn push_waiting<T: cmd::Command>(&mut self, c: T) {
+        let start = Instant::now();
+        while let Err(e) = self.ring.push(&c, &[]) {
+            assert!(matches!(e, ring::PushError::Full), "{e:?}");
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "the consumer stopped"
+            );
+            self.kick();
+            std::thread::sleep(Duration::from_micros(50));
+        }
+    }
+
     fn kick(&mut self) {
         if self.ring.publish() {
             self.bell.ring();
@@ -736,6 +750,49 @@ fn a_bad_handle_loses_the_context_and_says_where() {
     let at = g.ring.position() - ring::encoded_len::<cmd::Destroy>(0) as u64;
     let err = g.commit_and_wait().expect_err("must fail");
     assert_eq!(err, (ring::Error::BadHandle as u32, at));
+}
+
+/// Command buffers a guest ends and never commits are held by the replayer until a commit; past a
+/// bound the context is lost, rather than the replayer growing until it aborts and takes every
+/// context of the VM with it.
+#[test]
+fn command_buffers_ended_without_a_commit_are_bounded() {
+    let mut g = start();
+    for _ in 0..20_000 {
+        g.push_waiting(cmd::BeginCommandBuffer {});
+        g.push_waiting(cmd::EndCommandBuffer {});
+    }
+    g.kick();
+    let start = Instant::now();
+    let err = loop {
+        if let Some(e) = g.ring.error() {
+            break e;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "never lost");
+        std::thread::sleep(Duration::from_micros(100));
+    };
+    assert_eq!(err.0, ring::Error::OutOfMemory as u32);
+}
+
+/// The commands of an open command buffer are kept for an export until the commit; a window that
+/// never commits is bounded the same way.
+#[test]
+fn a_command_window_that_never_commits_is_bounded() {
+    let mut g = start();
+    g.push_waiting(cmd::BeginCommandBuffer {});
+    g.push_waiting(cmd::BeginCompute {});
+    for _ in 0..1_500_000 {
+        g.push_waiting(cmd::Barrier {
+            kind: cmd::barrier_kind::AFTER_QUEUE_STAGES,
+            after: STAGE_DISPATCH,
+            before: STAGE_DISPATCH,
+            visibility: VISIBILITY_DEVICE,
+        });
+    }
+    g.push_waiting(cmd::EndEncoding {});
+    g.push_waiting(cmd::EndCommandBuffer {});
+    let err = g.commit_and_wait().expect_err("must be lost");
+    assert_eq!(err.0, ring::Error::OutOfMemory as u32);
 }
 
 #[test]
