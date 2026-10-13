@@ -1316,6 +1316,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "limina-gpu-host"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "env_logger",
+ "libc",
+ "limina-gpu-wire",
+ "log",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "objc2-io-surface",
+ "objc2-metal",
+]
+
+[[package]]
 name = "limina-gpu-wire"
 version = "0.1.0"
 
@@ -1347,22 +1363,6 @@ name = "limina-proto"
 version = "0.1.0"
 dependencies = [
  "minicbor",
-]
-
-[[package]]
-name = "limina-replayer"
-version = "0.1.0"
-dependencies = [
- "block2",
- "env_logger",
- "libc",
- "limina-gpu-wire",
- "log",
- "objc2",
- "objc2-core-foundation",
- "objc2-foundation",
- "objc2-io-surface",
- "objc2-metal",
 ]
 
 [[package]]
@@ -1415,11 +1415,11 @@ dependencies = [
  "limina-debug",
  "limina-display",
  "limina-displayctl",
+ "limina-gpu-host",
  "limina-gpu-wire",
  "limina-input",
  "limina-launch",
  "limina-paniclog",
- "limina-replayer",
  "limina-surfaceport",
  "log",
  "tracing-appender",

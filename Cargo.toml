@@ -58,9 +58,9 @@ limina-launch      = { path = "crates/limina-launch" }
 # this the message our loud assertions exist to print is simply lost.
 limina-paniclog    = { path = "crates/limina-paniclog" }
 limina-proto       = { path = "crates/limina-proto" }
-# The Metal-level GPU transport: the out-of-process replayer and the worker's client of it.
+# The Metal-level GPU transport: the out-of-process GPU host and the worker's client of it.
 limina-gpu-wire    = { path = "crates/limina-gpu-wire" }
-limina-replayer    = { path = "crates/limina-replayer" }
+limina-gpu-host    = { path = "crates/limina-gpu-host" }
 limina-surfaceport = { path = "crates/limina-surfaceport" }
 # The renderer, which rutabaga already builds from this path; named here only so the worker can
 # install the publisher its surfaces are handed to.
@@ -154,15 +154,15 @@ opt-level = 3
 [profile.dev.package.bytemuck]
 opt-level = 3
 
-# The native-context transport's replayer is the other renderer on the per-command path, and it
+# The native-context transport's GPU host is the other renderer on the per-command path, and it
 # runs as its own debug binary. objc2 verifies every message's method signature against the
 # runtime's type encoding when its own debug_assertions are on, by parsing the encoding string
-# per send: in a debug replayer that parsing was the top of the profile and the replayer sat at
+# per send: in a debug GPU host that parsing was the top of the profile and the GPU host sat at
 # 98% of a core, so the WebGL aquarium read 4 fps on the transport against 25 on venus. So the
-# objc2 crates also lose their debug assertions, and the replayer and its wire crate (where
+# objc2 crates also lose their debug assertions, and the GPU host and its wire crate (where
 # objc2's generic sends are instantiated) are optimized. Check with `nm` that the debug
-# limina-replayer has no `verify_method_signature`.
-[profile.dev.package.limina-replayer]
+# limina-gpu-host has no `verify_method_signature`.
+[profile.dev.package.limina-gpu-host]
 opt-level = 3
 
 [profile.dev.package.limina-gpu-wire]

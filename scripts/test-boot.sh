@@ -39,10 +39,10 @@ test_artifacts_check "$(pwd)" "$(pin_build_rev edk2)" || exit 1
 CARGO_PROFILE_FLAG=()
 [ "$PROFILE" = "release" ] && CARGO_PROFILE_FLAG=(--release)
 
-# The worker starts limina-replayer from its own directory when a test turns the native-context
+# The worker starts limina-gpu-host from its own directory when a test turns the native-context
 # transport on (LIMINA_GPU_METAL=1), so it has to be as fresh as the worker beside it.
-echo "==> building limina + limina-vmm + limina-replayer ($PROFILE)"
-cargo build ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina -p limina-vmm -p limina-replayer
+echo "==> building limina + limina-vmm + limina-gpu-host ($PROFILE)"
+cargo build ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina -p limina-vmm -p limina-gpu-host
 
 echo "==> codesigning the worker (hypervisor entitlement)"
 crates/limina-vmm/sign.sh "$PROFILE"

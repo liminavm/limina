@@ -11,13 +11,13 @@
 //!   last commit, in order, and later publishes its seqno in
 //!   [`RingControl::completed`](crate::ring::RingControl::completed).
 //! - **Ordering** is what the stream says: queue order across commits, and within a command buffer
-//!   the barriers and fences it encodes, as in Metal 4. The replayer adds none.
+//!   the barriers and fences it encodes, as in Metal 4. The GPU host adds none.
 //! - **Answers** come back through memory. A command that needs one carries a `reply`
 //!   [`BufRef`] to a [`Reply`] the host fills and then marks done; a commit carries one to a
 //!   [`Feedback`]. A create with a reply reports failure there and leaves the context alive; the
 //!   same create without one loses the context instead.
 //! - Enum-valued fields carry Metal's raw values (`MTLPixelFormat`, `MTLLoadAction`, `MTLStages`,
-//!   …). The replayer checks them against what it supports.
+//!   …). The GPU host checks them against what it supports.
 //! - No field has implicit padding: a [`Command`]'s bytes are written to the ring as they are.
 //!
 //! Every struct here also exists in C, generated from these definitions
@@ -256,7 +256,7 @@ wire! {
 
     /// What the guest needs to know about the host GPU, written by [`QueryDevice`].
     struct DeviceInfo {
-        /// `crate::VERSION` of the replayer.
+        /// `crate::VERSION` of the GPU host.
         version: u32,
         /// How many `MTLGPUFamilyApple*` families the device supports.
         apple_family: u32,

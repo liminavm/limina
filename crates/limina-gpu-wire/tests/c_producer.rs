@@ -1,5 +1,5 @@
 //! The C producer (`include/limina_gpu_ring.h`) against the Rust consumer, in two processes
-//! sharing one mapping, as the guest driver and the replayer do.
+//! sharing one mapping, as the guest driver and the GPU host do.
 //!
 //! The consumer parks whenever the ring is empty and then waits only for a kick, never for `tail`:
 //! a producer that fails to see the parked state hangs the test instead of passing it.

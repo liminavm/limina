@@ -79,7 +79,7 @@ Each query really crossed to the host. Over the hot phase's 5 s window the host 
 ## 3. The same round trip on the Metal-level transport (`guest/limina-gpu-smoke`, output `runs/first-light/`)
 
 The transport `SKETCH.md` describes, built: libkrun's virtio-gpu extension, the
-`guest/virtio-gpu-limina` module and the `limina-replayer` process, with the worker started with
+`guest/virtio-gpu-limina` module and the `limina-gpu-host` process, with the worker started with
 `LIMINA_GPU_METAL=1`. The guest is a clone of the stock F44 test image on its own 6.19 kernel
 with 4 KiB pages; nothing else of the enhanced tier is installed. Measured 2026-10-12 on the
 same M1 Max while six other VMs ran (load average 3.0).
@@ -96,11 +96,11 @@ counterpart of the venus probe's empty fenced submit.
 | 200 µs | 229 µs | 37–42 µs | 67–70 µs | 124–445 µs | 200 of 200 |
 | 5 ms | 891 µs | 110–125 µs | 147–176 µs | 190–396 µs | 200 of 200 |
 
-Ranges span the three runs. The replayer's executor spins 50 µs and then parks, so every commit
+Ranges span the three runs. The GPU host's executor spins 50 µs and then parks, so every commit
 after a 200 µs gap needed the doorbell, and the doorbell path costs a few microseconds over the
 hot one. The extra ~80 µs after 5 ms of idle is on the host, past the doorbell, and was not
 broken down. The triangle frame, which compiles its library and pipeline, took 4–8 ms; the
-first frame after the replayer starts took 64 ms.
+first frame after the GPU host starts took 64 ms.
 
 ## What it says
 

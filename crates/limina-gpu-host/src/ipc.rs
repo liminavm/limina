@@ -1,9 +1,9 @@
-//! The worker↔replayer control protocol: Mach messages, one request and one reply each.
+//! The worker↔GPU host control protocol: Mach messages, one request and one reply each.
 //!
 //! This is the slow, privileged path: contexts, arenas and rings are created here, by the worker,
 //! on the guest kernel's behalf. Commands never travel this way; they go through the rings.
 
-/// Replayer → worker, once, right after start: carries a send right to the replayer's request port.
+/// The GPU host → worker, once, right after start: carries a send right to the GPU host's request port.
 pub const HELLO: i32 = 0x4c47_0000;
 /// `{ctx}` → `{status}` + the context's doorbell semaphore.
 pub const CREATE_CONTEXT: i32 = 0x4c47_0001;

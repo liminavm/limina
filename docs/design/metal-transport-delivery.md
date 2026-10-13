@@ -1,6 +1,6 @@
 # The Metal-level transport: delivery and interop
 
-How the guest drivers of limina's third GPU transport (the Metal-level protocol, the replayer and
+How the guest drivers of limina's third GPU transport (the Metal-level protocol, the GPU host and
 `guest/virtio-gpu-limina`; see `spikes/metal-heap-addressing/SKETCH.md`) reach guests, and how
 their buffers meet those of the other two transports, vrend and venus. What the transport does
 today, measured, is in `spikes/kk-on-wire/RESULTS.md`.
@@ -54,7 +54,7 @@ The stock tier keeps gnome-shell on vrend, unchanged.
 Any transport's shareable buffers can be imported by any other, so stock clients (Flatpaks without
 the extension, anything on stock Mesa) work under an enhanced compositor and the other way round.
 
-- **The transport stays out of virglrs.** The replayer remains its own process; interop is a
+- **The transport stays out of virglrs.** The GPU host remains its own process; interop is a
   resource-level matter, not a shared renderer.
 - **The currency is the IOSurface, handed over by Mach port**, as worker → supervisor surfaces
   already are (`docs/graphics.md` §4). Only IOSurface-shareable formats in LINEAR layout cross
@@ -65,7 +65,7 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
 - **Metal transport → vrend/venus — built for windows.** A window-system image is a dedicated
   texture over a *surface*: the guest module's `SURFACE_CREATE` makes a host3d resource the worker
   backs with an IOSurface minted by virglrs (`Renderer::resource_create_surface`), whose Mach port
-  goes to the replayer (`CREATE_TEXTURE_FROM_SURFACE`). vrend adopts the IOSurface when a context
+  goes to the GPU host (`CREATE_TEXTURE_FROM_SURFACE`). vrend adopts the IOSurface when a context
   types the resource; venus imports it as it does its own scanouts. Surfaces take 32-bit
   BGRA/RGBA, and the guest driver offers the window system nothing else
   (`wsi_device::can_share_format`), since an import the compositor cannot make ends its context.
@@ -75,7 +75,7 @@ the extension, anything on stock Mesa) work under an enhanced compositor and the
   dedicated image asks the module what surface its resource is (`SURFACE_IMPORT`); the worker
   resolves the resource to the IOSurface it is presented from (`Renderer::resource_surface_port`:
   vrend's SCANOUT/SHARED textures, venus exports, the transport's own surfaces), binds its port to
-  the context, and the replayer makes a texture over it. Each context importing a resource is a
+  the context, and the GPU host makes a texture over it. Each context importing a resource is a
   holder of its own, released when the resource goes or the context detaches it. A surface may be
   larger than the image over it (a decoder pads its planes); pitch and format must match.
 - **Video pictures cross plane by plane.** A stock VA driver exports a 4:2:0 picture as two

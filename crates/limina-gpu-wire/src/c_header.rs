@@ -56,7 +56,7 @@ fn generate() -> String {
         "/* Generated from crates/limina-gpu-wire by its c_header test; do not edit.\n \
          * SPDX-License-Identifier: MIT\n \
          *\n \
-         * The guest<->replayer protocol of limina's Metal-level GPU transport. The Rust crate is\n \
+         * The guest<->GPU host protocol of limina's Metal-level GPU transport. The Rust crate is\n \
          * the definition; its doc comments are the documentation. */\n\
          #ifndef LIMINA_GPU_WIRE_H\n#define LIMINA_GPU_WIRE_H\n\n\
          #include <stddef.h>\n#include <stdint.h>\n"

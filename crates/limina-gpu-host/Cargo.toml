@@ -1,12 +1,12 @@
-# limina-replayer — the host half of limina's Metal-level GPU transport.
+# limina-gpu-host — the host half of limina's Metal-level GPU transport.
 #
-# The binary is the replayer process: it owns Metal, allocates arenas, drains each context's
+# The binary is the GPU host process: it owns Metal, allocates arenas, drains each context's
 # command ring and executes it. The library also holds the worker's client of that process
 # (spawn, Mach RPC, arena mapping, doorbells), so both ends of the Mach protocol live in one place.
 # Design: spikes/metal-heap-addressing/SKETCH.md; measurements behind it: spikes/replayer-ipc/.
 [package]
-name = "limina-replayer"
-description = "Out-of-process Metal replayer for limina's guest GPU protocol, and the worker's client of it"
+name = "limina-gpu-host"
+description = "Out-of-process Metal GPU host for limina's guest GPU protocol, and the worker's client of it"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

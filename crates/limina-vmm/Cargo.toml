@@ -32,9 +32,9 @@ limina-paniclog = { workspace = true }
 limina-launch = { workspace = true }
 # Runtime log filter (the supervisor changes it over `--debug-control-fd`).
 limina-debug = { workspace = true }
-# The Metal-level GPU transport's replayer process, which the worker starts and drives.
+# The Metal-level GPU transport's GPU host process, which the worker starts and drives.
 limina-gpu-wire = { workspace = true }
-limina-replayer = { workspace = true }
+limina-gpu-host = { workspace = true }
 
 anyhow            = { workspace = true }
 clap              = { workspace = true }

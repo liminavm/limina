@@ -1,10 +1,10 @@
 # A/B: the native-context GPU transport against venus
 
 **Subject:** guest GPU work on the native-context transport (the guest's KosmicKrisp on the limina
-virtio-gpu extension, replayed host-side by `limina-replayer`) against the same work on venus. GL
+virtio-gpu extension, replayed host-side by `limina-gpu-host`) against the same work on venus. GL
 runs through Fedora's zink in both arms, so GL workloads go through the transport too.
 - **Host:** limina-kk `d1ed9e2d660`; virglrs `d389a00`; libkrun `5adb732f`; limina `35a31c97`
-  (optimized replayer).
+  (optimized GPU host).
 - **Guest:** `Fedora-Workstation-44.metal.test.raw`, stock kernel `6.19.10-300.fc44` at 4 KiB pages,
   Fedora mesa `26.1.8-1`, with the transport's guest half delivered; 4 vCPUs, 4 GiB, 1280x800 @ 1.0,
   60 Hz.
@@ -48,8 +48,8 @@ Five points, one boot each, measured 2026-10-13:
   cost is where the transport was meant to win, and this is the per-command workload.
 - **vkmark is level.** Its scenes run at ~2200 fps either way, so a vkmark frame is ~0.45 ms in
   both arms.
-- **glmark2-wayland halves and vk-replay loses a fifth.** Under glmark2 the replayer sat at ~62% of a
-  core, mostly parked in waits (`sample`: `Executor::run` is the only replayer frame of weight), so
+- **glmark2-wayland halves and vk-replay loses a fifth.** Under glmark2 the GPU host sat at ~62% of a
+  core, mostly parked in waits (`sample`: `Executor::run` is the only GPU host frame of weight), so
   it is not throughput-bound. The lead is a per-frame wait, a round trip or a fence the guest blocks
   on, which glmark2's ~0.5 ms frames expose and vkmark's do not. Not measured further.
 - **gl-replay does not move.** It replays through Xwayland and is paced by that present path
@@ -57,9 +57,9 @@ Five points, one boot each, measured 2026-10-13:
 
 ## Found on the way
 
-- **A debug `limina-replayer` cost the transport up to 6x.** objc2 verifies every message's signature
-  under debug assertions, the replayer had no opt-level override, and `cargo xtask build` did not
-  build the replayer at all. Under that build the aquarium read 3-4 fps and the transport lost
+- **A debug `limina-gpu-host` cost the transport up to 6x.** objc2 verifies every message's signature
+  under debug assertions, the GPU host had no opt-level override, and `cargo xtask build` did not
+  build the GPU host at all. Under that build the aquarium read 3-4 fps and the transport lost
   every workload but gl-replay. Fixed in `35a31c97`. The superseded rows are in `debug-replayer/`.
   At 1 fish that build still held 60 fps, so the cost was per command, not per frame.
 - **Firefox's hardware WebRender segfaults on zink over the transport.** It crashes in
@@ -72,5 +72,5 @@ Five points, one boot each, measured 2026-10-13:
   using readback` per flip. The captured scanout, which is the IOSurface the window shows, has 0
   nonzero pixels on most frames. Seen on this stock-kernel 4 KiB image. Whether the window shows
   black too was not eyeballed. Open.
-- **The shipped app does not carry the replayer.** `scripts/build-app.sh` and `xtask bundle` copy
-  `limina` and `limina-vmm` only, so `Limina.app` cannot start the transport. Not fixed here.
+- **The app bundles did not carry the GPU host**, so `Limina.app` could not start the transport.
+  `scripts/build-app.sh` and `xtask bundle` now ship `limina-gpu-host` beside the worker.

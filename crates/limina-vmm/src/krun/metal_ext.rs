@@ -1,8 +1,8 @@
 //! The worker's side of the Metal-level GPU transport: libkrun's virtio-gpu extension
-//! (`devices::virtio::gpu::ext`) served by a `limina-replayer` process.
+//! (`devices::virtio::gpu::ext`) served by a `limina-gpu-host` process.
 //!
 //! The device decides where things go in guest-physical space and keeps the guest's books; this
-//! decides what they are: contexts and arenas live in the replayer, arena pages are mapped here so
+//! decides what they are: contexts and arenas live in the GPU host, arena pages are mapped here so
 //! the device can hand them to the guest, and a doorbell store becomes a semaphore signal. Fences
 //! are answered here too, by watching each ring's `completed` in the mapping of its arena.
 
@@ -13,9 +13,9 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
 use devices::virtio::gpu::ext::{ExtArena, GpuExtension, Signal};
+use limina_gpu_host::client::{Doorbell, GpuHost, MappedArena};
+use limina_gpu_host::journal::ContextExport;
 use limina_gpu_wire::ring::RingControl;
-use limina_replayer::client::{Doorbell, MappedArena, Replayer};
-use limina_replayer::journal::ContextExport;
 
 /// Off by default until a guest driver exists: a stock guest would only pay for an idle process.
 const ENABLE_ENV: &str = "LIMINA_GPU_METAL";
@@ -23,8 +23,8 @@ const ENABLE_ENV: &str = "LIMINA_GPU_METAL";
 /// front.
 pub const ARENA_WINDOW: usize = 16 << 30;
 
-struct ReplayerExtension {
-    replayer: Replayer,
+struct GpuHostExtension {
+    host: GpuHost,
     /// Doorbell slot → that context's doorbell. Read on vCPU threads.
     doorbells: RwLock<Vec<Option<Doorbell>>>,
     /// ctx → its slot, to clear it on destroy.
@@ -32,15 +32,15 @@ struct ReplayerExtension {
     /// (ctx, arena) → the worker's mapping of it, which the guest's mapping is made from. An
     /// import shares its export's mapping.
     arenas: Mutex<HashMap<(u32, u32), Arc<MappedArena>>>,
-    /// Exported arenas by blob resource: each keeps its mapping (and, in the replayer, its
+    /// Exported arenas by blob resource: each keeps its mapping (and, in the GPU host, its
     /// arena) whatever happens to the context that made it.
     exports: Mutex<HashMap<u32, Arc<MappedArena>>>,
     fences: Arc<Fences>,
-    /// A restore made the replayer context that holds arenas only their exports still hold.
+    /// A restore made the GPU host context that holds arenas only their exports still hold.
     holding_orphans: Mutex<bool>,
 }
 
-/// The replayer context a restore puts orphaned exported arenas in, for as long as the restore
+/// The GPU host context a restore puts orphaned exported arenas in, for as long as the restore
 /// runs: the guest's contexts are never 0.
 const ORPHANS: u32 = 0;
 
@@ -121,12 +121,9 @@ fn info(a: &MappedArena) -> ExtArena {
     }
 }
 
-impl GpuExtension for ReplayerExtension {
+impl GpuExtension for GpuHostExtension {
     fn create_context(&self, ctx: u32, doorbell: u32) -> Result<(), String> {
-        let bell = self
-            .replayer
-            .create_context(ctx)
-            .map_err(|e| e.to_string())?;
+        let bell = self.host.create_context(ctx).map_err(|e| e.to_string())?;
         let mut bells = self.doorbells.write().unwrap_or_else(|e| e.into_inner());
         let slot = doorbell as usize;
         if bells.len() <= slot {
@@ -164,14 +161,14 @@ impl GpuExtension for ReplayerExtension {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&ctx);
         self.fences.wake.notify_one();
-        if let Err(e) = self.replayer.destroy_context(ctx) {
+        if let Err(e) = self.host.destroy_context(ctx) {
             log::warn!("metal ext: destroy context {ctx}: {e}");
         }
     }
 
     fn create_arena(&self, ctx: u32, arena: u32, size: u64) -> Result<ExtArena, String> {
         let a = self
-            .replayer
+            .host
             .create_arena(ctx, arena, size)
             .map_err(|e| e.to_string())?;
         let i = info(&a);
@@ -187,7 +184,7 @@ impl GpuExtension for ReplayerExtension {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&(ctx, arena));
-        if let Err(e) = self.replayer.destroy_arena(ctx, arena) {
+        if let Err(e) = self.host.destroy_arena(ctx, arena) {
             log::warn!("metal ext: destroy arena {ctx}/{arena}: {e}");
         }
     }
@@ -206,7 +203,7 @@ impl GpuExtension for ReplayerExtension {
         {
             return Err("ring control block outside its arena".into());
         }
-        self.replayer
+        self.host
             .attach_ring(ctx, arena, offset, data_size)
             .map_err(|e| e.to_string())?;
         self.fences
@@ -240,7 +237,7 @@ impl GpuExtension for ReplayerExtension {
             .get(&(ctx, arena))
             .cloned()
             .ok_or("no such arena")?;
-        self.replayer
+        self.host
             .export_arena(ctx, arena, export)
             .map_err(|e| e.to_string())?;
         let i = info(&a);
@@ -259,7 +256,7 @@ impl GpuExtension for ReplayerExtension {
             .get(&export)
             .cloned()
             .ok_or("no such export")?;
-        self.replayer
+        self.host
             .import_arena(ctx, arena, export)
             .map_err(|e| e.to_string())?;
         let i = info(&a);
@@ -275,25 +272,25 @@ impl GpuExtension for ReplayerExtension {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&export);
-        if let Err(e) = self.replayer.release_export(export) {
+        if let Err(e) = self.host.release_export(export) {
             log::warn!("metal ext: release export {export}: {e}");
         }
     }
 
     fn bind_surface(&self, ctx: u32, surface: u32, port: u32) -> Result<(), String> {
-        self.replayer
+        self.host
             .bind_surface(ctx, surface, port)
             .map_err(|e| e.to_string())
     }
 
     fn release_surface(&self, ctx: u32, surface: u32) {
-        if let Err(e) = self.replayer.release_surface(ctx, surface) {
+        if let Err(e) = self.host.release_surface(ctx, surface) {
             log::warn!("metal ext: release surface {surface} of {ctx}: {e}");
         }
     }
 
     fn export_context(&self, ctx: u32) -> Result<Vec<u8>, String> {
-        self.replayer.export_context(ctx).map_err(|e| e.to_string())
+        self.host.export_context(ctx).map_err(|e| e.to_string())
     }
 
     fn restore_arena(
@@ -309,14 +306,14 @@ impl GpuExtension for ReplayerExtension {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if !*holding {
-                self.replayer
+                self.host
                     .create_context(ORPHANS)
                     .map_err(|e| e.to_string())?;
                 *holding = true;
             }
         }
         let a = self
-            .replayer
+            .host
             .restore_arena(ctx, arena, size, gpu_base)
             .map_err(|e| e.to_string())?;
         let i = info(&a);
@@ -365,7 +362,7 @@ impl GpuExtension for ReplayerExtension {
         } else {
             export
         };
-        self.replayer
+        self.host
             .restore_context(ctx, arena, offset, data_size, export)
             .map_err(|e| e.to_string())?;
         self.fences
@@ -377,7 +374,7 @@ impl GpuExtension for ReplayerExtension {
     }
 
     fn restore_done(&self) {
-        if let Err(e) = self.replayer.restore_done() {
+        if let Err(e) = self.host.restore_done() {
             log::warn!("metal ext: restore done: {e}");
         }
         let mut holding = self
@@ -385,12 +382,12 @@ impl GpuExtension for ReplayerExtension {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if std::mem::take(&mut *holding) {
-            // Their exports keep the arenas, here and in the replayer.
+            // Their exports keep the arenas, here and in the GPU host.
             self.arenas
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|&(c, _), _| c != ORPHANS);
-            if let Err(e) = self.replayer.destroy_context(ORPHANS) {
+            if let Err(e) = self.host.destroy_context(ORPHANS) {
                 log::warn!("metal ext: orphan holder: {e}");
             }
         }
@@ -408,23 +405,23 @@ impl GpuExtension for ReplayerExtension {
     }
 }
 
-/// The replayer binary: next to this one, as cargo and the app bundle both lay them out.
-fn replayer_exe() -> Option<PathBuf> {
+/// The GPU host binary: next to this one, as cargo and the app bundle both lay them out.
+fn gpu_host_exe() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    Some(exe.parent()?.join("limina-replayer"))
+    Some(exe.parent()?.join("limina-gpu-host"))
 }
 
-/// Starts a replayer and returns the extension it serves, when enabled. A failure leaves the VM
+/// Starts a GPU host and returns the extension it serves, when enabled. A failure leaves the VM
 /// without the extension, which a guest sees as a plain virtio-gpu.
 pub fn start() -> Option<Arc<dyn GpuExtension>> {
     std::env::var_os(ENABLE_ENV)?;
-    let exe = replayer_exe()?;
-    match Replayer::spawn(&exe) {
-        Ok(replayer) => {
+    let exe = gpu_host_exe()?;
+    match GpuHost::spawn(&exe) {
+        Ok(host) => {
             log::info!(
-                "metal ext: replayer {} started (pid {})",
+                "metal ext: GPU host {} started (pid {})",
                 exe.display(),
-                replayer.pid()
+                host.pid()
             );
             let fences = Arc::new(Fences::default());
             let watched = fences.clone();
@@ -435,9 +432,9 @@ pub fn start() -> Option<Arc<dyn GpuExtension>> {
                 log::warn!("metal ext: fence watch did not start: {e}");
                 return None;
             }
-            Some(Arc::new(ReplayerExtension {
+            Some(Arc::new(GpuHostExtension {
                 fences,
-                replayer,
+                host,
                 doorbells: RwLock::new(Vec::new()),
                 slots: Mutex::new(HashMap::new()),
                 arenas: Mutex::new(HashMap::new()),
@@ -446,7 +443,7 @@ pub fn start() -> Option<Arc<dyn GpuExtension>> {
             }))
         }
         Err(e) => {
-            log::warn!("metal ext: replayer {} did not start: {e}", exe.display());
+            log::warn!("metal ext: GPU host {} did not start: {e}", exe.display());
             None
         }
     }

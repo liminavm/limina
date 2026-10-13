@@ -1,4 +1,4 @@
-//! The replayer process: answers the worker's control requests and runs one ring consumer thread
+//! The GPU host process: answers the worker's control requests and runs one ring consumer thread
 //! per context.
 
 use std::collections::HashMap;
@@ -60,14 +60,14 @@ const ARENA_GAP: u64 = 0x8000;
 /// Placeholders a single restored arena may need before giving up.
 const MAX_FILLS: usize = 64;
 
-/// The replayer's `main`. Never returns.
+/// The GPU host's `main`. Never returns.
 pub fn main() -> ! {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
         .format_timestamp_micros()
         .init();
     exit_with_parent();
     if let Err(e) = serve() {
-        log::error!("replayer: {e}");
+        log::error!("GPU host: {e}");
         std::process::exit(1);
     }
     std::process::exit(0);
@@ -84,7 +84,7 @@ fn serve() -> std::io::Result<()> {
         &[(send.into_name(), mach::MSG_TYPE_MOVE_SEND)],
     )?;
     drop(parent);
-    log::info!("replayer up on {}", device.name());
+    log::info!("GPU host up on {}", device.name());
     let mut server = Server {
         device,
         contexts: HashMap::new(),
@@ -586,7 +586,7 @@ impl Server {
     }
 }
 
-/// Exits when the parent (the worker) does, so a replayer never outlives its VM.
+/// Exits when the parent (the worker) does, so a GPU host never outlives its VM.
 fn exit_with_parent() {
     // SAFETY: plain syscalls on our own kqueue.
     unsafe {

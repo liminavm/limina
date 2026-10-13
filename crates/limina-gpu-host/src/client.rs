@@ -1,4 +1,4 @@
-//! The worker's side: start a replayer, and drive it on the guest's behalf.
+//! The worker's side: start a GPU host, and drive it on the guest's behalf.
 
 use std::ffi::CString;
 use std::io;
@@ -10,14 +10,14 @@ use crate::mach::{self, Mapping, Message, Port, ReceivePort, Semaphore};
 
 /// How long a control request may take. Arena creation is the slow one (a heap allocation).
 const CALL_TIMEOUT_MS: u32 = 10_000;
-/// How long the replayer may take to say hello.
+/// How long the GPU host may take to say hello.
 const HELLO_TIMEOUT_MS: u32 = 10_000;
 
 /// Serialises spawns: the registered-port slot is per task.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
-/// A running replayer process.
-pub struct Replayer {
+/// A running GPU host process.
+pub struct GpuHost {
     pid: libc::pid_t,
     service: Port,
     /// One reply port, so calls are serialised.
@@ -34,7 +34,7 @@ impl Doorbell {
     }
 }
 
-/// An arena as the worker sees it: the replayer's pages, mapped here.
+/// An arena as the worker sees it: the GPU host's pages, mapped here.
 #[derive(Debug)]
 pub struct MappedArena {
     pub mapping: Mapping,
@@ -42,11 +42,11 @@ pub struct MappedArena {
 }
 
 fn status_err(what: &str, status: i32) -> io::Error {
-    io::Error::other(format!("replayer refused {what}: status {status}"))
+    io::Error::other(format!("GPU host refused {what}: status {status}"))
 }
 
-impl Replayer {
-    /// Starts `exe` (the `limina-replayer` binary) and waits for it to say hello.
+impl GpuHost {
+    /// Starts `exe` (the `limina-gpu-host` binary) and waits for it to say hello.
     pub fn spawn(exe: &Path) -> io::Result<Self> {
         let bootstrap = ReceivePort::new()?;
         let send = bootstrap.make_send()?;
@@ -68,7 +68,7 @@ impl Replayer {
                 kill(pid);
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "replayer did not start",
+                    "GPU host did not start",
                 ));
             }
             Err(e) => {
@@ -239,7 +239,7 @@ impl Replayer {
         Ok(())
     }
 
-    /// Every arena and context is restored: the replayer lets go of what held their places.
+    /// Every arena and context is restored: the GPU host lets go of what held their places.
     pub fn restore_done(&self) -> io::Result<()> {
         self.simple("restore done", ipc::RESTORE_DONE, &[])
     }
@@ -322,7 +322,7 @@ impl Replayer {
     }
 }
 
-impl Drop for Replayer {
+impl Drop for GpuHost {
     fn drop(&mut self) {
         kill(self.pid);
     }
@@ -340,9 +340,9 @@ fn kill(pid: libc::pid_t) {
 fn spawn_process(exe: &Path) -> io::Result<libc::pid_t> {
     use std::os::unix::ffi::OsStrExt;
     let path = CString::new(exe.as_os_str().as_bytes())
-        .map_err(|_| io::Error::other("replayer path has a NUL"))?;
+        .map_err(|_| io::Error::other("GPU host path has a NUL"))?;
     let argv = [path.as_ptr(), std::ptr::null()];
-    // The replayer inherits our environment: RUST_LOG, and the Metal debug knobs.
+    // The GPU host inherits our environment: RUST_LOG, and the Metal debug knobs.
     unsafe extern "C" {
         static environ: *const *const libc::c_char;
     }

@@ -1,4 +1,4 @@
-//! Metal objects the replayer owns outside any one command: the device, and arenas.
+//! Metal objects the GPU host owns outside any one command: the device, and arenas.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -15,7 +15,7 @@ pub const PAGE: u64 = 16 * 1024;
 pub const MAX_ARENA: u64 = 4 << 30;
 
 /// The options every arena and every resource placed in one is created with: CPU-visible,
-/// untracked (the replayer orders work itself), the KK allocation pattern.
+/// untracked (the GPU host orders work itself), the KK allocation pattern.
 pub fn arena_options() -> MTLResourceOptions {
     MTLResourceOptions::StorageModeShared | MTLResourceOptions::HazardTrackingModeUntracked
 }
@@ -122,7 +122,7 @@ const fn block(bytes: u64, w: u32, h: u32) -> FormatInfo {
     }
 }
 
-/// The `MTLPixelFormat`s the replayer accepts, with their layout. A guest naming any other loses
+/// The `MTLPixelFormat`s the GPU host accepts, with their layout. A guest naming any other loses
 /// its context: Metal aborts on some invalid formats rather than failing the call. Formats Apple
 /// GPUs lack (PVRTC aside, which they have but no guest API asks for; Depth24Unorm_Stencil8;
 /// the 4:2:2 formats) are left out.
@@ -183,12 +183,12 @@ pub fn copy_format_info(format: u32, options: u32) -> Option<FormatInfo> {
     }
 }
 
-/// `MTLTextureType` values the replayer accepts (1D through 2DMultisampleArray; not
+/// `MTLTextureType` values the GPU host accepts (1D through 2DMultisampleArray; not
 /// TextureBuffer).
 pub fn valid_texture_type(t: u32) -> bool {
     matches!(t, 0..=8)
 }
 
-/// `MTLTextureUsage` bits the replayer passes through: ShaderRead, ShaderWrite, RenderTarget,
+/// `MTLTextureUsage` bits the GPU host passes through: ShaderRead, ShaderWrite, RenderTarget,
 /// PixelFormatView, ShaderAtomic.
 pub const TEXTURE_USAGE_MASK: u32 = 0x37;

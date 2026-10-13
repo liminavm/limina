@@ -1,4 +1,4 @@
-//! The replayer end to end, with this test process playing the guest: it maps arenas the way the
+//! The GPU host end to end, with this test process playing the guest: it maps arenas the way the
 //! worker does, writes commands into a ring in arena memory, rings the doorbell when the consumer
 //! has parked, and reads results back from arena memory. No VM is involved.
 
@@ -7,9 +7,9 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use limina_gpu_host::client::{Doorbell, GpuHost, MappedArena};
 use limina_gpu_wire::cmd::{self, BufRef, REPLY_DONE};
 use limina_gpu_wire::ring::{self, Producer};
-use limina_replayer::client::{Doorbell, MappedArena, Replayer};
 
 const RING_DATA: u32 = 1 << 18;
 const MIB: u64 = 1 << 20;
@@ -59,7 +59,7 @@ kernel void poke(constant Ptrs& p [[buffer(0)]], uint tid [[thread_position_in_g
 "#;
 
 struct Guest {
-    replayer: Replayer,
+    host: GpuHost,
     bell: Doorbell,
     ring: Producer,
     arena: MappedArena,
@@ -67,16 +67,16 @@ struct Guest {
 }
 
 impl Guest {
-    fn new(replayer: Replayer) -> Self {
-        let bell = replayer.create_context(1).expect("context");
-        let arena = replayer.create_arena(1, 1, 64 * MIB).expect("arena");
+    fn new(host: GpuHost) -> Self {
+        let bell = host.create_context(1).expect("context");
+        let arena = host.create_arena(1, 1, 64 * MIB).expect("arena");
         // SAFETY: the arena mapping outlives the producer (both live in `Guest`); offset 0 is
         // page-aligned and the region is far smaller than the arena.
         let ring =
             unsafe { Producer::init(NonNull::new(arena.mapping.as_ptr()).unwrap(), RING_DATA) };
-        replayer.attach_ring(1, 1, 0, RING_DATA).expect("attach");
+        host.attach_ring(1, 1, 0, RING_DATA).expect("attach");
         Self {
-            replayer,
+            host,
             bell,
             ring,
             arena,
@@ -171,8 +171,8 @@ impl Guest {
 }
 
 fn start() -> Guest {
-    let exe = env!("CARGO_BIN_EXE_limina-replayer");
-    Guest::new(Replayer::spawn(Path::new(exe)).expect("spawn replayer"))
+    let exe = env!("CARGO_BIN_EXE_limina-gpu-host");
+    Guest::new(GpuHost::spawn(Path::new(exe)).expect("spawn GPU host"))
 }
 
 fn create_library(g: &mut Guest, handle: u32, src: &str, reply: BufRef) {
@@ -383,7 +383,7 @@ fn a_triangle_drawn_into_an_arena_texture_reads_back() {
 #[test]
 fn a_kernel_writes_through_an_address_the_guest_computed() {
     let mut g = start();
-    let other = g.replayer.create_arena(1, 2, MIB).expect("second arena");
+    let other = g.host.create_arena(1, 2, MIB).expect("second arena");
     const PTRS: u64 = 3 * MIB;
     const DST: u64 = 4096;
     const N: u32 = 256;
@@ -482,12 +482,12 @@ fn poke(g: &mut Guest, dst: u64, n: u32) {
 #[test]
 fn an_exported_arena_outlives_its_context_and_imports_elsewhere() {
     let mut g = start();
-    g.replayer.create_context(2).expect("second context");
-    let theirs = g.replayer.create_arena(2, 1, MIB).expect("their arena");
-    g.replayer.export_arena(2, 1, 77).expect("export");
-    g.replayer.destroy_context(2).expect("context gone");
+    g.host.create_context(2).expect("second context");
+    let theirs = g.host.create_arena(2, 1, MIB).expect("their arena");
+    g.host.export_arena(2, 1, 77).expect("export");
+    g.host.destroy_context(2).expect("context gone");
 
-    let (size, gpu_base) = g.replayer.import_arena(1, 5, 77).expect("import");
+    let (size, gpu_base) = g.host.import_arena(1, 5, 77).expect("import");
     assert_eq!(size, theirs.mapping.size());
     assert_eq!(
         gpu_base, theirs.gpu_base,
@@ -503,12 +503,12 @@ fn an_exported_arena_outlives_its_context_and_imports_elsewhere() {
         assert_eq!(w, 0xC0FFEE00 + i as u32, "word {i}");
     }
 
-    g.replayer.release_export(77).expect("release");
+    g.host.release_export(77).expect("release");
     assert!(
-        g.replayer.import_arena(1, 6, 77).is_err(),
+        g.host.import_arena(1, 6, 77).is_err(),
         "a released export is gone"
     );
-    assert!(g.replayer.export_arena(1, 99, 78).is_err(), "no such arena");
+    assert!(g.host.export_arena(1, 99, 78).is_err(), "no such arena");
 }
 
 #[test]
@@ -707,7 +707,7 @@ fn destroying_a_context_wedged_on_an_event_answers_at_once() {
     assert_eq!(g.ring.completed(), 0, "the commit is held by the waits");
 
     let start = Instant::now();
-    g.replayer.destroy_context(1).expect("context gone");
+    g.host.destroy_context(1).expect("context gone");
     let took = start.elapsed();
     assert!(took < Duration::from_millis(500), "destroy took {took:?}");
     // The waits were released, so the commit ran and retired instead of being abandoned.
@@ -718,8 +718,8 @@ fn destroying_a_context_wedged_on_an_event_answers_at_once() {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
-    // The replayer still serves other contexts.
-    g.replayer.create_context(2).expect("a new context");
+    // The GPU host still serves other contexts.
+    g.host.create_context(2).expect("a new context");
 }
 
 /// A texture made over an IOSurface the worker filed for the context renders into the surface's
@@ -781,9 +781,9 @@ fn a_texture_over_a_bound_surface_renders_into_the_surface() {
     };
 
     let mut g = start();
-    // The right is ours and moves to the replayer.
+    // The right is ours and moves to the GPU host.
     let port = IOSurfaceCreateMachPort(&surface);
-    g.replayer
+    g.host
         .bind_surface(1, 7, port)
         .expect("the surface is filed");
 
@@ -885,8 +885,8 @@ fn a_texture_over_a_bound_surface_renders_into_the_surface() {
         "every pixel of the surface is the clear colour"
     );
 
-    g.replayer.release_surface(1, 7).expect("released");
-    assert!(g.replayer.release_surface(1, 7).is_err(), "only once");
+    g.host.release_surface(1, 7).expect("released");
+    assert!(g.host.release_surface(1, 7).is_err(), "only once");
 }
 
 /// Timestamps written around a compute fill and resolved into arena memory read back as two GPU
@@ -1000,7 +1000,7 @@ fn a_timestamp_past_its_heap_loses_the_context() {
     assert_eq!(err, (ring::Error::BadValue as u32, at));
 }
 
-/// What a guest is told by one fresh replayer running a fixed sequence of arena and texture
+/// What a guest is told by one fresh GPU host running a fixed sequence of arena and texture
 /// creates: each arena's GPU base and each texture's resource ID, in order. With `destroy_mid`,
 /// one arena and one texture are destroyed partway through, as they are in a live guest.
 fn host_values(destroy_mid: bool) -> Vec<u64> {
@@ -1008,21 +1008,16 @@ fn host_values(destroy_mid: bool) -> Vec<u64> {
     let mut seen = vec![g.arena.gpu_base];
     for (id, mib) in [(2, 8), (3, 1), (4, 32)] {
         seen.push(
-            g.replayer
+            g.host
                 .create_arena(1, id, mib * MIB)
                 .expect("arena")
                 .gpu_base,
         );
     }
     if destroy_mid {
-        g.replayer.destroy_arena(1, 3).expect("destroy");
+        g.host.destroy_arena(1, 3).expect("destroy");
     }
-    seen.push(
-        g.replayer
-            .create_arena(1, 5, 2 * MIB)
-            .expect("arena")
-            .gpu_base,
-    );
+    seen.push(g.host.create_arena(1, 5, 2 * MIB).expect("arena").gpu_base);
     let texture = |g: &mut Guest, handle: u32| {
         let reply = g.reply_slot(RECORDS);
         g.push(
@@ -1065,12 +1060,12 @@ fn host_values(destroy_mid: bool) -> Vec<u64> {
     seen
 }
 
-/// Measurement, not a check: whether two fresh replayers tell the guest the same arena bases and
+/// Measurement, not a check: whether two fresh GPU hosts tell the guest the same arena bases and
 /// texture IDs for the same sequence, with and without destroys in the middle, and what a replay
 /// of only the survivors would be told. Run with `--ignored --nocapture`.
 #[test]
 #[ignore]
-fn are_host_values_reproducible_across_replayers() {
+fn are_host_values_reproducible_across_gpu_hosts() {
     for destroy_mid in [false, true] {
         let a = host_values(destroy_mid);
         let b = host_values(destroy_mid);
@@ -1081,7 +1076,7 @@ fn are_host_values_reproducible_across_replayers() {
     }
 }
 
-/// Measurement: how texture IDs and arena bases are reused under churn, in one replayer. Run with
+/// Measurement: how texture IDs and arena bases are reused under churn, in one GPU host. Run with
 /// `--ignored --nocapture`.
 #[test]
 #[ignore]
@@ -1128,10 +1123,10 @@ fn how_host_values_are_reused_under_churn() {
         }
         let mut bases = Vec::new();
         for round in 0..6u32 {
-            let a = g.replayer.create_arena(1, 50, 4 * MIB).expect("arena");
+            let a = g.host.create_arena(1, 50, 4 * MIB).expect("arena");
             bases.push((round, a.gpu_base));
             drop(a);
-            g.replayer.destroy_arena(1, 50).expect("destroy");
+            g.host.destroy_arena(1, 50).expect("destroy");
         }
         (ids, bases)
     };
@@ -1140,7 +1135,7 @@ fn how_host_values_are_reused_under_churn() {
     eprintln!("texture ids (round, id): {ids1:x?}");
     eprintln!("arena bases (round, base): {bases1:x?}");
     eprintln!(
-        "second replayer equal: ids {} bases {}",
+        "second GPU host equal: ids {} bases {}",
         ids1 == ids2,
         bases1 == bases2
     );
@@ -1200,7 +1195,7 @@ fn churn_destroy(g: &mut Guest, handle: u32) {
     g.commit_and_wait().expect("destroy");
 }
 
-/// Measurement: whether a fresh replayer can be brought to hand out recorded resource IDs again,
+/// Measurement: whether a fresh GPU host can be brought to hand out recorded resource IDs again,
 /// by filling the slots below each one with placeholders. Also whether textures and samplers
 /// draw from one ID space. Run with `--ignored --nocapture`.
 #[test]
@@ -1229,7 +1224,7 @@ fn can_placeholders_reproduce_recorded_ids() {
     }
     eprintln!("recorded (handle, id): {live:?}");
 
-    // A fresh replayer, survivors only, each brought to its recorded id.
+    // A fresh GPU host, survivors only, each brought to its recorded id.
     let mut g = start();
     let mut by_id: Vec<(u64, u32)> = live.iter().map(|(&h, &id)| (id, h)).collect();
     by_id.sort();
@@ -1276,14 +1271,14 @@ fn can_placeholders_reproduce_recorded_ids() {
 fn where_arenas_land_after_holes() {
     let g = start();
     let base = |id: u32, mib: u64| {
-        let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+        let a = g.host.create_arena(1, id, mib * MIB).expect("arena");
         eprintln!("arena {id} ({mib} MiB) at 0x{:x}", a.gpu_base);
     };
     for (id, mib) in [(2, 8), (3, 1), (4, 32), (5, 2)] {
         base(id, mib);
     }
     for id in [3, 4] {
-        g.replayer.destroy_arena(1, id).expect("destroy");
+        g.host.destroy_arena(1, id).expect("destroy");
         eprintln!("destroyed arena {id}");
     }
     for (id, mib) in [(6, 4), (7, 16), (8, 1), (9, 64)] {
@@ -1300,13 +1295,13 @@ fn does_a_context_start_move_arenas() {
     for context_first in [true, false] {
         let g = start();
         let second = |g: &Guest| {
-            let _bell = g.replayer.create_context(2).expect("context");
-            let a = g.replayer.create_arena(2, 1, 4 * MIB).expect("ring arena");
+            let _bell = g.host.create_context(2).expect("context");
+            let a = g.host.create_arena(2, 1, 4 * MIB).expect("ring arena");
             eprintln!("  context 2 ring arena at 0x{:x}", a.gpu_base);
             // SAFETY: the arena's mapping is leaked below, so it outlives the producer.
             let ring =
                 unsafe { Producer::init(NonNull::new(a.mapping.as_ptr()).unwrap(), RING_DATA) };
-            g.replayer.attach_ring(2, 1, 0, RING_DATA).expect("attach");
+            g.host.attach_ring(2, 1, 0, RING_DATA).expect("attach");
             std::mem::forget((a, ring));
         };
         eprintln!("context_first={context_first}");
@@ -1314,7 +1309,7 @@ fn does_a_context_start_move_arenas() {
             second(&g);
         }
         for (id, mib) in [(2, 8), (3, 1), (4, 32)] {
-            let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+            let a = g.host.create_arena(1, id, mib * MIB).expect("arena");
             eprintln!("  arena {id} at 0x{:x}", a.gpu_base);
         }
         if !context_first {
@@ -1323,9 +1318,9 @@ fn does_a_context_start_move_arenas() {
     }
 }
 
-fn export(g: &mut Guest) -> limina_replayer::journal::ContextExport {
-    let bytes = g.replayer.export_context(1).expect("export");
-    limina_replayer::journal::ContextExport::decode(&bytes).expect("decodes")
+fn export(g: &mut Guest) -> limina_gpu_host::journal::ContextExport {
+    let bytes = g.host.export_context(1).expect("export");
+    limina_gpu_host::journal::ContextExport::decode(&bytes).expect("decodes")
 }
 
 /// Builds a little of everything a context holds, including objects the guest destroyed while
@@ -1432,7 +1427,7 @@ fn an_export_inside_open_command_buffers_carries_their_commands() {
         }])],
     );
     g.push(cmd::Destroy { handle: 5, _pad: 0 }, &[]);
-    // Answered once the replayer has consumed everything before it.
+    // Answered once the GPU host has consumed everything before it.
     let texture = churn_texture(&mut g, 9);
     assert_ne!(texture, 0);
     let e = export(&mut g);
@@ -1466,26 +1461,26 @@ fn an_export_inside_open_command_buffers_carries_their_commands() {
     );
 }
 
-/// Arenas re-created in a fresh replayer at the addresses a guest holds, around the holes destroyed
+/// Arenas re-created in a fresh GPU host at the addresses a guest holds, around the holes destroyed
 /// arenas left and the space a context's start takes.
 #[test]
 fn arenas_are_restored_at_their_addresses() {
     let g = start();
     let mut live = Vec::new();
     for (id, mib) in [(2, 8), (3, 1), (4, 32), (5, 2), (6, 1)] {
-        let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+        let a = g.host.create_arena(1, id, mib * MIB).expect("arena");
         live.push((id, a.mapping.size(), a.gpu_base));
     }
     for id in [3, 5] {
-        g.replayer.destroy_arena(1, id).expect("destroy");
+        g.host.destroy_arena(1, id).expect("destroy");
         live.retain(|&(i, _, _)| i != id);
     }
-    let a = g.replayer.create_arena(1, 7, 4 * MIB).expect("arena");
+    let a = g.host.create_arena(1, 7, 4 * MIB).expect("arena");
     live.push((7, a.mapping.size(), a.gpu_base));
     live.push((1, g.arena.mapping.size(), g.arena.gpu_base));
     live.sort_by_key(|&(_, _, base)| base);
 
-    let fresh = Replayer::spawn(Path::new(env!("CARGO_BIN_EXE_limina-replayer"))).expect("spawn");
+    let fresh = GpuHost::spawn(Path::new(env!("CARGO_BIN_EXE_limina-gpu-host"))).expect("spawn");
     let _bell = fresh.create_context(1).expect("context");
     let mut kept = Vec::new();
     for &(id, size, base) in &live {
@@ -1506,23 +1501,23 @@ fn arenas_are_restored_at_their_addresses() {
     assert_eq!(after.gpu_base, lowest_hole);
 }
 
-/// Moves the guest's context into a fresh replayer the way a snapshot restore does: the arena at
+/// Moves the guest's context into a fresh GPU host the way a snapshot restore does: the arena at
 /// its address with its contents, then the context's objects and ring.
 fn restore_into_fresh(g: Guest) -> Guest {
-    let export = g.replayer.export_context(1).expect("export");
+    let export = g.host.export_context(1).expect("export");
     let Guest {
-        replayer: old,
+        host: old,
         ring,
         arena: old_arena,
         seqno,
         ..
     } = g;
-    let fresh = Replayer::spawn(Path::new(env!("CARGO_BIN_EXE_limina-replayer"))).expect("spawn");
+    let fresh = GpuHost::spawn(Path::new(env!("CARGO_BIN_EXE_limina-gpu-host"))).expect("spawn");
     let bell = fresh.create_context(1).expect("context");
     let arena = fresh
         .restore_arena(1, 1, old_arena.mapping.size(), old_arena.gpu_base)
         .expect("arena");
-    // SAFETY: both mappings are the arena's size; the old replayer no longer writes.
+    // SAFETY: both mappings are the arena's size; the old GPU host no longer writes.
     unsafe {
         std::ptr::copy_nonoverlapping(
             old_arena.mapping.as_ptr(),
@@ -1538,7 +1533,7 @@ fn restore_into_fresh(g: Guest) -> Guest {
     // SAFETY: the new mapping holds a copy of the ring and lives as long as the producer.
     let ring = unsafe { ring.moved_to(NonNull::new(arena.mapping.as_ptr()).unwrap()) };
     Guest {
-        replayer: fresh,
+        host: fresh,
         bell,
         ring,
         arena,
@@ -1560,7 +1555,7 @@ fn churn_ids(g: &mut Guest) {
 }
 
 #[test]
-fn a_context_restored_in_a_fresh_replayer_is_the_one_the_guest_knew() {
+fn a_context_restored_in_a_fresh_gpu_host_is_the_one_the_guest_knew() {
     let mut g = start();
     churn_ids(&mut g);
     populate(&mut g);

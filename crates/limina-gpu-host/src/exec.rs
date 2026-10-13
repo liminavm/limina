@@ -1,7 +1,7 @@
 //! A context's ring consumer: decodes commands and replays them on Metal 4.
 //!
 //! Every value from the ring is checked before Metal sees it. Metal answers many invalid calls by
-//! aborting the process, which a lost context is cheaper than, even with the replayer isolated.
+//! aborting the process, which a lost context is cheaper than, even with the GPU host isolated.
 //! GPU addresses (argument-table entries, index and indirect buffers) are the exception: a shader
 //! can dereference any address it computes, so checking the ones a command names would buy no
 //! isolation, and they pass through as given.
@@ -541,7 +541,7 @@ fn is_create(op: u16) -> bool {
 const FILL_TRIES: usize = 100;
 
 /// Objects holding resource IDs while a restore brings objects to their recorded ones. Shared by
-/// every context restored into a replayer, since contexts share the ID spaces; dropped once all
+/// every context restored into a GPU host, since contexts share the ID spaces; dropped once all
 /// stand.
 #[derive(Default)]
 pub struct Placeholders {

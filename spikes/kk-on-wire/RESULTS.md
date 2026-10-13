@@ -2,7 +2,7 @@
 
 Stage 1 of `spikes/metal-heap-addressing/SKETCH.md`: KosmicKrisp in the guest, with its Metal
 bridge (`mtl_*`) replaced by an encoder of limina's GPU protocol (`crates/limina-gpu-wire`),
-and the host's `limina-replayer` making the Metal 4 calls.
+and the host's `limina-gpu-host` making the Metal 4 calls.
 
 Measured 2026-10-12 on an M1 Max with macOS 26.6.2, in a stock F44 guest (`metal-smoke.raw`,
 `guest/virtio-gpu-limina` module) booted with `LIMINA_GPU_METAL=1 cargo xtask run`. Mesa was
@@ -117,7 +117,7 @@ buffer scene with guest and host both idle. Queue events now publish like commit
   WSI and zink do, from exported sync_files (`DMA_BUF_IOCTL_IMPORT_SYNC_FILE`). Importing a
   sync_file into a KK semaphore still waits on the CPU (the host cannot wait on a guest fence).
 - The worker answers fences by polling ring control blocks every 100 µs while one is pending;
-  a replayer-posted wake would remove the poll.
+  a wake posted by the GPU host would remove the poll.
 - **Only windows cross to the compositor.** A non-window exported KK heap is still a blob the
   extension owns, invisible to virglrs. Windows in RGBA16F or 10-bit formats are withheld until
   surfaces take them; X11 WSI's format list is not filtered.

@@ -398,7 +398,7 @@ pub fn call(
         ))),
         None => Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "replayer did not reply",
+            "GPU host did not reply",
         )),
     }
 }

@@ -1,7 +1,7 @@
 /* Generated from crates/limina-gpu-wire by its c_header test; do not edit.
  * SPDX-License-Identifier: MIT
  *
- * The guest<->replayer protocol of limina's Metal-level GPU transport. The Rust crate is
+ * The guest<->GPU host protocol of limina's Metal-level GPU transport. The Rust crate is
  * the definition; its doc comments are the documentation. */
 #ifndef LIMINA_GPU_WIRE_H
 #define LIMINA_GPU_WIRE_H

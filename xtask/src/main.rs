@@ -680,11 +680,11 @@ fn with_venv_mesa(repo: &Path, cmd: &mut Command) {
 
 fn cargo_build_binaries(repo: &Path, release: bool) -> Result<()> {
     eprintln!(
-        "==> building limina + limina-vmm + limina-replayer ({})",
+        "==> building limina + limina-vmm + limina-gpu-host ({})",
         profile_name(release)
     );
-    // The worker starts limina-replayer from its own directory when the native-context transport
-    // is on, so a build that leaves it out runs whatever replayer the last build left behind.
+    // The worker starts limina-gpu-host from its own directory when the native-context transport
+    // is on, so a build that leaves it out runs whatever GPU host the last build left behind.
     let mut c = Command::new("cargo");
     c.current_dir(repo).args([
         "build",
@@ -693,7 +693,7 @@ fn cargo_build_binaries(repo: &Path, release: bool) -> Result<()> {
         "-p",
         "limina-vmm",
         "-p",
-        "limina-replayer",
+        "limina-gpu-host",
     ]);
     with_venv_mesa(repo, &mut c);
     if release {
@@ -717,7 +717,7 @@ fn build(release: bool) -> Result<()> {
     cargo_build_binaries(&repo, release)?;
     sign_worker(&repo, release)?;
     eprintln!(
-        "==> build complete: target/{}/{{limina,limina-vmm}} (worker signed)",
+        "==> build complete: target/{}/{{limina,limina-vmm,limina-gpu-host}} (worker signed)",
         profile_name(release)
     );
     Ok(())
@@ -820,7 +820,7 @@ fn bundle(release: bool, open: bool) -> Result<()> {
         std::fs::remove_dir_all(&app).with_context(|| format!("rm {app:?}"))?;
     }
     std::fs::create_dir_all(&macos).with_context(|| format!("mkdir {macos:?}"))?;
-    for bin in ["limina", "limina-vmm"] {
+    for bin in ["limina", "limina-vmm", "limina-gpu-host"] {
         std::fs::copy(profile_dir.join(bin), macos.join(bin))
             .with_context(|| format!("copy {bin} into the bundle"))?;
     }
@@ -837,6 +837,9 @@ fn bundle(release: bool, open: bool) -> Result<()> {
         .arg(&ents)
         .args(["-s", "-", "--force"])
         .arg(macos.join("limina-vmm")))?;
+    run(Command::new("codesign")
+        .args(["-s", "-", "--force"])
+        .arg(macos.join("limina-gpu-host")))?;
     run(Command::new("codesign")
         .args(["-s", "-", "--force"])
         .arg(macos.join("limina")))?;

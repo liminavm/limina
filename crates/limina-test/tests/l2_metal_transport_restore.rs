@@ -4,7 +4,7 @@
 //! A Vulkan client on the native-context transport must survive a snapshot restore as the same
 //! process, still rendering.
 //!
-//! The transport's state is spread over three owners: the replayer's objects and arenas, the
+//! The transport's state is spread over three owners: the GPU host's objects and arenas, the
 //! extension's books in the device (contexts, rings, arena mappings, the window surfaces a context
 //! made), and the classic renderer, which the compositor imports those surfaces into. A restore
 //! that brings back two of the three looks fine to every process oracle: the client is still
@@ -267,7 +267,7 @@ fn metal_transport_client_survives_snapshot_restore() {
         let _ = std::fs::remove_file(&disk);
     };
 
-    // --- Guest 2: a fresh worker and replayer restoring it ---
+    // --- Guest 2: a fresh worker and GPU host restoring it ---
     let mut cfg2 = devices(base_cfg)
         .with_coexist_display(1280, 800)
         .with_net()
