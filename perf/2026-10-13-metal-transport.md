@@ -62,11 +62,11 @@ Five points, one boot each, measured 2026-10-13:
   build the GPU host at all. Under that build the aquarium read 3-4 fps and the transport lost
   every workload but gl-replay. Fixed in `35a31c97`. The superseded rows are in `debug-replayer/`.
   At 1 fish that build still held 60 fps, so the cost was per command, not per frame.
-- **Firefox's hardware WebRender segfaults on zink over the transport.** It crashes in
-  `zink_set_sampler_views` (Fedora's `libgallium-26.1.8`), within 5 s of start, even on
-  `about:blank`. glmark2 and vkmark, texture scenes included, run on the same stack, so it is something
-  WebRender's compositor does.
-  Open.
+- **Firefox's hardware WebRender segfaulted on zink over the transport**, in
+  `zink_set_sampler_views` within 5 s of start, even on `about:blank`. The GPU host refused every
+  texel buffer (a `TextureBuffer` texture), and zink dereferences the view it did not get; WebRender
+  samples a texel buffer each frame. Fixed in `26d53779`: the aquarium then runs under hardware
+  WebRender on the transport.
 - **On venus, a fullscreen Firefox under hardware WebRender reads back black.** The client's
   buffers are scanned out directly, and the host logs `SET_SCANOUT_BLOB … not IOSurface-backed;
   using readback` per flip. The captured scanout, which is the IOSurface the window shows, has 0
