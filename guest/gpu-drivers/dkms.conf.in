@@ -1,0 +1,15 @@
+# dkms.conf for limina-virtio-gpu: the in-tree virtio-gpu DRM driver plus limina's Metal-level
+# transport extension (guest/virtio-gpu-limina), for every kernel series under series/.
+# @VERSION@ is stamped by scripts/package-gpu-drivers.sh.
+#
+# The module keeps the in-tree name and lands in extra/, which depmod searches before the kernel's
+# own tree, so it shadows the in-tree driver. Without the extension's feature bit it behaves as
+# upstream. A kernel whose series is not shipped fails the build, which leaves the in-tree driver.
+PACKAGE_NAME="limina-virtio-gpu"
+PACKAGE_VERSION="@VERSION@"
+BUILT_MODULE_NAME[0]="virtio-gpu"
+BUILT_MODULE_LOCATION[0]="out/"
+DEST_MODULE_LOCATION[0]="/extra"
+AUTOINSTALL="yes"
+MAKE[0]="sh ./dkms-make.sh ${kernelver} ${kernel_source_dir}"
+CLEAN="rm -rf out"

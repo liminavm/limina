@@ -9,7 +9,8 @@
 #
 # Usage: scripts/build-virtio-gpu-limina.sh [KTAG] [KREL]
 #   KTAG: stable kernel tag whose virtio-gpu sources to vendor (default v6.19.10, the F44 stock
-#         kernel; see docs/images.md).
+#         kernel; see docs/images.md), or `limina:<rev>` for the [linux] fork at <rev>, whose
+#         virtio-gpu carries our own commits on top of its stable base.
 #   KREL: when given, also build the module against that Fedora kernel-devel release
 #         (e.g. 6.19.10-300.fc44.aarch64) and leave it at target/virtio-gpu-limina/<KREL>/.
 # Output: target/virtio-gpu-limina/limina-virtio-gpu-ext-<version>/ (the DKMS tree) and its
@@ -23,12 +24,23 @@ cd "$(dirname "$0")/.."
 
 KTAG="${1:-v6.19.10}"
 KREL="${2:-}"
-VERSION="${KTAG#v}.limina1"
+case "$KTAG" in
+  limina:*)
+    REV="${KTAG#limina:}"
+    VERSION="limina.${REV:0:12}"
+    BASE_URL="https://raw.githubusercontent.com/liminavm/linux/$REV/drivers/gpu/drm/virtio"
+    fetch_url() { printf '%s/%s\n' "$BASE_URL" "$1"; }
+    ;;
+  *)
+    VERSION="${KTAG#v}.limina1"
+    BASE_URL="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/drivers/gpu/drm/virtio"
+    fetch_url() { printf '%s/%s?h=%s\n' "$BASE_URL" "$1" "$KTAG"; }
+    ;;
+esac
 NAME="limina-virtio-gpu-ext"
 SRC="guest/virtio-gpu-limina"
 OUT="target/virtio-gpu-limina"
 TREE="$OUT/$NAME-$VERSION"
-BASE_URL="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/drivers/gpu/drm/virtio"
 
 # The full in-tree source set; keep in sync with $SRC/Kbuild.
 FILES=(
@@ -41,9 +53,9 @@ FILES=(
 rm -rf "$TREE"
 mkdir -p "$TREE"
 
-echo "==> vendoring virtio-gpu sources from stable $KTAG"
+echo "==> vendoring virtio-gpu sources from $KTAG"
 for f in "${FILES[@]}"; do
-    curl -sfL "$BASE_URL/$f?h=$KTAG" -o "$TREE/$f" \
+    curl -sfL "$(fetch_url "$f")" -o "$TREE/$f" \
         || { echo "FAILED to fetch $f for $KTAG" >&2; exit 1; }
     # cgit serves an HTML error page for unknown refs; make sure we got C source.
     head -c 100 "$TREE/$f" | grep -q "<html" && { echo "bad fetch: $f ($KTAG)" >&2; exit 1; }

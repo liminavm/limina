@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+# Copyright © 2026 Gustavo Noronha Silva
+# The build base for limina's guest GPU drivers (scripts/build-gpu-drivers.sh): one binary build
+# that installs onto any distro. What makes it portable is the OLDEST glibc it links against, so
+# the base is the oldest mainstream release we support, not the newest: Ubuntu 24.04, glibc 2.39
+# (Debian 13 is 2.41, Fedora 40 is 2.39). A Fedora 44 build needs 2.43 and loads nowhere older.
+#
+# LLVM, libclc and the SPIR-V translator are build-time only: KosmicKrisp compiles its OpenCL
+# kernels while building, and Mesa wants LLVM >= 15 for that. SPIRV-Tools is linked statically
+# (see the build script), because distros ship it under different, unversioned sonames.
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential pkg-config cmake ninja-build bison flex git ca-certificates patchelf file \
+      python3 python3-pip python3-mako python3-yaml python3-packaging python3-ply \
+      llvm-18-dev libclang-18-dev clang-18 libclc-18-dev libclc-18 libllvmspirvlib-18-dev \
+      spirv-tools glslang-tools \
+      libdrm-dev libwayland-dev wayland-protocols libwayland-egl-backend-dev libglvnd-dev \
+      libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxrandr-dev libxxf86vm-dev \
+      libxshmfence-dev libxcb1-dev libxcb-glx0-dev libxcb-shm0-dev libxcb-dri3-dev \
+      libxcb-present-dev libxcb-sync-dev libxcb-randr0-dev libxcb-xfixes0-dev libxcb-keysyms1-dev \
+      libexpat1-dev libzstd-dev zlib1g-dev libudev-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Mesa needs meson >= 1.4; Ubuntu 24.04 ships 1.3.
+RUN pip3 install --break-system-packages 'meson==1.7.2'
+
+ENV PATH=/usr/lib/llvm-18/bin:$PATH

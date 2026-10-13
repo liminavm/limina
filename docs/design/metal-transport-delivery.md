@@ -9,19 +9,50 @@ today, measured, is in `spikes/kk-on-wire/RESULTS.md`.
 
 Both guest drivers ship as **vendor drivers**: the Vulkan driver (KosmicKrisp on the limina
 bridge) and the GL driver (zink over it first, an own GL-to-Metal later). Neither replaces the
-stock path; they are added beside it.
+system's Mesa; they are installed beside it, and nothing selects them through the environment.
 
-- **System-wide, enhanced tier.** An RPM next to the enhanced Mesa: the Vulkan ICD, and a Mesa
-  build carrying zink-on-KK as an EGL/GLX vendor. The stock tier never installs them.
-- **Selection is per feature.** A driver lights up only when its own prerequisites are there: the
-  guest module with the extension negotiated (`VIRTIO_GPU_F_LIMINA_EXT`). Without them the loader
-  falls back to the stock drivers, so a guest mid-upgrade keeps working.
+- **One build for every distro.** `scripts/build-gpu-drivers.sh` builds the `[kosmickrisp-guest]`
+  Mesa with `-Dlimina-vendor=true` on the oldest glibc we support (Ubuntu 24.04's 2.39,
+  `guest/gpu-drivers/Containerfile`), links the C++ runtime statically, and refuses an artifact
+  that needs a newer glibc or a library outside the short list every desktop distro has (glibc,
+  libdrm, expat, zlib, zstd, udev, wayland, xcb/X11, libgbm, the Vulkan loader, glvnd).
+- **A private tree per protocol: `/opt/limina/<wire>/`**, `<wire>` being the protocol the
+  drivers speak to the host. Drivers for several hosts sit side by side; each declines a host
+  that speaks another. The tree carries its own `libgallium` beside the libraries that need it
+  (RUNPATH `$ORIGIN`), never the distro's.
+- **Found where the system's loaders look**, through links the installer makes:
+  - EGL: a glvnd vendor, `/etc/glvnd/egl_vendor.d/10_limina-<wire>.json`, ahead of Mesa's `50_`.
+  - Vulkan: an ICD, `/etc/vulkan/icd.d/limina-<wire>.json`.
+  - GBM: `virtio_gpu_gbm.so` in the system libgbm's backend directory. libgbm tries a backend
+    named after the device's DRM driver before its built-in one, so ours is asked first about
+    every virtio-gpu. It loads one backend per name, so the newest protocol's takes it.
+  - GLX is not provided: Xwayland names Mesa as the GLX vendor, so X11 GL clients stay on the
+    stock drivers.
+- **Selection is per device, by declining.** Every entry point asks the module what the host
+  speaks (`DRM_VIRTGPU_LIMINA_INFO`, one ioctl, no host context) and declines a device that is
+  not a limina transport speaking its protocol, so the stock drivers take it:
+  - the DRI loader answers zink for such a device and nothing for any other, ahead of
+    `MESA_LOADER_DRIVER_OVERRIDE`, which a system Mesa's configuration may set for itself;
+  - EGL declines at vendor init when no such device exists, and declines a GBM display its own
+    backend did not make;
+  - the GBM backend declines other devices, and names its own `limina`, not `drm`: a system EGL
+    takes a `drm` device for its own and would read our device structure as one of its own;
+  - KosmicKrisp enumerates no device.
+  A guest mid-upgrade, without the module or on a host without the transport, keeps working.
 - **Vulkan coexistence.** The loader enumerates every ICD, so a guest with both venus and the
-  limina ICD shows two devices of one GPU. The enhanced tier must make ours the one applications
-  pick (device ordering, or not installing the venus ICD where ours is present).
-- **Versions.** A Flatpak extension (below) does not move with the guest's limina version, so the
-  drivers must refuse cleanly, falling back to stock, when the module or host is older or newer
-  than they speak. The wire protocol carries a version; the module's ioctls do not yet.
+  limina ICD shows two devices of one GPU. zink in the vendor build takes only KosmicKrisp's.
+  Applications still see both until a small implicit layer hides venus's device where ours is
+  present.
+- **The module ships through the distro's DKMS**, one package carrying the in-tree driver's
+  sources for every kernel series we support, each patched with the extension
+  (`guest/gpu-drivers/dkms-make.sh` picks by the kernel's major.minor). A series from our own
+  kernel fork is vendored from the fork, which carries virtio-gpu commits of ours. A kernel with
+  no series fails the build and keeps its in-tree driver.
+- **The installer is the distro-agnostic part of the guest tools** (`guest/gpu-drivers/install.sh`,
+  packaged by `scripts/package-gpu-drivers.sh`). What differs per distro is confined to the
+  prerequisites' package names and the initramfs tool; everything it installs is recorded in a
+  manifest that `--uninstall` and upgrades read. A Vulkan driver list pinned in the environment
+  (the RPM enhanced tier pins venus) gains our ICDs rather than being replaced.
 
 ### Flatpak
 
