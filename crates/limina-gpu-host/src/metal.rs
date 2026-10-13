@@ -33,6 +33,44 @@ impl Surface {
         objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(port).map(Surface)
     }
 
+    /// A surface of the GPU host's own, `width` x `height` elements of `bytes_per_element`, rows
+    /// at whatever pitch IOSurface aligns them to.
+    pub fn new(width: u32, height: u32, bytes_per_element: u32) -> Option<Self> {
+        use objc2_core_foundation::{
+            CFDictionary, CFNumber, CFRetained, CFString, kCFTypeDictionaryKeyCallBacks,
+            kCFTypeDictionaryValueCallBacks,
+        };
+        use objc2_io_surface::{
+            IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceHeight, kIOSurfaceWidth,
+        };
+        use std::ffi::c_void;
+
+        let values: [CFRetained<CFNumber>; 3] = [
+            CFNumber::new_i32(i32::try_from(width).ok()?),
+            CFNumber::new_i32(i32::try_from(height).ok()?),
+            CFNumber::new_i32(i32::try_from(bytes_per_element).ok()?),
+        ];
+        // SAFETY: framework key constants and live CFNumbers; the dictionary retains both.
+        unsafe {
+            let mut keys: [*const c_void; 3] = [
+                (kIOSurfaceWidth as *const CFString).cast(),
+                (kIOSurfaceHeight as *const CFString).cast(),
+                (kIOSurfaceBytesPerElement as *const CFString).cast(),
+            ];
+            let mut vals: [*const c_void; 3] =
+                values.each_ref().map(|v| (&**v as *const CFNumber).cast());
+            let dict = CFDictionary::new(
+                None,
+                keys.as_mut_ptr(),
+                vals.as_mut_ptr(),
+                keys.len() as isize,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
+            )?;
+            IOSurfaceRef::new(&dict).map(Surface)
+        }
+    }
+
     pub fn width(&self) -> u32 {
         self.0.width() as u32
     }

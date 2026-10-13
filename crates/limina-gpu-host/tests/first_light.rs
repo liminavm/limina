@@ -15,6 +15,7 @@ const RING_DATA: u32 = 1 << 18;
 const MIB: u64 = 1 << 20;
 
 const RGBA8_UNORM: u32 = 70;
+const BGRA8_UNORM: u32 = 80;
 const TEX_2D: u32 = 2;
 const USAGE_SHADER_READ: u32 = 1;
 const USAGE_RENDER_TARGET: u32 = 4;
@@ -819,12 +820,13 @@ fn destroying_a_context_wedged_on_an_event_answers_at_once() {
     g.host.create_context(2).expect("a new context");
 }
 
-/// A texture made over an IOSurface the worker filed for the context renders into the surface's
-/// own pages: what makes a buffer this transport draws reachable by vrend and venus, which adopt
-/// the same surface.
-#[test]
+/// A BGRA IOSurface of the worker's, as `SURFACE_CREATE` mints them.
 #[allow(deprecated)]
-fn a_texture_over_a_bound_surface_renders_into_the_surface() {
+fn bgra_surface(
+    w: u32,
+    h: u32,
+    pitch: i32,
+) -> objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef> {
     use std::ffi::c_void;
 
     use objc2_core_foundation::{
@@ -832,15 +834,9 @@ fn a_texture_over_a_bound_surface_renders_into_the_surface() {
         kCFTypeDictionaryValueCallBacks,
     };
     use objc2_io_surface::{
-        IOSurfaceCreate, IOSurfaceCreateMachPort, IOSurfaceGetBaseAddress, IOSurfaceLock,
-        IOSurfaceLockOptions, IOSurfaceUnlock, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow,
-        kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
+        IOSurfaceCreate, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight,
+        kIOSurfacePixelFormat, kIOSurfaceWidth,
     };
-
-    const BGRA8_UNORM: u32 = 80;
-    const W: u32 = 64;
-    const H: u32 = 8;
-    const PITCH: i32 = 256;
 
     let num = |v: i32| -> CFRetained<CFNumber> {
         // SAFETY: a pointer to an i32 for the SInt32 type.
@@ -848,14 +844,14 @@ fn a_texture_over_a_bound_surface_renders_into_the_surface() {
             .expect("a number")
     };
     let values = [
-        num(W as i32),
-        num(H as i32),
+        num(w as i32),
+        num(h as i32),
         num(4),
-        num(PITCH),
+        num(pitch),
         num(i32::from_be_bytes(*b"BGRA")),
     ];
     // SAFETY: framework key constants and live CFNumbers; the dictionary retains both.
-    let surface = unsafe {
+    unsafe {
         let mut keys: [*const c_void; 5] = [
             (kIOSurfaceWidth as *const CFString).cast(),
             (kIOSurfaceHeight as *const CFString).cast(),
@@ -875,7 +871,24 @@ fn a_texture_over_a_bound_surface_renders_into_the_surface() {
         )
         .expect("a dictionary");
         IOSurfaceCreate(&dict).expect("a surface")
+    }
+}
+
+/// A texture made over an IOSurface the worker filed for the context renders into the surface's
+/// own pages: what makes a buffer this transport draws reachable by vrend and venus, which adopt
+/// the same surface.
+#[test]
+#[allow(deprecated)]
+fn a_texture_over_a_bound_surface_renders_into_the_surface() {
+    use objc2_io_surface::{
+        IOSurfaceCreateMachPort, IOSurfaceGetBaseAddress, IOSurfaceLock, IOSurfaceLockOptions,
+        IOSurfaceUnlock,
     };
+
+    const W: u32 = 64;
+    const H: u32 = 8;
+    const PITCH: i32 = 256;
+    let surface = bgra_surface(W, H, PITCH);
 
     let mut g = start();
     // The right is ours and moves to the GPU host.
@@ -1596,6 +1609,64 @@ fn arenas_are_restored_at_their_addresses() {
         .expect("a hole")
         .0;
     assert_eq!(after.gpu_base, lowest_hole);
+}
+
+/// A texture outlives the guest's hold on the surface under it: the guest gives the resource back
+/// as it destroys the texture, and the destroy can still be on the ring when a snapshot is taken.
+/// The restore remakes the texture all the same, and the context comes back whole.
+#[test]
+fn a_texture_whose_surface_was_released_restores() {
+    let surface = bgra_surface(64, 8, 256);
+    let mut g = start();
+    g.host
+        .bind_surface(1, 7, surface.create_mach_port())
+        .expect("the surface is filed");
+    let desc = cmd::TextureDesc {
+        texture_type: TEX_2D,
+        pixel_format: BGRA8_UNORM,
+        width: 64,
+        height: 8,
+        depth: 1,
+        mip_levels: 1,
+        array_length: 1,
+        sample_count: 1,
+        usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+        ..Default::default()
+    };
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTextureFromSurface {
+            handle: 3,
+            surface: 7,
+            desc,
+            reply,
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0, "a texture over the surface");
+    g.host.release_surface(1, 7).expect("released");
+
+    let before = export(&mut g);
+    let mut g = restore_into_fresh(g);
+    let after = export(&mut g);
+    assert!(!after.lost, "restored lost: {:?}", g.ring.error());
+    assert_eq!(after, before);
+
+    // The remade texture still takes a render pass.
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    let mut pass = cmd::BeginRenderPass::default();
+    pass.colors[0] = cmd::RenderAttachment {
+        texture: 3,
+        load_action: LOAD_CLEAR,
+        store_action: STORE_STORE,
+        clear: [0.0, 1.0, 0.0, 1.0],
+        ..Default::default()
+    };
+    g.push(pass, &[]);
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("a pass over the remade texture");
+    assert!(g.ring.error().is_none());
 }
 
 /// Moves the guest's context into a fresh GPU host the way a snapshot restore does: the arena at

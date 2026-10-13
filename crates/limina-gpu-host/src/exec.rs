@@ -396,6 +396,8 @@ pub struct Executor {
     /// Destroyed objects with the commit that may still use them; see [`Self::reap`].
     graveyard: Vec<(u64, Grave)>,
     lost: bool,
+    /// Objects are being remade from an export.
+    restoring: bool,
     mailbox: Arc<Mailbox>,
 }
 
@@ -677,6 +679,7 @@ impl Executor {
             in_flight: Arc::new(Mutex::new(BTreeSet::new())),
             graveyard: Vec::new(),
             lost: false,
+            restoring: false,
             mailbox,
         })
     }
@@ -690,7 +693,10 @@ impl Executor {
         let r = if e.lost {
             Err(Error::Restore)
         } else {
-            self.import(e, placeholders)
+            self.restoring = true;
+            let r = self.import(e, placeholders);
+            self.restoring = false;
+            r
         };
         if let Err(err) = r {
             log::warn!("restore: context lost: {err:?}");
@@ -725,7 +731,14 @@ impl Executor {
             let live = std::mem::replace(&mut self.objects, scratch);
             let r = self.remake(o, placeholders);
             self.objects = live;
-            let (_, obj) = r?;
+            let (_, obj) = r.inspect_err(|err| {
+                log::warn!(
+                    "restore: object {} (op {:#x}, handle {:#x}) not rebuilt: {err:?}",
+                    made.len(),
+                    o.op,
+                    o.handle
+                )
+            })?;
             let rec = Arc::new(Record {
                 op: o.op,
                 payload: o.payload.clone().into(),
@@ -1871,12 +1884,17 @@ impl Executor {
         c: &cmd::CreateTextureFromSurface,
     ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
-        let surface = lock(&self.surfaces)
-            .get(&c.surface)
-            .cloned()
-            .ok_or(Error::BadHandle)?;
         let d = c.desc;
         let fmt = metal::format_info(d.pixel_format).ok_or(Error::BadValue)?;
+        let surface = match lock(&self.surfaces).get(&c.surface).cloned() {
+            Some(s) => s,
+            // A texture outlives the guest's hold on its surface: the guest lets go of the
+            // resource as it destroys the texture, and the destroy may still be on the ring. A
+            // restore remakes it over a surface of its own, as no one else can reach it.
+            None if self.restoring => metal::Surface::new(d.width, d.height, fmt.bytes as u32)
+                .ok_or(Error::OutOfMemory)?,
+            None => return Err(Error::BadHandle),
+        };
         check(
             d.texture_type == MTLTextureType::Type2D.0 as u32
                 && d.mip_levels == 1
