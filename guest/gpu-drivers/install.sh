@@ -104,6 +104,11 @@ gbm_backend_dir() {
 
 record() { printf '%s\n' "$*" >> "$STATE/manifest.new"; }
 
+# Where a file this edits is kept as it was. Never beside it: pam_env reads every file in
+# /etc/environment.d, not only *.conf, so a backup there overrides the edit in every login that
+# is not systemd's.
+original() { printf '%s/originals/%s\n' "$STATE" "$(printf '%s' "$1" | tr / %)"; }
+
 link() {
   local target="$1" at="$2"
   mkdir -p "$(dirname "$at")"
@@ -119,7 +124,7 @@ uninstall() {
       link) [ -L "$what" ] && rm -f "$what" ;;
       tree) rm -rf "$what" ;;
       dkms) dkms remove "$what" --all || true; rm -rf "/usr/src/${what/\//-}" ;;
-      envfile) [ -f "$what.limina-orig" ] && mv -f "$what.limina-orig" "$what" ;;
+      envfile) [ -f "$(original "$what")" ] && mv -f "$(original "$what")" "$what" ;;
     esac
   done < "$STATE/manifest"
   rmdir /opt/limina 2>/dev/null || true
@@ -180,7 +185,8 @@ fi
 # from every client and from zink itself; ours joins it rather than replacing it.
 for f in /etc/environment.d/*.conf /etc/environment; do
   [ -f "$f" ] && grep -q '^VK_DRIVER_FILES=' "$f" || continue
-  cp -p "$f" "$f.limina-orig"
+  mkdir -p "$STATE/originals"
+  cp -p "$f" "$(original "$f")"
   icds="$(ls /etc/vulkan/icd.d/limina-*.json | tr '\n' ':')"
   sed -i "s|^VK_DRIVER_FILES=|VK_DRIVER_FILES=${icds}|" "$f"
   record "envfile $f"
