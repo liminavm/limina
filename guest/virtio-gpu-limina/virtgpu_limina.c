@@ -33,6 +33,11 @@
 #define VIRTIO_GPU_SHM_ID_LIMINA_DOORBELLS	0x81
 /* One 16 KiB slot per context, so 4 KiB and 16 KiB guests both map a page of their own. */
 #define LIMINA_DOORBELL_STRIDE			(16 * 1024)
+/* Fences a file may have waiting at once. Each holds a control-queue descriptor until the host
+ * answers it, and the queue is shared by every client and the display: far above what a driver
+ * keeps in flight, far below the queue's size.
+ */
+#define LIMINA_MAX_PENDING_FENCES		64
 
 #define VIRTIO_GPU_CMD_LIMINA_CTX_CREATE	0x4c00
 #define VIRTIO_GPU_CMD_LIMINA_CTX_DESTROY	0x4c01
@@ -158,7 +163,44 @@ struct virtio_gpu_limina_file {
 	u64 fence_ctx;
 	u32 doorbell;
 	struct list_head arenas;
+	/* Fences not yet known signaled, at most LIMINA_MAX_PENDING_FENCES. */
+	struct dma_fence *pending[LIMINA_MAX_PENDING_FENCES];
+	unsigned int npending;
 };
+
+/* Takes a slot for `f` unless the file already has its fill of fences waiting. Call with
+ * lf->lock held.
+ */
+static bool limina_fence_track(struct virtio_gpu_limina_file *lf, struct dma_fence *f)
+{
+	unsigned int i, kept = 0;
+
+	for (i = 0; i < lf->npending; i++) {
+		if (dma_fence_is_signaled(lf->pending[i]))
+			dma_fence_put(lf->pending[i]);
+		else
+			lf->pending[kept++] = lf->pending[i];
+	}
+	lf->npending = kept;
+	if (lf->npending == LIMINA_MAX_PENDING_FENCES)
+		return false;
+	lf->pending[lf->npending++] = dma_fence_get(f);
+	return true;
+}
+
+/* Gives up the slot of a fence that was never sent. Call with lf->lock held. */
+static void limina_fence_untrack(struct virtio_gpu_limina_file *lf, struct dma_fence *f)
+{
+	unsigned int i;
+
+	for (i = 0; i < lf->npending; i++) {
+		if (lf->pending[i] == f) {
+			lf->pending[i] = lf->pending[--lf->npending];
+			dma_fence_put(f);
+			return;
+		}
+	}
+}
 
 void virtio_gpu_limina_init(struct virtio_gpu_device *vgdev)
 {
@@ -716,7 +758,7 @@ int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data, struct drm
 	struct virtio_gpu_fence *fence;
 	struct sync_file *sync_file;
 	int fd = -1;
-	bool created;
+	bool created, tracked;
 	int ret;
 
 	if (!vgdev->has_limina)
@@ -753,17 +795,31 @@ int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data, struct drm
 		ret = -ENOMEM;
 		goto err_objs;
 	}
+	/* One client asking for fences that never come would otherwise hold every descriptor of the
+	 * control queue, and every other command, the display's too, would wait behind them.
+	 */
+	mutex_lock(&lf->lock);
+	tracked = limina_fence_track(lf, &fence->f);
+	mutex_unlock(&lf->lock);
+	if (!tracked) {
+		ret = -EBUSY;
+		goto err_fence;
+	}
 	if (args->flags & VIRTGPU_LIMINA_FENCE_FD) {
 		fd = get_unused_fd_flags(O_CLOEXEC);
 		if (fd < 0) {
 			ret = fd;
-			goto err_fence;
+			goto err_untrack;
 		}
 	}
 	/* From here the command owns `objs`, and the reservations get unlocked with the fence in. */
 	ret = virtio_gpu_cmd_limina_fence(vgdev, vfpriv->ctx_id, args->seqno, objs, fence);
-	if (ret)
+	if (ret) {
+		mutex_lock(&lf->lock);
+		limina_fence_untrack(lf, &fence->f);
+		mutex_unlock(&lf->lock);
 		goto err_fd;
+	}
 	if (fd >= 0) {
 		sync_file = sync_file_create(&fence->f);
 		if (!sync_file) {
@@ -781,6 +837,10 @@ err_fd:
 		put_unused_fd(fd);
 	dma_fence_put(&fence->f);
 	return ret;
+err_untrack:
+	mutex_lock(&lf->lock);
+	limina_fence_untrack(lf, &fence->f);
+	mutex_unlock(&lf->lock);
 err_fence:
 	dma_fence_put(&fence->f);
 err_objs:
@@ -814,6 +874,8 @@ void virtio_gpu_limina_postclose(struct virtio_gpu_device *vgdev,
 		list_del(&a->node);
 		kfree(a);
 	}
+	while (lf->npending)
+		dma_fence_put(lf->pending[--lf->npending]);
 	mutex_destroy(&lf->lock);
 	kfree(lf);
 	vfpriv->limina = NULL;

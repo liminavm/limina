@@ -163,6 +163,8 @@ for tree in "$HERE"/drivers/opt/limina/*/; do
   rm -rf "/opt/limina/$wire.new"
   mkdir -p /opt/limina
   cp -a "$tree" "/opt/limina/$wire.new"
+  # `cp -a` keeps whoever unpacked the payload as owner, and the compositor loads these.
+  chown -R root:root "/opt/limina/$wire.new"
   rm -rf "/opt/limina/$wire"
   mv "/opt/limina/$wire.new" "/opt/limina/$wire"
   record "tree /opt/limina/$wire"
@@ -204,6 +206,7 @@ else
   src="/usr/src/$DKMS_NAME-$dkms_version"
   rm -rf "$src"
   cp -a "$HERE/dkms/tree" "$src"
+  chown -R root:root "$src"
   record "dkms $DKMS_NAME/$dkms_version"
   dkms add "$DKMS_NAME/$dkms_version"
   kver="$(uname -r)"
