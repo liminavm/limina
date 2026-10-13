@@ -40,9 +40,16 @@ system's Mesa; they are installed beside it, and nothing selects them through th
   - KosmicKrisp enumerates no device.
   A guest mid-upgrade, without the module or on a host without the transport, keeps working.
 - **Vulkan coexistence.** The loader enumerates every ICD, so a guest with both venus and the
-  limina ICD shows two devices of one GPU. zink in the vendor build takes only KosmicKrisp's.
-  Applications still see both until a small implicit layer hides venus's device where ours is
-  present.
+  limina ICD shows two devices of one GPU, venus's listed first. zink in the vendor build takes
+  only KosmicKrisp's, and an implicit layer in the vendor tree
+  (`guest/gpu-drivers/layer/transport_select.c`) hides venus's devices from applications
+  whenever KosmicKrisp has one, so a guest on the transport shows one GPU and a guest without it
+  shows venus's. A client naming its driver in `VK_DRIVER_FILES` sees only that one;
+  `LIMINA_VK_ALL_DEVICES=1` shows both.
+- **A Vulkan driver list pinned in the environment** (the RPM enhanced tier pins venus in
+  `/etc/environment.d`) gains our ICD in front rather than being replaced. The edited file's
+  original is kept in the installer's state directory, never beside it: pam_env reads every file
+  in `/etc/environment.d`, not only `*.conf`.
 - **The module ships through the distro's DKMS**, one package carrying the in-tree driver's
   sources for every kernel series we support, each patched with the extension
   (`guest/gpu-drivers/dkms-make.sh` picks by the kernel's major.minor). A series from our own
@@ -55,8 +62,8 @@ system's Mesa; they are installed beside it, and nothing selects them through th
 - **The installer is the distro-agnostic part of the guest tools** (`guest/gpu-drivers/install.sh`,
   packaged by `scripts/package-gpu-drivers.sh`). What differs per distro is confined to the
   prerequisites' package names and the initramfs tool; everything it installs is recorded in a
-  manifest that `--uninstall` and upgrades read. A Vulkan driver list pinned in the environment
-  (the RPM enhanced tier pins venus) gains our ICDs rather than being replaced.
+  manifest that `--uninstall` and upgrades read. Kernel headers already in place are used as
+  they are, since a kernel that is not the distro's ships its own under a name the distro lacks.
 
 ### Flatpak
 
