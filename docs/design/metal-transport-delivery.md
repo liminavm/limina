@@ -35,6 +35,11 @@ system's Mesa; they are installed beside it, and nothing selects them through th
     `MESA_LOADER_DRIVER_OVERRIDE`, which a system Mesa's configuration may set for itself;
   - EGL declines at vendor init when no such device exists, and declines a GBM display its own
     backend did not make;
+  - EGL and the GBM backend both decline a client that names other drivers: a Vulkan driver list
+    (`VK_DRIVER_FILES`, `VK_ICD_FILENAMES`) without a limina ICD, or `LIBGL_ALWAYS_SOFTWARE`. They
+    decline together, as the system's EGL cannot use a GBM device of ours. `GALLIUM_DRIVER` is not
+    such a sign: the enhanced tier's environment sets it for every client;
+  - zink takes no device but KosmicKrisp's, whichever way it picked one;
   - the GBM backend declines other devices, and names its own `limina`, not `drm`: a system EGL
     takes a `drm` device for its own and would read our device structure as one of its own;
   - KosmicKrisp enumerates no device.
