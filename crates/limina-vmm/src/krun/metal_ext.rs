@@ -122,6 +122,10 @@ fn info(a: &MappedArena) -> ExtArena {
 }
 
 impl GpuExtension for GpuHostExtension {
+    fn wire_version(&self) -> u32 {
+        limina_gpu_wire::VERSION
+    }
+
     fn create_context(&self, ctx: u32, doorbell: u32) -> Result<(), String> {
         let bell = self.host.create_context(ctx).map_err(|e| e.to_string())?;
         let mut bells = self.doorbells.write().unwrap_or_else(|e| e.into_inner());

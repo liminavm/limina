@@ -42,9 +42,11 @@
 #define VIRTIO_GPU_CMD_LIMINA_ARENA_IMPORT	0x4c05
 #define VIRTIO_GPU_CMD_LIMINA_SURFACE_CREATE	0x4c07
 #define VIRTIO_GPU_CMD_LIMINA_SURFACE_IMPORT	0x4c08
+#define VIRTIO_GPU_CMD_LIMINA_INFO		0x4c09
 #define VIRTIO_GPU_RESP_OK_LIMINA_CTX		0x1180
 #define VIRTIO_GPU_RESP_OK_LIMINA_ARENA		0x1181
 #define VIRTIO_GPU_RESP_OK_LIMINA_SURFACE	0x1182
+#define VIRTIO_GPU_RESP_OK_LIMINA_INFO		0x1183
 
 /*
  * mmap offsets live far above the GEM fake-offset range, so drm_gem_mmap keeps everything below
@@ -114,6 +116,12 @@ struct virtio_gpu_limina_ring_attach {
 	__le32 arena_id;
 	__le32 data_size;
 	__le64 offset;
+};
+
+struct virtio_gpu_limina_resp_info {
+	struct virtio_gpu_ctrl_hdr hdr;
+	__le32 wire_version;
+	__le32 flags;
 };
 
 struct virtio_gpu_limina_resp_ctx {
@@ -235,6 +243,26 @@ static struct limina_arena *limina_find(struct virtio_gpu_limina_file *lf, u32 i
 		if (a->id == id)
 			return a;
 	return NULL;
+}
+
+int virtio_gpu_limina_info_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct drm_virtgpu_limina_info *args = data;
+	struct virtio_gpu_ctrl_hdr cmd = {};
+	struct virtio_gpu_limina_resp_info resp = {};
+	int ret;
+
+	if (!vgdev->has_limina)
+		return -ENODEV;
+	cmd.type = cpu_to_le32(VIRTIO_GPU_CMD_LIMINA_INFO);
+	ret = limina_call(vgdev, &cmd, sizeof(cmd), &resp, sizeof(resp),
+			  VIRTIO_GPU_RESP_OK_LIMINA_INFO);
+	if (ret)
+		return ret;
+	args->wire_version = le32_to_cpu(resp.wire_version);
+	args->flags = le32_to_cpu(resp.flags);
+	return 0;
 }
 
 int virtio_gpu_limina_ctx_create_ioctl(struct drm_device *dev, void *data,

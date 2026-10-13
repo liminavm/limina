@@ -30,7 +30,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "5adb732f88a31898471c33c149fbc37e83ed2093"
+rev = "50e1351f01c3b194e71b21b853930295b20bd370"
 base = "51367cfaf379a5869ca2aa78eab1cfe68a769a52"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
@@ -73,7 +73,7 @@ tree = "/Volumes/mesa-cs/mesa"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "metal-native-context"
-rev = "dce6d5542a857476725999e2fcd30920f5ffe6a8"
+rev = "4485b05dafc2c5209476514ecd56525ac98661e2"
 base = "d1ed9e2d6608437f98f1130e8cccc7c7e31f25fd"
 tree = "/Volumes/mesa-cs/mesa-metal-guest"
 

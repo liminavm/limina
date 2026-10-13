@@ -25,6 +25,7 @@ extern "C" {
 #define DRM_VIRTGPU_LIMINA_FENCE         0x26
 #define DRM_VIRTGPU_LIMINA_SURFACE_CREATE 0x27
 #define DRM_VIRTGPU_LIMINA_SURFACE_IMPORT 0x28
+#define DRM_VIRTGPU_LIMINA_INFO          0x29
 
 /* Arena ids are below this. */
 #define VIRTGPU_LIMINA_MAX_ARENAS 4096
@@ -126,6 +127,15 @@ struct drm_virtgpu_limina_surface_import {
 	__u32 res_handle;	/* out */
 };
 
+/*
+ * What the host speaks, without creating a context: a driver declines a host whose protocol it
+ * does not speak before it costs the host anything. ENODEV without the extension.
+ */
+struct drm_virtgpu_limina_info {
+	__u32 wire_version;	/* out: the protocol a context's ring speaks */
+	__u32 flags;		/* out: none defined yet */
+};
+
 /* Starts the host consuming the command ring userspace initialised in an arena. */
 struct drm_virtgpu_limina_ring_attach {
 	__u32 arena_id;
@@ -160,6 +170,9 @@ struct drm_virtgpu_limina_ring_attach {
 #define DRM_IOCTL_VIRTGPU_LIMINA_SURFACE_IMPORT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_LIMINA_SURFACE_IMPORT, \
 		 struct drm_virtgpu_limina_surface_import)
+#define DRM_IOCTL_VIRTGPU_LIMINA_INFO \
+	DRM_IOR(DRM_COMMAND_BASE + DRM_VIRTGPU_LIMINA_INFO, \
+		struct drm_virtgpu_limina_info)
 
 #if defined(__cplusplus)
 }
