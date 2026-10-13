@@ -997,6 +997,74 @@ lists first: host probes do not cover adjacency or line inputs.
 
 ---
 
+## Metal transport
+
+### A guest process can forge its own fence completion
+The worker's fence watch (`crates/limina-vmm/src/krun/metal_ext.rs`, `Fences::watch`) reads
+`completed` and `error` from the ring's control block, which sits in an arena the guest maps
+writable. A process that writes `completed = u64::MAX` signals every pending fence of its context at
+once, including the implicit write fences the FENCE ioctl adds to shared dma-bufs, while the GPU is
+still writing: a compositor then reads a half-drawn buffer. Guest-internal integrity only; the host
+is not at risk. Fix shape: the replayer knows completion host-side (the commit-feedback block in
+`crates/limina-gpu-host/src/exec.rs`); report it through a channel the guest cannot map (a
+host-only page or the IPC) and never read it back from shared pages.
+
+### One process can still fill the control queue across several files
+`virtio-gpu-limina` refuses a file's FENCE with EBUSY past 64 waiting (`metal_fence_flood` covers
+one file), but a process that opens several render-node files gets 64 each, and the queue holds 256
+descriptors. Fix shape: a device-wide bound beside the per-file one, which needs a counter on
+`virtio_gpu_device` (the `0001` hook patch).
+
+### Reserved fields go unchecked and the guest interface has no version
+`crates/limina-gpu-wire/src/ring.rs` never reads `CmdHeader.flags`, no `_pad` field is checked, and
+trailing payload bytes are accepted although `Error::BadPayload`'s doc says otherwise. The guest
+module checks `pad` only in the FENCE ioctl. Anything an old host ignores can never be given a
+meaning later. Fix: reject non-zero values now, while no guest sets any, and version the guest
+interface (`docs/design/metal-transport-delivery.md` §1 notes the gap).
+
+### Fence order within a file is only a userspace promise
+All of a file's fences share one dma-fence context (`lf->fence_ctx` in
+`guest/virtio-gpu-limina/virtgpu_limina.c`), and the fence event path signals every lower id on a
+context, so FENCE(10) then FENCE(5) means answering 5 signals 10. Guest-internal. Fix: refuse a
+seqno below the file's last in the ioctl. Related: a LIMINA_FENCE without `INFO_RING_IDX` would
+collide with a rutabaga context on the same file fencing ring 0; refusing it makes that explicit.
+
+### Surface and arena imports drop the object before the host call
+The import ioctls in `virtgpu_limina.c` read `hw_res_handle`, then `drm_gem_object_put` it before
+`limina_call`. A concurrent GEM_CLOSE plus another process's blob create can reuse the id, since the
+ida hands out the lowest free one. Exploitability low. Fix: hold the object across the host call.
+
+### Exported resource ids have three owners
+`ExtState::export_arena` (libkrun `devices/src/virtio/gpu/ext.rs`) checks only its own exports, not
+rutabaga's resources. An extension blob under a live rutabaga id flips `is_ext_blob`, so that
+rutabaga resource is never freed. Only a guest kernel can collide ids, so this is self-harm. Fix:
+one owner, with exported arenas filed as rutabaga resources.
+
+### The GPU host gives up on recoverable Mach errors
+`crates/limina-gpu-host/src/mach.rs` `reply` forgets the send-once right before `mach_msg`, so a
+failed send leaks it, and `server.rs` exits on any receive error, `MACH_RCV_TOO_LARGE` included,
+which ends every context of the VM. Fix: treat both as recoverable, destroying the message.
+
+### Restore's dependence on Metal's allocator is measured on one host
+Restore reproduces Metal resource IDs and GPU addresses by relying on allocator behaviour measured on
+an M1 under macOS 26.6 (first fit, `ARENA_GAP` 0x8000, slot reuse within 100 tries). Each value is
+verified, so a macOS change fails safe by losing the context, but nothing says so before users hit
+it. Next: run the `are_host_values_*` tests on every host OS we ship to, as a gate.
+
+### Every context of a VM shares one GPU host process
+Cross-context isolation rests on Metal 4 residency sets, which Apple documents as paging control,
+not protection, and guest GPU addresses are forwarded unchecked. Either verify that a non-resident
+heap in the same process faults, or document every KK client of a VM as one trust domain.
+
+### Typed ids and a Metal wrapper module
+Every id is a bare integer (ctx, arena, export, surface, doorbell, seqno, Mach port), with
+`(u32, u32)` keys and ctx 0 meaning "orphan"; newtypes and an `ArenaOwner` enum would turn missed
+checks into compile errors. Surface send rights are flattened to `u32` (`into_raw`) two layers early
+and leak when a bind is refused; moving a `SurfacePort` would close that. `Result<_, String>` crosses
+the `GpuExtension` trait. `exec.rs` mixes about 41 `unsafe` blocks into its handlers because objc2
+marks the Metal setters unsafe; a thin typed wrapper, like virglrs's `vulkan.rs`, would separate the
+validator from the FFI.
+
 ## Video
 
 ### AV1 has no host decoder on M1/M2, so AV1 playback there never counts as video
