@@ -154,5 +154,47 @@ opt-level = 3
 [profile.dev.package.bytemuck]
 opt-level = 3
 
+# The native-context transport's replayer is the other renderer on the per-command path, and it
+# runs as its own debug binary. objc2 verifies every message's method signature against the
+# runtime's type encoding when its own debug_assertions are on, by parsing the encoding string
+# per send: in a debug replayer that parsing was the top of the profile and the replayer sat at
+# 98% of a core, so the WebGL aquarium read 4 fps on the transport against 25 on venus. So the
+# objc2 crates also lose their debug assertions, and the replayer and its wire crate (where
+# objc2's generic sends are instantiated) are optimized. Check with `nm` that the debug
+# limina-replayer has no `verify_method_signature`.
+[profile.dev.package.limina-replayer]
+opt-level = 3
+
+[profile.dev.package.limina-gpu-wire]
+opt-level = 3
+
+[profile.dev.package.objc2]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.objc2-encode]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.objc2-foundation]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.objc2-metal]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.objc2-io-surface]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.objc2-core-foundation]
+opt-level = 3
+debug-assertions = false
+
+[profile.dev.package.block2]
+opt-level = 3
+debug-assertions = false
+
 [patch.crates-io]
 imago = { path = "third_party/imago" }

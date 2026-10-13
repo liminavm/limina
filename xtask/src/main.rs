@@ -680,12 +680,21 @@ fn with_venv_mesa(repo: &Path, cmd: &mut Command) {
 
 fn cargo_build_binaries(repo: &Path, release: bool) -> Result<()> {
     eprintln!(
-        "==> building limina + limina-vmm ({})",
+        "==> building limina + limina-vmm + limina-replayer ({})",
         profile_name(release)
     );
+    // The worker starts limina-replayer from its own directory when the native-context transport
+    // is on, so a build that leaves it out runs whatever replayer the last build left behind.
     let mut c = Command::new("cargo");
-    c.current_dir(repo)
-        .args(["build", "-p", "limina", "-p", "limina-vmm"]);
+    c.current_dir(repo).args([
+        "build",
+        "-p",
+        "limina",
+        "-p",
+        "limina-vmm",
+        "-p",
+        "limina-replayer",
+    ]);
     with_venv_mesa(repo, &mut c);
     if release {
         c.arg("--release");
