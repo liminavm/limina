@@ -438,6 +438,103 @@ fn a_kernel_writes_through_an_address_the_guest_computed() {
     }
 }
 
+/// A Vulkan texel buffer as KosmicKrisp makes one: a `TextureBuffer` texture over arena memory,
+/// as wide as the view has elements (past a 2D texture's 16384) and with the view's range as its
+/// `bytesPerRow`, which nothing aligns. WebRender samples one on every frame.
+#[test]
+fn a_texel_buffer_over_arena_memory_reads_what_the_guest_wrote() {
+    const TB_MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+struct Args { texture_buffer<float> tb; device float* dst; };
+kernel void readtb(constant Args& a [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    a.dst[tid] = a.tb.read(min(tid * 105u, 20000u)).r;
+}
+"#;
+    const R32_FLOAT: u32 = 55;
+    const TEX_BUFFER: u32 = 9;
+    const TEXELS: u32 = 20001;
+    const DATA: u64 = 4 * MIB;
+    const ARGS: u64 = 3 * MIB;
+    const DST: u64 = 5 * MIB;
+    const N: u32 = 192;
+    let mut g = start();
+    let texels: Vec<u8> = (0..TEXELS).flat_map(|i| (i as f32).to_le_bytes()).collect();
+    g.write(DATA, &texels);
+
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTexture {
+            handle: 1,
+            arena: 1,
+            offset: DATA,
+            bytes_per_row: TEXELS as u64 * 4,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_BUFFER,
+                pixel_format: R32_FLOAT,
+                width: TEXELS,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            reply,
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0, "the host refused the texel buffer");
+    let base = g.arena.gpu_base;
+    g.write(ARGS, &r.values[0].to_le_bytes());
+    g.write(ARGS + 8, &(base + DST).to_le_bytes());
+
+    create_library(&mut g, 2, TB_MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 3,
+            library: 2,
+            name_len: 6,
+            reply,
+            ..Default::default()
+        },
+        &[b"readtb"],
+    );
+    g.reply(RECORDS);
+    table(&mut g, 4, &[(0, base + ARGS)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(cmd::SetComputePipeline { handle: 3, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetArgumentTable {
+            table: 4,
+            stages: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [N / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("dispatch");
+
+    for i in 0..N {
+        let at = DST + i as u64 * 4;
+        let got = f32::from_le_bytes(g.bytes(at, 4).try_into().unwrap());
+        // Up to the last texel, 20000, past where a 2D texture could reach.
+        let texel = (i * 105).min(TEXELS - 1);
+        assert_eq!(got, texel as f32, "texel {texel}");
+    }
+}
+
 /// Writes `0xC0FFEE00 + i` into `n` words at GPU address `dst` with the poke kernel.
 fn poke(g: &mut Guest, dst: u64, n: u32) {
     const PTRS: u64 = 3 * MIB;

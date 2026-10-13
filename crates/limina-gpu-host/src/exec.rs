@@ -51,6 +51,8 @@ use crate::metal::{self, Arena, Device, FormatInfo};
 const SPIN: Duration = Duration::from_micros(50);
 /// Largest texture dimension accepted.
 const MAX_DIM: u32 = 16384;
+/// Widest texture buffer accepted, in texels: KosmicKrisp's `maxTexelBufferElements`.
+const MAX_TEXEL_BUFFER: u32 = 16384 * 16384;
 /// Most buffer bindings an argument table may have (Metal's limit).
 const MAX_BUFFER_BINDS: u32 = 31;
 /// Every `MTLStages` bit.
@@ -1759,10 +1761,16 @@ impl Executor {
         &self,
         d: &cmd::TextureDesc,
     ) -> Result<Retained<MTLTextureDescriptor>, Error> {
+        let texel_buffer = d.texture_type == MTLTextureType::TypeTextureBuffer.0 as u32;
         check(
-            metal::valid_texture_type(d.texture_type)
+            (metal::valid_texture_type(d.texture_type) || texel_buffer)
                 && metal::format_info(d.pixel_format).is_some()
-                && (1..=MAX_DIM).contains(&d.width)
+                && (1..=if texel_buffer {
+                    MAX_TEXEL_BUFFER
+                } else {
+                    MAX_DIM
+                })
+                    .contains(&d.width)
                 && (1..=MAX_DIM).contains(&d.height)
                 && (1..=2048).contains(&d.depth)
                 && (1..=15).contains(&d.mip_levels)
@@ -1795,7 +1803,10 @@ impl Executor {
         self.new_handle(c.handle)?;
         let a = self.arena(c.arena)?;
         let mut d = c.desc;
+        let texel_buffer = d.texture_type == MTLTextureType::TypeTextureBuffer.0 as u32;
         let t = if c.bytes_per_row == 0 {
+            // Metal makes a texture buffer only over a buffer.
+            check(!texel_buffer)?;
             let desc = self.texture_descriptor(&d)?;
             desc.setResourceOptions(metal::arena_options());
             let sa = self.device.heapTextureSizeAndAlignWithDescriptor(&desc);
@@ -1816,24 +1827,30 @@ impl Executor {
             if d.texture_type == MTLTextureType::Type2DArray.0 as u32 && d.array_length == 1 {
                 d.texture_type = MTLTextureType::Type2D.0 as u32;
             }
+            // A texture buffer (a Vulkan texel buffer) is one row of any width, whose
+            // `bytesPerRow` Metal does not ask to be aligned: KosmicKrisp passes the view's range.
             check(
-                d.texture_type == MTLTextureType::Type2D.0 as u32
+                (d.texture_type == MTLTextureType::Type2D.0 as u32
+                    || texel_buffer && d.height == 1 && d.depth == 1 && d.array_length == 1)
                     && d.mip_levels == 1
                     && d.sample_count == 1,
             )?;
             let desc = self.texture_descriptor(&d)?;
             desc.setResourceOptions(metal::arena_options());
             let fmt = metal::format_info(d.pixel_format).ok_or(Error::BadValue)?;
-            let align = self
-                .device
-                .minimumLinearTextureAlignmentForPixelFormat(MTLPixelFormat(
-                    d.pixel_format as usize,
-                )) as u64;
+            let pixel_format = MTLPixelFormat(d.pixel_format as usize);
+            let align = if texel_buffer {
+                self.device
+                    .minimumTextureBufferAlignmentForPixelFormat(pixel_format)
+            } else {
+                self.device
+                    .minimumLinearTextureAlignmentForPixelFormat(pixel_format)
+            } as u64;
             let len = linear_extent(fmt, [d.width, d.height, 1], c.bytes_per_row, 0)
                 .ok_or(Error::BadValue)?;
             if align == 0
                 || !c.offset.is_multiple_of(align)
-                || !c.bytes_per_row.is_multiple_of(align)
+                || !(texel_buffer || c.bytes_per_row.is_multiple_of(align))
                 || !a.contains(c.offset, len)
             {
                 return Err(Error::BadRange);
