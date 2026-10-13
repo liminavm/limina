@@ -37,6 +37,13 @@ COMMIT=$(git rev-parse --short HEAD)
 [ -f "$LEDGER" ] || echo "date,commit,workload,metric,value,notes" > "$LEDGER"
 
 PORT="${LIMINA_SSH_PORT:-2222}"
+# LIMINA_PERF_TRANSPORT picks the GPU transport every GPU row runs on, and names the rows after it:
+#   venus  (default) the venus ICD, GL through zink on venus
+#   metal  the native-context transport's KosmicKrisp ICD (scripts/provision/deliver-metal-transport.sh
+#          installs it outside the loader's search path), GL through zink on it; the worker must run
+#          with LIMINA_GPU_METAL=1
+TRANSPORT="${LIMINA_PERF_TRANSPORT:-venus}"
+case "$TRANSPORT" in venus|metal) ;; *) echo "LIMINA_PERF_TRANSPORT must be venus or metal" >&2; exit 2 ;; esac
 SSH=(ssh -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR claude@127.0.0.1)
 SCP=(scp -P "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -q)
 
@@ -70,7 +77,7 @@ PERF_RATE="${LIMINA_PERF_RATE:-}"
 
 # The guest script below is single-quoted, so host env does NOT reach it — anything the guest
 # needs must be exported here, as a separate argv word ssh joins with a space.
-OUT=$("${SSH[@]}" "export LIMINA_PERF_SKIP_VK=${LIMINA_PERF_SKIP_VK:-0};" '
+OUT=$("${SSH[@]}" "export LIMINA_PERF_SKIP_VK=${LIMINA_PERF_SKIP_VK:-0} T=$TRANSPORT;" '
 set -e
 XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* | head -1)
 BASE="XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 XAUTHORITY=$XAUTH VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1"
@@ -85,10 +92,15 @@ BASE="XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 XAUTHO
 # config we no longer ship, and it is not free: it forces every fence check onto a synchronous
 # driver<->renderer round trip (25-30% of wall clock on submits carrying real work). Ledger rows
 # from 2026-07-26 on are as-shipped; rows before that carried the flag.
-if [ -d /opt/mesa-zink ]; then
-  ZINK="LD_LIBRARY_PATH=/opt/mesa-zink/lib64 LIBGL_DRIVERS_PATH=/opt/mesa-zink/lib64/dri __EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-zink/share/glvnd/egl_vendor.d MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
+if [ "$T" = metal ]; then
+  ICD=/usr/local/share/limina/vulkan/kk_limina_icd.json
 else
-  ZINK="MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json"
+  ICD=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
+fi
+if [ -d /opt/mesa-zink ]; then
+  ZINK="LD_LIBRARY_PATH=/opt/mesa-zink/lib64 LIBGL_DRIVERS_PATH=/opt/mesa-zink/lib64/dri __EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-zink/share/glvnd/egl_vendor.d MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink VK_DRIVER_FILES=$ICD"
+else
+  ZINK="MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink VK_DRIVER_FILES=$ICD"
 fi
 # eglretrace ships in apitrace (dnf-installable on the RPM image; baked on dev-enh). gfxrecon-replay
 # is not packaged — use a local build (~/gfxreconstruct) or the dev-enh /opt; skip vk-replay if absent.
@@ -115,8 +127,15 @@ if [ -z "$GFXR" ]; then
 fi
 
 # Backend guard: refuse to record numbers from a silent llvmpipe fallback (the env trap).
-env $BASE $ZINK glmark2-es2 -b build:duration=0.5 --size 128x128 2>&1 | grep -q "Virtio-GPU Venus" \
-  || { echo "GUARD_FAIL: GL stack is not on venus" >&2; exit 1; }
+# Venus on this host names the Apple GPU too, so the metal guard also refuses a venus renderer.
+R=$(env $BASE $ZINK glmark2-es2 -b build:duration=0.5 --size 128x128 2>&1 | grep -m1 GL_RENDERER)
+echo "RENDERER: $R" >&2
+if [ "$T" = metal ]; then
+  case "$R" in *Venus*|*llvmpipe*|"") echo "GUARD_FAIL: GL stack is not on the metal transport" >&2; exit 1 ;; esac
+  case "$R" in *KosmicKrisp*|*"Apple M"*) ;; *) echo "GUARD_FAIL: GL stack is not on the metal transport" >&2; exit 1 ;; esac
+else
+  case "$R" in *"Virtio-GPU Venus"*) ;; *) echo "GUARD_FAIL: GL stack is not on venus" >&2; exit 1 ;; esac
+fi
 
 # Provenance to stderr (stdout is the row stream). Records WHICH guest produced the numbers, so the
 # notes column can name real versions instead of "the enhanced image".
@@ -129,16 +148,16 @@ gl_venus=$(env $BASE $ZINK eglretrace --headless --benchmark /tmp/glmark2-build.
 gl_lvp=$(env -u MESA_LOADER_DRIVER_OVERRIDE -u VK_DRIVER_FILES $BASE GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1 eglretrace --headless --benchmark /tmp/glmark2-build.trace 2>&1 \
   | sed -n "s/.*average of \([0-9.]*\) fps.*/\1/p")
 vk_venus=""
-[ -n "$GFXR" ] && vk_venus=$(env $BASE VK_DRIVER_FILES=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json \
+[ -n "$GFXR" ] && vk_venus=$(env $BASE VK_DRIVER_FILES=$ICD \
   "$GFXR" --wsi headless /tmp/vkcube.gfxr 2>&1 \
   | sed -n "s/.*\(Measured\|Replay\) FPS: \([0-9.]*\) fps.*/\2/p")
 glmark=$(env $BASE $ZINK glmark2-es2-wayland -b build:duration=3 --size 512x512 2>&1 \
   | sed -n "s/.*glmark2 Score: \([0-9]*\).*/\1/p")
 
-echo "gl-replay-venus,fps,$gl_venus"
+echo "gl-replay-$T,fps,$gl_venus"
 echo "gl-replay-llvmpipe,fps,$gl_lvp"
-[ -n "$vk_venus" ] && echo "vk-replay-venus-headless,fps,$vk_venus"
-echo "glmark2-wayland-venus,score,$glmark"
+[ -n "$vk_venus" ] && echo "vk-replay-$T-headless,fps,$vk_venus"
+echo "glmark2-wayland-$T,score,$glmark"
 ')
 
 echo "$OUT" | while IFS= read -r line; do
