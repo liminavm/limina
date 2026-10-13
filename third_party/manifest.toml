@@ -65,6 +65,18 @@ rev = "d1ed9e2d6608437f98f1130e8cccc7c7e31f25fd"
 base = "ab0ab2209c4"
 tree = "/Volumes/mesa-cs/mesa"
 
+# The GUEST KosmicKrisp on the native-context transport (the limina bridge), with the guest-side
+# WSI it needs: the host KK branch plus guest-only commits. Built by spikes/kk-on-wire/kk-build.sh
+# from `tree` and installed by scripts/provision/deliver-metal-transport.sh. NOT vendored, for the
+# same reason as [kosmickrisp].
+[kosmickrisp-guest]
+repo = "https://github.com/liminavm/mesa.git"
+upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
+branch = "metal-native-context"
+rev = "dce6d5542a857476725999e2fcd30920f5ffe6a8"
+base = "d1ed9e2d6608437f98f1130e8cccc7c7e31f25fd"
+tree = "/Volumes/mesa-cs/mesa-metal-guest"
+
 # The GUEST venus Mesa (task #11 — same liminavm/mesa repo, its own branch). NOT vendored by
 # `cargo xtask vendor`: the working checkout is a worktree at /Volumes/mesa-cs/mesa-guest (same
 # case-sensitive image as the KK tree). Consumed as an EXPORTED SERIES by the F44 RPM build —
