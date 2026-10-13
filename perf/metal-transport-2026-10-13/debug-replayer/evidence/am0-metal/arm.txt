@@ -1,0 +1,5 @@
+	deviceName         = Apple M1 Max
+	driverName         = KosmicKrisp
+    GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+    GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8
+[    1.465060] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000

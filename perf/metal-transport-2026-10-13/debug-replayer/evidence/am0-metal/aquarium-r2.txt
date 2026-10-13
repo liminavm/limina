@@ -1,0 +1,18 @@
+=== metal / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 8a0dcb694d9740e3ad10e128ee827f69
+  settling 35s…
+capture unusable (UnidentifiedImageError); retry
+  capture attempt 1 unusable, retrying…
+perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-25000-fps.png: 1200x520 (from perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-25000.png 1280x800 box 0,0,300,130) bright_frac=0.1148
+  wrote perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-25000.png and perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-25000-fps.png
+=== metal / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 381e44e3b7be423fbbd0bcfce634ac63
+  settling 35s…
+capture unusable (UnidentifiedImageError); retry
+  capture attempt 1 unusable, retrying…
+perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-30000-fps.png: 1200x520 (from perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0511
+  wrote perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-30000.png and perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-25000-fps.png
+perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r2/metal-30000-fps.png

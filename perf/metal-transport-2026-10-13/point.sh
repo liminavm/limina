@@ -172,7 +172,22 @@ step 120 "${SSH[@]}" "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayl
 log "arm $ARM: $(tr '\n' ' ' < "$EV/arm.txt")"
 # Aquarium first, then perf-ledger and vkmark. The watchdog marks every row after a poisoned
 # compositor context INVALID.
-LEDGER_RUNS="1"
+#
+# Firefox composites with software WebRender in both arms. Its GL compositor on zink segfaults
+# on the metal arm (zink_set_sampler_views, even on about:blank), and on the venus arm a kiosk
+# window is scanned out directly from a buffer the host reads back black, so with hardware
+# WebRender neither arm yields a frame. WebGL still renders through zink on the arm's ICD; the
+# page's pixels reach the compositor through shared memory. The pref lives in the profile, which
+# Firefox creates on its first start, hence the throwaway launch.
+step 120 "${SSH[@]}" 'export XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+  systemd-run -q --user --unit=ff-profile --setenv=WAYLAND_DISPLAY=wayland-0 /usr/bin/firefox --headless about:blank
+  for i in $(seq 1 30); do ls -d ~/.config/mozilla/firefox/*.default-release >/dev/null 2>&1 && break; sleep 1; done
+  sleep 5; systemctl --user stop ff-profile; systemctl --user reset-failed ff-profile 2>/dev/null; sleep 2
+  for d in ~/.config/mozilla/firefox/*.default-release; do
+    echo "user_pref(\"gfx.webrender.software\", true);" > "$d/user.js"; echo "pref written: $d/user.js"
+  done' > "$EV/ff-profile.txt" 2>&1
+log "firefox profile: $(tr '\n' ' ' < "$EV/ff-profile.txt")"
+LEDGER_RUNS="1"; [ "${AQ_ONLY:-0}" = 1 ] && LEDGER_RUNS=""
 for r in r1 r2; do
   LIMINA_SSH_PORT="$PORT" LIMINA_CAPTURE="$ROOT/perf/metal-transport-2026-10-13/work.noindex/aq-capture.png" AQ_OUT="$EV/aquarium-$r" \
     AQ_EXTRA_ENV="--setenv=MESA_LOADER_DRIVER_OVERRIDE=zink --setenv=GALLIUM_DRIVER=zink --setenv=VK_DRIVER_FILES=$GICD" \
@@ -184,7 +199,8 @@ for r in $LEDGER_RUNS; do
     > "$EV/ledger-run$r.txt" 2>&1
   log "perf-ledger run $r exit=$? $(valid)"; grep -E 'ABORT|GUARD|RENDERER|^[0-9-]+,.*(gl-replay|vk-replay|glmark2)' "$EV/ledger-run$r.txt" | cut -d, -f3,5
 done
-for r in 1 2 3; do
+VK_RUNS="1 2 3"; [ "${AQ_ONLY:-0}" = 1 ] && VK_RUNS=""
+for r in $VK_RUNS; do
   step 600 "${SSH[@]}" "export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 VK_DRIVER_FILES=$GICD; vkmark -s 1280x720" \
     > "$EV/vkmark-run$r.txt" 2>&1
   s=$(sed -n 's/.*vkmark Score: \([0-9]*\).*/\1/p' "$EV/vkmark-run$r.txt")

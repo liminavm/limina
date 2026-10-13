@@ -1,0 +1,1 @@
+pref written: /home/claude/.config/mozilla/firefox/bbcn4bhl.default-release/user.js

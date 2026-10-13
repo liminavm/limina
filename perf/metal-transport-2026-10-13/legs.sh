@@ -23,6 +23,14 @@ POINTS=(
   "m1-metal metal"
   "v2-venus venus"
 )
+# AQ_ONLY=1: the aquarium-only pass, its own labels, same alternation.
+[ "${AQ_ONLY:-0}" = 1 ] && POINTS=(
+  "av0-venus venus"
+  "am0-metal metal"
+  "av1-venus venus"
+  "am1-metal metal"
+  "av2-venus venus"
+)
 started=${1:+0}; started=${started:-1}
 for p in "${POINTS[@]}"; do
   read -r label arm <<<"$p"

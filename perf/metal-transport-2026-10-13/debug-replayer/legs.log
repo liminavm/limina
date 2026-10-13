@@ -1,0 +1,111 @@
+######## v0-venus 00:10:47
+[00:10:48] build transport v0-venus: arm venus (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[00:10:49] enhanced boot
+[00:11:44] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.02
+final: up=205s load=0.02 0.05 0.02
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[00:15:00] arm venus: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 
+[00:19:00] aquarium r1 exit=1 
+[00:22:59] aquarium r2 exit=1 
+[00:22:59] perf-ledger run 1 exit=255 
+[00:25:10] vkmark run 1: 2178 
+[00:27:20] vkmark run 2: 2176 
+[00:29:31] vkmark run 3: 2176 
+[00:29:41] worker-enh: 0 poisoned-context lines
+[00:29:41] point v0-venus done; read perf/metal-transport-2026-10-13/evidence/v0-venus/aquarium-r*/*-fps.png
+######## m0-metal 00:29:41
+[00:29:41] build transport m0-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[00:29:42] enhanced boot
+[00:30:39] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.15
+final: up=205s load=0.15 0.16 0.07
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[00:33:56] arm metal: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 [    1.433766] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 
+[00:36:00] aquarium r1 exit=0 
+[00:38:01] aquarium r2 exit=0 
+[00:39:45] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+gl-replay-metal,49.7081
+gl-replay-llvmpipe,681.38
+vk-replay-metal-headless,1068.207255
+glmark2-wayland-metal,930
+[00:41:56] vkmark run 1: 1450 
+[00:44:07] vkmark run 2: 1451 
+[00:46:17] vkmark run 3: 1452 
+[00:46:27] worker-enh: 0 poisoned-context lines
+[00:46:27] point m0-metal done; read perf/metal-transport-2026-10-13/evidence/m0-metal/aquarium-r*/*-fps.png
+######## v1-venus 00:46:27
+[00:46:28] build transport v1-venus: arm venus (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[00:46:29] enhanced boot
+[00:47:26] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=206s load=0.11
+final: up=206s load=0.11 0.13 0.05
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[00:50:42] arm venus: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 
+[00:54:39] aquarium r1 exit=1 
+[00:58:37] aquarium r2 exit=1 
+[01:00:22] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+gl-replay-venus,49.2805
+gl-replay-llvmpipe,693.799
+vk-replay-venus-headless,1819.856218
+glmark2-wayland-venus,2199
+[01:02:32] vkmark run 1: 2186 
+[01:04:43] vkmark run 2: 2193 
+[01:06:53] vkmark run 3: 2193 
+[01:07:03] worker-enh: 0 poisoned-context lines
+[01:07:03] point v1-venus done; read perf/metal-transport-2026-10-13/evidence/v1-venus/aquarium-r*/*-fps.png
+######## m1-metal 01:07:03
+[01:07:03] build transport m1-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[01:07:04] enhanced boot
+[01:08:01] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.05
+final: up=205s load=0.05 0.09 0.04
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[01:11:17] arm metal: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 [    1.434457] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 
+[01:13:01] aquarium r1 exit=0 
+[01:15:01] aquarium r2 exit=0 
+[01:16:46] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+gl-replay-metal,49.5876
+gl-replay-llvmpipe,684.886
+vk-replay-metal-headless,1079.479128
+glmark2-wayland-metal,931
+[01:18:56] vkmark run 1: 1456 
+[01:21:06] vkmark run 2: 1448 
+[01:23:17] vkmark run 3: 1457 
+[01:23:27] worker-enh: 0 poisoned-context lines
+[01:23:27] point m1-metal done; read perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r*/*-fps.png
+######## v2-venus 01:23:27
+[01:23:27] build transport v2-venus: arm venus (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[01:23:28] enhanced boot
+[01:24:23] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.13
+final: up=205s load=0.13 0.14 0.07
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[01:27:39] arm venus: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 
+[01:31:37] aquarium r1 exit=1 
+[01:35:32] aquarium r2 exit=1 
+[01:37:17] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+gl-replay-venus,49.1541
+gl-replay-llvmpipe,686.241
+vk-replay-venus-headless,1747.145136
+glmark2-wayland-venus,2161
+[01:39:27] vkmark run 1: 2175 
+[01:41:38] vkmark run 2: 2173 
+[01:43:48] vkmark run 3: 2186 
+[01:43:58] worker-enh: 0 poisoned-context lines
+[01:43:58] point v2-venus done; read perf/metal-transport-2026-10-13/evidence/v2-venus/aquarium-r*/*-fps.png
+######## legs done 01:43:58

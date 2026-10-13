@@ -1,0 +1,14 @@
+=== venus / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 3cceaa6af8244ef899aaa5ac10d6a4f6
+  settling 35s…
+perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-25000-fps.png: 1200x520 (from perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0524
+  wrote perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-25000.png and perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-25000-fps.png
+=== venus / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: af340cd115a04f259199bc2cb88e5503
+  settling 35s…
+perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-30000-fps.png: 1200x520 (from perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0572
+  wrote perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-30000.png and perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-25000-fps.png
+perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r1/venus-30000-fps.png

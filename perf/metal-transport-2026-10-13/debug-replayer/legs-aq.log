@@ -1,0 +1,76 @@
+######## av0-venus 01:54:47
+[01:54:48] build transport av0-venus: arm venus (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[01:54:49] enhanced boot
+[01:55:44] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.14
+final: up=205s load=0.14 0.17 0.08
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[01:59:00] arm venus: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 
+[01:59:08] firefox profile: pref written: /home/claude/.config/mozilla/firefox/ws20ylsq.default-release/user.js 
+[02:00:29] aquarium r1 exit=0 
+[02:01:49] aquarium r2 exit=0 
+[02:01:58] worker-enh: 0 poisoned-context lines
+[02:01:58] point av0-venus done; read perf/metal-transport-2026-10-13/evidence/av0-venus/aquarium-r*/*-fps.png
+######## am0-metal 02:01:58
+[02:01:59] build transport am0-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[02:02:00] enhanced boot
+[02:02:55] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.06
+final: up=205s load=0.06 0.14 0.07
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[02:06:11] arm metal: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 [    1.465060] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 
+[02:06:19] firefox profile: pref written: /home/claude/.config/mozilla/firefox/7f148bjy.default-release/user.js 
+[02:07:40] aquarium r1 exit=0 
+[02:09:14] aquarium r2 exit=0 
+[02:09:24] worker-enh: 0 poisoned-context lines
+[02:09:24] point am0-metal done; read perf/metal-transport-2026-10-13/evidence/am0-metal/aquarium-r*/*-fps.png
+######## av1-venus 02:09:24
+[02:09:25] build transport av1-venus: arm venus (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[02:09:26] enhanced boot
+[02:10:21] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=205s load=0.06
+final: up=205s load=0.06 0.15 0.08
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[02:13:37] arm venus: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 
+[02:13:45] firefox profile: pref written: /home/claude/.config/mozilla/firefox/bbcn4bhl.default-release/user.js 
+[02:15:37] aquarium r1 exit=0 
+[02:16:57] aquarium r2 exit=0 
+[02:17:07] worker-enh: 0 poisoned-context lines
+[02:17:07] point av1-venus done; read perf/metal-transport-2026-10-13/evidence/av1-venus/aquarium-r*/*-fps.png
+######## am1-metal 02:17:07
+[02:17:08] build transport am1-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[02:17:09] enhanced boot
+[02:18:06] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=251s load=0.24
+final: up=251s load=0.24 0.14 0.05
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[02:22:07] arm metal: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 [    1.433073] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 
+[02:22:16] firefox profile: pref written: /home/claude/.config/mozilla/firefox/lbfqs296.default-release/user.js 
+[02:23:35] aquarium r1 exit=0 
+[02:24:56] aquarium r2 exit=0 
+[02:25:06] worker-enh: 0 poisoned-context lines
+[02:25:06] point am1-metal done; read perf/metal-transport-2026-10-13/evidence/am1-metal/aquarium-r*/*-fps.png
+######## av2-venus 02:25:06
+[02:25:06] build transport av2-venus: arm venus (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294
+[02:25:07] enhanced boot
+[02:26:04] display pinned on transport: verify OK: Virtual-1 1280x800@59.974 scale=1.0
+SETTLED up=206s load=0.03
+final: up=206s load=0.03 0.08 0.04
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[02:29:20] arm venus: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 
+[02:29:28] firefox profile: pref written: /home/claude/.config/mozilla/firefox/2ts7jent.default-release/user.js 
+[02:30:49] aquarium r1 exit=0 
+[02:32:10] aquarium r2 exit=0 
+[02:32:19] worker-enh: 0 poisoned-context lines
+[02:32:19] point av2-venus done; read perf/metal-transport-2026-10-13/evidence/av2-venus/aquarium-r*/*-fps.png
+######## legs done 02:32:19

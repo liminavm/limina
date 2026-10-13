@@ -1,0 +1,1 @@
+pref written: /home/claude/.config/mozilla/firefox/cq17vfxe.default-release/user.js

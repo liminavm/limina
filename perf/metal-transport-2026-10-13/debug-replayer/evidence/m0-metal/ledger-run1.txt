@@ -1,0 +1,8 @@
+verify OK: Virtual-1 1280x800@59.974 scale=1.0
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+PROVENANCE: kernel=6.19.10-300.fc44.aarch64 pagesize=4096 mesa=26.1.8-1.fc44 vnperf=<unset> vcpus=4 ram=3887MiB display=Virtual-1: 1280x800@59.974 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/metal-transport-2026-10-13/ledger.csv:
+2026-10-13,30268294,gl-replay-metal,fps,49.7081,transport m0-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294; run 1/1 
+2026-10-13,30268294,gl-replay-llvmpipe,fps,681.38,transport m0-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294; run 1/1 
+2026-10-13,30268294,vk-replay-metal-headless,fps,1068.207255,transport m0-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294; run 1/1 
+2026-10-13,30268294,glmark2-wayland-metal,score,930,transport m0-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa d1ed9e2d660; virglrs d389a00 + libkrun 5adb732f; limina 30268294; run 1/1 

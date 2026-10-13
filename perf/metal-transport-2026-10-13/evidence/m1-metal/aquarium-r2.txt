@@ -1,0 +1,14 @@
+=== metal / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 6f6deeddd0a046bf9180f16703d9f640
+  settling 35s…
+perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-25000-fps.png: 1200x520 (from perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-25000.png 1280x800 box 0,0,300,130) bright_frac=0.1019
+  wrote perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-25000.png and perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-25000-fps.png
+=== metal / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: e7313499adfc45efb0dc4f781606e127
+  settling 35s…
+perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-30000-fps.png: 1200x520 (from perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0551
+  wrote perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-30000.png and perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-25000-fps.png
+perf/metal-transport-2026-10-13/evidence/m1-metal/aquarium-r2/metal-30000-fps.png
