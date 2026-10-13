@@ -25,6 +25,13 @@ use anyhow::{Context, Result};
 
 use crate::Guest;
 
+/// Whether the enhanced-tier tests run on the Metal transport (`LIMINA_TEST_TRANSPORT=metal`)
+/// rather than venus. The enhanced images carry the vendor drivers either way; this decides
+/// whether the host offers them the transport. A test whose oracle names a transport asks this.
+pub fn enhanced_on_transport() -> bool {
+    std::env::var("LIMINA_TEST_TRANSPORT").as_deref() == Ok("metal")
+}
+
 /// Where the vendor drivers for this build's protocol live in the guest.
 pub fn prefix() -> String {
     format!("/opt/limina/{}", limina_gpu_wire::VERSION)
