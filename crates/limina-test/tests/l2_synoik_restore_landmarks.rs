@@ -418,15 +418,17 @@ fn synoik_desktop_survives_snapshot_restore() {
     launch_workload(&g1, &apps);
     std::thread::sleep(SETTLE);
     let procs_before = workload_procs(&g1, &apps);
+    // vkstill names its device once its window is configured, which a busy session can put
+    // behind the settle: wait for the line rather than read it once.
     let vk_device = ssh_soft(
         &g1,
-        "journalctl --user -u l2s-vkstill --no-pager 2>/dev/null | grep -m1 'vkstill: device' \
-         || echo none",
+        "for i in $(seq 30); do journalctl --user -u l2s-vkstill --no-pager 2>/dev/null \
+         | grep -m1 'vkstill: device' && exit 0; sleep 1; done; echo none",
     );
     eprintln!("workload up: {procs_before} | {vk_device}");
-    if procs_before.contains("vkstill=0") {
+    if procs_before.contains("vkstill=0") || !vk_device.contains("vkstill: device") {
         eprintln!(
-            "--- vkstill is not running; its journal ---\n{}",
+            "--- vkstill is not running, or never named its device; its journal ---\n{}",
             ssh_soft(
                 &g1,
                 "journalctl --user -u l2s-vkstill --no-pager -o short-monotonic 2>&1 | tail -40"
