@@ -362,14 +362,18 @@ pub fn reply(to: Port, msg: &Message, ports: &[(mach_port_t, u8)]) -> io::Result
     })
 }
 
-/// Sends a request and waits for its reply on `reply_port`, which must have no other traffic.
+/// Sends a request and waits for its reply.
+///
+/// Each call waits on a reply port of its own, made for it and gone with it: a reply that comes
+/// after its call gave up then finds no one to answer, where on a shared port it would answer the
+/// next call in its place, and every one after that with the reply before.
 pub fn call(
     dest: &Port,
-    reply_port: &ReceivePort,
     msg: &Message,
     ports: &[(mach_port_t, u8)],
     timeout_ms: u32,
 ) -> io::Result<Message> {
+    let reply_port = ReceivePort::new()?;
     let mut words = msg.build(
         dest.name(),
         MSG_TYPE_COPY_SEND,
@@ -626,5 +630,44 @@ impl Drop for Mapping {
     fn drop(&mut self) {
         // SAFETY: we mapped exactly this range.
         unsafe { mach_vm_deallocate(task(), self.addr, self.size) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A call that timed out leaves its reply to come later. It must not answer the next call:
+    /// two calls of one kind would swap replies, and every later one would read the one before.
+    #[test]
+    fn a_reply_after_its_timeout_never_answers_a_later_call() {
+        let service = ReceivePort::new().expect("service port");
+        let to = service.make_send().expect("send right");
+        let server = std::thread::spawn(move || {
+            let a = service.receive(None).expect("A").expect("A");
+            std::thread::sleep(Duration::from_millis(200));
+            // Its caller gave up long ago; where this goes is the point of the test.
+            let late = reply(
+                a.reply.unwrap(),
+                &Message::new(a.id + REPLY_ID_OFFSET, b"A"),
+                &[],
+            );
+            let b = service.receive(None).expect("B").expect("B");
+            reply(
+                b.reply.unwrap(),
+                &Message::new(b.id + REPLY_ID_OFFSET, b"B"),
+                &[],
+            )
+            .expect("replying to B");
+            late
+        });
+        let err = call(&to, &Message::new(7, b"a"), &[], 50).expect_err("A times out");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        std::thread::sleep(Duration::from_millis(300));
+        let b = call(&to, &Message::new(7, b"b"), &[], 5000).expect("B");
+        assert_eq!(b.data[0], b'B', "B was answered with A's late reply");
+        let _late = server.join().expect("server");
     }
 }

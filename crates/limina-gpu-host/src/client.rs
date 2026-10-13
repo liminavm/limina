@@ -22,8 +22,8 @@ static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 pub struct GpuHost {
     pid: libc::pid_t,
     service: Port,
-    /// One reply port, so calls are serialised.
-    calls: Mutex<ReceivePort>,
+    /// Serialises calls: the GPU host answers one at a time anyway.
+    calls: Mutex<()>,
     /// Set as [`Drop`] kills the process, so [`Self::on_exit`] stays quiet about an exit it asked for.
     dropping: Arc<AtomicBool>,
 }
@@ -84,7 +84,7 @@ impl GpuHost {
         Ok(Self {
             pid,
             service,
-            calls: Mutex::new(ReceivePort::new()?),
+            calls: Mutex::new(()),
             dropping: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -166,10 +166,9 @@ impl GpuHost {
     }
 
     fn call_with(&self, id: i32, data: &[u8], ports: &[(u32, u8)]) -> io::Result<Message> {
-        let reply_port = self.calls.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         mach::call(
             &self.service,
-            &reply_port,
             &Message::new(id, data),
             ports,
             CALL_TIMEOUT_MS,
