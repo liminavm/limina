@@ -39,9 +39,9 @@ COMMIT=$(git rev-parse --short HEAD)
 PORT="${LIMINA_SSH_PORT:-2222}"
 # LIMINA_PERF_TRANSPORT picks the GPU transport every GPU row runs on, and names the rows after it:
 #   venus  (default) the venus ICD, GL through zink on venus
-#   metal  the native-context transport's KosmicKrisp ICD (scripts/provision/deliver-metal-transport.sh
-#          installs it outside the loader's search path), GL through zink on it; the worker must run
-#          with LIMINA_GPU_METAL=1
+#   metal  the native-context transport: the guest's vendor drivers (scripts/provision/
+#          deliver-metal-transport.sh), Vulkan through their ICD and GL through their zink, which
+#          clients get with no environment at all; the worker must run with LIMINA_GPU_METAL=1
 TRANSPORT="${LIMINA_PERF_TRANSPORT:-venus}"
 case "$TRANSPORT" in venus|metal) ;; *) echo "LIMINA_PERF_TRANSPORT must be venus or metal" >&2; exit 2 ;; esac
 SSH=(ssh -p "$PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR claude@127.0.0.1)
@@ -93,13 +93,14 @@ BASE="XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 XAUTHO
 # driver<->renderer round trip (25-30% of wall clock on submits carrying real work). Ledger rows
 # from 2026-07-26 on are as-shipped; rows before that carried the flag.
 if [ "$T" = metal ]; then
-  ICD=/usr/local/share/limina/vulkan/kk_limina_icd.json
-else
+  # The newest protocol the vendor drivers carry; its GL needs nothing from the environment.
+  ICD=$(ls /etc/vulkan/icd.d/limina-*.json 2>/dev/null | sort -V | tail -1)
+  ZINK=""
+elif [ -d /opt/mesa-zink ]; then
   ICD=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
-fi
-if [ -d /opt/mesa-zink ]; then
   ZINK="LD_LIBRARY_PATH=/opt/mesa-zink/lib64 LIBGL_DRIVERS_PATH=/opt/mesa-zink/lib64/dri __EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-zink/share/glvnd/egl_vendor.d MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink VK_DRIVER_FILES=$ICD"
 else
+  ICD=/usr/share/vulkan/icd.d/virtio_icd.aarch64.json
   ZINK="MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink VK_DRIVER_FILES=$ICD"
 fi
 # eglretrace ships in apitrace (dnf-installable on the RPM image; baked on dev-enh). gfxrecon-replay
@@ -127,12 +128,13 @@ if [ -z "$GFXR" ]; then
 fi
 
 # Backend guard: refuse to record numbers from a silent llvmpipe fallback (the env trap).
-# Venus on this host names the Apple GPU too, so the metal guard also refuses a venus renderer.
+# Venus on this host names the Apple GPU too, and stock virgl reports the host zink on KosmicKrisp
+# behind it, so the metal guard refuses both and wants the guest zink on KosmicKrisp.
 R=$(env $BASE $ZINK glmark2-es2 -b build:duration=0.5 --size 128x128 2>&1 | grep -m1 GL_RENDERER)
 echo "RENDERER: $R" >&2
 if [ "$T" = metal ]; then
-  case "$R" in *Venus*|*llvmpipe*|"") echo "GUARD_FAIL: GL stack is not on the metal transport" >&2; exit 1 ;; esac
-  case "$R" in *KosmicKrisp*|*"Apple M"*) ;; *) echo "GUARD_FAIL: GL stack is not on the metal transport" >&2; exit 1 ;; esac
+  case "$R" in *Venus*|*virgl*|*llvmpipe*|"") echo "GUARD_FAIL: GL stack is not on the metal transport" >&2; exit 1 ;; esac
+  case "$R" in *MESA_KOSMICKRISP*) ;; *) echo "GUARD_FAIL: GL stack is not on the metal transport" >&2; exit 1 ;; esac
 else
   case "$R" in *"Virtio-GPU Venus"*) ;; *) echo "GUARD_FAIL: GL stack is not on venus" >&2; exit 1 ;; esac
 fi

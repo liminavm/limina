@@ -2,29 +2,25 @@
 # SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 # Copyright © 2026 Gustavo Noronha Silva
 
-# Install the guest half of the native-context GPU transport into images: the virtio-gpu module
-# with limina's extension (guest/virtio-gpu-limina) and KosmicKrisp on the limina bridge, as a
-# Vulkan driver beside the stock ones.
+# Install the guest half of the native-context GPU transport into images, the way a guest gets
+# it: the distro-agnostic vendor-driver payload (scripts/package-gpu-drivers.sh), run through its
+# own installer (guest/gpu-drivers/install.sh). That puts the vendor drivers under
+# /opt/limina/<wire>/ where the system's loaders find them, and the extended virtio-gpu module in
+# through the distro's DKMS (docs/design/metal-transport-delivery.md §1).
 #
 #   scripts/provision/deliver-metal-transport.sh Fedora-Workstation-44.metal.test.raw ...
 #
-# The module is built for ONE kernel release, so this refuses an image whose running kernel is not
-# that release. The driver goes under /usr/local and its ICD is NOT put in the loader's search
-# path: nothing picks it up unless asked, with VK_DRIVER_FILES=$ICD (below). Advertising it
-# system-wide would put two devices of one GPU in front of every Vulkan client, venus's and ours,
-# and is the enhanced tier's job (docs/design/metal-transport-delivery.md §1).
+# Nothing selects the drivers but the device: booted with the transport the guest's compositor
+# and clients run on it, booted without it the same guest is stock.
 #
 # Per image, in place: refuse if a live limina-vmm has it open; CoW backup
 # `<image>.bak-pre-metal.raw` (LIMINA_DELIVER_BACKUP=0 skips it); boot through the default vehicle
-# without the transport; install; rebuild the initramfs, so early boot binds the extended module
-# and not the stock one it carries; verify the installed bytes and that the module resolves to the
-# installed file; clean poweroff.
+# without the transport; install (an upgrade in place when a payload is already there); verify
+# that the module resolves to DKMS's and that any copy in the initramfs is that one; clean
+# poweroff.
 #
-# Inputs (defaults are where the two builds leave them):
-#   LIMINA_METAL_MODULE  scripts/build-virtio-gpu-limina.sh <KTAG> <KREL> ->
-#                        target/virtio-gpu-limina/<KREL>/virtio-gpu.ko
-#   LIMINA_METAL_KREL    the module's kernel release (default 6.19.10-300.fc44.aarch64)
-#   LIMINA_METAL_KK      spikes/kk-on-wire/kk-build.sh -> spikes/kk-on-wire/out/libvulkan_kosmickrisp.so
+# Inputs:
+#   LIMINA_GPU_DRIVERS  the payload (default target/gpu-drivers/limina-gpu-drivers.tar.gz)
 # Env otherwise as deliver-payload.sh (LIMINA_GUEST_USER, LIMINA_DELIVER_LOGDIR,
 # LIMINA_DELIVER_SSH_TIMEOUT, and what the boot vehicle honours).
 set -euo pipefail
@@ -33,29 +29,14 @@ cd "$(git rev-parse --show-toplevel)"
 [ "$#" -ge 1 ] || { echo "usage: deliver-metal-transport.sh <image.raw>..." >&2; exit 2; }
 for img in "$@"; do [ -f "$img" ] || { echo "no such image: $img" >&2; exit 2; }; done
 
-KREL="${LIMINA_METAL_KREL:-6.19.10-300.fc44.aarch64}"
-MODULE="${LIMINA_METAL_MODULE:-target/virtio-gpu-limina/$KREL/virtio-gpu.ko}"
-KK="${LIMINA_METAL_KK:-spikes/kk-on-wire/out/libvulkan_kosmickrisp.so}"
-[ -f "$MODULE" ] || { echo "no module at $MODULE (scripts/build-virtio-gpu-limina.sh)" >&2; exit 2; }
-[ -f "$KK" ] || { echo "no driver at $KK (spikes/kk-on-wire/kk-build.sh)" >&2; exit 2; }
-
-# Where they land in the guest. The L2 tests select the driver by $ICD.
-LIBDIR=/usr/local/lib64/limina
-ICD=/usr/local/share/limina/vulkan/kk_limina_icd.json
-MODDIR="/lib/modules/$KREL/updates"
+PAYLOAD="${LIMINA_GPU_DRIVERS:-target/gpu-drivers/limina-gpu-drivers.tar.gz}"
+[ -f "$PAYLOAD" ] || { echo "no payload at $PAYLOAD (scripts/package-gpu-drivers.sh)" >&2; exit 2; }
 
 USER_="${LIMINA_GUEST_USER:-claude}"
 LOGDIR="${LIMINA_DELIVER_LOGDIR:-/tmp}"
 SSH_TIMEOUT="${LIMINA_DELIVER_SSH_TIMEOUT:-420}"
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
-
-WANT_MOD="$(shasum -a 256 "$MODULE" | cut -d' ' -f1)"
-WANT_KK="$(shasum -a 256 "$KK" | cut -d' ' -f1)"
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
-printf '{"ICD":{"api_version":"1.4.363","library_path":"%s/libvulkan_kosmickrisp.so"},"file_format_version":"1.0.1"}\n' \
-  "$LIBDIR" > "$STAGE/kk_limina_icd.json"
-echo "module $KREL ${WANT_MOD:0:12}…  driver ${WANT_KK:0:12}…"
+echo "payload $PAYLOAD ($(shasum -a 256 "$PAYLOAD" | cut -c1-12)…)"
 
 deliver() {
   local img="$1" base name log boot port ilog
@@ -94,23 +75,12 @@ deliver() {
   local g=(ssh -p "$port" "${SSH_OPTS[@]}" "$USER_@127.0.0.1")
   off() { "${g[@]}" 'sudo systemctl poweroff -i' || true; wait "$boot" || true; }
 
-  local running
-  running="$("${g[@]}" 'uname -r')"
-  if [ "$running" != "$KREL" ]; then
-    echo "!!! $img runs $running; the module is built for $KREL" >&2
-    off
-    return 1
-  fi
-
-  scp -P "$port" "${SSH_OPTS[@]}" "$MODULE" "$KK" "$STAGE/kk_limina_icd.json" "$USER_@127.0.0.1:"
-  if "${g[@]}" "set -e
-      sudo install -D -m644 virtio-gpu.ko '$MODDIR/virtio-gpu.ko'
-      sudo install -D -m755 libvulkan_kosmickrisp.so '$LIBDIR/libvulkan_kosmickrisp.so'
-      sudo install -D -m644 kk_limina_icd.json '$ICD'
-      sudo restorecon -R '$MODDIR' '$LIBDIR' '$(dirname "$ICD")' || true
-      rm -f virtio-gpu.ko libvulkan_kosmickrisp.so kk_limina_icd.json
-      sudo depmod -a '$KREL'
-      sudo dracut -f --kver '$KREL'" >"$ilog" 2>&1; then
+  scp -P "$port" "${SSH_OPTS[@]}" "$PAYLOAD" "$USER_@127.0.0.1:limina-gpu-drivers.tar.gz"
+  if "${g[@]}" 'set -e
+      rm -rf limina-gpu-drivers
+      tar xzf limina-gpu-drivers.tar.gz
+      sudo ./limina-gpu-drivers/install.sh
+      rm -rf limina-gpu-drivers limina-gpu-drivers.tar.gz' >"$ilog" 2>&1; then
     echo "installed (log $ilog)"
   else
     echo "!!! install FAILED (log $ilog); tail:" >&2; tail -15 "$ilog" >&2
@@ -118,25 +88,29 @@ deliver() {
     return 1
   fi
 
-  local ok=1 got
-  got="$("${g[@]}" "sha256sum '$MODDIR/virtio-gpu.ko' | cut -d' ' -f1")"
-  [ "$got" = "$WANT_MOD" ] || { echo "!!! installed module is $got, want $WANT_MOD" >&2; ok=0; }
-  got="$("${g[@]}" "sha256sum '$LIBDIR/libvulkan_kosmickrisp.so' | cut -d' ' -f1")"
-  [ "$got" = "$WANT_KK" ] || { echo "!!! installed driver is $got, want $WANT_KK" >&2; ok=0; }
-  got="$("${g[@]}" "modinfo -k '$KREL' -n virtio_gpu")"
-  [ "$got" = "$MODDIR/virtio-gpu.ko" ] || { echo "!!! virtio_gpu resolves to $got" >&2; ok=0; }
+  local ok=1 krel got
+  krel="$("${g[@]}" 'uname -r')"
+  grep -q "module installed for $krel" "$ilog" ||
+    { echo "!!! the module did not build for $krel (log $ilog)" >&2; ok=0; }
+  # DKMS installs to extra/, which depmod ranks below updates/: a virtio-gpu left in updates/
+  # (by hand, or by another package) would shadow ours.
+  got="$("${g[@]}" "modinfo -k '$krel' -n virtio_gpu")"
+  case "$got" in
+    */extra/virtio-gpu.ko*) ;;
+    *) echo "!!! virtio_gpu resolves to $got, not DKMS's" >&2; ok=0 ;;
+  esac
   # Early boot binds virtio_gpu from the initramfs when it carries one, before the root is up, so
   # any copy it carries must be ours. Carrying none is fine: the root's then binds.
   local inird
-  inird="$("${g[@]}" "sudo lsinitrd --kver '$KREL'" | grep -E '/virtio-gpu\.ko' || true)"
+  inird="$("${g[@]}" "sudo lsinitrd --kver '$krel'" | grep -E '/virtio-gpu\.ko' || true)"
   if [ -z "$inird" ]; then
     echo "the initramfs carries no virtio-gpu module; the root's binds"
-  elif grep -q 'updates/virtio-gpu\.ko' <<<"$inird" && ! grep -qv 'updates/virtio-gpu\.ko' <<<"$inird"; then
+  elif ! grep -qv '/extra/virtio-gpu\.ko' <<<"$inird"; then
     echo "the initramfs carries the extended module"
   else
-    echo "!!! the initramfs for $KREL carries a virtio-gpu module that is not ours: $inird" >&2; ok=0
+    echo "!!! the initramfs for $krel carries a virtio-gpu module that is not ours: $inird" >&2; ok=0
   fi
-  [ "$ok" = 1 ] && echo "verified: module and driver match, and the module resolves to ours"
+  [ "$ok" = 1 ] && echo "verified: the module is DKMS's for $krel, in the root and the initramfs"
 
   "${g[@]}" 'sudo fstrim -av' 2>&1 | sed 's/^/   trim: /' || true
   off
@@ -152,4 +126,4 @@ if [ "${#failed[@]}" -gt 0 ]; then
   echo "FAILED: ${failed[*]}" >&2
   exit 1
 fi
-echo "delivered the native-context transport to: $*"
+echo "delivered the vendor GPU drivers to: $*"

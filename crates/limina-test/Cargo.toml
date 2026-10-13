@@ -24,6 +24,9 @@ png    = { workspace = true }
 limina-proto = { workspace = true }
 # The frame-sequence capture's `frames.jsonl` records, read back the way a harness would.
 limina-framecap = { workspace = true }
+# The Metal transport's protocol version, which names where its guest drivers install
+# (/opt/limina/<wire>/).
+limina-gpu-wire = { workspace = true }
 # The USB/IP server (M7): the mock-attach test runs `limina_usbip::serve` with the hardware-free
 # MockBackend on the vsock-bridged stream the guest connects to. default-features off = no libusb
 # (the mock needs none); we're exercising the wire protocol the guest's vhci_hcd speaks.

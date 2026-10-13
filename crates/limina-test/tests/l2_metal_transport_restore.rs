@@ -12,9 +12,11 @@
 //! poisons the compositor's context or leaves the window frozen. So this gate asserts, besides the
 //! restore's own report, that the client's frames keep changing after the resume.
 //!
-//! The vehicle is `metal.test`: the stock-kernel seated desktop with the extended virtio-gpu
-//! module and KosmicKrisp on the limina bridge (`scripts/provision/deliver-metal-transport.sh`).
-//! KosmicKrisp is selected by `VK_DRIVER_FILES` alone; its ICD is not in the loader's path.
+//! The vehicle is `metal.test`: the stock-kernel seated desktop with limina's vendor GPU drivers
+//! (`scripts/provision/deliver-metal-transport.sh`), booted with the transport, so gnome-shell
+//! itself runs on it and the restore brings back the compositor's contexts too. The client is
+//! pointed at the vendor ICD with `VK_DRIVER_FILES`: the loader enumerates venus's device first,
+//! and venus names the same GPU.
 //!
 //! The renderer replay fails the restore on any command it drops (`gpu restore: … the replay
 //! dropped N commands` → `replay FAILED`), so the restore's own verdict is load-bearing here: a
@@ -24,16 +26,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use limina_test::metal::{SESSION, Stack};
 use limina_test::{CapturedFrame, Guest, GuestConfig};
 
 const TEST: &str = "metal_transport_client_survives_snapshot_restore";
-
-/// Where `deliver-metal-transport.sh` puts KosmicKrisp's ICD; nothing else selects it.
-const ICD: &str = "/usr/local/share/limina/vulkan/kk_limina_icd.json";
-
-/// Runs what follows in the seated user's session.
-const SESSION: &str = "env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 \
-                       DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus";
 
 /// Wakes a display the in-guest suspend blanked: a blanked compositor sends no frame callbacks,
 /// and a FIFO client then stops presenting, which would read as a frozen window.
@@ -150,40 +146,30 @@ fn metal_transport_client_survives_snapshot_restore() {
     g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .unwrap_or_else(|e| panic!("gnome-shell never appeared: {e}"));
 
-    // The premise: the extended module bound, it found the extension, and KosmicKrisp answers on
-    // it. Without these the rest would test venus or nothing.
-    let missing = "— deliver the transport with scripts/provision/deliver-metal-transport.sh";
-    let module = ssh_retry(&g1, "modinfo -n virtio_gpu");
-    let krel = ssh_retry(&g1, "uname -r");
-    assert_eq!(
-        module,
-        format!("/lib/modules/{krel}/updates/virtio-gpu.ko"),
-        "virtio_gpu is not the extended module {missing}"
+    // The premise: the extended module bound, it found the extension, and the desktop and
+    // KosmicKrisp are on it. Without these the rest would test venus or nothing.
+    let missing = "— deliver the vendor drivers with scripts/provision/deliver-metal-transport.sh";
+    let stack = Stack::probe(&g1).expect("probing the guest's GPU stack");
+    assert!(
+        stack.module_is_ours(),
+        "virtio_gpu is not DKMS's extended module {missing}: {stack:#?}"
     );
-    let ext = ssh_retry(&g1, "sudo dmesg | grep -c 'limina extension:' || true");
-    assert_ne!(
-        ext, "0",
+    assert!(
+        stack.extension,
         "the module did not find the limina extension (is LIMINA_GPU_METAL reaching the worker?)"
     );
-    let summary = ssh_retry(
-        &g1,
-        &format!("VK_DRIVER_FILES={ICD} timeout 30 vulkaninfo --summary 2>&1 || true"),
-    );
     assert!(
-        summary.contains("Apple M1 Max") || summary.contains("deviceName         = Apple"),
-        "KosmicKrisp on the transport lists no Apple GPU {missing}:\n{summary}"
+        stack.shell_on_vendor_drivers() && stack.vk_has_kosmickrisp(),
+        "the desktop is not on the transport {missing}: {stack:#?}"
     );
-    assert!(
-        summary.contains("driverName         = KosmicKrisp"),
-        "the selected driver is not KosmicKrisp {missing}:\n{summary}"
-    );
+    let icd = limina_test::metal::icd();
 
     // Settle the desktop, then start the client.
     std::thread::sleep(Duration::from_secs(10));
     ssh_retry(
         &g1,
         &format!(
-            "{SESSION} VK_DRIVER_FILES={ICD} setsid nohup vkcube --wsi wayland \
+            "{SESSION} VK_DRIVER_FILES={icd} setsid nohup vkcube --wsi wayland \
              > /tmp/vkcube.log 2>&1 < /dev/null & echo started"
         ),
     );
@@ -193,8 +179,9 @@ fn metal_transport_client_survives_snapshot_restore() {
     )
     .unwrap_or_else(|e| panic!("vkcube never selected a GPU: {e}"));
     let selected = ssh_retry(&g1, "grep 'Selected GPU' /tmp/vkcube.log");
+    // venus names the same GPU, as `Virtio-GPU Venus (Apple M1 Max)`.
     assert!(
-        selected.contains("Apple M1 Max"),
+        selected.contains("Apple M1 Max") && !selected.contains("Venus"),
         "vkcube is not on KosmicKrisp: {selected}"
     );
     let cube = vkcube_pid(&g1);

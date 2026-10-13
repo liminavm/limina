@@ -1382,6 +1382,7 @@ dependencies = [
  "libc",
  "limina-displayctl",
  "limina-framecap",
+ "limina-gpu-wire",
  "limina-proto",
  "limina-usbip",
  "objc2",

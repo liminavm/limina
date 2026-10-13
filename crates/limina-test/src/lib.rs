@@ -38,6 +38,7 @@ pub use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec}
 
 pub mod bench;
 pub mod landmarks;
+pub mod metal;
 pub mod renderer;
 
 /// Last-resort fallback firmware: the krunkit-shipped blob (an EDK2 `.fd`), the same one the
@@ -1109,11 +1110,17 @@ impl GuestConfig {
         Ok(cfg)
     }
 
-    /// Like [`GuestConfig::seated_efi_fedora_from_env`], but booting the **metal** test image: the
-    /// stock-kernel seated desktop with the guest half of the native-context GPU transport (the
-    /// extended virtio-gpu module and KosmicKrisp on the limina bridge) delivered into it by
-    /// `scripts/provision/deliver-metal-transport.sh`. `LIMINA_TEST_DISK_METAL` overrides.
+    /// Like [`GuestConfig::seated_efi_fedora_from_env`], but booting the **metal** test image with
+    /// the native-context GPU transport on: the stock-kernel seated desktop with limina's vendor
+    /// GPU drivers installed by `scripts/provision/deliver-metal-transport.sh` (see [`metal`]), so
+    /// gnome-shell and its clients run on the transport. `LIMINA_TEST_DISK_METAL` overrides.
     pub fn metal_efi_fedora_from_env() -> Result<GuestConfig> {
+        Ok(Self::metal_image_efi_fedora_from_env()?.with_env("LIMINA_GPU_METAL", "1"))
+    }
+
+    /// The metal test image **without** the transport: the same installed guest, on a host that
+    /// does not offer it, which must come up stock.
+    pub fn metal_image_efi_fedora_from_env() -> Result<GuestConfig> {
         let disk = match std::env::var("LIMINA_TEST_DISK_METAL") {
             Ok(p) => PathBuf::from(p),
             Err(_) => fedora_image("metal.test"),
@@ -1124,8 +1131,7 @@ impl GuestConfig {
              stock.test golden and run scripts/provision/deliver-metal-transport.sh on it, see \
              docs/images.md"
         );
-        Ok(GuestConfig::seated_efi_fedora_from_env_with_disk(disk)?
-            .with_env("LIMINA_GPU_METAL", "1"))
+        GuestConfig::seated_efi_fedora_from_env_with_disk(disk)
     }
 
     /// Like [`GuestConfig::seated_efi_fedora_from_env`], but booting the **synoik** enhanced image
