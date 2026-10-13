@@ -18,15 +18,21 @@ two independent causes, each about a full Metal round trip (~200 µs):
    predate it. venus has always been exempt, which is the whole of the gap that remained.
 
 Measured 2026-10-13: `metal.test` clone, 1280x800, gnome-shell and clients all on zink over the
-same stack; glmark2-es2-wayland `build`, 512x512.
+arm's stack, a fresh boot per arm; glmark2-es2-wayland `build`, 512x512. "New zink" is the mesa
+fork at `dce6d5542a8`, which carries `e9a87f80b2d`, built as a prefix in the guest.
 
-| | glmark2 |
-|---|---|
-| venus | 2340 2356 2442 |
-| transport, before | 1312 1307 1293 |
-| transport, export fix | 1715 1700 (1027 once) |
-| transport, export fix + zink with `e9a87f80b2d` | 3133 3156 3203 |
-| ... with zink's wait forced back on (A/B toggle) | 1749 1790 |
+| | venus | transport |
+|---|---|---|
+| stock zink 26.1.8, before the export fix | 2340 2356 2442 | 1312 1307 1293 |
+| stock zink 26.1.8 | 2411 2375 2423 | 1757 1771 1785 |
+| new zink | 2366 2266 2261 | 3377 3346 3338 |
+| new zink, its per-present wait forced back on (A/B toggle) | — | 1749 1790 |
+
+The new zink is neutral on venus, so its row compares like with like: +45%.
+
+Checked by eye, from the scanout capture: glmark2 frames at 3000+ fps composited at 60 Hz show
+no seams or partial buffers; an X11 glmark2-es2 through Xwayland (itself on the transport) renders
+cleanly and logs nothing; Firefox's aquarium renders at 60 fps.
 
 The export fix also moved headless vk-replay from 1569 to 2110 fps (venus ~1820) and vkmark cube
 from 2684 to 4922.

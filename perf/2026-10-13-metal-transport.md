@@ -54,8 +54,9 @@ Five points, one boot each, measured 2026-10-13:
   the guest KK (`dce6d5542a8`), which takes headless vk-replay to 2110 fps, past venus. Stock zink's
   `implicit_sync` workaround waits on every present for any driver but venus and a list that gained
   KosmicKrisp only upstream (`e9a87f80b2d`, after Fedora's 26.1.8 and our 26.2.3). With both gone,
-  glmark2-wayland on an all-zink desktop reads 3133-3203 on the transport against 2340-2442 on
-  venus. These rows predate both.
+  glmark2-wayland on an all-zink desktop with the same zink on both arms reads 3338-3377 on the
+  transport against 2261-2366 on venus (+45%); with stock zink it is 1757-1785 against 2375-2423.
+  These rows predate both.
 - **gl-replay does not move.** It replays through Xwayland and is paced by that present path
   (tier 0 moved it, `perf/2026-10-05-tier0.md`), so the transport does not show in it.
 
