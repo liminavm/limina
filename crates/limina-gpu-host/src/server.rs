@@ -38,6 +38,7 @@ impl Drop for Context {
         if let Some(r) = self.ring.take() {
             r.stop.store(true, std::sync::atomic::Ordering::Release);
             self.doorbell.signal();
+            // A panic never returns here: the hook in `main` ends the process.
             let _ = r.join.join();
         }
     }
@@ -66,6 +67,22 @@ pub fn main() -> ! {
         .format_timestamp_micros()
         .init();
     exit_with_parent();
+    // A thread that unwound alone would leave whatever it served looking alive with nothing
+    // behind it: a ring thread's context would never progress or fail, and its fences would wait
+    // for good. The process ends instead, which the worker watches for and reports as every
+    // context lost. (A panic in the commit-feedback block crosses `extern "C"` and aborts anyway.)
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        report(info);
+        std::process::abort();
+    }));
+    if std::env::var_os("LIMINA_GPU_HOST_TEST_PANIC").is_some() {
+        // Off unless a test asks: a thread that panics once the server is up.
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            panic!("a test asked for a panic")
+        });
+    }
     if let Err(e) = serve() {
         log::error!("GPU host: {e}");
         std::process::exit(1);
