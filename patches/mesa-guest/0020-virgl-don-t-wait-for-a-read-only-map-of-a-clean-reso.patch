@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Mon, 5 Oct 2026 10:13:28 -0300
-Subject: [PATCH 20/20] virgl: don't wait for a read-only map of a clean
+Subject: [PATCH 20/21] virgl: don't wait for a read-only map of a clean
  resource
 
 virgl_resource_transfer_prepare() waits for every synchronized map of a
