@@ -730,16 +730,19 @@ against a known-failures baseline.
 
 ## GPU present & scanout
 
-### vrend scanout flushes carry no fence, so every GL desktop pays a Metal copy per frame
-`virtio_gpu_plane_prepare_fb` (`drivers/gpu/drm/virtio/virtgpu_plane.c` on the linux fork's `limina`
-branch) returns before allocating a plane fence for any primary plane whose bo is not a guest blob,
-then fences only dumb or imported objects. A GNOME desktop scans out through vrend (non-blob) on both
-tiers, so its flushes carry no fence, no `GuestFlushHold` forms, and the compositor may render into
-the buffer while it is on glass. The supervisor covers that with a Metal-blit copy of every unheld
-frame (`docs/graphics.md` §4): correct, but ~1.2 ms of added latency per frame, 4.6–6.1 ms worst case
-under a 24–33 fps WebGL load (measured 2026-09-12). Fix, enhanced tier only (a commit on the fork's `limina` branch): fence
-every primary-plane flush the host can hold, so the enhanced tier goes back to zero-copy and the stock
-tier keeps the copy. libkrun already reports the change (`scanout_held`). Check with
+### vrend scanout flushes carry no fence off the Metal transport, so a GL desktop pays a Metal copy per frame
+`virtio_gpu_plane_prepare_fb` (`drivers/gpu/drm/virtio/virtgpu_plane.c`) returns before allocating a
+plane fence for any primary plane whose bo is not a guest blob, then fences only dumb or imported
+objects. A GNOME desktop scans out through vrend (non-blob), so its flushes carry no fence, no
+`GuestFlushHold` forms, and the compositor may render into the buffer while it is on glass. The
+supervisor covers that with a Metal-blit copy of every unheld frame (`docs/graphics.md` §4): correct,
+but ~1.2 ms of added latency per frame, 4.6–6.1 ms worst case under a 24–33 fps WebGL load (measured
+2026-09-12). limina's DKMS module fences every primary-plane flush when the host offers the limina
+extension (`guest/virtio-gpu-limina/0001-hook-the-limina-extension.patch`), which the host does only
+with `--gpu-metal`, so this is closed on the transport and open everywhere else. Remaining: fence
+when the host holds flushes without the extension (a capability of its own in `LIMINA_INFO`, or the
+module keyed on something the host offers in venus mode too), and confirm on a vrend desktop that
+the flush parks rather than taking the blocking `sync_iosurface` path. Check with
 `LIMINA_PRESENT_MUTATION_TRACE=1` (zero surfaces changed while up) and the worker's
 `scanout N flushes are fenced` line.
 

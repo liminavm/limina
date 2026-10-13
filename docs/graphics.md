@@ -299,7 +299,11 @@ kernel attaches that fence only for a dumb or imported guest-blob primary plane
 from upstream), so a GNOME desktop scanning out through vrend is **not held on either tier**: its
 compositor draws later frames into a buffer the window server is still compositing, and older
 frames flash back on screen (measured 2026-09-12: about 60% of frames changed while on glass under a
-heavy WebGL load). The worker reports each scanout's state as it changes (`held <scanout> <0|1>`,
+heavy WebGL load). On the Metal transport, limina's DKMS module fences every primary-plane flush
+(the host offers the extension, so it holds them), and a transport surface's present is parked with
+nothing to wait for: the guest waited for its rendering before it flushed, and the renderer can
+neither fence nor copy it. The hold is what keeps that compositor off buffers on glass
+(`metal_fence_present`). The worker reports each scanout's state as it changes (`held <scanout> <0|1>`,
 from libkrun's optional `scanout_held` display call), and the supervisor shows a slot that is not
 held through a private copy: a Metal blit into a 3-deep ring (`crates/limina/src/window/copy.rs`),
 about 1.2 ms of GPU time per frame (M1 Max, measured 2026-09-12). The main thread never waits for
