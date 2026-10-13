@@ -170,6 +170,8 @@ for tree in "$HERE"/drivers/opt/limina/*/; do
     "/etc/glvnd/egl_vendor.d/10_limina-$wire.json"
   link "/opt/limina/$wire/share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json" \
     "/etc/vulkan/icd.d/limina-$wire.json"
+  link "/opt/limina/$wire/share/vulkan/implicit_layer.d/limina-$wire-transport-select.json" \
+    "/etc/vulkan/implicit_layer.d/limina-$wire-transport-select.json"
 done
 command -v restorecon >/dev/null && restorecon -R /opt/limina || true
 

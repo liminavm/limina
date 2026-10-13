@@ -42,6 +42,7 @@ mkdir -p "$OUT"
 echo "==> building $PREFIX from $TREE ($(git -C "$TREE" rev-parse --short HEAD))"
 container run --rm --cpus "${JOBS:-8}" --memory 12g \
   --mount "type=bind,source=$TREE,target=/src,readonly" \
+  --mount "type=bind,source=$ROOT/guest/gpu-drivers/layer,target=/layer,readonly" \
   -v "$VOLUME:/build" -v "$OUT:/out" "$IMAGE" bash -euo pipefail -c "
 [ '${RECONFIGURE:-0}' = 1 ] && rm -rf /build/vendor
 if [ ! -f /build/vendor/build.ninja ]; then
@@ -69,6 +70,9 @@ rm -rf include lib/pkgconfig lib/dri lib/libgbm.so*
 # The private libgallium sits beside the libraries that need it.
 patchelf --set-rpath '\$ORIGIN' lib/libEGL_limina.so.0.0.0
 patchelf --set-rpath '\$ORIGIN/..' lib/gbm/dri_gbm.so
+# The layer that hides venus's devices where ours are, against the fork's Vulkan headers.
+gcc -shared -fPIC -O2 -fvisibility=hidden -Wall -Werror -I/src/include \
+  -o lib/libVkLayer_limina_transport_select.so /layer/transport_select.c -lpthread
 cp -a /tmp/stage/opt /out/
 "
 
@@ -99,6 +103,14 @@ mkdir -p "$D/share/glvnd/egl_vendor.d"
 rm -f "$D/share/glvnd/egl_vendor.d/"*.json
 printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s/lib/libEGL_limina.so.0"}}\n' \
   "$PREFIX" > "$D/share/glvnd/egl_vendor.d/10_limina-$WIRE.json"
+mkdir -p "$D/share/vulkan/implicit_layer.d"
+cat > "$D/share/vulkan/implicit_layer.d/limina-$WIRE-transport-select.json" <<JSON
+{"file_format_version":"1.0.0","layer":{"name":"VK_LAYER_LIMINA_transport_select_$WIRE",
+"type":"GLOBAL","library_path":"$PREFIX/lib/libVkLayer_limina_transport_select.so",
+"api_version":"1.4.0","implementation_version":"1",
+"description":"Hides venus's devices where the Metal transport's driver has one",
+"disable_environment":{"LIMINA_VK_ALL_DEVICES":"1"}}}
+JSON
 echo "$WIRE" > "$D/WIRE_VERSION"
 git -C "$TREE" rev-parse HEAD > "$D/MESA_REV"
 
