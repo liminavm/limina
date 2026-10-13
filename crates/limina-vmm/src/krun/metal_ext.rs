@@ -8,14 +8,14 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
 use devices::virtio::gpu::ext::{ExtArena, GpuExtension, Signal};
 use limina_gpu_host::client::{Doorbell, GpuHost, MappedArena};
 use limina_gpu_host::journal::ContextExport;
-use limina_gpu_wire::ring::RingControl;
+use limina_gpu_wire::ring::{self, RingControl};
 
 /// Turns the transport on like `--gpu-metal`, for runs that cannot add a flag (the L2 tests).
 /// Off by default: a guest without the vendor drivers would only pay for an idle process.
@@ -65,6 +65,8 @@ struct Fences {
     pending: Mutex<Vec<(u32, u64, Signal)>>,
     wake: Condvar,
     rings: Mutex<HashMap<u32, Ring>>,
+    /// The GPU host exited: nothing will complete any more.
+    gone: AtomicBool,
 }
 
 /// How often the watch looks at the rings while a fence waits. Fences guard only buffers that
@@ -72,6 +74,24 @@ struct Fences {
 const FENCE_POLL: Duration = Duration::from_micros(100);
 
 impl Fences {
+    /// The GPU host exited. Every ring is lost, so the guest's driver sees its device gone, and
+    /// every fence is answered, now and from now on: the work it waits for will never finish.
+    fn host_gone(&self) {
+        self.gone.store(true, Ordering::Release);
+        for r in self
+            .rings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
+            let c = r.control();
+            c.fail(ring::Error::HostGone, c.head.load(Ordering::Acquire));
+        }
+        // Taken so the notify cannot fall between the watch's check and its wait.
+        drop(self.pending.lock().unwrap_or_else(|e| e.into_inner()));
+        self.wake.notify_one();
+    }
+
     /// Answers each fence whose ring has completed its seqno, lost its context, or gone.
     fn watch(&self) {
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
@@ -80,7 +100,9 @@ impl Fences {
                 pending = self.wake.wait(pending).unwrap_or_else(|e| e.into_inner());
             }
             let mut done = Vec::new();
-            {
+            if self.gone.load(Ordering::Acquire) {
+                done.extend(pending.drain(..).map(|(_, _, signal)| signal));
+            } else {
                 let rings = self.rings.lock().unwrap_or_else(|e| e.into_inner());
                 let mut i = 0;
                 while i < pending.len() {
@@ -431,6 +453,16 @@ pub fn start(enabled: bool) -> Option<Arc<dyn GpuExtension>> {
                 host.pid()
             );
             let fences = Arc::new(Fences::default());
+            let dead = Arc::downgrade(&fences);
+            if let Err(e) = host.on_exit(move || {
+                log::error!("metal ext: the GPU host exited; every context it served is lost");
+                if let Some(f) = dead.upgrade() {
+                    f.host_gone();
+                }
+            }) {
+                log::warn!("metal ext: cannot watch the GPU host: {e}");
+                return None;
+            }
             let watched = fences.clone();
             if let Err(e) = std::thread::Builder::new()
                 .name("metal-fences".into())
@@ -453,5 +485,82 @@ pub fn start(enabled: bool) -> Option<Arc<dyn GpuExtension>> {
             log::warn!("metal ext: GPU host {} did not start: {e}", exe.display());
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use limina_gpu_host::mach::{self, Mapping};
+    use limina_gpu_wire::ring::Error;
+
+    use super::*;
+
+    /// A ring control block in memory mapped the way the worker maps arenas.
+    fn ring() -> Ring {
+        let page = 16 << 10;
+        let blob = mach::Anonymous::new(page).expect("memory");
+        let (entry, _) = mach::make_memory_entry(blob.addr(), blob.size()).expect("entry");
+        let mapping = Mapping::map(&entry, page).expect("mapping");
+        Ring {
+            arena: Arc::new(MappedArena {
+                mapping,
+                gpu_base: 0,
+            }),
+            offset: 0,
+        }
+    }
+
+    /// A GPU host that dies answers every fence still waiting on it, and its rings say why, so
+    /// the guest sees its device lost rather than waiting for work that will never complete.
+    #[test]
+    fn a_dead_gpu_host_answers_its_fences_and_loses_its_rings() {
+        let fences = Arc::new(Fences::default());
+        fences.rings.lock().unwrap().insert(1, ring());
+        let watched = fences.clone();
+        std::thread::spawn(move || watched.watch());
+        let (tx, rx) = mpsc::channel();
+        for seqno in [1, 2] {
+            let tx = tx.clone();
+            fences.pending.lock().unwrap().push((
+                1,
+                seqno,
+                Box::new(move || tx.send(seqno).expect("the test waits for this")),
+            ));
+        }
+        fences.wake.notify_one();
+        assert!(
+            rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "nothing completed yet"
+        );
+
+        fences.host_gone();
+
+        let mut answered: Vec<u64> = (0..2)
+            .map(|_| {
+                rx.recv_timeout(Duration::from_secs(1))
+                    .expect("a fence was left waiting")
+            })
+            .collect();
+        answered.sort();
+        assert_eq!(answered, [1, 2]);
+        let rings = fences.rings.lock().unwrap();
+        let control = rings[&1].control();
+        assert_eq!(
+            control.error.load(Ordering::Acquire),
+            Error::HostGone as u32
+        );
+        drop(rings);
+        // A fence asked for after the host died is answered too.
+        let (tx, rx) = mpsc::channel();
+        fences.pending.lock().unwrap().push((
+            1,
+            3,
+            Box::new(move || tx.send(()).expect("the test waits for this")),
+        ));
+        fences.wake.notify_one();
+        rx.recv_timeout(Duration::from_secs(1))
+            .expect("a fence after the host died was left waiting");
     }
 }

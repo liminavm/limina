@@ -110,6 +110,9 @@ pub enum Error {
     /// A snapshot could not carry the context: its work did not finish before the snapshot, or
     /// the restore could not rebuild it as the guest knew it.
     Restore = 13,
+    /// The process serving the context exited: nothing it held survives, and nothing it owed will
+    /// arrive. Written by the worker, not the GPU host.
+    HostGone = 14,
 }
 
 impl Error {
@@ -128,6 +131,7 @@ impl Error {
             11 => Self::GpuFault,
             12 => Self::OutOfMemory,
             13 => Self::Restore,
+            14 => Self::HostGone,
             _ => return None,
         })
     }

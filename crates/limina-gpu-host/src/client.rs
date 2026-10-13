@@ -2,8 +2,10 @@
 
 use std::ffi::CString;
 use std::io;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::ipc::{self, Pod};
 use crate::mach::{self, Mapping, Message, Port, ReceivePort, Semaphore};
@@ -22,6 +24,8 @@ pub struct GpuHost {
     service: Port,
     /// One reply port, so calls are serialised.
     calls: Mutex<ReceivePort>,
+    /// Set as [`Drop`] kills the process, so [`Self::on_exit`] stays quiet about an exit it asked for.
+    dropping: Arc<AtomicBool>,
 }
 
 /// A context's doorbell: signalling it wakes the context's ring consumer.
@@ -81,11 +85,80 @@ impl GpuHost {
             pid,
             service,
             calls: Mutex::new(ReceivePort::new()?),
+            dropping: Arc::new(AtomicBool::new(false)),
         })
     }
 
     pub fn pid(&self) -> libc::pid_t {
         self.pid
+    }
+
+    /// Calls `f` once, on a thread of its own, when the GPU host process exits of its own accord:
+    /// every context it served is lost then, and nothing else will say so. The kill in [`Drop`]
+    /// is not reported. The process is not reaped here, so that kill can never reach a recycled
+    /// pid.
+    pub fn on_exit(&self, f: impl FnOnce() + Send + 'static) -> io::Result<()> {
+        // SAFETY: plain syscalls on a descriptor this owns.
+        let kq = unsafe { libc::kqueue() };
+        if kq < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `kqueue` returned a descriptor nothing else owns.
+        let kq = unsafe { std::os::fd::OwnedFd::from_raw_fd(kq) };
+        let change = libc::kevent {
+            ident: self.pid as libc::uintptr_t,
+            filter: libc::EVFILT_PROC,
+            flags: libc::EV_ADD | libc::EV_ONESHOT,
+            fflags: libc::NOTE_EXIT,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        // SAFETY: one change, no events asked for.
+        let rc = unsafe {
+            libc::kevent(
+                kq.as_raw_fd(),
+                &change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        // A process that has already exited cannot be watched; it is reported at once.
+        if rc < 0 && io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
+            return Err(io::Error::last_os_error());
+        }
+        let exited = rc < 0;
+        let dropping = self.dropping.clone();
+        std::thread::Builder::new()
+            .name("gpu-host-exit".into())
+            .spawn(move || {
+                if !exited {
+                    // SAFETY: an all-zero kevent is a valid buffer for one event.
+                    let mut event: libc::kevent = unsafe { std::mem::zeroed() };
+                    loop {
+                        // SAFETY: waits for one event into `event`, with no timeout.
+                        let n = unsafe {
+                            libc::kevent(
+                                kq.as_raw_fd(),
+                                std::ptr::null(),
+                                0,
+                                &mut event,
+                                1,
+                                std::ptr::null(),
+                            )
+                        };
+                        if n > 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted
+                        {
+                            break;
+                        }
+                    }
+                }
+                if !dropping.load(Ordering::Acquire) {
+                    f();
+                }
+            })?;
+        Ok(())
     }
 
     fn call(&self, id: i32, data: &[u8]) -> io::Result<Message> {
@@ -324,6 +397,7 @@ impl GpuHost {
 
 impl Drop for GpuHost {
     fn drop(&mut self) {
+        self.dropping.store(true, Ordering::Release);
         kill(self.pid);
     }
 }

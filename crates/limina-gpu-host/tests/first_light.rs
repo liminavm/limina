@@ -765,6 +765,21 @@ fn many_small_commits_retire_in_order() {
     assert!(g.bytes(MIB, 4096).iter().all(|&b| b == (1999 & 0xff) as u8));
 }
 
+/// A GPU host that dies is reported, so the worker can answer the fences it will never complete
+/// instead of leaving the guest waiting on them.
+#[test]
+fn a_gpu_host_that_dies_is_reported() {
+    let g = start();
+    let (tx, rx) = std::sync::mpsc::channel();
+    g.host
+        .on_exit(move || tx.send(()).expect("the test waits for this"))
+        .expect("watching the GPU host");
+    // SAFETY: the GPU host is this test's own child.
+    assert_eq!(unsafe { libc::kill(g.host.pid(), libc::SIGKILL) }, 0);
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("the GPU host's exit was not reported");
+}
+
 /// A context destroyed while its queue waits on events the guest will never signal: the destroy
 /// answers at once (the worker's control queue waits on it), and the wedged work is released.
 #[test]
