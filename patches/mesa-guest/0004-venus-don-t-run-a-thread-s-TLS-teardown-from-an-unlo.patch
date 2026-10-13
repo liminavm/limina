@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Tue, 6 Oct 2026 11:08:32 -0300
-Subject: [PATCH 04/21] venus: don't run a thread's TLS teardown from an
+Subject: [PATCH 04/22] venus: don't run a thread's TLS teardown from an
  unloaded driver
 
 vn_tls_get() registers vn_tls_free as the destructor of a tss key the

@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Tue, 13 Oct 2026 17:32:34 -0300
+Subject: [PATCH 22/22] venus: match the X server's DRM device by its node, not
+ only by PCI
+
+wsi_device_matches_drm_fd compares PCI bus info and nothing else, so a
+virtio-gpu on any other bus (virtio-mmio, as arm64 VMMs such as libkrun
+expose it) never matches the device the X server hands out over DRI3.
+Every X11 swapchain then takes the prime blit path into a linear buffer,
+even though the X server renders on the same GPU.
+
+Fall back to comparing the fd's device number with the primary and render
+nodes VK_EXT_physical_device_drm reports, as drivers for platform devices
+do. X11 swapchains on such a device get native images, which the
+compositor's driver can import directly.
+
+Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/virtio/vulkan/vn_wsi.c | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/src/virtio/vulkan/vn_wsi.c b/src/virtio/vulkan/vn_wsi.c
+index 3a5a801c0bb..817b9b20637 100644
+--- a/src/virtio/vulkan/vn_wsi.c
++++ b/src/virtio/vulkan/vn_wsi.c
+@@ -10,8 +10,12 @@
+ 
+ #include "vn_wsi.h"
+ 
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
++
+ #include "vk_enum_to_str.h"
+ #include "wsi_common_entrypoints.h"
++#include "wsi_common_private.h"
+ 
+ #include "vn_device.h"
+ #include "vn_image.h"
+@@ -119,6 +123,34 @@ vn_wsi_chains_unlock(struct vn_device *dev,
+    }
+ }
+ 
++/* The common check matches PCI bus info only, so a virtio-gpu on any other
++ * bus (virtio-mmio on arm64 VMMs) never matched the X server's DRI3 device,
++ * and every X11 swapchain took the prime blit path into a buffer. Match the
++ * device numbers VK_EXT_physical_device_drm reports instead.
++ */
++static bool
++vn_wsi_can_present_on_device(VkPhysicalDevice physicalDevice, int fd)
++{
++   struct vn_physical_device *physical_dev =
++      vn_physical_device_from_handle(physicalDevice);
++   const VkPhysicalDeviceDrmPropertiesEXT *drm =
++      &physical_dev->instance->renderer->info.drm.props;
++
++   if (wsi_device_matches_drm_fd(physicalDevice, fd))
++      return true;
++
++   struct stat st;
++   if (fstat(fd, &st) || !S_ISCHR(st.st_mode))
++      return false;
++
++   const unsigned maj = major(st.st_rdev);
++   const unsigned min = minor(st.st_rdev);
++   return (drm->hasPrimary && maj == drm->primaryMajor &&
++           min == drm->primaryMinor) ||
++          (drm->hasRender && maj == drm->renderMajor &&
++           min == drm->renderMinor);
++}
++
+ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+ vn_wsi_proc_addr(VkPhysicalDevice physicalDevice, const char *pName)
+ {
+@@ -187,6 +219,8 @@ vn_wsi_init(struct vn_physical_device *physical_dev)
+       return result;
+ 
+    physical_dev->wsi_device.supports_scanout = false;
++   physical_dev->wsi_device.can_present_on_device =
++      vn_wsi_can_present_on_device;
+    physical_dev->wsi_device.supports_modifiers =
+       physical_dev->base.vk.supported_extensions.EXT_image_drm_format_modifier;
+    /* macOS-host virtio-gpu compositors advertise modifiers as INVALID. Force
