@@ -1,0 +1,88 @@
+# host at probe time: 2026-10-06 19:57, load averages 6.38 4.92 3.92; peer VMs:
+peer 1: a dev-tree limina-vmm (4 vCPU)
+peer 2: an installed Limina.app limina-vmm (6 vCPU)
+== limits
+device=Apple M1 Max maxBufferLength=19169 MiB recommendedMaxWorkingSetSize=28672 MiB hasUnifiedMemory=1 argumentBuffersSupport=1
+heap    256 MiB: heap=ok (0.05 ms) alias=ok (0.00 ms) contents=0x1091bc000 align16k=1 gpu=0x1500068000 currentAllocatedSize=256 MiB
+heap    512 MiB: heap=ok (0.04 ms) alias=ok (0.00 ms) contents=0x1191bc000 align16k=1 gpu=0x1510070000 currentAllocatedSize=512 MiB
+heap   1024 MiB: heap=ok (0.07 ms) alias=ok (0.00 ms) contents=0x300000000 align16k=1 gpu=0x1530078000 currentAllocatedSize=1024 MiB
+heap   2048 MiB: heap=ok (0.10 ms) alias=ok (0.00 ms) contents=0x340000000 align16k=1 gpu=0x1570080000 currentAllocatedSize=2048 MiB
+heap   4096 MiB: heap=ok (0.18 ms) alias=ok (0.00 ms) contents=0xb7c000000 align16k=1 gpu=0x15f0088000 currentAllocatedSize=4096 MiB
+heap   8192 MiB: heap=ok (0.34 ms) alias=ok (0.00 ms) contents=0x7000000000 align16k=1 gpu=0x16f0090000 currentAllocatedSize=8192 MiB
+heap  16384 MiB: heap=ok (0.64 ms) alias=ok (0.00 ms) contents=0x7500000000 align16k=1 gpu=0x18f0098000 currentAllocatedSize=16384 MiB
+heap  32768 MiB: heap=nil (0.01 ms) alias=nil (0.00 ms) contents=0x0 align16k=-1 gpu=0x0 currentAllocatedSize=0 MiB
+== addr
+heap 0 (alias first): alias gpu=0x1500068000 cpu=0x1091bc000; heap-to-heap gpu delta=0 MiB
+heap 1 (alias last): alias gpu=0x1510070000 cpu=0x1191bc000; heap-to-heap gpu delta=256 MiB
+heap 2 (alias first): alias gpu=0x1520078000 cpu=0x1291bc000; heap-to-heap gpu delta=256 MiB
+placed buffers: 192; gpuAddress != alias+offset: 0; contents != alias+offset: 0
+GPU writes through computed addresses: 96 targets over 3 heaps, 0 wrong (cb status 4)
+== align
+buffer shared  len=1          size=1          align=256
+buffer shared  len=16         size=16         align=256
+buffer shared  len=255        size=255        align=256
+buffer shared  len=256        size=256        align=256
+buffer shared  len=4095       size=4095       align=256
+buffer shared  len=4096       size=4096       align=256
+buffer shared  len=4097       size=4097       align=256
+buffer shared  len=16383      size=16383      align=256
+buffer shared  len=16384      size=16384      align=256
+buffer shared  len=16385      size=16385      align=256
+buffer shared  len=65536      size=65536      align=256
+buffer shared  len=65537      size=65537      align=256
+buffer shared  len=1048577    size=1048577    align=256
+buffer shared  len=16777219   size=16777219   align=256
+buffer shared  len=268435456  size=268435456  align=256
+buffer private len=1          size=1          align=256
+buffer private len=16         size=16         align=256
+buffer private len=255        size=255        align=256
+buffer private len=256        size=256        align=256
+buffer private len=4095       size=4095       align=256
+buffer private len=4096       size=4096       align=256
+buffer private len=4097       size=4097       align=256
+buffer private len=16383      size=16383      align=256
+buffer private len=16384      size=16384      align=256
+buffer private len=16385      size=16385      align=256
+buffer private len=65536      size=65536      align=256
+buffer private len=65537      size=65537      align=256
+buffer private len=1048577    size=1048577    align=256
+buffer private len=16777219   size=16777219   align=256
+buffer private len=268435456  size=268435456  align=256
+texture shared  rgba8 1x1            size=128        align=128    repeatable=1 linear-bytes=4
+texture shared  rgba8 256            size=264192     align=128    repeatable=1 linear-bytes=262144
+texture shared  rgba8 256 mips       size=352768     align=128    repeatable=1 linear-bytes=262144
+texture shared  rgba8 1080p rt       size=8486912    align=128    repeatable=1 linear-bytes=8294400
+texture shared  rgba8 1921x1081 rt   size=8765440    align=128    repeatable=1 linear-bytes=8306404
+texture shared  rgba8 1080p 4x       size=33947648   align=128    repeatable=1 linear-bytes=33177600
+texture shared  d32 1080p            size=8486912    align=128    repeatable=1 linear-bytes=8294400
+texture shared  rgba16f 1k mips      size=11228928   align=128    repeatable=1 linear-bytes=8388608
+texture shared  bc1 1k mips          size=699520     align=128    repeatable=1 linear-bytes=0
+texture private rgba8 1x1            size=128        align=128    repeatable=1 linear-bytes=4
+texture private rgba8 256            size=264192     align=128    repeatable=1 linear-bytes=262144
+texture private rgba8 256 mips       size=352768     align=128    repeatable=1 linear-bytes=262144
+texture private rgba8 1080p rt       size=8486912    align=128    repeatable=1 linear-bytes=8294400
+texture private rgba8 1921x1081 rt   size=8765440    align=128    repeatable=1 linear-bytes=8306404
+texture private rgba8 1080p 4x       size=33947648   align=128    repeatable=1 linear-bytes=33177600
+texture private d32 1080p            size=8486912    align=128    repeatable=1 linear-bytes=8294400
+texture private rgba16f 1k mips      size=11228928   align=128    repeatable=1 linear-bytes=8388608
+texture private bc1 1k mips          size=699520     align=128    repeatable=1 linear-bytes=0
+== ids
+16 textures: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+8 views of texture 0: 17 18 19 20 21 22 23 24
+release textures 2,5,9 and all views, then 6 new textures: 3 6 10 17 18 19
+same offset re-placed (alias of texture 0): 20 (texture 0 is 1)
+8 samplers: 29 30 31 32 33 34 35 36
+sampler with the same descriptor as sampler 0: 29
+gpuResourceID host cost: 22.9 ns/call (acc 0)
+texture view create + id: 1.17 us each
+== layout
+allowGPUOptimizedContents=1: words at linear position 128/65536; first 16 raw: 0 1 256 257 2 3 258 259 512 513 768 769 514 515 770 771 | row 1 starts with 16
+allowGPUOptimizedContents=0: words at linear position 128/65536; first 16 raw: 0 1 256 257 2 3 258 259 512 513 768 769 514 515 770 771 | row 1 starts with 16
+== tput (indicative: peers share the GPU)
+round 0: 50x 4096^2 rgba8 read+write: shared heap 18.02 ms (372.5 GB/s), private heap 18.02 ms (372.4 GB/s)
+round 1: 50x 4096^2 rgba8 read+write: shared heap 17.99 ms (373.0 GB/s), private heap 18.10 ms (370.7 GB/s)
+== hv
+heap 1 GiB alias at 0x128604000 -> gpa 0x100000000: hv_vm_map 0x0 (0.00 ms), unmap 0x0 (0.00 ms)
+heap 2 GiB alias at 0x300000000 -> gpa 0x140000000: hv_vm_map 0x0 (0.00 ms), unmap 0x0 (0.00 ms)
+heap 4 GiB alias at 0xa8e000000 -> gpa 0x1c0000000: hv_vm_map 0x0 (0.00 ms), unmap 0x0 (0.00 ms)
+heap 8 GiB alias at 0x7000000000 -> gpa 0x2c0000000: hv_vm_map 0x0 (0.00 ms), unmap 0x0 (0.00 ms)

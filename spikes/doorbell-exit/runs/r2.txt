@@ -1,0 +1,26 @@
+Wed Oct  7 08:00:21 -03 2026
+ 8:00  up 5 days, 14:20, 4 users, load averages: 3.85 3.48 4.03
+timebase: 41.667 ns/tick
+load  metal    gap=    0us n=2000   p50=   2.25us p90=   2.54us p99=  26.71us max=   202.4us mean=   3.06us 
+none  nothing  gap=    0us n=20000  p50=   0.00us p90=   0.04us p99=   0.08us max=     0.2us mean=   0.01us 
+store nothing  gap=    0us n=20000  p50=   1.04us p90=   1.21us p99=   1.38us max=   765.0us mean=   1.15us 
+load  nothing  gap=    0us n=20000  p50=   1.00us p90=   1.83us p99=   2.00us max=  7207.5us mean=   2.73us 
+load  metal    gap=    0us n=20000  p50=   2.17us p90=   2.29us p99=   5.62us max=  1880.9us mean=   2.76us 
+load  handoff  gap=    0us n=20000  p50=  11.17us p90=1322.50us p99=8001.00us max= 49282.6us mean= 515.43us 
+load  spin     gap=    0us n=20000  p50=   1.08us p90=   1.08us p99=   2.25us max=   298.1us mean=   1.16us 
+hvc   nothing  gap=    0us n=20000  p50=   0.83us p90=   0.88us p99=   1.08us max=   239.5us mean=   0.87us 
+none  nothing  gap=  200us n=2000   p50=   0.00us p90=   0.00us p99=   0.04us max=     0.0us mean=   0.00us 
+store nothing  gap=  200us n=2000   p50=   1.08us p90=   1.25us p99=   5.04us max=   143.2us mean=   1.28us 
+load  nothing  gap=  200us n=2000   p50=   1.08us p90=   1.29us p99=   3.46us max=    13.1us mean=   1.18us 
+load  metal    gap=  200us n=2000   p50=   2.38us p90=   2.83us p99=  24.62us max=    46.6us mean=   2.99us 
+load  handoff  gap=  200us n=2000   p50=  12.25us p90=  49.75us p99= 398.42us max=  4244.2us mean=  35.99us 
+load  spin     gap=  200us n=2000   p50=   1.33us p90=   2.38us p99=  10.25us max=   631.8us mean=   2.83us 
+hvc   nothing  gap=  200us n=2000   p50=   0.96us p90=   1.21us p99=   3.38us max=   134.6us mean=   1.20us 
+none  nothing  gap= 5000us n=200    p50=   0.00us p90=   0.00us p99=   0.04us max=     0.1us mean=   0.00us 
+store nothing  gap= 5000us n=200    p50=   3.17us p90=   7.38us p99= 220.12us max=   502.9us mean=   7.56us 
+load  nothing  gap= 5000us n=200    p50=   1.96us p90=   6.38us p99=  19.83us max=   189.5us mean=   4.22us 
+load  metal    gap= 5000us n=200    p50=   6.92us p90=  29.29us p99=  38.12us max=    38.1us mean=  13.07us 
+load  handoff  gap= 5000us n=200    p50=  10.88us p90=  27.38us p99=1273.54us max=  1318.4us mean=  37.26us 
+load  spin     gap= 5000us n=200    p50=   2.04us p90=   7.17us p99=  11.00us max=    21.7us mean=   3.55us 
+hvc   nothing  gap= 5000us n=200    p50=   1.38us p90=   4.38us p99=   6.29us max=     7.3us mean=   2.11us 
+rc=0

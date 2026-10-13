@@ -1,0 +1,1673 @@
+//! The replayer end to end, with this test process playing the guest: it maps arenas the way the
+//! worker does, writes commands into a ring in arena memory, rings the doorbell when the consumer
+//! has parked, and reads results back from arena memory. No VM is involved.
+
+use std::path::Path;
+use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use limina_gpu_wire::cmd::{self, BufRef, REPLY_DONE};
+use limina_gpu_wire::ring::{self, Producer};
+use limina_replayer::client::{Doorbell, MappedArena, Replayer};
+
+const RING_DATA: u32 = 1 << 18;
+const MIB: u64 = 1 << 20;
+
+const RGBA8_UNORM: u32 = 70;
+const TEX_2D: u32 = 2;
+const USAGE_SHADER_READ: u32 = 1;
+const USAGE_RENDER_TARGET: u32 = 4;
+const LOAD_CLEAR: u32 = 2;
+const STORE_STORE: u32 = 1;
+const PRIM_TRIANGLE: u32 = 3;
+const RENDER_VERTEX: u32 = 1;
+const STAGE_VERTEX: u32 = 1 << 0;
+const STAGE_FRAGMENT: u32 = 1 << 1;
+const STAGE_DISPATCH: u32 = 1 << 26;
+const STAGE_BLIT: u32 = 1 << 27;
+const VISIBILITY_DEVICE: u32 = 1;
+
+/// Where the tests keep replies, feedback and other host-written records.
+const RECORDS: u64 = 8 * MIB;
+
+const MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct VOut { float4 pos [[position]]; };
+
+// The vertex positions arrive as a raw GPU address in an argument table, as KosmicKrisp binds
+// everything.
+vertex VOut vs(uint vid [[vertex_id]], const device float4* pos [[buffer(0)]]) {
+    VOut o;
+    o.pos = pos[vid];
+    return o;
+}
+
+fragment float4 fs(VOut in [[stage_in]]) {
+    return float4(0.0, 1.0, 0.0, 1.0);
+}
+
+// The destination arrives as a raw GPU address the guest computed (arena base + offset), read from
+// arena memory.
+struct Ptrs { device uint* dst; };
+
+kernel void poke(constant Ptrs& p [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    p.dst[tid] = 0xC0FFEE00u + tid;
+}
+"#;
+
+struct Guest {
+    replayer: Replayer,
+    bell: Doorbell,
+    ring: Producer,
+    arena: MappedArena,
+    seqno: u64,
+}
+
+impl Guest {
+    fn new(replayer: Replayer) -> Self {
+        let bell = replayer.create_context(1).expect("context");
+        let arena = replayer.create_arena(1, 1, 64 * MIB).expect("arena");
+        // SAFETY: the arena mapping outlives the producer (both live in `Guest`); offset 0 is
+        // page-aligned and the region is far smaller than the arena.
+        let ring =
+            unsafe { Producer::init(NonNull::new(arena.mapping.as_ptr()).unwrap(), RING_DATA) };
+        replayer.attach_ring(1, 1, 0, RING_DATA).expect("attach");
+        Self {
+            replayer,
+            bell,
+            ring,
+            arena,
+            seqno: 0,
+        }
+    }
+
+    fn push<T: cmd::Command>(&mut self, c: T, extra: &[&[u8]]) {
+        self.ring.push(&c, extra).expect("ring space");
+    }
+
+    fn kick(&mut self) {
+        if self.ring.publish() {
+            self.bell.ring();
+        }
+    }
+
+    /// Commits with `feedback`, kicks if the consumer parked, and waits for the GPU to finish.
+    fn commit_with(&mut self, feedback: BufRef) -> Result<(), (u32, u64)> {
+        self.seqno += 1;
+        self.push(
+            cmd::Commit {
+                seqno: self.seqno,
+                feedback,
+            },
+            &[],
+        );
+        self.kick();
+        let start = Instant::now();
+        while self.ring.completed() < self.seqno {
+            if let Some(e) = self.ring.error() {
+                return Err(e);
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "GPU did not finish"
+            );
+            std::thread::sleep(Duration::from_micros(100));
+        }
+        self.ring.error().map_or(Ok(()), Err)
+    }
+
+    fn commit_and_wait(&mut self) -> Result<(), (u32, u64)> {
+        self.commit_with(BufRef::NONE)
+    }
+
+    fn ptr(&self, offset: u64, len: usize) -> *mut u8 {
+        assert!(offset + len as u64 <= self.arena.mapping.size());
+        // SAFETY: inside the mapping, checked above.
+        unsafe { self.arena.mapping.as_ptr().add(offset as usize) }
+    }
+
+    fn bytes(&self, offset: u64, len: usize) -> &[u8] {
+        // SAFETY: inside the mapping; the writer has finished.
+        unsafe { std::slice::from_raw_parts(self.ptr(offset, len), len) }
+    }
+
+    fn write(&mut self, offset: u64, data: &[u8]) {
+        // SAFETY: inside the mapping.
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), self.ptr(offset, data.len()), data.len())
+        }
+    }
+
+    /// Clears the reply at `offset` and returns its reference.
+    fn reply_slot(&mut self, offset: u64) -> BufRef {
+        self.write(offset, &[0; size_of::<cmd::Reply>()]);
+        BufRef::new(1, offset)
+    }
+
+    /// Waits for the reply at `offset`, kicking the ring first.
+    fn reply(&mut self, offset: u64) -> cmd::Reply {
+        self.kick();
+        let p = self
+            .ptr(offset, size_of::<cmd::Reply>())
+            .cast::<cmd::Reply>();
+        // SAFETY: an aligned u32 in the mapping, written by the host.
+        let done = unsafe { &*(&raw const (*p).done).cast::<AtomicU32>() };
+        let start = Instant::now();
+        while done.load(Ordering::Acquire) != REPLY_DONE {
+            assert!(
+                self.ring.error().is_none(),
+                "context lost: {:?}",
+                self.ring.error()
+            );
+            assert!(start.elapsed() < Duration::from_secs(10), "no reply");
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        // SAFETY: the host wrote it before `done`.
+        unsafe { p.read() }
+    }
+}
+
+fn start() -> Guest {
+    let exe = env!("CARGO_BIN_EXE_limina-replayer");
+    Guest::new(Replayer::spawn(Path::new(exe)).expect("spawn replayer"))
+}
+
+fn create_library(g: &mut Guest, handle: u32, src: &str, reply: BufRef) {
+    g.push(
+        cmd::CreateLibrary {
+            handle,
+            source_len: src.len() as u32,
+            reply,
+            ..Default::default()
+        },
+        &[src.as_bytes()],
+    );
+}
+
+fn barrier(g: &mut Guest, after: u32, before: u32) {
+    g.push(
+        cmd::Barrier {
+            kind: cmd::barrier_kind::AFTER_QUEUE_STAGES,
+            after,
+            before,
+            visibility: VISIBILITY_DEVICE,
+        },
+        &[],
+    );
+}
+
+fn table(g: &mut Guest, handle: u32, bindings: &[(u32, u64)]) {
+    g.push(
+        cmd::CreateArgumentTable {
+            handle,
+            max_buffer_bind_count: 4,
+        },
+        &[],
+    );
+    let b: Vec<cmd::AddressBinding> = bindings
+        .iter()
+        .map(|&(index, address)| cmd::AddressBinding {
+            index,
+            _pad: 0,
+            address,
+        })
+        .collect();
+    g.push(
+        cmd::SetAddresses {
+            table: handle,
+            count: b.len() as u32,
+        },
+        &[cmd::bytes_of_slice(&b)],
+    );
+}
+
+#[test]
+fn a_triangle_drawn_into_an_arena_texture_reads_back() {
+    let mut g = start();
+    const VB: u64 = MIB;
+    const READBACK: u64 = 2 * MIB;
+    const TEX: u64 = 4 * MIB;
+    const W: u32 = 64;
+
+    let verts: [[f32; 4]; 3] = [
+        [0.0, 0.8, 0.0, 1.0],
+        [-0.8, -0.8, 0.0, 1.0],
+        [0.8, -0.8, 0.0, 1.0],
+    ];
+    let vb: Vec<u8> = verts
+        .iter()
+        .flatten()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    g.write(VB, &vb);
+
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    let (vs, fs) = (b"vs", b"fs");
+    let mut colors = [0u32; cmd::MAX_COLOR_ATTACHMENTS];
+    colors[0] = RGBA8_UNORM;
+    g.push(
+        cmd::CreateRenderPipeline {
+            handle: 2,
+            vertex_library: 1,
+            fragment_library: 1,
+            vertex_name_len: 2,
+            fragment_name_len: 2,
+            color_formats: colors,
+            raster_sample_count: 1,
+            rasterization_enabled: 1,
+            ..Default::default()
+        },
+        &[vs, fs],
+    );
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTexture {
+            handle: 3,
+            arena: 1,
+            offset: TEX,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: RGBA8_UNORM,
+                width: W,
+                height: W,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0);
+    assert_ne!(r.values[0], 0, "a texture has a resource ID");
+    let base = g.arena.gpu_base;
+    table(&mut g, 4, &[(0, base + VB)]);
+
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    let mut pass = cmd::BeginRenderPass::default();
+    pass.colors[0] = cmd::RenderAttachment {
+        texture: 3,
+        load_action: LOAD_CLEAR,
+        store_action: STORE_STORE,
+        clear: [1.0, 0.0, 0.0, 1.0],
+        ..Default::default()
+    };
+    g.push(pass, &[]);
+    g.push(cmd::SetRenderPipeline { handle: 2, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetArgumentTable {
+            table: 4,
+            stages: RENDER_VERTEX,
+        },
+        &[],
+    );
+    g.push(
+        cmd::SetViewports { count: 1, _pad: 0 },
+        &[cmd::bytes_of(&cmd::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: W as f64,
+            height: W as f64,
+            znear: 0.0,
+            zfar: 1.0,
+        })],
+    );
+    g.push(
+        cmd::Draw {
+            primitive: PRIM_TRIANGLE,
+            vertex_count: 3,
+            instance_count: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    barrier(&mut g, STAGE_FRAGMENT, STAGE_BLIT);
+    g.push(
+        cmd::CopyBufferTexture {
+            texture: 3,
+            size: [W, W, 1],
+            buffer: BufRef::new(1, READBACK),
+            bytes_per_row: W as u64 * 4,
+            bytes_per_image: (W * W) as u64 * 4,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    let fb = BufRef::new(1, RECORDS + 256);
+    g.write(fb.offset, &[0; size_of::<cmd::Feedback>()]);
+    g.commit_with(fb).expect("frame");
+
+    // SAFETY: written by the host before the seqno was published.
+    let f = unsafe {
+        g.ptr(fb.offset, size_of::<cmd::Feedback>())
+            .cast::<cmd::Feedback>()
+            .read()
+    };
+    assert_eq!((f.done, f.error), (REPLY_DONE, 0));
+    assert!(f.gpu_end >= f.gpu_start && f.gpu_start > 0.0, "{f:?}");
+
+    let px = |x: u32, y: u32| {
+        let at = READBACK + ((y * W + x) * 4) as u64;
+        <[u8; 4]>::try_from(g.bytes(at, 4)).unwrap()
+    };
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    assert_eq!(px(W / 2, W / 2), GREEN, "centre is inside the triangle");
+    assert_eq!(px(0, 0), RED, "corner keeps the clear colour");
+    assert_eq!(px(W - 1, W - 1), RED);
+    assert_eq!(px(W / 2, 2), RED, "above the apex");
+    let green = (0..W)
+        .flat_map(|y| (0..W).map(move |x| (x, y)))
+        .filter(|&(x, y)| px(x, y) == GREEN)
+        .count();
+    // Area of the triangle: 0.8 * 1.6 of a 2x2 NDC square, a third of the pixels.
+    let expect = (W * W) as f64 * 0.32;
+    assert!(
+        (green as f64 - expect).abs() < expect * 0.1,
+        "{green} green pixels, expected about {expect}"
+    );
+}
+
+#[test]
+fn a_kernel_writes_through_an_address_the_guest_computed() {
+    let mut g = start();
+    let other = g.replayer.create_arena(1, 2, MIB).expect("second arena");
+    const PTRS: u64 = 3 * MIB;
+    const DST: u64 = 4096;
+    const N: u32 = 256;
+    g.write(PTRS, &(other.gpu_base + DST).to_le_bytes());
+
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    let max = g.reply(RECORDS).values[0];
+    assert!(max >= 64, "max threads per group {max}");
+    let base = g.arena.gpu_base;
+    table(&mut g, 3, &[(0, base + PTRS)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(cmd::SetComputePipeline { handle: 2, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetArgumentTable {
+            table: 3,
+            stages: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [N / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("dispatch");
+
+    // SAFETY: inside the second arena's mapping; the GPU has finished.
+    let words = unsafe {
+        std::slice::from_raw_parts(
+            other.mapping.as_ptr().add(DST as usize).cast::<u32>(),
+            N as usize,
+        )
+    };
+    for (i, &w) in words.iter().enumerate() {
+        assert_eq!(w, 0xC0FFEE00 + i as u32, "word {i}");
+    }
+}
+
+/// Writes `0xC0FFEE00 + i` into `n` words at GPU address `dst` with the poke kernel.
+fn poke(g: &mut Guest, dst: u64, n: u32) {
+    const PTRS: u64 = 3 * MIB;
+    g.write(PTRS, &dst.to_le_bytes());
+    create_library(g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    g.reply(RECORDS);
+    let base = g.arena.gpu_base;
+    table(g, 3, &[(0, base + PTRS)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(cmd::SetComputePipeline { handle: 2, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetArgumentTable {
+            table: 3,
+            stages: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [n / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("dispatch");
+}
+
+#[test]
+fn an_exported_arena_outlives_its_context_and_imports_elsewhere() {
+    let mut g = start();
+    g.replayer.create_context(2).expect("second context");
+    let theirs = g.replayer.create_arena(2, 1, MIB).expect("their arena");
+    g.replayer.export_arena(2, 1, 77).expect("export");
+    g.replayer.destroy_context(2).expect("context gone");
+
+    let (size, gpu_base) = g.replayer.import_arena(1, 5, 77).expect("import");
+    assert_eq!(size, theirs.mapping.size());
+    assert_eq!(
+        gpu_base, theirs.gpu_base,
+        "an import is the same memory, at the same address"
+    );
+    const N: u32 = 256;
+    poke(&mut g, gpu_base + 4096, N);
+    // SAFETY: inside the exporting context's mapping, which the test still holds; the GPU is done.
+    let words = unsafe {
+        std::slice::from_raw_parts(theirs.mapping.as_ptr().add(4096).cast::<u32>(), N as usize)
+    };
+    for (i, &w) in words.iter().enumerate() {
+        assert_eq!(w, 0xC0FFEE00 + i as u32, "word {i}");
+    }
+
+    g.replayer.release_export(77).expect("release");
+    assert!(
+        g.replayer.import_arena(1, 6, 77).is_err(),
+        "a released export is gone"
+    );
+    assert!(g.replayer.export_arena(1, 99, 78).is_err(), "no such arena");
+}
+
+#[test]
+fn the_device_answers_queries() {
+    let mut g = start();
+    const INFO: u64 = RECORDS + 1024;
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::QueryDevice {
+            dst: BufRef::new(1, INFO),
+            reply,
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    // SAFETY: written by the host before the reply.
+    let info = unsafe {
+        g.ptr(INFO, size_of::<cmd::DeviceInfo>())
+            .cast::<cmd::DeviceInfo>()
+            .read()
+    };
+    let name = std::str::from_utf8(&info.name)
+        .unwrap()
+        .trim_end_matches('\0');
+    eprintln!("{name}: {info:?}");
+    assert_eq!(info.version, limina_gpu_wire::VERSION);
+    assert!(name.starts_with("Apple"), "{name}");
+    assert!(info.apple_family >= 7, "Metal 4 needs Apple7 or later");
+    assert!(info.sample_counts & (1 << 1 | 1 << 4) == (1 << 1 | 1 << 4));
+    assert!(info.heap_buffer_align.is_power_of_two());
+    assert!(info.max_threads_per_threadgroup[0] >= 256);
+    assert!(info.os_version[0] >= 26, "{:?}", info.os_version);
+
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::QueryTextureSize {
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: RGBA8_UNORM,
+                width: 256,
+                height: 256,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            reply,
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0);
+    assert!(
+        r.values[0] >= 256 * 256 * 4 && r.values[1].is_power_of_two(),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_failed_create_with_a_reply_keeps_the_context() {
+    let mut g = start();
+    let reply = g.reply_slot(RECORDS);
+    create_library(&mut g, 1, "this is not MSL", reply);
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, ring::Error::ShaderCompile as u32);
+    // The context lives on, and the handle was never taken.
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    g.commit_and_wait().expect("still alive");
+}
+
+#[test]
+fn a_shared_event_signal_reaches_its_mirror() {
+    let mut g = start();
+    const MIRROR: u64 = RECORDS + 512;
+    g.push(
+        cmd::SyncObject {
+            handle: 1,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            initial: 3,
+            mirror: BufRef::new(1, MIRROR),
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("create");
+    // SAFETY: an aligned u64 in the mapping, written by the host.
+    let mirror = unsafe { &*g.ptr(MIRROR, 8).cast::<AtomicU64>() };
+    assert_eq!(mirror.load(Ordering::Acquire), 3);
+    g.push(
+        cmd::QueueEvent {
+            event: 1,
+            wait: 0,
+            value: 7,
+        },
+        &[],
+    );
+    g.kick();
+    let start = Instant::now();
+    while mirror.load(Ordering::Acquire) < 7 {
+        assert!(start.elapsed() < Duration::from_secs(5), "mirror stuck");
+        std::thread::sleep(Duration::from_micros(50));
+    }
+    eprintln!("mirror raised after {:?}", start.elapsed());
+    g.push(
+        cmd::SetSharedEvent {
+            handle: 1,
+            _pad: 0,
+            value: 9,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("set");
+    assert_eq!(mirror.load(Ordering::Acquire), 9);
+}
+
+#[test]
+fn a_bad_handle_loses_the_context_and_says_where() {
+    let mut g = start();
+    g.push(
+        cmd::Destroy {
+            handle: 99,
+            _pad: 0,
+        },
+        &[],
+    );
+    let at = g.ring.position() - ring::encoded_len::<cmd::Destroy>(0) as u64;
+    let err = g.commit_and_wait().expect_err("must fail");
+    assert_eq!(err, (ring::Error::BadHandle as u32, at));
+}
+
+#[test]
+fn many_small_commits_retire_in_order() {
+    let mut g = start();
+    for _ in 0..2000 {
+        g.push(cmd::BeginCommandBuffer {}, &[]);
+        g.push(cmd::BeginCompute {}, &[]);
+        barrier(
+            &mut g,
+            STAGE_BLIT | STAGE_DISPATCH | STAGE_VERTEX,
+            STAGE_BLIT,
+        );
+        g.push(
+            cmd::FillBuffer {
+                buffer: BufRef::new(1, MIB),
+                length: 4096,
+                value: (g.seqno & 0xff) as u32,
+                _pad: 0,
+            },
+            &[],
+        );
+        g.push(cmd::EndEncoding {}, &[]);
+        g.push(cmd::EndCommandBuffer {}, &[]);
+        g.commit_and_wait().expect("commit");
+    }
+    assert!(g.bytes(MIB, 4096).iter().all(|&b| b == (1999 & 0xff) as u8));
+}
+
+/// A context destroyed while its queue waits on events the guest will never signal: the destroy
+/// answers at once (the worker's control queue waits on it), and the wedged work is released.
+#[test]
+fn destroying_a_context_wedged_on_an_event_answers_at_once() {
+    let mut g = start();
+    for (handle, kind) in [
+        (40, cmd::sync_kind::EVENT),
+        (41, cmd::sync_kind::SHARED_EVENT),
+    ] {
+        g.push(
+            cmd::SyncObject {
+                handle,
+                kind,
+                initial: 0,
+                mirror: BufRef::NONE,
+            },
+            &[],
+        );
+        g.push(
+            cmd::QueueEvent {
+                event: handle,
+                wait: 1,
+                value: 1,
+            },
+            &[],
+        );
+    }
+    g.seqno += 1;
+    g.push(
+        cmd::Commit {
+            seqno: g.seqno,
+            feedback: BufRef::NONE,
+        },
+        &[],
+    );
+    g.kick();
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(g.ring.completed(), 0, "the commit is held by the waits");
+
+    let start = Instant::now();
+    g.replayer.destroy_context(1).expect("context gone");
+    let took = start.elapsed();
+    assert!(took < Duration::from_millis(500), "destroy took {took:?}");
+    // The waits were released, so the commit ran and retired instead of being abandoned.
+    while g.ring.completed() < g.seqno {
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "the wedged commit never completed"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // The replayer still serves other contexts.
+    g.replayer.create_context(2).expect("a new context");
+}
+
+/// A texture made over an IOSurface the worker filed for the context renders into the surface's
+/// own pages: what makes a buffer this transport draws reachable by vrend and venus, which adopt
+/// the same surface.
+#[test]
+#[allow(deprecated)]
+fn a_texture_over_a_bound_surface_renders_into_the_surface() {
+    use std::ffi::c_void;
+
+    use objc2_core_foundation::{
+        CFDictionary, CFNumber, CFNumberType, CFRetained, CFString, kCFTypeDictionaryKeyCallBacks,
+        kCFTypeDictionaryValueCallBacks,
+    };
+    use objc2_io_surface::{
+        IOSurfaceCreate, IOSurfaceCreateMachPort, IOSurfaceGetBaseAddress, IOSurfaceLock,
+        IOSurfaceLockOptions, IOSurfaceUnlock, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow,
+        kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
+    };
+
+    const BGRA8_UNORM: u32 = 80;
+    const W: u32 = 64;
+    const H: u32 = 8;
+    const PITCH: i32 = 256;
+
+    let num = |v: i32| -> CFRetained<CFNumber> {
+        // SAFETY: a pointer to an i32 for the SInt32 type.
+        unsafe { CFNumber::new(None, CFNumberType::SInt32Type, (&v as *const i32).cast()) }
+            .expect("a number")
+    };
+    let values = [
+        num(W as i32),
+        num(H as i32),
+        num(4),
+        num(PITCH),
+        num(i32::from_be_bytes(*b"BGRA")),
+    ];
+    // SAFETY: framework key constants and live CFNumbers; the dictionary retains both.
+    let surface = unsafe {
+        let mut keys: [*const c_void; 5] = [
+            (kIOSurfaceWidth as *const CFString).cast(),
+            (kIOSurfaceHeight as *const CFString).cast(),
+            (kIOSurfaceBytesPerElement as *const CFString).cast(),
+            (kIOSurfaceBytesPerRow as *const CFString).cast(),
+            (kIOSurfacePixelFormat as *const CFString).cast(),
+        ];
+        let mut vals: [*const c_void; 5] =
+            values.each_ref().map(|v| (&**v as *const CFNumber).cast());
+        let dict = CFDictionary::new(
+            None,
+            keys.as_mut_ptr(),
+            vals.as_mut_ptr(),
+            keys.len() as isize,
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks,
+        )
+        .expect("a dictionary");
+        IOSurfaceCreate(&dict).expect("a surface")
+    };
+
+    let mut g = start();
+    // The right is ours and moves to the replayer.
+    let port = IOSurfaceCreateMachPort(&surface);
+    g.replayer
+        .bind_surface(1, 7, port)
+        .expect("the surface is filed");
+
+    let desc = cmd::TextureDesc {
+        texture_type: TEX_2D,
+        pixel_format: BGRA8_UNORM,
+        width: W,
+        height: H,
+        depth: 1,
+        mip_levels: 1,
+        array_length: 1,
+        sample_count: 1,
+        usage: USAGE_RENDER_TARGET | USAGE_SHADER_READ,
+        ..Default::default()
+    };
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTextureFromSurface {
+            handle: 3,
+            surface: 7,
+            desc,
+            reply,
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0, "a texture over the surface");
+    assert_ne!(r.values[0], 0, "with a resource ID");
+
+    // Larger than the surface, and over a surface the context was never given: both refused.
+    let reply = g.reply_slot(RECORDS + 256);
+    g.push(
+        cmd::CreateTextureFromSurface {
+            handle: 4,
+            surface: 7,
+            desc: cmd::TextureDesc {
+                width: W + 1,
+                ..desc
+            },
+            reply,
+        },
+        &[],
+    );
+    assert_ne!(g.reply(RECORDS + 256).status, 0, "wider than the surface");
+    let reply = g.reply_slot(RECORDS + 512);
+    g.push(
+        cmd::CreateTextureFromSurface {
+            handle: 5,
+            surface: 8,
+            desc,
+            reply,
+        },
+        &[],
+    );
+    assert_ne!(g.reply(RECORDS + 512).status, 0, "no such surface");
+
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    let mut pass = cmd::BeginRenderPass::default();
+    pass.colors[0] = cmd::RenderAttachment {
+        texture: 3,
+        load_action: LOAD_CLEAR,
+        store_action: STORE_STORE,
+        clear: [0.0, 1.0, 0.0, 1.0],
+        ..Default::default()
+    };
+    g.push(pass, &[]);
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("the clear ran");
+
+    // SAFETY: a live surface, locked read-only for the read; rows are PITCH bytes apart.
+    let pixels = unsafe {
+        IOSurfaceLock(
+            &surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+        let base = IOSurfaceGetBaseAddress(&surface).as_ptr() as *const u8;
+        let rows: Vec<Vec<u8>> = (0..H as usize)
+            .map(|y| {
+                std::slice::from_raw_parts(base.add(y * PITCH as usize), W as usize * 4).to_vec()
+            })
+            .collect();
+        IOSurfaceUnlock(
+            &surface,
+            IOSurfaceLockOptions::ReadOnly,
+            std::ptr::null_mut(),
+        );
+        rows
+    };
+    let green = pixels
+        .iter()
+        .flat_map(|row| row.chunks(4))
+        .filter(|p| *p == [0, 255, 0, 255])
+        .count();
+    assert_eq!(
+        green,
+        (W * H) as usize,
+        "every pixel of the surface is the clear colour"
+    );
+
+    g.replayer.release_surface(1, 7).expect("released");
+    assert!(g.replayer.release_surface(1, 7).is_err(), "only once");
+}
+
+/// Timestamps written around a compute fill and resolved into arena memory read back as two GPU
+/// times in order, as KosmicKrisp's timestamp queries read them.
+#[test]
+fn timestamps_resolve_into_arena_memory_in_order() {
+    let mut g = start();
+    const OUT: u64 = RECORDS + 1024;
+    g.write(OUT, &[0; 16]);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateCounterHeap {
+            handle: 60,
+            count: 4,
+            reply,
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0, "a counter heap of 4 entries");
+    g.push(
+        cmd::SyncObject {
+            handle: 61,
+            kind: cmd::sync_kind::FENCE,
+            ..Default::default()
+        },
+        &[],
+    );
+    let stamp = |g: &mut Guest, index| {
+        g.push(
+            cmd::WriteTimestamp {
+                heap: 60,
+                index,
+                stage: 0,
+                granularity: 0,
+            },
+            &[],
+        )
+    };
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    stamp(&mut g, 0);
+    g.push(
+        cmd::FillBuffer {
+            buffer: BufRef::new(1, MIB),
+            length: 16 * MIB,
+            value: 7,
+            _pad: 0,
+        },
+        &[],
+    );
+    stamp(&mut g, 1);
+    // A fence is the only thing that orders a resolve after the stamps: no barrier reaches it.
+    g.push(
+        cmd::FenceOp {
+            fence: 61,
+            stages: STAGE_DISPATCH | STAGE_BLIT,
+            wait: 0,
+            _pad: 0,
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(
+        cmd::ResolveCounterHeap {
+            heap: 60,
+            first: 0,
+            count: 2,
+            wait_fence: 61,
+            update_fence: 0,
+            _pad: 0,
+            dst: g.arena.gpu_base + OUT,
+        },
+        &[],
+    );
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("commit");
+    let t: Vec<u64> = g
+        .bytes(OUT, 16)
+        .chunks(8)
+        .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+        .collect();
+    eprintln!("timestamps {t:?}");
+    assert!(t[0] != 0 && t[1] >= t[0], "two GPU times in order: {t:?}");
+}
+
+/// A timestamp written past the end of its heap loses the context instead of reaching Metal.
+#[test]
+fn a_timestamp_past_its_heap_loses_the_context() {
+    let mut g = start();
+    g.push(
+        cmd::CreateCounterHeap {
+            handle: 60,
+            count: 2,
+            reply: BufRef::NONE,
+        },
+        &[],
+    );
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(
+        cmd::WriteTimestamp {
+            heap: 60,
+            index: 2,
+            stage: 0,
+            granularity: 0,
+        },
+        &[],
+    );
+    let at = g.ring.position() - ring::encoded_len::<cmd::WriteTimestamp>(0) as u64;
+    let err = g.commit_and_wait().expect_err("must fail");
+    assert_eq!(err, (ring::Error::BadValue as u32, at));
+}
+
+/// What a guest is told by one fresh replayer running a fixed sequence of arena and texture
+/// creates: each arena's GPU base and each texture's resource ID, in order. With `destroy_mid`,
+/// one arena and one texture are destroyed partway through, as they are in a live guest.
+fn host_values(destroy_mid: bool) -> Vec<u64> {
+    let mut g = start();
+    let mut seen = vec![g.arena.gpu_base];
+    for (id, mib) in [(2, 8), (3, 1), (4, 32)] {
+        seen.push(
+            g.replayer
+                .create_arena(1, id, mib * MIB)
+                .expect("arena")
+                .gpu_base,
+        );
+    }
+    if destroy_mid {
+        g.replayer.destroy_arena(1, 3).expect("destroy");
+    }
+    seen.push(
+        g.replayer
+            .create_arena(1, 5, 2 * MIB)
+            .expect("arena")
+            .gpu_base,
+    );
+    let texture = |g: &mut Guest, handle: u32| {
+        let reply = g.reply_slot(RECORDS);
+        g.push(
+            cmd::CreateTexture {
+                handle,
+                arena: 1,
+                offset: 16 * MIB + u64::from(handle) * MIB,
+                desc: cmd::TextureDesc {
+                    texture_type: TEX_2D,
+                    pixel_format: RGBA8_UNORM,
+                    width: 64,
+                    height: 64,
+                    depth: 1,
+                    mip_levels: 1,
+                    array_length: 1,
+                    sample_count: 1,
+                    usage: USAGE_SHADER_READ,
+                    ..Default::default()
+                },
+                reply,
+                ..Default::default()
+            },
+            &[],
+        );
+        g.reply(RECORDS).values[0]
+    };
+    for h in 10..15 {
+        seen.push(texture(&mut g, h));
+    }
+    if destroy_mid {
+        g.push(
+            cmd::Destroy {
+                handle: 12,
+                _pad: 0,
+            },
+            &[],
+        );
+    }
+    seen.push(texture(&mut g, 15));
+    seen
+}
+
+/// Measurement, not a check: whether two fresh replayers tell the guest the same arena bases and
+/// texture IDs for the same sequence, with and without destroys in the middle, and what a replay
+/// of only the survivors would be told. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn are_host_values_reproducible_across_replayers() {
+    for destroy_mid in [false, true] {
+        let a = host_values(destroy_mid);
+        let b = host_values(destroy_mid);
+        eprintln!("destroy_mid={destroy_mid}");
+        eprintln!("  run 1: {:x?}", a);
+        eprintln!("  run 2: {:x?}", b);
+        eprintln!("  equal: {}", a == b);
+    }
+}
+
+/// Measurement: how texture IDs and arena bases are reused under churn, in one replayer. Run with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn how_host_values_are_reused_under_churn() {
+    let run = || {
+        let mut g = start();
+        let mut ids = Vec::new();
+        for round in 0..400u32 {
+            let reply = g.reply_slot(RECORDS);
+            g.push(
+                cmd::CreateTexture {
+                    handle: 100,
+                    arena: 1,
+                    offset: 16 * MIB,
+                    desc: cmd::TextureDesc {
+                        texture_type: TEX_2D,
+                        pixel_format: RGBA8_UNORM,
+                        width: 64,
+                        height: 64,
+                        depth: 1,
+                        mip_levels: 1,
+                        array_length: 1,
+                        sample_count: 1,
+                        usage: USAGE_SHADER_READ,
+                        ..Default::default()
+                    },
+                    reply,
+                    ..Default::default()
+                },
+                &[],
+            );
+            let id = g.reply(RECORDS).values[0];
+            if round < 6 || round % 50 == 0 || round == 399 {
+                ids.push((round, id));
+            }
+            g.push(
+                cmd::Destroy {
+                    handle: 100,
+                    _pad: 0,
+                },
+                &[],
+            );
+            g.commit_and_wait().expect("destroy");
+        }
+        let mut bases = Vec::new();
+        for round in 0..6u32 {
+            let a = g.replayer.create_arena(1, 50, 4 * MIB).expect("arena");
+            bases.push((round, a.gpu_base));
+            drop(a);
+            g.replayer.destroy_arena(1, 50).expect("destroy");
+        }
+        (ids, bases)
+    };
+    let (ids1, bases1) = run();
+    let (ids2, bases2) = run();
+    eprintln!("texture ids (round, id): {ids1:x?}");
+    eprintln!("arena bases (round, base): {bases1:x?}");
+    eprintln!(
+        "second replayer equal: ids {} bases {}",
+        ids1 == ids2,
+        bases1 == bases2
+    );
+}
+
+fn churn_texture(g: &mut Guest, handle: u32) -> u64 {
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTexture {
+            handle,
+            arena: 1,
+            offset: 16 * MIB,
+            desc: cmd::TextureDesc {
+                texture_type: TEX_2D,
+                pixel_format: RGBA8_UNORM,
+                width: 64,
+                height: 64,
+                depth: 1,
+                mip_levels: 1,
+                array_length: 1,
+                sample_count: 1,
+                usage: USAGE_SHADER_READ,
+                ..Default::default()
+            },
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0, "texture {handle}");
+    r.values[0]
+}
+
+fn churn_sampler(g: &mut Guest, handle: u32) -> u64 {
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateSampler {
+            handle,
+            _pad: 0,
+            desc: cmd::SamplerDesc {
+                lod_max_clamp: 1000.0,
+                normalized_coordinates: 1,
+                ..Default::default()
+            },
+            reply,
+        },
+        &[],
+    );
+    let r = g.reply(RECORDS);
+    assert_eq!(r.status, 0, "sampler {handle}");
+    r.values[0]
+}
+
+fn churn_destroy(g: &mut Guest, handle: u32) {
+    g.push(cmd::Destroy { handle, _pad: 0 }, &[]);
+    g.commit_and_wait().expect("destroy");
+}
+
+/// Measurement: whether a fresh replayer can be brought to hand out recorded resource IDs again,
+/// by filling the slots below each one with placeholders. Also whether textures and samplers
+/// draw from one ID space. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn can_placeholders_reproduce_recorded_ids() {
+    let mut g = start();
+    let t1 = churn_texture(&mut g, 1000);
+    let s1 = churn_sampler(&mut g, 1001);
+    let t2 = churn_texture(&mut g, 1002);
+    eprintln!("texture {t1}, sampler {s1}, texture {t2}");
+    churn_destroy(&mut g, 1000);
+    churn_destroy(&mut g, 1001);
+    churn_destroy(&mut g, 1002);
+
+    // The recorded run: twelve textures, three destroyed partway, two more after.
+    let mut live = std::collections::BTreeMap::new();
+    for h in 10..22 {
+        live.insert(h, churn_texture(&mut g, h));
+    }
+    for h in [12, 13, 15] {
+        churn_destroy(&mut g, h);
+        live.remove(&h);
+    }
+    for h in 22..24 {
+        live.insert(h, churn_texture(&mut g, h));
+    }
+    eprintln!("recorded (handle, id): {live:?}");
+
+    // A fresh replayer, survivors only, each brought to its recorded id.
+    let mut g = start();
+    let mut by_id: Vec<(u64, u32)> = live.iter().map(|(&h, &id)| (id, h)).collect();
+    by_id.sort();
+    let mut placeholders = Vec::new();
+    let mut next_placeholder = 5000;
+    let (mut matched, mut retries) = (0, 0);
+    for (target, handle) in by_id {
+        loop {
+            let p = next_placeholder;
+            next_placeholder += 1;
+            let id = churn_texture(&mut g, p);
+            if id < target {
+                placeholders.push(p);
+                continue;
+            }
+            assert_eq!(id, target, "overshot: the slot for {handle} was taken");
+            // Every lower slot is held: free this one and take it with the real handle.
+            churn_destroy(&mut g, p);
+            let got = churn_texture(&mut g, handle);
+            if got == target {
+                matched += 1;
+                break;
+            }
+            retries += 1;
+            assert!(retries < 100, "{handle}: got {got}, wanted {target}");
+            churn_destroy(&mut g, handle);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    for p in &placeholders {
+        churn_destroy(&mut g, *p);
+    }
+    eprintln!(
+        "fill: {matched}/{} matched, {retries} retries, {} placeholders",
+        live.len(),
+        placeholders.len()
+    );
+}
+
+/// Measurement: where a fresh arena lands once others have been destroyed. Run with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn where_arenas_land_after_holes() {
+    let g = start();
+    let base = |id: u32, mib: u64| {
+        let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+        eprintln!("arena {id} ({mib} MiB) at 0x{:x}", a.gpu_base);
+    };
+    for (id, mib) in [(2, 8), (3, 1), (4, 32), (5, 2)] {
+        base(id, mib);
+    }
+    for id in [3, 4] {
+        g.replayer.destroy_arena(1, id).expect("destroy");
+        eprintln!("destroyed arena {id}");
+    }
+    for (id, mib) in [(6, 4), (7, 16), (8, 1), (9, 64)] {
+        base(id, mib);
+    }
+}
+
+/// Measurement: whether starting a context (its queue, compiler and residency set) takes GPU
+/// addresses from the space arenas are placed in. The same three arenas, with a second context
+/// started before them and after them. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn does_a_context_start_move_arenas() {
+    for context_first in [true, false] {
+        let g = start();
+        let second = |g: &Guest| {
+            let _bell = g.replayer.create_context(2).expect("context");
+            let a = g.replayer.create_arena(2, 1, 4 * MIB).expect("ring arena");
+            eprintln!("  context 2 ring arena at 0x{:x}", a.gpu_base);
+            // SAFETY: the arena's mapping is leaked below, so it outlives the producer.
+            let ring =
+                unsafe { Producer::init(NonNull::new(a.mapping.as_ptr()).unwrap(), RING_DATA) };
+            g.replayer.attach_ring(2, 1, 0, RING_DATA).expect("attach");
+            std::mem::forget((a, ring));
+        };
+        eprintln!("context_first={context_first}");
+        if context_first {
+            second(&g);
+        }
+        for (id, mib) in [(2, 8), (3, 1), (4, 32)] {
+            let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+            eprintln!("  arena {id} at 0x{:x}", a.gpu_base);
+        }
+        if !context_first {
+            second(&g);
+        }
+    }
+}
+
+fn export(g: &mut Guest) -> limina_replayer::journal::ContextExport {
+    let bytes = g.replayer.export_context(1).expect("export");
+    limina_replayer::journal::ContextExport::decode(&bytes).expect("decodes")
+}
+
+/// Builds a little of everything a context holds, including objects the guest destroyed while
+/// something it made still names them. Returns the texture's and the sampler's resource IDs.
+fn populate(g: &mut Guest) -> (u64, u64) {
+    create_library(g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    g.push(cmd::Destroy { handle: 1, _pad: 0 }, &[]);
+    let texture = churn_texture(g, 3);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTextureView {
+            handle: 4,
+            parent: 3,
+            pixel_format: RGBA8_UNORM,
+            texture_type: TEX_2D,
+            level_count: 1,
+            slice_count: 1,
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    g.push(cmd::Destroy { handle: 3, _pad: 0 }, &[]);
+    let sampler = churn_sampler(g, 5);
+    let base = g.arena.gpu_base;
+    table(g, 6, &[(0, base + MIB)]);
+    g.push(
+        cmd::SyncObject {
+            handle: 7,
+            kind: cmd::sync_kind::EVENT,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(
+        cmd::QueueEvent {
+            event: 7,
+            wait: 0,
+            value: 5,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit");
+    (texture, sampler)
+}
+
+#[test]
+fn an_export_holds_every_object_and_what_it_answered() {
+    let mut g = start();
+    let (texture, sampler) = populate(&mut g);
+    let e = export(&mut g);
+    assert!(!e.lost);
+    assert_eq!(e.last_seqno, g.seqno);
+    assert_eq!(e.position, g.ring.position());
+    assert!(e.recording.is_empty(), "{:?}", e.recording);
+    let by_handle = |h: u32| e.objects.iter().find(|o| o.handle == h).expect("listed");
+    // The pipeline still names its library, which only it keeps.
+    let pipeline = by_handle(2);
+    assert_eq!(pipeline.op, cmd::op::CREATE_COMPUTE_PIPELINE);
+    let library = &e.objects[pipeline.refs[0] as usize];
+    assert_eq!((library.handle, library.op), (0, cmd::op::CREATE_LIBRARY));
+    assert!(pipeline.value[0] >= 64);
+    // The view names its parent, and the parent's answer is the resource ID the guest holds.
+    let view = by_handle(4);
+    let parent = &e.objects[view.refs[0] as usize];
+    assert_eq!((parent.handle, parent.op), (0, cmd::op::CREATE_TEXTURE));
+    assert_eq!(parent.value[0], texture);
+    assert_ne!(view.value[0], 0);
+    assert_eq!(by_handle(5).value[0], sampler);
+    assert_eq!(e.objects.iter().filter(|o| o.handle != 0).count(), 5);
+    let base = g.arena.gpu_base;
+    assert_eq!(e.tables, vec![(6, vec![base + MIB, 0, 0, 0])]);
+    assert_eq!(e.events, vec![(7, 5)]);
+}
+
+/// Command buffers begun and not committed: the export describes the context as the first began,
+/// and carries their commands to run again.
+#[test]
+fn an_export_inside_open_command_buffers_carries_their_commands() {
+    let mut g = start();
+    populate(&mut g);
+    let base = g.arena.gpu_base;
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    table(&mut g, 8, &[(1, base + 2 * MIB)]);
+    g.push(
+        cmd::SetAddresses { table: 6, count: 1 },
+        &[cmd::bytes_of_slice(&[cmd::AddressBinding {
+            index: 0,
+            _pad: 0,
+            address: base + 3 * MIB,
+        }])],
+    );
+    g.push(cmd::Destroy { handle: 5, _pad: 0 }, &[]);
+    // Answered once the replayer has consumed everything before it.
+    let texture = churn_texture(&mut g, 9);
+    assert_ne!(texture, 0);
+    let e = export(&mut g);
+    assert!(!e.lost);
+    let handles: Vec<u32> = e
+        .objects
+        .iter()
+        .map(|o| o.handle)
+        .filter(|&h| h != 0)
+        .collect();
+    assert!(
+        handles.contains(&5),
+        "a destroy inside the window runs again: {handles:?}"
+    );
+    assert!(
+        !handles.contains(&8) && !handles.contains(&9),
+        "{handles:?}"
+    );
+    assert_eq!(e.tables, vec![(6, vec![base + MIB, 0, 0, 0])]);
+    let ops: Vec<u16> = e.recording.iter().map(|(op, _, _)| *op).collect();
+    assert_eq!(
+        ops,
+        vec![
+            cmd::op::BEGIN_COMMAND_BUFFER,
+            cmd::op::CREATE_ARGUMENT_TABLE,
+            cmd::op::SET_ADDRESSES,
+            cmd::op::SET_ADDRESSES,
+            cmd::op::DESTROY,
+            cmd::op::CREATE_TEXTURE,
+        ]
+    );
+}
+
+/// Arenas re-created in a fresh replayer at the addresses a guest holds, around the holes destroyed
+/// arenas left and the space a context's start takes.
+#[test]
+fn arenas_are_restored_at_their_addresses() {
+    let g = start();
+    let mut live = Vec::new();
+    for (id, mib) in [(2, 8), (3, 1), (4, 32), (5, 2), (6, 1)] {
+        let a = g.replayer.create_arena(1, id, mib * MIB).expect("arena");
+        live.push((id, a.mapping.size(), a.gpu_base));
+    }
+    for id in [3, 5] {
+        g.replayer.destroy_arena(1, id).expect("destroy");
+        live.retain(|&(i, _, _)| i != id);
+    }
+    let a = g.replayer.create_arena(1, 7, 4 * MIB).expect("arena");
+    live.push((7, a.mapping.size(), a.gpu_base));
+    live.push((1, g.arena.mapping.size(), g.arena.gpu_base));
+    live.sort_by_key(|&(_, _, base)| base);
+
+    let fresh = Replayer::spawn(Path::new(env!("CARGO_BIN_EXE_limina-replayer"))).expect("spawn");
+    let _bell = fresh.create_context(1).expect("context");
+    let mut kept = Vec::new();
+    for &(id, size, base) in &live {
+        let a = fresh.restore_arena(1, id, size, base).expect("restore");
+        assert_eq!(a.gpu_base, base, "arena {id}");
+        assert_eq!(a.mapping.size(), size, "arena {id}");
+        kept.push(a);
+    }
+    fresh.restore_done().expect("done");
+    let after = fresh.create_arena(1, 50, MIB).expect("arena");
+    // Placeholders are gone: a new arena takes the lowest hole it fits, here arena 3's.
+    let lowest_hole = live
+        .windows(2)
+        .map(|w| (w[0].2 + w[0].1 + 0x8000, w[1].2))
+        .find(|&(start, next)| next >= start + MIB + 0x8000)
+        .expect("a hole")
+        .0;
+    assert_eq!(after.gpu_base, lowest_hole);
+}
+
+/// Moves the guest's context into a fresh replayer the way a snapshot restore does: the arena at
+/// its address with its contents, then the context's objects and ring.
+fn restore_into_fresh(g: Guest) -> Guest {
+    let export = g.replayer.export_context(1).expect("export");
+    let Guest {
+        replayer: old,
+        ring,
+        arena: old_arena,
+        seqno,
+        ..
+    } = g;
+    let fresh = Replayer::spawn(Path::new(env!("CARGO_BIN_EXE_limina-replayer"))).expect("spawn");
+    let bell = fresh.create_context(1).expect("context");
+    let arena = fresh
+        .restore_arena(1, 1, old_arena.mapping.size(), old_arena.gpu_base)
+        .expect("arena");
+    // SAFETY: both mappings are the arena's size; the old replayer no longer writes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            old_arena.mapping.as_ptr(),
+            arena.mapping.as_ptr(),
+            arena.mapping.size() as usize,
+        )
+    };
+    drop(old);
+    fresh
+        .restore_context(1, 1, 0, RING_DATA, &export)
+        .expect("restore");
+    fresh.restore_done().expect("done");
+    // SAFETY: the new mapping holds a copy of the ring and lives as long as the producer.
+    let ring = unsafe { ring.moved_to(NonNull::new(arena.mapping.as_ptr()).unwrap()) };
+    Guest {
+        replayer: fresh,
+        bell,
+        ring,
+        arena,
+        seqno,
+    }
+}
+
+/// Textures and samplers made and destroyed first, so the IDs a context holds have holes below.
+fn churn_ids(g: &mut Guest) {
+    for h in 100..106 {
+        churn_texture(g, h);
+    }
+    for h in 106..110 {
+        churn_sampler(g, h);
+    }
+    for h in [100, 102, 103, 107] {
+        churn_destroy(g, h);
+    }
+}
+
+#[test]
+fn a_context_restored_in_a_fresh_replayer_is_the_one_the_guest_knew() {
+    let mut g = start();
+    churn_ids(&mut g);
+    populate(&mut g);
+    let before = export(&mut g);
+    let mut g = restore_into_fresh(g);
+    let after = export(&mut g);
+    assert!(!after.lost, "restored lost: {:?}", g.ring.error());
+    assert_eq!(after, before);
+
+    // The restored objects work: a view of the restored view, a library for the pipeline's name,
+    // and a commit that waits for the event to have reached its restored value.
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateTextureView {
+            handle: 20,
+            parent: 4,
+            pixel_format: RGBA8_UNORM,
+            texture_type: TEX_2D,
+            level_count: 1,
+            slice_count: 1,
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    g.push(
+        cmd::QueueEvent {
+            event: 7,
+            wait: 1,
+            value: 5,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit after restore");
+    assert!(g.ring.error().is_none());
+}
+
+#[test]
+fn a_context_restored_inside_open_command_buffers_runs_them_again() {
+    let mut g = start();
+    churn_ids(&mut g);
+    populate(&mut g);
+    let base = g.arena.gpu_base;
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    table(&mut g, 8, &[(1, base + 2 * MIB)]);
+    g.push(cmd::Destroy { handle: 5, _pad: 0 }, &[]);
+    let texture = churn_texture(&mut g, 9);
+    let before = export(&mut g);
+    let mut g = restore_into_fresh(g);
+    let after = export(&mut g);
+    assert!(!after.lost, "restored lost: {:?}", g.ring.error());
+    assert_eq!(after, before);
+    let made = after
+        .recording
+        .iter()
+        .find(|(op, _, _)| *op == cmd::op::CREATE_TEXTURE);
+    assert_eq!(made.expect("recorded").2[0], texture);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait()
+        .expect("the open command buffer commits");
+    let e = export(&mut g);
+    assert!(e.recording.is_empty());
+    let handles: Vec<u32> = e.objects.iter().map(|o| o.handle).collect();
+    assert!(handles.contains(&8) && handles.contains(&9) && !handles.contains(&5));
+    assert_eq!(
+        e.tables.iter().find(|(h, _)| *h == 8).unwrap().1[1],
+        base + 2 * MIB
+    );
+}
+
+/// A commit the frozen guest would have unblocked cannot finish before a snapshot: the export
+/// gives up on it and loses the context there and then, so its waiters are answered.
+#[test]
+fn an_export_that_cannot_drain_loses_the_context() {
+    let mut g = start();
+    g.push(
+        cmd::SyncObject {
+            handle: 1,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(
+        cmd::QueueEvent {
+            event: 1,
+            wait: 1,
+            value: 1,
+        },
+        &[],
+    );
+    g.seqno += 1;
+    g.push(
+        cmd::Commit {
+            seqno: g.seqno,
+            feedback: BufRef::NONE,
+        },
+        &[],
+    );
+    g.kick();
+    let e = export(&mut g);
+    assert!(e.lost);
+    assert!(e.objects.is_empty());
+    assert_eq!(
+        g.ring.error().map(|(code, _)| code),
+        Some(13),
+        "the ring says why"
+    );
+}

@@ -13,6 +13,7 @@
 mod battery;
 mod console;
 mod display_update;
+mod metal_ext;
 
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::unbounded;
@@ -535,7 +536,7 @@ fn gpu_device(display: &DisplaySpec, disks: &[DiskSpec]) -> GpuDevice {
     let gpu = GpuDevice::new(VirglRendererFlags::from_bits_retain(flags), backend)
         .software_2d(software_2d);
     // A key that cannot be read or made costs the guest its warm caches, never the boot.
-    match display
+    let gpu = match display
         .pipeline_cache_key
         .as_deref()
         .map(crate::pipeline_cache_key::load_or_create)
@@ -546,6 +547,10 @@ fn gpu_device(display: &DisplaySpec, disks: &[DiskSpec]) -> GpuDevice {
             gpu
         }
         None => gpu,
+    };
+    match (software_2d, metal_ext::start()) {
+        (false, Some(ext)) => gpu.extension(ext, metal_ext::ARENA_WINDOW),
+        _ => gpu,
     }
 }
 

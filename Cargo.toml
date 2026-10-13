@@ -58,6 +58,9 @@ limina-launch      = { path = "crates/limina-launch" }
 # this the message our loud assertions exist to print is simply lost.
 limina-paniclog    = { path = "crates/limina-paniclog" }
 limina-proto       = { path = "crates/limina-proto" }
+# The Metal-level GPU transport: the out-of-process replayer and the worker's client of it.
+limina-gpu-wire    = { path = "crates/limina-gpu-wire" }
+limina-replayer    = { path = "crates/limina-replayer" }
 limina-surfaceport = { path = "crates/limina-surfaceport" }
 # The renderer, which rutabaga already builds from this path; named here only so the worker can
 # install the publisher its surfaces are handed to.

@@ -1,0 +1,11 @@
+# limina-gpu-smoke — first light for the Metal-level GPU transport, run inside a guest that has
+# the virtio-gpu-limina module loaded and a worker started with LIMINA_GPU_METAL=1.
+[package]
+name = "limina-gpu-smoke"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[dependencies]
+libc = "0.2"
+limina-gpu-wire = { path = "../../crates/limina-gpu-wire" }

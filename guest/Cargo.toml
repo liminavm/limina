@@ -11,9 +11,16 @@
 #    RemoteDesktop D-Bus; runs as a systemd user unit on the session bus).
 #  - limina-mock-mutter: TEST-ONLY scripted stand-in for mutter's RemoteDesktop API, so
 #    the L1 guest can integration-test the real limina-agent-session without GNOME.
+#  - limina-gpu-smoke: first light for the Metal-level GPU transport (guest/virtio-gpu-limina).
 [workspace]
 resolver = "2"
-members = ["limina-init", "limina-agent", "limina-agent-session", "limina-mock-mutter"]
+members = [
+    "limina-init",
+    "limina-agent",
+    "limina-agent-session",
+    "limina-mock-mutter",
+    "limina-gpu-smoke",
+]
 
 # Tiny, panic-free static binaries: abort (never unwind), optimize for size.
 [profile.release]

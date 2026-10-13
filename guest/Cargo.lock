@@ -452,6 +452,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "limina-gpu-smoke"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "limina-gpu-wire",
+]
+
+[[package]]
+name = "limina-gpu-wire"
+version = "0.1.0"
+
+[[package]]
 name = "limina-init"
 version = "0.1.0"
 dependencies = [

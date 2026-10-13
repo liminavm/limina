@@ -1,0 +1,7 @@
+limina   9d97ab37eb5466baaf0de2600dcb098b5c0f9be6 + the commit that adds this file (driver unplug fix, smoke gap split)
+libkrun  91299de5febf9051229e4f3eaa2148ec8a68aa21
+module   virtio-gpu.ko md5 dda01287dc3dd5b5598a2ed9edc282a7, built against 6.19.10-300.fc44.aarch64
+guest    CoW clone of Fedora-Workstation-44.stock.test.raw, kernel 6.19.10-300.fc44.aarch64 (4 KiB pages)
+boot     LIMINA_GPU_METAL=1 cargo xtask run (EFI+venus coexist, default cpus/ram)
+host     Apple M1 Max, macOS 26.6.2
+date     2026-10-12T11:49Z

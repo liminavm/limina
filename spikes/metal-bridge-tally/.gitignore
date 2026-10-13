@@ -1,0 +1,9 @@
+# Raw worker logs and frame captures are large and machine-local; analysis.md, marks.tsv and the
+# per-workload guest output are what each run keeps.
+runs/*/worker.log
+runs/*/worker.stamped.log
+runs/*/*.png
+runs/*/boot.out
+runs/*/*.spv
+# one FPS line per ~0.1 s replay; RESULTS.md carries the summary
+runs/*/vk-replay.txt

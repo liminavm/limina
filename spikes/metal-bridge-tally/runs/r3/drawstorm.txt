@@ -1,0 +1,4 @@
+device: Virtio-GPU Venus (Apple M1 Max)
+drawstorm n=1000 push=1 frames=7500 inflight=1 device="Virtio-GPU Venus (Apple M1 Max)"
+per-frame ms: record=0.048 submit=0.016 fence=1.122 total=1.187 (842.7 fps)
+per-draw us: record=0.048 submit=0.016 fence=1.122 total=1.187

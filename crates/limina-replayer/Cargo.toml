@@ -1,0 +1,32 @@
+# limina-replayer — the host half of limina's Metal-level GPU transport.
+#
+# The binary is the replayer process: it owns Metal, allocates arenas, drains each context's
+# command ring and executes it. The library also holds the worker's client of that process
+# (spawn, Mach RPC, arena mapping, doorbells), so both ends of the Mach protocol live in one place.
+# Design: spikes/metal-heap-addressing/SKETCH.md; measurements behind it: spikes/replayer-ipc/.
+[package]
+name = "limina-replayer"
+description = "Out-of-process Metal replayer for limina's guest GPU protocol, and the worker's client of it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+limina-gpu-wire = { path = "../limina-gpu-wire" }
+libc = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSError", "NSRange", "NSProcessInfo"] }
+objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
+objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
+
+[dev-dependencies]
+objc2-core-foundation = { version = "0.3", features = [
+    "CFBase",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+] }
