@@ -89,7 +89,7 @@ tree = "/Volumes/mesa-cs/mesa-guest"
 [virglrs]
 repo = "https://github.com/liminavm/virglrs.git"
 branch = "main"
-rev = "734d803a60e59a6340d0dfc978a0e8bc7f2a1304"
+rev = "d389a0061ba593b5a3106bc43b5c5577de651c84"
 
 # The OpenCL C standard library KosmicKrisp's kernels are compiled against. NOT a source
 # checkout and not merely a configure-time gate: `src/kosmickrisp/libkk/*.cl` (tessellation,
