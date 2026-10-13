@@ -25,6 +25,10 @@
 //! Same prereqs as `venus_fd_census`: the seated enhanced golden + KosmicKrisp;
 //! SKIPs cleanly if missing. Gated behind LIMINA_HVF_TESTS; run via
 //! `scripts/test-boot.sh`.
+//!
+//! The same body runs on the metal test image with the Metal transport on, where gnome-shell
+//! itself runs on limina's vendor drivers and the venus clients beside it on venus: the restore
+//! has to bring back both transports' worlds, and the compositor's is the transport's.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -98,20 +102,45 @@ fn suspend_in_guest_and_wait_dark(guest: &Guest) {
 
 #[test]
 fn seated_gnome_session_survives_snapshot_restore() {
-    if !limina_test::require_hvf_or_skip("seated_gnome_session_survives_snapshot_restore") {
+    run(
+        "seated_gnome_session_survives_snapshot_restore",
+        GuestConfig::seated_efi_fedora_from_env,
+        |_| {},
+    );
+}
+
+#[test]
+fn metal_gnome_session_survives_snapshot_restore() {
+    run(
+        "metal_gnome_session_survives_snapshot_restore",
+        GuestConfig::metal_efi_fedora_from_env,
+        |g| {
+            let stack = limina_test::metal::Stack::probe(g).expect("probing the guest's GPU stack");
+            assert!(
+                stack.extension && stack.shell_on_vendor_drivers(),
+                "gnome-shell is not on the Metal transport, so this would test venus alone: \
+                 {stack:#?}"
+            );
+        },
+    );
+}
+
+/// `premise` proves the desktop runs on what the test means to restore; panics otherwise.
+fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Guest)) {
+    if !limina_test::require_hvf_or_skip(test) {
         return;
     }
     if limina_test::kosmickrisp_icd().is_none() {
         eprintln!(
-            "SKIPPED seated_gnome_session_survives_snapshot_restore: no KosmicKrisp ICD under \
+            "SKIPPED {test}: no KosmicKrisp ICD under \
              /Volumes/mesa-cs/build-kk (mount third_party/mesa-cs.sparseimage and ninja)"
         );
         return;
     }
-    let base_cfg = match GuestConfig::seated_efi_fedora_from_env() {
+    let base_cfg = match config() {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("SKIPPED seated_gnome_session_survives_snapshot_restore: {e}");
+            eprintln!("SKIPPED {test}: {e}");
             return;
         }
     };
@@ -149,6 +178,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
     eprintln!("guest SSH up: {banner}");
     g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .expect("gnome-shell never appeared — the seated enhanced session didn't come up");
+    premise(&g1);
 
     // Let the session settle: the shell's venus world (rings, glyph caches, scanouts)
     // should be steady-state, matching the real suspend-a-working-desktop scenario.
@@ -315,8 +345,8 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // of the golden.
     let scratch = g1.scratch_dir().to_path_buf();
     let pid = std::process::id();
-    let snap: PathBuf = std::env::temp_dir().join(format!("limina-venus-session-{pid}.snap"));
-    let disk: PathBuf = std::env::temp_dir().join(format!("limina-venus-session-{pid}.raw"));
+    let snap: PathBuf = std::env::temp_dir().join(format!("limina-{test}-{pid}.snap"));
+    let disk: PathBuf = std::env::temp_dir().join(format!("limina-{test}-{pid}.raw"));
     std::fs::copy(g1.snapshot_path().expect("snapshot path configured"), &snap)
         .expect("preserving the snapshot file");
     limina_test::cow_clone(&scratch.join("disk.raw"), &disk)
@@ -552,7 +582,7 @@ fn seated_gnome_session_survives_snapshot_restore() {
     // --snapshot-file at `snap`, and the suspend recreates the canonical name there).
     // The gen-2 DISK state lives in g2's scratch (the harness boots a clone of the
     // preserved disk, not the preserved file itself) — carry it out before g2 drops.
-    let disk2: PathBuf = std::env::temp_dir().join(format!("limina-venus-session-{pid}-g2.raw"));
+    let disk2: PathBuf = std::env::temp_dir().join(format!("limina-{test}-{pid}-g2.raw"));
     limina_test::cow_clone(&g2.scratch_dir().join("disk.raw"), &disk2)
         .expect("preserving the gen-2 suspended guest's disk");
     drop(g2);
