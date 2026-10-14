@@ -28,8 +28,8 @@ the guest's flush to the window server's composite — the **lead**.
    a few ms, which is the accepted cost.
 2. **A shared timing page, not a forwarded interrupt per vsync.** The host publishes the grid;
    the guest programs its own timer from it. No VM exit per frame, no delivery jitter.
-3. **The lead is measured, not a constant.** Copy-on-present (next step) will add its blit to the
-   path; a measured lead stays right across that and across host load.
+3. **The lead is measured, not a constant.** It stays right across host load and across what the
+   present path costs, the copy's blit included.
 
 ## Why the guest can be told an exact instant
 
@@ -84,8 +84,8 @@ refresh. The lead is built from the two parts the guest cannot influence instead
 - **host processing** `h`: from the worker receiving the guest's flush (`mach_absolute_time`,
   stamped as `t=<mach>` on the `frame` line when the present reaches its display backend) to the
   supervisor starting that frame's layer commit — the commit call itself belongs to `w`, which
-  the spike measured from the same point. Both stamps are the host's. Copy-on-present's blit
-  lands here, where it belongs. Measured with the aquarium (F44, 30 presented fps): the worker →
+  the spike measured from the same point. Both stamps are the host's. The present copy's blit
+  (below) lands here, where it belongs. Measured with the aquarium (F44, 30 presented fps): the worker →
   reader leg is p50 0.07 ms; arrival → commit p50 1.6, p95 3.4, p99 6.9, max 18 ms.
 - **composite deadline** `w`: how long before a vsync a layer commit must land to be shown at it,
   a property of WindowServer, not of the guest. Measured once per macOS version by
@@ -149,12 +149,21 @@ one line, `handle_vblank_timeout` in the CRTC helper funcs, the same on 6.19, 7.
 - an entry that is not `VALID` (or a page that is not, or not yet, one the module understands)
   leaves the expiry the stock handler set: the stock cadence, at the mode's rate.
 
-## What changes when copy-on-present lands
+## The flip completes when the host releases the buffer
 
-With the frame copied at latch the host releases the guest's buffer within ~1 ms of the flush,
-before the deadline vblank the frame was aimed at; the flip-done event then fires *at* that
-vblank, as on hardware, with no "complete at release" needed. That switch remains useful only
-for the zero-copy fenced path, where the release can come after the tick.
+A fenced flush's flip-done event cannot fire before the host releases the guest's buffer, and the
+release necessarily follows the tick the frame was aimed at: the frame was flushed a lead ahead
+of the vsync, and the host takes it after. Arming the event at the end of the commit therefore
+cost a refresh on every frame. The module's rule instead: **if a vblank tick passed between the
+commit's `atomic_begin` and `atomic_flush`, send the event now** (the core stamps it with that
+tick); otherwise arm it for the next one. Debugfs counts both (`flips N at_release= at_tick=`).
+
+What the release waits for decides which branch wins. The Metal transport's scanouts are shown as
+copies (`try_park_present` in libkrun's `virtio_gpu.rs`, the blit in
+`crates/limina-vmm/src/scanout_copier.rs`): a copied frame's hold confirms when the blit retires,
+~1 ms after the flush (`spikes/transport-copy`), so most flips complete at the tick. Showing the
+guest's own buffer instead (`LIMINA_TRANSPORT_COPY=0`) holds the guest until the replaced
+surface leaves WindowServer, a refresh after latch, and caps a 60 Hz guest near 39 fps.
 
 ## Validation (frame pacing, not fps)
 
@@ -168,3 +177,9 @@ for the zero-copy fenced path, where the release can come after the tick.
   50 µs (measured: within 5 µs), across a phase change, and back on the stock timer after `off`.
 - A guest without the module, or a host that does not offer 0x82, must keep running on the stock
   timer: covered by the existing stock-tier suite.
+- Measured 2026-10-14, F44 Venus, WebGL aquarium, BenQ at 59.95 Hz, copies on: 58.7 presented
+  fps over 30 s (1741 of 1779 intervals one refresh, 37 two, none three), the guest flushing
+  59.4/s, flips completing at the tick ~3.5x as often as at release.
+- Owed: a second output gets no grid. On the built-in 120 Hz panel the guest's scanout 1 kept
+  the stock timer (its entry never `VALID`), its flushes arrived unfenced, and the EDID clamps
+  3024x1896@120 (an 836 MHz pixel clock); the 120 Hz check waits on those.

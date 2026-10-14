@@ -21,8 +21,9 @@
 //!
 //! A venus scanout rarely gets here: the renderer copies it on the guest's own queue, in order
 //! with the guest's next frame, and the worker presents that copy and reports the slot held
-//! (`ScanoutCopies` in libkrun's `virtio_gpu.rs`). This ring serves what the renderer cannot copy
-//! in order, which today is chiefly a vrend desktop.
+//! (`ScanoutCopies` in libkrun's `virtio_gpu.rs`). The Metal transport's scanouts do not get here
+//! either: the worker blits those itself (`limina-vmm`'s `scanout_copier.rs`). This ring serves
+//! what neither can copy, which today is chiefly a vrend desktop.
 //!
 //! **The copy reads the guest's surface when the blit runs, not when the frame arrived.** Nothing
 //! holds an unfenced guest off the surface in between, so a copy that runs late shows whatever the
