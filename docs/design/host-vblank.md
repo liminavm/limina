@@ -69,7 +69,9 @@ period=<ticks·2^-32> lead=<ticks> leadns=<ns>` — only when the worker needs i
 or the worker's grid being 50 µs off the measured one now or within a minute. A fresh worker (a
 resume, a relaunch) is told again. When the link stops (window occluded, screen asleep) a burst
 ends with what it has, and the last grid stands. `LIMINA_VSYNC_SOURCE=0` keeps the source quiet,
-for runs that state a grid of their own.
+for runs that state a grid of their own. A window never sends `off`: a slot it leaves may already have
+another window's grid on it, and an `off` racing that would clear it. A stale grid stands until
+the next window's first burst, about a second.
 
 ### Host: lead estimator (supervisor)
 
