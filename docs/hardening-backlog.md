@@ -1056,6 +1056,14 @@ Cross-context isolation rests on Metal 4 residency sets, which Apple documents a
 not protection, and guest GPU addresses are forwarded unchecked. Either verify that a non-resident
 heap in the same process faults, or document every KK client of a VM as one trust domain.
 
+### A raw venus KMS client gets only its first frame copied when the transport is on
+`scanout_copy_shows_presented_frame` fails in `LIMINA_TEST_TRANSPORT=metal` suite mode, and only
+there: the worker traces one `copy trace:` frame, logs `flushes carry no fence` once, then nothing for
+the remaining ~900 flips, where venus mode copies all 901. It predates the transport review (the
+same failure on the tree before it). Either the copy path stops being re-armed once
+`LIMINA_GPU_METAL=1` is set, or the test's venus client is not what scans out under the metal image;
+start by checking which context owns the scanout's resource after the first flip.
+
 ### Typed ids and a Metal wrapper module
 Every id is a bare integer (ctx, arena, export, surface, doorbell, seqno, Mach port), with
 `(u32, u32)` keys and ctx 0 meaning "orphan"; newtypes and an `ArenaOwner` enum would turn missed
