@@ -407,7 +407,7 @@ bool virtio_gpu_limina_vblank_timeout(struct drm_crtc *crtc)
 }
 
 /* A commit begins: remember which vblank it began after (`virtio_gpu_limina_flip_done`). */
-void virtio_gpu_limina_crtc_atomic_begin(struct drm_crtc *crtc, struct drm_atomic_state *state)
+void virtio_gpu_limina_crtc_atomic_begin(struct drm_crtc *crtc, LIMINA_ATOMIC_STATE *state)
 {
 	struct virtio_gpu_device *vgdev = crtc->dev->dev_private;
 	unsigned int i = drm_crtc_index(crtc);

@@ -59,18 +59,19 @@ index 9af740b..6b543a6 100644
  static const struct drm_driver driver = {
  	/*
 diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.h b/drivers/gpu/drm/virtio/virtgpu_drv.h
-index 29b6795..bf6d51e 100644
+index 29b6795..050d477 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_drv.h
 +++ b/drivers/gpu/drm/virtio/virtgpu_drv.h
-@@ -42,6 +42,7 @@
+@@ -42,6 +42,8 @@
  #include <drm/drm_ioctl.h>
  #include <drm/drm_probe_helper.h>
  #include <drm/virtgpu_drm.h>
 +#include <linux/completion.h>
++#include <linux/version.h>
  
  #define DRIVER_NAME "virtio_gpu"
  #define DRIVER_DESC "virtio GPU"
-@@ -264,6 +265,12 @@ struct virtio_gpu_device {
+@@ -264,6 +266,12 @@ struct virtio_gpu_device {
  	struct virtio_shm_region host_visible_region;
  	struct drm_mm host_visible_mm;
  
@@ -83,7 +84,7 @@ index 29b6795..bf6d51e 100644
  	struct work_struct config_changed_work;
  
  	struct work_struct obj_free_work;
-@@ -291,13 +298,54 @@ struct virtio_gpu_fpriv {
+@@ -291,13 +299,60 @@ struct virtio_gpu_fpriv {
  	struct mutex context_lock;
  	char debug_name[DEBUG_NAME_MAX_LEN];
  	bool explicit_debug_name;
@@ -133,13 +134,19 @@ index 29b6795..bf6d51e 100644
 +int virtio_gpu_limina_surface_import_ioctl(struct drm_device *dev, void *data,
 +					   struct drm_file *file);
 +bool virtio_gpu_limina_vblank_timeout(struct drm_crtc *crtc);
-+void virtio_gpu_limina_crtc_atomic_begin(struct drm_crtc *crtc, struct drm_atomic_state *state);
++/* 7.2 renamed the atomic helpers' state to struct drm_atomic_commit. */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
++#define LIMINA_ATOMIC_STATE struct drm_atomic_commit
++#else
++#define LIMINA_ATOMIC_STATE struct drm_atomic_state
++#endif
++void virtio_gpu_limina_crtc_atomic_begin(struct drm_crtc *crtc, LIMINA_ATOMIC_STATE *state);
 +bool virtio_gpu_limina_flip_done(struct drm_crtc *crtc);
 +
  /* virtgpu_kms.c */
  int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev);
  void virtio_gpu_deinit(struct drm_device *dev);
-@@ -384,6 +432,11 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
+@@ -384,6 +439,11 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
  void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
  				   uint32_t context_init, uint32_t nlen,
  				   const char *name);
@@ -151,7 +158,7 @@ index 29b6795..bf6d51e 100644
  void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
  				    uint32_t id);
  void virtio_gpu_cmd_context_attach_resource(struct virtio_gpu_device *vgdev,
-@@ -503,6 +556,9 @@ void virtio_gpu_debugfs_init(struct drm_minor *minor);
+@@ -503,6 +563,9 @@ void virtio_gpu_debugfs_init(struct drm_minor *minor);
  
  /* virtgpu_vram.c */
  bool virtio_gpu_is_vram(struct virtio_gpu_object *bo);
