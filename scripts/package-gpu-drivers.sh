@@ -7,15 +7,15 @@
 #
 # Usage: scripts/package-gpu-drivers.sh
 #   SERIES  the kernel sources to vendor, as scripts/build-virtio-gpu-limina.sh takes them
-#           (default: Fedora 44's stock v6.19.10, and the [linux] fork at its pin for the
-#           enhanced tier's 7.1, whose virtio-gpu carries commits of ours)
+#           (default: Fedora 44's stock v6.19.10, Debian testing's v7.2.9, and the [linux] fork
+#           at its pin for the enhanced tier's 7.1, whose virtio-gpu carries commits of ours)
 # Output: target/gpu-drivers/limina-gpu-drivers.tar.gz, unpacking to limina-gpu-drivers/
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck source=scripts/lib/manifest.sh
 . scripts/lib/manifest.sh
-SERIES="${SERIES:-v6.19.10 limina:$(pin linux rev)}"
+SERIES="${SERIES:-v6.19.10 v7.2.9 limina:$(pin linux rev)}"
 OUT="target/gpu-drivers"
 STAGE="$OUT/limina-gpu-drivers"
 
@@ -55,5 +55,8 @@ sed "s/@VERSION@/$version/" guest/gpu-drivers/dkms.conf.in > "$STAGE/dkms/tree/d
 echo "$version" > "$STAGE/dkms/VERSION"
 printf '%s\n' "${names[@]}" > "$STAGE/dkms/SERIES"
 
-tar -C "$OUT" -czf "$OUT/limina-gpu-drivers.tar.gz" limina-gpu-drivers
+# Without these, macOS's tar adds an AppleDouble `._*` file beside each file carrying extended
+# attributes, and the attributes themselves, all of which the guest unpacks.
+COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -C "$OUT" -czf "$OUT/limina-gpu-drivers.tar.gz" \
+  limina-gpu-drivers
 echo "==> $OUT/limina-gpu-drivers.tar.gz (protocols: $(ls "$OUT/opt/limina" | tr '\n' ' ')module series: ${names[*]})"

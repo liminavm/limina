@@ -2,14 +2,14 @@ diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.c b/drivers/gpu/drm/virtio/virtg
 index a5ce96f..942451a 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_drv.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_drv.c
-@@ -163,6 +163,7 @@ static unsigned int features[] = {
+@@ -161,6 +161,7 @@ static unsigned int features[] = {
+ #endif
+ 	VIRTIO_GPU_F_EDID,
  	VIRTIO_GPU_F_RESOURCE_UUID,
++	VIRTIO_GPU_F_LIMINA_EXT,
  	VIRTIO_GPU_F_RESOURCE_BLOB,
  	VIRTIO_GPU_F_CONTEXT_INIT,
-+	VIRTIO_GPU_F_LIMINA_EXT,
  };
- static struct virtio_driver virtio_gpu_driver = {
- 	.feature_table = features,
 @@ -220,7 +221,19 @@ MODULE_AUTHOR("Dave Airlie <airlied@redhat.com>");
  MODULE_AUTHOR("Gerd Hoffmann <kraxel@redhat.com>");
  MODULE_AUTHOR("Alon Levy");
@@ -303,13 +303,10 @@ diff --git a/drivers/gpu/drm/virtio/virtgpu_vram.c b/drivers/gpu/drm/virtio/virt
 index 5ad3b7c..079d84f 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_vram.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_vram.c
-@@ -185,9 +185,14 @@ err_remove_node:
+@@ -185,6 +185,46 @@
  	return ret;
  }
  
--int virtio_gpu_vram_create(struct virtio_gpu_device *vgdev,
--			   struct virtio_gpu_object_params *params,
--			   struct virtio_gpu_object **bo_ptr)
 +/*
 + * A vram object and its resource id, not yet created on the host: limina's surfaces are created
 + * by a command of their own. Set bo->created once a create has been sent, so that freeing the
@@ -318,32 +315,38 @@ index 5ad3b7c..079d84f 100644
 +int virtio_gpu_vram_init(struct virtio_gpu_device *vgdev,
 +			 struct virtio_gpu_object_params *params,
 +			 struct virtio_gpu_object **bo_ptr)
- {
- 	struct drm_gem_object *obj;
- 	struct virtio_gpu_object_vram *vram;
-@@ -216,6 +221,25 @@ int virtio_gpu_vram_create(struct virtio_gpu_device *vgdev,
- 		return ret;
- 	}
- 
-+	*bo_ptr = &vram->base;
-+	return 0;
-+}
-+
-+int virtio_gpu_vram_create(struct virtio_gpu_device *vgdev,
-+			   struct virtio_gpu_object_params *params,
-+			   struct virtio_gpu_object **bo_ptr)
 +{
-+	struct virtio_gpu_object_vram *vram;
 +	struct drm_gem_object *obj;
-+	struct virtio_gpu_object *bo;
++	struct virtio_gpu_object_vram *vram;
 +	int ret;
 +
-+	ret = virtio_gpu_vram_init(vgdev, params, &bo);
-+	if (ret)
-+		return ret;
-+	vram = to_virtio_gpu_vram(bo);
-+	obj = &vram->base.base.base;
++	vram = kzalloc(sizeof(*vram), GFP_KERNEL);
++	if (!vram)
++		return -ENOMEM;
 +
- 	virtio_gpu_cmd_resource_create_blob(vgdev, &vram->base, params, NULL,
- 					    0);
- 	if (params->blob_flags & VIRTGPU_BLOB_FLAG_USE_MAPPABLE) {
++	obj = &vram->base.base.base;
++	obj->funcs = &virtio_gpu_vram_funcs;
++
++	params->size = PAGE_ALIGN(params->size);
++	drm_gem_private_object_init(vgdev->ddev, obj, params->size);
++
++	ret = drm_gem_create_mmap_offset(obj);
++	if (ret)
++		goto err_release_obj;
++
++	ret = virtio_gpu_resource_id_get(vgdev, &vram->base.hw_res_handle);
++	if (ret)
++		goto err_release_obj;
++
++	*bo_ptr = &vram->base;
++	return 0;
++
++err_release_obj:
++	drm_gem_object_release(obj);
++	kfree(vram);
++	return ret;
++}
++
+ int virtio_gpu_vram_create(struct virtio_gpu_device *vgdev,
+ 			   struct virtio_gpu_object_params *params,
+ 			   struct virtio_gpu_object **bo_ptr)
