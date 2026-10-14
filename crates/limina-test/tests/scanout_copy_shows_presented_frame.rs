@@ -37,6 +37,12 @@
 //! that way in minutes. That test flips two outputs of different sizes (`stamp2-vk`) and bounds
 //! the distinct copy surfaces the trace names.
 //!
+//! **On the Metal transport** (`LIMINA_TEST_TRANSPORT=metal`) the guest runs our virtio-gpu
+//! module, which fences every primary-plane flush once the host speaks the extension. The vehicle
+//! is then held off its buffers by that fence and needs no copy: the first frame, flushed before
+//! any fence was seen, is copied, and none after it. The oracle there is the worker's last word
+//! on each scanout, which must be that it is fenced.
+//!
 //! Same prereqs as the other venus L2 tests: seated EFI enhanced image + KosmicKrisp; SKIPs
 //! cleanly if missing. Gated behind `LIMINA_HVF_TESTS`; run via `scripts/test-boot.sh`. It opens
 //! a real NSWindow, so it is in the EXCLUSIVE set in `.config/nextest.toml`.
@@ -65,6 +71,9 @@ const FRAMES: u32 = 900;
 
 /// How long a delay holds its step back: three frames at 60 Hz.
 const DELAY_MS: &str = "50";
+
+/// What the worker says of a scanout whose flushes hold the guest off its buffers.
+const FENCED: &str = "flushes are fenced; the guest is held off buffers on glass";
 
 /// Traced copies needed before the verdict means anything.
 const MIN_TRACED: usize = 50;
@@ -252,6 +261,20 @@ fn run(name: &str, delay: Option<&str>, outputs: u32) {
     std::thread::sleep(Duration::from_secs(2));
     let log = guest.supervisor_log();
     let run = log.get(offset..).unwrap_or("");
+
+    if limina_test::metal::enhanced_on_transport() {
+        for scanout in 0..outputs {
+            let said = format!("virtio-gpu: scanout {scanout} flushes");
+            let last = run.lines().rfind(|l| l.contains(&said));
+            assert!(
+                last.is_some_and(|l| l.contains(FENCED)),
+                "the module fences the vehicle's flushes, but the worker's last word on scanout \
+                 {scanout} is not that it is fenced: {last:?}"
+            );
+        }
+        drop(guest);
+        return;
+    }
 
     assert!(
         log.contains("flushes carry no fence"),
