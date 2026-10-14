@@ -832,6 +832,16 @@ pub(super) fn deliver_line<S: Clone>(
                 slot.show_id = Some(id);
                 slot.resource = resource;
                 slot.arrived = arrived;
+                if let Some(arrived) = arrived
+                    && log::log_enabled!(target: "limina::window::vsync", log::Level::Trace)
+                {
+                    let tb = super::vsync::Timebase::host();
+                    log::trace!(
+                        target: "limina::window::vsync",
+                        "vsync: frame {id} read {} µs after it reached the worker",
+                        tb.ns_from_ticks(super::vsync::mach_now().saturating_sub(arrived)) / 1000
+                    );
+                }
                 slot.last_shown = Some(id);
                 slot.generation += 1;
                 slot.frames += 1;

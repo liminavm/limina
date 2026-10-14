@@ -414,7 +414,12 @@ impl VsyncSource {
         let Some(ticks) = mach_now().checked_sub(arrived) else {
             return;
         };
-        self.lead.note(now, self.timebase.ns_from_ticks(ticks));
+        let host_ns = self.timebase.ns_from_ticks(ticks);
+        log::trace!(
+            "vsync: frame committed {} µs after it reached the worker",
+            host_ns / 1000
+        );
+        self.lead.note(now, host_ns);
     }
 
     /// Advance this window's bursts; the command to send, if the worker needs one. `slot` is the
