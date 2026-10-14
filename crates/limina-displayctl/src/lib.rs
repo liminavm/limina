@@ -8,14 +8,21 @@
 //! writes them when the window is resized or moves to another host display; the test harness
 //! uses the same socket.
 //!
-//! There are two commands:
+//! There are three commands:
 //!
 //! ```text
 //! resize <width> <height>
 //! display id=0 size=1512x982 connected=1 refresh=120 dpi=226 vendor=LMN product=48879 \
 //!         serial=19088743 name=Built-in%20Display serialstr=ABC123 \
 //!         range=48-120/30-200/675 modes=1920x1080@60,1280x800@60 alt=1512x982@60
+//! vsync id=0 at=123456789 period=1717986918400000 lead=96000 leadns=4000000
+//! vsync id=0 off
 //! ```
+//!
+//! `vsync` states the host display's vsync grid for a guest display (see
+//! `docs/design/host-vblank.md`): one vsync and the lead to put the guest's vblank ahead of it,
+//! in `mach_absolute_time` ticks, and the period in ticks as 32.32 fixed point. `off` withdraws
+//! it, and the guest goes back to its own timer.
 //!
 //! `resize` is the original, shorter form and stays supported forever — it is what the harness
 //! and any external scripting use. `display` is the general one: every field after `id` is
@@ -38,6 +45,24 @@ pub enum DisplayCommand {
     Resize { width: u32, height: u32 },
     /// The general form.
     Display(DisplayControl),
+    /// The host vsync grid for one display; `grid: None` withdraws it.
+    Vsync {
+        display_id: u32,
+        grid: Option<VsyncGrid>,
+    },
+}
+
+/// Where a display's vsyncs fall, in host `mach_absolute_time` ticks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VsyncGrid {
+    /// One vsync.
+    pub at: u64,
+    /// Ticks per frame, 32.32 fixed point.
+    pub period_fp: u64,
+    /// How far ahead of the vsync the guest's vblank goes.
+    pub lead: u64,
+    /// The same lead in nanoseconds, for logs and the guest's diagnostics.
+    pub lead_ns: u32,
 }
 
 /// A runtime change to one virtual display. Every field beyond the id is optional.
@@ -122,6 +147,17 @@ impl DisplayCommand {
         match self {
             DisplayCommand::Resize { width, height } => format!("resize {width} {height}"),
             DisplayCommand::Display(control) => control.to_wire(),
+            DisplayCommand::Vsync {
+                display_id,
+                grid: None,
+            } => format!("vsync id={display_id} off"),
+            DisplayCommand::Vsync {
+                display_id,
+                grid: Some(g),
+            } => format!(
+                "vsync id={display_id} at={} period={} lead={} leadns={}",
+                g.at, g.period_fp, g.lead, g.lead_ns
+            ),
         }
     }
 
@@ -137,6 +173,7 @@ impl DisplayCommand {
                 Some(DisplayCommand::Resize { width, height })
             }
             "display" => DisplayControl::parse_fields(parts).map(DisplayCommand::Display),
+            "vsync" => parse_vsync(parts),
             _ => None,
         }
     }
@@ -273,6 +310,42 @@ impl DisplayControl {
     }
 }
 
+/// `vsync id=N off`, or `vsync id=N at= period= lead= [leadns=]`; a grid missing a field, or with
+/// a zero period, is refused whole rather than half-applied.
+fn parse_vsync<'a>(parts: impl Iterator<Item = &'a str>) -> Option<DisplayCommand> {
+    let (mut id, mut off) = (None, false);
+    let (mut at, mut period_fp, mut lead, mut lead_ns) = (None, None, None, 0);
+    for part in parts {
+        if part == "off" {
+            off = true;
+            continue;
+        }
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        match key {
+            "id" => id = value.parse().ok(),
+            "at" => at = value.parse().ok(),
+            "period" => period_fp = value.parse().ok(),
+            "lead" => lead = value.parse().ok(),
+            "leadns" => lead_ns = value.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    let display_id = id?;
+    let grid = if off {
+        None
+    } else {
+        Some(VsyncGrid {
+            at: at?,
+            period_fp: period_fp.filter(|&p| p > 0)?,
+            lead: lead?,
+            lead_ns,
+        })
+    };
+    Some(DisplayCommand::Vsync { display_id, grid })
+}
+
 fn parse_position(value: &str) -> Option<(u32, u32)> {
     let (x, y) = value.split_once(',')?;
     Some((x.parse().ok()?, y.parse().ok()?))
@@ -350,6 +423,37 @@ fn percent_decode(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_vsync_grid_round_trips() {
+        let command = DisplayCommand::Vsync {
+            display_id: 1,
+            grid: Some(VsyncGrid {
+                at: 123_456_789,
+                period_fp: 400_312 << 32,
+                lead: 96_000,
+                lead_ns: 4_000_000,
+            }),
+        };
+        assert_eq!(DisplayCommand::parse(&command.to_wire()), Some(command));
+        let off = DisplayCommand::Vsync {
+            display_id: 0,
+            grid: None,
+        };
+        assert_eq!(off.to_wire(), "vsync id=0 off");
+        assert_eq!(DisplayCommand::parse(&off.to_wire()), Some(off));
+    }
+
+    #[test]
+    fn a_partial_vsync_grid_is_refused() {
+        assert_eq!(DisplayCommand::parse("vsync id=0 at=5 lead=1"), None);
+        assert_eq!(
+            DisplayCommand::parse("vsync id=0 at=5 period=0 lead=1"),
+            None
+        );
+        assert_eq!(DisplayCommand::parse("vsync at=5 period=7 lead=1"), None);
+        assert!(DisplayCommand::parse("vsync id=0 at=5 period=7 lead=1 future=x").is_some());
+    }
 
     fn full_control() -> DisplayControl {
         DisplayControl {

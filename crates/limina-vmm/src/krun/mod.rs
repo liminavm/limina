@@ -15,10 +15,13 @@ mod console;
 mod display_update;
 mod metal_ext;
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::unbounded;
 use devices::display::{DisplayInfo, DisplayInfoEdid, EdidIdentity, EdidParams};
 use devices::virtio::block::{DiskFormat, SyncMode};
+use devices::virtio::gpu::timing::TimingPage;
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use krun_lib::api::device_builders::{
     BalloonDevice, BlockDevice, DisplayBackend, FsDevice, GpuDevice, I2cBatteryDevice, InputDevice,
@@ -35,7 +38,7 @@ use vmm::vmm_config::external_kernel::{ExternalKernel, KernelFormat};
 use vmm::vmm_config::firmware::FirmwareConfig;
 use vmm::vmm_config::machine_config::VmConfig;
 
-use self::display_update::display_update_from;
+use self::display_update::{display_update_from, timing_grid_from};
 use crate::config::{
     BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, NetSpec,
     VmSpec, VsockSpec,
@@ -797,8 +800,9 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
         .as_ref()
         .and_then(|d| d.control_socket.as_ref())
     {
+        let timing = vmm.lock().unwrap().gpu_timing();
         match vmm.lock().unwrap().gpu_resize_handle() {
-            Some(handle) => install_resize_listener(at.clone(), handle)
+            Some(handle) => install_resize_listener(at.clone(), handle, timing)
                 .context("installing the display-resize listener")?,
             None => log::error!(
                 "display control requested but the GPU resize handle is unavailable; \
@@ -1078,7 +1082,15 @@ pub fn boot(spec: &VmSpec) -> Result<()> {
 /// Runs on a detached thread for the VMM's lifetime. The wire format lives in
 /// `limina-displayctl`. See docs/design/runtime-display-resize.md and
 /// docs/design/stable-edid-hotplug.md.
-fn install_resize_listener(at: ListenAt, handle: DisplayResizeHandle) -> Result<()> {
+///
+/// `vsync id=… …` states the host vsync grid for a display on the GPU extension's timing page
+/// (`timing`, when the extension has one; otherwise the line is dropped and the guest keeps its own
+/// timer). See docs/design/host-vblank.md.
+fn install_resize_listener(
+    at: ListenAt,
+    handle: DisplayResizeHandle,
+    timing: Option<Arc<TimingPage>>,
+) -> Result<()> {
     use std::io::BufRead;
 
     let place = at.to_string();
@@ -1107,6 +1119,12 @@ fn install_resize_listener(at: ListenAt, handle: DisplayResizeHandle) -> Result<
                         Some(DisplayCommand::Display(control)) => {
                             log::info!("display-control: {control:?}");
                             handle.update(display_update_from(control));
+                        }
+                        Some(DisplayCommand::Vsync { display_id, grid }) => {
+                            log::debug!("display-control: vsync {display_id} {grid:?}");
+                            if let Some(timing) = &timing {
+                                timing.set_grid(display_id, grid.map(timing_grid_from));
+                            }
                         }
                         None => log::warn!("display-control: ignoring control line {line:?}"),
                     }

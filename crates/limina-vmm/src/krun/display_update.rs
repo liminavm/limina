@@ -17,7 +17,8 @@ use devices::display::{
     StandardTimings,
 };
 use devices::virtio::DisplayUpdate;
-use limina_displayctl::{DisplayControl, EdidSpec};
+use devices::virtio::gpu::timing::Grid;
+use limina_displayctl::{DisplayControl, EdidSpec, VsyncGrid};
 
 /// Number of standard-timing slots an EDID has.
 const STANDARD_TIMING_SLOTS: usize = 8;
@@ -62,6 +63,16 @@ fn edid_params_from(spec: EdidSpec) -> EdidParams {
                 height,
                 refresh_hz,
             }),
+    }
+}
+
+/// A `vsync` grid off the wire, for the timing page: the same mach-tick values, renamed.
+pub fn timing_grid_from(grid: VsyncGrid) -> Grid {
+    Grid {
+        vsync: grid.at,
+        period_fp: grid.period_fp,
+        lead_ticks: grid.lead,
+        lead_ns: grid.lead_ns,
     }
 }
 
