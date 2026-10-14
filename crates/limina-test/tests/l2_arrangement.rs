@@ -51,6 +51,7 @@ fn spec(display_id: u32, serial: u32, position: (u32, u32)) -> DisplayControl {
         connected: Some(true),
         edid: Some(EdidSpec {
             refresh_hz: 60,
+            refresh_millihertz: None,
             dpi: 96,
             vendor: *b"LMN",
             product_id: 0x5151,

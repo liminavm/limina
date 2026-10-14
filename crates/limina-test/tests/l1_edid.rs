@@ -93,6 +93,7 @@ fn l1_edid_identity_is_stable_and_pushable() {
         connected: None,
         edid: Some(EdidSpec {
             refresh_hz: 120,
+            refresh_millihertz: None,
             dpi: 226,
             vendor: *b"LMN",
             product_id: 0x4242,
@@ -157,6 +158,42 @@ fn l1_edid_identity_is_stable_and_pushable() {
         "the pushed monitor range-limits descriptor never reached the guest"
     );
 
+    // ---- 3a. An exact refresh rate retimes the preferred mode. The guest's vblank timer runs
+    // off the mode's pixel clock, so a 60 Hz mode on a 59.95 Hz host panel has to carry the
+    // panel's rate in that clock, or the guest's vblanks slide a full refresh against the host's
+    // every ~23 s.
+    guest
+        .update_display(DisplayControl {
+            display_id: 0,
+            position: None,
+            size: Some((1280, 800)),
+            connected: None,
+            edid: Some(EdidSpec {
+                refresh_hz: 60,
+                refresh_millihertz: Some(59_950),
+                dpi: 226,
+                vendor: *b"LMN",
+                product_id: 0x4242,
+                serial: 0x0BAD_F00D,
+                name: "L1 Panel".into(),
+                serial_string: None,
+                range: None,
+                modes: Vec::new(),
+                alt_mode: None,
+            }),
+        })
+        .expect("sending the exact-rate mode");
+    let exact = wait_for_edid(&mut guest, &edid_path, |edid| {
+        preferred_millihertz(edid).abs_diff(59_950) <= 2
+    });
+    if exact.is_none() {
+        let seen = read_edid(&mut guest, &edid_path);
+        panic!(
+            "the guest never read a preferred mode timed at 59.95 Hz; its EDID says {} mHz",
+            seen.as_deref().map_or(0, preferred_millihertz)
+        );
+    }
+
     // ---- 3b. A mode the base block cannot express arrives with a DisplayID extension.
     // 3024x1964 @ 120 Hz needs ~866 MHz of pixel clock; a base detailed timing tops out at
     // 655.35 MHz, so the honest timing rides a DisplayID 2.0 type VII block instead.
@@ -168,6 +205,7 @@ fn l1_edid_identity_is_stable_and_pushable() {
             connected: None,
             edid: Some(EdidSpec {
                 refresh_hz: 120,
+                refresh_millihertz: None,
                 dpi: 254,
                 vendor: *b"LMN",
                 product_id: 0x4242,
@@ -383,4 +421,22 @@ fn find_connector(guest: &mut Guest) -> String {
 
 fn checksum(block: &[u8]) -> u8 {
     block.iter().fold(0u8, |acc, b| acc.wrapping_add(*b))
+}
+
+/// The preferred (first) detailed timing's refresh rate, in millihertz, as the guest's kernel
+/// derives its timing from it: the pixel clock over the total pixels per frame.
+fn preferred_millihertz(edid: &[u8]) -> u64 {
+    let Some(block) = edid.get(DESCRIPTOR_0) else {
+        return 0;
+    };
+    let clock_10khz = u64::from(u16::from_le_bytes([block[0], block[1]]));
+    let width = u64::from(block[2]) | u64::from(block[4] >> 4) << 8;
+    let hblank = u64::from(block[3]) | u64::from(block[4] & 0x0F) << 8;
+    let height = u64::from(block[5]) | u64::from(block[7] >> 4) << 8;
+    let vblank = u64::from(block[6]) | u64::from(block[7] & 0x0F) << 8;
+    let total = (width + hblank) * (height + vblank);
+    if total == 0 {
+        return 0;
+    }
+    clock_10khz * 10_000_000 / total
 }

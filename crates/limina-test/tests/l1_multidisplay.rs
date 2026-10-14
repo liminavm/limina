@@ -172,6 +172,7 @@ fn spec(display_id: u32, product_id: u16, serial: u32, name: &str) -> DisplayCon
         connected: Some(true),
         edid: Some(EdidSpec {
             refresh_hz: 60,
+            refresh_millihertz: None,
             dpi: 109,
             vendor: *b"LMN",
             product_id,

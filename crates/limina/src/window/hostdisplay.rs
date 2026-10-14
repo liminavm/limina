@@ -92,7 +92,11 @@ impl HostDisplay {
     /// and the VRR range ride in the EDID, and variable refresh is unreachable without them),
     /// but it travels in place, with the connector left up.
     pub fn mode_key(&self) -> u64 {
-        u64::from(self.edid.refresh_hz)
+        u64::from(
+            self.edid
+                .refresh_millihertz
+                .unwrap_or(self.edid.refresh_hz.saturating_mul(1000)),
+        )
     }
 }
 
@@ -427,6 +431,7 @@ pub fn describe(screen: &NSScreen, scale: fit::Scale, notch_inset: f64) -> HostD
         logical: points,
         edid: EdidSpec {
             refresh_hz,
+            refresh_millihertz: exact_millihertz(screen.minimumRefreshInterval(), refresh_hz),
             dpi: dpi_from(points.0, millimeters_wide, backing),
             vendor: LIMINA_VENDOR,
             product_id,
@@ -493,6 +498,22 @@ fn dpi_from(points_wide: u32, millimeters_wide: f64, backing: f64) -> u32 {
     } else {
         FALLBACK_DPI
     }
+}
+
+/// The panel's exact refresh rate in millihertz, from its shortest frame interval, when that
+/// interval is the rate the guest's preferred mode is named for (a fixed-rate panel's only
+/// interval, or a ProMotion panel's fastest). `None` when they disagree by half a hertz or more,
+/// which leaves the mode at its whole-Hz clock.
+fn exact_millihertz(min_interval: f64, refresh_hz: u32) -> Option<u32> {
+    if !(min_interval.is_finite() && min_interval > 0.0) {
+        return None;
+    }
+    let millihertz = (1000.0 / min_interval).round();
+    if !(1.0..=f64::from(u32::MAX)).contains(&millihertz) {
+        return None;
+    }
+    let millihertz = millihertz as u32;
+    (millihertz.abs_diff(refresh_hz.saturating_mul(1000)) < 500).then_some(millihertz)
 }
 
 /// The monitor range limits, when the panel genuinely has a *range* — i.e. it supports variable
@@ -731,6 +752,18 @@ mod tests {
 
     /// The window's own panel follows the display mode: match-host drives the guest, dynamic and
     /// fixed leave the resolution to the window.
+    #[test]
+    fn the_exact_rate_comes_from_the_panel_interval_when_it_names_the_mode() {
+        // The BenQ this was measured on: AppKit's interval, 59.95 Hz.
+        assert_eq!(exact_millihertz(0.016680416, 60), Some(59_951));
+        // ProMotion at its fastest.
+        assert_eq!(exact_millihertz(1.0 / 120.0, 120), Some(120_000));
+        // An interval for a different rate than the mode's is not this mode's rate.
+        assert_eq!(exact_millihertz(0.016680416, 120), None);
+        assert_eq!(exact_millihertz(0.0, 60), None);
+        assert_eq!(exact_millihertz(f64::NAN, 60), None);
+    }
+
     #[test]
     fn the_window_s_panel_is_driven_only_in_match_host_mode() {
         assert!(drives_size(DisplayResolution::Host, true));

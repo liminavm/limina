@@ -577,6 +577,7 @@ fn l2_input_inject_per_display_headless() {
             connected: Some(true),
             edid: Some(limina_test::EdidSpec {
                 refresh_hz: 60,
+                refresh_millihertz: None,
                 dpi: 96,
                 vendor: *b"LMN",
                 product_id: 0x5152,

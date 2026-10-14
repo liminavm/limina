@@ -50,6 +50,7 @@ fn pushed_identity() -> DisplayControl {
         connected: None,
         edid: Some(EdidSpec {
             refresh_hz: 60,
+            refresh_millihertz: None,
             dpi: 96,
             vendor: *b"LMN",
             product_id: 0x4C32,

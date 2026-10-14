@@ -35,6 +35,7 @@ pub fn display_update_from(control: DisplayControl) -> DisplayUpdate {
 fn edid_params_from(spec: EdidSpec) -> EdidParams {
     EdidParams {
         refresh_rate: spec.refresh_hz,
+        refresh_millihertz: spec.refresh_millihertz,
         // DPI rather than fixed millimetres: our window is a viewport, not a panel, so the
         // advertised physical size tracks the resolution and the DPI the guest computes stays
         // put across a resize (which keeps its scale factor from flipping mid-drag).
@@ -134,6 +135,7 @@ mod tests {
     fn spec() -> EdidSpec {
         EdidSpec {
             refresh_hz: 120,
+            refresh_millihertz: Some(119_880),
             dpi: 226,
             vendor: *b"LMN",
             product_id: 7,
@@ -168,6 +170,7 @@ mod tests {
         assert_eq!(update.connected, Some(true));
         let params = update.edid.expect("edid");
         assert_eq!(params.refresh_rate, 120);
+        assert_eq!(params.refresh_millihertz, Some(119_880));
         assert_eq!(params.physical_size, PhysicalSize::Dpi(226));
         let identity = params.identity.expect("identity");
         assert_eq!(identity.manufacturer, *b"LMN");

@@ -200,6 +200,7 @@ fn run(name: &str, delay: Option<&str>, outputs: u32) {
                 connected: Some(true),
                 edid: Some(EdidSpec {
                     refresh_hz: 60,
+                    refresh_millihertz: None,
                     dpi: 96,
                     vendor: *b"LMN",
                     product_id: 0x5152,

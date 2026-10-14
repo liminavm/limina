@@ -61,6 +61,10 @@ pub struct DisplayControl {
 pub struct EdidSpec {
     /// Refresh rate of the preferred (current) mode.
     pub refresh_hz: u32,
+    /// The same rate exactly, in millihertz (59950 for a 59.95 Hz panel), when the host knows
+    /// it. It sets the preferred mode's pixel clock, which the guest's vblank timer runs off;
+    /// `refresh_hz` still names the mode.
+    pub refresh_millihertz: Option<u32>,
     /// Pixels per inch, from which the advertised physical size is derived. Held constant
     /// across a resize on purpose, so the guest never flips its scale factor mid-drag.
     pub dpi: u32,
@@ -86,6 +90,7 @@ impl Default for EdidSpec {
     fn default() -> Self {
         Self {
             refresh_hz: 60,
+            refresh_millihertz: None,
             dpi: 300,
             vendor: *b"LMN",
             product_id: 1,
@@ -151,6 +156,9 @@ impl DisplayControl {
         }
         if let Some(edid) = &self.edid {
             out.push_str(&format!(" refresh={}", edid.refresh_hz));
+            if let Some(mhz) = edid.refresh_millihertz {
+                out.push_str(&format!(" refreshmhz={mhz}"));
+            }
             out.push_str(&format!(" dpi={}", edid.dpi));
             out.push_str(&format!(
                 " vendor={}",
@@ -201,6 +209,10 @@ impl DisplayControl {
                 "connected" => control.connected = Some(parse_bool(value)?),
                 "refresh" => {
                     edid.refresh_hz = value.parse().ok()?;
+                    saw_edid_field = true;
+                }
+                "refreshmhz" => {
+                    edid.refresh_millihertz = Some(value.parse().ok()?);
                     saw_edid_field = true;
                 }
                 "dpi" => {
@@ -347,6 +359,7 @@ mod tests {
             connected: Some(true),
             edid: Some(EdidSpec {
                 refresh_hz: 120,
+                refresh_millihertz: Some(119_880),
                 dpi: 226,
                 vendor: *b"LMN",
                 product_id: 48879,
