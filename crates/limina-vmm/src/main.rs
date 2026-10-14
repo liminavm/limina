@@ -22,6 +22,7 @@ mod pipeline_cache_key;
 mod power;
 mod quiesce;
 mod restart;
+mod scanout_copier;
 mod shutdown;
 mod snapshot;
 mod surface_publisher;
@@ -754,6 +755,8 @@ fn main() -> Result<()> {
             if let Some(name) = cli.surface_port_name.as_deref() {
                 surface_publisher::install(name);
             }
+            // The Metal transport's scanouts are shown as copies this process blits.
+            scanout_copier::install();
             // Whether the guest is decoding video, for the supervisor's keep-the-display-awake
             // policy. Before the renderer starts, for the same reason: a codec keeps the observer
             // it was created under.

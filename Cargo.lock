@@ -1404,6 +1404,7 @@ name = "limina-vmm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "block2",
  "clap",
  "crossbeam-channel",
  "env_logger",
@@ -1423,6 +1424,10 @@ dependencies = [
  "limina-paniclog",
  "limina-surfaceport",
  "log",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-io-surface",
+ "objc2-metal",
  "tracing-appender",
  "virglrs",
 ]

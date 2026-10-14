@@ -44,4 +44,23 @@ getrandom         = { workspace = true }
 libc              = { workspace = true }
 log               = { workspace = true }
 tracing-appender = "0.2.5"
+# The blit that copies the Metal transport's scanouts before they are shown (scanout_copier.rs).
+objc2 = "0.6"
+block2 = "0.6"
+objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2-core-foundation"] }
+objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
+objc2-metal = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "MTLAllocation",
+    "MTLBlitCommandEncoder",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLTexture",
+    "objc2-io-surface",
+] }
 
