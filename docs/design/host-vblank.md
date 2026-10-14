@@ -180,6 +180,7 @@ surface leaves WindowServer, a refresh after latch, and caps a 60 Hz guest near 
 - Measured 2026-10-14, F44 Venus, WebGL aquarium, BenQ at 59.95 Hz, copies on: 58.7 presented
   fps over 30 s (1741 of 1779 intervals one refresh, 37 two, none three), the guest flushing
   59.4/s, flips completing at the tick ~3.5x as often as at release.
-- Owed: a second output gets no grid. On the built-in 120 Hz panel the guest's scanout 1 kept
-  the stock timer (its entry never `VALID`), its flushes arrived unfenced, and the EDID clamps
-  3024x1896@120 (an 836 MHz pixel clock); the 120 Hz check waits on those.
+- A window on a variable-refresh screen (ProMotion) states no grid: its slot's entry goes off and
+  the guest keeps the stock timer. There, the display link runs at ~60 Hz against a 120 Hz
+  `duration`, and its phase wanders by milliseconds (`spikes/promotion-link`). VRR support is owed
+  (`docs/hardening-backlog.md`).

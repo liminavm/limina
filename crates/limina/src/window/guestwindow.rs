@@ -233,8 +233,15 @@ impl GuestWindow {
             .window
             .styleMask()
             .contains(NSWindowStyleMask::FullScreen)
-            || screen.is_some_and(|s| s.frame() == self.window.frame());
-        self.vsync.borrow_mut().poll(slot, panel, covering, now)
+            || screen
+                .as_ref()
+                .is_some_and(|s| s.frame() == self.window.frame());
+        let variable = screen.as_ref().is_some_and(|s| {
+            super::vsync::variable_refresh(s.minimumRefreshInterval(), s.maximumRefreshInterval())
+        });
+        self.vsync
+            .borrow_mut()
+            .poll(slot, panel, covering, variable, now)
     }
 
     /// A fresh worker has the device: the grid has to be stated again.

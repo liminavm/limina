@@ -18,6 +18,11 @@
 //! committing it, plus the window server's composite deadline and a margin. Until a window has
 //! committed frames it is [`DEFAULT_LEAD_NS`].
 //!
+//! A screen whose refresh rate varies (ProMotion) has no grid to state: the panel refreshes when
+//! content arrives, and its display link runs at a rate its own `duration` does not name and at a
+//! phase that wanders (`spikes/promotion-link`). A window on one tells the worker its slot has no
+//! grid ([`NoGrid`]), and the guest keeps its own timer at the mode's rate.
+//!
 //! `LIMINA_VSYNC_SOURCE=0` keeps the source quiet, for runs that state a grid of their own (the L2
 //! test does).
 
@@ -334,6 +339,36 @@ struct Sent {
     grid: VsyncGrid,
 }
 
+/// Whether a screen refreshes at a variable rate, from its shortest and longest refresh intervals
+/// (`NSScreen.minimumRefreshInterval`, `maximumRefreshInterval`): a fixed-rate screen's are equal.
+pub(crate) fn variable_refresh(min_interval: f64, max_interval: f64) -> bool {
+    max_interval - min_interval > 1e-4
+}
+
+/// Telling the worker a slot has no grid, once per slot it lands on.
+#[derive(Debug, Default)]
+struct NoGrid {
+    told: Option<usize>,
+}
+
+impl NoGrid {
+    /// The command clearing `slot`'s grid, unless the worker was already told.
+    fn tell(&mut self, slot: usize) -> Option<DisplayCommand> {
+        if self.told == Some(slot) {
+            return None;
+        }
+        self.told = Some(slot);
+        log::info!(
+            "vsync: guest display {slot} is on a variable-refresh screen: no host grid, the guest \
+             keeps its own timer"
+        );
+        Some(DisplayCommand::Vsync {
+            display_id: slot as u32,
+            grid: None,
+        })
+    }
+}
+
 /// Whether the worker needs `grid` for `slot`, given what it was last told: yes for a new slot or
 /// lead, or when its grid is `tol` ticks off this one now or would be within `horizon` ticks.
 fn needs_send(sent: Option<Sent>, slot: usize, grid: VsyncGrid, tol: u64, horizon: u64) -> bool {
@@ -385,6 +420,8 @@ pub(crate) struct VsyncSource {
     estimator: GridEstimator,
     lead: LeadEstimator,
     sent: Option<Sent>,
+    /// While the window is on a variable-refresh screen: which slot the worker was told has none.
+    no_grid: NoGrid,
     panel: Option<u64>,
     reset_at: Instant,
     bursts: usize,
@@ -417,6 +454,7 @@ impl VsyncSource {
             estimator: GridEstimator::default(),
             lead: LeadEstimator::default(),
             sent: None,
+            no_grid: NoGrid::default(),
             panel: None,
             reset_at: Instant::now(),
             bursts: 0,
@@ -427,6 +465,7 @@ impl VsyncSource {
     /// A fresh worker has the device and knows no grid: say it again.
     pub(crate) fn forget_sent(&mut self) {
         self.sent = None;
+        self.no_grid = NoGrid::default();
     }
 
     /// This window committed, at `committing` (mach ticks, taken just before the layer commit),
@@ -451,12 +490,13 @@ impl VsyncSource {
 
     /// Advance this window's bursts; the command to send, if the worker needs one. `slot` is the
     /// guest display the window shows, `panel` the screen it is on, `covering` whether the window
-    /// covers that screen.
+    /// covers that screen, `variable` whether that screen refreshes at a variable rate.
     pub(crate) fn poll(
         &mut self,
         slot: usize,
         panel: Option<u64>,
         covering: bool,
+        variable: bool,
         now: Instant,
     ) -> Option<DisplayCommand> {
         let link = self.link.as_ref()?;
@@ -466,6 +506,14 @@ impl VsyncSource {
             self.reset_at = now;
             self.bursts = 0;
         }
+        if variable {
+            if self.burst_started.take().is_some() {
+                link.setPaused(true);
+            }
+            self.sent = None;
+            return self.no_grid.tell(slot);
+        }
+        self.no_grid = NoGrid::default();
         match self.burst_started {
             None if now >= self.next_burst() && panel.is_some() => {
                 self.target.ivars().targets.borrow_mut().clear();
@@ -544,6 +592,33 @@ impl Drop for VsyncSource {
 
 #[cfg(test)]
 mod tests {
+    /// The two screens of `spikes/promotion-link`: the BenQ's intervals are equal, the ProMotion
+    /// panel's span 8.3 to 41.7 ms.
+    #[test]
+    fn a_promotion_panel_refreshes_at_a_variable_rate() {
+        assert!(!super::variable_refresh(0.016680416, 0.016680416));
+        assert!(super::variable_refresh(0.008333291, 0.041666667));
+    }
+
+    /// A window on a variable-refresh screen clears its slot's grid once, again when it lands on
+    /// another slot, and again after leaving such a screen and coming back.
+    #[test]
+    fn a_variable_refresh_slot_is_told_it_has_no_grid_once() {
+        let mut none = super::NoGrid::default();
+        let cleared = |c: Option<DisplayCommand>| match c {
+            Some(DisplayCommand::Vsync {
+                display_id,
+                grid: None,
+            }) => Some(display_id),
+            _ => None,
+        };
+        assert_eq!(cleared(none.tell(1)), Some(1));
+        assert_eq!(cleared(none.tell(1)), None, "told already");
+        assert_eq!(cleared(none.tell(0)), Some(0), "another slot");
+        none = super::NoGrid::default(); // a fixed-rate screen in between
+        assert_eq!(cleared(none.tell(0)), Some(0));
+    }
+
     use super::*;
 
     const MS: u64 = 1_000_000;

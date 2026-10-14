@@ -13,6 +13,41 @@ Dates attach to measurements only.
 
 ## Display & windows
 
+### Variable-refresh screens (ProMotion) get no host vblank grid: VRR support is owed
+A guest window on a screen whose refresh rate varies (`NSScreen.minimumRefreshInterval` ≠
+`maximumRefreshInterval`) tells the worker its slot has no grid (`vsync id=N off`,
+`window/vsync.rs`). The guest keeps its stock timer at the mode's rate, and fenced flips are paced
+by the host's release (the copy's blit, ~1 ms). That keeps the guest running. It is not VRR support.
+
+Established on the dev Mac's built-in panel (ProMotion, 8.3–41.7 ms, BenQ 60 Hz attached as main;
+`spikes/promotion-link`, measured 2026-10-14):
+- An app's display link there runs at ~60 Hz while its `duration` says 8.333 ms. Requesting 120
+  (`preferredFrameRateRange`), drawing a new frame every callback, native fullscreen, and the
+  screen's link instead of the window's all change nothing. A CVDisplayLink delivered no callbacks.
+  Before the variable-rate check, every burst was dropped as off-nominal and the slot simply never
+  got a grid.
+- The 60 Hz phase wandered by 1.5–4 ms (p50–p90) within a few seconds in two runs of three: there is
+  no stable grid to phase-lock a guest vblank to.
+- The guest is told the mode is 120 Hz: 3024x1896@120 overflows an EDID detailed timing, and the
+  DisplayID block carries the true timing, which the guest runs. Glass got 60.0 presented fps, every
+  interval 16.7 ms. The guest's flips on that output completed mostly at release (1333 against 498
+  at the tick, on the stock 120 Hz timer). Its copy ring grew to 5 surfaces, against 3 on the 60 Hz
+  BenQ.
+
+Not established: why an app gets 60 Hz. The candidates are the external display attached as main,
+or a policy for unbundled processes (the probe was a bare binary). Re-run `linkprobe` with the BenQ
+unplugged and from inside the signed bundle first; that decides whether to advertise what macOS
+will actually drive (60) or to chase 120.
+
+Fix shape, once the rate question is answered:
+- Advertise a VRR range to the guest: a DisplayID adaptive-sync range, and `vrr_capable` on the
+  connector in the module. Honour `VRR_ENABLED` so a VRR-aware compositor (mutter, synoik) runs
+  unthrottled within the range.
+- Under VRR the flip completes at release, never waiting on a tick, and the event is stamped with
+  the present time rather than a deadline.
+- The supervisor commits each frame as it arrives, with the panel following content. Measure that
+  with the composite-deadline release oracle (`spikes/composite-deadline`) on the ProMotion panel.
+
 ### The captured cursor can go undrawn on the display the user is looking at
 Seen once on the dogfood Mac (2026-08-24) in a cold-booted two-display session: the pointer moved and GNOME's
 overview fired, but nothing was drawn while captured; the uncaptured pointer wore the guest's shape
@@ -797,7 +832,11 @@ stops drawing. The hover dependence points at the compositor choosing what to re
 otherwise.
 
 ### Direct-KMS strictly double-buffered clients run at ~30 fps
-kmscube `-A` ran at 31 fps on a 60 Hz host whatever `LIMINA_FENCE_LATCH_MS` was (8 and 35 ms both
+On the Metal transport this is probably closed and needs a re-measure: there the module completes
+a flip at release when a vblank tick passed during the commit, and transport scanouts go up as
+copies released at the blit (~1 ms). The aquarium under mutter went from 39 to 58.7 presented fps on
+a 60 Hz screen (2026-10-14, `docs/design/host-vblank.md`). Off the transport the analysis below
+still stands. kmscube `-A` ran at 31 fps on a 60 Hz host whatever `LIMINA_FENCE_LATCH_MS` was (8 and 35 ms both
 gave 31), measured 2026-06-23, before the virglrs present path — re-measure before acting. A client that blocks
 on flip-complete misses every other vsync because the fence-accurate present waits twice in sequence
 (GPU render complete, then the CoreAnimation latch) and the round trip exceeds one vsync. Wayland
