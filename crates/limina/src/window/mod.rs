@@ -40,6 +40,7 @@ use objc2_io_surface::IOSurfaceLookup;
 use objc2_quartz_core::{CALayer, CATransaction};
 
 pub(crate) mod absfit;
+mod ack_gate;
 pub(crate) mod arrangement;
 mod button_pace;
 mod capture_tap;
@@ -2455,85 +2456,77 @@ pub fn run(
                     );
                 }
             };
-            while let Ok(msg) = ack_rx.recv() {
-                let (id, prev) = match msg {
-                    present::AckMsg::Shown(id, prev) => (id, prev),
+            // #24: the completion block (latch) fires ~one refresh BEFORE WindowServer stops
+            // sampling the surface a frame replaced (measured p50 17 ms / max 33 ms,
+            // spikes/present-pacing/). Acking at latch hands the guest its flip-completion while
+            // the old buffer is still being read: it repaints it and the mid-repaint state reaches
+            // glass (the zero-copy tear). So each "shown" waits for the replaced surface to leave
+            // window-server use, capped (see `ack_gate`), and "free" reports the clear itself.
+            // The caps bound a stuck count (occlusion oddities); the worker's 150 ms fallback
+            // stands behind them.
+            let shown_cap =
+                std::time::Duration::from_millis(if fence_capped { cap_ms } else { 50 });
+            let mut gate = ack_gate::AckGate::new(shown_cap, std::time::Duration::from_millis(50));
+            loop {
+                let msg = if gate.idle() {
+                    match ack_rx.recv() {
+                        Ok(msg) => Some(msg),
+                        Err(_) => break,
+                    }
+                } else {
+                    match ack_rx.recv_timeout(std::time::Duration::from_micros(500)) {
+                        Ok(msg) => Some(msg),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                };
+                match msg {
+                    Some(present::AckMsg::Shown(id, prev)) => {
+                        if marker_at.elapsed() >= std::time::Duration::from_millis(500) {
+                            marker_at = std::time::Instant::now();
+                            latch_marker = std::fs::metadata("/tmp/limina-ack-latch").is_ok();
+                        }
+                        gate.push(id, prev, !latch_marker, std::time::Instant::now());
+                    }
                     // Out-of-band and unpaced: this is only the *request*. The worker answers by
                     // publishing on the surface port, which is what keeps the ordering that makes
                     // recycled IOSurface ids safe.
-                    present::AckMsg::Resurface(id) => {
+                    Some(present::AckMsg::Resurface(id)) => {
                         log::warn!(
                             "window: asking the worker to re-publish surface {id} — we dropped it \
                              and the guest is still presenting it"
                         );
                         send_line(format!("resurface {id}\n"));
-                        continue;
                     }
-                };
-                // #24: the completion block (latch) fires ~one refresh BEFORE WindowServer
-                // stops sampling the surface this frame replaced (measured p50 17 ms / max
-                // 33 ms, spikes/present-pacing/). Acking at latch hands the guest its
-                // flip-completion while the old buffer is still being read — it repaints it
-                // and the mid-repaint state reaches glass (the zero-copy tear). Hold the ack
-                // until the replaced surface leaves window-server use; the caps bound a
-                // stuck count (occlusion oddities), and the worker's 150 ms fallback stands
-                // behind that.
-                if marker_at.elapsed() >= std::time::Duration::from_millis(500) {
-                    marker_at = std::time::Instant::now();
-                    latch_marker = std::fs::metadata("/tmp/limina-ack-latch").is_ok();
+                    None => {}
                 }
-                let gate = !latch_marker;
-                let mut freed = true;
-                if gate && let Some(prev) = &prev {
-                    let t0 = std::time::Instant::now();
-                    let gated = prev.is_in_use();
-                    let shown_cap =
-                        std::time::Duration::from_millis(if fence_capped { cap_ms } else { 50 });
-                    while prev.is_in_use() && t0.elapsed() < shown_cap {
-                        std::thread::sleep(std::time::Duration::from_micros(500));
-                    }
-                    freed = !prev.is_in_use();
-                    if gated {
-                        // Engagement oracle (the 0114 lesson): the FIRST gated ack logs
-                        // at INFO — one line per run confirms the mode without any
-                        // per-frame firehose; the periodic wait sample stays at trace.
-                        static GATED: std::sync::atomic::AtomicU64 =
-                            std::sync::atomic::AtomicU64::new(0);
-                        let n = GATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if n == 0 {
-                            log::info!(
-                                "window: off-glass ack gating ENGAGED (first gated ack waited {:?}, fence cap {:?})",
-                                t0.elapsed(),
-                                shown_cap
-                            );
-                        } else if n.is_multiple_of(512) {
-                            log::trace!(
-                                "window: off-glass ack gate n={n}, last wait {:?}",
-                                t0.elapsed()
-                            );
+                for ack in gate.poll(std::time::Instant::now()) {
+                    match ack {
+                        ack_gate::Ack::Shown { id, waited } => {
+                            if let Some(waited) = waited {
+                                // Engagement oracle (the 0114 lesson): the FIRST gated ack logs
+                                // at INFO — one line per run confirms the mode without any
+                                // per-frame firehose; the periodic wait sample stays at trace.
+                                static GATED: std::sync::atomic::AtomicU64 =
+                                    std::sync::atomic::AtomicU64::new(0);
+                                let n = GATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if n == 0 {
+                                    log::info!(
+                                        "window: off-glass ack gating ENGAGED (first gated ack waited {waited:?}, fence cap {shown_cap:?})"
+                                    );
+                                } else if n.is_multiple_of(512) {
+                                    log::trace!(
+                                        "window: off-glass ack gate n={n}, last wait {waited:?}"
+                                    );
+                                }
+                            }
+                            send_line(format!("shown {id}\n"));
                         }
+                        // The worker ignores this verb today: it is the wire's release signal for
+                        // any future reuse-safety bookkeeping.
+                        ack_gate::Ack::Free { id, .. } => send_line(format!("free {id}\n")),
                     }
                 }
-                send_line(format!("shown {id}\n"));
-                // Release truth: keep polling the replaced surface past the fence cap (up
-                // to the old 50 ms total) and report the observed clear as "free <id>".
-                // The worker ignores unknown verbs today; this is the wire's release
-                // signal for any future reuse-safety bookkeeping, and it keeps the
-                // over-hold tail observable (trace) without moving the fence.
-                if !freed && let Some(prev) = &prev {
-                    let t0 = std::time::Instant::now();
-                    while prev.is_in_use() && t0.elapsed() < std::time::Duration::from_millis(50) {
-                        std::thread::sleep(std::time::Duration::from_micros(500));
-                    }
-                    freed = !prev.is_in_use();
-                    if freed {
-                        log::trace!(
-                            "window: over-hold tail on frame {id}: replaced surface cleared {:?} after the fence cap",
-                            t0.elapsed()
-                        );
-                    }
-                }
-                send_line(format!("free {id}\n"));
             }
         });
     }
