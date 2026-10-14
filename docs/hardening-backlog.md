@@ -574,6 +574,15 @@ so first rule libkrun out:
   (`irq_set_irqchip_state`); trace the L1 KVM's `kvm_timer_*` and `vgic_*` events at a hang to see
   whether the L2 ever reads `ICC_IAR1_EL1`, and what the LR holds when it does.
 
+### The device tree names the wrong hypervisor timer interrupt
+libkrun's timer node (`devices/src/fdt/aarch64.rs`, `create_timer_node`) lists PPI 12 (INTID 28)
+in the hypervisor-timer slot; HVF raises the EL2 physical timer on INTID 26
+(`hv_gic_get_intid(HV_GIC_INT_EL2_PHYSICAL_TIMER)`, measured in
+`spikes/nested-virt-probe/RESULTS.md`, *Timer interrupts at EL2*). Nothing reads that entry today:
+Linux runs nVHE and the firmware uses the EL1 physical timer at EL2. A VHE guest kernel, or
+firmware moved to `CNTHP`, would get no timer. Take the INTID from `hv_gic_get_intid` when EL2 is
+on.
+
 ---
 
 ## GPU robustness — guest-reachable aborts & containment

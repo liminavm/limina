@@ -1,2 +1,4 @@
 out/
 guest/target/
+el2-regs
+el2-timer-irq

@@ -128,3 +128,41 @@ the cause: booted with `kvm-arm.mode=none` the numbers are the same (4.9-5.3 / 2
 EL2, HVF also takes the guest's `WFI` itself (libkrun saw none), so the cost is inside HVF.
 System-register traps reaching libkrun are rare at L1 (a handful at boot); each L2 entry and
 exit costs one `CNTHCTL_EL2` read and write through libkrun, ~23 000 pairs per L2 boot.
+
+## Timer interrupts at EL2: what the firmware can tick on
+
+With `--nested-virt` the firmware and GRUB run at EL2. `el2-timer-irq.c`
+(`build-el2-timer-irq.sh`) runs a few dozen instructions at EL2 that enable HVF's GIC and the
+CPU interface, arm one timer, unmask IRQs and WFI; the IRQ vector acknowledges and reports the
+INTID. A timer that does not interrupt within 500 ms is reported with its `CTL.ISTATUS` and
+`GICR_ISPENDR0`.
+
+Measured 2026-10-14, dogfood Mac (M4 Pro, macOS 27.0.1); `hv_gic_get_intid` names INTID 26 for
+the EL2 physical timer:
+
+| HCR_EL2 | CNTV, EL1 virtual (27) | CNTP, EL1 physical (30) | CNTHP, EL2 physical (26) |
+|---|---|---|---|
+| libkrun's (`IMO`/`FMO`/`AMO` set) | never fires: ISTATUS 0 | taken | taken |
+| libkrun's + `TGE` (what the firmware runs with) | never fires | taken | taken |
+| `TGE` only | never fires | pending, not taken | pending, not taken |
+| `TGE` + `IMO`/`FMO`/`AMO` | never fires | taken | taken |
+| `RW` only | never fires | pending, not taken | pending, not taken |
+
+- **The EL1 virtual timer never fires at EL2.** `CNTV_CTL_EL0` never reports ISTATUS, against a
+  2.7 ms deadline computed from `CNTVCT_EL0`. Linux is unaffected (its kernel runs at EL1, where
+  CNTV works); the firmware's `ArmGenericTimerVirtCounterLib` drove CNTV at EL2, so it never got
+  a timer interrupt, no UEFI timer event fired, and every console input driver (virtio keyboard,
+  USB keyboard, serial terminal), which all poll from one, saw no keys. GRUB's countdown reads the
+  counter, so the boot went on: issue #16. The firmware now uses CNTP at EL2
+  (`ArmGenericTimerVirtPhyCounterLib` in the edk2 fork).
+- **`TGE` alone does not route IRQs to EL2** under HVF, though architecturally it implies
+  `IMO`/`FMO`/`AMO`; the interrupt stays pending and `WFI` keeps returning. The explicit bits are
+  needed. The firmware's SEC (`PrePeiCore`) ORs them into the value libkrun sets, so it has them.
+- libkrun's device-tree timer node names PPI 12 (INTID 28) as the hypervisor timer; HVF's is
+  INTID 26. Nothing reads that entry today (Linux runs nVHE; the firmware uses CNTP).
+
+Keys during GRUB's countdown on a clone of a stock Debian 13 VM (`--ipa-granule 4k`, firmware
+built from the fork's branch): with nested virtualization on, the shipped firmware ignores them
+both over serial and through `limina input` (virtio-input), and the boot reaches the LUKS prompt;
+the fixed firmware moves GRUB's highlight on both paths. With it off, both firmwares take the
+serial keys.
