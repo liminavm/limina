@@ -39,8 +39,10 @@ the worker's own: 0 at boot, advanced by the same paused ticks on every vCPU acr
 vsync time from CoreVideo, which is in `mach_absolute_time` ticks, minus the offset, *is* a guest
 counter value: no clock estimation, no PLL, on either side.
 
-The offset lives in per-vCPU HVF state, which only that vCPU's thread can read, so the vCPU
-threads publish it (an atomic beside the pause/restore code) for the GPU device to use.
+The offset lives in per-vCPU HVF state, which only that vCPU's thread can read, so the `Vmm` keeps
+its own record of it: the one place a pause advances it (`Vmm::resume`) and the restore that sets
+it both go through `Vmm::note_vtimer_offset`, which pushes it to the timing page — on resume
+*before* the vCPUs run, so the guest never sees an anchor stated in the old counter time.
 
 ## The pieces
 
@@ -87,8 +89,10 @@ refresh. The lead is built from the two parts the guest cannot influence instead
 
 ### Worker: the timing page
 
-A new shared-memory region of the extension, **shm id 0x82**, one 4 KiB page, read-only to the
-guest. One 64-byte entry per scanout, each under a seqlock:
+A new shared-memory region of the extension, **shm id 0x82**: one 16 KiB host page (what
+`hv_vm_map` maps), at the arena window's first slot; arenas are placed after it. It is mapped
+read-write like the arenas; the host owns it and rewrites entries whole, so a guest writing to it
+only disturbs its own vblank. One 64-byte entry per scanout, each under a seqlock:
 
 | field | |
 |---|---|
