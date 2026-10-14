@@ -651,7 +651,13 @@ enum DebugAction {
 #[derive(clap::Subcommand, Debug)]
 enum CaptureAction {
     /// Start capturing into DIR (created if missing; one that already holds a capture is refused).
-    Start { dir: PathBuf },
+    Start {
+        dir: PathBuf,
+        /// What each frame gets beside its tag and timing. `timing` writes no images: no disk,
+        /// and no GPU copy holding the frame on glass (which can delay its shown-ack ~1 ms).
+        #[arg(long, value_enum, default_value_t = CaptureModeArg::Images)]
+        mode: CaptureModeArg,
+    },
     /// Stop, wait for the frames already copied to be written, and print the summary.
     Stop,
     /// Write the frame on glass on one display to PNG now — however long ago it went up, and
@@ -662,6 +668,21 @@ enum CaptureAction {
         /// The guest display (slot); the main window's when omitted.
         slot: Option<usize>,
     },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum CaptureModeArg {
+    Images,
+    Timing,
+}
+
+impl From<CaptureModeArg> for limina_debug::wire::CaptureMode {
+    fn from(m: CaptureModeArg) -> Self {
+        match m {
+            CaptureModeArg::Images => Self::Images,
+            CaptureModeArg::Timing => Self::Timing,
+        }
+    }
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -1379,13 +1400,14 @@ fn cmd_debug(args: DebugArgs) -> Result<()> {
             on: matches!(state, OnOff::On),
         },
         DebugAction::Capture {
-            action: CaptureAction::Start { dir },
+            action: CaptureAction::Start { dir, mode },
         } => {
             // Absolute here: the supervisor's working directory is not the caller's.
             let dir = std::path::absolute(&dir)
                 .with_context(|| format!("resolving {}", dir.display()))?;
             limina_debug::wire::Request::Capture(limina_debug::wire::Capture::Start {
                 dir: dir.to_string_lossy().into_owned(),
+                mode: mode.into(),
             })
         }
         DebugAction::Capture {

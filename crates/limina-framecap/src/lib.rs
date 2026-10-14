@@ -106,6 +106,8 @@ pub enum Reason {
     DiskBudget,
     /// Shown and copied, but encoding or writing the file failed.
     WriteError,
+    /// Shown, on a capture asked for timing only: no frame of it has an image, by design.
+    TimingOnly,
 }
 
 impl Reason {
@@ -117,6 +119,7 @@ impl Reason {
             Reason::CopyFailed => "copy_failed",
             Reason::DiskBudget => "disk_budget",
             Reason::WriteError => "write_error",
+            Reason::TimingOnly => "timing_only",
         }
     }
 }
@@ -290,8 +293,11 @@ pub struct Summary {
     pub presented: u64,
     /// Of those, frames written to an image.
     pub captured: u64,
-    /// Of those, frames with no image, by any reason but `not_presented`.
+    /// Of those, frames with no image, by any reason but `not_presented` and `timing_only`.
     pub dropped: u64,
+    /// Of those, frames a timing-only capture recorded without an image, as it was asked to.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub timing_only: u64,
     /// Guest flips that never reached glass (the sum of the `not_presented` records' counts).
     pub not_presented: u64,
     /// Every frame without an image, by reason (`not_presented` counted in flips).
@@ -300,6 +306,9 @@ pub struct Summary {
     pub duration_s: f64,
     /// `captured / duration_s`.
     pub captured_fps: f64,
+    /// `presented / duration_s`: the rate frames went on glass, images or not.
+    #[serde(default)]
+    pub presented_fps: f64,
     /// Bytes of image written.
     pub bytes: u64,
     /// What the capture cost the main thread per presented frame, in microseconds.
@@ -310,6 +319,10 @@ pub struct Summary {
     /// for them never reach the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incomplete: Option<u64>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Summary {
@@ -323,6 +336,19 @@ impl Summary {
             Some(n) => format!("; INCOMPLETE: {n} frames still in flight at the stop"),
             None => String::new(),
         };
+        if self.timing_only > 0 {
+            return format!(
+                "{} presented, timing only, {} flips never presented, over {:.1} s ({:.1} \
+                 presented fps); main thread {} us p50 / {} us max per frame{}",
+                self.presented,
+                self.not_presented,
+                self.duration_s,
+                self.presented_fps,
+                self.present_hook_us_p50,
+                self.present_hook_us_max,
+                incomplete,
+            );
+        }
         format!(
             "{} presented, {} captured, {} dropped, {} flips never presented, over {:.1} s \
              ({:.1} captured fps, {:.1} MB); main thread {} us p50 / {} us max per frame{}",
@@ -686,7 +712,12 @@ impl Tally {
             .get(&Reason::NotPresented)
             .copied()
             .unwrap_or(0);
-        let dropped = self.by_reason.values().sum::<u64>() - not_presented;
+        let timing_only = self
+            .by_reason
+            .get(&Reason::TimingOnly)
+            .copied()
+            .unwrap_or(0);
+        let dropped = self.by_reason.values().sum::<u64>() - not_presented - timing_only;
         let mut us = self.hook_us.clone();
         us.sort_unstable();
         let pct = |p: f64| {
@@ -701,6 +732,7 @@ impl Tally {
             presented: self.presented,
             captured: self.captured,
             dropped,
+            timing_only,
             not_presented,
             by_reason: self
                 .by_reason
@@ -710,6 +742,11 @@ impl Tally {
             duration_s,
             captured_fps: if duration_s > 0.0 {
                 self.captured as f64 / duration_s
+            } else {
+                0.0
+            },
+            presented_fps: if duration_s > 0.0 {
+                self.presented as f64 / duration_s
             } else {
                 0.0
             },
@@ -958,6 +995,23 @@ mod tests {
         let never = Record::not_presented(0, 1, 3..5).unwrap();
         assert_eq!(never.guest_resource, None);
         assert!(!never.to_line().contains("guest_resource"));
+    }
+
+    #[test]
+    fn a_timing_only_capture_drops_nothing_and_says_how_fast_frames_went_up() {
+        let mut t = Tally::default();
+        for seq in 1..=4 {
+            t.count(&presented(0, seq, seq).drop_for(Reason::TimingOnly), 0);
+        }
+        t.count(&presented(0, 5, 5).drop_for(Reason::QueueFull), 0);
+        let s = t.summary(2.0);
+        assert_eq!(
+            (s.presented, s.captured, s.dropped, s.timing_only),
+            (5, 0, 1, 4)
+        );
+        assert_eq!(s.presented_fps, 2.5);
+        assert!(s.describe().contains("timing only"), "{}", s.describe());
+        assert_eq!(parse_line(&s.to_line()), Ok(Line::Summary(s)));
     }
 
     #[test]

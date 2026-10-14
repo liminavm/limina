@@ -830,9 +830,16 @@ actually got on glass, attributed, without a human:
 
 ```sh
 limina debug <vm> capture start <dir>   # any time; <dir> must not already hold a capture
+limina debug <vm> capture start --mode timing <dir>   # records only, no images
 limina debug <vm> capture stop          # waits for the frames in flight, prints the summary
 LIMINA_WINDOW_CAPTURE_DIR=<dir> …        # or capture the whole run (summary written at exit)
 ```
+
+`--mode` (`LIMINA_WINDOW_CAPTURE_DIR_MODE` for the whole-run form) says what each frame gets beside
+its record: `images` (the default) a PNG, `timing` nothing. A timing capture costs no disk and makes
+no GPU copy, so it can run for as long as a pacing question needs and does not hold the frame on
+glass (the copy can delay a shown-ack by about 1 ms, below), which is what a pacing measurement
+must not do. Its records carry every field but `file`.
 
 `<dir>` (a relative one resolves against the directory `limina debug` runs in) gets one
 `s<slot>-<seq>.png` (RGB, 8 bit; `seq` zero-padded to eight digits) per captured frame and
@@ -862,12 +869,13 @@ ignore does not. `limina_framecap::parse_line` refuses any other format. A recor
 | `t_monotonic_raw_ns` | `CLOCK_MONOTONIC_RAW` (= `mach_continuous_time` in ns; it keeps counting across host sleep), read on the main thread as the frame went on glass. For ordering and intervals. |
 | `t_realtime_ns` | `CLOCK_REALTIME`, ns since the Unix epoch, read at the same moment. The one to correlate with guest logs: the guest RTC is anchored to it. |
 | `file` | The image, relative to the capture directory. Absent when the frame has no image. |
-| `dropped`, `reason` | Present (and `dropped` true) only on a frame with no image. `not_presented`: guest flips the window never put on glass, replaced before it applied them; one record per run of them, with `flip_from`, `flip_to` and `count` (and `flip` = `flip_to`). The rest are frames that were on glass: `queue_full` (every capture buffer busy), `overtaken` (the next frame went up before this one's copy finished), `copy_failed`, `disk_budget`, `write_error`. |
+| `dropped`, `reason` | Present (and `dropped` true) only on a frame with no image. `not_presented`: guest flips the window never put on glass, replaced before it applied them; one record per run of them, with `flip_from`, `flip_to` and `count` (and `flip` = `flip_to`). The rest are frames that were on glass: `queue_full` (every capture buffer busy), `overtaken` (the next frame went up before this one's copy finished), `copy_failed`, `disk_budget`, `write_error`, and `timing_only` (a `--mode timing` capture, which writes no images by design). |
 
 The summary line has `"summary": true` and: `presented` (frames put on glass, guest flips or not),
-`captured`, `dropped` (frames on glass with no image), `not_presented` (guest flips never on glass,
-counted in flips), `by_reason` (every frame without an image, by reason), `duration_s`,
-`captured_fps`, `bytes` (of image written), `present_hook_us_p50/p99/max` (what the capture cost
+`captured`, `dropped` (frames on glass with no image, `timing_only` aside), `timing_only` (only on
+a timing capture: frames recorded without an image as asked), `not_presented` (guest flips never on
+glass, counted in flips), `by_reason` (every frame without an image, by reason), `duration_s`,
+`captured_fps`, `presented_fps` (`presented / duration_s`), `bytes` (of image written), `present_hook_us_p50/p99/max` (what the capture cost
 the main thread per frame), and `incomplete` only when the stop gave up waiting for frames still in
 flight, whose records are then never written.
 

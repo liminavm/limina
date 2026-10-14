@@ -203,8 +203,8 @@ pub fn handle(req: &Request) -> Result<Vec<String>, String> {
             );
             Ok(Vec::new())
         }
-        Request::Capture(wire::Capture::Start { dir }) => {
-            crate::window::frame_capture::start(Path::new(dir)).map(|msg| vec![msg])
+        Request::Capture(wire::Capture::Start { dir, mode }) => {
+            crate::window::frame_capture::start(Path::new(dir), *mode).map(|msg| vec![msg])
         }
         Request::Capture(wire::Capture::Stop) => {
             crate::window::frame_capture::stop().map(|s| vec![s.describe()])

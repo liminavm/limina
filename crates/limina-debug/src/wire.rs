@@ -83,11 +83,46 @@ pub enum Request {
     Capture(Capture),
 }
 
+/// What a capture writes for each frame it records. Every mode records every frame's tag and
+/// timing in the sidecar; the modes differ in what goes beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptureMode {
+    /// A PNG per frame: exact pixels, at a disk and GPU-copy cost per frame.
+    #[default]
+    Images,
+    /// The sidecar alone: no disk, and no GPU copy holding the frame on glass.
+    Timing,
+}
+
+impl CaptureMode {
+    pub const ALL: [CaptureMode; 2] = [CaptureMode::Images, CaptureMode::Timing];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaptureMode::Images => "images",
+            CaptureMode::Timing => "timing",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self, String> {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.as_str() == s)
+            .ok_or_else(|| {
+                let names: Vec<_> = Self::ALL.iter().map(|m| m.as_str()).collect();
+                format!("capture mode {s:?} is not one of {}", names.join(", "))
+            })
+    }
+}
+
 /// What a `capture` request asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Capture {
+    /// `capture start [--mode <mode>] <dir>`: the option first, so the directory can be the rest
+    /// of the line. `images` when no mode is given.
     Start {
         dir: String,
+        mode: CaptureMode,
     },
     Stop,
     /// `capture still <slot|main> <png>`: the slot first, so the path can be the rest of the
@@ -135,18 +170,28 @@ impl Request {
             }
             Some("capture") => match words.next() {
                 Some("start") => {
-                    // The directory is everything after `start`, so a path with spaces survives.
-                    let dir = line
+                    // The directory is everything after `start` and the mode, so a path with spaces
+                    // survives.
+                    let rest = line
                         .trim_start()
                         .strip_prefix("capture")
                         .and_then(|r| r.trim_start().strip_prefix("start"))
                         .map(str::trim)
                         .unwrap_or("");
+                    let (mode, dir) = match rest.strip_prefix("--mode") {
+                        Some(r) => {
+                            let r = r.trim_start();
+                            let (name, dir) = r.split_once(char::is_whitespace).unwrap_or((r, ""));
+                            (CaptureMode::parse(name)?, dir.trim())
+                        }
+                        None => (CaptureMode::Images, rest),
+                    };
                     if dir.is_empty() {
                         return Err("capture start needs a directory".into());
                     }
                     Ok(Request::Capture(Capture::Start {
                         dir: dir.to_string(),
+                        mode,
                     }))
                 }
                 Some("stop") => match words.next() {
@@ -194,7 +239,10 @@ impl Request {
             Request::Lever { name, on } => {
                 format!("lever {name} {}", if *on { "on" } else { "off" })
             }
-            Request::Capture(Capture::Start { dir }) => format!("capture start {dir}"),
+            Request::Capture(Capture::Start { dir, mode }) => match mode {
+                CaptureMode::Images => format!("capture start {dir}"),
+                mode => format!("capture start --mode {} {dir}", mode.as_str()),
+            },
             Request::Capture(Capture::Stop) => "capture stop".into(),
             Request::Capture(Capture::Still { slot, path }) => match slot {
                 Some(n) => format!("capture still {n} {path}"),
@@ -260,6 +308,11 @@ mod tests {
             },
             Request::Capture(Capture::Start {
                 dir: "/tmp/a dir with spaces/frames".into(),
+                mode: CaptureMode::Images,
+            }),
+            Request::Capture(Capture::Start {
+                dir: "/tmp/a dir/timing".into(),
+                mode: CaptureMode::Timing,
             }),
             Request::Capture(Capture::Stop),
             Request::Capture(Capture::Still {
@@ -286,8 +339,18 @@ mod tests {
         assert!(Request::parse("lever edge-trace maybe").is_err());
         assert!(Request::parse("reboot").is_err());
         assert!(Request::parse("capture").is_err());
+        assert_eq!(
+            Request::parse("capture start --mode images /tmp/x"),
+            Ok(Request::Capture(Capture::Start {
+                dir: "/tmp/x".into(),
+                mode: CaptureMode::Images,
+            }))
+        );
         assert!(Request::parse("capture start").is_err());
         assert!(Request::parse("capture start   ").is_err());
+        assert!(Request::parse("capture start --mode timing").is_err());
+        assert!(Request::parse("capture start --mode timing   ").is_err());
+        assert!(Request::parse("capture start --mode film /tmp/a").is_err());
         assert!(Request::parse("capture stop now").is_err());
         assert!(Request::parse("capture pause").is_err());
         assert!(Request::parse("capture still").is_err());

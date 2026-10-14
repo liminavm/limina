@@ -1361,6 +1361,15 @@ avoids, and `build-app.sh` already supports `LIMINA_ALLOW_ADHOC=1` / `LIMINA_SIG
 `bundle`; the references are `docs/dev-onboarding.md` and `CLAUDE.md`. The module doc in
 `xtask/src/main.rs` still says `bundle` assembles `target/Limina.app`.
 
+### A video mode for the frame-sequence capture
+A third `capture start --mode` beside `images` and `timing` (`limina_debug::wire::CaptureMode`): the
+frames on glass encoded into one video (VideoToolbox HEVC), each stamped with its real present time,
+so playback shows the guest's cadence as a human saw it — hitches, 30/60 alternation, a tear — at a
+fraction of the PNGs' disk. Lossy, so it complements `images` and never replaces it: the pixel-exact
+oracles (frame-number colours, tear detection by comparison) stay on PNGs. It still needs a GPU copy
+per frame, with the shown-ack cost `images` has, plus the encoder's GPU time; measure both before
+using it beside a pacing measurement.
+
 ### virtiofs DAX window
 Not implemented (`docs/roadmap.md` §M5; `docs/design/16k-page-requirement.md`). Wire libkrun's
 virtio-fs shm region (`VirtioShmRegion`, `fs/device.rs`), confirm window alignment and

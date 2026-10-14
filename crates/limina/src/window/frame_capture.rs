@@ -50,6 +50,7 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use limina_debug::wire::CaptureMode;
 use limina_framecap::{
     Cause, HostState, HostStateCause, HostStateRecord, PixelOrder, Presented, Reason, Record,
     Reorder, Sequencer, Summary, Tally,
@@ -259,6 +260,7 @@ impl Outstanding {
 
 struct Session {
     dir: PathBuf,
+    mode: CaptureMode,
     started: Instant,
     budget: u64,
     bytes: AtomicU64,
@@ -511,6 +513,10 @@ impl Session {
             file: Some(limina_framecap::file_name(slot, seq)),
             ..Record::default()
         };
+        if self.mode == CaptureMode::Timing {
+            self.finish(ord, record.drop_for(Reason::TimingOnly), 0);
+            return;
+        }
         if self.bytes.load(Ordering::Relaxed) >= self.budget {
             self.finish(ord, record.drop_for(Reason::DiskBudget), 0);
             return;
@@ -726,7 +732,7 @@ fn holds_a_capture(dir: &Path) -> bool {
 }
 
 /// Start capturing into `dir`, which must not already hold a capture.
-pub(crate) fn start(dir: &Path) -> Result<String, String> {
+pub(crate) fn start(dir: &Path, mode: CaptureMode) -> Result<String, String> {
     if source() == Source::None {
         return Err(no_source());
     }
@@ -750,7 +756,7 @@ pub(crate) fn start(dir: &Path) -> Result<String, String> {
         .create_new(true)
         .open(&sidecar_path)
         .map_err(|e| format!("{}: {e}", sidecar_path.display()))?;
-    let session = spawn(dir, sidecar).inspect_err(|_| {
+    let session = spawn(dir, mode, sidecar).inspect_err(|_| {
         let _ = std::fs::remove_file(&sidecar_path);
     })?;
     // Live before the state is read, and the state written before the session is published:
@@ -764,16 +770,22 @@ pub(crate) fn start(dir: &Path) -> Result<String, String> {
         session.host_state(&mut m, state, HostStateCause::CaptureStart);
     }
     *slot = Some(session);
-    let msg = format!(
-        "frame capture: capturing every presented frame to {}",
-        dir.display()
-    );
+    let msg = match mode {
+        CaptureMode::Images => format!(
+            "frame capture: capturing every presented frame to {}",
+            dir.display()
+        ),
+        CaptureMode::Timing => format!(
+            "frame capture: recording every presented frame's timing, no images, to {}",
+            dir.display()
+        ),
+    };
     log::warn!("{msg}");
     Ok(msg)
 }
 
 /// The session and its threads: the sidecar's writer, then the encoders.
-fn spawn(dir: &Path, sidecar: std::fs::File) -> Result<Arc<Session>, String> {
+fn spawn(dir: &Path, mode: CaptureMode, sidecar: std::fs::File) -> Result<Arc<Session>, String> {
     let (out, out_rx) = std::sync::mpsc::channel::<Msg>();
     std::thread::Builder::new()
         .name("limina-framecap-sidecar".into())
@@ -782,6 +794,7 @@ fn spawn(dir: &Path, sidecar: std::fs::File) -> Result<Arc<Session>, String> {
     let (tx, rx) = std::sync::mpsc::channel::<Job>();
     let session = Arc::new(Session {
         dir: dir.to_path_buf(),
+        mode,
         started: Instant::now(),
         budget: budget_from_env(),
         bytes: AtomicU64::new(0),
@@ -879,9 +892,20 @@ pub(crate) fn status() -> Option<PathBuf> {
 /// `LIMINA_WINDOW_CAPTURE_DIR`: capture for the whole run. Called once as the window comes up,
 /// or as a headless run's frames start to arrive; a run with no [`Source`] says why it is ignored.
 pub(crate) fn start_from_env() {
-    if let Some(dir) = std::env::var_os("LIMINA_WINDOW_CAPTURE_DIR")
-        && let Err(e) = start(Path::new(&dir))
-    {
+    let Some(dir) = std::env::var_os("LIMINA_WINDOW_CAPTURE_DIR") else {
+        return;
+    };
+    let mode = match std::env::var("LIMINA_WINDOW_CAPTURE_DIR_MODE") {
+        Ok(m) => match CaptureMode::parse(m.trim()) {
+            Ok(mode) => mode,
+            Err(e) => {
+                log::error!("frame capture: LIMINA_WINDOW_CAPTURE_DIR_MODE: {e}");
+                return;
+            }
+        },
+        Err(_) => CaptureMode::Images,
+    };
+    if let Err(e) = start(Path::new(&dir), mode) {
         log::error!("frame capture: LIMINA_WINDOW_CAPTURE_DIR: {e}");
     }
 }
@@ -942,7 +966,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(limina_framecap::SIDECAR);
         let _ = std::fs::remove_file(&path);
-        let session = spawn(&dir, std::fs::File::create(&path).unwrap()).unwrap();
+        let session = spawn(
+            &dir,
+            CaptureMode::Images,
+            std::fs::File::create(&path).unwrap(),
+        )
+        .unwrap();
         {
             let mut m = lock(&session.main);
             // The first state a capture writes is its start's, whatever the caller calls it.
