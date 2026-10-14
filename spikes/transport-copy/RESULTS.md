@@ -14,9 +14,14 @@ WebGL aquarium on the same GPU (37 guest flushes/s; `data/blitlat-aquarium.txt`)
 | on the GPU | 115 | 158 | 381 | 424 | 616 | 706 |
 | commit → completion handler | 466 | 805 | 1232 | 1324 | 1676 | 2402 |
 
+The same copy on the CPU (`blitlat … cpu`: lock both surfaces, `memcpy`, unlock, as virglrs's
+`copy_on_cpu` does), same load (`data/cpucopy-aquarium.txt`): p50 1645, p95 3521, p99 6699,
+max 13710 µs, and a core busy for all of it.
+
 ## Conclusion
 
-The blit is cheap even on a busy GPU: a waiter sees it done in under 1.4 ms at p95. Releasing the
-guest's fence at the blit's completion is enough; holding it until the copy is on glass is what
+The blit is cheap even on a busy GPU: a waiter sees it done in under 1.4 ms at p95. A CPU copy is
+worse at every percentile and costs a core, so the copy is a GPU blit. Releasing the guest's
+fence at the blit's completion is enough; holding it until the copy is on glass is what
 cost a refresh. The supervisor's copy path measured ~4 ms mean from copy to show with the same
 load: the blit plus a main-thread wake and an apply, which the guest does not need to wait for.

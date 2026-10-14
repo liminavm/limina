@@ -12,7 +12,9 @@
 //   done_us   = completion handler - commit (what a waiter on the CPU sees)
 // then percentiles.
 //
-// Build: swiftc -O blitlat.swift -o blitlat ; run: ./blitlat [frames] [width] [height]
+// With `cpu` anywhere in the arguments it times the same copy done on the CPU instead.
+//
+// Build: swiftc -O blitlat.swift -o blitlat ; run: ./blitlat [frames] [width] [height] [cpu]
 
 import Foundation
 import IOSurface
@@ -41,6 +43,28 @@ func texture(_ s: IOSurface) -> MTLTexture {
 }
 let src = texture(surface())
 let dsts = (0..<3).map { _ in texture(surface()) }
+
+if args.contains("cpu") {
+    // The same copy on the CPU: lock both surfaces, memcpy, unlock, as virglrs's copy_on_cpu does.
+    let s = (0..<4).map { _ in surface() }
+    var us: [Double] = []
+    for i in 0..<frames {
+        let (a, b) = (s[0], s[1 + i % 3])
+        let t0 = CACurrentMediaTime()
+        a.lock(options: .readOnly, seed: nil)
+        b.lock(options: [], seed: nil)
+        memcpy(b.baseAddress, a.baseAddress, min(a.allocationSize, b.allocationSize))
+        b.unlock(options: [], seed: nil)
+        a.unlock(options: .readOnly, seed: nil)
+        us.append((CACurrentMediaTime() - t0) * 1e6)
+        usleep(16_667)
+    }
+    let v = us.sorted()
+    let p = { (q: Double) in v[min(v.count - 1, Int(Double(v.count) * q))] }
+    print(String(format: "cpu copies %d of %dx%d: p10 %.0f p50 %.0f p90 %.0f p95 %.0f p99 %.0f max %.0f us",
+                 frames, W, H, p(0.1), p(0.5), p(0.9), p(0.95), p(0.99), v.last!))
+    exit(0)
+}
 
 var queueUs: [Double] = []
 var execUs: [Double] = []
