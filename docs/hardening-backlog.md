@@ -235,6 +235,15 @@ probes — decide offer or decline for each and record it.
 
 ---
 
+### A full host disk reaches the guest as an I/O error, and its file system goes read-only
+The virtio-blk worker answers a failed host `flush`/`sync` with an I/O error
+(`RequestError::FlushingToDisk`, libkrun `devices/src/virtio/block/worker.rs`), so ENOSPC on the
+host volume, which a large build on the same disk can cause, aborts the guest's btrfs transaction and
+forces it read-only until a reboot; writes since the last commit are lost. Seen on a dev guest:
+`FlushingToDisk(… "No space left on device")` in the worker log, `forced readonly` in the guest.
+Fix shape: pause the VM on ENOSPC and resume once space returns (QEMU's `werror=enospc` default),
+and say so in the window, rather than failing the request.
+
 ## Suspend/restore
 
 ### The worker's quiesce budget plus a slow save can outrun the supervisor's bracket timeout
