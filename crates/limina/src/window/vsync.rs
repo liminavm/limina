@@ -22,7 +22,6 @@
 //! test does).
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use limina_displayctl::{DisplayCommand, VsyncGrid};
@@ -42,12 +41,17 @@ const COMPOSITE_DEADLINE_NS: u64 = 1_000_000;
 const COMPOSITE_DEADLINE_COVERING_NS: u64 = 2_000_000;
 /// On top of the measured parts, for what the p95 does not see.
 const LEAD_MARGIN_NS: u64 = 1_000_000;
-/// A new lead moves every guest vblank: it is restated only when it moves by more than this.
-const LEAD_HYSTERESIS_NS: u64 = 500_000;
-/// The host processing statistic is over this long…
-const HOST_WINDOW: Duration = Duration::from_secs(2);
-/// …and needs this many frames in it to say anything.
-const HOST_MIN_SAMPLES: usize = 10;
+/// A new lead moves every guest vblank. A longer one is stated once it is this much longer…
+const LEAD_RISE_NS: u64 = 500_000;
+/// …a shorter one only once it is this much shorter: a vsync missed costs a refresh, a lead too
+/// long only latency.
+const LEAD_FALL_NS: u64 = 1_500_000;
+/// The host time statistic is taken over windows this long, once as each one ends. Re-read as
+/// frames come and go, a p95 over a couple of seconds is the third-largest of sixty frames at
+/// 30 fps and moves with every stall: measured, it restated the lead ~8 times a second.
+const HOST_WINDOW: Duration = Duration::from_secs(10);
+/// A window with fewer frames than this says nothing, and the last lead stands.
+const HOST_MIN_SAMPLES: usize = 50;
 /// A lead past this is a stalled host, not a deadline worth scheduling a guest around.
 const LEAD_MAX_NS: u64 = 33_000_000;
 /// How far the worker's grid may drift from the screen's before it is restated.
@@ -100,51 +104,67 @@ pub(crate) fn mach_now() -> u64 {
 /// lead plus the compositor's own margin, and feeding it back ratchets the lead up.
 #[derive(Debug)]
 struct LeadEstimator {
-    /// (when committed, host processing in ns), oldest first.
-    samples: VecDeque<(Instant, u64)>,
+    window_start: Option<Instant>,
+    /// This window's host times, ns.
+    samples: Vec<u64>,
+    /// The p95 of the last window that had enough frames to say anything.
+    host_p95: Option<u64>,
     published: u64,
+    /// Whether `published` came from a measurement: the default gives way either way.
+    measured: bool,
 }
 
 impl Default for LeadEstimator {
     fn default() -> Self {
         Self {
-            samples: VecDeque::new(),
+            window_start: None,
+            samples: Vec::new(),
+            host_p95: None,
             published: DEFAULT_LEAD_NS as u64,
+            measured: false,
         }
     }
 }
 
 impl LeadEstimator {
     fn note(&mut self, now: Instant, host_ns: u64) {
-        self.samples.push_back((now, host_ns));
-        self.prune(now);
-    }
-
-    fn prune(&mut self, now: Instant) {
-        while let Some(&(t, _)) = self.samples.front() {
-            if now.duration_since(t) <= HOST_WINDOW && self.samples.len() <= 4096 {
-                break;
-            }
-            self.samples.pop_front();
+        self.roll(now);
+        if self.samples.len() < 8192 {
+            self.samples.push(host_ns);
         }
     }
 
-    /// The lead to state now, in ns. It holds while there are too few frames to say anything —
-    /// an idle guest keeps the last one.
-    fn lead_ns(&mut self, now: Instant, covering: bool) -> u64 {
-        self.prune(now);
+    /// Close the window if it has run its length.
+    fn roll(&mut self, now: Instant) {
+        let start = *self.window_start.get_or_insert(now);
+        if now.duration_since(start) < HOST_WINDOW {
+            return;
+        }
         if self.samples.len() >= HOST_MIN_SAMPLES {
-            let mut h: Vec<u64> = self.samples.iter().map(|&(_, h)| h).collect();
-            h.sort_unstable();
-            let p95 = h[(h.len() * 95).div_ceil(100) - 1];
+            self.samples.sort_unstable();
+            self.host_p95 = Some(self.samples[(self.samples.len() * 95).div_ceil(100) - 1]);
+        }
+        self.samples.clear();
+        self.window_start = Some(now);
+    }
+
+    /// The lead to state now, in ns: the default until a window has said something, then the
+    /// last one's, moved only past [`LEAD_RISE_NS`] / [`LEAD_FALL_NS`].
+    fn lead_ns(&mut self, now: Instant, covering: bool) -> u64 {
+        self.roll(now);
+        if let Some(h) = self.host_p95 {
             let w = if covering {
                 COMPOSITE_DEADLINE_COVERING_NS
             } else {
                 COMPOSITE_DEADLINE_NS
             };
-            let lead = (p95 + w + LEAD_MARGIN_NS).min(LEAD_MAX_NS);
-            if lead.abs_diff(self.published) > LEAD_HYSTERESIS_NS {
+            let lead = (h + w + LEAD_MARGIN_NS).min(LEAD_MAX_NS);
+            if !self.measured
+                || lead > self.published + LEAD_RISE_NS
+                || lead + LEAD_FALL_NS < self.published
+            {
                 self.published = lead;
+                self.measured = true;
             }
         }
         self.published
@@ -409,16 +429,23 @@ impl VsyncSource {
         self.sent = None;
     }
 
-    /// This window just committed a frame that reached the worker at `arrived` (mach ticks).
-    pub(crate) fn note_commit(&mut self, arrived: u64, now: Instant) {
-        let Some(ticks) = mach_now().checked_sub(arrived) else {
+    /// This window committed, at `committing` (mach ticks, taken just before the layer commit),
+    /// a frame that reached the worker at `arrived`. The commit call itself is the composite
+    /// deadline's, which the spike measured from the same point.
+    pub(crate) fn note_commit(&mut self, arrived: u64, committing: u64, now: Instant) {
+        let Some(ticks) = committing.checked_sub(arrived) else {
             return;
         };
         let host_ns = self.timebase.ns_from_ticks(ticks);
-        log::trace!(
-            "vsync: frame committed {} µs after it reached the worker",
-            host_ns / 1000
-        );
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!(
+                "vsync: frame committing {} µs after it reached the worker, the commit took {} µs",
+                host_ns / 1000,
+                self.timebase
+                    .ns_from_ticks(mach_now().saturating_sub(committing))
+                    / 1000
+            );
+        }
         self.lead.note(now, host_ns);
     }
 
@@ -521,17 +548,37 @@ mod tests {
 
     const MS: u64 = 1_000_000;
 
+    /// Frames at 30 fps from `from` for `secs`, each with host time `h(i)`.
+    fn frames(
+        l: &mut LeadEstimator,
+        t0: Instant,
+        from: Duration,
+        secs: u64,
+        h: impl Fn(u64) -> u64,
+    ) {
+        for i in 0..secs * 30 {
+            l.note(t0 + from + Duration::from_micros(i * 33_333), h(i));
+        }
+    }
+
     #[test]
-    fn the_lead_is_the_default_until_frames_say_otherwise() {
+    fn the_lead_is_the_default_until_a_window_says_otherwise() {
         let mut l = LeadEstimator::default();
         let t0 = Instant::now();
+        frames(&mut l, t0, Duration::ZERO, 9, |_| 9 * MS);
+        assert_eq!(
+            l.lead_ns(t0 + Duration::from_secs(9), false),
+            DEFAULT_LEAD_NS as u64,
+            "the first window has not ended"
+        );
+        let mut l = LeadEstimator::default();
         for i in 0..HOST_MIN_SAMPLES as u64 - 1 {
-            l.note(t0 + Duration::from_millis(i), 9 * MS);
+            l.note(t0 + Duration::from_millis(i * 100), 9 * MS);
         }
         assert_eq!(
-            l.lead_ns(t0, false),
+            l.lead_ns(t0 + HOST_WINDOW, false),
             DEFAULT_LEAD_NS as u64,
-            "too few frames"
+            "too few frames in the window"
         );
     }
 
@@ -539,12 +586,11 @@ mod tests {
     fn the_lead_is_the_host_p95_plus_the_deadline_and_margin() {
         let mut l = LeadEstimator::default();
         let t0 = Instant::now();
-        // 100 frames: 94 at 0.5 ms, 6 at 3 ms. The p95 is the first of the slow ones.
-        for i in 0..100u64 {
-            let h = if i % 17 == 0 { 3 * MS } else { MS / 2 };
-            l.note(t0 + Duration::from_millis(i * 10), h);
-        }
-        let now = t0 + Duration::from_millis(990);
+        // Every 17th frame at 3 ms, the rest at 0.5 ms: 18 of 300, so the p95 is a slow one.
+        frames(&mut l, t0, Duration::ZERO, 10, |i| {
+            if i % 17 == 0 { 3 * MS } else { MS / 2 }
+        });
+        let now = t0 + HOST_WINDOW;
         assert_eq!(
             l.lead_ns(now, false),
             3 * MS + COMPOSITE_DEADLINE_NS + LEAD_MARGIN_NS
@@ -552,33 +598,70 @@ mod tests {
         assert_eq!(
             l.lead_ns(now, true),
             3 * MS + COMPOSITE_DEADLINE_COVERING_NS + LEAD_MARGIN_NS,
-            "covering the screen moves the deadline by more than the hysteresis"
+            "covering the screen moves the deadline by more than a rise"
         );
     }
 
     #[test]
-    fn the_lead_moves_only_past_the_hysteresis_and_holds_when_idle() {
+    fn the_lead_rises_readily_falls_reluctantly_and_holds_when_idle() {
         let mut l = LeadEstimator::default();
         let t0 = Instant::now();
-        let fill = |l: &mut LeadEstimator, from: u64, h: u64| {
-            for i in 0..50u64 {
-                l.note(t0 + Duration::from_millis(from + i * 10), h);
-            }
-            t0 + Duration::from_millis(from + 490)
+        let window = |l: &mut LeadEstimator, n: u32, h: u64| {
+            frames(l, t0, HOST_WINDOW * n, 10, |_| h);
+            l.lead_ns(t0 + HOST_WINDOW * (n + 1), false)
         };
-        let now = fill(&mut l, 0, MS);
-        let first = l.lead_ns(now, false);
+        let first = window(&mut l, 0, MS);
         assert_eq!(first, 3 * MS);
-        // 0.4 ms more host time: within the hysteresis, the lead stays.
-        let now = fill(&mut l, 3_000, MS + 4 * MS / 10);
-        assert_eq!(l.lead_ns(now, false), first);
-        // 0.6 ms more: restated.
-        let now = fill(&mut l, 6_000, MS + 6 * MS / 10);
-        assert_eq!(l.lead_ns(now, false), first + 6 * MS / 10);
-        // No frames for a while: the samples age out and the last lead stands.
         assert_eq!(
-            l.lead_ns(now + Duration::from_secs(10), false),
-            first + 6 * MS / 10
+            window(&mut l, 1, MS + 4 * MS / 10),
+            first,
+            "0.4 ms longer: stays"
+        );
+        assert_eq!(
+            window(&mut l, 2, MS + 6 * MS / 10),
+            first + 6 * MS / 10,
+            "0.6 ms longer"
+        );
+        assert_eq!(
+            window(&mut l, 3, MS / 2),
+            first + 6 * MS / 10,
+            "1.1 ms shorter: stays"
+        );
+        assert_eq!(window(&mut l, 4, 0), 2 * MS, "1.6 ms shorter");
+        // No frames for a while: the last lead stands.
+        assert_eq!(l.lead_ns(t0 + HOST_WINDOW * 20, false), 2 * MS);
+    }
+
+    /// The measured host times have a heavy tail (p50 1.6 ms, p99 7 ms, max 18 ms with the
+    /// aquarium): polled at 60 Hz for a minute, the lead must not follow it around.
+    #[test]
+    fn a_noisy_tail_restates_the_lead_rarely() {
+        let mut l = LeadEstimator::default();
+        let t0 = Instant::now();
+        let mut published = vec![l.published];
+        let mut x = 12345u64;
+        for tick in 0..60 * 60u64 {
+            let now = t0 + Duration::from_micros(tick * 16_667);
+            if tick % 2 == 0 {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let r = x >> 33;
+                let h = match r % 100 {
+                    0 => 18 * MS,
+                    1..=4 => 4 * MS + (r % 3_000_000),
+                    _ => MS / 2 + (r % 2_000_000),
+                };
+                l.note(now, h);
+            }
+            let lead = l.lead_ns(now, false);
+            if *published.last().unwrap() != lead {
+                published.push(lead);
+            }
+        }
+        assert!(
+            published.len() <= 4,
+            "the lead was restated as {published:?}"
         );
     }
 
@@ -586,13 +669,8 @@ mod tests {
     fn a_stalled_host_does_not_set_a_lead_past_the_cap() {
         let mut l = LeadEstimator::default();
         let t0 = Instant::now();
-        for i in 0..20u64 {
-            l.note(t0 + Duration::from_millis(i), 500 * MS);
-        }
-        assert_eq!(
-            l.lead_ns(t0 + Duration::from_millis(20), false),
-            LEAD_MAX_NS
-        );
+        frames(&mut l, t0, Duration::ZERO, 10, |_| 500 * MS);
+        assert_eq!(l.lead_ns(t0 + HOST_WINDOW, false), LEAD_MAX_NS);
     }
 
     /// 59.9502 Hz at 24 MHz.

@@ -300,11 +300,12 @@ impl GuestWindow {
         ack_tx: &SyncSender<AckMsg>,
     ) {
         let ack = self.ack_for(id, src, ack_tx);
+        let committing = super::vsync::mach_now();
         present::set_layer_surface(&self.layer, src, ack);
         if let Some(arrived) = tag.arrived {
             self.vsync
                 .borrow_mut()
-                .note_commit(arrived, std::time::Instant::now());
+                .note_commit(arrived, committing, std::time::Instant::now());
         }
         if self.overlay.is_active() {
             present::set_layer_surface(&self.overlay.strip_layer(), src, None);

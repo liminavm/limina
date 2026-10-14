@@ -82,9 +82,11 @@ back into itself, ratchets the lead up until frames land a vsync early, and then
 refresh. The lead is built from the two parts the guest cannot influence instead:
 
 - **host processing** `h`: from the worker receiving the guest's flush (`mach_absolute_time`,
-  stamped on the frame message it already sends) to the supervisor committing that frame to its
-  layer. Both stamps are the host's; their p95 over the last ~2 s. Copy-on-present's blit lands
-  here, where it belongs.
+  stamped as `t=<mach>` on the `frame` line when the present reaches its display backend) to the
+  supervisor starting that frame's layer commit — the commit call itself belongs to `w`, which
+  the spike measured from the same point. Both stamps are the host's. Copy-on-present's blit
+  lands here, where it belongs. Measured with the aquarium (F44, 30 presented fps): the worker →
+  reader leg is p50 0.07 ms; arrival → commit p50 1.6, p95 3.4, p99 6.9, max 18 ms.
 - **composite deadline** `w`: how long before a vsync a layer commit must land to be shown at it,
   a property of WindowServer, not of the guest. Measured once per macOS version by
   `spikes/composite-deadline`, which commits surfaces at swept phases against the display link
@@ -95,11 +97,13 @@ refresh. The lead is built from the two parts the guest cannot influence instead
   runtime guard — a frame whose commit was earlier than `vsync - w` yet missed that vsync widens
   `w` by 0.5 ms — for the stray misses a constant cannot absorb.
 
-**lead = h + w + 1 ms margin.** A new value is published only when it moves by more than 0.5 ms
-(hysteresis). Before the first `h` (ten frames in the window) a default of 4 ms stands, an idle
-guest keeps the last value, and a lead past 33 ms is capped: that is a stalled host, not a
-deadline. The worker stamps `h`'s start as `t=<mach>` on the `frame` line when the present
-reaches its display backend; the window ends it after the layer commit.
+**lead = h + w + 1 ms margin**, `h` the p95 of a **10 s tumbling window**, taken once as each
+window ends. A p95 re-read continuously over a couple of seconds is the third-largest of sixty
+frames and moves with every stall; that restated the lead ~8 times a second, and every restatement
+moves the guest's vblank. A longer lead is published once it exceeds the last by 0.5 ms, a shorter
+one only once it is 1.5 ms shorter (a missed vsync costs a refresh, too long a lead only latency).
+The 4 ms default stands until a window holds 50 frames and then gives way either way; an idle
+guest keeps the last value; a lead past 33 ms is capped — that is a stalled host, not a deadline.
 
 ### Worker: the timing page
 
