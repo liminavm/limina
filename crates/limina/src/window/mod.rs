@@ -72,6 +72,7 @@ mod present;
 mod seams;
 pub(crate) mod still;
 mod trackpad;
+mod vsync;
 mod wake_policy;
 mod warp;
 mod windows;
@@ -2593,6 +2594,9 @@ pub fn run(
         }
         std::rc::Rc::new(RefCell::new(table))
     };
+    // The render timer states the windows' vsync grids (`docs/design/host-vblank.md`) on the
+    // same socket the arrangement uses.
+    let vsync_socket = resize_socket.clone();
     let apply: std::rc::Rc<dyn Fn()> = std::rc::Rc::new({
         let shared = shared.clone();
         let guest_windows = guest_windows.clone();
@@ -2699,6 +2703,7 @@ pub fn run(
                             "display: a fresh worker has the device; re-asserting the arrangement"
                         );
                         table.reset_connectors_to_boot();
+                        guest_windows.borrow().forget_vsync();
                         screen_sent.set((initial_size, 0));
                         identity_sent.set(0);
                         mode_sent.set(0);
@@ -3300,6 +3305,14 @@ pub fn run(
         // A compositor that quits stops presenting, and its framebuffers are exactly the ones
         // worth reclaiming (testcomp/supervisor-retention.sh).
         timer_windows.borrow().drain_releases(&timer_surface_map);
+        // Every tick, not on frames: an idle desktop presents nothing for seconds, and a burst
+        // has to be read when it ends.
+        if let Some(sock) = &vsync_socket {
+            let vsyncs = timer_windows.borrow().poll_vsync();
+            if !vsyncs.is_empty() {
+                send_display_commands(sock, vsyncs);
+            }
+        }
         host_sampler
             .borrow_mut()
             .tick(&window, timer_primary_slot.get() as usize, &timer_app);

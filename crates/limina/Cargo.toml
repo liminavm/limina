@@ -153,6 +153,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSText",
     "NSTextView",
     "objc2-core-graphics",
+    # The vsync source (window/vsync.rs): the window's display link.
+    "objc2-quartz-core",
     "block2",
 ] }
 objc2-quartz-core = { version = "0.3", features = [
@@ -164,6 +166,9 @@ objc2-quartz-core = { version = "0.3", features = [
     "CAAnimation",
     "CAMediaTiming",
     "CATextLayer",
+    # The vsync source (window/vsync.rs): the window's display link and its timestamps.
+    "CADisplayLink",
+    "objc2-core-foundation",
 ] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
 # The copy shown for a guest that is not held off its scanout buffers is a GPU blit

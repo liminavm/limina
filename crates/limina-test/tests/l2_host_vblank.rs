@@ -176,10 +176,13 @@ fn the_guest_vblank_falls_on_the_host_grid() {
             return;
         }
     };
+    // The supervisor's vsync source must not restate a window's screen grid over ours. The PNG sink
+    // has no window for it to measure today; this keeps it so if the harness ever gets one.
     let cfg = cfg
         .with_coexist_display(1280, 800)
         .with_net()
-        .with_supervisor_log();
+        .with_supervisor_log()
+        .with_env("LIMINA_VSYNC_SOURCE", "0");
     let mut g = Guest::boot(&cfg).expect("spawning the limina supervisor");
     g.wait_for_ssh(Duration::from_secs(240))
         .expect("guest sshd never became reachable");

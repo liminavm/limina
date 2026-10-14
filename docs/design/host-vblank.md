@@ -1,6 +1,7 @@
 # Host-driven vblank: the guest's frame clock on the Mac's grid
 
-**Status: agreed; being built.**
+**Status: built, except the lead estimator**: the supervisor states every grid with the default
+4 ms lead (`crates/limina/src/window/vsync.rs`).
 
 Enhanced tier only (the `virtio-gpu-limina` module with the limina extension). A stock guest keeps
 the in-tree driver's free-running vblank timer, which `refresh_millihertz` (the exact-rate EDID)
@@ -49,21 +50,26 @@ it both go through `Vmm::note_vtimer_offset`, which pushes it to the timing page
 ### Host: vsync source (supervisor)
 
 The supervisor is the guest's display engine — it puts every frame on glass — and knows which
-screen each guest display's window is on, so it owns the vsync source: that screen's display link
-(`NSScreen.displayLink`, macOS 14+; `CVDisplayLink` is deprecated). Its timestamps are
-`CACurrentMediaTime` seconds, i.e. `mach_absolute_time` scaled, and convert back to ticks without
-loss that matters here. From them it keeps, per guest display, an **anchor** (one vsync's time, in
-`mach_absolute_time` ticks) and the **actual period** (measured over the link's callbacks, not the
-nominal rate). VRR / ProMotion's adaptive cadence is out of scope: the grid is the screen's fixed
-nominal one. It sends them, with the lead, to the worker on the
-display-control socket, `vsync id=<display> anchor=<mach> period=<ticks·2^-32> lead=<ns>`, only when
-they change: a new screen, a rate change, the predicted grid drifting more than 50 µs from the
-observed one, or a new lead estimate (below). Between updates nothing flows — except that it
-also sends its current grid whenever it attaches to a worker (a new, relaunched or restored one),
-which otherwise would have none until something changed.
+screen each guest display's window is on, so it owns the vsync source: each guest window's display
+link (`NSWindow.displayLink`, macOS 14+, which follows the window from screen to screen;
+`CVDisplayLink` is deprecated). Its `targetTimestamp`s are `CACurrentMediaTime` seconds, i.e.
+`mach_absolute_time` scaled, and convert back to ticks without loss that matters here.
 
-When the link stops (window occluded, screen asleep) the last grid stands and the guest free-runs
-on it, which is exactly what its timer would have done anyway.
+The link runs in **bursts** (up to 60 vsyncs or 2 s), at 0, 3 and 12 s after the window lands on a
+screen and every 30 s after, not every frame: a fixed-rate screen's grid is a phase and a period,
+and a long baseline between bursts pins the period down far better than continuous watching.
+Each burst gives a least-squares period and the vsync nearest its centroid; later bursts refine the
+period over the span from the first, counting the frames between with the period known so far.
+That count is only safe while the baseline grows by at most 16× a step, which the schedule keeps;
+a count that leaves more than a quarter period unexplained starts over (another screen, a rate
+change). VRR / ProMotion's adaptive cadence is out of scope: the grid is the screen's fixed one.
+
+It sends the grid, with the lead, on the display-control socket — `vsync id=<slot> at=<mach>
+period=<ticks·2^-32> lead=<ticks> leadns=<ns>` — only when the worker needs it: a new slot or lead,
+or the worker's grid being 50 µs off the measured one now or within a minute. A fresh worker (a
+resume, a relaunch) is told again. When the link stops (window occluded, screen asleep) a burst
+ends with what it has, and the last grid stands. `LIMINA_VSYNC_SOURCE=0` keeps the source quiet,
+for runs that state a grid of their own.
 
 ### Host: lead estimator (supervisor)
 

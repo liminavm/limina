@@ -776,6 +776,30 @@ impl GuestWindows {
         }
     }
 
+    /// Advance every window's vsync measurement; the `vsync` commands the worker needs for the
+    /// grids of the screens they are on (`docs/design/host-vblank.md`).
+    pub(crate) fn poll_vsync(&self) -> Vec<limina_displayctl::DisplayCommand> {
+        let now = std::time::Instant::now();
+        let mut out = Vec::new();
+        out.extend(
+            self.primary
+                .core
+                .poll_vsync(self.primary.slot.get() as usize, now),
+        );
+        for (&slot, w) in &self.secondaries {
+            out.extend(w.core.poll_vsync(slot, now));
+        }
+        out
+    }
+
+    /// A fresh worker has the device: every window states its grid again.
+    pub(crate) fn forget_vsync(&self) {
+        self.primary.core.forget_vsync();
+        for w in self.secondaries.values() {
+            w.core.forget_vsync();
+        }
+    }
+
     /// Apply the current shared state to every guest window: run the primary's walk, open a
     /// window for any other live slot that lacks one, present each one's latest frame, and
     /// close the window of any slot whose connector went away.

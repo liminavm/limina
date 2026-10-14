@@ -70,6 +70,9 @@ pub(crate) struct GuestWindow {
     /// The private copies [`Self::show`] puts on glass instead of a guest surface the guest may
     /// still draw into.
     copies: RefCell<super::copy::CopyRing>,
+    /// The vsync grid of the screen this window is on, measured for the guest's vblank
+    /// (`docs/design/host-vblank.md`).
+    vsync: RefCell<super::vsync::VsyncSource>,
 }
 
 /// Ack frames that will never reach glass. They replaced nothing on the layer, so the worker has
@@ -192,7 +195,12 @@ impl GuestWindow {
         view.setLayerContentsRedrawPolicy(NSViewLayerContentsRedrawPolicy::Never);
         view.setAllowedTouchTypes(NSTouchTypeMask::Indirect);
         window.setBackgroundColor(Some(&NSColor::blackColor()));
+        let vsync = RefCell::new(super::vsync::VsyncSource::new(
+            &window,
+            objc2::MainThreadOnly::mtm(&*window),
+        ));
         GuestWindow {
+            vsync,
             window,
             view,
             layer,
@@ -207,6 +215,25 @@ impl GuestWindow {
             last_ca: RefCell::new(None),
             copies: RefCell::new(super::copy::CopyRing::default()),
         }
+    }
+
+    /// Advance this window's vsync measurement; the `vsync` command for `slot`, the guest display
+    /// it shows, when the worker needs one.
+    pub(crate) fn poll_vsync(
+        &self,
+        slot: usize,
+        now: std::time::Instant,
+    ) -> Option<limina_displayctl::DisplayCommand> {
+        let panel = self
+            .window
+            .screen()
+            .map(|s| super::hostdisplay::panel_key(&s));
+        self.vsync.borrow_mut().poll(slot, panel, now)
+    }
+
+    /// A fresh worker has the device: the grid has to be stated again.
+    pub(crate) fn forget_vsync(&self) {
+        self.vsync.borrow_mut().forget_sent();
     }
 
     /// Resolve the presented `id` through this window's frame cache — [`resolve_presented`]

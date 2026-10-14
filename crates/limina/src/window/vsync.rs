@@ -1,0 +1,532 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
+// Copyright © 2026 Gustavo Noronha Silva
+
+//! The supervisor's half of the host-driven vblank (`docs/design/host-vblank.md`): each guest
+//! window measures the vsync grid of the screen it is on and states it to the worker as
+//! `vsync id=<slot> …`, which puts it on the timing page the guest's driver ticks from.
+//!
+//! The window's display link (`NSWindow.displayLink`, which follows the window from screen to
+//! screen) runs only in short bursts: the grid of a fixed-rate screen is a phase and a period, and
+//! the period is pinned down far better by a long baseline between bursts than by watching every
+//! frame. The baseline grows geometrically ([`GridEstimator`]) so that counting the frames between
+//! two bursts can never round to the wrong number. Between updates nothing flows; a grid is sent
+//! again only when the one the worker has would drift off the screen's by [`DRIFT_NS`], when the
+//! window lands on another slot, or when a fresh worker has the device.
+//!
+//! The lead the guest's vblank goes ahead of the vsync by is [`DEFAULT_LEAD_NS`] for now; the
+//! design's measured lead (host processing plus the window server's composite deadline) replaces it.
+//!
+//! `LIMINA_VSYNC_SOURCE=0` keeps the source quiet, for runs that state a grid of their own (the L2
+//! test does).
+
+use std::cell::RefCell;
+use std::time::{Duration, Instant};
+
+use limina_displayctl::{DisplayCommand, VsyncGrid};
+use objc2::rc::Retained;
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2_app_kit::NSWindow;
+use objc2_foundation::{NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes};
+use objc2_quartz_core::CADisplayLink;
+
+/// How far ahead of the host vsync the guest's vblank goes, until the lead is measured.
+pub(crate) const DEFAULT_LEAD_NS: u32 = 4_000_000;
+/// How far the worker's grid may drift from the screen's before it is restated.
+const DRIFT_NS: u64 = 50_000;
+/// When bursts start, counted from the last reset: the baseline grows by at most ×4 a step until
+/// the steady cadence, which keeps every step's frame count unambiguous (see [`GridEstimator`]).
+const BURST_SCHEDULE: [Duration; 3] = [
+    Duration::ZERO,
+    Duration::from_secs(3),
+    Duration::from_secs(12),
+];
+/// The steady cadence after the schedule.
+const BURST_EVERY: Duration = Duration::from_secs(30);
+/// A burst ends when it has this many vsyncs…
+const BURST_SAMPLES: usize = 60;
+/// …or after this long, whatever it has: an occluded window or a sleeping screen stops the link,
+/// and then the last grid stands.
+const BURST_TIMEOUT: Duration = Duration::from_secs(2);
+/// Fewer vsyncs than this and a burst says nothing.
+const BURST_MIN_SAMPLES: usize = 20;
+
+/// `mach_absolute_time` ticks ↔ nanoseconds.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Timebase {
+    numer: u32,
+    denom: u32,
+}
+
+#[repr(C)]
+struct MachTimebaseInfo {
+    numer: u32,
+    denom: u32,
+}
+
+unsafe extern "C" {
+    fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
+}
+
+impl Timebase {
+    pub(crate) fn host() -> Self {
+        let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
+        // SAFETY: fills the struct it is given.
+        let ok = unsafe { mach_timebase_info(&mut info) } == 0 && info.numer > 0 && info.denom > 0;
+        if ok {
+            Self {
+                numer: info.numer,
+                denom: info.denom,
+            }
+        } else {
+            // Apple silicon's: 24 MHz.
+            Self {
+                numer: 125,
+                denom: 3,
+            }
+        }
+    }
+
+    pub(crate) fn ticks_from_ns(self, ns: u64) -> u64 {
+        (ns as u128 * self.denom as u128 / self.numer as u128) as u64
+    }
+
+    /// A `CACurrentMediaTime`-style time (seconds of `mach_absolute_time`) in ticks.
+    pub(crate) fn ticks_from_secs(self, secs: f64) -> u64 {
+        (secs * 1e9 * self.denom as f64 / self.numer as f64).round() as u64
+    }
+}
+
+/// One burst's reading: a vsync in it, de-jittered, and its period.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Reading {
+    at: u64,
+    period_fp: u64,
+}
+
+/// A burst's vsyncs (ticks, in order) as one de-jittered vsync and a period. `None` for a burst
+/// too thin to trust, or whose period is off the link's nominal one by more than 1%.
+fn read_burst(targets: &[u64], nominal: Option<u64>) -> Option<Reading> {
+    if targets.len() < BURST_MIN_SAMPLES {
+        return None;
+    }
+    let mut gaps: Vec<u64> = targets
+        .windows(2)
+        .filter_map(|w| w[1].checked_sub(w[0]))
+        .filter(|&g| g > 0)
+        .collect();
+    if gaps.len() + 1 < BURST_MIN_SAMPLES {
+        return None;
+    }
+    gaps.sort_unstable();
+    let median = gaps[gaps.len() / 2] as f64;
+    let first = targets[0];
+    // Each callback's frame number from the median gap (coalesced callbacks show as 2× gaps and
+    // simply skip a number), then the period as the least-squares slope of time over frame: every
+    // sample's jitter counts, not just the two ends'.
+    let points: Vec<(f64, f64)> = targets
+        .iter()
+        .map(|&t| {
+            let dt = (t - first) as f64;
+            ((dt / median).round(), dt)
+        })
+        .collect();
+    let n = points.len() as f64;
+    let (mk, mt) = points
+        .iter()
+        .fold((0.0, 0.0), |(a, b), &(k, t)| (a + k / n, b + t / n));
+    let (sxy, sxx) = points.iter().fold((0.0, 0.0), |(a, b), &(k, t)| {
+        (a + (k - mk) * (t - mt), b + (k - mk) * (k - mk))
+    });
+    if sxx <= 0.0 {
+        return None;
+    }
+    let period_fp = (sxy / sxx * 4_294_967_296.0).round() as u64;
+    if let Some(n) = nominal {
+        let p = period_fp >> 32;
+        if p.abs_diff(n) > n / 100 {
+            return None;
+        }
+    }
+    // A vsync at the burst's centroid, where the fit is exact whatever its slope's error (taken at
+    // either end it would carry that error times half the burst): the frame nearest the mean.
+    let at = first + (mt + (mk.round() - mk) * sxy / sxx).round() as u64;
+    Some(Reading { at, period_fp })
+}
+
+/// A screen's vsync grid, refined across bursts.
+///
+/// The first burst gives the period to a frame's jitter over its own span (~1 s). Later bursts
+/// refine it over the span from the epoch's first reading: the frames between the two are counted
+/// with the period known so far, which is only safe while that period's error, times the frames
+/// counted, stays well under half a period. The baseline therefore grows by at most
+/// [`MAX_GROWTH`]× per refinement, and a count that leaves more than a quarter period unexplained
+/// starts a new epoch instead (another screen, a rate change).
+#[derive(Debug, Default)]
+pub(crate) struct GridEstimator {
+    epoch: Option<Reading>,
+    period_fp: u64,
+    /// The span the current period was refined over, in ticks.
+    baseline: u64,
+    latest: Option<u64>,
+}
+
+const MAX_GROWTH: u64 = 16;
+
+impl GridEstimator {
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Fold in one burst's vsyncs. Returns the grid as now known.
+    fn burst(&mut self, targets: &[u64], nominal: Option<u64>) -> Option<(u64, u64)> {
+        let reading = read_burst(targets, nominal)?;
+        let span = targets.last().unwrap() - targets[0];
+        let Some(epoch) = self.epoch else {
+            self.start(reading, span);
+            return self.grid();
+        };
+        let p = self.period_fp as u128;
+        let base = reading.at.saturating_sub(epoch.at);
+        let frames = ((base as u128) << 32) as f64 / p as f64;
+        let n = frames.round() as u128;
+        let residual = (((base as u128) << 32) as i128 - (n * p) as i128).unsigned_abs();
+        let rate_moved = (reading.period_fp as u128).abs_diff(p) > p / 1000;
+        if n == 0 || rate_moved || residual > p / 4 || base > self.baseline * MAX_GROWTH {
+            if base > self.baseline * MAX_GROWTH && !rate_moved && residual <= p / 4 {
+                // Too far to count safely, but still on the grid: keep the period, take the phase.
+                self.latest = Some(reading.at);
+                return self.grid();
+            }
+            self.start(reading, span);
+            return self.grid();
+        }
+        self.period_fp = (((base as u128) << 32) / n) as u64;
+        self.baseline = base;
+        self.latest = Some(reading.at);
+        self.grid()
+    }
+
+    fn start(&mut self, reading: Reading, span: u64) {
+        self.epoch = Some(reading);
+        self.period_fp = reading.period_fp;
+        self.baseline = span.max(1);
+        self.latest = Some(reading.at);
+    }
+
+    /// (a vsync, the period as 32.32 ticks), once a burst has been read.
+    pub(crate) fn grid(&self) -> Option<(u64, u64)> {
+        Some((self.latest?, self.period_fp))
+    }
+}
+
+/// What the worker was last told for this window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Sent {
+    slot: usize,
+    grid: VsyncGrid,
+}
+
+/// Whether the worker needs `grid` for `slot`, given what it was last told: yes for a new slot or
+/// lead, or when its grid is `tol` ticks off this one now or would be within `horizon` ticks.
+fn needs_send(sent: Option<Sent>, slot: usize, grid: VsyncGrid, tol: u64, horizon: u64) -> bool {
+    let Some(s) = sent else {
+        return true;
+    };
+    if s.slot != slot || s.grid.lead != grid.lead {
+        return true;
+    }
+    let p = s.grid.period_fp as u128;
+    let d = grid.at.abs_diff(s.grid.at) as u128;
+    let k = (((d << 32) as f64) / p as f64).round() as u128;
+    let phase = ((d << 32) as i128 - (k * p) as i128).unsigned_abs() >> 32;
+    // A period difference becomes phase drift: the relative difference times the horizon.
+    let drift = grid.period_fp.abs_diff(s.grid.period_fp) as u128 * horizon as u128 / p.max(1);
+    phase as u64 > tol || drift as u64 > tol
+}
+
+pub(crate) struct VsyncIvars {
+    targets: RefCell<Vec<f64>>,
+    duration: RefCell<f64>,
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements; no Drop; `step:` matches CADisplayLink's
+    // target/selector convention (one argument, the link).
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[name = "LiminaVsyncTarget"]
+    #[ivars = VsyncIvars]
+    pub(crate) struct VsyncTarget;
+
+    unsafe impl NSObjectProtocol for VsyncTarget {}
+
+    impl VsyncTarget {
+        #[unsafe(method(step:))]
+        fn step(&self, link: &CADisplayLink) {
+            self.ivars().targets.borrow_mut().push(link.targetTimestamp());
+            *self.ivars().duration.borrow_mut() = link.duration();
+        }
+    }
+);
+
+/// One guest window's vsync source.
+pub(crate) struct VsyncSource {
+    link: Option<Retained<CADisplayLink>>,
+    target: Retained<VsyncTarget>,
+    timebase: Timebase,
+    estimator: GridEstimator,
+    sent: Option<Sent>,
+    panel: Option<u64>,
+    reset_at: Instant,
+    bursts: usize,
+    burst_started: Option<Instant>,
+}
+
+impl VsyncSource {
+    pub(crate) fn new(window: &NSWindow, mtm: MainThreadMarker) -> Self {
+        let target = VsyncTarget::alloc(mtm).set_ivars(VsyncIvars {
+            targets: RefCell::new(Vec::new()),
+            duration: RefCell::new(0.0),
+        });
+        // SAFETY: NSObject's init.
+        let target: Retained<VsyncTarget> = unsafe { msg_send![super(target), init] };
+        let enabled = std::env::var("LIMINA_VSYNC_SOURCE").map_or(true, |v| v != "0");
+        let link = enabled.then(|| {
+            // SAFETY: `target` implements `step:` taking the link.
+            let link = unsafe { window.displayLinkWithTarget_selector(&target, sel!(step:)) };
+            link.setPaused(true);
+            // Common modes, like the render timer: the default mode alone stalls through live
+            // resizes and menu tracking, and a burst that never ends is a grid never sent.
+            // SAFETY: the main run loop, on the main thread.
+            unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
+            link
+        });
+        Self {
+            link,
+            target,
+            timebase: Timebase::host(),
+            estimator: GridEstimator::default(),
+            sent: None,
+            panel: None,
+            reset_at: Instant::now(),
+            bursts: 0,
+            burst_started: None,
+        }
+    }
+
+    /// A fresh worker has the device and knows no grid: say it again.
+    pub(crate) fn forget_sent(&mut self) {
+        self.sent = None;
+    }
+
+    /// Advance this window's bursts; the command to send, if the worker needs one. `slot` is the
+    /// guest display the window shows, `panel` the screen it is on.
+    pub(crate) fn poll(
+        &mut self,
+        slot: usize,
+        panel: Option<u64>,
+        now: Instant,
+    ) -> Option<DisplayCommand> {
+        let link = self.link.as_ref()?;
+        if panel != self.panel {
+            self.panel = panel;
+            self.estimator.reset();
+            self.reset_at = now;
+            self.bursts = 0;
+        }
+        match self.burst_started {
+            None if now >= self.next_burst() && panel.is_some() => {
+                self.target.ivars().targets.borrow_mut().clear();
+                link.setPaused(false);
+                self.burst_started = Some(now);
+            }
+            Some(started) => {
+                let have = self.target.ivars().targets.borrow().len();
+                if have >= BURST_SAMPLES || now.duration_since(started) >= BURST_TIMEOUT {
+                    link.setPaused(true);
+                    self.burst_started = None;
+                    self.bursts += 1;
+                    let tb = self.timebase;
+                    let targets: Vec<u64> = self
+                        .target
+                        .ivars()
+                        .targets
+                        .borrow()
+                        .iter()
+                        .map(|&s| tb.ticks_from_secs(s))
+                        .collect();
+                    let duration = *self.target.ivars().duration.borrow();
+                    let nominal = (duration > 0.0).then(|| tb.ticks_from_secs(duration));
+                    if self.estimator.burst(&targets, nominal).is_none() {
+                        log::debug!("vsync: burst of {} vsyncs read nothing", targets.len());
+                    }
+                }
+            }
+            None => {}
+        }
+        let (at, period_fp) = self.estimator.grid()?;
+        let grid = VsyncGrid {
+            at,
+            period_fp,
+            lead: self.timebase.ticks_from_ns(DEFAULT_LEAD_NS as u64),
+            lead_ns: DEFAULT_LEAD_NS,
+        };
+        let tol = self.timebase.ticks_from_ns(DRIFT_NS);
+        let minute = self.timebase.ticks_from_ns(60_000_000_000);
+        if !needs_send(self.sent, slot, grid, tol, minute) {
+            return None;
+        }
+        log::info!(
+            "vsync: guest display {slot} on the host grid, {:.4} Hz, lead {} µs",
+            1e9 / (self.timebase_ns(period_fp >> 32) as f64),
+            DEFAULT_LEAD_NS / 1000
+        );
+        self.sent = Some(Sent { slot, grid });
+        Some(DisplayCommand::Vsync {
+            display_id: slot as u32,
+            grid: Some(grid),
+        })
+    }
+
+    fn timebase_ns(&self, ticks: u64) -> u64 {
+        (ticks as u128 * self.timebase.numer as u128 / self.timebase.denom as u128) as u64
+    }
+
+    fn next_burst(&self) -> Instant {
+        match BURST_SCHEDULE.get(self.bursts) {
+            Some(&after) => self.reset_at + after,
+            None => {
+                self.reset_at
+                    + BURST_SCHEDULE[BURST_SCHEDULE.len() - 1]
+                    + BURST_EVERY * (self.bursts + 1 - BURST_SCHEDULE.len()) as u32
+            }
+        }
+    }
+}
+
+impl Drop for VsyncSource {
+    fn drop(&mut self) {
+        // The link holds its target strongly until it is invalidated.
+        if let Some(link) = &self.link {
+            link.invalidate();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 59.9502 Hz at 24 MHz.
+    const TRUE_PERIOD: f64 = 24_000_000.0 / 59.9502;
+    const MINUTE: u64 = 60 * 24_000_000;
+
+    fn fp(p: f64) -> u64 {
+        (p * 4_294_967_296.0).round() as u64
+    }
+
+    /// A burst of `n` link callbacks from frame `k0`, with deterministic jitter up to ±720 ticks
+    /// (30 µs) and every 7th callback coalesced into the next.
+    fn burst(k0: u64, n: u64) -> Vec<u64> {
+        (k0..k0 + n)
+            .filter(|k| k % 7 != 3)
+            .map(|k| {
+                let jitter = ((k * 7919) % 1441) as i64 - 720;
+                (1_000_000_000.0 + k as f64 * TRUE_PERIOD).round() as u64 + (jitter + 720) as u64
+                    - 720
+            })
+            .collect()
+    }
+
+    fn ppm(period_fp: u64) -> f64 {
+        (period_fp as f64 / 4_294_967_296.0 - TRUE_PERIOD) / TRUE_PERIOD * 1e6
+    }
+
+    #[test]
+    fn the_schedule_refines_the_period_without_miscounting() {
+        let mut e = GridEstimator::default();
+        let nominal = Some(400_000);
+        // Bursts at 0 s, 3 s, 12 s, then every 30 s, ~1 s each.
+        let starts = [0u64, 180, 720, 2520, 4320, 6120, 7920];
+        let mut last_ppm = f64::MAX;
+        for (i, &k0) in starts.iter().enumerate() {
+            let (_, p) = e.burst(&burst(k0, 60), nominal).expect("a grid");
+            last_ppm = ppm(p).abs();
+            eprintln!(
+                "burst {i}: {:+.4} ppm, baseline {} ticks",
+                ppm(p),
+                e.baseline
+            );
+            // A frame miscounted at these baselines is over 100 ppm.
+            assert!(last_ppm < 50.0, "burst {i} miscounted: {last_ppm} ppm");
+        }
+        // 0.3 ppm drifts under 10 µs a minute, against a 50 µs tolerance.
+        assert!(last_ppm < 0.3, "the ladder ends at {last_ppm} ppm");
+        let (at, p) = e.grid().unwrap();
+        // The phase is a vsync of the true grid.
+        let k = ((at as f64 - 1_000_000_000.0) / TRUE_PERIOD).round();
+        let off = at as f64 - (1_000_000_000.0 + k * TRUE_PERIOD);
+        assert!(off.abs() < 240.0, "the phase is {off} ticks off the grid");
+        assert_eq!(p, e.period_fp);
+    }
+
+    #[test]
+    fn a_jump_past_safe_counting_keeps_the_period_and_takes_the_phase() {
+        let mut e = GridEstimator::default();
+        e.burst(&burst(0, 60), Some(400_000)).unwrap();
+        let before = e.period_fp;
+        // 300 s later: 300× the first baseline, past MAX_GROWTH.
+        let (at, p) = e.burst(&burst(18_000, 60), Some(400_000)).unwrap();
+        assert_eq!(p, before, "the period was refined over an unsafe count");
+        assert!(at > 18_000 * 400_000);
+    }
+
+    #[test]
+    fn another_screen_starts_a_new_epoch() {
+        let mut e = GridEstimator::default();
+        e.burst(&burst(0, 60), Some(400_000)).unwrap();
+        // A 120 Hz screen: half the period.
+        let fast: Vec<u64> = (0..120u64).map(|k| 3_000_000_000 + k * 200_000).collect();
+        let (_, p) = e.burst(&fast, Some(200_000)).unwrap();
+        assert_eq!(p >> 32, 200_000);
+    }
+
+    #[test]
+    fn a_thin_or_implausible_burst_says_nothing() {
+        assert!(read_burst(&burst(0, 10), None).is_none());
+        assert!(
+            read_burst(&burst(0, 60), Some(300_000)).is_none(),
+            "25% off nominal"
+        );
+    }
+
+    #[test]
+    fn the_worker_is_told_only_what_it_does_not_know() {
+        let grid = |at: u64, p: f64| VsyncGrid {
+            at,
+            period_fp: fp(p),
+            lead: 96_000,
+            lead_ns: 4_000_000,
+        };
+        let g = grid(1_000_000, 400_333.6);
+        assert!(needs_send(None, 0, g, 1200, MINUTE));
+        let sent = Some(Sent { slot: 0, grid: g });
+        // The same grid, read a thousand frames later.
+        let later = 1_000_000 + ((fp(400_333.6) as u128 * 1000) >> 32) as u64;
+        assert!(!needs_send(sent, 0, grid(later, 400_333.6), 1200, MINUTE));
+        assert!(needs_send(sent, 1, g, 1200, MINUTE), "another slot");
+        assert!(
+            needs_send(sent, 0, grid(1_000_000 + 5_000, 400_333.6), 1200, MINUTE),
+            "phase moved"
+        );
+        // 1 ppm of period is 0.4 ticks a frame: 1440 ticks over a minute.
+        assert!(
+            needs_send(sent, 0, grid(1_000_000, 400_334.0), 1200, MINUTE),
+            "period drifts"
+        );
+        assert!(
+            !needs_send(sent, 0, grid(1_000_000, 400_333.601), 1200, MINUTE),
+            "a rounding's difference"
+        );
+    }
+}
