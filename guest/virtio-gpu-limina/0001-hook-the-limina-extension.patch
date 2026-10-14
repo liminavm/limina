@@ -1,8 +1,23 @@
 diff --git a/drivers/gpu/drm/virtio/virtgpu_display.c b/drivers/gpu/drm/virtio/virtgpu_display.c
-index 6a962c1..f4fb220 100644
+index 030098a..ca7898d 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_display.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_display.c
-@@ -163,6 +163,7 @@ static const struct drm_crtc_helper_funcs virtio_gpu_crtc_helper_funcs = {
+@@ -149,7 +149,9 @@ static void virtio_gpu_crtc_atomic_flush(struct drm_crtc *crtc,
+ 	crtc_state->event = NULL;
+ 
+ 	if (event) {
+-		if (drm_crtc_vblank_get(crtc) == 0)
++		if (virtio_gpu_limina_flip_done(crtc))
++			drm_crtc_send_vblank_event(crtc, event);
++		else if (drm_crtc_vblank_get(crtc) == 0)
+ 			drm_crtc_arm_vblank_event(crtc, event);
+ 		else
+ 			drm_crtc_send_vblank_event(crtc, event);
+@@ -161,9 +163,11 @@ static void virtio_gpu_crtc_atomic_flush(struct drm_crtc *crtc,
+ static const struct drm_crtc_helper_funcs virtio_gpu_crtc_helper_funcs = {
+ 	.mode_set_nofb = virtio_gpu_crtc_mode_set_nofb,
+ 	.atomic_check  = virtio_gpu_crtc_atomic_check,
++	.atomic_begin  = virtio_gpu_limina_crtc_atomic_begin,
  	.atomic_flush  = virtio_gpu_crtc_atomic_flush,
  	.atomic_enable = virtio_gpu_crtc_atomic_enable,
  	.atomic_disable = virtio_gpu_crtc_atomic_disable,
@@ -11,10 +26,10 @@ index 6a962c1..f4fb220 100644
  
  static void virtio_gpu_enc_mode_set(struct drm_encoder *encoder,
 diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.c b/drivers/gpu/drm/virtio/virtgpu_drv.c
-index a5ce96f..f872a03 100644
+index 9af740b..6b543a6 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_drv.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_drv.c
-@@ -161,6 +161,7 @@ static unsigned int features[] = {
+@@ -164,6 +164,7 @@ static unsigned int features[] = {
  #endif
  	VIRTIO_GPU_F_EDID,
  	VIRTIO_GPU_F_RESOURCE_UUID,
@@ -22,7 +37,7 @@ index a5ce96f..f872a03 100644
  	VIRTIO_GPU_F_RESOURCE_BLOB,
  	VIRTIO_GPU_F_CONTEXT_INIT,
  };
-@@ -220,7 +221,19 @@ MODULE_AUTHOR("Dave Airlie <airlied@redhat.com>");
+@@ -223,7 +224,19 @@ MODULE_AUTHOR("Dave Airlie <airlied@redhat.com>");
  MODULE_AUTHOR("Gerd Hoffmann <kraxel@redhat.com>");
  MODULE_AUTHOR("Alon Levy");
  
@@ -44,7 +59,7 @@ index a5ce96f..f872a03 100644
  static const struct drm_driver driver = {
  	/*
 diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.h b/drivers/gpu/drm/virtio/virtgpu_drv.h
-index f17660a..3a9d8af 100644
+index 29b6795..bf6d51e 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_drv.h
 +++ b/drivers/gpu/drm/virtio/virtgpu_drv.h
 @@ -42,6 +42,7 @@
@@ -55,7 +70,7 @@ index f17660a..3a9d8af 100644
  
  #define DRIVER_NAME "virtio_gpu"
  #define DRIVER_DESC "virtio GPU"
-@@ -260,6 +261,12 @@ struct virtio_gpu_device {
+@@ -264,6 +265,12 @@ struct virtio_gpu_device {
  	struct virtio_shm_region host_visible_region;
  	struct drm_mm host_visible_mm;
  
@@ -68,7 +83,7 @@ index f17660a..3a9d8af 100644
  	struct work_struct config_changed_work;
  
  	struct work_struct obj_free_work;
-@@ -287,13 +294,52 @@ struct virtio_gpu_fpriv {
+@@ -291,13 +298,54 @@ struct virtio_gpu_fpriv {
  	struct mutex context_lock;
  	char debug_name[DEBUG_NAME_MAX_LEN];
  	bool explicit_debug_name;
@@ -118,11 +133,13 @@ index f17660a..3a9d8af 100644
 +int virtio_gpu_limina_surface_import_ioctl(struct drm_device *dev, void *data,
 +					   struct drm_file *file);
 +bool virtio_gpu_limina_vblank_timeout(struct drm_crtc *crtc);
++void virtio_gpu_limina_crtc_atomic_begin(struct drm_crtc *crtc, struct drm_atomic_state *state);
++bool virtio_gpu_limina_flip_done(struct drm_crtc *crtc);
 +
  /* virtgpu_kms.c */
  int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev);
  void virtio_gpu_deinit(struct drm_device *dev);
-@@ -379,6 +425,11 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
+@@ -384,6 +432,11 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
  void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
  				   uint32_t context_init, uint32_t nlen,
  				   const char *name);
@@ -134,7 +151,7 @@ index f17660a..3a9d8af 100644
  void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
  				    uint32_t id);
  void virtio_gpu_cmd_context_attach_resource(struct virtio_gpu_device *vgdev,
-@@ -498,6 +549,9 @@ void virtio_gpu_debugfs_init(struct drm_minor *minor);
+@@ -503,6 +556,9 @@ void virtio_gpu_debugfs_init(struct drm_minor *minor);
  
  /* virtgpu_vram.c */
  bool virtio_gpu_is_vram(struct virtio_gpu_object *bo);
@@ -192,10 +209,10 @@ index c33c057..087aa62 100644
 +			  DRM_RENDER_ALLOW),
  };
 diff --git a/drivers/gpu/drm/virtio/virtgpu_kms.c b/drivers/gpu/drm/virtio/virtgpu_kms.c
-index f359469..24e7edc 100644
+index b79fd83..00c2c61 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_kms.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_kms.c
-@@ -198,6 +198,8 @@ int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev)
+@@ -201,6 +201,8 @@ int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev)
  	if (virtio_has_feature(vgdev->vdev, VIRTIO_GPU_F_CONTEXT_INIT))
  		vgdev->has_context_init = true;
  
@@ -204,7 +221,7 @@ index f359469..24e7edc 100644
  	DRM_INFO("features: %cvirgl %cedid %cresource_blob %chost_visible",
  		 vgdev->has_virgl_3d    ? '+' : '-',
  		 vgdev->has_edid        ? '+' : '-',
-@@ -346,6 +348,7 @@ void virtio_gpu_driver_postclose(struct drm_device *dev, struct drm_file *file)
+@@ -349,6 +351,7 @@ void virtio_gpu_driver_postclose(struct drm_device *dev, struct drm_file *file)
  		virtio_gpu_notify(vgdev);
  	}
  
@@ -213,10 +230,10 @@ index f359469..24e7edc 100644
  	mutex_destroy(&vfpriv->context_lock);
  	kfree(vfpriv);
 diff --git a/drivers/gpu/drm/virtio/virtgpu_plane.c b/drivers/gpu/drm/virtio/virtgpu_plane.c
-index a7863f8..c93cd8a 100644
+index 6523524..1c73d78 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_plane.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_plane.c
-@@ -363,11 +363,17 @@ static int virtio_gpu_plane_prepare_fb(struct drm_plane *plane,
+@@ -366,11 +366,17 @@ static int virtio_gpu_plane_prepare_fb(struct drm_plane *plane,
  
  	drm_gem_plane_helper_prepare_fb(plane, new_state);
  
@@ -237,10 +254,10 @@ index a7863f8..c93cd8a 100644
  						     vgdev->fence_drv.context,
  						     0);
 diff --git a/drivers/gpu/drm/virtio/virtgpu_vq.c b/drivers/gpu/drm/virtio/virtgpu_vq.c
-index 0c194b4..043ad21 100644
+index 10f721d..369e93a 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_vq.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_vq.c
-@@ -1098,6 +1098,73 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
+@@ -1109,6 +1109,73 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
  	virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
  }
  
@@ -315,7 +332,7 @@ index 0c194b4..043ad21 100644
  				    uint32_t id)
  {
 diff --git a/drivers/gpu/drm/virtio/virtgpu_vram.c b/drivers/gpu/drm/virtio/virtgpu_vram.c
-index 5ad3b7c..a58c033 100644
+index 084e802..4a92a95 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_vram.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_vram.c
 @@ -185,6 +185,46 @@ err_remove_node:

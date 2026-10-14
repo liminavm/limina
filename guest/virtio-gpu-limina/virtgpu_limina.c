@@ -250,6 +250,12 @@ struct limina_vblank_stats {
 	u64 ns_per_tick;
 	/* The last few expiries: when each fired and where it was aimed, in counter ticks. */
 	u64 fired[8], aimed_at[8];
+	/* The vblank count when the CRTC's commit in progress began, and how its flips completed:
+	 * at the host's release, a tick having passed while the commit waited for it, or at a tick.
+	 */
+	u64 begin_count;
+	u64 flips_at_release;
+	u64 flips_at_tick;
 };
 
 struct virtio_gpu_limina_timing {
@@ -400,6 +406,45 @@ bool virtio_gpu_limina_vblank_timeout(struct drm_crtc *crtc)
 	return drm_crtc_handle_vblank(crtc);
 }
 
+/* A commit begins: remember which vblank it began after (`virtio_gpu_limina_flip_done`). */
+void virtio_gpu_limina_crtc_atomic_begin(struct drm_crtc *crtc, struct drm_atomic_state *state)
+{
+	struct virtio_gpu_device *vgdev = crtc->dev->dev_private;
+	unsigned int i = drm_crtc_index(crtc);
+
+	if (vgdev->limina_timing && i < LIMINA_TIMING_ENTRIES)
+		vgdev->limina_timing->crtc[i].begin_count = drm_crtc_vblank_count(crtc);
+}
+
+/* Whether a flip is done now, at the end of its commit, rather than at the next vblank.
+ *
+ * A limina host holds a fenced primary-plane flush until it has taken the frame, and the plane
+ * update waits for that before the CRTC flush that sends the event. The vblank ticks are deadlines
+ * (`docs/design/host-vblank.md`): a frame committed before one is aimed at it, and the host's
+ * release necessarily comes after it, while the host still has the lead to put the frame up. So a
+ * tick that passed while the commit waited is the one this flip was for, and the event goes now,
+ * stamped with it by the vblank core, as hardware completes a flip at the vblank it latched at.
+ * Arming it instead would complete it a tick late, every frame: half rate.
+ *
+ * No tick passed (the release came first): armed as usual, completed at the tick it was aimed at.
+ */
+bool virtio_gpu_limina_flip_done(struct drm_crtc *crtc)
+{
+	struct virtio_gpu_device *vgdev = crtc->dev->dev_private;
+	unsigned int i = drm_crtc_index(crtc);
+	struct limina_vblank_stats *st;
+
+	if (!vgdev->limina_timing || i >= LIMINA_TIMING_ENTRIES)
+		return false;
+	st = &vgdev->limina_timing->crtc[i];
+	if (drm_crtc_vblank_count(crtc) != st->begin_count) {
+		WRITE_ONCE(st->flips_at_release, st->flips_at_release + 1);
+		return true;
+	}
+	WRITE_ONCE(st->flips_at_tick, st->flips_at_tick + 1);
+	return false;
+}
+
 /* debugfs dri/N/limina_timing: what the page says and what each CRTC's timer made of it, with a
  * (counter, ktime) pair to map the counter values onto vblank timestamps.
  */
@@ -445,6 +490,9 @@ static int limina_timing_show(struct seq_file *m, void *unused)
 					   i, ktime_to_ns(hrtimer_get_expires(&vbl->vblank_timer.timer)),
 					   ktime_to_ns(vbl->vblank_timer.interval), vbl->framedur_ns,
 					   count, ktime_to_ns(vt));
+			seq_printf(m, "flips %u at_release=%llu at_tick=%llu\n", i,
+				   READ_ONCE(t->crtc[i].flips_at_release),
+				   READ_ONCE(t->crtc[i].flips_at_tick));
 			for (j = 0; j < 8; j++)
 				seq_printf(m, "fire %u %u fired=%llu aimed_at=%llu\n", i, j,
 					   t->crtc[i].fired[j], t->crtc[i].aimed_at[j]);
