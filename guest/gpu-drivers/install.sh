@@ -92,6 +92,34 @@ rebuild_initramfs() {
   fi
 }
 
+# Whether the initramfs of `kver` carries a virtio-gpu module; unknown (0) where it cannot be read.
+initramfs_has_module() {
+  local kver="$1" list
+  if command -v lsinitrd >/dev/null; then list="$(lsinitrd --kver "$kver" 2>/dev/null)"
+  elif command -v lsinitramfs >/dev/null; then list="$(lsinitramfs "/boot/initrd.img-$kver" 2>/dev/null)"
+  else return 0
+  fi
+  grep -q '/virtio[-_]gpu\.ko' <<<"$list"
+}
+
+# initramfs-tools collects GPU drivers by their path under kernel/drivers/gpu, and DKMS moves the
+# in-tree virtio-gpu out of there while its own copy lives under updates/: without this hook the
+# initramfs carries no virtio-gpu at all, and nothing draws early boot, a LUKS prompt included.
+# Asking for it by name finds whichever copy modprobe would load.
+INITRAMFS_HOOK=/etc/initramfs-tools/hooks/limina-virtio-gpu
+initramfs_hook() {
+  [ -d /etc/initramfs-tools/hooks ] || return 0
+  cat > "$INITRAMFS_HOOK" <<'HOOK'
+#!/bin/sh
+# Installed by limina's GPU drivers: carry the virtio-gpu module DKMS built (see their install.sh).
+case "$1" in prereqs) exit 0 ;; esac
+. /usr/share/initramfs-tools/hook-functions
+manual_add_modules virtio_gpu
+HOOK
+  chmod 755 "$INITRAMFS_HOOK"
+  record "file $INITRAMFS_HOOK"
+}
+
 # Where the system's libgbm looks for backends: the directory beside the libgbm it loads.
 gbm_backend_dir() {
   local lib
@@ -125,6 +153,7 @@ uninstall() {
       tree) rm -rf "$what" ;;
       dkms) dkms remove "$what" --all || true; rm -rf "/usr/src/${what/\//-}" ;;
       envfile) [ -f "$(original "$what")" ] && mv -f "$(original "$what")" "$what" ;;
+      file) rm -f "$what" ;;
     esac
   done < "$STATE/manifest"
   rmdir /opt/limina 2>/dev/null || true
@@ -210,9 +239,12 @@ else
   record "dkms $DKMS_NAME/$dkms_version"
   dkms add "$DKMS_NAME/$dkms_version"
   kver="$(uname -r)"
+  initramfs_hook
   if dkms install "$DKMS_NAME/$dkms_version" -k "$kver"; then
     # Early boot binds virtio-gpu from the initramfs, which still holds the in-tree driver.
     rebuild_initramfs "$kver"
+    initramfs_has_module "$kver" ||
+      say "WARNING: the initramfs of $kver carries no virtio-gpu: early boot, a disk unlock prompt included, will not be shown"
     say "module installed for $kver"
   else
     say "the module did not build for $kver: the in-tree driver stays and the transport stays off"
