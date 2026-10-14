@@ -1079,8 +1079,8 @@ impl GuestConfig {
     /// plus the usual `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
     /// GOP firmware or the enhanced disk is missing; it does not need any test kernel.
     ///
-    /// With `LIMINA_TEST_TRANSPORT=metal` the host offers the Metal transport, which the enhanced
-    /// images' vendor GPU drivers take: the desktop and its clients run on it instead of venus.
+    /// The host offers the Metal transport, which the enhanced images' vendor GPU drivers take:
+    /// the desktop and its clients run on it. `LIMINA_TEST_TRANSPORT=venus` runs them on venus.
     /// The synoik and KDE configs inherit it. See [`metal::enhanced_on_transport`].
     pub fn seated_efi_fedora_from_env() -> Result<GuestConfig> {
         let disk = match std::env::var("LIMINA_TEST_DISK_ENH") {

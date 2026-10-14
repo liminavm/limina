@@ -37,7 +37,7 @@
 //! that way in minutes. That test flips two outputs of different sizes (`stamp2-vk`) and bounds
 //! the distinct copy surfaces the trace names.
 //!
-//! **On the Metal transport** (`LIMINA_TEST_TRANSPORT=metal`) the guest runs our virtio-gpu
+//! **On the Metal transport** (the default; `LIMINA_TEST_TRANSPORT=venus` runs venus) the guest runs our virtio-gpu
 //! module, which fences every primary-plane flush once the host speaks the extension. The vehicle
 //! is then held off its buffers by that fence and needs no copy: the first frame, flushed before
 //! any fence was seen, is copied, and none after it. The oracle there is the worker's last word
@@ -73,7 +73,8 @@ const FRAMES: u32 = 900;
 const DELAY_MS: &str = "50";
 
 /// What the worker says of a scanout whose flushes hold the guest off its buffers.
-const FENCED: &str = "flushes are fenced; the guest is held off buffers on glass";
+const FENCED: &str =
+    "flushes are fenced; the guest is held until the host is done with each buffer";
 
 /// Traced copies needed before the verdict means anything.
 const MIN_TRACED: usize = 50;

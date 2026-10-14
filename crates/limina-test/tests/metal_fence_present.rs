@@ -3,12 +3,12 @@
 
 //! L2 guard: a desktop on the Metal transport is held off the buffers it has on glass.
 //!
-//! A compositor on the vendor drivers scans out transport surfaces, which the renderer can
-//! neither fence nor copy. Unless the guest fences those flushes and the host holds the fence
-//! until the frame has left glass, the compositor draws its next frame into a buffer the display
-//! is still showing, and the supervisor falls back to copying every frame late. The worker says
-//! which it is, per scanout, as it changes: `flushes are fenced; the guest is held off buffers on
-//! glass` against `flushes carry no fence`.
+//! A compositor on the vendor drivers scans out transport surfaces, rendered out of this process.
+//! Unless the guest fences those flushes and the host holds the fence until it is done with the
+//! buffer -- the worker's copy of it taken, or with copies off the frame off glass -- the
+//! compositor draws its next frame into a buffer still being read. The worker says which it is,
+//! per scanout, as it changes: `flushes are fenced; the guest is held until the host is done with
+//! each buffer` against `flushes carry no fence`.
 //!
 //! `LIMINA_FENCE_PRESENT=1` is forced, as in `venus_fence_present`: the harness display is the
 //! ack-less capture sink, where the default leaves the chain off.
@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
-const HELD: &str = "flushes are fenced; the guest is held off buffers on glass";
+const HELD: &str = "flushes are fenced; the guest is held until the host is done with each buffer";
 
 #[test]
 fn metal_desktop_is_held_off_buffers_on_glass() {

@@ -25,11 +25,12 @@ use anyhow::{Context, Result};
 
 use crate::Guest;
 
-/// Whether the enhanced-tier tests run on the Metal transport (`LIMINA_TEST_TRANSPORT=metal`)
-/// rather than venus. The enhanced images carry the vendor drivers either way; this decides
-/// whether the host offers them the transport. A test whose oracle names a transport asks this.
+/// Whether the enhanced-tier tests run on the Metal transport, the default, rather than venus
+/// (`LIMINA_TEST_TRANSPORT=venus`). The enhanced images carry the vendor drivers either way; this
+/// decides whether the host offers them the transport. A test whose oracle names a transport asks
+/// this.
 pub fn enhanced_on_transport() -> bool {
-    std::env::var("LIMINA_TEST_TRANSPORT").as_deref() == Ok("metal")
+    std::env::var("LIMINA_TEST_TRANSPORT").as_deref() != Ok("venus")
 }
 
 /// Whether a Vulkan device name is the hardware driver of the transport the enhanced tests run
