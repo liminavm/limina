@@ -3522,12 +3522,17 @@ impl Guest {
     /// [`GuestConfig::with_console_input`]. Lets a test "type" at the guest — e.g. a command
     /// for the L1 init's echo mode (or, later, a real shell) to read and respond to.
     pub fn console_send(&mut self, line: &str) -> Result<()> {
+        self.console_write(format!("{line}\n").as_bytes())
+    }
+
+    /// Feed `bytes` to the guest console input exactly as given, with no newline: a keypress
+    /// for a firmware or bootloader menu, where a stray Enter would pick an entry.
+    pub fn console_write(&mut self, bytes: &[u8]) -> Result<()> {
         let f = self
             .console_in
             .as_mut()
             .context("console input not enabled (use GuestConfig::with_console_input)")?;
-        f.write_all(line.as_bytes())
-            .and_then(|()| f.write_all(b"\n"))
+        f.write_all(bytes)
             .and_then(|()| f.flush())
             .context("writing to console input fifo")?;
         Ok(())
