@@ -6,6 +6,9 @@ a stock guest kernel can take it (the design is `spikes/metal-heap-addressing/SK
 - `virtgpu_limina.c` — the extension: negotiates `VIRTIO_GPU_F_LIMINA_EXT` (bit 23), finds the
   arena window (shm id 0x80) and the doorbell window (shm id 0x81), and gives each open file one
   context with its doorbell page and arenas, mapped by `mmap()` on the same file.
+  When the host also offers the timing page (shm id 0x82), each CRTC's vblank timer is re-aimed
+  at the host display's vsync grid every tick (`docs/design/host-vblank.md`); debugfs
+  `dri/<n>/limina_timing` shows the page, the timer and the last ticks.
 - `virtgpu_limina_drm.h` — its UAPI: ioctls at `DRM_COMMAND_BASE + 0x20..0x29`, clear of
   upstream's. Besides contexts, arenas and rings, shared arenas (exported as GEM objects, so they
   travel as dma-bufs, and imported into other contexts), fences for a context's commits, surfaces,

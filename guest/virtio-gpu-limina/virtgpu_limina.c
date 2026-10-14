@@ -10,20 +10,34 @@
  * doorbell only when the host says it is asleep; nothing here is on that path.
  *
  * This file is what the kernel adds: it creates contexts and arenas on the host for each open
- * file, and maps them into the file's process. Display and the upstream 3D paths are untouched.
+ * file, and maps them into the file's process. The upstream 3D paths are untouched.
+ *
+ * Display gains one thing: when the host offers a timing page (shm id 0x82), each CRTC's vblank
+ * timer ticks on the host display's vsync grid, which the page states in this guest's virtual
+ * counter time (docs/design/host-vblank.md). The stock timer still runs it; every expiry is only
+ * re-aimed at the grid, so a CRTC whose entry is not valid keeps the stock cadence.
  */
 
 #include <linux/dma-fence.h>
 #include <linux/file.h>
+#include <linux/io.h>
+#include <linux/math64.h>
 #include <linux/mm.h>
+#include <linux/seq_file.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/sync_file.h>
 
+#ifdef CONFIG_ARM64
+#include <asm/arch_timer.h>
+#endif
+
+#include <drm/drm_debugfs.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_print.h>
+#include <drm/drm_vblank.h>
 #include <drm/virtgpu_drm.h>
 
 #include "virtgpu_drv.h"
@@ -31,6 +45,18 @@
 
 #define VIRTIO_GPU_SHM_ID_LIMINA_ARENAS		0x80
 #define VIRTIO_GPU_SHM_ID_LIMINA_DOORBELLS	0x81
+#define VIRTIO_GPU_SHM_ID_LIMINA_TIMING		0x82
+
+/* The timing page (libkrun devices/src/virtio/gpu/timing.rs): a 64-byte header, then one 64-byte
+ * entry per scanout, each read under its sequence number (odd while the host writes it).
+ */
+#define LIMINA_TIMING_SIZE			(16 * 1024)
+#define LIMINA_TIMING_MAGIC			0x4c42564c	/* "LVBL" */
+#define LIMINA_TIMING_VERSION			1
+#define LIMINA_TIMING_HEADER			64
+#define LIMINA_TIMING_ENTRY			64
+#define LIMINA_TIMING_ENTRIES			16
+#define LIMINA_TIMING_VALID			1
 /* One 16 KiB slot per context, so 4 KiB and 16 KiB guests both map a page of their own. */
 #define LIMINA_DOORBELL_STRIDE			(16 * 1024)
 /* Fences a file may have waiting at once. Each holds a control-queue descriptor until the host
@@ -202,6 +228,258 @@ static void limina_fence_untrack(struct virtio_gpu_limina_file *lf, struct dma_f
 	}
 }
 
+/* One scanout's entry on the timing page. */
+struct limina_timing_entry {
+	u32 flags;
+	u64 anchor;	/* a vblank, in virtual counter ticks */
+	u64 period;	/* counter ticks per frame, 32.32 fixed point */
+	u32 lead_ns;
+	u32 generation;
+};
+
+struct limina_vblank_stats {
+	u64 aimed;	/* expiries re-aimed at the grid */
+	u64 stock;	/* expiries left to the stock cadence */
+	u64 next_tick;	/* counter value the last aimed expiry was set to */
+	u32 generation;	/* the entry's generation it was aimed from */
+	/* The (counter, CLOCK_MONOTONIC) pair at the last expiry, and the ns per tick (32.32) the
+	 * two moved at since the one before.
+	 */
+	u64 last_counter;
+	s64 last_ns;
+	u64 ns_per_tick;
+	/* The last few expiries: when each fired and where it was aimed, in counter ticks. */
+	u64 fired[8], aimed_at[8];
+};
+
+struct virtio_gpu_limina_timing {
+	const void *page;
+	u32 rate;	/* counter ticks per second */
+	struct limina_vblank_stats crtc[LIMINA_TIMING_ENTRIES];
+};
+
+static u32 limina_page_u32(const void *page, unsigned int off)
+{
+	return READ_ONCE(*(const u32 *)(page + off));
+}
+
+static u64 limina_page_u64(const void *page, unsigned int off)
+{
+	return READ_ONCE(*(const u64 *)(page + off));
+}
+
+/* False when the page is not (yet) one we understand, or the host kept rewriting the entry. */
+static bool limina_timing_read(const struct virtio_gpu_limina_timing *t, unsigned int i,
+			       struct limina_timing_entry *e)
+{
+	unsigned int off = LIMINA_TIMING_HEADER + i * LIMINA_TIMING_ENTRY;
+	int tries;
+
+	if (limina_page_u32(t->page, 0) != LIMINA_TIMING_MAGIC ||
+	    limina_page_u32(t->page, 4) != LIMINA_TIMING_VERSION ||
+	    i >= limina_page_u32(t->page, 8))
+		return false;
+	for (tries = 0; tries < 4; tries++) {
+		u32 seq = limina_page_u32(t->page, off);
+
+		if (seq & 1) {
+			cpu_relax();
+			continue;
+		}
+		virt_rmb();
+		e->flags = limina_page_u32(t->page, off + 4);
+		e->anchor = limina_page_u64(t->page, off + 8);
+		e->period = limina_page_u64(t->page, off + 16);
+		e->lead_ns = limina_page_u32(t->page, off + 24);
+		e->generation = limina_page_u32(t->page, off + 28);
+		virt_rmb();
+		if (limina_page_u32(t->page, off) == seq)
+			return true;
+	}
+	return false;
+}
+
+#ifdef CONFIG_ARM64
+/*
+ * Nanoseconds of CLOCK_MONOTONIC per counter tick, 32.32. hrtimers run on CLOCK_MONOTONIC, which
+ * NTP slews against the counter the grid is in — chrony at up to 1/12 while it pulls a freshly
+ * booted guest's clock in — so a conversion at the counter's nominal rate fires every expiry early
+ * or late by the slew. The rate the two clocks moved at since the last expiry is the one in effect,
+ * within an eighth of nominal (past chrony's 1/12); past that, or without a recent expiry,
+ * nominal.
+ */
+static u64 limina_ns_per_tick(struct limina_vblank_stats *st, u32 rate, u64 now, s64 now_ns)
+{
+	u64 nominal = div_u64((u64)NSEC_PER_SEC << 32, rate);
+	bool first = !st->last_counter;
+	u64 dc = now - st->last_counter;
+	s64 dn = now_ns - st->last_ns;
+	u64 r;
+
+	st->last_counter = now;
+	st->last_ns = now_ns;
+	if (first || dc == 0 || dc > rate || dn <= 0)
+		return nominal;
+	r = div64_u64((u64)dn << 32, dc);
+	if (r < nominal - nominal / 8 || r > nominal + nominal / 8)
+		return nominal;
+	return r;
+}
+
+/*
+ * The first grid point past half a period from now. Each tick then lands between half a period
+ * and one and a half from the last, so a new phase neither doubles nor drops a vblank, and the
+ * timestamp the vblank core takes from it (the grid point before) is never more than half a period
+ * ahead of the expiry.
+ */
+static u64 limina_next_tick(const struct limina_timing_entry *e, u64 now)
+{
+	u64 from = now + (e->period >> 32) / 2;
+
+	if ((s64)(from - e->anchor) >= 0)
+		return e->anchor +
+		       mul_u64_u64_shr(mul_u64_u64_div_u64(from - e->anchor, 1ULL << 32, e->period) + 1,
+				       e->period, 32);
+	return e->anchor -
+	       mul_u64_u64_shr(mul_u64_u64_div_u64(e->anchor - from, 1ULL << 32, e->period),
+			       e->period, 32);
+}
+
+static void limina_vblank_aim(struct virtio_gpu_limina_timing *t, struct drm_crtc *crtc,
+			      unsigned int i)
+{
+	struct drm_vblank_crtc_timer *vt = &drm_crtc_vblank_crtc(crtc)->vblank_timer;
+	struct limina_vblank_stats *st = &t->crtc[i];
+	struct limina_timing_entry e;
+	unsigned long flags;
+	u64 now, tick, ns_per_tick;
+	ktime_t now_ns;
+
+	if (!limina_timing_read(t, i, &e) || !(e.flags & LIMINA_TIMING_VALID) ||
+	    (e.period >> 32) == 0) {
+		WRITE_ONCE(st->stock, st->stock + 1);
+		return;
+	}
+	now_ns = ktime_get();
+	now = __arch_counter_get_cntvct();
+	tick = limina_next_tick(&e, now);
+	ns_per_tick = limina_ns_per_tick(st, t->rate, now, ktime_to_ns(now_ns));
+
+	/* The stock handler has already moved the expiry on by its interval; it is replaced by the
+	 * grid's, and the interval by the grid's period, which the vblank core subtracts from the
+	 * expiry to stamp this vblank: at the grid point it was aimed at, the deadline.
+	 */
+	spin_lock_irqsave(&vt->interval_lock, flags);
+	if (vt->interval) {	/* zero: being cancelled, and it must stay so */
+		vt->interval = ns_to_ktime(mul_u64_u64_shr(e.period, ns_per_tick, 64));
+		hrtimer_set_expires(&vt->timer,
+				    ktime_add_ns(now_ns, mul_u64_u64_shr(tick - now, ns_per_tick, 32)));
+	}
+	spin_unlock_irqrestore(&vt->interval_lock, flags);
+	st->fired[st->aimed % 8] = now;
+	st->aimed_at[st->aimed % 8] = tick;
+	WRITE_ONCE(st->ns_per_tick, ns_per_tick);
+	WRITE_ONCE(st->next_tick, tick);
+	WRITE_ONCE(st->generation, e.generation);
+	WRITE_ONCE(st->aimed, st->aimed + 1);
+}
+#else
+static void limina_vblank_aim(struct virtio_gpu_limina_timing *t, struct drm_crtc *crtc,
+			      unsigned int i)
+{
+}
+#endif
+
+bool virtio_gpu_limina_vblank_timeout(struct drm_crtc *crtc)
+{
+	struct virtio_gpu_device *vgdev = crtc->dev->dev_private;
+	unsigned int i = drm_crtc_index(crtc);
+
+	if (vgdev->limina_timing && i < LIMINA_TIMING_ENTRIES)
+		limina_vblank_aim(vgdev->limina_timing, crtc, i);
+	return drm_crtc_handle_vblank(crtc);
+}
+
+/* debugfs dri/N/limina_timing: what the page says and what each CRTC's timer made of it, with a
+ * (counter, ktime) pair to map the counter values onto vblank timestamps.
+ */
+static int limina_timing_show(struct seq_file *m, void *unused)
+{
+	struct drm_debugfs_entry *entry = m->private;
+	struct virtio_gpu_device *vgdev = entry->dev->dev_private;
+	struct virtio_gpu_limina_timing *t = vgdev->limina_timing;
+	struct limina_timing_entry e;
+	ktime_t now_ns, raw_ns;
+	unsigned long flags;
+	u64 now = 0;
+	unsigned int i;
+
+	local_irq_save(flags);
+	now_ns = ktime_get();
+	raw_ns = ktime_get_raw();
+#ifdef CONFIG_ARM64
+	now = __arch_counter_get_cntvct();
+#endif
+	local_irq_restore(flags);
+	seq_printf(m, "clock counter=%llu ktime_ns=%lld raw_ns=%lld rate=%u\n", now,
+		   ktime_to_ns(now_ns), ktime_to_ns(raw_ns), t->rate);
+	seq_printf(m, "page magic=%#x version=%u\n", limina_page_u32(t->page, 0),
+		   limina_page_u32(t->page, 4));
+	for (i = 0; i < vgdev->num_scanouts && i < LIMINA_TIMING_ENTRIES; i++) {
+		if (!limina_timing_read(t, i, &e))
+			memset(&e, 0, sizeof(e));
+		seq_printf(m,
+			   "scanout %u flags=%u anchor=%llu period=%llu lead_ns=%u generation=%u aimed=%llu stock=%llu next_tick=%llu ns_per_tick=%llu\n",
+			   i, e.flags, e.anchor, e.period, e.lead_ns, e.generation,
+			   READ_ONCE(t->crtc[i].aimed), READ_ONCE(t->crtc[i].stock),
+			   READ_ONCE(t->crtc[i].next_tick), READ_ONCE(t->crtc[i].ns_per_tick));
+		{
+			struct drm_crtc *crtc = drm_crtc_from_index(entry->dev, i);
+			struct drm_vblank_crtc *vbl = crtc ? drm_crtc_vblank_crtc(crtc) : NULL;
+			ktime_t vt;
+			u64 count = crtc ? drm_crtc_vblank_count_and_time(crtc, &vt) : 0;
+			unsigned int j;
+
+			if (vbl)
+				seq_printf(m, "timer %u expires_ns=%lld interval_ns=%lld framedur_ns=%d count=%llu vbl_ns=%lld\n",
+					   i, ktime_to_ns(hrtimer_get_expires(&vbl->vblank_timer.timer)),
+					   ktime_to_ns(vbl->vblank_timer.interval), vbl->framedur_ns,
+					   count, ktime_to_ns(vt));
+			for (j = 0; j < 8; j++)
+				seq_printf(m, "fire %u %u fired=%llu aimed_at=%llu\n", i, j,
+					   t->crtc[i].fired[j], t->crtc[i].aimed_at[j]);
+		}
+	}
+	return 0;
+}
+
+/* A host without the page, or a guest without a virtual counter to read it by: stock vblanks. */
+static void limina_timing_init(struct virtio_gpu_device *vgdev)
+{
+#ifdef CONFIG_ARM64
+	struct virtio_gpu_limina_timing *t;
+	struct virtio_shm_region r;
+	void *page;
+
+	if (!virtio_get_shm_region(vgdev->vdev, &r, VIRTIO_GPU_SHM_ID_LIMINA_TIMING) ||
+	    r.len < LIMINA_TIMING_SIZE)
+		return;
+	t = devm_kzalloc(&vgdev->vdev->dev, sizeof(*t), GFP_KERNEL);
+	if (!t)
+		return;
+	page = devm_memremap(&vgdev->vdev->dev, r.addr, LIMINA_TIMING_SIZE, MEMREMAP_WB);
+	if (IS_ERR(page)) {
+		DRM_ERROR("limina timing page at 0x%llx: %ld\n", r.addr, PTR_ERR(page));
+		return;
+	}
+	t->page = page;
+	t->rate = arch_timer_get_cntfrq();
+	vgdev->limina_timing = t;
+	drm_debugfs_add_file(vgdev->ddev, "limina_timing", limina_timing_show, NULL);
+	DRM_INFO("limina extension: timing page at 0x%llx, counter at %u Hz\n", r.addr, t->rate);
+#endif
+}
+
 void virtio_gpu_limina_init(struct virtio_gpu_device *vgdev)
 {
 	if (!virtio_has_feature(vgdev->vdev, VIRTIO_GPU_F_LIMINA_EXT))
@@ -217,6 +495,7 @@ void virtio_gpu_limina_init(struct virtio_gpu_device *vgdev)
 	DRM_INFO("limina extension: arenas 0x%llx+0x%llx, doorbells 0x%llx+0x%llx\n",
 		 vgdev->limina_arenas.addr, vgdev->limina_arenas.len,
 		 vgdev->limina_doorbells.addr, vgdev->limina_doorbells.len);
+	limina_timing_init(vgdev);
 }
 
 static int limina_errno(u32 type)

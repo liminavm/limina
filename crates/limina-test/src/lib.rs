@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 // Re-exported so tests can build display commands without depending on the crate directly.
-pub use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec};
+pub use limina_displayctl::{DisplayCommand, DisplayControl, EdidSpec, RangeSpec, VsyncGrid};
 
 pub mod bench;
 pub mod landmarks;
@@ -2392,7 +2392,8 @@ impl Guest {
         self.send_display_command(&DisplayCommand::Display(control))
     }
 
-    fn send_display_command(&self, command: &DisplayCommand) -> Result<()> {
+    /// Send any display-control command (see `limina-displayctl`), e.g. a `vsync` grid.
+    pub fn send_display_command(&self, command: &DisplayCommand) -> Result<()> {
         use std::io::Write;
         let path = self
             .resize_socket

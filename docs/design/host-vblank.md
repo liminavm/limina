@@ -109,25 +109,27 @@ nothing: the page is derived, and the restored worker rewrites it from the next 
 
 ### Guest: the module's vblank
 
-When the host offers the region and a scanout's entry is `VALID`, that CRTC's vblank comes from
-the module instead of `DRM_CRTC_VBLANK_TIMER_FUNCS`:
+When the host offers the region and a scanout's entry is `VALID`, that CRTC's vblank ticks on the
+grid. The stock vblank timer (`DRM_CRTC_VBLANK_TIMER_FUNCS`) still runs it: the hook patch adds
+one line, `handle_vblank_timeout` in the CRTC helper funcs, the same on 6.19, 7.1 and 7.2, and
+`virtgpu_limina.c` re-aims every expiry before it hands the vblank to the core:
 
-- an hrtimer per CRTC; each expiry reads the entry, computes the next tick as
-  `anchor + k·period` in counter time, converts it to `ktime` against a fresh
-  `(arch_timer_read_counter(), ktime_get())` pair, rearms, and calls `drm_crtc_handle_vblank`.
-  Every tick is recomputed from the anchor, so there is no accumulated drift and a new anchor
-  takes effect at the next tick;
-- ticks stay monotonic and one per period: a new anchor never arms a tick earlier than
-  `last_tick + period/2`, and a phase correction larger than that is slewed over several ticks
-  rather than jumped (mutter and wlroots take a backwards timestamp as given; KWin replaces it
-  with "now");
-- `get_vblank_timestamp` returns the tick's own time, so `drm_crtc_vblank_count_and_time` — and
-  therefore every flip-done event — carries the deadline time;
-- an entry that goes invalid hands the CRTC back to the stock timer at the next tick.
-
-The hook patch gains one hunk: the CRTC funcs route `enable_vblank` / `disable_vblank` /
-`get_vblank_timestamp` through `virtgpu_limina.c`, which falls back to the stock helpers. Anchored
-on code that is the same in 6.19, 7.1 and 7.2.
+- the next tick is the first grid point (`anchor + k·period`, in counter time) past half a period
+  from now. Ticks therefore stay between half a period and one and a half apart: a new phase
+  neither doubles nor drops a vblank, the vblank core's timestamp-based count never sees a
+  redundant interrupt, and a stamp is never more than half a period ahead. Every tick is
+  recomputed from the anchor, so nothing drifts, and a stale anchor (hours old) costs nothing —
+  `k` comes from 128-bit arithmetic;
+- the timer's expiry is set to that tick and its interval to the period, so the core's stamp
+  (`expiry - interval`) is the grid point just reached: the deadline time, carried by every
+  flip-done event;
+- counter ticks become `CLOCK_MONOTONIC` nanoseconds at the rate the two clocks moved since the
+  previous expiry, not the counter's nominal rate. hrtimers run on `CLOCK_MONOTONIC`, which NTP
+  slews against the counter: chrony slews at up to 1/12 while it pulls a freshly booted guest's
+  clock in, and a nominal conversion then fires every tick ~1.4 ms off the grid. Measured rates
+  more than an eighth from nominal are not trusted;
+- an entry that is not `VALID` (or a page that is not, or not yet, one the module understands)
+  leaves the expiry the stock handler set: the stock cadence, at the mode's rate.
 
 ## What changes when copy-on-present lands
 
@@ -141,7 +143,10 @@ for the zero-copy fenced path, where the release can come after the tick.
 - The timing capture records gain the worker's flush time `f` (in guest counter time as well as
   host). Phase lock means `f mod period`, against the Mac grid, stays in a narrow band for minutes;
   a free-running timer's sits wherever the CRTC came up and drifts with any rate error left.
-- The module exposes its last tick (counter value, generation) in debugfs; the L2 check compares
-  ticks against the published grid (within 50 µs) and against the Mac vsync (`lead` apart).
+- `dri/<n>/limina_timing` (debugfs) shows the page, each CRTC's timer, its last ticks and a
+  (counter, `CLOCK_MONOTONIC`, `CLOCK_MONOTONIC_RAW`) triple. `l2_host_vblank` pushes a grid with
+  an odd period and checks the vblank stamps userspace gets from `DRM_IOCTL_WAIT_VBLANK`, moved
+  onto the counter through `CLOCK_MONOTONIC_RAW` (which NTP does not slew), against it: within
+  50 µs (measured: within 5 µs), across a phase change, and back on the stock timer after `off`.
 - A guest without the module, or a host that does not offer 0x82, must keep running on the stock
   timer: covered by the existing stock-tier suite.
