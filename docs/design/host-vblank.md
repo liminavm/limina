@@ -1,7 +1,7 @@
 # Host-driven vblank: the guest's frame clock on the Mac's grid
 
-**Status: built, except the lead estimator**: the supervisor states every grid with the default
-4 ms lead (`crates/limina/src/window/vsync.rs`).
+**Status: built, except the composite deadline's runtime guard**: `w` is a measured constant
+(`crates/limina/src/window/vsync.rs`).
 
 Enhanced tier only (the `virtio-gpu-limina` module with the limina extension). A stock guest keeps
 the in-tree driver's free-running vblank timer, which `refresh_millihertz` (the exact-rate EDID)
@@ -86,14 +86,20 @@ refresh. The lead is built from the two parts the guest cannot influence instead
   layer. Both stamps are the host's; their p95 over the last ~2 s. Copy-on-present's blit lands
   here, where it belongs.
 - **composite deadline** `w`: how long before a vsync a layer commit must land to be shown at it,
-  a property of WindowServer, not of the guest. Measured once per macOS version by a spike that
-  commits surfaces at swept phases against the display link and records which vsync each goes
-  live at (the replaced surface leaving window-server use); kept as a constant, with a runtime
-  guard: a frame whose commit was earlier than `vsync - w` yet missed that vsync widens `w` by
-  0.5 ms.
+  a property of WindowServer, not of the guest. Measured once per macOS version by
+  `spikes/composite-deadline`, which commits surfaces at swept phases against the display link
+  and reads which vsync each goes live at from when the replaced surface leaves window-server use.
+  On macOS 26.6 a window's commits make the vsync up to ~0.3 ms *after* the link's target, and a
+  window covering its screen (natively fullscreen; the borderless cover is assumed the same) needs
+  ~0.7 ms before it: **`w` = 1 ms, 2 ms covering**, each ~1 ms clear of the edge. Owed: the
+  runtime guard — a frame whose commit was earlier than `vsync - w` yet missed that vsync widens
+  `w` by 0.5 ms — for the stray misses a constant cannot absorb.
 
 **lead = h + w + 1 ms margin.** A new value is published only when it moves by more than 0.5 ms
-(hysteresis). Before the first `h` a default of 4 ms stands.
+(hysteresis). Before the first `h` (ten frames in the window) a default of 4 ms stands, an idle
+guest keeps the last value, and a lead past 33 ms is capped: that is a stalled host, not a
+deadline. The worker stamps `h`'s start as `t=<mach>` on the `frame` line when the present
+reaches its display backend; the window ends it after the layer commit.
 
 ### Worker: the timing page
 

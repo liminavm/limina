@@ -224,11 +224,17 @@ impl GuestWindow {
         slot: usize,
         now: std::time::Instant,
     ) -> Option<limina_displayctl::DisplayCommand> {
-        let panel = self
+        use objc2_app_kit::NSWindowStyleMask;
+        let screen = self.window.screen();
+        let panel = screen.as_ref().map(|s| super::hostdisplay::panel_key(s));
+        // Natively fullscreen, or the borderless cover: the window server's deadline for a window
+        // that covers its screen is not a window's.
+        let covering = self
             .window
-            .screen()
-            .map(|s| super::hostdisplay::panel_key(&s));
-        self.vsync.borrow_mut().poll(slot, panel, now)
+            .styleMask()
+            .contains(NSWindowStyleMask::FullScreen)
+            || screen.is_some_and(|s| s.frame() == self.window.frame());
+        self.vsync.borrow_mut().poll(slot, panel, covering, now)
     }
 
     /// A fresh worker has the device: the grid has to be stated again.
@@ -295,6 +301,11 @@ impl GuestWindow {
     ) {
         let ack = self.ack_for(id, src, ack_tx);
         present::set_layer_surface(&self.layer, src, ack);
+        if let Some(arrived) = tag.arrived {
+            self.vsync
+                .borrow_mut()
+                .note_commit(arrived, std::time::Instant::now());
+        }
         if self.overlay.is_active() {
             present::set_layer_surface(&self.overlay.strip_layer(), src, None);
         }

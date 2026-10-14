@@ -198,6 +198,16 @@ impl DisplayBackendNew<WindowConfig> for WindowBackend {
     }
 }
 
+unsafe extern "C" {
+    fn mach_absolute_time() -> u64;
+}
+
+/// The host clock the supervisor's display link and commit stamps are on.
+fn mach_now() -> u64 {
+    // SAFETY: no arguments, no state.
+    unsafe { mach_absolute_time() }
+}
+
 /// Validate a guest-supplied scanout id as a pool slot. The bound is the device's own
 /// `VIRTIO_GPU_MAX_SCANOUTS`; anything past it is a malformed command, not a display we could
 /// grow into.
@@ -230,15 +240,18 @@ impl WindowBackend {
     }
 
     /// The `frame` line for `show_id` on `scanout_id`, naming the guest resource the device said
-    /// this present shows, and forgetting it.
-    fn frame_line(&mut self, show_id: u32, scanout_id: u32) -> String {
+    /// this present shows, and forgetting it. `t=` is when the present reached the backend, in
+    /// `mach_absolute_time` ticks: the supervisor measures from it to its layer commit, the host
+    /// half of the guest vblank's lead (`docs/design/host-vblank.md`). A key, not a position, so
+    /// a line without a resource still reads, and a supervisor that predates it ignores it.
+    fn frame_line(&mut self, show_id: u32, scanout_id: u32, arrived: u64) -> String {
         match self
             .frame_resource
             .get_mut(scanout_id as usize)
             .and_then(Option::take)
         {
-            Some(res) => format!("frame {show_id} {scanout_id} {res}"),
-            None => format!("frame {show_id} {scanout_id}"),
+            Some(res) => format!("frame {show_id} {scanout_id} {res} t={arrived}"),
+            None => format!("frame {show_id} {scanout_id} t={arrived}"),
         }
     }
 
@@ -349,10 +362,11 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         iosurface_id: u32,
         _rect: Option<&Rect>,
     ) -> Result<(), DisplayBackendError> {
+        let arrived = mach_now();
         slot_of(scanout_id)?;
         self.presents += 1;
         red_probe(iosurface_id, self.presents);
-        let line = self.frame_line(iosurface_id, scanout_id);
+        let line = self.frame_line(iosurface_id, scanout_id, arrived);
         self.send(&line);
         Ok(())
     }
@@ -427,6 +441,7 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         _frame_id: u32,
         rect: Option<&Rect>,
     ) -> Result<(), DisplayBackendError> {
+        let arrived = mach_now();
         let slot = slot_of(scanout_id)?;
         // Take the scanout out so we can write the surface and call &mut self.send().
         let mut scanout = self.scanouts[slot]
@@ -471,7 +486,7 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
         let show_id = scanout.ids[i];
         self.presents += 1;
         self.scanouts[slot] = Some(scanout);
-        let line = self.frame_line(show_id, scanout_id);
+        let line = self.frame_line(show_id, scanout_id, arrived);
         self.send(&line);
         Ok(())
     }
@@ -846,9 +861,8 @@ mod tests {
                 "no `surface … {slot}` line in {lines:?}"
             );
             assert!(
-                lines
-                    .iter()
-                    .any(|l| l.starts_with("frame ") && l.ends_with(&format!(" {slot}"))),
+                lines.iter().any(|l| l.starts_with("frame ")
+                    && l.split(' ').nth(2) == Some(slot.to_string().as_str())),
                 "no `frame … {slot}` line in {lines:?}"
             );
         }
@@ -886,8 +900,29 @@ mod tests {
         let frames: Vec<Vec<String>> = wire(&path)
             .iter()
             .filter(|l| l.starts_with("frame "))
-            .map(|l| l.split(' ').skip(2).map(str::to_string).collect())
+            .map(|l| {
+                l.split(' ')
+                    .skip(2)
+                    .filter(|f| !f.starts_with("t="))
+                    .map(str::to_string)
+                    .collect()
+            })
             .collect();
+        let stamps: Vec<u64> = wire(&path)
+            .iter()
+            .filter(|l| l.starts_with("frame "))
+            .map(|l| {
+                l.rsplit(' ')
+                    .next()
+                    .and_then(|f| f.strip_prefix("t="))
+                    .and_then(|t| t.parse().ok())
+                    .expect("every frame line ends with its arrival stamp")
+            })
+            .collect();
+        assert!(
+            stamps.windows(2).all(|w| w[0] <= w[1]),
+            "arrival stamps out of order: {stamps:?}"
+        );
         assert_eq!(
             frames,
             [

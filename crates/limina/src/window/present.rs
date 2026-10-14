@@ -519,6 +519,9 @@ pub struct SlotPresent {
     /// named it. Set by every `frame` line, so a frame that names none never carries an earlier
     /// one's.
     pub(crate) resource: Option<u32>,
+    /// When the slot's latest `frame` reached the worker, in `mach_absolute_time` ticks, when the
+    /// worker stamped it. Set by every `frame` line, like `resource`.
+    pub(crate) arrived: Option<u64>,
     /// Whether the worker says the guest is held off this scanout's presented buffers (`held`
     /// messages). `Some(false)` means it may draw into the surface on glass, so the window shows
     /// a copy. `None` until the worker says: an older worker never does, and zero-copy is what
@@ -814,15 +817,21 @@ pub(super) fn deliver_line<S: Clone>(
             }
         }
         Some("frame") => {
-            // frame <id> [<scanout> [<resource>]] — the buffer to show now, on that slot, and the
-            // guest resource whose flush it is. A worker that predates the resource omits it.
+            // frame <id> [<scanout> [<resource>]] [t=<mach>] — the buffer to show now, on that
+            // slot, the guest resource whose flush it is, and when the flush reached the worker. A
+            // worker that predates the resource or the stamp omits it.
             let id = parts.next().and_then(|s| s.parse::<u32>().ok());
             let slot = parse_slot(parts.next());
-            let resource = parts.next().and_then(|s| s.parse::<u32>().ok());
+            let rest: Vec<&str> = parts.collect();
+            let resource = rest.first().and_then(|s| s.parse::<u32>().ok());
+            let arrived = rest
+                .iter()
+                .find_map(|f| f.strip_prefix("t=")?.parse::<u64>().ok());
             if let (Some(id), Some(slot)) = (id, slot) {
                 let slot = &mut s.slots[slot];
                 slot.show_id = Some(id);
                 slot.resource = resource;
+                slot.arrived = arrived;
                 slot.last_shown = Some(id);
                 slot.generation += 1;
                 slot.frames += 1;
@@ -1174,15 +1183,24 @@ mod tests {
             let s = shared.lock().unwrap();
             (s.slots[slot].show_id, s.slots[slot].resource)
         };
+        let arrived = |slot: usize| shared.lock().unwrap().slots[slot].arrived;
         say("surface 53 55 1280 800 0");
-        say("frame 55 0 7");
+        say("frame 55 0 7 t=1234");
         assert_eq!(at(0), (Some(55), Some(7)));
+        assert_eq!(arrived(0), Some(1234));
+        say("frame 54 0 t=1240");
+        assert_eq!(
+            (at(0), arrived(0)),
+            ((Some(54), None), Some(1240)),
+            "a stamp where the resource would be is no resource"
+        );
         say("frame 53 0");
         assert_eq!(
             at(0),
             (Some(53), None),
             "no resource named: none, not the last one"
         );
+        assert_eq!(arrived(0), None, "no stamp: none, not the last one");
         say("frame 55");
         assert_eq!(
             at(0),

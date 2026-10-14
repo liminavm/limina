@@ -78,6 +78,9 @@ pub(crate) struct FrameTag {
     pub(crate) epoch: u64,
     pub(crate) resource: Option<u32>,
     pub(crate) cause: Option<Cause>,
+    /// When the flip reached the worker (`SlotPresent::arrived`): what the window's vsync source
+    /// measures its commit against.
+    pub(crate) arrived: Option<u64>,
 }
 
 impl FrameTag {
@@ -92,12 +95,18 @@ impl FrameTag {
             epoch,
             resource: None,
             cause: None,
+            arrived: None,
         }
     }
 
     /// The tag naming the guest resource its flip came from.
     pub(crate) fn with_resource(self, resource: Option<u32>) -> Self {
         FrameTag { resource, ..self }
+    }
+
+    /// The tag carrying when its flip reached the worker.
+    pub(crate) fn with_arrived(self, arrived: Option<u64>) -> Self {
+        FrameTag { arrived, ..self }
     }
 
     /// The guest resource to record for a present the sequencer judged `cause`: only a new guest

@@ -169,6 +169,7 @@ struct SlotSnapshot {
     frames: u64,
     epoch: u64,
     resource: Option<u32>,
+    arrived: Option<u64>,
 }
 
 /// What this tick does with one slot's secondary window, after the dismissal pass has closed
@@ -579,6 +580,7 @@ impl PrimaryDisplay {
             frames,
             epoch,
             resource,
+            arrived,
         } = *snap;
         if generation == self.last_gen.get() {
             return;
@@ -667,7 +669,9 @@ impl PrimaryDisplay {
                 trace.showing(id, surface);
             }
         }
-        let tag = super::frame_capture::FrameTag::new(slot, frames, epoch).with_resource(resource);
+        let tag = super::frame_capture::FrameTag::new(slot, frames, epoch)
+            .with_resource(resource)
+            .with_arrived(arrived);
         self.core.show(id, tag, surface, ack_tx, copy);
 
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
@@ -850,6 +854,7 @@ impl GuestWindows {
                         held: d.held,
                         frames: d.frames,
                         resource: d.resource,
+                        arrived: d.arrived,
                         epoch: s.reader_epoch,
                     }
                 })
@@ -919,6 +924,7 @@ impl GuestWindows {
             frames,
             epoch,
             resource,
+            arrived,
         } in slots
         {
             // The primary's slot already had its walk above; it gets no secondary window.
@@ -1001,8 +1007,9 @@ impl GuestWindows {
             // `None` from an announcement until the guest's first flip: the layer keeps its last
             // frame (refit above if the mode changed), and a freshly opened window stays empty.
             let Some(id) = show_id else { continue };
-            let tag =
-                super::frame_capture::FrameTag::new(slot, frames, epoch).with_resource(resource);
+            let tag = super::frame_capture::FrameTag::new(slot, frames, epoch)
+                .with_resource(resource)
+                .with_arrived(arrived);
             entry
                 .core
                 .present(id, tag, surface_map, ack_tx, held == Some(false));

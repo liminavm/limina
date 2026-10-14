@@ -13,13 +13,16 @@
 //! again only when the one the worker has would drift off the screen's by [`DRIFT_NS`], when the
 //! window lands on another slot, or when a fresh worker has the device.
 //!
-//! The lead the guest's vblank goes ahead of the vsync by is [`DEFAULT_LEAD_NS`] for now; the
-//! design's measured lead (host processing plus the window server's composite deadline) replaces it.
+//! The lead the guest's vblank goes ahead of the vsync by is measured ([`LeadEstimator`]): the
+//! host's own processing of a frame, from the worker receiving the guest's flush to this window
+//! committing it, plus the window server's composite deadline and a margin. Until a window has
+//! committed frames it is [`DEFAULT_LEAD_NS`].
 //!
 //! `LIMINA_VSYNC_SOURCE=0` keeps the source quiet, for runs that state a grid of their own (the L2
 //! test does).
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use limina_displayctl::{DisplayCommand, VsyncGrid};
@@ -31,6 +34,22 @@ use objc2_quartz_core::CADisplayLink;
 
 /// How far ahead of the host vsync the guest's vblank goes, until the lead is measured.
 pub(crate) const DEFAULT_LEAD_NS: u32 = 4_000_000;
+/// How long before the display link's target a layer commit must land to be shown at it, about
+/// 1 ms clear of where commits start to miss (`spikes/composite-deadline`, macOS 26.6): a window…
+const COMPOSITE_DEADLINE_NS: u64 = 1_000_000;
+/// …and one covering its screen, which goes another way through the window server and misses
+/// ~0.8 ms earlier. Measured natively fullscreen; the borderless cover is taken to be the same.
+const COMPOSITE_DEADLINE_COVERING_NS: u64 = 2_000_000;
+/// On top of the measured parts, for what the p95 does not see.
+const LEAD_MARGIN_NS: u64 = 1_000_000;
+/// A new lead moves every guest vblank: it is restated only when it moves by more than this.
+const LEAD_HYSTERESIS_NS: u64 = 500_000;
+/// The host processing statistic is over this long…
+const HOST_WINDOW: Duration = Duration::from_secs(2);
+/// …and needs this many frames in it to say anything.
+const HOST_MIN_SAMPLES: usize = 10;
+/// A lead past this is a stalled host, not a deadline worth scheduling a guest around.
+const LEAD_MAX_NS: u64 = 33_000_000;
 /// How far the worker's grid may drift from the screen's before it is restated.
 const DRIFT_NS: u64 = 50_000;
 /// When bursts start, counted from the last reset: the baseline grows by at most ×4 a step until
@@ -65,9 +84,78 @@ struct MachTimebaseInfo {
 
 unsafe extern "C" {
     fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
+    fn mach_absolute_time() -> u64;
+}
+
+/// The host clock the display link and the worker's frame stamps are on.
+pub(crate) fn mach_now() -> u64 {
+    // SAFETY: no arguments, no state.
+    unsafe { mach_absolute_time() }
+}
+
+/// The lead a window states with its grid (`docs/design/host-vblank.md`, §lead estimator):
+/// `h + w + margin`, where `h` is the p95 of the host's own processing of a frame over the last
+/// [`HOST_WINDOW`] and `w` the window server's composite deadline. Never a statistic of how early
+/// frames arrive before the vsync they make: once the guest is locked on, that is the published
+/// lead plus the compositor's own margin, and feeding it back ratchets the lead up.
+#[derive(Debug)]
+struct LeadEstimator {
+    /// (when committed, host processing in ns), oldest first.
+    samples: VecDeque<(Instant, u64)>,
+    published: u64,
+}
+
+impl Default for LeadEstimator {
+    fn default() -> Self {
+        Self {
+            samples: VecDeque::new(),
+            published: DEFAULT_LEAD_NS as u64,
+        }
+    }
+}
+
+impl LeadEstimator {
+    fn note(&mut self, now: Instant, host_ns: u64) {
+        self.samples.push_back((now, host_ns));
+        self.prune(now);
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while let Some(&(t, _)) = self.samples.front() {
+            if now.duration_since(t) <= HOST_WINDOW && self.samples.len() <= 4096 {
+                break;
+            }
+            self.samples.pop_front();
+        }
+    }
+
+    /// The lead to state now, in ns. It holds while there are too few frames to say anything —
+    /// an idle guest keeps the last one.
+    fn lead_ns(&mut self, now: Instant, covering: bool) -> u64 {
+        self.prune(now);
+        if self.samples.len() >= HOST_MIN_SAMPLES {
+            let mut h: Vec<u64> = self.samples.iter().map(|&(_, h)| h).collect();
+            h.sort_unstable();
+            let p95 = h[(h.len() * 95).div_ceil(100) - 1];
+            let w = if covering {
+                COMPOSITE_DEADLINE_COVERING_NS
+            } else {
+                COMPOSITE_DEADLINE_NS
+            };
+            let lead = (p95 + w + LEAD_MARGIN_NS).min(LEAD_MAX_NS);
+            if lead.abs_diff(self.published) > LEAD_HYSTERESIS_NS {
+                self.published = lead;
+            }
+        }
+        self.published
+    }
 }
 
 impl Timebase {
+    pub(crate) fn ns_from_ticks(self, ticks: u64) -> u64 {
+        (ticks as u128 * self.numer as u128 / self.denom as u128) as u64
+    }
+
     pub(crate) fn host() -> Self {
         let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
         // SAFETY: fills the struct it is given.
@@ -275,6 +363,7 @@ pub(crate) struct VsyncSource {
     target: Retained<VsyncTarget>,
     timebase: Timebase,
     estimator: GridEstimator,
+    lead: LeadEstimator,
     sent: Option<Sent>,
     panel: Option<u64>,
     reset_at: Instant,
@@ -306,6 +395,7 @@ impl VsyncSource {
             target,
             timebase: Timebase::host(),
             estimator: GridEstimator::default(),
+            lead: LeadEstimator::default(),
             sent: None,
             panel: None,
             reset_at: Instant::now(),
@@ -319,12 +409,22 @@ impl VsyncSource {
         self.sent = None;
     }
 
+    /// This window just committed a frame that reached the worker at `arrived` (mach ticks).
+    pub(crate) fn note_commit(&mut self, arrived: u64, now: Instant) {
+        let Some(ticks) = mach_now().checked_sub(arrived) else {
+            return;
+        };
+        self.lead.note(now, self.timebase.ns_from_ticks(ticks));
+    }
+
     /// Advance this window's bursts; the command to send, if the worker needs one. `slot` is the
-    /// guest display the window shows, `panel` the screen it is on.
+    /// guest display the window shows, `panel` the screen it is on, `covering` whether the window
+    /// covers that screen.
     pub(crate) fn poll(
         &mut self,
         slot: usize,
         panel: Option<u64>,
+        covering: bool,
         now: Instant,
     ) -> Option<DisplayCommand> {
         let link = self.link.as_ref()?;
@@ -365,11 +465,12 @@ impl VsyncSource {
             None => {}
         }
         let (at, period_fp) = self.estimator.grid()?;
+        let lead_ns = self.lead.lead_ns(now, covering);
         let grid = VsyncGrid {
             at,
             period_fp,
-            lead: self.timebase.ticks_from_ns(DEFAULT_LEAD_NS as u64),
-            lead_ns: DEFAULT_LEAD_NS,
+            lead: self.timebase.ticks_from_ns(lead_ns),
+            lead_ns: lead_ns as u32,
         };
         let tol = self.timebase.ticks_from_ns(DRIFT_NS);
         let minute = self.timebase.ticks_from_ns(60_000_000_000);
@@ -378,18 +479,14 @@ impl VsyncSource {
         }
         log::info!(
             "vsync: guest display {slot} on the host grid, {:.4} Hz, lead {} µs",
-            1e9 / (self.timebase_ns(period_fp >> 32) as f64),
-            DEFAULT_LEAD_NS / 1000
+            1e9 / (self.timebase.ns_from_ticks(period_fp >> 32) as f64),
+            lead_ns / 1000
         );
         self.sent = Some(Sent { slot, grid });
         Some(DisplayCommand::Vsync {
             display_id: slot as u32,
             grid: Some(grid),
         })
-    }
-
-    fn timebase_ns(&self, ticks: u64) -> u64 {
-        (ticks as u128 * self.timebase.numer as u128 / self.timebase.denom as u128) as u64
     }
 
     fn next_burst(&self) -> Instant {
@@ -416,6 +513,82 @@ impl Drop for VsyncSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MS: u64 = 1_000_000;
+
+    #[test]
+    fn the_lead_is_the_default_until_frames_say_otherwise() {
+        let mut l = LeadEstimator::default();
+        let t0 = Instant::now();
+        for i in 0..HOST_MIN_SAMPLES as u64 - 1 {
+            l.note(t0 + Duration::from_millis(i), 9 * MS);
+        }
+        assert_eq!(
+            l.lead_ns(t0, false),
+            DEFAULT_LEAD_NS as u64,
+            "too few frames"
+        );
+    }
+
+    #[test]
+    fn the_lead_is_the_host_p95_plus_the_deadline_and_margin() {
+        let mut l = LeadEstimator::default();
+        let t0 = Instant::now();
+        // 100 frames: 94 at 0.5 ms, 6 at 3 ms. The p95 is the first of the slow ones.
+        for i in 0..100u64 {
+            let h = if i % 17 == 0 { 3 * MS } else { MS / 2 };
+            l.note(t0 + Duration::from_millis(i * 10), h);
+        }
+        let now = t0 + Duration::from_millis(990);
+        assert_eq!(
+            l.lead_ns(now, false),
+            3 * MS + COMPOSITE_DEADLINE_NS + LEAD_MARGIN_NS
+        );
+        assert_eq!(
+            l.lead_ns(now, true),
+            3 * MS + COMPOSITE_DEADLINE_COVERING_NS + LEAD_MARGIN_NS,
+            "covering the screen moves the deadline by more than the hysteresis"
+        );
+    }
+
+    #[test]
+    fn the_lead_moves_only_past_the_hysteresis_and_holds_when_idle() {
+        let mut l = LeadEstimator::default();
+        let t0 = Instant::now();
+        let fill = |l: &mut LeadEstimator, from: u64, h: u64| {
+            for i in 0..50u64 {
+                l.note(t0 + Duration::from_millis(from + i * 10), h);
+            }
+            t0 + Duration::from_millis(from + 490)
+        };
+        let now = fill(&mut l, 0, MS);
+        let first = l.lead_ns(now, false);
+        assert_eq!(first, 3 * MS);
+        // 0.4 ms more host time: within the hysteresis, the lead stays.
+        let now = fill(&mut l, 3_000, MS + 4 * MS / 10);
+        assert_eq!(l.lead_ns(now, false), first);
+        // 0.6 ms more: restated.
+        let now = fill(&mut l, 6_000, MS + 6 * MS / 10);
+        assert_eq!(l.lead_ns(now, false), first + 6 * MS / 10);
+        // No frames for a while: the samples age out and the last lead stands.
+        assert_eq!(
+            l.lead_ns(now + Duration::from_secs(10), false),
+            first + 6 * MS / 10
+        );
+    }
+
+    #[test]
+    fn a_stalled_host_does_not_set_a_lead_past_the_cap() {
+        let mut l = LeadEstimator::default();
+        let t0 = Instant::now();
+        for i in 0..20u64 {
+            l.note(t0 + Duration::from_millis(i), 500 * MS);
+        }
+        assert_eq!(
+            l.lead_ns(t0 + Duration::from_millis(20), false),
+            LEAD_MAX_NS
+        );
+    }
 
     /// 59.9502 Hz at 24 MHz.
     const TRUE_PERIOD: f64 = 24_000_000.0 / 59.9502;
