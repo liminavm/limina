@@ -306,6 +306,16 @@ the guest has reset all of those devices and their workers have exited; the xHCI
 protocol after the guest's controller save. Fix for the raw path: give each of those devices a gate,
 one section per wake, as the block worker has.
 
+### A restored guest can go idle and never wake
+`l1_restore_vtimer_offset` fails intermittently under host CPU load (about one run in five, none
+on a quiet host) at "the restored guest never ran": both vCPUs resume, settle in HVF's in-kernel
+WFI wait at the guest's idle PC, and the guest's heartbeat task is never woken again. The timer
+state at restore is sane (unmasked, enabled, deadlines already due) and HVF's vtimer offset matches
+libkrun's record, so the wake lost is the heartbeat task's: the overdue hrtimer's expiry or the IPI
+behind it. It predates libkrun `9c3cb1e8` (it fails the same way at `bf5fb254`). Measurements,
+what is ruled out and the diagnostic patches: `spikes/restore-idle-stall/`. Next: the in-kernel
+GIC's restore and any SGI in flight at the snapshot.
+
 ### Restored hardware decode freezes instead of resyncing seamlessly
 After a restore, virglrs re-creates journaled video codecs/targets and gates the stream until the
 next keyframe (`vrend/video/mod.rs`, `Gate::AwaitingKey`; guard `l2_video_vaapi_restore.rs`),

@@ -1,0 +1,81 @@
+diff --git a/src/hvf/src/lib.rs b/src/hvf/src/lib.rs
+index de5df8b2..2a1b0b09 100644
+--- a/src/hvf/src/lib.rs
++++ b/src/hvf/src/lib.rs
+@@ -1384,6 +1384,18 @@ impl HvfVcpu<'_> {
+         // guest snapshotted mid-timer waits forever on an IRQ that never re-fires.
+         vcpu_set_vtimer_mask(self.vcpuid, state.vtimer_masked)?;
+         self.vtimer_masked = state.vtimer_masked;
++        {
++            // DIAG (temporary)
++            let ctl = self.read_sys_reg(hv_sys_reg_t_HV_SYS_REG_CNTV_CTL_EL0).unwrap_or(0);
++            let cval = self.read_sys_reg(hv_sys_reg_t_HV_SYS_REG_CNTV_CVAL_EL0).unwrap_or(0);
++            let now = unsafe { mach_absolute_time() }.wrapping_sub(state.vtimer_offset);
++            log::info!(
++                "DIAG restore vcpu {}: masked={} ctl={ctl:#x} cval={cval} now={now} ahead_ms={}",
++                self.vcpuid,
++                state.vtimer_masked,
++                (cval as i128 - now as i128) / 24_000
++            );
++        }
+         if !self.nested_enabled {
+             vcpu_set_pending_irq(self.vcpuid, InterruptType::Irq, state.pending_irq)?;
+             vcpu_set_pending_irq(self.vcpuid, InterruptType::Fiq, state.pending_fiq)?;
+@@ -1632,7 +1644,33 @@ impl HvfVcpu<'_> {
+                 self.vtimer_masked = true;
+                 return Ok(VcpuExit::VtimerActivated);
+             }
+-            HV_EXIT_REASON_CANCELED => return Ok(VcpuExit::Canceled),
++            HV_EXIT_REASON_CANCELED => {
++                // DIAG (temporary)
++                if std::env::var_os("LIMINA_DIAG_VTIMER").is_some() {
++                    use std::sync::atomic::{AtomicU64, Ordering};
++                    static LAST: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
++                    let t = unsafe { mach_absolute_time() };
++                    let slot = &LAST[(self.vcpuid as usize) & 7];
++                    if t.wrapping_sub(slot.load(Ordering::Relaxed)) > 36_000_000 {
++                        slot.store(t, Ordering::Relaxed);
++                        let hv_off = self.read_vtimer_offset().unwrap_or(u64::MAX);
++                        let ctl = self.read_sys_reg(hv_sys_reg_t_HV_SYS_REG_CNTV_CTL_EL0).unwrap_or(0);
++                        let cval = self.read_sys_reg(hv_sys_reg_t_HV_SYS_REG_CNTV_CVAL_EL0).unwrap_or(0);
++                        let pc = self.read_reg(hv_reg_t_HV_REG_PC).unwrap_or(0);
++                        let mut hvmask = false;
++                        unsafe { hv_vcpu_get_vtimer_mask(self.vcpuid, &mut hvmask) };
++                        let now = t.wrapping_sub(hv_off);
++                        log::info!(
++                            "DIAG cancel vcpu {}: pc={pc:#x} hv_off={hv_off} rec_off={} ctl={ctl:#x} ahead_ms={} masked={} hvmask={hvmask}",
++                            self.vcpuid,
++                            self.vtimer_offset.get(),
++                            (cval as i128 - now as i128) / 24_000,
++                            self.vtimer_masked
++                        );
++                    }
++                }
++                return Ok(VcpuExit::Canceled);
++            }
+             _ => {
+                 let pc = self.read_reg(hv_reg_t_HV_REG_PC)?;
+                 error!(
+diff --git a/src/libkrun/src/vmm/macos/vstate.rs b/src/libkrun/src/vmm/macos/vstate.rs
+index 2365fe2a..aff1fcdd 100644
+--- a/src/libkrun/src/vmm/macos/vstate.rs
++++ b/src/libkrun/src/vmm/macos/vstate.rs
+@@ -626,6 +626,18 @@ impl Vcpu {
+                 .as_ref()
+                 .map(vcpu_sched::BandGuard::kick_interval)
+         });
++        // DIAG (temporary): kick every vCPU each 2 s so its state is logged on the Canceled exit.
++        if std::env::var_os("LIMINA_DIAG_VTIMER").is_some() {
++            thread::Builder::new()
++                .name(format!("vcpu{}-diag", self.id))
++                .spawn(move || {
++                    loop {
++                        thread::sleep(Duration::from_secs(2));
++                        let _ = vcpu_request_exit(hvf_vcpuid);
++                    }
++                })
++                .ok();
++        }
+         if let Some(interval) = kick_interval {
+             let heartbeat = Arc::clone(&heartbeat);
+             thread::Builder::new()

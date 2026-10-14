@@ -1,0 +1,41 @@
+diff --git a/crates/limina-test/tests/l1_restore_vtimer_offset.rs b/crates/limina-test/tests/l1_restore_vtimer_offset.rs
+index 5d22ef5b..86e9d192 100644
+--- a/crates/limina-test/tests/l1_restore_vtimer_offset.rs
++++ b/crates/limina-test/tests/l1_restore_vtimer_offset.rs
+@@ -99,7 +99,9 @@ fn a_restored_guest_keeps_its_counter_across_the_next_pause() {
+             .expect("resolving L1 guest config")
+             .append_cmdline("limina.counter")
+             .with_supervisor_log()
+-            .with_env("LIMINA_HOST_SLEEP_SEAM", "1");
++            .with_env("LIMINA_HOST_SLEEP_SEAM", "1")
++            .with_env("RUST_LOG", "info")
++            .with_env("LIMINA_DIAG_VTIMER", "1");
+         c.cpus = CPUS;
+         c.ram_mib = 512;
+         c
+@@ -163,9 +165,24 @@ fn a_restored_guest_keeps_its_counter_across_the_next_pause() {
+     let restored_from = last_mono_ms(&g2.console()).unwrap_or(0);
+     let deadline = Instant::now() + Duration::from_secs(20);
+     while last_mono_ms(&g2.console()).unwrap_or(0) <= restored_from {
+-        assert!(Instant::now() < deadline, "the restored guest never ran");
++        if Instant::now() >= deadline {
++            // DIAG (temporary)
++            let console = g2.console();
++            let tail: Vec<&str> = console.lines().rev().take(40).collect();
++            eprintln!("DIAG console tail:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
++            eprintln!("DIAG supervisor log:\n{}", g2.supervisor_log());
++            if let Ok(w) = g2.worker_pid() {
++                let out = std::env::var("DIAG_SAMPLE").unwrap_or("/tmp/diag-sample.txt".into());
++                let _ = std::process::Command::new("sample").args([&w.to_string(), "2", "-file", &out]).output();
++                eprintln!("DIAG sampled worker {w} into {out}");
++            }
++            panic!("the restored guest never ran");
++        }
+         std::thread::sleep(Duration::from_millis(200));
+     }
++    for l in g2.supervisor_log().lines().filter(|l| l.contains("DIAG")) {
++        eprintln!("DIAG ok-run {l}");
++    }
+     // The restore consumed the snapshot by renaming it, so its path is free: a directory there
+     // makes the next save fail after the vCPUs have parked.
+     std::fs::create_dir_all(&snap).expect("blocking the snapshot path");
