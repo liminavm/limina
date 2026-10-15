@@ -41,10 +41,12 @@ live branch has commits the PR lacks, replay them onto the PR's rebased tip with
 Work in `cargo xtask worktree new <name>`. Its `third_party/` clones are worktrees of main's, so
 the PR refs are visible after a `git fetch liminavm`.
 
-- **Mesa never gets checked out in the shared clones.** `/Volumes/mesa-cs/mesa` and its sibling
-  worktrees belong to every session on the host, so in them run only read-only commands
-  (`git -C … log/show/range-diff`). To build or edit a candidate, make a private case-sensitive
-  volume and detached worktrees on it:
+- **Review and edit Mesa outside the shared clones.** `/Volumes/mesa-cs/mesa` and its sibling
+  worktrees belong to every session on the host. In them, run only `fetch` (to get the PR refs:
+  `git -C /Volumes/mesa-cs/mesa fetch liminavm`) and read-only commands (`log`, `show`,
+  `range-diff`). The one sanctioned move of the shared checkout is the host KK build in step 4.
+  To edit a candidate or build the guest drivers from it, make a private case-sensitive volume
+  and detached worktrees on it:
   ```sh
   hdiutil create -size 12g -fs "Case-sensitive APFS" -type SPARSE -volname mesa-accept <scratch>/mesa-accept.sparseimage
   hdiutil attach <scratch>/mesa-accept.sparseimage -mountpoint /Volumes/mesa-accept
@@ -96,7 +98,7 @@ Each fork is covered as follows:
 | Fork / branch | Build | Covered by the suite as |
 |---|---|---|
 | libkrun, imago | `cargo xtask build` (worktree clones at the candidate revs) | every test |
-| mesa `limina-kk` (host KK + zink) | `scripts/build-host-mesa.sh both` **in place**, into the shared `/Volumes/mesa-cs/build-kk` and `zink-kk-prefix` (the harness loads only those). Keep it if the suite is clean; rebuild the old rev if the round is rejected. | every venus/vrend test |
+| mesa `limina-kk` (host KK + zink) | `scripts/build-host-mesa.sh both` **in place**, run from the worktree. It moves the shared checkout's `limina-kk` branch to the *worktree's* manifest pin (so bump the pin first, step 3) and builds into the shared `/Volumes/mesa-cs/build-kk` and `zink-kk-prefix`, the only KK the harness loads. Keep it if the suite is clean. If the round is rejected, run the script again from a checkout at the old pin. | every venus/vrend test |
 | mesa `metal-native-context` (guest vendor drivers) | `MESA_TREE=/Volumes/mesa-accept/mesa-mnc VOLUME=<own-volume> scripts/build-gpu-drivers.sh`, then `scripts/package-gpu-drivers.sh` | the metal and enhanced tests, through image clones (below) |
 | mesa `limina-guest` (guest venus RPM) | none: bump the pin and run `scripts/export-mesa-guest-patches.sh` | **not tested.** No RPM build is part of acceptance. |
 | edk2 (when the pin moved, or the suite refuses a stale firmware) | `scripts/build-krun-efi.sh` | every EFI boot |
