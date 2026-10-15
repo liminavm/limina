@@ -171,3 +171,23 @@ too.
 
     cc -Wall -I/opt/homebrew/include xfb-probe.c -L/opt/homebrew/lib -lvulkan -o xp
     VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./xp [case]
+
+## `desc-span-probe.c` — descriptor updates across consecutive bindings
+
+The spec lets one descriptor update run past the end of its binding: the rest goes into the next
+binding at element 0, skipping bindings with no descriptors, and for an inline uniform block the
+count and offset are bytes. ggml's Vulkan backend (llama.cpp, Ollama) writes all of a dispatch's
+storage buffers this way, in one write from binding 0. Each case updates a set by one kind of span
+(a write, dynamic buffers, a skipped empty binding, a span starting mid-array, inline uniform
+blocks, a copy, an update template, a push descriptor), dispatches a compute shader that copies
+what the spanned bindings hold into binding 0, and checks the values; what a descriptor holds
+cannot be read back any other way. `bad-span-type` and `bad-span-end` are spans the spec forbids
+(into a binding of another type, past the last binding), which KK must refuse. `span/` holds the
+GLSL and the SPIR-V headers `span/gen.sh` makes from it.
+
+Fixed in limina-kk `kk: follow descriptor updates across consecutive bindings`. Before it the
+eight valid cases FAIL, each with `kk: refusing a descriptor write` (or copy, or template update)
+and zeroed output; after it all ten PASS, and so does every case of `probe.c`.
+
+    cc -Wall -I/opt/homebrew/include desc-span-probe.c -L/opt/homebrew/lib -lvulkan -o dsp
+    VK_ICD_FILENAMES=<kk build>/.../kosmickrisp_mesa_devenv_icd.aarch64.json ./dsp [case]

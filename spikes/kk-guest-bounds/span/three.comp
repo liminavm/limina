@@ -1,0 +1,7 @@
+#version 450
+// Bindings 0, 1 and 2, one buffer each: what 1 and 2 hold lands in 0.
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0) buffer O { uint o[]; };
+layout(set = 0, binding = 1) readonly buffer A { uint a[]; };
+layout(set = 0, binding = 2) readonly buffer B { uint b[]; };
+void main() { o[0] = a[0]; o[1] = b[0]; }

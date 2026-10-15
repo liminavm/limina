@@ -1,0 +1,7 @@
+#version 450
+// Binding 0 is a two-buffer array, binding 1 one buffer: a write of two from element 1 of
+// binding 0 fills that element and binding 1.
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0) buffer X { uint v[]; } x[2];
+layout(set = 0, binding = 1) readonly buffer B { uint b[]; };
+void main() { x[0].v[0] = x[1].v[0]; x[0].v[1] = b[0]; }
