@@ -12,6 +12,9 @@ document is about executing those verdicts, not re-deriving them** — though ex
 to correct some, because applying a verdict tests it in a way reading never does. Both linux
 findings below came out that way.
 
+Keeping a fork current once it exists, by accepting the weekly `[auto-rebase]` PRs, is
+[fork-rebase-acceptance.md](fork-rebase-acceptance.md).
+
 ## The model
 
 - One fork per dependency in the **liminavm** org, **public**.
@@ -21,7 +24,7 @@ findings below came out that way.
   clones and checks out the pinned rev. Optional keys: `base` (the upstream tag/rev the branch
   sits on) and `heavy = true` (a tree this host never builds — skipped unless `--heavy`, and
   cloned blobless when materialized).
-- **Tag before every rebase.** Tag the outgoing head (`limina/<date>`) so every rev ever pinned
+- **Tag before every rebase.** Tag the outgoing head (`pre-rebase-<date>`) so every rev ever pinned
   stays reachable. This replaces `UPSTREAM_BASE`.
 - **`git format-patch` becomes a derived artifact**, not a source of truth — for upstream
   submission, and for any build that applies our changes onto a *different* base than the branch

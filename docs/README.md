@@ -66,6 +66,13 @@ Decision-oriented design docs — the founding one plus one per major feature
   per-patch upstreamability triage of all carried series, plans/risks; feeds the
   upstreaming effort.
 
+## Forks and upstreaming
+
+- [Fork migration](upstreaming/fork-migration.md) — how a dependency moves onto a liminavm fork.
+- [Accepting the weekly fork rebases](upstreaming/fork-rebase-acceptance.md) — review, fix,
+  test and push the `[auto-rebase]` PRs.
+- [Ledger](upstreaming/ledger/README.md) — per-patch upstreaming verdicts.
+
 ## Guest images & tiers
 
 - [images.md](images.md) — the source of truth for the Fedora guest disk images we develop and

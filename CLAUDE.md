@@ -34,7 +34,8 @@ right tool — not treat upstream as immutable:
   [shipped], balloon target/inflate control, runtime display resize, zero-copy scanout,
   snapshot/restore machinery, an emulated xHCI controller + USB gadgets). To change libkrun:
   commit on the fork's `limina` branch, push, update the manifest rev; tag before every
-  branch rewrite. Audit status: `docs/upstreaming/ledger/libkrun.md`.
+  branch rewrite. Audit status: `docs/upstreaming/ledger/libkrun.md`. The weekly
+  `[auto-rebase]` PRs in the forks are accepted by `docs/upstreaming/fork-rebase-acceptance.md`.
   - **`cargo xtask vendor`** is the one-command bootstrap: it recreates every gitignored
     `third_party/` source tree. **Every dep is on the fork model**: clone our fork under github.com/liminavm and check out the
     rev pinned in the committed `third_party/manifest.toml` — the fork's `limina` branch IS the
