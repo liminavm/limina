@@ -16,8 +16,10 @@ get / set false / set true / get on both lines. `build.sh` builds, signs and run
 | macOS 26.6.2, M1 Max | none | `HV_SUCCESS` | `HV_SUCCESS` | `HV_SUCCESS` (reads back 1) |
 | macOS 27.0.1, M4 Pro | in-kernel | `HV_UNSUPPORTED` | `HV_UNSUPPORTED` | `HV_UNSUPPORTED` |
 | macOS 27.0.1, M4 Pro | none | `HV_SUCCESS` | `HV_SUCCESS` | `HV_SUCCESS` (reads back 1) |
+| macOS 27.0.1, M1 Max | in-kernel | `HV_UNSUPPORTED` | `HV_UNSUPPORTED` | `HV_UNSUPPORTED` |
+| macOS 27.0.1, M1 Max | none | `HV_SUCCESS` | `HV_SUCCESS` | `HV_SUCCESS` (reads back 1) |
 
-Same on both lines (IRQ, FIQ). `spikes/m9-hvf-state-roundtrip` dies on 27.0.1 at the same call
+Same on both lines (IRQ, FIQ), and the same on both chips: it is the OS, not the silicon. `spikes/m9-hvf-state-roundtrip` dies on 27.0.1 at the same call
 (`roundtrip.c:447`) and is GREEN on 26.6.2. With its four pending-line calls made non-fatal it is
 GREEN on 27.0.1 too, with the same rejections as on 26 (the EL2 reads, `ICC_RPR_EL1` on restore):
 the pending lines are the only part of a vCPU + GIC snapshot that macOS 27 broke.
