@@ -749,9 +749,9 @@ pub(crate) struct DisplayMenuRow {
     /// What to call it — the panel's own name, as the guest is told it.
     pub(crate) name: String,
     pub(crate) enabled: bool,
-    /// The panel the VM's window is on. Its row is checked and dead: switching off the display
-    /// you are looking at has no sensible outcome.
-    pub(crate) primary: bool,
+    /// The only display still switched on. Its row is checked and dead until another one is
+    /// switched on: a guest with no display at all is no state to leave it in.
+    pub(crate) last_enabled: bool,
 }
 
 define_class!(
@@ -854,9 +854,10 @@ define_class!(
             }
             if action == Some(objc2::sel!(toggleDisplay:)) {
                 let tag = item.tag();
-                let primary = DISPLAY_MENU
-                    .with(|r| menu_row_for_tag(&r.borrow(), tag).is_some_and(|row| row.primary));
-                return (!primary).into();
+                let last = DISPLAY_MENU.with(|r| {
+                    menu_row_for_tag(&r.borrow(), tag).is_some_and(|row| row.last_enabled)
+                });
+                return (!last).into();
             }
             // The guest-controlled pointer gives the guest every tap, so these two say nothing
             // while it is on.
@@ -896,7 +897,7 @@ define_class!(
             else {
                 return;
             };
-            if row.primary {
+            if row.last_enabled {
                 return;
             }
             log::info!(
@@ -1020,16 +1021,38 @@ define_class!(
     }
 );
 
+/// Put the (windowed) window on a panel, keeping its size where the panel's visible area allows,
+/// centered. A panel no longer attached is left alone; the relocation then times out.
+fn move_window_to_panel(window: &NSWindow, panel: u64, mtm: MainThreadMarker) {
+    let Some(screen) = NSScreen::screens(mtm)
+        .into_iter()
+        .find(|s| hostdisplay::panel_key(s) == panel)
+    else {
+        return;
+    };
+    let vis = screen.visibleFrame();
+    let cur = window.frame();
+    let w = cur.size.width.min(vis.size.width);
+    let h = cur.size.height.min(vis.size.height);
+    window.setFrame_display(
+        NSRect::new(
+            NSPoint::new(
+                vis.origin.x + (vis.size.width - w) / 2.0,
+                vis.origin.y + (vis.size.height - h) / 2.0,
+            ),
+            NSSize::new(w, h),
+        ),
+        true,
+    );
+}
+
 /// Republish what the Displays menu shows, if it changed. Called from the render timer, which
 /// is the only place that knows both the slot table and which panel the window is on.
-fn publish_display_menu(
-    table: &displays::DisplayTable,
-    names: &[(u64, String)],
-    primary: Option<u64>,
-) {
+fn publish_display_menu(table: &displays::DisplayTable, names: &[(u64, String)]) {
     let attached: Vec<u64> = names.iter().map(|(k, _)| *k).collect();
-    let rows: Vec<DisplayMenuRow> = table
-        .rows(&attached)
+    let table_rows = table.rows(&attached);
+    let lit = table_rows.iter().filter(|r| r.enabled).count();
+    let rows: Vec<DisplayMenuRow> = table_rows
         .into_iter()
         .map(|row| DisplayMenuRow {
             panel: row.panel,
@@ -1039,7 +1062,7 @@ fn publish_display_menu(
                 .map(|(_, n)| n.clone())
                 .unwrap_or_default(),
             enabled: row.enabled,
-            primary: primary == Some(row.panel),
+            last_enabled: row.enabled && lit == 1,
         })
         .collect();
     DISPLAY_MENU.with(|r| {
@@ -1271,6 +1294,11 @@ thread_local! {
     /// button / Cmd-W); consumed by the render timer, which routes it through the
     /// `on_window_close` policy. Main-thread only, like all window state.
     static CLOSE_REQUESTED: Cell<bool> = const { Cell::new(false) };
+
+    /// Set by [`WindowCloseInterceptor`] when a fullscreen exit has FINISHED, animation and
+    /// all; consumed by the render timer's display relocation, which must not move the window
+    /// while AppKit is still animating it (the style bit flips at the start).
+    static FULLSCREEN_EXITED: Cell<bool> = const { Cell::new(false) };
 
     /// Where the window is in the suspended-window lifecycle (task #18). Written by the
     /// render timer; read by the VM-menu validation and the input monitor (all main
@@ -2025,9 +2053,9 @@ impl ExtendOverlay {
 }
 
 define_class!(
-    // SAFETY: NSObject has no subclassing requirements; no Drop; only
-    // `windowShouldClose:` is implemented, so every other delegate behavior keeps its
-    // AppKit default (the window otherwise stays on its deliberate no-delegate diet).
+    // SAFETY: NSObject has no subclassing requirements; no Drop; only `windowShouldClose:`
+    // and `windowDidExitFullScreen:` are implemented, so every other delegate behavior keeps
+    // its AppKit default (the window otherwise stays on its deliberate no-delegate diet).
     #[unsafe(super = objc2_foundation::NSObject)]
     #[thread_kind = MainThreadOnly]
     #[name = "LiminaWindowCloseInterceptor"]
@@ -2045,6 +2073,12 @@ define_class!(
         fn window_should_close(&self, _sender: &NSWindow) -> bool {
             CLOSE_REQUESTED.with(|c| c.set(true));
             false
+        }
+
+        // The one fullscreen moment the style mask cannot tell: the exit animation is over.
+        #[unsafe(method(windowDidExitFullScreen:))]
+        fn window_did_exit_full_screen(&self, _notification: &objc2_foundation::NSNotification) {
+            FULLSCREEN_EXITED.with(|c| c.set(true));
         }
     }
 );
@@ -2615,6 +2649,9 @@ pub fn run(
         let taps_saved: Cell<bool> = Cell::new(GUEST_TAPS.with(|f| f.get()));
         let drag_saved: Cell<bool> = Cell::new(TAP_DRAG.with(|f| f.get()));
         let panel_names: RefCell<Vec<(u64, String)>> = RefCell::new(Vec::new());
+        // The window being moved off a panel the user switched off, while fullscreen across
+        // displays (`displays::Relocation`).
+        let relocation: Cell<Option<displays::Relocation>> = Cell::new(None);
         let window = window.clone();
         let ack_tx = ack_tx.clone();
         let surface_map = surface_map.clone();
@@ -2747,11 +2784,61 @@ pub fn run(
                     }
                     // Fullscreen is what lights up the other panels — when the user opted in
                     // via the Displays menu; a window occupies exactly the display it is on.
-                    let presentation = displays::presentation_for(
-                        panel,
-                        window.styleMask().contains(NSWindowStyleMask::FullScreen),
-                        FULLSCREEN_ALL_DISPLAYS.with(|f| f.get()),
-                    );
+                    let fullscreen = window.styleMask().contains(NSWindowStyleMask::FullScreen);
+                    let exited = FULLSCREEN_EXITED.with(|c| c.replace(false));
+                    let fsall = FULLSCREEN_ALL_DISPLAYS.with(|f| f.get());
+                    let mut moving = relocation.get();
+                    if moving.is_none()
+                        && let Some(target) = panel.and_then(|p| {
+                            table.relocation_target(
+                                displays::presentation_for(Some(p), fullscreen, fsall),
+                                &attached,
+                            )
+                        })
+                    {
+                        log::info!(
+                            "display: the window's panel {:x} was switched off; moving the \
+                             window to panel {target:x}",
+                            panel.unwrap_or_default()
+                        );
+                        moving = Some(displays::Relocation::new(target, std::time::Instant::now()));
+                    }
+                    if let Some(mut r) = moving {
+                        let step = r.step(std::time::Instant::now(), fullscreen, exited, panel);
+                        moving = match step {
+                            displays::RelocationStep::Wait => Some(r),
+                            displays::RelocationStep::LeaveFullscreen => {
+                                window.toggleFullScreen(None);
+                                Some(r)
+                            }
+                            displays::RelocationStep::MoveTo(target) => {
+                                move_window_to_panel(&window, target, mtm);
+                                Some(r)
+                            }
+                            displays::RelocationStep::EnterFullscreen => {
+                                log::info!("display: the window is on panel {:x}", r.target);
+                                window.toggleFullScreen(None);
+                                None
+                            }
+                            displays::RelocationStep::GiveUp => {
+                                log::warn!(
+                                    "display: moving the window to panel {:x} did not finish; \
+                                     leaving it where it is",
+                                    r.target
+                                );
+                                if !fullscreen {
+                                    window.toggleFullScreen(None);
+                                }
+                                None
+                            }
+                        };
+                    }
+                    relocation.set(moving);
+                    // Held across the move: the interlude out of fullscreen must not read as
+                    // windowed, which would unplug every other panel only to plug them back.
+                    guest_windows.borrow().hold_cover(moving.is_some());
+                    let presentation =
+                        displays::presentation_for(panel, fullscreen || moving.is_some(), fsall);
                     // Gated on the guest having presented, like every other push here: a plan
                     // acted on before the first frame would cycle connectors under a guest that
                     // has not finished probing them.
@@ -2764,7 +2851,7 @@ pub fn run(
                     }
                 };
                 primary_slot.set(slot);
-                publish_display_menu(&display_table.borrow(), &panel_names.borrow(), panel);
+                publish_display_menu(&display_table.borrow(), &panel_names.borrow());
                 {
                     // Persist on change only: this runs at frame rate, and the assignment moves
                     // about as often as a monitor is plugged in.
@@ -4355,7 +4442,7 @@ mod tests {
             panel,
             name: name.into(),
             enabled: true,
-            primary: false,
+            last_enabled: false,
         };
         let before = [row(10, "a"), row(20, "b"), row(0x8000_0000_0000_0003, "c")];
         // The user opens the menu over "c" (its tag bakes in the panel key)...
@@ -4370,6 +4457,29 @@ mod tests {
         // The display itself unplugging means the click lands on nothing, never a neighbour.
         let gone = [row(10, "a"), row(20, "b")];
         assert!(super::menu_row_for_tag(&gone, tag).is_none());
+    }
+
+    /// Any display can be switched off, the window's included, except the last one still on.
+    #[test]
+    fn only_the_last_display_switched_on_is_dead_in_the_menu() {
+        let names = vec![(10u64, "a".to_string()), (20u64, "b".to_string())];
+        let mut table = super::displays::DisplayTable::new(4);
+        let dead = || {
+            super::DISPLAY_MENU.with(|r| {
+                r.borrow()
+                    .iter()
+                    .map(|row| row.last_enabled)
+                    .collect::<Vec<_>>()
+            })
+        };
+        super::publish_display_menu(&table, &names);
+        assert_eq!(dead(), vec![false, false]);
+        table.set_enabled(10, false);
+        super::publish_display_menu(&table, &names);
+        assert_eq!(dead(), vec![false, true]);
+        table.set_enabled(10, true);
+        super::publish_display_menu(&table, &names);
+        assert_eq!(dead(), vec![false, false]);
     }
     use super::*;
 

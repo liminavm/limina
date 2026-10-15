@@ -413,8 +413,14 @@ guest's current state (`connected`), and the planner ANDs them — so the Displa
 the same connector cycle as an unplug, planned in the same place. Intent is keyed on the **panel**
 and persisted as `display_disabled`, because it has to outlive the assignment: an unplugged panel
 has no slot to carry the decision. The menu lists every attached panel rather than every assigned
-slot (a panel earns a connector only when something wants to show it), and the row for the panel
-the window is on is checked and dead.
+slot (a panel earns a connector only when something wants to show it). Any row can be switched
+off, the window's own included; only the last display still on is checked and dead, until another
+is switched on. Switching off the window's panel is intent only while windowed (the window keeps
+showing it, `DisplayTable::wanted`). Fullscreen across displays moves the window to an enabled
+panel instead (`DisplayTable::relocation_target`, `displays::Relocation`): leave fullscreen, wait
+for AppKit's `windowDidExitFullScreen:` (the style bit flips at the start of the animation), move,
+re-enter. The presentation and the secondaries' covers are held through the interlude, so only the
+switched-off panel cycles.
 
 **A window's lifetime is the TABLE's decision, never `scanoutgone`'s.** A guest disables a scanout
 and reconfigures it for every ordinary modeset — simpledrm → plymouth → gdm on the way up, and

@@ -79,8 +79,9 @@ pub(crate) enum Phase {
 pub(crate) enum Presentation {
     /// One window on one panel: that panel's slot, and nothing else.
     Windowed { panel: u64 },
-    /// Fullscreen across every attached panel. `panel` is still the one the *window* is on —
-    /// the only slot that cannot be switched off, because it is the one the user is looking at.
+    /// Fullscreen across every attached panel. `panel` is still the one the *window* is on; it
+    /// stays lit while the window is there, even switched off, until the window has been moved
+    /// off it ([`DisplayTable::relocation_target`]).
     FullscreenAll { panel: u64 },
 }
 
@@ -314,10 +315,10 @@ impl DisplayTable {
             want[0] = true;
             return want;
         }
-        // The panel the window is on is wanted whatever its `enabled` says. The user cannot switch
-        // off the display they are looking at (the menu greys that row), but a panel switched off
-        // while the window was elsewhere can still become the window's — and a window showing a
-        // connector the guest has unplugged shows nothing at all.
+        // The panel the window is on is wanted whatever its `enabled` says: a window showing a
+        // connector the guest has unplugged shows nothing at all. Switching it off is intent only
+        // while windowed; fullscreen across displays moves the window to an enabled panel first
+        // (`relocation_target`), and only then does this panel drop out.
         let primary = match presentation {
             Presentation::Windowed { panel } | Presentation::FullscreenAll { panel } => panel,
         };
@@ -499,6 +500,36 @@ impl DisplayTable {
         }
     }
 
+    /// Where the window has to go because the user switched off the panel it is on, if anywhere.
+    ///
+    /// Only fullscreen across displays moves the window: there every enabled panel is lit, the
+    /// window's included, so switching its panel off has to hand the window to another one. A
+    /// windowed VM shows its own panel and nothing else, so there the switch is intent only — it
+    /// applies the next time fullscreen lights up the rest, and the window keeps showing
+    /// ([`Self::wanted`] keeps the window's panel up whatever its switch says).
+    ///
+    /// The target is the enabled attached panel holding the lowest slot — one the guest is
+    /// already showing, so the move cycles only the panel being switched off — or, with none
+    /// holding a slot yet, the first enabled one attached. `None` when nothing is enabled, which
+    /// the menu prevents and a replug can still reach: the window then stays where it is.
+    pub(crate) fn relocation_target(
+        &self,
+        presentation: Presentation,
+        attached: &[u64],
+    ) -> Option<u64> {
+        let Presentation::FullscreenAll { panel } = presentation else {
+            return None;
+        };
+        if self.phase != Phase::Os || self.is_enabled(panel) {
+            return None;
+        }
+        attached
+            .iter()
+            .copied()
+            .filter(|&p| p != panel && self.is_enabled(p))
+            .min_by_key(|&p| self.find(p).unwrap_or(u32::MAX))
+    }
+
     /// Restore a remembered assignment. Entries beyond this VM's pool are dropped — the pool may
     /// have been configured smaller since — and the connector state is left alone, because it is
     /// decided by the phase and the presentation, never by what a previous run was showing.
@@ -530,6 +561,83 @@ pub(crate) fn presentation_for(
         Some(panel) if fullscreen && use_other_screens => Presentation::FullscreenAll { panel },
         Some(panel) => Presentation::Windowed { panel },
         None => Presentation::Windowed { panel: 0 },
+    }
+}
+
+/// Moving a fullscreen-across-displays window off a panel the user switched off.
+///
+/// A native fullscreen window cannot change screens, so the move is three steps: leave
+/// fullscreen, put the window on the target panel, enter fullscreen there. The caller holds the
+/// presentation as fullscreen-across-displays for the whole of it, so the interlude does not read
+/// as windowed and unplug every other panel only to plug them back in.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Relocation {
+    pub(crate) target: u64,
+    stage: RelocationStage,
+    started: std::time::Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelocationStage {
+    /// Not yet asked to leave fullscreen.
+    Start,
+    /// Asked; waiting for AppKit to say the exit has finished — the style bit flips at the start
+    /// of the animation, and a frame set mid-animation is fought.
+    Leaving,
+    /// Moved; waiting for the window to be on the target panel.
+    Moving,
+}
+
+/// What the caller does on this tick of a [`Relocation`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RelocationStep {
+    Wait,
+    LeaveFullscreen,
+    MoveTo(u64),
+    EnterFullscreen,
+    /// It did not finish in time; put fullscreen back wherever the window is and stop.
+    GiveUp,
+}
+
+impl Relocation {
+    /// Long enough for two fullscreen animations and a move, with room for a busy host.
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    pub(crate) fn new(target: u64, now: std::time::Instant) -> Self {
+        Self {
+            target,
+            stage: RelocationStage::Start,
+            started: now,
+        }
+    }
+
+    /// One tick. `exited` is whether AppKit has reported a finished fullscreen exit since the
+    /// last tick; `on_panel` is the panel the window is on now. Once [`RelocationStep::
+    /// EnterFullscreen`] or [`RelocationStep::GiveUp`] is returned, the relocation is over.
+    pub(crate) fn step(
+        &mut self,
+        now: std::time::Instant,
+        fullscreen: bool,
+        exited: bool,
+        on_panel: Option<u64>,
+    ) -> RelocationStep {
+        if now.duration_since(self.started) > Self::TIMEOUT {
+            return RelocationStep::GiveUp;
+        }
+        match self.stage {
+            RelocationStage::Start => {
+                self.stage = RelocationStage::Leaving;
+                RelocationStep::LeaveFullscreen
+            }
+            RelocationStage::Leaving if exited && !fullscreen => {
+                self.stage = RelocationStage::Moving;
+                RelocationStep::MoveTo(self.target)
+            }
+            RelocationStage::Moving if on_panel == Some(self.target) => {
+                RelocationStep::EnterFullscreen
+            }
+            _ => RelocationStep::Wait,
+        }
     }
 }
 
@@ -1182,6 +1290,121 @@ mod tests {
         assert_eq!(
             presentation_for(None, true, true),
             Presentation::Windowed { panel: 0 }
+        );
+    }
+    /// Switching off the panel a fullscreen-across-displays window is on hands the window to an
+    /// enabled panel the guest is already showing.
+    #[test]
+    fn switching_off_the_windows_panel_in_fullscreen_moves_the_window() {
+        let mut t = os_table(4);
+        let all = [BUILT_IN, STUDIO, THIRD];
+        let fs = Presentation::FullscreenAll { panel: BUILT_IN };
+        t.plan(fs, &all);
+        assert_eq!(
+            t.relocation_target(fs, &all),
+            None,
+            "nothing switched off yet"
+        );
+        t.set_enabled(BUILT_IN, false);
+        assert_eq!(t.relocation_target(fs, &all), Some(STUDIO));
+    }
+
+    /// Windowed, the switch is intent only: the window stays and keeps its panel lit.
+    #[test]
+    fn switching_off_the_windows_panel_while_windowed_is_intent_only() {
+        let mut t = os_table(4);
+        let all = [BUILT_IN, STUDIO];
+        let win = Presentation::Windowed { panel: BUILT_IN };
+        t.plan(win, &all);
+        t.set_enabled(BUILT_IN, false);
+        assert_eq!(t.relocation_target(win, &all), None);
+        t.plan(win, &all);
+        assert_eq!(t.connected_slots(), vec![0], "the window's panel stays up");
+    }
+
+    /// The move goes to a panel already holding a slot, not to the first one listed.
+    #[test]
+    fn the_window_moves_to_a_panel_the_guest_already_shows() {
+        let mut t = os_table(4);
+        t.plan(
+            Presentation::FullscreenAll { panel: BUILT_IN },
+            &[BUILT_IN, THIRD],
+        );
+        // STUDIO plugs in later and is listed first, but has no slot yet.
+        let all = [STUDIO, BUILT_IN, THIRD];
+        t.set_enabled(BUILT_IN, false);
+        assert_eq!(
+            t.relocation_target(Presentation::FullscreenAll { panel: BUILT_IN }, &all),
+            Some(THIRD)
+        );
+    }
+
+    /// With every attached panel switched off (a replug can get there), the window stays put.
+    #[test]
+    fn with_nothing_enabled_the_window_stays() {
+        let mut t = os_table(4);
+        let all = [BUILT_IN, STUDIO];
+        let fs = Presentation::FullscreenAll { panel: BUILT_IN };
+        t.plan(fs, &all);
+        t.set_enabled(BUILT_IN, false);
+        t.set_enabled(STUDIO, false);
+        assert_eq!(t.relocation_target(fs, &all), None);
+    }
+
+    /// Once the window has moved, its old panel drops out of the guest and the rest stay.
+    #[test]
+    fn after_the_move_only_the_switched_off_panel_is_unplugged() {
+        let mut t = os_table(4);
+        let all = [BUILT_IN, STUDIO, THIRD];
+        t.plan(Presentation::FullscreenAll { panel: BUILT_IN }, &all);
+        let studio = t.slot_for(STUDIO, &all).unwrap();
+        let third = t.slot_for(THIRD, &all).unwrap();
+        t.set_enabled(BUILT_IN, false);
+        let pushes = t.plan(Presentation::FullscreenAll { panel: STUDIO }, &all);
+        assert_eq!(
+            pushes,
+            vec![SlotPush {
+                slot: 0,
+                action: SlotAction::Disconnect
+            }]
+        );
+        assert_eq!(t.connected_slots(), vec![studio, third]);
+    }
+    /// The move is leave, then move once the exit has FINISHED, then enter once on the target.
+    #[test]
+    fn a_relocation_leaves_moves_and_reenters_in_order() {
+        let t0 = std::time::Instant::now();
+        let mut r = Relocation::new(STUDIO, t0);
+        assert_eq!(
+            r.step(t0, true, false, Some(BUILT_IN)),
+            RelocationStep::LeaveFullscreen
+        );
+        // The style bit drops at the start of the animation; the move waits for its end.
+        assert_eq!(
+            r.step(t0, false, false, Some(BUILT_IN)),
+            RelocationStep::Wait
+        );
+        assert_eq!(
+            r.step(t0, false, true, Some(BUILT_IN)),
+            RelocationStep::MoveTo(STUDIO)
+        );
+        assert_eq!(r.step(t0, false, false, None), RelocationStep::Wait);
+        assert_eq!(
+            r.step(t0, false, false, Some(STUDIO)),
+            RelocationStep::EnterFullscreen
+        );
+    }
+
+    /// A move that never completes gives up rather than holding the presentation for good.
+    #[test]
+    fn a_stuck_relocation_gives_up() {
+        let t0 = std::time::Instant::now();
+        let mut r = Relocation::new(STUDIO, t0);
+        r.step(t0, true, false, Some(BUILT_IN));
+        let late = t0 + std::time::Duration::from_secs(11);
+        assert_eq!(
+            r.step(late, true, false, Some(BUILT_IN)),
+            RelocationStep::GiveUp
         );
     }
 }

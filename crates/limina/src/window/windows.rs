@@ -746,6 +746,9 @@ struct SecondaryWindow {
 pub(crate) struct GuestWindows {
     primary: PrimaryDisplay,
     secondaries: HashMap<usize, SecondaryWindow>,
+    /// The secondaries keep covering their panels although the primary is out of fullscreen:
+    /// it is being moved to another panel, and will be back ([`Self::hold_cover`]).
+    cover_held: Cell<bool>,
 }
 
 impl GuestWindows {
@@ -753,7 +756,14 @@ impl GuestWindows {
         Self {
             primary,
             secondaries: HashMap::new(),
+            cover_held: Cell::new(false),
         }
+    }
+
+    /// Keep the secondaries covering while the primary leaves fullscreen only to move panels —
+    /// otherwise each would drop its own fullscreen and take it again a second later.
+    pub(crate) fn hold_cover(&self, held: bool) {
+        self.cover_held.set(held);
     }
 
     /// Drop, from EVERY window's frame cache, the surfaces the guest has let go of.
@@ -828,12 +838,13 @@ impl GuestWindows {
         // plane assigned it just before this call), and whether the VM is fullscreen — the
         // primary's Space is what covers every other panel.
         let primary = self.primary.slot.get() as usize;
-        let cover = self
-            .primary
-            .core
-            .window
-            .styleMask()
-            .contains(NSWindowStyleMask::FullScreen);
+        let cover = self.cover_held.get()
+            || self
+                .primary
+                .core
+                .window
+                .styleMask()
+                .contains(NSWindowStyleMask::FullScreen);
 
         // Let go of what the guest has let go of before any window resolves this tick.
         self.drain_releases(surface_map);
