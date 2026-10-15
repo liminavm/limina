@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Yiwei Zhang <zzyiwei@chromium.org>
 Date: Thu, 8 Oct 2026 13:17:00 -0700
-Subject: [PATCH 19/22] venus: ignore imported SYNC_FD payload for signal
+Subject: [PATCH 18/21] venus: ignore imported SYNC_FD payload for signal
  semaphore inspection
 
 Vulkan allows to wait and signal the same binary semaphore as long as

@@ -30,8 +30,8 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "9c3cb1e8f9e04c5cfc73d9f1aa8d43da7fac089a"
-base = "51367cfaf379a5869ca2aa78eab1cfe68a769a52"
+rev = "ce777533dae273acea6bb533820523660579fc20"
+base = "dc1a18ada58cb5d15db5333a12bf2f0cbf64ac15"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
 # delta as commits (TerminalPcdProducerLib build fix, the VirtioSerialDxe TPL fix, PL031
@@ -51,7 +51,7 @@ base = "13e8adac8a83141b51375c799996946082e1eb43"
 repo = "https://github.com/liminavm/imago.git"
 upstream = "https://gitlab.com/hreitz/imago.git"
 branch = "limina"
-rev = "e04b8ec772b51d7e5bfcab83f36e01a2cd6952c1"
+rev = "7f4ffb3e151d445c24af91d4dd718d8b244a92ce"
 
 # The HOST KosmicKrisp / zink-on-KK Mesa. NOT vendored by `cargo xtask vendor`: this tree lives at
 # /Volumes/mesa-cs/mesa on a case-sensitive sparse image (scripts/ensure-mesa-cs.sh), because Mesa
@@ -61,8 +61,8 @@ rev = "e04b8ec772b51d7e5bfcab83f36e01a2cd6952c1"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-kk"
-rev = "d1ed9e2d6608437f98f1130e8cccc7c7e31f25fd"
-base = "ab0ab2209c4"
+rev = "2e1d2485bca38b3f4ac5bd10150b0918539a324d"
+base = "d44453ce07ba5e1e6b71f7960809c38f2526c1cd"
 tree = "/Volumes/mesa-cs/mesa"
 
 # The GUEST KosmicKrisp on the native-context transport (the limina bridge), with the guest-side
@@ -73,8 +73,8 @@ tree = "/Volumes/mesa-cs/mesa"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "metal-native-context"
-rev = "0144c30fc8ce1061c11138d8cb3942997f0ed046"
-base = "d1ed9e2d6608437f98f1130e8cccc7c7e31f25fd"
+rev = "0809183abfc46f86b173212665edef6e04340ca9"
+base = "2e1d2485bca38b3f4ac5bd10150b0918539a324d"
 tree = "/Volumes/mesa-cs/mesa-metal-guest"
 
 # The GUEST venus Mesa (task #11 — same liminavm/mesa repo, its own branch). NOT vendored by
@@ -87,8 +87,8 @@ tree = "/Volumes/mesa-cs/mesa-metal-guest"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-guest"
-rev = "14952457e03ba1c76093996d3ab975343a68202b"
-base = "mesa-26.2.3"
+rev = "4ea3613b0903913e55127828ae6fbcd1da1246f7"
+base = "mesa-26.2.5"
 tree = "/Volumes/mesa-cs/mesa-guest"
 
 # The host GPU renderer, consumed by rutabaga as a Rust crate — nothing here is loaded at
