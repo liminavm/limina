@@ -1,0 +1,21 @@
+#version 450
+// Shifts whose count NIR may take modulo the operand's bit size. Each line masks the count the
+// way GLSL code does, and NIR drops that mask because its own shifts already apply it.
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+layout(local_size_x = 8) in;
+layout(set = 0, binding = 0) readonly buffer In8 { uint8_t s8[]; };
+layout(set = 0, binding = 1) readonly buffer In16 { uint16_t s16[]; };
+layout(set = 0, binding = 2) readonly buffer In32 { uint s32[]; };
+layout(set = 0, binding = 3) buffer Out { uint o[]; };
+void main() {
+  uint i = gl_LocalInvocationID.x;
+  // ggml's IQ scale read: the low or high nibble of byte i/2.
+  o[i] = uint((s8[i / 2] >> (4 * (i & 1))) & uint8_t(0xF));
+  // A 16-bit value shifted by a count kept under 16 by a mask.
+  o[8 + i] = uint((s16[0] >> ((4 * i) & 15)) & uint16_t(0xF));
+  // A 32-bit value shifted by a count kept under 32 by a mask.
+  o[16 + i] = (s32[0] >> ((8 * i) & 31)) & 0xFFu;
+  o[24 + i] = (s32[0] << ((8 * i) & 31)) >> 24;
+}

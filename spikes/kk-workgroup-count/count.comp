@@ -1,0 +1,10 @@
+#version 450
+// One invocation per workgroup: count the workgroups that ran and keep the largest id seen.
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0) buffer Out { uint count; uint max_x; uint max_y; uint max_z; };
+void main() {
+  atomicAdd(count, 1u);
+  atomicMax(max_x, gl_WorkGroupID.x);
+  atomicMax(max_y, gl_WorkGroupID.y);
+  atomicMax(max_z, gl_WorkGroupID.z);
+}
