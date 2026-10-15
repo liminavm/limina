@@ -20,6 +20,10 @@ a stock guest kernel can take it (the design is `spikes/metal-heap-addressing/SK
   `FENCE`. It is plain `git diff` output: to change it, commit the stable tag's
   `drivers/gpu/drm/virtio/` files to a scratch git repository, `git apply` the patch, edit, and
   `git diff` again.
+- `backports/` — upstream fixes a vendored series predates, applied before the hook only where the
+  series' source still lacks them (the build script names each one's tell). `d1b894c5bbb3` takes
+  the hotplug off the control queue's dequeue worker: without it a stock 6.19 guest on the Metal
+  transport wedges at boot, the worker waiting on a primary-plane flush fence only it can signal.
 
 Without the feature bit the module behaves exactly as upstream. The host offers the bit only when
 the worker runs with `LIMINA_GPU_METAL=1` (`crates/limina-vmm/src/krun/metal_ext.rs`).

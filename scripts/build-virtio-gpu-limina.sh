@@ -61,6 +61,17 @@ for f in "${FILES[@]}"; do
     head -c 100 "$TREE/$f" | grep -q "<html" && { echo "bad fetch: $f ($KTAG)" >&2; exit 1; }
 done
 
+# Upstream fixes a vendored series predates, each applied only where its source still lacks it.
+# d1b894c5bbb3 (7.1): the display-info callback raised the hotplug from the control queue's
+# dequeue worker, whose modeset can wait on a fence only that worker signals. A limina host fences
+# every primary-plane flush, so a stock 6.19 guest on the Metal transport wedged at boot whenever a
+# display change reached it while the console's flush was outstanding.
+if grep -q 'if (!drm_helper_hpd_irq_event(vgdev->ddev))' "$TREE/virtgpu_vq.c"; then
+    echo "==> backporting d1b894c5bbb3 (hotplug off the dequeue worker)"
+    patch -p5 -d "$TREE" --no-backup-if-mismatch \
+        < "$SRC/backports/d1b894c5bbb3-drm-virtio-fix-deadlock-in-display_info_cb.patch"
+fi
+
 echo "==> hooking in the extension"
 # Patch paths are in-tree (a/drivers/gpu/drm/virtio/...); strip to the tree root.
 patch -p5 -d "$TREE" --no-backup-if-mismatch < "$SRC/0001-hook-the-limina-extension.patch"
