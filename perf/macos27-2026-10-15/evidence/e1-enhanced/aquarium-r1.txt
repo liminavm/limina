@@ -1,0 +1,14 @@
+=== enhanced / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 1decc108de314932ab1065193fb3c909
+  settling 35s…
+perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-25000-fps.png: 1200x520 (from perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-25000.png 1280x800 box 0,0,300,130) bright_frac=0.4098
+  wrote perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-25000.png and perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-25000-fps.png
+=== enhanced / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 3fe1896953af41578eb456b4b4441d4a
+  settling 35s…
+perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-30000-fps.png: 1200x520 (from perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-30000.png 1280x800 box 0,0,300,130) bright_frac=0.1381
+  wrote perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-30000.png and perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-25000-fps.png
+perf/macos27-2026-10-15/evidence/e1-enhanced/aquarium-r1/enhanced-30000-fps.png

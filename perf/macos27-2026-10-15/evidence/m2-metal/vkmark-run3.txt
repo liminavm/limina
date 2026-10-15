@@ -1,0 +1,31 @@
+=======================================================
+    vkmark 2025.01
+=======================================================
+    Vendor ID:      0x106B
+    Device ID:      0x64
+    Device Name:    Apple M1 Max
+    Driver Version: 109060195
+    Device UUID:    ba00456878e457a820f6347e770844ba
+=======================================================
+[vertex] device-local=true:[LIMINA-KK-GUARD] periodic encoder guard: checks=0 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=0 table=0/0 | context: not applicable on limina's Metal transport born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+ FPS: 4021 FrameTime: 0.249 ms
+[vertex] device-local=false: FPS: 4023 FrameTime: 0.249 ms
+[texture] anisotropy=0: FPS: 4408 FrameTime: 0.227 ms
+[LIMINA] KK sampler slot retired (#1, index 0)
+[texture] anisotropy=16:[LIMINA-KK-GUARD] periodic encoder guard: checks=0 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=0 table=0/0 | context: not applicable on limina's Metal transport born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+ FPS: 4414 FrameTime: 0.227 ms
+[shading] shading=gouraud: FPS: 4028 FrameTime: 0.248 ms
+[shading] shading=blinn-phong-inf: FPS: 4032 FrameTime: 0.248 ms
+[shading] shading=phong:[LIMINA-KK-GUARD] periodic encoder guard: checks=0 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=0 table=0/0 | context: not applicable on limina's Metal transport born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+ FPS: 4048 FrameTime: 0.247 ms
+[shading] shading=cel: FPS: 4023 FrameTime: 0.249 ms
+[effect2d] kernel=edge: FPS: 4038 FrameTime: 0.248 ms
+[effect2d] kernel=blur:[LIMINA-KK-GUARD] periodic encoder guard: checks=0 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=0 table=0/0 | context: not applicable on limina's Metal transport born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+ FPS: 4142 FrameTime: 0.241 ms
+[desktop] <default>: FPS: 4017 FrameTime: 0.249 ms
+[cube] <default>: FPS: 4527 FrameTime: 0.221 ms
+[clear] <default>: FPS: 4380 FrameTime: 0.228 ms
+=======================================================
+                                   vkmark Score: 4161
+=======================================================
+[LIMINA-ALLOC-POOL] teardown: pool=0xaaaaea38ac10 live=1 peak=1 released=0 ceiling-waits=0 ceiling-fails=0

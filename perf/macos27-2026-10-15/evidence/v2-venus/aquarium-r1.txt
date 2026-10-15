@@ -1,0 +1,14 @@
+=== venus / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: e725f338f87b47fa904aebff62a3512f
+  settling 35s…
+perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-25000-fps.png: 1200x520 (from perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0825
+  wrote perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-25000.png and perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-25000-fps.png
+=== venus / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 4c4aeb954eea4595807135478138bc42
+  settling 35s…
+perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-30000-fps.png: 1200x520 (from perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0604
+  wrote perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-30000.png and perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-25000-fps.png
+perf/macos27-2026-10-15/evidence/v2-venus/aquarium-r1/venus-30000-fps.png

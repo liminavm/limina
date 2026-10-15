@@ -1,0 +1,1 @@
+limina pid=47684 (worker log /tmp/limina-worker-transport.log, disk perf/macos27-2026-10-15/work.noindex/transport.raw, firmware target/krun-efi/KRUN_EFI.gop.fd, ICD /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json)

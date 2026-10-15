@@ -1,0 +1,16 @@
+=== enhanced / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: c1eb592485174fd9af7de380da6c5f9a
+  settling 35s…
+capture unusable (UnidentifiedImageError); retry
+  capture attempt 1 unusable, retrying…
+perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-25000-fps.png: 1200x520 (from perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-25000.png 1280x800 box 0,0,300,130) bright_frac=0.1148
+  wrote perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-25000.png and perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-25000-fps.png
+=== enhanced / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 0720f7bd974c467cb7d89d9aac8bce8c
+  settling 35s…
+perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-30000-fps.png: 1200x520 (from perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0959
+  wrote perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-30000.png and perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-25000-fps.png
+perf/macos27-2026-10-15/evidence/e0-enhanced/aquarium-r2/enhanced-30000-fps.png

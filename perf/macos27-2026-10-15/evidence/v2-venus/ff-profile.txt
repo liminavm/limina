@@ -1,0 +1,1 @@
+pref written: /home/claude/.config/mozilla/firefox/3hechten.default-release/user.js

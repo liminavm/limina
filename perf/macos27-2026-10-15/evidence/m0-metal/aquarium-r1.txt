@@ -1,0 +1,14 @@
+=== metal / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: cc2c2090e7944768bc73885a7321e45d
+  settling 35s…
+perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-25000-fps.png: 1200x520 (from perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0340
+  wrote perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-25000.png and perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-25000-fps.png
+=== metal / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 0c72b6b580b1408a9a813e85d432c63d
+  settling 35s…
+perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-30000-fps.png: 1200x520 (from perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0703
+  wrote perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-30000.png and perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-25000-fps.png
+perf/macos27-2026-10-15/evidence/m0-metal/aquarium-r1/metal-30000-fps.png

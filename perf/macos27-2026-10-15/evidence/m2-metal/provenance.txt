@@ -1,0 +1,3 @@
+macos27 m2-metal: arm metal (Fedora-Workstation-44.metal.test.raw); host mesa 2e1d2485bca; virglrs 2efa024 + libkrun 28d988ca; limina e696bb19; macOS 27.0.1
+-rwxr-xr-x@ 1 kov  staff  15116648 Oct 14 20:47 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+-rwxr-xr-x@ 1 kov  staff  21501664 Oct 14 20:47 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-26.3.0-devel.dylib

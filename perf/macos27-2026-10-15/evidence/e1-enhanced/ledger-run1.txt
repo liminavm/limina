@@ -1,0 +1,8 @@
+verify OK: Virtual-1 1280x800@59.949 scale=1.0
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+PROVENANCE: kernel=7.1.13-limina16k.2 pagesize=16384 mesa=26.2.3-6.limina.fc44 vnperf=<unset> vcpus=4 ram=3940MiB display=Virtual-1: 1280x800@59.949 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/macos27-2026-10-15/ledger.csv:
+2026-10-15,e696bb19,gl-replay-metal,fps,51.7201,macos27 e1-enhanced: arm enhanced (Fedora-Workstation-44.enhanced.test.raw); host mesa 2e1d2485bca; virglrs 2efa024 + libkrun 28d988ca; limina e696bb19; macOS 27.0.1; run 1/1 
+2026-10-15,e696bb19,gl-replay-llvmpipe,fps,750.221,macos27 e1-enhanced: arm enhanced (Fedora-Workstation-44.enhanced.test.raw); host mesa 2e1d2485bca; virglrs 2efa024 + libkrun 28d988ca; limina e696bb19; macOS 27.0.1; run 1/1 
+2026-10-15,e696bb19,vk-replay-metal-headless,fps,2067.057922,macos27 e1-enhanced: arm enhanced (Fedora-Workstation-44.enhanced.test.raw); host mesa 2e1d2485bca; virglrs 2efa024 + libkrun 28d988ca; limina e696bb19; macOS 27.0.1; run 1/1 
+2026-10-15,e696bb19,glmark2-wayland-metal,score,3322,macos27 e1-enhanced: arm enhanced (Fedora-Workstation-44.enhanced.test.raw); host mesa 2e1d2485bca; virglrs 2efa024 + libkrun 28d988ca; limina e696bb19; macOS 27.0.1; run 1/1 
