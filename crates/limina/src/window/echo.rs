@@ -226,6 +226,44 @@ pub(crate) fn shown_slot(prefer: usize, echo: &[CursorEcho; MAX_SCANOUTS]) -> Op
     echo.iter().position(|c| c.visible)
 }
 
+/// Where the captured pointer is, as the captured estimate re-bases onto it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Located {
+    /// The guest's cursor plane names it: this pixel of this slot's `scanout`.
+    Echo {
+        slot: usize,
+        px: (i32, i32),
+        scanout: (u32, u32),
+    },
+    /// No plane anywhere — the guest draws its own cursor — so the position we sent, read
+    /// against the guest's own report of its monitors: this unit position on this slot.
+    Sent { slot: usize, unit: (f64, f64) },
+}
+
+/// Which display the captured pointer is on, and where.
+///
+/// The echo is the truth wherever there is one. A guest compositing its own cursor never
+/// enables a plane, and then the slot the range position `sent` lands on in the guest's
+/// reported `desktop` is: the guest itself said which monitor covers which part of the range.
+/// `None` when neither can say — a plane with no scanout size yet, no report, dead space.
+pub(crate) fn locate(
+    prefer: usize,
+    echo: &[CursorEcho; MAX_SCANOUTS],
+    desktop: Option<&super::arrangement::Desktop>,
+    sent: Option<(f64, f64)>,
+) -> Option<Located> {
+    let Some(on) = shown_slot(prefer, echo) else {
+        let (slot, unit) = desktop?.locate(sent?, prefer)?;
+        return Some(Located::Sent { slot, unit });
+    };
+    let c = echo[on];
+    (c.w != 0 && c.h != 0).then_some(Located::Echo {
+        slot: on,
+        px: (c.x, c.y),
+        scanout: (c.w, c.h),
+    })
+}
+
 pub(crate) fn expected_pixel(unit: (f64, f64), scanout: (u32, u32)) -> (f64, f64) {
     (
         unit.0.clamp(0.0, 1.0) * f64::from(scanout.0),
@@ -284,6 +322,71 @@ mod tests {
             h,
             seq: 0,
         }
+    }
+
+    /// Two displays side by side in range units, the second reaching two thirds down.
+    fn reported() -> super::super::arrangement::Desktop {
+        use super::super::arrangement::{Desktop, RangeRect};
+        Desktop::new(vec![
+            (
+                0,
+                RangeRect {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 21_000.0,
+                    y1: 32_767.0,
+                },
+            ),
+            (
+                1,
+                RangeRect {
+                    x0: 21_000.0,
+                    y0: 0.0,
+                    x1: 32_767.0,
+                    y1: 21_000.0,
+                },
+            ),
+        ])
+    }
+
+    /// The dogfood's fault: a compositor drawing its own cursor enables no plane anywhere, so
+    /// a crossing was never seen — the estimate stayed pinned at the old display's edge until
+    /// the grab released, and the re-grab put the guest's pointer where the host's was.
+    #[test]
+    fn with_no_plane_anywhere_the_sent_position_names_the_display() {
+        let none = rig(CursorEcho::NONE, CursorEcho::NONE);
+        assert_eq!(
+            locate(0, &none, Some(&reported()), Some((26_883.5, 10_500.0))),
+            Some(Located::Sent {
+                slot: 1,
+                unit: (0.5, 0.5)
+            })
+        );
+    }
+
+    /// The echo is the truth wherever there is one: the report is only read when no plane is.
+    #[test]
+    fn a_plane_wins_over_the_sent_position() {
+        let echo = rig(CursorEcho::NONE, shown(10, 20, 2048, 1328));
+        assert_eq!(
+            locate(0, &echo, Some(&reported()), Some((100.0, 100.0))),
+            Some(Located::Echo {
+                slot: 1,
+                px: (10, 20),
+                scanout: (2048, 1328)
+            })
+        );
+    }
+
+    /// Without a report, or in its dead space, nothing is located rather than something guessed.
+    #[test]
+    fn with_no_plane_and_no_report_nothing_is_located() {
+        let none = rig(CursorEcho::NONE, CursorEcho::NONE);
+        assert_eq!(locate(0, &none, None, Some((26_883.5, 10_500.0))), None);
+        assert_eq!(
+            locate(1, &none, Some(&reported()), Some((30_000.0, 30_000.0))),
+            None
+        );
     }
 
     /// The echo is the plane origin; the stored pointer adds the hotspot back (the measured

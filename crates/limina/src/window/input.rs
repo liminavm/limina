@@ -2991,33 +2991,55 @@ impl InputState {
         }
         let echo = super::echo::snapshot();
         let was = self.capture_slot.get();
-        let Some(on) = super::echo::shown_slot(was, &echo) else {
+        let desktop = super::arrangement::desktop_in_range(f64::from(ABS_MAX));
+        let Some(located) =
+            super::echo::locate(was, &echo, desktop.as_ref(), self.capture_range.get())
+        else {
             return;
         };
-        let c = echo[on];
-        if c.w == 0 || c.h == 0 {
-            return;
-        }
-        let mut gate = self.echo_seen.get();
-        if !gate.adopt((on, c.x, c.y)) {
-            return;
-        }
-        self.echo_seen.set(gate);
+        let on = match located {
+            super::echo::Located::Echo { slot, px, .. } => {
+                let mut gate = self.echo_seen.get();
+                if !gate.adopt((slot, px.0, px.1)) {
+                    return;
+                }
+                self.echo_seen.set(gate);
+                slot
+            }
+            // Our own last send, so there is no echo lag to wait out. Only a crossing is news:
+            // within one display the captured step already moves the estimate, and pulling it
+            // back to the range every tick would hold it short of a held seam, where the edge
+            // press must be able to charge.
+            super::echo::Located::Sent { slot, .. } if slot == was => return,
+            super::echo::Located::Sent { slot, .. } => slot,
+        };
         let Some((_, fit)) = self.slot_surface(on, primary_view) else {
             return;
         };
         if fit.w <= 0.0 || fit.h <= 0.0 {
             return;
         }
-        let point = super::fit::fit_point_of_pixel((c.x, c.y), (c.w, c.h), fit);
+        let point = match located {
+            super::echo::Located::Echo { px, scanout, .. } => {
+                super::fit::fit_point_of_pixel(px, scanout, fit)
+            }
+            super::echo::Located::Sent { unit, .. } => super::fit::fit_point_of_unit(unit, fit),
+        };
         if on != was {
-            log::info!(
-                "display: the guest's cursor crossed to slot {on} at ({},{}) of {}x{} (was slot {was}); the captured cursor follows it",
-                c.x,
-                c.y,
-                c.w,
-                c.h,
-            );
+            match located {
+                super::echo::Located::Echo { px, scanout, .. } => log::info!(
+                    "display: the guest's cursor crossed to slot {on} at ({},{}) of {}x{} (was slot {was}); the captured cursor follows it",
+                    px.0,
+                    px.1,
+                    scanout.0,
+                    scanout.1,
+                ),
+                super::echo::Located::Sent { unit, .. } => log::info!(
+                    "display: the pointer crossed to slot {on} at ({:.3},{:.3}) of it by the guest's reported layout (was slot {was}); the guest shows no cursor plane, so the captured cursor follows the position we sent",
+                    unit.0,
+                    unit.1,
+                ),
+            }
             self.capture_slot.set(on);
         }
         self.capture_pos.set(Some(point));

@@ -204,7 +204,17 @@ its own seams by itself, and its cursor echo (`window/echo.rs` — the scanout i
 `MOVE_CURSOR` carries, plus the plane origin and hotspot) names the slot and pixel it is on;
 the render tick re-bases `capture_slot`/`capture_pos` to that slot's fit from the echo pixel
 (`InputState::follow_guest_echo`, `fit::fit_point_of_pixel`) and logs every crossing
-(`display: the guest's cursor crossed to slot N … (was slot M)`, info). The fit-space
+(`display: the guest's cursor crossed to slot N … (was slot M)`, info). **A guest that
+composites its own cursor enables no plane anywhere and sends no echo** (synoik behind its
+system compositor, measured 2026-10-15: every `[ECHO]` `hidden`, both cursor planes unbound).
+Then the slot the range position we sent lands on in the guest's *reported* layout names the
+crossing instead (`echo::locate`, `arrangement::Desktop::locate`; logged as `display: the
+pointer crossed to slot N … by the guest's reported layout`). It re-bases only on a crossing,
+since within one display the captured step already moves the estimate. Without it the
+estimate stayed pinned at the old display's edge, the edge press released the grab after
+each fast crossing, and the re-grab put the guest's pointer where the host's was: the cursor
+jumped, and the park — so macOS's Space swipes — stayed on the old panel. A guest with no
+plane and no report has neither answer and keeps the old behaviour. The fit-space
 `capture_pos` is only an *estimate* kept for drawing, the grab's edge press and the release
 warp target; it is re-synced from every fresh echo. Nothing in this path needs the guest's
 logical scale or its arrangement: a wrong gain moves the cursor a little faster or slower on

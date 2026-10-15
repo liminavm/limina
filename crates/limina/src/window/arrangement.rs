@@ -476,6 +476,25 @@ impl Desktop {
         self.rects.iter().find(|(s, _)| *s == slot).map(|(_, r)| *r)
     }
 
+    /// The display a device position lands on, and where on it as a `0.0..=1.0` unit position
+    /// (top-left origin). A position on a seam belongs to both, and `prefer` — the display the
+    /// pointer is already on — keeps it. `None` in dead space.
+    pub(crate) fn locate(&self, p: (f64, f64), prefer: usize) -> Option<(usize, (f64, f64))> {
+        let (slot, r) = self
+            .rects
+            .iter()
+            .filter(|(_, r)| r.holds(p))
+            .min_by_key(|(s, _)| *s != prefer)?;
+        let unit = |v: f64, lo: f64, hi: f64| {
+            if hi > lo {
+                ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        Some((*slot, (unit(p.0, r.x0, r.x1), unit(p.1, r.y0, r.y1))))
+    }
+
     /// Hold a candidate device position on the desktop, sliding it along the wall of the
     /// monitor it is leaving.
     ///
@@ -1100,5 +1119,62 @@ mod tests {
         assert_eq!(e.keep((9.0, 0.0)), (9.0, 0.0));
         assert_eq!(Edges::ALL.keep((-5.0, 5.0)), (-5.0, 5.0));
         assert_eq!(Edges::NONE.keep((-5.0, 5.0)), (0.0, 0.0));
+    }
+
+    /// The dogfood's shape in range units: a tall display on the left, a shorter one beside
+    /// it reaching two thirds down, dead space under the shorter one.
+    fn tall_and_short() -> Desktop {
+        Desktop::new(vec![
+            (
+                0,
+                RangeRect {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 21_000.0,
+                    y1: 32_767.0,
+                },
+            ),
+            (
+                1,
+                RangeRect {
+                    x0: 21_000.0,
+                    y0: 0.0,
+                    x1: 32_767.0,
+                    y1: 21_000.0,
+                },
+            ),
+        ])
+    }
+
+    /// A guest drawing its own cursor sends no echo; the position we sent, read against its
+    /// report, is the only place left to learn which display the pointer is on.
+    #[test]
+    fn a_position_past_the_seam_is_located_on_the_neighbour() {
+        let (slot, (u, v)) = tall_and_short()
+            .locate((26_883.5, 10_500.0), 0)
+            .expect("on the short display");
+        assert_eq!(slot, 1);
+        assert!((u - 0.5).abs() < 1e-9 && (v - 0.5).abs() < 1e-9, "{u},{v}");
+    }
+
+    /// A point on a seam belongs to both displays: the one the pointer is already on keeps it,
+    /// so a pointer resting on the seam does not flip between them every tick.
+    #[test]
+    fn a_position_on_the_seam_stays_on_the_preferred_display() {
+        let d = tall_and_short();
+        assert_eq!(
+            d.locate((21_000.0, 100.0), 0),
+            Some((0, (1.0, 100.0 / 32_767.0)))
+        );
+        assert_eq!(
+            d.locate((21_000.0, 100.0), 1),
+            Some((1, (0.0, 100.0 / 21_000.0)))
+        );
+    }
+
+    /// Dead space is on no display; nothing is located there rather than something guessed.
+    #[test]
+    fn a_position_in_dead_space_is_on_no_display() {
+        assert_eq!(tall_and_short().locate((30_000.0, 30_000.0), 1), None);
     }
 }

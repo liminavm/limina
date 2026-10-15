@@ -479,8 +479,19 @@ pub(crate) fn fit_point_of_pixel(px: (i32, i32), scanout: (u32, u32), fit: FitRe
     if scanout.0 == 0 || scanout.1 == 0 {
         return (fit.x, fit.y);
     }
-    let u = (f64::from(px.0) / f64::from(scanout.0)).clamp(0.0, 1.0);
-    let v = (f64::from(px.1) / f64::from(scanout.1)).clamp(0.0, 1.0);
+    fit_point_of_unit(
+        (
+            f64::from(px.0) / f64::from(scanout.0),
+            f64::from(px.1) / f64::from(scanout.1),
+        ),
+        fit,
+    )
+}
+
+/// A unit position on a slot's content (top-left origin) as a point in that slot's fit (view
+/// space, y up), clamped into the fit — the inverse of [`unit_through_fit`].
+pub(crate) fn fit_point_of_unit(unit: (f64, f64), fit: FitRect) -> (f64, f64) {
+    let (u, v) = (unit.0.clamp(0.0, 1.0), unit.1.clamp(0.0, 1.0));
     (fit.x + u * fit.w, fit.y + (1.0 - v) * fit.h)
 }
 
