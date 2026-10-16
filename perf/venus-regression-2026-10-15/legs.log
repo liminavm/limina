@@ -1,0 +1,96 @@
+[02:57:11] host busy: 33.7 /usr/libexec/opendirectoryd;
+######## a0 02:59:12
+[02:59:12] point venus-regression a0: bundle Limina-2026-09-10-8 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+wait-guest-ssh: no supervisor under pid 85277 answered `limina ssh-port` in 30s; took port 2222 from /tmp/limina-worker-venus.log
+[02:59:55] display pinned: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=203s load=0.08
+final: up=203s load=0.08 0.18 0.08
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[03:02:41] arm: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.1 Mesa 26.1.8 
+[03:02:42] perf-ledger exit=255
+[03:04:53] vkmark run 1: 3540
+[03:07:04] vkmark run 2: 3587
+[03:09:14] vkmark run 3: 3492
+[03:09:24] worker: 0 ring bindings, 0 poisoned lines,        5 vCPU-policy lines (sched.txt)
+[03:09:24] point a0 done
+######## b0 03:10:24
+[03:10:24] point venus-regression b0: bundle Limina-2026-10-15-1 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+[03:10:51] display pinned: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=203s load=0.08
+final: up=203s load=0.08 0.13 0.06
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[03:13:53] arm: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 
+[03:15:36] perf-ledger exit=0
+gl-replay-venus,49.9281
+gl-replay-llvmpipe,731.107
+vk-replay-venus-headless,649.462583
+glmark2-wayland-venus,2336
+[03:17:47] vkmark run 1: 2178
+[03:19:58] vkmark run 2: 2203
+[03:22:08] vkmark run 3: 2199
+[03:22:18] worker: 9 ring bindings, 0 poisoned lines,       31 vCPU-policy lines (sched.txt)
+[03:22:18] point b0 done
+######## a1 03:23:18
+[03:23:18] point venus-regression a1: bundle Limina-2026-09-10-8 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+wait-guest-ssh: no supervisor under pid 87212 answered `limina ssh-port` in 30s; took port 2222 from /tmp/limina-worker-venus.log
+[03:24:01] display pinned: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=206s load=0.12
+final: up=206s load=0.12 0.14 0.06
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[03:26:47] arm: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.1 Mesa 26.1.8 
+[03:28:19] perf-ledger exit=0
+gl-replay-venus,56.6801
+gl-replay-llvmpipe,727.869
+vk-replay-venus-headless,879.061149
+glmark2-wayland-venus,2888
+[03:30:31] vkmark run 1: 3392
+[03:32:42] vkmark run 2: 3408
+[03:34:53] vkmark run 3: 3477
+[03:35:02] worker: 0 ring bindings, 0 poisoned lines,        5 vCPU-policy lines (sched.txt)
+[03:35:02] point a1 done
+######## b1 03:36:02
+[03:36:03] point venus-regression b1: bundle Limina-2026-10-15-1 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+[03:36:27] display pinned: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=202s load=0.11
+final: up=202s load=0.11 0.08 0.03
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[03:39:28] arm: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.1.8 
+[03:41:11] perf-ledger exit=0
+gl-replay-venus,50.1427
+gl-replay-llvmpipe,734.326
+vk-replay-venus-headless,1819.597531
+glmark2-wayland-venus,2331
+[03:43:22] vkmark run 1: 2196
+[03:45:32] vkmark run 2: 2203
+[03:47:43] vkmark run 3: 2207
+[03:47:52] worker: 9 ring bindings, 0 poisoned lines,       33 vCPU-policy lines (sched.txt)
+[03:47:52] point b1 done
+######## a2 03:48:52
+[03:48:53] point venus-regression a2: bundle Limina-2026-09-10-8 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+wait-guest-ssh: no supervisor under pid 88653 answered `limina ssh-port` in 30s; took port 2222 from /tmp/limina-worker-venus.log
+[03:49:36] display pinned: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+SETTLED up=205s load=0.06
+final: up=205s load=0.06 0.08 0.03
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[03:52:22] arm: 	deviceName         = Virtio-GPU Venus (Apple M1 Max) 	driverName         = venus     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.1 Mesa 26.1.8 
+[03:53:54] perf-ledger exit=0
+gl-replay-venus,56.5923
+gl-replay-llvmpipe,727.088
+vk-replay-venus-headless,2080.959739
+glmark2-wayland-venus,2866
+[03:56:04] vkmark run 1: 3606
+[03:58:15] vkmark run 2: 3501
+[04:00:25] vkmark run 3: 3602
+[04:00:35] worker: 0 ring bindings, 0 poisoned lines,        5 vCPU-policy lines (sched.txt)
+[04:00:35] point a2 done
+######## legs done 04:00:35

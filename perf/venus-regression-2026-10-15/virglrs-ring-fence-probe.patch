@@ -1,0 +1,208 @@
+diff --git a/src/venus/driver.rs b/src/venus/driver.rs
+index d14a2d1..e470d61 100644
+--- a/src/venus/driver.rs
++++ b/src/venus/driver.rs
+@@ -1585,6 +1585,12 @@ struct RingQueuesInner {
+     bound: Mutex<BTreeMap<RingIdx, RingSync>>,
+     /// How many fences this context has actually ordered on a queue. See [`RingQueues::fence`].
+     ordered: AtomicU64,
++    /// `VIRGLRS_RING_FENCE_STATS`: where each ring fence's time goes, summed per window.
++    stats: Option<Arc<Mutex<FenceStats>>>,
++    /// `VIRGLRS_RING_FENCE_UNORDERED`: a MEASUREMENT seam that retires every ring fence on
++    /// arrival, as before ring fences were ordered. It is wrong -- a compositor can sample an image
++    /// whose render is still in flight -- and exists only to price the ordering.
++    unordered: bool,
+     /// The thread that answers present fences, made on the first one asked for.
+     ///
+     /// Separate from the per-ring threads because a present is not on a ring: it fences every
+@@ -1656,6 +1662,60 @@ struct SyncJob {
+     /// guest's fence still retires: a fence a guest is waiting on must never be dropped, and a
+     /// host that cannot order it is not a reason to wedge the guest.
+     fence: Option<VkFence>,
++    /// When the fence arrived, and how long its empty submit took, for [`FenceStats`].
++    arrived: std::time::Instant,
++    submit: std::time::Duration,
++}
++
++/// Where ring fences' time went over one window: arrival to retire, split into the empty submit,
++/// the wait for the ring's thread, and the wait for the queue.
++#[derive(Default)]
++struct FenceStats {
++    n: u64,
++    submit_us: u64,
++    queued_us: u64,
++    wait_us: u64,
++    total_us: u64,
++    max_us: u64,
++    /// Arrival to retire, bucketed at the bounds in [`FenceStats::BOUNDS_US`] and one past.
++    buckets: [u64; 8],
++    began: Option<std::time::Instant>,
++}
++
++impl FenceStats {
++    const BOUNDS_US: [u64; 7] = [50, 100, 200, 300, 500, 1000, 2000];
++    const WINDOW: u64 = 2000;
++
++    fn record(&mut self, ctx: ContextId, submit: u64, queued: u64, wait: u64) {
++        let total = submit + queued + wait;
++        let began = *self.began.get_or_insert_with(std::time::Instant::now);
++        self.n += 1;
++        self.submit_us += submit;
++        self.queued_us += queued;
++        self.wait_us += wait;
++        self.total_us += total;
++        self.max_us = self.max_us.max(total);
++        let b = Self::BOUNDS_US.iter().position(|&b| total < b).unwrap_or(Self::BOUNDS_US.len());
++        self.buckets[b] += 1;
++        if self.n == Self::WINDOW {
++            let secs = began.elapsed().as_secs_f64();
++            eprintln!(
++                "[virglrs] ctx {} ring fences: {} in {:.2}s ({:.0}/s); mean us submit {} queued {} \
++                 wait {} total {}, max {}; <50/100/200/300/500/1000/2000/more {:?}",
++                ctx.get(),
++                self.n,
++                secs,
++                self.n as f64 / secs,
++                self.submit_us / self.n,
++                self.queued_us / self.n,
++                self.wait_us / self.n,
++                self.total_us / self.n,
++                self.max_us,
++                self.buckets
++            );
++            *self = FenceStats::default();
++        }
++    }
+ }
+ 
+ impl Drop for RingSync {
+@@ -1675,12 +1735,23 @@ impl RingQueues {
+     pub fn new(ctx: ContextId, retire: crate::fence::Handle) -> RingQueues {
+         #[cfg(target_os = "macos")]
+         let knobs = super::present_copy::Knobs::from_env();
++        let stats = std::env::var_os("VIRGLRS_RING_FENCE_STATS")
++            .map(|_| Arc::new(Mutex::new(FenceStats::default())));
++        let unordered = std::env::var_os("VIRGLRS_RING_FENCE_UNORDERED").is_some();
++        if unordered {
++            eprintln!(
++                "[virglrs] MEASUREMENT SEAM: ctx {} retires ring fences on arrival, unordered",
++                ctx.get()
++            );
++        }
+         RingQueues {
+             inner: Arc::new(RingQueuesInner {
+                 ctx,
+                 retire: Some(retire),
+                 bound: Mutex::new(BTreeMap::new()),
+                 ordered: AtomicU64::new(0),
++                stats,
++                unordered,
+                 present: Mutex::new(None),
+                 #[cfg(target_os = "macos")]
+                 copies: Mutex::new(super::present_copy::Ring::new(knobs)),
+@@ -1707,6 +1778,8 @@ impl RingQueues {
+                 retire: None,
+                 bound: Mutex::new(BTreeMap::new()),
+                 ordered: AtomicU64::new(0),
++                stats: None,
++                unordered: false,
+                 present: Mutex::new(None),
+                 #[cfg(target_os = "macos")]
+                 copies: Mutex::new(super::present_copy::Ring::new(knobs)),
+@@ -1735,9 +1808,16 @@ impl RingQueues {
+         let (tx, rx) = std::sync::mpsc::channel();
+         let going = Arc::new(AtomicBool::new(true));
+         let (q, ctx, g) = (Arc::clone(&queue), self.inner.ctx, Arc::clone(&going));
++        let stats = self.inner.stats.clone();
++        // `VIRGLRS_RING_FENCE_POLL_US`: a MEASUREMENT seam that polls each fence at this interval
++        // instead of blocking in the driver's wait, to price the driver's wake path.
++        let poll = std::env::var("VIRGLRS_RING_FENCE_POLL_US")
++            .ok()
++            .and_then(|us| us.parse::<u64>().ok())
++            .map(std::time::Duration::from_micros);
+         let thread = std::thread::Builder::new()
+             .name(format!("virglrs-ring{}-sync", ring.0))
+-            .spawn(move || sync_thread(&q, ring, ctx, &retire, &rx, &g))
++            .spawn(move || sync_thread(&q, ring, ctx, &retire, &rx, &g, stats.as_deref(), poll))
+             .expect("spawning a ring's fence thread");
+         // Said once per ring, unprompted. A build where no ring is ever bound retires every
+         // fence unordered and looks, from a frame count alone, exactly like one where the
+@@ -1792,6 +1872,10 @@ impl RingQueues {
+         let Some(jobs) = sync.jobs.as_ref() else {
+             return false;
+         };
++        if self.inner.unordered {
++            return false;
++        }
++        let arrived = std::time::Instant::now();
+         let fence = match sync.queue.take_fence() {
+             None => None,
+             Some(fence) => {
+@@ -1836,7 +1920,7 @@ impl RingQueues {
+         }
+         // Queued whatever happened above: a job with no fence retires at once, and that is how a
+         // host that could not order this fence still answers it.
+-        jobs.send(SyncJob { id, fence }).is_ok()
++        jobs.send(SyncJob { id, fence, arrived, submit: arrived.elapsed() }).is_ok()
+     }
+ 
+     /// Order a present fence behind everything this context could have drawn the flushed frame
+@@ -2387,14 +2471,30 @@ fn sync_thread(
+     retire: &crate::fence::Handle,
+     jobs: &std::sync::mpsc::Receiver<SyncJob>,
+     going: &AtomicBool,
++    stats: Option<&Mutex<FenceStats>>,
++    poll: Option<std::time::Duration>,
+ ) {
+     while let Ok(job) = jobs.recv() {
++        let dequeued = std::time::Instant::now();
+         if let Some(fence) = job.fence
+-            && wait_out(queue, &format!("ring {}", ring.0), job.id, fence, going)
++            && match poll {
++                None => wait_out(queue, &format!("ring {}", ring.0), job.id, fence, going),
++                Some(every) => poll_out(queue, fence, every, going),
++            }
+         {
+             queue.put_fence(fence);
+         }
++        let waited = dequeued.elapsed();
+         retire.retire_context(ctx, ring, job.id);
++        if let Some(stats) = stats {
++            let queued = dequeued.saturating_duration_since(job.arrived).saturating_sub(job.submit);
++            stats.lock().expect("the fence-stats lock is never poisoned").record(
++                ctx,
++                job.submit.as_micros() as u64,
++                queued.as_micros() as u64,
++                waited.as_micros() as u64,
++            );
++        }
+     }
+ }
+ 
+@@ -2440,6 +2540,26 @@ fn wait_out(
+     false
+ }
+ 
++/// [`wait_out`] by polling the fence's status every `every`, for `VIRGLRS_RING_FENCE_POLL_US`.
++fn poll_out(
++    queue: &Arc<HostQueue>,
++    fence: VkFence,
++    every: std::time::Duration,
++    going: &AtomicBool,
++) -> bool {
++    let device = queue.fns.handle;
++    while going.load(Ordering::Acquire) {
++        // SAFETY: a fence this thread's queue made, on the device that made it.
++        let r = unsafe { (queue.fns.vkGetFenceStatus())(device, fence) };
++        match r {
++            VkResult::VK_SUCCESS => return true,
++            VkResult::VK_NOT_READY => std::thread::sleep(every),
++            _ => return false,
++        }
++    }
++    false
++}
++
+ /// The rings a queue may carry fences for.
+ ///
+ /// Ring 0 is the context's own stream, which retires on the CPU timeline as the C does. The C's

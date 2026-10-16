@@ -1,0 +1,4 @@
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+gcc-16.2.1-2.fc44.aarch64
+package mesa-libEGL-devel is not installed
+package mesa-libGLES-devel is not installed

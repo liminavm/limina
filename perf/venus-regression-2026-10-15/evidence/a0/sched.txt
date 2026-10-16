@@ -1,0 +1,5 @@
+[2026-10-16T05:59:12Z INFO  limina::vcpu_policy] dynamic vCPUs: 4..4 online (reclaim Disabled, dwell 20s)
+[2026-10-16T05:59:14.310918Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+[2026-10-16T05:59:14.311040Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 1 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+[2026-10-16T05:59:14.311100Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 2 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)
+[2026-10-16T05:59:14.311153Z INFO  krun_vmm::macos::vcpu_sched] [VCPU-RT] vCPU 3 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms)

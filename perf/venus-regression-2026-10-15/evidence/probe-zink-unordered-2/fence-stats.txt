@@ -1,0 +1,14 @@
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] ctx 4: ring 1 fences are ordered on queue 0x758698b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7586f73308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7586f8b308
+[virglrs] MEASUREMENT SEAM: ctx 6 retires ring fences on arrival, unordered
+[virglrs] ctx 6: ring 1 fences are ordered on queue 0x7586f8b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7586f8b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x758608b308

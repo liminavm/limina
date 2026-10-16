@@ -1,0 +1,10 @@
+renderer: zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+version: OpenGL ES 3.1 Mesa 26.1.8
+empty frame (clear + finish)              0.60 ms/frame       0.0 M tris/s
+1 draw x 100k tris, u32                   0.58 ms/frame     171.9 M tris/s
+1 draw x 1M tris, u32                     0.75 ms/frame    1340.3 M tris/s
+1 draw x 1M tris, u16 (multi-use)         0.75 ms/frame    1335.6 M tris/s
+100 draws x 10k tris, u32                 0.76 ms/frame    1318.9 M tris/s
+1000 draws x 1k tris, u32                 0.98 ms/frame    1019.4 M tris/s
+instanced 1k tris x 1000, u32             0.85 ms/frame    1176.9 M tris/s
+instanced 100 tris x 10000, u32           0.88 ms/frame    1138.2 M tris/s

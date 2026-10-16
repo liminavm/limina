@@ -1,0 +1,480 @@
+[04:24:34] up on 2222; worker log /tmp/limina-worker-probe.log
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+gcc-16.2.1-2.fc44.aarch64
+package mesa-libEGL-devel is not installed
+package mesa-libGLES-devel is not installed
+[04:25:47] display: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+[04:27:58] vkmark: 2171
+[04:29:42] perf-ledger: 
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+renderer: zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+version: OpenGL ES 3.2 Mesa 26.1.8
+empty frame (clear + finish)              0.57 ms/frame       0.0 M tris/s
+1 draw x 100k tris, u32                   0.60 ms/frame     167.3 M tris/s
+1 draw x 1M tris, u32                     0.87 ms/frame    1154.4 M tris/s
+1 draw x 1M tris, u16 (multi-use)         0.87 ms/frame    1146.9 M tris/s
+100 draws x 10k tris, u32                 0.87 ms/frame    1148.5 M tris/s
+1000 draws x 1k tris, u32                 0.91 ms/frame    1093.4 M tris/s
+instanced 1k tris x 1000, u32             0.86 ms/frame    1159.9 M tris/s
+instanced 100 tris x 10000, u32           0.89 ms/frame    1124.4 M tris/s
+[virglrs] ctx 4: ring 1 fences are ordered on queue 0x7af0d77308
+[virglrs] ctx 4 ring fences: 2000 in 1.04s (1917/s); mean us submit 2 queued 8 wait 227 total 237, max 1442; <50/100/200/300/500/1000/2000/more [51, 6, 674, 1052, 163, 31, 23, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2211/s); mean us submit 2 queued 7 wait 209 total 219, max 1046; <50/100/200/300/500/1000/2000/more [45, 12, 823, 936, 143, 38, 3, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2119/s); mean us submit 2 queued 8 wait 207 total 218, max 3212; <50/100/200/300/500/1000/2000/more [52, 25, 841, 900, 138, 39, 4, 1]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2203/s); mean us submit 2 queued 7 wait 213 total 223, max 2605; <50/100/200/300/500/1000/2000/more [44, 13, 786, 965, 151, 32, 8, 1]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2193/s); mean us submit 2 queued 7 wait 216 total 226, max 1243; <50/100/200/300/500/1000/2000/more [42, 9, 769, 971, 173, 23, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2174/s); mean us submit 2 queued 7 wait 209 total 219, max 1184; <50/100/200/300/500/1000/2000/more [49, 24, 855, 871, 164, 19, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2212/s); mean us submit 2 queued 7 wait 211 total 222, max 1218; <50/100/200/300/500/1000/2000/more [45, 15, 797, 935, 173, 24, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2207/s); mean us submit 2 queued 7 wait 209 total 219, max 1116; <50/100/200/300/500/1000/2000/more [45, 23, 850, 891, 154, 29, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2205/s); mean us submit 2 queued 7 wait 209 total 220, max 1207; <50/100/200/300/500/1000/2000/more [45, 21, 831, 915, 150, 33, 5, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2221/s); mean us submit 2 queued 7 wait 210 total 220, max 1147; <50/100/200/300/500/1000/2000/more [45, 21, 822, 901, 179, 24, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2165/s); mean us submit 2 queued 7 wait 214 total 225, max 1079; <50/100/200/300/500/1000/2000/more [50, 14, 755, 981, 164, 31, 5, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2193/s); mean us submit 2 queued 7 wait 211 total 222, max 1257; <50/100/200/300/500/1000/2000/more [42, 18, 801, 946, 157, 31, 5, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2177/s); mean us submit 2 queued 7 wait 211 total 221, max 1258; <50/100/200/300/500/1000/2000/more [44, 19, 799, 945, 160, 24, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 1.00s (1994/s); mean us submit 2 queued 7 wait 241 total 252, max 2536; <50/100/200/300/500/1000/2000/more [51, 16, 730, 953, 183, 30, 23, 14]
+[virglrs] ctx 4 ring fences: 2000 in 0.96s (2087/s); mean us submit 2 queued 7 wait 226 total 236, max 1747; <50/100/200/300/500/1000/2000/more [39, 23, 804, 908, 165, 33, 28, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2212/s); mean us submit 2 queued 7 wait 209 total 220, max 1443; <50/100/200/300/500/1000/2000/more [48, 17, 841, 910, 150, 13, 21, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2144/s); mean us submit 2 queued 7 wait 214 total 224, max 1274; <50/100/200/300/500/1000/2000/more [49, 21, 759, 980, 146, 31, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2186/s); mean us submit 2 queued 7 wait 210 total 220, max 1184; <50/100/200/300/500/1000/2000/more [49, 18, 821, 913, 166, 18, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2188/s); mean us submit 2 queued 7 wait 211 total 222, max 1137; <50/100/200/300/500/1000/2000/more [46, 19, 813, 915, 173, 25, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2189/s); mean us submit 2 queued 7 wait 210 total 220, max 1141; <50/100/200/300/500/1000/2000/more [49, 20, 779, 959, 161, 19, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2182/s); mean us submit 2 queued 7 wait 210 total 220, max 1211; <50/100/200/300/500/1000/2000/more [50, 18, 815, 915, 170, 21, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2166/s); mean us submit 2 queued 7 wait 209 total 220, max 1202; <50/100/200/300/500/1000/2000/more [39, 14, 821, 927, 165, 24, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2195/s); mean us submit 2 queued 7 wait 211 total 221, max 1186; <50/100/200/300/500/1000/2000/more [40, 15, 782, 980, 143, 33, 7, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2183/s); mean us submit 2 queued 7 wait 211 total 221, max 1159; <50/100/200/300/500/1000/2000/more [40, 19, 824, 933, 148, 21, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2179/s); mean us submit 2 queued 7 wait 213 total 223, max 1448; <50/100/200/300/500/1000/2000/more [48, 19, 799, 931, 168, 14, 21, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2212/s); mean us submit 2 queued 7 wait 204 total 214, max 1324; <50/100/200/300/500/1000/2000/more [49, 25, 908, 853, 130, 19, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2224/s); mean us submit 2 queued 7 wait 208 total 218, max 1303; <50/100/200/300/500/1000/2000/more [49, 18, 845, 919, 139, 11, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2195/s); mean us submit 2 queued 7 wait 211 total 221, max 1319; <50/100/200/300/500/1000/2000/more [50, 15, 812, 931, 154, 19, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2154/s); mean us submit 2 queued 7 wait 215 total 225, max 1558; <50/100/200/300/500/1000/2000/more [50, 11, 833, 953, 104, 19, 30, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2205/s); mean us submit 2 queued 7 wait 213 total 223, max 1302; <50/100/200/300/500/1000/2000/more [43, 13, 819, 937, 149, 20, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2229/s); mean us submit 2 queued 7 wait 209 total 219, max 1161; <50/100/200/300/500/1000/2000/more [43, 20, 830, 919, 153, 22, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2215/s); mean us submit 2 queued 7 wait 206 total 216, max 1277; <50/100/200/300/500/1000/2000/more [44, 13, 880, 900, 126, 28, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2159/s); mean us submit 2 queued 7 wait 207 total 217, max 1311; <50/100/200/300/500/1000/2000/more [48, 13, 905, 843, 156, 22, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2152/s); mean us submit 2 queued 7 wait 212 total 222, max 1352; <50/100/200/300/500/1000/2000/more [52, 21, 763, 980, 151, 15, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2207/s); mean us submit 2 queued 7 wait 206 total 216, max 1307; <50/100/200/300/500/1000/2000/more [42, 19, 863, 912, 134, 21, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2184/s); mean us submit 2 queued 7 wait 208 total 218, max 1195; <50/100/200/300/500/1000/2000/more [49, 16, 827, 925, 148, 17, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2175/s); mean us submit 2 queued 7 wait 211 total 221, max 1321; <50/100/200/300/500/1000/2000/more [48, 14, 780, 973, 148, 20, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2220/s); mean us submit 2 queued 7 wait 210 total 220, max 1374; <50/100/200/300/500/1000/2000/more [37, 9, 822, 963, 135, 20, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2173/s); mean us submit 2 queued 7 wait 210 total 220, max 1327; <50/100/200/300/500/1000/2000/more [52, 10, 829, 932, 143, 17, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2191/s); mean us submit 2 queued 7 wait 207 total 217, max 1301; <50/100/200/300/500/1000/2000/more [50, 18, 883, 865, 149, 24, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2219/s); mean us submit 2 queued 7 wait 207 total 217, max 1144; <50/100/200/300/500/1000/2000/more [39, 26, 835, 923, 142, 26, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2182/s); mean us submit 2 queued 7 wait 211 total 221, max 1123; <50/100/200/300/500/1000/2000/more [49, 17, 777, 970, 154, 17, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2230/s); mean us submit 2 queued 7 wait 203 total 213, max 1142; <50/100/200/300/500/1000/2000/more [44, 23, 946, 801, 154, 22, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2119/s); mean us submit 2 queued 7 wait 218 total 228, max 1154; <50/100/200/300/500/1000/2000/more [46, 8, 715, 1018, 177, 25, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2173/s); mean us submit 2 queued 7 wait 213 total 223, max 1380; <50/100/200/300/500/1000/2000/more [42, 19, 791, 935, 181, 17, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2194/s); mean us submit 2 queued 7 wait 211 total 221, max 1184; <50/100/200/300/500/1000/2000/more [39, 29, 801, 953, 141, 25, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2194/s); mean us submit 2 queued 7 wait 207 total 217, max 1197; <50/100/200/300/500/1000/2000/more [46, 27, 871, 859, 158, 28, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.88s (2269/s); mean us submit 2 queued 7 wait 208 total 219, max 1253; <50/100/200/300/500/1000/2000/more [43, 22, 865, 873, 164, 20, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2204/s); mean us submit 2 queued 7 wait 214 total 224, max 1302; <50/100/200/300/500/1000/2000/more [41, 17, 748, 1001, 157, 24, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2164/s); mean us submit 2 queued 7 wait 213 total 223, max 1295; <50/100/200/300/500/1000/2000/more [51, 20, 737, 1014, 142, 18, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2165/s); mean us submit 2 queued 7 wait 213 total 223, max 1199; <50/100/200/300/500/1000/2000/more [54, 19, 763, 964, 162, 26, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2204/s); mean us submit 2 queued 7 wait 212 total 222, max 1258; <50/100/200/300/500/1000/2000/more [46, 16, 767, 976, 164, 20, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2209/s); mean us submit 2 queued 7 wait 208 total 218, max 1154; <50/100/200/300/500/1000/2000/more [37, 28, 813, 948, 144, 23, 7, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2213/s); mean us submit 2 queued 7 wait 211 total 221, max 1112; <50/100/200/300/500/1000/2000/more [42, 16, 827, 927, 152, 24, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2156/s); mean us submit 2 queued 7 wait 212 total 222, max 1193; <50/100/200/300/500/1000/2000/more [42, 20, 802, 948, 153, 19, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2174/s); mean us submit 2 queued 7 wait 213 total 223, max 1327; <50/100/200/300/500/1000/2000/more [52, 21, 807, 915, 171, 17, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2165/s); mean us submit 2 queued 7 wait 212 total 222, max 1296; <50/100/200/300/500/1000/2000/more [51, 24, 766, 973, 151, 21, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2234/s); mean us submit 2 queued 7 wait 210 total 221, max 1883; <50/100/200/300/500/1000/2000/more [40, 19, 813, 958, 135, 21, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2206/s); mean us submit 2 queued 7 wait 212 total 223, max 1363; <50/100/200/300/500/1000/2000/more [47, 17, 805, 925, 172, 17, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2220/s); mean us submit 2 queued 7 wait 206 total 216, max 1366; <50/100/200/300/500/1000/2000/more [49, 16, 896, 862, 144, 19, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2199/s); mean us submit 2 queued 7 wait 211 total 221, max 1297; <50/100/200/300/500/1000/2000/more [32, 27, 830, 933, 138, 21, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2202/s); mean us submit 2 queued 7 wait 208 total 218, max 1911; <50/100/200/300/500/1000/2000/more [45, 28, 863, 865, 162, 26, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2208/s); mean us submit 2 queued 7 wait 210 total 221, max 1149; <50/100/200/300/500/1000/2000/more [50, 22, 811, 908, 175, 25, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2223/s); mean us submit 2 queued 7 wait 207 total 218, max 1164; <50/100/200/300/500/1000/2000/more [43, 22, 858, 898, 150, 17, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2201/s); mean us submit 2 queued 7 wait 211 total 221, max 1144; <50/100/200/300/500/1000/2000/more [45, 22, 824, 903, 169, 23, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2145/s); mean us submit 2 queued 7 wait 216 total 226, max 1210; <50/100/200/300/500/1000/2000/more [49, 8, 743, 994, 169, 22, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2180/s); mean us submit 2 queued 7 wait 218 total 228, max 1199; <50/100/200/300/500/1000/2000/more [38, 22, 728, 999, 174, 27, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2195/s); mean us submit 2 queued 7 wait 214 total 224, max 1174; <50/100/200/300/500/1000/2000/more [45, 12, 759, 983, 171, 19, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2192/s); mean us submit 2 queued 7 wait 209 total 219, max 1351; <50/100/200/300/500/1000/2000/more [39, 22, 821, 923, 159, 30, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2167/s); mean us submit 2 queued 7 wait 216 total 226, max 1335; <50/100/200/300/500/1000/2000/more [30, 25, 756, 1010, 143, 18, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2184/s); mean us submit 2 queued 7 wait 213 total 223, max 1358; <50/100/200/300/500/1000/2000/more [45, 25, 797, 951, 145, 18, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2242/s); mean us submit 2 queued 7 wait 211 total 221, max 1268; <50/100/200/300/500/1000/2000/more [41, 24, 820, 941, 136, 18, 20, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2147/s); mean us submit 2 queued 7 wait 217 total 227, max 1246; <50/100/200/300/500/1000/2000/more [48, 17, 705, 1022, 170, 25, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2250/s); mean us submit 2 queued 7 wait 210 total 221, max 1173; <50/100/200/300/500/1000/2000/more [48, 17, 802, 943, 159, 19, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2198/s); mean us submit 2 queued 7 wait 210 total 221, max 1202; <50/100/200/300/500/1000/2000/more [44, 14, 843, 906, 154, 28, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2169/s); mean us submit 2 queued 7 wait 216 total 226, max 1190; <50/100/200/300/500/1000/2000/more [42, 18, 736, 993, 180, 18, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2162/s); mean us submit 2 queued 7 wait 216 total 226, max 1265; <50/100/200/300/500/1000/2000/more [35, 16, 744, 1005, 169, 21, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2162/s); mean us submit 2 queued 7 wait 217 total 227, max 1206; <50/100/200/300/500/1000/2000/more [42, 13, 707, 1043, 152, 30, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.97s (2072/s); mean us submit 2 queued 7 wait 229 total 239, max 2541; <50/100/200/300/500/1000/2000/more [43, 17, 793, 924, 173, 20, 19, 11]
+[virglrs] ctx 4 ring fences: 2000 in 1.00s (2007/s); mean us submit 2 queued 8 wait 234 total 245, max 1684; <50/100/200/300/500/1000/2000/more [59, 13, 695, 962, 199, 40, 32, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.95s (2101/s); mean us submit 2 queued 7 wait 223 total 233, max 1634; <50/100/200/300/500/1000/2000/more [50, 20, 694, 1018, 164, 30, 24, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2214/s); mean us submit 2 queued 7 wait 212 total 223, max 1313; <50/100/200/300/500/1000/2000/more [46, 16, 783, 968, 153, 14, 20, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2149/s); mean us submit 2 queued 7 wait 216 total 226, max 1318; <50/100/200/300/500/1000/2000/more [52, 16, 791, 916, 190, 14, 21, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2211/s); mean us submit 2 queued 7 wait 207 total 217, max 1268; <50/100/200/300/500/1000/2000/more [35, 19, 825, 951, 141, 18, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2226/s); mean us submit 2 queued 7 wait 209 total 219, max 1133; <50/100/200/300/500/1000/2000/more [42, 21, 827, 923, 151, 28, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2139/s); mean us submit 2 queued 7 wait 220 total 230, max 1195; <50/100/200/300/500/1000/2000/more [48, 11, 677, 1041, 181, 32, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2168/s); mean us submit 2 queued 7 wait 212 total 222, max 1191; <50/100/200/300/500/1000/2000/more [44, 27, 775, 944, 178, 18, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2123/s); mean us submit 2 queued 7 wait 217 total 227, max 1297; <50/100/200/300/500/1000/2000/more [50, 19, 728, 984, 181, 28, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2188/s); mean us submit 2 queued 7 wait 211 total 221, max 1173; <50/100/200/300/500/1000/2000/more [43, 19, 828, 918, 151, 28, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2161/s); mean us submit 2 queued 7 wait 212 total 223, max 1202; <50/100/200/300/500/1000/2000/more [52, 20, 786, 938, 169, 20, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2200/s); mean us submit 2 queued 7 wait 207 total 217, max 1324; <50/100/200/300/500/1000/2000/more [48, 13, 873, 889, 145, 13, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2201/s); mean us submit 2 queued 7 wait 209 total 219, max 1333; <50/100/200/300/500/1000/2000/more [39, 17, 863, 903, 144, 18, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2206/s); mean us submit 2 queued 7 wait 207 total 218, max 1403; <50/100/200/300/500/1000/2000/more [42, 20, 884, 882, 133, 19, 20, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2200/s); mean us submit 2 queued 7 wait 209 total 219, max 1305; <50/100/200/300/500/1000/2000/more [44, 18, 848, 915, 141, 18, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2200/s); mean us submit 2 queued 7 wait 210 total 220, max 1291; <50/100/200/300/500/1000/2000/more [43, 16, 843, 905, 153, 27, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2230/s); mean us submit 2 queued 7 wait 210 total 221, max 1167; <50/100/200/300/500/1000/2000/more [51, 13, 847, 865, 187, 23, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2148/s); mean us submit 2 queued 7 wait 217 total 227, max 1209; <50/100/200/300/500/1000/2000/more [53, 17, 748, 967, 174, 24, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2209/s); mean us submit 2 queued 7 wait 208 total 218, max 1138; <50/100/200/300/500/1000/2000/more [43, 29, 879, 857, 156, 18, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.95s (2100/s); mean us submit 2 queued 7 wait 227 total 237, max 1328; <50/100/200/300/500/1000/2000/more [47, 6, 681, 1020, 201, 28, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.95s (2113/s); mean us submit 2 queued 7 wait 229 total 239, max 1373; <50/100/200/300/500/1000/2000/more [45, 12, 631, 1044, 227, 28, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2144/s); mean us submit 2 queued 7 wait 224 total 234, max 1320; <50/100/200/300/500/1000/2000/more [34, 12, 722, 1006, 182, 34, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2132/s); mean us submit 2 queued 7 wait 230 total 241, max 1187; <50/100/200/300/500/1000/2000/more [46, 6, 651, 1004, 255, 24, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2130/s); mean us submit 2 queued 7 wait 221 total 231, max 1344; <50/100/200/300/500/1000/2000/more [49, 13, 807, 890, 202, 23, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2130/s); mean us submit 2 queued 7 wait 225 total 235, max 1320; <50/100/200/300/500/1000/2000/more [43, 13, 721, 988, 196, 21, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2129/s); mean us submit 2 queued 7 wait 225 total 235, max 1322; <50/100/200/300/500/1000/2000/more [48, 11, 736, 946, 220, 24, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2180/s); mean us submit 2 queued 7 wait 222 total 232, max 1278; <50/100/200/300/500/1000/2000/more [38, 11, 794, 908, 204, 31, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2193/s); mean us submit 2 queued 7 wait 213 total 223, max 1231; <50/100/200/300/500/1000/2000/more [32, 16, 920, 804, 189, 33, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2141/s); mean us submit 2 queued 7 wait 225 total 235, max 1165; <50/100/200/300/500/1000/2000/more [45, 9, 730, 955, 220, 30, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.96s (2082/s); mean us submit 2 queued 7 wait 219 total 229, max 1169; <50/100/200/300/500/1000/2000/more [48, 13, 773, 939, 189, 25, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2152/s); mean us submit 2 queued 7 wait 213 total 224, max 1190; <50/100/200/300/500/1000/2000/more [45, 19, 773, 959, 167, 21, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2164/s); mean us submit 2 queued 7 wait 211 total 222, max 1159; <50/100/200/300/500/1000/2000/more [52, 18, 747, 996, 147, 29, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2175/s); mean us submit 2 queued 7 wait 209 total 220, max 1186; <50/100/200/300/500/1000/2000/more [43, 27, 810, 937, 138, 37, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2169/s); mean us submit 2 queued 7 wait 208 total 218, max 1362; <50/100/200/300/500/1000/2000/more [52, 17, 852, 898, 142, 24, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2158/s); mean us submit 2 queued 7 wait 212 total 222, max 1401; <50/100/200/300/500/1000/2000/more [55, 16, 759, 992, 138, 24, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2233/s); mean us submit 2 queued 7 wait 208 total 218, max 1403; <50/100/200/300/500/1000/2000/more [35, 20, 859, 917, 138, 16, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2161/s); mean us submit 2 queued 7 wait 214 total 224, max 1276; <50/100/200/300/500/1000/2000/more [47, 20, 729, 1021, 145, 24, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2174/s); mean us submit 2 queued 7 wait 213 total 223, max 1222; <50/100/200/300/500/1000/2000/more [46, 17, 772, 973, 157, 22, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2196/s); mean us submit 2 queued 7 wait 208 total 218, max 1149; <50/100/200/300/500/1000/2000/more [47, 30, 808, 939, 143, 16, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2171/s); mean us submit 2 queued 7 wait 211 total 222, max 1174; <50/100/200/300/500/1000/2000/more [49, 18, 787, 951, 161, 21, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2151/s); mean us submit 2 queued 7 wait 211 total 221, max 1120; <50/100/200/300/500/1000/2000/more [51, 15, 778, 968, 149, 30, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2183/s); mean us submit 2 queued 7 wait 209 total 219, max 1307; <50/100/200/300/500/1000/2000/more [40, 20, 815, 959, 133, 19, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2184/s); mean us submit 2 queued 7 wait 208 total 218, max 1293; <50/100/200/300/500/1000/2000/more [48, 13, 855, 909, 141, 19, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2237/s); mean us submit 2 queued 7 wait 206 total 216, max 1277; <50/100/200/300/500/1000/2000/more [39, 14, 907, 866, 138, 21, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2227/s); mean us submit 2 queued 7 wait 204 total 214, max 1087; <50/100/200/300/500/1000/2000/more [36, 17, 917, 882, 117, 22, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2172/s); mean us submit 2 queued 7 wait 211 total 221, max 1266; <50/100/200/300/500/1000/2000/more [50, 10, 796, 955, 157, 12, 20, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2174/s); mean us submit 2 queued 7 wait 209 total 219, max 4077; <50/100/200/300/500/1000/2000/more [47, 22, 854, 916, 123, 18, 19, 1]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2191/s); mean us submit 2 queued 7 wait 205 total 215, max 2178; <50/100/200/300/500/1000/2000/more [50, 20, 892, 879, 124, 20, 14, 1]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2247/s); mean us submit 2 queued 7 wait 207 total 217, max 1288; <50/100/200/300/500/1000/2000/more [47, 13, 901, 851, 155, 19, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2205/s); mean us submit 2 queued 7 wait 207 total 217, max 1162; <50/100/200/300/500/1000/2000/more [46, 18, 854, 917, 132, 21, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2166/s); mean us submit 2 queued 7 wait 213 total 223, max 1234; <50/100/200/300/500/1000/2000/more [51, 13, 745, 989, 171, 23, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2209/s); mean us submit 2 queued 7 wait 209 total 219, max 1291; <50/100/200/300/500/1000/2000/more [32, 15, 848, 921, 154, 19, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2153/s); mean us submit 2 queued 7 wait 216 total 226, max 1242; <50/100/200/300/500/1000/2000/more [35, 17, 775, 963, 169, 29, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.95s (2097/s); mean us submit 2 queued 7 wait 217 total 227, max 1191; <50/100/200/300/500/1000/2000/more [46, 25, 798, 906, 188, 15, 22, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2123/s); mean us submit 2 queued 7 wait 210 total 220, max 2125; <50/100/200/300/500/1000/2000/more [51, 20, 858, 860, 169, 30, 11, 1]
+[virglrs] ctx 4 ring fences: 2000 in 0.95s (2112/s); mean us submit 2 queued 7 wait 215 total 224, max 1366; <50/100/200/300/500/1000/2000/more [42, 17, 868, 836, 194, 24, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.96s (2088/s); mean us submit 2 queued 7 wait 218 total 227, max 1330; <50/100/200/300/500/1000/2000/more [50, 23, 793, 898, 196, 18, 22, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.96s (2078/s); mean us submit 2 queued 7 wait 220 total 230, max 1306; <50/100/200/300/500/1000/2000/more [53, 10, 726, 998, 174, 15, 24, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.95s (2115/s); mean us submit 2 queued 7 wait 216 total 226, max 1290; <50/100/200/300/500/1000/2000/more [38, 16, 817, 898, 194, 18, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.96s (2074/s); mean us submit 2 queued 7 wait 222 total 232, max 1141; <50/100/200/300/500/1000/2000/more [36, 17, 685, 1028, 199, 23, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2125/s); mean us submit 2 queued 7 wait 214 total 224, max 1282; <50/100/200/300/500/1000/2000/more [48, 19, 818, 910, 159, 25, 21, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.96s (2084/s); mean us submit 2 queued 7 wait 226 total 236, max 2889; <50/100/200/300/500/1000/2000/more [36, 15, 683, 1019, 204, 20, 22, 1]
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7af0d77308
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7af0d77308
+[virglrs] ctx 7 ring fences: 2000 in 39.83s (50/s); mean us submit 27 queued 96 wait 420 total 544, max 9847; <50/100/200/300/500/1000/2000/more [1, 32, 215, 264, 501, 863, 107, 17]
+[virglrs] ctx 7 ring fences: 2000 in 40.36s (50/s); mean us submit 28 queued 92 wait 428 total 548, max 9331; <50/100/200/300/500/1000/2000/more [8, 60, 234, 228, 459, 891, 101, 19]
+[virglrs] ctx 6: ring 1 fences are ordered on queue 0x7af0d77308
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7af0d77308
+[virglrs] ctx 7 ring fences: 2000 in 0.93s (2144/s); mean us submit 2 queued 9 wait 188 total 200, max 1655; <50/100/200/300/500/1000/2000/more [39, 48, 1342, 390, 123, 26, 32, 0]
+[virglrs] ctx 7 ring fences: 2000 in 0.87s (2305/s); mean us submit 3 queued 9 wait 185 total 198, max 1349; <50/100/200/300/500/1000/2000/more [27, 46, 1406, 367, 101, 17, 36, 0]
+[virglrs] ctx 7 ring fences: 2000 in 0.86s (2313/s); mean us submit 3 queued 9 wait 187 total 200, max 1374; <50/100/200/300/500/1000/2000/more [32, 39, 1389, 372, 115, 21, 32, 0]
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7af0d77308
+#### ordered 1 rc=0
+[04:29:59] up on 2222; worker log /tmp/limina-worker-probe.log
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+gcc-16.2.1-2.fc44.aarch64
+package mesa-libEGL-devel is not installed
+package mesa-libGLES-devel is not installed
+[04:31:12] display: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+[04:33:23] vkmark: 3394
+[04:35:06] perf-ledger: 
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+renderer: zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+version: OpenGL ES 3.2 Mesa 26.1.8
+empty frame (clear + finish)              0.50 ms/frame       0.0 M tris/s
+1 draw x 100k tris, u32                   0.60 ms/frame     166.8 M tris/s
+1 draw x 1M tris, u32                     0.86 ms/frame    1164.3 M tris/s
+1 draw x 1M tris, u16 (multi-use)         0.87 ms/frame    1144.8 M tris/s
+100 draws x 10k tris, u32                 0.86 ms/frame    1167.8 M tris/s
+1000 draws x 1k tris, u32                 0.99 ms/frame    1010.8 M tris/s
+instanced 1k tris x 1000, u32             0.77 ms/frame    1294.2 M tris/s
+instanced 100 tris x 10000, u32           0.89 ms/frame    1125.4 M tris/s
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] ctx 4: ring 1 fences are ordered on queue 0x7c8ed6b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7c8ed6b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7c8ed6b308
+[virglrs] MEASUREMENT SEAM: ctx 6 retires ring fences on arrival, unordered
+[virglrs] ctx 6: ring 1 fences are ordered on queue 0x7c8ed6b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7c8ed6b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7c8ed6b308
+#### unordered 1 rc=0
+[04:35:23] up on 2222; worker log /tmp/limina-worker-probe.log
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+gcc-16.2.1-2.fc44.aarch64
+package mesa-libEGL-devel is not installed
+package mesa-libGLES-devel is not installed
+[04:36:36] display: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+[04:38:47] vkmark: 2181
+[04:40:30] perf-ledger: 
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+renderer: zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+version: OpenGL ES 3.2 Mesa 26.1.8
+empty frame (clear + finish)              0.58 ms/frame       0.0 M tris/s
+1 draw x 100k tris, u32                   0.58 ms/frame     173.7 M tris/s
+1 draw x 1M tris, u32                     0.87 ms/frame    1155.7 M tris/s
+1 draw x 1M tris, u16 (multi-use)         0.86 ms/frame    1163.0 M tris/s
+100 draws x 10k tris, u32                 0.87 ms/frame    1154.7 M tris/s
+1000 draws x 1k tris, u32                 0.91 ms/frame    1097.4 M tris/s
+instanced 1k tris x 1000, u32             0.87 ms/frame    1149.4 M tris/s
+instanced 100 tris x 10000, u32           0.87 ms/frame    1155.9 M tris/s
+[virglrs] ctx 4: ring 1 fences are ordered on queue 0x77a896f308
+[virglrs] ctx 4 ring fences: 2000 in 1.04s (1922/s); mean us submit 3 queued 8 wait 228 total 239, max 1754; <50/100/200/300/500/1000/2000/more [44, 12, 619, 1140, 138, 18, 29, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2212/s); mean us submit 2 queued 7 wait 207 total 218, max 1067; <50/100/200/300/500/1000/2000/more [36, 24, 843, 906, 160, 27, 4, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2139/s); mean us submit 3 queued 8 wait 208 total 220, max 4229; <50/100/200/300/500/1000/2000/more [54, 27, 805, 921, 157, 31, 4, 1]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2170/s); mean us submit 3 queued 8 wait 214 total 225, max 1107; <50/100/200/300/500/1000/2000/more [46, 18, 751, 967, 180, 27, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2198/s); mean us submit 3 queued 7 wait 216 total 227, max 1115; <50/100/200/300/500/1000/2000/more [40, 22, 707, 989, 208, 29, 5, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2208/s); mean us submit 2 queued 8 wait 210 total 221, max 1236; <50/100/200/300/500/1000/2000/more [45, 15, 847, 884, 170, 29, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2206/s); mean us submit 2 queued 7 wait 208 total 219, max 1188; <50/100/200/300/500/1000/2000/more [38, 25, 845, 898, 154, 34, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2201/s); mean us submit 3 queued 7 wait 210 total 221, max 1242; <50/100/200/300/500/1000/2000/more [46, 26, 792, 937, 161, 26, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2216/s); mean us submit 3 queued 7 wait 211 total 222, max 1236; <50/100/200/300/500/1000/2000/more [44, 24, 798, 922, 174, 28, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2221/s); mean us submit 3 queued 7 wait 209 total 220, max 1273; <50/100/200/300/500/1000/2000/more [41, 26, 839, 897, 161, 28, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2161/s); mean us submit 2 queued 8 wait 213 total 224, max 1270; <50/100/200/300/500/1000/2000/more [50, 23, 771, 946, 175, 19, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2193/s); mean us submit 2 queued 7 wait 212 total 222, max 1195; <50/100/200/300/500/1000/2000/more [32, 18, 820, 931, 169, 17, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2210/s); mean us submit 3 queued 7 wait 212 total 223, max 1214; <50/100/200/300/500/1000/2000/more [51, 18, 783, 944, 168, 31, 5, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2192/s); mean us submit 2 queued 7 wait 207 total 218, max 1048; <50/100/200/300/500/1000/2000/more [48, 26, 826, 880, 189, 28, 3, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2184/s); mean us submit 2 queued 7 wait 213 total 224, max 1039; <50/100/200/300/500/1000/2000/more [39, 14, 775, 956, 183, 31, 2, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2200/s); mean us submit 3 queued 7 wait 210 total 221, max 1099; <50/100/200/300/500/1000/2000/more [52, 23, 823, 881, 184, 33, 4, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2126/s); mean us submit 2 queued 7 wait 217 total 228, max 1134; <50/100/200/300/500/1000/2000/more [43, 16, 742, 972, 185, 35, 7, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2183/s); mean us submit 2 queued 7 wait 212 total 222, max 1113; <50/100/200/300/500/1000/2000/more [52, 19, 809, 881, 199, 33, 7, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2204/s); mean us submit 2 queued 7 wait 211 total 222, max 1162; <50/100/200/300/500/1000/2000/more [47, 20, 807, 925, 168, 20, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2198/s); mean us submit 2 queued 7 wait 216 total 227, max 1261; <50/100/200/300/500/1000/2000/more [34, 22, 757, 988, 157, 30, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2200/s); mean us submit 3 queued 8 wait 212 total 223, max 1265; <50/100/200/300/500/1000/2000/more [45, 23, 764, 959, 178, 18, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2160/s); mean us submit 2 queued 7 wait 210 total 221, max 1223; <50/100/200/300/500/1000/2000/more [51, 19, 848, 889, 154, 26, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2217/s); mean us submit 3 queued 7 wait 210 total 221, max 1216; <50/100/200/300/500/1000/2000/more [45, 19, 818, 926, 152, 26, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2221/s); mean us submit 2 queued 8 wait 206 total 217, max 1834; <50/100/200/300/500/1000/2000/more [50, 18, 883, 860, 158, 26, 5, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2140/s); mean us submit 3 queued 8 wait 215 total 226, max 2889; <50/100/200/300/500/1000/2000/more [52, 22, 853, 886, 146, 24, 11, 6]
+[virglrs] ctx 4 ring fences: 2000 in 0.98s (2032/s); mean us submit 3 queued 8 wait 236 total 248, max 2825; <50/100/200/300/500/1000/2000/more [58, 12, 715, 975, 177, 30, 25, 8]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2137/s); mean us submit 2 queued 8 wait 217 total 228, max 1711; <50/100/200/300/500/1000/2000/more [39, 23, 864, 863, 156, 31, 24, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2193/s); mean us submit 2 queued 7 wait 210 total 221, max 1280; <50/100/200/300/500/1000/2000/more [45, 17, 858, 877, 168, 18, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2142/s); mean us submit 2 queued 7 wait 220 total 231, max 1328; <50/100/200/300/500/1000/2000/more [45, 14, 733, 1035, 123, 18, 32, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2231/s); mean us submit 2 queued 7 wait 209 total 220, max 1243; <50/100/200/300/500/1000/2000/more [48, 19, 842, 896, 160, 20, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2235/s); mean us submit 2 queued 7 wait 208 total 218, max 1226; <50/100/200/300/500/1000/2000/more [49, 18, 830, 925, 140, 25, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2210/s); mean us submit 2 queued 7 wait 208 total 218, max 1314; <50/100/200/300/500/1000/2000/more [41, 22, 868, 887, 145, 25, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2189/s); mean us submit 2 queued 7 wait 210 total 220, max 1373; <50/100/200/300/500/1000/2000/more [48, 22, 830, 894, 178, 8, 20, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2194/s); mean us submit 2 queued 7 wait 214 total 225, max 1414; <50/100/200/300/500/1000/2000/more [40, 10, 767, 982, 168, 18, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2255/s); mean us submit 2 queued 7 wait 210 total 220, max 1207; <50/100/200/300/500/1000/2000/more [36, 22, 797, 956, 153, 27, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2224/s); mean us submit 2 queued 7 wait 207 total 218, max 1147; <50/100/200/300/500/1000/2000/more [50, 31, 834, 886, 169, 17, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2203/s); mean us submit 2 queued 7 wait 209 total 219, max 1114; <50/100/200/300/500/1000/2000/more [41, 19, 813, 943, 150, 24, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2190/s); mean us submit 2 queued 7 wait 212 total 222, max 1088; <50/100/200/300/500/1000/2000/more [51, 19, 782, 937, 177, 22, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2178/s); mean us submit 2 queued 7 wait 211 total 221, max 1110; <50/100/200/300/500/1000/2000/more [51, 19, 817, 904, 178, 18, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2207/s); mean us submit 2 queued 7 wait 213 total 223, max 1191; <50/100/200/300/500/1000/2000/more [42, 18, 793, 950, 160, 25, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2221/s); mean us submit 2 queued 7 wait 211 total 221, max 1153; <50/100/200/300/500/1000/2000/more [45, 12, 821, 912, 178, 21, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2194/s); mean us submit 2 queued 7 wait 209 total 219, max 1321; <50/100/200/300/500/1000/2000/more [49, 29, 821, 922, 147, 18, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2195/s); mean us submit 2 queued 7 wait 211 total 222, max 1399; <50/100/200/300/500/1000/2000/more [39, 18, 790, 968, 147, 20, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2142/s); mean us submit 2 queued 7 wait 215 total 226, max 1359; <50/100/200/300/500/1000/2000/more [35, 17, 796, 940, 174, 22, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2186/s); mean us submit 2 queued 7 wait 215 total 225, max 1317; <50/100/200/300/500/1000/2000/more [46, 21, 774, 944, 177, 18, 20, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2199/s); mean us submit 2 queued 7 wait 211 total 221, max 1149; <50/100/200/300/500/1000/2000/more [42, 18, 830, 915, 156, 26, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2160/s); mean us submit 2 queued 7 wait 218 total 228, max 1157; <50/100/200/300/500/1000/2000/more [53, 16, 693, 1015, 190, 17, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2171/s); mean us submit 2 queued 7 wait 216 total 227, max 1174; <50/100/200/300/500/1000/2000/more [51, 18, 680, 1025, 192, 24, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2228/s); mean us submit 2 queued 7 wait 213 total 223, max 1191; <50/100/200/300/500/1000/2000/more [41, 11, 818, 922, 173, 20, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2174/s); mean us submit 2 queued 7 wait 215 total 225, max 1262; <50/100/200/300/500/1000/2000/more [45, 12, 768, 963, 177, 19, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2186/s); mean us submit 2 queued 7 wait 211 total 221, max 1338; <50/100/200/300/500/1000/2000/more [45, 27, 771, 973, 152, 21, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2193/s); mean us submit 4 queued 7 wait 211 total 223, max 2676; <50/100/200/300/500/1000/2000/more [40, 22, 789, 956, 155, 26, 11, 1]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2239/s); mean us submit 2 queued 7 wait 213 total 223, max 1290; <50/100/200/300/500/1000/2000/more [41, 15, 820, 921, 167, 21, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2188/s); mean us submit 2 queued 7 wait 214 total 224, max 1272; <50/100/200/300/500/1000/2000/more [52, 25, 759, 973, 149, 23, 19, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2144/s); mean us submit 2 queued 7 wait 213 total 223, max 1316; <50/100/200/300/500/1000/2000/more [44, 20, 794, 951, 156, 15, 20, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2170/s); mean us submit 2 queued 7 wait 215 total 225, max 1256; <50/100/200/300/500/1000/2000/more [48, 25, 751, 966, 173, 22, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2191/s); mean us submit 2 queued 7 wait 214 total 224, max 1149; <50/100/200/300/500/1000/2000/more [48, 19, 763, 962, 173, 18, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2235/s); mean us submit 2 queued 7 wait 207 total 217, max 2899; <50/100/200/300/500/1000/2000/more [36, 26, 920, 817, 171, 18, 10, 2]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2213/s); mean us submit 2 queued 7 wait 212 total 222, max 1152; <50/100/200/300/500/1000/2000/more [38, 25, 853, 872, 177, 21, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2180/s); mean us submit 2 queued 7 wait 214 total 225, max 1109; <50/100/200/300/500/1000/2000/more [48, 19, 732, 1008, 160, 18, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2190/s); mean us submit 2 queued 7 wait 211 total 221, max 2447; <50/100/200/300/500/1000/2000/more [45, 22, 827, 906, 164, 20, 15, 1]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2214/s); mean us submit 2 queued 7 wait 210 total 220, max 1199; <50/100/200/300/500/1000/2000/more [53, 22, 832, 896, 162, 21, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2162/s); mean us submit 2 queued 7 wait 217 total 228, max 1319; <50/100/200/300/500/1000/2000/more [48, 20, 745, 955, 189, 30, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2198/s); mean us submit 2 queued 7 wait 212 total 222, max 1407; <50/100/200/300/500/1000/2000/more [49, 14, 802, 935, 160, 25, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2170/s); mean us submit 2 queued 7 wait 215 total 226, max 1335; <50/100/200/300/500/1000/2000/more [48, 11, 769, 960, 175, 17, 20, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2139/s); mean us submit 2 queued 7 wait 216 total 226, max 1456; <50/100/200/300/500/1000/2000/more [44, 25, 721, 1007, 163, 27, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2197/s); mean us submit 2 queued 7 wait 213 total 223, max 1308; <50/100/200/300/500/1000/2000/more [36, 28, 808, 919, 174, 20, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2186/s); mean us submit 2 queued 7 wait 219 total 228, max 1174; <50/100/200/300/500/1000/2000/more [45, 16, 708, 1004, 193, 18, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2223/s); mean us submit 2 queued 7 wait 208 total 218, max 1148; <50/100/200/300/500/1000/2000/more [44, 21, 856, 896, 149, 23, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2202/s); mean us submit 2 queued 7 wait 212 total 222, max 1160; <50/100/200/300/500/1000/2000/more [51, 13, 807, 921, 170, 26, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2164/s); mean us submit 2 queued 7 wait 217 total 227, max 1172; <50/100/200/300/500/1000/2000/more [52, 13, 725, 1000, 177, 16, 17, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2156/s); mean us submit 2 queued 7 wait 215 total 225, max 1361; <50/100/200/300/500/1000/2000/more [46, 15, 747, 1008, 148, 20, 16, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2191/s); mean us submit 2 queued 7 wait 214 total 224, max 1225; <50/100/200/300/500/1000/2000/more [48, 13, 788, 952, 161, 20, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2177/s); mean us submit 2 queued 7 wait 216 total 226, max 1251; <50/100/200/300/500/1000/2000/more [43, 19, 720, 1011, 174, 24, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.88s (2276/s); mean us submit 2 queued 7 wait 214 total 224, max 1221; <50/100/200/300/500/1000/2000/more [36, 16, 786, 954, 176, 18, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2148/s); mean us submit 2 queued 7 wait 219 total 229, max 1340; <50/100/200/300/500/1000/2000/more [49, 19, 688, 1006, 202, 22, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2138/s); mean us submit 2 queued 7 wait 215 total 225, max 1272; <50/100/200/300/500/1000/2000/more [49, 22, 762, 965, 169, 15, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2182/s); mean us submit 2 queued 7 wait 214 total 224, max 1285; <50/100/200/300/500/1000/2000/more [50, 16, 807, 907, 187, 20, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2134/s); mean us submit 2 queued 7 wait 218 total 229, max 1301; <50/100/200/300/500/1000/2000/more [46, 16, 728, 995, 176, 25, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2224/s); mean us submit 2 queued 7 wait 209 total 219, max 1074; <50/100/200/300/500/1000/2000/more [48, 23, 825, 888, 177, 33, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2197/s); mean us submit 2 queued 7 wait 213 total 223, max 1172; <50/100/200/300/500/1000/2000/more [43, 23, 778, 962, 160, 19, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2192/s); mean us submit 2 queued 7 wait 211 total 221, max 1165; <50/100/200/300/500/1000/2000/more [45, 21, 759, 977, 169, 26, 3, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2211/s); mean us submit 2 queued 7 wait 212 total 222, max 1104; <50/100/200/300/500/1000/2000/more [40, 13, 812, 932, 166, 25, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2210/s); mean us submit 2 queued 7 wait 208 total 218, max 1167; <50/100/200/300/500/1000/2000/more [43, 25, 879, 871, 148, 22, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2183/s); mean us submit 2 queued 7 wait 212 total 223, max 1207; <50/100/200/300/500/1000/2000/more [47, 18, 787, 941, 170, 27, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2222/s); mean us submit 2 queued 7 wait 213 total 223, max 1300; <50/100/200/300/500/1000/2000/more [47, 18, 812, 920, 163, 19, 21, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2201/s); mean us submit 2 queued 7 wait 211 total 221, max 1301; <50/100/200/300/500/1000/2000/more [48, 18, 817, 941, 142, 16, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2162/s); mean us submit 2 queued 7 wait 215 total 225, max 1300; <50/100/200/300/500/1000/2000/more [45, 23, 729, 1015, 151, 16, 21, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2220/s); mean us submit 2 queued 7 wait 213 total 223, max 1305; <50/100/200/300/500/1000/2000/more [51, 15, 811, 904, 177, 28, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2203/s); mean us submit 2 queued 7 wait 211 total 221, max 1361; <50/100/200/300/500/1000/2000/more [41, 13, 826, 912, 169, 28, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.97s (2064/s); mean us submit 2 queued 7 wait 235 total 245, max 2779; <50/100/200/300/500/1000/2000/more [24, 15, 724, 1008, 177, 21, 20, 11]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2157/s); mean us submit 2 queued 7 wait 220 total 230, max 1706; <50/100/200/300/500/1000/2000/more [27, 17, 842, 904, 160, 25, 25, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2204/s); mean us submit 2 queued 7 wait 214 total 225, max 1686; <50/100/200/300/500/1000/2000/more [45, 25, 805, 917, 158, 32, 18, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.88s (2264/s); mean us submit 2 queued 7 wait 206 total 216, max 1128; <50/100/200/300/500/1000/2000/more [48, 23, 884, 840, 174, 27, 4, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2173/s); mean us submit 2 queued 7 wait 214 total 224, max 1219; <50/100/200/300/500/1000/2000/more [53, 21, 766, 957, 161, 32, 10, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2172/s); mean us submit 2 queued 7 wait 215 total 225, max 1306; <50/100/200/300/500/1000/2000/more [41, 10, 752, 980, 179, 32, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2205/s); mean us submit 2 queued 7 wait 209 total 219, max 1170; <50/100/200/300/500/1000/2000/more [52, 27, 818, 902, 168, 25, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2225/s); mean us submit 2 queued 7 wait 210 total 220, max 1218; <50/100/200/300/500/1000/2000/more [32, 23, 823, 934, 145, 37, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2163/s); mean us submit 2 queued 7 wait 218 total 228, max 1216; <50/100/200/300/500/1000/2000/more [52, 12, 768, 937, 195, 21, 15, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2151/s); mean us submit 2 queued 7 wait 225 total 235, max 1229; <50/100/200/300/500/1000/2000/more [47, 9, 717, 960, 217, 39, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2135/s); mean us submit 2 queued 7 wait 227 total 237, max 1106; <50/100/200/300/500/1000/2000/more [46, 12, 681, 990, 227, 35, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2147/s); mean us submit 2 queued 7 wait 221 total 231, max 1127; <50/100/200/300/500/1000/2000/more [48, 8, 767, 927, 212, 32, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2136/s); mean us submit 2 queued 7 wait 222 total 233, max 1110; <50/100/200/300/500/1000/2000/more [51, 11, 739, 947, 216, 28, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2146/s); mean us submit 2 queued 7 wait 225 total 235, max 1041; <50/100/200/300/500/1000/2000/more [43, 10, 748, 931, 225, 40, 3, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2141/s); mean us submit 2 queued 7 wait 223 total 233, max 1161; <50/100/200/300/500/1000/2000/more [42, 9, 775, 914, 211, 43, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2157/s); mean us submit 2 queued 7 wait 222 total 232, max 1079; <50/100/200/300/500/1000/2000/more [39, 13, 746, 951, 210, 38, 3, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2215/s); mean us submit 2 queued 7 wait 219 total 230, max 1090; <50/100/200/300/500/1000/2000/more [37, 10, 835, 879, 196, 31, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2162/s); mean us submit 2 queued 7 wait 222 total 232, max 1316; <50/100/200/300/500/1000/2000/more [48, 12, 767, 922, 212, 28, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2128/s); mean us submit 2 queued 7 wait 228 total 239, max 1245; <50/100/200/300/500/1000/2000/more [47, 11, 642, 1044, 210, 33, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2133/s); mean us submit 2 queued 7 wait 211 total 221, max 1230; <50/100/200/300/500/1000/2000/more [42, 17, 838, 901, 170, 20, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2154/s); mean us submit 2 queued 7 wait 215 total 225, max 1149; <50/100/200/300/500/1000/2000/more [51, 18, 709, 1030, 149, 32, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2205/s); mean us submit 2 queued 7 wait 212 total 222, max 1087; <50/100/200/300/500/1000/2000/more [43, 14, 790, 976, 137, 31, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2183/s); mean us submit 2 queued 7 wait 212 total 222, max 1234; <50/100/200/300/500/1000/2000/more [49, 14, 780, 962, 160, 26, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2194/s); mean us submit 2 queued 7 wait 210 total 220, max 1083; <50/100/200/300/500/1000/2000/more [44, 22, 795, 949, 155, 29, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2179/s); mean us submit 2 queued 7 wait 211 total 221, max 1255; <50/100/200/300/500/1000/2000/more [45, 21, 780, 956, 164, 27, 7, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2167/s); mean us submit 2 queued 7 wait 214 total 225, max 1152; <50/100/200/300/500/1000/2000/more [52, 20, 714, 1008, 168, 30, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2172/s); mean us submit 2 queued 7 wait 213 total 224, max 1243; <50/100/200/300/500/1000/2000/more [51, 13, 714, 1020, 165, 32, 5, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2192/s); mean us submit 2 queued 7 wait 210 total 220, max 1117; <50/100/200/300/500/1000/2000/more [48, 26, 773, 959, 155, 33, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2172/s); mean us submit 2 queued 7 wait 212 total 223, max 1265; <50/100/200/300/500/1000/2000/more [47, 20, 723, 1020, 157, 24, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2188/s); mean us submit 2 queued 7 wait 209 total 219, max 1286; <50/100/200/300/500/1000/2000/more [49, 20, 838, 900, 157, 23, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2237/s); mean us submit 2 queued 7 wait 205 total 215, max 1241; <50/100/200/300/500/1000/2000/more [35, 21, 905, 864, 141, 22, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2243/s); mean us submit 2 queued 7 wait 207 total 218, max 1167; <50/100/200/300/500/1000/2000/more [46, 15, 836, 919, 152, 20, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2257/s); mean us submit 2 queued 7 wait 203 total 213, max 1112; <50/100/200/300/500/1000/2000/more [49, 22, 907, 839, 151, 25, 7, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2184/s); mean us submit 2 queued 7 wait 209 total 219, max 1056; <50/100/200/300/500/1000/2000/more [40, 21, 824, 936, 144, 26, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.91s (2192/s); mean us submit 2 queued 7 wait 208 total 218, max 1078; <50/100/200/300/500/1000/2000/more [46, 19, 832, 919, 145, 35, 4, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2215/s); mean us submit 2 queued 7 wait 208 total 218, max 1130; <50/100/200/300/500/1000/2000/more [48, 24, 820, 909, 168, 23, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2184/s); mean us submit 2 queued 7 wait 208 total 218, max 1089; <50/100/200/300/500/1000/2000/more [48, 15, 810, 959, 134, 25, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2216/s); mean us submit 2 queued 7 wait 208 total 219, max 1151; <50/100/200/300/500/1000/2000/more [46, 23, 843, 909, 140, 30, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2225/s); mean us submit 2 queued 7 wait 206 total 216, max 1134; <50/100/200/300/500/1000/2000/more [39, 18, 861, 900, 153, 22, 7, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.89s (2243/s); mean us submit 2 queued 7 wait 206 total 216, max 1231; <50/100/200/300/500/1000/2000/more [42, 14, 880, 899, 133, 19, 13, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.90s (2225/s); mean us submit 2 queued 7 wait 203 total 213, max 1290; <50/100/200/300/500/1000/2000/more [49, 23, 915, 842, 137, 22, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2161/s); mean us submit 2 queued 7 wait 205 total 215, max 1243; <50/100/200/300/500/1000/2000/more [50, 32, 928, 780, 173, 26, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2131/s); mean us submit 2 queued 7 wait 215 total 225, max 1311; <50/100/200/300/500/1000/2000/more [49, 26, 804, 898, 184, 25, 14, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2122/s); mean us submit 2 queued 7 wait 218 total 229, max 1179; <50/100/200/300/500/1000/2000/more [46, 19, 766, 934, 194, 30, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.92s (2166/s); mean us submit 2 queued 7 wait 210 total 220, max 1223; <50/100/200/300/500/1000/2000/more [43, 27, 886, 831, 175, 27, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.95s (2115/s); mean us submit 2 queued 7 wait 220 total 230, max 1179; <50/100/200/300/500/1000/2000/more [45, 24, 742, 918, 234, 26, 11, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2119/s); mean us submit 2 queued 7 wait 217 total 227, max 1114; <50/100/200/300/500/1000/2000/more [40, 18, 760, 939, 209, 25, 9, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2151/s); mean us submit 2 queued 7 wait 214 total 224, max 1349; <50/100/200/300/500/1000/2000/more [34, 19, 827, 899, 185, 24, 12, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.94s (2126/s); mean us submit 2 queued 7 wait 218 total 228, max 1164; <50/100/200/300/500/1000/2000/more [45, 18, 758, 933, 208, 32, 6, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.95s (2100/s); mean us submit 2 queued 7 wait 216 total 226, max 1261; <50/100/200/300/500/1000/2000/more [50, 25, 805, 864, 214, 34, 8, 0]
+[virglrs] ctx 4 ring fences: 2000 in 0.93s (2154/s); mean us submit 2 queued 7 wait 216 total 226, max 1224; <50/100/200/300/500/1000/2000/more [47, 15, 804, 901, 192, 29, 12, 0]
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x77a896f308
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x77a896f308
+[virglrs] ctx 7 ring fences: 2000 in 39.92s (50/s); mean us submit 29 queued 97 wait 424 total 551, max 7457; <50/100/200/300/500/1000/2000/more [5, 49, 215, 271, 480, 856, 100, 24]
+[virglrs] ctx 7 ring fences: 2000 in 40.16s (50/s); mean us submit 28 queued 101 wait 419 total 549, max 13357; <50/100/200/300/500/1000/2000/more [3, 68, 211, 277, 509, 819, 88, 25]
+[virglrs] ctx 6: ring 1 fences are ordered on queue 0x77a896f308
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x77a896f308
+[virglrs] ctx 7 ring fences: 2000 in 0.93s (2154/s); mean us submit 2 queued 9 wait 188 total 200, max 2241; <50/100/200/300/500/1000/2000/more [41, 57, 1353, 382, 107, 24, 35, 1]
+[virglrs] ctx 7 ring fences: 2000 in 0.87s (2306/s); mean us submit 3 queued 9 wait 187 total 200, max 1282; <50/100/200/300/500/1000/2000/more [27, 43, 1383, 378, 115, 21, 33, 0]
+[virglrs] ctx 7 ring fences: 2000 in 0.86s (2321/s); mean us submit 3 queued 9 wait 187 total 200, max 1397; <50/100/200/300/500/1000/2000/more [35, 40, 1377, 357, 137, 19, 35, 0]
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x77a896f308
+#### ordered 2 rc=0
+[04:40:45] up on 2222; worker log /tmp/limina-worker-probe.log
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+gcc-16.2.1-2.fc44.aarch64
+package mesa-libEGL-devel is not installed
+package mesa-libGLES-devel is not installed
+[04:42:00] display: verify OK: Virtual-1 1280x800@59.810 scale=1.0
+[04:44:11] vkmark: 3374
+[04:45:54] perf-ledger: 
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
+renderer: zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+version: OpenGL ES 3.2 Mesa 26.1.8
+empty frame (clear + finish)              0.60 ms/frame       0.0 M tris/s
+1 draw x 100k tris, u32                   0.60 ms/frame     168.0 M tris/s
+1 draw x 1M tris, u32                     0.87 ms/frame    1149.5 M tris/s
+1 draw x 1M tris, u16 (multi-use)         0.86 ms/frame    1162.2 M tris/s
+100 draws x 10k tris, u32                 0.87 ms/frame    1153.3 M tris/s
+1000 draws x 1k tris, u32                 0.93 ms/frame    1080.3 M tris/s
+instanced 1k tris x 1000, u32             0.87 ms/frame    1152.6 M tris/s
+instanced 100 tris x 10000, u32           0.87 ms/frame    1151.2 M tris/s
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] MEASUREMENT SEAM: ctx 4 retires ring fences on arrival, unordered
+[virglrs] ctx 4: ring 1 fences are ordered on queue 0x758698b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7586f73308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7586f8b308
+[virglrs] MEASUREMENT SEAM: ctx 6 retires ring fences on arrival, unordered
+[virglrs] ctx 6: ring 1 fences are ordered on queue 0x7586f8b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x7586f8b308
+[virglrs] MEASUREMENT SEAM: ctx 7 retires ring fences on arrival, unordered
+[virglrs] ctx 7: ring 1 fences are ordered on queue 0x758608b308
+#### unordered 2 rc=0

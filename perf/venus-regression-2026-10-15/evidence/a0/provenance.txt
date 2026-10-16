@@ -1,0 +1,20 @@
+venus-regression a0: bundle Limina-2026-09-10-8 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+/private/tmp/claude-501/-Users-kov-Projects-limina/1f24dddb-142f-4c01-9d8c-fbe056999c4c/scratchpad/dmg/Limina-2026-09-10-8/Limina.app/Contents/Frameworks/:
+total 432704
+-rwxr-xr-x@ 1 kov  staff    1133328 Sep 10 18:58 libEGL.1.dylib
+-rwxr-xr-x@ 1 kov  staff    1133328 Sep 10 18:58 libEGL.dylib
+-rwxr-xr-x@ 1 kov  staff     110416 Sep 10 18:58 libGLESv2.dylib
+-rw-r--r--@ 1 kov  staff  163633744 Sep 10 18:58 libLLVM.dylib
+-rw-r--r--@ 1 kov  staff    1781552 Sep 10 18:58 libSPIRV-Tools.dylib
+-rwxr-xr-x@ 1 kov  staff   21619280 Sep 10 18:58 libgallium-26.3.0-devel.dylib
+-rwxr-xr-x@ 1 kov  staff     117008 Sep 10 18:58 liblimina_sep.dylib
+-rw-r--r--@ 1 kov  staff     624960 Sep 10 18:58 libvulkan.1.dylib
+-rwxr-xr-x@ 1 kov  staff   15178368 Sep 10 18:58 libvulkan_kosmickrisp.dylib
+-rw-r--r--@ 1 kov  staff   15545488 Sep 10 18:58 libz3.5.0.dylib
+-rw-r--r--@ 1 kov  staff     649840 Sep 10 18:58 libzstd.1.dylib
+
+/private/tmp/claude-501/-Users-kov-Projects-limina/1f24dddb-142f-4c01-9d8c-fbe056999c4c/scratchpad/dmg/Limina-2026-09-10-8/Limina.app/Contents/MacOS/:
+total 55888
+-rwxr-xr-x@ 1 kov  staff  12232016 Sep 10 18:58 gvproxy
+-rwxr-xr-x@ 1 kov  staff   5619888 Sep 10 18:58 limina
+-rwxr-xr-x@ 1 kov  staff  10753328 Sep 10 18:58 limina-vmm

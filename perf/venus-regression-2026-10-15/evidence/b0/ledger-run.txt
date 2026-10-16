@@ -1,0 +1,8 @@
+verify OK: Virtual-1 1280x800@59.810 scale=1.0
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Virtio-GPU Venus (Apple M1 Max) (MESA_KOSMICKRISP))
+PROVENANCE: kernel=6.19.10-300.fc44.aarch64 pagesize=4096 mesa=26.1.8-1.fc44 vnperf=<unset> vcpus=4 ram=3887MiB display=Virtual-1: 1280x800@59.810 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/venus-regression-2026-10-15/ledger.csv:
+2026-10-16,b71c2139,gl-replay-venus,fps,49.9281,venus-regression b0: bundle Limina-2026-10-15-1 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+2026-10-16,b71c2139,gl-replay-llvmpipe,fps,731.107,venus-regression b0: bundle Limina-2026-10-15-1 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+2026-10-16,b71c2139,vk-replay-venus-headless,fps,649.462583,venus-regression b0: bundle Limina-2026-10-15-1 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1
+2026-10-16,b71c2139,glmark2-wayland-venus,score,2336,venus-regression b0: bundle Limina-2026-10-15-1 (Fedora-Workstation-44.metal.test.raw); macOS 27.0.1

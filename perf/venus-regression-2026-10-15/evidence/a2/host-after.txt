@@ -1,0 +1,8 @@
+ %CPU    RSS COMM
+114.9 5368848 /private/tmp/claude-501/-Users-kov-Projects-limina/1f24dddb-142f-4c01-9d8c-fbe056999c4c/scratchp
+ 33.0  93968 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+ 13.5  18432 /usr/libexec/opendirectoryd
+  8.8  50608 /System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex/Contents/MacOS/WallpaperA
+  5.0 139232 /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/
+  2.6   3888 automountd
+  2.5  84640 /private/tmp/claude-501/-Users-kov-Projects-limina/1f24dddb-142f-4c01-9d8c-fbe056999c4c/scratchpa
