@@ -71,7 +71,7 @@ that exposes framebuffer fetch; Ice Lake anv does not, so no run covers it.
 Host: Fedora 44, Intel Iris Plus G7 (Ice Lake), system anv from Fedora mesa 26.1.8 as the Vulkan
 driver; zink from the Mesa under test. "Venus" rows run zink and venus from the Mesa under test in
 the rig's QEMU 10.2 + virglrenderer 1.3.0 guest, on the same host anv. "+0001" is the first
-commit alone, "+series" all three (`7f5ed671264`).
+commit alone, "+series" all three (`86968e1a8f7`).
 
 | Mesa (zink) | Driver | Modes | Result |
 |---|---|---|---|
@@ -139,8 +139,9 @@ the tree is the one measured as +series. 0001 is also on `upstream/guest-2026-10
   attachment's own clears enabled. The loop is older: it needs only the emulation
   (`fbff2b6c652`, 2021) and the clear flush on attachment change (`66ceea7ed9a`, 22.2.0);
   `82add9f2e99` first shipped in 23.3.0 and `staging/26.2` carries it.
-- 0002 `Fixes: ef3f7989574` ("zink: prune zink_surface down to the imageview and create/fetch on
-  demand", 25.2): it added the unbind-time `res->transient->valid = false` (absent at its parent).
+- 0002 `Fixes: 635f0c5f4fe` ("zink: delete transient attachments instead of leaking them",
+  25.2): it added the unbind-time invalidation of the transient (absent at its parent);
+  `ef3f7989574` later rewrote it as `res->transient->valid = false`.
 - 0003 has no `Fixes:`; the reduced framebuffer dates from `b122c3eaa9e` ("zink: unify/fix clear
   flushing", 25.3), but a shadow inside it recursed until 0001. `Cc: mesa-stable` so it travels
   with 0001.
@@ -151,5 +152,5 @@ Points for the MR description: the three bugs and their order of dependence (000
 0003 needs 2 for multiple cleared attachments); the reproducer and its modes, before and after;
 the `zink_blit()` precedent for 0001; why 0003 populates before reducing instead of restoring
 derived state; piglit unchanged; observed in the wild as a browser renderer process crash. Review:
-zink is maintained by the author of the commits named above (`82add9f2e99`, `ef3f7989574`,
+zink is maintained by the author of the commits named above (`82add9f2e99`, `635f0c5f4fe`,
 `b122c3eaa9e`).

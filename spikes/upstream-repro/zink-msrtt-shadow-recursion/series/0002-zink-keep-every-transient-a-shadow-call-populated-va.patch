@@ -1,4 +1,4 @@
-From e1d83494ff244f52f13db7f4c7dc7928fff42847 Mon Sep 17 00:00:00 2001
+From b923771421c6e67cac29b2a1ea7e141e04300d91 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Fri, 16 Oct 2026 16:58:58 -0300
 Subject: [PATCH 2/3] zink: keep every transient a shadow call populated valid
@@ -14,7 +14,7 @@ and the end of the loop.
 
 Mark every transient the call populated valid once the loop is done.
 
-Fixes: ef3f7989574 ("zink: prune zink_surface down to the imageview and create/fetch on demand")
+Fixes: 635f0c5f4fe ("zink: delete transient attachments instead of leaking them")
 Cc: mesa-stable
 Assisted-by: Claude Code
 Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>

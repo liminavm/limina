@@ -46,7 +46,8 @@
  *   GL_EXT_shader_framebuffer_fetch shader that adds green to COLOR0, bound
  *   before the clear and the glFlush. COLOR0 has no pending clear, so the
  *   flush's renderpass leaves it out. COLOR0 must read blue, cyan, blue and
- *   COLOR1 red, green, yellow.
+ *   COLOR1 red, green, yellow. Not yet run on any driver: the expected
+ *   pixels are unvalidated.
  *
  * Unfixed: "Caught recursion" from u_blitter, then SIGSEGV (stack overflow).
  * Fixed:   prints the pixels and "ok", exit 0.

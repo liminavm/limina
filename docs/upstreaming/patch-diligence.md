@@ -128,7 +128,9 @@ alternatives come from proposers who have never seen it:
    in agreement afterwards, behaviour changed besides the bug, whether it reads like the
    surrounding code, size, and correctness on every path in the brief.
 5. **A skeptic per top-two candidate** looks for a call path, ordering or input that breaks it.
-   What it finds becomes a reproducer mode in §6.
+   What it finds becomes a reproducer mode in §6. When the mode fails, the fix changes and the
+   changed fix gets a fresh skeptic: repeat until a round finds nothing. The zink MSRTT series
+   took three rounds, and each one found a real bug.
 
 §6 then builds the top candidate, the runner-up and ours. Proposers that arrive at our shape
 are a result too: the README says so, next to the alternatives that lost and why.
