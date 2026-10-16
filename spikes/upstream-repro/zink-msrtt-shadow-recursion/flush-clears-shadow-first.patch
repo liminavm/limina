@@ -1,0 +1,26 @@
+diff --git a/src/gallium/drivers/zink/zink_context.c b/src/gallium/drivers/zink/zink_context.c
+index a5323ee6..6f75d6f4 100644
+--- a/src/gallium/drivers/zink/zink_context.c
++++ b/src/gallium/drivers/zink/zink_context.c
+@@ -3754,6 +3754,21 @@ zink_flush_clears(struct zink_context *ctx)
+    bool queries_disabled = ctx->queries_disabled;
+    bool has_swapchain = ctx->has_swapchain;
+    bool blitting = ctx->blitting;
++   if (!blitting && ctx->transient_msrtss && !screen->info.have_EXT_multisampled_render_to_single_sampled) {
++      /* populate the transients the clears below need while the whole fb is still
++       * bound: the replicate blit rebinds the fb, and rebinding the reduced one
++       * would leave all fb-derived state describing it
++       */
++      uint32_t shadow_mask = 0;
++      for (unsigned i = 0; i < ctx->fb_state.nr_cbufs; i++) {
++         struct zink_resource *res = zink_resource(ctx->fb_state.cbufs[i].texture);
++         if (res && res->valid && zink_fb_clear_enabled(ctx, i))
++            shadow_mask |= BITFIELD_BIT(i);
++      }
++      shadow_mask &= ctx->transient_attachments;
++      if (shadow_mask)
++         zink_render_attachment_shadow(ctx, shadow_mask);
++   }
+    struct pipe_framebuffer_state fb = ctx->fb_state;
+    if (!blitting) {
+       for (unsigned i = 0; i < ctx->fb_state.nr_cbufs; i++) {

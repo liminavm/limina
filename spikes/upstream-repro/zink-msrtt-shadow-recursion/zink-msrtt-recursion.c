@@ -39,6 +39,11 @@
  *   the draw did not reach, including under COLOR0's cleared quadrant (a
  *   stale transient would read pass 1's blue there).
  * mrt-rebind: mrt with rebind's FBO round trip in place of the glFlush.
+ * fbfetch: mrt, but the scissored clear is on COLOR1 only and pass 3 uses a
+ *   GL_EXT_shader_framebuffer_fetch shader that adds green to COLOR0, bound
+ *   before the clear and the glFlush. COLOR0 has no pending clear, so the
+ *   flush's renderpass leaves it out. COLOR0 must read blue, cyan, blue and
+ *   COLOR1 red, green, yellow.
  *
  * Unfixed: "Caught recursion" from u_blitter, then SIGSEGV (stack overflow).
  * Fixed:   prints the pixels and "ok", exit 0.
@@ -86,11 +91,12 @@ int main(int argc, char **argv)
 {
    const char *mode = argc > 1 ? argv[1] : "color";
    const int zs = !strcmp(mode, "zs");
-   const int mrt = !strncmp(mode, "mrt", 3);
+   const int fbfetch = !strcmp(mode, "fbfetch");
+   const int mrt = fbfetch || !strncmp(mode, "mrt", 3);
    const int rebind = !strcmp(mode, "rebind") || !strcmp(mode, "mrt-rebind");
-   const int flush = rebind || !strcmp(mode, "mrt") || !strcmp(mode, "flush");
+   const int flush = fbfetch || rebind || !strcmp(mode, "mrt") || !strcmp(mode, "flush");
    if (!zs && !flush && strcmp(mode, "color"))
-      die("mode: color|zs|flush|rebind|mrt|mrt-rebind");
+      die("mode: color|zs|flush|rebind|mrt|mrt-rebind|fbfetch");
 
    PFNEGLGETPLATFORMDISPLAYEXTPROC get_display =
       (void *)eglGetProcAddress("eglGetPlatformDisplayEXT");
@@ -127,6 +133,28 @@ int main(int argc, char **argv)
    glUseProgram(prog);
    GLint color = glGetUniformLocation(prog, "color");
    GLint z = glGetUniformLocation(prog, "z");
+
+   /* fbfetch: pass 3 adds green to what COLOR0 already holds */
+   GLuint prog2 = 0;
+   if (fbfetch) {
+      if (!strstr((const char *)glGetString(GL_EXTENSIONS), "GL_EXT_shader_framebuffer_fetch"))
+         die("no GL_EXT_shader_framebuffer_fetch");
+      prog2 = glCreateProgram();
+      glAttachShader(prog2, shader(GL_VERTEX_SHADER,
+         "#version 300 es\n"
+         "void main() {\n"
+         "  vec2 p = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 4.0 - 1.0;\n"
+         "  gl_Position = vec4(p, 0.0, 1.0);\n"
+         "}\n"));
+      glAttachShader(prog2, shader(GL_FRAGMENT_SHADER,
+         "#version 300 es\n"
+         "#extension GL_EXT_shader_framebuffer_fetch : require\n"
+         "precision mediump float;\n"
+         "layout(location = 0) inout vec4 o;\n"
+         "layout(location = 1) out vec4 o1;\n"
+         "void main() { o = o + vec4(0.0, 1.0, 0.0, 0.0); o1 = vec4(0.0, 1.0, 0.0, 1.0); }\n"));
+      glLinkProgram(prog2);
+   }
 
    GLuint fbo[2];
    glGenFramebuffers(2, fbo);
@@ -181,6 +209,8 @@ int main(int argc, char **argv)
 
    /* 3. back to MSRTT, partial clear, draw */
    glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+   if (fbfetch)
+      glUseProgram(prog2);
    glEnable(GL_SCISSOR_TEST);
    glScissor(0, 0, W / 2, H / 2);
    if (zs) {
@@ -192,7 +222,7 @@ int main(int argc, char **argv)
    } else {
       if (mrt) {
          static const GLfloat red[4] = { 1, 0, 0, 1 };
-         glClearBufferfv(GL_COLOR, 0, red);
+         glClearBufferfv(GL_COLOR, fbfetch ? 1 : 0, red);
       } else {
          glClearColor(1, 0, 0, 1);
          glClear(GL_COLOR_BUFFER_BIT);
@@ -223,7 +253,10 @@ int main(int argc, char **argv)
    static const GLubyte want_color[3][3] = { { 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 } };
    static const GLubyte want_zs[3][3] = { { 0, 255, 0 }, { 0, 0, 255 }, { 0, 0, 255 } };
    static const GLubyte want_color1[3][3] = { { 255, 255, 0 }, { 0, 255, 0 }, { 255, 255, 0 } };
-   const GLubyte (*want)[3] = zs ? want_zs : want_color;
+   static const GLubyte want_fbfetch[3][3] = { { 0, 0, 255 }, { 0, 255, 255 }, { 0, 0, 255 } };
+   static const GLubyte want_fbfetch1[3][3] = { { 255, 0, 0 }, { 0, 255, 0 }, { 255, 255, 0 } };
+   const GLubyte (*want)[3] = zs ? want_zs : fbfetch ? want_fbfetch : want_color;
+   const GLubyte (*want1)[3] = fbfetch ? want_fbfetch1 : want_color1;
    int ok = 1;
    for (int i = 0; i < 3; i++) {
       GLubyte px[4];
@@ -237,8 +270,7 @@ int main(int argc, char **argv)
          GLubyte px[4];
          glReadPixels(at[i][0], at[i][1], 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
          printf("color1 pixel %d: %u %u %u %u\n", i, px[0], px[1], px[2], px[3]);
-         ok &= px[0] == want_color1[i][0] && px[1] == want_color1[i][1] &&
-               px[2] == want_color1[i][2];
+         ok &= px[0] == want1[i][0] && px[1] == want1[i][1] && px[2] == want1[i][2];
       }
    }
    printf("%s\n", ok ? "ok" : "WRONG PIXELS");

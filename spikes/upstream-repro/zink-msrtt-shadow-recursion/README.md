@@ -18,7 +18,7 @@ driver without MSRTSS under zink. Measured: anv on Ice Lake lacks it, and so doe
 QEMU guest; lavapipe has it (`zink_screen.c` also disables it for panvk).
 
     cc -o zink-msrtt-recursion zink-msrtt-recursion.c -lEGL -lGLESv2
-    MESA_LOADER_DRIVER_OVERRIDE=zink ./zink-msrtt-recursion [color|zs|flush|rebind|mrt|mrt-rebind]
+    MESA_LOADER_DRIVER_OVERRIDE=zink ./zink-msrtt-recursion [color|zs|flush|rebind|mrt|mrt-rebind|fbfetch]
 
 `color` (the default) is the sequence above. `zs` attaches a depth texture through MSRTT as well and
 leaves the scissored clear on depth instead: pass 1 writes depth 0.5, pass 3 clears the lower-left
@@ -38,7 +38,10 @@ main) instead of from the draw. `rebind` binds the other FBO and back instead; t
 then still starts at the draw. `mrt` and `mrt-rebind` add a second MSRTT colour attachment,
 clear only COLOR0, and overwrite COLOR1's texture with yellow by `glTexSubImage2D` before
 pass 3. Only a replicate blit can carry that yellow into COLOR1's transient, so a stale
-transient reads pass 1's blue.
+transient reads pass 1's blue. `fbfetch` is `mrt` with the clear on COLOR1 and a
+`GL_EXT_shader_framebuffer_fetch` shader bound before the `glFlush`, so the flush's renderpass
+leaves out COLOR0, the attachment the shader reads; it needs a zink that exposes framebuffer
+fetch, which Ice Lake anv does not.
 
 ## Results
 
@@ -58,24 +61,35 @@ under test inside the rig guest, on the same host anv.
 | `main` 92b45bd0f2e + fix | same | the same three pixels, `ok`, exit 0, 5/5 |
 | `main` 92b45bd0f2e, `zs` | anv, ICL | green, blue, blue, `ok`, exit 0, 5/5 (control) |
 | `main` 92b45bd0f2e + fix, `zs` | same | green, blue, blue, `ok`, exit 0, 5/5 |
-
 | `main` 92b45bd0f2e, `flush`, `rebind`, `mrt`, `mrt-rebind` | anv, ICL | SIGSEGV, ~4360 "Caught recursion" lines before it, 3/3 each |
 | `main` 92b45bd0f2e + fix, `flush`, `rebind` | same | red, green, blue, `ok`, 3/3 each |
 | `main` 92b45bd0f2e + fix, `mrt-rebind` | same | COLOR0 red, green, blue; COLOR1 yellow, green, yellow; `ok`, 3/3 |
 | `main` 92b45bd0f2e + fix, `mrt` | same | COLOR0 red, green, blue; **COLOR1 blue, green, blue** (stale transient), `WRONG PIXELS`, 3/3 |
+| `main` 92b45bd0f2e + fix + candidate, `color`, `zs`, `flush`, `rebind`, `mrt-rebind` | same | the same pixels as with the fix, `ok`, 3/3 each |
+| `main` 92b45bd0f2e + fix + candidate, `mrt` | same | COLOR0 red, green, blue; COLOR1 yellow, green, yellow; `ok`, 3/3 |
 
 Measured 2026-10-05 (`b39d173ca93`), 2026-10-08 and 2026-10-16 (`92b45bd0f2e`).
 
-**Open: the `glFlush` route leaves other MSRTT attachments stale.** When the shadow runs from
-`zink_flush_clears()` outside a blit, the framebuffer it sees is the one `zink_flush_clears()`
-doctored: every attachment without a pending clear is NULLed. The replicate blit's u_blitter
-save/restore calls `zink_set_framebuffer_state()` with that doctored state, which recomputes
-`ctx->transient_attachments` (and the bind counts and other derived fields) from it, and
-`zink_flush_clears()` then puts the real `fb_state` back by plain assignment without
-recomputing them. Under gdb on `mrt` with the fix, `transient_attachments` goes from `0x3` to
-`0x1` across the `glFlush` and stays there for the draw, so COLOR1's invalidated transient is
-loaded without a replicate blit; on `mrt-rebind` the draw sees `0x3`. On main this route
-recurses, so the fix is what makes it reachable.
+**The `glFlush` route.** When the shadow runs from `zink_flush_clears()` outside a blit, the
+framebuffer it sees is the one `zink_flush_clears()` reduced: every attachment without a pending
+clear is NULLed. The replicate blit's u_blitter save/restore calls `zink_set_framebuffer_state()`
+with that reduced state, which recomputes `ctx->transient_attachments` and the rest of the
+framebuffer-derived state from it, and `zink_flush_clears()` then puts the real `fb_state` back by
+plain assignment without recomputing any of it. Under gdb on `mrt` with the fix,
+`transient_attachments` goes from `0x3` to `0x1` across the `glFlush` and stays there for the
+draw, so COLOR1's invalidated transient is loaded without a replicate blit; on `mrt-rebind` the
+draw sees `0x3`. On main this route recurses, so the fix is what makes it reachable.
+
+The candidate second commit (`flush-clears-shadow-first.patch`) populates, in `zink_flush_clears()`, the transients of the attachments
+it is about to clear before it reduces the framebuffer, so the replicate blit rebinds the real
+one, and the renderpass on the reduced framebuffer finds them valid and blits nothing. Under gdb on
+`mrt` the shadow runs from `zink_flush_clears()` with mask `0x1` and `transient_attachments` stays
+`0x3` through the draw. It needs the fix: its blit relies on the pending clears being masked.
+Restoring the derived fields afterwards instead (a snapshot of the fields, or re-deriving them
+through a helper or a second `set_framebuffer_state`) was proposed three ways by the
+fix-alternatives panel; reviewers found each one misses state the nested rebind changes
+(framebuffer-fetch input attachment, feedback-loop bits) or, for the second bind, drops
+`needs_present`.
 
 **piglit, main vs fix** (2026-10-08, `92b45bd0f2e`): zink over venus in the rig guest, surfaceless
 EGL, `quick` filtered to `fbo`, `clear`, `framebuffer_srgb`, `ext_framebuffer_multisample`,
