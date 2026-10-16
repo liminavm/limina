@@ -4,7 +4,7 @@ The edk2 delta that lived here — the vendored `OvmfPkg/VirtioKeyboardDxe/` tre
 `apply-virtio-keyboard.py`, and the in-place patches inside `scripts/build-krun-efi.sh`
 (TerminalPcdProducerLib build fix, VirtioSerialDxe TPL fix, PL031 DT status=okay, the
 VirtioGpuDxe GOP/ConIn enablement) — was **migrated to the fork model** in task #22:
-`github.com/liminavm/edk2`, branch **`limina`**, is the delta (6 commits on the
+`github.com/liminavm/edk2`, branch **`limina`**, is the delta (9 commits on the
 `slp/edk2@krun-support` base the krunkit blob is built from).
 
 - The pin lives in `[edk2]` in `third_party/manifest.toml`. edk2 is **not** vendored by
