@@ -1,14 +1,32 @@
+<!-- ledger-check: dep=virglrenderer manifest=third_party/virglrs/third_party/manifest.toml base=aafa9bd234a43c31004ec768ce000b21cf7b99ca paths=src,server,meson.build,meson_options.txt,config.h.meson,tests -->
 # virglrenderer — patch-audit ledger
 
-75 commits; base **upstream tip `f2945d39`** (deps-to-tip rebase 2026-08-05 — see *Deps-to-tip
-rebase executed* in Findings). Schema + protocol: `README.md`.
+181 C-tree commits; base **`aafa9bd2`** on upstream `main` ("venus: fix the vulkan_metal.h
+include on macOS", 2026-09-28, the merge-base after the 2026-10-02 rebase — see *Rebase onto
+`aafa9bd2`* in Findings). Upstream's `master` branch is stale (2023, `d74a494a`); `main` is the
+live one. Schema + protocol: `README.md`.
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
-The table covers the 58 audited commits; the 6 added since are listed under
-*Post-audit commits* in Findings.
+
+**Scope.** The `limina` branch carries 616 commits over the base; this ledger tracks only the
+181 that touch the C tree (`src/`, `server/`, `meson.build`, `meson_options.txt`,
+`config.h.meson`, `tests/`, the paths named in the marker on line 1). The other 435 are the
+virglrs Rust rewrite, its harness and docs (`virglrs/`, `harness/`, `docs/`, `CLAUDE.md`):
+history of the rewrite, not a delta against upstream virglrenderer, so they get no rows.
+
+**Coverage.** The main table holds the 58 commits audited on 2026-08-03; *Post-audit commits*
+in Findings lists 36 more with first guesses; *Unaudited commits (skeleton, 2026-10-16)* at the
+end lists the remaining 86 with unresearched first guesses. One more (*"vkr: advertise
+VK_EXT_external_memory_dma_buf alongside the injected fd extension"*) is named only in the
+note below.
+
+**Where the pin lives.** limina no longer pins the C tree: the pin is `[virglrenderer]` in
+virglrs's `third_party/manifest.toml` (rev `a649897f`, the branch head), because virglrs
+generates code from this tree and records its harness goldens against it. This ledger stays in
+limina until someone moves it next to that pin.
 
 > **Fork model since 2026-08-04.** There is no `patches/virglrenderer/` any more — our delta is the
-> commits on the `limina` branch of `github.com/liminavm/virglrenderer`, pinned by
-> `third_party/manifest.toml`. Read a "patch" here as "the commit with this subject". The branch is
+> commits on the `limina` branch of `github.com/liminavm/virglrenderer`, pinned (since the virglrs
+> split) by virglrs's `third_party/manifest.toml`. Read a "patch" here as "the commit with this subject". The branch is
 > rewritten as patches merge upstream or get dropped, so **tag before every rewrite** — every rev
 > ever pinned in the manifest must stay reachable. Two commits joined at migration and are not yet
 > audited: *"vkr: advertise VK_EXT_external_memory_dma_buf alongside the injected fd extension"*
@@ -61,7 +79,7 @@ The table covers the 58 audited commits; the 6 added since are listed under
 | 0042 | vkr: LIMINA_WAKE_TRACE ring wake accounting (diagnostic, env-gated) | `src/venus/vkr_ring.c` |  | needed (diag) | n/a-local (triage 2026-08-03) | n/a | n/a | no | strip-diag-first | host | carry (drop-candidate) | Pure env-gated diagnostic; the wakeup-attribution oracle (use FIRST per limina-overhead-trim) — keep while perf work lives |
 | 0043 | vkr: adaptive relax plateau — recover ring throughput, keep the idle-wakeup win | `src/venus/vkr_ring.c` |  | needed (as part of squash) | tip `956b034f` 2026-08-03 (branch-tip) | n/a | n/a | no | fold-into:0041 (squash) | host | squash | adaptive relax plateau |
 | 0044 | vkr: adaptive relax plateau DEPTH — regime-classified per ring (limina wakeup round 2) | `src/venus/vkr_ring.c`, `src/venus/vkr_ring.h` |  | needed (as part of squash) | tip `956b034f` 2026-08-03 (branch-tip) | n/a | n/a | no | fold-into:0041 (squash) | host | squash | **rename LIMINA_RELAX_WARM_MAX/WARM_MIN/LONG_IDLE_US/WINDOW_MS/COARSEN_PCT → VKR_-prefixed or constants for the MR** — env surface is the main cleanup cost |
-| 0045 | vkr: sanitize guest empty VkClearRects in vkCmdClearAttachments | `src/venus/vkr_command_buffer.c` |  | **yes, but expect pushback**: tip vkr_dispatch_vkCmdClearAttachments (vkr_command_buffer.c:397) is a bare VKR_CMD_CALL — no rect validation anywhere in the decode layer | tip `956b034f` 2026-08-03 | none | none — **FILE MR** (guest-triggerable host-driver abort, defense-in-depth) | yes:dos (guest-triggerable host abort). public MR OK | already mechanism-only and limina-free; keep as-is | host | **upstream** | counter-signal: upstream dropped venus-validate (4df196e3) leaning on render-server process isolation — but limina runs vkr IN-process so an abort kills the VMM. NOT redundant with the mesa/vk_meta fix (that fixes one driver; this closes the trust boundary for all). Per-incident validation precedent exists (144da865, d584798c, 058fa04b) |
+| 0045 | vkr: sanitize guest empty VkClearRects in vkCmdClearAttachments | `src/venus/vkr_command_buffer.c` |  | **yes, but expect pushback**: tip vkr_dispatch_vkCmdClearAttachments (vkr_command_buffer.c:397) is a bare VKR_CMD_CALL — no rect validation anywhere in the decode layer | tip `956b034f` 2026-08-03 | none | none — **FILE MR** (guest-triggerable host-driver abort, defense-in-depth) | yes:dos (guest-triggerable host abort). public MR OK | already mechanism-only and limina-free; keep as-is | host | **upstream** | counter-signal: upstream dropped venus-validate (4df196e3) leaning on render-server process isolation — but limina runs vkr IN-process so an abort kills the VMM. NOT redundant with the mesa/vk_meta fix (that fixes one driver; this closes the trust boundary for all). Per-incident validation precedent exists (144da865, d584798c, 058fa04b). 2026-10-16 audit: a follow-up on the branch, `1a9b057b` *"vkr: also drop negative-offset and i32-overflow VkClearRects"*, extends this sanitize (negative offsets and int32 overflow reached the host driver's meta-clear asserts), so "keep as-is" predates it; whether the two go up as one MR is for a human. Upstream `main` `07a5bc39` still has the bare `VKR_CMD_CALL` |
 | 0046 | vkr: LIMINA_RING_WAKE_PROFILE — split the parked-ring wake chain into hops | `src/venus/vkr_ring.c`, `src/venus/vkr_ring.h` |  | needed (diag) | n/a-local (triage 2026-08-03) | n/a | n/a | no | standalone (absorbs 0047/0048) | host | carry | Pure diagnostic; answered the venus-wake-chain question |
 | 0047 | vkr: don't count a raced notify as this park's wake (RINGWAKE underflow) | `src/venus/vkr_ring.c` |  | needed (diag) | n/a-local (triage 2026-08-03) | n/a | n/a | no | fold-into:vkr: LIMINA_RING_WAKE_PROFILE — split the parked-ring wake chain into hops | host | carry | Fixup on the profiler |
 | 0048 | vkr: LIMINA_RING_WAKE_PROFILE=0 must turn the profile off | `src/venus/vkr_ring.c` |  | needed (diag) | n/a-local (triage 2026-08-03) | n/a | n/a | no | fold-into:vkr: LIMINA_RING_WAKE_PROFILE — split the parked-ring wake chain into hops | host | carry | Fixup on the profiler |
@@ -72,7 +90,7 @@ The table covers the 58 audited commits; the 6 added since are listed under
 | 0053 | vrend: zero-copy scanout — IOSurface + pinned-PBO blit for SCANOUT-bound textures | `src/venus/vkr_metal_helpers.h`, `src/venus/vkr_metal_helpers.m`, `src/virglrenderer.c` +3 |  | needed | n/a-local (triage 2026-08-03) | n/a | n/a | no | standalone | host | carry | Plan A1; presents vrend scanouts through limina's VMM exactly like venus blobs; chained to 0003 |
 | 0054 | venus: decode-lane cost fixes — cached rtlog env, journal msg-inline + batched push | `src/venus/vkr_command_buffer.c`, `src/venus/vkr_common.h`, `src/venus/vkr_context.c` +4 |  | needed | n/a-local (triage 2026-08-03) | n/a | n/a | no | fold-into:vkr: move journal retention off the decode path (two-lane journal) | host | carry | Two concerns in one patch: journal batching (fold into 0051) + the LIMINA_KK_RTLOG getenv cache (must move with 0011's diag strip) |
 | 0055 | venus: journal recording block lane — zero-alloc, near-lockless decode capture | `src/venus/vkr_journal.c` |  | needed | n/a-local (triage 2026-08-03) | n/a | n/a | no | fold-into:vkr: move journal retention off the decode path (two-lane journal) | host | carry | Perf iteration on the journal |
-| 0056 | venus: object-lookup generation cache — lock-free repeat lookups | `src/venus/vkr_common.h`, `src/venus/vkr_context.h`, `src/venus/vkr_cs.c` +1 |  | **needed — per-command locked lookup verbatim on tip** (vkr_cs.h:311, mutex+hash per command; the lock was added upstream 944c8ca9 for a real race) | tip `956b034f` 2026-08-03 (branch-tip) | none-yet | no lookup-cache/lock-free MRs; adjacent !630/!1045 show upstream cares about this cost | no (correctness argument — generation tagging — must survive adversarial review) | standalone | host (OS-agnostic, ~10% decode lane) | **upstream-after-cleanup — strong second-wave candidate** | MR burden = the id-reuse safety argument (generation captured under mutex, relaxed fast-path read, stale ⇒ locked path); already in the commit message; clean of naming |
+| 0056 | venus: object-lookup generation cache — lock-free repeat lookups | `src/venus/vkr_common.h`, `src/venus/vkr_context.h`, `src/venus/vkr_cs.c` +1 |  | **needed — per-command locked lookup verbatim on tip** (vkr_cs.h:311, mutex+hash per command; the lock was added upstream 944c8ca9 for a real race) | tip `956b034f` 2026-08-03 (branch-tip) | none-yet | no lookup-cache/lock-free MRs; adjacent !630/!1045 show upstream cares about this cost | no (correctness argument — generation tagging — must survive adversarial review) | standalone | host (OS-agnostic, ~10% decode lane) | **upstream-after-cleanup — strong second-wave candidate** | MR burden = the id-reuse safety argument (generation captured under mutex, relaxed fast-path read, stale ⇒ locked path); already in the commit message; clean of naming. 2026-10-16 audit: upstream `795d2475` *"vkr: avoid TOCTOU in object id validation"* (!1676, touches `vkr_context.h`, `vkr_physical_device.c`, `vkr_queue.c`) is now in the base; the id-reuse safety argument has not been re-read against it. `vkr_cs_decoder_lookup_object` still takes `object_mutex` per lookup at `07a5bc39` (`vkr_cs.h:302-311`) |
 | 0057 | vrend: never use EGL native-fence syncs on macOS | `src/vrend/vrend_renderer.c` |  | needed — tip use_egl_fence = virgl_egl_supports_fences(egl) unconditionally (7746); supports_fences is advertisement-only (925-928); on macOS init itself hits the blocking-export fallback | tip `956b034f` 2026-08-03 | none | none; gating precedent !441 (gles-only 2020) + !1168 (GL re-enable 2023) | no | fold with 0021 into a macOS-vrend series | host (vrend/GL) | **send-now** — a !defined(__APPLE__) gate is a natural third refinement | a runtime probe is infeasible (the failure mode IS a blocking export), so the __APPLE__ gate is the honest shape |
 | 0058 | vkr: a slow ring wait is not a fatal error (it was poisoning the context) | `src/venus/vkr_context.c` |  | **NOT needed upstream — the bug is OURS**: tip vkr_context_wait_ring_seqno uses plain cnd_wait, no timedwait/STUCK branch; the poisoning was introduced by our 0039 diagnostic | tip `956b034f` 2026-08-03 (branch-tip) | none-yet | none (self-inflicted) | no upstream exposure | **fold-into:0039** (fixes 0039's own diagnostic) | host | carry (folded) | the trap it documents IS real upstream (vendored c11 shim maps ETIMEDOUT→thrd_busy, non-conforming; tip monitor already codes to the quirk at vkr_context.c:538) — at most a comment-grade upstream courtesy; LIMINA_RING_WAIT_WARN_MS has no upstream analog, stays limina |
 
@@ -80,56 +98,58 @@ The table covers the 58 audited commits; the 6 added since are listed under
 
 ### Post-audit commits (unaudited — added after the 2026-08-03 pass)
 
-The table's 58 rows are the audited series. The commits below have landed on the branch since,
+The table's 58 rows are the audited series. The 36 commits below have landed on the branch since,
 and none has been researched against upstream yet. Listed so the drift is visible rather than
-implied by a stale count. (The H.264 VideoToolbox decode commits are not in this list yet.)
+implied by a stale count. SHAs are those on the current branch (after the 2026-10-02 rebase); the
+rest of the post-audit commits, including the VideoToolbox decode stack, are in *Unaudited commits
+(skeleton, 2026-10-16)* at the end.
 
 | commit | subject | first guess at disposition |
 |---|---|---|
-| `490fb0ec` | vrend: add the classic snapshot-replay re-creation journal (P0: record + census) | carry (limina snapshot model) |
-| `2faed850` | vrend: journal export + replay for classic snapshot restore (P1) | carry |
-| `969af493` | vrend: host-side resource content capture for snapshot restore (P2) | carry |
-| `17bb8bf2` | vrend: VREND_CONTENT=0 kill switch for the content export | carry (chained) |
-| `034f7086` | vrend: back VIRGL_BIND_SHARED resources with IOSurfaces too | carry — chains onto the IOSurface backing (0053) and the fd-less classic attach; upstreamable only if that stack goes up |
-| `24a3c2d9` | venus: bound the host GPU memory a guest can hold | **send-later, standalone** — the accounting half is host-agnostic and generally useful (any VMM can be killed by a guest that over-allocates); the ledger + histogram would need no limina context to explain. The `LIMINA_GPU_MEM_BUDGET_MIB` name and the default-off policy are ours and would need renaming; splitting accounting from enforcement is the natural shape upstream |
-| `16bd6836` | venus: periodic GPU-memory census, and read the modifiers before the cap | chains onto `24a3c2d9`; goes up or stays with it |
-| `53e660e6` | budget: charge classic resources to their own bucket, not a venus context | chained (accounting half of `24a3c2d9`) |
-| `f665d25e` | budget: report lifetime charges, not just what is live | chained |
-| `fc27af6e` | vkr: tag scanout traces by context, log lifetime totals at every teardown | diag — strip or drop before any send |
-| `fbde8534` | vkr: census the +1/-1 balance of every host reference taken on an IOSurface | diag — same |
-| `b3a40d2f` | venus: count DEALLOCs, not releases, for scanout surfaces and textures | chained to the IOSurface stack |
-| `af8043c8` | venus: reject a zero-size vkCreateBuffer at the trust boundary | **send-later, standalone** — a guest-triggerable host-side fault at a trust boundary, no limina context needed; classify for disclosure before filing |
-| `b1913b6f` | venus: answer VK_EXT_memory_budget from the GPU-memory ledger | chained to `24a3c2d9`; the natural second half of that MR |
-| `283aeea4` | venus: poison a cmd_buf's replay after a failed RECORDING entry | unassessed |
-| `81de70e8` | venus: contain ghost objects instead of killing the context | unassessed — related in spirit to mesa 0016 (ring loss is not an abort) and to the open !42501 |
-| `5c762457` | vrend: force the Metal linear row pitch on classic IOSurfaces | carry (macOS/IOSurface-specific) |
-| `7caf247b` | vkr: default the KK MTLTEXTURE scanout path ON, one parse for all sites | carry (chained to the KK scanout stack) |
-| `a6a36c93` | vrend: complete a CPU transfer into a shared IOSurface before returning | carry |
-| `b3bc52e0` | vkr: log the pre-clamp memory budget, so a moving number can be attributed | diag |
-| `5e04055b` | vkr: let the supervisor ask for a scanout IOSurface back | carry (limina supervisor protocol) |
-| `4c2a38f5` | vrend: sample guest-memory blobs from the guest's own pages | **carry** — it exists because macOS has no dmabuf, so a `blob_mem=GUEST` resource can only be sampled by copying the guest pages into the texture. On a dmabuf host the import aliases the pages and no copy is wanted, so the mechanism is not upstream-shaped as written; the generalizable part is "a guest blob with no importable fd is not automatically untypeable" |
-| `f04641d7` | vrend: sample a planar-YUV guest blob by converting it to RGBA | **carry** — chained to `4c2a38f5`, and the CPU YUV to RGBA conversion stands in for sampler-side conversion the host GL cannot do here. What *is* upstream-shaped is the narrow half: advertising NV12/NV21/IYUV/YV12 as sampler-only formats so the guest stops taking the per-plane "lowered" path (the guest half is mesa 0019 — send the pair or neither) |
-| `6cc070e0` | vrend: back a decode target's planes with one IOSurface | **carry** — the IOSurface allocation and the plane-carrying EGL import are macOS-only by construction. Two halves are upstream-shaped and would go as one: binding the aux plane image *before* the texture-view branch (upstream reaches its aux bind only via the `else if`, so a host that keeps `GL_IMMUTABLE` on an EGLImage-backed planar resource gets a refused zero-layer view and a poisoned context), and applying the view's swizzle on the aux bind, which upstream omits. The plane-0-by-format signal changes GBM behaviour too — a component-format view of plane 0 now routes to `aux[0]` rather than the base texture, which is arguably more correct and is untested on a GBM host; say so when this goes up rather than letting upstream CI find it |
-| `86741d53` | vrend: drop the iovecs when the VMM's resource is destroyed | **carry, chained to `4c2a38f5`** — the dangling `res->iov` exists upstream too (`virgl_resource_destroy_func` never calls `detach_iov`), but nothing upstream reads it after the unref, so there is no bug to report and nothing to disclose. It became reachable only through our own guest-pixels refresh. Sending it alone would be a fix for a latent pointer with no failing case |
-| `e534ac72` | venus: size host-visible allocations for the blob the guest will make of them | **carry, but the underlying gap is upstream-shaped** — a guest turns host-visible memory into a virtio-gpu blob and the guest *kernel* `PAGE_ALIGN`s it to the guest's page size, so a 1280-byte `VkDeviceMemory` arrives back as a 4096-byte blob and the export refuses it (the guest then holds a dead resource id and the client dies — measured on stock Fedora 44 with `vkcube`). We pad to 64 KiB because the host cannot ask the guest its page size; the *right* upstream fix is for venus to learn the guest page size (or for the export to tolerate a page-aligned overshoot), not a fixed pad. `LIMINA_BLOB_SIZE_ALIGN` would need renaming either way |
-| `f68289d8` | macOS: composite a stock guest's Vulkan window from the bytes it blits | **carry, chained to `4c2a38f5`** — it is the same idea (a blob with no importable fd is sampled rather than declared untypeable) reaching a second source of bytes: an SHM carrier instead of guest iovecs. Neither half is upstream-shaped as written. Backing a stripped export's memory with its own carrier only makes sense on a host with no dmabuf *and* no working export, and the host-visible gate stands in for a `vkGetMemoryHostPointerPropertiesEXT` KK does not expose. What generalises is the observation, worth an upstream issue on its own: on the merged SHM-fd macOS model, a stock guest's WSI prime-blit staging buffer reaches the compositor with no way to read it, so krunkit composites Vulkan windows black today for the same reason we did. The durable fix is guest-side (virgl enumerating modifiers, so no staging buffer is allocated at all) — see `spikes/stock-venus-black-windows/` |
-| `ecf3d3b0` | virgl_resource: lock the resource table | **send-later, standalone** — the table is lock-free upstream because upstream only touches it from the entry-point thread, so there is no upstream bug to report; the lock becomes upstream-shaped only if the IOSurface-forget path (which is what put a second thread on it) goes up. `virgl_fence.c` already carries the same global-lock pattern in-tree, so the shape needs no argument |
-| `c2dda273` | vrend: do not write a fresh resource's shadow into the guest backing on attach | **send now, standalone** — upstream `main` has the identical unconditional write-back in `vrend_pipe_resource_attach_iov`, and the guest kernel never waits for ATTACH_BACKING; the `ptr_valid` gate is host-agnostic and needs no limina context. Repro for the MR: any VA-API bitstream buffer (PIPE_BIND_CUSTOM) written right after creation |
-| `45324ada` | tests: attaching backing must not overwrite the guest's bytes | **send now, with `c2dda273`** — the check-suite regression test for the attach write-back (fails without the gate) plus the clang `-Wno-gnu-zero-variadic-macro-arguments` the tests need under `-Werror=pedantic`. |
-| `2c5f6e9c` | vrend: keep video codecs and buffers across a snapshot restore | **split** — the journal half is ours (upstream has no re-creation journal). The backend half sends standalone: `vrend_decode_create_video_{codec,buffer}` returning EINVAL when nothing was created, the rate-limited lookup-miss log in `vrend_video.c`, and the fresh-codec keyframe gate — upstream's libva backend has the same silent return-0 and would also decode a mid-stream re-created codec against an empty DPB. `tests/test_virgl_journal.c` stays with the journal. |
-| `8925afcf` | video: freeze the picture while a re-created codec awaits its keyframe | **split** — the `copy_picture` callback and the VideoToolbox freeze are ours (upstream has no VideoToolbox backend and no re-creation journal to create the window); the vrend implementation of a target-to-target picture copy could send standalone if upstream's libva backend ever needs one. |
-| `76d8c3d5` | av1: code a global-motion parameter without the reference's sub term | **carry, chained to the AV1 serializer** — a fix inside our own OBU writer, which upstream does not have (its libva backend is handed OBUs by the guest and writes none). Standalone in shape, but there is nothing upstream to apply it to. |
-| `c26a0b3f` | av1: deliver a shown frame at the wall now, claim its slot later | **carry, chained to the AV1 serializer** — the hold it fixes exists only because our OBU writer has to invent `refresh_frame_flags`; upstream's libva backend is handed OBUs and holds nothing. The one separable piece is the `ensure_session` change letting a target-less unit keep the session's pixel format, which is a real fix on its own but touches a file upstream does not have. |
-| `b83f3825` | av1: a switch to force the old hold-everything behaviour | **limina-only, drop** — `LIMINA_AV1_HOLD_SHOWN` exists to A/B the delivery-timing regression against one build. Fold away before any submission. |
-| `bc6f0029` | vrend: destroy a video plane's EGLImage instead of the null one | **carry, upstream takes it whole** — the inverted test is upstream's own, added in `a92fed82` (2022) and untouched since; nothing limina-specific. Dead on macOS (VideoToolbox delivers mapped planes, so the image is never created), live for the VA-API backend. Send it standalone, not chained to anything. |
+| `98fb854f` | vrend: add the classic snapshot-replay re-creation journal (P0: record + census) | carry (limina snapshot model) |
+| `57b596c9` | vrend: journal export + replay for classic snapshot restore (P1) | carry |
+| `86c60065` | vrend: host-side resource content capture for snapshot restore (P2) | carry |
+| `ade06a04` | vrend: VREND_CONTENT=0 kill switch for the content export | carry (chained) |
+| `6adbc74f` | vrend: back VIRGL_BIND_SHARED resources with IOSurfaces too | carry — chains onto the IOSurface backing (0053) and the fd-less classic attach; upstreamable only if that stack goes up |
+| `3738a2a4` | venus: bound the host GPU memory a guest can hold | **send-later, standalone** — the accounting half is host-agnostic and generally useful (any VMM can be killed by a guest that over-allocates); the ledger + histogram would need no limina context to explain. The `LIMINA_GPU_MEM_BUDGET_MIB` name and the default-off policy are ours and would need renaming; splitting accounting from enforcement is the natural shape upstream |
+| `c738e545` | venus: periodic GPU-memory census, and read the modifiers before the cap | chains onto `3738a2a4`; goes up or stays with it |
+| `9ab89040` | budget: charge classic resources to their own bucket, not a venus context | chained (accounting half of `3738a2a4`) |
+| `535137e4` | budget: report lifetime charges, not just what is live | chained |
+| `d814b4b4` | vkr: tag scanout traces by context, log lifetime totals at every teardown | diag — strip or drop before any send |
+| `d69264c7` | vkr: census the +1/-1 balance of every host reference taken on an IOSurface | diag — same |
+| `3614d8f7` | venus: count DEALLOCs, not releases, for scanout surfaces and textures | chained to the IOSurface stack |
+| `f8c4f822` | venus: reject a zero-size vkCreateBuffer at the trust boundary | **send-later, standalone** — a guest-triggerable host-side fault at a trust boundary, no limina context needed; classify for disclosure before filing |
+| `049cc4cf` | venus: answer VK_EXT_memory_budget from the GPU-memory ledger | chained to `3738a2a4`; the natural second half of that MR |
+| `800c1358` | venus: poison a cmd_buf's replay after a failed RECORDING entry | unassessed |
+| `8cb5678f` | venus: contain ghost objects instead of killing the context | unassessed — related in spirit to mesa 0016 (ring loss is not an abort) and to the open !42501 |
+| `5ec40a96` | vrend: force the Metal linear row pitch on classic IOSurfaces | carry (macOS/IOSurface-specific) |
+| `99793b3d` | vkr: default the KK MTLTEXTURE scanout path ON, one parse for all sites | carry (chained to the KK scanout stack) |
+| `d5a7941a` | vrend: complete a CPU transfer into a shared IOSurface before returning | carry |
+| `7cf65acf` | vkr: log the pre-clamp memory budget, so a moving number can be attributed | diag |
+| `f73e6a95` | vkr: let the supervisor ask for a scanout IOSurface back | carry (limina supervisor protocol) |
+| `3dda8478` | vrend: sample guest-memory blobs from the guest's own pages | **carry** — it exists because macOS has no dmabuf, so a `blob_mem=GUEST` resource can only be sampled by copying the guest pages into the texture. On a dmabuf host the import aliases the pages and no copy is wanted, so the mechanism is not upstream-shaped as written; the generalizable part is "a guest blob with no importable fd is not automatically untypeable" |
+| `85851981` | vrend: sample a planar-YUV guest blob by converting it to RGBA | **carry** — chained to `3dda8478`, and the CPU YUV to RGBA conversion stands in for sampler-side conversion the host GL cannot do here. What *is* upstream-shaped is the narrow half: advertising NV12/NV21/IYUV/YV12 as sampler-only formats so the guest stops taking the per-plane "lowered" path (the guest half is mesa 0019 — send the pair or neither) |
+| `ea0131dc` | vrend: back a decode target's planes with one IOSurface | **carry** — the IOSurface allocation and the plane-carrying EGL import are macOS-only by construction. Two halves are upstream-shaped and would go as one: binding the aux plane image *before* the texture-view branch (upstream reaches its aux bind only via the `else if`, so a host that keeps `GL_IMMUTABLE` on an EGLImage-backed planar resource gets a refused zero-layer view and a poisoned context), and applying the view's swizzle on the aux bind, which upstream omits. The plane-0-by-format signal changes GBM behaviour too — a component-format view of plane 0 now routes to `aux[0]` rather than the base texture, which is arguably more correct and is untested on a GBM host; say so when this goes up rather than letting upstream CI find it |
+| `18c03b35` | vrend: drop the iovecs when the VMM's resource is destroyed | **carry, chained to `3dda8478`** — the dangling `res->iov` exists upstream too (`virgl_resource_destroy_func` never calls `detach_iov`), but nothing upstream reads it after the unref, so there is no bug to report and nothing to disclose. It became reachable only through our own guest-pixels refresh. Sending it alone would be a fix for a latent pointer with no failing case |
+| `a548ef17` | venus: size host-visible allocations for the blob the guest will make of them | **carry, but the underlying gap is upstream-shaped** — a guest turns host-visible memory into a virtio-gpu blob and the guest *kernel* `PAGE_ALIGN`s it to the guest's page size, so a 1280-byte `VkDeviceMemory` arrives back as a 4096-byte blob and the export refuses it (the guest then holds a dead resource id and the client dies — measured on stock Fedora 44 with `vkcube`). We pad to 64 KiB because the host cannot ask the guest its page size; the *right* upstream fix is for venus to learn the guest page size (or for the export to tolerate a page-aligned overshoot), not a fixed pad. `LIMINA_BLOB_SIZE_ALIGN` would need renaming either way |
+| `5f792568` | macOS: composite a stock guest's Vulkan window from the bytes it blits | **carry, chained to `3dda8478`** — it is the same idea (a blob with no importable fd is sampled rather than declared untypeable) reaching a second source of bytes: an SHM carrier instead of guest iovecs. Neither half is upstream-shaped as written. Backing a stripped export's memory with its own carrier only makes sense on a host with no dmabuf *and* no working export, and the host-visible gate stands in for a `vkGetMemoryHostPointerPropertiesEXT` KK does not expose. What generalises is the observation, worth an upstream issue on its own: on the merged SHM-fd macOS model, a stock guest's WSI prime-blit staging buffer reaches the compositor with no way to read it, so krunkit composites Vulkan windows black today for the same reason we did. The durable fix is guest-side (virgl enumerating modifiers, so no staging buffer is allocated at all) — see `spikes/stock-venus-black-windows/` |
+| `59029c94` | virgl_resource: lock the resource table | **send-later, standalone** — the table is lock-free upstream because upstream only touches it from the entry-point thread, so there is no upstream bug to report; the lock becomes upstream-shaped only if the IOSurface-forget path (which is what put a second thread on it) goes up. `virgl_fence.c` already carries the same global-lock pattern in-tree, so the shape needs no argument |
+| `e5c82bbb` | vrend: do not write a fresh resource's shadow into the guest backing on attach | **send now, standalone** — upstream `main` has the identical unconditional write-back in `vrend_pipe_resource_attach_iov`, and the guest kernel never waits for ATTACH_BACKING; the `ptr_valid` gate is host-agnostic and needs no limina context. Repro for the MR: any VA-API bitstream buffer (PIPE_BIND_CUSTOM) written right after creation |
+| `4555c856` | tests: attaching backing must not overwrite the guest's bytes | **send now, with `e5c82bbb`** — the check-suite regression test for the attach write-back (fails without the gate) plus the clang `-Wno-gnu-zero-variadic-macro-arguments` the tests need under `-Werror=pedantic`. |
+| `b6d4e8c3` | vrend: keep video codecs and buffers across a snapshot restore | **split** — the journal half is ours (upstream has no re-creation journal). The backend half sends standalone: `vrend_decode_create_video_{codec,buffer}` returning EINVAL when nothing was created, the rate-limited lookup-miss log in `vrend_video.c`, and the fresh-codec keyframe gate — upstream's libva backend has the same silent return-0 and would also decode a mid-stream re-created codec against an empty DPB. `tests/test_virgl_journal.c` stays with the journal. |
+| `de33f490` | video: freeze the picture while a re-created codec awaits its keyframe | **split** — the `copy_picture` callback and the VideoToolbox freeze are ours (upstream has no VideoToolbox backend and no re-creation journal to create the window); the vrend implementation of a target-to-target picture copy could send standalone if upstream's libva backend ever needs one. |
+| `57915fc0` | av1: code a global-motion parameter without the reference's sub term | **carry, chained to the AV1 serializer** — a fix inside our own OBU writer, which upstream does not have (its libva backend is handed OBUs by the guest and writes none). Standalone in shape, but there is nothing upstream to apply it to. |
+| `03aebe20` | av1: deliver a shown frame at the wall now, claim its slot later | **carry, chained to the AV1 serializer** — the hold it fixes exists only because our OBU writer has to invent `refresh_frame_flags`; upstream's libva backend is handed OBUs and holds nothing. The one separable piece is the `ensure_session` change letting a target-less unit keep the session's pixel format, which is a real fix on its own but touches a file upstream does not have. |
+| `649c4071` | av1: a switch to force the old hold-everything behaviour | **limina-only, drop** — `LIMINA_AV1_HOLD_SHOWN` exists to A/B the delivery-timing regression against one build. Fold away before any submission. |
+| `98c4de94` | vrend: destroy a video plane's EGLImage instead of the null one | **carry, upstream takes it whole** — the inverted test is upstream's own, added in `a92fed82` (2022) and untouched since; nothing limina-specific. Dead on macOS (VideoToolbox delivers mapped planes, so the image is never created), live for the VA-API backend. Send it standalone, not chained to anything. |
 
-`034f7086` is the allocation-side half of the fd-less classic-resource attach: without it
+`6adbc74f` is the allocation-side half of the fd-less classic-resource attach: without it
 only `VIRGL_BIND_SCANOUT` resources got an IOSurface, so a Vulkan compositor could import
 its own framebuffer but none of its clients' window buffers, and could not run on the
 virgl GL default at all. Carries a `LIMINA_VREND_SHARED_IOSURFACE=0` kill switch (one more
 env for the fold plan's getenv-consistency item, alongside 0011/0054).
 
-`24a3c2d9` adds `src/venus/vkr_budget.{c,h}`, a ledger of host memory allocated on the
+`3738a2a4` adds `src/venus/vkr_budget.{c,h}`, a ledger of host memory allocated on the
 guest's behalf, with an optional cap. Two things about it are load-bearing for anyone
 auditing it later. Charging happens at each **host allocator** call site (the driver
 allocation, our IOSurfaces, the mtl_shm carriers), not at the Vulkan entry point, so an
@@ -138,6 +158,28 @@ context** instead of returning an error, because venus submits `vkAllocateMemory
 asynchronously and discards the host's `VkResult` — a fact worth re-verifying against
 mesa's `vn_device_memory_alloc_simple` before reworking that decision. One more env for
 the getenv-consistency item.
+
+### Rebase onto `aafa9bd2` (2026-10-02)
+
+The branch was rebased from `f2945d39` onto upstream `main` at `aafa9bd2`, 41 upstream commits
+later; every commit on it carries a committer date of 2026-10-02 or 2026-10-03. The pre-rebase
+head `017b7e15` is kept by the tag `limina-pre-rebase-2026-10-02`. Other tags on the fork that
+keep earlier heads reachable: `limina-2026-08-05-pre-gkvm-rename` (`bc03f705`),
+`limina-2026-08-05-pre-tip-rebase` (`96c6e99c`), `pre-zerobuf-20260807` (`b3a40d2f`),
+`virgl-pre-rewrite-2026-08-31` (`24384536`), `pre-resource-lock-fixup-2026-08-31` (`9140325b`),
+`limina-pre-virglrs-pin-2026-10-01` (`c59a1067`), `limina-2026-09-06-virglrs-split`
+(`017b7e15`, the same commit as the pre-rebase tag) and `limina/2026-08-04-mtltexture`.
+
+- Dropped at this rebase: *"vkr: fix the vulkan_metal.h include for the venus-protocol
+  subproject"*, superseded by `aafa9bd2` (see the 2026-08-05 section).
+- Added on top: `ad8e1b75` (fork code moved to upstream's `virgl_iov.h` and
+  `vkr_pnext_set_next()`) and `eeb66943` (fork-only video cap bits moved to the top of the
+  word).
+- virglrs's `[virglrenderer-upstream]` rev `cf6c62da` is an ancestor of the base; it is that
+  repo's reference-leg pin, not this ledger's base.
+- 2026-10-16 spot re-check at upstream `main` `07a5bc39`: the `need` evidence cited for 0002,
+  0010, 0019, 0020, 0021, 0022, 0023, 0026, 0028, 0030, 0032, 0041, 0045 and 0057, and for
+  `e5c82bbb` and `98c4de94`, is still present upstream. The `checked` columns were not updated.
 
 ### Series verdict (all 58 rows researched 2026-08-03, vs tip `956b034f`)
 
@@ -186,6 +228,10 @@ quiet host (they raced the poke VM's gvproxy/port during the run).
   the venus-protocol subproject"* — upstream `b47495fb` broke their own macOS build
   (`vkr_metal_helpers.m` includes a path that no longer resolves; no macOS CI to see it).
   Trivial MR, good-citizen opener for the send queue.
+  *2026-10-16 audit: superseded upstream.* matthewperiut's `aafa9bd2` (!1689, "venus: fix the
+  vulkan_metal.h include on macOS", 2026-09-28) makes the same fix and is now the base; our
+  commit (`c902f922` on the pre-rebase branch) was dropped at the 2026-10-02 rebase and is no
+  longer on `limina`.
 - The Metal-shm restructure (`8cebba7f`/`3b61c967`) is superseded inside our alloc-path
   rewrite (0006/0009 territory) — and with `8cebba7f` now in-base, 0030's fd-leak MR is
   directly demonstrable at tip, exactly as its row predicted.
@@ -246,3 +292,131 @@ series, but rows here are subject-keyed per the schema.
   subjects and env vars (0003–0008, 0011, 0012, 0016, 0024) — all renamed to
   neutral/`LIMINA_` shapes; subject keys in this ledger updated to match the rewritten
   branch.
+
+## Unaudited commits (skeleton, 2026-10-16)
+
+Phase-0 output of `scripts/patch-audit/check-ledger.sh --skeleton virglrenderer`: the 86 C-tree
+commits in `aafa9bd2..a649897f` that had no row, grouped by theme, in branch order within each
+group. The last column holds unresearched first guesses (disposition, then a sec flag) from the
+2026-10-16 audit; none has been checked against upstream beyond the notes inside it.
+
+### KosmicKrisp, IOSurface and scanout, and the classic/venus blob bridge
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `7b872e76` | vkr: back KK scanout images with the IOSurface's MTLTexture (both ends) | `src/venus/vkr_device_memory.c`, `src/venus/vkr_image.c`, `src/venus/vkr_image.h` +2 |  | carry; sec: no |
+| `b97a657d` | vkr: probe what the guest negotiates for DRM format modifiers | `src/venus/vkr_image.c` |  | carry (diag); sec: no |
+| `8464bd07` | vkr: pass DRM-format-modifier creates through to KosmicKrisp verbatim | `src/venus/vkr_device.c`, `src/venus/vkr_image.c`, `src/venus/vkr_physical_device.c` +1 |  | carry; sec: no |
+| `84f2294d` | vrend: never poison a context on an untypeable blob; log decode-level SET_TYPE rejects | `src/vrend/vrend_decode.c`, `src/vrend/vrend_renderer.c` |  | carry; the no-permanent-poison idea may be upstream-after-cleanup; sec: no |
+| `b8a2bdd1` | vrend: adopt venus blobs' IOSurfaces as compositor textures (zero-copy import) | `src/vrend/vrend_renderer.c`, `src/vrend/vrend_winsys_egl.c`, `src/vrend/vrend_winsys_egl.h` |  | carry; sec: no |
+| `734589d0` | vrend: EGLImage-backed scanout — render straight into the display IOSurface | `src/venus/vkr_metal_helpers.h`, `src/venus/vkr_metal_helpers.m`, `src/vrend/vrend_renderer.c` |  | carry; sec: no |
+| `3a2b7172` | venus: attach IOSurface-backed classic virgl resources by surface id | `server/render_context.c`, `src/proxy/proxy_context.c`, `src/venus/vkr_context.c` +1 |  | carry; sec: no |
+| `c7747ee5` | limina: forget a resource's IOSurface id when the surface is freed | `src/venus/vkr_metal_helpers.m`, `src/virgl_resource.c`, `src/virgl_resource.h` |  | carry (fixes a fork-only IOSurface id lifetime bug); sec: no |
+| `4f2eded8` | venus: capture a scanout memory's pixels from its IOSurface, not vkMapMemory | `src/venus/vkr_device_memory.c`, `src/venus/vkr_metal_helpers.h`, `src/venus/vkr_metal_helpers.m` |  | carry; sec: no |
+| `8fcc3705` | venus: put the per-import MTLTexture prints behind a switch | `src/venus/vkr_device_memory.c`, `src/venus/vkr_image.c` |  | carry (diag); sec: no |
+| `d14ed091` | vrend: finish the context that rendered before a scanout is read | `harness/replay/fixtures/vrend.score`, `src/vrend/vrend_renderer.c` |  | carry (the bug is in the fork-only IOSurface sync path); sec: no |
+
+### Trust boundary and robustness
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `1a9b057b` | vkr: also drop negative-offset and i32-overflow VkClearRects | `src/venus/vkr_command_buffer.c` |  | upstream, folded into 0045's MR; sec: yes (guest-triggerable host DoS) |
+| `f311c517` | vrend: guard glTexBuffer on a sampler view over a buffer | `src/vrend/vrend_renderer.c` |  | upstream-now (upstream `main` still calls `glTexBuffer`/`glTexBufferRange` unguarded); sec: yes (guest-reachable VMM abort on a GLES 3.1 host) |
+| `d28ffdd4` | vrend: refuse a transfer on a multi-plane format | `src/vrend/vrend_renderer.c` |  | carry (`yuv_planar_formats` is fork-only); sec: yes (guest-triggerable OOB in fork-introduced code) |
+| `3fa8a312` | vrend, proxy: fix the two data races ThreadSanitizer reports on every boot | `src/proxy/proxy_context.c`, `src/vrend/vrend_renderer.c` |  | upstream-now (generic data-race fix in `proxy_context.c` and `vrend_renderer.c`); sec: no |
+| `aa01b79d` | venus: a ring FATAL names the command that raised it | `src/venus/vkr_cs.c`, `src/venus/vkr_cs.h`, `src/venus/vkr_journal.c` |  | upstream-after-cleanup, only together with the generated-decoder shim it touches; sec: no |
+
+### Snapshot, journal and restore
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `c68a573c` | vkr: move the journal dispatch tee out of the generated protocol headers | `src/venus/vkr_context.c`, `src/venus/vkr_journal.c`, `src/venus/vkr_journal.h` +2 |  | carry (limina snapshot model); sec: no |
+| `27cd55f3` | vrend: a poisoned replay entry must not brick the context forever | `src/vrend/vrend_decode.c`, `src/vrend/vrend_renderer.c`, `src/vrend/vrend_renderer.h` |  | carry (limina snapshot model); sec: no |
+| `7c30cbe1` | vrend: report content that a snapshot left behind at warn, not info | `src/vrend/vrend_renderer.c` |  | carry (limina snapshot model); sec: no |
+| `c0bceba8` | vrend: warn only on content the export actually lost | `src/vrend/vrend_renderer.c` |  | carry (limina snapshot model); sec: no |
+| `a4cc369f` | venus: a restored context's missing objects must not kill its ring | `src/venus/vkr_context.h`, `src/venus/vkr_cs.c`, `src/venus/vkr_cs.h` +1 |  | carry (limina snapshot model); sec: no |
+| `657929e2` | venus: name the restore containment for what it is | `src/venus/vkr_context.h`, `src/venus/vkr_cs.c`, `src/venus/vkr_cs.h` +1 |  | carry (limina snapshot model); sec: no |
+| `ee13315e` | venus: say what an uncapturable allocation actually is | `src/venus/vkr_device_memory.c` |  | carry (limina snapshot model); sec: no |
+| `f3e0f0b4` | vrend: rebuild a context from its journal, and say what would not go back | `harness/abi/symbols.txt`, `src/virglrenderer.c`, `src/virglrenderer.h` +4 |  | carry (limina snapshot model); sec: no |
+
+### vrend tracer and replay recorder (reference-leg instrumentation for virglrs's harness)
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `2b4b41f4` | limina: an in-memory tracer for everything vrend is asked to do | `src/meson.build`, `src/vrend/vrend_decode.c`, `src/vrend/vrend_renderer.c` +2 |  | carry; sec: no |
+| `44e6ce9d` | limina: record what a replay needs -- resource creates and transfer bytes | `src/virglrenderer.c`, `src/vrend/vrend_renderer.c`, `src/vrend/vrend_trace.c` +1 |  | carry; sec: no |
+| `1424a5a2` | limina: arm the tracer on first ask, and say which rejection this is | `src/vrend/vrend_renderer.c`, `src/vrend/vrend_trace.c` |  | carry; sec: no |
+| `f5881d56` | limina: say which of copy_transfer3d's two rejections fired | `src/vrend/vrend_renderer.c` |  | carry; sec: no |
+| `0e5e90cd` | venus: record the full ring stream, so a corpus has a beginning | `harness/README.md`, `harness/replay/vkr-record-decode.py`, `src/meson.build` +3 | DIAG | carry; sec: no |
+| `957e7d46` | venus: name a recorded context by id AND generation | `harness/replay/vkr-record-decode.py`, `harness/vm/capture.sh`, `harness/vm/dump.sh` +3 |  | carry; sec: no |
+| `631c26f6` | vkr_record: record the control path, not only the command stream | `harness/replay/vkr-record-decode.py`, `src/venus/vkr_record.c`, `src/venus/vkr_record.h` +1 |  | carry; sec: no |
+| `7c43f2d5` | harness: a VM-free venus replayer, and three recorder bugs it found | `harness/replay/rs/.gitignore`, `harness/replay/rs/Cargo.lock`, `harness/replay/rs/Cargo.toml` +9 |  | carry; sec: no |
+| `7ba688dd` | vkr_record: stamp every event with an execution clock (format v4) | `harness/replay/rs/src/corpus.rs`, `harness/replay/rs/src/main.rs`, `harness/replay/vkr-record-decode.py` +3 |  | carry; sec: no |
+| `5189a678` | harness: a desktop corpus with its wallpaper, and the first pixel gate | `docs/rust-rewrite.md`, `harness/README.md`, `harness/replay/fixtures/vrend-desktop.score` +3 |  | carry; sec: no |
+| `8436e6c3` | harness: let the tracer's resource log grow past a stock desktop | `src/vrend/vrend_trace.c` |  | carry; sec: no |
+| `7fd005e7` | harness: capture the bytes behind an imported blob | `harness/replay/vrend-replay.c`, `src/vrend/vrend_renderer.c`, `src/vrend/vrend_renderer.h` +2 |  | carry; sec: no |
+| `dba2364c` | harness: replay a blob's recorded pixels, and score them | `harness/README.md`, `harness/replay/fixtures/vrend-vkclient.score`, `harness/replay/vrend-replay.c` +2 |  | carry; sec: no |
+| `23522e2b` | harness: say which blob went unfed, and when the cap bit | `harness/replay/vrend-replay.c`, `src/vrend/vrend_trace.c` |  | carry; sec: no |
+
+### Diagnostics and logging
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `6494bb5a` | vrend: A/B levers and probes for the notification text-corruption spike | `src/vrend/vrend_renderer.c` |  | drop (spike levers); sec: no |
+| `7710171a` | venus: log the clamp event, not every budget sample | `src/venus/vkr_physical_device.c` |  | carry, chained to the GPU-memory budget commits; sec: no |
+| `795f0a70` | vrend: say why a command submission was refused, and allow sizing the latch | `src/virglrenderer.c`, `src/vrend/vrend_decode.c` |  | carry (diag); sec: no |
+| `cc184642` | video: say what each bitstream read gave, and which client and session it fed | `src/virglrenderer.c`, `src/vrend/virgl_video_vt.c`, `src/vrend/vrend_video.c` |  | carry (diag); sec: no |
+| `7a02e9de` | video: check the bytes handed to the decoder, not just their length | `src/vrend/virgl_video_vt.c` |  | carry (diag: adds a trace, no check); sec: no |
+
+### Video: VideoToolbox, AV1, H.264, HEVC and planar decode targets
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `f13577cf` | video: a VideoToolbox backend, so macOS hosts can decode for the guest | `meson.build`, `src/meson.build`, `src/vrend/virgl_video_vt.c` |  | carry (macOS VideoToolbox backend); sec: no |
+| `f8133f4f` | video: let a backend deliver a picture it cannot export as a dmabuf | `src/vrend/virgl_video.h`, `src/vrend/vrend_renderer.c`, `src/vrend/vrend_video.c` |  | carry (macOS VideoToolbox backend); sec: no |
+| `d9d21a85` | vrend: H.264 decode on the VideoToolbox backend | `src/meson.build`, `src/vrend/virgl_video_h264_ps.c`, `src/vrend/virgl_video_h264_ps.h` +1 |  | carry (macOS VideoToolbox backend); sec: no |
+| `7cfd58f1` | vt: decode H.264 correctly against a changing parameter set | `src/vrend/virgl_video_h264_ps.c`, `src/vrend/virgl_video_vt.c` |  | carry (macOS VideoToolbox backend); sec: no |
+| `d222d528` | vt: assert hardware acceleration on the session, not the codec | `src/vrend/virgl_video_vt.c` |  | carry (macOS VideoToolbox backend); sec: no |
+| `7f009188` | vrend: synthesize HEVC parameter sets for the VideoToolbox backend | `src/meson.build`, `src/vrend/virgl_video_bitstream.h`, `src/vrend/virgl_video_h264_ps.c` +2 |  | carry (macOS VideoToolbox backend); sec: no |
+| `8b3d11f7` | vt: HEVC hardware decode | `src/vrend/virgl_video_vt.c` |  | carry (macOS VideoToolbox backend); sec: no |
+| `7fabf760` | video: advertise AV1 and record what the guest sends, without decoding | `src/vrend/virgl_video_vt.c` |  | carry, chained to the AV1 serializer; sec: no |
+| `4b57c4a5` | video: rebuild an AV1 frame header from the parsed picture descriptor | `src/vrend/virgl_video_av1_obu.c`, `src/vrend/virgl_video_av1_obu.h` |  | carry, chained to the AV1 serializer; sec: no |
+| `3e1f0aaf` | video: assign AV1 reference slots ourselves, and take the sequence flags from the guest | `src/vrend/virgl_video_av1_obu.c`, `src/vrend/virgl_video_av1_obu.h` |  | carry, chained to the AV1 serializer; sec: no |
+| `fe4588f5` | vrend/av1: hold hidden frames so reference slots are assigned exactly | `src/vrend/virgl_video_av1_obu.c`, `src/vrend/virgl_video_av1_obu.h` |  | carry, chained to the AV1 serializer; sec: no |
+| `9d8404de` | vrend/av1: drop the state the round-robin cursor left behind | `src/vrend/virgl_video_av1_obu.c`, `src/vrend/virgl_video_av1_obu.h` |  | carry, chained to the AV1 serializer; sec: no |
+| `057b8b84` | vrend/av1: hold a hidden frame only when every slot is live | `src/vrend/virgl_video_av1_obu.c` |  | carry, chained to the AV1 serializer; sec: no |
+| `ede63abd` | vrend/av1: never let two temporal units share one buffer | `src/vrend/virgl_video_av1_obu.c`, `src/vrend/virgl_video_av1_obu.h` |  | carry, chained to the AV1 serializer; sec: no |
+| `80be0acc` | vrend/av1: decode AV1 through the synthesized bitstream | `src/meson.build`, `src/vrend/virgl_video_av1_obu.c`, `src/vrend/virgl_video_av1_obu.h` +1 |  | carry, chained to the AV1 serializer; sec: no |
+| `1187c5d9` | video: decode AV1 super-resolution in software | `config.h.meson`, `meson.build`, `src/meson.build` +3 |  | carry, chained to the AV1 serializer; sec: no |
+| `b346a68e` | video: decode AV1 in software where the host has no AV1 silicon | `src/vrend/virgl_video_vt.c` |  | carry, chained to the AV1 serializer; sec: no |
+| `a823b28c` | video: let the software AV1 decoder use more than one thread | `src/vrend/virgl_video_dav1d.c` |  | carry, chained to the AV1 serializer; sec: no |
+| `635c518f` | video: hold a shown AV1 frame too when every reference slot is live | `src/vrend/virgl_video_av1_obu.c`, `src/vrend/virgl_video_vt.c` |  | carry, chained to the AV1 serializer; sec: no |
+| `4920ae81` | video: do not advertise AV1 on a host with no AV1 silicon | `src/vrend/virgl_video_vt.c` |  | carry, chained to the AV1 serializer; sec: no |
+| `a649897f` | video: advertise AV1 on a host with dav1d and no AV1 silicon | `src/vrend/virgl_video_dav1d.h`, `src/vrend/virgl_video_vt.c` |  | carry, chained to the AV1 serializer; sec: no |
+| `8238b55c` | video: dump every reconstructed AV1 unit on request | `src/vrend/virgl_video_vt.c` |  | carry (diag), drop before any send; sec: no |
+| `5632a388` | video: track mesa's pipe_video_profile, which the protocol carries raw | `src/gallium/include/pipe/p_video_enums.h`, `src/vrend/virgl_video.c` |  | upstream-now (wire enum drift against mesa that stock guests hit; verify upstream's `p_video_enums` copy first); sec: no |
+| `6478578b` | vrend: make mesa's VA post-processing draws render | `src/vrend/vrend_renderer.c`, `src/vrend/vrend_shader.c`, `src/vrend/vrend_shader.h` |  | upstream-after-cleanup (check whether VA-API hosts are affected); sec: no |
+| `d16547d7` | vrend: a sampler view's plane index is not a layer range | `src/vrend/vrend_renderer.c` |  | carry (no-GBM plane path); sec: no |
+| `c2451f23` | vrend: the lowered plane path is workable, not merely undesirable | `src/vrend/vrend_formats.c` |  | carry; sec: no |
+| `e36102da` | vrend: tear down a resource's plane images whether or not it has a base image | `src/venus/vkr_metal_helpers.h`, `src/venus/vkr_metal_helpers.m`, `src/vrend/vrend_renderer.c` |  | carry (fork-only planar IOSurface code); sec: possible (leak, DoS) |
+| `6c56f314` | vrend: size a plane copy from the source, not from the resource | `src/vrend/vrend_video.c` |  | carry (VideoToolbox path); sec: possible (host OOB read of a CoreVideo mapping) |
+| `8594b8ef` | vrend: read the bridged constants from the guest backing, not the GL buffer | `src/vrend/vrend_renderer.c` |  | carry; sec: no |
+| `7c3b9eb7` | vrend: write decoded frames into guest-backed video planes | `src/virgl_hw.h`, `src/vrend/vrend_renderer.c`, `src/vrend/vrend_video.c` |  | carry; sec: no |
+| `424bbaea` | vrend: a decode target that is not guest-backed is normal, not an error | `src/vrend/vrend_video.c` |  | carry; sec: no |
+| `85a89645` | vrend: let the IOSurface EGL import name a plane | `src/vrend/vrend_renderer.c`, `src/vrend/vrend_winsys_egl.c`, `src/vrend/vrend_winsys_egl.h` |  | carry; sec: no |
+| `1515fae8` | vrend: advertise that the host takes a composite planar decode target | `src/virgl_hw.h`, `src/vrend/vrend_renderer.c` |  | carry; sec: no |
+| `e15b2391` | vrend: address a decoded plane by index, not by "one plane, one resource" | `src/vrend/vrend_renderer.c`, `src/vrend/vrend_renderer.h`, `src/vrend/vrend_video.c` |  | carry; sec: no |
+| `76439a8c` | vrend: refuse a composite target we cannot back with a planar surface | `src/vrend/vrend_renderer.c` |  | carry; sec: no |
+| `e8ff855e` | vrend: name the plane from the view format on a two-plane surface | `src/vrend/vrend_renderer.c` |  | carry; sec: no |
+| `d71266d3` | vrend: name the surface a video plane view samples, and the write that fills it | `src/vrend/vrend_renderer.c`, `src/vrend/vrend_video.c` |  | carry; sec: no |
+| `6b5ece16` | vrend: advertise as samplable only the planar formats a composite target can be backed with | `src/vrend/vrend_renderer.c` |  | carry; sec: no |
+| `28156a24` | vrend: say when a planar IOSurface cannot be allocated, and how many are live | `src/venus/vkr_metal_helpers.h`, `src/venus/vkr_metal_helpers.m`, `src/vrend/vrend_renderer.c` |  | carry; sec: no |
+| `11be9647` | vrend: fill a planar decode target's base texture for its composite view | `src/vrend/vrend_blitter.c`, `src/vrend/vrend_blitter.h`, `src/vrend/vrend_renderer.c` +2 |  | carry; sec: no |
+| `8754cf90` | vrend: LIMINA_VIDEO_WRITEBACK_TRACE — say why a decode target was skipped | `src/vrend/vrend_video.c` |  | carry (diag); sec: no |
+
+### Rebase maintenance
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `eeb66943` | virgl_hw: move the fork-only video cap bits to the top of the word | `harness/README.md`, `src/virgl_hw.h`, `virglrs/src/vrend/caps.rs` |  | carry (virglrs's `build.rs` reads these cap bits); sec: no |
+| `ad8e1b75` | vrend, venus: build the fork's code against upstream's iov and pNext helpers | `src/venus/vkr_device_memory.c`, `src/vrend/vrend_renderer.c`, `src/vrend/vrend_video.c` |  | carry; its message says it belongs folded into the commits that introduced the calls; sec: no |
