@@ -40,7 +40,7 @@ spikes/metal-compute-mlx/run.sh $port     # copies out/ to /tmp/mcp in the guest
 ## The command
 
 `CREATE_LIBRARY_DATA` hands a `.metallib` to `newLibraryWithData:`. The bytes sit in an arena, at
-most `MAX_LIBRARY_DATA` (256 MiB), because MLX's library is tens of megabytes and the ring a few
+most `MAX_LIBRARY_DATA` (256 MiB), because MLX's `mlx.metallib` is 147 MB (mlx-metal 0.32.4) and the ring a few
 hundred kilobytes. The host files the command with the bytes inline, so a snapshot restore
 replays it with nothing from the arena; a context holds a copy of every library it loaded for as
 long as the library lives.

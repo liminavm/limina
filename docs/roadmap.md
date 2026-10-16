@@ -14,7 +14,8 @@ clipboard, M12.5's QEMU-guest-agent steps 1–4, M14 biometrics, the emulated xH
 wave 1. Open: the rest of M15, M13, M17, the M12 file-transfer half. Deferred by decision: M3
 bridged networking (worker-held vmnet, no privilege needed) and M7 real-device USB capture
 (AccessoryAccess on macOS 27, root helper below). M16
-(LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) is booked.
+(LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) has its first spike: a host-built `.metallib` runs in
+the guest.
 
 ---
 
@@ -1324,7 +1325,7 @@ The standing rule for all of it: spike the gating unknown before building on it.
 
 ## Milestone 18 — Metal compute in the guest (MLX)
 
-**Booked, not started.** For: GPU-accelerated machine learning in the guest through MLX, Apple's ML
+**Started: the spike runs** (`spikes/metal-compute-mlx/RESULTS.md`). For: GPU-accelerated machine learning in the guest through MLX, Apple's ML
 framework. MLX's GPU backend is written against `metal-cpp`; on Linux it has only CUDA and CPU
 backends today. A Linux build of MLX with its Metal backend, over limina's Metal-level transport,
 would run on the host GPU without porting MLX. Apple hosts only; enhanced tier, additive.
@@ -1337,16 +1338,19 @@ classes over that encoder is a second client of the same wire, not a new transpo
 way the vendor drivers do, under `/opt/limina/<wire>/`
 (`docs/design/metal-transport-delivery.md` §1).
 
-**What it needs:**
-- **A `metal-cpp` implementation over the wire.** Compute only: device, buffers, compute pipelines,
-  command queues and buffers, compute encoders, events and fences. No drawables and no window
-  integration.
-- **Shader libraries as shipped.** MLX loads a prebuilt `.metallib`, so the wire needs an op that
-  hands a library binary to the host's loader, beside today's MSL source.
-- **The coverage MLX actually uses.** Measure it against what the wire carries (KosmicKrisp's
-  subset) before building; anything missing is new host surface, so it goes through the same
-  validation as the rest of the transport (`docs/hardening-backlog.md` §Metal transport).
+**Done:** `CREATE_LIBRARY_DATA` hands a `.metallib` to the host's loader, behind
+`feature::LIBRARY_DATA` rather than a wire version change, and a guest program over
+`guest/limina-gpu-client` runs a kernel from one with every element right. The spike's RESULTS
+maps everything MLX's Metal backend calls onto the wire: it is all compute.
 
-**First step, a spike:** a guest program that creates a device, fills a shared buffer, builds a
-compute pipeline from a `.metallib` and dispatches it, over the existing wire, with the result
-checked in the guest. Then MLX's Metal backend built for Linux against our `libMetal`.
+**What it still needs:**
+- **Function constants on pipeline creation.** MLX specialises its matmul, attention, quantized
+  and convolution kernels with them; the one wire addition left, as a second feature bit.
+- **A `libMetal`:** metal-cpp's `MTL::` and `NS::` names for the calls MLX makes, over
+  `limina-gpu-client`, with per-command-buffer streams (MLX encodes from several threads),
+  `setBytes` through arena scratch, queue events split out of command buffers, completion
+  handlers, and buffers carved from pooled arenas (a context has at most 4096 arenas). Compute
+  only; no Objective-C runtime, since MLX builds from source against it.
+- **MLX built for Linux with its Metal backend**, its `mlx.metallib` (147 MB in mlx-metal 0.32.4)
+  built on the host and shipped beside it. A fork, `liminavm/mlx`.
+- **The Python bindings**, for `mlx-lm` and servers over it such as omlx.

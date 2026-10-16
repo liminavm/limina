@@ -1089,6 +1089,14 @@ module checks `pad` only in the FENCE ioctl. Anything an old host ignores can ne
 meaning later. Fix: reject non-zero values now, while no guest sets any, and version the guest
 interface (`docs/design/metal-transport-delivery.md` §1 notes the gap).
 
+### A guest hands Apple's library loader arbitrary bytes
+`CREATE_LIBRARY_DATA` (`crates/limina-gpu-host/src/exec.rs`, `create_library_data`) passes up to
+`MAX_LIBRARY_DATA` (256 MiB) of guest-written bytes to `newLibraryWithData:`, a parser of Apple's
+whose robustness against malformed input nobody here has measured. The bytes are copied out of the
+arena before parsing, so the guest cannot change them mid-parse, and a load failure fails the reply
+only. A crash in the loader takes the GPU host process, and every context of the VM with it. Next:
+fuzz the loader with mutated metallibs in a throwaway process before anything untrusted runs it.
+
 ### Fence order within a file is only a userspace promise
 All of a file's fences share one dma-fence context (`lf->fence_ctx` in
 `guest/virtio-gpu-limina/virtgpu_limina.c`), and the fence event path signals every lower id on a
