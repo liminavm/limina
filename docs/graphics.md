@@ -1022,6 +1022,7 @@ or commit while it runs.
 |---|---|
 | **Multisampling is disabled on the GL tier** — a `{antialias:true}` WebGL context takes a GPU address fault and loses the host Vulkan device; mitigated by advertising `max_samples = 1`, root cause open | §3.2, `spikes/webgl-msaa/RESULTS.md` |
 | **A vrend desktop is never held off its scanout, so every frame is copied** — the guest kernel fences no non-blob primary flush; a Metal blit keeps it correct at ~1.2 ms per frame, and fencing those flushes in the enhanced kernel would restore zero-copy there | §4, `docs/hardening-backlog.md` |
+| **Every venus frame waits a ~215 µs host round trip for its ring fence** — the cost of ordering ring fences (the stale-frame fix): vkmark −37%, glmark2 about −10%. GPU-side ordering (retire on arrival, the present path waits on the GPU) would recover it, provided a guest reading mapped memory after the fence keeps the CPU wait | `perf/2026-10-16-venus-regression.md` |
 | **A venus failure kills the whole Vulkan loader** — upstream the stub-instance patch so a stock guest keeps llvmpipe when venus goes down | §3.3, `docs/design/16k-page-requirement.md`, `docs/upstreaming/ledger/mesa.md` |
 | zink reads `heap.size − heapUsage` instead of `heapBudget`, so GL clients do not see our cap | `docs/design/gpu-memory-budget.md` §Known limits |
 | Pure-GL guests are unbounded — the cap is only enforced at `vkAllocateMemory` | same |
