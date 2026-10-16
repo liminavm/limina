@@ -39,3 +39,23 @@ Still slower than it should be: IQ4_XS, and every IQ type at n=2..8 (iq4_xs 1652
 q4_0's 282). None of those kernels uses scratch. ggml's q8_1 integer-dot path (MMVQ), which it uses
 for small batches elsewhere, needs `integerDotProduct4x8BitPackedSignedAccelerated`, which
 KosmicKrisp does not advertise, so `GGML_VK_DISABLE_MMVQ` changes nothing here.
+
+What keeps them slow is loops KosmicKrisp never unrolls: ggml writes `[[unroll]]` loops bounded by
+specialization constants (`NUM_COLS`, `NUM_ROWS`), and KosmicKrisp runs no `nir_opt_loop_unroll` on
+compute shaders, so arrays like `sum[NUM_COLS]` stay indexed by a loop counter (an if-else tree at
+32 bytes or less, scratch above). Running the unroller before that lowering honours the SPIR-V
+`Unroll` hint (NIR unrolls a hinted loop of known trip count whatever `max_unroll_iterations` says),
+and it is not a global win, measured the same day (µs, before → after):
+
+| kernel             | before | unrolled |
+| ------------------ | -----: | -------: |
+| iq4_xs n=2         |   1641 |      907 |
+| iq4_xs n=8         |   7053 |     2163 |
+| iq3_s n=8          |   4233 |     1575 |
+| iq2_s n=8          |   4822 |     2064 |
+| q4_0 n=2           |    283 |      354 |
+| q4_0 n=512 (mul_mm)|  65539 |   281669 |
+
+The tiled matmul behind prompt processing gets 4x slower (its scratch arrays become registers),
+whatever the iteration cap. Sending every indirectly indexed temp to scratch instead of if-else
+trees is worse on both kinds of kernel. A fix has to choose per loop.
