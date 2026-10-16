@@ -655,6 +655,8 @@ enum CaptureAction {
         dir: PathBuf,
         /// What each frame gets beside its tag and timing. `timing` writes no images: no disk,
         /// and no GPU copy holding the frame on glass (which can delay its shown-ack ~1 ms).
+        /// `video` writes one HEVC movie per display and size, each frame at its present time:
+        /// lossy, so pixel-exact checks stay on `images`.
         #[arg(long, value_enum, default_value_t = CaptureModeArg::Images)]
         mode: CaptureModeArg,
     },
@@ -674,6 +676,7 @@ enum CaptureAction {
 enum CaptureModeArg {
     Images,
     Timing,
+    Video,
 }
 
 impl From<CaptureModeArg> for limina_debug::wire::CaptureMode {
@@ -681,6 +684,7 @@ impl From<CaptureModeArg> for limina_debug::wire::CaptureMode {
         match m {
             CaptureModeArg::Images => Self::Images,
             CaptureModeArg::Timing => Self::Timing,
+            CaptureModeArg::Video => Self::Video,
         }
     }
 }

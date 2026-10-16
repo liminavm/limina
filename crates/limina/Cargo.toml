@@ -61,7 +61,7 @@ limina-framecap = { workspace = true }
 # Native window (decision D3: the UI lives in the supervisor). Looks up the worker's
 # shared IOSurface by id and shows it via CALayer.contents; an NSTimer on the main thread
 # polls state updated by the control-channel reader thread.
-objc2 = "0.6"
+objc2 = { version = "0.6", features = ["exception"] }
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
     "NSGeometry",
@@ -171,6 +171,29 @@ objc2-quartz-core = { version = "0.3", features = [
     "objc2-core-foundation",
 ] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
+# The frame-sequence capture's video mode (`window/frame_capture/video.rs`): AVAssetWriter
+# encodes the frames on glass with VideoToolbox HEVC into a QuickTime movie, each frame at its
+# real present time.
+objc2-av-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "AVAssetWriter",
+    "AVAssetWriterInput",
+    "AVMediaFormat",
+    "AVVideoSettings",
+    "objc2-core-media",
+    "objc2-core-video",
+] }
+objc2-core-video = { version = "0.3", default-features = false, features = [
+    "std",
+    "CVBase",
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVPixelBufferPool",
+    "CVReturn",
+] }
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
 # The copy shown for a guest that is not held off its scanout buffers is a GPU blit
 # (`window/copy.rs`).
 objc2-metal = { version = "0.3", default-features = false, features = [

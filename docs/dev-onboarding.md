@@ -217,6 +217,7 @@ limina debug <vm> lever debug-port on            # let the guest read the debug 
 limina debug <vm> lever lifecycle-control on     # allow `limina reset` (off by default)
 limina debug <vm> lever no-throttle on           # keep App Nap off the supervisor (off by default)
 limina debug <vm> capture start <dir>            # every presented frame, tagged (docs/graphics.md §8)
+limina debug <vm> capture start --mode video <dir>  # the same frames as one movie per display
 limina debug <vm> capture stop
 limina debug <vm> capture still <png> [slot]     # the frame on glass now
 ```

@@ -84,6 +84,12 @@ pub fn file_name(slot: usize, seq: u64) -> String {
     format!("s{slot}-{seq:08}.png")
 }
 
+/// The movie a video capture writes `slot`'s frames to, relative to the capture directory:
+/// `segment` counts from 0 and moves on whenever the display changes size.
+pub fn video_file_name(slot: usize, segment: u32) -> String {
+    format!("s{slot}-{segment:03}.mov")
+}
+
 /// The sidecar's name inside the capture directory.
 pub const SIDECAR: &str = "frames.jsonl";
 
@@ -208,9 +214,14 @@ pub struct Record {
     /// `CLOCK_REALTIME` in ns since the Unix epoch, as the frame went on glass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub t_realtime_ns: Option<u64>,
-    /// The image, relative to the capture directory.
+    /// The image, relative to the capture directory; on a video capture, the movie holding the
+    /// frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    /// On a video capture, the frame's presentation time in `file`, in ns: its present time less
+    /// that of the movie's first frame, to the microsecond (the movie's time scale).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pts_ns: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dropped: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,6 +250,7 @@ impl Default for Record {
             t_monotonic_raw_ns: None,
             t_realtime_ns: None,
             file: None,
+            pts_ns: None,
             dropped: false,
             reason: None,
         }
@@ -268,6 +280,7 @@ impl Record {
     /// Mark a presented frame as having no image, for `reason`.
     pub fn drop_for(mut self, reason: Reason) -> Record {
         self.file = None;
+        self.pts_ns = None;
         self.dropped = true;
         self.reason = Some(reason);
         self
@@ -309,7 +322,7 @@ pub struct Summary {
     /// `presented / duration_s`: the rate frames went on glass, images or not.
     #[serde(default)]
     pub presented_fps: f64,
-    /// Bytes of image written.
+    /// Bytes of image written: the PNGs, or the finished movies.
     pub bytes: u64,
     /// What the capture cost the main thread per presented frame, in microseconds.
     pub present_hook_us_p50: u64,
@@ -699,6 +712,11 @@ impl Tally {
         }
     }
 
+    /// Count bytes written for no one record: a movie, once it is finished.
+    pub fn add_bytes(&mut self, bytes: u64) {
+        self.bytes += bytes;
+    }
+
     /// Record what one present cost the main thread.
     pub fn hook_cost(&mut self, us: u32) {
         if self.hook_us.len() < HOOK_SAMPLES {
@@ -877,6 +895,29 @@ mod tests {
         assert!(parse_line(&other).unwrap_err().contains("format 2"));
         let bare = flipped.to_line().replace(r#""format":1,"#, "");
         assert!(parse_line(&bare).is_err());
+    }
+
+    #[test]
+    fn a_video_frame_names_its_movie_and_its_time_in_it_and_the_movies_count_as_bytes() {
+        let framed = Record {
+            file: Some(video_file_name(1, 2)),
+            pts_ns: Some(16_667_000),
+            ..presented(1, 3, 9)
+        };
+        assert_eq!(framed.file.as_deref(), Some("s1-002.mov"));
+        let line = framed.to_line();
+        assert!(line.contains(r#""pts_ns":16667000"#), "{line}");
+        assert_eq!(parse_line(&line), Ok(Line::Frame(framed.clone())));
+        // An image, or a frame with no picture at all, has no time in a movie.
+        assert!(!presented(0, 1, 9).to_line().contains("pts_ns"));
+        let dropped = framed.clone().drop_for(Reason::QueueFull);
+        assert_eq!((dropped.file, dropped.pts_ns), (None, None));
+        // A movie's size is known only once it is finished, not per frame.
+        let mut t = Tally::default();
+        t.count(&framed, 0);
+        t.add_bytes(5_000_000);
+        let summary = t.summary(1.0);
+        assert_eq!((summary.captured, summary.bytes), (1, 5_000_000));
     }
 
     #[test]

@@ -837,15 +837,29 @@ actually got on glass, attributed, without a human:
 ```sh
 limina debug <vm> capture start <dir>   # any time; <dir> must not already hold a capture
 limina debug <vm> capture start --mode timing <dir>   # records only, no images
+limina debug <vm> capture start --mode video <dir>    # a movie per display, at the real cadence
 limina debug <vm> capture stop          # waits for the frames in flight, prints the summary
 LIMINA_WINDOW_CAPTURE_DIR=<dir> …        # or capture the whole run (summary written at exit)
 ```
 
 `--mode` (`LIMINA_WINDOW_CAPTURE_DIR_MODE` for the whole-run form) says what each frame gets beside
-its record: `images` (the default) a PNG, `timing` nothing. A timing capture costs no disk and makes
-no GPU copy, so it can run for as long as a pacing question needs and does not hold the frame on
-glass (the copy can delay a shown-ack by about 1 ms, below), which is what a pacing measurement
-must not do. Its records carry every field but `file`.
+its record: `images` (the default) a PNG, `timing` nothing, `video` a place in a movie. A timing
+capture costs no disk and makes no GPU copy, so it can run for as long as a pacing question needs
+and does not hold the frame on glass (the copy can delay a shown-ack by about 1 ms, below), which
+is what a pacing measurement must not do. Its records carry every field but `file`.
+
+A video capture writes `s<slot>-<n>.mov` instead of PNGs: one HEVC QuickTime movie per display,
+and a new one (`n` counts from 000) whenever that display changes size, since a movie has one
+size and scaling would hide what a human is looking for. Each frame sits in its movie at its real
+present time (less the movie's first frame's, to the microsecond), so playback shows the guest's
+cadence as a human saw it: hitches, 30/60 alternation, a tear. Its records carry `file` (the
+movie) and `pts_ns` (the frame's time in it). It is lossy, so it complements `images` and never
+replaces it: pixel-exact oracles (frame-number colours, tear detection by comparison) stay on
+PNGs. It makes the same GPU copy per frame as `images`, with the same shown-ack cost, plus the
+encoder's GPU time; one thread appends the frames in present order (`frame_capture/video.rs`).
+A frame the encoder is not ready for is `queue_full`. The movies are finished when the capture
+stops: their bytes reach the summary only then, and a stop that cannot finish them in time (at
+process exit it waits 3 s) counts them in `incomplete` and leaves them as written so far.
 
 `<dir>` (a relative one resolves against the directory `limina debug` runs in) gets one
 `s<slot>-<seq>.png` (RGB, 8 bit; `seq` zero-padded to eight digits) per captured frame and
@@ -874,16 +888,18 @@ ignore does not. `limina_framecap::parse_line` refuses any other format. A recor
 | `width`, `height` | The layer surface's size, which is the image's. |
 | `t_monotonic_raw_ns` | `CLOCK_MONOTONIC_RAW` (= `mach_continuous_time` in ns; it keeps counting across host sleep), read on the main thread as the frame went on glass. For ordering and intervals. |
 | `t_realtime_ns` | `CLOCK_REALTIME`, ns since the Unix epoch, read at the same moment. The one to correlate with guest logs: the guest RTC is anchored to it. |
-| `file` | The image, relative to the capture directory. Absent when the frame has no image. |
+| `file` | The image, relative to the capture directory; on a video capture, the movie holding the frame. Absent when the frame has no image. |
+| `pts_ns` | Only on a video capture: the frame's presentation time in `file`, in ns — its `t_monotonic_raw_ns` less that of the movie's first frame, in whole microseconds (the movie's time scale), moved on by 1 µs when it would not be later than the last. What a player shows as the frame's time. |
 | `dropped`, `reason` | Present (and `dropped` true) only on a frame with no image. `not_presented`: guest flips the window never put on glass, replaced before it applied them; one record per run of them, with `flip_from`, `flip_to` and `count` (and `flip` = `flip_to`). The rest are frames that were on glass: `queue_full` (every capture buffer busy), `overtaken` (the next frame went up before this one's copy finished), `copy_failed`, `disk_budget`, `write_error`, and `timing_only` (a `--mode timing` capture, which writes no images by design). |
 
 The summary line has `"summary": true` and: `presented` (frames put on glass, guest flips or not),
 `captured`, `dropped` (frames on glass with no image, `timing_only` aside), `timing_only` (only on
 a timing capture: frames recorded without an image as asked), `not_presented` (guest flips never on
 glass, counted in flips), `by_reason` (every frame without an image, by reason), `duration_s`,
-`captured_fps`, `presented_fps` (`presented / duration_s`), `bytes` (of image written), `present_hook_us_p50/p99/max` (what the capture cost
+`captured_fps`, `presented_fps` (`presented / duration_s`), `bytes` (of image written: the PNGs, or the finished movies), `present_hook_us_p50/p99/max` (what the capture cost
 the main thread per frame), and `incomplete` only when the stop gave up waiting for frames still in
-flight, whose records are then never written.
+flight, whose records are then never written (on a video capture, the unfinished movies count as
+one more).
 
 **Host state lines.** The first line of every capture, and a line at every change after it, is
 the host state (`limina_framecap::HostStateRecord`): `"format": 1`, `"host_state": true`, `cause`

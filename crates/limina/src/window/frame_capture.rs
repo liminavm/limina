@@ -67,6 +67,8 @@ use objc2_metal::{
 
 use super::present::SendSurface;
 
+mod video;
+
 /// Which guest frame a present is: the slot it belongs to, the worker's flip count for that slot
 /// when the window applied it (`SlotPresent::frames`, under the worker generation `epoch`), the
 /// guest resource that flip came from when the worker named it (`SlotPresent::resource`), and
@@ -220,6 +222,8 @@ enum Msg {
     Line(u64, String),
     /// What one present cost the main thread, in microseconds.
     Cost(u32),
+    /// Bytes written for no one record: a video capture's movies, once finished.
+    Bytes(u64),
     /// Write the summary and stop writing; answer with it.
     Close {
         duration: f64,
@@ -398,6 +402,8 @@ fn write_sidecar(rx: Receiver<Msg>, sidecar: std::fs::File) {
                 dirty = true;
             }
             Msg::Cost(us) => tally.hook_cost(us),
+            Msg::Bytes(n) if !closed => tally.add_bytes(n),
+            Msg::Bytes(_) => {}
             Msg::Close {
                 duration,
                 incomplete,
@@ -519,7 +525,9 @@ impl Session {
             height: Some(geom.1 as u32),
             t_monotonic_raw_ns: Some(mono),
             t_realtime_ns: Some(real),
-            file: Some(limina_framecap::file_name(slot, seq)),
+            // A movie and the frame's time in it are known only once the video thread has
+            // appended it.
+            file: (self.mode == CaptureMode::Images).then(|| limina_framecap::file_name(slot, seq)),
             ..Record::default()
         };
         if self.mode == CaptureMode::Timing {
@@ -591,6 +599,38 @@ impl Drop for Pending<'_> {
     }
 }
 
+/// Wait for a frame's copy into `buffer`, then run `read` on its pixels: `h` rows of `bpr`
+/// bytes, `w` pixels of 4 bytes each. Why there are none when the copy cannot be used.
+fn read_copy<T>(
+    buffer: SendSurface,
+    commands: &SendCommands,
+    overtaken: &AtomicBool,
+    read: impl FnOnce(&[u8], usize, usize, usize) -> T,
+) -> Result<T, Reason> {
+    commands.0.waitUntilCompleted();
+    if commands.0.status() != MTLCommandBufferStatus::Completed {
+        return Err(Reason::CopyFailed);
+    }
+    // After the wait: the main thread sets this before the guest can have the buffer back.
+    if overtaken.load(Ordering::SeqCst) {
+        return Err(Reason::Overtaken);
+    }
+    let s = buffer.into_inner();
+    // SAFETY: our own surface, whose blit has completed. A lock that fails leaves the base
+    // address unpinned, so nothing is read; one that succeeds pins it for the read, and the
+    // slice is exactly its allocation's rows.
+    unsafe {
+        if s.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut()) != 0 {
+            return Err(Reason::CopyFailed);
+        }
+        let (w, h, bpr) = (s.width(), s.height(), s.bytes_per_row());
+        let bytes = std::slice::from_raw_parts(s.base_address().as_ptr() as *const u8, h * bpr);
+        let out = read(bytes, w, h, bpr);
+        s.unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
+        Ok(out)
+    }
+}
+
 /// Wait for a copied frame, then encode and write it.
 fn encode(session: &Session, job: Job) {
     let Job {
@@ -609,37 +649,16 @@ fn encode(session: &Session, job: Job) {
         buffer: Some(buffer.clone()),
     };
     let record = |p: &mut Pending| p.record.clone().expect("held until finished");
-    commands.0.waitUntilCompleted();
-    let failed = commands.0.status() != MTLCommandBufferStatus::Completed;
-    // After the wait: the main thread sets this before the guest can have the buffer back.
-    if failed || overtaken.load(Ordering::SeqCst) {
-        let reason = if failed {
-            Reason::CopyFailed
-        } else {
-            Reason::Overtaken
-        };
-        let r = record(&mut pending).drop_for(reason);
-        pending.finish(r, 0);
-        return;
-    }
-    let s = buffer.into_inner();
-    // SAFETY: our own surface, whose blit has completed. A lock that fails leaves the base
-    // address unpinned, so nothing is read; one that succeeds pins it for the read, and the
-    // slice is exactly its allocation's rows.
-    let png = unsafe {
-        if s.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut()) != 0 {
-            drop(s);
-            let r = record(&mut pending).drop_for(Reason::CopyFailed);
+    let png = match read_copy(buffer, &commands, &overtaken, |bytes, w, h, bpr| {
+        limina_framecap::encode_png_rgb(bytes, w, h, bpr, order)
+    }) {
+        Ok(png) => png,
+        Err(reason) => {
+            let r = record(&mut pending).drop_for(reason);
             pending.finish(r, 0);
             return;
         }
-        let (w, h, bpr) = (s.width(), s.height(), s.bytes_per_row());
-        let bytes = std::slice::from_raw_parts(s.base_address().as_ptr() as *const u8, h * bpr);
-        let png = limina_framecap::encode_png_rgb(bytes, w, h, bpr, order);
-        s.unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
-        png
     };
-    drop(s);
     if let Some(b) = pending.buffer.take() {
         session.give_back(b);
     }
@@ -663,6 +682,74 @@ fn encode(session: &Session, job: Job) {
             log::warn!("frame capture: {file}: {e}");
             pending.finish(r.drop_for(Reason::WriteError), 0);
         }
+    }
+}
+
+/// The video thread: every copied frame, in present order, into its display's movie; at the
+/// end of the capture, finish the movies and count them. It holds one [`Outstanding`] number
+/// of its own from [`spawn`] until the movies are finished, so a stop waits for them too.
+fn record_video(session: &Session, rx: Receiver<Job>) {
+    let mut movies = video::Movies::new(&session.dir);
+    while let Ok(job) = rx.recv() {
+        // A panic is contained to its job (`Pending` finishes it): the thread lives on.
+        let appended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            objc2::rc::autoreleasepool(|_| append_video(session, &mut movies, job))
+        }));
+        if appended.is_err() {
+            log::error!("frame capture: a video append panicked; recorded as write_error");
+        }
+    }
+    let bytes = objc2::rc::autoreleasepool(|_| movies.finish_all());
+    session.bytes.store(bytes, Ordering::Relaxed);
+    if session.out.send(Msg::Bytes(bytes)).is_err() {
+        log::error!("frame capture: the sidecar writer is gone");
+    }
+    session.outstanding.done();
+}
+
+/// Wait for a copied frame and append it to its display's movie.
+fn append_video(session: &Session, movies: &mut video::Movies, job: Job) {
+    let Job {
+        ord,
+        record,
+        buffer,
+        order,
+        commands,
+        overtaken,
+    } = job;
+    let (slot, t_ns) = (record.slot, record.t_monotonic_raw_ns.unwrap_or(0));
+    let pending = Pending {
+        session,
+        ord,
+        record: Some(record),
+        buffer: Some(buffer.clone()),
+    };
+    let placed = read_copy(buffer, &commands, &overtaken, |pixels, w, h, bpr| {
+        movies.append(
+            slot,
+            t_ns,
+            &video::Frame {
+                pixels,
+                w,
+                h,
+                bpr,
+                order,
+            },
+        )
+    })
+    .and_then(|r| r);
+    session.bytes.store(movies.bytes_now(), Ordering::Relaxed);
+    let r = pending.record.clone().expect("held until finished");
+    match placed {
+        Ok(video::Placed { file, pts_ns }) => pending.finish(
+            Record {
+                file: Some(file),
+                pts_ns: Some(pts_ns),
+                ..r
+            },
+            0,
+        ),
+        Err(reason) => pending.finish(r.drop_for(reason), 0),
     }
 }
 
@@ -727,7 +814,8 @@ fn budget_from_env() -> u64 {
         .saturating_mul(1_000_000)
 }
 
-/// Whether `dir` already holds a capture's files: a sidecar, or any `s<slot>-<seq>.png`.
+/// Whether `dir` already holds a capture's files: a sidecar, any `s<slot>-<seq>.png`, or any
+/// `s<slot>-<n>.mov`.
 fn holds_a_capture(dir: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return false;
@@ -736,7 +824,9 @@ fn holds_a_capture(dir: &Path) -> bool {
         let name = e.file_name();
         let name = name.to_string_lossy();
         name == limina_framecap::SIDECAR
-            || (name.starts_with('s') && name.contains('-') && name.ends_with(".png"))
+            || (name.starts_with('s')
+                && name.contains('-')
+                && (name.ends_with(".png") || name.ends_with(".mov")))
     })
 }
 
@@ -788,6 +878,10 @@ pub(crate) fn start(dir: &Path, mode: CaptureMode) -> Result<String, String> {
             "frame capture: recording every presented frame's timing, no images, to {}",
             dir.display()
         ),
+        CaptureMode::Video => format!(
+            "frame capture: recording every presented frame into a movie per display, to {}",
+            dir.display()
+        ),
     };
     log::warn!("{msg}");
     Ok(msg)
@@ -819,6 +913,16 @@ fn spawn(dir: &Path, mode: CaptureMode, sidecar: std::fs::File) -> Result<Arc<Se
         out,
         outstanding: Arc::new(Outstanding::default()),
     });
+    if mode == CaptureMode::Video {
+        // The movies' own number, done once they are finished.
+        session.outstanding.add();
+        let writer = session.clone();
+        std::thread::Builder::new()
+            .name("limina-framecap-video".into())
+            .spawn(move || record_video(&writer, rx))
+            .map_err(|e| format!("spawning the video writer: {e}"))?;
+        return Ok(session);
+    }
     let rx: Arc<Mutex<Receiver<Job>>> = Arc::new(Mutex::new(rx));
     for i in 0..ENCODERS {
         let (session, rx) = (session.clone(), rx.clone());
@@ -945,6 +1049,9 @@ mod tests {
         );
         std::fs::write(dir.join(limina_framecap::file_name(0, 3)), b"").unwrap();
         assert!(holds_a_capture(&dir));
+        std::fs::remove_file(dir.join(limina_framecap::file_name(0, 3))).unwrap();
+        std::fs::write(dir.join(limina_framecap::video_file_name(1, 0)), b"").unwrap();
+        assert!(holds_a_capture(&dir), "a video capture's movie");
         std::fs::remove_dir_all(&dir).ok();
     }
 

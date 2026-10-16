@@ -92,15 +92,20 @@ pub enum CaptureMode {
     Images,
     /// The sidecar alone: no disk, and no GPU copy holding the frame on glass.
     Timing,
+    /// One HEVC movie per display (and per size it takes), each frame at its real present
+    /// time: the cadence as a human saw it, lossy, at a fraction of the images' disk.
+    Video,
 }
 
 impl CaptureMode {
-    pub const ALL: [CaptureMode; 2] = [CaptureMode::Images, CaptureMode::Timing];
+    pub const ALL: [CaptureMode; 3] =
+        [CaptureMode::Images, CaptureMode::Timing, CaptureMode::Video];
 
     pub fn as_str(self) -> &'static str {
         match self {
             CaptureMode::Images => "images",
             CaptureMode::Timing => "timing",
+            CaptureMode::Video => "video",
         }
     }
 
@@ -314,6 +319,10 @@ mod tests {
                 dir: "/tmp/a dir/timing".into(),
                 mode: CaptureMode::Timing,
             }),
+            Request::Capture(Capture::Start {
+                dir: "/tmp/a dir/video".into(),
+                mode: CaptureMode::Video,
+            }),
             Request::Capture(Capture::Stop),
             Request::Capture(Capture::Still {
                 slot: None,
@@ -351,6 +360,13 @@ mod tests {
         assert!(Request::parse("capture start --mode timing").is_err());
         assert!(Request::parse("capture start --mode timing   ").is_err());
         assert!(Request::parse("capture start --mode film /tmp/a").is_err());
+        assert_eq!(
+            Request::parse("capture start --mode video /tmp/v"),
+            Ok(Request::Capture(Capture::Start {
+                dir: "/tmp/v".into(),
+                mode: CaptureMode::Video,
+            }))
+        );
         assert!(Request::parse("capture stop now").is_err());
         assert!(Request::parse("capture pause").is_err());
         assert!(Request::parse("capture still").is_err());
