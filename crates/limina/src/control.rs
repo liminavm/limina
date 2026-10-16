@@ -175,7 +175,7 @@ struct Pending(Arc<AtomicUsize>);
 impl Pending {
     fn claim(count: &Arc<AtomicUsize>, cap: usize) -> Option<Pending> {
         count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < cap).then_some(n + 1)
             })
             .ok()

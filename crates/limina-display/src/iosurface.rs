@@ -636,7 +636,7 @@ fn red_probe(iosurface_id: u32, frame: u64) {
         }
         IOSurfaceUnlock(&surface, opts, ptr::null_mut());
         let baseline = BASELINE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
                 Some(red.min(b.saturating_add(1)))
             })
             .unwrap_or(u32::MAX);
