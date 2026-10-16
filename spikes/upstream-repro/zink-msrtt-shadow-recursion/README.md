@@ -1,148 +1,155 @@
-# zink: don't recurse forever populating a shadow attachment
+# zink: shadow attachments of the MSRTT emulation
 
-**Bug.** Without `VK_EXT_multisampled_render_to_single_sampled`, zink emulates
-`EXT_multisampled_render_to_texture` with a transient MSAA image, which
-`zink_render_attachment_shadow()` fills by a replicate blit from the single-sampled texture and
-marks valid only after the blit returns. Pending clears are masked across that blit for every
-attachment *except the one being shadowed*. util_blitter rebinds the framebuffer,
-`zink_set_framebuffer_state()` flushes that attachment's pending clear, the flush begins a
-renderpass, the transient is still invalid, and the replicate blit starts again: unbounded
-recursion, one `u_blitter:557: Caught recursion. This is a driver bug.` per lap, then a stack
-overflow.
+Without `VK_EXT_multisampled_render_to_single_sampled` (MSRTSS), zink emulates
+`EXT_multisampled_render_to_texture` (MSRTT) with a transient MSAA image per attachment, which
+`zink_render_attachment_shadow()` fills by a replicate blit (u_blitter) from the single-sampled
+texture. Three bugs sit on that path; the series in `series/` fixes them, one commit each. Needs a
+Vulkan driver without MSRTSS under zink. Measured: anv on Ice Lake lacks it, and so does venus on
+that anv in a QEMU guest; lavapipe has it (`zink_screen.c` also disables it for panvk).
 
-**Reproducer.** `zink-msrtt-recursion.c` (GLES 3, surfaceless EGL): render to a texture through
-an MSRTT FBO, bind another FBO (unbinding invalidates the transient), bind the MSRTT FBO again,
-issue a scissored clear, draw; then read back three pixels — the cleared quadrant (red), the drawn
-quadrant (green), and an untouched quadrant that must keep the first pass's blue. Needs a Vulkan
-driver without MSRTSS under zink. Measured: anv on Ice Lake lacks it, and so does venus on that anv in a
-QEMU guest; lavapipe has it (`zink_screen.c` also disables it for panvk).
+1. **Unbounded recursion** (`0001`, "zink: don't recurse forever populating a shadow
+   attachment"). The transient is marked valid only after its blit returns, and pending clears
+   are masked across the blit for every attachment *except the one being shadowed*. util_blitter
+   rebinds the framebuffer, `zink_set_framebuffer_state()` flushes that attachment's pending
+   clear, the flush begins a renderpass, the transient is still invalid, and the replicate blit
+   starts again: one `u_blitter:557: Caught recursion. This is a driver bug.` per lap, then a
+   stack overflow. The fix masks all pending clears across the blit and restores them in full;
+   `zink_blit()` already does the same around blits whose destination is not bound
+   (`zink_blit.c`, "avoid applying clears from fb unbind by storing and re-setting them after the
+   blit"). The old restore assigned back only the masked bits, so it also dropped the shadowed
+   attachment's own clear bit. The clear is deferred, not dropped: `zink_fb_clear_enabled()` reads
+   the same mask and the `fb_clears` entries are untouched, so the next renderpass applies it on
+   top of the replicated content.
+2. **Only the last transient of a multi-attachment shadow stays valid** (`0002`, "zink: keep
+   every transient a shadow call populated valid"). Every replicate blit rebinds the framebuffer,
+   and `unbind_fb_surface()` marks the transient of every MSRTT attachment of the real framebuffer
+   invalid, including the ones the call has just populated. Nothing renders to them between their
+   blit and the end of the loop, so the function now marks everything it populated valid after
+   it.
+3. **The `glFlush` route leaves other MSRTT attachments stale** (`0003`, "zink: populate shadow
+   attachments before reducing the fb to flush clears"). When it is not blitting,
+   `zink_flush_clears()` reduces `ctx->fb_state` to the attachments with pending clears, begins a
+   renderpass to apply them, and puts `fb_state` back by plain assignment. A shadow blit inside
+   that renderpass setup makes u_blitter rebind the *reduced* framebuffer through
+   `zink_set_framebuffer_state()`, which recomputes `transient_attachments` and the rest of the
+   framebuffer-derived state for it; the plain assignment restores none of that, so an MSRTT
+   attachment without a pending clear drops out of `transient_attachments` and its invalidated
+   transient is later loaded without a replicate blit. The fix populates the transients the clears
+   need before reducing the framebuffer, so the blit rebinds the real one and the reduced
+   renderpass blits nothing. On main this route recurses (bug 1), so 0001 is what makes it
+   reachable; 0003 needs 0002 whenever two or more attachments have pending clears.
+
+## Reproducer
+
+`zink-msrtt-recursion.c` (GLES 3, surfaceless EGL): render to a texture through an MSRTT FBO
+(blue), bind another FBO (unbinding invalidates the transient), bind the MSRTT FBO again, issue a
+scissored clear (red, lower-left), draw (green, upper-right); then read back the cleared, the
+drawn and an untouched quadrant.
 
     cc -o zink-msrtt-recursion zink-msrtt-recursion.c -lEGL -lGLESv2
-    MESA_LOADER_DRIVER_OVERRIDE=zink ./zink-msrtt-recursion [color|zs|flush|rebind|mrt|mrt-rebind|mrt3|fbfetch]
+    MESA_LOADER_DRIVER_OVERRIDE=zink ./zink-msrtt-recursion [mode]
 
-`color` (the default) is the sequence above. `zs` attaches a depth texture through MSRTT as well and
-leaves the scissored clear on depth instead: pass 1 writes depth 0.5, pass 3 clears the lower-left
-quadrant's depth to 1.0 and draws green at depth 0.75 with `GL_LESS`, so green shows where the
-clear landed and pass 1's blue wherever the replicated depth survived. It is a control: zink's
-depth/stencil shadow leg never runs on main, because `begin_rendering()` builds the shadow mask
-from colour attachments only (the line that would add the depth/stencil bit is commented out in
-`zink_context.c`, "maybe TODO but also not handled by legacy rp"). The patch changes that leg's
-mask too, without effect.
+| mode | what it changes | correct result |
+|---|---|---|
+| `color` (default) | the sequence above | red, green, blue |
+| `zs` | depth attached through MSRTT too; the scissored clear is on depth, the draw at depth 0.75 with `GL_LESS` | green, blue, blue |
+| `flush` | a `glFlush` between the clear and the draw: the shadow runs from `zink_flush` → `zink_flush_clears` | red, green, blue |
+| `rebind` | the other FBO bound and back between the clear and the draw | red, green, blue |
+| `mrt` | a second MSRTT attachment; clear on COLOR0 only; COLOR1's texture overwritten with yellow by `glTexSubImage2D` before pass 3 (only a replicate blit can carry it into the transient); `glFlush` | COLOR0 as `color`; COLOR1 yellow, green, yellow |
+| `mrt-rebind` | `mrt` with the FBO round trip instead of the `glFlush` | as `mrt` |
+| `mrt3` | three MSRTT attachments; clears on COLOR0 and COLOR1, yellow upload on COLOR2; `glFlush` | COLOR0 and COLOR1 as `color`; COLOR2 yellow, green, yellow |
+| `fbfetch` | `mrt` with the clear on COLOR1 and a `GL_EXT_shader_framebuffer_fetch` shader adding green to COLOR0, bound before the `glFlush` | COLOR0 blue, cyan, blue; COLOR1 red, green, yellow |
 
-Without the unbind (scissored clear on a fresh MSRTT attachment) it does not recurse, so the
-invalidated-transient step is required.
-
-The other modes change how the pending clear is reached. `flush` puts a `glFlush` between the
-clear and the draw, so the shadow runs from `zink_flush` → `zink_flush_clears` (backtrace on
-main) instead of from the draw. `rebind` binds the other FBO and back instead; the recursion
-then still starts at the draw. `mrt` and `mrt-rebind` add a second MSRTT colour attachment,
-clear only COLOR0, and overwrite COLOR1's texture with yellow by `glTexSubImage2D` before
-pass 3. Only a replicate blit can carry that yellow into COLOR1's transient, so a stale
-transient reads pass 1's blue. `mrt3` has three MSRTT attachments, clears COLOR0 and COLOR1,
-and uploads yellow to COLOR2. `fbfetch` is `mrt` with the clear on COLOR1 and a
-`GL_EXT_shader_framebuffer_fetch` shader bound before the `glFlush`, so the flush's renderpass
-leaves out COLOR0, the attachment the shader reads; it needs a zink that exposes framebuffer
-fetch, which Ice Lake anv does not.
+`zs` is a control: zink's depth/stencil shadow leg never runs on main, because `begin_rendering()`
+builds the shadow mask from colour attachments only (the line that would add the depth/stencil bit
+is commented out in `zink_context.c`, "maybe TODO but also not handled by legacy rp"). Without the
+FBO unbind (a scissored clear on a fresh MSRTT attachment) nothing recurses. `fbfetch` needs a zink
+that exposes framebuffer fetch; Ice Lake anv does not, so no run covers it.
 
 ## Results
 
-Host: Fedora 44, Intel Iris Plus G7 (Ice Lake), system anv from Fedora mesa 26.1.8 as the
-Vulkan driver; zink from the Mesa under test. The venus rows run zink and venus from the Mesa
-under test inside the rig guest, on the same host anv.
+Host: Fedora 44, Intel Iris Plus G7 (Ice Lake), system anv from Fedora mesa 26.1.8 as the Vulkan
+driver; zink from the Mesa under test. "Venus" rows run zink and venus from the Mesa under test in
+the rig's QEMU 10.2 + virglrenderer 1.3.0 guest, on the same host anv. "+0001" is the first
+commit alone, "+series" all three (`7f5ed671264`).
 
-| Mesa (zink) | Vulkan driver | Result |
-|---|---|---|
-| `main` b39d173ca93 | anv, ICL (no MSRTSS) | SIGSEGV, ~4360 "Caught recursion" lines before it, 5/5 |
-| `main` + fix (series tip e09e44d2d0d) | same | `pixel 0: 255 0 0 255`, `pixel 1: 0 255 0 255`, `pixel 2: 0 0 255 255`, `ok`, exit 0, 5/5 |
-| `main` b39d173ca93 | lavapipe (has MSRTSS; `LIBGL_ALWAYS_SOFTWARE=1`) | `ok`, exit 0 (control: emulation path not taken) |
-| `main` 92b45bd0f2e | anv, ICL (no MSRTSS) | SIGSEGV, ~4360 "Caught recursion" lines before it, 5/5 |
-| `main` 92b45bd0f2e + fix | same | the same three pixels, `ok`, exit 0, 5/5 |
-| `main` 92b45bd0f2e | system lavapipe (`LIBGL_ALWAYS_SOFTWARE=1` plus `VK_DRIVER_FILES` naming its ICD) | the same three pixels, `ok`, exit 0 (control) |
-| `main` 92b45bd0f2e | venus on that anv, QEMU 10.2 + virglrenderer 1.3.0 guest | SIGSEGV, ~4358 "Caught recursion" lines before it, 5/5 |
-| `main` 92b45bd0f2e + fix | same | the same three pixels, `ok`, exit 0, 5/5 |
-| `main` 92b45bd0f2e, `zs` | anv, ICL | green, blue, blue, `ok`, exit 0, 5/5 (control) |
-| `main` 92b45bd0f2e + fix, `zs` | same | green, blue, blue, `ok`, exit 0, 5/5 |
-| `main` 92b45bd0f2e, `flush`, `rebind`, `mrt`, `mrt-rebind` | anv, ICL | SIGSEGV, ~4360 "Caught recursion" lines before it, 3/3 each |
-| `main` 92b45bd0f2e + fix, `flush`, `rebind` | same | red, green, blue, `ok`, 3/3 each |
-| `main` 92b45bd0f2e + fix, `mrt-rebind` | same | COLOR0 red, green, blue; COLOR1 yellow, green, yellow; `ok`, 3/3 |
-| `main` 92b45bd0f2e + fix, `mrt` | same | COLOR0 red, green, blue; **COLOR1 blue, green, blue** (stale transient), `WRONG PIXELS`, 3/3 |
-| `main` 92b45bd0f2e, `mrt3` | same | SIGSEGV, ~4360 "Caught recursion" lines before it, 3/3 |
-| `main` 92b45bd0f2e + fix, `mrt3` | same | COLOR0 and COLOR1 red, green, blue; **COLOR2 blue, green, blue**, `WRONG PIXELS`, 3/3 |
-| `main` 92b45bd0f2e + fix + candidate, `color`, `zs`, `flush`, `rebind`, `mrt-rebind` | same | the same pixels as with the fix, `ok`, 3/3 each |
-| `main` 92b45bd0f2e + fix + candidate, `mrt` | same | COLOR0 red, green, blue; COLOR1 yellow, green, yellow; `ok`, 3/3 |
-| `main` 92b45bd0f2e + fix + candidate, `mrt3` | same | COLOR0 and COLOR1 red, green, blue; COLOR2 yellow, green, yellow; `ok`, 3/3 |
+| Mesa (zink) | Driver | Modes | Result |
+|---|---|---|---|
+| `main` 92b45bd0f2e | anv (no MSRTSS) | `color` | SIGSEGV after ~4360 "Caught recursion" lines, 5/5 |
+| `main` 92b45bd0f2e | venus on anv | `color` | SIGSEGV after ~4358 "Caught recursion" lines, 5/5 |
+| `main` 92b45bd0f2e | lavapipe (`LIBGL_ALWAYS_SOFTWARE=1`, has MSRTSS) | `color` | correct (control: emulation not taken) |
+| `main` 92b45bd0f2e | anv | `flush`, `rebind`, `mrt`, `mrt-rebind`, `mrt3` | SIGSEGV after ~4360 "Caught recursion" lines, 3/3 each |
+| `main` 92b45bd0f2e | anv | `zs` | correct, 5/5 |
+| +0001 | anv | `color`, `zs` | correct, 5/5 each |
+| +0001 | venus on anv | `color` | correct, 5/5 |
+| +0001 | anv | `flush`, `rebind`, `mrt-rebind` | correct, 3/3 each |
+| +0001 | anv | `mrt` | **COLOR1 blue, green, blue** (stale transient), 3/3 |
+| +0001 | anv | `mrt3` | **COLOR2 blue, green, blue**, 3/3 |
+| +0001 and 0003 without 0002 | anv | `mrt3` | **COLOR2 blue, green, blue**, 3/3; the other modes correct |
+| +series | anv | `color`, `zs`, `flush`, `rebind`, `mrt`, `mrt-rebind`, `mrt3` | correct, 5/5 each |
 
-Measured 2026-10-05 (`b39d173ca93`), 2026-10-08 and 2026-10-16 (`92b45bd0f2e`).
+Measured 2026-10-08 (`color`, `zs`, venus, lavapipe) and 2026-10-16 (the rest); `main` `b39d173ca93`
+gave the same `color` results on 2026-10-05.
 
-**The `glFlush` route.** When the shadow runs from `zink_flush_clears()` outside a blit, the
-framebuffer it sees is the one `zink_flush_clears()` reduced: every attachment without a pending
-clear is NULLed. The replicate blit's u_blitter save/restore calls `zink_set_framebuffer_state()`
-with that reduced state, which recomputes `ctx->transient_attachments` and the rest of the
-framebuffer-derived state from it, and `zink_flush_clears()` then puts the real `fb_state` back by
-plain assignment without recomputing any of it. Under gdb on `mrt` with the fix,
-`transient_attachments` goes from `0x3` to `0x1` across the `glFlush` and stays there for the
-draw, so COLOR1's invalidated transient is loaded without a replicate blit; on `mrt-rebind` the
-draw sees `0x3`. On main this route recurses, so the fix is what makes it reachable.
+Under gdb (`mesa_glthread=false GALLIUM_THREAD=0`, a breakpoint where `begin_rendering()` masks
+the shadow request): on `mrt` with 0001 alone, `transient_attachments` goes from `0x3` to `0x1`
+across the `glFlush` and stays there for the draw; with the series the shadow runs from
+`zink_flush_clears()`, the reduced renderpass's shadow call blits nothing, and
+`transient_attachments` stays `0x3` (`mrt`) and `0x7` (`mrt3`) through the draw.
 
-The candidate (`flush-clears-shadow-first.patch`, on top of the fix) has two parts.
-`zink_flush_clears()` populates the transients of the attachments it is about to clear before it
-reduces the framebuffer, so the replicate blit rebinds the real one, and the renderpass on the
-reduced framebuffer finds them valid and blits nothing. That needs the second part: every
-replicate blit rebinds the framebuffer, and `unbind_fb_surface()` marks every MSRTT transient of
-the real one invalid, so with two or more attachments in one shadow call only the last stayed
-valid and the reduced renderpass blitted the others again (`mrt3` fails with the first part
-alone). `zink_render_attachment_shadow()` now marks everything it populated valid after its
-loop, since nothing renders to them in between. Under gdb on `mrt3` the shadow runs from
-`zink_flush_clears()` with mask `0x3`, the reduced renderpass's shadow call blits nothing, and
-`transient_attachments` stays `0x7` through the draw. Both parts need the fix: their blits rely
-on the pending clears being masked.
-Restoring the derived fields afterwards instead (a snapshot of the fields, or re-deriving them
-through a helper or a second `set_framebuffer_state`) was proposed three ways by the
-fix-alternatives panel; reviewers found each one misses state the nested rebind changes
-(framebuffer-fetch input attachment, feedback-loop bits) or, for the second bind, drops
-`needs_present`.
+**piglit** (`92b45bd0f2e`, zink over venus in the rig guest, surfaceless EGL, `quick` filtered to
+`ext_multisampled_render_to_texture`, `fbo`, `clear`, `framebuffer_srgb`,
+`ext_framebuffer_multisample`, `arb_framebuffer_object`, `ext_framebuffer_object`,
+`arb_texture_view` and `ext_texture_srgb`, 1379 tests): +0001 (2026-10-08) and +series
+(2026-10-16) give identical results test for test: pass 1091, fail 21, crash 26, skip 231,
+warn 10. Against `main` the one difference, `ext_texture_array/fbo-depth-array stencil-clear`,
+stalled main's run once and passes 3/3 on every build alone. The sRGB and texture-view groups are
+there because format-view shadowing runs the patched function. piglit's only MSRTT test,
+`ext_multisampled_render_to_texture-clear_color_and_depth`, is in no profile; run alone
+(`-auto -fbo`, which surfaceless EGL needs) it passes 3/3 on main and +0001, since its one
+unscissored clear on a fresh framebuffer never needs a replicate blit.
 
-**piglit, main vs fix** (2026-10-08, `92b45bd0f2e`): zink over venus in the rig guest, surfaceless
-EGL, `quick` filtered to `fbo`, `clear`, `framebuffer_srgb`, `ext_framebuffer_multisample`,
-`arb_framebuffer_object`, `ext_framebuffer_object`, `arb_texture_view` and `ext_texture_srgb`
-(1379 tests, 3496 results): no regressions, identical fail (21), crash (26) and skip (309) sets.
-The one difference, `ext_texture_array/fbo-depth-array stencil-clear`, stalled the main run once
-and passes 3/3 on both builds alone. The sRGB and texture-view groups are there because
-format-view shadowing runs the patched function. piglit's only MSRTT test,
-`ext_multisampled_render_to_texture-clear_color_and_depth`, is built but in no profile; run alone
-(`-auto -fbo`, which surfaceless EGL needs) it passes 3/3 on both, since its one unscissored clear
-on a fresh framebuffer never needs a replicate blit.
+## Alternatives
 
-The fixed run's pixels check the "deferred, not dropped" claim: the red quadrant is the scissored
-clear applied after the transient was repopulated, and the blue quadrant is content the replicate
-blit carried over.
+The fix-alternatives step (`docs/upstreaming/patch-diligence.md` §5) ran on bugs 1 and 3.
 
-## MR description (draft)
+- **Bug 1:** all four blind proposers wrote 0001's change line for line. A skeptic found the
+  `glFlush` route, which became bug 3 (`mrt`).
+- **Bug 3:** the proposers restored the derived state after the reduced renderpass instead: a
+  snapshot of the fields, a helper that re-derives them, or a second `set_framebuffer_state()`.
+  Reviewers found each misses state the nested rebind changes (the framebuffer-fetch input
+  attachment, feedback-loop bits), and the second bind also drops `needs_present` on a swapchain
+  framebuffer; none was built. Populating before reducing removes the nested rebind instead. Its
+  first version broke on two cleared attachments (`mrt3`), which is bug 2.
 
-> **zink: don't recurse forever populating a shadow attachment**
->
-> When the Vulkan driver lacks VK_EXT_multisampled_render_to_single_sampled, the
-> EXT_multisampled_render_to_texture emulation fills its transient MSAA image with a replicate
-> blit. Pending clears on the other attachments are masked across that blit, but not the one on
-> the attachment being shadowed: u_blitter rebinds the framebuffer, zink_set_framebuffer_state
-> flushes that clear, the flush begins a renderpass while the transient is still invalid, and the
-> blit starts over until the stack overflows ("Caught recursion" from u_blitter on every lap).
->
-> Reproducer (attached; zink on anv/Ice Lake, which has no MSRTSS): render through an MSRTT FBO,
-> bind another FBO, rebind, scissored clear, draw. Before: SIGSEGV 5/5. After: exit 0 5/5 with the
-> expected pixels — the clear lands after the replicated content, and untouched content survives.
-> Observed in the wild as a browser renderer process crash.
->
-> The fix masks all pending clears across the blit and restores them afterwards. Nothing can
-> apply a clear while its bit is masked (zink_fb_clear_enabled reads the same mask) and the
-> fb_clears entries are untouched, so the clear is only deferred to the following renderpass.
+**Not covered by any run**, found by the reviewers and present on main too: the shadow blit's
+`set_framebuffer_state()` clears `ctx->rp_tc_info_updated`, which the `zink_texture_barrier`
+caller does not set again (tracked renderpasses under threaded context); framebuffer-fetch paths;
+kopper/swapchain MSRTT attachments; two attachments sharing one transient (layers of one texture)
+share one `valid` flag.
 
 ## As sent
 
-The commit — message, `Fixes:`, trimmed comments — is on branch `upstream/guest-2026-10` of
-`liminavm/mesa`. `Fixes: 82add9f2e99` because that commit added the clear save/restore
-around the replicate blit but left the shadowed attachment's own clears enabled. The loop itself
-is older: it needs only the emulation (`fbff2b6c652`, 2021) and the clear flush on attachment
-change (`66ceea7ed9a`, "zink: lift clearing on fb state change up a level", 22.2.0).
-`82add9f2e99` first shipped in 23.3.0 and `staging/26.2` carries it, so the stable reach is the
-same whichever commit the tag names.
+Branch `upstream/zink-msrtt-shadow` in `/Volumes/mesa-cs/mesa-upstream` (a worktree at
+`/Volumes/mesa-cs/mesa-zink-msrtt`), three commits on `main` `92b45bd0f2e`, exported to `series/`;
+the tree is the one measured as +series. 0001 is also on `upstream/guest-2026-10`.
+
+- 0001 `Fixes: 82add9f2e99` ("zink: avoid recursion during msrtss blits from flushing clears"):
+  that commit added the clear save/restore around the replicate blit but left the shadowed
+  attachment's own clears enabled. The loop is older: it needs only the emulation
+  (`fbff2b6c652`, 2021) and the clear flush on attachment change (`66ceea7ed9a`, 22.2.0);
+  `82add9f2e99` first shipped in 23.3.0 and `staging/26.2` carries it.
+- 0002 `Fixes: ef3f7989574` ("zink: prune zink_surface down to the imageview and create/fetch on
+  demand", 25.2): it added the unbind-time `res->transient->valid = false` (absent at its parent).
+- 0003 has no `Fixes:`; the reduced framebuffer dates from `b122c3eaa9e` ("zink: unify/fix clear
+  flushing", 25.3), but a shadow inside it recursed until 0001. `Cc: mesa-stable` so it travels
+  with 0001.
+- All three carry `Cc: mesa-stable` and `Assisted-by: Claude Code`; the messages and comments are
+  to be rewritten by the submitter.
+
+Points for the MR description: the three bugs and their order of dependence (0001 exposes 3;
+0003 needs 2 for multiple cleared attachments); the reproducer and its modes, before and after;
+the `zink_blit()` precedent for 0001; why 0003 populates before reducing instead of restoring
+derived state; piglit unchanged; observed in the wild as a browser renderer process crash. Review:
+zink is maintained by the author of the commits named above (`82add9f2e99`, `ef3f7989574`,
+`b122c3eaa9e`).
