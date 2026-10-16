@@ -1,0 +1,17 @@
+# metal-compute-probe — a kernel from a host-built .metallib, run in a guest over limina's
+# Metal-level GPU transport. Built for aarch64-unknown-linux-musl (.cargo/config.toml).
+[package]
+name = "metal-compute-probe"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[dependencies]
+limina-gpu-client = { path = "../../../guest/limina-gpu-client" }
+limina-gpu-wire = { path = "../../../crates/limina-gpu-wire" }
+
+[workspace]
+
+[profile.release]
+panic = "abort"
+strip = true
