@@ -133,6 +133,12 @@ alternatives come from proposers who have never seen it:
 §6 then builds the top candidate, the runner-up and ours. Proposers that arrive at our shape
 are a result too: the README says so, next to the alternatives that lost and why.
 
+Calibration, measured 2026-10-16 on Mesa 0019 at `3b1fece6ff5`
+(`spikes/upstream-repro/venus-sync-count/alternatives-brief.md`, written as the bug was understood
+before the maintainer's fix): all four blind proposers reached the maintainer's shape, one with a
+helper body identical to theirs, and the judge ranked our two-commit fix last as patching
+consequences. Rerun it when the procedure or its lenses change.
+
 When a maintainer rewrites one of our patches, the difference becomes a rule in this section,
 written as a rule; a rule that applies to every patch also becomes a lens.
 
