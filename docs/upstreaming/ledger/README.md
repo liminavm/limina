@@ -35,6 +35,23 @@ regressing commit, prior art, focused alternatives, discriminating tests, packag
 | `disp` | `upstream-now` / `upstream-after-cleanup` / `carry` (limina/macOS-specific) / `drop` |
 | `notes` | free text, keep short; long findings go in a section below the table |
 
+## Keeping it current
+
+A ledger is current when it has a row for every commit on its fork's pinned branch.
+`cargo xtask ledger` (`scripts/patch-audit/check-ledger.sh`) checks that: for each file that opens
+with a `<!-- ledger-check: dep=… -->` marker, it lists `base..rev` from the manifest pin and reports
+each commit whose subject the file does not contain verbatim. `--skeleton` prints those commits as
+rows, with subject, files and DIAG flag filled and the judgment left empty. The marker can also
+name another manifest (virglrenderer is pinned by virglrs), a base the manifest does not record,
+and the paths that count (virglrenderer's branch also carries the Rust rewrite).
+
+Bring the ledger along whenever a pin moves (`../fork-rebase-acceptance.md`, step 6). The
+pre-push hook warns when a pushed pin bump leaves rows missing. It does not refuse the push,
+because the check needs every fork's tree deep enough to hold its base. The 2026-10-16 audit
+found the ledger four rebase rounds behind: about 366 commits had no row, every rebased file
+cited SHAs that no longer existed, and three rows described commits that had left their branch
+without a word. None of that was visible from the ledger itself.
+
 ## Phases
 
 - **Phase 0 — mechanical skeleton** (`build-ledger.py`): subjects, files, DIAG flags.

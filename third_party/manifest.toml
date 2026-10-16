@@ -52,6 +52,7 @@ repo = "https://github.com/liminavm/imago.git"
 upstream = "https://gitlab.com/hreitz/imago.git"
 branch = "limina"
 rev = "7f4ffb3e151d445c24af91d4dd718d8b244a92ce"
+base = "6258f51cc74128e775c2fcab03b6e93ae2d2e215"
 
 # The HOST KosmicKrisp / zink-on-KK Mesa. NOT vendored by `cargo xtask vendor`: this tree lives at
 # /Volumes/mesa-cs/mesa on a case-sensitive sparse image (scripts/ensure-mesa-cs.sh), because Mesa

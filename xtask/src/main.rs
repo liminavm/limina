@@ -20,6 +20,8 @@
 //!   `pins`   — every fork pin, the tree standing in for it, and whether its remote has it;
 //!              then the pushes that would publish it (`src/pins.rs`). `--check` is the
 //!              pre-push gate.
+//!   `ledger` — check that the upstreaming ledger has a row for every pinned fork commit;
+//!              `--skeleton` drafts the missing rows (`scripts/patch-audit/check-ledger.sh`).
 //!   `worktree` — `new`/`init`/`rm` limina worktrees that build and test without touching each
 //!              other or the main checkout (`src/worktree.rs`).
 //!   `mesa`   — build the HOST Mesa (KosmicKrisp + zink-on-KK), creating the case-sensitive
@@ -128,6 +130,15 @@ enum Cmd {
     },
     /// Build the GOP KRUN_EFI firmware (the EFI boot path's, and the test suite's, default).
     Firmware,
+    /// Check that the upstreaming ledger has a row for every commit on each pinned fork branch
+    /// (wraps `scripts/patch-audit/check-ledger.sh`).
+    Ledger {
+        /// Print the untracked commits as skeleton ledger rows instead.
+        #[arg(long)]
+        skeleton: bool,
+        /// Ledgers to check (`libkrun`, `kosmickrisp`, …); all of them when omitted.
+        names: Vec<String>,
+    },
     /// Write the third-party notices About → Licenses shows (`app` does this into the bundle).
     Notices {
         /// Where to write them.
@@ -260,6 +271,13 @@ fn main() -> Result<()> {
         Cmd::Mesa { what } => mesa(what.as_deref()),
         Cmd::Build { release } => build(release),
         Cmd::Firmware => bash_script(&repo_root(), "scripts/build-krun-efi.sh", &[] as &[&str]),
+        Cmd::Ledger { skeleton, names } => {
+            let mut args = names;
+            if skeleton {
+                args.insert(0, "--skeleton".into());
+            }
+            bash_script(&repo_root(), "scripts/patch-audit/check-ledger.sh", &args)
+        }
         Cmd::Notices { out } => run(Command::new("python3")
             .current_dir(repo_root())
             .arg("scripts/gen-third-party-notices.py")
