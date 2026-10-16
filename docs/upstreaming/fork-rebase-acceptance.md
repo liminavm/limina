@@ -177,10 +177,20 @@ Then the limina side:
 1. Commit `third_party/manifest.toml`, plus `patches/mesa-guest/` when that pin moved. The
    message gives what each fork moved onto, each fix, and the suite verdict, including the flake
    and both of its rates.
-2. `cargo xtask pins --check`. The pre-push hook runs it too, and it refuses a pin no remote
-   carries.
-3. Push limina `main`.
-4. Close each PR with a comment that names the accepted rev, any fix or replay, and the tag that
+2. Bring the upstreaming ledger along in the same push (`docs/upstreaming/ledger/`, one file per
+   fork). For each fork that moved, update the file's header: the new base, the commit count, the
+   rebase date and the `pre-rebase-<date>` tag. Rewrite every SHA the file cites to its rebased
+   commit; `git range-diff` from step 2 pairs them. Record each commit that left the branch and
+   why: superseded upstream (name the upstream commit), folded into another commit, or dropped.
+   Then add a skeleton row for each new commit with
+   `cargo xtask ledger --skeleton <ledger>`. `cargo xtask ledger` must then report every ledger
+   clean. Rows are keyed by subject, so rewritten SHAs alone never show up as drift. Nothing
+   else reads the ledger, so a round that skips this step leaves the gap unnoticed.
+3. `cargo xtask pins --check`. The pre-push hook runs it too, and it refuses a pin no remote
+   carries. The hook also warns, without refusing, when a pushed pin bump leaves the ledger
+   behind.
+4. Push limina `main`.
+5. Close each PR with a comment that names the accepted rev, any fix or replay, and the tag that
    keeps the old tip.
 
 ## 7. Clean up, and say what is left behind
