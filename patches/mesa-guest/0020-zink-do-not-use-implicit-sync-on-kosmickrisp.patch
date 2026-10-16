@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vandomas <vandcim@gmail.com>
 Date: Thu, 27 Aug 2026 15:58:43 +0300
-Subject: [PATCH 20/21] zink: do not use implicit sync on kosmickrisp
+Subject: [PATCH 20/23] zink: do not use implicit sync on kosmickrisp
 
 kosmickrisp is a mesa driver, it just never got added to the list. Metal
 has no implicit sync to work around anyway, so the empty submit and the

@@ -71,7 +71,8 @@ that exposes framebuffer fetch; Ice Lake anv does not, so no run covers it.
 Host: Fedora 44, Intel Iris Plus G7 (Ice Lake), system anv from Fedora mesa 26.1.8 as the Vulkan
 driver; zink from the Mesa under test. "Venus" rows run zink and venus from the Mesa under test in
 the rig's QEMU 10.2 + virglrenderer 1.3.0 guest, on the same host anv. "+0001" is the first
-commit alone, "+series" all three (`86968e1a8f7`).
+commit alone, "+series" all three: `86968e1a8f7` on `92b45bd0f2e`, and the branch as sent
+(`e12c40e5f57`) on `af2f67b2b36`.
 
 | Mesa (zink) | Driver | Modes | Result |
 |---|---|---|---|
@@ -87,9 +88,25 @@ commit alone, "+series" all three (`86968e1a8f7`).
 | +0001 | anv | `mrt3` | **COLOR2 blue, green, blue**, 3/3 |
 | +0001 and 0003 without 0002 | anv | `mrt3` | **COLOR2 blue, green, blue**, 3/3; the other modes correct |
 | +series | anv | `color`, `zs`, `flush`, `rebind`, `mrt`, `mrt-rebind`, `mrt3` | correct, 5/5 each |
+| `main` af2f67b2b36 | anv | all but `zs` | SIGSEGV after ~4395 "Caught recursion" lines, 3/3 each |
+| `main` af2f67b2b36 | anv | `zs` | **SIGABRT**, `validate_atoms` assertion (below), 3/3 |
+| +series on af2f67b2b36 | anv | `flush`, `mrt`, `mrt3` | correct, 5/5 each |
+| +series on af2f67b2b36 | anv | `color`, `zs`, `rebind`, `mrt-rebind` | **SIGABRT**, `validate_atoms` assertion, 5/5 each |
+| `limina-guest` (26.2.5 + the series) | anv | all seven | correct, 5/5 each |
 
 Measured 2026-10-08 (`color`, `zs`, venus, lavapipe) and 2026-10-16 (the rest); `main` `b39d173ca93`
 gave the same `color` results on 2026-10-05.
+
+**On `af2f67b2b36` every shadow blit started by a draw aborts a debug build**, with or without the
+series: `validate_atoms()` asserts `ctx->in_rp || zink_is_atom_dirty(ctx, ZINK_ATOM_RENDERPASS)`
+(`zink_draw.cpp`) in the u_blitter draw nested in `zink_draw_atoms()` → `zink_batch_rp()` →
+`begin_rendering()` → `zink_render_attachment_shadow()`, because the outer draw has already consumed
+its renderpass atom. The assertion came with `769b356b5b6` ("zink: emit the draw synchronization and
+the renderpass as atoms", !45263, merged 2026-10-16); it is a separate bug the series does not touch.
+Main reaches it only in `zs`, since the other modes recurse first; the series removes the recursion,
+so draw-started shadows reach it too. Shadows started by `glFlush` (`flush`, `mrt`, `mrt3`) run from
+`zink_flush_clears()` and pass. Release builds compile the assertion out; their pixels on this base
+are unmeasured.
 
 Under gdb (`mesa_glthread=false GALLIUM_THREAD=0`, a breakpoint where `begin_rendering()` masks
 the shadow request): on `mrt` with 0001 alone, `transient_attachments` goes from `0x3` to `0x1`
@@ -130,9 +147,10 @@ share one `valid` flag.
 
 ## As sent
 
-Branch `upstream/zink-msrtt-shadow` in `/Volumes/mesa-cs/mesa-upstream` (a worktree at
-`/Volumes/mesa-cs/mesa-zink-msrtt`), three commits on `main` `92b45bd0f2e`, exported to `series/`;
-the tree is the one measured as +series. 0001 is also on `upstream/guest-2026-10`.
+Branch `zink-msrtt-shadow` on `gitlab.freedesktop.org/kov/mesa` (local branch of the same name
+in `/Volumes/mesa-cs/mesa-upstream`), three commits on `main` `af2f67b2b36`, exported to `series/`;
+the rebase applied cleanly. `upstream/zink-msrtt-shadow` keeps the same commits on `92b45bd0f2e`,
+the base piglit and gdb measured. The guest branch `limina-guest` carries all three.
 
 - 0001 `Fixes: 82add9f2e99` ("zink: avoid recursion during msrtss blits from flushing clears"):
   that commit added the clear save/restore around the replicate blit but left the shadowed
@@ -151,6 +169,7 @@ the tree is the one measured as +series. 0001 is also on `upstream/guest-2026-10
 Points for the MR description: the three bugs and their order of dependence (0001 exposes 3;
 0003 needs 2 for multiple cleared attachments); the reproducer and its modes, before and after;
 the `zink_blit()` precedent for 0001; why 0003 populates before reducing instead of restoring
-derived state; piglit unchanged; observed in the wild as a browser renderer process crash. Review:
+derived state; piglit unchanged; the `validate_atoms` assertion draw-started shadows hit on current
+main, which the reproducer's `color` mode shows once the series is applied; observed in the wild as a browser renderer process crash. Review:
 zink is maintained by the author of the commits named above (`82add9f2e99`, `635f0c5f4fe`,
 `b122c3eaa9e`).

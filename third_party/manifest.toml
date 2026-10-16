@@ -87,7 +87,7 @@ tree = "/Volumes/mesa-cs/mesa-metal-guest"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-guest"
-rev = "4ea3613b0903913e55127828ae6fbcd1da1246f7"
+rev = "0642e0178cecf448401b86258b39218d5433d791"
 base = "mesa-26.2.5"
 tree = "/Volumes/mesa-cs/mesa-guest"
 

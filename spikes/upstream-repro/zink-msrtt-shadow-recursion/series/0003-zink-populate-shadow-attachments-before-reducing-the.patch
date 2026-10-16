@@ -1,4 +1,4 @@
-From 86968e1a8f7e1150147bf9081058c55fd9a4084a Mon Sep 17 00:00:00 2001
+From e12c40e5f57c817c347faf39eb3dfed46cdc4d13 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Fri, 16 Oct 2026 16:58:58 -0300
 Subject: [PATCH 3/3] zink: populate shadow attachments before reducing the fb
@@ -31,10 +31,10 @@ Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
  1 file changed, 15 insertions(+)
 
 diff --git a/src/gallium/drivers/zink/zink_context.c b/src/gallium/drivers/zink/zink_context.c
-index a5323ee630f..6f75d6f49fc 100644
+index 727022f8d85..5c0cddeaf10 100644
 --- a/src/gallium/drivers/zink/zink_context.c
 +++ b/src/gallium/drivers/zink/zink_context.c
-@@ -3754,6 +3754,21 @@ zink_flush_clears(struct zink_context *ctx)
+@@ -3773,6 +3773,21 @@ zink_flush_clears(struct zink_context *ctx)
     bool queries_disabled = ctx->queries_disabled;
     bool has_swapchain = ctx->has_swapchain;
     bool blitting = ctx->blitting;
