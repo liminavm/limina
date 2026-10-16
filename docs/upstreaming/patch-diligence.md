@@ -76,16 +76,24 @@ Search the tracker, the mailing list and the history for the specific bug and fo
   Notes return 401 on REST, but `/-/issues/<n>/discussions.json` and
   `/-/merge_requests/<n>/discussions.json` serve them. More craft in `ledger/README.md`.
 
-## 5. Look for a more focused fix
+## 5. Look for the fix a maintainer would write
 
-The first working fix is a candidate, not the answer. Before sending it:
+The first working fix is a candidate, not the answer. A fix can work and still have the wrong
+shape, and a maintainer then rewrites it. Look for that shape before sending:
 
 - **State what the fix changes besides the bug.** 0004's first version pinned the driver for
   the rest of the process, which ended unloading, something upstream keeps on purpose.
-- **List the alternatives** and judge each on: scope (only the processes or threads that
-  need it), preserved behaviour, races, leaks, portability, and how it reads to a reviewer.
-  Reject infeasible ones with the reason. That reason goes in the MR, because reviewers
-  propose the same ideas.
+- **Fix the decision, not its consumers.** When several stages act on one decision and
+  disagree, make the decision give the same answer everywhere instead of reconciling each
+  stage. A fix that needs a follow-up commit for a sibling stage is the signal. Mesa 0019:
+  venus judged whether a signal semaphore holds a sync fd from its current payload, which the
+  waits change mid-submission. Correcting the sync count, then the pNext arrays, fixed two
+  consumers; judging by the permanent payload, which a temporary import never replaces, fixed
+  them all in one place.
+- **Get independent alternatives** (below), then **list them all** and judge each on: scope
+  (only the processes or threads that need it), preserved behaviour, races, leaks,
+  portability, and how it reads to a reviewer. Reject infeasible ones with the reason. That
+  reason goes in the MR, because reviewers propose the same ideas.
 - **Look for the mechanism the platform already provides for this exact problem.** C++
   `thread_local` destructors have 0004's problem, so the C library solves it
   (`__cxa_thread_atexit_impl` holds the library while a teardown is pending). A
@@ -96,6 +104,37 @@ The first working fix is a candidate, not the answer. Before sending it:
   back in (0004 clears its pointer before freeing).
 - **Choose fallbacks per platform with the user.** The trade-off is theirs. 0004 takes a small
   leak and a narrow race over a pin where the hook is missing.
+
+### Independent alternatives
+
+Whoever wrote the fix, or has read it, reviews it instead of looking for the cause. So the
+alternatives come from proposers who have never seen it:
+
+1. **A brief without the fix.** It holds the mechanism from §2, every path that reaches the
+   faulty code, the invariant that breaks, the reproducer with its verdicts, and the upstream
+   SHA. It holds nothing that names or points at our fix: not the diff, not our branch, not
+   the reproducer README or the ledger row.
+2. **A tree that holds only upstream**: a worktree at that SHA with no other refs. Our forks'
+   clones carry the fix on their branches, so a proposer must not work in them. The shallow
+   worktrees on `/Volumes/mesa-cs` are enough for recent authors of the touched files; older
+   history needs the full clone on the upstream repro rig.
+3. **One proposer per lens**, each independent:
+   - the invariant that breaks, restored where no other code has to know (the rule above);
+   - the idiom of the people who maintain the touched files, from how they fixed similar bugs;
+   - the smallest diff, preferring to remove state or conditions over adding them;
+   - the mechanism the subsystem already has for this problem.
+4. **A judge that cannot tell which fix is ours.** It gets every candidate, ours included,
+   under neutral labels, and ranks them on: cause or consequences, how many places must stay
+   in agreement afterwards, behaviour changed besides the bug, whether it reads like the
+   surrounding code, size, and correctness on every path in the brief.
+5. **A skeptic per top-two candidate** looks for a call path, ordering or input that breaks it.
+   What it finds becomes a reproducer mode in §6.
+
+§6 then builds the top candidate, the runner-up and ours. Proposers that arrive at our shape
+are a result too: the README says so, next to the alternatives that lost and why.
+
+When a maintainer rewrites one of our patches, the difference becomes a rule in this section,
+written as a rule; a rule that applies to every patch also becomes a lens.
 
 ## 6. Prove each claim with a test that could fail
 
