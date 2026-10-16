@@ -353,7 +353,10 @@ load-bearing parts:
   a position lands on, so the echo is treated as the **source of truth, not a test**: 150 ms
   after the last position (and the last relative push, which legitimately moves the guest's
   pointer) the tick reads which slot shows the cursor (`echo::shown_slot`, preferring the sent
-  slot when a sprite straddles a seam), remembers it, and logs every change —
+  slot when a sprite straddles a seam, and ignoring a plane whose pointer lies off its own
+  scanout — a guest that draws its own cursor on one display and uses the plane on the next
+  lights the neighbour's plane while the hotspot is still home, `CursorEcho::shows_pointer`),
+  remembers it, and logs every change —
   `display: the guest's cursor is on slot N … (was M); we sent slot S unit (u,v)` — which is
   how a stock guest with two displays shows us its own mapping instead of crashing. A readable
   disagreement (`echo::verdict`: plane on the sent slot but more than 3 px from the pixel;

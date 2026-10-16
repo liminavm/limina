@@ -49,6 +49,19 @@ impl CursorEcho {
         h: 0,
         seq: 0,
     };
+
+    /// Whether this plane says the pointer is on its scanout. A lit plane whose pointer lies
+    /// off the scanout is a neighbour's sprite reaching across the seam, not the pointer: a
+    /// guest that composites its own cursor on one display and uses the plane on the next
+    /// lights the plane while the hotspot is still on the first (issue #21: `(-10,555)` on
+    /// slot 1, the pointer held 8 px short of the seam on slot 0). A plane on a scanout with
+    /// no mode yet cannot be judged, so it still counts.
+    pub(crate) fn shows_pointer(&self) -> bool {
+        self.visible
+            && (self.w == 0
+                || self.h == 0
+                || ((0..=self.w as i32).contains(&self.x) && (0..=self.h as i32).contains(&self.y)))
+    }
 }
 
 /// Written by the control-channel reader thread, read by the main thread.
@@ -70,7 +83,7 @@ pub(crate) fn shown_point(echo: &[CursorEcho; MAX_SCANOUTS]) -> Option<(usize, i
     let mut shown = echo
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.visible && c.w > 0 && c.h > 0);
+        .filter(|(_, c)| c.shows_pointer() && c.w > 0 && c.h > 0);
     let (slot, c) = shown.next()?;
     shown.next().is_none().then_some((slot, c.x, c.y))
 }
@@ -177,7 +190,7 @@ pub(crate) fn verdict(
     let elsewhere: Vec<(usize, (i32, i32))> = echo
         .iter()
         .enumerate()
-        .filter(|(s, c)| *s != slot && c.visible)
+        .filter(|(s, c)| *s != slot && c.shows_pointer())
         .map(|(s, c)| (s, (c.x, c.y)))
         .collect();
     if !e.visible {
@@ -218,12 +231,13 @@ pub(crate) fn verdict(
 /// [`verdict`] judges, computed in one place so the sender and the checker cannot differ.
 /// The slot the guest's cursor is on right now: `prefer` when a plane is visible there (a
 /// sprite straddling a seam is on two planes, and the one we sent is the one we mean),
-/// otherwise the first slot showing one, `None` when the guest shows no cursor at all.
+/// otherwise the first slot showing one, `None` when the guest shows no cursor at all. Only
+/// planes whose pointer is on their own scanout count ([`CursorEcho::shows_pointer`]).
 pub(crate) fn shown_slot(prefer: usize, echo: &[CursorEcho; MAX_SCANOUTS]) -> Option<usize> {
-    if echo[prefer].visible {
+    if echo[prefer].shows_pointer() {
         return Some(prefer);
     }
-    echo.iter().position(|c| c.visible)
+    echo.iter().position(CursorEcho::shows_pointer)
 }
 
 /// Where the captured pointer is, as the captured estimate re-bases onto it.
@@ -376,6 +390,25 @@ mod tests {
                 scanout: (2048, 1328)
             })
         );
+    }
+
+    /// Issue #21: the guest draws its own cursor on slot 0 (no plane) and uses the plane on
+    /// slot 1, so a sprite pressed against the held seam lights slot 1's plane with the pointer
+    /// ten pixels left of its column 0. That pointer is on slot 0: the read must not call it a
+    /// crossing, and the position we sent names the display instead.
+    #[test]
+    fn a_plane_whose_pointer_is_off_its_scanout_is_a_straddle_not_a_crossing() {
+        let echo = rig(CursorEcho::NONE, shown(-10, 555, 2048, 1328));
+        assert_eq!(shown_slot(0, &echo), None);
+        assert_eq!(
+            locate(0, &echo, Some(&reported()), Some((20_900.0, 10_500.0))),
+            Some(Located::Sent {
+                slot: 0,
+                unit: (20_900.0 / 21_000.0, 10_500.0 / 32_767.0)
+            })
+        );
+        assert_eq!(shown_point(&echo), None);
+        assert_eq!(verdict(0, (3830.0, 1300.0), &echo), Ok(None));
     }
 
     /// Without a report, or in its dead space, nothing is located rather than something guessed.
