@@ -84,3 +84,23 @@ KosmicKrisp's code generation: KosmicKrisp compiles with Metal's fast math, so t
 NIR splits are fused again. ggml's q8_1 integer-dot path (MMVQ) needs
 `integerDotProduct4x8BitPackedSignedAccelerated`, which KosmicKrisp does not advertise, so
 `GGML_VK_DISABLE_MMVQ` changes nothing here.
+
+Advertising it is a one-line change, and wrong to make. Metal has no packed 8-bit dot product, so
+NIR lowers each one to four extracts, multiplies and adds. ggml then uses its q8_1 integer kernels
+everywhere: MMVQ for n up to 8 and `mul_mmq` above. Measured 2026-10-16, same shapes, µs per run:
+
+| kernel        | float path | integer dot |
+| ------------- | ---------: | ----------: |
+| iq4_xs n=1    |        432 |         303 |
+| iq4_xs n=8    |       6060 |        1442 |
+| q8_0 n=2      |        753 |         453 |
+| q4_0 n=1      |        203 |         240 |
+| iq1_s n=4     |        795 |        3066 |
+| q4_0 n=512    |      17026 |       59969 |
+| iq3_s n=512   |      20208 |      289168 |
+
+Geometric mean 0.77x over 75 shapes (n=1 0.88x, n=512 0.36x). `mul_mmq` also returns NaN in 20
+of 2272 MUL_MAT cases (n=9 to 16; q4_0, q4_1, q5_0, q5_1, q8_0, mxfp4), a KosmicKrisp miscompile
+still to find. What the integer path offers is IQ4_XS and q8_0 at small batches. Taking only that
+part would need a per-type MMVQ rule for Apple in ggml (`ggml_vk_should_use_mmvq`), the fixed
+`mul_mmq` kept off, and a driver that advertises the feature without making ggml prefer it.
