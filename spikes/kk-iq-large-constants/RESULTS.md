@@ -35,27 +35,41 @@ test-backend-ops MUL_MAT and GET_ROWS match the CPU throughout. Llama-3.2-1B tok
 guest on the Metal transport (Ollama, greedy, three prompts): IQ3_M 20.6 → 110 t/s (CPU 65),
 IQ4_XS unchanged at 96 t/s (CPU 114), outputs as before.
 
-Still slower than it should be: IQ4_XS, and every IQ type at n=2..8 (iq4_xs 1652 µs at n=2 against
-q4_0's 282). None of those kernels uses scratch. ggml's q8_1 integer-dot path (MMVQ), which it uses
-for small batches elsewhere, needs `integerDotProduct4x8BitPackedSignedAccelerated`, which
-KosmicKrisp does not advertise, so `GGML_VK_DISABLE_MMVQ` changes nothing here.
+## Hinted loops, unrolled within a budget
 
-What keeps them slow is loops KosmicKrisp never unrolls: ggml writes `[[unroll]]` loops bounded by
-specialization constants (`NUM_COLS`, `NUM_ROWS`), and KosmicKrisp runs no `nir_opt_loop_unroll` on
-compute shaders, so arrays like `sum[NUM_COLS]` stay indexed by a loop counter (an if-else tree at
-32 bytes or less, scratch above). Running the unroller before that lowering honours the SPIR-V
-`Unroll` hint (NIR unrolls a hinted loop of known trip count whatever `max_unroll_iterations` says),
-and it is not a global win, measured the same day (µs, before → after):
+ggml writes `[[unroll]]` loops bounded by specialization constants (`NUM_COLS`, `NUM_ROWS`, the
+mul_mm tile sizes), and KosmicKrisp ran no loop unrolling on compute shaders, so arrays indexed by
+those counters stayed in if-else trees (32 bytes or less) or scratch. NIR unrolls a hinted loop of
+known trip count whatever `max_unroll_iterations` says, so honouring every hint is all or nothing,
+and all makes ggml's tiled mul_mm 4x slower. limina-kk `kk: unroll the loops the source asks to,
+while they stay small` honours a hint only while the loop's NIR cost times its trip count is at
+most 512, re-measured after each round of unrolling; no unhinted loop is unrolled.
 
-| kernel             | before | unrolled |
-| ------------------ | -----: | -------: |
-| iq4_xs n=2         |   1641 |      907 |
-| iq4_xs n=8         |   7053 |     2163 |
-| iq3_s n=8          |   4233 |     1575 |
-| iq2_s n=8          |   4822 |     2064 |
-| q4_0 n=2           |    283 |      354 |
-| q4_0 n=512 (mul_mm)|  65539 |   281669 |
+The budget came from a sweep (64 to 4096; 512 and 768 best). Measured 2026-10-16, MUL_MAT m=4096
+k=14336, µs per run:
 
-The tiled matmul behind prompt processing gets 4x slower (its scratch arrays become registers),
-whatever the iteration cap. Sending every indirectly indexed temp to scratch instead of if-else
-trees is worse on both kinds of kernel. A fix has to choose per loop.
+| kernel        | before | budget 512 |
+| ------------- | -----: | ---------: |
+| q4_0 n=512    |  64948 |      17015 |
+| iq4_xs n=512  |  65734 |      17593 |
+| f16 n=512     | 261452 |      17252 |
+| iq4_xs n=2    |   1656 |        558 |
+| iq4_xs n=4    |   3796 |       3238 |
+| iq4_nl n=8    |   3837 |       1372 |
+| q4_0 n=8      |   1346 |        996 |
+| iq1_m n=4     |    910 |       1817 |
+| q8_0 n=2      |    603 |        745 |
+
+Geometric mean over 60 shapes: 1.58x; over n=1..8 alone, 1.28x. test-backend-ops still matches the
+CPU in all 18646 cases. Llama-3.2-1B prompt processing (llama-bench pp512): Q4_0 445 → 1543 t/s,
+IQ4_XS 435 → 1482, IQ3_M 421 → 1358 (CPU Q4_0: 636). Token generation is unchanged.
+
+## What is left
+
+IQ4_XS token generation (n=1) stays at 431 µs per product against q4_0's 190, and below the CPU
+end to end (95 t/s against 118). The kernel looks up every 4-bit weight in a 16-entry table in
+threadgroup memory, as iq4_nl does (350 µs); q4_0 has no table. That is ggml's shader, not
+KosmicKrisp's code generation: KosmicKrisp compiles with Metal's fast math, so the multiply-adds
+NIR splits are fused again. ggml's q8_1 integer-dot path (MMVQ) needs
+`integerDotProduct4x8BitPackedSignedAccelerated`, which KosmicKrisp does not advertise, so
+`GGML_VK_DISABLE_MMVQ` changes nothing here.
