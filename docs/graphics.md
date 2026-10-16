@@ -857,7 +857,13 @@ movie) and `pts_ns` (the frame's time in it). It is lossy, so it complements `im
 replaces it: pixel-exact oracles (frame-number colours, tear detection by comparison) stay on
 PNGs. It makes the same GPU copy per frame as `images`, with the same shown-ack cost, plus the
 encoder's GPU time; one thread appends the frames in present order (`frame_capture/video.rs`).
-A frame the encoder is not ready for is `queue_full`. The movies are finished when the capture
+A frame the encoder is still not ready for after 100 ms is `queue_full`; the wait is the video
+thread's, so the main thread never feels it. Measured 2026-10-16 on the M1 Max, 20 s of
+vkcube at 60 fps on a 2560x1440 display, the same stretch per mode: `video` 9.6 MB, 1198 of 1200
+frames in the movie, main thread 273 µs p50 / 3.0 ms p99 / 12.8 ms max per frame; `images` 3.0 GB,
+87 µs / 136 µs / 4.0 ms; `timing` 45 µs / 256 µs / 1.3 ms. All three held 59.3–59.9 presented fps.
+The video mode's heavier tail lands on the main thread, so keep it away from a pacing measurement,
+as the images mode. The movies are finished when the capture
 stops: their bytes reach the summary only then, and a stop that cannot finish them in time (at
 process exit it waits 3 s) counts them in `incomplete` and leaves them as written so far.
 

@@ -49,6 +49,11 @@ const TIMESCALE: i32 = 1_000_000;
 /// above the default; this keeps a desktop's text readable at a few MB a minute.
 const QUALITY: f64 = 0.75;
 
+/// How long a frame waits for the encoder to take more before it is `queue_full`. The wait is
+/// on the video thread, so the main thread never feels it: frames queue behind it in the
+/// capture buffers, which is the slack they exist for.
+const READY_WAIT: Duration = Duration::from_millis(100);
+
 /// How long finishing one movie may take before it is left as it is.
 const FINISH: Duration = Duration::from_secs(10);
 
@@ -295,11 +300,15 @@ impl Movie {
     }
 
     fn append(&mut self, t_ns: u64, frame: &Frame) -> Result<Placed, Reason> {
+        let until = Instant::now() + READY_WAIT;
         // SAFETY: plain property reads on our own input and writer.
-        let ready = unsafe { self.input.isReadyForMoreMediaData() };
-        if !ready {
-            // Appending now would raise; the encoder is behind, as the PNG path's queue can be.
-            return Err(Reason::QueueFull);
+        while !unsafe { self.input.isReadyForMoreMediaData() } {
+            if Instant::now() >= until {
+                // Appending now would raise; the encoder is behind, as the PNG path's queue
+                // can be.
+                return Err(Reason::QueueFull);
+            }
+            std::thread::sleep(Duration::from_millis(1));
         }
         // SAFETY: as above; the pool exists once writing has started.
         let Some(pool) = (unsafe { self.adaptor.pixelBufferPool() }) else {
