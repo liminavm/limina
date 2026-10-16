@@ -1,4 +1,4 @@
-# Patch-audit — cross-series summary (2026-08-03)
+# Patch-audit — cross-series summary (2026-08-03, scope updated 2026-10-16)
 
 The per-patch upstreaming audit of every series limina carries, completed 2026-08-03.
 Method, schema, and research protocol: `README.md`. Per-patch verdicts and reasoning:
@@ -12,17 +12,44 @@ docs-only.
 
 ## Scope
 
-| series | patches | upstream (checked SHA) | tracker |
+As of 2026-10-16: commits on each pinned fork branch, every one of which now has a ledger row.
+Rows added on 2026-10-16 are phase-0 skeletons (unresearched first guesses), so the per-patch
+verdicts below cover only the series' state at the 2026-08-03 audit. `cargo xtask ledger`
+re-derives the commit counts.
+
+| series | commits | base | tracker |
 |---|---|---|---|
-| linux | **1** *(was 6; migrated to the fork model 2026-08-03 — base `v7.1.6`. One patch left for the DKMS tree; one replaced by an upstream backport; the blob-scanout fence **dropped 2026-08-04** after the rig measured it costing 86% of frames; and the two DRM format/modifier patches **dropped 2026-08-04**, punted to the future hardware-planes work — they addressed guest-KMS plane scanout, not the VM-output-to-Mac-display path we actually care about. Tag `limina/2026-08-04-modifiers` recovers them.)* | `gregkh/linux` (stable mirror) + dri-devel lore | lore.kernel.org |
-| kosmickrisp (KK) | 19 | mesa `84acd848` | gitlab.fd.o (Anubis) |
-| mesa (guest) | 19 | mesa `b39d173ca93` (2026-10-05) | gitlab.fd.o (Anubis) |
-| imago | 2 | `hreitz/imago` | gitlab.com |
-| mutter | ~~1~~ RETIRED | — | series removed 2026-08-03 (own compositor) |
-| virglrenderer | 58 | `956b034f` | gitlab.fd.o (Anubis) |
-| libkrun | 126 | `c652b56` (main) | github.com/libkrun/libkrun |
-| mlx | (fork) | — | `mlx.md`: post-audit rows only, unresearched |
-| **total** | **226** | | (was 227; mutter's 1 retired) |
+| linux | 2 | `v7.1.13` (`gregkh/linux` stable mirror) | lore.kernel.org |
+| kosmickrisp (host KK, `limina-kk`) | 131 | mesa main `d44453ce` | gitlab.fd.o (Anubis) |
+| kosmickrisp-guest (`metal-native-context`) | 8 | `limina-kk` pin `059715d2` | gitlab.fd.o (Anubis) |
+| mesa (guest venus, `limina-guest`) | 21 | `mesa-26.2.5` | gitlab.fd.o (Anubis) |
+| imago | 1 | `6258f51` | gitlab.com |
+| mutter | RETIRED | — | series removed 2026-08-03 (own compositor) |
+| virglrenderer (C; pinned by virglrs) | 181 C-tree (616 with the Rust rewrite) | upstream main `aafa9bd2` | gitlab.fd.o (Anubis) |
+| libkrun | 318 | `dc1a18ad` | github.com/libkrun/libkrun |
+| mlx | 2 | `ml-explore/mlx` main `b6642e6` | github.com/ml-explore/mlx |
+| **total** | **664** | | |
+
+**Superseded since 2026-08-03 (verified 2026-10-16; per-series detail in each file):**
+
+- libkrun 0029 (capset count): upstream `c5d974cd` "fix #565" is in the base. 0119's aspect-shift
+  half is fixed by upstream `766da0c7`, while its u16 clock wrap is still in the base. 0058 no
+  longer exists as a commit: its vsock-thread fix is inside `ec2aaa09` (row 0056), and its
+  eventfd half is `b767ae40`.
+- KK 0006 (depth_clip_enable) left the branch at the 2026-10-14 rebase, because base `d44453ce`
+  carries the !43421 superset. Upstream KK already advertises `VK_EXT_external_memory_metal`
+  (MTLHEAP), so the MTLHEAP work item below is done upstream; only our MTLTEXTURE handle type is
+  extra.
+- mesa 0004 (venus TLS teardown) is in 26.2.5 via `133e1af39ce`.
+- The virglrenderer `vulkan_metal.h` fixlet was fixed upstream as `aafa9bd2`, which is now the
+  base.
+- imago: the discard-truncate patch was fixed upstream in 0.2.5. The one remaining patch, the
+  EFAULT retry, conflicts with upstream 0.2.6 (`ff96e18`).
+
+The headline, send queue and action items below are the 2026-08-03 roll-up and have not been
+re-judged. Read them with the list above. Several new upstream candidates and security-relevant
+commits are flagged in the skeleton sections of `libkrun.md`, `virglrenderer.md` and
+`kosmickrisp.md`.
 
 ## Headline: what changes hands, what stays
 
