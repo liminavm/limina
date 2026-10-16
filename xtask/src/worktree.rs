@@ -9,10 +9,14 @@
 //!   worktree of the main checkout's clone, detached at the pin: objects are shared, so it sees
 //!   commits nobody has pushed yet, and it has a HEAD of its own.
 //! - What is shared on purpose, as symlinks: the test images (the harness clones them before
-//!   booting, never writes them), the Python venv, and the case-sensitive Mesa image (one host
-//!   Mesa per machine).
+//!   booting, never writes them), the trace fixtures (gitignored, read by `perf-ledger.sh` and
+//!   the replay tests), the Python venv, and the case-sensitive Mesa image (one host Mesa per
+//!   machine).
 //! - What is cloned (`cp -c`, free on APFS) so a rebuild here does not change main's: the L1 test
-//!   guest, the firmware and the trap probe under `target/`.
+//!   guest, the firmware and the trap probe under `target/`. **Only when main has them** — work
+//!   happens in worktrees, so main's `target/` is often absent — and each one it cannot clone is
+//!   named with the command that makes it, because the first thing to miss it (`cargo xtask
+//!   app`, the suite) otherwise fails a long way from here.
 //!
 //! `target/` itself is per worktree: sharing it would relink one worktree's worker under
 //! another's running suite. It is the expensive part, and `rm` deletes it with the worktree.
@@ -23,12 +27,26 @@ use anyhow::{Context, Result, bail};
 
 use crate::git;
 
-/// Build outputs that are slow to make and safe to start from main's copy.
-const CLONED_OUTPUTS: &[&str] = &[
-    "target/test-guest",
-    "target/krun-efi",
-    "target/hvf-trap-probe",
+/// Build outputs that are slow to make and safe to start from main's copy, each with what needs
+/// it and how to make it when main has none.
+const CLONED_OUTPUTS: &[(&str, &str)] = &[
+    (
+        "target/test-guest",
+        "the L1 suite needs it: scripts/build-test-guest.sh",
+    ),
+    (
+        "target/krun-efi",
+        "`cargo xtask app` and the suite need it: scripts/build-krun-efi.sh, or `cp -c` the \
+         directory from a worktree whose KRUN_EFI.gop.fd.rev is the [edk2] pin",
+    ),
+    (
+        "target/hvf-trap-probe",
+        "the trap-probe tests need it: scripts/build-hvf-trap-probe.sh",
+    ),
 ];
+
+/// Where the gitignored trace fixtures live, relative to a checkout.
+const TRACES: &str = "fixtures/traces";
 
 /// `third_party/` entries that are host-wide state, not per-tree source.
 const SHARED_THIRD_PARTY: &[&str] = &["venv-mesa", "mesa-cs.sparseimage", "epoxy-egl-prefix"];
@@ -93,8 +111,19 @@ pub fn init(wt: &Path) -> Result<()> {
             link_if_absent(&main.join(n), &wt.join(n))?;
         }
     }
-    for out in CLONED_OUTPUTS {
+    for entry in std::fs::read_dir(main.join(TRACES)).into_iter().flatten() {
+        let name = entry?.file_name();
+        let Some(n) = name.to_str() else { continue };
+        if is_shared_trace(n) {
+            link_if_absent(&main.join(TRACES).join(n), &wt.join(TRACES).join(n))?;
+        }
+    }
+    let mut missing = Vec::new();
+    for (out, remedy) in CLONED_OUTPUTS {
         let (from, to) = (main.join(out), wt.join(out));
+        if !from.exists() && !to.exists() {
+            missing.push((out, remedy));
+        }
         if from.exists() && !to.exists() {
             std::fs::create_dir_all(to.parent().unwrap())?;
             eprintln!("==> cloning {out} from the main checkout (cp -c)");
@@ -109,7 +138,16 @@ pub fn init(wt: &Path) -> Result<()> {
 
     crate::vendor(wt, false)?;
     eprintln!("    note: target/ here is this worktree's own — a first build is a full one");
+    for (out, remedy) in missing {
+        eprintln!("    MISSING {out} (the main checkout has none to clone) — {remedy}");
+    }
     Ok(())
+}
+
+/// The trace fixtures the replay tests and `perf-ledger.sh` read: the gitignored ones only, so
+/// a tracked file there (the README) is never shadowed by a link.
+fn is_shared_trace(name: &str) -> bool {
+    name.ends_with(".trace") || name.ends_with(".gfxr")
 }
 
 /// The test images and ISOs the harness finds at the repository root. Backups stay behind.
@@ -215,17 +253,22 @@ pub fn rm(root: &Path, which: &str, force: bool) -> Result<()> {
     // The links `init` made point at shared state: remove the links, never what they name, and
     // only those — the tree tracks symlinks of its own (AGENTS.md), and deleting one is a change
     // `git worktree remove` then refuses over.
-    let ours = [path.clone(), third_party].into_iter().flat_map(|dir| {
-        std::fs::read_dir(&dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .collect::<Vec<_>>()
-    });
+    let traces = path.join(TRACES);
+    let ours = [path.clone(), third_party, traces.clone()]
+        .into_iter()
+        .flat_map(|dir| {
+            std::fs::read_dir(&dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .collect::<Vec<_>>()
+        });
     for p in ours {
         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-        let made_by_init = is_shared_image(name) || SHARED_THIRD_PARTY.contains(&name);
+        let made_by_init = is_shared_image(name)
+            || SHARED_THIRD_PARTY.contains(&name)
+            || (p.parent() == Some(traces.as_path()) && is_shared_trace(name));
         if made_by_init && p.symlink_metadata()?.file_type().is_symlink() {
             std::fs::remove_file(&p)?;
         }
@@ -245,7 +288,14 @@ pub fn rm(root: &Path, which: &str, force: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_shared_image;
+    use super::{is_shared_image, is_shared_trace};
+
+    #[test]
+    fn shares_the_ignored_traces_not_the_tracked_readme() {
+        assert!(is_shared_trace("glmark2-build.trace"));
+        assert!(is_shared_trace("vkcube.gfxr"));
+        assert!(!is_shared_trace("README.md"));
+    }
 
     #[test]
     fn shares_test_images_not_backups() {

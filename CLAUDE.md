@@ -55,7 +55,9 @@ right tool — not treat upstream as immutable:
     Recipe: `docs/dev-onboarding.md` §1.
   - **Worktrees: `cargo xtask worktree new <name>`** (`init` inside one made by hand, `rm` to
     remove). Forks become worktrees of main's clones detached at the pin, so unpushed commits are
-    visible; images, venv and the Mesa image are shared; `target/` is per worktree.
+    visible; images, trace fixtures, venv and the Mesa image are shared; `target/` is per
+    worktree. **Act on its closing `MISSING` lines at once** (main usually has no `target/` to
+    clone the firmware and test guest from) — not when `cargo xtask app` or the suite trips on them.
 - **edk2 (the KRUN_EFI boot firmware)** — **fork model**:
   `github.com/liminavm/edk2` (`limina` branch; base is `slp/edk2@krun-support`, the tree
   krunkit's blob is built from), pinned by `[edk2]` in `third_party/manifest.toml` but **not

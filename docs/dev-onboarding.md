@@ -122,10 +122,15 @@ cargo xtask worktree rm <name>                    # forks, symlinks and target/ 
 
 In a worktree the forks are **worktrees of the main checkout's clones**, detached at the pin:
 objects are shared, so unpushed commits are already there, and each has its own HEAD. The
-test images, the Python venv and the Mesa sparse image are shared as symlinks (the harness
-clones images before booting them); `target/test-guest`, `target/krun-efi` and the trap probe
-are APFS clones. `target/` is the worktree's own — the first build is a full one, and `rm`
-reaps it. The suite stays one-at-a-time per host whichever worktree starts it.
+test images, the trace fixtures, the Python venv and the Mesa sparse image are shared as
+symlinks (the harness clones images before booting them); `target/test-guest`,
+`target/krun-efi` and the trap probe are APFS clones **of main's copies, when main has them**.
+Work happens in worktrees, so main's `target/` is usually absent: `new` then ends with a
+`MISSING <output> — <what needs it>: <how to make it>` line per gap. **Read those lines before
+you need the output** — the firmware is what `cargo xtask app` and the suite fail on. The quick
+fix is `cp -c` from a sibling worktree, after checking that its `KRUN_EFI.gop.fd.rev` is the
+`[edk2]` pin. `target/` is the worktree's own — the first build is a full one, and `rm` reaps
+it. The suite stays one-at-a-time per host whichever worktree starts it.
 
 ## 1.5. Host Mesa (once per machine)
 
