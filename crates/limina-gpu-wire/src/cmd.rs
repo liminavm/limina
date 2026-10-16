@@ -181,6 +181,18 @@ pub const MAX_SAMPLE_POSITIONS: usize = 16;
 /// [`Reply::done`] once the host has written the reply.
 pub const REPLY_DONE: u32 = 1;
 
+/// [`DeviceInfo::features`] bits: optional commands a GPU host takes without a [`VERSION`]
+/// change. A guest checks the bit before sending one; a host without it answers `UnknownOp`.
+///
+/// [`VERSION`]: crate::VERSION
+pub mod feature {
+    /// [`CreateLibraryData`](super::CreateLibraryData).
+    pub const LIBRARY_DATA: u32 = 1 << 0;
+}
+
+/// Most bytes a [`CreateLibraryData`] may hand the host.
+pub const MAX_LIBRARY_DATA: u64 = 256 << 20;
+
 /// [`SyncObject`] kinds.
 pub mod sync_kind {
     pub const FENCE: u32 = 0;
@@ -280,7 +292,8 @@ wire! {
         /// The host's macOS version (`NSProcessInfo.operatingSystemVersion`): Metal's behaviour
         /// changes with it, and KosmicKrisp works around some of it by version.
         os_version: [u32; 3],
-        _pad: u32,
+        /// `feature` bits. Hosts before the first feature wrote 0 here.
+        features: u32,
     }
 
     /// The fields of an `MTLTextureDescriptor` the guest chooses.
@@ -382,6 +395,18 @@ wire! {
         /// `MTLMathFloatingPointFunctions`.
         math_fp_functions: u32,
         _pad: u32,
+        reply: BufRef,
+    }
+
+    /// A library from a compiled `.metallib` (`newLibraryWithData:`), `data_len` bytes of at
+    /// most `MAX_LIBRARY_DATA`: at `data` in an arena, or, with `data` none, following the
+    /// command. The host keeps the bytes in the object's record, so a restore needs no arena.
+    /// Only for a host with `feature::LIBRARY_DATA`.
+    struct CreateLibraryData = CREATE_LIBRARY_DATA(0x010b) {
+        handle: u32,
+        _pad: u32,
+        data_len: u64,
+        data: BufRef,
         reply: BufRef,
     }
 

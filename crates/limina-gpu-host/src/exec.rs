@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use block2::RcBlock;
+use dispatch2::DispatchData;
 use limina_gpu_wire::cmd::{self, BufRef, Command, Feedback, REPLY_DONE, Reply, op};
 use limina_gpu_wire::ring::{Consumer, Error, RingControl};
 use objc2::rc::Retained;
@@ -545,6 +546,7 @@ fn is_create(op: u16) -> bool {
             | op::CREATE_TEXTURE_VIEW
             | op::CREATE_SAMPLER
             | op::CREATE_LIBRARY
+            | op::CREATE_LIBRARY_DATA
             | op::CREATE_RENDER_PIPELINE
             | op::CREATE_COMPUTE_PIPELINE
             | op::CREATE_DEPTH_STENCIL
@@ -1116,6 +1118,13 @@ impl Executor {
                 let (src, _) = take(rest, c.source_len)?;
                 (c.handle, Some(c.reply), self.create_library(&c, src))
             }
+            op::CREATE_LIBRARY_DATA => {
+                let (c, rest) = arg::<cmd::CreateLibraryData>(p)?;
+                check(c.data.is_none())?;
+                let len = u32::try_from(c.data_len).map_err(|_| Error::BadValue)?;
+                let (data, _) = take(rest, len)?;
+                (c.handle, Some(c.reply), self.create_library_data(&c, data))
+            }
             op::CREATE_RENDER_PIPELINE => {
                 let (c, rest) = arg::<cmd::CreateRenderPipeline>(p)?;
                 let (v, rest) = take(rest, c.vertex_name_len)?;
@@ -1314,6 +1323,14 @@ impl Executor {
 
     fn exec(&mut self, opcode: u16, p: &[u8]) -> R {
         match opcode {
+            op::CREATE_LIBRARY_DATA if !arg::<cmd::CreateLibraryData>(p)?.0.data.is_none() => {
+                // Filed with its bytes inline, so the record replays without the arena.
+                let c = arg::<cmd::CreateLibraryData>(p)?.0;
+                match self.library_data_inline(&c) {
+                    Ok(inline) => self.exec(opcode, &inline),
+                    Err(e) => self.answer(c.reply, Err(e)),
+                }
+            }
             opcode if is_create(opcode) => {
                 let (handle, reply, made) = self.make(opcode, p)?;
                 let r = self.file(handle, opcode, p, &named(opcode, p)?, made);
@@ -2065,6 +2082,41 @@ impl Executor {
         }
     }
 
+    /// `c` with the bytes it names in an arena following it instead.
+    fn library_data_inline(&self, c: &cmd::CreateLibraryData) -> Result<Vec<u8>, Error> {
+        check(c.data_len != 0 && c.data_len <= cmd::MAX_LIBRARY_DATA)?;
+        let (_a, src) = self.host(c.data, c.data_len, 1)?;
+        let head = cmd::CreateLibraryData {
+            data: BufRef::NONE,
+            ..*c
+        };
+        let mut out = Vec::with_capacity(size_of_val(&head) + c.data_len as usize);
+        out.extend_from_slice(cmd::bytes_of(&head));
+        // SAFETY: `data_len` bytes inside the arena, checked by `host`; the guest may be writing
+        // them, which makes the library it gets wrong, not this copy unsound.
+        out.extend_from_slice(unsafe { std::slice::from_raw_parts(src, c.data_len as usize) });
+        Ok(out)
+    }
+
+    fn create_library_data(
+        &mut self,
+        c: &cmd::CreateLibraryData,
+        data: &[u8],
+    ) -> Result<(Object, [u64; 6]), Error> {
+        self.new_handle(c.handle)?;
+        check(!data.is_empty() && data.len() as u64 <= cmd::MAX_LIBRARY_DATA)?;
+        match self
+            .device
+            .newLibraryWithData_error(&DispatchData::from_bytes(data))
+        {
+            Ok(l) => Ok((Object::Library(l), [0; 6])),
+            Err(e) => {
+                log::warn!("metallib load failed: {}", e.localizedDescription());
+                Err(Error::ShaderCompile)
+            }
+        }
+    }
+
     fn create_render_pipeline(
         &mut self,
         c: &cmd::CreateRenderPipeline,
@@ -2336,6 +2388,7 @@ impl Executor {
             v.minorVersion as u32,
             v.patchVersion as u32,
         ];
+        info.features = cmd::feature::LIBRARY_DATA;
         let (_a, p) = self.host(dst, size_of::<cmd::DeviceInfo>() as u64, 8)?;
         // SAFETY: in the arena, aligned and in bounds.
         unsafe { p.cast::<cmd::DeviceInfo>().write(info) };

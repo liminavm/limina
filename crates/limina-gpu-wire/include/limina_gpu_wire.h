@@ -71,6 +71,7 @@
 #define LMN_OP_CREATE_TEXTURE_VIEW 0x0101u
 #define LMN_OP_CREATE_SAMPLER 0x0102u
 #define LMN_OP_CREATE_LIBRARY 0x0103u
+#define LMN_OP_CREATE_LIBRARY_DATA 0x010bu
 #define LMN_OP_CREATE_RENDER_PIPELINE 0x0104u
 #define LMN_OP_CREATE_COMPUTE_PIPELINE 0x0105u
 #define LMN_OP_CREATE_DEPTH_STENCIL 0x0106u
@@ -176,7 +177,7 @@ struct lmn_device_info {
    uint32_t sparse_tile_bytes;
    uint32_t heap_buffer_align;
    uint32_t os_version[3];
-   uint32_t _pad;
+   uint32_t features;
 };
 _Static_assert(sizeof(struct lmn_device_info) == 152, "lmn_device_info size");
 _Static_assert(offsetof(struct lmn_device_info, version) == 0, "lmn_device_info.version");
@@ -194,7 +195,7 @@ _Static_assert(offsetof(struct lmn_device_info, timestamp_frequency) == 120, "lm
 _Static_assert(offsetof(struct lmn_device_info, sparse_tile_bytes) == 128, "lmn_device_info.sparse_tile_bytes");
 _Static_assert(offsetof(struct lmn_device_info, heap_buffer_align) == 132, "lmn_device_info.heap_buffer_align");
 _Static_assert(offsetof(struct lmn_device_info, os_version) == 136, "lmn_device_info.os_version");
-_Static_assert(offsetof(struct lmn_device_info, _pad) == 148, "lmn_device_info._pad");
+_Static_assert(offsetof(struct lmn_device_info, features) == 148, "lmn_device_info.features");
 
 /* The fields of an `MTLTextureDescriptor` the guest chooses. */
 struct lmn_texture_desc {
@@ -354,6 +355,24 @@ _Static_assert(offsetof(struct lmn_create_library, math_mode) == 12, "lmn_create
 _Static_assert(offsetof(struct lmn_create_library, math_fp_functions) == 16, "lmn_create_library.math_fp_functions");
 _Static_assert(offsetof(struct lmn_create_library, _pad) == 20, "lmn_create_library._pad");
 _Static_assert(offsetof(struct lmn_create_library, reply) == 24, "lmn_create_library.reply");
+
+/* A library from a compiled `.metallib` (`newLibraryWithData:`), `data_len` bytes of at */
+/* most `MAX_LIBRARY_DATA`: at `data` in an arena, or, with `data` none, following the */
+/* command. The host keeps the bytes in the object's record, so a restore needs no arena. */
+/* Only for a host with `feature::LIBRARY_DATA`. */
+struct lmn_create_library_data {
+   uint32_t handle;
+   uint32_t _pad;
+   uint64_t data_len;
+   struct lmn_buf_ref data;
+   struct lmn_buf_ref reply;
+};
+_Static_assert(sizeof(struct lmn_create_library_data) == 48, "lmn_create_library_data size");
+_Static_assert(offsetof(struct lmn_create_library_data, handle) == 0, "lmn_create_library_data.handle");
+_Static_assert(offsetof(struct lmn_create_library_data, _pad) == 4, "lmn_create_library_data._pad");
+_Static_assert(offsetof(struct lmn_create_library_data, data_len) == 8, "lmn_create_library_data.data_len");
+_Static_assert(offsetof(struct lmn_create_library_data, data) == 16, "lmn_create_library_data.data");
+_Static_assert(offsetof(struct lmn_create_library_data, reply) == 32, "lmn_create_library_data.reply");
 
 /* An `MTL4RenderPipelineDescriptor`; the vertex function's name follows, then the */
 /* fragment's (absent when `fragment_library` is `0`). */

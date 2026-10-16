@@ -552,9 +552,14 @@ kernel void readtb(constant Args& a [[buffer(0)]], uint tid [[thread_position_in
 
 /// Writes `0xC0FFEE00 + i` into `n` words at GPU address `dst` with the poke kernel.
 fn poke(g: &mut Guest, dst: u64, n: u32) {
+    create_library(g, 1, MSL, BufRef::NONE);
+    run_poke(g, dst, n);
+}
+
+/// Library 1's `poke` writing `n` words at GPU address `dst`.
+fn run_poke(g: &mut Guest, dst: u64, n: u32) {
     const PTRS: u64 = 3 * MIB;
     g.write(PTRS, &dst.to_le_bytes());
-    create_library(g, 1, MSL, BufRef::NONE);
     let reply = g.reply_slot(RECORDS);
     g.push(
         cmd::CreateComputePipeline {
@@ -653,6 +658,7 @@ fn the_device_answers_queries() {
     assert!(info.heap_buffer_align.is_power_of_two());
     assert!(info.max_threads_per_threadgroup[0] >= 256);
     assert!(info.os_version[0] >= 26, "{:?}", info.os_version);
+    assert_ne!(info.features & cmd::feature::LIBRARY_DATA, 0);
 
     let reply = g.reply_slot(RECORDS);
     g.push(
@@ -691,6 +697,96 @@ fn a_failed_create_with_a_reply_keeps_the_context() {
     // The context lives on, and the handle was never taken.
     create_library(&mut g, 1, MSL, BufRef::NONE);
     g.commit_and_wait().expect("still alive");
+}
+
+/// `src` compiled to a `.metallib` by Xcode's Metal toolchain
+/// (`xcodebuild -downloadComponent MetalToolchain` installs it).
+fn metallib(name: &str, src: &str) -> Vec<u8> {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let metal = dir.join(format!("{name}.metal"));
+    let lib = dir.join(format!("{name}.metallib"));
+    std::fs::write(&metal, src).expect("write MSL");
+    let out = std::process::Command::new("xcrun")
+        .args(["-sdk", "macosx", "metal", "-o"])
+        .arg(&lib)
+        .arg(&metal)
+        .output()
+        .expect("xcrun");
+    assert!(
+        out.status.success(),
+        "metal: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::read(lib).expect("read metallib")
+}
+
+/// Where the tests below stage a library's bytes in the guest's arena.
+const LIB_DATA: u64 = 16 * MIB;
+
+fn create_library_data(g: &mut Guest, handle: u32, data: &[u8], reply: BufRef) {
+    g.write(LIB_DATA, data);
+    g.push(
+        cmd::CreateLibraryData {
+            handle,
+            data_len: data.len() as u64,
+            data: BufRef::new(1, LIB_DATA),
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+}
+
+#[test]
+fn a_kernel_from_a_metallib_writes_through_an_address_the_guest_computed() {
+    let mut g = start();
+    let other = g.host.create_arena(1, 2, MIB).expect("second arena");
+    let reply = g.reply_slot(RECORDS + 1024);
+    create_library_data(&mut g, 1, &metallib("poke", MSL), reply);
+    assert_eq!(g.reply(RECORDS + 1024).status, 0);
+    run_poke(&mut g, other.gpu_base, 256);
+    // SAFETY: inside the second arena's mapping; the GPU has finished.
+    let words = unsafe { std::slice::from_raw_parts(other.mapping.as_ptr().cast::<u32>(), 256) };
+    for (i, &w) in words.iter().enumerate() {
+        assert_eq!(w, 0xC0FFEE00 + i as u32, "word {i}");
+    }
+}
+
+#[test]
+fn a_metallib_that_does_not_load_fails_its_reply_and_keeps_the_context() {
+    let mut g = start();
+    let reply = g.reply_slot(RECORDS);
+    create_library_data(&mut g, 1, b"MTLB not really a library", reply);
+    assert_eq!(g.reply(RECORDS).status, ring::Error::ShaderCompile as u32);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateLibraryData {
+            handle: 1,
+            data_len: cmd::MAX_LIBRARY_DATA + 1,
+            data: BufRef::new(1, 0),
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, ring::Error::BadValue as u32);
+    create_library_data(&mut g, 1, &metallib("poke", MSL), BufRef::NONE);
+    g.commit_and_wait().expect("still alive");
+}
+
+/// The library's record holds its bytes: a restore needs nothing from the arena it came from.
+#[test]
+fn a_metallib_library_restores_without_its_staging() {
+    const DST: u64 = 32 * MIB;
+    let mut g = start();
+    create_library_data(&mut g, 1, &metallib("poke", MSL), BufRef::NONE);
+    g.commit_and_wait().expect("library");
+    g.write(LIB_DATA, &[0; 4096]);
+    let mut g = restore_into_fresh(g);
+    let base = g.arena.gpu_base;
+    run_poke(&mut g, base + DST, 64);
+    let words = g.bytes(DST, 64 * 4);
+    assert_eq!(words[63 * 4..], (0xC0FFEE00u32 + 63).to_le_bytes());
 }
 
 #[test]
