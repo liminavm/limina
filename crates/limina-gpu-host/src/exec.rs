@@ -133,6 +133,8 @@ enum Object {
     SharedEvent(Po<dyn MTLSharedEvent>, Option<Mirror>),
     /// A timestamp counter heap and its entry count.
     CounterHeap(Po<dyn MTL4CounterHeap>, u32),
+    /// A command queue, and the `u64` its commits' seqnos are published to.
+    Queue(Po<dyn MTL4CommandQueue>, Mirror),
 }
 
 /// Destroyed objects, held until the GPU can no longer be using them.
@@ -609,6 +611,7 @@ fn is_create(op: u16) -> bool {
             | op::CREATE_ARGUMENT_TABLE
             | op::CREATE_SYNC
             | op::CREATE_COUNTER_HEAP
+            | op::CREATE_QUEUE
     )
 }
 
@@ -1224,6 +1227,10 @@ impl Executor {
                     self.create_counter_heap(c.handle, c.count),
                 )
             }
+            op::CREATE_QUEUE => {
+                let c = arg::<cmd::CreateQueue>(p)?.0;
+                (c.handle, None, self.create_queue(&c))
+            }
             _ => return Err(Error::UnknownOp),
         })
     }
@@ -1271,6 +1278,35 @@ impl Executor {
             Object::ArgumentTable(t, c.max_buffer_bind_count, addrs),
             [0; 6],
         ))
+    }
+
+    fn create_queue(&mut self, c: &cmd::CreateQueue) -> Result<(Object, [u64; 6]), Error> {
+        self.new_handle(c.handle)?;
+        let (arena, _) = self.host(c.completed, 8, 8)?;
+        // The guest kernel's fences are completed by limina-vmm, which sees only the ring's arena.
+        check(Arc::ptr_eq(&arena, &self.ring_arena))?;
+        let q = self
+            .device
+            .newMTL4CommandQueue()
+            .ok_or(Error::OutOfMemory)?;
+        q.addResidencySet(&self.residency);
+        let m = Mirror {
+            arena,
+            offset: c.completed.offset,
+        };
+        Ok((Object::Queue(q, m), [0; 6]))
+    }
+
+    /// Queue `h` (`0`, the context's own) and where its completed seqnos go (`None`, the ring's
+    /// control block).
+    fn queue(&self, h: u32) -> Result<(Po<dyn MTL4CommandQueue>, Option<Mirror>), Error> {
+        if h == 0 {
+            return Ok((self.queue.clone(), None));
+        }
+        match self.objects.get(&h) {
+            Some(Object::Queue(q, m)) => Ok((q.clone(), Some(m.clone()))),
+            _ => Err(Error::BadHandle),
+        }
     }
 
     fn new_handle(&self, h: u32) -> R {
@@ -1859,7 +1895,7 @@ impl Executor {
             op::COMMIT => {
                 self.objects.close_window();
                 let c = arg::<cmd::Commit>(p)?.0;
-                self.commit(c.seqno, c.feedback)
+                self.commit(c.seqno, c.queue, c.feedback)
             }
             op::QUEUE_EVENT => self.queue_event(&arg(p)?.0),
             _ => Err(Error::UnknownOp),
@@ -2700,13 +2736,15 @@ impl Executor {
         if !self.ended.is_empty() {
             return Err(Error::BadState);
         }
+        let (queue, _) = self.queue(c.queue)?;
         let event: &ProtocolObject<dyn MTLEvent> = match self.objects.get(&c.event) {
             Some(Object::Event(e, _)) => e,
             Some(Object::SharedEvent(e, _)) => ProtocolObject::from_ref(&**e),
             _ => return Err(Error::BadHandle),
         };
         log::debug!(
-            "queue {} event {} value {} (signaled value now {:?})",
+            "queue {} {} event {} value {} (signaled value now {:?})",
+            c.queue,
             if c.wait != 0 { "waits for" } else { "signals" },
             c.event,
             c.value,
@@ -2716,10 +2754,10 @@ impl Executor {
             }
         );
         if c.wait != 0 {
-            self.queue.waitForEvent_value(event, c.value);
+            queue.waitForEvent_value(event, c.value);
             return Ok(());
         }
-        self.queue.signalEvent_value(event, c.value);
+        queue.signalEvent_value(event, c.value);
         self.objects.note_signal(c.event, c.value);
         if let Some(Object::SharedEvent(e, Some(m))) = self.objects.get(&c.event) {
             let m = m.clone();
@@ -2736,10 +2774,11 @@ impl Executor {
         Ok(())
     }
 
-    fn commit(&mut self, seqno: u64, feedback: BufRef) -> R {
+    fn commit(&mut self, seqno: u64, queue: u32, feedback: BufRef) -> R {
         if !matches!(self.enc, Encoder::None) || self.open.is_some() || seqno <= self.last_seqno {
             return Err(Error::BadState);
         }
+        let (queue, published) = self.queue(queue)?;
         let fb = if feedback.is_none() {
             None
         } else {
@@ -2752,7 +2791,11 @@ impl Executor {
             cb.endCommandBuffer();
             self.ended.push((cb, alloc));
         }
-        log::debug!("commit {seqno}: {} command buffers", self.ended.len());
+        log::debug!(
+            "commit {seqno} on queue {}: {} command buffers",
+            if published.is_some() { "own" } else { "0" },
+            self.ended.len()
+        );
         self.last_seqno = seqno;
         self.commits += 1;
         let generation = self.commits;
@@ -2792,7 +2835,10 @@ impl Executor {
             }
             lock(&pool).append(&mut lock(&allocs));
             lock(&in_flight).remove(&generation);
-            c.complete(seqno);
+            match &published {
+                Some(m) => m.raise(seqno),
+                None => c.complete(seqno),
+            }
         });
         let options = MTL4CommitOptions::new();
         // SAFETY: Metal copies the block.
@@ -2801,11 +2847,7 @@ impl Executor {
             cbs.iter().map(|cb| NonNull::from(&**cb)).collect();
         // SAFETY: live, ended command buffers.
         unsafe {
-            self.queue.commit_count_options(
-                NonNull::from(&mut ptrs[..]).cast(),
-                ptrs.len(),
-                &options,
-            )
+            queue.commit_count_options(NonNull::from(&mut ptrs[..]).cast(), ptrs.len(), &options)
         };
         self.reap();
         Ok(())

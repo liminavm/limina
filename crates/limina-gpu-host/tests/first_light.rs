@@ -116,6 +116,7 @@ impl Guest {
             cmd::Commit {
                 seqno: self.seqno,
                 feedback,
+                ..Default::default()
             },
             &[],
         );
@@ -1060,6 +1061,7 @@ fn a_shared_event_signal_reaches_its_mirror() {
             event: 1,
             wait: 0,
             value: 7,
+            ..Default::default()
         },
         &[],
     );
@@ -1085,6 +1087,11 @@ fn a_shared_event_signal_reaches_its_mirror() {
 /// Commits, without waiting, a command buffer that pokes `N` words at `dst` through table `table`,
 /// whose pointer lives at `ptrs`.
 fn commit_poke(g: &mut Guest, table_handle: u32, ptrs: u64, dst: u64) {
+    commit_poke_on(g, 0, table_handle, ptrs, dst);
+}
+
+/// [`commit_poke`] on `queue`.
+fn commit_poke_on(g: &mut Guest, queue: u32, table_handle: u32, ptrs: u64, dst: u64) {
     const N: u32 = 256;
     g.write(ptrs, &(g.arena.gpu_base + dst).to_le_bytes());
     let base = g.arena.gpu_base;
@@ -1108,20 +1115,200 @@ fn commit_poke(g: &mut Guest, table_handle: u32, ptrs: u64, dst: u64) {
         &[],
     );
     g.push(cmd::EndEncoding {}, &[]);
-    commit_nowait(g);
+    commit_nowait_on(g, queue);
 }
 
 fn commit_nowait(g: &mut Guest) {
+    commit_nowait_on(g, 0);
+}
+
+fn commit_nowait_on(g: &mut Guest, queue: u32) {
     g.push(cmd::EndCommandBuffer {}, &[]);
     g.seqno += 1;
     g.push(
         cmd::Commit {
             seqno: g.seqno,
+            queue,
             feedback: BufRef::NONE,
+            ..Default::default()
         },
         &[],
     );
     g.kick();
+}
+
+/// The poke library and pipeline 2, and shared event `event` with its mirror at `mirror`.
+fn poke_setup(g: &mut Guest) {
+    create_library(g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    g.reply(RECORDS);
+}
+
+fn shared_event(g: &mut Guest, handle: u32, mirror: u64) {
+    g.push(
+        cmd::SyncObject {
+            handle,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            initial: 0,
+            mirror: BufRef::new(1, mirror),
+        },
+        &[],
+    );
+}
+
+/// A queue whose completed value the host stores at `slot` in the ring's arena.
+fn create_queue(g: &mut Guest, handle: u32, slot: u64) {
+    g.push(
+        cmd::CreateQueue {
+            handle,
+            completed: BufRef::new(1, slot),
+            ..Default::default()
+        },
+        &[],
+    );
+}
+
+fn slot(g: &Guest, at: u64) -> u64 {
+    // SAFETY: an aligned u64 in the mapping, written by the host.
+    unsafe { &*g.ptr(at, 8).cast::<AtomicU64>() }.load(Ordering::Acquire)
+}
+
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(10), "{what}");
+        std::thread::sleep(Duration::from_micros(100));
+    }
+}
+
+/// Two queues complete on their own: queue 0 waits for an event only the CPU sets, and the work
+/// committed after it on queue 5 runs and completes meanwhile, its completed value reaching its
+/// seqno while queue 0's stays behind.
+#[test]
+fn a_second_queue_completes_while_the_first_waits() {
+    let mut g = start();
+    const A: u64 = 4 * MIB;
+    const B: u64 = 5 * MIB;
+    const MIRROR: u64 = RECORDS + 512;
+    const SLOT: u64 = RECORDS + 1024;
+    poke_setup(&mut g);
+    shared_event(&mut g, 9, MIRROR);
+    create_queue(&mut g, 5, SLOT);
+    g.commit_and_wait().expect("setup");
+    let before = g.seqno;
+
+    g.push(
+        cmd::QueueEvent {
+            event: 9,
+            wait: 1,
+            value: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    commit_poke_on(&mut g, 0, 3, 3 * MIB, A);
+    let a = g.seqno;
+    commit_poke_on(&mut g, 5, 4, 3 * MIB + 8, B);
+    let b = g.seqno;
+    wait_until("queue 5's commit did not complete", || slot(&g, SLOT) >= b);
+    assert_eq!(poked(&g, B), 256, "queue 5's work");
+    assert_eq!(poked(&g, A), 0, "queue 0's work ran before its wait");
+    assert_eq!(
+        g.ring.completed(),
+        before,
+        "queue 0 completed past its wait"
+    );
+
+    g.push(
+        cmd::SetSharedEvent {
+            handle: 9,
+            _pad: 0,
+            value: 1,
+        },
+        &[],
+    );
+    g.kick();
+    wait_until("queue 0's commit did not complete", || {
+        g.ring.completed() >= a
+    });
+    assert_eq!(poked(&g, A), 256);
+    assert!(g.ring.error().is_none());
+}
+
+/// A wait on one queue committed before the signal it waits for on another: as in Metal, the
+/// second queue's signal releases the first.
+#[test]
+fn a_wait_committed_before_its_signal_on_another_queue_completes() {
+    let mut g = start();
+    const A: u64 = 4 * MIB;
+    const B: u64 = 5 * MIB;
+    const SLOT: u64 = RECORDS + 1024;
+    poke_setup(&mut g);
+    shared_event(&mut g, 9, RECORDS + 512);
+    create_queue(&mut g, 5, SLOT);
+    g.commit_and_wait().expect("setup");
+
+    g.push(
+        cmd::QueueEvent {
+            event: 9,
+            wait: 1,
+            value: 1,
+            queue: 5,
+            ..Default::default()
+        },
+        &[],
+    );
+    commit_poke_on(&mut g, 5, 4, 3 * MIB + 8, B);
+    let b = g.seqno;
+    commit_poke_on(&mut g, 0, 3, 3 * MIB, A);
+    g.push(
+        cmd::QueueEvent {
+            event: 9,
+            wait: 0,
+            value: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("queue 0");
+    wait_until("queue 5's commit did not complete", || slot(&g, SLOT) >= b);
+    assert_eq!((poked(&g, A), poked(&g, B)), (256, 256));
+}
+
+/// A queue is an object like any other: it survives an export and a restore into a fresh GPU host
+/// and runs work there, and a commit to a queue that does not exist loses the context.
+#[test]
+fn a_queue_is_restored_and_an_unknown_one_loses_the_context() {
+    let mut g = start();
+    const SLOT: u64 = RECORDS + 1024;
+    poke_setup(&mut g);
+    create_queue(&mut g, 5, SLOT);
+    g.commit_and_wait().expect("setup");
+    let mut g = restore_into_fresh(g);
+    commit_poke_on(&mut g, 5, 4, 3 * MIB + 8, 5 * MIB);
+    let b = g.seqno;
+    wait_until("the restored queue's commit did not complete", || {
+        slot(&g, SLOT) >= b
+    });
+    assert_eq!(poked(&g, 5 * MIB), 256);
+
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    commit_nowait_on(&mut g, 77);
+    wait_until("no error for an unknown queue", || g.ring.error().is_some());
+    assert_eq!(
+        g.ring.error().map(|(code, _)| code),
+        Some(ring::Error::BadHandle as u32)
+    );
 }
 
 fn poked(g: &Guest, dst: u64) -> usize {
@@ -1173,6 +1360,7 @@ fn work_committed_after_a_queue_wait_runs_only_once_the_event_is_signaled() {
             event: 9,
             wait: 1,
             value: 1,
+            ..Default::default()
         },
         &[],
     );
@@ -1183,6 +1371,7 @@ fn work_committed_after_a_queue_wait_runs_only_once_the_event_is_signaled() {
             event: 10,
             wait: 0,
             value: 1,
+            ..Default::default()
         },
         &[],
     );
@@ -1333,6 +1522,7 @@ fn destroying_a_context_wedged_on_an_event_answers_at_once() {
                 event: handle,
                 wait: 1,
                 value: 1,
+                ..Default::default()
             },
             &[],
         );
@@ -1342,6 +1532,7 @@ fn destroying_a_context_wedged_on_an_event_answers_at_once() {
         cmd::Commit {
             seqno: g.seqno,
             feedback: BufRef::NONE,
+            ..Default::default()
         },
         &[],
     );
@@ -2028,6 +2219,7 @@ fn populate(g: &mut Guest) -> (u64, u64) {
             event: 7,
             wait: 0,
             value: 5,
+            ..Default::default()
         },
         &[],
     );
@@ -2300,6 +2492,7 @@ fn a_context_restored_in_a_fresh_gpu_host_is_the_one_the_guest_knew() {
             event: 7,
             wait: 1,
             value: 5,
+            ..Default::default()
         },
         &[],
     );
@@ -2358,6 +2551,7 @@ fn an_export_that_cannot_drain_loses_the_context() {
             event: 1,
             wait: 1,
             value: 1,
+            ..Default::default()
         },
         &[],
     );
@@ -2366,6 +2560,7 @@ fn an_export_that_cannot_drain_loses_the_context() {
         cmd::Commit {
             seqno: g.seqno,
             feedback: BufRef::NONE,
+            ..Default::default()
         },
         &[],
     );

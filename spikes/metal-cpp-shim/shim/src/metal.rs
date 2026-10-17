@@ -117,6 +117,7 @@ impl State {
             cmd::Commit {
                 seqno,
                 feedback: BufRef::NONE,
+                ..Default::default()
             },
             &[],
         );
@@ -1308,6 +1309,7 @@ fn advance(s: &mut State, sub: &mut Submission) -> (bool, bool) {
                     event,
                     wait: wait as u32,
                     value,
+                    ..Default::default()
                 },
                 &[],
             );

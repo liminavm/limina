@@ -378,6 +378,7 @@ impl Gpu {
             cmd::Commit {
                 seqno: self.seqno,
                 feedback: BufRef::NONE,
+                ..Default::default()
             },
             &[],
         );
@@ -428,6 +429,7 @@ impl Gpu {
             cmd::Commit {
                 seqno: self.seqno,
                 feedback: BufRef::NONE,
+                ..Default::default()
             },
             &[],
         );

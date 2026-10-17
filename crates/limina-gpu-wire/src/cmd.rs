@@ -8,10 +8,15 @@
 //!   arena, named by a [`BufRef`] or a GPU address (arena base + offset).
 //! - **Command buffers** are explicit: [`BeginCommandBuffer`] … [`EndCommandBuffer`], with
 //!   encoders opened and closed inside. [`Commit`] submits every command buffer ended since the
-//!   last commit, in order, and later publishes its seqno in
-//!   [`RingControl::completed`](crate::ring::RingControl::completed).
-//! - **Ordering** is what the stream says: queue order across commits, and within a command buffer
-//!   the barriers and fences it encodes, as in Metal 4. The GPU host adds none.
+//!   last commit, in order, to a queue, and later publishes its seqno as that queue's completed
+//!   value.
+//! - **Queues** are [`CreateQueue`] objects, each an `MTL4CommandQueue`; queue `0` is the
+//!   context's own, whose completed value is
+//!   [`RingControl::completed`](crate::ring::RingControl::completed). Seqnos are one increasing
+//!   sequence per context; commits on one queue finish in order, on different queues in any order.
+//! - **Ordering** is what the stream says: queue order across commits on a queue, the events
+//!   between queues, and within a command buffer the barriers and fences it encodes, as in Metal
+//!   4. The GPU host adds none.
 //! - **Answers** come back through memory. A command that needs one carries a `reply`
 //!   [`BufRef`] to a [`Reply`] the host fills and then marks done; a commit carries one to a
 //!   [`Feedback`]. A create with a reply reports failure there and leaves the context alive; the
@@ -491,6 +496,15 @@ wire! {
         mirror: BufRef,
     }
 
+    /// An `MTL4CommandQueue`, which the context's residency set is added to. The host stores the
+    /// highest finished seqno of its commits to the `u64` at `completed`, in the ring's arena and
+    /// 8-aligned, which is how the guest and the guest kernel's fences learn of them.
+    struct CreateQueue = CREATE_QUEUE(0x010c) {
+        handle: u32,
+        _pad: u32,
+        completed: BufRef,
+    }
+
     /// An `MTL4CounterHeap` of `count` timestamp entries (`MTL4CounterHeapTypeTimestamp`).
     struct CreateCounterHeap = CREATE_COUNTER_HEAP(0x010a) {
         handle: u32,
@@ -832,21 +846,26 @@ wire! {
         indirect: u64,
     }
 
-    /// Submits the command buffers ended since the last commit, in one `commit:count:options:`.
-    /// The host fills `feedback` (arena `0` for none) and then publishes `seqno`. Seqnos must
-    /// increase. A commit with nothing to submit commits an empty command buffer.
+    /// Submits the command buffers ended since the last commit to `queue` (`0`, the context's
+    /// own), in one `commit:count:options:`. The host fills `feedback` (arena `0` for none) and
+    /// then publishes `seqno` as the queue's completed value. Seqnos must increase across the
+    /// context. A commit with nothing to submit commits an empty command buffer.
     struct Commit = COMMIT(0x0300) {
         seqno: u64,
+        queue: u32,
+        _pad: u32,
         feedback: BufRef,
     }
 
-    /// `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on the queue, between
-    /// commits: no command buffer may be ended and not yet committed. A signal of a shared event
-    /// also updates its mirror once the value is reached.
+    /// `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on `queue`, between commits:
+    /// no command buffer may be ended and not yet committed. A signal of a shared event also
+    /// updates its mirror once the value is reached.
     struct QueueEvent = QUEUE_EVENT(0x0301) {
         event: u32,
         wait: u32,
         value: u64,
+        queue: u32,
+        _pad: u32,
     }
 }
 
@@ -876,6 +895,9 @@ const _: () = {
     assert!(size_of::<RenderAttachment>() == 80);
     assert!(size_of::<BeginRenderPass>() == 40 + 128 + 10 * 80);
     assert!(size_of::<EndEncoding>() == 0);
+    assert!(size_of::<Commit>() == 32);
+    assert!(size_of::<QueueEvent>() == 24);
+    assert!(size_of::<CreateQueue>() == 24);
 };
 
 #[cfg(test)]

@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define LMN_WIRE_VERSION 4u
+#define LMN_WIRE_VERSION 5u
 
 /* Ring (crates/limina-gpu-wire/src/ring.rs). */
 #define LMN_RING_MAGIC 0x52474d4cu
@@ -77,6 +77,7 @@
 #define LMN_OP_CREATE_DEPTH_STENCIL 0x0106u
 #define LMN_OP_CREATE_ARGUMENT_TABLE 0x0107u
 #define LMN_OP_CREATE_SYNC 0x0108u
+#define LMN_OP_CREATE_QUEUE 0x010cu
 #define LMN_OP_CREATE_COUNTER_HEAP 0x010au
 #define LMN_OP_DESTROY 0x01ffu
 #define LMN_OP_SET_ADDRESSES 0x0180u
@@ -497,6 +498,19 @@ _Static_assert(offsetof(struct lmn_sync_object, handle) == 0, "lmn_sync_object.h
 _Static_assert(offsetof(struct lmn_sync_object, kind) == 4, "lmn_sync_object.kind");
 _Static_assert(offsetof(struct lmn_sync_object, initial) == 8, "lmn_sync_object.initial");
 _Static_assert(offsetof(struct lmn_sync_object, mirror) == 16, "lmn_sync_object.mirror");
+
+/* An `MTL4CommandQueue`, which the context's residency set is added to. The host stores the */
+/* highest finished seqno of its commits to the `u64` at `completed`, in the ring's arena and */
+/* 8-aligned, which is how the guest and the guest kernel's fences learn of them. */
+struct lmn_create_queue {
+   uint32_t handle;
+   uint32_t _pad;
+   struct lmn_buf_ref completed;
+};
+_Static_assert(sizeof(struct lmn_create_queue) == 24, "lmn_create_queue size");
+_Static_assert(offsetof(struct lmn_create_queue, handle) == 0, "lmn_create_queue.handle");
+_Static_assert(offsetof(struct lmn_create_queue, _pad) == 4, "lmn_create_queue._pad");
+_Static_assert(offsetof(struct lmn_create_queue, completed) == 8, "lmn_create_queue.completed");
 
 /* An `MTL4CounterHeap` of `count` timestamp entries (`MTL4CounterHeapTypeTimestamp`). */
 struct lmn_create_counter_heap {
@@ -1022,28 +1036,37 @@ _Static_assert(offsetof(struct lmn_draw_indirect, index_address) == 16, "lmn_dra
 _Static_assert(offsetof(struct lmn_draw_indirect, index_length) == 24, "lmn_draw_indirect.index_length");
 _Static_assert(offsetof(struct lmn_draw_indirect, indirect) == 32, "lmn_draw_indirect.indirect");
 
-/* Submits the command buffers ended since the last commit, in one `commit:count:options:`. */
-/* The host fills `feedback` (arena `0` for none) and then publishes `seqno`. Seqnos must */
-/* increase. A commit with nothing to submit commits an empty command buffer. */
+/* Submits the command buffers ended since the last commit to `queue` (`0`, the context's */
+/* own), in one `commit:count:options:`. The host fills `feedback` (arena `0` for none) and */
+/* then publishes `seqno` as the queue's completed value. Seqnos must increase across the */
+/* context. A commit with nothing to submit commits an empty command buffer. */
 struct lmn_commit {
    uint64_t seqno;
+   uint32_t queue;
+   uint32_t _pad;
    struct lmn_buf_ref feedback;
 };
-_Static_assert(sizeof(struct lmn_commit) == 24, "lmn_commit size");
+_Static_assert(sizeof(struct lmn_commit) == 32, "lmn_commit size");
 _Static_assert(offsetof(struct lmn_commit, seqno) == 0, "lmn_commit.seqno");
-_Static_assert(offsetof(struct lmn_commit, feedback) == 8, "lmn_commit.feedback");
+_Static_assert(offsetof(struct lmn_commit, queue) == 8, "lmn_commit.queue");
+_Static_assert(offsetof(struct lmn_commit, _pad) == 12, "lmn_commit._pad");
+_Static_assert(offsetof(struct lmn_commit, feedback) == 16, "lmn_commit.feedback");
 
-/* `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on the queue, between */
-/* commits: no command buffer may be ended and not yet committed. A signal of a shared event */
-/* also updates its mirror once the value is reached. */
+/* `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on `queue`, between commits: */
+/* no command buffer may be ended and not yet committed. A signal of a shared event also */
+/* updates its mirror once the value is reached. */
 struct lmn_queue_event {
    uint32_t event;
    uint32_t wait;
    uint64_t value;
+   uint32_t queue;
+   uint32_t _pad;
 };
-_Static_assert(sizeof(struct lmn_queue_event) == 16, "lmn_queue_event size");
+_Static_assert(sizeof(struct lmn_queue_event) == 24, "lmn_queue_event size");
 _Static_assert(offsetof(struct lmn_queue_event, event) == 0, "lmn_queue_event.event");
 _Static_assert(offsetof(struct lmn_queue_event, wait) == 4, "lmn_queue_event.wait");
 _Static_assert(offsetof(struct lmn_queue_event, value) == 8, "lmn_queue_event.value");
+_Static_assert(offsetof(struct lmn_queue_event, queue) == 16, "lmn_queue_event.queue");
+_Static_assert(offsetof(struct lmn_queue_event, _pad) == 20, "lmn_queue_event._pad");
 
 #endif /* LIMINA_GPU_WIRE_H */

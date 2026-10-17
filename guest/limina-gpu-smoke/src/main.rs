@@ -538,6 +538,7 @@ fn fence(g: &mut Gpu) -> Result<(), String> {
             event: EVENT,
             wait: 1,
             value: 1,
+            ..Default::default()
         },
         &[],
     );
@@ -607,6 +608,7 @@ fn orphan_fence(path: &str) -> Result<(), String> {
             event: EVENT,
             wait: 1,
             value: 1,
+            ..Default::default()
         },
         &[],
     );
