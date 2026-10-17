@@ -3,11 +3,13 @@
 //! list into ring commands under the device's lock, and a completion thread runs the handlers.
 
 use std::ffi::{CString, c_void};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use limina_gpu_client::{Arena, Gpu, MIB, find_node};
 use limina_gpu_wire::cmd::{self, BufRef};
+use limina_gpu_wire::ring::PushError;
 
 use crate::blocks::{_Block_copy, _Block_release, Block};
 use crate::foundation::{Error, NSString, fail, string, text};
@@ -17,6 +19,9 @@ use crate::runtime::{Class, Def, Obj, Sel, alloc, dealloc, new, send0};
 // The main arena (64 MiB): the ring takes the first 256 KiB.
 const REPLY: u64 = MIB;
 const INFO: u64 = MIB + 4096;
+/// Shared events' signaled values, which the host mirrors here, one u64 each.
+const EVENTS: u64 = MIB + 8192;
+const EVENTS_END: u64 = 2 * MIB;
 const SCRATCH: u64 = 2 * MIB;
 const SCRATCH_END: u64 = 64 * MIB;
 
@@ -57,6 +62,8 @@ struct State {
     scratch: u64,
     pending: Vec<(u64, Ptr<Obj<CommandBuffer>>)>,
     lost: Option<String>,
+    next_event_slot: u64,
+    free_event_slots: Vec<u64>,
 }
 
 pub struct Device {
@@ -64,6 +71,7 @@ pub struct Device {
     done: Condvar,
     name: String,
     max_threads: Size,
+    info: cmd::DeviceInfo,
 }
 
 impl State {
@@ -78,6 +86,28 @@ impl State {
         Ok((id, Arena::create(&self.gpu.file, id, size.max(16384))?))
     }
 
+    /// Pushes `c` with `extra`, publishing and waiting for the host to make room when the ring is
+    /// full: one command buffer can hold more than the ring does.
+    fn push<T: cmd::Command>(&mut self, c: T, extra: &[&[u8]]) {
+        loop {
+            match self.gpu.ring.push(&c, extra) {
+                Ok(()) => return,
+                Err(PushError::Full) => {
+                    self.gpu.kick();
+                    if let Some((e, at)) = self.gpu.ring.error() {
+                        eprintln!("limina-metal: context lost: error {e} at ring position {at}");
+                        std::process::abort();
+                    }
+                    std::thread::yield_now();
+                }
+                Err(PushError::TooLarge) => {
+                    eprintln!("limina-metal: a command larger than half the ring");
+                    std::process::abort();
+                }
+            }
+        }
+    }
+
     /// Pushes `c` with `extra` and waits for its reply.
     fn call<T: cmd::Command>(
         &mut self,
@@ -85,7 +115,7 @@ impl State {
         extra: &[&[u8]],
     ) -> Result<cmd::Reply, String> {
         let reply = self.gpu.reply_slot(REPLY);
-        self.gpu.push(c(reply), extra);
+        self.push(c(reply), extra);
         let r = self.gpu.reply(REPLY)?;
         match r.status {
             0 => Ok(r),
@@ -147,6 +177,8 @@ fn device() -> &'static Obj<Device> {
                     scratch: SCRATCH,
                     pending: Vec::new(),
                     lost: None,
+                    next_event_slot: EVENTS,
+                    free_event_slots: Vec::new(),
                 }),
                 done: Condvar::new(),
                 name: format!("{name} (limina)"),
@@ -155,6 +187,7 @@ fn device() -> &'static Obj<Device> {
                     height: h as usize,
                     depth: d as usize,
                 },
+                info,
             },
         );
         std::thread::Builder::new()
@@ -246,6 +279,218 @@ unsafe extern "C" fn device_max_threads(this: *const Obj<Device>, _: Sel) -> Siz
     unsafe { (*this).v.max_threads }
 }
 
+/// Metal's list of devices. Nil, which MLX takes as "use the default device", spares an NSArray.
+#[unsafe(no_mangle)]
+pub extern "C" fn MTLCopyAllDevices() -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+fn info(this: *const Obj<Device>) -> &'static cmd::DeviceInfo {
+    // SAFETY: the device lives as long as the process.
+    unsafe { &(*this).v.info }
+}
+
+pub struct Architecture {
+    name: String,
+}
+
+unsafe extern "C" fn device_architecture(
+    this: *const Obj<Device>,
+    _: Sel,
+) -> *mut Obj<Architecture> {
+    let name = String::from_utf8_lossy(&info(this).architecture)
+        .trim_end_matches('\0')
+        .to_owned();
+    autoreleased(new("MTLArchitecture", Architecture { name }))
+}
+
+unsafe extern "C" fn architecture_name(this: *const Obj<Architecture>, _: Sel) -> *mut NSString {
+    // SAFETY: a live object.
+    autoreleased(string(unsafe { &(*this).v.name }))
+}
+
+/// `MTLGPUFamily`: Apple1.. up to the host's, Mac2, the Common ones, Metal3 and Metal4.
+unsafe extern "C" fn device_supports_family(this: *const Obj<Device>, _: Sel, f: isize) -> bool {
+    let apple = info(this).apple_family as isize;
+    match f {
+        1001.. if f <= 1000 + apple => true,
+        2002 | 3001..=3003 | 5001 | 5002 => true,
+        _ => false,
+    }
+}
+
+unsafe extern "C" fn device_max_buffer_length(this: *const Obj<Device>, _: Sel) -> usize {
+    info(this).max_buffer_length as usize
+}
+
+unsafe extern "C" fn device_working_set(this: *const Obj<Device>, _: Sel) -> u64 {
+    info(this).recommended_max_working_set
+}
+
+unsafe extern "C" fn device_max_threadgroup_memory(this: *const Obj<Device>, _: Sel) -> usize {
+    info(this).max_threadgroup_memory as usize
+}
+
+unsafe extern "C" fn device_registry_id(this: *const Obj<Device>, _: Sel) -> u64 {
+    info(this).registry_id
+}
+
+extern "C" fn device_true(_: *const Obj<Device>, _: Sel) -> bool {
+    true
+}
+
+#[derive(Default)]
+pub struct HeapDescriptor;
+
+extern "C" fn heap_descriptor_set(_: *mut Obj<HeapDescriptor>, _: Sel, _: usize) {}
+
+/// No heaps yet: Metal may fail to make one, and MLX then allocates from the device.
+extern "C" fn device_new_heap(
+    _: *const Obj<Device>,
+    _: Sel,
+    _: *const Obj<HeapDescriptor>,
+) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+// --- Synchronisation ---
+
+/// One queue carries every command buffer, and each encoder starts after the last's work is done,
+/// so a fence between two encoders always holds.
+pub struct Fence;
+
+extern "C" fn device_new_fence(_: *const Obj<Device>, _: Sel) -> *mut Obj<Fence> {
+    new("MTLFence", Fence)
+}
+
+extern "C" fn encoder_fence(_: *const Obj<Encoder>, _: Sel, _: *const Obj<Fence>) {}
+
+/// The host mirrors the event's signaled value into a u64 of the main arena.
+pub struct SharedEvent {
+    handle: u32,
+    slot: u64,
+    mirror: *const AtomicU64,
+}
+
+unsafe extern "C" fn device_new_shared_event(
+    this: *const Obj<Device>,
+    _: Sel,
+) -> *mut Obj<SharedEvent> {
+    // SAFETY: a live device.
+    let mut s = unsafe { &(*this).v }.state.lock().unwrap();
+    let slot = match s.free_event_slots.pop() {
+        Some(slot) => slot,
+        None if s.next_event_slot < EVENTS_END => {
+            s.next_event_slot += 8;
+            s.next_event_slot - 8
+        }
+        None => {
+            eprintln!("limina-metal: out of shared event slots");
+            return std::ptr::null_mut();
+        }
+    };
+    s.gpu.main.write(slot, &0u64.to_le_bytes());
+    let handle = s.handle();
+    s.push(
+        cmd::SyncObject {
+            handle,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            initial: 0,
+            mirror: BufRef::new(1, slot),
+        },
+        &[],
+    );
+    // SAFETY: inside the main arena, which lives as long as the process; aligned to 8.
+    let mirror = unsafe { s.gpu.main.ptr.as_ptr().add(slot as usize) }.cast::<AtomicU64>();
+    new(
+        "MTLSharedEvent",
+        SharedEvent {
+            handle,
+            slot,
+            mirror,
+        },
+    )
+}
+
+unsafe extern "C" fn shared_event_value(this: *const Obj<SharedEvent>, _: Sel) -> u64 {
+    // SAFETY: a live event, whose mirror the host stores to.
+    unsafe { (*(*this).v.mirror).load(Ordering::Acquire) }
+}
+
+unsafe extern "C" fn shared_event_set_value(this: *const Obj<SharedEvent>, _: Sel, value: u64) {
+    // SAFETY: a live event.
+    let handle = unsafe { (*this).v.handle };
+    let mut s = device().v.state.lock().unwrap();
+    s.push(
+        cmd::SetSharedEvent {
+            handle,
+            _pad: 0,
+            value,
+        },
+        &[],
+    );
+    s.gpu.kick();
+}
+
+unsafe extern "C" fn shared_event_wait(
+    this: *const Obj<SharedEvent>,
+    s: Sel,
+    value: u64,
+    timeout_ms: u64,
+) -> bool {
+    let start = Instant::now();
+    let mut spins = 0u32;
+    loop {
+        // SAFETY: a live event.
+        if unsafe { shared_event_value(this, s) } >= value {
+            return true;
+        }
+        if device().v.state.lock().unwrap().lost.is_some()
+            || start.elapsed() >= Duration::from_millis(timeout_ms)
+        {
+            return false;
+        }
+        spins += 1;
+        if spins < 1000 {
+            std::hint::spin_loop();
+        } else {
+            std::thread::sleep(Duration::from_micros(20));
+        }
+    }
+}
+
+unsafe extern "C" fn shared_event_dealloc(this: *mut Obj<SharedEvent>, s: Sel) {
+    // SAFETY: a live event, at its last reference.
+    let (handle, slot) = unsafe { ((*this).v.handle, (*this).v.slot) };
+    let mut st = device().v.state.lock().unwrap();
+    // The host keeps the event until the work committed before this destroy is done.
+    st.push(cmd::Destroy { handle, _pad: 0 }, &[]);
+    st.free_event_slots.push(slot);
+    drop(st);
+    // SAFETY: as in `dealloc`.
+    unsafe { dealloc(this, s) };
+}
+
+/// Residency is the host's to manage: every arena is resident while the guest maps it.
+#[derive(Default)]
+pub struct ResidencySet;
+
+unsafe extern "C" fn device_new_residency_set(
+    _: *const Obj<Device>,
+    _: Sel,
+    _desc: *const c_void,
+    _error: *mut *mut Obj<Error>,
+) -> *mut Obj<ResidencySet> {
+    new("MTLResidencySet", ResidencySet)
+}
+
+extern "C" fn residency_nop(_: *const c_void, _: Sel) {}
+extern "C" fn residency_nop1(_: *const c_void, _: Sel, _: *const c_void) {}
+extern "C" fn residency_nop2(_: *const c_void, _: Sel, _: *const c_void, _: usize) {}
+extern "C" fn residency_size(_: *const c_void, _: Sel) -> u64 {
+    0
+}
+
 // --- Buffers ---
 
 pub struct Buffer {
@@ -280,6 +525,21 @@ unsafe extern "C" fn buffer_length(this: *const Obj<Buffer>, _: Sel) -> usize {
     unsafe { (*this).v.length }
 }
 
+extern "C" fn buffer_heap(_: *const Obj<Buffer>, _: Sel) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+/// What the buffer takes: an arena, in whole 16 KiB host pages.
+unsafe extern "C" fn buffer_allocated_size(this: *const Obj<Buffer>, _: Sel) -> usize {
+    // SAFETY: a live buffer.
+    unsafe { (*this).v.length }.max(1).next_multiple_of(16384)
+}
+
+/// MTLStorageModeShared.
+extern "C" fn buffer_storage_mode(_: *const Obj<Buffer>, _: Sel) -> usize {
+    0
+}
+
 unsafe extern "C" fn buffer_gpu_address(this: *const Obj<Buffer>, _: Sel) -> u64 {
     // SAFETY: a live buffer.
     unsafe { (*this).v.arena.gpu_base }
@@ -293,7 +553,8 @@ pub struct Library {
 
 #[derive(Default)]
 pub struct CompileOptions {
-    fast_math: bool,
+    /// `MTLMathMode`, which the wire carries as is.
+    math_mode: u32,
     language_version: u32,
 }
 
@@ -301,16 +562,29 @@ unsafe extern "C" fn options_init(
     this: *mut Obj<CompileOptions>,
     _: Sel,
 ) -> *mut Obj<CompileOptions> {
-    // Metal's default.
+    // Metal's default: fastMathEnabled, which is MTLMathModeFast.
     // SAFETY: a live object.
-    unsafe { (*this).v.fast_math = true };
+    unsafe { (*this).v.math_mode = 2 };
     this
 }
 
 unsafe extern "C" fn set_fast_math(this: *mut Obj<CompileOptions>, _: Sel, on: bool) {
     // SAFETY: a live object.
-    unsafe { (*this).v.fast_math = on };
+    unsafe { (*this).v.math_mode = if on { 2 } else { 0 } };
 }
+
+unsafe extern "C" fn set_math_mode(this: *mut Obj<CompileOptions>, _: Sel, mode: isize) {
+    // SAFETY: a live object.
+    unsafe { (*this).v.math_mode = mode as u32 };
+}
+
+unsafe extern "C" fn language_version(this: *const Obj<CompileOptions>, _: Sel) -> usize {
+    // SAFETY: a live object.
+    unsafe { (*this).v.language_version as usize }
+}
+
+/// Shader logging needs a log stream back from the host, which the wire does not carry.
+extern "C" fn set_enable_logging(_: *mut Obj<CompileOptions>, _: Sel, _: bool) {}
 
 unsafe extern "C" fn set_language_version(this: *mut Obj<CompileOptions>, _: Sel, v: usize) {
     // SAFETY: a live object.
@@ -324,7 +598,23 @@ unsafe extern "C" fn new_library_with_url(
     error: *mut *mut Obj<Error>,
 ) -> *mut Obj<Library> {
     // SAFETY: a live NSURL.
-    let path = unsafe { &(*url).v.path };
+    load_library(this, unsafe { &(*url).v.path }, error)
+}
+
+unsafe extern "C" fn new_library_with_file(
+    this: *const Obj<Device>,
+    _: Sel,
+    path: *const NSString,
+    error: *mut *mut Obj<Error>,
+) -> *mut Obj<Library> {
+    load_library(this, &text(path), error)
+}
+
+fn load_library(
+    this: *const Obj<Device>,
+    path: &str,
+    error: *mut *mut Obj<Error>,
+) -> *mut Obj<Library> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => {
@@ -373,12 +663,12 @@ unsafe extern "C" fn new_library_with_source(
     error: *mut *mut Obj<Error>,
 ) -> *mut Obj<Library> {
     let src = text(source);
-    let (fast, version) = if options.is_null() {
-        (true, 0)
+    let (math_mode, version) = if options.is_null() {
+        (2, 0)
     } else {
         // SAFETY: a live CompileOptions.
         let o = unsafe { &(*options).v };
-        (o.fast_math, o.language_version)
+        (o.math_mode, o.language_version)
     };
     // SAFETY: a live device.
     let mut s = unsafe { &(*this).v }.state.lock().unwrap();
@@ -388,8 +678,7 @@ unsafe extern "C" fn new_library_with_source(
             handle,
             source_len: src.len() as u32,
             language_version: version,
-            // MTLMathModeFast or MTLMathModeSafe.
-            math_mode: if fast { 2 } else { 0 },
+            math_mode,
             reply,
             ..Default::default()
         },
@@ -612,6 +901,8 @@ enum Op {
     Groups(Size, Size),
     Barrier,
     End,
+    /// `encodeWaitForEvent:value:` (true) or `encodeSignalEvent:value:`.
+    Event(u32, bool, u64),
 }
 
 pub struct CommandBuffer {
@@ -719,6 +1010,43 @@ unsafe extern "C" fn end_encoding(this: *const Obj<Encoder>, _: Sel) {
     unsafe { (*this).v.op(Op::End) };
 }
 
+unsafe extern "C" fn encode_event(
+    this: *const Obj<CommandBuffer>,
+    wait: bool,
+    event: *const Obj<SharedEvent>,
+    value: u64,
+) {
+    // SAFETY: live objects.
+    unsafe {
+        (*this)
+            .v
+            .ops
+            .lock()
+            .unwrap()
+            .push(Op::Event((*event).v.handle, wait, value))
+    };
+}
+
+unsafe extern "C" fn encode_wait(
+    this: *const Obj<CommandBuffer>,
+    _: Sel,
+    event: *const Obj<SharedEvent>,
+    value: u64,
+) {
+    // SAFETY: as in encode_event.
+    unsafe { encode_event(this, true, event, value) };
+}
+
+unsafe extern "C" fn encode_signal(
+    this: *const Obj<CommandBuffer>,
+    _: Sel,
+    event: *const Obj<SharedEvent>,
+    value: u64,
+) {
+    // SAFETY: as in encode_event.
+    unsafe { encode_event(this, false, event, value) };
+}
+
 unsafe extern "C" fn add_completed_handler(
     this: *const Obj<CommandBuffer>,
     _: Sel,
@@ -735,20 +1063,20 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
     let ops = std::mem::take(&mut *unsafe { &(*this).v }.ops.lock().unwrap());
     let mut s = dev.v.state.lock().unwrap();
     let table = s.handle();
-    s.gpu.push(
+    s.push(
         cmd::CreateArgumentTable {
             handle: table,
             max_buffer_bind_count: BINDINGS,
         },
         &[],
     );
-    s.gpu.push(cmd::BeginCommandBuffer {}, &[]);
+    s.push(cmd::BeginCommandBuffer {}, &[]);
     for op in ops {
         match op {
             Op::BeginCompute => {
-                s.gpu.push(cmd::BeginCompute {}, &[]);
+                s.push(cmd::BeginCompute {}, &[]);
                 // Metal 3 runs one encoder's work after the last's; Metal 4 needs a barrier for that.
-                s.gpu.push(
+                s.push(
                     cmd::Barrier {
                         kind: cmd::barrier_kind::AFTER_QUEUE_STAGES,
                         after: STAGE_DISPATCH | STAGE_BLIT,
@@ -757,29 +1085,29 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
                     },
                     &[],
                 );
-                s.gpu.push(cmd::SetArgumentTable { table, stages: 0 }, &[]);
+                s.push(cmd::SetArgumentTable { table, stages: 0 }, &[]);
             }
-            Op::Pipeline(handle) => s.gpu.push(cmd::SetComputePipeline { handle, _pad: 0 }, &[]),
+            Op::Pipeline(handle) => s.push(cmd::SetComputePipeline { handle, _pad: 0 }, &[]),
             Op::Bind(index, address) => bind(&mut s, table, index, address),
             Op::Bytes(index, data) => {
                 let address = s.scratch(&data);
                 bind(&mut s, table, index, address);
             }
-            Op::Threads(grid, group) => s.gpu.push(
+            Op::Threads(grid, group) => s.push(
                 cmd::DispatchThreads {
                     grid: grid.wire(),
                     threads_per_group: group.wire(),
                 },
                 &[],
             ),
-            Op::Groups(groups, group) => s.gpu.push(
+            Op::Groups(groups, group) => s.push(
                 cmd::DispatchThreadgroups {
                     groups: groups.wire(),
                     threads_per_group: group.wire(),
                 },
                 &[],
             ),
-            Op::Barrier => s.gpu.push(
+            Op::Barrier => s.push(
                 cmd::Barrier {
                     kind: cmd::barrier_kind::AFTER_ENCODER_STAGES,
                     after: STAGE_DISPATCH,
@@ -788,10 +1116,25 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
                 },
                 &[],
             ),
-            Op::End => s.gpu.push(cmd::EndEncoding {}, &[]),
+            Op::End => s.push(cmd::EndEncoding {}, &[]),
+            Op::Event(event, wait, value) => {
+                // The wire takes queue events only between commits: what came before goes in its
+                // own commit, and the rest of this command buffer in the next.
+                s.push(cmd::EndCommandBuffer {}, &[]);
+                s.gpu.commit_nowait();
+                s.push(
+                    cmd::QueueEvent {
+                        event,
+                        wait: wait as u32,
+                        value,
+                    },
+                    &[],
+                );
+                s.push(cmd::BeginCommandBuffer {}, &[]);
+            }
         }
     }
-    s.gpu.push(cmd::EndCommandBuffer {}, &[]);
+    s.push(cmd::EndCommandBuffer {}, &[]);
     // The table is never destroyed: whether the host may destroy one that committed work still
     // names is not settled here.
     let seqno = s.gpu.commit_nowait();
@@ -854,7 +1197,89 @@ pub fn defs() -> Vec<Def> {
                     imp!(new_compute_pipeline),
                 ),
                 ("newCommandQueue", imp!(new_command_queue)),
+                ("newLibraryWithFile:error:", imp!(new_library_with_file)),
+                ("architecture", imp!(device_architecture)),
+                ("supportsFamily:", imp!(device_supports_family)),
+                ("maxBufferLength", imp!(device_max_buffer_length)),
+                ("recommendedMaxWorkingSetSize", imp!(device_working_set)),
+                (
+                    "maxThreadgroupMemoryLength",
+                    imp!(device_max_threadgroup_memory),
+                ),
+                ("registryID", imp!(device_registry_id)),
+                ("hasUnifiedMemory", imp!(device_true)),
+                ("newHeapWithDescriptor:", imp!(device_new_heap)),
+                ("newFence", imp!(device_new_fence)),
+                ("newSharedEvent", imp!(device_new_shared_event)),
+                (
+                    "newResidencySetWithDescriptor:error:",
+                    imp!(device_new_residency_set),
+                ),
                 ("dealloc", imp!(device_dealloc)),
+            ],
+            class_methods: vec![],
+        },
+        Def {
+            name: "MTLArchitecture",
+            superclass: Some("NSObject"),
+            methods: vec![
+                ("name", imp!(architecture_name)),
+                ("dealloc", imp!(dealloc::<Architecture>)),
+            ],
+            class_methods: vec![],
+        },
+        Def {
+            name: "MTLHeapDescriptor",
+            superclass: Some("NSObject"),
+            methods: vec![
+                ("setSize:", imp!(heap_descriptor_set)),
+                ("setResourceOptions:", imp!(heap_descriptor_set)),
+                ("setStorageMode:", imp!(heap_descriptor_set)),
+                ("setHazardTrackingMode:", imp!(heap_descriptor_set)),
+                ("dealloc", imp!(dealloc::<HeapDescriptor>)),
+            ],
+            class_methods: vec![("alloc", imp!(alloc::<HeapDescriptor>))],
+        },
+        Def {
+            name: "MTLFence",
+            superclass: Some("NSObject"),
+            methods: vec![("dealloc", imp!(dealloc::<Fence>))],
+            class_methods: vec![],
+        },
+        Def {
+            name: "MTLSharedEvent",
+            superclass: Some("NSObject"),
+            methods: vec![
+                ("signaledValue", imp!(shared_event_value)),
+                ("setSignaledValue:", imp!(shared_event_set_value)),
+                ("waitUntilSignaledValue:timeoutMS:", imp!(shared_event_wait)),
+                ("dealloc", imp!(shared_event_dealloc)),
+            ],
+            class_methods: vec![],
+        },
+        Def {
+            name: "MTLResidencySetDescriptor",
+            superclass: Some("NSObject"),
+            methods: vec![
+                ("setInitialCapacity:", imp!(residency_nop1)),
+                ("dealloc", imp!(dealloc::<ResidencySet>)),
+            ],
+            class_methods: vec![("alloc", imp!(alloc::<ResidencySet>))],
+        },
+        Def {
+            name: "MTLResidencySet",
+            superclass: Some("NSObject"),
+            methods: vec![
+                ("requestResidency", imp!(residency_nop)),
+                ("endResidency", imp!(residency_nop)),
+                ("commit", imp!(residency_nop)),
+                ("removeAllAllocations", imp!(residency_nop)),
+                ("addAllocation:", imp!(residency_nop1)),
+                ("removeAllocation:", imp!(residency_nop1)),
+                ("addAllocations:count:", imp!(residency_nop2)),
+                ("removeAllocations:count:", imp!(residency_nop2)),
+                ("allocatedSize", imp!(residency_size)),
+                ("dealloc", imp!(dealloc::<ResidencySet>)),
             ],
             class_methods: vec![],
         },
@@ -865,6 +1290,9 @@ pub fn defs() -> Vec<Def> {
                 ("contents", imp!(buffer_contents)),
                 ("length", imp!(buffer_length)),
                 ("gpuAddress", imp!(buffer_gpu_address)),
+                ("heap", imp!(buffer_heap)),
+                ("allocatedSize", imp!(buffer_allocated_size)),
+                ("storageMode", imp!(buffer_storage_mode)),
                 ("dealloc", imp!(dealloc::<Buffer>)),
             ],
             class_methods: vec![],
@@ -876,6 +1304,9 @@ pub fn defs() -> Vec<Def> {
                 ("init", imp!(options_init)),
                 ("setFastMathEnabled:", imp!(set_fast_math)),
                 ("setLanguageVersion:", imp!(set_language_version)),
+                ("setMathMode:", imp!(set_math_mode)),
+                ("languageVersion", imp!(language_version)),
+                ("setEnableLogging:", imp!(set_enable_logging)),
                 ("dealloc", imp!(dealloc::<CompileOptions>)),
             ],
             class_methods: vec![("alloc", imp!(alloc::<CompileOptions>))],
@@ -944,6 +1375,10 @@ pub fn defs() -> Vec<Def> {
                     "commandBufferWithUnretainedReferences",
                     imp!(command_buffer),
                 ),
+                ("addResidencySet:", imp!(residency_nop1)),
+                ("removeResidencySet:", imp!(residency_nop1)),
+                ("addResidencySets:count:", imp!(residency_nop2)),
+                ("removeResidencySets:count:", imp!(residency_nop2)),
                 ("dealloc", imp!(dealloc::<Queue>)),
             ],
             class_methods: vec![],
@@ -958,6 +1393,8 @@ pub fn defs() -> Vec<Def> {
                     imp!(compute_encoder_with_type),
                 ),
                 ("addCompletedHandler:", imp!(add_completed_handler)),
+                ("encodeWaitForEvent:value:", imp!(encode_wait)),
+                ("encodeSignalEvent:value:", imp!(encode_signal)),
                 ("commit", imp!(commit)),
                 ("waitUntilCompleted", imp!(wait_until_completed)),
                 ("status", imp!(cb_status)),
@@ -982,6 +1419,8 @@ pub fn defs() -> Vec<Def> {
                     imp!(dispatch_threadgroups),
                 ),
                 ("memoryBarrierWithScope:", imp!(memory_barrier)),
+                ("waitForFence:", imp!(encoder_fence)),
+                ("updateFence:", imp!(encoder_fence)),
                 ("endEncoding", imp!(end_encoding)),
                 ("dealloc", imp!(dealloc::<Encoder>)),
             ],

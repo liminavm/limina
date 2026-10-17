@@ -183,22 +183,30 @@ pub extern "C" fn objc_getProtocol(_: *const c_char) -> *const c_void {
     std::ptr::null()
 }
 
-/// The method `objc_msgSend` jumps to for `sel` sent to `recv`, which is not null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn limina_objc_lookup(recv: *const Header, sel: Sel) -> Imp {
+/// The method for `sel` in `recv`'s class chain.
+unsafe fn find(recv: *const Header, sel: Sel) -> Option<Imp> {
     // SAFETY: every object and class starts with a Header.
-    let start = unsafe { (*recv).isa };
-    let mut c = start;
+    let mut c = unsafe { (*recv).isa };
     while !c.is_null() {
         // SAFETY: classes are leaked and immutable.
         let class = unsafe { &*c };
         if let Some(&imp) = class.methods.get(&(sel as usize)) {
-            return imp;
+            return Some(imp);
         }
         c = class.superclass;
     }
+    None
+}
+
+/// The method `objc_msgSend` jumps to for `sel` sent to `recv`, which is not null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn limina_objc_lookup(recv: *const Header, sel: Sel) -> Imp {
+    // SAFETY: the caller passes a live object or class.
+    if let Some(imp) = unsafe { find(recv, sel) } {
+        return imp;
+    }
     // SAFETY: as above; `sel` is an interned C string.
-    let class = unsafe { &*start };
+    let class = unsafe { &*(*recv).isa };
     let name = unsafe { CStr::from_ptr(sel) }.to_string_lossy();
     eprintln!(
         "limina-metal: {}[{} {name}] is not implemented",
@@ -307,6 +315,14 @@ pub unsafe extern "C" fn release(this: *mut Header, _: Sel) {
     }
 }
 
+unsafe extern "C" fn responds_to_selector(this: *const Header, _: Sel, sel: Sel) -> bool {
+    // SAFETY: a live object; `sel` is interned.
+    unsafe { find(this, sel) }.is_some()
+}
+
+/// Labels are for Xcode's debugger and captures, which a guest has neither of.
+extern "C" fn set_label(_: *mut Header, _: Sel, _: *const c_void) {}
+
 unsafe extern "C" fn retain_count(this: *mut Header, _: Sel) -> usize {
     // SAFETY: a live object.
     unsafe { (*this).refs.load(Ordering::Relaxed) }
@@ -363,9 +379,14 @@ pub fn root_defs() -> Vec<Def> {
                 ("release", imp!(release)),
                 ("autorelease", imp!(autorelease)),
                 ("retainCount", imp!(retain_count)),
+                ("respondsToSelector:", imp!(responds_to_selector)),
+                ("setLabel:", imp!(set_label)),
                 ("dealloc", imp!(dealloc::<()>)),
             ],
-            class_methods: vec![("alloc", imp!(alloc::<()>))],
+            class_methods: vec![
+                ("alloc", imp!(alloc::<()>)),
+                ("respondsToSelector:", imp!(responds_to_selector)),
+            ],
         },
         Def {
             name: "NSAutoreleasePool",
