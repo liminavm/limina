@@ -117,11 +117,27 @@ impl Pool {
 
     fn create(&mut self, size: u64) -> std::io::Result<(u32, Arena)> {
         let id = self.id()?;
-        match Arena::create(&self.file, id, size) {
-            Ok(a) => Ok((id, a)),
-            Err(e) => {
-                self.free_ids.push(id);
+        let start = Instant::now();
+        loop {
+            match Arena::create(&self.file, id, size) {
+                Ok(a) => return Ok((id, a)),
+                // The VM's arena window is full; doomed arenas give their part of it back once
+                // the commits they wait for complete.
                 Err(e)
+                    if e.raw_os_error() == Some(libc::ENOMEM)
+                        && !self.doomed.is_empty()
+                        && start.elapsed() < Duration::from_secs(10) =>
+                {
+                    let before = self.doomed.len();
+                    self.reap(self.completed.load(Ordering::Acquire));
+                    if self.doomed.len() == before {
+                        std::thread::sleep(Duration::from_micros(50));
+                    }
+                }
+                Err(e) => {
+                    self.free_ids.push(id);
+                    return Err(e);
+                }
             }
         }
     }
@@ -180,6 +196,8 @@ impl Pool {
         if let Some(arena) = r.own.take() {
             drop(arena);
             self.doomed.push((after, r.arena));
+            // Its guest-physical range is taken until it is destroyed.
+            self.reap(self.completed.load(Ordering::Acquire));
             return;
         }
         let Some(i) = self.pooled.iter().position(|p| p.id == r.arena) else {
@@ -205,6 +223,7 @@ impl Pool {
             let p = self.pooled.swap_remove(i);
             drop(p.arena);
             self.doomed.push((after, p.id));
+            self.reap(self.completed.load(Ordering::Acquire));
         }
     }
 

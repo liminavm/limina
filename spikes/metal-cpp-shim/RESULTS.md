@@ -12,7 +12,7 @@ Measured 2026-10-17 on an M1 Max, macOS 27, in a clone of `Fedora-Workstation-44
 run`. The GPU host is from limina `5000e7d0` (function constants on the wire) and libkrun
 `9dc32a05`. metal-cpp is `metal-cpp_26.zip` (sha256 `4df3c078…a3a4`).
 
-| check (test/axpy.cpp, written as MLX writes its calls) | result, 4 runs |
+| check (test/axpy.cpp, written as MLX writes its calls) | result |
 |---|---|
 | builds with `clang++ -std=c++17 -fblocks` against metal-cpp and the stand-in headers, linked to `liblimina_metal.a` | yes |
 | `MTL::CreateSystemDefaultDevice`, `name()`, and `maxThreadsPerThreadgroup()`, a 24-byte struct return | `Apple M1 Max (limina)`, 1024×1024×1024 |
@@ -23,6 +23,9 @@ run`. The GPU host is from limina `5000e7d0` (function constants on the wire) an
 | a method the shim lacks (`isHeadless`) | aborts: `limina-metal: -[MTLDevice isHeadless] is not implemented`, exit 134 |
 | `thread-exit`: a C++ `thread_local` destructor that uses an autorelease pool at thread exit, after the thread's own pool use | runs |
 | `many-buffers`: 5000 buffers of 4 KiB, freed and made again, then axpy across them; then 4500 buffers of 20 MiB made and freed one after another, and axpy in the last | 0 of 6144 and 0 of 5 242 880 wrong |
+| `event-wait`: work behind `encodeWait` on a shared event only the CPU signals, 300 ms before `setSignaledValue` and after it | 0 written and not completed; then 1048576/1048576 right |
+| `event-wait`, two queues: B waits for A's signal and is committed first, then reads what A wrote | 1048576/1048576 right |
+| `event-wait`, two queues: B waits for the CPU, then A commits work and a signal | A's signal arrives and its work is done while B's has not run; after the CPU's signal, B's is right |
 
 ## Recipe
 
@@ -75,12 +78,26 @@ shim is a Rust static library, so building it needs no Linux linker. The guest l
   are reused, and an arena is destroyed (`ARENA_DESTROY`) once every commit made before its last
   free has completed. When every id is in use or waiting for that, an allocation waits for the
   commits, up to 10 s. A freed region is reused at once: that is Metal's contract with heaps and
-  untracked resources, which MLX keeps.
+  untracked resources, which MLX keeps. Each free tries to destroy what is due, and an arena that
+  finds the VM's arena window full waits for doomed ones to give their part of it back.
 - **`setBytes` data** of a command buffer goes in one region from the pool, which it holds until
   it retires.
 - **Command buffers record into their own list**, and commit turns it into ring commands under the
   device's lock: this is the per-command-buffer stream MLX's multithreaded encoding needs. A
   completion thread polls the ring every 50 µs, and frees what retired command buffers held.
+- **One ring, several `MTLCommandQueue`s.** The ring is one queue on the host, where Metal has one
+  per `MTLCommandQueue`, and MLX commits a stream's wait for another stream's event before that
+  event's signal is committed (mlx-lm generates on a stream of its own). On one queue the wait
+  would come first, ahead of the signal it needs; mlx-lm's generation over lazily cast weights
+  came out as garbage (`!!!…`) that way. So a committed command buffer goes on the ring up to a wait that no submitted
+  signal or CPU `setSignaledValue` has reached, and is held there, with the command buffers
+  committed after it on its own queue, until one does (`pump` in `shim/src/metal.rs`). Other
+  queues go past it. The host still runs the queues one after the other, and an event's
+  `Destroy` waits while a held command buffer names it. `LIMINA_METAL_TRACE=1` prints every
+  commit, event and hold.
+- **Event waits and signals split a command buffer**: the wire takes `QUEUE_EVENT` only between
+  commits, so one `MTLCommandBuffer` becomes several commits, and its status and handlers follow
+  the last.
 - **Each command buffer has an argument table**, destroyed straight after its last commit: the
   host holds a destroyed object until the commits made before the destroy have completed.
 - **Each encoder starts with a queue barrier**, which gives Metal 3's ordering between encoders.

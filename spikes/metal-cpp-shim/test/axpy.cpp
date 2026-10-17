@@ -7,9 +7,12 @@
 // With "many-buffers" it holds more buffers than a context has arenas (4096), as a loaded model
 // does, frees and remakes them, and runs axpy on buffers spread across them; then it makes and
 // frees more large buffers, each an arena of its own, than there are arena ids, and runs axpy in
-// the last of them.
+// the last of them. With "event-wait" a command buffer waits for a value only the CPU sets, and
+// must not run before it does; then two queues order their work through events as MLX's streams
+// do, a wait committed ahead of the signal it waits for, and one queue held by the CPU while the
+// other goes on.
 //
-// Usage: axpy <kernels.metallib> <kernels.metal> [unknown | thread-exit | many-buffers]
+// Usage: axpy <kernels.metallib> <kernels.metal> [unknown | thread-exit | many-buffers | event-wait]
 
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
@@ -20,6 +23,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 #include <fstream>
 #include <sstream>
 #include <thread>
@@ -74,6 +78,109 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
         dev->isHeadless();
         return 0;
+    }
+
+    if (argc > 3 && std::strcmp(argv[3], "event-wait") == 0) {
+        NS::Error* err = nullptr;
+        NS::URL* url = NS::URL::fileURLWithPath(NS::String::string(argv[1], NS::UTF8StringEncoding));
+        MTL::Library* lib = dev->newLibrary(url, &err);
+        MTL::Function* axpy = lib ? lib->newFunction(NS::String::string("axpy", NS::ASCIIStringEncoding)) : nullptr;
+        MTL::ComputePipelineState* pso = axpy ? dev->newComputePipelineState(axpy, &err) : nullptr;
+        if (!pso)
+            return fail("axpy pipeline", err);
+        auto filled = [&](float v) {
+            MTL::Buffer* b = dev->newBuffer(N * 4, MTL::ResourceStorageModeShared);
+            float* p = static_cast<float*>(b->contents());
+            for (uint32_t i = 0; i < N; i++)
+                p[i] = v;
+            return b;
+        };
+        // y += A * x on the command buffer `cb`.
+        auto axpy_on = [&](MTL::CommandBuffer* cb, MTL::Buffer* xb, MTL::Buffer* yb) {
+            MTL::ComputeCommandEncoder* e = cb->computeCommandEncoder(MTL::DispatchTypeConcurrent);
+            e->setComputePipelineState(pso);
+            e->setBuffer(xb, 0, 0);
+            e->setBuffer(yb, 0, 1);
+            e->setBytes(&A, sizeof(A), 2);
+            e->dispatchThreads(MTL::Size(N, 1, 1), MTL::Size(256, 1, 1));
+            e->endEncoding();
+        };
+        auto count = [&](MTL::Buffer* b, float want) {
+            const float* p = static_cast<const float*>(b->contents());
+            uint32_t n = 0;
+            for (uint32_t i = 0; i < N; i++)
+                n += p[i] == want;
+            return n;
+        };
+        MTL::CommandQueue* q = dev->newCommandQueue();
+        MTL::Buffer* ones = filled(1.0f);
+        MTL::Buffer* y = filled(0.0f);
+        bool ok = true;
+
+        // Work behind a wait on a value only the CPU sets, and nothing behind it.
+        MTL::SharedEvent* cpu = dev->newSharedEvent();
+        std::printf("a new event's value: %llu\n", (unsigned long long)cpu->signaledValue());
+        MTL::CommandBuffer* cb = q->commandBuffer();
+        cb->encodeWait(cpu, 1);
+        axpy_on(cb, ones, y);
+        cb->commit();
+        usleep(300000);
+        uint32_t early = count(y, A);
+        bool done_early = cb->status() == MTL::CommandBufferStatusCompleted;
+        std::printf("300 ms before the CPU's signal: %u of %u written, %s\n", early, N,
+                    done_early ? "completed" : "not completed");
+        ok &= early == 0 && !done_early;
+        cpu->setSignaledValue(1);
+        cb->waitUntilCompleted();
+        uint32_t right = count(y, A);
+        std::printf("after it: %u of %u right\n", right, N);
+        ok &= right == N;
+
+        // Two queues, as MLX's streams: B waits for what A computes, and is committed first.
+        MTL::CommandQueue* qa = dev->newCommandQueue();
+        MTL::CommandQueue* qb = dev->newCommandQueue();
+        MTL::SharedEvent* e = dev->newSharedEvent();
+        MTL::Buffer* ya = filled(0.0f);
+        MTL::Buffer* yb = filled(0.0f);
+        MTL::CommandBuffer* cbb = qb->commandBuffer();
+        cbb->encodeWait(e, 1);
+        axpy_on(cbb, ya, yb);
+        cbb->commit();
+        MTL::CommandBuffer* cba = qa->commandBuffer();
+        axpy_on(cba, ones, ya);
+        cba->encodeSignalEvent(e, 1);
+        cba->commit();
+        cbb->waitUntilCompleted();
+        right = count(yb, A * A);
+        std::printf("a wait committed before its signal on another queue: %u of %u right\n", right, N);
+        ok &= right == N;
+
+        // B waits for the CPU; A's later work and signal go past it.
+        MTL::SharedEvent* gate = dev->newSharedEvent();
+        MTL::SharedEvent* after = dev->newSharedEvent();
+        MTL::Buffer* yc = filled(0.0f);
+        MTL::Buffer* yd = filled(0.0f);
+        MTL::CommandBuffer* cbw = qb->commandBuffer();
+        cbw->encodeWait(gate, 1);
+        axpy_on(cbw, ones, yc);
+        cbw->commit();
+        MTL::CommandBuffer* cbs = qa->commandBuffer();
+        axpy_on(cbs, ones, yd);
+        cbs->encodeSignalEvent(after, 1);
+        cbs->commit();
+        bool signaled = after->waitUntilSignaledValue(1, 5000);
+        uint32_t other = count(yd, A);
+        early = count(yc, A);
+        std::printf("while one queue waits for the CPU, the other's work: %s, %u of %u; the waiting work ran early on %u\n",
+                    signaled ? "signaled" : "TIMED OUT", other, N, early);
+        ok &= signaled && other == N && early == 0;
+        gate->setSignaledValue(1);
+        cbw->waitUntilCompleted();
+        right = count(yc, A);
+        std::printf("after the CPU's signal: %u of %u right\n", right, N);
+        ok &= right == N;
+        std::printf(ok ? "OK\n" : "FAIL\n");
+        return ok ? 0 : 1;
     }
 
     if (argc > 3 && std::strcmp(argv[3], "many-buffers") == 0) {

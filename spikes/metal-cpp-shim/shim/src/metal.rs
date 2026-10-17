@@ -2,8 +2,9 @@
 //! transport (`limina-gpu-client`). A command buffer records into its own list; commit turns the
 //! list into ring commands under the device's lock, and a completion thread runs the handlers.
 
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{CString, c_void};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -63,6 +64,12 @@ struct State {
     lost: Option<String>,
     next_event_slot: u64,
     free_event_slots: Vec<u64>,
+    /// Committed command buffers not yet all on the ring, in commit order (see [`pump`]).
+    held: Vec<Submission>,
+    /// Each event's highest value a submitted signal or the CPU has set.
+    promised: HashMap<u32, u64>,
+    /// Released events a held command buffer still names, destroyed once none does.
+    doomed_events: Vec<u32>,
 }
 
 pub struct Device {
@@ -134,6 +141,20 @@ impl State {
     }
 }
 
+/// `LIMINA_METAL_TRACE=1`: one line per commit and event to stderr.
+fn trace() -> bool {
+    static T: OnceLock<bool> = OnceLock::new();
+    *T.get_or_init(|| std::env::var_os("LIMINA_METAL_TRACE").is_some_and(|v| v != "0"))
+}
+
+macro_rules! trace {
+    ($($a:tt)*) => {
+        if trace() {
+            eprintln!("[limina-metal {:?}] {}", std::thread::current().id(), format!($($a)*));
+        }
+    };
+}
+
 /// Where buffers and scratch come from.
 pub fn pool() -> &'static Mutex<Pool> {
     &device().v.pool
@@ -188,6 +209,9 @@ fn device() -> &'static Obj<Device> {
                     lost: None,
                     next_event_slot: EVENTS,
                     free_event_slots: Vec::new(),
+                    held: Vec::new(),
+                    promised: HashMap::new(),
+                    doomed_events: Vec::new(),
                 }),
                 done: Condvar::new(),
                 name: format!("{name} (limina)"),
@@ -431,6 +455,7 @@ unsafe extern "C" fn shared_event_value(this: *const Obj<SharedEvent>, _: Sel) -
 }
 
 unsafe extern "C" fn shared_event_set_value(this: *const Obj<SharedEvent>, _: Sel, value: u64) {
+    trace!("event {}: CPU sets {value}", unsafe { (*this).v.handle });
     // SAFETY: a live event.
     let handle = unsafe { (*this).v.handle };
     let mut s = device().v.state.lock().unwrap();
@@ -442,6 +467,9 @@ unsafe extern "C" fn shared_event_set_value(this: *const Obj<SharedEvent>, _: Se
         },
         &[],
     );
+    let p = s.promised.entry(handle).or_default();
+    *p = (*p).max(value);
+    pump(&mut s);
     s.gpu.kick();
 }
 
@@ -451,6 +479,9 @@ unsafe extern "C" fn shared_event_wait(
     value: u64,
     timeout_ms: u64,
 ) -> bool {
+    trace!("event {}: CPU waits for {value}", unsafe {
+        (*this).v.handle
+    });
     let start = Instant::now();
     let mut spins = 0u32;
     loop {
@@ -476,8 +507,14 @@ unsafe extern "C" fn shared_event_dealloc(this: *mut Obj<SharedEvent>, s: Sel) {
     // SAFETY: a live event, at its last reference.
     let (handle, slot) = unsafe { ((*this).v.handle, (*this).v.slot) };
     let mut st = device().v.state.lock().unwrap();
-    // The host keeps the event until the work committed before this destroy is done.
-    st.push(cmd::Destroy { handle, _pad: 0 }, &[]);
+    // The host keeps the event until the work committed before this destroy is done; a held
+    // command buffer that names it has not been committed yet.
+    if st.held.iter().any(|h| h.names(handle)) {
+        st.doomed_events.push(handle);
+    } else {
+        st.push(cmd::Destroy { handle, _pad: 0 }, &[]);
+    }
+    st.promised.remove(&handle);
     st.free_event_slots.push(slot);
     drop(st);
     // SAFETY: as in `dealloc`.
@@ -929,10 +966,18 @@ unsafe extern "C" fn pipeline_execution_width(_: *const Obj<Pipeline>, _: Sel) -
 
 // --- Queues, command buffers, encoders ---
 
-pub struct Queue;
+pub struct Queue {
+    id: u32,
+}
 
 unsafe extern "C" fn new_command_queue(_: *const Obj<Device>, _: Sel) -> *mut Obj<Queue> {
-    new("MTLCommandQueue", Queue)
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    new(
+        "MTLCommandQueue",
+        Queue {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+        },
+    )
 }
 
 enum Op {
@@ -949,6 +994,7 @@ enum Op {
 }
 
 pub struct CommandBuffer {
+    queue: u32,
     ops: Mutex<Vec<Op>>,
     handlers: Mutex<Vec<Ptr<c_void>>>,
     status: Mutex<usize>,
@@ -958,10 +1004,12 @@ pub struct CommandBuffer {
     scratch: Mutex<Option<Region>>,
 }
 
-unsafe extern "C" fn command_buffer(_: *const Obj<Queue>, _: Sel) -> *mut Obj<CommandBuffer> {
+unsafe extern "C" fn command_buffer(this: *const Obj<Queue>, _: Sel) -> *mut Obj<CommandBuffer> {
     autoreleased(new(
         "MTLCommandBuffer",
         CommandBuffer {
+            // SAFETY: a live queue.
+            queue: unsafe { (*this).v.id },
             ops: Mutex::new(Vec::new()),
             handlers: Mutex::new(Vec::new()),
             status: Mutex::new(0),
@@ -1121,87 +1169,164 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
             std::process::abort();
         }
     });
-    let mut at = 0u64;
+    // SAFETY: a live command buffer; the pending list holds a reference until it completes.
+    let queue = unsafe {
+        *(*this).v.status.lock().unwrap() = STATUS_COMMITTED;
+        send0(this.cast(), "retain");
+        (*this).v.queue
+    };
     let mut s = dev.v.state.lock().unwrap();
-    let table = s.handle();
-    s.push(
-        cmd::CreateArgumentTable {
-            handle: table,
-            max_buffer_bind_count: BINDINGS,
-        },
-        &[],
-    );
-    s.push(cmd::BeginCommandBuffer {}, &[]);
-    for op in ops {
-        match op {
-            Op::BeginCompute => {
-                s.push(cmd::BeginCompute {}, &[]);
-                // Metal 3 runs one encoder's work after the last's; Metal 4 needs a barrier for that.
-                s.push(
-                    cmd::Barrier {
-                        kind: cmd::barrier_kind::AFTER_QUEUE_STAGES,
-                        after: STAGE_DISPATCH | STAGE_BLIT,
-                        before: STAGE_DISPATCH | STAGE_BLIT,
-                        visibility: VISIBILITY_DEVICE,
-                    },
-                    &[],
-                );
-                s.push(cmd::SetArgumentTable { table, stages: 0 }, &[]);
+    s.held.push(Submission {
+        queue,
+        cb: Ptr(this),
+        ops: ops.into(),
+        table: None,
+        scratch,
+        at: 0,
+        open: false,
+    });
+    pump(&mut s);
+}
+
+/// A committed command buffer on its way to the ring.
+struct Submission {
+    queue: u32,
+    cb: Ptr<Obj<CommandBuffer>>,
+    /// What is not on the ring yet.
+    ops: VecDeque<Op>,
+    table: Option<u32>,
+    scratch: Option<Region>,
+    /// The next free byte of `scratch`.
+    at: u64,
+    /// A command buffer is begun on the ring.
+    open: bool,
+}
+
+impl Submission {
+    fn names(&self, event: u32) -> bool {
+        self.ops
+            .iter()
+            .any(|op| matches!(op, Op::Event(e, _, _) if *e == event))
+    }
+}
+
+/// Puts on the ring what the held command buffers can.
+///
+/// The ring is one queue, where Metal has one per `MTLCommandQueue`. On one queue a wait committed
+/// ahead of the signal it waits for, from another `MTLCommandQueue`, would come before it, and MLX
+/// does exactly that with a second stream. So a command buffer goes on the ring up to a wait no
+/// submitted signal or CPU set has reached yet, and is held there, along with the command buffers
+/// committed after it on its own queue, until one does. Other queues' command buffers go past it.
+/// The queues still run one after the other on the host.
+fn pump(s: &mut State) {
+    loop {
+        let mut advanced = false;
+        let mut blocked = Vec::new();
+        let mut i = 0;
+        while i < s.held.len() {
+            if blocked.contains(&s.held[i].queue) {
+                i += 1;
+                continue;
             }
-            Op::Pipeline(handle) => s.push(cmd::SetComputePipeline { handle, _pad: 0 }, &[]),
-            Op::Bind(index, address) => bind(&mut s, table, index, address),
-            Op::Bytes(index, data) => {
-                let r = scratch.as_ref().unwrap();
-                // SAFETY: inside the region, which was sized for all of them.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(data.as_ptr(), r.ptr.add(at as usize), data.len())
-                };
-                bind(&mut s, table, index, r.gpu + at);
-                at += (data.len() as u64).next_multiple_of(BYTES_ALIGN);
-            }
-            Op::Threads(grid, group) => s.push(
-                cmd::DispatchThreads {
-                    grid: grid.wire(),
-                    threads_per_group: group.wire(),
-                },
-                &[],
-            ),
-            Op::Groups(groups, group) => s.push(
-                cmd::DispatchThreadgroups {
-                    groups: groups.wire(),
-                    threads_per_group: group.wire(),
-                },
-                &[],
-            ),
-            Op::Barrier => s.push(
-                cmd::Barrier {
-                    kind: cmd::barrier_kind::AFTER_ENCODER_STAGES,
-                    after: STAGE_DISPATCH,
-                    before: STAGE_DISPATCH,
-                    visibility: VISIBILITY_DEVICE,
-                },
-                &[],
-            ),
-            Op::End => s.push(cmd::EndEncoding {}, &[]),
-            Op::Event(event, wait, value) => {
-                // The wire takes queue events only between commits: what came before goes in its
-                // own commit, and the rest of this command buffer in the next.
-                s.push(cmd::EndCommandBuffer {}, &[]);
-                s.commit();
-                s.push(
-                    cmd::QueueEvent {
-                        event,
-                        wait: wait as u32,
-                        value,
-                    },
-                    &[],
-                );
-                s.push(cmd::BeginCommandBuffer {}, &[]);
+            let mut sub = s.held.remove(i);
+            let (done, moved) = advance(s, &mut sub);
+            advanced |= moved;
+            if !done {
+                blocked.push(sub.queue);
+                s.held.insert(i, sub);
+                i += 1;
             }
         }
+        if !advanced {
+            break;
+        }
+    }
+    let (named, free): (Vec<u32>, Vec<u32>) = std::mem::take(&mut s.doomed_events)
+        .into_iter()
+        .partition(|&e| s.held.iter().any(|h| h.names(e)));
+    s.doomed_events = named;
+    for handle in free {
+        s.push(cmd::Destroy { handle, _pad: 0 }, &[]);
+    }
+}
+
+/// Puts `sub` on the ring up to its first wait that cannot be met yet. Whether all of it is on
+/// the ring now, and whether any more of it went.
+fn advance(s: &mut State, sub: &mut Submission) -> (bool, bool) {
+    let table = match sub.table {
+        Some(t) => t,
+        None => {
+            let t = s.handle();
+            s.push(
+                cmd::CreateArgumentTable {
+                    handle: t,
+                    max_buffer_bind_count: BINDINGS,
+                },
+                &[],
+            );
+            sub.table = Some(t);
+            t
+        }
+    };
+    let mut moved = false;
+    while let Some(op) = sub.ops.front() {
+        if let Op::Event(event, true, value) = *op
+            && s.promised.get(&event).copied().unwrap_or(0) < value
+        {
+            if sub.open {
+                s.push(cmd::EndCommandBuffer {}, &[]);
+                s.commit();
+                sub.open = false;
+            }
+            trace!(
+                "cb {:p}: held at a wait for event {event} value {value}",
+                sub.cb.0
+            );
+            return (false, moved);
+        }
+        let op = sub.ops.pop_front().unwrap();
+        moved = true;
+        if let Op::Event(event, wait, value) = op {
+            trace!(
+                "cb {:p}: {} event {event} value {value} after seqno {}",
+                sub.cb.0,
+                if wait { "wait for" } else { "signal" },
+                s.gpu.seqno + sub.open as u64
+            );
+            // The wire takes queue events only between commits: what came before goes in its own
+            // commit, and the rest of this command buffer in the next.
+            if sub.open {
+                s.push(cmd::EndCommandBuffer {}, &[]);
+                s.commit();
+                sub.open = false;
+            }
+            s.push(
+                cmd::QueueEvent {
+                    event,
+                    wait: wait as u32,
+                    value,
+                },
+                &[],
+            );
+            if !wait {
+                let p = s.promised.entry(event).or_default();
+                *p = (*p).max(value);
+            }
+            continue;
+        }
+        if !sub.open {
+            s.push(cmd::BeginCommandBuffer {}, &[]);
+            sub.open = true;
+        }
+        encode(s, table, sub, op);
+    }
+    // The last commit, which the command buffer completes with, follows its last event.
+    if !sub.open {
+        s.push(cmd::BeginCommandBuffer {}, &[]);
     }
     s.push(cmd::EndCommandBuffer {}, &[]);
     let seqno = s.commit();
+    trace!("cb {:p}: committed as seqno {seqno}", sub.cb.0);
     // The host holds a destroyed object until the commits made before the destroy complete.
     s.push(
         cmd::Destroy {
@@ -1210,13 +1335,67 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
         },
         &[],
     );
-    // SAFETY: a live command buffer; the pending list holds a reference until it completes.
-    unsafe {
-        *(*this).v.status.lock().unwrap() = STATUS_COMMITTED;
-        *(*this).v.scratch.lock().unwrap() = scratch;
-        send0(this.cast(), "retain");
+    // SAFETY: the pending list's reference keeps the command buffer alive.
+    unsafe { *(*sub.cb.0).v.scratch.lock().unwrap() = sub.scratch.take() };
+    s.pending.push((seqno, Ptr(sub.cb.0)));
+    (true, true)
+}
+
+/// Puts one op other than an event on the ring, inside a begun command buffer.
+fn encode(s: &mut State, table: u32, sub: &mut Submission, op: Op) {
+    match op {
+        Op::BeginCompute => {
+            s.push(cmd::BeginCompute {}, &[]);
+            // Metal 3 runs one encoder's work after the last's; Metal 4 needs a barrier for that.
+            s.push(
+                cmd::Barrier {
+                    kind: cmd::barrier_kind::AFTER_QUEUE_STAGES,
+                    after: STAGE_DISPATCH | STAGE_BLIT,
+                    before: STAGE_DISPATCH | STAGE_BLIT,
+                    visibility: VISIBILITY_DEVICE,
+                },
+                &[],
+            );
+            s.push(cmd::SetArgumentTable { table, stages: 0 }, &[]);
+        }
+        Op::Pipeline(handle) => s.push(cmd::SetComputePipeline { handle, _pad: 0 }, &[]),
+        Op::Bind(index, address) => bind(s, table, index, address),
+        Op::Bytes(index, data) => {
+            let r = sub.scratch.as_ref().unwrap();
+            // SAFETY: inside the region, which was sized for all of them.
+            unsafe {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), r.ptr.add(sub.at as usize), data.len())
+            };
+            let address = r.gpu + sub.at;
+            sub.at += (data.len() as u64).next_multiple_of(BYTES_ALIGN);
+            bind(s, table, index, address);
+        }
+        Op::Threads(grid, group) => s.push(
+            cmd::DispatchThreads {
+                grid: grid.wire(),
+                threads_per_group: group.wire(),
+            },
+            &[],
+        ),
+        Op::Groups(groups, group) => s.push(
+            cmd::DispatchThreadgroups {
+                groups: groups.wire(),
+                threads_per_group: group.wire(),
+            },
+            &[],
+        ),
+        Op::Barrier => s.push(
+            cmd::Barrier {
+                kind: cmd::barrier_kind::AFTER_ENCODER_STAGES,
+                after: STAGE_DISPATCH,
+                before: STAGE_DISPATCH,
+                visibility: VISIBILITY_DEVICE,
+            },
+            &[],
+        ),
+        Op::End => s.push(cmd::EndEncoding {}, &[]),
+        Op::Event(..) => unreachable!("events are put on the ring by advance"),
     }
-    s.pending.push((seqno, Ptr(this)));
 }
 
 fn bind(s: &mut State, table: u32, index: u32, address: u64) {
