@@ -11,8 +11,12 @@
 // must not run before it does; then two queues order their work through events as MLX's streams
 // do, a wait committed ahead of the signal it waits for, and one queue held by the CPU while the
 // other goes on; last, a signal ahead of a wait for the CPU, which waits for that signal first.
+// With "two-queues" a long single-thread kernel runs alone, twice on one queue, and once on each
+// of two queues: the two queues must take about as long as one run, as on Metal, where work on
+// different queues runs side by side.
 //
-// Usage: axpy <kernels.metallib> <kernels.metal> [unknown | thread-exit | many-buffers | event-wait]
+// Usage: axpy <kernels.metallib> <kernels.metal>
+//            [unknown | thread-exit | many-buffers | event-wait | two-queues]
 
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
@@ -20,6 +24,7 @@
 #include <Metal/Metal.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -78,6 +83,59 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
         dev->isHeadless();
         return 0;
+    }
+
+    if (argc > 3 && std::strcmp(argv[3], "two-queues") == 0) {
+        NS::Error* err = nullptr;
+        NS::URL* url = NS::URL::fileURLWithPath(NS::String::string(argv[1], NS::UTF8StringEncoding));
+        MTL::Library* lib = dev->newLibrary(url, &err);
+        MTL::Function* f = lib ? lib->newFunction(NS::String::string("spin", NS::ASCIIStringEncoding)) : nullptr;
+        MTL::ComputePipelineState* pso = f ? dev->newComputePipelineState(f, &err) : nullptr;
+        if (!pso)
+            return fail("spin pipeline", err);
+        MTL::Buffer* out = dev->newBuffer(64, MTL::ResourceStorageModeShared);
+        auto spin = [&](MTL::CommandQueue* q, uint32_t n, uint32_t slot) {
+            MTL::CommandBuffer* cb = q->commandBuffer();
+            MTL::ComputeCommandEncoder* e = cb->computeCommandEncoder(MTL::DispatchTypeConcurrent);
+            e->setComputePipelineState(pso);
+            e->setBuffer(out, slot * 16, 0);
+            e->setBytes(&n, sizeof(n), 1);
+            e->dispatchThreads(MTL::Size(1, 1, 1), MTL::Size(1, 1, 1));
+            e->endEncoding();
+            cb->commit();
+            return cb;
+        };
+        auto secs = [](auto t) { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count(); };
+        MTL::CommandQueue* qa = dev->newCommandQueue();
+        MTL::CommandQueue* qb = dev->newCommandQueue();
+        // Calibrate to about 300 ms a run.
+        uint32_t n = 1u << 20;
+        double alone = 0;
+        for (;;) {
+            auto t = std::chrono::steady_clock::now();
+            spin(qa, n, 0)->waitUntilCompleted();
+            alone = secs(t);
+            if (alone > 0.15 || n >= (1u << 31))
+                break;
+            n *= 2;
+        }
+        auto t = std::chrono::steady_clock::now();
+        MTL::CommandBuffer* a = spin(qa, n, 0);
+        MTL::CommandBuffer* b = spin(qa, n, 1);
+        a->waitUntilCompleted();
+        b->waitUntilCompleted();
+        double one = secs(t);
+        t = std::chrono::steady_clock::now();
+        a = spin(qa, n, 0);
+        b = spin(qb, n, 1);
+        a->waitUntilCompleted();
+        b->waitUntilCompleted();
+        double two = secs(t);
+        std::printf("spin of %u steps: alone %.0f ms; twice on one queue %.0f ms (%.2fx); once on each of two queues %.0f ms (%.2fx)\n",
+                    n, alone * 1e3, one * 1e3, one / alone, two * 1e3, two / alone);
+        bool ok = two < 1.4 * alone;
+        std::printf(ok ? "OK\n" : "FAIL: the two queues took turns\n");
+        return ok ? 0 : 1;
     }
 
     if (argc > 3 && std::strcmp(argv[3], "event-wait") == 0) {

@@ -9,8 +9,8 @@ host's GPU, without anyone maintaining a copy of metal-cpp's headers.
 
 Measured 2026-10-17 on an M1 Max, macOS 27, in a clone of `Fedora-Workstation-44.metal.test.raw`
 (kernel 6.19.10-300.fc44, glibc 2.43, clang 22.1.8), booted with `LIMINA_GPU_METAL=1 cargo xtask
-run`. The GPU host is from limina `5000e7d0` (function constants on the wire) and libkrun
-`9dc32a05`. metal-cpp is `metal-cpp_26.zip` (sha256 `4df3c078…a3a4`).
+run`. The GPU host speaks wire VERSION 5 (a host queue per `MTLCommandQueue`,
+`docs/design/metal-transport-queues.md`), with libkrun `9dc32a05`. metal-cpp is `metal-cpp_26.zip` (sha256 `4df3c078…a3a4`).
 
 | check (test/axpy.cpp, written as MLX writes its calls) | result |
 |---|---|
@@ -27,6 +27,7 @@ run`. The GPU host is from limina `5000e7d0` (function constants on the wire) an
 | `event-wait`, two queues: B waits for A's signal and is committed first, then reads what A wrote | 1048576/1048576 right |
 | `event-wait`, two queues: B waits for the CPU, then A commits work and a signal | A's signal arrives and its work is done while B's has not run; after the CPU's signal, B's is right |
 | `event-wait`: a command buffer signals, then waits for the CPU, which waits for that signal before it sets the value | the signal arrives; then 1048576/1048576 right |
+| `two-queues`: a single-thread kernel of 2²³ steps alone, twice on one queue, once on each of two queues | 241 ms; 481 ms (2.00×); 241 ms (1.00×) |
 
 ## Recipe
 
@@ -34,7 +35,7 @@ run`. The GPU host is from limina `5000e7d0` (function constants on the wire) an
 spikes/metal-cpp-shim/build.sh          # out/: metal-cpp, kernels.metallib, liblimina_metal.a, stand-in headers
 LIMINA_GPU_METAL=1 cargo xtask run --disk <clone of metal.test>
 port=$(scripts/wait-guest-ssh.sh /tmp/limina-worker-<disk>.log)
-spikes/metal-cpp-shim/run.sh $port      # installs clang in the guest if missing, builds, runs twice
+spikes/metal-cpp-shim/run.sh $port      # installs clang in the guest if missing, builds, runs every mode
 ```
 
 `build.sh` needs Xcode's Metal toolchain and `rustup target add aarch64-unknown-linux-gnu`. The
@@ -86,20 +87,14 @@ shim is a Rust static library, so building it needs no Linux linker. The guest l
 - **Command buffers record into their own list**, and commit turns it into ring commands under the
   device's lock: this is the per-command-buffer stream MLX's multithreaded encoding needs. A
   completion thread polls the ring every 50 µs, and frees what retired command buffers held.
-- **One ring, several `MTLCommandQueue`s.** The ring is one queue on the host, where Metal has one
-  per `MTLCommandQueue`, and MLX commits a stream's wait for another stream's event before that
-  event's signal is committed (mlx-lm generates on a stream of its own). On one queue the wait
-  would come first, ahead of the signal it needs; mlx-lm's generation over lazily cast weights
-  came out as garbage (`!!!…`) that way. So a committed command buffer goes on the ring up to a wait that no submitted
-  signal or CPU `setSignaledValue` has reached, and is held there, with the command buffers
-  committed after it on its own queue, until one does (`pump` in `shim/src/metal.rs`). Other
-  queues go past it. The host still runs the queues one after the other, and an event's
-  `Destroy` waits while a held command buffer names it. Every pump rings the doorbell, because a
-  held command buffer can leave a signal on the ring past its last commit, and MLX's CPU stream
-  waits for such a signal before it sets the value the GPU is held on. A held command buffer's
-  work lands under a later seqno than its `commit` returned with, so freeing a buffer is safe
-  only from a completion handler, as MLX does, not after `commit` returns. `LIMINA_METAL_TRACE=1` prints every
-  commit, event and hold.
+- **A host queue per `MTLCommandQueue`.** `newCommandQueue` sends `CREATE_QUEUE` with a slot in
+  the main arena (from 2 MiB) where the host stores that queue's completed seqno, and every commit
+  and queue event names its queue. Work on different queues runs side by side, and a wait
+  committed before its signal on another queue simply waits on the host, as on Metal. A command
+  buffer retires when its own queue's slot reaches its last seqno. Seqnos are one sequence per
+  context, so no single value says "every commit up to here": an arena freed while commits are
+  in flight is destroyed once each queue has completed what it had committed at the free.
+  `LIMINA_METAL_TRACE=1` prints every queue, commit and event.
 - **Event waits and signals split a command buffer**: the wire takes `QUEUE_EVENT` only between
   commits, so one `MTLCommandBuffer` becomes several commits, and its status and handlers follow
   the last.

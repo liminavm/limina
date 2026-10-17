@@ -7,9 +7,9 @@
 //!
 //! A freed region is reused at once. That is Metal's contract with heaps and untracked resources,
 //! which MLX keeps: it frees a buffer only once no command buffer still in flight uses it. An
-//! arena is destroyed later, once every commit made before the free has completed: the host frees
-//! its memory and reuses its guest-physical range at once, and the destroy travels on the control
-//! queue, not the ring.
+//! arena is destroyed later, once every queue has completed the commits it had made before the
+//! free: the host frees its memory and reuses its guest-physical range at once, and the destroy
+//! travels on the control queue, not the ring.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -28,8 +28,33 @@ const MAX_ARENAS: u32 = 4096;
 /// The host page: an arena of its own is whole pages of it.
 const HOST_PAGE: u64 = 16384;
 
-/// The seqno of the latest commit, so a free can tell which commits it must wait for.
-pub static COMMITTED: AtomicU64 = AtomicU64::new(0);
+/// A host queue: the `u64` the host stores its completed seqnos to, in the main arena, and the
+/// seqno of the latest commit made to it.
+pub struct QueueState {
+    pub handle: u32,
+    pub completed: &'static AtomicU64,
+    pub committed: AtomicU64,
+}
+
+impl QueueState {
+    pub fn done(&self, seqno: u64) -> bool {
+        self.completed.load(Ordering::Acquire) >= seqno
+    }
+}
+
+/// Every queue made, which live as long as the process.
+pub static QUEUES: Mutex<Vec<&'static QueueState>> = Mutex::new(Vec::new());
+
+/// What a free must wait for: each queue's latest commit at the time, where not yet completed.
+fn outstanding() -> Vec<(&'static QueueState, u64)> {
+    QUEUES
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|&q| (q, q.committed.load(Ordering::Acquire)))
+        .filter(|&(q, seqno)| !q.done(seqno))
+        .collect()
+}
 
 /// GPU memory: `size` bytes at `ptr` in this process and at `gpu` for the GPU.
 pub struct Region {
@@ -62,27 +87,22 @@ struct Pooled {
 
 pub struct Pool {
     file: File,
-    /// The ring's completed seqno, which the host writes: in the main arena, which lives as long
-    /// as the process.
-    completed: &'static AtomicU64,
     align: u64,
     next_id: u32,
     free_ids: Vec<u32>,
     pooled: Vec<Pooled>,
-    /// Arenas no region uses any more, unmapped, with the seqno that must complete first.
-    doomed: Vec<(u64, u32)>,
+    /// Arenas no region uses any more, unmapped, with the commits that must complete first.
+    doomed: Vec<(Vec<(&'static QueueState, u64)>, u32)>,
 }
 
 // SAFETY: the arenas' mappings are plain memory; the pool is only reached through a Mutex.
 unsafe impl Send for Pool {}
 
 impl Pool {
-    /// A pool over the context of `file`, whose ring's completed seqno is `completed`, aligning
-    /// regions to `align` bytes.
-    pub fn new(file: File, completed: &'static AtomicU64, align: u64) -> Mutex<Self> {
+    /// A pool over the context of `file`, aligning regions to `align` bytes.
+    pub fn new(file: File, align: u64) -> Mutex<Self> {
         Mutex::new(Self {
             file,
-            completed,
             align: align.max(256),
             next_id: MAIN_ARENA,
             free_ids: Vec::new(),
@@ -108,7 +128,7 @@ impl Pool {
                     "all {MAX_ARENAS} arenas of the context are in use"
                 )));
             }
-            self.reap(self.completed.load(Ordering::Acquire));
+            self.reap();
             if self.free_ids.is_empty() {
                 std::thread::sleep(Duration::from_micros(50));
             }
@@ -129,7 +149,7 @@ impl Pool {
                         && start.elapsed() < Duration::from_secs(10) =>
                 {
                     let before = self.doomed.len();
-                    self.reap(self.completed.load(Ordering::Acquire));
+                    self.reap();
                     if self.doomed.len() == before {
                         std::thread::sleep(Duration::from_micros(50));
                     }
@@ -192,12 +212,12 @@ impl Pool {
     }
 
     fn free(&mut self, r: &mut Region) {
-        let after = COMMITTED.load(Ordering::Acquire);
+        let after = outstanding();
         if let Some(arena) = r.own.take() {
             drop(arena);
             self.doomed.push((after, r.arena));
             // Its guest-physical range is taken until it is destroyed.
-            self.reap(self.completed.load(Ordering::Acquire));
+            self.reap();
             return;
         }
         let Some(i) = self.pooled.iter().position(|p| p.id == r.arena) else {
@@ -223,15 +243,15 @@ impl Pool {
             let p = self.pooled.swap_remove(i);
             drop(p.arena);
             self.doomed.push((after, p.id));
-            self.reap(self.completed.load(Ordering::Acquire));
+            self.reap();
         }
     }
 
-    /// Destroys the doomed arenas whose commits have all completed, up to seqno `done`.
-    pub fn reap(&mut self, done: u64) {
+    /// Destroys the doomed arenas whose commits have all completed.
+    pub fn reap(&mut self) {
         let (ready, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.doomed)
             .into_iter()
-            .partition(|&(after, _)| after <= done);
+            .partition(|(after, _)| after.iter().all(|&(q, seqno)| q.done(seqno)));
         self.doomed = kept;
         for (_, id) in ready {
             match destroy_arena(&self.file, id) {

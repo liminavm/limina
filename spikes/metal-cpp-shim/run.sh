@@ -1,9 +1,9 @@
 #!/bin/bash
 # The guest half: copies out/ into a guest, installs clang if it is missing, builds the test
-# against Apple's metal-cpp and the stand-in headers, links limina-metal, and runs it five times:
+# against Apple's metal-cpp and the stand-in headers, links limina-metal, and runs it six times:
 # the compute run, an autorelease pool used at thread exit, more buffers than a context has
-# arenas, GPU waits on shared events within and across queues, then a call limina-metal does not implement, which
-# must abort naming it.
+# arenas, GPU waits on shared events within and across queues, two queues' work side by side,
+# then a call limina-metal does not implement, which must abort naming it.
 # Usage: run.sh <ssh-port>. The test images' credentials are in docs/images.md.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -35,6 +35,11 @@ echo "== exit $t"
 [ $rc -eq 0 ] && rc=$t
 echo "== GPU waits on events, within and across queues"
 g 60 'cd /tmp/mcs && ./axpy kernels.metallib kernels.metal event-wait'
+t=$?
+echo "== exit $t"
+[ $rc -eq 0 ] && rc=$t
+echo "== two queues side by side"
+g 120 'cd /tmp/mcs && ./axpy kernels.metallib kernels.metal two-queues'
 t=$?
 echo "== exit $t"
 [ $rc -eq 0 ] && rc=$t
