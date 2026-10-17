@@ -1,7 +1,6 @@
 # Metal transport: command queues (wire VERSION 5)
 
-Status: agreed. The wire, the GPU host, limina-metal, the fence path (module, libkrun,
-limina-vmm), the client and the smoke test implement it; KosmicKrisp and delivery do not yet.
+Status: implemented, and delivered to the enhanced and `metal.test` images (`docs/images.md`).
 Wire VERSION 4 has one queue per context: every guest `MTLCommandQueue` lands
 on the context's single `MTL4CommandQueue`, so two MLX streams take turns, and limina-metal holds
 a command buffer at a cross-queue wait no submitted signal has reached
