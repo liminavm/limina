@@ -36,6 +36,13 @@ pub mod uapi {
         pub mmap_offset: u64,
     }
 
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct ArenaDestroy {
+        pub arena_id: u32,
+        pub pad: u32,
+    }
+
     pub const ARENA_SHARED: u32 = 1;
     pub const FENCE_FD: u32 = 1;
 
@@ -139,6 +146,7 @@ pub mod uapi {
 
     pub const CTX_CREATE: libc::c_ulong = iowr(0x20, size_of::<CtxCreate>());
     pub const ARENA_CREATE: libc::c_ulong = iowr(0x21, size_of::<ArenaCreate>());
+    pub const ARENA_DESTROY: libc::c_ulong = iow(0x22, size_of::<ArenaDestroy>());
     pub const RING_ATTACH: libc::c_ulong = iow(0x23, size_of::<RingAttach>());
     pub const ARENA_EXPORT: libc::c_ulong = iowr(0x24, size_of::<ArenaExport>());
     pub const ARENA_IMPORT: libc::c_ulong = iowr(0x25, size_of::<ArenaImport>());
@@ -270,6 +278,17 @@ impl Arena {
         // SAFETY: inside the mapping, checked above; read only after the GPU finished.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().add(offset as usize), len) }
     }
+}
+
+/// Destroys arena `id`, whose id is then free for another. The guest module refuses while any
+/// mapping of it exists, so drop the [`Arena`] first. The host frees its memory at once, so no
+/// commit still in flight may use it.
+pub fn destroy_arena(f: &File, id: u32) -> io::Result<()> {
+    let mut d = uapi::ArenaDestroy {
+        arena_id: id,
+        pad: 0,
+    };
+    ioctl(f, uapi::ARENA_DESTROY, &mut d)
 }
 
 /// A mapping keeps the device file open; unmapping is what lets closing it end the context.
