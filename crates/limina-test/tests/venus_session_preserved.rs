@@ -428,6 +428,10 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
         cleanup();
         panic!("{e:#}");
     }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
+        cleanup();
+        panic!("{e:#}");
+    }
     eprintln!("restored guest SSH up: {banner}");
 
     // Same kernel boot — a differing boot_id means the guest REBOOTED, which is a
@@ -625,6 +629,10 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
         });
     // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
     if let Err(e) = g3.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
+    if let Err(e) = g3.assert_restore_lost_nothing() {
         cleanup();
         panic!("{e:#}");
     }

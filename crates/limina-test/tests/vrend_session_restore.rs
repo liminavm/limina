@@ -509,6 +509,10 @@ fn run(desktop: &Desktop) {
         cleanup();
         panic!("{e:#}");
     }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
+        cleanup();
+        panic!("{e:#}");
+    }
     eprintln!("restored guest SSH up: {banner}");
 
     // Identity floor.

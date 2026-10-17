@@ -272,6 +272,10 @@ fn hardware_decode_in_flight_survives_restore() {
         cleanup();
         panic!("{e:#}");
     }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
+        cleanup();
+        panic!("{e:#}");
+    }
     if ssh_retry(&g2, "cat /proc/sys/kernel/random/boot_id") != boot_id {
         cleanup();
         panic!("boot_id changed across restore — the guest rebooted instead of resuming");

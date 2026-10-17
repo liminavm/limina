@@ -557,6 +557,10 @@ fn synoik_desktop_survives_snapshot_restore() {
         cleanup();
         panic!("{e:#}");
     }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
+        cleanup();
+        panic!("{e:#}");
+    }
 
     let procs_after = workload_procs(&g2, &apps);
     // A blank desktop is perfectly still, so this settles quickly on the failing path too —

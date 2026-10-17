@@ -278,15 +278,7 @@ fn metal_transport_client_survives_snapshot_restore() {
 
     // The restore's own report.
     let log = g2.supervisor_log();
-    let failures: Vec<&str> = log
-        .lines()
-        .filter(|l| {
-            l.contains("replay dropped")
-                || l.contains("replay FAILED")
-                || l.contains("staged snapshot replay failed")
-                || l.contains("unparseable extension section")
-        })
-        .collect();
+    let failures = limina_test::restore_losses(&log);
     let complete = log.contains("gpu restore: replay complete");
     let back = log
         .lines()

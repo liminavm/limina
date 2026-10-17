@@ -3209,6 +3209,22 @@ impl Guest {
         }
     }
 
+    /// Fail if this restore lost anything of the GPU's: see [`restore_losses`]. Call it once the
+    /// restored guest answers. The lines are printed here because the scratch dir goes with the
+    /// `Guest`.
+    pub fn assert_restore_lost_nothing(&self) -> Result<()> {
+        let log = self.supervisor_log();
+        let lost = restore_losses(&log);
+        if lost.is_empty() {
+            return Ok(());
+        }
+        bail!(
+            "the restore lost GPU state ({} line(s)):\n{}",
+            lost.len(),
+            lost.join("\n")
+        )
+    }
+
     /// Fail if the guest kernel logged a GPU error since it last suspended. Call it after a
     /// restore, once SSH answers.
     ///
@@ -4203,6 +4219,26 @@ pub fn ring_stalls(log: &str) -> Vec<&str> {
         .collect()
 }
 
+/// What a restore did not bring back, from a restoring worker's supervisor log: every error the
+/// GPU restore logged (a refused arena, a context restored lost, a dropped or failed replay), and
+/// every account the GPU host gave of a value it could not reproduce (its `restore:` lines, which
+/// it logs only when something is lost).
+///
+/// A restore can lose a context and still look right: the rest of the device comes back, and a
+/// still desktop shows the lost client's last frame. So a test that restores GPU state asserts
+/// this is empty rather than leaving it to the pixels. The worker's
+/// `gpu restore: extension: N contexts, ... back` line says the extension was restored at all.
+pub fn restore_losses(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter(|l| {
+            (l.contains("ERROR") && l.contains("gpu restore:"))
+                || (l.contains("limina_gpu_host") && l.contains("] restore:"))
+                || l.contains("staged snapshot replay failed")
+                || l.contains("replay dropped")
+        })
+        .collect()
+}
+
 /// The GPU errors in a guest's `journalctl -k -p err -o short-monotonic` output that were logged
 /// at or after the last line of `suspends` (the same format, filtered to `PM: suspend entry`), so
 /// a resumed guest is judged on what happened since it went to sleep and not on its boot. With no
@@ -4508,6 +4544,32 @@ mod teardown_tests {
             other_supervisor_alive,
             "the forced teardown killed another run's supervisor"
         );
+    }
+}
+
+#[cfg(test)]
+mod restore_losses_tests {
+    use super::restore_losses;
+
+    #[test]
+    fn a_refused_arena_and_a_lost_context_are_losses() {
+        // The first two lines are the failed run's, verbatim; the third its GPU host's account.
+        let log = "\
+[2026-10-16T22:29:15.368506Z INFO  limina_vmm::krun] display-resize: listening at \"/tmp/r.sock\"\n\
+[2026-10-16T22:29:15.862151Z ERROR krun_devices::virtio::gpu::worker] gpu restore: extension: GPU host refused arena: status 5\n\
+[2026-10-16T23:56:53.122616Z WARN  limina_gpu_host::server] restore: arena 3 of context 1 wanted at 0x1504180000, the space offers 0x1504178000\n\
+[2026-10-17T00:00:00.000000Z ERROR krun_devices::virtio::gpu::ext] gpu restore: extension: context 3 restored lost: an arena of its is not at its address\n";
+        assert_eq!(restore_losses(log).len(), 3);
+    }
+
+    #[test]
+    fn a_whole_restore_is_not_a_loss() {
+        let log = "\
+[2026-10-17T00:11:30.896181Z INFO  limina_gpu_host::server] GPU host up on Apple M1 Max\n\
+[2026-10-17T00:11:35.418061Z INFO  krun::vmm::builder] restore: read + validated the snapshot head (1099 MiB file) in 4.5s\n\
+[2026-10-17T00:11:39.000000Z INFO  krun_devices::virtio::gpu::worker] gpu restore: extension: 2 contexts, 9 arenas, 3 surfaces back\n\
+[2026-10-17T00:11:39.000000Z WARN  krun_devices::virtio::gpu::worker] gpu restore: surface 50: rows not written; blank until redrawn\n";
+        assert!(restore_losses(log).is_empty());
     }
 }
 

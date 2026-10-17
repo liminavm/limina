@@ -781,6 +781,10 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         cleanup();
         panic!("{e:#}");
     }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
+        cleanup();
+        panic!("{e:#}");
+    }
 
     let boot_id_after = ssh_retry(&g2, "cat /proc/sys/kernel/random/boot_id");
     if boot_id_after != boot_id {
