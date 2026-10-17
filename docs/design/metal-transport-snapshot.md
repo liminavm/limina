@@ -23,22 +23,29 @@ KosmicKrisp writes two kinds of host value into memory the GPU reads: arena GPU 
 addresses), and resource IDs of textures, texture views and samplers (in argument buffers).
 Metal takes neither as a request. A restore reproduces them, measured in
 `crates/limina-gpu-host/tests/first_light.rs` (the ignored `are_host_values_*`, `how_host_values_*`,
-`can_placeholders_*` and `where_arenas_*` tests):
+`can_placeholders_*`, `where_arenas_*` and `do_other_objects_*` tests), `tests/arena_space.rs` and
+`metal.rs`'s `footprints_of_small_objects`:
 
-- **Arenas** are placed lowest-address first-fit, with freed neighbours merged and 32 KiB between
-  arenas. Other allocations share the space (the process's first context start takes 0x68000
-  after the first arena; later context starts take none of it). The restore therefore places
-  every arena before it starts anything else, in address order, filling each gap below a recorded
-  address with a placeholder arena whatever made the gap, and frees the placeholders once every
-  arena stands.
+- **Arenas** are placed lowest-address first-fit on 32 KiB boundaries, with freed neighbours
+  merged. Each allocation takes its size plus 16 KiB, rounded up to 32 KiB (a 16 KiB arena takes
+  0x8000, a 1 MiB one 0x108000), from 16 KiB to 2 GiB; buffers of 8 KiB or less come out of a
+  pooled 0x28000. Other allocations share the space: the process's first context start takes
+  0x68000 after the first arena (later ones take none), a timestamp counter heap 0x8000, a
+  dispatch 0xd0000. So every hole is a whole number of granules, and a
+  placeholder arena 16 KiB smaller than the hole fills it exactly. The restore places every arena
+  before it starts anything else, in address order, filling each hole below a recorded address
+  with such a placeholder whatever made the hole, and frees the placeholders once every arena
+  stands.
 - **Resource IDs** come from two spaces per GPU host process, textures (views included) and
   samplers, each slot reused once Metal has released it, not strictly lowest-first. The fill runs
   over every context's objects together, since two clients share one space. Objects are created
   in dependency order (a view after its parent, whatever their IDs) and each is brought to its
   recorded ID: placeholders hold the slots below it, and a slot that a placeholder already holds
   is freed and taken, retrying while Metal's release is pending.
-- **Every value is verified.** A mismatch is a bug in the above, and loses that context (its
-  ring reports `LMN_ERROR_RESTORE`); it never touches the device or another context.
+- **Every value is verified.** A mismatch is a bug in the above. In a context's objects it loses
+  that context (its ring reports `LMN_ERROR_RESTORE`) and touches nothing else; an arena that
+  cannot be placed fails the whole GPU restore, so every renderer's session restarts (hardening
+  backlog).
 - **An arena only its export still holds** (the context that made it destroyed it, or is gone)
   is restored in a GPU host context 0, which the guest can never name, exported again, and the
   holder dropped at the end: the export keeps the arena.

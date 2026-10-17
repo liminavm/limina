@@ -2002,3 +2002,114 @@ fn an_export_that_cannot_drain_loses_the_context() {
         "the ring says why"
     );
 }
+
+/// Measurement: whether objects other than arenas take GPU addresses from the space arenas are
+/// placed in. A 1 MiB arena after each kind of object; a gap other than 0x8000 is space taken.
+/// Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn do_other_objects_take_arena_space() {
+    let mut g = start();
+    let mut id = 100;
+    let mut last = g.host.create_arena(1, id, MIB).expect("arena");
+    let mut step = |g: &mut Guest, what: &str| {
+        id += 1;
+        let a = g.host.create_arena(1, id, MIB).expect("arena");
+        eprintln!(
+            "after {what:<22} arena at {:#x}, gap {:#x}",
+            a.gpu_base,
+            a.gpu_base.wrapping_sub(last.gpu_base + last.mapping.size())
+        );
+        last = a;
+    };
+    step(&mut g, "nothing");
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "a library");
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    step(&mut g, "a compute pipeline");
+    churn_texture(&mut g, 3);
+    step(&mut g, "a texture");
+    churn_sampler(&mut g, 5);
+    step(&mut g, "a sampler");
+    let base = g.arena.gpu_base;
+    table(&mut g, 6, &[(0, base + MIB)]);
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "an argument table");
+    g.push(
+        cmd::SyncObject {
+            handle: 7,
+            kind: cmd::sync_kind::EVENT,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "an event");
+    g.push(
+        cmd::CreateCounterHeap {
+            handle: 8,
+            count: 2,
+            reply: BufRef::NONE,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "a counter heap");
+    // `run_poke` makes its own pipeline 2 and table 3.
+    for h in [2, 3] {
+        g.push(cmd::Destroy { handle: h, _pad: 0 }, &[]);
+    }
+    run_poke(&mut g, base + 2 * MIB, 64);
+    step(&mut g, "a dispatch");
+    for h in [2, 1, 3, 5, 6, 7, 8] {
+        g.push(cmd::Destroy { handle: h, _pad: 0 }, &[]);
+    }
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "destroying them");
+}
+
+/// A counter heap takes less GPU address space than the smallest arena, so the hole it leaves in
+/// a fresh GPU host below the arena made after it is one no arena can fill.
+#[test]
+fn an_arena_made_after_a_counter_heap_is_restored_at_its_address() {
+    let mut g = start();
+    let before = g.host.create_arena(1, 2, MIB).expect("arena");
+    g.push(
+        cmd::CreateCounterHeap {
+            handle: 8,
+            count: 2,
+            reply: BufRef::NONE,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit");
+    let after = g.host.create_arena(1, 3, MIB).expect("arena");
+    let mut live = vec![
+        (1, g.arena.mapping.size(), g.arena.gpu_base),
+        (2, before.mapping.size(), before.gpu_base),
+        (3, after.mapping.size(), after.gpu_base),
+    ];
+    live.sort_by_key(|&(_, _, base)| base);
+
+    let fresh = GpuHost::spawn(Path::new(env!("CARGO_BIN_EXE_limina-gpu-host"))).expect("spawn");
+    let _bell = fresh.create_context(1).expect("context");
+    let mut kept = Vec::new();
+    for &(id, size, base) in &live {
+        let a = fresh.restore_arena(1, id, size, base).expect("restore");
+        assert_eq!(a.gpu_base, base, "arena {id}");
+        kept.push(a);
+    }
+    fresh.restore_done().expect("done");
+}

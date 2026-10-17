@@ -56,8 +56,11 @@ struct Server {
     id_placeholders: Placeholders,
 }
 
-/// The address space Metal leaves after each allocation.
-const ARENA_GAP: u64 = 0x8000;
+/// Metal places allocations on this boundary.
+const GRANULE: u64 = 0x8000;
+/// What an allocation takes beyond its size, before rounding up to [`GRANULE`]: a 16 KiB arena
+/// takes 0x8000 of address space, a 1 MiB one 0x108000.
+const GUARD: u64 = 0x4000;
 /// Placeholders a single restored arena may need before giving up.
 const MAX_FILLS: usize = 64;
 
@@ -328,7 +331,8 @@ impl Server {
             }
             let hole = probe.gpu_base;
             drop(probe);
-            if hole > r.gpu_base || r.gpu_base - hole < ARENA_GAP + metal::PAGE {
+            let span = r.gpu_base.wrapping_sub(hole);
+            if hole > r.gpu_base || span < GRANULE || span % GRANULE != 0 {
                 log::warn!(
                     "restore: arena {} of context {} wanted at {:#x}, the space offers {hole:#x}",
                     r.arena,
@@ -337,8 +341,7 @@ impl Server {
                 );
                 return Err(ipc::ERR_BAD_VALUE);
             }
-            let filler = Arena::new(&self.device, r.gpu_base - hole - ARENA_GAP)
-                .ok_or(ipc::ERR_NO_MEMORY)?;
+            let filler = Arena::new(&self.device, span - GUARD).ok_or(ipc::ERR_NO_MEMORY)?;
             if filler.gpu_base != hole {
                 log::warn!(
                     "restore: a placeholder for {hole:#x} landed at {:#x}",
@@ -348,6 +351,13 @@ impl Server {
             }
             self.placeholders.push(filler);
         }
+        log::warn!(
+            "restore: arena {} of context {} wanted at {:#x}, still not there after {MAX_FILLS} \
+             placeholders",
+            r.arena,
+            r.ctx,
+            r.gpu_base
+        );
         Err(ipc::ERR_BAD_VALUE)
     }
 
