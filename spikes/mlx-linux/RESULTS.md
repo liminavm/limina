@@ -27,6 +27,11 @@ below; the GPU host is from limina `5000e7d0`.
 | `mlx-lm` 0.32.2, `mlx-community/Qwen2.5-0.5B-Instruct-4bit` (`test/lm_check.py`, `test/lm_compare.py`): the prompt's logits in float32, GPU against MLX's CPU backend | 40 positions × 151936; largest difference 4.2e-4 of 28.9; the next-token choice agrees at 40 of 40 |
 | the same model generating 96 tokens greedily in its own float16 on the GPU | coherent English; 203 tok/s, prompt 499 tok/s, peak 0.38 GB. Other runs, on earlier builds of limina-metal or with the GPU host logging at debug, gave 156 to 306 tok/s: one run is not a benchmark |
 | generating again after the float32 pass, the weights cast back lazily, so the generation stream waits on the default stream's events | the same 96 tokens |
+| omlx `8a9da1b` (0.7.1rc1), `omlx serve --headless`, with `mlx-community/Qwen2.5-7B-Instruct-4bit` (4.19 GB): discovery, load, `/v1/models`, `/v1/chat/completions` | serves; the model loads in 3.6 s (3.99 GB) |
+| the same 256-token greedy story from the guest's omlx and from omlx on macOS itself (`mlx==0.32.4` from PyPI, same model files) | byte-identical, 207 words |
+| `test/serve_check.py` against the guest: one 256-token request; the same streamed; four different requests at once | 72 to 74 tok/s generating, first token 0.17 to 0.30 s; streamed in 8 chunks, first after 0.14 s; four at once 58 to 67 tok/s together, 15 to 25 each. Over four runs |
+| the same, against omlx on macOS itself, while the guest sat idle | 57 to 70 tok/s; four at once 67 to 71 tok/s together. Over two runs |
+| host GPU utilisation (`ioreg`) during `serve_check` in the guest | 77 to 100 % |
 
 `examples/cpp/tutorial` also runs, but checks nothing: its `assert`s compile out of a Release build.
 In float16 the GPU and the CPU backend cannot be compared token for token: the two sum in
@@ -46,11 +51,22 @@ port=$(scripts/wait-guest-ssh.sh /tmp/limina-worker-<disk>.log)
 spikes/mlx-linux/guest.sh $port        # copy, deps, so, build (about 3 minutes on 8 vCPUs)
 spikes/mlx-linux/guest.sh $port check linear_regression logistic_regression
 spikes/mlx-linux/guest.sh $port python lm model   # MLX's Python package in ~/mlxl/venv, mlx-lm, the model
+spikes/mlx-linux/guest.sh $port omlx serve        # omlx over it; serve a 7B from ~/models and drive it
 ```
 
 The Python package installs `libmlx.so` next to the extension, so it needs only
 `LD_LIBRARY_PATH=~/mlxl/prefix/lib`, for limina-metal. `mlx-lm` goes in with `--no-deps` and then
-its own requirements, which keeps pip from replacing the fork's MLX with PyPI's.
+its own requirements, which keeps pip from replacing the fork's MLX with PyPI's. omlx goes in the
+same way (`test/omlx_reqs.py` splits its requirements): its git-pinned MLX packages and omlx itself
+with `--no-deps`, and `--ignore-requires-python`, because omlx declares Python below 3.14 and the
+guest has 3.14. It runs unchanged: its macOS-only parts (Mach memory statistics, `sysctl`,
+IOKit sampling) sit behind `sys.platform` checks, and its custom kernels are off unless
+`OMLX_WITH_CUSTOM_KERNEL` is set. omlx renames its process `omlx-server`, so a pattern on its
+command line does not find it.
+
+Four requests at once are no faster than one, on macOS itself as in the guest, so that is this
+model on an M1 Max under omlx, not the transport; whether the guest's few percent less there is
+the streams taking turns (`spikes/metal-cpp-shim/RESULTS.md`) is not measured.
 
 `host.sh` builds from the MLX tree at `third_party/mlx`, the `liminavm/mlx` fork pinned in the
 manifest (`cargo xtask vendor` materializes it), and refuses a dirty one:

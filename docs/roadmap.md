@@ -16,7 +16,7 @@ bridged networking (worker-held vmnet, no privilege needed) and M7 real-device U
 (AccessoryAccess on macOS 27, root helper below). M16
 (LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) runs MLX itself: built for Linux with its Metal backend,
 it runs on the host GPU from a guest, passes 297 of the 298 cases in MLX's C++ test suite, and
-runs a 4-bit LLM through `mlx-lm`.
+serves a 7B LLM through omlx at the speed it runs on macOS.
 
 ---
 
@@ -1355,7 +1355,9 @@ built on the host from the same commit. limina-metal carves buffers out of poole
 guest, MLX's C++ test suite passes 297 of its 298 cases (the last needs zero-copy user buffers), 12 ops plus a custom kernel compiled from MSL match MLX's CPU backend, a 2048³ matmul runs at
 up to 6.9 TFLOP/s, and MLX's regression examples converge. MLX's Python package builds in the
 guest from the same fork, and `mlx-lm` runs a 4-bit Qwen2.5-0.5B on the GPU at about 200 tok/s,
-its float32 logits matching MLX's CPU backend at every prompt position. limina-metal holds a
+its float32 logits matching MLX's CPU backend at every prompt position. omlx serves a 4-bit
+Qwen2.5-7B from the guest over its OpenAI API at about 73 tok/s, as fast as omlx on macOS itself,
+and its greedy output is byte-identical to the host's. limina-metal holds a
 command buffer at a wait no submitted signal has reached, so MLX's streams order correctly over
 the one wire queue.
 
@@ -1363,4 +1365,4 @@ the one wire queue.
 - **limina-metal, out of the spike:** streams that run concurrently (a host queue per stream; today
   they take turns on the one wire queue), and an arena window (16 GiB per VM today, shared by
   every context) that fits the models people run.
-- **Servers over `mlx-lm`**, such as omlx, and larger models.
+- **Larger models**, past what the arena window holds, and omlx's custom kernels.
