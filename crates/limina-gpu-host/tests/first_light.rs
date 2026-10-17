@@ -659,6 +659,7 @@ fn the_device_answers_queries() {
     assert!(info.max_threads_per_threadgroup[0] >= 256);
     assert!(info.os_version[0] >= 26, "{:?}", info.os_version);
     assert_ne!(info.features & cmd::feature::LIBRARY_DATA, 0);
+    assert_ne!(info.features & cmd::feature::FUNCTION_CONSTANTS, 0);
 
     let reply = g.reply_slot(RECORDS);
     g.push(
@@ -840,6 +841,201 @@ fn a_metallib_library_restores_without_its_staging() {
     run_poke(&mut g, base + DST, 64);
     let words = g.bytes(DST, 64 * 4);
     assert_eq!(words[63 * 4..], (0xC0FFEE00u32 + 63).to_le_bytes());
+}
+
+const SPEC_MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+constant bool NEGATE [[function_constant(0)]];
+constant int K [[function_constant(1)]];
+constant ushort STEP [[function_constant(2)]];
+
+kernel void spec(device int* dst [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    dst[tid] = (NEGATE ? -K : K) + int(tid) * int(STEP);
+}
+"#;
+
+/// `MTLDataType` values.
+const DATA_BOOL: u32 = 53;
+const DATA_INT: u32 = 29;
+const DATA_USHORT: u32 = 41;
+
+fn constants(negate: bool, k: i32, step: u16) -> [cmd::FunctionConstant; 3] {
+    [
+        (0, DATA_BOOL, negate as u64),
+        (1, DATA_INT, k as u32 as u64),
+        (2, DATA_USHORT, step as u64),
+    ]
+    .map(|(index, data_type, value)| cmd::FunctionConstant {
+        index,
+        data_type,
+        value,
+    })
+}
+
+/// Pipeline `handle` for `spec` from `library`, specialised with `consts`.
+fn spec_pipeline(
+    g: &mut Guest,
+    handle: u32,
+    library: u32,
+    consts: &[cmd::FunctionConstant],
+    reply: BufRef,
+) {
+    g.push(
+        cmd::CreateComputePipeline {
+            handle,
+            library,
+            name_len: 4,
+            constant_count: consts.len() as u32,
+            reply,
+            ..Default::default()
+        },
+        &[cmd::bytes_of_slice(consts), b"spec"],
+    );
+}
+
+/// `spec` from pipeline `pipeline` over `n` ints at arena offset `dst`, bound through table
+/// `table`.
+fn run_spec(g: &mut Guest, pipeline: u32, table_handle: u32, dst: u64, n: u32) -> Vec<i32> {
+    let base = g.arena.gpu_base;
+    table(g, table_handle, &[(0, base + dst)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(
+        cmd::SetComputePipeline {
+            handle: pipeline,
+            _pad: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::SetArgumentTable {
+            table: table_handle,
+            stages: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [n / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("dispatch");
+    g.bytes(dst, n as usize * 4)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&w| i32::from_le_bytes(w))
+        .collect()
+}
+
+fn spec_want(negate: bool, k: i32, step: u16, n: u32) -> Vec<i32> {
+    (0..n as i32)
+        .map(|i| (if negate { -k } else { k }) + i * step as i32)
+        .collect()
+}
+
+/// MLX's kernels take their variants as function constants: one function, a pipeline per set of
+/// values, from MSL source and from a `.metallib` alike.
+#[test]
+fn function_constants_specialise_one_function_into_several_pipelines() {
+    let mut g = start();
+    let reply = g.reply_slot(RECORDS);
+    create_library(&mut g, 1, SPEC_MSL, BufRef::NONE);
+    create_library_data(&mut g, 2, &metallib("spec", SPEC_MSL), reply);
+    assert_eq!(g.reply(RECORDS).status, 0);
+    for (handle, library, (negate, k, step)) in [
+        (3, 1, (false, 7, 1)),
+        (4, 1, (true, 40, 3)),
+        (5, 2, (true, -5, 65535)),
+    ] {
+        let reply = g.reply_slot(RECORDS);
+        spec_pipeline(&mut g, handle, library, &constants(negate, k, step), reply);
+        let r = g.reply(RECORDS);
+        assert_eq!(r.status, 0, "pipeline {handle}");
+        let got = run_spec(&mut g, handle, 10 + handle, 32 * MIB, 128);
+        assert_eq!(got, spec_want(negate, k, step, 128), "pipeline {handle}");
+    }
+}
+
+#[test]
+fn a_constant_metal_cannot_take_fails_its_reply_and_keeps_the_context() {
+    let mut g = start();
+    create_library(&mut g, 1, SPEC_MSL, BufRef::NONE);
+    let good = constants(false, 1, 1);
+    let with = |i: usize, data_type: u32, value: u64| {
+        let mut c = good;
+        c[i] = cmd::FunctionConstant {
+            data_type,
+            value,
+            ..c[i]
+        };
+        c
+    };
+    let cases: [(&str, Vec<cmd::FunctionConstant>, ring::Error); 6] = [
+        (
+            "not a scalar type",
+            with(1, 999, 1).to_vec(),
+            ring::Error::BadValue,
+        ),
+        (
+            "a bool of 2",
+            with(0, DATA_BOOL, 2).to_vec(),
+            ring::Error::BadValue,
+        ),
+        (
+            "an int with bits above it",
+            with(1, DATA_INT, 1 << 32).to_vec(),
+            ring::Error::BadValue,
+        ),
+        (
+            "an index past Metal's range",
+            vec![cmd::FunctionConstant {
+                index: 1 << 16,
+                ..good[0]
+            }],
+            ring::Error::BadValue,
+        ),
+        (
+            "no constants for a function that needs them",
+            vec![],
+            ring::Error::PipelineCreate,
+        ),
+        (
+            "one constant missing",
+            good[..2].to_vec(),
+            ring::Error::PipelineCreate,
+        ),
+    ];
+    for (what, consts, want) in cases {
+        let reply = g.reply_slot(RECORDS);
+        spec_pipeline(&mut g, 2, 1, &consts, reply);
+        assert_eq!(g.reply(RECORDS).status, want as u32, "{what}");
+    }
+    spec_pipeline(&mut g, 2, 1, &good, BufRef::NONE);
+    assert_eq!(
+        run_spec(&mut g, 2, 3, 32 * MIB, 64),
+        spec_want(false, 1, 1, 64)
+    );
+}
+
+/// The constants travel in the pipeline's record, so a restore rebuilds the same specialisation.
+#[test]
+fn a_specialised_pipeline_restores() {
+    let mut g = start();
+    create_library(&mut g, 1, SPEC_MSL, BufRef::NONE);
+    spec_pipeline(&mut g, 2, 1, &constants(true, 9, 2), BufRef::NONE);
+    g.commit_and_wait().expect("pipeline");
+    let mut g = restore_into_fresh(g);
+    assert_eq!(
+        run_spec(&mut g, 2, 3, 32 * MIB, 64),
+        spec_want(true, 9, 2, 64)
+    );
 }
 
 #[test]

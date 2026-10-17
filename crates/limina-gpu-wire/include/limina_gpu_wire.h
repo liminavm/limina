@@ -404,12 +404,14 @@ _Static_assert(offsetof(struct lmn_create_render_pipeline, _pad) == 36, "lmn_cre
 _Static_assert(offsetof(struct lmn_create_render_pipeline, color_formats) == 40, "lmn_create_render_pipeline.color_formats");
 _Static_assert(offsetof(struct lmn_create_render_pipeline, reply) == 72, "lmn_create_render_pipeline.reply");
 
-/* An `MTL4ComputePipelineDescriptor`; the function's name follows. */
+/* An `MTL4ComputePipelineDescriptor`; `constant_count` [`FunctionConstant`]s follow, then */
+/* the function's name. With constants, the function is an `MTL4SpecializedFunctionDescriptor` */
+/* over the library's; only for a host with `feature::FUNCTION_CONSTANTS`. */
 struct lmn_create_compute_pipeline {
    uint32_t handle;
    uint32_t library;
    uint32_t name_len;
-   uint32_t _pad;
+   uint32_t constant_count;
    uint64_t max_total_threads;
    struct lmn_buf_ref reply;
 };
@@ -417,9 +419,22 @@ _Static_assert(sizeof(struct lmn_create_compute_pipeline) == 40, "lmn_create_com
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, handle) == 0, "lmn_create_compute_pipeline.handle");
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, library) == 4, "lmn_create_compute_pipeline.library");
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, name_len) == 8, "lmn_create_compute_pipeline.name_len");
-_Static_assert(offsetof(struct lmn_create_compute_pipeline, _pad) == 12, "lmn_create_compute_pipeline._pad");
+_Static_assert(offsetof(struct lmn_create_compute_pipeline, constant_count) == 12, "lmn_create_compute_pipeline.constant_count");
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, max_total_threads) == 16, "lmn_create_compute_pipeline.max_total_threads");
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, reply) == 24, "lmn_create_compute_pipeline.reply");
+
+/* One `setConstantValue:type:atIndex:`. `data_type` is a scalar `MTLDataType` (bool, char, */
+/* short, int, long, their unsigned forms, half, bfloat or float); the value sits in the low */
+/* bytes of `value`, little-endian, and the bytes above it are zero. */
+struct lmn_function_constant {
+   uint32_t index;
+   uint32_t data_type;
+   uint64_t value;
+};
+_Static_assert(sizeof(struct lmn_function_constant) == 16, "lmn_function_constant size");
+_Static_assert(offsetof(struct lmn_function_constant, index) == 0, "lmn_function_constant.index");
+_Static_assert(offsetof(struct lmn_function_constant, data_type) == 4, "lmn_function_constant.data_type");
+_Static_assert(offsetof(struct lmn_function_constant, value) == 8, "lmn_function_constant.value");
 
 /* An `MTLStencilDescriptor`, with `MTLStencilOperation` and `MTLCompareFunction` values. */
 struct lmn_stencil_desc {

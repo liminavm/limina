@@ -188,6 +188,9 @@ pub const REPLY_DONE: u32 = 1;
 pub mod feature {
     /// [`CreateLibraryData`](super::CreateLibraryData).
     pub const LIBRARY_DATA: u32 = 1 << 0;
+    /// [`FunctionConstant`](super::FunctionConstant)s on a
+    /// [`CreateComputePipeline`](super::CreateComputePipeline).
+    pub const FUNCTION_CONSTANTS: u32 = 1 << 1;
 }
 
 /// Most bytes a [`CreateLibraryData`] may hand the host.
@@ -429,14 +432,25 @@ wire! {
         reply: BufRef,
     }
 
-    /// An `MTL4ComputePipelineDescriptor`; the function's name follows.
+    /// An `MTL4ComputePipelineDescriptor`; `constant_count` [`FunctionConstant`]s follow, then
+    /// the function's name. With constants, the function is an `MTL4SpecializedFunctionDescriptor`
+    /// over the library's; only for a host with `feature::FUNCTION_CONSTANTS`.
     struct CreateComputePipeline = CREATE_COMPUTE_PIPELINE(0x0105) {
         handle: u32,
         library: u32,
         name_len: u32,
-        _pad: u32,
+        constant_count: u32,
         max_total_threads: u64,
         reply: BufRef,
+    }
+
+    /// One `setConstantValue:type:atIndex:`. `data_type` is a scalar `MTLDataType` (bool, char,
+    /// short, int, long, their unsigned forms, half, bfloat or float); the value sits in the low
+    /// bytes of `value`, little-endian, and the bytes above it are zero.
+    struct FunctionConstant {
+        index: u32,
+        data_type: u32,
+        value: u64,
     }
 
     /// An `MTLStencilDescriptor`, with `MTLStencilOperation` and `MTLCompareFunction` values.
