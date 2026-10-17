@@ -108,6 +108,21 @@ impl State {
         }
     }
 
+    /// Commits what was pushed without waiting for it, through [`push`](Self::push); its seqno.
+    fn commit(&mut self) -> u64 {
+        self.gpu.seqno += 1;
+        let seqno = self.gpu.seqno;
+        self.push(
+            cmd::Commit {
+                seqno,
+                feedback: BufRef::NONE,
+            },
+            &[],
+        );
+        self.gpu.kick();
+        seqno
+    }
+
     /// Pushes `c` with `extra` and waits for its reply.
     fn call<T: cmd::Command>(
         &mut self,
@@ -1121,7 +1136,7 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
                 // The wire takes queue events only between commits: what came before goes in its
                 // own commit, and the rest of this command buffer in the next.
                 s.push(cmd::EndCommandBuffer {}, &[]);
-                s.gpu.commit_nowait();
+                s.commit();
                 s.push(
                     cmd::QueueEvent {
                         event,
@@ -1137,7 +1152,7 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
     s.push(cmd::EndCommandBuffer {}, &[]);
     // The table is never destroyed: whether the host may destroy one that committed work still
     // names is not settled here.
-    let seqno = s.gpu.commit_nowait();
+    let seqno = s.commit();
     // SAFETY: a live command buffer; the pending list holds a reference until it completes.
     unsafe {
         *(*this).v.status.lock().unwrap() = STATUS_COMMITTED;

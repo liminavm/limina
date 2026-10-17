@@ -12,10 +12,11 @@ below; the GPU host is from limina `5000e7d0`.
 
 | check (`test/check.cpp`, unless named) | result |
 |---|---|
-| `libmlx.so`, the C++ examples and `check` build against limina-metal | yes; MLX's own test binary fails to link (not looked at yet) |
+| `libmlx.so`, MLX's C++ tests and examples, and `check` build against limina-metal | yes |
+| MLX's C++ test suite (`build/tests/tests`, doctest) | 296 of 298 test cases, 4528 assertions, all pass. The 2 left out make arrays from a user's buffer, which needs `newBufferWithBytesNoCopy:` |
 | `mx::gpu::is_available()`, and the default device | yes; the GPU |
 | `2i+1` over 2²⁰ floats on the GPU, read back on the CPU | every element right |
-| 12 ops on the GPU against the same ops on MLX's CPU backend: elementwise, fp32 and fp16 matmul, row and full sums, softmax, argmax, sort, transpose, conv2d, layer norm, 4-bit quantized matmul | all within tolerance. matmul and conv2d are bit-identical to OpenBLAS's sgemm, which also accumulates along K in order; the sums, softmax and layer norm differ by 1e-8 to 4e-4 of their scale, as two separate implementations should |
+| 12 ops on the GPU against the same ops on MLX's CPU backend: elementwise, fp32 and fp16 matmul, row and full sums, softmax, argmax, sort, transpose, conv2d, layer norm, 4-bit quantized matmul | all within tolerance. matmul and conv2d come out bit-identical to the CPU backend's OpenBLAS sgemm, which is consistent with both accumulating along K in order (not verified); the sums, softmax and layer norm differ by 1e-8 to 4e-4 of their scale. The utilisation and custom-kernel rows, not these, are the evidence that the GPU ran it |
 | a kernel of our own, `mx::fast::metal_kernel` from MSL source, compiled on the host | 4096/4096 right |
 | 2048³ fp32 matmul, mean of 5 after a warm-up | GPU 2.5 to 6.0 ms (2.9 to 6.9 TFLOP/s, varying with what else the host ran); CPU backend 185 to 189 ms (91 to 93 GFLOP/s) |
 | host GPU utilisation (`ioreg`, `Device Utilization %`) while the guest runs 2048³ matmuls for 10 s | idle 8–9 %, during 89–92 %; 3686 matmuls in the 10 s |
@@ -24,6 +25,8 @@ below; the GPU host is from limina `5000e7d0`.
 | worker log over all of the above | nothing from the GPU host |
 
 `examples/cpp/tutorial` also runs, but checks nothing: its `assert`s compile out of a Release build.
+The tests run as `cd ~/mlxl/build/tests && LD_LIBRARY_PATH=~/mlxl/prefix/lib:~/mlxl/build ./tests
+--test-case-exclude="test make array from user buffer,test user buffer is not donated"`.
 
 ## Recipe
 
@@ -87,7 +90,15 @@ not implemented`). That makes the next missing method one run away, and a new sh
   `setEnableLogging:` is ignored, because shader logging needs a log stream back from the host
   that the wire does not carry.
 - **Pushes wait for ring space.** An MLX command buffer can hold more than the 256 KiB ring, so a
-  push that finds the ring full publishes, rings the doorbell and retries.
+  push that finds the ring full publishes, rings the doorbell and retries, commits included
+  (`Gpu::commit_nowait` would panic instead). No run here filled the ring, because MLX commits every
+  few dozen dispatches, so this retry path has not run yet.
+- **Autorelease pools outlive the thread's other thread-local state.** MLX's per-thread
+  destructors use pools at thread exit. A Rust `thread_local!` that owns the pool stack is
+  destroyed in no particular order relative to them, so it panicked in MLX's suite. The stack now
+  hangs off a raw pointer that registers no destructor, so pools work until the thread is gone.
+  What a thread leaves in a pool at exit leaks. `spikes/metal-cpp-shim`'s `thread-exit` run is the
+  repro.
 
 ## What is still the spike's
 

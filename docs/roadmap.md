@@ -15,7 +15,7 @@ wave 1. Open: the rest of M15, M13, M17, the M12 file-transfer half. Deferred by
 bridged networking (worker-held vmnet, no privilege needed) and M7 real-device USB capture
 (AccessoryAccess on macOS 27, root helper below). M16
 (LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) runs MLX itself: built for Linux with its Metal backend,
-it runs on the host GPU from a guest, matching MLX's CPU backend op for op.
+it runs on the host GPU from a guest and passes 296 of the 298 cases in MLX's C++ test suite.
 
 ---
 
@@ -1350,9 +1350,9 @@ in the guest: limina-metal supplies `objc_msgSend` and the other runtime entry p
 calls, a blocks runtime, and Metal's compute classes over the transport. A third
 (`spikes/mlx-linux/RESULTS.md`) builds MLX for Linux with its Metal backend against limina-metal,
 from a fork with two small commits under one CMake option. The `mlx.metallib` and JIT sources are
-built on the host from the same commit. In the guest, 12 ops plus a custom kernel compiled from MSL
-match MLX's CPU backend, a 2048³ matmul runs at up to 6.9 TFLOP/s, and MLX's regression examples
-converge.
+built on the host from the same commit. In the guest, MLX's C++ test suite passes 296 of its 298
+cases, 12 ops plus a custom kernel compiled from MSL match MLX's CPU backend, a 2048³ matmul runs at
+up to 6.9 TFLOP/s, and MLX's regression examples converge.
 
 **What it still needs:**
 - **limina-metal, out of the spike:** buffers carved from pooled arenas (a context has at most
