@@ -26,6 +26,7 @@ run`. The GPU host is from limina `5000e7d0` (function constants on the wire) an
 | `event-wait`: work behind `encodeWait` on a shared event only the CPU signals, 300 ms before `setSignaledValue` and after it | 0 written and not completed; then 1048576/1048576 right |
 | `event-wait`, two queues: B waits for A's signal and is committed first, then reads what A wrote | 1048576/1048576 right |
 | `event-wait`, two queues: B waits for the CPU, then A commits work and a signal | A's signal arrives and its work is done while B's has not run; after the CPU's signal, B's is right |
+| `event-wait`: a command buffer signals, then waits for the CPU, which waits for that signal before it sets the value | the signal arrives; then 1048576/1048576 right |
 
 ## Recipe
 
@@ -93,7 +94,11 @@ shim is a Rust static library, so building it needs no Linux linker. The guest l
   signal or CPU `setSignaledValue` has reached, and is held there, with the command buffers
   committed after it on its own queue, until one does (`pump` in `shim/src/metal.rs`). Other
   queues go past it. The host still runs the queues one after the other, and an event's
-  `Destroy` waits while a held command buffer names it. `LIMINA_METAL_TRACE=1` prints every
+  `Destroy` waits while a held command buffer names it. Every pump rings the doorbell, because a
+  held command buffer can leave a signal on the ring past its last commit, and MLX's CPU stream
+  waits for such a signal before it sets the value the GPU is held on. A held command buffer's
+  work lands under a later seqno than its `commit` returned with, so freeing a buffer is safe
+  only from a completion handler, as MLX does, not after `commit` returns. `LIMINA_METAL_TRACE=1` prints every
   commit, event and hold.
 - **Event waits and signals split a command buffer**: the wire takes `QUEUE_EVENT` only between
   commits, so one `MTLCommandBuffer` becomes several commits, and its status and handlers follow

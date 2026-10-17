@@ -1248,6 +1248,9 @@ fn pump(s: &mut State) {
     for handle in free {
         s.push(cmd::Destroy { handle, _pad: 0 }, &[]);
     }
+    // A held command buffer can leave a signal on the ring past its last commit, and the CPU may
+    // be about to wait for it.
+    s.gpu.kick();
 }
 
 /// Puts `sub` on the ring up to its first wait that cannot be met yet. Whether all of it is on

@@ -10,7 +10,7 @@
 // the last of them. With "event-wait" a command buffer waits for a value only the CPU sets, and
 // must not run before it does; then two queues order their work through events as MLX's streams
 // do, a wait committed ahead of the signal it waits for, and one queue held by the CPU while the
-// other goes on.
+// other goes on; last, a signal ahead of a wait for the CPU, which waits for that signal first.
 //
 // Usage: axpy <kernels.metallib> <kernels.metal> [unknown | thread-exit | many-buffers | event-wait]
 
@@ -177,6 +177,25 @@ int main(int argc, char** argv) {
         gate->setSignaledValue(1);
         cbw->waitUntilCompleted();
         right = count(yc, A);
+        std::printf("after the CPU's signal: %u of %u right\n", right, N);
+        ok &= right == N;
+
+        // A command buffer signals, then waits for the CPU, which sets that only once it has seen
+        // the signal: as MLX's CPU and GPU streams hand work to each other.
+        MTL::SharedEvent* s1 = dev->newSharedEvent();
+        MTL::SharedEvent* g1 = dev->newSharedEvent();
+        MTL::Buffer* ye = filled(0.0f);
+        MTL::CommandBuffer* cbx = q->commandBuffer();
+        cbx->encodeSignalEvent(s1, 1);
+        cbx->encodeWait(g1, 1);
+        axpy_on(cbx, ones, ye);
+        cbx->commit();
+        signaled = s1->waitUntilSignaledValue(1, 5000);
+        std::printf("a signal ahead of a wait for the CPU: %s\n", signaled ? "arrived" : "TIMED OUT");
+        ok &= signaled;
+        g1->setSignaledValue(1);
+        cbx->waitUntilCompleted();
+        right = count(ye, A);
         std::printf("after the CPU's signal: %u of %u right\n", right, N);
         ok &= right == N;
         std::printf(ok ? "OK\n" : "FAIL\n");
