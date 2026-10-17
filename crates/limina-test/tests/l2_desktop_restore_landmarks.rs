@@ -862,11 +862,12 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         // Name where the landmarks moved: a displaced window clusters, a blanked desktop
         // spreads everywhere. The rows tell those apart at a glance.
         eprintln!("moved cells by grid row: {:?}", by_row(&moved));
-        // The display table's own account of what the restored device answered.
+        // The display table's own account of what the restored device answered, and the GPU
+        // host's (`restore: ...`) of any arena it could not place.
         let log = g2.supervisor_log();
         for line in log
             .lines()
-            .filter(|l| l.contains("display") || l.contains("gpu restore:"))
+            .filter(|l| l.contains("display") || l.contains("restore:"))
             .rev()
             .take(20)
             .collect::<Vec<_>>()
