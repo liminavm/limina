@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use limina_gpu_client::{Arena, MIB, destroy_arena};
 
@@ -61,6 +62,9 @@ struct Pooled {
 
 pub struct Pool {
     file: File,
+    /// The ring's completed seqno, which the host writes: in the main arena, which lives as long
+    /// as the process.
+    completed: &'static AtomicU64,
     align: u64,
     next_id: u32,
     free_ids: Vec<u32>,
@@ -73,10 +77,12 @@ pub struct Pool {
 unsafe impl Send for Pool {}
 
 impl Pool {
-    /// A pool over the context of `file`, aligning regions to `align` bytes.
-    pub fn new(file: File, align: u64) -> Mutex<Self> {
+    /// A pool over the context of `file`, whose ring's completed seqno is `completed`, aligning
+    /// regions to `align` bytes.
+    pub fn new(file: File, completed: &'static AtomicU64, align: u64) -> Mutex<Self> {
         Mutex::new(Self {
             file,
+            completed,
             align: align.max(256),
             next_id: MAIN_ARENA,
             free_ids: Vec::new(),
@@ -86,16 +92,27 @@ impl Pool {
     }
 
     fn id(&mut self) -> std::io::Result<u32> {
-        if let Some(id) = self.free_ids.pop() {
-            return Ok(id);
+        let start = Instant::now();
+        loop {
+            if let Some(id) = self.free_ids.pop() {
+                return Ok(id);
+            }
+            if self.next_id + 1 < MAX_ARENAS {
+                self.next_id += 1;
+                return Ok(self.next_id);
+            }
+            // Every id is in use or doomed. The doomed ones come back once the commits they wait
+            // for complete, which the completion thread may not have seen yet.
+            if self.doomed.is_empty() || start.elapsed() > Duration::from_secs(10) {
+                return Err(std::io::Error::other(format!(
+                    "all {MAX_ARENAS} arenas of the context are in use"
+                )));
+            }
+            self.reap(self.completed.load(Ordering::Acquire));
+            if self.free_ids.is_empty() {
+                std::thread::sleep(Duration::from_micros(50));
+            }
         }
-        if self.next_id + 1 >= MAX_ARENAS {
-            return Err(std::io::Error::other(format!(
-                "all {MAX_ARENAS} arenas of the context are in use"
-            )));
-        }
-        self.next_id += 1;
-        Ok(self.next_id)
     }
 
     fn create(&mut self, size: u64) -> std::io::Result<(u32, Arena)> {

@@ -21,8 +21,8 @@ run`. The GPU host is from limina `5000e7d0` (function constants on the wire) an
 | `addCompletedHandler` with a C++ lambda, then `waitUntilCompleted` | the handler saw status 4 (completed) before the wait returned |
 | `newLibrary(source, CompileOptions)`; then a source that does not compile | compiles; refused with an `NS::Error`, the program carries on |
 | a method the shim lacks (`isHeadless`) | aborts: `limina-metal: -[MTLDevice isHeadless] is not implemented`, exit 134 |
-| `thread-exit`: a C++ `thread_local` destructor that uses an autorelease pool at thread exit, after the thread's own pool use | runs (it aborted while the pool stack was a Rust `thread_local!` with a destructor) |
-| `many-buffers`: 5000 buffers of 4 KiB, freed and made again, then axpy across them; then 4500 buffers of 20 MiB made and freed one after another, and axpy in the last | 0 of 6144 and 0 of 5 242 880 wrong (5000 buffers failed at the 4094th before the pool) |
+| `thread-exit`: a C++ `thread_local` destructor that uses an autorelease pool at thread exit, after the thread's own pool use | runs |
+| `many-buffers`: 5000 buffers of 4 KiB, freed and made again, then axpy across them; then 4500 buffers of 20 MiB made and freed one after another, and axpy in the last | 0 of 6144 and 0 of 5 242 880 wrong |
 
 ## Recipe
 
@@ -70,9 +70,11 @@ shim is a Rust static library, so building it needs no Linux linker. The guest l
 
 - **Buffers come from a pool** (`shim/src/pool.rs`). Regions of up to 16 MiB are carved out of
   shared 64 MiB arenas, and larger ones get an arena of their own, as KosmicKrisp's bridge does
-  with its heaps. A context has at most 4096 arenas, with ids the guest picks below that, so ids
+  with its heaps. Regions are aligned to 256 bytes: the host's heap alignment for the arena
+  options is no larger (a 1-byte buffer takes 256). A context has at most 4096 arenas, with ids the guest picks below that, so ids
   are reused, and an arena is destroyed (`ARENA_DESTROY`) once every commit made before its last
-  free has completed. A freed region is reused at once: that is Metal's contract with heaps and
+  free has completed. When every id is in use or waiting for that, an allocation waits for the
+  commits, up to 10 s. A freed region is reused at once: that is Metal's contract with heaps and
   untracked resources, which MLX keeps.
 - **`setBytes` data** of a command buffer goes in one region from the pool, which it holds until
   it retires.

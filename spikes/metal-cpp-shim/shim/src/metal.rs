@@ -174,6 +174,10 @@ fn device() -> &'static Obj<Device> {
             .file
             .try_clone()
             .expect("limina-metal: duplicating the render node's descriptor");
+        // SAFETY: the ring's control block is in the main arena, which lives as long as the
+        // process: the device is never released.
+        let completed: *const AtomicU64 = &gpu.ring.control().completed;
+        let completed: &'static AtomicU64 = unsafe { &*completed };
         let dev = new(
             "MTLDevice",
             Device {
@@ -193,7 +197,7 @@ fn device() -> &'static Obj<Device> {
                     depth: d as usize,
                 },
                 info,
-                pool: Pool::new(file, info.heap_buffer_align as u64),
+                pool: Pool::new(file, completed, info.heap_buffer_align as u64),
             },
         );
         std::thread::Builder::new()

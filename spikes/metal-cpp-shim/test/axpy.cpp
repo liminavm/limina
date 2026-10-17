@@ -78,6 +78,9 @@ int main(int argc, char** argv) {
 
     if (argc > 3 && std::strcmp(argv[3], "many-buffers") == 0) {
         const int count = 5000, n = 1024;
+        MTL::Buffer* tiny = dev->newBuffer(1, MTL::ResourceStorageModeShared);
+        std::printf("a 1-byte buffer takes %lu bytes\n", (unsigned long)tiny->allocatedSize());
+        tiny->release();
         std::vector<MTL::Buffer*> bufs;
         // Twice round: what the first round frees must come back for the second.
         for (int round = 0; round < 2; round++) {
