@@ -25,7 +25,7 @@ below; the GPU host is from limina `5000e7d0`.
 | worker log over all of the above | nothing from the GPU host |
 | MLX's Python package (`pip install .` with `CMAKE_ARGS`), `import mlx.core` | builds; default device `gpu`, `(arange(8) * 2 + 1)` right |
 | `mlx-lm` 0.32.2, `mlx-community/Qwen2.5-0.5B-Instruct-4bit` (`test/lm_check.py`, `test/lm_compare.py`): the prompt's logits in float32, GPU against MLX's CPU backend | 40 positions × 151936; largest difference 4.2e-4 of 28.9; the next-token choice agrees at 40 of 40 |
-| the same model generating 96 tokens greedily in its own float16 on the GPU | coherent English; 156 to 306 tok/s over four runs, prompt 590 to 650 tok/s, peak 0.38 GB |
+| the same model generating 96 tokens greedily in its own float16 on the GPU | coherent English; 203 tok/s, prompt 499 tok/s, peak 0.38 GB. Other runs, on earlier builds of limina-metal or with the GPU host logging at debug, gave 156 to 306 tok/s: one run is not a benchmark |
 | generating again after the float32 pass, the weights cast back lazily, so the generation stream waits on the default stream's events | the same 96 tokens |
 
 `examples/cpp/tutorial` also runs, but checks nothing: its `assert`s compile out of a Release build.

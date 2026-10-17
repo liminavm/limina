@@ -1354,7 +1354,7 @@ from a fork, `liminavm/mlx`, with two small commits under one CMake option. The 
 built on the host from the same commit. limina-metal carves buffers out of pooled arenas. In the
 guest, MLX's C++ test suite passes 297 of its 298 cases (the last needs zero-copy user buffers), 12 ops plus a custom kernel compiled from MSL match MLX's CPU backend, a 2048³ matmul runs at
 up to 6.9 TFLOP/s, and MLX's regression examples converge. MLX's Python package builds in the
-guest from the same fork, and `mlx-lm` runs a 4-bit Qwen2.5-0.5B on the GPU at 156 to 306 tok/s,
+guest from the same fork, and `mlx-lm` runs a 4-bit Qwen2.5-0.5B on the GPU at about 200 tok/s,
 its float32 logits matching MLX's CPU backend at every prompt position. limina-metal holds a
 command buffer at a wait no submitted signal has reached, so MLX's streams order correctly over
 the one wire queue.
