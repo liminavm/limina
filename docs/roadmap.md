@@ -1340,12 +1340,13 @@ way the vendor drivers do, under `/opt/limina/<wire>/`
 
 **Done:** `CREATE_LIBRARY_DATA` hands a `.metallib` to the host's loader, behind
 `feature::LIBRARY_DATA` rather than a wire version change, and a guest program over
-`guest/limina-gpu-client` runs a kernel from one with every element right. The spike's RESULTS
-maps everything MLX's Metal backend calls onto the wire: it is all compute.
+`guest/limina-gpu-client` runs a kernel from one with every element right. Function constants
+ride on `CREATE_COMPUTE_PIPELINE` behind `feature::FUNCTION_CONSTANTS`, the way MLX specialises its
+matmul, attention, quantized and convolution kernels. The spike's RESULTS maps everything MLX's
+Metal backend calls onto the wire: it is all compute, and what is left is guest-side work, apart
+from linked functions for user-written custom kernels.
 
 **What it still needs:**
-- **Function constants on pipeline creation.** MLX specialises its matmul, attention, quantized
-  and convolution kernels with them; the one wire addition left, as a second feature bit.
 - **A `libMetal`:** metal-cpp's `MTL::` and `NS::` names for the calls MLX makes, over
   `limina-gpu-client`, with per-command-buffer streams (MLX encodes from several threads),
   `setBytes` through arena scratch, queue events split out of command buffers, completion

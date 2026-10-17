@@ -62,7 +62,7 @@ symbols, all compute: no render or blit encoders, no textures. Against the wire:
 |---|---|---|
 | `newLibrary` from `mlx.metallib` | `CREATE_LIBRARY_DATA` | **this spike** |
 | `newLibrary` from MSL source (JIT kernels), `CompileOptions` math mode and language version | `CREATE_LIBRARY` | exists |
-| `newFunction` with `FunctionConstantValues` (bool and int; 173 uses across matmul, SDPA, quantized, conv, normalization, rope) | `CREATE_COMPUTE_PIPELINE` has no constants | **missing**: needed before MLX runs |
+| `newFunction` with `FunctionConstantValues` (bool and int; 173 uses across matmul, SDPA, quantized, conv, normalization, rope) | `FunctionConstant`s on `CREATE_COMPUTE_PIPELINE`, behind `feature::FUNCTION_CONSTANTS` | exists: a guest `MTL::Function` is a value (library, name, constants) sent with the pipeline |
 | `ComputeCommandEncoder` with `DispatchTypeConcurrent`, `memoryBarrier(BarrierScopeBuffers)` | Metal 4 encoders are concurrent; `BARRIER` | exists |
 | `setBuffer` | `SET_ADDRESSES` on an argument table | exists |
 | `setBytes` | none | guest side: a scratch range in an arena, bound by address |
@@ -83,7 +83,6 @@ symbols, all compute: no render or blit encoders, no textures. Against the wire:
   the calls above, over `limina-gpu-client`, recording each command buffer into its own stream and
   copying it into the ring at commit (MLX encodes from several threads; the ring has one
   producer). No Objective-C runtime: MLX is built from source against these headers.
-- **Function constants** on `CREATE_COMPUTE_PIPELINE`, as a second feature bit.
 - **MLX for Linux with its Metal backend**: the backend is gated on `APPLE` in its CMake, and its
   build compiles `mlx.metallib` with `xcrun`, which the guest does not have. The metallib is built
   on the host and shipped beside the library (`MLX_METAL_PATH`, `set_metallib_path`). A fork,
