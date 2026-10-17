@@ -2705,6 +2705,16 @@ impl Executor {
             Some(Object::SharedEvent(e, _)) => ProtocolObject::from_ref(&**e),
             _ => return Err(Error::BadHandle),
         };
+        log::debug!(
+            "queue {} event {} value {} (signaled value now {:?})",
+            if c.wait != 0 { "waits for" } else { "signals" },
+            c.event,
+            c.value,
+            match self.objects.get(&c.event) {
+                Some(Object::SharedEvent(e, _)) => Some(e.signaledValue()),
+                _ => None,
+            }
+        );
         if c.wait != 0 {
             self.queue.waitForEvent_value(event, c.value);
             return Ok(());
@@ -2742,6 +2752,7 @@ impl Executor {
             cb.endCommandBuffer();
             self.ended.push((cb, alloc));
         }
+        log::debug!("commit {seqno}: {} command buffers", self.ended.len());
         self.last_seqno = seqno;
         self.commits += 1;
         let generation = self.commits;

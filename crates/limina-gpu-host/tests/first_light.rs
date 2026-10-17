@@ -1082,6 +1082,134 @@ fn a_shared_event_signal_reaches_its_mirror() {
     assert_eq!(mirror.load(Ordering::Acquire), 9);
 }
 
+/// Commits, without waiting, a command buffer that pokes `N` words at `dst` through table `table`,
+/// whose pointer lives at `ptrs`.
+fn commit_poke(g: &mut Guest, table_handle: u32, ptrs: u64, dst: u64) {
+    const N: u32 = 256;
+    g.write(ptrs, &(g.arena.gpu_base + dst).to_le_bytes());
+    let base = g.arena.gpu_base;
+    table(g, table_handle, &[(0, base + ptrs)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    barrier(g, STAGE_DISPATCH | STAGE_BLIT, STAGE_DISPATCH | STAGE_BLIT);
+    g.push(cmd::SetComputePipeline { handle: 2, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetArgumentTable {
+            table: table_handle,
+            stages: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [N / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    commit_nowait(g);
+}
+
+fn commit_nowait(g: &mut Guest) {
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.seqno += 1;
+    g.push(
+        cmd::Commit {
+            seqno: g.seqno,
+            feedback: BufRef::NONE,
+        },
+        &[],
+    );
+    g.kick();
+}
+
+fn poked(g: &Guest, dst: u64) -> usize {
+    (0..256u32)
+        .filter(|&i| g.bytes(dst + i as u64 * 4, 4) == (0xC0FFEE00 + i).to_le_bytes())
+        .count()
+}
+
+/// A queue wait holds the work committed after it, as limina-metal sends it when it splits a
+/// command buffer around `encodeWaitForEvent:value:`: an empty commit, the wait, a commit with
+/// work, then another command buffer's work and an event signal. Nothing after the wait runs, and
+/// the second event is not signaled, until the CPU signals the first.
+#[test]
+fn work_committed_after_a_queue_wait_runs_only_once_the_event_is_signaled() {
+    let mut g = start();
+    const A: u64 = 4 * MIB;
+    const B: u64 = 5 * MIB;
+    const MIRROR: u64 = RECORDS + 512;
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    g.reply(RECORDS);
+    for (handle, at) in [(9, MIRROR), (10, MIRROR + 8)] {
+        g.push(
+            cmd::SyncObject {
+                handle,
+                kind: cmd::sync_kind::SHARED_EVENT,
+                initial: 0,
+                mirror: BufRef::new(1, at),
+            },
+            &[],
+        );
+    }
+    g.commit_and_wait().expect("setup");
+
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    commit_nowait(&mut g);
+    g.push(
+        cmd::QueueEvent {
+            event: 9,
+            wait: 1,
+            value: 1,
+        },
+        &[],
+    );
+    commit_poke(&mut g, 3, 3 * MIB, A);
+    commit_poke(&mut g, 4, 3 * MIB + 8, B);
+    g.push(
+        cmd::QueueEvent {
+            event: 10,
+            wait: 0,
+            value: 1,
+        },
+        &[],
+    );
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    commit_nowait(&mut g);
+    g.kick();
+    std::thread::sleep(Duration::from_millis(300));
+    // SAFETY: an aligned u64 in the mapping, written by the host.
+    let signaled = unsafe { &*g.ptr(MIRROR + 8, 8).cast::<AtomicU64>() }.load(Ordering::Acquire);
+    let early = (poked(&g, A), poked(&g, B), signaled, g.ring.completed());
+
+    g.push(
+        cmd::SetSharedEvent {
+            handle: 9,
+            _pad: 0,
+            value: 1,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("after the signal");
+    assert_eq!(
+        (early, poked(&g, A), poked(&g, B)),
+        ((0, 0, 0, 2), 256, 256),
+        "(words of A and B, the second event, completed seqno) before the CPU's signal; A and B after"
+    );
+}
+
 #[test]
 fn a_bad_handle_loses_the_context_and_says_where() {
     let mut g = start();
