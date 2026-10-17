@@ -14,8 +14,8 @@ clipboard, M12.5's QEMU-guest-agent steps 1–4, M14 biometrics, the emulated xH
 wave 1. Open: the rest of M15, M13, M17, the M12 file-transfer half. Deferred by decision: M3
 bridged networking (worker-held vmnet, no privilege needed) and M7 real-device USB capture
 (AccessoryAccess on macOS 27, root helper below). M16
-(LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) has its first spikes: a host-built `.metallib` runs in
-the guest, and so does a program built against Apple's metal-cpp, unmodified.
+(LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) runs MLX itself: built for Linux with its Metal backend,
+it runs on the host GPU from a guest, matching MLX's CPU backend op for op.
 
 ---
 
@@ -1347,13 +1347,16 @@ Metal backend calls onto the wire: it is all compute, and what is left is guest-
 from linked functions for user-written custom kernels. A second spike
 (`spikes/metal-cpp-shim/RESULTS.md`) runs a program built against Apple's metal-cpp, unmodified,
 in the guest: limina-metal supplies `objc_msgSend` and the other runtime entry points metal-cpp
-calls, a blocks runtime, and Metal's compute classes over the transport.
+calls, a blocks runtime, and Metal's compute classes over the transport. A third
+(`spikes/mlx-linux/RESULTS.md`) builds MLX for Linux with its Metal backend against limina-metal,
+from a fork with two small commits under one CMake option. The `mlx.metallib` and JIT sources are
+built on the host from the same commit. In the guest, 12 ops plus a custom kernel compiled from MSL
+match MLX's CPU backend, a 2048³ matmul runs at up to 6.9 TFLOP/s, and MLX's regression examples
+converge.
 
 **What it still needs:**
-- **limina-metal, grown from the spike:** the rest of the roughly 100 metal-cpp methods MLX calls,
-  buffers carved from pooled arenas (a context has at most 4096 arenas), `setBytes` scratch that
-  waits for the GPU, queue events split out of command buffers, and argument-table lifetimes. MLX
-  keeps Apple's metal-cpp and builds against it with clang and `-fblocks`.
-- **MLX built for Linux with its Metal backend**, its `mlx.metallib` (147 MB in mlx-metal 0.32.4)
-  built on the host and shipped beside it. A fork, `liminavm/mlx`.
+- **limina-metal, out of the spike:** buffers carved from pooled arenas (a context has at most
+  4096 arenas, and a model has thousands of buffers), `setBytes` scratch that waits for the GPU,
+  argument-table lifetimes, and a queue per MLX GPU stream, or a reason not to need one.
+- **The fork, `liminavm/mlx`**, pinned in the manifest. Its two commits are local today.
 - **The Python bindings**, for `mlx-lm` and servers over it such as omlx.
