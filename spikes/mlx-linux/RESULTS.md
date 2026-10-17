@@ -39,7 +39,8 @@ spikes/mlx-linux/guest.sh $port        # copy, deps, so, build (about 3 minutes 
 spikes/mlx-linux/guest.sh $port check linear_regression logistic_regression
 ```
 
-`host.sh` builds from the MLX tree at `third_party/mlx` (branch `limina`) and refuses a dirty one:
+`host.sh` builds from the MLX tree at `third_party/mlx`, the `liminavm/mlx` fork pinned in the
+manifest (`cargo xtask vendor` materializes it), and refuses a dirty one:
 the artifacts name the commit they came from. The test image's 11 GB root has too little room for
 the build; grow the raw file (`truncate -s +24G`), then `growpart /dev/vda 3` (the disk is MBR) and
 `btrfs filesystem resize max /` in the guest.
@@ -117,5 +118,3 @@ These are untested by what ran here, and some will break a real model:
   functions, and `setThreadgroupMemoryLength:`. MLX has no callers of the last one yet.
 - **Library probes print.** MLX probes three paths for a colocated `mlx.metallib` before it finds
   the prefix's, and limina-metal prints every failed load to stderr.
-- **The fork is local.** It lives in `third_party/mlx` on branch `limina`. There is no
-  `liminavm/mlx` repository yet, and the manifest does not pin it.

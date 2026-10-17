@@ -405,6 +405,10 @@ fn vendor(root: &Path, heavy: bool) -> Result<()> {
     // krun-devices. Ours outright, like virglrs: its `main` branch is the whole thing.
     vendor_fork(root, &manifest, "janus", main.as_deref())?;
 
+    // mlx: MLX with its Metal backend on Linux guests (milestone 18). Only spikes/mlx-linux reads
+    // it.
+    vendor_fork(root, &manifest, "mlx", main.as_deref())?;
+
     // linux: the enhanced-tier guest kernel fork. Marked `heavy` in the manifest — a multi-GB
     // tree this host never builds (the kernel builds in a Linux container / build guest, which
     // fetches the pinned rev itself), so it is opt-in.

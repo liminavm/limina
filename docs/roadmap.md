@@ -1349,7 +1349,7 @@ from linked functions for user-written custom kernels. A second spike
 in the guest: limina-metal supplies `objc_msgSend` and the other runtime entry points metal-cpp
 calls, a blocks runtime, and Metal's compute classes over the transport. A third
 (`spikes/mlx-linux/RESULTS.md`) builds MLX for Linux with its Metal backend against limina-metal,
-from a fork with two small commits under one CMake option. The `mlx.metallib` and JIT sources are
+from a fork, `liminavm/mlx`, with two small commits under one CMake option. The `mlx.metallib` and JIT sources are
 built on the host from the same commit. In the guest, MLX's C++ test suite passes 296 of its 298
 cases, 12 ops plus a custom kernel compiled from MSL match MLX's CPU backend, a 2048³ matmul runs at
 up to 6.9 TFLOP/s, and MLX's regression examples converge.
@@ -1358,5 +1358,4 @@ up to 6.9 TFLOP/s, and MLX's regression examples converge.
 - **limina-metal, out of the spike:** buffers carved from pooled arenas (a context has at most
   4096 arenas, and a model has thousands of buffers), `setBytes` scratch that waits for the GPU,
   argument-table lifetimes, and a queue per MLX GPU stream, or a reason not to need one.
-- **The fork, `liminavm/mlx`**, pinned in the manifest. Its two commits are local today.
 - **The Python bindings**, for `mlx-lm` and servers over it such as omlx.
