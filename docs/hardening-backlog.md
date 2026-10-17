@@ -1127,13 +1127,6 @@ tries). Each value is verified, so a macOS change fails safe, but nothing says s
 it. Next: run the `are_host_values_*` tests and `footprints_of_small_objects` on every host OS we
 ship to, as a gate.
 
-### An arena the restore cannot place restarts every GPU session
-`ExtState::restore` (libkrun `devices/src/virtio/gpu/ext.rs`) returns at the first arena the GPU
-host refuses, and the worker's `gpu_restore` then skips the rest of the GPU payload, so vrend and
-venus contexts, resources and the display table all come back fresh, not just the one Metal
-context. A refused context's objects already lose only that context. Fix: mark the arena's context
-lost and carry on placing the others.
-
 ### Every context of a VM shares one GPU host process
 Cross-context isolation rests on Metal 4 residency sets, which Apple documents as paging control,
 not protection, and guest GPU addresses are forwarded unchecked. Either verify that a non-resident

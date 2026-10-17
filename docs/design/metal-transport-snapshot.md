@@ -42,10 +42,13 @@ Metal takes neither as a request. A restore reproduces them, measured in
   in dependency order (a view after its parent, whatever their IDs) and each is brought to its
   recorded ID: placeholders hold the slots below it, and a slot that a placeholder already holds
   is freed and taken, retrying while Metal's release is pending.
-- **Every value is verified.** A mismatch is a bug in the above. In a context's objects it loses
-  that context (its ring reports `LMN_ERROR_RESTORE`) and touches nothing else; an arena that
-  cannot be placed fails the whole GPU restore, so every renderer's session restarts (hardening
-  backlog).
+- **Every value is verified.** A mismatch is a bug in the above, and loses only the contexts it
+  reaches (their rings report `LMN_ERROR_RESTORE`), never the device or another context. In a
+  context's objects that is the context. An arena that cannot be put back at its address is made
+  elsewhere once every other arena stands, with its contents and window, so the guest's memory
+  stays whole; the context that made it and every context that imported it hold its old address,
+  so all of them restart lost. Every loss is logged, and the restore tests fail on any
+  (`limina_test::restore_losses`).
 - **An arena only its export still holds** (the context that made it destroyed it, or is gone)
   is restored in a GPU host context 0, which the guest can never name, exported again, and the
   holder dropped at the end: the export keeps the arena.

@@ -194,6 +194,8 @@ impl GpuExtension for GpuHostExtension {
     }
 
     fn create_arena(&self, ctx: u32, arena: u32, size: u64) -> Result<ExtArena, String> {
+        // A restore makes an orphaned arena it could not put back at its address this way.
+        self.hold_orphans_for(ctx)?;
         let a = self
             .host
             .create_arena(ctx, arena, size)
@@ -327,18 +329,7 @@ impl GpuExtension for GpuHostExtension {
         size: u64,
         gpu_base: u64,
     ) -> Result<ExtArena, String> {
-        if ctx == ORPHANS {
-            let mut holding = self
-                .holding_orphans
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if !*holding {
-                self.host
-                    .create_context(ORPHANS)
-                    .map_err(|e| e.to_string())?;
-                *holding = true;
-            }
-        }
+        self.hold_orphans_for(ctx)?;
         let a = self
             .host
             .restore_arena(ctx, arena, size, gpu_base)
@@ -429,6 +420,26 @@ impl GpuExtension for GpuHostExtension {
         {
             b.ring();
         }
+    }
+}
+
+impl GpuHostExtension {
+    /// Arenas of [`ORPHANS`] go in a context of their own in the GPU host, made by the first.
+    fn hold_orphans_for(&self, ctx: u32) -> Result<(), String> {
+        if ctx != ORPHANS {
+            return Ok(());
+        }
+        let mut holding = self
+            .holding_orphans
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !*holding {
+            self.host
+                .create_context(ORPHANS)
+                .map_err(|e| e.to_string())?;
+            *holding = true;
+        }
+        Ok(())
     }
 }
 
