@@ -7,13 +7,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use limina_gpu_client::{Arena, Gpu, MIB, find_node};
+use limina_gpu_client::{Gpu, MIB, find_node};
 use limina_gpu_wire::cmd::{self, BufRef};
 use limina_gpu_wire::ring::PushError;
 
 use crate::blocks::{_Block_copy, _Block_release, Block};
 use crate::foundation::{Error, NSString, fail, string, text};
 use crate::imp;
+use crate::pool::{COMMITTED, Pool, Region};
 use crate::runtime::{Class, Def, Obj, Sel, alloc, dealloc, new, send0};
 
 // The main arena (64 MiB): the ring takes the first 256 KiB.
@@ -22,8 +23,8 @@ const INFO: u64 = MIB + 4096;
 /// Shared events' signaled values, which the host mirrors here, one u64 each.
 const EVENTS: u64 = MIB + 8192;
 const EVENTS_END: u64 = 2 * MIB;
-const SCRATCH: u64 = 2 * MIB;
-const SCRATCH_END: u64 = 64 * MIB;
+/// `setBytes` data's alignment in a command buffer's scratch.
+const BYTES_ALIGN: u64 = 256;
 
 /// Argument-table slots: Metal's buffer indices 0..31.
 const BINDINGS: u32 = 31;
@@ -58,8 +59,6 @@ unsafe impl<T> Send for Ptr<T> {}
 struct State {
     gpu: Gpu,
     next_handle: u32,
-    next_arena: u32,
-    scratch: u64,
     pending: Vec<(u64, Ptr<Obj<CommandBuffer>>)>,
     lost: Option<String>,
     next_event_slot: u64,
@@ -72,18 +71,13 @@ pub struct Device {
     name: String,
     max_threads: Size,
     info: cmd::DeviceInfo,
+    pool: Mutex<Pool>,
 }
 
 impl State {
     fn handle(&mut self) -> u32 {
         self.next_handle += 1;
         self.next_handle
-    }
-
-    fn arena(&mut self, size: u64) -> std::io::Result<(u32, Arena)> {
-        self.next_arena += 1;
-        let id = self.next_arena;
-        Ok((id, Arena::create(&self.gpu.file, id, size.max(16384))?))
     }
 
     /// Pushes `c` with `extra`, publishing and waiting for the host to make room when the ring is
@@ -120,6 +114,7 @@ impl State {
             &[],
         );
         self.gpu.kick();
+        COMMITTED.store(seqno, Ordering::Release);
         seqno
     }
 
@@ -137,19 +132,11 @@ impl State {
             s => Err(format!("the GPU host refused it: error {s}")),
         }
     }
+}
 
-    /// `data` copied into the scratch region; its GPU address.
-    fn scratch(&mut self, data: &[u8]) -> u64 {
-        let len = (data.len() as u64).next_multiple_of(256);
-        if self.scratch + len > SCRATCH_END {
-            // The spike reuses scratch from the start; the libMetal must not before the GPU is done.
-            self.scratch = SCRATCH;
-        }
-        let at = self.scratch;
-        self.gpu.main.write(at, data);
-        self.scratch += len;
-        self.gpu.main.gpu_base + at
-    }
+/// Where buffers and scratch come from.
+pub fn pool() -> &'static Mutex<Pool> {
+    &device().v.pool
 }
 
 fn device() -> &'static Obj<Device> {
@@ -182,14 +169,17 @@ fn device() -> &'static Obj<Device> {
             .trim_end_matches('\0')
             .to_owned();
         let [w, h, d] = info.max_threads_per_threadgroup;
+        // The same context, through a second descriptor, so the pool needs no lock of State's.
+        let file = gpu
+            .file
+            .try_clone()
+            .expect("limina-metal: duplicating the render node's descriptor");
         let dev = new(
             "MTLDevice",
             Device {
                 state: Mutex::new(State {
                     gpu,
                     next_handle: 0,
-                    next_arena: 1,
-                    scratch: SCRATCH,
                     pending: Vec::new(),
                     lost: None,
                     next_event_slot: EVENTS,
@@ -203,6 +193,7 @@ fn device() -> &'static Obj<Device> {
                     depth: d as usize,
                 },
                 info,
+                pool: Pool::new(file, info.heap_buffer_align as u64),
             },
         );
         std::thread::Builder::new()
@@ -220,7 +211,7 @@ fn device() -> &'static Obj<Device> {
 fn completion() {
     let dev = device();
     loop {
-        let finished: Vec<_> = {
+        let (finished, done): (Vec<_>, u64) = {
             let mut s = dev.v.state.lock().unwrap();
             if let Some((e, at)) = s.gpu.ring.error() {
                 s.lost = Some(format!("context lost: error {e} at ring position {at}"));
@@ -232,8 +223,9 @@ fn completion() {
                 .drain(..)
                 .partition(|(seqno, _)| *seqno <= done || lost);
             s.pending = still;
-            finished
+            (finished, done)
         };
+        pool().lock().unwrap().reap(done);
         let status = if dev.v.state.lock().unwrap().lost.is_some() {
             STATUS_ERROR
         } else {
@@ -254,6 +246,8 @@ fn completion() {
                     _Block_release(block.cast());
                 }
             }
+            // Its setBytes data, which the GPU is done reading.
+            drop(c.scratch.lock().unwrap().take());
             *c.retired.lock().unwrap() = true;
         }
         if !finished.is_empty() {
@@ -509,20 +503,13 @@ extern "C" fn residency_size(_: *const c_void, _: Sel) -> u64 {
 // --- Buffers ---
 
 pub struct Buffer {
-    arena: Arena,
+    region: Region,
     length: usize,
 }
 
-unsafe extern "C" fn new_buffer(
-    this: *const Obj<Device>,
-    _: Sel,
-    length: usize,
-    _options: usize,
-) -> *mut Obj<Buffer> {
-    // SAFETY: a live device.
-    let mut s = unsafe { &(*this).v }.state.lock().unwrap();
-    match s.arena(length as u64) {
-        Ok((_, arena)) => new("MTLBuffer", Buffer { arena, length }),
+fn make_buffer(length: usize) -> *mut Obj<Buffer> {
+    match pool().lock().unwrap().alloc(length as u64) {
+        Ok(region) => new("MTLBuffer", Buffer { region, length }),
         Err(e) => {
             eprintln!("limina-metal: a buffer of {length} bytes: {e}");
             std::ptr::null_mut()
@@ -530,9 +517,46 @@ unsafe extern "C" fn new_buffer(
     }
 }
 
+extern "C" fn new_buffer(
+    _: *const Obj<Device>,
+    _: Sel,
+    length: usize,
+    _options: usize,
+) -> *mut Obj<Buffer> {
+    make_buffer(length)
+}
+
+unsafe extern "C" fn new_buffer_with_bytes(
+    _: *const Obj<Device>,
+    _: Sel,
+    bytes: *const u8,
+    length: usize,
+    _options: usize,
+) -> *mut Obj<Buffer> {
+    let b = make_buffer(length);
+    if !b.is_null() {
+        // SAFETY: the caller's `length` bytes, into a new buffer at least that long.
+        unsafe { std::ptr::copy_nonoverlapping(bytes, (*b).v.region.ptr, length) };
+    }
+    b
+}
+
+/// The GPU reaches only arenas, which cannot alias the caller's memory, so: nil, which Metal
+/// returns too for memory it cannot wrap. MLX then copies.
+extern "C" fn new_buffer_no_copy(
+    _: *const Obj<Device>,
+    _: Sel,
+    _bytes: *const u8,
+    _length: usize,
+    _options: usize,
+    _deallocator: *const c_void,
+) -> *mut Obj<Buffer> {
+    std::ptr::null_mut()
+}
+
 unsafe extern "C" fn buffer_contents(this: *const Obj<Buffer>, _: Sel) -> *mut c_void {
     // SAFETY: a live buffer.
-    unsafe { (*this).v.arena.ptr.as_ptr().cast() }
+    unsafe { (*this).v.region.ptr.cast() }
 }
 
 unsafe extern "C" fn buffer_length(this: *const Obj<Buffer>, _: Sel) -> usize {
@@ -544,10 +568,9 @@ extern "C" fn buffer_heap(_: *const Obj<Buffer>, _: Sel) -> *mut c_void {
     std::ptr::null_mut()
 }
 
-/// What the buffer takes: an arena, in whole 16 KiB host pages.
 unsafe extern "C" fn buffer_allocated_size(this: *const Obj<Buffer>, _: Sel) -> usize {
     // SAFETY: a live buffer.
-    unsafe { (*this).v.length }.max(1).next_multiple_of(16384)
+    unsafe { (*this).v.region.size as usize }
 }
 
 /// MTLStorageModeShared.
@@ -557,7 +580,7 @@ extern "C" fn buffer_storage_mode(_: *const Obj<Buffer>, _: Sel) -> usize {
 
 unsafe extern "C" fn buffer_gpu_address(this: *const Obj<Buffer>, _: Sel) -> u64 {
     // SAFETY: a live buffer.
-    unsafe { (*this).v.arena.gpu_base }
+    unsafe { (*this).v.region.gpu }
 }
 
 // --- Libraries and functions ---
@@ -637,10 +660,8 @@ fn load_library(
             return std::ptr::null_mut();
         }
     };
-    // SAFETY: a live device.
-    let mut s = unsafe { &(*this).v }.state.lock().unwrap();
-    let staged = match s.arena(bytes.len() as u64) {
-        Ok(a) => a,
+    let staged = match pool().lock().unwrap().alloc(bytes.len() as u64) {
+        Ok(r) => r,
         Err(e) => {
             fail(
                 error,
@@ -649,14 +670,17 @@ fn load_library(
             return std::ptr::null_mut();
         }
     };
-    staged.1.write(0, &bytes);
+    // SAFETY: a new region at least that long.
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), staged.ptr, bytes.len()) };
+    // SAFETY: a live device.
+    let mut s = unsafe { &(*this).v }.state.lock().unwrap();
     let handle = s.handle();
-    // The host copies the bytes before it replies, so the staging arena can go after.
+    // The host copies the bytes before it replies, so the staging region can go after.
     match s.call(
         |reply| cmd::CreateLibraryData {
             handle,
             data_len: bytes.len() as u64,
-            data: BufRef::new(staged.0, 0),
+            data: BufRef::new(staged.arena, staged.offset),
             reply,
             ..Default::default()
         },
@@ -926,6 +950,8 @@ pub struct CommandBuffer {
     status: Mutex<usize>,
     /// Complete, and its handlers have run.
     retired: Mutex<bool>,
+    /// Its setBytes data, from commit until it retires.
+    scratch: Mutex<Option<Region>>,
 }
 
 unsafe extern "C" fn command_buffer(_: *const Obj<Queue>, _: Sel) -> *mut Obj<CommandBuffer> {
@@ -936,6 +962,7 @@ unsafe extern "C" fn command_buffer(_: *const Obj<Queue>, _: Sel) -> *mut Obj<Co
             handlers: Mutex::new(Vec::new()),
             status: Mutex::new(0),
             retired: Mutex::new(false),
+            scratch: Mutex::new(None),
         },
     ))
 }
@@ -981,10 +1008,9 @@ unsafe extern "C" fn set_buffer(
 ) {
     // SAFETY: live objects.
     unsafe {
-        (*this).v.op(Op::Bind(
-            index as u32,
-            (*b).v.arena.gpu_base + offset as u64,
-        ))
+        (*this)
+            .v
+            .op(Op::Bind(index as u32, (*b).v.region.gpu + offset as u64))
     };
 }
 
@@ -1076,6 +1102,22 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
     let dev = device();
     // SAFETY: a live command buffer.
     let ops = std::mem::take(&mut *unsafe { &(*this).v }.ops.lock().unwrap());
+    // One region for all its setBytes data, freed when it retires.
+    let bytes: u64 = ops
+        .iter()
+        .map(|op| match op {
+            Op::Bytes(_, d) => (d.len() as u64).next_multiple_of(BYTES_ALIGN),
+            _ => 0,
+        })
+        .sum();
+    let scratch = (bytes > 0).then(|| match pool().lock().unwrap().alloc(bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("limina-metal: {bytes} bytes of setBytes data: {e}");
+            std::process::abort();
+        }
+    });
+    let mut at = 0u64;
     let mut s = dev.v.state.lock().unwrap();
     let table = s.handle();
     s.push(
@@ -1105,8 +1147,13 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
             Op::Pipeline(handle) => s.push(cmd::SetComputePipeline { handle, _pad: 0 }, &[]),
             Op::Bind(index, address) => bind(&mut s, table, index, address),
             Op::Bytes(index, data) => {
-                let address = s.scratch(&data);
-                bind(&mut s, table, index, address);
+                let r = scratch.as_ref().unwrap();
+                // SAFETY: inside the region, which was sized for all of them.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), r.ptr.add(at as usize), data.len())
+                };
+                bind(&mut s, table, index, r.gpu + at);
+                at += (data.len() as u64).next_multiple_of(BYTES_ALIGN);
             }
             Op::Threads(grid, group) => s.push(
                 cmd::DispatchThreads {
@@ -1150,12 +1197,19 @@ unsafe extern "C" fn commit(this: *mut Obj<CommandBuffer>, _: Sel) {
         }
     }
     s.push(cmd::EndCommandBuffer {}, &[]);
-    // The table is never destroyed: whether the host may destroy one that committed work still
-    // names is not settled here.
     let seqno = s.commit();
+    // The host holds a destroyed object until the commits made before the destroy complete.
+    s.push(
+        cmd::Destroy {
+            handle: table,
+            _pad: 0,
+        },
+        &[],
+    );
     // SAFETY: a live command buffer; the pending list holds a reference until it completes.
     unsafe {
         *(*this).v.status.lock().unwrap() = STATUS_COMMITTED;
+        *(*this).v.scratch.lock().unwrap() = scratch;
         send0(this.cast(), "retain");
     }
     s.pending.push((seqno, Ptr(this)));
@@ -1167,8 +1221,7 @@ fn bind(s: &mut State, table: u32, index: u32, address: u64) {
         _pad: 0,
         address,
     };
-    s.gpu
-        .push(cmd::SetAddresses { table, count: 1 }, &[cmd::bytes_of(&b)]);
+    s.push(cmd::SetAddresses { table, count: 1 }, &[cmd::bytes_of(&b)]);
 }
 
 unsafe extern "C" fn wait_until_completed(this: *const Obj<CommandBuffer>, _: Sel) {
@@ -1202,6 +1255,14 @@ pub fn defs() -> Vec<Def> {
                 ("name", imp!(device_name)),
                 ("maxThreadsPerThreadgroup", imp!(device_max_threads)),
                 ("newBufferWithLength:options:", imp!(new_buffer)),
+                (
+                    "newBufferWithBytes:length:options:",
+                    imp!(new_buffer_with_bytes),
+                ),
+                (
+                    "newBufferWithBytesNoCopy:length:options:deallocator:",
+                    imp!(new_buffer_no_copy),
+                ),
                 ("newLibraryWithURL:error:", imp!(new_library_with_url)),
                 (
                     "newLibraryWithSource:options:error:",

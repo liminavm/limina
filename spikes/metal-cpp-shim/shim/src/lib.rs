@@ -9,6 +9,7 @@
 mod blocks;
 mod foundation;
 mod metal;
+mod pool;
 pub mod runtime;
 
 /// Every class this library defines, superclasses first.

@@ -4,8 +4,12 @@
 // library, and autorelease pools. With "unknown" it calls a method limina-metal lacks, which must
 // abort naming it. With "thread-exit" a thread's C++ thread_local destructor uses an autorelease
 // pool after the shim's own per-thread state may already be gone, as MLX's per-thread state does.
+// With "many-buffers" it holds more buffers than a context has arenas (4096), as a loaded model
+// does, frees and remakes them, and runs axpy on buffers spread across them; then it makes and
+// frees more large buffers, each an arena of its own, than there are arena ids, and runs axpy in
+// the last of them.
 //
-// Usage: axpy <kernels.metallib> <kernels.metal> [unknown | thread-exit]
+// Usage: axpy <kernels.metallib> <kernels.metal> [unknown | thread-exit | many-buffers]
 
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
@@ -19,6 +23,7 @@
 #include <fstream>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 static const uint32_t N = 1 << 20;
 static const float A = 2.5f;
@@ -69,6 +74,103 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
         dev->isHeadless();
         return 0;
+    }
+
+    if (argc > 3 && std::strcmp(argv[3], "many-buffers") == 0) {
+        const int count = 5000, n = 1024;
+        std::vector<MTL::Buffer*> bufs;
+        // Twice round: what the first round frees must come back for the second.
+        for (int round = 0; round < 2; round++) {
+            for (MTL::Buffer* b : bufs)
+                b->release();
+            bufs.clear();
+            for (int i = 0; i < count; i++) {
+                MTL::Buffer* b = dev->newBuffer(n * 4, MTL::ResourceStorageModeShared);
+                if (!b) {
+                    std::printf("FAIL: buffer %d of %d (round %d) was not made\n", i, count, round);
+                    return 1;
+                }
+                float* p = static_cast<float*>(b->contents());
+                for (int j = 0; j < n; j++)
+                    p[j] = float(i + j);
+                bufs.push_back(b);
+            }
+        }
+        NS::Error* err = nullptr;
+        NS::URL* url = NS::URL::fileURLWithPath(NS::String::string(argv[1], NS::UTF8StringEncoding));
+        MTL::Library* lib = dev->newLibrary(url, &err);
+        MTL::Function* axpy = lib ? lib->newFunction(NS::String::string("axpy", NS::ASCIIStringEncoding)) : nullptr;
+        MTL::ComputePipelineState* pso = axpy ? dev->newComputePipelineState(axpy, &err) : nullptr;
+        if (!pso)
+            return fail("axpy pipeline", err);
+        MTL::CommandQueue* queue = dev->newCommandQueue();
+        MTL::CommandBuffer* cb = queue->commandBufferWithUnretainedReferences();
+        MTL::ComputeCommandEncoder* enc = cb->computeCommandEncoder(MTL::DispatchTypeConcurrent);
+        enc->setComputePipelineState(pso);
+        // y = A*x + y for (x, y) = (bufs[k], bufs[count-1-k]), k spread across all of them.
+        const int pairs[] = {0, 1, 1000, 2047, 2048, 2499};
+        for (int k : pairs) {
+            enc->setBuffer(bufs[k], 0, 0);
+            enc->setBuffer(bufs[count - 1 - k], 0, 1);
+            enc->setBytes(&A, sizeof(A), 2);
+            enc->dispatchThreads(MTL::Size(n, 1, 1), MTL::Size(256, 1, 1));
+        }
+        enc->endEncoding();
+        cb->commit();
+        cb->waitUntilCompleted();
+        int wrong = 0;
+        for (int k : pairs) {
+            const float* y = static_cast<const float*>(bufs[count - 1 - k]->contents());
+            for (int j = 0; j < n; j++)
+                wrong += y[j] != std::fma(A, float(k + j), float(count - 1 - k + j));
+        }
+        std::printf("%d buffers, twice; axpy across them: %d of %d wrong\n", count, wrong,
+                    int(sizeof(pairs) / sizeof(pairs[0])) * n);
+        for (MTL::Buffer* b : bufs)
+            b->release();
+
+        const int big = 4500;
+        const uint32_t bn = (20u << 20) / 4;
+        MTL::Buffer* last = nullptr;
+        for (int i = 0; i < big; i++) {
+            if (last)
+                last->release();
+            last = dev->newBuffer(bn * 4, MTL::ResourceStorageModeShared);
+            if (!last) {
+                std::printf("FAIL: large buffer %d of %d was not made\n", i, big);
+                return 1;
+            }
+        }
+        float* lp = static_cast<float*>(last->contents());
+        for (uint32_t j = 0; j < bn; j++)
+            lp[j] = float(j % 4096);
+        MTL::Buffer* lx = dev->newBuffer(bn * 4, MTL::ResourceStorageModeShared);
+        float* xp = static_cast<float*>(lx->contents());
+        for (uint32_t j = 0; j < bn; j++)
+            xp[j] = 1.0f;
+        cb = queue->commandBufferWithUnretainedReferences();
+        enc = cb->computeCommandEncoder(MTL::DispatchTypeConcurrent);
+        enc->setComputePipelineState(pso);
+        enc->setBuffer(lx, 0, 0);
+        enc->setBuffer(last, 0, 1);
+        enc->setBytes(&A, sizeof(A), 2);
+        enc->dispatchThreads(MTL::Size(bn, 1, 1), MTL::Size(256, 1, 1));
+        enc->endEncoding();
+        cb->commit();
+        cb->waitUntilCompleted();
+        int bwrong = 0;
+        for (uint32_t j = 0; j < bn; j++)
+            bwrong += lp[j] != A + float(j % 4096);
+        std::printf("%d large buffers made and freed; axpy in the last: %d of %u wrong\n", big,
+                    bwrong, bn);
+        wrong += bwrong;
+        last->release();
+        lx->release();
+        pso->release();
+        axpy->release();
+        lib->release();
+        queue->release();
+        return wrong ? 1 : 0;
     }
 
     NS::Error* err = nullptr;

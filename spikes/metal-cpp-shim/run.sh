@@ -1,8 +1,8 @@
 #!/bin/bash
 # The guest half: copies out/ into a guest, installs clang if it is missing, builds the test
-# against Apple's metal-cpp and the stand-in headers, links limina-metal, and runs it three times:
-# the compute run, an autorelease pool used at thread exit, then a call limina-metal does not
-# implement, which must abort naming it.
+# against Apple's metal-cpp and the stand-in headers, links limina-metal, and runs it four times:
+# the compute run, an autorelease pool used at thread exit, more buffers than a context has
+# arenas, then a call limina-metal does not implement, which must abort naming it.
 # Usage: run.sh <ssh-port>. The test images' credentials are in docs/images.md.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -24,6 +24,11 @@ rc=$?
 echo "== exit $rc"
 echo "== a pool at thread exit"
 g 60 'cd /tmp/mcs && ./axpy kernels.metallib kernels.metal thread-exit'
+t=$?
+echo "== exit $t"
+[ $rc -eq 0 ] && rc=$t
+echo "== more buffers than arenas"
+g 300 'cd /tmp/mcs && ./axpy kernels.metallib kernels.metal many-buffers'
 t=$?
 echo "== exit $t"
 [ $rc -eq 0 ] && rc=$t

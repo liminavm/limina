@@ -21,6 +21,8 @@ run`. The GPU host is from limina `5000e7d0` (function constants on the wire) an
 | `addCompletedHandler` with a C++ lambda, then `waitUntilCompleted` | the handler saw status 4 (completed) before the wait returned |
 | `newLibrary(source, CompileOptions)`; then a source that does not compile | compiles; refused with an `NS::Error`, the program carries on |
 | a method the shim lacks (`isHeadless`) | aborts: `limina-metal: -[MTLDevice isHeadless] is not implemented`, exit 134 |
+| `thread-exit`: a C++ `thread_local` destructor that uses an autorelease pool at thread exit, after the thread's own pool use | runs (it aborted while the pool stack was a Rust `thread_local!` with a destructor) |
+| `many-buffers`: 5000 buffers of 4 KiB, freed and made again, then axpy across them; then 4500 buffers of 20 MiB made and freed one after another, and axpy in the last | 0 of 6144 and 0 of 5 242 880 wrong (5000 buffers failed at the 4094th before the pool) |
 
 ## Recipe
 
@@ -64,16 +66,21 @@ shim is a Rust static library, so building it needs no Linux linker. The guest l
   the class methods. `retain`, `release`, `autorelease` and per-thread `NSAutoreleasePool`s behave
   as Foundation's.
 
-## Choices this spike made that the libMetal must revisit
+## How the shim manages memory and work
 
-- **One arena per `MTLBuffer`.** A context has at most 4096 arenas, and a loaded model has
-  thousands of buffers. Buffers must be carved from pooled arenas, as KosmicKrisp's bridge does.
-- **`setBytes` scratch wraps** without waiting for the GPU to finish with what it overwrites.
+- **Buffers come from a pool** (`shim/src/pool.rs`). Regions of up to 16 MiB are carved out of
+  shared 64 MiB arenas, and larger ones get an arena of their own, as KosmicKrisp's bridge does
+  with its heaps. A context has at most 4096 arenas, with ids the guest picks below that, so ids
+  are reused, and an arena is destroyed (`ARENA_DESTROY`) once every commit made before its last
+  free has completed. A freed region is reused at once: that is Metal's contract with heaps and
+  untracked resources, which MLX keeps.
+- **`setBytes` data** of a command buffer goes in one region from the pool, which it holds until
+  it retires.
 - **Command buffers record into their own list**, and commit turns it into ring commands under the
   device's lock: this is the per-command-buffer stream MLX's multithreaded encoding needs. A
-  completion thread polls the ring every 50 µs.
-- **Argument tables are never destroyed** (one per command buffer). Whether the host may destroy
-  one that committed work still names is not settled here.
+  completion thread polls the ring every 50 µs, and frees what retired command buffers held.
+- **Each command buffer has an argument table**, destroyed straight after its last commit: the
+  host holds a destroyed object until the commits made before the destroy have completed.
 - **Each encoder starts with a queue barrier**, which gives Metal 3's ordering between encoders.
   Inside an encoder, dispatches run concurrently and order only at `memoryBarrier`, which is
   what MLX asks for with `DispatchTypeConcurrent`.
@@ -84,6 +91,4 @@ shim is a Rust static library, so building it needs no Linux linker. The guest l
 
 ## Next
 
-The libMetal is this shim grown to MLX's call set: about 100 metal-cpp methods (the spike
-implements 44, not counting `alloc` and `dealloc`), heaps, shared events, residency sets as no-ops, and the choices above settled.
-MLX itself then builds for Linux against Apple's metal-cpp and that library (`liminavm/mlx`).
+MLX builds for Linux against this shim and Apple's metal-cpp: `spikes/mlx-linux/RESULTS.md`.
