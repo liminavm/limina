@@ -1357,12 +1357,11 @@ up to 6.9 TFLOP/s, and MLX's regression examples converge. MLX's Python package 
 guest from the same fork, and `mlx-lm` runs a 4-bit Qwen2.5-0.5B on the GPU at about 200 tok/s,
 its float32 logits matching MLX's CPU backend at every prompt position. omlx serves a 4-bit
 Qwen2.5-7B from the guest over its OpenAI API at about 73 tok/s, as fast as omlx on macOS itself,
-and its greedy output is byte-identical to the host's. limina-metal holds a
-command buffer at a wait no submitted signal has reached, so MLX's streams order correctly over
-the one wire queue.
+and its greedy output is byte-identical to the host's. Each `MTLCommandQueue` has a host queue
+of its own (wire VERSION 5, `docs/design/metal-transport-queues.md`), so MLX's streams run side
+by side and wait on each other's events as on Metal.
 
 **What it still needs:**
-- **limina-metal, out of the spike:** streams that run concurrently (a host queue per stream; today
-  they take turns on the one wire queue), and an arena window (16 GiB per VM today, shared by
-  every context) that fits the models people run.
+- **limina-metal, out of the spike**, and an arena window (16 GiB per VM today, shared by every
+  context) that fits the models people run.
 - **Larger models**, past what the arena window holds, and omlx's custom kernels.

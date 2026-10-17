@@ -65,8 +65,11 @@ IOKit sampling) sit behind `sys.platform` checks, and its custom kernels are off
 command line does not find it.
 
 Four requests at once are no faster than one, on macOS itself as in the guest, so that is this
-model on an M1 Max under omlx, not the transport; whether the guest's few percent less there is
-the streams taking turns (`spikes/metal-cpp-shim/RESULTS.md`) is not measured.
+model on an M1 Max under omlx, not the transport. Two models generating at once (the 7B and a
+4-bit Qwen2.5-0.5B, 256 tokens each, measured 2026-10-17 over three runs per case) slow the 7B to
+0.71 to 0.95 of its speed alone in the guest, whether MLX's streams share one host queue or each
+has its own, and to 0.74 to 0.89 on macOS: omlx generates every model from one thread on one
+stream, so separate queues have nothing to overlap, and decoding is bound by memory bandwidth.
 
 `host.sh` builds from the MLX tree at `third_party/mlx`, the `liminavm/mlx` fork pinned in the
 manifest (`cargo xtask vendor` materializes it), and refuses a dirty one:
@@ -110,8 +113,8 @@ not implemented`). That makes the next missing method one run away, and a new sh
   command buffer. The wire takes `QUEUE_EVENT` only between commits, so commit splits the command
   buffer there. One `MTLCommandBuffer` becomes several commits, and its status and handlers follow
   the last of them.
-- **`MTLFence` is a no-op.** Every command buffer goes through one queue, and each encoder starts
-  after the last one's work is done, so a fence between two encoders always holds.
+- **`MTLFence` is a no-op.** Each encoder starts after the last one's work on its queue is done,
+  and a fence orders work within one queue, so a fence between two encoders always holds.
 - **Residency sets are no-ops**, because every arena is resident while the guest maps it.
   **`newHeapWithDescriptor:` returns nil**, which Metal allows, and MLX then allocates small
   buffers from the device instead. `MTLCopyAllDevices` returns nil, which MLX takes as "use the
@@ -144,9 +147,6 @@ These are untested by what ran here, and some will break a real model:
   guest-physical), shared by every context, the desktop's Vulkan driver included. Pooling does not
   move it, and a pooled arena takes its whole 64 MiB of it however little is in use. A model larger
   than about 14 GiB will not fit until the window grows.
-- **MLX's GPU streams take turns on one wire queue.** limina-metal holds a command buffer at a
-  wait until a signal reaching it is on the ring (`spikes/metal-cpp-shim/RESULTS.md` §How the shim
-  manages memory and work), which orders them correctly, but no two streams' work runs at once.
 - **Not implemented:** zero-copy user buffers, linked functions, and
   `setThreadgroupMemoryLength:`. MLX has no callers of the last one yet.
 - **Library probes print.** MLX probes three paths for a colocated `mlx.metallib` before it finds
