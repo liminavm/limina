@@ -73,7 +73,7 @@ tree = "/Volumes/mesa-cs/mesa"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "metal-native-context"
-rev = "41353793c95042ea4824c974082bf87a7d66cd85"
+rev = "340ed84bf1ba1c2706dc3279fdcf148f24526309"
 base = "059715d2aa534b74fee59aec6fae316f026d0627"
 tree = "/Volumes/mesa-cs/mesa-metal-guest"
 
