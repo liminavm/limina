@@ -54,7 +54,8 @@ pub mod uapi {
         pub num_handles: u32,
         pub flags: u32,
         pub fence_fd: i32,
-        pub pad: u32,
+        /// Where in the ring's arena the completed value is: a queue's slot, or 0 for the ring's.
+        pub completed_at: u32,
     }
 
     #[repr(C)]
@@ -373,10 +374,17 @@ impl Gpu {
 
     /// Commits what was pushed without waiting for it; returns its seqno.
     pub fn commit_nowait(&mut self) -> u64 {
+        self.commit_nowait_on(0)
+    }
+
+    /// Commits what was pushed to `queue` (0, the context's own) without waiting for it; returns
+    /// its seqno.
+    pub fn commit_nowait_on(&mut self, queue: u32) -> u64 {
         self.seqno += 1;
         self.push(
             cmd::Commit {
                 seqno: self.seqno,
+                queue,
                 feedback: BufRef::NONE,
                 ..Default::default()
             },
@@ -384,6 +392,20 @@ impl Gpu {
         );
         self.kick();
         self.seqno
+    }
+
+    /// Makes queue `handle`, whose completed seqno the host stores to the u64 at `slot` in the
+    /// main arena, which holds the ring.
+    pub fn create_queue(&mut self, handle: u32, slot: u64) {
+        self.main.write(slot, &0u64.to_le_bytes());
+        self.push(
+            cmd::CreateQueue {
+                handle,
+                completed: BufRef::new(1, slot),
+                ..Default::default()
+            },
+            &[],
+        );
     }
 
     /// Publishes what was pushed, ringing the doorbell if the host parked.

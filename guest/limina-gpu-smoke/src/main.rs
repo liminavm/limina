@@ -7,7 +7,8 @@
 //! as a GEM object, PRIME to an fd, import in a child with its own context, and a kernel there
 //! writes what the parent reads back. Then a fence: a commit that waits on a shared event
 //! nobody has set, fenced as a sync_file and on a shared arena's dma-buf, must leave both
-//! unsignaled until the guest sets the event, and both signaled after. Exports must also come back
+//! unsignaled until the guest sets the event, and both signaled after; fences on two queues each
+//! follow their own queue. Exports must also come back
 //! promptly on a quiet device, with nothing else kicking the control queue. Exit status 0 means
 //! everything came back right.
 //!
@@ -549,7 +550,7 @@ fn fence(g: &mut Gpu) -> Result<(), String> {
         num_handles: 1,
         flags: uapi::FENCE_FD,
         fence_fd: -1,
-        pad: 0,
+        completed_at: 0,
     };
     ioctl(&g.file, uapi::FENCE, &mut fence).map_err(|e| format!("FENCE: {e}"))?;
     let early = (ready(fence.fence_fd, 300), ready(dmabuf, 0));
@@ -586,6 +587,114 @@ fn fence(g: &mut Gpu) -> Result<(), String> {
     }
     if !signaled || !readable || completed < seqno {
         return Err("not signaled after its commit completed".into());
+    }
+    Ok(())
+}
+
+/// A sync_file fence for `seqno` on the completed value at `completed_at`.
+fn queue_fence(g: &Gpu, seqno: u64, completed_at: u32) -> io::Result<i32> {
+    let mut fence = uapi::Fence {
+        seqno,
+        flags: uapi::FENCE_FD,
+        fence_fd: -1,
+        completed_at,
+        ..Default::default()
+    };
+    ioctl(&g.file, uapi::FENCE, &mut fence)?;
+    Ok(fence.fence_fd)
+}
+
+/// Fences on two queues, each held by a wait on its own shared event, B's committed and fenced
+/// first: A's completing must signal A's fence and leave B's pending, which upstream's fence
+/// driver gets wrong when both are on one dma-fence context. Then a fence on a value already
+/// reached is signaled as the ioctl returns, and a misaligned slot, or one outside the ring's
+/// arena, is refused.
+fn queue_fences(g: &mut Gpu) -> Result<(), String> {
+    const SLOTS: u64 = 8 * MIB;
+    const QA: u32 = 40;
+    const QB: u32 = 41;
+    const EA: u32 = 42;
+    const EB: u32 = 43;
+    let (sa_at, sb_at) = (SLOTS as u32, SLOTS as u32 + 8);
+    g.create_queue(QA, SLOTS);
+    g.create_queue(QB, SLOTS + 8);
+    let mut seqnos = Vec::new();
+    for (q, e) in [(QB, EB), (QA, EA)] {
+        g.push(
+            cmd::SyncObject {
+                handle: e,
+                kind: cmd::sync_kind::SHARED_EVENT,
+                initial: 0,
+                mirror: BufRef::NONE,
+            },
+            &[],
+        );
+        g.push(
+            cmd::QueueEvent {
+                event: e,
+                wait: 1,
+                value: 1,
+                queue: q,
+                ..Default::default()
+            },
+            &[],
+        );
+        seqnos.push(g.commit_nowait_on(q));
+    }
+    let (sb, sa) = (seqnos[0], seqnos[1]);
+    let fb = queue_fence(g, sb, sb_at).map_err(|e| format!("FENCE on queue B: {e}"))?;
+    let fa = queue_fence(g, sa, sa_at).map_err(|e| format!("FENCE on queue A: {e}"))?;
+    let set = |g: &mut Gpu, e| {
+        g.push(
+            cmd::SetSharedEvent {
+                handle: e,
+                _pad: 0,
+                value: 1,
+            },
+            &[],
+        );
+        g.kick();
+    };
+    set(g, EA);
+    let a_done = ready(fa, 3000);
+    let b_early = ready(fb, 300);
+    set(g, EB);
+    let b_done = ready(fb, 3000);
+    let fc = queue_fence(g, sa, sa_at).map_err(|e| format!("FENCE on a reached value: {e}"))?;
+    let c_now = ready(fc, 0);
+    let refused = |at| {
+        queue_fence(g, sa, at)
+            .map(|fd| {
+                // SAFETY: an fd this function got.
+                unsafe { libc::close(fd) };
+            })
+            .err()
+            .and_then(|e| e.raw_os_error())
+            == Some(libc::EINVAL)
+    };
+    let misaligned = refused(sa_at + 4);
+    let outside = refused(g.main.size as u32);
+    println!(
+        "queue fences: A {} after its event, B {} before its own and {} after; a reached \
+         value's fence {} at once; misaligned slot {}, slot outside the arena {}",
+        if a_done { "signaled" } else { "pending" },
+        if b_early { "signaled" } else { "pending" },
+        if b_done { "signaled" } else { "pending" },
+        if c_now { "signaled" } else { "pending" },
+        if misaligned { "refused" } else { "taken" },
+        if outside { "refused" } else { "taken" },
+    );
+    // SAFETY: fds this function got.
+    unsafe {
+        libc::close(fa);
+        libc::close(fb);
+        libc::close(fc);
+    }
+    if !a_done || b_early || !b_done {
+        return Err("a queue's fence followed another queue's completion".into());
+    }
+    if !c_now || !misaligned || !outside {
+        return Err("a queue fence's fast path or its checks are wrong".into());
     }
     Ok(())
 }
@@ -740,9 +849,10 @@ fn main() {
         .and_then(|()| poke(&mut g, &other))
         .and_then(|()| export_latency(&g.file))
         .and_then(|()| share(&path, &g.file))
-        .and_then(|()| surface(&path, &mut g))
         .and_then(|()| fence(&mut g))
+        .and_then(|()| queue_fences(&mut g))
         .and_then(|()| orphan_fence(&path))
+        .and_then(|()| surface(&path, &mut g))
         .and_then(|()| round_trips(&mut g));
     match result {
         Ok(()) => println!("PASS"),
