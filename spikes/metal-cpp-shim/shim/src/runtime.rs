@@ -5,7 +5,7 @@
 //! answer it; a class's `isa` is its metaclass, which holds the class methods. A message that no
 //! class in the chain implements aborts, naming the class and the selector.
 
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -329,11 +329,27 @@ unsafe extern "C" fn retain_count(this: *mut Header, _: Sel) -> usize {
 }
 
 thread_local! {
-    static POOLS: RefCell<Vec<Vec<*mut Header>>> = const { RefCell::new(Vec::new()) };
+    // A raw pointer, so the thread registers no destructor for it: C++ thread_local destructors,
+    // which run at thread exit in no order relative to Rust's, use pools too (MLX's do). What a
+    // thread leaves here at exit leaks.
+    static POOLS: Cell<*mut Vec<Vec<*mut Header>>> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+/// `f` on this thread's stack of pools, innermost last. `f` must not send messages: a release can
+/// reach `autorelease` again.
+fn pools<R>(f: impl FnOnce(&mut Vec<Vec<*mut Header>>) -> R) -> R {
+    POOLS.with(|p| {
+        if p.get().is_null() {
+            p.set(Box::into_raw(Box::default()));
+        }
+        // SAFETY: this thread's own stack, made just above if need be and never freed; `f` sends
+        // no messages, so nothing else on the thread borrows it meanwhile.
+        f(unsafe { &mut *p.get() })
+    })
 }
 
 unsafe extern "C" fn autorelease(this: *mut Header, _: Sel) -> *mut Header {
-    let pooled = POOLS.with(|p| match p.borrow_mut().last_mut() {
+    let pooled = pools(|p| match p.last_mut() {
         Some(pool) => {
             pool.push(this);
             true
@@ -348,13 +364,13 @@ unsafe extern "C" fn autorelease(this: *mut Header, _: Sel) -> *mut Header {
 }
 
 extern "C" fn pool_init(this: *mut Header, _: Sel) -> *mut Header {
-    POOLS.with(|p| p.borrow_mut().push(Vec::new()));
+    pools(|p| p.push(Vec::new()));
     this
 }
 
 unsafe extern "C" fn pool_dealloc(this: *mut Obj<()>, s: Sel) {
     // Pools nest: this one is the innermost.
-    let objects = POOLS.with(|p| p.borrow_mut().pop()).unwrap_or_default();
+    let objects = pools(|p| p.pop()).unwrap_or_default();
     for o in objects {
         // SAFETY: each was live when autoreleased, and the pool held that reference.
         unsafe { release(o, s) };

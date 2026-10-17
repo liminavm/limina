@@ -1,7 +1,8 @@
 #!/bin/bash
 # The guest half: copies out/ into a guest, installs clang if it is missing, builds the test
-# against Apple's metal-cpp and the stand-in headers, links limina-metal, and runs it twice: the
-# compute run, then a call limina-metal does not implement, which must abort naming it.
+# against Apple's metal-cpp and the stand-in headers, links limina-metal, and runs it three times:
+# the compute run, an autorelease pool used at thread exit, then a call limina-metal does not
+# implement, which must abort naming it.
 # Usage: run.sh <ssh-port>. The test images' credentials are in docs/images.md.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -21,6 +22,11 @@ echo "== run"
 g 120 'cd /tmp/mcs && ./axpy kernels.metallib kernels.metal'
 rc=$?
 echo "== exit $rc"
+echo "== a pool at thread exit"
+g 60 'cd /tmp/mcs && ./axpy kernels.metallib kernels.metal thread-exit'
+t=$?
+echo "== exit $t"
+[ $rc -eq 0 ] && rc=$t
 echo "== a method limina-metal lacks"
 g 60 'cd /tmp/mcs && { ./axpy kernels.metallib kernels.metal unknown; echo "== exit $? (SIGABRT is 134)"; }'
 exit $rc

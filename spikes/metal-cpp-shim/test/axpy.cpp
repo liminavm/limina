@@ -2,9 +2,10 @@
 // .metallib loaded by URL, a kernel specialised with function constants, buffers and setBytes,
 // a concurrent encoder with a memory barrier, a std::function completion handler, an MSL source
 // library, and autorelease pools. With "unknown" it calls a method limina-metal lacks, which must
-// abort naming it.
+// abort naming it. With "thread-exit" a thread's C++ thread_local destructor uses an autorelease
+// pool after the shim's own per-thread state may already be gone, as MLX's per-thread state does.
 //
-// Usage: axpy <kernels.metallib> <kernels.metal> [unknown]
+// Usage: axpy <kernels.metallib> <kernels.metal> [unknown | thread-exit]
 
 #define NS_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
@@ -17,12 +18,24 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 static const uint32_t N = 1 << 20;
 static const float A = 2.5f;
 
 static float x(uint32_t i) { return (i % 1000) * 0.25f; }
 static float y0(uint32_t i) { return 1.0f - (i % 77); }
+
+// Made on a thread's first use; destroyed at its exit, in reverse order of construction among the
+// thread's destructors.
+struct UsesPoolAtThreadExit {
+    ~UsesPoolAtThreadExit() {
+        NS::AutoreleasePool* p = NS::AutoreleasePool::alloc()->init();
+        NS::String::string("at thread exit", NS::UTF8StringEncoding);
+        p->release();
+    }
+};
+static thread_local UsesPoolAtThreadExit uses_pool_at_thread_exit;
 
 static int fail(const char* what, NS::Error* err) {
     std::printf("FAIL: %s: %s\n", what, err ? err->localizedDescription()->utf8String() : "(no error)");
@@ -33,6 +46,18 @@ int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr, "usage: %s <kernels.metallib> <kernels.metal> [unknown]\n", argv[0]);
         return 2;
+    }
+    if (argc > 3 && std::strcmp(argv[3], "thread-exit") == 0) {
+        std::thread([] {
+            // Construct the C++ thread_local first, so its destructor runs after anything the
+            // shim registers for this thread later.
+            (void)&uses_pool_at_thread_exit;
+            NS::AutoreleasePool* p = NS::AutoreleasePool::alloc()->init();
+            NS::String::string("on the thread", NS::UTF8StringEncoding);
+            p->release();
+        }).join();
+        std::printf("a pool in a thread_local destructor at thread exit: OK\n");
+        return 0;
     }
     NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
     MTL::Device* dev = MTL::CreateSystemDefaultDevice();
