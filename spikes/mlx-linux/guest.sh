@@ -5,7 +5,9 @@
 #   deps    cmake, clang, git, OpenBLAS and LAPACK (MLX's CPU backend)
 #   so      liblimina_metal.so from the static library, so a new shim needs no MLX relink
 #   build   MLX, shared, Release, with MLX_METAL_LIMINA=~/mlxl/prefix
-# and, when named: check (test/check.cpp, the GPU against MLX's CPU backend), or MLX's C++ examples: tutorial, linear_regression, logistic_regression.
+# and, when named: check (test/check.cpp, the GPU against MLX's CPU backend), python (MLX's Python
+# package, in ~/mlxl/venv), lm (mlx-lm in that venv), model (test/lm_check.py on the GPU and the
+# CPU, compared by test/lm_compare.py; MODEL picks the model), or MLX's C++ examples: tutorial, linear_regression, logistic_regression.
 # Usage: guest.sh <ssh-port> [step...]. The test images' credentials are in docs/images.md.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -41,6 +43,36 @@ for step in $steps; do
       tail -20 configure.log; exit $rc' || exit 1
     g 7200 'cd ~/mlxl && cmake --build build -j "$(nproc)" -- -k > build.log 2>&1; rc=$?; \
       grep -E "error|Error" build.log | head -40; tail -5 build.log; exit $rc' || exit 1
+    ;;
+  python)
+    # MLX's own setup.py, which runs its CMake with CMAKE_ARGS appended. No .git in the copied
+    # source, so DEV_RELEASE skips the commit hash in the version. Fedora's GNUInstallDirs would put
+    # libmlx.so in lib64/, where the extension's $ORIGIN/lib runpath does not look.
+    g 1800 "echo '$pass' | sudo -S dnf -y -q install python3-devel python3-pip" || exit 1
+    g 3600 'cd ~/mlxl && { [ -d venv ] || python3 -m venv venv; } && . venv/bin/activate &&
+      pip install -q setuptools typing_extensions numpy && cd mlx &&
+      DEV_RELEASE=1 CMAKE_ARGS="-DMLX_METAL_LIMINA=$HOME/mlxl/prefix -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++" \
+      pip install --no-build-isolation . > ~/mlxl/python-build.log 2>&1; rc=$?
+      tail -5 ~/mlxl/python-build.log; exit $rc' || exit 1
+    g 120 'cd ~/mlxl && . venv/bin/activate && cd /tmp &&
+      LD_LIBRARY_PATH=$HOME/mlxl/prefix/lib python3 -c "import mlx.core as mx; a = mx.arange(8.0); print(mx.default_device(), (a * 2 + 1).tolist())" 2>&1 | grep -v "os error"' || exit 1
+    ;;
+  lm)
+    # mlx-lm without its mlx requirement, which pip would take from PyPI; then its own deps.
+    g 1800 'cd ~/mlxl && . venv/bin/activate && pip install -q --no-deps mlx-lm &&
+      pip install -q $(python3 -c "import importlib.metadata as m; print(\" \".join(r.split(\";\")[0].replace(\" \", \"\") for r in m.requires(\"mlx-lm\") if \"extra ==\" not in r and not r.startswith(\"mlx\")))") &&
+      pip show mlx-lm | grep -i "^version"' || exit 1
+    ;;
+  model)
+    # A small 4-bit model through mlx-lm, on the GPU and on MLX's CPU backend, compared.
+    model=${MODEL:-mlx-community/Qwen2.5-0.5B-Instruct-4bit}
+    tar --no-mac-metadata --no-xattrs -C "$here" -cf - test |
+      gtimeout --kill-after=10 60 sshpass -p "$pass" ssh -p "$port" "${O[@]}" "$user@127.0.0.1" \
+        'cd ~/mlxl && tar -xf -' || exit 1
+    g 3600 "cd ~/mlxl && . venv/bin/activate && export LD_LIBRARY_PATH=\$HOME/mlxl/prefix/lib &&
+      python3 test/lm_check.py $model gpu lm-gpu 2>&1 | grep -v 'os error' &&
+      python3 test/lm_check.py $model cpu lm-cpu 2>&1 | grep -v 'os error' &&
+      python3 test/lm_compare.py lm-gpu lm-cpu" || exit 1
     ;;
   check)
     tar --no-mac-metadata --no-xattrs -C "$here" -cf - test |

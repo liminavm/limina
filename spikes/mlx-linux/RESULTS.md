@@ -6,7 +6,7 @@ on the host's GPU. MLX keeps Apple's metal-cpp, unmodified. limina-metal
 Metal's compute classes over `guest/limina-gpu-client`.
 
 Measured 2026-10-17 on an M1 Max, macOS 27, in a clone of `Fedora-Workstation-44.metal.test.raw`
-(8 vCPUs, 16 GiB, clang 22.1.8, OpenBLAS for MLX's CPU backend), booted with
+(8 vCPUs, 16 GiB, clang 22.1.8, Python 3.14.8, OpenBLAS for MLX's CPU backend), booted with
 `LIMINA_GPU_METAL=1 cargo xtask run`. MLX is `ml-explore/mlx` `b6642e6` plus the fork's two commits
 below; the GPU host is from limina `5000e7d0`.
 
@@ -23,8 +23,17 @@ below; the GPU host is from limina `5000e7d0`.
 | `examples/cpp/linear_regression` | loss 4.5e-5, \|w − w*\| = 0.0033, 2237 it/s |
 | `examples/cpp/logistic_regression` | loss 0.028, accuracy 1.0, 2055 it/s |
 | worker log over all of the above | nothing from the GPU host |
+| MLX's Python package (`pip install .` with `CMAKE_ARGS`), `import mlx.core` | builds; default device `gpu`, `(arange(8) * 2 + 1)` right |
+| `mlx-lm` 0.32.2, `mlx-community/Qwen2.5-0.5B-Instruct-4bit` (`test/lm_check.py`, `test/lm_compare.py`): the prompt's logits in float32, GPU against MLX's CPU backend | 40 positions × 151936; largest difference 4.2e-4 of 28.9; the next-token choice agrees at 40 of 40 |
+| the same model generating 96 tokens greedily in its own float16 on the GPU | coherent English; 156 to 306 tok/s over four runs, prompt 590 to 650 tok/s, peak 0.38 GB |
+| generating again after the float32 pass, the weights cast back lazily, so the generation stream waits on the default stream's events | the same 96 tokens |
 
 `examples/cpp/tutorial` also runs, but checks nothing: its `assert`s compile out of a Release build.
+In float16 the GPU and the CPU backend cannot be compared token for token: the two sum in
+different orders, near ties flip (8 of 40 prompt positions in bfloat16), and one different token
+changes the rest. So the comparison is in float32, and the float16 generation is checked against
+itself. MLX's CPU backend generates this model at about 0.1 tok/s, which makes the `model` step
+take about 10 minutes.
 The tests run as `cd ~/mlxl/build/tests && LD_LIBRARY_PATH=~/mlxl/prefix/lib:~/mlxl/build ./tests`.
 
 ## Recipe
@@ -36,7 +45,12 @@ LIMINA_GPU_METAL=1 cargo xtask run --disk <clone of metal.test> --cpus 8 --ram-m
 port=$(scripts/wait-guest-ssh.sh /tmp/limina-worker-<disk>.log)
 spikes/mlx-linux/guest.sh $port        # copy, deps, so, build (about 3 minutes on 8 vCPUs)
 spikes/mlx-linux/guest.sh $port check linear_regression logistic_regression
+spikes/mlx-linux/guest.sh $port python lm model   # MLX's Python package in ~/mlxl/venv, mlx-lm, the model
 ```
+
+The Python package installs `libmlx.so` next to the extension, so it needs only
+`LD_LIBRARY_PATH=~/mlxl/prefix/lib`, for limina-metal. `mlx-lm` goes in with `--no-deps` and then
+its own requirements, which keeps pip from replacing the fork's MLX with PyPI's.
 
 `host.sh` builds from the MLX tree at `third_party/mlx`, the `liminavm/mlx` fork pinned in the
 manifest (`cargo xtask vendor` materializes it), and refuses a dirty one:
@@ -114,10 +128,9 @@ These are untested by what ran here, and some will break a real model:
   guest-physical), shared by every context, the desktop's Vulkan driver included. Pooling does not
   move it, and a pooled arena takes its whole 64 MiB of it however little is in use. A model larger
   than about 14 GiB will not fit until the window grows.
-- **Every MLX GPU stream shares one wire queue.** Within a stream, commit order follows MLX's
-  evaluation order, so events are ordered correctly. Across two GPU streams, a wait committed
-  before the signal it waits for would hold the queue forever. MLX uses one GPU stream unless the
-  program makes more.
+- **MLX's GPU streams take turns on one wire queue.** limina-metal holds a command buffer at a
+  wait until a signal reaching it is on the ring (`spikes/metal-cpp-shim/RESULTS.md` §How the shim
+  manages memory and work), which orders them correctly, but no two streams' work runs at once.
 - **Not implemented:** zero-copy user buffers, linked functions, and
   `setThreadgroupMemoryLength:`. MLX has no callers of the last one yet.
 - **Library probes print.** MLX probes three paths for a colocated `mlx.metallib` before it finds

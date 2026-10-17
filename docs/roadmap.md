@@ -15,7 +15,8 @@ wave 1. Open: the rest of M15, M13, M17, the M12 file-transfer half. Deferred by
 bridged networking (worker-held vmnet, no privilege needed) and M7 real-device USB capture
 (AccessoryAccess on macOS 27, root helper below). M16
 (LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) runs MLX itself: built for Linux with its Metal backend,
-it runs on the host GPU from a guest and passes 297 of the 298 cases in MLX's C++ test suite.
+it runs on the host GPU from a guest, passes 297 of the 298 cases in MLX's C++ test suite, and
+runs a 4-bit LLM through `mlx-lm`.
 
 ---
 
@@ -1352,9 +1353,14 @@ calls, a blocks runtime, and Metal's compute classes over the transport. A third
 from a fork, `liminavm/mlx`, with two small commits under one CMake option. The `mlx.metallib` and JIT sources are
 built on the host from the same commit. limina-metal carves buffers out of pooled arenas. In the
 guest, MLX's C++ test suite passes 297 of its 298 cases (the last needs zero-copy user buffers), 12 ops plus a custom kernel compiled from MSL match MLX's CPU backend, a 2048³ matmul runs at
-up to 6.9 TFLOP/s, and MLX's regression examples converge.
+up to 6.9 TFLOP/s, and MLX's regression examples converge. MLX's Python package builds in the
+guest from the same fork, and `mlx-lm` runs a 4-bit Qwen2.5-0.5B on the GPU at 156 to 306 tok/s,
+its float32 logits matching MLX's CPU backend at every prompt position. limina-metal holds a
+command buffer at a wait no submitted signal has reached, so MLX's streams order correctly over
+the one wire queue.
 
 **What it still needs:**
-- **limina-metal, out of the spike:** a queue per MLX GPU stream, or a reason not to need one, and
-  an arena window (16 GiB per VM today, shared by every context) that fits the models people run.
-- **The Python bindings**, for `mlx-lm` and servers over it such as omlx.
+- **limina-metal, out of the spike:** streams that run concurrently (a host queue per stream; today
+  they take turns on the one wire queue), and an arena window (16 GiB per VM today, shared by
+  every context) that fits the models people run.
+- **Servers over `mlx-lm`**, such as omlx, and larger models.
