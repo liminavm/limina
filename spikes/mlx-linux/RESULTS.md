@@ -13,7 +13,7 @@ below; the GPU host is from limina `5000e7d0`.
 | check (`test/check.cpp`, unless named) | result |
 |---|---|
 | `libmlx.so`, MLX's C++ tests and examples, and `check` build against limina-metal | yes |
-| MLX's C++ test suite (`build/tests/tests`, doctest) | 296 of 298 test cases, 4528 assertions, all pass. The 2 left out make arrays from a user's buffer, which needs `newBufferWithBytesNoCopy:` |
+| MLX's C++ test suite (`build/tests/tests`, doctest), all of it | 297 of 298 test cases, 4531 of 4532 assertions. The one failure checks that an array made from a user's buffer aliases it (`array_tests.cpp:640`), which needs the GPU to reach the guest's own memory |
 | `mx::gpu::is_available()`, and the default device | yes; the GPU |
 | `2i+1` over 2²⁰ floats on the GPU, read back on the CPU | every element right |
 | 12 ops on the GPU against the same ops on MLX's CPU backend: elementwise, fp32 and fp16 matmul, row and full sums, softmax, argmax, sort, transpose, conv2d, layer norm, 4-bit quantized matmul | all within tolerance. matmul and conv2d come out bit-identical to the CPU backend's OpenBLAS sgemm, which is consistent with both accumulating along K in order (not verified); the sums, softmax and layer norm differ by 1e-8 to 4e-4 of their scale. The utilisation and custom-kernel rows, not these, are the evidence that the GPU ran it |
@@ -25,8 +25,7 @@ below; the GPU host is from limina `5000e7d0`.
 | worker log over all of the above | nothing from the GPU host |
 
 `examples/cpp/tutorial` also runs, but checks nothing: its `assert`s compile out of a Release build.
-The tests run as `cd ~/mlxl/build/tests && LD_LIBRARY_PATH=~/mlxl/prefix/lib:~/mlxl/build ./tests
---test-case-exclude="test make array from user buffer,test user buffer is not donated"`.
+The tests run as `cd ~/mlxl/build/tests && LD_LIBRARY_PATH=~/mlxl/prefix/lib:~/mlxl/build ./tests`.
 
 ## Recipe
 
@@ -101,20 +100,25 @@ not implemented`). That makes the next missing method one run away, and a new sh
   What a thread leaves in a pool at exit leaks. `spikes/metal-cpp-shim`'s `thread-exit` run is the
   repro.
 
+- **Buffers come from pooled arenas**, `setBytes` data from a region each command buffer holds
+  until it retires, and argument tables are destroyed after their last commit
+  (`spikes/metal-cpp-shim/RESULTS.md` §How the shim manages memory and work).
+  `newBufferWithBytesNoCopy:` returns nil, which Metal also does for memory it cannot wrap, and
+  MLX then copies.
+
 ## What is still the spike's
 
 These are untested by what ran here, and some will break a real model:
 
-- **One arena per buffer, with no heaps.** A context has at most 4096 arenas, and a loaded model
-  has thousands of weight buffers. This is the first thing a model will hit.
-- **`setBytes` scratch wraps** without waiting for the GPU to finish reading it. A long run of
-  small dispatches, as in token generation, will overwrite parameters still in use.
+- **The VM's arena window is 16 GiB** (`ARENA_WINDOW` in `crates/limina-vmm/src/krun/metal_ext.rs`,
+  guest-physical), shared by every context, the desktop's Vulkan driver included. Pooling does not
+  move it, and a pooled arena takes its whole 64 MiB of it however little is in use. A model larger
+  than about 14 GiB will not fit until the window grows.
 - **Every MLX GPU stream shares one wire queue.** Within a stream, commit order follows MLX's
   evaluation order, so events are ordered correctly. Across two GPU streams, a wait committed
   before the signal it waits for would hold the queue forever. MLX uses one GPU stream unless the
   program makes more.
-- **Argument tables are never destroyed**, one per command buffer (and per event split).
-- **Not implemented:** `newBufferWithBytesNoCopy:` (MLX's `make_buffer` from a pointer), linked
-  functions, and `setThreadgroupMemoryLength:`. MLX has no callers of the last one yet.
+- **Not implemented:** zero-copy user buffers, linked functions, and
+  `setThreadgroupMemoryLength:`. MLX has no callers of the last one yet.
 - **Library probes print.** MLX probes three paths for a colocated `mlx.metallib` before it finds
   the prefix's, and limina-metal prints every failed load to stderr.
