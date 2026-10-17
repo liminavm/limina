@@ -112,6 +112,8 @@ impl State {
     fn commit(&mut self, q: &QueueState) -> u64 {
         self.gpu.seqno += 1;
         let seqno = self.gpu.seqno;
+        // Before the push, so a free never misses a commit already on the ring.
+        q.committed.store(seqno, Ordering::Release);
         self.push(
             cmd::Commit {
                 seqno,
@@ -122,7 +124,6 @@ impl State {
             &[],
         );
         self.gpu.kick();
-        q.committed.store(seqno, Ordering::Release);
         seqno
     }
 

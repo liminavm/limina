@@ -1,6 +1,7 @@
 # Metal transport: command queues (wire VERSION 5)
 
-Status: agreed; the wire and the GPU host implement it, the other components below do not yet.
+Status: agreed. The wire, the GPU host, limina-metal, the fence path (module, libkrun,
+limina-vmm), the client and the smoke test implement it; KosmicKrisp and delivery do not yet.
 Wire VERSION 4 has one queue per context: every guest `MTLCommandQueue` lands
 on the context's single `MTL4CommandQueue`, so two MLX streams take turns, and limina-metal holds
 a command buffer at a cross-queue wait no submitted signal has reached
@@ -28,9 +29,16 @@ A fence is `(seqno, completed_at)`: it signals once the u64 at `completed_at` in
 reaches `seqno`, and `completed_at` 0 means `RingControl::completed`.
 
 - **UAPI:** `drm_virtgpu_limina_fence.pad` becomes `completed_at`. The module checks it lies in
-  the ring's arena and is 8-aligned. It owns the arena's pages, so it reads the value itself: a
-  seqno already reached gets a signaled fence at once, with no virtio command. Only a pending
-  fence goes to the host.
+  the ring's arena and is 8-aligned. It owns the arena's pages, so it reads a nonzero
+  `completed_at` itself: a seqno already reached gets a signaled fence at once, with no virtio
+  command. Only a pending fence goes to the host. `completed_at` 0 always goes to the host: the
+  module does not know `RingControl`'s layout.
+- **A virtio ring per completed value.** Upstream's fence driver signals a dma-fence context's
+  earlier fences along with a later one, and the host retires a `(ctx, ring_idx)`'s fence
+  commands in order the same way; queues complete independently. So the module gives each
+  `completed_at` a file fences on a ring index of its own (0 for `completed_at` 0), with the
+  dma-fence context `base + ring_idx`, as upstream does for context rings. `ring_idx` is below 64,
+  so a context fences at most 63 queue slots besides its own (`ENOSPC` after).
 - **Virtio command `0x4c06`** carries `completed_at` after `seqno`. libkrun passes it through,
   and limina-vmm's fence thread polls that offset in its mapping of the ring arena, not the
   control block.
