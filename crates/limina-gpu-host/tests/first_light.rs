@@ -699,6 +699,59 @@ fn a_failed_create_with_a_reply_keeps_the_context() {
     g.commit_and_wait().expect("still alive");
 }
 
+/// Metal asserts on a pipeline descriptor whose function it cannot find, which would end the GPU
+/// host and every context of the VM; the host must answer it as a failed create instead.
+#[test]
+fn a_pipeline_naming_a_function_the_library_lacks_fails_its_reply() {
+    let mut g = start();
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"nope"],
+    );
+    assert_eq!(
+        g.reply(RECORDS).status,
+        ring::Error::PipelineCreate as u32,
+        "compute"
+    );
+    let mut colors = [0u32; cmd::MAX_COLOR_ATTACHMENTS];
+    colors[0] = RGBA8_UNORM;
+    for (vs, fs) in [(b"no", b"fs"), (b"vs", b"no")] {
+        let reply = g.reply_slot(RECORDS);
+        g.push(
+            cmd::CreateRenderPipeline {
+                handle: 2,
+                vertex_library: 1,
+                fragment_library: 1,
+                vertex_name_len: 2,
+                fragment_name_len: 2,
+                color_formats: colors,
+                raster_sample_count: 1,
+                rasterization_enabled: 1,
+                reply,
+                ..Default::default()
+            },
+            &[vs, fs],
+        );
+        assert_eq!(
+            g.reply(RECORDS).status,
+            ring::Error::PipelineCreate as u32,
+            "render {}, {}",
+            std::str::from_utf8(vs).unwrap(),
+            std::str::from_utf8(fs).unwrap()
+        );
+    }
+    let base = g.arena.gpu_base;
+    run_poke(&mut g, base + 32 * MIB, 64);
+}
+
 /// `src` compiled to a `.metallib` by Xcode's Metal toolchain
 /// (`xcodebuild -downloadComponent MetalToolchain` installs it).
 fn metallib(name: &str, src: &str) -> Vec<u8> {

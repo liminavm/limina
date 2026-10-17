@@ -441,12 +441,17 @@ fn check(ok: bool) -> R {
     if ok { Ok(()) } else { Err(Error::BadValue) }
 }
 
+/// Function `name` of `lib`. Metal asserts, ending the process, on a pipeline whose function it
+/// cannot resolve, so the function is looked up here first.
 fn function(
     lib: &Po<dyn MTLLibrary>,
     name: &[u8],
 ) -> Result<Retained<MTL4FunctionDescriptor>, Error> {
+    let name = text(name)?;
+    lib.newFunctionWithName(&name)
+        .ok_or(Error::PipelineCreate)?;
     let f = MTL4LibraryFunctionDescriptor::new();
-    f.setName(Some(&*text(name)?));
+    f.setName(Some(&name));
     f.setLibrary(Some(lib));
     Ok(Retained::into_super(f))
 }
