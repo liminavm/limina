@@ -1,0 +1,165 @@
+[2026-10-18T15:48:50Z INFO  limina] suspend armed by default: snapshot path $MAIN/target/perf-compute/work.noindex/compute-guest.raw.limina-suspend.bin
+[2026-10-18T15:48:50Z INFO  limina::debug_ctl] debug: answering at /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-debug-2368.sock
+[2026-10-18T15:48:50Z INFO  limina::runtime_ctl] runtime: answering at /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-vm-2368.sock
+[2026-10-18T15:48:50Z INFO  limina::vcpu_policy] dynamic vCPUs: 8..8 online (reclaim Disabled, dwell 20s)
+time="2026-10-18T12:48:50-03:00" level=warning msg="bad log level \"\", falling back to \"info\""
+time="2026-10-18T12:48:50-03:00" level=info msg="gvproxy version v0.8.8"
+time="2026-10-18T12:48:50-03:00" level=info msg="waiting for clients..."
+time="2026-10-18T12:48:50-03:00" level=info msg="enabling services API. Listening unix:///var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-2368.services.sock"
+[2026-10-18T15:48:50Z INFO  limina::gateway] death-pact watcher up (pid 2374) tying gvproxy 2370 to this supervisor
+[2026-10-18T15:48:50Z INFO  limina::gateway] gvproxy gateway up (pid 2370, socket "/var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-2368.sock", ssh-port 2222)
+guest SSH forward ready: ssh -p 2222 <user>@127.0.0.1
+[2026-10-18T15:48:50Z INFO  limina::hosttrackpad] touchpad: host trackpad surface 124.8 x 76.8 mm
+[2026-10-18T15:48:50Z INFO  limina::supervisor] VM worker started through launchd (pid 2377, job eti.noronha.limina.worker.2368.0); Ctrl-C to power off
+limina: identity format=1
+limina: identity limina_version=0.1.0
+limina: identity limina_git_rev=9a2e5558b51f
+limina: identity limina_build_date=2026-10-18
+limina: identity dep.libkrun=ce663d7410062d472b4645ff5bed16ab6446f44d
+limina: identity dep.virglrs=2efa02476928c91e815032ca1836bd27a5dc9605
+limina: identity dep.imago=7f4ffb3e151d445c24af91d4dd718d8b244a92ce
+limina: identity dep.kosmickrisp=059715d2aa534b74fee59aec6fae316f026d0627
+limina: identity dep.edk2=0a8c9044bc097c72148b5d3ec612e5f806e0723b
+limina: identity limina_bundle=none
+limina: identity limina_cdhash=12ce03978e58c48f54440c758ed594da361fa7f2
+limina: identity launch_id=86f16e92-68e3-4d49-a6b4-35d51433919c
+limina: identity resumed=no
+limina: identity vm_kind=flat
+limina: identity vm=compute-guest.raw
+limina: identity boot=efi
+limina: identity gpu=coexist
+limina: identity display=window
+limina: identity display_pool=4
+limina: identity cpus=8
+limina: identity ram_mib=16384
+limina: identity host_os=macOS 27.0.1
+limina: identity host_model=MacBookPro18,4
+limina: identity supervisor_pid=2368
+limina: identity worker_pid=2377
+[2026-10-18T15:48:50.245133Z INFO  limina_vmm::krun] virtio-gpu virgl_flags = 0xb5b, software_2d = false (coexist = true), vrend max_samples ceiling = 1
+[2026-10-18T15:48:50.245204Z INFO  limina_vmm::krun] virtio-gpu displays: 4 scanout(s), slot 0 connected at 2560x1440 as LMN/limina serial 0x14c35dc5
+[2026-10-18T15:48:50.262519Z INFO  limina_vmm::krun::metal_ext] metal ext: GPU host $ROOT/target/debug/limina-gpu-host started (pid 2378)
+[2026-10-18T15:48:50.262551Z INFO  limina_gpu_host::server] GPU host up on Apple M1 Max
+[2026-10-18T15:48:50.262674Z INFO  limina_vmm::krun] virtio-input: keyboard fd=10, pointer fd=12, rel-pointer fd=14, touchpad fd=16 (TouchpadGeometry { width: 12480, height: 7680 })
+[2026-10-18T15:48:50.263087Z INFO  limina_vmm::krun] battery: mirroring the host battery into the guest
+[2026-10-18T15:48:50.263114Z INFO  limina_vmm::krun::console] spice: exposed the guest agent port com.redhat.spice.0
+[2026-10-18T15:48:50.263135Z INFO  limina_vmm::krun::console] qga: exposed the guest agent port org.qemu.guest_agent.0
+[2026-10-18T15:48:50.263157Z INFO  limina_vmm::krun::console] debug: exposed the debug port org.limina.debug.0
+[2026-10-18T15:48:50.263227Z INFO  limina_vmm::krun] USB: cold-plugging the FIDO authenticator gadget (the supervisor's link (fd 26))
+[2026-10-18T15:48:50.263269Z INFO  limina_vmm::fido_usb] fido-usb: supervisor connected
+[2026-10-18T15:48:50Z INFO  limina::fido::usb] fido-usb: connected to the worker gadget at Link(the worker's link)
+[2026-10-18T15:48:50.263289Z INFO  limina_vmm::krun] USB: cold-plugging the fingerprint reader gadget (the supervisor's link (fd 28))
+[2026-10-18T15:48:50.263313Z INFO  limina_vmm::krun] USB: cold-plugging the HID keyboard gadget (the pre-virtio-input keyboard)
+[2026-10-18T15:48:50.263325Z INFO  limina_vmm::moc_usb] moc-usb: supervisor connected
+[2026-10-18T15:48:50Z INFO  limina::moc::usb] moc: connected to the worker gadget at Link(the worker's link)
+[2026-10-18T15:48:50.263377Z INFO  limina_vmm::krun] building microVM: 8 vcpu(s), 16384 MiB, 2 disk(s), 0 share(s), display=true, boot=EFI firmware
+[2026-10-18T15:48:50.266151Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 at latency QoS tier 0
+[2026-10-18T15:48:50.266222Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 joins the dynamic band (period=16.667ms computation=1ms constraint=2ms, at most 1 armed at once)
+[2026-10-18T15:48:50.266391Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 1 at latency QoS tier 0
+[2026-10-18T15:48:50.266513Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 2 at latency QoS tier 0
+[2026-10-18T15:48:50.266590Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 3 at latency QoS tier 0
+[2026-10-18T15:48:50.266662Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 4 at latency QoS tier 0
+[2026-10-18T15:48:50.266736Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 5 at latency QoS tier 0
+[2026-10-18T15:48:50.266843Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 6 at latency QoS tier 0
+[2026-10-18T15:48:50.266981Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 7 at latency QoS tier 0
+[2026-10-18T15:48:50.267065Z INFO  limina_vmm::krun] display-resize: listening at the supervisor's link (fd 30)
+[2026-10-18T15:48:50.267161Z INFO  limina_vmm::krun] microVM running; entering event loop (SIGTERM/SIGINT → guest power-off)
+[2026-10-18T15:48:50.267319Z INFO  limina_vmm::power] host sleep: registered (guest will s2idle around host sleep)
+[2026-10-18T15:48:50Z INFO  limina::window::capture_tap] pointer capture: CGEventTap installed (session-level, consuming)
+[2026-10-18T15:48:50.309127Z WARN  krun_devices::virtio::mmio] virtio queue marked ready with QueueNum=0; defaulting to max_size=256
+[virglrs] limina GPU budget: cap 32768 MiB, refusal stops the context
+[2026-10-18T15:48:50Z INFO  limina::window::host_observe] host state: visible=false active=false hidden=false throttled=false (main thread priority 31) windows=[WindowState { slot: 0, visible: false, minimized: false }] displays asleep 0/2 locked=Some(false) thermal=fair low_power=false no_throttle=false
+[2026-10-18T15:48:50Z INFO  limina::window::gesture_tap] trackpad: gesture tap installed (HID-level; takes guest three-finger gestures)
+[2026-10-18T15:48:50Z INFO  limina::window::host_observe] host state: visible=true active=false hidden=false throttled=false (main thread priority 31) windows=[WindowState { slot: 0, visible: true, minimized: false }] displays asleep 0/2 locked=Some(false) thermal=fair low_power=false no_throttle=false
+[virglrs] vrend: hardware video decode h264 hevc vp9
+[virglrs] VREND_MAX_SAMPLES: advertising max_samples 1, not 4
+[virglrs] vrend: OpenGL ES 3.2 Mesa 26.3.0-devel (git-059715d2aa) (gles 32), 152 formats, 77 features, iosurface storage available
+[2026-10-18T15:48:50.537902Z INFO  limina_display::iosurface] window: scanout surfaces scoped via Mach port (name eti.noronha.limina.2368)
+[2026-10-18T15:48:50.539727Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [53, 64, 124] (640x480 BGRX)
+[2026-10-18T15:48:50Z INFO  limina::window::present] window: <- surface 53 64 640 480 0
+[2026-10-18T15:48:50.542269Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [144, 147, 153] (1280x800 BGRX)
+[2026-10-18T15:48:50Z INFO  limina::window::present] window: <- surface 144 147 1280 800 0
+[2026-10-18T15:48:50.550250Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: None, position: None, connected: Some(false), edid: None }
+[2026-10-18T15:48:50Z INFO  limina::window] display-control: pushed "display id=0 connected=0" to the guest
+[2026-10-18T15:48:50Z INFO  limina::window] window: off-glass ack gating ENGAGED (first gated ack waited 458ns, fence cap 20ms)
+[2026-10-18T15:48:50.612206Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((2560, 1440)), position: None, connected: Some(true), edid: Some(EdidSpec { refresh_hz: 60, refresh_millihertz: Some(59951), dpi: 123, vendor: [76, 77, 78], product_id: 32795, serial: 1816328933, name: "BenQ LCD", serial_string: None, range: None, modes: [], alt_mode: None }) }
+[2026-10-18T15:48:50Z INFO  limina::window] display-control: pushed "display id=0 size=2560x1440 connected=1 refresh=60 refreshmhz=59951 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-10-18T15:48:51Z INFO  limina::window::vsync] vsync: guest display 0 on the host grid, 59.9489 Hz, lead 4000 µs
+[2026-10-18T15:48:51Z INFO  limina::window] display-control: pushed "vsync id=0 at=6343461856023 period=1719455581308974 lead=96000 leadns=4000000" to the guest
+[2026-10-18T15:48:51.793445Z INFO  krun_devices::virtio::gpu::worker] gpu worker: reset drain quiesced in 25.791µs
+[2026-10-18T15:48:51.793515Z INFO  krun_devices::virtio::gpu::worker] gpu worker: device reset with a quiescent session — PARKED for classification at the next activation
+[2026-10-18T15:48:52.338892Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 8%, 1/1 armed)
+[2026-10-18T15:48:53.441879Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 41.927ms of CPU over a 41.920958ms hold
+[2026-10-18T15:48:53.550417Z INFO  krun_devices::virtio::gpu::worker] gpu worker: dropping the parked session — this activation programmed its queues (real driver re-init)
+[2026-10-18T15:48:53Z INFO  limina::window::present] window: <- guestdriver
+[2026-10-18T15:48:53Z INFO  limina::window] display: the guest's own driver has the GPU; the scanout pool is ours to arrange
+[2026-10-18T15:48:53Z INFO  limina::window] display-control: pushed "display id=0 connected=0" to the guest
+[2026-10-18T15:48:53.552476Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: None, position: None, connected: Some(false), edid: None }
+[2026-10-18T15:48:53Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-18T15:48:53.565149Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [876, 885, 897] (2560x1440 BGRX)
+[2026-10-18T15:48:53Z INFO  limina::window::present] window: <- surface 876 885 2560 1440 0
+[2026-10-18T15:48:53.617690Z INFO  limina_vmm::krun] display-control: DisplayControl { display_id: 0, size: Some((2560, 1440)), position: None, connected: Some(true), edid: Some(EdidSpec { refresh_hz: 60, refresh_millihertz: Some(59951), dpi: 123, vendor: [76, 77, 78], product_id: 32795, serial: 1816328933, name: "BenQ LCD", serial_string: None, range: None, modes: [], alt_mode: None }) }
+[2026-10-18T15:48:53Z INFO  limina::window] display-control: pushed "display id=0 size=2560x1440 connected=1 refresh=60 refreshmhz=59951 dpi=123 vendor=LMN product=32795 serial=1816328933 name=BenQ%20LCD" to the guest
+[2026-10-18T15:48:53Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-18T15:48:53Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-18T15:48:53Z INFO  limina::window::present] window: <- scanoutgone 0
+[2026-10-18T15:48:53.723045Z INFO  limina_display::iosurface] window: scanout 0 -> IOSurfaces [901, 904, 906] (2560x1440 BGRX)
+[2026-10-18T15:48:53Z INFO  limina::window::present] window: <- surface 901 904 2560 1440 0
+[2026-10-18T15:48:53.786913Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 13%, 1/1 armed)
+[2026-10-18T15:48:54Z INFO  limina::window::vsync] vsync: guest display 0 on the host grid, 59.9507 Hz, lead 4000 µs
+[2026-10-18T15:48:54Z INFO  limina::window] display-control: pushed "vsync id=0 at=6343534315678 period=1719402477925098 lead=96000 leadns=4000000" to the guest
+2026/10/18 12:48:55 tcpproxy: for incoming conn 127.0.0.1:55252, error dialing "192.168.127.2:22": connect tcp 192.168.127.2:22: no route to host
+[2026-10-18T15:48:55.451825Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 38.112ms of CPU over a 46.775458ms hold
+[2026-10-18T15:48:55.640697Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 19%, 1/1 armed)
+[2026-10-18T15:48:55.936030Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.341ms of CPU over a 33.335708ms hold
+[2026-10-18T15:48:56.453885Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[2026-10-18T15:48:58Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-18T15:48:58Z INFO  limina::window::present] window: <- audio 0 prepare
+[2026-10-18T15:48:59.314385Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_CREATE ctx=3 init=0x4 name=Some("gnome-shell\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0")
+[2026-10-18T15:49:00Z INFO  limina::window::vsync] vsync: guest display 0 on the host grid, 59.9507 Hz, lead 11578 µs
+[2026-10-18T15:49:00Z INFO  limina::window] display-control: pushed "vsync id=0 at=6343534315678 period=1719402477925098 lead=277884 leadns=11578541" to the guest
+[2026-10-18T15:49:04.561706Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.336ms of CPU over a 33.336041ms hold
+[2026-10-18T15:49:04.923238Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 1%, 1/1 armed)
+[virglrs] limina GPU budget: ctx 3 [gnome-shell] destroyed with 1.1 MiB still charged, now counted as shared -- storage a resource still holds a share of, or a charge this renderer did not drop
+[virglrs] limina GPU budget:   1 x 1.0 MiB (host shm), 1 x 147456 B (host shm)
+[2026-10-18T15:49:05.278467Z INFO  krun_devices::virtio::gpu::virtio_gpu] CTX_DESTROY ctx=3
+[2026-10-18T15:49:05.536549Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 45.109ms of CPU over a 45.098041ms hold
+[2026-10-18T15:49:05.942626Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 14%, 1/1 armed)
+[2026-10-18T15:49:50Z INFO  limina::qga::client] qga: guest agent 10.2.2 answered on org.qemu.guest_agent.0 (43 commands)
+[2026-10-18T15:49:50Z INFO  limina::qga::client] qga: guest is Fedora Linux 44 (Workstation Edition) (kernel 6.19.10-300.fc44.aarch64, aarch64) as fedora; addresses 192.168.127.2
+[2026-10-18T15:49:50Z INFO  limina::qga::client] qga: guest filesystems: /opt/perf-compute (ext4) 10.0/59.2 GiB, /boot/efi (vfat) 0.0/0.5 GiB, /boot (ext4) 0.4/1.8 GiB, / (btrfs) 8.6/9.7 GiB
+[2026-10-18T15:50:03Z INFO  limina::window::vsync] vsync: guest display 0 on the host grid, 59.9505 Hz, lead 11578 µs
+[2026-10-18T15:50:03Z INFO  limina::window] display-control: pushed "vsync id=0 at=6345190081072 period=1719404694367152 lead=277884 leadns=11578541" to the guest
+[2026-10-18T15:50:10Z INFO  limina::window::vsync] vsync: guest display 0 on the host grid, 59.9505 Hz, lead 9717 µs
+[2026-10-18T15:50:10Z INFO  limina::window] display-control: pushed "vsync id=0 at=6345190081072 period=1719404694367152 lead=233209 leadns=9717083" to the guest
+[2026-10-18T15:50:12.961810Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.458ms of CPU over a 33.473666ms hold
+[2026-10-18T15:50:13.416974Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 21%, 1/1 armed)
+[2026-10-18T15:50:18.345021Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 41.448ms of CPU over a 42.04875ms hold
+[2026-10-18T15:50:19.571915Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 8%, 1/1 armed)
+[2026-10-18T15:50:20.578977Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 gave back the band (share 77%, 0/1 armed)
+[2026-10-18T15:50:20Z INFO  limina::window::vsync] vsync: guest display 0 on the host grid, 59.9505 Hz, lead 11489 µs
+[2026-10-18T15:50:20Z INFO  limina::window] display-control: pushed "vsync id=0 at=6345190081072 period=1719404694367152 lead=275740 leadns=11489208" to the guest
+[2026-10-18T15:50:21.190739Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 31%, 1/1 armed)
+[2026-10-18T15:50:33Z INFO  limina::window::vsync] vsync: guest display 0 on the host grid, 59.9505 Hz, lead 11489 µs
+[2026-10-18T15:50:33Z INFO  limina::window] display-control: pushed "vsync id=0 at=6345910276572 period=1719405851015265 lead=275740 leadns=11489208" to the guest
+[2026-10-18T15:50:52.425850Z WARN  krun_devices::virtio::gpu::worker] virtio-gpu: control queue drain ran 114 ms over 1 pass(es); nothing else on the worker ran meanwhile
+[2026-10-18T15:50:58.461553Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 34.604ms of CPU over a 34.598583ms hold
+[2026-10-18T15:50:58.469670Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 34%, 1/1 armed)
+[2026-10-18T15:50:58.504476Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 34.489ms of CPU over a 34.790666ms hold
+[2026-10-18T15:50:59.076543Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 2%, 1/1 armed)
+[2026-10-18T15:51:05.041932Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.434ms of CPU over a 33.431583ms hold
+[2026-10-18T15:51:05.584174Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 8%, 1/1 armed)
+[2026-10-18T15:51:11.499028Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 33.39ms of CPU over a 33.387916ms hold
+[2026-10-18T15:51:12.156047Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 0%, 1/1 armed)
+[2026-10-18T15:51:33Z INFO  limina::window::vsync] vsync: guest display 0 on the host grid, 59.9505 Hz, lead 11489 µs
+[2026-10-18T15:51:33Z INFO  limina::window] display-control: pushed "vsync id=0 at=6347350262827 period=1719404927079571 lead=275740 leadns=11489208" to the guest
+[2026-10-18T15:51:43.137973Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] a vCPU gave the band back from its own loop: it burned 43.864ms of CPU over a 44.082916ms hold
+[2026-10-18T15:51:43.213778Z INFO  krun::vmm::macos::vcpu_sched] [VCPU-RT] vCPU 0 took the band (share 34%, 1/1 armed)
+[2026-10-18T15:51:43.911632Z INFO  krun::vmm::macos::vstate] vCPU 0 received shutdown signal
+[2026-10-18T15:51:43.911774Z INFO  krun::vmm] Vmm is stopping.
+[2026-10-18T15:51:43Z INFO  limina::fido::usb] fido-usb: worker gadget connection ended; retrying
+[2026-10-18T15:51:43Z INFO  limina::moc::usb] moc: worker gadget connection ended; retrying
+[2026-10-18T15:51:43Z INFO  limina::window::present] window: control channel closed (worker gone)
+[2026-10-18T15:51:44Z INFO  limina::supervisor] VM powered off cleanly (worker exit 0)
+time="2026-10-18T12:51:44-03:00" level=error msg="cannot receive packets from /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/krun-net-2377-0.sock, disconnecting: cannot read size from socket: read unixgram /var/folders/q3/m3ybcb591kldf06qbp4q4fj80000gn/T/limina-gvproxy-2368.sock: use of closed network connection"
+time="2026-10-18T12:51:44-03:00" level=error msg="gvproxy exiting: signal caught"
