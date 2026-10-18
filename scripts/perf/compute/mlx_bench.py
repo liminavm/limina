@@ -2,11 +2,12 @@
 # Copyright © 2026 Gustavo Noronha Silva
 #
 # MLX on the GPU, the same script in a guest (over limina-metal) and on macOS (the native control):
-#   matmul   2048^3 float32 and 4096^3 float16, ms, median over 50 after a warm-up
-#   lm       greedy generation with mlx-lm from a fixed ~500-token prompt: prompt and generation
-#            tokens per second, median over 5 runs after a warm-up (128 tokens each: the prompt asks
-#            for far more, so a model stopping early fails the run), and a hash of the text, which
-#            must be the same in every run (and is expected to match the other side)
+#   matmul   2048^3 float32 and 4096^3 float16, ms, median over 100 after a second of warm-up
+#   lm       greedy generation with mlx-lm from a fixed ~700-token prompt: prompt and generation
+#            tokens per second, median of 5 back-to-back runs after 2 untimed ones, 128 tokens each
+#            (the prompt asks for far more, so a model stopping early fails the run), and a hash
+#            of the text, which must be the same in every run and is expected to match the other
+#            side
 # Each prints `ROW <name> <metric> <value>`; everything else is commentary.
 # Usage: python3 mlx_bench.py matmul | lm <model-dir> <tag>
 import hashlib
@@ -30,10 +31,13 @@ def matmul():
         a = mx.random.normal((n, n)).astype(dt)
         b = mx.random.normal((n, n)).astype(dt)
         mx.eval(a, b)
-        for _ in range(5):
+        # A second of the same work first: the GPU ramps its clock up under load, and the timed
+        # part is short enough to land inside the ramp otherwise.
+        t = time.perf_counter()
+        while time.perf_counter() - t < 1.0:
             mx.eval(a @ b)
         times = []
-        for _ in range(50):
+        for _ in range(100):
             t = time.perf_counter()
             mx.eval(a @ b)
             times.append((time.perf_counter() - t) * 1e3)
@@ -60,11 +64,12 @@ def lm(path, tag):
     prompt = tok.apply_chat_template([{"role": "user", "content": PROMPT}], add_generation_prompt=True)
     print("prompt tokens", len(prompt))
     pp, tg, hashes = [], [], set()
-    for run in range(6):
-        # Back to back, every run after the first loses about a third of its speed on an M1 Max
-        # (7B: prompt 485 -> 241 tok/s); two seconds between runs gives it back, clearing MLX's
-        # cache does not. Both sides pause the same.
-        time.sleep(2)
+    # Sustained speed, not burst: the runs go back to back after an untimed one. On an M1 Max the
+    # GPU clocks up for a short burst and settles lower under sustained load (7B generation: ~70
+    # tok/s for the first couple of seconds, ~45-50 after), and a pause between runs makes the
+    # number depend on how long each run lasts against that ramp. Sustained is what a long
+    # generation gets, and it puts both sides in the same regime.
+    for run in range(7):
         text, last = "", None
         for r in stream_generate(model, tok, prompt, max_tokens=128):
             text += r.text
@@ -73,7 +78,7 @@ def lm(path, tag):
             print(f"FAIL: generated {last.generation_tokens} tokens, not 128")
             sys.exit(1)
         hashes.add(hashlib.sha256(text.encode()).hexdigest()[:16])
-        if run > 0:
+        if run > 1:
             pp.append(last.prompt_tps)
             tg.append(last.generation_tps)
         print(f"run {run}: prompt {last.prompt_tps:.0f} tok/s, generation {last.generation_tps:.1f} tok/s, peak {last.peak_memory:.2f} GB")
