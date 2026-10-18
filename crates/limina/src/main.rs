@@ -323,6 +323,11 @@ struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
     efi_vars: Option<PathBuf>,
 
+    /// Describe the machine to the OS with ACPI instead of a device tree — forwarded to the
+    /// worker. EFI boot only (docs/design/firmware-and-acpi.md).
+    #[arg(long, conflicts_with = "kernel")]
+    acpi: bool,
+
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
     /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
@@ -1583,6 +1588,7 @@ fn cli_from_definition(
         tpm: cfg.hardware.tpm,
         tpm_state: cfg.hardware.tpm.then(|| bundle.tpm_state()),
         efi_vars: Some(bundle.efi_vars()),
+        acpi: false,
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1917,6 +1923,9 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         if let Some(vars) = vars {
             args.push("--efi-vars".into());
             args.push(path_arg(&vars)?);
+        }
+        if cli.acpi {
+            args.push("--acpi".into());
         }
     }
     if let Some(rootfs) = &cli.rootfs {

@@ -306,6 +306,13 @@ struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
     efi_vars: Option<PathBuf>,
 
+    /// Describe the machine to the OS with ACPI tables instead of a device tree: libkrun writes
+    /// them, and the firmware installs them and withholds the tree (docs/design/
+    /// firmware-and-acpi.md). **EFI boot only**, since an arm64 OS finds ACPI only through a
+    /// firmware.
+    #[arg(long, conflicts_with = "kernel")]
+    acpi: bool,
+
     /// Inherited link (`limina_launch::connect`) for the stock-tier FIDO USB gadget (M14 Stage
     /// C). The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
     /// CTAPHID frames over a connection on this link to the supervisor's authenticator
@@ -846,6 +853,7 @@ fn main() -> Result<()> {
         tpm: cli.tpm || cli.tpm_state.is_some(),
         tpm_state: cli.tpm_state.clone(),
         efi_vars: cli.efi_vars.clone(),
+        acpi: cli.acpi,
         fido_socket: cli.fido_fd.map(ListenAt::Link),
         moc_socket: cli.moc_fd.map(ListenAt::Link),
         free_page_reporting: cli.balloon_free_page_reporting,

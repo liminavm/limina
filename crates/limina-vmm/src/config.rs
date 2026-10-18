@@ -286,6 +286,8 @@ pub struct VmSpec {
     pub tpm_state: Option<PathBuf>,
     /// The file the firmware's UEFI variables live in; `None` keeps them in RAM. See `--efi-vars`.
     pub efi_vars: Option<PathBuf>,
+    /// Describe the machine to the OS with ACPI instead of a device tree. See `--acpi`.
+    pub acpi: bool,
     /// Where the stock-tier FIDO USB gadget (M14 Stage C) takes the supervisor's connection. When
     /// set (and `usb` is true) the worker cold-plugs a HID report-pipe gadget with the FIDO
     /// identity and bridges its CTAPHID frames to the supervisor's authenticator over it.

@@ -313,6 +313,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     vmr.tpm = spec.tpm;
     vmr.tpm_state = spec.tpm_state.clone();
     vmr.efi_vars = spec.efi_vars.clone();
+    vmr.acpi_enabled = spec.acpi;
     // Test hook (not a user feature): with --usb, LIMINA_USB_MOCK selects a cold-plugged
     // mock gadget so a stock guest enumerates a device. `enum` (or the legacy `1`) is the
     // vendor-specific enumeration-only mock; `hid` is the full-speed HID echo gadget that
@@ -1343,6 +1344,7 @@ mod tests {
             tpm: false,
             tpm_state: None,
             efi_vars: None,
+            acpi: false,
             fido_socket: None,
             moc_socket: None,
             free_page_reporting: false,

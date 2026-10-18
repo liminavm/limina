@@ -1,7 +1,7 @@
 # Our own firmware, and ACPI for the guest
 
-Status: accepted direction. Phase 0 (ACPI on the edk2 fork) is in progress; the Rust firmware is
-not started.
+Status: accepted direction. Phase 0 (ACPI on the edk2 fork) works behind `--acpi`; the Rust
+firmware is not started.
 
 ## Decision
 
@@ -88,6 +88,7 @@ Driver bindings verified against kernel source.
 
 | Today (device tree) | Under ACPI | Work |
 |---|---|---|
+| `/cpus` nodes | MADT GICC per vCPU **plus** an `ACPI0007` processor device per vCPU (`_UID` = the GICC's processor UID) and a PPTT | without the processor devices Linux registers no CPU devices: topology/cacheinfo WARN, lscpu shows 0 sockets, qemu-ga's vCPU calls abort |
 | virtio-mmio `virtio,mmio` | `LNRO0005` | mechanical |
 | PL011 `arm,pl011` | `ARMH0011` | mechanical; SPCR only when headless |
 | xHCI `generic-xhci` + `dma-coherent` | `PNP0D10` + `_CCA` | mechanical |
@@ -145,13 +146,17 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
 
 ## Phases
 
-0. **ACPI on the edk2 fork.** libkrun generates RSDP/XSDT/FADT/MADT/GTDT/DSDT for aarch64
-   (`acpi_tables`, already a dependency for x86_64) into a reserved region below RAM and names it
-   with a `libkrun,acpi-tables` device-tree node. A Krun ACPI DXE in the fork maps the region,
-   chooses ACPI when the node exists, and installs the tables. Opt-in per VM. Done when a stock
-   F44 guest boots EFI+venus on ACPI with every device bound and no device tree visible.
+0. **ACPI on the edk2 fork — works, opt-in (`limina --acpi`).** libkrun
+   (`devices/src/acpi.rs`) generates RSDP/XSDT/FADT/MADT/GTDT/PPTT/DSDT into the window at
+   `ACPI_START` and names it with a `libkrun,acpi-tables` device-tree node; the fork's
+   `KrunAcpiPlatformDxe` maps the window, chooses ACPI when the node exists (device tree
+   otherwise) and installs the tables. A stock F44 guest boots EFI+venus on ACPI with no device
+   tree visible, every virtio device and the xHCI gadgets bound, its RTC on `rtc-efi`, and a host
+   stop falling through to qemu-ga (the power button is not described yet). The same firmware
+   without `--acpi` boots the device-tree machine unchanged.
 1. **ACPI parity and stock wins** on edk2: GED power and sleep buttons, the wake path, CRB TPM,
-   CPPC + efficiency classes, battery/AC, `rtc-efi` wakeup time, BGRT logo. Then ACPI becomes the
+   CPPC + efficiency classes, battery/AC, `rtc-efi` wakeup time, BGRT logo (the kernel rejects
+   edk2's BGRT image today: `Incorrect BMP magic number`), the PMU interrupt in the GICCs. Then ACPI becomes the
    default and the device-tree machine remains only for `--kernel`/L1.
 2. **Rust firmware, device-tree machine**: parity with `KRUN_EFI.gop.fd` on the floor tests
    (`boot::fedora_stock_image_efi_boots_to_userspace`, `..._renders_to_gop`), Debian LUKS, the TPM
