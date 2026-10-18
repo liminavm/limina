@@ -364,7 +364,9 @@ fn surface(path: &str, g: &mut Gpu) -> Result<(), String> {
     const STRIDE: u32 = 256;
     const READBACK: u64 = 6 * MIB;
     const BGRA8_UNORM: u32 = 80;
-    let xr24 = u32::from_le_bytes(*b"XR24");
+    // Past the queue step's handles (40..=43): a context's handles are one namespace.
+    const TEXTURE: u32 = 50;
+    let ar24 = u32::from_le_bytes(*b"AR24");
     let f = &g.file;
     let mut bad = uapi::SurfaceCreate {
         width: W,
@@ -379,7 +381,7 @@ fn surface(path: &str, g: &mut Gpu) -> Result<(), String> {
     let mut s = uapi::SurfaceCreate {
         width: W,
         height: H,
-        drm_fourcc: xr24,
+        drm_fourcc: ar24,
         stride: STRIDE,
         ..Default::default()
     };
@@ -387,7 +389,7 @@ fn surface(path: &str, g: &mut Gpu) -> Result<(), String> {
 
     g.push(
         cmd::CreateTextureFromSurface {
-            handle: 40,
+            handle: TEXTURE,
             surface: s.res_handle,
             desc: cmd::TextureDesc {
                 texture_type: TEX_2D,
@@ -408,7 +410,7 @@ fn surface(path: &str, g: &mut Gpu) -> Result<(), String> {
     g.push(cmd::BeginCommandBuffer {}, &[]);
     let mut pass = cmd::BeginRenderPass::default();
     pass.colors[0] = cmd::RenderAttachment {
-        texture: 40,
+        texture: TEXTURE,
         load_action: LOAD_CLEAR,
         store_action: STORE_STORE,
         clear: [0.0, 1.0, 0.0, 1.0],
@@ -428,7 +430,7 @@ fn surface(path: &str, g: &mut Gpu) -> Result<(), String> {
     );
     g.push(
         cmd::CopyBufferTexture {
-            texture: 40,
+            texture: TEXTURE,
             size: [W, H, 1],
             buffer: BufRef::new(1, READBACK),
             bytes_per_row: W as u64 * 4,
