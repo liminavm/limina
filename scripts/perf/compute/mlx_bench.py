@@ -64,9 +64,9 @@ def lm(path, tag):
     prompt = tok.apply_chat_template([{"role": "user", "content": PROMPT}], add_generation_prompt=True)
     print("prompt tokens", len(prompt))
     pp, tg, hashes = [], [], set()
-    # Sustained speed, not burst: the runs go back to back after an untimed one. On an M1 Max the
+    # Sustained speed, not burst: the runs go back to back after two untimed ones. On an M1 Max the
     # GPU clocks up for a short burst and settles lower under sustained load (7B generation: ~70
-    # tok/s for the first couple of seconds, ~45-50 after), and a pause between runs makes the
+    # tok/s in the first run, 52-57 after), and a pause between runs makes the
     # number depend on how long each run lasts against that ramp. Sustained is what a long
     # generation gets, and it puts both sides in the same regime.
     for run in range(7):
