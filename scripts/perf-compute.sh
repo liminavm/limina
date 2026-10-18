@@ -167,5 +167,9 @@ for (w, m), g in sorted(guest.items()):
         of = (n / g) if m in lower_is_better else (g / n)
         print(f'{date},{commit},{w}-of-native,{m},{of:.3f},"{notes}"')
 EOF
+# The evidence may be committed to a public repo: name the trees, not where they sit on this host.
+for f in "$EV"/*; do
+  sed -i '' -e "s#$ROOT#\$ROOT#g" -e "s#$MAIN#\$MAIN#g" -e "s#$HOME#~#g" "$f"
+done
 log "rows appended to $LEDGER; evidence in $EV"
 tail -n +"$((before + 1))" "$LEDGER" | grep -- '-of-native,' | cut -d, -f3-5 | tee -a "$EV/run.log"

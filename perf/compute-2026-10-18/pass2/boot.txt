@@ -1,0 +1,1 @@
+limina pid=2368 (worker log /tmp/limina-worker-compute-guest.log, disk $MAIN/target/perf-compute/work.noindex/compute-guest.raw, firmware target/krun-efi/KRUN_EFI.gop.fd, ICD /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.aarch64.json)

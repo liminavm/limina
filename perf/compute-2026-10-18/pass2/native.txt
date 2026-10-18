@@ -1,0 +1,70 @@
+DEVICE Apple M1 Max
+ROW metal-commit-rtt us_median 238.4 run=1
+ROW metal-commit-rtt us_p90 279.0 run=1
+ROW metal-dispatch-rate per_s 4875471 run=1
+ROW metal-cb-rate per_s 42693 run=1
+ROW metal-copy-bandwidth GB_s 320.6 run=1
+two-queue: spin of 8388608 steps, 241 ms alone
+ROW metal-two-queue ratio 2.00 run=1
+DEVICE Apple M1 Max
+ROW metal-commit-rtt us_median 227.2 run=2
+ROW metal-commit-rtt us_p90 237.5 run=2
+ROW metal-dispatch-rate per_s 4816376 run=2
+ROW metal-cb-rate per_s 43018 run=2
+ROW metal-copy-bandwidth GB_s 325.3 run=2
+two-queue: spin of 8388608 steps, 241 ms alone
+ROW metal-two-queue ratio 2.00 run=2
+DEVICE Apple M1 Max
+ROW metal-commit-rtt us_median 228.9 run=3
+ROW metal-commit-rtt us_p90 242.8 run=3
+ROW metal-dispatch-rate per_s 4689057 run=3
+ROW metal-cb-rate per_s 42928 run=3
+ROW metal-copy-bandwidth GB_s 326.1 run=3
+two-queue: spin of 8388608 steps, 241 ms alone
+ROW metal-two-queue ratio 2.00 run=3
+DEVICE Apple M1 Max applegpu_g13s
+ROW mlx-matmul-f32-2048 ms 2.217
+ROW mlx-matmul-f32-2048 tflops 7.75
+ROW mlx-matmul-f16-4096 ms 14.723
+ROW mlx-matmul-f16-4096 tflops 9.33
+DEVICE Apple M1 Max applegpu_g13s
+prompt tokens 733
+run 0: prompt 5259 tok/s, generation 282.1 tok/s, peak 0.88 GB
+run 1: prompt 8133 tok/s, generation 298.2 tok/s, peak 0.88 GB
+run 2: prompt 8136 tok/s, generation 300.7 tok/s, peak 0.88 GB
+run 3: prompt 8127 tok/s, generation 299.5 tok/s, peak 0.88 GB
+run 4: prompt 8144 tok/s, generation 300.0 tok/s, peak 0.88 GB
+run 5: prompt 8149 tok/s, generation 300.1 tok/s, peak 0.88 GB
+run 6: prompt 8128 tok/s, generation 300.8 tok/s, peak 0.88 GB
+TEXT 07d2730896650758 'As I walked through the old city, the streets were lined with cobblestone street'
+ROW mlx-lm-qwen0.5b prompt_tok_s 8136.0
+ROW mlx-lm-qwen0.5b gen_tok_s 300.1
+DEVICE Apple M1 Max applegpu_g13s
+prompt tokens 733
+run 0: prompt 573 tok/s, generation 71.9 tok/s, peak 4.89 GB
+run 1: prompt 368 tok/s, generation 55.7 tok/s, peak 4.89 GB
+run 2: prompt 370 tok/s, generation 57.3 tok/s, peak 4.89 GB
+run 3: prompt 369 tok/s, generation 57.1 tok/s, peak 4.89 GB
+run 4: prompt 371 tok/s, generation 56.9 tok/s, peak 4.89 GB
+run 5: prompt 367 tok/s, generation 56.7 tok/s, peak 4.89 GB
+run 6: prompt 370 tok/s, generation 57.0 tok/s, peak 4.89 GB
+TEXT 66f6cf0055ac084d 'The sun was beginning to set as I set out on my walk through the old city, the c'
+ROW mlx-lm-qwen7b prompt_tok_s 369.5
+ROW mlx-lm-qwen7b gen_tok_s 57.0
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = Apple M1 Max (KosmicKrisp) | uma: 1 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 32 | shared memory: 32768 | int dot: 0 | matrix cores: none
+[LIMINA-CTX] compute encoder class AGXG13XFamilyComputeContext_mtlnext from /System/Library/Extensions/AGXMetalG13X.bundle/Contents/MacOS/AGXMetalG13X (UUID 00B55E63-2C95-333C-A1FB-011998810142): _impl@72 _allocator@104 _command_buffer@64; pass-state canary OFF (driver build not listed)
+[LIMINA-KK-GUARD] periodic encoder guard: checks=4 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=1 table=1/8192 | context: canary=off born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+ROW llama-bench-qwen0.5b pp512_tok_s 3028.75
+ROW llama-bench-qwen0.5b pp512_stddev 4.35
+ROW llama-bench-qwen0.5b tg128_tok_s 167.88
+ROW llama-bench-qwen0.5b tg128_stddev 1.34
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = Apple M1 Max (KosmicKrisp) | uma: 1 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 32 | shared memory: 32768 | int dot: 0 | matrix cores: none
+[LIMINA-CTX] compute encoder class AGXG13XFamilyComputeContext_mtlnext from /System/Library/Extensions/AGXMetalG13X.bundle/Contents/MacOS/AGXMetalG13X (UUID 00B55E63-2C95-333C-A1FB-011998810142): _impl@72 _allocator@104 _command_buffer@64; pass-state canary OFF (driver build not listed)
+[LIMINA-KK-GUARD] periodic encoder guard: checks=4 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=1 table=1/8192 | context: canary=off born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+ROW llama-bench-qwen7b pp512_tok_s 229.62
+ROW llama-bench-qwen7b pp512_stddev 16.61
+[LIMINA-KK-GUARD] periodic encoder guard: checks=347638 untracked=0 | bad: null=0 ended=0 released=0 | refused: handout=0 close=0 | encoders=7601 table=11/8192 | context: canary=off born-broken=0 died=0 swapped=0 alloc-mismatch=0 skipped=0
+ROW llama-bench-qwen7b tg128_tok_s 24.07
+ROW llama-bench-qwen7b tg128_stddev 0.72
