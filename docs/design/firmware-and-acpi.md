@@ -61,7 +61,7 @@ Parked snapshots do not survive it (restore refuses a machine whose devices chan
 
 | Opportunity | Mechanism | Replaces |
 |---|---|---|
-| Graceful shutdown with no agent | `PNP0C0C` power button signalled through a GED (`ACPI0013`) event; logind honours it | GPIO `gpio-keys` button stock Fedora ignores; the QGA/SIGKILL ladder rungs |
+| Graceful shutdown with no agent | `PNP0C0C` power button signalled through the PL061's ACPI GPIO events (done; a stopped Fedora 44 guest powers off in 1-3 s) | the `gpio-keys` power button, which keeps this working on the device-tree machine |
 | TPM on Debian | ACPI `TPM2` table + CRB (`tpm_crb`, built into both distros' kernels) | the 90 s per-boot wait on a TIS device Debian has no driver for |
 | EAS energy model on a stock kernel | MADT GICC efficiency classes + `_CPC`: `cppc_cpufreq` registers an energy model from them (`populate_efficiency_class`), `topology_init_cpu_capacity_cppc()` sets capacities | the DKMS energy-model module the roadmap calls EAS's last gate; `qemu,virtual-cpufreq` |
 | Native battery and AC | `PNP0C0A` + `ACPI0003` with AML over a small MMIO register block | virtio-i2c SBS battery (and stock `i2c-virtio`'s switch-root panic) |
@@ -92,16 +92,25 @@ Driver bindings verified against kernel source.
 | virtio-mmio `virtio,mmio` | `LNRO0005` | mechanical |
 | PL011 `arm,pl011` | `ARMH0011` | mechanical; SPCR only when headless |
 | xHCI `generic-xhci` + `dma-coherent` | `PNP0D10` + `_CCA` | mechanical |
-| PL031 `rtc-pl031` | **no ACPI ID** — the guest RTC becomes `rtc-efi` | firmware runtime `GetTime`/`SetTime` and `Get/SetWakeupTime`; host-sleep sleeptime injection rides `rtc-efi` already |
-| `gpio-keys` power/sleep/restart/wake | **no ACPI table** in `gpio_keys.c` | power → `PNP0C0C`, sleep → `PNP0C0E`, via GED. **KEY_WAKEUP is the M9.2 resume mechanism** (`m9.2-quiesced-snapshot.md` step 4): needs a wake-capable GED event, re-proven with the wake spike. KEY_RESTART has no ACPI button. |
-| `qemu,virtual-cpufreq` | **device-tree only** | `cppc_cpufreq` with `_CPC` registers in VMM MMIO |
-| `capacity-dmips-mhz` + `cpu-map` | CPPC capacities + efficiency classes | see the EAS row above |
-| TIS TPM `tcg,tpm-tis-mmio` | `MSFT0101` (TIS) or CRB | add a CRB front-end to the vTPM; prefer CRB |
-| virtio-i2c SBS battery | `PNP0C0A`/`ACPI0003` | new MMIO battery block |
+| PL031 `rtc-pl031` | **no ACPI ID** — the guest keeps only `rtc-efi` (its `rtc0` on both machines; the device tree adds the PL031 as `rtc1`) | firmware runtime `GetTime`/`SetTime` and `Get/SetWakeupTime`; host-sleep sleeptime injection rides `rtc-efi` already |
+| `gpio-keys` power/sleep/restart/wake | **no ACPI table** in `gpio_keys.c` | **done**: the PL061 (`ARMH0061`) with an `_AEI` listing lines 3, 4 and 6 as GpioInt events; `_E03`/`_E04` notify `PNP0C0C`/`PNP0C0E` (0x80), line 6 is `ExclusiveAndWake` and `_E06` notifies the sleep button with 0x02. The same eventfds drive it, so the M9.2 wake works in s2idle (the guest's own wake IRQ) and deep. KEY_RESTART has no ACPI button. Check: `spikes/acpi-guest/buttons.sh` |
+| `qemu,virtual-cpufreq` | **device-tree only** | open: `cppc_cpufreq` with `_CPC` per processor device. A banded VM loses EAS packing under ACPI until this lands |
+| `capacity-dmips-mhz` + `cpu-map` | `_CPC` highest performance (`topology_init_cpu_capacity_cppc`) + GICC efficiency classes | open, with the row above: the energy model registers only when efficiency classes differ, and CPPC frequency invariance reads delivered/reference counters every tick, a trap per tick per vCPU on MMIO registers |
+| TIS TPM `tcg,tpm-tis-mmio` | `MSFT0101` + a TPM2 table, start method 6 | **done**: no interrupt in `_CRS` (tpm_tis polls, as on the device tree); `tpm_tis` refuses `MSFT0101` without the TPM2 table. CRB stays optional |
+| virtio-i2c SBS battery | an I2C client of the virtio-i2c adapter | **done**: `BAT0` inside the adapter's `LNRO0005` device, `I2cSerialBusV2` at 0x0b naming it, `PRP0001` + `_DSD` compatible `sbs,sbs-battery`. Needs the transport to activate virtio-i2c before DRIVER_OK (below) |
+| (no PMU node) | GICC performance interrupt 0 | none: HVF exposes no PMU on either machine; the kernel's per-CPU "No ACPI PMU IRQ" notice is the only difference |
 | `display-cutouts.md` reads `/sys/firmware/devicetree/base/compatible` | absent | identify the platform from SMBIOS instead |
 
 Interrupts keep the conventions the device tree uses on HVF: SPIs edge-triggered (the in-kernel GIC
 only pulses), PPIs level.
+
+**An ACPI-described device exists before its bus does.** Its node is in the namespace from boot,
+so udev loads the client driver at coldplug; a device-tree client only appears when its bus
+registers. Linux's virtio-i2c registers its adapter inside its own probe, before DRIVER_OK, so an
+ACPI client probes then and its first transfer waits forever on a device that is not running yet.
+The libkrun transport therefore activates a device that asks for it
+(`VirtioDevice::activates_before_driver_ok`, only virtio-i2c) on the first queue notification
+after FEATURES_OK, as QEMU effectively does. Any new bus-attached ACPI client needs the same check.
 
 ## The UEFI implementation
 
@@ -135,6 +144,11 @@ Debian's installer):
 **Later**: Secure Boot (authenticated variables, db/dbx/KEK/PK, Authenticode verification in
 `LoadImage`), Windows (fuller UEFI and ACPI, PCI).
 
+**The BGRT image** must be `EfiBootServicesData` (Linux before 7.1 accepts no other type) and must
+sit low in RAM: arm64 Linux treats boot services data as free memory and reserves the image only
+after `efi_bgrt_init` has read its header, while its early allocations come from the top of RAM.
+The edk2 fork copies the BMP into the lowest free range at ReadyToBoot; ours must do the same.
+
 **Variable store migration**: limina converts an existing edk2 store to ours on first boot under
 the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extra fallback boot).
 
@@ -151,13 +165,14 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
    `ACPI_START` and names it with a `libkrun,acpi-tables` device-tree node; the fork's
    `KrunAcpiPlatformDxe` maps the window, chooses ACPI when the node exists (device tree
    otherwise) and installs the tables. A stock F44 guest boots EFI+venus on ACPI with no device
-   tree visible, every virtio device and the xHCI gadgets bound, its RTC on `rtc-efi`, and a host
-   stop falling through to qemu-ga (the power button is not described yet). The same firmware
-   without `--acpi` boots the device-tree machine unchanged.
-1. **ACPI parity and stock wins** on edk2: GED power and sleep buttons, the wake path, CRB TPM,
-   CPPC + efficiency classes, battery/AC, `rtc-efi` wakeup time, BGRT logo (the kernel rejects
-   edk2's BGRT image today: `Incorrect BMP magic number`), the PMU interrupt in the GICCs. Then ACPI becomes the
-   default and the device-tree machine remains only for `--kernel`/L1.
+   tree visible, every virtio device and the xHCI gadgets bound, only `rtc-efi` as its RTC, and a host
+   stop powering it off through the ACPI power button. The same firmware without `--acpi` boots
+   the device-tree machine unchanged.
+1. **ACPI parity and stock wins** on edk2. Done: power, sleep and wake buttons; the TPM; the SBS
+   battery; the Limina logo on the guest's boot splash (Plymouth's `bgrt` theme, Fedora's
+   default, draws the firmware's BGRT image; `spikes/acpi-guest/plymouth-limina.png`). Open: CPPC
+   and efficiency classes (see the table), `rtc-efi` wakeup time. Then ACPI becomes the default
+   and the device-tree machine remains only for `--kernel`/L1.
 2. **Rust firmware, device-tree machine**: parity with `KRUN_EFI.gop.fd` on the floor tests
    (`boot::fedora_stock_image_efi_boots_to_userspace`, `..._renders_to_gop`), Debian LUKS, the TPM
    tests.
@@ -170,5 +185,5 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
 - Where the firmware lives: an in-tree `firmware/` workspace built by `cargo xtask` (proposed), or
   its own repository under `liminavm`.
 - Its license, which needs the same counsel review as the rest of the tree before a release tag.
-- The KEY_WAKEUP replacement: a GED event marked wake-capable, proven against s2idle with the
-  M9.2 wake spike.
+- CPPC's frequency invariance: counters the guest reads every tick cost a trap each on MMIO. A
+  firmware-mediated (FFH) or counter-free design has to be measured before choosing.
