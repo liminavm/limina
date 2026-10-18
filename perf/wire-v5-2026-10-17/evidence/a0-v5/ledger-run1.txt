@@ -1,0 +1,8 @@
+verify OK: Virtual-1 1280x800@59.949 scale=1.0
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+PROVENANCE: kernel=6.19.10-300.fc44.aarch64 pagesize=4096 mesa=26.1.8-1.fc44 vnperf=<unset> vcpus=4 ram=3887MiB display=Virtual-1: 1280x800@59.949 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/wire-v5-2026-10-17/ledger.csv:
+2026-10-17,9a2e5558,gl-replay-metal,fps,51.3148,wire-v5 a0-v5: arm v5 (Fedora-Workstation-44.metal.test.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun ce663d74; limina 9a2e5558; macOS 27.0.1; run 1/1 
+2026-10-17,9a2e5558,gl-replay-llvmpipe,fps,735.24,wire-v5 a0-v5: arm v5 (Fedora-Workstation-44.metal.test.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun ce663d74; limina 9a2e5558; macOS 27.0.1; run 1/1 
+2026-10-17,9a2e5558,vk-replay-metal-headless,fps,2107.706433,wire-v5 a0-v5: arm v5 (Fedora-Workstation-44.metal.test.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun ce663d74; limina 9a2e5558; macOS 27.0.1; run 1/1 
+2026-10-17,9a2e5558,glmark2-wayland-metal,score,3370,wire-v5 a0-v5: arm v5 (Fedora-Workstation-44.metal.test.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun ce663d74; limina 9a2e5558; macOS 27.0.1; run 1/1 
