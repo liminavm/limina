@@ -17,15 +17,21 @@
 # Both hosts are built before the sweep starts; a point builds nothing. A point whose guest does
 # not show KosmicKrisp on the arm's wire aborts.
 #
-# Usage: perf/wire-v5-2026-10-17/point.sh <label> <v4|v5>
+# ENH_IMAGE=1: the same two arms on enhanced.test (the 16 KiB limina kernel and limina's guest Mesa,
+# the vendor drivers on top), as the dogfood runs it -- Firefox with hardware WebRender there, as
+# on the 2026-10-15 enhanced arm.
+#
+# Usage: [ENH_IMAGE=1] perf/wire-v5-2026-10-17/point.sh <label> <v4|v5>
 set -uo pipefail
 LABEL="${1:?label}"; ARM="${2:?v4 or v5}"
 CACHE="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)/perf/wire-v5-2026-10-17/work.noindex/shader-cache-$ARM"
 HOST_V4=/Users/kov/Projects/limina/.claude/worktrees/wire-v4-base
 HOST_V5=/Users/kov/Projects/limina/.claude/worktrees/mlx
 case "$ARM" in
-  v4) HOST=$HOST_V4; IMG=/Users/kov/Projects/limina/Fedora-Workstation-44.metal.test.bak-pre-metal.raw ;;
-  v5) HOST=$HOST_V5; IMG=/Users/kov/Projects/limina/Fedora-Workstation-44.metal.test.raw ;;
+  v4) HOST=$HOST_V4; IMG=/Users/kov/Projects/limina/Fedora-Workstation-44.metal.test.bak-pre-metal.raw
+    [ "${ENH_IMAGE:-0}" = 1 ] && IMG=/Users/kov/Projects/limina/Fedora-Workstation-44.enhanced.test.bak-pre-metal.raw ;;
+  v5) HOST=$HOST_V5; IMG=/Users/kov/Projects/limina/Fedora-Workstation-44.metal.test.raw
+    [ "${ENH_IMAGE:-0}" = 1 ] && IMG=/Users/kov/Projects/limina/Fedora-Workstation-44.enhanced.test.raw ;;
   *) echo "arm must be v4 or v5" >&2; exit 1 ;;
 esac
 WIRE=${ARM#v}
@@ -196,7 +202,7 @@ fi
 # WebRender neither arm yields a frame. WebGL still renders through zink on the arm's ICD; the
 # page's pixels reach the compositor through shared memory. The pref lives in the profile, which
 # Firefox creates on its first start, hence the throwaway launch.
-step 120 "${SSH[@]}" 'export XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+[ "${ENH_IMAGE:-0}" = 1 ] || step 120 "${SSH[@]}" 'export XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
   systemd-run -q --user --unit=ff-profile --setenv=WAYLAND_DISPLAY=wayland-0 /usr/bin/firefox --headless about:blank
   for i in $(seq 1 30); do ls -d ~/.config/mozilla/firefox/*.default-release >/dev/null 2>&1 && break; sleep 1; done
   sleep 5; systemctl --user stop ff-profile; systemctl --user reset-failed ff-profile 2>/dev/null; sleep 2

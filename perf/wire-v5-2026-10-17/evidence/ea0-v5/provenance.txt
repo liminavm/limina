@@ -1,0 +1,7 @@
+wire-v5 ea0-v5: arm v5 (Fedora-Workstation-44.enhanced.test.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun ce663d74; limina 16e15048; macOS 27.0.1
+-rwxr-xr-x@ 1 kov  staff  15117144 Oct 16 12:01 /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib
+-rwxr-xr-x@ 1 kov  staff  21502208 Oct 16 12:02 /Volumes/mesa-cs/zink-kk-prefix/lib/libgallium-26.3.0-devel.dylib
+-rwxr-xr-x@ 1 kov  staff  30459912 Oct 17 21:40 /Users/kov/Projects/limina/.claude/worktrees/mlx/target/debug/limina
+-rwxr-xr-x@ 1 kov  staff   6692160 Oct 17 15:28 /Users/kov/Projects/limina/.claude/worktrees/mlx/target/debug/limina-gpu-host
+-rwxr-xr-x@ 1 kov  staff  42322864 Oct 17 21:40 /Users/kov/Projects/limina/.claude/worktrees/mlx/target/debug/limina-vmm
+-rwxr-xr-x@ 1 kov  staff   2188416 Oct 17 16:35 /Users/kov/Projects/limina/.claude/worktrees/mlx/target/release/limina-gpu-host

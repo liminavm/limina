@@ -1,0 +1,5 @@
+SETTLED up=205s load=0.19
+final: up=205s load=0.19 0.27 0.12
+7.1.13-limina16k.2
+mesa-dri-drivers-26.2.3-6.limina.fc44.aarch64
+mesa-vulkan-drivers-26.2.3-6.limina.fc44.aarch64
