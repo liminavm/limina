@@ -52,6 +52,34 @@ Workloads (see `scripts/perf-ledger.sh` for the exact invocations):
   ⚠ Numbers from the **unpaced-present era** (through 2026-07-26, e.g. venus 71 @5k) are not
   commensurable with post-fence-accurate-present rows — a counter above the mode is the tell.
 
+## Compute: `scripts/perf-compute.sh`
+
+GPU compute over the Metal transport, which none of the graphics rows reach. It owns its boot (a
+fresh clone of metal.test at 8 vCPUs / 16 GiB, the compositor stopped, the tools on a second
+disk), then runs the same work natively on macOS once the guest is down. Every guest row
+(`<workload>-metal`) comes with its `-native` row and an `-of-native` row: guest speed over
+native speed, so 1.00 is native. Read the `-of-native` rows; the raw rows move with the host.
+
+- `metal-*`: the transport's own costs, `scripts/perf/compute/metal-bench.cpp` through
+  limina-metal: `commit-rtt` (one tiny dispatch committed and waited for, µs), `dispatch-rate`,
+  `cb-rate`, `copy-bandwidth` and `two-queue` (two long kernels on two queues against one alone).
+  These are the rows a transport change moves. The native side is classic Metal, as a macOS app
+  calls it, not the host's own MTL4 queues, so it is what MLX on macOS gets, not a floor the
+  transport could reach.
+- `mlx-matmul-*`, `mlx-lm-qwen{0.5b,7b}`: MLX's pinned fork, matmuls and mlx-lm generation from
+  `scripts/perf/compute/mlx_bench.py`. The text is hashed and every run must produce the same one.
+  Generation is bound by memory bandwidth and catches only large costs.
+- `llama-bench-qwen{0.5b,7b}`: llama.cpp's Vulkan backend on the guest's KosmicKrisp, pp512 and
+  tg128 on the same models as GGUF Q4_0. The native side runs the same llama.cpp on the host's
+  KosmicKrisp; its shaders are compiled by Homebrew's glslc, the guest's by Fedora's, and the two
+  KosmicKrisp builds are pinned separately.
+
+The tools disk (`tools.raw` in `$PERF_HOME`, the main checkout's `target/perf-compute` by default)
+is made once with `scripts/perf/compute/tools-disk.sh` and rebuilt when the pins in
+`scripts/perf/compute/env.sh` or the image's Python move; `models.sh` fetches the models.
+limina-metal is relinked from the tree being measured at every run, so the disk does not go stale
+on a transport change.
+
 ## Before you measure ANYTHING: pin the display
 
 `match-host` (default since 2026-07-03) drives the guest to the host screen, and GNOME then picks a
