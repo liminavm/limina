@@ -51,6 +51,8 @@ Decision-oriented design docs — the founding one plus one per major feature
   capture rides the [privileged helper](design/privileged-helper.md) (deferred).
 - [M9 suspend/resume + VM snapshots](design/m9-suspend-resume.md) — designed, not started.
 - [M10 multiple disks](design/m10-multiple-disks.md) — shipped.
+- [Firmware and ACPI](design/firmware-and-acpi.md) — our own Rust UEFI firmware replacing
+  edk2, and ACPI instead of a device tree for the guest; phase 0 (ACPI on edk2) in progress.
 - [Multi-VM networking](design/multi-vm-networking.md) — proposal; default NAT backend open pending measurements.
 - [VM definitions & persistence](design/vm-definitions.md) — the per-VM config model;
   Phase 1 + the control-center UI shipped (`.liminavm` bundles, `limina create/start/
