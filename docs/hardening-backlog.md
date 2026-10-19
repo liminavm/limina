@@ -290,6 +290,22 @@ with it (`-Zbuild-std`, also unstable). Fix shape, once both are stable: build w
 check the disassembly has no x18 use, and drop the entry shims. The hostile loader's
 `runtime_services_keep_x18` case stays as the witness.
 
+### A guest on the ACPI machine cannot have its console on both the display and the serial line
+Debugging a guest that does not come up (no agent, no network, sometimes no picture) needs what it
+printed, read by a person in the window and by a tool on the host, without a guest change and
+without costing the boot and shutdown splash. The device-tree machine gives that: `stdout-path`
+names the PL011, and a Debian LUKS guest shows its passphrase prompt both in the window and on the
+serial line. The ACPI machine gives one or the other: without an SPCR the kernel never writes to
+the serial line (only Cardea and GRUB do), and with one (`hardware.serial_console`) the serial
+port becomes the only console and the prompt leaves the window. Forwarding the log through
+limina-agent does not answer it: the agent is unreachable in exactly the cases this is for.
+Owed: (1) find why the SPCR excludes the display console where `stdout-path` does not (Linux's
+console registration order is the suspect) and whether an ACPI description can match the device
+tree's behaviour; (2) whether an SPCR, or `stdout-path`, makes Plymouth drop its splash the way a
+`console=ttyAMA0` on the command line does; (3) the host half: record every managed VM's serial
+line, read it programmatically (the debug port or the CLI), and let the window switch between the
+display and a terminal view of the serial line, as QEMU's monitor views do.
+
 ---
 
 ### A full host disk reaches the guest as an I/O error, and its file system goes read-only
