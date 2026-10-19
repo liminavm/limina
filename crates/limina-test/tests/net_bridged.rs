@@ -421,6 +421,42 @@ fn a_managed_vm_bridged_in_its_definition_is_reached_at_its_lan_address() {
         "{ip} is not a LAN address beside the host's {host_ip}/{mask} on {ifname}"
     );
     wait_for_ssh_at(&ip.to_string());
+
+    // Suspend and resume: a restore does not cycle the guest's link, so the guest asks no DHCP
+    // server anything and the fresh worker has no acknowledgement to read. Its address must
+    // still be known, and soon — not at the lease's renewal, hours away.
+    let out = vm
+        .limina()
+        .args(["suspend", Managed::NAME])
+        .output()
+        .expect("running limina suspend");
+    assert!(
+        out.status.success(),
+        "limina suspend: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut first = vm.supervisor.take().expect("the first supervisor");
+    first.wait().expect("reaping the suspended supervisor");
+    vm.start();
+    assert!(vm.supervisor.is_some(), "the resume exited at once");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        match address_of(vm.limina(), Managed::NAME) {
+            Ok(again) => {
+                assert_eq!(
+                    again, ip,
+                    "the resumed guest is reported at another address"
+                );
+                break;
+            }
+            Err(why) => assert!(
+                Instant::now() < deadline,
+                "no address for the resumed guest within 60 s: {why}"
+            ),
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    wait_for_ssh_at(&ip.to_string());
 }
 
 #[test]

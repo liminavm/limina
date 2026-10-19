@@ -3,7 +3,9 @@
 //!
 //! On a bridged NIC the LAN's DHCP server leases the address, so nothing on the host knows it
 //! otherwise; on vmnet shared and on netd the acknowledgement passes through the worker all the
-//! same, so every NIC reports the same way. [`observed`] wraps a NIC's backend to read the frames
+//! same, so every NIC reports the same way. A guest restored from a snapshot asks for no lease
+//! unless its network manager does so on waking, so until an address is known the source of the
+//! guest's own IPv4 frames stands in for it. [`observed`] wraps a NIC's backend to read the frames
 //! it hands the guest; [`Lease`] keeps what they said and tells every watcher when it changes. A
 //! NIC whose backend will not start reports why instead, so the supervisor can say it.
 
@@ -79,20 +81,7 @@ impl Lease {
 
     /// Record what the NIC has now, and tell every watcher if it changed.
     pub fn set(&self, held: Held) {
-        let mut state = lock(&self.state);
-        if state.held == held {
-            return;
-        }
-        match &held {
-            Held::Address(ip) => log::info!("network: the guest holds {ip}"),
-            Held::Failed(why) => log::error!("network: the NIC did not start: {why}"),
-            Held::Nothing => {}
-        }
-        let line = format!("{}\n", held.line());
-        state.held = held;
-        state
-            .watchers
-            .retain_mut(|w| w.write_all(line.as_bytes()).is_ok());
+        apply(&mut lock(&self.state), held);
     }
 
     /// Keep `stream` told: what the NIC has now, then every change, for as long as it reads.
@@ -104,11 +93,58 @@ impl Lease {
         Ok(())
     }
 
-    fn saw(&self, frame: &[u8]) {
-        if let Some(ip) = acked_address(frame, &self.mac) {
-            self.set(Held::Address(ip));
+    /// A frame to the guest: an acknowledgement for it says its address.
+    fn saw(&self, frame: &[u8]) -> bool {
+        match acked_address(frame, &self.mac) {
+            Some(ip) => {
+                self.set(Held::Address(ip));
+                true
+            }
+            None => false,
         }
     }
+
+    /// A frame from the guest, while no address is known: the address it sends from.
+    fn sent(&self, frame: &[u8]) -> bool {
+        let Some(ip) = sent_from(frame, &self.mac) else {
+            return false;
+        };
+        // Checked and set under one lock, so an acknowledgement arriving meanwhile is not lost.
+        let mut state = lock(&self.state);
+        if state.held == Held::Nothing {
+            log::info!("network: the guest sends from {ip} (no lease seen)");
+            apply(&mut state, Held::Address(ip));
+        }
+        true
+    }
+}
+
+/// Record `held` in `state`, and tell every watcher if it changed.
+fn apply(state: &mut State, held: Held) {
+    if state.held == held {
+        return;
+    }
+    match &held {
+        Held::Address(ip) => log::info!("network: the guest holds {ip}"),
+        Held::Failed(why) => log::error!("network: the NIC did not start: {why}"),
+        Held::Nothing => {}
+    }
+    let line = format!("{}\n", held.line());
+    state.held = held;
+    state
+        .watchers
+        .retain_mut(|w| w.write_all(line.as_bytes()).is_ok());
+}
+
+/// The address an IPv4 frame from `mac` is sent from, unless it is none yet (a DHCP client's
+/// 0.0.0.0) or link-local.
+pub fn sent_from(frame: &[u8], mac: &[u8; 6]) -> Option<Ipv4Addr> {
+    if frame.get(6..12)? != mac || frame.get(12..14)? != [0x08, 0x00] {
+        return None;
+    }
+    let src = frame.get(26..30)?;
+    let ip = Ipv4Addr::new(src[0], src[1], src[2], src[3]);
+    (!ip.is_unspecified() && !ip.is_link_local() && !ip.is_broadcast()).then_some(ip)
 }
 
 /// The address a DHCP acknowledgement for `mac` gives, if `frame` (an Ethernet frame) is one.
@@ -165,18 +201,25 @@ pub fn reason(e: &ConnectError) -> String {
 struct Observed {
     inner: Box<dyn NetBackend + Send>,
     lease: Arc<Lease>,
+    /// An address is known, so the guest's own frames need no reading.
+    known: bool,
 }
 
 impl NetBackend for Observed {
     fn read_frame(&mut self, buf: &mut [u8]) -> Result<usize, ReadError> {
         let n = self.inner.read_frame(buf)?;
         if let Some(frame) = buf.get(VNET_HDR_LEN..n) {
-            self.lease.saw(frame);
+            self.known |= self.lease.saw(frame);
         }
         Ok(n)
     }
 
     fn write_frame(&mut self, hdr_len: usize, buf: &mut [u8]) -> Result<(), WriteError> {
+        if !self.known
+            && let Some(frame) = buf.get(hdr_len..)
+        {
+            self.known = self.lease.sent(frame);
+        }
         self.inner.write_frame(hdr_len, buf)
     }
 
@@ -216,6 +259,7 @@ pub fn observed(build: ExternalBackend, lease: Arc<Lease>) -> ExternalBackend {
         Ok(inner) => Ok(Box::new(Observed {
             inner,
             lease: lease.clone(),
+            known: false,
         }) as Box<dyn NetBackend + Send>),
         Err(e) => {
             lease.set(Held::Failed(reason(&e)));
@@ -279,6 +323,35 @@ mod tests {
         let mut arp = f.clone();
         arp[12..14].copy_from_slice(&[0x08, 0x06]);
         assert_eq!(acked_address(&arp, &MAC), None);
+    }
+
+    /// An IPv4 frame from `src_mac`, sent from `src`.
+    fn sent(src_mac: [u8; 6], src: [u8; 4]) -> Vec<u8> {
+        let mut f = vec![0u8; 60];
+        f[6..12].copy_from_slice(&src_mac);
+        f[12..14].copy_from_slice(&[0x08, 0x00]);
+        f[14] = 0x45;
+        f[26..30].copy_from_slice(&src);
+        f
+    }
+
+    #[test]
+    fn a_restored_guest_is_known_by_what_it_sends_until_a_lease_says_otherwise() {
+        let lease = Lease::new(MAC);
+        // A DHCP client with no address yet, and a link-local one, say nothing.
+        assert!(!lease.sent(&sent(MAC, [0, 0, 0, 0])));
+        assert!(!lease.sent(&sent(MAC, [169, 254, 3, 4])));
+        // Another machine's frame says nothing about this guest.
+        assert!(!lease.sent(&sent([2, 0, 0, 0, 0, 9], [192, 168, 13, 9])));
+        assert_eq!(lease.held(), Held::Nothing);
+
+        assert!(lease.sent(&sent(MAC, [192, 168, 13, 77])));
+        assert_eq!(lease.held(), Held::Address(Ipv4Addr::new(192, 168, 13, 77)));
+        // Once known, its frames change nothing; a new lease does.
+        assert!(lease.sent(&sent(MAC, [10, 0, 0, 5])));
+        assert_eq!(lease.held(), Held::Address(Ipv4Addr::new(192, 168, 13, 77)));
+        assert!(lease.saw(&reply(MAC, [192, 168, 13, 80], 5)));
+        assert_eq!(lease.held(), Held::Address(Ipv4Addr::new(192, 168, 13, 80)));
     }
 
     #[test]

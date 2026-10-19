@@ -107,6 +107,26 @@ impl Nic {
     }
 }
 
+/// The address `limina address` reports for the guest of the supervisor `pid`, once it has one.
+fn reported_address(limina: &std::path::Path, pid: libc::pid_t, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let out = std::process::Command::new(limina)
+            .args(["address", &pid.to_string()])
+            .output()
+            .expect("running limina address");
+        if out.status.success() {
+            return String::from_utf8_lossy(&out.stdout).trim().to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "limina address named nothing within {timeout:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
 fn nat_dhcp_and_outbound(nic: Nic) {
     let cfg = nic.config().with_ssh_target_check();
     eprintln!("booting Fedora (writable COW clone) with NAT on {nic:?}");
@@ -123,6 +143,20 @@ fn nat_dhcp_and_outbound(nic: Nic) {
         .wait_for_ssh(Duration::from_secs(30))
         .expect("guest SSH not reachable through the forward");
     eprintln!("guest SSH reachable: {banner}");
+
+    // The supervisor knows the address the guest holds, on either side of the switch.
+    let ip = reported_address(
+        &cfg.limina_bin,
+        guest.supervisor_pid(),
+        Duration::from_secs(30),
+    );
+    let own = guest
+        .ssh_exec("ip -4 -o addr show dev eth0")
+        .expect("reading the guest's addresses");
+    assert!(
+        own.contains(&format!(" {ip}/")),
+        "the supervisor reports {ip}, but the guest holds: {own}"
+    );
 
     // Clean teardown. Stock Fedora ignores the GPIO power button, so the supervisor
     // force-kills the worker after its short grace — still a clean supervisor stop. The
@@ -405,6 +439,11 @@ fn a_moved_ssh_forward_outlives_a_reset_on_netd() {
         )
     });
     eprintln!("guest SSH on the moved port {new} after the reset: {banner}");
+    // The supervisor follows the fresh worker's NIC too.
+    assert_eq!(
+        reported_address(&cfg.limina_bin, pid, Duration::from_secs(30)),
+        "192.168.127.2"
+    );
 
     let outcome = guest
         .shutdown(Duration::from_secs(20))

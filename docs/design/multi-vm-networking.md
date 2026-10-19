@@ -236,7 +236,9 @@ which Network, which mode, uplink tracking (§3.4), VPN detection and the switch
   goes to the LAN without entering the host's routing, so a host VPN neither breaks it nor carries
   it; the sheet says so. Bridged is an explicit choice, never a fallback. It has no SSH forward:
   the LAN's DHCP server leases the address, so the worker reads the acknowledgement on its way to
-  the guest (`krun::lease`, on every NIC) and reports it over the NIC's control link; the
+  the guest (`krun::lease`, on every NIC) — or, until one is seen, the source of the guest's own
+  IPv4 frames, which is what a guest restored from a snapshot without asking for a lease has to
+  go on — and reports it over the NIC's control link; the
   supervisor publishes it on its runtime socket (`address`), where the control center and
   `limina address` read it, and prints it to the VM log. A NIC that will not start is reported the
   same way, with the reason. Pre-flight refuses an uplink the host does not have, since vmnet's

@@ -1913,6 +1913,8 @@ enum NicChoice {
         ifname: String,
         label: String,
     },
+    /// Bridged, with no interface named (a hand-edited vm.toml), which pre-flight refuses.
+    BridgedUnset,
 }
 
 impl NicChoice {
@@ -1921,6 +1923,7 @@ impl NicChoice {
             NicChoice::None => "None".into(),
             NicChoice::Nat => "NAT".into(),
             NicChoice::Bridged { label, .. } => format!("Bridged: {label}"),
+            NicChoice::BridgedUnset => "Bridged: no interface chosen".into(),
         }
     }
 }
@@ -1934,17 +1937,23 @@ fn nic_choices(current: Option<&NetworkEntry>, uplinks: &[Uplink]) -> Vec<NicCho
         ifname: u.ifname.clone(),
         label: u.label(),
     }));
-    if let Some(NetworkEntry {
-        mode: NetMode::Bridged,
-        uplink: Some(ifname),
-        ..
-    }) = current
-        && !uplinks.iter().any(|u| u.ifname == *ifname)
-    {
-        choices.push(NicChoice::Bridged {
-            ifname: ifname.clone(),
-            label: format!("{ifname} (not available now)"),
-        });
+    match current {
+        Some(NetworkEntry {
+            mode: NetMode::Bridged,
+            uplink: Some(ifname),
+            ..
+        }) if !uplinks.iter().any(|u| u.ifname == *ifname) => {
+            choices.push(NicChoice::Bridged {
+                ifname: ifname.clone(),
+                label: format!("{ifname} (not available now)"),
+            });
+        }
+        Some(NetworkEntry {
+            mode: NetMode::Bridged,
+            uplink: None,
+            ..
+        }) => choices.push(NicChoice::BridgedUnset),
+        _ => {}
     }
     choices
 }
@@ -1955,9 +1964,11 @@ fn nic_index(current: Option<&NetworkEntry>, choices: &[NicChoice]) -> isize {
     let found = match current {
         None => index(&NicChoice::None),
         Some(n) if n.mode == NetMode::Nat => index(&NicChoice::Nat),
-        Some(n) => choices.iter().position(
-            |c| matches!(c, NicChoice::Bridged { ifname, .. } if Some(ifname) == n.uplink.as_ref()),
-        ),
+        Some(n) => choices.iter().position(|c| match c {
+            NicChoice::Bridged { ifname, .. } => Some(ifname) == n.uplink.as_ref(),
+            NicChoice::BridgedUnset => n.uplink.is_none(),
+            _ => false,
+        }),
     };
     found.unwrap_or(1) as isize
 }
@@ -1972,6 +1983,7 @@ fn apply_nic(cfg: &mut VmConfig, choice: NicChoice, ssh_port: u16) {
         }
         NicChoice::Nat => (NetMode::Nat, None),
         NicChoice::Bridged { ifname, .. } => (NetMode::Bridged, Some(ifname)),
+        NicChoice::BridgedUnset => (NetMode::Bridged, None),
     };
     if cfg.networks.is_empty() {
         cfg.networks.push(NetworkEntry {
@@ -2168,6 +2180,12 @@ mod tests {
             choices[i as usize].title(),
             "Bridged: en7 (not available now)"
         );
+
+        // Saving what the sheet opened on keeps it, even a bridged NIC naming no interface.
+        let unset = entry(NetMode::Bridged, None, 0);
+        let choices = nic_choices(Some(&unset), &wifi());
+        let i = nic_index(Some(&unset), &choices);
+        assert_eq!(choices[i as usize], NicChoice::BridgedUnset);
     }
 
     #[test]
