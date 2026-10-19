@@ -161,6 +161,9 @@ pub struct NetSpec {
     /// Guest MAC for the NIC. `None` = the well-known vfkit MAC; the supervisor names one for
     /// every NIC that can reach vmnet.
     pub mac: Option<[u8; 6]>,
+    /// Where the supervisor connects to watch the guest's address and, on netd or auto, to add
+    /// and remove forwards and move the NIC while the VM runs.
+    pub control: Option<ListenAt>,
 }
 
 #[derive(Debug, Clone)]
@@ -183,8 +186,6 @@ pub enum NetBackend {
 pub struct NetdSpec {
     /// Port forwards from the start: host address → guest TCP port.
     pub forwards: Vec<(SocketAddrV4, u16)>,
-    /// Where the supervisor adds and removes forwards while the VM runs.
-    pub control: Option<ListenAt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

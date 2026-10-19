@@ -32,6 +32,7 @@ use limina_netd_wire::{
 };
 use limina_ring::PushError;
 
+use super::lease::Lease;
 use super::switch::{Side, SwitchControl};
 
 struct Forward {
@@ -144,12 +145,15 @@ impl Forwards {
 }
 
 /// Serves the NIC's control link: one thread, one request line at a time, answered `ok` or
-/// `error: …`. A NIC that switches sides takes `switch vmnet|netd` too, answered once the move is
-/// under way.
+/// `error: …`. `watch` is answered with the guest's address and then each change
+/// ([`Lease::watch`]), for as long as the client reads; the connection carries nothing else after
+/// it. A NIC on netd takes `forward` and `unforward`, and one that switches sides takes `switch
+/// vmnet|netd` too, answered once the move is under way.
 pub fn serve_control(
     at: ListenAt,
-    forwards: Arc<Forwards>,
+    forwards: Option<Arc<Forwards>>,
     switch: Option<Arc<SwitchControl>>,
+    lease: Arc<Lease>,
 ) -> anyhow::Result<()> {
     let listener = at.listen()?;
     std::thread::Builder::new()
@@ -157,7 +161,7 @@ pub fn serve_control(
         .spawn(move || {
             for stream in listener.incoming() {
                 match stream {
-                    Ok(s) => serve_client(s, &forwards, switch.as_deref()),
+                    Ok(s) => serve_client(s, forwards.as_deref(), switch.as_deref(), &lease),
                     Err(e) => log::error!("net-control: accept failed: {e}"),
                 }
             }
@@ -165,12 +169,23 @@ pub fn serve_control(
     Ok(())
 }
 
-fn serve_client(stream: UnixStream, forwards: &Forwards, switch: Option<&SwitchControl>) {
+fn serve_client(
+    stream: UnixStream,
+    forwards: Option<&Forwards>,
+    switch: Option<&SwitchControl>,
+    lease: &Lease,
+) {
     let Ok(mut out) = stream.try_clone() else {
         return;
     };
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { break };
+        if line.trim() == "watch" {
+            if let Err(e) = lease.watch(out) {
+                log::warn!("net-control: a watcher went away at once: {e}");
+            }
+            return;
+        }
         let reply = match answer(&line, forwards, switch) {
             Ok(()) => "ok\n".to_string(),
             Err(e) => format!("error: {e}\n"),
@@ -181,27 +196,32 @@ fn serve_client(stream: UnixStream, forwards: &Forwards, switch: Option<&SwitchC
     }
 }
 
-fn answer(line: &str, forwards: &Forwards, switch: Option<&SwitchControl>) -> Result<(), String> {
+fn answer(
+    line: &str,
+    forwards: Option<&Forwards>,
+    switch: Option<&SwitchControl>,
+) -> Result<(), String> {
     let words: Vec<&str> = line.split_whitespace().collect();
     let host = |s: &str| {
         s.parse::<SocketAddrV4>()
             .map_err(|e| format!("{s:?} is not HOST_IP:PORT: {e}"))
     };
+    let forwards = || forwards.ok_or("this NIC has no forwards (it is not on limina-netd)");
     match words.as_slice() {
         ["forward", h, guest] => {
             let guest: u16 = guest
                 .parse()
                 .map_err(|e| format!("{guest:?} is not a port: {e}"))?;
-            forwards.add(host(h)?, guest).map_err(|e| e.to_string())
+            forwards()?.add(host(h)?, guest).map_err(|e| e.to_string())
         }
-        ["unforward", h] => forwards.remove(host(h)?).map_err(|e| e.to_string()),
+        ["unforward", h] => forwards()?.remove(host(h)?).map_err(|e| e.to_string()),
         ["switch", side] => {
             let switch = switch.ok_or("this NIC does not switch sides")?;
             switch.request(side.parse::<Side>()?, "asked to");
             Ok(())
         }
         _ => Err(format!(
-            "unknown request {line:?} (have: forward HOST_IP:PORT GUEST_PORT, unforward \
+            "unknown request {line:?} (have: watch, forward HOST_IP:PORT GUEST_PORT, unforward \
              HOST_IP:PORT, switch vmnet|netd)"
         )),
     }

@@ -42,7 +42,7 @@ pub fn info(pid: i32) -> Option<Info> {
         return None;
     }
     let start = with_links(|links| match links.get(&pid) {
-        Some(Link::Up(info)) => Some(Some(*info)),
+        Some(Link::Up(info)) => Some(Some(info.clone())),
         Some(_) => Some(None),
         None => {
             links.insert(pid, Link::Connecting);

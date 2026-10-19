@@ -13,6 +13,7 @@
 mod battery;
 mod console;
 mod display_update;
+mod lease;
 mod metal_ext;
 mod netd;
 mod switch;
@@ -25,7 +26,8 @@ use crossbeam_channel::unbounded;
 use devices::display::{DisplayInfo, DisplayInfoEdid, EdidIdentity, EdidParams};
 use devices::virtio::block::{DiskFormat, SyncMode};
 use devices::virtio::gpu::timing::TimingPage;
-use devices::virtio::net::vmnet::{VmnetConfig, VmnetMode as KrunVmnetMode};
+use devices::virtio::net::backend::ExternalBackend;
+use devices::virtio::net::vmnet::{Vmnet, VmnetConfig, VmnetMode as KrunVmnetMode};
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use krun_lib::api::device_builders::{
     BalloonDevice, BlockDevice, DisplayBackend, FsDevice, GpuDevice, I2cBatteryDevice, InputDevice,
@@ -74,11 +76,6 @@ const NET_VMNET_FEATURES: u32 = NET_FEATURE_CSUM
 /// two. netd takes the guest's large segments whole and never sends any of its own, which a guest
 /// that takes them does not mind.
 const NET_NETD_FEATURES: u32 = NET_VMNET_FEATURES;
-
-/// `vmnet_mode_t` values from `<vmnet/vmnet.h>`, as `NetDevice::new_vmnet` takes them.
-const VMNET_HOST_MODE: u32 = 1000;
-const VMNET_SHARED_MODE: u32 = 1001;
-const VMNET_BRIDGED_MODE: u32 = 1002;
 
 /// Guest MAC for a NIC the supervisor names none for: the well-known vfkit/krunkit MAC. netd
 /// leases its one guest address to whichever MAC asks; on vmnet, where every guest of the host
@@ -681,32 +678,57 @@ fn vsock_device(vsock: &VsockSpec) -> Result<VsockDevice> {
 }
 
 /// Attach the guest's NIC. Every backend connects lazily, when the guest activates the device
-/// during boot: a vmnet interface libkrun starts in this process, a limina-netd this process
-/// spawns, or both under the switch.
+/// during boot: a vmnet interface started in this process, a limina-netd this process spawns, or
+/// both under the switch. Each is read for the guest's lease on the way ([`lease`]), which the
+/// control link reports to the supervisor.
 fn net_device(net: &NetSpec) -> Result<NetDevice> {
     let mac = net.mac.unwrap_or(NET_GUEST_MAC);
+    let lease = lease::Lease::new(mac);
+    let serve = |forwards: Option<Arc<netd::Forwards>>, switch| -> Result<()> {
+        if let Some(at) = net.control.clone() {
+            netd::serve_control(at, forwards, switch, lease.clone())
+                .context("listening for network control")?;
+        }
+        Ok(())
+    };
     match &net.backend {
         NetBackend::Vmnet(mode) => {
-            let (mode, bridged) = match mode {
-                VmnetMode::Shared => (VMNET_SHARED_MODE, ""),
-                VmnetMode::Host => (VMNET_HOST_MODE, ""),
-                VmnetMode::Bridged(ifname) => (VMNET_BRIDGED_MODE, ifname.as_str()),
+            let config = VmnetConfig {
+                mode: match mode {
+                    VmnetMode::Shared => KrunVmnetMode::Shared,
+                    VmnetMode::Host => KrunVmnetMode::Host,
+                    VmnetMode::Bridged(_) => KrunVmnetMode::Bridged,
+                },
+                bridged_interface: match mode {
+                    VmnetMode::Bridged(ifname) => Some(ifname.clone()),
+                    _ => None,
+                },
             };
-            NetDevice::new_vmnet("eth0", mode, bridged, &mac, NET_VMNET_FEATURES)
-                .map_err(|e| anyhow!("virtio-net (vmnet): {e:?}"))
+            serve(None, None)?;
+            let build: ExternalBackend = Arc::new(move |features| {
+                Vmnet::start(config.clone(), features).map(|v| {
+                    Box::new(v) as Box<dyn devices::virtio::net::backend::NetBackend + Send>
+                })
+            });
+            // vmnet hands over its own header, so the device's checksum flag has no say.
+            NetDevice::new_external(
+                "eth0",
+                lease::observed(build, lease.clone()),
+                &mac,
+                NET_VMNET_FEATURES,
+                NetFlags::empty(),
+            )
+            .map_err(|e| anyhow!("virtio-net (vmnet): {e:?}"))
         }
         NetBackend::Netd(spec) => {
             let exe = netd::netd_exe().context("locating limina-netd")?;
             anyhow::ensure!(exe.exists(), "limina-netd is not at {}", exe.display());
             let forwards = netd_forwards(spec)?;
-            if let Some(at) = spec.control.clone() {
-                netd::serve_control(at, forwards.clone(), None)
-                    .context("listening for network control")?;
-            }
+            serve(Some(forwards.clone()), None)?;
             // netd sets each frame's header itself, so the device's checksum flag has no say.
             NetDevice::new_external(
                 "eth0",
-                netd::backend(exe, forwards),
+                lease::observed(netd::backend(exe, forwards), lease.clone()),
                 &mac,
                 NET_NETD_FEATURES,
                 NetFlags::empty(),
@@ -722,14 +744,14 @@ fn net_device(net: &NetSpec) -> Result<NetDevice> {
                 bridged_interface: None,
             })
             .context("starting the network switch")?;
-            if let Some(at) = spec.control.clone() {
-                netd::serve_control(at, forwards.clone(), Some(control.clone()))
-                    .context("listening for network control")?;
-            }
+            serve(Some(forwards.clone()), Some(control.clone()))?;
             // vmnet and netd each set their frames' headers, so the device's flag has no say.
             let device = NetDevice::new_external(
                 "eth0",
-                switch::backend(exe, forwards, control.clone()),
+                lease::observed(
+                    switch::backend(exe, forwards, control.clone()),
+                    lease.clone(),
+                ),
                 &mac,
                 NET_VMNET_FEATURES,
                 NetFlags::empty(),

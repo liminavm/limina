@@ -345,7 +345,7 @@ struct Cli {
     balloon_deflate_on_oom: bool,
 
     /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
-    /// `host` (host-only) or `bridged:<interface>`. Experimental (networking design Phase 1).
+    /// `host` (host-only) or `bridged:<interface>` (the LAN, through that host interface).
     #[arg(long, conflicts_with_all = ["net_netd", "net_auto"])]
     net_vmnet: Option<VmnetMode>,
 
@@ -364,9 +364,10 @@ struct Cli {
     #[arg(long, value_name = "HOST_IP:HOST_PORT:GUEST_PORT", value_parser = parse_forward)]
     net_forward: Vec<(SocketAddrV4, u16)>,
 
-    /// A netd or auto NIC's control link (an inherited link the supervisor connects over):
-    /// newline `forward HOST_IP:HOST_PORT GUEST_PORT`, `unforward HOST_IP:HOST_PORT` and, on an
-    /// auto NIC, `switch vmnet|netd` commands.
+    /// The NIC's control link (an inherited link the supervisor connects over): newline `watch`
+    /// (the guest's address, then each change) on any NIC, `forward HOST_IP:HOST_PORT
+    /// GUEST_PORT` and `unforward HOST_IP:HOST_PORT` on a netd or auto NIC, and `switch
+    /// vmnet|netd` on an auto NIC.
     #[arg(long)]
     net_control_fd: Option<i32>,
 
@@ -846,14 +847,15 @@ fn main() -> Result<()> {
 
     let net_mac = cli.net_mac.as_deref().map(parse_mac).transpose()?;
     anyhow::ensure!(
-        cli.net_netd
-            || cli.net_auto
-            || (cli.net_forward.is_empty() && cli.net_control_fd.is_none()),
-        "--net-forward and --net-control-fd need --net-netd or --net-auto"
+        cli.net_netd || cli.net_auto || cli.net_forward.is_empty(),
+        "--net-forward needs --net-netd or --net-auto"
+    );
+    anyhow::ensure!(
+        cli.net_netd || cli.net_auto || cli.net_vmnet.is_some() || cli.net_control_fd.is_none(),
+        "--net-control-fd needs a NIC"
     );
     let netd_spec = NetdSpec {
         forwards: cli.net_forward,
-        control: cli.net_control_fd.map(ListenAt::Link),
     };
     let net_backend = match (cli.net_vmnet, cli.net_netd, cli.net_auto) {
         (Some(mode), false, false) => Some(NetBackend::Vmnet(mode)),
@@ -865,6 +867,7 @@ fn main() -> Result<()> {
     let net = net_backend.map(|backend| NetSpec {
         backend,
         mac: net_mac,
+        control: cli.net_control_fd.map(ListenAt::Link),
     });
 
     let spec = VmSpec {

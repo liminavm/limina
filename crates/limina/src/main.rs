@@ -454,9 +454,9 @@ struct Cli {
     net: bool,
 
     /// Attach a NIC on a vmnet interface alone: `shared` (NAT through macOS), `host`
-    /// (host-only) or `bridged:<interface>` (e.g. `bridged:en0`, a real LAN lease). No SSH
-    /// forward: the guest's address is in `/var/db/dhcpd_leases` (shared/host), and only Apple's
-    /// own tools reach it from the host without a Local Network grant. Experimental.
+    /// (host-only) or `bridged:<interface>` (e.g. `bridged:en0`, a lease from the LAN). No SSH
+    /// forward: `limina address` names the guest's address, and only Apple's own tools reach it
+    /// from the host without a Local Network grant.
     #[arg(long, value_name = "MODE", value_parser = parse_vmnet_mode, conflicts_with = "net_netd")]
     net_vmnet: Option<String>,
 
@@ -591,6 +591,9 @@ enum Cmd {
     /// Print a running VM's SSH forward port, or move it to another host port. A move lasts
     /// until the VM exits; the port in its definition is the one the next start uses.
     SshPort(SshPortArgs),
+    /// Print the address a running VM's guest holds on its NIC, as its DHCP acknowledgement gave
+    /// it: the way to reach a bridged guest, whose address the LAN hands out.
+    Address(AddressArgs),
     /// Move a running VM's `--net-auto` NIC to vmnet or limina-netd, as a VPN taking vmnet's
     /// route would. Off by default: the VM refuses until its net-switch lever is on
     /// (LIMINA_NET_SWITCH=1, the Debug menu, or `limina debug <vm> lever net-switch on`).
@@ -634,6 +637,13 @@ struct SshPortArgs {
     vm: String,
     /// The host port to move the forward to; omitted, the current one is printed.
     port: Option<u16>,
+}
+
+#[derive(clap::Args, Debug)]
+struct AddressArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -960,6 +970,7 @@ fn main() -> Result<()> {
         Some(Cmd::Rm(args)) => cmd_rm(args),
         Some(Cmd::Debug(args)) => cmd_debug(args),
         Some(Cmd::SshPort(args)) => cmd_ssh_port(args),
+        Some(Cmd::Address(args)) => cmd_address(args),
         Some(Cmd::NetSwitch(args)) => {
             let pid = debug_target_pid(&args.vm)?;
             runtime_ctl::request(pid, runtime_ctl::Request::NetSwitch(args.side))?;
@@ -1471,6 +1482,24 @@ fn cmd_ssh_port(args: SshPortArgs) -> Result<()> {
     match runtime_ctl::request(pid, req)?.ssh_port {
         Some(p) => println!("{p}"),
         None => anyhow::bail!("{} has no SSH forward (no NAT network)", args.vm),
+    }
+    Ok(())
+}
+
+/// `limina address`: ask the VM's supervisor which address its guest holds.
+fn cmd_address(args: AddressArgs) -> Result<()> {
+    let pid = debug_target_pid(&args.vm)?;
+    match runtime_ctl::request(pid, runtime_ctl::Request::Info)?.address {
+        runtime_ctl::GuestAddress::At(ip) => println!("{ip}"),
+        runtime_ctl::GuestAddress::None => {
+            anyhow::bail!(
+                "{} has no address yet (no NIC, or no DHCP lease yet)",
+                args.vm
+            )
+        }
+        runtime_ctl::GuestAddress::Failed(why) => {
+            anyhow::bail!("{}'s network did not start: {why}", args.vm)
+        }
     }
     Ok(())
 }
@@ -2219,19 +2248,22 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         if cli.net {
             runtime_ctl::set_net_control(Some(link.clone()));
         }
+        runtime_ctl::follow_address(link.clone());
         ssh_forward = Some(forward::SshForward::on_worker(port, link));
         println!("guest SSH forward ready: ssh -p {port} <user>@127.0.0.1");
     }
     runtime_ctl::set_forward(ssh_forward.clone());
     if let Some(mode) = &cli.net_vmnet {
-        // Every vmnet guest of a mode shares one segment, so the fixed vfkit MAC would collide
-        // between two VMs here.
-        let mac = cli.net_mac.clone().unwrap_or_else(random_local_mac);
+        // Every vmnet guest of a mode shares one segment, and a bridged one the LAN's, so the
+        // fixed vfkit MAC would collide between two VMs here; and each DHCP server keeps a lease
+        // per MAC, so the MAC stays the same from boot to boot.
+        let mac = cli.net_mac.clone().unwrap_or_else(|| disk_mac(&cli.disk));
         println!("vmnet {mode} NIC, guest MAC {mac}");
         args.push("--net-vmnet".into());
         args.push(mode.clone());
         args.push("--net-mac".into());
         args.push(mac);
+        runtime_ctl::follow_address(worker_link(&mut links, "--net-control-fd"));
     }
 
     // The scanout pool belongs to the DEVICE, so it is pushed here — above the windowed branch,
