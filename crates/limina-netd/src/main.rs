@@ -3,7 +3,8 @@
 //!
 //! The worker starts it with one end of a socketpair as descriptor 3 (`limina_netd_wire`); netd
 //! takes the shared rings from it and serves the guest's link until the worker goes away, which
-//! it sees as EOF. It has no other way in: no path, no port, no name.
+//! it sees as EOF. Descriptor 4, when present, carries the VM's port forwards. It has no other way
+//! in: no path, no port, no name.
 //!
 //! One thread and one kqueue: the channel's doorbell and every host socket (UDP flows, DNS
 //! questions, TCP connections) wake the same loop, which drains the guest's ring, answers on the
@@ -11,6 +12,7 @@
 //! sockets, and frames what comes back for the guest.
 
 mod dns;
+mod forward;
 mod poller;
 mod stack;
 mod tcp;
@@ -22,14 +24,12 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use limina_netd_wire::{MAX_FRAME, NetdEnd, TAG_FRAME, drain, ring};
+use limina_netd_wire::{CHANNEL_FD, CONTROL_FD, MAX_FRAME, NetdEnd, TAG_FRAME, drain, ring};
 use limina_ring::Producer;
 
 use crate::poller::{Event, Filter, Poller};
 use crate::stack::{Ingress, Link, Stack};
 
-/// The descriptor the worker hands over.
-const CHANNEL_FD: i32 = 3;
 const DNS_PORT: u16 = 53;
 /// How soon netd tries again after the guest's ring filled: the worker drains it without telling
 /// netd, and a TCP segment left over waits on this rather than on a retransmission timeout.
@@ -43,9 +43,12 @@ fn main() -> ExitCode {
         .format_timestamp_millis()
         .init();
     raise_fd_limit();
-    // SAFETY: descriptor 3 is the worker's handover, and nothing else in this process owns it.
+    // SAFETY: descriptors 3 and 4 are the worker's handover, and nothing else in this process
+    // owns them; 4 is taken only if it is open.
     let sock = unsafe { OwnedFd::from_raw_fd(CHANNEL_FD) };
-    match serve(sock) {
+    let ctl = (unsafe { libc::fcntl(CONTROL_FD, libc::F_GETFD) } >= 0)
+        .then(|| unsafe { OwnedFd::from_raw_fd(CONTROL_FD) });
+    match serve(sock, ctl) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             log::error!("limina-netd: {e}");
@@ -122,6 +125,7 @@ struct Netd {
     udp: udp::UdpNat,
     dns: dns::Resolver,
     tcp: tcp::TcpNat,
+    forwards: forward::Forwards,
     poller: Poller,
 }
 
@@ -207,9 +211,19 @@ impl Netd {
     }
 
     /// A host socket's event.
-    fn event(&mut self, ev: &Event, out: &mut ToGuest<'_>) {
+    fn event(&mut self, ev: &Event, out: &mut ToGuest<'_>) -> io::Result<()> {
         let fd = ev.fd;
-        if self.tcp.owns(fd) {
+        if self.forwards.is_control(fd) {
+            self.forwards.control(&self.poller)?;
+        } else if self.forwards.is_listener(fd) {
+            let (stack, tcp) = (&self.stack, &mut self.tcp);
+            self.forwards.accept(fd, &mut |guest_port, sock| {
+                // Until the guest has spoken it has no address; the connection is closed.
+                if stack.guest_known() {
+                    tcp.open_to_guest(guest_port, stack.link().gateway, sock);
+                }
+            });
+        } else if self.tcp.owns(fd) {
             self.tcp.event(ev, tcp_emit!(self.stack, out));
         } else if ev.filter != Filter::Read {
         } else if self.udp.owns(fd) {
@@ -224,6 +238,7 @@ impl Netd {
         {
             self.dns_answer(a, out);
         }
+        Ok(())
     }
 
     fn expire(&mut self, now: Instant, out: &mut ToGuest<'_>) {
@@ -251,7 +266,7 @@ impl Netd {
     }
 }
 
-fn serve(sock: OwnedFd) -> io::Result<()> {
+fn serve(sock: OwnedFd, ctl: Option<OwnedFd>) -> io::Result<()> {
     let mut end = NetdEnd::accept(sock)?;
     let poller = Poller::new()?;
     poller.add(end.sock.as_raw_fd())?;
@@ -260,6 +275,7 @@ fn serve(sock: OwnedFd) -> io::Result<()> {
         udp: udp::UdpNat::default(),
         dns: dns::Resolver::default(),
         tcp: tcp::TcpNat::default(),
+        forwards: forward::Forwards::new(ctl, &poller)?,
         poller,
     };
     let mut frame = vec![0u8; MAX_FRAME];
@@ -276,7 +292,7 @@ fn serve(sock: OwnedFd) -> io::Result<()> {
             full: false,
         };
         for ev in &events {
-            netd.event(ev, &mut out);
+            netd.event(ev, &mut out)?;
         }
         netd.expire(Instant::now(), &mut out);
         while let Some((tag, len)) = end

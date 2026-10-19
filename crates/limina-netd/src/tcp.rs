@@ -13,13 +13,17 @@
 //!   timeout (go-back-N), or for three duplicate ACKs (the one segment). A full buffer stops the
 //!   reads, and the host's own flow control takes over from there.
 //!
+//! A port forward runs the same machine the other way round: netd accepts on the forward's
+//! listening socket, and opens the connection to the guest from the gateway's address, its SYN
+//! first.
+//!
 //! Everything a connection owes the guest (its SYN-ACK, data within the guest's window, its FIN, an
 //! ACK) goes out in `flush`, which may be called again and again: a segment the ring has no room
 //! for is simply not counted as sent, and goes on the next pass.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::time::{Duration, Instant};
 
@@ -190,15 +194,9 @@ fn set_int_opt(fd: RawFd, level: i32, name: i32, value: libc::c_int) -> io::Resu
     Ok(())
 }
 
-/// A non-blocking TCP socket connecting to `dst`, and whether it already has.
-fn connect(dst: SocketAddrV4) -> io::Result<(OwnedFd, bool)> {
-    // SAFETY: a plain syscall; the result is ours.
-    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: just created.
-    let sock = unsafe { OwnedFd::from_raw_fd(fd) };
+/// Readies a host TCP socket for netd: close-on-exec, non-blocking, and without delaying small
+/// writes (the guest's own stack decided when to send them).
+fn prepare(fd: RawFd) -> io::Result<()> {
     // SAFETY: flag changes on our own descriptor.
     unsafe {
         libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
@@ -209,7 +207,19 @@ fn connect(dst: SocketAddrV4) -> io::Result<(OwnedFd, bool)> {
     }
     // A peer's reset must surface as EPIPE, not kill netd.
     set_int_opt(fd, libc::SOL_SOCKET, libc::SO_NOSIGPIPE, 1)?;
-    set_int_opt(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY, 1)?;
+    set_int_opt(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY, 1)
+}
+
+/// A non-blocking TCP socket connecting to `dst`, and whether it already has.
+fn connect(dst: SocketAddrV4) -> io::Result<(OwnedFd, bool)> {
+    // SAFETY: a plain syscall; the result is ours.
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: just created.
+    let sock = unsafe { OwnedFd::from_raw_fd(fd) };
+    prepare(fd)?;
     let addr = libc::sockaddr_in {
         sin_len: size_of::<libc::sockaddr_in>() as u8,
         sin_family: libc::AF_INET as libc::sa_family_t,
@@ -282,6 +292,11 @@ struct Conn {
     sock: OwnedFd,
     /// The host's connect has not answered yet.
     connecting: bool,
+    /// The guest's side of the sequence space is known: always for a connection the guest
+    /// opened, and from its SYN-ACK for one netd opened.
+    synced: bool,
+    /// The window scale netd's SYN offers.
+    offer_scale: Option<u8>,
 
     /// The guest's initial sequence number, and the next it is to send.
     irs: TcpSeqNumber,
@@ -365,7 +380,7 @@ impl Conn {
             dst_port: key.0,
             control,
             seq_number: seq,
-            ack_number: Some(self.rcv_nxt),
+            ack_number: self.synced.then_some(self.rcv_nxt),
             window_len: (wnd >> self.rcv_scale.unwrap_or(0)) as u16,
             window_scale: None,
             max_seg_size: None,
@@ -398,7 +413,7 @@ impl Conn {
             let mut syn = self.header(key, TcpControl::Syn, self.iss);
             // The window in a SYN is never scaled.
             syn.window_len = self.to_host.free().min(u16::MAX as usize) as u16;
-            syn.window_scale = self.rcv_scale;
+            syn.window_scale = self.offer_scale;
             syn.max_seg_size = Some(MSS as u16);
             if !emit(key.1, &syn, &[]) {
                 return false;
@@ -465,6 +480,22 @@ impl Conn {
             self.ack_owed = false;
         }
         true
+    }
+
+    /// The guest's answer to netd's SYN.
+    fn syn_acked_by_guest(&mut self, seg: &TcpRepr<'_>, now: Instant) {
+        self.synced = true;
+        self.irs = seg.seq_number;
+        self.rcv_nxt = seg.seq_number + 1;
+        self.mss = seg.max_seg_size.map_or(536, |m| m as usize).min(MSS);
+        if let Some(scale) = seg.window_scale {
+            self.snd_scale = scale;
+            self.rcv_scale = self.offer_scale;
+        }
+        self.segment(seg, now);
+        // The window in a SYN is never scaled.
+        self.snd_wnd = seg.window_len as usize;
+        self.ack_owed = true;
     }
 
     /// A segment from the guest on this connection (not a SYN, not a RST).
@@ -604,6 +635,8 @@ pub struct TcpNat {
     by_fd: HashMap<RawFd, Key>,
     /// The connections that may owe the guest a segment or the poller an arming.
     dirty: HashSet<Key>,
+    /// The gateway port the last forwarded connection was given.
+    next_port: u16,
 }
 
 impl TcpNat {
@@ -623,6 +656,19 @@ impl TcpNat {
                     self.remove(key, true);
                     return;
                 }
+                TcpControl::Syn if seg.ack_number.is_some() => {
+                    if !c.synced && seg.ack_number == Some(c.iss + 1) {
+                        log::debug!("TCP: {} → guest port {} connected", key.1, key.0);
+                        c.syn_acked_by_guest(seg, now);
+                        self.dirty.insert(key);
+                    } else if c.synced && seg.seq_number == c.irs {
+                        // Its SYN-ACK again: netd's ACK was lost.
+                        c.ack_owed = true;
+                        self.dirty.insert(key);
+                    }
+                    return;
+                }
+                _ if !c.synced => return,
                 TcpControl::Syn if seg.ack_number.is_none() => {
                     if seg.seq_number == c.irs {
                         // Its SYN again: the SYN-ACK was lost (or the connect is still going).
@@ -670,22 +716,81 @@ impl TcpNat {
                 return;
             }
         };
-        // SAFETY: arc4random has no preconditions.
-        let iss = TcpSeqNumber(unsafe { libc::arc4random() } as i32);
-        let scaled = seg.window_scale.is_some();
+        let scale = seg.window_scale.map(|_| RCV_SCALE);
         let conn = Conn {
-            sock,
             connecting: !connected,
+            synced: true,
+            offer_scale: scale,
             irs: seg.seq_number,
             rcv_nxt: seg.seq_number + 1,
+            snd_wnd: seg.window_len as usize,
+            snd_scale: seg.window_scale.unwrap_or(0),
+            rcv_scale: scale,
+            mss: seg.max_seg_size.map_or(536, |m| m as usize).min(MSS),
+            ..Conn::new(sock)
+        };
+        self.by_fd.insert(conn.sock.as_raw_fd(), key);
+        self.conns.insert(key, conn);
+        self.dirty.insert(key);
+    }
+
+    /// Carries a connection accepted on a port forward to the guest's `guest_port`, from the
+    /// gateway's `gateway` address. Beyond `MAX_CONNS`, or with no port left, it is closed.
+    pub fn open_to_guest(&mut self, guest_port: u16, gateway: Ipv4Addr, sock: OwnedFd) {
+        if self.conns.len() >= MAX_CONNS {
+            return;
+        }
+        if let Err(e) = prepare(sock.as_raw_fd()) {
+            log::debug!("TCP forward to guest port {guest_port}: {e}");
+            return;
+        }
+        let Some(key) = self.free_key(guest_port, gateway) else {
+            return;
+        };
+        let conn = Conn {
+            synced: false,
+            offer_scale: Some(RCV_SCALE),
+            ..Conn::new(sock)
+        };
+        self.by_fd.insert(conn.sock.as_raw_fd(), key);
+        self.conns.insert(key, conn);
+        self.dirty.insert(key);
+    }
+
+    /// A source port on the gateway no connection to the guest's `guest_port` uses.
+    fn free_key(&mut self, guest_port: u16, gateway: Ipv4Addr) -> Option<Key> {
+        const FIRST: u16 = 32768;
+        for _ in FIRST..=u16::MAX {
+            self.next_port = self.next_port.max(FIRST).wrapping_add(1).max(FIRST);
+            let key = (guest_port, SocketAddrV4::new(gateway, self.next_port));
+            if !self.conns.contains_key(&key) {
+                return Some(key);
+            }
+        }
+        None
+    }
+}
+
+impl Conn {
+    /// A connection on `sock` with nothing yet known of the guest's side.
+    fn new(sock: OwnedFd) -> Self {
+        // SAFETY: arc4random has no preconditions.
+        let iss = TcpSeqNumber(unsafe { libc::arc4random() } as i32);
+        Self {
+            sock,
+            connecting: false,
+            synced: false,
+            offer_scale: None,
+            irs: TcpSeqNumber(0),
+            rcv_nxt: TcpSeqNumber(0),
             iss,
             snd_una: iss,
             snd_nxt: iss,
             snd_max: iss,
-            snd_wnd: seg.window_len as usize,
-            snd_scale: seg.window_scale.unwrap_or(0),
-            rcv_scale: scaled.then_some(RCV_SCALE),
-            mss: seg.max_seg_size.map_or(536, |m| m as usize).min(MSS),
+            snd_wnd: 0,
+            snd_scale: 0,
+            rcv_scale: None,
+            mss: MSS,
             retain: Bytes::new(RETAIN),
             retain_seq: iss + 1,
             to_host: Bytes::new(TO_HOST),
@@ -703,12 +808,11 @@ impl TcpNat {
             read_armed: false,
             write_armed: false,
             last: Instant::now(),
-        };
-        self.by_fd.insert(conn.sock.as_raw_fd(), key);
-        self.conns.insert(key, conn);
-        self.dirty.insert(key);
+        }
     }
+}
 
+impl TcpNat {
     /// Ends a connection; `abort` resets the host side rather than closing it.
     fn remove(&mut self, key: Key, abort: bool) {
         self.dirty.remove(&key);
@@ -722,7 +826,8 @@ impl TcpNat {
 
     /// Resets a connection on both sides.
     fn abort(&mut self, key: Key, emit: &mut Emit<'_>) {
-        if let Some(c) = self.conns.get_mut(&key) {
+        // Before the guest's SYN-ACK there is nothing on its side to reset.
+        if let Some(c) = self.conns.get_mut(&key).filter(|c| c.synced) {
             let header = if c.connecting {
                 TcpRepr {
                     ack_number: Some(c.irs + 1),
@@ -1156,6 +1261,67 @@ mod tests {
         let mut g = Guest::new();
         g.lose = |n| (300..500).contains(&n);
         round_trip(&mut g, &pattern(1 << 20, 5), &pattern(2 << 20, 6));
+    }
+
+    /// A port forward: netd opens the connection to a guest listening on 22, from the gateway,
+    /// and the bytes and closes cross as they do the other way round.
+    #[test]
+    fn a_forwarded_connection_reaches_the_guest() {
+        let mut g = Guest::new();
+        let mut s = tcp::Socket::new(
+            tcp::SocketBuffer::new(vec![0; 256 * 1024]),
+            tcp::SocketBuffer::new(vec![0; 256 * 1024]),
+        );
+        s.listen(22).unwrap();
+        let h = g.sockets.add(s);
+        // The guest has spoken (its ARP for the gateway) before anything is forwarded to it.
+        let _ = g.connect(1);
+        g.until("the guest to be heard", |g| g.stack.guest_known());
+
+        let (listener, port) = listener();
+        let mut client = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        let gateway = g.stack.link().gateway;
+        g.tcp.open_to_guest(22, gateway, OwnedFd::from(accepted));
+        g.until("the guest to accept", |g| g.socket(h).may_send());
+        assert_eq!(
+            g.socket(h).remote_endpoint().map(|e| e.addr),
+            Some(gateway.into()),
+            "the connection comes from the gateway"
+        );
+
+        client.write_all(b"SSH-2.0-client\r\n").unwrap();
+        let mut got = Vec::new();
+        g.until("the client's bytes", |g| {
+            let mut buf = [0u8; 64];
+            while g.socket(h).can_recv() {
+                let n = g.socket(h).recv_slice(&mut buf).unwrap();
+                got.extend_from_slice(&buf[..n]);
+            }
+            got.ends_with(b"\r\n")
+        });
+        assert_eq!(got, b"SSH-2.0-client\r\n");
+        g.socket(h).send_slice(b"SSH-2.0-guest\r\n").unwrap();
+        g.socket(h).close();
+        client.set_nonblocking(true).unwrap();
+        let mut back = Vec::new();
+        g.until("the guest's bytes and close", |_| {
+            let mut buf = [0u8; 64];
+            match client.read(&mut buf) {
+                Ok(0) => true,
+                Ok(n) => {
+                    back.extend_from_slice(&buf[..n]);
+                    false
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+                Err(e) => panic!("{e}"),
+            }
+        });
+        assert_eq!(back, b"SSH-2.0-guest\r\n");
+        drop(client);
+        g.until("netd to forget the connection", |g| {
+            g.tcp.conns.keys().all(|k| k.0 != 22)
+        });
     }
 
     #[test]

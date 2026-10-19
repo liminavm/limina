@@ -8,6 +8,7 @@
 //! and handed to this worker. Keeping it separate from `VmResources` is what lets the
 //! facade absorb libkrun-internal API churn in one place (decision D2.1).
 
+use std::net::SocketAddrV4;
 use std::path::PathBuf;
 
 use limina_input::touchpad::TouchpadGeometry;
@@ -177,7 +178,16 @@ pub enum NetBackend {
     Vmnet(VmnetMode),
     /// User-mode NAT through a `limina-netd` the worker spawns and talks to over shared rings
     /// (`docs/design/multi-vm-networking.md` §3.2). Needs no entitlement. Experimental.
-    Netd,
+    Netd(NetdSpec),
+}
+
+/// What a NIC on netd is set up with.
+#[derive(Debug, Clone, Default)]
+pub struct NetdSpec {
+    /// Port forwards from the start: host address → guest TCP port.
+    pub forwards: Vec<(SocketAddrV4, u16)>,
+    /// Where the supervisor adds and removes forwards while the VM runs.
+    pub control: Option<ListenAt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

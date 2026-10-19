@@ -55,6 +55,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use limina_launch::connect::Endpoint;
 use std::os::unix::process::CommandExt;
 
 /// Default Homebrew location; overridable with `LIMINA_GVPROXY_BIN`, else found on `PATH`.
@@ -254,19 +255,36 @@ fn describe_wait_status(status: libc::c_int) -> String {
     }
 }
 
-/// The host end of the guest's SSH forward, shared between the [`Gateway`] and whoever moves it
-/// at runtime (the supervisor's runtime socket). Cloning shares the same forward.
+/// The host end of the guest's SSH forward, shared between whoever holds it (a [`Gateway`], or
+/// the worker for a NIC on limina-netd) and whoever moves it at runtime (the supervisor's runtime
+/// socket). Cloning shares the same forward.
 #[derive(Clone)]
 pub struct SshForward {
     port: Arc<Mutex<u16>>,
-    services: PathBuf,
+    mover: Mover,
+}
+
+#[derive(Clone)]
+enum Mover {
+    /// gvproxy's services API, at this socket.
+    Gvproxy(PathBuf),
+    /// The worker's network control link (a NIC on limina-netd).
+    Worker(Endpoint),
 }
 
 impl SshForward {
     fn new(port: u16, socket_path: &Path) -> Self {
         SshForward {
             port: Arc::new(Mutex::new(port)),
-            services: services_path(socket_path),
+            mover: Mover::Gvproxy(services_path(socket_path)),
+        }
+    }
+
+    /// The forward a worker holds for a NIC on limina-netd, moved over its control `link`.
+    pub fn on_worker(port: u16, link: Endpoint) -> Self {
+        SshForward {
+            port: Arc::new(Mutex::new(port)),
+            mover: Mover::Worker(link),
         }
     }
 
@@ -298,17 +316,29 @@ impl SshForward {
             "the SSH port must be between {SSH_PORT_MIN} and 65535, got {port}"
         );
         anyhow::ensure!(port_is_free(port), "host port {port} is already in use");
-        services_post(
-            &self.services,
-            "/services/forwarder/expose",
-            &forward_json(port, true),
-        )
-        .with_context(|| format!("opening the SSH forward on port {port}"))?;
-        if let Err(e) = services_post(
-            &self.services,
-            "/services/forwarder/unexpose",
-            &forward_json(*current, false),
-        ) {
+        let (open, close) = match &self.mover {
+            Mover::Gvproxy(services) => (
+                services_post(
+                    services,
+                    "/services/forwarder/expose",
+                    &forward_json(port, true),
+                ),
+                Box::new(|old: u16| {
+                    services_post(
+                        services,
+                        "/services/forwarder/unexpose",
+                        &forward_json(old, false),
+                    )
+                }) as Box<dyn Fn(u16) -> Result<()>>,
+            ),
+            Mover::Worker(link) => (
+                worker_request(link, &format!("forward 127.0.0.1:{port} 22")),
+                Box::new(|old: u16| worker_request(link, &format!("unforward 127.0.0.1:{old}")))
+                    as Box<dyn Fn(u16) -> Result<()>>,
+            ),
+        };
+        open.with_context(|| format!("opening the SSH forward on port {port}"))?;
+        if let Err(e) = close(*current) {
             // The guest is reachable on the new port either way; the old one lingering until the
             // next gateway restart is untidy, not broken.
             log::warn!("gateway: could not close the old SSH forward on {current}: {e:#}");
@@ -316,6 +346,23 @@ impl SshForward {
         log::info!("gateway: SSH forward moved from {current} to {port}");
         *current = port;
         Ok(())
+    }
+}
+
+/// One request on a worker's network control link, answered `ok` or `error: …`.
+fn worker_request(link: &Endpoint, request: &str) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+    let stream = link
+        .connect()
+        .context("reaching the worker's network control")?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    (&stream).write_all(format!("{request}\n").as_bytes())?;
+    let mut reply = String::new();
+    BufReader::new(&stream).read_line(&mut reply)?;
+    match reply.trim_end() {
+        "ok" => Ok(()),
+        "" => bail!("the worker closed its network control without answering"),
+        other => bail!("{}", other.strip_prefix("error: ").unwrap_or(other)),
     }
 }
 
@@ -697,7 +744,7 @@ fn first_free_port(base: u16, is_free: impl Fn(u16) -> bool) -> Option<u16> {
 /// if it is already in use, so the user gets a clear message instead of a silently-dead forward),
 /// or auto-allocate the first free port from [`DEFAULT_SSH_PORT`] upward when `None` — what lets
 /// two VMs that both omit `--ssh-port` run in parallel without colliding on 2222.
-fn allocate_ssh_port(requested: Option<u16>) -> Result<u16> {
+pub(crate) fn allocate_ssh_port(requested: Option<u16>) -> Result<u16> {
     match requested {
         Some(p) if port_is_free(p) => Ok(p),
         Some(p) => bail!(

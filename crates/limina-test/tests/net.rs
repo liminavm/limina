@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! L2 networking test: the stock Fedora image gets user-mode NAT through limina.
+//! L2 networking tests: the stock Fedora image gets user-mode NAT through limina, on each NIC
+//! that provides it — a gvproxy gateway the supervisor runs (`--net`), and a `limina-netd` the
+//! worker spawns (`--net-netd`).
 //!
-//! Drives the real `limina` supervisor → it spawns + supervises a gvproxy gateway and
-//! connects the guest's virtio-net to it (`--net`). The oracle is **host-side**: gvproxy's
-//! `-debug` packet log (`--net-log`), because the pristine Fedora image is silent on serial
-//! after GRUB (no `console=`), so the guest console can't witness DHCP/DNS. A DHCP Ack plus
-//! an outbound DNS query prove the whole path: VFKT handshake → link → DHCP lease → NAT.
+//! The oracles are **host-side**, because the pristine Fedora image is silent on serial after
+//! GRUB (no `console=`), so the guest console can't witness DHCP or DNS: gvproxy's `-debug` packet
+//! log (`--net-log`), and netd's own account of its leases and answers, which lands in the
+//! supervisor's log. A lease plus an outbound DNS question prove the whole path: link → DHCP →
+//! NAT; the SSH forward proves the way in.
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
@@ -15,53 +17,79 @@ use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
-#[test]
-fn fedora_gets_nat_dhcp_and_outbound() {
-    if !limina_test::require_hvf_or_skip("fedora_gets_nat_dhcp_and_outbound") {
-        return;
+/// The NIC a test runs on.
+#[derive(Clone, Copy, Debug)]
+enum Nic {
+    Gvproxy,
+    Netd,
+}
+
+impl Nic {
+    fn config(self) -> GuestConfig {
+        let cfg = GuestConfig::fedora_from_env().expect("resolving guest config");
+        match self {
+            Nic::Gvproxy => cfg.with_net(),
+            Nic::Netd => cfg
+                .with_net_netd()
+                .with_supervisor_log()
+                .with_env("RUST_LOG", "warn,limina_netd=debug"),
+        }
     }
 
-    let cfg = GuestConfig::fedora_from_env()
-        .expect("resolving guest config")
-        .with_net()
-        .with_ssh_target_check();
-    eprintln!(
-        "booting Fedora (writable COW clone) with user-mode NAT via {:?}",
-        cfg.limina_bin
-    );
+    /// Waits for the guest's DHCP lease of 192.168.127.2, the address the SSH forward lands on.
+    /// Full userspace boot (firmware → GRUB → kernel → systemd → NM) takes a while.
+    fn wait_for_lease(self, guest: &mut Guest, timeout: Duration) -> anyhow::Result<()> {
+        match self {
+            Nic::Gvproxy => {
+                guest.wait_for_gateway_log("MessageType:Ack", timeout)?;
+                anyhow::ensure!(
+                    guest.gateway_log().contains("YourClientIP=192.168.127.2 "),
+                    "expected the static 192.168.127.2 lease in the gateway log"
+                );
+                Ok(())
+            }
+            Nic::Netd => guest.wait_for_supervisor_log("DHCP: leased 192.168.127.2", timeout),
+        }
+    }
 
+    /// Waits for the guest's first DNS question at the gateway: it routes off-link, not just
+    /// holds a lease.
+    fn wait_for_dns(self, guest: &mut Guest, timeout: Duration) -> anyhow::Result<()> {
+        match self {
+            Nic::Gvproxy => guest.wait_for_gateway_log("DstPort=53(domain)", timeout),
+            Nic::Netd => guest.wait_for_supervisor_log("DNS: answered", timeout),
+        }
+    }
+
+    /// What the NIC's log says about the guest's MAC.
+    fn log(self, guest: &Guest) -> String {
+        match self {
+            Nic::Gvproxy => guest.gateway_log(),
+            Nic::Netd => guest.supervisor_log(),
+        }
+    }
+}
+
+fn nat_dhcp_and_outbound(nic: Nic) {
+    let cfg = nic.config().with_ssh_target_check();
+    eprintln!("booting Fedora (writable COW clone) with user-mode NAT on {nic:?}");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
-    // DHCP: gvproxy ACKs the guest's request once NetworkManager brings the link up. Full
-    // userspace boot (firmware → GRUB → kernel → systemd → NM) takes a while, so be patient.
-    guest
-        .wait_for_gateway_log("MessageType:Ack", Duration::from_secs(150))
-        .expect("guest never obtained a DHCP lease from gvproxy");
-
-    // Outbound NAT: an outbound DNS query (to gvproxy's resolver at .1:53) proves the guest
-    // can route off-link, not just hold a lease.
-    guest
-        .wait_for_gateway_log("DstPort=53(domain)", Duration::from_secs(45))
+    nic.wait_for_lease(&mut guest, Duration::from_secs(150))
+        .expect("guest never obtained its DHCP lease");
+    nic.wait_for_dns(&mut guest, Duration::from_secs(45))
         .expect("guest never made an outbound DNS query");
 
-    // The well-known vfkit MAC gets gvproxy's static `.2` lease (deterministic guest IP),
-    // which is what makes the built-in 127.0.0.1:2222 → .2:22 forward land on the guest.
-    let log = guest.gateway_log();
-    assert!(
-        log.contains("YourClientIP=192.168.127.2 "),
-        "expected the static 192.168.127.2 lease in the gateway log"
-    );
-
-    // Inbound NAT: gvproxy's default port-forward reaches the guest's sshd — the path that
-    // makes `ssh -p 2222 user@127.0.0.1` work (what the M3 SSH goal is for).
+    // Inbound: the SSH forward reaches the guest's sshd — the path that makes
+    // `ssh -p <port> user@127.0.0.1` work (what the M3 SSH goal is for).
     let banner = guest
         .wait_for_ssh(Duration::from_secs(30))
-        .expect("guest SSH not reachable through the gvproxy forward");
+        .expect("guest SSH not reachable through the forward");
     eprintln!("guest SSH reachable: {banner}");
 
     // Clean teardown. Stock Fedora ignores the GPIO power button, so the supervisor
     // force-kills the worker after its short grace — still a clean supervisor stop. The
-    // gateway must be torn down with it (the supervisor kills gvproxy on exit).
+    // NIC's helper goes with it.
     let outcome = guest
         .shutdown(Duration::from_secs(20))
         .expect("supervisor did not stop");
@@ -72,37 +100,40 @@ fn fedora_gets_nat_dhcp_and_outbound() {
     );
 }
 
-/// Per-VM network config → run two VMs in parallel (the multi-VM goal: design doc Phase 2).
-///
-/// Two stock Fedora guests boot AT ONCE, each its own gvproxy NAT island, each on a DISTINCT
-/// host SSH-forward port — the harness's AUTO-ALLOCATED ephemeral ports (the default path every
-/// test rides), not explicit ones. The proof is end-to-end and concurrent: both gateways must
-/// independently lease (two separate NAT islands), both guests must answer SSH on their own host
-/// port at the same time, AND each harness handle must demonstrably reach ITS OWN guest (identity
-/// markers) — banner-answering alone can't catch a port mix-up because all test guests share
-/// creds, which is exactly how the assume-2222 crosstalk stayed invisible.
 #[test]
-fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
-    if !limina_test::require_hvf_or_skip("two_vms_run_in_parallel_on_distinct_ssh_ports") {
-        return;
+fn fedora_gets_nat_dhcp_and_outbound() {
+    if limina_test::require_hvf_or_skip("fedora_gets_nat_dhcp_and_outbound") {
+        nat_dhcp_and_outbound(Nic::Gvproxy);
     }
+}
 
+#[test]
+fn fedora_gets_nat_dhcp_and_outbound_on_netd() {
+    if limina_test::require_hvf_or_skip("fedora_gets_nat_dhcp_and_outbound_on_netd") {
+        nat_dhcp_and_outbound(Nic::Netd);
+    }
+}
+
+/// Per-VM network config → run two VMs in parallel (the multi-VM goal).
+///
+/// Two stock Fedora guests boot AT ONCE, each its own NAT island, each on a DISTINCT host
+/// SSH-forward port — the harness's AUTO-ALLOCATED ephemeral ports (the default path every test
+/// rides), not explicit ones. The proof is end-to-end and concurrent: both must independently
+/// lease (two separate NAT islands), both guests must answer SSH on their own host port at the
+/// same time, AND each harness handle must demonstrably reach ITS OWN guest (identity markers) —
+/// banner-answering alone can't catch a port mix-up because all test guests share creds, which is
+/// exactly how the assume-2222 crosstalk stayed invisible.
+fn two_vms_in_parallel(nic: Nic) {
     // NO explicit ports: this exercises the harness's pre-allocated ephemeral ssh-forward
     // ports (the default path every other test rides). Assuming the supervisor default (2222)
     // here once sent every ssh_exec into a BYSTANDER VM's guest when a dev VM held 2222 —
     // identical test creds made every check "pass" against the wrong guest.
-    // Each VM cow-clones its own writable disk via with_net, so the two share nothing on disk.
-    let cfg_a = GuestConfig::fedora_from_env()
-        .expect("resolving guest config A")
-        .with_net()
-        .with_ssh_target_check();
-    let cfg_b = GuestConfig::fedora_from_env()
-        .expect("resolving guest config B")
-        .with_net()
-        .with_ssh_target_check();
+    // Each VM cow-clones its own writable disk, so the two share nothing on disk.
+    let cfg_a = nic.config().with_ssh_target_check();
+    let cfg_b = nic.config().with_ssh_target_check();
 
     // Boot BOTH before waiting on either, so they come up concurrently (wall-clock ~= one boot).
-    eprintln!("booting two Fedora VMs in parallel on auto-allocated ssh ports");
+    eprintln!("booting two Fedora VMs in parallel on {nic:?}, on auto-allocated ssh ports");
     let mut a = Guest::boot(&cfg_a).expect("spawning supervisor A");
     let mut b = Guest::boot(&cfg_b).expect("spawning supervisor B");
     assert_ne!(
@@ -111,11 +142,11 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
         "the two VMs were given the same ssh-forward port — parallel VMs would collide"
     );
 
-    // Both gateways lease independently — two live NAT islands, not one shared (and proves B's
-    // gvproxy didn't fail to start behind A's).
-    a.wait_for_gateway_log("MessageType:Ack", Duration::from_secs(180))
+    // Both lease independently — two live NAT islands, not one shared (and proves B's NIC
+    // didn't fail to start behind A's).
+    nic.wait_for_lease(&mut a, Duration::from_secs(180))
         .expect("VM A never obtained a DHCP lease");
-    b.wait_for_gateway_log("MessageType:Ack", Duration::from_secs(180))
+    nic.wait_for_lease(&mut b, Duration::from_secs(180))
         .expect("VM B never obtained a DHCP lease (second VM did not come up in parallel)");
 
     // The headline: both guests answer SSH on their OWN forward port, simultaneously.
@@ -153,7 +184,8 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
     assert_eq!(id_a.trim(), "vm-a", "handle A is not talking to guest A");
     assert_eq!(id_b.trim(), "vm-b", "handle B is not talking to guest B");
 
-    // Tear both down cleanly; neither teardown may need forcing (gateway killed with each).
+    // Tear both down cleanly; neither teardown may need forcing (the NIC's helper goes with
+    // each).
     let oa = a
         .shutdown(Duration::from_secs(20))
         .expect("supervisor A did not stop");
@@ -167,48 +199,118 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
     );
 }
 
-/// Per-VM MAC (managed VMs' persistent MAC from vm.toml): a custom `--net-mac` must not
-/// break the deterministic network identity. The supervisor rebinds gvproxy's static `.2`
-/// lease to the custom MAC via a generated config file (in config mode gvproxy installs
-/// NO default forwards/leases, and `-ssh-port` is ignored — the config must carry both).
-/// The proof is end-to-end: the DHCP Ack goes to the custom MAC, the guest still gets the
-/// static 192.168.127.2, and the SSH forward still lands on it.
 #[test]
-fn custom_guest_mac_keeps_the_static_lease_and_ssh_forward() {
-    if !limina_test::require_hvf_or_skip("custom_guest_mac_keeps_the_static_lease_and_ssh_forward")
-    {
-        return;
+fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
+    if limina_test::require_hvf_or_skip("two_vms_run_in_parallel_on_distinct_ssh_ports") {
+        two_vms_in_parallel(Nic::Gvproxy);
     }
+}
 
+#[test]
+fn two_vms_run_in_parallel_on_distinct_ssh_ports_on_netd() {
+    if limina_test::require_hvf_or_skip("two_vms_run_in_parallel_on_distinct_ssh_ports_on_netd") {
+        two_vms_in_parallel(Nic::Netd);
+    }
+}
+
+/// Per-VM MAC (managed VMs' persistent MAC from vm.toml): a custom `--net-mac` must not break the
+/// deterministic network identity. On gvproxy the supervisor rebinds its static `.2` lease to the
+/// custom MAC via a generated config file (in config mode gvproxy installs NO default
+/// forwards/leases, and `-ssh-port` is ignored — the config must carry both); netd leases `.2` to
+/// whichever MAC asks. The proof is end-to-end: the lease goes to the custom MAC, the guest still
+/// gets the static 192.168.127.2, and the SSH forward still lands on it.
+fn custom_mac(nic: Nic) {
     const MAC: &str = "5a:11:22:33:44:55";
-    let cfg = GuestConfig::fedora_from_env()
-        .expect("resolving guest config")
-        .with_net_mac(MAC)
-        .with_ssh_target_check();
+    let cfg = nic.config().with_net_mac(MAC).with_ssh_target_check();
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
-    guest
-        .wait_for_gateway_log("MessageType:Ack", Duration::from_secs(150))
-        .expect("guest never obtained a DHCP lease from gvproxy (custom MAC)");
+    nic.wait_for_lease(&mut guest, Duration::from_secs(150))
+        .expect("guest never obtained its DHCP lease (custom MAC)");
 
-    let log = guest.gateway_log();
+    let log = nic.log(&guest);
     assert!(
         log.contains(MAC),
-        "the gateway packet log must show traffic from the custom MAC {MAC}"
+        "the NIC's log must show traffic from the custom MAC {MAC}"
     );
     assert!(
         !log.contains("5a:94:ef:e4:0c:ee"),
         "the well-known vfkit MAC must NOT appear — the NIC really carries the custom MAC"
     );
-    assert!(
-        log.contains("YourClientIP=192.168.127.2 "),
-        "the static .2 lease must follow the custom MAC (config-file rebind)"
-    );
 
     let banner = guest
         .wait_for_ssh(Duration::from_secs(30))
-        .expect("SSH forward broken with a custom MAC (config-mode forward missing?)");
+        .expect("SSH forward broken with a custom MAC");
     eprintln!("guest SSH reachable with custom MAC: {banner}");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "teardown had to be forced");
+}
+
+#[test]
+fn custom_guest_mac_keeps_the_static_lease_and_ssh_forward() {
+    if limina_test::require_hvf_or_skip("custom_guest_mac_keeps_the_static_lease_and_ssh_forward") {
+        custom_mac(Nic::Gvproxy);
+    }
+}
+
+#[test]
+fn custom_guest_mac_keeps_the_static_lease_and_ssh_forward_on_netd() {
+    if limina_test::require_hvf_or_skip(
+        "custom_guest_mac_keeps_the_static_lease_and_ssh_forward_on_netd",
+    ) {
+        custom_mac(Nic::Netd);
+    }
+}
+
+/// The SSH forward moves while the VM runs (`limina ssh-port <vm> <port>`): on netd the worker
+/// binds the new port and hands it to netd before the old one closes, so the guest is reachable on
+/// the new port and no longer on the old.
+#[test]
+fn the_ssh_forward_moves_while_the_vm_runs_on_netd() {
+    if !limina_test::require_hvf_or_skip("the_ssh_forward_moves_while_the_vm_runs_on_netd") {
+        return;
+    }
+    let cfg = Nic::Netd.config().with_ssh_target_check();
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    Nic::Netd
+        .wait_for_lease(&mut guest, Duration::from_secs(150))
+        .expect("guest never obtained its DHCP lease");
+    guest
+        .wait_for_ssh(Duration::from_secs(60))
+        .expect("guest SSH not reachable through the forward");
+
+    let old = guest.ssh_port();
+    let new = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("probing a free port")
+        .port();
+    let pid = guest.supervisor_pid();
+    let out = std::process::Command::new(&cfg.limina_bin)
+        .args(["ssh-port", &pid.to_string(), &new.to_string()])
+        .output()
+        .expect("running limina ssh-port");
+    assert!(
+        out.status.success(),
+        "limina ssh-port {new} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let banner = limina_test::wait_for_ssh_on(new, Duration::from_secs(30), || {
+        limina_test::pid_path(pid).is_some()
+    })
+    .expect("guest SSH not reachable on the moved port");
+    eprintln!("guest SSH reachable on the moved port {new}: {banner}");
+    assert!(
+        std::net::TcpStream::connect(("127.0.0.1", old)).is_err(),
+        "the old port {old} still accepts"
+    );
+    let now = std::process::Command::new(&cfg.limina_bin)
+        .args(["ssh-port", &pid.to_string()])
+        .output()
+        .expect("running limina ssh-port");
+    assert_eq!(String::from_utf8_lossy(&now.stdout).trim(), new.to_string());
 
     let outcome = guest
         .shutdown(Duration::from_secs(20))

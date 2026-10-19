@@ -38,6 +38,8 @@ pub struct SessionConfig {
     pub width: u32,
     pub height: u32,
     pub gateway: Option<gateway::Gateway>,
+    /// The guest's SSH forward, whichever NIC holds it.
+    pub ssh: Option<gateway::SshForward>,
     pub control: Option<control::ControlPlane>,
     pub resize_socket: Option<Endpoint>,
     pub remap: limina_input::keymap::KeyRemap,
@@ -308,6 +310,7 @@ impl WindowedSession {
             width,
             height,
             gateway,
+            ssh,
             control,
             resize_socket,
             remap,
@@ -359,7 +362,7 @@ impl WindowedSession {
                 .as_ref()
                 .and_then(|p| p.parent())
                 .map(|p| p.to_path_buf()),
-            ssh: gateway.as_ref().map(|g| g.forward()),
+            ssh,
         };
 
         // The resolution the guest is currently driven to — written by the window on every

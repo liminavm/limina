@@ -8,22 +8,172 @@
 //! Waking follows the rings' handshake. A frame for netd rings its doorbell only when netd has
 //! parked; on the way back, the worker parks the guest ring when it runs dry and netd rings the
 //! socket, which libkrun's net worker watches as this backend's descriptor.
+//!
+//! Port forwards are the worker's too ([`Forwards`]): it binds each listening socket and hands
+//! netd a copy over the control pair (descriptor 4), and again to every netd that replaces it, so
+//! a forward's port stays taken for the VM's life.
 
 use std::ffi::CString;
-use std::io;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::{SocketAddrV4, TcpListener};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use devices::virtio::net::backend::{
     ConnectError, ExternalBackend, NetBackend, ReadError, Reconnect, SysError, WriteError,
 };
-use limina_netd_wire::{TAG_FRAME, WorkerEnd, drain, ring, socketpair};
+use limina_launch::connect::ListenAt;
+use limina_netd_wire::{
+    CHANNEL_FD, CONTROL_FD, Control, TAG_FRAME, WorkerEnd, control_socketpair, drain, ring,
+    send_control, socketpair,
+};
 use limina_ring::PushError;
 
-/// The descriptor netd finds its end of the channel on.
-const NETD_CHANNEL_FD: RawFd = 3;
+struct Forward {
+    id: u32,
+    host: SocketAddrV4,
+    guest_port: u16,
+    listener: TcpListener,
+}
+
+#[derive(Default)]
+struct Table {
+    next_id: u32,
+    forwards: Vec<Forward>,
+    /// The running netd's control pair.
+    ctl: Option<OwnedFd>,
+}
+
+/// The NIC's port forwards, shared between the backend (which hands them to each netd it
+/// starts) and the control link (which changes them while the VM runs).
+#[derive(Default)]
+pub struct Forwards(Mutex<Table>);
+
+impl Forwards {
+    fn table(&self) -> std::sync::MutexGuard<'_, Table> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Binds `host` and carries its connections to the guest's `guest_port`. A port that is
+    /// taken fails here, and nothing changes.
+    pub fn add(&self, host: SocketAddrV4, guest_port: u16) -> io::Result<()> {
+        let mut t = self.table();
+        if t.forwards.iter().any(|f| f.host == host) {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                format!("{host} is already forwarded"),
+            ));
+        }
+        let listener = TcpListener::bind(host)?;
+        let id = t.next_id;
+        t.next_id += 1;
+        if let Some(ctl) = &t.ctl {
+            // A dead netd gets the forward with the rest when its replacement starts.
+            let _ = send_control(
+                ctl.as_fd(),
+                Control::Listen { id, guest_port },
+                Some(listener.as_fd()),
+            );
+        }
+        log::info!("virtio-net: forwarding {host} to guest port {guest_port}");
+        t.forwards.push(Forward {
+            id,
+            host,
+            guest_port,
+            listener,
+        });
+        Ok(())
+    }
+
+    /// Stops forwarding `host`; connections already carried stay up.
+    pub fn remove(&self, host: SocketAddrV4) -> io::Result<()> {
+        let mut t = self.table();
+        let i = t
+            .forwards
+            .iter()
+            .position(|f| f.host == host)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, format!("{host} is not forwarded"))
+            })?;
+        let f = t.forwards.remove(i);
+        if let Some(ctl) = &t.ctl {
+            let _ = send_control(ctl.as_fd(), Control::Close { id: f.id }, None);
+        }
+        log::info!("virtio-net: no longer forwarding {host}");
+        Ok(())
+    }
+
+    /// Hands every forward to a freshly started netd on its control pair.
+    fn attach(&self, ctl: OwnedFd) {
+        let mut t = self.table();
+        for f in &t.forwards {
+            let msg = Control::Listen {
+                id: f.id,
+                guest_port: f.guest_port,
+            };
+            if let Err(e) = send_control(ctl.as_fd(), msg, Some(f.listener.as_fd())) {
+                log::warn!("virtio-net: handing netd the forward of {}: {e}", f.host);
+            }
+        }
+        t.ctl = Some(ctl);
+    }
+}
+
+/// Serves the NIC's control link: one thread, one request line at a time, answered `ok` or
+/// `error: …`.
+pub fn serve_control(at: ListenAt, forwards: Arc<Forwards>) -> anyhow::Result<()> {
+    let listener = at.listen()?;
+    std::thread::Builder::new()
+        .name("net-control".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(s) => serve_client(s, &forwards),
+                    Err(e) => log::error!("net-control: accept failed: {e}"),
+                }
+            }
+        })?;
+    Ok(())
+}
+
+fn serve_client(stream: UnixStream, forwards: &Forwards) {
+    let Ok(mut out) = stream.try_clone() else {
+        return;
+    };
+    for line in BufReader::new(stream).lines() {
+        let Ok(line) = line else { break };
+        let reply = match answer(&line, forwards) {
+            Ok(()) => "ok\n".to_string(),
+            Err(e) => format!("error: {e}\n"),
+        };
+        if out.write_all(reply.as_bytes()).is_err() {
+            break;
+        }
+    }
+}
+
+fn answer(line: &str, forwards: &Forwards) -> Result<(), String> {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let host = |s: &str| {
+        s.parse::<SocketAddrV4>()
+            .map_err(|e| format!("{s:?} is not HOST_IP:PORT: {e}"))
+    };
+    match words.as_slice() {
+        ["forward", h, guest] => {
+            let guest: u16 = guest
+                .parse()
+                .map_err(|e| format!("{guest:?} is not a port: {e}"))?;
+            forwards.add(host(h)?, guest).map_err(|e| e.to_string())
+        }
+        ["unforward", h] => forwards.remove(host(h)?).map_err(|e| e.to_string()),
+        _ => Err(format!(
+            "unknown request {line:?} (have: forward HOST_IP:PORT GUEST_PORT, unforward HOST_IP:PORT)"
+        )),
+    }
+}
 
 /// netd's binary: next to this one, as cargo and the app bundle both lay them out.
 pub fn netd_exe() -> Option<PathBuf> {
@@ -32,9 +182,9 @@ pub fn netd_exe() -> Option<PathBuf> {
 }
 
 /// The libkrun backend builder for a NIC on netd.
-pub fn backend(exe: PathBuf) -> ExternalBackend {
+pub fn backend(exe: PathBuf, forwards: Arc<Forwards>) -> ExternalBackend {
     Arc::new(move |_features| {
-        Netd::start(&exe)
+        Netd::start(&exe, &forwards)
             .map(|n| Box::new(n) as Box<dyn NetBackend + Send>)
             .map_err(|e| ConnectError::External(format!("starting {}: {e}", exe.display())))
     })
@@ -43,20 +193,25 @@ pub fn backend(exe: PathBuf) -> ExternalBackend {
 /// One running netd and this worker's end of its channel.
 struct Netd {
     exe: PathBuf,
+    forwards: Arc<Forwards>,
     /// `None` once it has been killed and reaped: a reaped pid may already name someone else.
     pid: Option<libc::pid_t>,
     end: WorkerEnd,
 }
 
 impl Netd {
-    fn start(exe: &Path) -> io::Result<Self> {
+    fn start(exe: &Path, forwards: &Arc<Forwards>) -> io::Result<Self> {
         let (ours, theirs) = socketpair()?;
-        // The region goes out before netd exists; the socket holds the setup message for it.
+        let (ctl_ours, ctl_theirs) = control_socketpair()?;
+        // The region goes out before netd exists; the socket holds the setup message for it, as
+        // the control pair holds the forwards.
         let end = WorkerEnd::new(ours)?;
-        let pid = spawn(exe, theirs)?;
+        let pid = spawn(exe, theirs, ctl_theirs)?;
         log::info!("virtio-net: started limina-netd (pid {pid})");
+        forwards.attach(ctl_ours);
         Ok(Self {
             exe: exe.to_path_buf(),
+            forwards: forwards.clone(),
             pid: Some(pid),
             end,
         })
@@ -137,7 +292,7 @@ impl NetBackend for Netd {
     /// (netd leases the one address it has); its open connections are gone.
     fn reconnect(&mut self) -> Reconnect {
         kill(&mut self.pid);
-        match Netd::start(&self.exe) {
+        match Netd::start(&self.exe, &self.forwards) {
             Ok(fresh) => {
                 *self = fresh;
                 Reconnect::Done
@@ -178,10 +333,24 @@ unsafe extern "C" {
     ) -> libc::c_int;
 }
 
-/// Starts netd with `channel` as its descriptor 3, stdin on /dev/null, our stdout and stderr (so
-/// its log lands in the worker's), and nothing else: every other descriptor is closed in the
-/// child, whatever its close-on-exec flag says.
-fn spawn(exe: &Path, channel: OwnedFd) -> io::Result<libc::pid_t> {
+/// A close-on-exec copy of `fd` at 10 or above, clear of the descriptors netd is given.
+fn above_targets(fd: &OwnedFd) -> io::Result<OwnedFd> {
+    // SAFETY: duplicating a descriptor we hold; the copy is ours.
+    let dup = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 10) };
+    if dup < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: just created.
+    Ok(unsafe { OwnedFd::from_raw_fd(dup) })
+}
+
+/// Starts netd with `channel` as its descriptor 3 and `control` as 4, stdin on /dev/null, our
+/// stdout and stderr (so its log lands in the worker's), and nothing else: every other descriptor
+/// is closed in the child, whatever its close-on-exec flag says.
+fn spawn(exe: &Path, channel: OwnedFd, control: OwnedFd) -> io::Result<libc::pid_t> {
+    // Copies above both targets, so neither dup2 can land on the other's source.
+    let channel = above_targets(&channel)?;
+    let control = above_targets(&control)?;
     let path = CString::new(exe.as_os_str().as_bytes())
         .map_err(|_| io::Error::other("netd path has a NUL"))?;
     let argv = [path.as_ptr(), std::ptr::null()];
@@ -216,14 +385,11 @@ fn spawn(exe: &Path, channel: OwnedFd) -> io::Result<libc::pid_t> {
             ))?;
             check(posix_spawn_file_actions_addinherit_np(&mut actions, 1))?;
             check(posix_spawn_file_actions_addinherit_np(&mut actions, 2))?;
-            let fd = channel.as_raw_fd();
-            if fd == NETD_CHANNEL_FD {
-                check(posix_spawn_file_actions_addinherit_np(&mut actions, fd))?;
-            } else {
+            for (fd, target) in [(&channel, CHANNEL_FD), (&control, CONTROL_FD)] {
                 check(libc::posix_spawn_file_actions_adddup2(
                     &mut actions,
-                    fd,
-                    NETD_CHANNEL_FD,
+                    fd.as_raw_fd(),
+                    target,
                 ))?;
             }
             let mut pid = 0;

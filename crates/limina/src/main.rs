@@ -2191,7 +2191,6 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             "guest SSH forward ready: ssh -p {} <user>@127.0.0.1",
             gw.ssh_port()
         );
-        runtime_ctl::set_forward(Some(gw.forward()));
         args.push("--net-gvproxy".into());
         args.push(path_arg(gw.socket_path())?);
         if let Some(mac) = &cli.net_mac {
@@ -2206,6 +2205,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         cli.net_mac.is_none() || cli.net || cli.net_vmnet.is_some() || cli.net_netd,
         "--net-mac needs a NIC: pass --net, --net-vmnet or --net-netd"
     );
+    let mut ssh_forward = gateway.as_ref().map(|g| g.forward());
     if cli.net_netd {
         println!("limina-netd NIC");
         args.push("--net-netd".into());
@@ -2213,7 +2213,23 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             args.push("--net-mac".into());
             args.push(mac.clone());
         }
+        // The worker binds the SSH forward (netd carries its connections), so it is up by the
+        // time the guest is; the port is checked here so a taken one fails before the boot.
+        if let Some(p) = cli.ssh_port {
+            anyhow::ensure!(
+                p >= gateway::SSH_PORT_MIN,
+                "--ssh-port must be between {} and 65535, got {p}",
+                gateway::SSH_PORT_MIN
+            );
+        }
+        let port = gateway::allocate_ssh_port(cli.ssh_port)?;
+        args.push("--net-forward".into());
+        args.push(format!("127.0.0.1:{port}:22"));
+        let link = worker_link(&mut links, "--net-control-fd");
+        ssh_forward = Some(gateway::SshForward::on_worker(port, link));
+        println!("guest SSH forward ready: ssh -p {port} <user>@127.0.0.1");
     }
+    runtime_ctl::set_forward(ssh_forward.clone());
     if let Some(mode) = &cli.net_vmnet {
         // Every vmnet guest of a mode shares one segment, so the fixed vfkit MAC that gives
         // gvproxy's islands their static lease would collide between two VMs here.
@@ -2382,6 +2398,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             width,
             height,
             gateway,
+            ssh: ssh_forward,
             control,
             resize_socket,
             remap,

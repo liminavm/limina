@@ -82,6 +82,12 @@ impl Stack {
         &self.link
     }
 
+    /// Whether the guest has said anything on the link yet: until it has, it has no address to
+    /// carry a forwarded connection to.
+    pub fn guest_known(&self) -> bool {
+        self.guest_mac.is_some()
+    }
+
     /// Handles one frame from the guest. Frames netd answers on the link (ARP, DHCP) go to
     /// `reply`; what has to leave the link comes back.
     pub fn handle<'a>(
@@ -318,11 +324,11 @@ impl Stack {
             (src_mac, self.link.guest)
         };
         if answer == DhcpMessageType::Ack {
-            log::info!(
-                "DHCP: leased {} to {}",
-                self.link.guest,
-                request.client_hardware_address
-            );
+            let mac = request
+                .client_hardware_address
+                .0
+                .map(|b| format!("{b:02x}"));
+            log::info!("DHCP: leased {} to {}", self.link.guest, mac.join(":"));
         }
         let mut msg = vec![0u8; repr.buffer_len()];
         repr.emit(&mut DhcpPacket::new_unchecked(&mut msg[..]))

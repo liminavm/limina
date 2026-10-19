@@ -722,13 +722,23 @@ fn net_device(net: &NetSpec) -> Result<NetDevice> {
             NetDevice::new_vmnet("eth0", mode, bridged, &mac, NET_VMNET_FEATURES)
                 .map_err(|e| anyhow!("virtio-net (vmnet): {e:?}"))
         }
-        NetBackend::Netd => {
+        NetBackend::Netd(spec) => {
             let exe = netd::netd_exe().context("locating limina-netd")?;
             anyhow::ensure!(exe.exists(), "limina-netd is not at {}", exe.display());
+            let forwards = Arc::new(netd::Forwards::default());
+            for &(host, guest_port) in &spec.forwards {
+                forwards
+                    .add(host, guest_port)
+                    .with_context(|| format!("forwarding {host} to guest port {guest_port}"))?;
+            }
+            if let Some(at) = spec.control.clone() {
+                netd::serve_control(at, forwards.clone())
+                    .context("listening for network control")?;
+            }
             // netd sets each frame's header itself, so the device's checksum flag has no say.
             NetDevice::new_external(
                 "eth0",
-                netd::backend(exe),
+                netd::backend(exe, forwards),
                 &mac,
                 NET_NETD_FEATURES,
                 NetFlags::empty(),

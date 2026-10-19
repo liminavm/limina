@@ -15,12 +15,21 @@
 //!
 //! The region is a POSIX shared-memory object whose random name is unlinked straight after it is
 //! created, before it is sized, so it can be neither left behind nor opened by name later.
+//!
+//! A second pair, of datagrams ([`control_socketpair`]), carries the VM's port forwards: the
+//! worker binds each forward's listening socket and hands it over ([`Control::Listen`]), so the
+//! port stays the worker's across a netd restart and netd never binds one itself.
 
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
 
 use limina_ring::{Consumer, Producer};
+
+/// The descriptor netd finds the channel at.
+pub const CHANNEL_FD: i32 = 3;
+/// The descriptor netd finds the control pair at.
+pub const CONTROL_FD: i32 = 4;
 
 /// The ring protocol number both ends check, and the setup message's magic.
 pub const PROTOCOL: u32 = u32::from_le_bytes(*b"NTD1");
@@ -195,13 +204,10 @@ pub fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<()> {
     set_flag(fd, libc::F_GETFL, libc::F_SETFL, libc::O_NONBLOCK)
 }
 
-/// A connected pair for a worker and its netd. Both ends are close-on-exec, so another child of
-/// the worker never holds netd's end open past netd's death; and neither raises `SIGPIPE`, so a
-/// write to a dead peer is an error, not the end of the process.
-pub fn socketpair() -> io::Result<(OwnedFd, OwnedFd)> {
+fn pair(kind: libc::c_int) -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0; 2];
     // SAFETY: a two-element array for the pair.
-    if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) } != 0 {
+    if unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, fds.as_mut_ptr()) } != 0 {
         return last_error();
     }
     // SAFETY: both are ours, just created.
@@ -226,9 +232,20 @@ pub fn socketpair() -> io::Result<(OwnedFd, OwnedFd)> {
     Ok(pair)
 }
 
-/// Sends the setup message and the region's descriptor.
-fn send_setup(sock: BorrowedFd<'_>, region: BorrowedFd<'_>) -> io::Result<()> {
-    let body = Setup::ours().encode();
+/// A connected pair for a worker and its netd. Both ends are close-on-exec, so another child of
+/// the worker never holds netd's end open past netd's death; and neither raises `SIGPIPE`, so a
+/// write to a dead peer is an error, not the end of the process.
+pub fn socketpair() -> io::Result<(OwnedFd, OwnedFd)> {
+    pair(libc::SOCK_STREAM)
+}
+
+/// The control pair, as [`socketpair`] but of datagrams, each one [`Control`] message.
+pub fn control_socketpair() -> io::Result<(OwnedFd, OwnedFd)> {
+    pair(libc::SOCK_DGRAM)
+}
+
+/// Sends `body` with `fd`, if any, attached.
+fn send_msg(sock: BorrowedFd<'_>, body: &[u8], fd: Option<BorrowedFd<'_>>) -> io::Result<()> {
     let mut iov = libc::iovec {
         iov_base: body.as_ptr() as *mut _,
         iov_len: body.len(),
@@ -240,17 +257,19 @@ fn send_setup(sock: BorrowedFd<'_>, region: BorrowedFd<'_>) -> io::Result<()> {
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
-    msg.msg_control = cbuf.as_mut_ptr().cast();
-    msg.msg_controllen = space as libc::socklen_t;
-    // SAFETY: the control buffer holds exactly one descriptor's message.
-    unsafe {
-        let c = libc::CMSG_FIRSTHDR(&msg);
-        (*c).cmsg_level = libc::SOL_SOCKET;
-        (*c).cmsg_type = libc::SCM_RIGHTS;
-        (*c).cmsg_len = libc::CMSG_LEN(size_of::<libc::c_int>() as u32) as libc::socklen_t;
-        libc::CMSG_DATA(c)
-            .cast::<libc::c_int>()
-            .write_unaligned(region.as_raw_fd());
+    if let Some(fd) = fd {
+        msg.msg_control = cbuf.as_mut_ptr().cast();
+        msg.msg_controllen = space as libc::socklen_t;
+        // SAFETY: the control buffer holds exactly one descriptor's message.
+        unsafe {
+            let c = libc::CMSG_FIRSTHDR(&msg);
+            (*c).cmsg_level = libc::SOL_SOCKET;
+            (*c).cmsg_type = libc::SCM_RIGHTS;
+            (*c).cmsg_len = libc::CMSG_LEN(size_of::<libc::c_int>() as u32) as libc::socklen_t;
+            libc::CMSG_DATA(c)
+                .cast::<libc::c_int>()
+                .write_unaligned(fd.as_raw_fd());
+        }
     }
     // SAFETY: a fully initialised message.
     let n = unsafe { libc::sendmsg(sock.as_raw_fd(), &msg, 0) };
@@ -258,50 +277,66 @@ fn send_setup(sock: BorrowedFd<'_>, region: BorrowedFd<'_>) -> io::Result<()> {
         return last_error();
     }
     if n as usize != body.len() {
-        return Err(io::Error::other("short setup message"));
+        return Err(io::Error::other("short message"));
     }
     Ok(())
+}
+
+/// Receives into `body`: how much arrived (0 at EOF) and the descriptor it carried, close-on-exec.
+fn recv_msg(sock: BorrowedFd<'_>, body: &mut [u8]) -> io::Result<(usize, Option<OwnedFd>)> {
+    // SAFETY: CMSG_SPACE is a pure size computation.
+    let space = unsafe { libc::CMSG_SPACE(size_of::<libc::c_int>() as u32) } as usize;
+    let mut cbuf = vec![0u8; space];
+    let mut iov = libc::iovec {
+        iov_base: body.as_mut_ptr().cast(),
+        iov_len: body.len(),
+    };
+    // SAFETY: an all-zero msghdr is a valid empty one.
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cbuf.as_mut_ptr().cast();
+    msg.msg_controllen = space as libc::socklen_t;
+    // SAFETY: buffers sized above.
+    let n = unsafe { libc::recvmsg(sock.as_raw_fd(), &mut msg, 0) };
+    if n < 0 {
+        return last_error();
+    }
+    let mut fd = None;
+    // SAFETY: walking the control messages the kernel just wrote.
+    unsafe {
+        let mut c = libc::CMSG_FIRSTHDR(&msg);
+        while !c.is_null() {
+            if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
+                let raw = libc::CMSG_DATA(c).cast::<libc::c_int>().read_unaligned();
+                fd = Some(OwnedFd::from_raw_fd(raw));
+            }
+            c = libc::CMSG_NXTHDR(&msg, c);
+        }
+    }
+    if let Some(fd) = &fd {
+        set_flag(fd.as_fd(), libc::F_GETFD, libc::F_SETFD, libc::FD_CLOEXEC)?;
+    }
+    Ok((n as usize, fd))
+}
+
+/// Sends the setup message and the region's descriptor.
+fn send_setup(sock: BorrowedFd<'_>, region: BorrowedFd<'_>) -> io::Result<()> {
+    send_msg(sock, &Setup::ours().encode(), Some(region))
 }
 
 /// Receives the setup message and its descriptor, refusing any other layout. Blocks.
 fn recv_setup(sock: BorrowedFd<'_>) -> io::Result<OwnedFd> {
     let mut body = [0u8; Setup::LEN];
-    // SAFETY: CMSG_SPACE is a pure size computation.
-    let space = unsafe { libc::CMSG_SPACE(size_of::<libc::c_int>() as u32) } as usize;
-    let mut cbuf = vec![0u8; space];
     let mut got = 0;
     let mut fd: Option<OwnedFd> = None;
     while got < body.len() {
-        let mut iov = libc::iovec {
-            iov_base: body[got..].as_mut_ptr().cast(),
-            iov_len: body.len() - got,
-        };
-        // SAFETY: an all-zero msghdr is a valid empty one.
-        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = cbuf.as_mut_ptr().cast();
-        msg.msg_controllen = space as libc::socklen_t;
-        // SAFETY: buffers sized above.
-        let n = unsafe { libc::recvmsg(sock.as_raw_fd(), &mut msg, 0) };
-        if n < 0 {
-            return last_error();
-        }
+        let (n, f) = recv_msg(sock, &mut body[got..])?;
         if n == 0 {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
-        // SAFETY: walking the control messages the kernel just wrote.
-        unsafe {
-            let mut c = libc::CMSG_FIRSTHDR(&msg);
-            while !c.is_null() {
-                if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
-                    let raw = libc::CMSG_DATA(c).cast::<libc::c_int>().read_unaligned();
-                    fd = Some(OwnedFd::from_raw_fd(raw));
-                }
-                c = libc::CMSG_NXTHDR(&msg, c);
-            }
-        }
-        got += n as usize;
+        fd = fd.or(f);
+        got += n;
     }
     let setup = Setup::decode(&body);
     if setup != Setup::ours() {
@@ -310,9 +345,73 @@ fn recv_setup(sock: BorrowedFd<'_>) -> io::Result<OwnedFd> {
             Setup::ours()
         )));
     }
-    let fd = fd.ok_or_else(|| io::Error::other("the setup message carried no region"))?;
-    set_flag(fd.as_fd(), libc::F_GETFD, libc::F_SETFD, libc::FD_CLOEXEC)?;
-    Ok(fd)
+    fd.ok_or_else(|| io::Error::other("the setup message carried no region"))
+}
+
+/// A message on the control pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Control {
+    /// Accept connections on the listening socket that comes with this message, and carry each
+    /// to `guest_port` on the guest. `id` names the forward for [`Control::Close`].
+    Listen { id: u32, guest_port: u16 },
+    /// Stop accepting on forward `id`; its connections carry on.
+    Close { id: u32 },
+}
+
+impl Control {
+    const LEN: usize = 8;
+
+    fn encode(&self) -> [u8; Self::LEN] {
+        let (op, id, port) = match *self {
+            Control::Listen { id, guest_port } => (1u8, id, guest_port),
+            Control::Close { id } => (2, id, 0),
+        };
+        let mut b = [0u8; Self::LEN];
+        b[0] = op;
+        b[2..4].copy_from_slice(&port.to_le_bytes());
+        b[4..8].copy_from_slice(&id.to_le_bytes());
+        b
+    }
+
+    fn decode(b: &[u8]) -> Option<Self> {
+        let b: &[u8; Self::LEN] = b.try_into().ok()?;
+        let port = u16::from_le_bytes([b[2], b[3]]);
+        let id = u32::from_le_bytes(b[4..8].try_into().unwrap());
+        match b[0] {
+            1 => Some(Control::Listen {
+                id,
+                guest_port: port,
+            }),
+            2 => Some(Control::Close { id }),
+            _ => None,
+        }
+    }
+}
+
+/// Sends a control message; a [`Control::Listen`] takes its listening socket along.
+pub fn send_control(
+    sock: BorrowedFd<'_>,
+    msg: Control,
+    listener: Option<BorrowedFd<'_>>,
+) -> io::Result<()> {
+    send_msg(sock, &msg.encode(), listener)
+}
+
+/// The next control message, if one is waiting (`sock` non-blocking), with the descriptor it
+/// carried. A message netd does not understand is an error, as is a `Listen` without its socket.
+pub fn recv_control(sock: BorrowedFd<'_>) -> io::Result<Option<(Control, Option<OwnedFd>)>> {
+    let mut body = [0u8; Control::LEN + 1];
+    let (n, fd) = match recv_msg(sock, &mut body) {
+        Ok(r) => r,
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let msg = Control::decode(&body[..n])
+        .ok_or_else(|| io::Error::other(format!("a control message of {n} bytes: {body:?}")))?;
+    if matches!(msg, Control::Listen { .. }) && fd.is_none() {
+        return Err(io::Error::other("a forward without its listening socket"));
+    }
+    Ok(Some((msg, fd)))
 }
 
 /// Rings the peer's doorbell. A full socket means the peer has wakes queued already, and a dead
@@ -503,6 +602,34 @@ mod tests {
             assert_eq!(libc::sendmsg(w.as_raw_fd(), &msg, 0), body.len() as isize);
         }
         assert!(NetdEnd::accept(n).is_err());
+    }
+
+    #[test]
+    fn control_messages_carry_their_listening_socket() {
+        let (worker, netd) = control_socketpair().unwrap();
+        set_nonblocking(netd.as_fd()).unwrap();
+        assert!(recv_control(netd.as_fd()).unwrap().is_none());
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let listen = Control::Listen {
+            id: 7,
+            guest_port: 22,
+        };
+        send_control(worker.as_fd(), listen, Some(listener.as_fd())).unwrap();
+        send_control(worker.as_fd(), Control::Close { id: 7 }, None).unwrap();
+
+        let (msg, fd) = recv_control(netd.as_fd()).unwrap().unwrap();
+        assert_eq!(msg, listen);
+        let theirs = std::net::TcpListener::from(fd.unwrap());
+        assert_eq!(
+            theirs.local_addr().unwrap(),
+            addr,
+            "the same listening socket"
+        );
+        let (msg, fd) = recv_control(netd.as_fd()).unwrap().unwrap();
+        assert_eq!(msg, Control::Close { id: 7 });
+        assert!(fd.is_none());
     }
 
     #[test]

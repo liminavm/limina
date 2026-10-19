@@ -699,6 +699,10 @@ pub struct GuestConfig {
     /// Attach a user-mode NAT NIC (the supervisor spawns + supervises a gvproxy gateway and
     /// captures its `-debug` packet log — the host-side network oracle). See [`Guest::wait_for_gateway_log`].
     pub net: bool,
+    /// Put that NIC on a `limina-netd` the worker spawns instead of gvproxy (`--net-netd`). There
+    /// is no gateway log then: netd's own log lines land in the supervisor's. Set via
+    /// [`with_net_netd`](GuestConfig::with_net_netd).
+    pub net_netd: bool,
     /// Per-VM host port for gvproxy's inbound SSH forward (`--ssh-port`). `None` → the supervisor
     /// default ([`DEFAULT_SSH_PORT`], 2222). Give two concurrent VMs distinct ports so they don't
     /// collide on the host port — what lets more than one run in parallel. Set via
@@ -800,6 +804,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -898,6 +903,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -983,6 +989,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1026,6 +1033,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1095,6 +1103,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1267,6 +1276,14 @@ impl GuestConfig {
 
     pub fn with_net(mut self) -> GuestConfig {
         self.net = true;
+        self
+    }
+
+    /// Like [`with_net`](GuestConfig::with_net) but on `limina-netd` (`--net-netd`), with the same
+    /// SSH forward on its pre-allocated port.
+    pub fn with_net_netd(mut self) -> GuestConfig {
+        self.net = true;
+        self.net_netd = true;
         self
     }
 
@@ -2267,7 +2284,11 @@ impl Guest {
         // is silent on serial after GRUB, so the guest console can't witness DHCP/DNS).
         let gateway_log = if cfg.net {
             let log = scratch.join("gvproxy.log");
-            cmd.arg("--net").arg("--net-log").arg(&log);
+            if cfg.net_netd {
+                cmd.arg("--net-netd");
+            } else {
+                cmd.arg("--net").arg("--net-log").arg(&log);
+            }
             // Per-VM SSH-forward port — ALWAYS passed explicitly. When the flag is absent the
             // supervisor AUTO-ALLOCATES from 2222 up, so with another VM holding 2222 the forward
             // silently lands elsewhere while a harness that assumes 2222 ssh'es into the BYSTANDER
@@ -2288,7 +2309,7 @@ impl Guest {
             if let Some(mac) = &cfg.net_mac {
                 cmd.arg("--net-mac").arg(mac);
             }
-            Some(log)
+            (!cfg.net_netd).then_some(log)
         } else {
             None
         };

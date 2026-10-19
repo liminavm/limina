@@ -31,6 +31,7 @@ mod usb_kbd;
 mod video_state;
 mod wake;
 
+use std::net::SocketAddrV4;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -40,7 +41,7 @@ use limina_launch::connect::ListenAt;
 
 use crate::config::{
     BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec,
-    NetBackend, NetSpec, VirtioConsoleSpec, VmSpec, VmnetMode, VsockSpec,
+    NetBackend, NetSpec, NetdSpec, VirtioConsoleSpec, VmSpec, VmnetMode, VsockSpec,
 };
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
@@ -359,6 +360,16 @@ struct Cli {
     #[arg(long)]
     net_netd: bool,
 
+    /// A port forward on the netd NIC, `HOST_IP:HOST_PORT:GUEST_PORT` (TCP): this worker binds
+    /// the host side and netd carries each connection to the guest's port. Repeatable.
+    #[arg(long, value_name = "HOST_IP:HOST_PORT:GUEST_PORT", value_parser = parse_forward, requires = "net_netd")]
+    net_forward: Vec<(SocketAddrV4, u16)>,
+
+    /// The netd NIC's control link (an inherited link the supervisor connects over): newline
+    /// `forward HOST_IP:HOST_PORT GUEST_PORT` and `unforward HOST_IP:HOST_PORT` commands.
+    #[arg(long, requires = "net_netd")]
+    net_control_fd: Option<i32>,
+
     /// Guest MAC for the NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
     /// The supervisor keeps gvproxy's static .2 lease in sync with this.
     #[arg(long)]
@@ -412,6 +423,20 @@ struct Cli {
 
 /// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
 /// A listener's place from its path flag or its link flag (clap keeps them exclusive).
+/// A `--net-forward`: `HOST_IP:HOST_PORT:GUEST_PORT`.
+fn parse_forward(s: &str) -> Result<(SocketAddrV4, u16)> {
+    let (host, guest) = s
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("a forward is HOST_IP:HOST_PORT:GUEST_PORT, got {s:?}"))?;
+    let host: SocketAddrV4 = host
+        .parse()
+        .map_err(|e| anyhow::anyhow!("forward host side {host:?}: {e}"))?;
+    let guest: u16 = guest
+        .parse()
+        .map_err(|e| anyhow::anyhow!("forward guest port {guest:?}: {e}"))?;
+    Ok((host, guest))
+}
+
 fn listen_at(path: Option<PathBuf>, link: Option<i32>) -> Option<ListenAt> {
     path.map(ListenAt::Path).or(link.map(ListenAt::Link))
 }
@@ -824,7 +849,10 @@ fn main() -> Result<()> {
     let net_backend = match (cli.net_gvproxy, cli.net_vmnet, cli.net_netd) {
         (Some(socket), None, false) => Some(NetBackend::Gvproxy(socket)),
         (None, Some(mode), false) => Some(NetBackend::Vmnet(mode)),
-        (None, None, true) => Some(NetBackend::Netd),
+        (None, None, true) => Some(NetBackend::Netd(NetdSpec {
+            forwards: cli.net_forward,
+            control: cli.net_control_fd.map(ListenAt::Link),
+        })),
         (None, None, false) => None,
         _ => unreachable!("clap rejects more than one of the --net-* backends"),
     };
