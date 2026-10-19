@@ -7,8 +7,8 @@
 //! SSH) with `LIMINA_BATTERY_FAKE` pinning a known state, so the assertion is exact and the
 //! test runs identically on battery-less hosts. The chain under test is the whole shipped
 //! stack: the worker's battery provider → libkrun's virtio-i2c device + emulated SBS slave →
-//! the DT child node → the guest's stock `i2c-virtio` + `sbs-battery` modules (autoloaded,
-//! zero guest-side limina components) → `/sys/class/power_supply/sbs-0-000b`.
+//! the DT child node (or ACPI `PRP0001` device) → the guest's stock `i2c-virtio` + `sbs-battery` modules (autoloaded,
+//! zero guest-side limina components) → `/sys/class/power_supply/sbs-*`.
 //!
 //! RED without any link of that chain: no FDT node → the modules never load; no SBS register
 //! file → sbs-battery's probe read of BatteryStatus fails; wrong register encoding → the
@@ -18,8 +18,10 @@ use std::time::Duration;
 
 use limina_test::{Guest, GuestConfig};
 
-/// The sysfs node: SBS battery at the standard address 0x0b on the (sole) virtio-i2c bus.
-const PSY: &str = "/sys/class/power_supply/sbs-0-000b";
+/// The sysfs node of the SBS battery at the standard address 0x0b on the (sole) virtio-i2c bus.
+/// Its name follows the I2C client's: `sbs-0-000b` (bus and address) on the device-tree machine,
+/// `sbs-i2c-PRP0001:00` (the ACPI device) on the ACPI one.
+const PSY: &str = "/sys/class/power_supply/sbs-*";
 
 #[test]
 fn host_battery_mirrors_into_the_guest_as_a_power_supply() {
