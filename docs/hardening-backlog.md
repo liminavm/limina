@@ -176,6 +176,16 @@ redesigning, research how VNC/RDP servers solve capture (a real cursor-freeze AP
 an upstream RD capture). Overlaps the tap-free capture ladder (`docs/input-and-windows.md` §5b),
 which hinges on the same disassociate-freeze question.
 
+### The captured range does not follow a pointer the guest moves on its own
+While captured, `follow_guest_echo` re-bases the fit estimate (`capture_pos`) onto the guest's
+cursor echo, but the position we send (`capture_range`) keeps its running value. When the guest
+moves its pointer itself — mutter putting a pointer that is on no monitor in the middle of the
+primary, or an app warping it — the two disagree (about 1000 px on the dogfood, 2026-10-19) and
+the next absolute send yanks the guest's pointer back to the stale value. Our own sends no
+longer leave the desktop (`fit::held_range_step`, `Desktop::wire`), which removed the cause seen
+there. A general echo→range re-base has to wait out echo lag the way the fit's `EchoGate` does,
+or it drags the pointer back a step behind every crossing; design that before building it.
+
 ### Per-key aux-key settings, and the Accessibility cliff in the UI
 The aux-key buckets in `crates/limina-input/src/auxkey.rs` (`Media`/`Volume` hard-grab only,
 `Brightness`/`Other` host-only) are meant to become per-key runtime settings: shape the config as

@@ -2647,7 +2647,7 @@ impl InputState {
         self.record_sent(
             slot,
             (u, v),
-            (range.0 / f64::from(ABS_MAX), range.1 / f64::from(ABS_MAX)),
+            (f64::from(wire.0) / max, f64::from(wire.1) / max),
             true,
             injected,
         );
