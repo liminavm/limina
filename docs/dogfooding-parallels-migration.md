@@ -132,7 +132,7 @@ qemu-img convert -f parallels \
   -O raw Fedora-Workstation-44.migrated.raw
 
 # Verify GPT + an EF00 ESP (Apple-Silicon Parallels Linux is UEFI/GPT). "MBR only" ⇒ legacy
-# install that limina's EDK2 EFI path won't boot ⇒ fall back to fresh-install + rsync.
+# install that limina's EFI path (Cardea) won't boot ⇒ fall back to fresh-install + rsync.
 gdisk -l Fedora-Workstation-44.migrated.raw
 
 # Transfer, preserving sparseness.

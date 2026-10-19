@@ -48,7 +48,7 @@ Fedora.liminavm/
 │  └─ root.raw
 ├─ snapshots/           # M9: one subdir per named snapshot (RAM+device state + disk refs)
 │  └─ 2026-07-01-pre-upgrade/
-├─ nvram/               # EFI variable store, when we grow one
+├─ efi.vars             # the firmware's persistent UEFI variables (boot entries, TPM-era shim state)
 └─ logs/                # supervisor + worker + netd logs for the last N runs
 ```
 
@@ -162,8 +162,6 @@ Phase 3 (app): the VM library UI enumerates the same directory; no second store.
 
 ## 7. Open questions
 
-- Whether `nvram/` (persistent EFI variables) is worth adding before Windows/other-OS
-  guests force it — today's KRUN_EFI is stateless.
 - Definition-level `[policy]` knobs (autoballoon aggressiveness, capture sensitivity) —
   defer until a second user of each exists.
 - Bundle-internal disk *ownership* semantics on delete (`limina rm` prompts for the bundle;

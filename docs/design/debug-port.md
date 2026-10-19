@@ -111,7 +111,7 @@ sees an error, as it would for any refused request.
 | `limina_version` | the workspace version |
 | `limina_git_rev` | limina's source revision (12 hex digits), `unknown` outside a checkout |
 | `limina_build_date` | build date, UTC (the minute for a release bundle, the day for a dev build) |
-| `dep.<name>` | full revision of each host dependency this build carries: `libkrun`, `virglrs`, `imago`, `kosmickrisp`, `edk2` (`crates/limina/build.rs` resolves them) |
+| `dep.<name>` | full revision of each host dependency this build carries: `libkrun`, `virglrs`, `imago`, `kosmickrisp`, `cardea` (`crates/limina/build.rs` resolves them) |
 | `limina_bundle` | the parking-lot dmg this app came from (`Limina-<YYYY-MM-DD>-<n>.dmg`, the heading of its entry in the lot's `INDEX.md`); `none` for a binary not run from a bundle, `unparked` for a bundle whose build could not reserve a name, `malformed` for a stamp that is not such a name |
 | `limina_cdhash` | the running `limina`'s CDHash (40 hex digits; what `codesign -dvvv Limina.app` prints as `CDHash=`, and what `INDEX.md` records as *Supervisor CDHash*); `none` when unsigned |
 | `launch_id` | a random UUID, fresh for every worker launch: cold boot, guest-reboot relaunch, and resume each get a new one |

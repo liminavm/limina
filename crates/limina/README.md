@@ -21,12 +21,13 @@ libkrun dependency — only the worker is codesigned.
 
 ### Graceful shutdown is tier-dependent
 
-A **stock EFI Fedora guest does not honor the GPIO power button** — KRUN_EFI's ACPI
-doesn't advertise it, so the orderly-shutdown request is a no-op and the supervisor
-falls back to SIGKILL after the grace period. This is expected under the two-tier
-guarantee: reliable graceful shutdown belongs to the **enhanced tier** (our DT /
-`limina-agent` handling the signal), while the baseline still stops correctly via the
-forceful fallback. (Verified 2026-06: stock guest needed the SIGKILL fallback.)
+On the default ACPI machine the DSDT carries a power button (`PNP0C0C`, signalled through the
+GPIO controller's `_AEI` events), so a stock guest handles the orderly-shutdown request itself
+and powers off. On the device-tree machine (`--machine device-tree`, and `--kernel` boots) the
+button is a GPIO key that a stock EFI Fedora guest ignores: the request is a no-op and the
+supervisor falls back to SIGKILL after the grace period (verified 2026-06). Graceful shutdown
+there belongs to the **enhanced tier** (`limina-agent` handling the signal), while the baseline
+still stops correctly via the forceful fallback, as the two-tier guarantee requires.
 
 ## Run
 

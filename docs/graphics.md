@@ -384,8 +384,8 @@ and persisted per VM (`display_slots` in the VM state), so the guest sees the sa
 same connectors every run. The primary window follows its panel's slot; every other connected slot
 gets its own window, slot 0 included — no index is permanently special.
 
-That collides with the firmware, which can only paint head 0: edk2's `VirtioGpuDxe` hardcodes it
-(`OvmfPkg/VirtioGpuDxe/Gop.c:66,447,480`). So the pool is arranged in two phases, and the
+That collides with the firmware, which can only paint head 0: Cardea's virtio-gpu driver uses scanout 0 only
+(`third_party/cardea/firmware/src/virtio/gpu.rs:7-11`). So the pool is arranged in two phases, and the
 boundary is **observed, not declared**: firmware never issues `VIRTIO_GPU_CMD_GET_EDID`, and every
 Linux connector probe does, so the first one is an unambiguous "the OS driver has the GPU". The
 device reports it to the display backend (`krun_display_guest_driver_ready_fn`) and the supervisor

@@ -57,7 +57,7 @@ release barrier),
   Screens When Fullscreen" (off by default, persisted per VM beside the per-panel switches)
   is what turns fullscreen into `FullscreenAll`; without it, fullscreen occupies exactly the
   window's own panel, like any window. The decision is `displays::presentation_for`.
-- **Firmware paints slot 0 and only slot 0.** EDK2's virtio-gpu GOP driver hardcodes head 0, so
+- **Firmware paints slot 0 and only slot 0.** Cardea's virtio-gpu GOP driver uses scanout 0 only, so
   until the guest's own driver takes over, slot 0 must be the connected one whatever panel the
   window is on.
 - The **primary window** is the one that owns the keyboard, the menu, and the app's lifecycle. It is

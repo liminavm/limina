@@ -698,13 +698,12 @@ recording of a guest session is not reproducible.
 
 Every **Linux** build runs in one container image — `scripts/build-image/Containerfile`, built on first
 use by `scripts/build-image.sh` (rebuild with `FORCE=1`). It bakes the union of all build deps
-(rpmbuild, kernel toolchain, meson/ninja + `builddep mesa`/`builddep mutter`, edk2 + nasm/acpica + a
-`-std=gnu17` ccwrap for edk2's K&R BaseTools, gfxreconstruct's cmake/xcb/X11/wayland set), so the
+(rpmbuild, kernel toolchain, meson/ninja + `builddep mesa`/`builddep mutter`, gfxreconstruct's cmake/xcb/X11/wayland set), so the
 per-script `dnf install` is gone and builds start instantly. The Fedora release is the `FEDORA_REL`
 build arg, **44 by default** — it is the enhanced tier's target, so the RPMs link the sonames of the
 release they install onto. Moving the whole toolchain is `FEDORA_REL=45 FORCE=1 scripts/build-image.sh`;
 the tag is spelled once, in `build-image.sh`, and consumers source it for `$LIMINA_BUILD_IMAGE`.
-Consumers: `build-krun-efi`, `build-enhanced-rpms` (which runs `provision/f44/*` — the same scripts a
+Consumers: `build-enhanced-rpms` (which runs `provision/f44/*` — the same scripts a
 booted guest runs), `build-test-kernel`, `build-testcomp`, `build-gfxreconstruct`. The separate F43
 pair (`build-kernel-rpm.sh`, `build-mesa-rpm.sh`) is **gone**: it existed only because this image was
 pinned to Fedora 43 and their `FEDORA_REL` knob merely picked a tag. Each still mounts its own persistent source/cache `container volume` (the image

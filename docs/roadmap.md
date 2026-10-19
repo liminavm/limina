@@ -139,16 +139,17 @@ aborts (a malformed command tripping an assert in a host library kills the VMM).
 
 ## Milestone 1 — Boot a stock Fedora image to a serial console
 
-`limina --firmware <KRUN_EFI.fd> --disk <fedora.raw> --console <file>` boots the stock distro via
+`limina --firmware <efi.fd> --disk <fedora.raw> --console <file>` boots the stock distro via
 EFI to userspace. Load-bearing facts:
-- **Firmware is a flat EDK2 `.fd`** read into guest RAM (`Payload::Firmware`), not a linked library.
-  Ours is built by `scripts/build-krun-efi.sh` (M2.5).
+- **Firmware is Cardea's flat image** read into guest RAM (`Payload::Firmware`), not a linked
+  library. It is built by `scripts/build-firmware.sh` (`cargo xtask firmware`).
 - The distro's own initramfs mounts root (FAT ESP / ext4 `/boot` / btrfs `subvol=root` on `vda`).
 - **Console:** `disable_implicit_console = true` + a `SerialConsoleConfig` (input fd must be
   kqueue-pollable); libkrun's PL011 is at `0x0a001000`
   (`earlycon=pl011,mmio32,0x0a001000 console=ttyAMA0,115200`). When no console is requested, limina
-  still attaches an output-dropped PL011 — a consoleless FDT makes EDK2's serial library fail its
-  constructor.
+  still attaches an output-dropped PL011: Cardea tolerates a missing serial port, but a guest
+  booted with no PL011 at all wedges intermittently in early boot
+  (`crates/limina-vmm/src/krun/console.rs`).
 - **Supervision:** the supervisor spawns the signed worker in its own process group and forwards
   graceful shutdown up the stop ladder; it never kills on a timer (M12.5).
 - A stock EFI Fedora guest does not honour the GPIO power button, so graceful power-off needs
@@ -191,11 +192,11 @@ in `docs/input-and-windows.md` and M15.
   `--console-pty` gives a human an interactive firmware/GRUB/kernel console. Automated guest access
   is SSH; the serial getty is the human debug shell.
 - **On the EFI path GRUB owns the cmdline** (EFI LoadOptions override FDT bootargs), so a firmware
-  graphics console is the lever for pre-kernel stages. Our `KRUN_EFI` (`liminavm/edk2`, built by
-  `scripts/build-krun-efi.sh`) adds `VirtioGpuDxe` and puts the virtio-mmio GOP on ConOut; libkrun
-  snaps a ready-but-unsized queue to `max_size` and joins the firmware-era GPU worker on reset. The
+  graphics console is the lever for pre-kernel stages. Cardea's virtio-gpu GOP is on ConOut
+  (`scripts/build-firmware.sh`); libkrun snaps a ready-but-unsized queue to `max_size` and joins the firmware-era GPU worker on reset. The
   RELEASE GOP build is the windowed default (`resolve_windowed_firmware`: `$LIMINA_FIRMWARE` →
-  the bundle's copy → `target/firmware/` → krunkit's silent `.fd` with a warning) and ships in the app.
+  the bundle's `Resources/efi.fd` → `target/firmware/efi.fd` next to the binary; no krunkit
+  fallback) and ships in the app.
 - Image prep (`scripts/prepare-efi-image.sh`, `scripts/provision/make-accessible.sh`) adds
   `console=ttyAMA0` for the serial oracle and clears a stale `/.autorelabel`.
 - **Floor guards:** `boot::fedora_stock_image_efi_boots_to_userspace` (firmware → GRUB → kernel →
@@ -593,7 +594,8 @@ from `root=/dev/vda3` to PARTUUID.
 `cargo xtask <cmd>` (`xtask/src/main.rs`; `--help` lists it) is the one-command surface over the
 tested scripts, which stay the source of truth: `setup`, `vendor`, `build`, `sign`, `test`, `run`,
 `app`, `bundle`. CLAUDE.md describes each; onboarding is `docs/dev-onboarding.md`. The heavy
-container builds (guest mesa, KRUN_EFI, kernels, the build image) stay scripts.
+container builds (guest mesa, kernels, the build image) stay scripts; the firmware builds natively
+(`cargo xtask firmware`).
 
 **Owed:** notarized distribution (Developer ID; `docs/design/distribution.md`); folding `bundle` into
 `app` (`docs/hardening-backlog.md`).
@@ -969,16 +971,15 @@ compositor animates.
 
 ### Boot chain — every stage ours, no pivots
 
-**KRUN_EFI → systemd-boot → UKI (kernel + tiny initrd + cmdline) → verity `/usr` → systemd →
+**firmware → systemd-boot → UKI (kernel + tiny initrd + cmdline) → verity `/usr` → systemd →
 system compositor.**
 
 **This chain is proven on real KRUN_EFI**, booting to a login prompt in ~10s on our own 16 KiB
 kernel, through verity `/usr` and switch-root. systemd-boot loads from
 `ESP:/EFI/BOOT/BOOTAA64.EFI` (the removable path). Two properties worth stating because they are
-easy to assume otherwise: **KRUN_EFI's ESP is writable**, so systemd-boot's boot-count rename
-reaches the disk; and the firmware falls through to PXE **with no error message at all** when it
-cannot read the ESP, so a silent boot failure means "firmware could not read the ESP", not "no
-bootloader".
+easy to assume otherwise: **the firmware's ESP is writable**, so systemd-boot's boot-count rename
+reaches the disk; and a firmware that cannot read the ESP boots nothing and prints "no bootable
+device found", so that message means "firmware could not read the ESP", not "no bootloader".
 
 - **No simpledrm, no framebuffer inheritance:** in a VM, virtio-gpu exists from cycle zero —
   build it in, turn `CONFIG_SYSFB_SIMPLEFB` off, and `/dev/dri/card0` is there before PID 1
@@ -1165,8 +1166,9 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
   EFI-boot only, since libkrun writes SMBIOS only on the firmware path — and it needs
   `CONFIG_DMI_SYSFS=y` in the guest kernel (see §Boot chain), without which the credential is
   delivered but unreadable.
-- **Crypto tier waits on the vTPM; verity kept.** KRUN_EFI has no SecureBoot and libkrun has no
-  TPM yet, so LUKS2-sealed-to-TPM2 and PCR measurement have no substrate today. We take dm-verity +
+- **Crypto tier waits on the vTPM; verity kept.** Cardea has no SecureBoot keys enrolled; the TPM 2.0
+  (a libkrun TIS device, with Cardea's TCG2 event log) is the substrate for LUKS2-sealed-to-TPM2
+  and PCR measurement. We take dm-verity +
   signed images (integrity, rollback protection, measurable objects); confidentiality stays at the
   host layer (FileVault/APFS), which was already this section's position. **The partition layout
   must be designed so the crypto tier can be added without a re-layout.** The substrate is
@@ -1265,7 +1267,7 @@ on the Fedora enhanced tier before LiminaOS is usable.
 system compositor, host-splash→guest cross-fade is seamless, login/logout are animated with no
 mode switch or black frame, the session runs with zero /dev/dri-master or /dev/input access, and
 a system-compositor restart mid-session is invisible to the seated session.
-**Done test (distro phase):** a LiminaOS image boots KRUN_EFI → systemd-boot → UKI → verity `/usr`
+**Done test (distro phase):** a LiminaOS image boots the firmware → systemd-boot → UKI → verity `/usr`
 → compositor, with no simpledrm and no VTs; sysupdate applies an A/B update and a forced-bad slot
 auto-rolls back via boot counting **with both slots populated and the bless side live** (the
 single-slot case retries forever by design, so it does not test rollback); Flatpak, toolbox, and a

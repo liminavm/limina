@@ -187,5 +187,10 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
 
 - Cardea's license (MIT) and the licenses of the crates it links (`fdt` is MPL-2.0), which need
   the same counsel review as the rest of the tree before a release tag.
-- CPPC's frequency invariance: counters the guest reads every tick cost a trap each on MMIO. A
-  firmware-mediated (FFH) or counter-free design has to be measured before choosing.
+- CPPC's layout. Measured (`spikes/acpi-cppc-cost/RESULTS.md`): SystemMemory feedback counters
+  cost −0.34 % of a fully busy guest on Linux 7.2+ and −0.88 % on 6.19, whose irq_work/kthread
+  machinery is −0.66 % of that for any non-PCC layout; FFH is out, since HVF exposes no AMU and an
+  FFH entry without one makes Linux reject the whole `_CPC`. Still to choose: real CPPC FIE on
+  MMIO counters, or `_CPC` for capacities only with `qemu,virtual-cpufreq` keeping DVFS — which
+  needs the guest to bind virtual-cpufreq before `cppc_cpufreq`, both being modules F44 loads
+  automatically.

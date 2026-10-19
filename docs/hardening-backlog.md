@@ -1365,16 +1365,17 @@ building on any of them):
   Fedora both build `SPI_BCM2835`, `SPI_OMAP24XX`, `SPI_IMX`, `SPI_SUN6I`, `SPI_MESON_SPICC` and
   `SPI_TEGRA114`; BCM2835's is the simplest register model. TCG's SPI protocol carries the same
   TIS register accesses, so janus and the TIS register file stay as they are; the new parts are
-  the controller (FIFO, chip select, a fixed clock node) and an interface switch: edk2 cannot
-  speak SPI, so the firmware keeps the MMIO TIS for measured boot and must disable that node
-  before the OS sees the tree, or a kernel with both drivers binds two TPM devices to one TPM.
+  the controller (FIFO, chip select, a fixed clock node) and an interface switch: Cardea speaks
+  only the MMIO TIS (no SPI) and passes the device tree through unmodified, so the firmware
+  would keep the MMIO TIS for measured boot and disabling that node before the OS sees the tree
+  would be new Cardea work, or a kernel with both drivers binds two TPM devices to one TPM.
   The one stock-kernel route found; a few days of work and a second OS-facing interface to test.
 - **I2C: not viable.** Debian has no generic `TCG_TIS_I2C`, only `TCG_TIS_I2C_CR50` (expects
   Google's cr50 vendor ID: an impersonation) and `TCG_TIS_I2C_INFINEON` (believed TPM 1.2 parts
   only), and no `I2C_VIRTIO`, so it also needs an emulated I2C controller.
-- **ACPI with a CRB TPM.** Both kernels build `tpm_crb` in, and edk2's Tpm2DeviceLibDTpm speaks
-  CRB, but arm64 Linux takes ACPI or a device tree, never both: the whole platform would have to
-  be described in ACPI. Out of proportion for this.
+- **ACPI with a CRB TPM.** Both kernels build `tpm_crb` in, but Cardea speaks only the MMIO TIS
+  (no CRB), and arm64 Linux takes ACPI or a device tree, never both: the whole platform would have
+  to be described in ACPI. Out of proportion for this.
 
 Until one lands, a TPM on a Debian guest costs 90 s per boot and gives nothing; leave it off.
 

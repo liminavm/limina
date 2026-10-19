@@ -658,7 +658,7 @@ parked-fence hang, pixel-verified (`iosdump` + human).
 Named snapshots (save / restore / **clone** / roll back / delete); VMGenID reseed on clone; one-click
 Suspend; capability probe; ~~stock wall-clock one-shot step on resume~~ **VERIFIED ALREADY CLOSED
 2026-07-20, no new code needed**: libkrun 0088 (PL031 anchored to host `CLOCK_REALTIME`; the restore's
-fresh worker rebuilds it at current host time) flows through EDK2's `rtc-efi` runtime service — the
+fresh worker rebuilds it at current host time) flows through the firmware's `GetTime` runtime service (Cardea reads the PL031) — the
 guest's hctosys device — and the stock kernel's own s2idle-thaw sleeptime injection does the step.
 Measured on an F44 stock guest (own 6.19.10 kernel via EFI, chronyd stopped, no limina components):
 guest−host delta **+0.058 s** after a 122 s suspend gap, same as the boot baseline (a broken path
