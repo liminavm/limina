@@ -602,6 +602,16 @@ pub struct Spawned {
     pub qga_host: OwnedFd,
 }
 
+/// Point the worker's SSH forward (`--net-forward`) at `port`: a forward moved while the VM ran
+/// stays moved for the worker that replaces it on a reboot, reset or resume.
+fn forward_on(args: &mut [OsString], port: u16) {
+    if let Some(i) = args.iter().position(|a| a == "--net-forward")
+        && let Some(value) = args.get_mut(i + 1)
+    {
+        *value = format!("127.0.0.1:{port}:22").into();
+    }
+}
+
 /// Spawn the worker in its own process group. `inherit_fds` are extra file descriptors
 /// the child should keep open across exec (the windowed control channel) — Rust sets
 /// `O_CLOEXEC` on fds it doesn't know about, so we clear it via `pre_exec`.
@@ -619,6 +629,9 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     install_signal_handlers()?;
     install_panic_kill_hook();
     let mut args: Vec<OsString> = spec.args.iter().map(OsString::from).collect();
+    if let Some(port) = crate::runtime_ctl::forward_port() {
+        forward_on(&mut args, port);
+    }
     // What the worker's environment adds to ours; applied the same way on either path.
     let mut env: Vec<(OsString, OsString)> = Vec::new();
 
@@ -1209,6 +1222,21 @@ fn report_exit(status: ExitStatus) -> i32 {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn a_fresh_worker_binds_the_forward_where_it_is_now() {
+        let mut args: Vec<OsString> = ["--net-netd", "--net-forward", "127.0.0.1:2222:22", "-v"]
+            .map(OsString::from)
+            .into();
+        forward_on(&mut args, 4022);
+        assert_eq!(
+            args,
+            ["--net-netd", "--net-forward", "127.0.0.1:4022:22", "-v"].map(OsString::from)
+        );
+        let mut none: Vec<OsString> = vec!["--net-vmnet".into(), "shared".into()];
+        forward_on(&mut none, 4022);
+        assert_eq!(none, ["--net-vmnet", "shared"].map(OsString::from));
+    }
 
     /// A resume must give the guest the EL2 it was saved with, or the worker refuses it: a
     /// VM that was suspended before the setting existed resumes without, one saved nested

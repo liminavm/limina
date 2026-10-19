@@ -228,6 +228,11 @@ pub fn set_forward(forward: Option<SshForward>) {
     push();
 }
 
+/// The host port the SSH forward is on now, if the VM has one.
+pub fn forward_port() -> Option<u16> {
+    lock(&FORWARD).as_ref().map(SshForward::port)
+}
+
 /// Publish the worker's network control link, on a NIC that switches sides.
 pub fn set_net_control(link: Option<Endpoint>) {
     *lock(&NET_CONTROL) = link;

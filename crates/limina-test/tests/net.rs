@@ -318,6 +318,63 @@ fn the_ssh_forward_moves_while_the_vm_runs_on_netd() {
     assert!(!outcome.forced, "teardown had to be forced");
 }
 
+/// A forward moved while the VM runs stays moved across a reset: the fresh worker binds the port
+/// the forward is on now, not the one the VM booted with.
+#[test]
+fn a_moved_ssh_forward_outlives_a_reset_on_netd() {
+    if !limina_test::require_hvf_or_skip("a_moved_ssh_forward_outlives_a_reset_on_netd") {
+        return;
+    }
+    let cfg = Nic::Netd
+        .config()
+        .with_ssh_target_check()
+        .with_env("LIMINA_LIFECYCLE_CONTROL", "1");
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    guest
+        .wait_for_ssh(Duration::from_secs(150))
+        .expect("guest SSH not reachable through the forward");
+
+    let new = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("probing a free port")
+        .port();
+    let pid = guest.supervisor_pid();
+    let limina = |args: &[&str]| {
+        let out = std::process::Command::new(&cfg.limina_bin)
+            .args(args)
+            .output()
+            .expect("running limina");
+        assert!(
+            out.status.success(),
+            "limina {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    limina(&["ssh-port", &pid.to_string(), &new.to_string()]);
+    limina_test::wait_for_ssh_on(new, Duration::from_secs(30), || {
+        limina_test::pid_path(pid).is_some()
+    })
+    .expect("guest SSH not reachable on the moved port");
+
+    limina(&["reset", &pid.to_string()]);
+    let banner = limina_test::wait_for_ssh_on(new, Duration::from_secs(150), || {
+        limina_test::pid_path(pid).is_some()
+    })
+    .unwrap_or_else(|e| {
+        panic!(
+            "guest SSH not reachable on the moved port {new} after the reset: {e:#}\n\
+             supervisor log:\n{}",
+            guest.supervisor_log()
+        )
+    });
+    eprintln!("guest SSH on the moved port {new} after the reset: {banner}");
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "teardown had to be forced");
+}
+
 /// Pings from the guest: the gateway answers its own, and one past it goes out from netd's
 /// unprivileged ICMP socket and comes back.
 #[test]
