@@ -1,78 +1,115 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-limina-exception
 // Copyright © 2026 Gustavo Noronha Silva
 
-//! L2 networking tests: the stock Fedora image gets user-mode NAT through limina, on each NIC
-//! that provides it — a gvproxy gateway the supervisor runs (`--net`), and a `limina-netd` the
-//! worker spawns (`--net-netd`).
+//! L2 networking tests: the stock Fedora image gets NAT through limina, on each NIC that
+//! provides it — the default (`--net`: vmnet shared, with limina-netd to fall back on) and a
+//! `limina-netd` alone (`--net-netd`).
 //!
-//! The oracles are **host-side**, because the pristine Fedora image is silent on serial after
-//! GRUB (no `console=`), so the guest console can't witness DHCP or DNS: gvproxy's `-debug` packet
-//! log (`--net-log`), and netd's own account of its leases and answers, which lands in the
-//! supervisor's log. A lease plus an outbound DNS question prove the whole path: link → DHCP →
-//! NAT; the SSH forward proves the way in.
+//! The pristine Fedora image is silent on serial after GRUB (no `console=`), so the guest console
+//! can't witness DHCP or DNS. On the default NIC the lease is macOS's DHCP server's
+//! (`/var/db/dhcpd_leases`, by the guest's MAC) and the name is resolved by the guest itself, over
+//! SSH; on netd both are in netd's own account, which lands in the supervisor's log. A lease plus
+//! an answered DNS question prove the whole path: link → DHCP → NAT; the SSH forward proves the way
+//! in.
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use limina_test::{Guest, GuestConfig};
+use limina_test::{Guest, GuestConfig, vmnet_lease};
 
 /// The NIC a test runs on.
 #[derive(Clone, Copy, Debug)]
 enum Nic {
-    Gvproxy,
+    Default,
     Netd,
 }
 
 impl Nic {
     fn config(self) -> GuestConfig {
-        let cfg = GuestConfig::fedora_from_env().expect("resolving guest config");
+        let cfg = GuestConfig::fedora_from_env()
+            .expect("resolving guest config")
+            .with_supervisor_log();
         match self {
-            Nic::Gvproxy => cfg.with_net(),
+            Nic::Default => cfg
+                .with_net()
+                .with_env("RUST_LOG", "warn,limina_vmm=info,limina_netd=info"),
             Nic::Netd => cfg
                 .with_net_netd()
-                .with_supervisor_log()
                 .with_env("RUST_LOG", "warn,limina_netd=debug"),
         }
     }
 
-    /// Waits for the guest's DHCP lease of 192.168.127.2, the address the SSH forward lands on.
-    /// Full userspace boot (firmware → GRUB → kernel → systemd → NM) takes a while.
+    /// Waits for the guest's DHCP lease: on the default NIC vmnet's, for the guest's MAC; on netd
+    /// 192.168.127.2. Full userspace boot (firmware → GRUB → kernel → systemd → NM) takes a while.
     fn wait_for_lease(self, guest: &mut Guest, timeout: Duration) -> anyhow::Result<()> {
         match self {
-            Nic::Gvproxy => {
-                guest.wait_for_gateway_log("MessageType:Ack", timeout)?;
-                anyhow::ensure!(
-                    guest.gateway_log().contains("YourClientIP=192.168.127.2 "),
-                    "expected the static 192.168.127.2 lease in the gateway log"
-                );
-                Ok(())
+            Nic::Default => {
+                guest.wait_for_supervisor_log("network: on vmnet", timeout)?;
+                let mac = guest
+                    .net_mac()
+                    .expect("the harness names the MAC")
+                    .to_string();
+                let deadline = Instant::now() + timeout;
+                // bootpd keeps a lease past the guest that took it, so the lease alone could be
+                // an earlier run's: the guest has to hold that address too.
+                loop {
+                    if let Some(ip) = vmnet_lease(&mac)
+                        && guest
+                            .ssh_exec_timeout(
+                                "ip -4 -o addr show dev eth0",
+                                Duration::from_secs(20),
+                            )
+                            .is_ok_and(|out| out.contains(&format!(" {ip}/")))
+                    {
+                        eprintln!("guest {mac} holds its vmnet lease {ip}");
+                        return Ok(());
+                    }
+                    anyhow::ensure!(
+                        Instant::now() < deadline,
+                        "the guest {mac} never held a vmnet lease within {timeout:?}"
+                    );
+                    std::thread::sleep(Duration::from_secs(1));
+                }
             }
             Nic::Netd => guest.wait_for_supervisor_log("DHCP: leased 192.168.127.2", timeout),
         }
     }
 
-    /// Waits for the guest's first DNS question at the gateway: it routes off-link, not just
-    /// holds a lease.
+    /// Waits for a DNS answer to the guest: it routes off-link, not just holds a lease.
     fn wait_for_dns(self, guest: &mut Guest, timeout: Duration) -> anyhow::Result<()> {
         match self {
-            Nic::Gvproxy => guest.wait_for_gateway_log("DstPort=53(domain)", timeout),
+            Nic::Default => {
+                let deadline = Instant::now() + timeout;
+                loop {
+                    match guest
+                        .ssh_exec_timeout("getent hosts fedoraproject.org", Duration::from_secs(20))
+                    {
+                        Ok(out) if !out.trim().is_empty() => return Ok(()),
+                        Ok(_) | Err(_) if Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_secs(1))
+                        }
+                        Ok(_) => anyhow::bail!("the guest resolved nothing within {timeout:?}"),
+                        Err(e) => return Err(e.context("resolving a name in the guest")),
+                    }
+                }
+            }
             Nic::Netd => guest.wait_for_supervisor_log("DNS: answered", timeout),
         }
     }
 
-    /// What the NIC's log says about the guest's MAC.
-    fn log(self, guest: &Guest) -> String {
+    /// Whether the NIC carried the guest under `mac`.
+    fn carried(self, guest: &Guest, mac: &str) -> bool {
         match self {
-            Nic::Gvproxy => guest.gateway_log(),
-            Nic::Netd => guest.supervisor_log(),
+            Nic::Default => vmnet_lease(mac).is_some(),
+            Nic::Netd => guest.supervisor_log().contains(mac),
         }
     }
 }
 
 fn nat_dhcp_and_outbound(nic: Nic) {
     let cfg = nic.config().with_ssh_target_check();
-    eprintln!("booting Fedora (writable COW clone) with user-mode NAT on {nic:?}");
+    eprintln!("booting Fedora (writable COW clone) with NAT on {nic:?}");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     nic.wait_for_lease(&mut guest, Duration::from_secs(150))
@@ -103,7 +140,7 @@ fn nat_dhcp_and_outbound(nic: Nic) {
 #[test]
 fn fedora_gets_nat_dhcp_and_outbound() {
     if limina_test::require_hvf_or_skip("fedora_gets_nat_dhcp_and_outbound") {
-        nat_dhcp_and_outbound(Nic::Gvproxy);
+        nat_dhcp_and_outbound(Nic::Default);
     }
 }
 
@@ -202,7 +239,7 @@ fn two_vms_in_parallel(nic: Nic) {
 #[test]
 fn two_vms_run_in_parallel_on_distinct_ssh_ports() {
     if limina_test::require_hvf_or_skip("two_vms_run_in_parallel_on_distinct_ssh_ports") {
-        two_vms_in_parallel(Nic::Gvproxy);
+        two_vms_in_parallel(Nic::Default);
     }
 }
 
@@ -213,12 +250,9 @@ fn two_vms_run_in_parallel_on_distinct_ssh_ports_on_netd() {
     }
 }
 
-/// Per-VM MAC (managed VMs' persistent MAC from vm.toml): a custom `--net-mac` must not break the
-/// deterministic network identity. On gvproxy the supervisor rebinds its static `.2` lease to the
-/// custom MAC via a generated config file (in config mode gvproxy installs NO default
-/// forwards/leases, and `-ssh-port` is ignored — the config must carry both); netd leases `.2` to
-/// whichever MAC asks. The proof is end-to-end: the lease goes to the custom MAC, the guest still
-/// gets the static 192.168.127.2, and the SSH forward still lands on it.
+/// Per-VM MAC (managed VMs' persistent MAC from vm.toml): the NIC carries a custom `--net-mac`, the
+/// guest leases under it (from vmnet, or netd's 192.168.127.2), and the SSH forward still lands on
+/// it.
 fn custom_mac(nic: Nic) {
     const MAC: &str = "5a:11:22:33:44:55";
     let cfg = nic.config().with_net_mac(MAC).with_ssh_target_check();
@@ -227,15 +261,18 @@ fn custom_mac(nic: Nic) {
     nic.wait_for_lease(&mut guest, Duration::from_secs(150))
         .expect("guest never obtained its DHCP lease (custom MAC)");
 
-    let log = nic.log(&guest);
     assert!(
-        log.contains(MAC),
-        "the NIC's log must show traffic from the custom MAC {MAC}"
+        nic.carried(&guest, MAC),
+        "the NIC must carry the guest under the custom MAC {MAC}"
     );
-    assert!(
-        !log.contains("5a:94:ef:e4:0c:ee"),
-        "the well-known vfkit MAC must NOT appear — the NIC really carries the custom MAC"
-    );
+    // vmnet's leases outlive their guests, so only netd's own account can say the default MAC
+    // never showed up.
+    if let Nic::Netd = nic {
+        assert!(
+            !nic.carried(&guest, "5a:94:ef:e4:0c:ee"),
+            "the well-known vfkit MAC must NOT appear — the NIC really carries the custom MAC"
+        );
+    }
 
     let banner = guest
         .wait_for_ssh(Duration::from_secs(30))
@@ -251,7 +288,7 @@ fn custom_mac(nic: Nic) {
 #[test]
 fn custom_guest_mac_keeps_the_static_lease_and_ssh_forward() {
     if limina_test::require_hvf_or_skip("custom_guest_mac_keeps_the_static_lease_and_ssh_forward") {
-        custom_mac(Nic::Gvproxy);
+        custom_mac(Nic::Default);
     }
 }
 

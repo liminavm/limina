@@ -69,7 +69,7 @@ fn stock_vulkan_floor_survives_broken_venus() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // Stage the dependency-free probe (pure python3 + libvulkan — nothing to install).

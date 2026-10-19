@@ -45,7 +45,7 @@ use limina_proto::{
 pub const AGENT_GRACE: Duration = Duration::from_secs(5);
 
 /// Socket path to remove on exit (the windowed path leaves via `process::exit`, which
-/// skips destructors — same pattern as `gateway::cleanup`).
+/// skips destructors — same pattern as `debug_ctl::cleanup`).
 static CLEANUP_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Remove the control socket file (idempotent; safe from any exit path).

@@ -20,7 +20,7 @@
 //! < ssh-port 2301        (pushed whenever it changes, for as long as the client stays)
 //! ```
 //!
-//! `ssh-port none` means the VM has no NAT network, or its gateway is not up yet. `parked yes`
+//! `ssh-port none` means the VM has no network with a forward, or it is not up yet. `parked yes`
 //! means the guest is suspended and its window is waiting for a play click: the supervisor is
 //! still up, but there is no worker behind it. After `watch`
 //! the connection carries only those pushed lines, so a watcher that also wants to change
@@ -35,7 +35,7 @@
 //! input needs.
 //!
 //! `reset` kills the VM's worker and cold-boots a fresh one behind the same supervisor, window,
-//! gateway and SSH port (`supervisor::request_reset`); `limina reset` is its client. The answer
+//! and SSH port (`supervisor::request_reset`); `limina reset` is its client. The answer
 //! comes once the fresh worker is running (`worker-pid <pid>`). It is refused unless the VM's
 //! `lifecycle-control` lever is on (`debug_ctl::LIFECYCLE_CONTROL`, off by default, read per
 //! request). Stopping a VM needs no lever and no socket: it is a signal to the supervisor, which
@@ -58,16 +58,16 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use limina_debug::wire;
 
-use crate::gateway::SshForward;
+use crate::forward::SshForward;
 use limina_launch::connect::Endpoint;
 
-/// How long a client waits for an answer. A move asks gvproxy, which answers in milliseconds.
+/// How long a client waits for an answer. A move asks the worker, which answers in milliseconds.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a push may block on a watcher that stopped reading before it is dropped.
 const PUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// The NAT gateway's SSH forward, once `run_vm` has started one.
+/// The VM's SSH forward, once `run_vm` has started one.
 static FORWARD: Mutex<Option<SshForward>> = Mutex::new(None);
 
 /// The worker's network control link, on a NIC that switches sides.
@@ -172,8 +172,8 @@ impl Request {
 /// A running VM as its supervisor reports it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Info {
-    /// The host port of the guest's SSH forward; `None` without a NAT network (or before its
-    /// gateway is up).
+    /// The host port of the guest's SSH forward; `None` without a network that has one (or before
+    /// it is up).
     pub ssh_port: Option<u16>,
     /// The guest is suspended and the supervisor's window is parked on it. A supervisor too old
     /// to say reads as not parked.
@@ -222,7 +222,7 @@ pub fn socket_path(pid: u32) -> PathBuf {
     std::env::temp_dir().join(format!("limina-vm-{pid}.sock"))
 }
 
-/// Publish the NAT gateway's SSH forward (and tell every watcher).
+/// Publish the VM's SSH forward (and tell every watcher).
 pub fn set_forward(forward: Option<SshForward>) {
     *lock(&FORWARD) = forward;
     push();
@@ -254,7 +254,7 @@ fn net_switch(side: NetSide) -> Result<Vec<String>, String> {
     let link = lock(&NET_CONTROL)
         .clone()
         .ok_or("this VM's NIC does not switch sides (it needs --net-auto)")?;
-    crate::gateway::worker_request(&link, &format!("switch {}", side.word()))
+    crate::forward::worker_request(&link, &format!("switch {}", side.word()))
         .map_err(|e| format!("{e:#}"))?;
     Ok(report())
 }
@@ -280,8 +280,8 @@ pub fn set_parked(parked: bool) {
     push();
 }
 
-/// How long a `reset` answer waits for the fresh worker. Its spawn goes through launchd and
-/// recycles gvproxy, which takes about a second.
+/// How long a `reset` answer waits for the fresh worker. Its spawn goes through launchd, which
+/// takes about a second.
 const RESET_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The answer to `reset` while the `lifecycle-control` lever is off.
@@ -789,9 +789,9 @@ pub(crate) mod tests {
         };
         wait(None);
 
-        // The gateway coming up is a change: a forward with no gvproxy behind it is enough,
-        // since publishing it asks gvproxy nothing.
-        let forward = crate::gateway::SshForward::for_tests(2299);
+        // The forward coming up is a change: one with no worker behind it is enough, since
+        // publishing it asks the worker nothing.
+        let forward = crate::forward::SshForward::for_tests(2299);
         set_forward(Some(forward));
         wait(Some(2299));
 

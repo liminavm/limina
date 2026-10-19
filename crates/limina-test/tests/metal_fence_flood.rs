@@ -37,7 +37,7 @@ fn a_fence_flood_from_one_client_leaves_the_device_answering() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
         .wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     // sshd can answer before the GPU driver has probed.
     guest
         .ssh_poll("ls /dev/dri/renderD*", Duration::from_secs(120))

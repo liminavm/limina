@@ -91,7 +91,7 @@ fn virgl_global_fences_retire_through_virglrenderer() {
     // Global fence wedges the desktop and times these out.
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy (fences wedged post-flip?)");
+        .expect("guest sshd never became reachable through the forward (fences wedged post-flip?)");
     eprintln!("guest SSH up: {banner}");
     guest
         .ssh_poll(

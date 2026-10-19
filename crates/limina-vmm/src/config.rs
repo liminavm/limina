@@ -158,29 +158,23 @@ pub enum DisplaySink {
 #[derive(Debug, Clone)]
 pub struct NetSpec {
     pub backend: NetBackend,
-    /// Guest MAC for the NIC. `None` = the well-known vfkit MAC (gvproxy's default static
-    /// .2 lease); managed VMs pass their persistent per-VM MAC (the supervisor then rebinds
-    /// gvproxy's lease to match).
+    /// Guest MAC for the NIC. `None` = the well-known vfkit MAC; the supervisor names one for
+    /// every NIC that can reach vmnet.
     pub mac: Option<[u8; 6]>,
 }
 
 #[derive(Debug, Clone)]
 pub enum NetBackend {
-    /// User-mode NAT (M3) through a **gvproxy** gateway over a vfkit-style UNIX *datagram*
-    /// socket, its path here (`gvproxy -listen-vfkit unixgram://<path>`). gvproxy provides
-    /// DHCP, DNS and the NAT entirely in userspace — no root, no entitlement. The supervisor
-    /// spawns it and guarantees it is listening before the guest's virtio-net activates; the
-    /// worker just connects libkrun's backend to it (sending the `VFKT` magic).
-    Gvproxy(PathBuf),
     /// A vmnet interface the worker starts itself, through libkrun's vmnet backend
     /// (`docs/design/multi-vm-networking.md` §3.3). Needs the worker's
     /// `com.apple.security.virtualization` entitlement.
     Vmnet(VmnetMode),
     /// User-mode NAT through a `limina-netd` the worker spawns and talks to over shared rings
-    /// (`docs/design/multi-vm-networking.md` §3.2). Needs no entitlement. Experimental.
+    /// (`docs/design/multi-vm-networking.md` §3.2). Needs no entitlement.
     Netd(NetdSpec),
     /// vmnet shared, moving to netd when vmnet cannot serve and back when it can
-    /// (`docs/design/multi-vm-networking.md` §3.5). The forwards are netd's on either side.
+    /// (`docs/design/multi-vm-networking.md` §3.5): the default NIC. The forwards are netd's on
+    /// either side.
     Auto(NetdSpec),
 }
 

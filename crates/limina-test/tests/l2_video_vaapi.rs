@@ -158,7 +158,7 @@ fn stock_guest_hardware_decodes_vp9_through_vaapi() {
 
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // ORACLE 1 — the guest half exists. An image without mesa's VA driver cannot express the

@@ -231,7 +231,7 @@ fn a_bootstrap_kit_installs_the_enhanced_agent_through_the_guest_agent_port() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     let rpm = ssh_soft(&guest, "rpm -q qemu-guest-agent");

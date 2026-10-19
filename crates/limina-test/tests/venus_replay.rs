@@ -94,7 +94,7 @@ fn boot_seated(test_name: &str) -> Option<Guest> {
 
     let banner = guest
         .wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // The autologin graphical session (and its Xwayland) comes up well after sshd.

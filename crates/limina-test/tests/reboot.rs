@@ -5,7 +5,7 @@
 //!
 //! libkrun is single-shot: a guest reboot (PSCI `SYSTEM_RESET`) exits the worker process just
 //! like a power-off. Our libkrun patch gives reboot a distinct exit code and the supervisor
-//! relaunches the worker on it, so the limina process — and the gvproxy + control plane it owns —
+//! relaunches the worker on it, so the limina process — and the SSH port + control plane it owns —
 //! survives a guest reboot (real-hardware behavior). Without the fix the supervisor exited on
 //! the first reboot and the guest never came back.
 //!
@@ -13,7 +13,7 @@
 //! supervisor to print a second launch identity block (a fresh `launch_id`, same supervisor pid,
 //! a cold boot) and for SSH to come back with a *different* boot id. The block is the host's
 //! evidence that this supervisor relaunched the worker; the second SSH only succeeds if it stayed
-//! alive (it owns the gvproxy NAT and the forward); the changed boot id proves it was a genuine
+//! alive (it owns the forward's port); the changed boot id proves it was a genuine
 //! fresh boot, not the same instance.
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`.

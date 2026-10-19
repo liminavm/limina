@@ -77,7 +77,6 @@ pub enum Code {
     FirmwareMissing,
     FirmwareUnresolvable,
     FirmwareDebugFallback,
-    GvproxyMissing,
     SuspendedGranuleCoarser,
 }
 
@@ -443,33 +442,19 @@ fn check_network(cfg: &VmConfig, depth: Depth, out: &mut Vec<Finding>) {
     let Some(net) = cfg.networks.first() else {
         return;
     };
-    if net.ssh_port != 0 && net.ssh_port < crate::gateway::SSH_PORT_MIN {
+    if net.ssh_port != 0 && net.ssh_port < crate::forward::SSH_PORT_MIN {
         out.push(Finding::blocker(
             Code::SshPortTooLow,
             "network.ssh_port",
             format!(
-                "network.ssh_port {} is below {} (gvproxy's floor)",
+                "network.ssh_port {} is below {} (the privileged ports)",
                 net.ssh_port,
-                crate::gateway::SSH_PORT_MIN
+                crate::forward::SSH_PORT_MIN
             ),
         ));
     }
-    let gvproxy = crate::gateway::gvproxy_bin();
-    if !gvproxy.is_file() {
-        out.push(
-            Finding::blocker(
-                Code::GvproxyMissing,
-                gvproxy.display().to_string(),
-                format!(
-                    "networking needs gvproxy, not found at {}",
-                    gvproxy.display()
-                ),
-            )
-            .with_remedy("set LIMINA_GVPROXY_BIN, or install gvproxy"),
-        );
-    }
     // A bind probe races anything else on the host, so it can only ever be a Warning.
-    if depth == Depth::Full && net.ssh_port != 0 && !crate::gateway::port_is_free(net.ssh_port) {
+    if depth == Depth::Full && net.ssh_port != 0 && !crate::forward::port_is_free(net.ssh_port) {
         out.push(Finding::warning(
             Code::SshPortInUse,
             "network.ssh_port",
@@ -548,18 +533,13 @@ mod tests {
         r.findings.iter().map(|f| f.code).collect()
     }
 
-    /// Blockers that come from the definition itself. Whether this host has gvproxy or a
-    /// built GOP firmware is not what these tests are about, and asserting on plain
+    /// Blockers that come from the definition itself. Whether this host has a built GOP
+    /// firmware is not what these tests are about, and asserting on plain
     /// `is_startable()` would make them pass or fail by what happens to be installed.
     fn config_blockers(r: &Report) -> Vec<Code> {
         r.blockers()
             .map(|f| f.code)
-            .filter(|c| {
-                !matches!(
-                    c,
-                    Code::GvproxyMissing | Code::FirmwareUnresolvable | Code::FirmwareMissing
-                )
-            })
+            .filter(|c| !matches!(c, Code::FirmwareUnresolvable | Code::FirmwareMissing))
             .collect()
     }
 

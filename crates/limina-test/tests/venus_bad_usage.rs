@@ -69,7 +69,7 @@ fn spec_invalid_guest_calls_do_not_abort_the_worker() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
         .wait_for_ssh(Duration::from_secs(180))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
 
     guest
         .ssh_exec(&format!(

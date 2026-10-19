@@ -8,9 +8,9 @@ licence text.
     scripts/gen-third-party-notices.py --out <file> [--check-bundle <Limina.app>]
 
 Two sources, one file:
-  - assets/third-party/components.toml, hand-maintained: the bundled libraries, gvproxy, the
+  - assets/third-party/components.toml, hand-maintained: the bundled libraries, the
     firmware and the Rust standard library, each with the licence file it ships under.
-  - `cargo metadata`: every crate `limina`, `limina-vmm` or `limina-gpu-host` links for aarch64-apple-darwin,
+  - `cargo metadata`: every crate `limina`, `limina-vmm`, `limina-gpu-host` or `limina-netd` links for aarch64-apple-darwin,
     following normal dependencies only (build and dev dependencies are not shipped, and
     neither is a proc-macro crate). Workspace members are ours and left out; the forks under
     third_party/ (libkrun, rutabaga, virglrs, imago) are third-party and stay in.
@@ -244,8 +244,6 @@ def main():
         "third-party software listed below, each under its own licence, whose text follows the",
         "lists. Where a component offers a choice of licences, the files it ships are reproduced",
         "as provided.",
-        "",
-        "gvproxy is a Go program; this file attributes it but not the Go modules compiled into it.",
         "",
         "=" * 78,
         "Bundled components",

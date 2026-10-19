@@ -151,6 +151,36 @@ pub fn ssh_exec_on(port: u16, remote_cmd: &str, timeout: Duration) -> Result<Str
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+std::thread_local! {
+    /// How many VMs this test thread has given a MAC.
+    static MACS_GIVEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// The MAC the harness gives a test's VM on the default NIC. On vmnet a MAC holds a lease from
+/// one pool the whole host shares, for a day, so a fresh MAC per boot would drain it within a
+/// suite run or two. This one is derived from the test's name (its thread's) and how many VMs the
+/// test has booted before: each test keeps its own leases run after run, and two VMs of one test
+/// never share one. A thread with no name (one a test spawned) gets a random MAC.
+pub fn test_mac() -> String {
+    let given = MACS_GIVEN.with(|n| n.replace(n.get() + 1));
+    let mut b = [0u8; 6];
+    match std::thread::current().name() {
+        Some(name) => {
+            // FNV-1a 64, folded onto the 6 bytes.
+            let mut h: u64 = 0xcbf29ce484222325;
+            for byte in format!("{name}#{given}").bytes() {
+                h ^= u64::from(byte);
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            b.copy_from_slice(&h.to_be_bytes()[2..]);
+        }
+        // SAFETY: arc4random_buf fills exactly the buffer it is given.
+        None => unsafe { libc::arc4random_buf(b.as_mut_ptr().cast(), b.len()) },
+    }
+    b[0] = (b[0] & 0xfc) | 0x02; // unicast, locally administered
+    b.map(|o| format!("{o:02x}")).join(":")
+}
+
 /// The address macOS's DHCP server (bootpd) leased to the guest NIC with MAC `mac` on a vmnet
 /// shared or host network, from `/var/db/dhcpd_leases`. bootpd writes each octet without its
 /// leading zero (`2:c:4c:…`), so octets are compared as numbers.
@@ -174,7 +204,7 @@ pub fn vmnet_lease(mac: &str) -> Option<std::net::Ipv4Addr> {
 }
 
 /// Run `remote_cmd` as the test images' `claude` user on the guest's own address `host`, port 22,
-/// returning its stdout: the vmnet path, where no gvproxy forward exists. With `stdin`, that file
+/// returning its stdout: the `--net-vmnet` path, which has no SSH forward. With `stdin`, that file
 /// is fed to the remote command. Apple's `/usr/bin/ssh` by full path: macOS's Local Network
 /// policy drops connections to a vmnet guest from ad-hoc binaries (the test binary among them)
 /// and lets platform binaries through (`spikes/vmnet-network-probe/RESULTS.md`).
@@ -332,8 +362,8 @@ fn fedora_image(role: &str) -> PathBuf {
     repo_root().join(format!("Fedora-Workstation-{}.{role}.raw", fedora_rel()))
 }
 
-/// Loopback host gvproxy binds its inbound SSH forward on (`<host>:<ssh_port> → 192.168.127.2:22`;
-/// with the well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd).
+/// Loopback host the worker binds the inbound SSH forward on (`<host>:<ssh_port>` → the guest's
+/// port 22, carried by limina-netd).
 const FORWARDED_SSH_HOST: &str = "127.0.0.1";
 
 /// The SSH options every harness invocation shares — `ssh` and `scp` alike. Key auth as the
@@ -362,7 +392,7 @@ const SSH_SHARED_OPTS: [&str; 8] = [
     "-o",
     "LogLevel=INFO",
 ];
-/// gvproxy's default inbound SSH-forward host port; per-VM overridable via `--ssh-port` so several
+/// The supervisor's default inbound SSH-forward host port; per-VM overridable via `--ssh-port` so several
 /// VMs can run in parallel without colliding (see [`GuestConfig::with_ssh_port`]).
 const DEFAULT_SSH_PORT: u16 = 2222;
 
@@ -370,7 +400,7 @@ const DEFAULT_SSH_PORT: u16 = 2222;
 /// test instead of stalling the whole suite (a zink lost-wakeup deadlock once froze
 /// eglretrace mid-`venus_replay` and the un-capped ssh blocked `test-boot.sh` for 100
 /// minutes — spikes/venus-replay-zink-hang-2026-07-12/). Generous on purpose: the longest
-/// legitimate steps (the ~1 GiB trace-fixture upload through gvproxy, a full llvmpipe
+/// legitimate steps (the ~1 GiB trace-fixture upload through the forward, a full llvmpipe
 /// reference replay) finish in a few minutes. Steps that truly need more pass their own
 /// deadline via [`Guest::ssh_exec_timeout`].
 pub const SSH_CMD_TIMEOUT: Duration = Duration::from_secs(900);
@@ -696,25 +726,21 @@ pub struct GuestConfig {
     /// Which device an interactive console is wired through (only meaningful when
     /// `console_input` is set).
     pub console_channel: ConsoleChannel,
-    /// Attach a user-mode NAT NIC (the supervisor spawns + supervises a gvproxy gateway and
-    /// captures its `-debug` packet log — the host-side network oracle). See [`Guest::wait_for_gateway_log`].
+    /// Attach the default NIC (`--net`): vmnet shared, with limina-netd to fall back on and the
+    /// SSH forward through netd on either side. Its log lines land in the supervisor's.
     pub net: bool,
-    /// Put that NIC on a `limina-netd` the worker spawns instead of gvproxy (`--net-netd`). There
-    /// is no gateway log then: netd's own log lines land in the supervisor's. Set via
+    /// Put that NIC on a `limina-netd` alone (`--net-netd`). Set via
     /// [`with_net_netd`](GuestConfig::with_net_netd).
     pub net_netd: bool,
-    /// Put it on vmnet shared with netd to fall back on (`--net-auto`), the SSH forward through
-    /// netd on either side. Set via [`with_net_auto`](GuestConfig::with_net_auto).
-    pub net_auto: bool,
-    /// Per-VM host port for gvproxy's inbound SSH forward (`--ssh-port`). `None` → the supervisor
+    /// Per-VM host port for the inbound SSH forward (`--ssh-port`). `None` → the supervisor
     /// default ([`DEFAULT_SSH_PORT`], 2222). Give two concurrent VMs distinct ports so they don't
     /// collide on the host port — what lets more than one run in parallel. Set via
     /// [`with_ssh_port`](GuestConfig::with_ssh_port) (which also implies `net`).
     pub ssh_port: Option<u16>,
-    /// Custom guest MAC for the NAT NIC (`--net-mac`). `None` → the well-known vfkit MAC.
-    /// With a custom MAC the supervisor generates a gvproxy config rebinding the static .2
-    /// lease, so this exercises the managed-VM (per-VM MAC) network path. Set via
-    /// [`with_net_mac`](GuestConfig::with_net_mac) (which also implies `net`).
+    /// Custom guest MAC for the NIC (`--net-mac`), as a managed VM passes its persistent one.
+    /// `None` → on the default NIC, one derived from the test's name ([`test_mac`]); on netd,
+    /// the worker's well-known vfkit MAC. Set via [`with_net_mac`](GuestConfig::with_net_mac)
+    /// (which also implies `net`).
     pub net_mac: Option<String>,
     /// Capture the supervisor's own stderr (its log) to a scratch file instead of letting
     /// it flow to the test's stderr — for asserting on supervisor-side events (e.g. the
@@ -808,7 +834,6 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
-            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -908,7 +933,6 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
-            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -995,7 +1019,6 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
-            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1040,7 +1063,6 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
-            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1111,7 +1133,6 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
-            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1274,36 +1295,28 @@ impl GuestConfig {
         Ok(cfg)
     }
 
-    /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its
-    /// `-debug` log; assert on it via [`Guest::wait_for_gateway_log`] (DHCP lease, outbound).
     /// Append a verbatim extra flag to the `limina` supervisor command line.
     pub fn with_supervisor_arg(mut self, arg: &str) -> GuestConfig {
         self.extra_supervisor_args.push(arg.to_string());
         self
     }
 
+    /// Attach the default NIC (`--net`): vmnet shared with limina-netd to fall back on, and the
+    /// SSH forward on a pre-allocated port.
     pub fn with_net(mut self) -> GuestConfig {
         self.net = true;
         self
     }
 
-    /// Like [`with_net`](GuestConfig::with_net) but on `limina-netd` (`--net-netd`), with the same
-    /// SSH forward on its pre-allocated port.
+    /// Like [`with_net`](GuestConfig::with_net) but on `limina-netd` alone (`--net-netd`), with the
+    /// same SSH forward on its pre-allocated port.
     pub fn with_net_netd(mut self) -> GuestConfig {
         self.net = true;
         self.net_netd = true;
         self
     }
 
-    /// Like [`with_net`](GuestConfig::with_net) but on vmnet with limina-netd to fall back on
-    /// (`--net-auto`), with the same SSH forward on its pre-allocated port.
-    pub fn with_net_auto(mut self) -> GuestConfig {
-        self.net = true;
-        self.net_auto = true;
-        self
-    }
-
-    /// Like [`with_net`](GuestConfig::with_net) but pin gvproxy's inbound SSH forward to a specific
+    /// Like [`with_net`](GuestConfig::with_net) but pin the inbound SSH forward to a specific
     /// host `port` (`--ssh-port`) instead of the default 2222. Give two concurrent VMs distinct
     /// ports so they can run in parallel without colliding on the host port;
     /// [`Guest::wait_for_ssh`]/[`Guest::ssh_exec`] then target that VM's own port.
@@ -1314,8 +1327,7 @@ impl GuestConfig {
     }
 
     /// Like [`with_net`](GuestConfig::with_net) but give the guest NIC a custom MAC
-    /// (`--net-mac`) — the managed-VM path where the supervisor rebinds gvproxy's static
-    /// .2 lease to the VM's persistent MAC via a generated config file.
+    /// (`--net-mac`) — the managed-VM path, which passes the VM's persistent MAC.
     pub fn with_net_mac(mut self, mac: &str) -> GuestConfig {
         self.net = true;
         self.net_mac = Some(mac.to_string());
@@ -1751,9 +1763,9 @@ pub struct Guest {
     balloon_socket: Option<PathBuf>,
     /// Write handle to the guest console input FIFO, if an interactive console was enabled.
     console_in: Option<fs::File>,
-    /// Path to the gvproxy gateway's `-debug` log (inside `scratch`), if net was enabled.
-    gateway_log: Option<PathBuf>,
-    /// Host port of gvproxy's inbound `127.0.0.1:<port> → guest:22` forward (the `--ssh-port`
+    /// The guest NIC's MAC as the harness passed it (`--net-mac`), if it named one.
+    net_mac: Option<String>,
+    /// Host port of the inbound `127.0.0.1:<port> → guest:22` forward (the `--ssh-port`
     /// the supervisor was launched with; default [`DEFAULT_SSH_PORT`]). Distinct per VM lets
     /// several run in parallel; [`Guest::wait_for_ssh`]/[`Guest::ssh_exec`] target it.
     ssh_port: u16,
@@ -2295,18 +2307,10 @@ impl Guest {
             None => (None, None),
         };
 
-        // Networking: ask the supervisor to bring up the gvproxy NAT gateway and capture its
-        // -debug packet log into the scratch dir (the host-side network oracle — stock Fedora
-        // is silent on serial after GRUB, so the guest console can't witness DHCP/DNS).
-        let gateway_log = if cfg.net {
-            let log = scratch.join("gvproxy.log");
-            if cfg.net_auto {
-                cmd.arg("--net-auto");
-            } else if cfg.net_netd {
-                cmd.arg("--net-netd");
-            } else {
-                cmd.arg("--net").arg("--net-log").arg(&log);
-            }
+        // Networking: the supervisor's NIC, with its SSH forward.
+        let mut net_mac = None;
+        if cfg.net {
+            cmd.arg(if cfg.net_netd { "--net-netd" } else { "--net" });
             // Per-VM SSH-forward port — ALWAYS passed explicitly. When the flag is absent the
             // supervisor AUTO-ALLOCATES from 2222 up, so with another VM holding 2222 the forward
             // silently lands elsewhere while a harness that assumes 2222 ssh'es into the BYSTANDER
@@ -2323,14 +2327,16 @@ impl Guest {
             };
             allocated_ssh_port = Some(port);
             cmd.arg("--ssh-port").arg(port.to_string());
-            // Per-VM guest MAC → the supervisor's gvproxy-config (static-lease rebind) path.
-            if let Some(mac) = &cfg.net_mac {
+            // On vmnet the MAC is the guest's identity in one pool of leases the whole host shares,
+            // for a day: a test's own name gives it the same lease every run.
+            net_mac = cfg
+                .net_mac
+                .clone()
+                .or_else(|| (!cfg.net_netd).then(test_mac));
+            if let Some(mac) = &net_mac {
                 cmd.arg("--net-mac").arg(mac);
             }
-            (!cfg.net_netd && !cfg.net_auto).then_some(log)
-        } else {
-            None
-        };
+        }
 
         // Control socket at a known path, so the test can join the supervisor-owned
         // plane as a peer (see connect_control).
@@ -2415,7 +2421,7 @@ impl Guest {
             resize_socket,
             balloon_socket,
             console_in,
-            gateway_log,
+            net_mac,
             ssh_port: allocated_ssh_port.unwrap_or(DEFAULT_SSH_PORT),
             supervisor_log,
             stdout_log,
@@ -2788,15 +2794,6 @@ impl Guest {
         }
     }
 
-    /// Current gvproxy gateway `-debug` log text (lossy UTF-8; empty if no net / nothing yet).
-    pub fn gateway_log(&self) -> String {
-        self.gateway_log
-            .as_ref()
-            .and_then(|p| fs::read(p).ok())
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default()
-    }
-
     /// Current captured supervisor log text (lossy UTF-8; empty if not captured / nothing
     /// yet). Requires [`GuestConfig::with_supervisor_log`].
     pub fn supervisor_log(&self) -> String {
@@ -3030,36 +3027,10 @@ impl Guest {
         self.debug_port("identity")
     }
 
-    /// Block until `needle` appears in the gvproxy gateway log, or `timeout` elapses, or the
-    /// supervisor exits early. The gateway log is the host-side network oracle (DHCP, DNS,
-    /// NAT packets). Requires [`GuestConfig::with_net`].
-    pub fn wait_for_gateway_log(&mut self, needle: &str, timeout: Duration) -> Result<()> {
-        anyhow::ensure!(
-            self.gateway_log.is_some(),
-            "no gateway log (use GuestConfig::with_net)"
-        );
-        let deadline = Instant::now() + timeout;
-        loop {
-            let log = self.gateway_log();
-            if log.contains(needle) {
-                return Ok(());
-            }
-            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
-                bail!(
-                    "supervisor exited ({status}) before the gateway log showed {needle:?}.\n\
-                     --- gateway log tail ---\n{}",
-                    tail(&log, 20)
-                );
-            }
-            if Instant::now() >= deadline {
-                bail!(
-                    "timed out after {timeout:?} waiting for {needle:?} in the gateway log.\n\
-                     --- gateway log tail ---\n{}",
-                    tail(&log, 20)
-                );
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
+    /// The guest NIC's MAC, as the harness gave it to the supervisor (`None` on a netd NIC that
+    /// named none, which takes the worker's well-known one).
+    pub fn net_mac(&self) -> Option<&str> {
+        self.net_mac.as_deref()
     }
 
     /// The host port of this VM's SSH forward (`127.0.0.1:<port> → guest:22`) — the explicit
@@ -3068,11 +3039,11 @@ impl Guest {
         self.ssh_port
     }
 
-    /// Block until the guest's SSH is **usable** — not merely answering — through gvproxy's
+    /// Block until the guest's SSH is **usable** — not merely answering — through the
     /// inbound port-forward (`127.0.0.1:<ssh_port> → guest:22`, this VM's
     /// [`GuestConfig::with_ssh_port`] or 2222). Returns the banner it saw
     /// (e.g. `SSH-2.0-OpenSSH_10.0`), so it still reads as proof of the inbound NAT path
-    /// end to end (host → gvproxy forward → guest sshd) — what makes
+    /// end to end (host → the forward → guest sshd) — what makes
     /// `ssh -p 2222 user@127.0.0.1` work. Requires [`GuestConfig::with_net`].
     ///
     /// **The banner is not readiness**, which is what this used to assume. sshd sends it the
@@ -3159,8 +3130,8 @@ impl Guest {
         let forward = format!("{FORWARDED_SSH_HOST}:{port}");
         let addr: std::net::SocketAddr = forward.parse().expect("valid forward addr");
 
-        // Stage 1 — a banner. gvproxy accepts on the forward immediately and only yields a
-        // banner once it can dial the guest, so an empty/short read means "not yet".
+        // Stage 1 — a banner. The forward accepts immediately and only yields a banner once it
+        // can reach the guest, so an empty/short read means "not yet".
         let banner = loop {
             if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
                 stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
@@ -3228,7 +3199,7 @@ impl Guest {
         }
     }
 
-    /// Run `remote_cmd` in the guest over SSH (through gvproxy's `127.0.0.1:<ssh_port> → guest:22`
+    /// Run `remote_cmd` in the guest over SSH (through the `127.0.0.1:<ssh_port> → guest:22`
     /// forward, this VM's [`GuestConfig::with_ssh_port`] or 2222) and return its stdout. Logs in as
     /// the in-image `claude` user via the host's default key (passwordless — see memory
     /// `limina-fedora-access`); host-key checks are disabled (the per-VM forward reuses
@@ -3351,8 +3322,8 @@ impl Guest {
     /// [`vmm_bin`](GuestConfig::vmm_bin). The supervisor normally has launchd start it, through a
     /// `limina-vmm --launcher <job label>` whose label carries the supervisor's pid, so the worker
     /// is that launcher's child. When the launchd path is unavailable (or `LIMINA_WORKER_LAUNCH=
-    /// spawn`) it is the supervisor's own child. With `--net` the supervisor also has gvproxy and
-    /// a reaper child, so both matches go by the executable path, not the first child.
+    /// spawn`) it is the supervisor's own child, among others, so both matches go by the
+    /// executable path, not the first child.
     pub fn worker_pid(&self) -> Result<libc::pid_t> {
         worker_pid_of(self.pid, &self.vmm_bin)
     }
@@ -3837,7 +3808,7 @@ impl Guest {
         // Overran. An ordinary stop never kills the guest — the supervisor asks and then waits
         // — so a guest that ignores every rung is still running here, by design. Escalate the
         // way a user would: a SECOND SIGTERM is the force path, and the supervisor then tears
-        // its own worker and gateway down cleanly instead of being killed out from under them.
+        // its own worker down cleanly instead of being killed out from under it.
         unsafe {
             libc::kill(self.pid, libc::SIGTERM);
         }
@@ -3861,7 +3832,6 @@ impl Guest {
         // A worker the supervisor launched in the moment between the look and the kill is still
         // under a launcher whose job label names this run.
         self.kill_stray_workers();
-        self.kill_stray_gateway();
         let status = self
             .child
             .wait()
@@ -3882,19 +3852,6 @@ impl Guest {
     /// the forced path.
     fn kill_stray_workers(&self) {
         kill_run_workers(self.pid, &self.vmm_bin);
-    }
-
-    /// Best-effort: SIGKILL this supervisor's gvproxy on the forced path. After we SIGKILL the
-    /// supervisor it can't run its own gateway teardown, so its gvproxy would be orphaned (the
-    /// next `limina --net` would sweep it, but don't leave a stray after a test run). Targeted by
-    /// the supervisor pid embedded in gvproxy's socket name (`limina-gvproxy-<pid>.sock`, see
-    /// limina/src/gateway.rs), so it can't touch a concurrently-running VM's gateway.
-    fn kill_stray_gateway(&self) {
-        let _ = Command::new("pkill")
-            .args(["-9", "-f", &format!("limina-gvproxy-{}.sock", self.pid)])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
     }
 }
 
@@ -4466,9 +4423,9 @@ mod teardown_tests {
         // pid -> (parent, exe, argv)
         let table: Vec<(libc::pid_t, libc::pid_t, &Path, Vec<String>)> = vec![
             (100, 50, other, vec!["limina".into()]),
-            // This supervisor's own child worker (the spawn path) and its gvproxy.
+            // This supervisor's own child worker (the spawn path) and another child of it.
             (101, 100, vmm, vec!["limina-vmm".into(), "--cpus".into()]),
-            (102, 100, other, vec!["gvproxy".into()]),
+            (102, 100, other, vec!["limina".into()]),
             // This run's launcher (a child of launchd) and the worker under it.
             (
                 200,
@@ -4914,5 +4871,28 @@ mod frame_tests {
             !a.dominant_within([0, 0, 0], [10, 255, 236], 0.5),
             "red out of range"
         );
+    }
+}
+
+#[cfg(test)]
+mod mac_tests {
+    use super::*;
+
+    /// A test's VMs get the same MACs every run, distinct from each other, locally administered.
+    #[test]
+    fn a_tests_vms_keep_their_macs_from_run_to_run() {
+        let run = || {
+            std::thread::Builder::new()
+                .name("net::some_test".into())
+                .spawn(|| (test_mac(), test_mac()))
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        let (first, second) = run();
+        assert_eq!(run(), (first.clone(), second.clone()));
+        assert_ne!(first, second);
+        let octet = u8::from_str_radix(&first[..2], 16).unwrap();
+        assert_eq!(octet & 0x03, 0x02, "{first}");
     }
 }

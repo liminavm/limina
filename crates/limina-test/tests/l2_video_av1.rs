@@ -100,7 +100,7 @@ fn stock_guest_plays_av1_through_vaapi() {
         .expect("coexist GPU did not come up (degraded to software-2D?)");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     let have_driver = guest

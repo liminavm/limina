@@ -36,7 +36,7 @@ fn test_mac() -> String {
 fn config(mac: &str) -> GuestConfig {
     GuestConfig::fedora_from_env()
         .expect("resolving guest config")
-        .with_net_auto()
+        .with_net()
         .with_net_mac(mac)
         .with_supervisor_log()
         .with_ssh_target_check()

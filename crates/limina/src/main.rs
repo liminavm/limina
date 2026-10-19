@@ -20,7 +20,7 @@ mod control;
 mod debug_ctl;
 mod debug_port;
 mod fido;
-mod gateway;
+mod forward;
 mod host_state;
 // macOS's own Modifier Keys configuration, which positional normalization must read past.
 mod hostmods;
@@ -446,47 +446,35 @@ struct Cli {
     #[arg(long, value_parser = ["s2idle", "ignore"])]
     on_host_sleep: Option<String>,
 
-    /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
-    /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
-    /// internet automatically (e.g. for SSH).
-    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd", "net_auto"])]
+    /// Attach a NIC with outbound networking and an SSH forward: on vmnet shared (NAT through
+    /// macOS), moving to a user-mode NAT (limina-netd) when vmnet cannot serve — it will not
+    /// start, or a VPN takes its route — and back when it can. The guest takes its address by
+    /// DHCP on either side, and the SSH forward works the same on both.
+    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd"])]
     net: bool,
 
-    /// Attach a NIC on a vmnet interface instead of the gvproxy NAT: `shared` (NAT through
-    /// macOS), `host` (host-only) or `bridged:<interface>` (e.g. `bridged:en0`, a real LAN
-    /// lease). The worker starts the interface itself; no gateway process runs. The guest's
-    /// address is in `/var/db/dhcpd_leases` (shared/host) and only Apple's own tools reach
-    /// it from the host until Local Network access is sorted out. Experimental.
-    #[arg(long, value_name = "MODE", value_parser = parse_vmnet_mode, conflicts_with_all = ["net_netd", "net_auto"])]
+    /// Attach a NIC on a vmnet interface alone: `shared` (NAT through macOS), `host`
+    /// (host-only) or `bridged:<interface>` (e.g. `bridged:en0`, a real LAN lease). No SSH
+    /// forward: the guest's address is in `/var/db/dhcpd_leases` (shared/host), and only Apple's
+    /// own tools reach it from the host without a Local Network grant. Experimental.
+    #[arg(long, value_name = "MODE", value_parser = parse_vmnet_mode, conflicts_with = "net_netd")]
     net_vmnet: Option<String>,
 
-    /// Attach a user-mode NAT NIC on limina-netd instead of gvproxy: the worker spawns netd
-    /// itself and talks to it over shared memory. It leases the guest an address; forwarding
-    /// traffic is still being built. Experimental.
-    #[arg(long, conflicts_with = "net_auto")]
+    /// Attach a NIC on limina-netd alone, the user-mode NAT `--net` falls back on: the worker
+    /// spawns netd itself and talks to it over shared memory.
+    #[arg(long)]
     net_netd: bool,
 
-    /// Attach a NIC on vmnet shared that moves to limina-netd when vmnet cannot serve (it will
-    /// not start, or a VPN takes its route) and back when it can. The SSH forward works the same
-    /// on either side. Experimental.
+    /// Host port for inbound SSH to the guest (`127.0.0.1:<port> → guest:22`). When omitted, the
+    /// first free port from 2222 up is auto-allocated, so two or more VMs run in parallel without
+    /// colliding — the resolved port is logged at startup. Pass an explicit value to pin it
+    /// (errors if that port is busy). Needs --net or --net-netd; must be 1024–65535.
     #[arg(long)]
-    net_auto: bool,
-
-    /// Capture the gvproxy gateway's `-debug` packet log to this file (DHCP/DNS/NAT — the
-    /// host-side network oracle). Requires --net; without it gvproxy logs quietly.
-    #[arg(long, requires = "net")]
-    net_log: Option<PathBuf>,
-
-    /// Host port for inbound SSH to the guest (gvproxy's built-in `127.0.0.1:<port> → guest:22`
-    /// forward). When omitted, the first free port from 2222 up is auto-allocated, so two or more
-    /// VMs run in parallel without colliding — the resolved port is logged at startup. Pass an
-    /// explicit value to pin it (errors if that port is busy). Requires --net; must be 1024–65535.
-    #[arg(long, requires = "net")]
     ssh_port: Option<u16>,
 
-    /// Guest MAC address for the NAT NIC (aa:bb:cc:dd:ee:ff). Managed VMs pass their persistent
-    /// per-VM MAC from vm.toml; when omitted, the well-known vfkit MAC is used. The gateway's
-    /// static .2 lease is rebound to this MAC so DHCP and the SSH forward keep working.
+    /// Guest MAC address for the NIC (aa:bb:cc:dd:ee:ff). Managed VMs pass their persistent
+    /// per-VM MAC from vm.toml; when omitted, `--net` derives one from the boot disk's path, so a
+    /// VM keeps its vmnet lease from boot to boot.
     #[arg(long, value_parser = parse_mac_arg)]
     net_mac: Option<String>,
 
@@ -922,7 +910,7 @@ impl Cli {
 /// context create fails EMFILE, guest venus init dies and gnome-shell aborts at login
 /// (observed with the worker idling just 6 fds from the ceiling). Terminal launches
 /// inherit a high shell limit, which is why dev runs never hit it. Called first thing in
-/// main so every child (center → `limina start` → limina-vmm + gvproxy) inherits the
+/// main so every child (center → `limina start` → limina-vmm → limina-netd) inherits the
 /// raised limit; the worker also raises its own. macOS rejects an unbounded setrlimit
 /// (rlim_max reads RLIM_INFINITY but the kernel caps at kern.maxfilesperproc), so clamp
 /// to OPEN_MAX (10240), which is always accepted and plenty for any session.
@@ -952,13 +940,6 @@ fn main() -> Result<()> {
     // stderr, so without this the message our loud assertions exist to print is simply lost
     // (see `limina_paniclog`). `supervisor::install_panic_kill_hook` chains on top of this later.
     limina_paniclog::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-
-    // Death-pact reaper mode (hidden, spawned by the gateway alongside gvproxy). Handled BEFORE
-    // clap/logging/AppKit so it stays a tiny process that only watches a pipe and reaps gvproxy
-    // when this supervisor dies. See gateway::spawn_death_pact_watcher / run_reaper.
-    if std::env::args().nth(1).as_deref() == Some(gateway::REAP_GATEWAY_ARG) {
-        gateway::run_reaper();
-    }
 
     // Default to warn-and-up so a production run is quiet; RUST_LOG overrides it (RUST_LOG=info
     // restores the lifecycle log), and a running VM can change it (`limina debug`, the Debug
@@ -1690,8 +1671,6 @@ fn cli_from_definition(
         net,
         net_vmnet: None,
         net_netd: false,
-        net_auto: false,
-        net_log: None,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
         ssh_port,
         shutdown_grace_secs: ov.shutdown_grace_secs.unwrap_or(20),
@@ -1723,7 +1702,6 @@ fn cli_from_definition(
 /// tail of [`run_vm`] plus six in the windowed AppKit timer), all via `process::exit`, so a
 /// teardown step added to only six of them is the natural bug. Each callee is idempotent.
 fn exit_cleanup() {
-    gateway::cleanup();
     control::cleanup();
     debug_ctl::cleanup();
     runtime_ctl::cleanup();
@@ -2199,47 +2177,20 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--balloon-deflate-on-oom".into());
     }
 
-    // User-mode NAT: spawn + supervise a gvproxy gateway and connect the guest NIC to it.
-    // Kept alive for the VM's lifetime; cleaned up on both exit paths (Drop here, the global
-    // gateway::cleanup() in the windowed timer's process::exit).
-    let gateway = if cli.net {
-        // Validate only an *explicit* port; omitting --ssh-port auto-allocates a free one (so two
-        // VMs can run in parallel without the user hand-picking non-colliding ports).
-        if let Some(p) = cli.ssh_port {
-            anyhow::ensure!(
-                p >= gateway::SSH_PORT_MIN,
-                "--ssh-port must be between {} and 65535 (gvproxy's range), got {p}",
-                gateway::SSH_PORT_MIN
-            );
-        }
-        let gw = gateway::start(cli.net_log.as_deref(), cli.ssh_port, cli.net_mac.as_deref())
-            .context("starting the gvproxy NAT gateway")?;
-        // Surface the resolved port — with auto-allocation the user can't know it in advance.
-        // User-facing output: print directly so it shows at the default warn level.
-        println!(
-            "guest SSH forward ready: ssh -p {} <user>@127.0.0.1",
-            gw.ssh_port()
-        );
-        args.push("--net-gvproxy".into());
-        args.push(path_arg(gw.socket_path())?);
-        if let Some(mac) = &cli.net_mac {
-            args.push("--net-mac".into());
-            args.push(mac.clone());
-        }
-        Some(gw)
-    } else {
-        None
-    };
     anyhow::ensure!(
-        cli.net_mac.is_none() || cli.net || cli.net_vmnet.is_some() || cli.net_netd || cli.net_auto,
-        "--net-mac needs a NIC: pass --net, --net-vmnet, --net-netd or --net-auto"
+        cli.net_mac.is_none() || cli.net || cli.net_vmnet.is_some() || cli.net_netd,
+        "--net-mac needs a NIC: pass --net, --net-vmnet or --net-netd"
     );
-    let mut ssh_forward = gateway.as_ref().map(|g| g.forward());
-    if cli.net_netd || cli.net_auto {
-        if cli.net_auto {
-            // On vmnet every guest of the host shares one segment, so the fixed vfkit MAC that
-            // gives netd's islands their lease would collide between two VMs there.
-            let mac = cli.net_mac.clone().unwrap_or_else(random_local_mac);
+    anyhow::ensure!(
+        cli.ssh_port.is_none() || cli.net || cli.net_netd,
+        "--ssh-port needs a NIC with a forward: pass --net or --net-netd"
+    );
+    let mut ssh_forward = None;
+    if cli.net || cli.net_netd {
+        if cli.net {
+            // On vmnet every guest of the host shares one segment and one pool of leases, so a VM
+            // needs a MAC of its own, and the same one at every boot.
+            let mac = cli.net_mac.clone().unwrap_or_else(|| disk_mac(&cli.disk));
             println!("vmnet NIC with limina-netd to fall back on, guest MAC {mac}");
             args.push("--net-auto".into());
             args.push("--net-mac".into());
@@ -2256,25 +2207,25 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         // time the guest is; the port is checked here so a taken one fails before the boot.
         if let Some(p) = cli.ssh_port {
             anyhow::ensure!(
-                p >= gateway::SSH_PORT_MIN,
+                p >= forward::SSH_PORT_MIN,
                 "--ssh-port must be between {} and 65535, got {p}",
-                gateway::SSH_PORT_MIN
+                forward::SSH_PORT_MIN
             );
         }
-        let port = gateway::allocate_ssh_port(cli.ssh_port)?;
+        let port = forward::allocate_ssh_port(cli.ssh_port)?;
         args.push("--net-forward".into());
         args.push(format!("127.0.0.1:{port}:22"));
         let link = worker_link(&mut links, "--net-control-fd");
-        if cli.net_auto {
+        if cli.net {
             runtime_ctl::set_net_control(Some(link.clone()));
         }
-        ssh_forward = Some(gateway::SshForward::on_worker(port, link));
+        ssh_forward = Some(forward::SshForward::on_worker(port, link));
         println!("guest SSH forward ready: ssh -p {port} <user>@127.0.0.1");
     }
     runtime_ctl::set_forward(ssh_forward.clone());
     if let Some(mode) = &cli.net_vmnet {
-        // Every vmnet guest of a mode shares one segment, so the fixed vfkit MAC that gives
-        // gvproxy's islands their static lease would collide between two VMs here.
+        // Every vmnet guest of a mode shares one segment, so the fixed vfkit MAC would collide
+        // between two VMs here.
         let mac = cli.net_mac.clone().unwrap_or_else(random_local_mac);
         println!("vmnet {mode} NIC, guest MAC {mac}");
         args.push("--net-vmnet".into());
@@ -2439,7 +2390,6 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             grace,
             width,
             height,
-            gateway,
             ssh: ssh_forward,
             control,
             resize_socket,
@@ -2516,7 +2466,6 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     let code = supervisor::run(
         &spec,
         control.as_ref(),
-        gateway.as_ref(),
         cli.input,
         headless_display.as_ref(),
     )?;
@@ -2557,9 +2506,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     if let Some(snapshot) = &cli.snapshot_file {
         let _ = std::fs::remove_file(snapshot.with_extension("bin.consumed"));
     }
-    // Explicit: process::exit skips destructors, so tear the gateway + control socket
-    // down before exiting.
-    drop(gateway);
+    // Explicit: process::exit skips destructors, so tear the control socket down before exiting.
     exit_cleanup();
     std::process::exit(code);
 }
@@ -2712,6 +2659,21 @@ fn parse_vmnet_mode(s: &str) -> Result<String, String> {
 }
 
 /// A random locally-administered unicast MAC, `aa:bb:cc:dd:ee:ff`.
+/// The MAC a `--net` VM that names none takes: one derived from its boot disk's path, so it
+/// keeps its vmnet lease from boot to boot and two disks never share one. With no disk, a random
+/// one.
+fn disk_mac(disks: &[String]) -> String {
+    match disks.first() {
+        Some(disk) => {
+            let path = std::fs::canonicalize(disk)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| disk.clone());
+            vmlib::schema::mac_for_uuid(&path)
+        }
+        None => random_local_mac(),
+    }
+}
+
 fn random_local_mac() -> String {
     let mut b = [0u8; 6];
     // SAFETY: arc4random_buf fills exactly the buffer it is given.
@@ -3684,7 +3646,7 @@ mod tests {
         assert_eq!(
             cli.net_mac.as_deref(),
             Some("5a:00:00:00:00:01"),
-            "the persistent per-VM MAC reaches the worker + gateway"
+            "the persistent per-VM MAC reaches the worker"
         );
         assert!(!cli.window);
         assert!(cli.gpu_software_2d);

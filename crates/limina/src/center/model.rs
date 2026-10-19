@@ -335,12 +335,9 @@ mod tests {
         opts.disk = Some(src);
         let bundle = create(&opts, &lib).unwrap();
 
-        // The row reports the first blocker, and whether this host has gvproxy or a built
-        // GOP firmware is not what this test is about: satisfy both with stand-ins so the
-        // only thing that can block is the definition itself.
-        let gvproxy = lib.join("gvproxy");
-        std::fs::write(&gvproxy, b"").unwrap();
-        unsafe { std::env::set_var("LIMINA_GVPROXY_BIN", &gvproxy) };
+        // The row reports the first blocker, and whether this host has a built GOP firmware
+        // is not what this test is about: satisfy it with a stand-in so the only thing that
+        // can block is the definition itself.
         let firmware = lib.join("firmware.fd");
         std::fs::write(&firmware, b"").unwrap();
         let mut cfg = bundle.load().unwrap();
@@ -361,7 +358,6 @@ mod tests {
             .expect("the row must say why Start is unavailable");
         assert!(why.contains("not found"), "{why}");
 
-        unsafe { std::env::remove_var("LIMINA_GVPROXY_BIN") };
         unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }

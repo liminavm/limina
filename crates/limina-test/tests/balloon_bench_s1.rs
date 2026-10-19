@@ -134,7 +134,7 @@ fn s1_mechanism_deflate_inflate() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
     let stamp = verify_tier(&guest, &cfg).expect("tier positive control");
     // Let boot-time churn settle so the idle baseline is honest.

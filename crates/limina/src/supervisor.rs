@@ -20,8 +20,8 @@
 //! Reboot: libkrun is single-shot — a guest reboot (PSCI `SYSTEM_RESET`) tears the worker
 //! process down just like a power-off. Our libkrun patch makes it exit with a *distinct* code
 //! ([`WORKER_EXIT_REBOOT`]) so [`run`] can tell the two apart and **relaunch the worker** (a
-//! fresh boot) on reboot, while the supervisor — and the resources it owns (gvproxy, the
-//! control plane) — survive. A boot-loop guard stops endless relaunches.
+//! fresh boot) on reboot, while the supervisor — and the resources it owns (the SSH
+//! forward's port, the control plane) — survive. A boot-loop guard stops endless relaunches.
 
 use std::ffi::{OsStr, OsString};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -213,7 +213,7 @@ pub fn suspend_requested_externally() -> bool {
 /// Set by [`request_reset`]; observed by [`monitor`], which kills the worker and reports the exit
 /// as a guest reboot, so the relaunch loop that already handles a guest's own `reboot` (the
 /// headless [`run`] and the windowed session alike) cold-boots a fresh worker behind the same
-/// supervisor, window, gateway and SSH port.
+/// supervisor, window and SSH port.
 static RESET: AtomicBool = AtomicBool::new(false);
 /// The last worker exit was a reset, not the guest's own reboot (for the relaunch's log line).
 static RESET_RELAUNCH: AtomicBool = AtomicBool::new(false);
@@ -1102,7 +1102,7 @@ pub fn force_stop_requested() -> bool {
 ///
 /// A guest **power-off** (or signal-driven stop) returns the worker's exit code. A guest
 /// **reboot** ([`WORKER_EXIT_REBOOT`]) instead **relaunches** the worker — a fresh boot of the
-/// same VM — so the supervisor and its gvproxy/control-plane resources survive a guest reboot
+/// same VM — so the supervisor and its control-plane resources survive a guest reboot
 /// the way real hardware would. A runaway boot loop (repeated reboots each under
 /// [`MIN_HEALTHY_UPTIME`]) is capped at [`MAX_RAPID_REBOOTS`] so we don't spin forever.
 ///
@@ -1112,7 +1112,6 @@ pub fn force_stop_requested() -> bool {
 pub fn run(
     spec: &WorkerSpec,
     control: Option<&crate::control::ControlPlane>,
-    gateway: Option<&crate::gateway::Gateway>,
     input: bool,
     display: Option<&crate::window::headless::HeadlessDisplay>,
 ) -> Result<i32> {
@@ -1179,14 +1178,6 @@ pub fn run(
             return Ok(code);
         }
 
-        // Recycle the NAT gateway: gvproxy's vfkit socket is single-connection, so the fresh
-        // worker can't reconnect to the old one. Restart it at the same path before re-spawning.
-        if let Some(gw) = gateway
-            && let Err(e) = gw.restart()
-        {
-            log::error!("could not restart the NAT gateway for the reboot: {e:#}; stopping");
-            return Ok(code);
-        }
         if take_reset_relaunch() {
             log::info!("reset → cold-booting a fresh VM worker");
         } else {

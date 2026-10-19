@@ -7,8 +7,7 @@
 # Bundles the entire host venus/GL dylib closure into Contents/Frameworks, relocated
 # to @rpath so it resolves relative to the app (no /Volumes/mesa-cs, no third_party
 # prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the GOP
-# firmware and the gvproxy NAT helper (so `--net` works on a Mac without Homebrew),
-# writes Info.plist, codesigns inside-out (hardened runtime + secure timestamp) with an
+# firmware, writes Info.plist, codesigns inside-out (hardened runtime + secure timestamp) with an
 # Apple Development identity from
 # the keychain (keeps TCC grants stable across redeploys; ad-hoc only by explicit
 # opt-in — LIMINA_SIGN_IDENTITY="-" or LIMINA_ALLOW_ADHOC=1 — otherwise abort). The
@@ -56,9 +55,6 @@ DLOPEN_ROOTS=(
   "$ZINK/libGLESv2.dylib"
 )
 GOP_FD="$ROOT/target/firmware/efi.fd"
-# gvproxy (user-mode NAT for `--net`); vendored into the bundle so networking works on a
-# Homebrew-less Mac. Override the source with LIMINA_GVPROXY_BIN; defaults to Homebrew's.
-GVPROXY="${LIMINA_GVPROXY_BIN:-/opt/homebrew/bin/gvproxy}"
 
 # KK/zink live on a case-sensitive sparse image whose mount macOS drops on reboot.
 . "$ROOT/scripts/ensure-mesa-cs.sh"
@@ -74,8 +70,8 @@ if [ "${#ZINK_GALLIUM[@]}" -ne 1 ] || [ ! -e "${ZINK_GALLIUM[0]}" ]; then
 fi
 DLOPEN_ROOTS+=("${ZINK_GALLIUM[0]}")
 
-for f in "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY"; do
-  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
+for f in "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD"; do
+  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, or build the GOP firmware)" >&2; exit 1; }
 done
 
 # ---- KK provenance tripwire (2026-07-29): a bundle silently shipped whatever ------
@@ -219,11 +215,8 @@ cp "$ROOT/target/$PROFILE/limina" "$MACOS/limina"
 cp "$ROOT/target/$PROFILE/limina-vmm" "$MACOS/limina-vmm"
 # The worker starts the native-context transport's GPU host from its own directory.
 cp "$ROOT/target/$PROFILE/limina-gpu-host" "$MACOS/limina-gpu-host"
-# ...and the user-mode NAT for a NIC on limina-netd.
+# ...and the user-mode NAT its NIC falls back on.
 cp "$ROOT/target/$PROFILE/limina-netd" "$MACOS/limina-netd"
-# gvproxy alongside the binaries (Contents/MacOS/gvproxy); gateway.rs resolves it bundle-relative.
-cp "$GVPROXY" "$MACOS/gvproxy"
-chmod u+w "$MACOS/gvproxy"
 
 # ---- recursive dylib bundler -----------------------------------------------------
 # Copy a dylib into Frameworks, set its id to @rpath/<leaf>, then for every non-system
@@ -435,7 +428,6 @@ else
   codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force \
     --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
 fi
-codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/gvproxy"
 codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina-gpu-host"
 codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina-netd"
 codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina"

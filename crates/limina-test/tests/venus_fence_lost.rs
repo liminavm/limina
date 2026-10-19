@@ -90,7 +90,7 @@ fn lost_context_fence_still_signals_its_sync_file() {
     let mut g = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = g
         .wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // EFI boots the image's own autologin desktop; drop it so the session is headless from

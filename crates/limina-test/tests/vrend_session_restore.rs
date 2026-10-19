@@ -335,7 +335,7 @@ fn run(desktop: &Desktop) {
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     let banner = g1
         .wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
     let shell = desktop.shell;
     g1.ssh_poll(

@@ -311,7 +311,7 @@ fn seated_gpu_workload_survives_restore_unchanged() {
     eprintln!("booting the seated desktop (snapshot-armed)");
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     g1.wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .expect("gnome-shell never appeared — the seated session didn't come up");
 

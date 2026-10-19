@@ -78,7 +78,7 @@ fn virgl_readback_does_not_wedge_the_gpu() {
     // sshd is reachable, and the autologin Xwayland session comes up well after that.
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
     guest
         .ssh_poll(

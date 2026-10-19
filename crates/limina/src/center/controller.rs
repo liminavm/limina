@@ -337,7 +337,7 @@ define_class!(
             };
             let errors = self.ivars().errors.clone();
             let (pid, name) = (row.pid as u32, row.name.clone());
-            // Asks gvproxy, which is quick, but never on the main thread.
+            // Asks the worker, which is quick, but never on the main thread.
             std::thread::spawn(move || {
                 let req = crate::runtime_ctl::Request::SshPort(port);
                 if let Err(e) = crate::runtime_ctl::request(pid, req) {

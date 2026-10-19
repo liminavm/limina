@@ -19,8 +19,8 @@ use smoltcp::wire::{
 
 use limina_netd_wire::VNET_HDR_LEN;
 
-/// The link netd presents: the addresses gvproxy used, so a guest moving between the two sees
-/// the same network.
+/// The link netd presents: gvisor-tap-vsock's vfkit addressing (192.168.127.0/24, the gateway at
+/// `.1`, the guest at `.2`), which vfkit and krunkit guests already know.
 #[derive(Clone, Debug)]
 pub struct Link {
     pub gateway_mac: EthernetAddress,

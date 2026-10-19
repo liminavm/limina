@@ -344,24 +344,18 @@ struct Cli {
     #[arg(long)]
     balloon_deflate_on_oom: bool,
 
-    /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
-    /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
-    /// before the guest activates the device.
-    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd", "net_auto"])]
-    net_gvproxy: Option<PathBuf>,
-
     /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
     /// `host` (host-only) or `bridged:<interface>`. Experimental (networking design Phase 1).
     #[arg(long, conflicts_with_all = ["net_netd", "net_auto"])]
     net_vmnet: Option<VmnetMode>,
 
     /// Attach a user-mode NAT NIC (`eth0`) on a `limina-netd` this worker spawns from its own
-    /// directory. Experimental (networking design Phase 3).
+    /// directory.
     #[arg(long, conflicts_with = "net_auto")]
     net_netd: bool,
 
     /// Attach a NIC (`eth0`) on vmnet shared that moves to a `limina-netd` this worker spawns
-    /// when vmnet cannot serve, and back. Experimental (networking design Phase 4).
+    /// when vmnet cannot serve, and back: the supervisor's `--net`.
     #[arg(long)]
     net_auto: bool,
 
@@ -377,7 +371,6 @@ struct Cli {
     net_control_fd: Option<i32>,
 
     /// Guest MAC for the NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
-    /// The supervisor keeps gvproxy's static .2 lease in sync with this.
     #[arg(long)]
     net_mac: Option<String>,
 
@@ -862,12 +855,11 @@ fn main() -> Result<()> {
         forwards: cli.net_forward,
         control: cli.net_control_fd.map(ListenAt::Link),
     };
-    let net_backend = match (cli.net_gvproxy, cli.net_vmnet, cli.net_netd, cli.net_auto) {
-        (Some(socket), None, false, false) => Some(NetBackend::Gvproxy(socket)),
-        (None, Some(mode), false, false) => Some(NetBackend::Vmnet(mode)),
-        (None, None, true, false) => Some(NetBackend::Netd(netd_spec)),
-        (None, None, false, true) => Some(NetBackend::Auto(netd_spec)),
-        (None, None, false, false) => None,
+    let net_backend = match (cli.net_vmnet, cli.net_netd, cli.net_auto) {
+        (Some(mode), false, false) => Some(NetBackend::Vmnet(mode)),
+        (None, true, false) => Some(NetBackend::Netd(netd_spec)),
+        (None, false, true) => Some(NetBackend::Auto(netd_spec)),
+        (None, false, false) => None,
         _ => unreachable!("clap rejects more than one of the --net-* backends"),
     };
     let net = net_backend.map(|backend| NetSpec {

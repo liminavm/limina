@@ -52,25 +52,13 @@ use crate::config::{
 const GUEST_CID: u32 = 3;
 
 // virtio-net feature bits (mirrors libkrun's C-API `NET_FEATURE_*` so we don't depend on
-// private consts). We request the IPv4 offload set `NET_COMPAT_FEATURES` — the same baseline
-// krunkit uses with gvproxy. TSO6/UFO6 are reachable but left off until verified non-corrupting
-// (see roadmap M3).
+// private consts).
 const NET_FEATURE_CSUM: u32 = 1 << 0;
 const NET_FEATURE_GUEST_CSUM: u32 = 1 << 1;
 const NET_FEATURE_GUEST_TSO4: u32 = 1 << 7;
 const NET_FEATURE_GUEST_TSO6: u32 = 1 << 8;
-const NET_FEATURE_GUEST_UFO: u32 = 1 << 10;
 const NET_FEATURE_HOST_TSO4: u32 = 1 << 11;
 const NET_FEATURE_HOST_TSO6: u32 = 1 << 12;
-const NET_FEATURE_HOST_UFO: u32 = 1 << 14;
-
-/// virtio-net offload features for the gvproxy NAT NIC (IPv4-only baseline).
-const NET_COMPAT_FEATURES: u32 = NET_FEATURE_CSUM
-    | NET_FEATURE_GUEST_CSUM
-    | NET_FEATURE_GUEST_TSO4
-    | NET_FEATURE_GUEST_UFO
-    | NET_FEATURE_HOST_TSO4
-    | NET_FEATURE_HOST_UFO;
 
 /// virtio-net offload features for a vmnet NIC: checksum and TCP segmentation both ways, IPv6
 /// included, since vmnet's one TSO switch covers both directions and both families. No UFO:
@@ -92,12 +80,9 @@ const VMNET_HOST_MODE: u32 = 1000;
 const VMNET_SHARED_MODE: u32 = 1001;
 const VMNET_BRIDGED_MODE: u32 = 1002;
 
-/// Guest MAC for the NAT NIC: the well-known vfkit/krunkit MAC. gvproxy's default config
-/// has a *static* DHCP lease binding this MAC to `192.168.127.2` and a built-in port-forward
-/// `127.0.0.1:2222 → 192.168.127.2:22`. Using it (rather than an arbitrary locally-administered
-/// MAC, which gets a dynamic .3 lease) makes the guest IP deterministic and gives inbound SSH
-/// (`ssh -p 2222 user@127.0.0.1`) for free — no gvproxy REST forwarding needed. (`5a` =
-/// locally-administered, unicast.)
+/// Guest MAC for a NIC the supervisor names none for: the well-known vfkit/krunkit MAC. netd
+/// leases its one guest address to whichever MAC asks; on vmnet, where every guest of the host
+/// shares a segment, the supervisor always names one. (`5a` = locally administered, unicast.)
 const NET_GUEST_MAC: [u8; 6] = [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee];
 
 // virglrenderer init flag bits (see docs/graphics.md §2).
@@ -245,7 +230,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     let net = spec.net.as_ref().map(net_device).transpose()?;
     if net.is_some() {
         // `KRUN_DHCP=1` drives libkrun's *own* guest init (the L1/krun-guest path). A stock
-        // Fedora guest ignores it and runs DHCP via NetworkManager against gvproxy's built-in
+        // Fedora guest ignores it and runs DHCP via NetworkManager against vmnet's or netd's
         // DHCP server either way.
         let epilog = vmr.kernel_cmdline.epilog.get_or_insert_with(String::new);
         if !epilog.is_empty() {
@@ -696,27 +681,11 @@ fn vsock_device(vsock: &VsockSpec) -> Result<VsockDevice> {
 }
 
 /// Attach the guest's NIC. Every backend connects lazily, when the guest activates the device
-/// during boot: a vfkit-style UNIX datagram connection to a gvproxy gateway (and the `VFKT`
-/// handshake), which the supervisor guarantees is listening by then, a vmnet interface libkrun
-/// starts in this process, or a limina-netd this process spawns.
+/// during boot: a vmnet interface libkrun starts in this process, a limina-netd this process
+/// spawns, or both under the switch.
 fn net_device(net: &NetSpec) -> Result<NetDevice> {
     let mac = net.mac.unwrap_or(NET_GUEST_MAC);
     match &net.backend {
-        NetBackend::Gvproxy(socket) => {
-            let path = socket
-                .to_str()
-                .with_context(|| format!("gvproxy socket path is not valid UTF-8: {socket:?}"))?;
-            NetDevice::new_unixgram_path(
-                "eth0",
-                path,
-                &mac,
-                NET_COMPAT_FEATURES,
-                // gvproxy builds every frame in its own gVisor stack, so the guest can skip
-                // re-summing.
-                NetFlags::VFKIT | NetFlags::CSUM_VALID,
-            )
-            .map_err(|e| anyhow!("virtio-net (gvproxy): {e:?}"))
-        }
         NetBackend::Vmnet(mode) => {
             let (mode, bridged) = match mode {
                 VmnetMode::Shared => (VMNET_SHARED_MODE, ""),

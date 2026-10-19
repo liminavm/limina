@@ -667,9 +667,9 @@ pub(crate) struct MenuCtx {
     pub(crate) suspend_armed: bool,
     /// The VM's .liminavm bundle directory — gates Show in Finder.
     pub(crate) bundle_dir: Option<PathBuf>,
-    /// The NAT gateway's SSH forward — gates Copy SSH Command, which reads its port at the
+    /// The VM's SSH forward — gates Copy SSH Command, which reads its port at the
     /// click because the forward can move while the VM runs.
-    pub(crate) ssh: Option<crate::gateway::SshForward>,
+    pub(crate) ssh: Option<crate::forward::SshForward>,
 }
 
 thread_local! {
@@ -1010,7 +1010,7 @@ define_class!(
             );
         }
 
-        // Copy SSH Command: the NAT gateway's inbound forward, ready to paste.
+        // Copy SSH Command: the VM's inbound SSH forward, ready to paste.
         #[unsafe(method(copySshVm:))]
         fn copy_ssh_vm(&self, _sender: &NSMenuItem) {
             let Some(ssh) = MENU_CTX.with(|c| c.borrow().ssh.clone()) else {
@@ -1395,7 +1395,7 @@ pub(crate) fn resume_first_frame(worker_epoch: u64, epoch_at_click: u64, frames:
 /// worker in and calls `mark_worker_running` — so `exited` alone cannot distinguish "the
 /// swap hasn't happened yet" from "the fresh worker crashed". `epoch > baseline` proves a
 /// swap happened after the click (the flags describe the FRESH worker), and `resume_dead`
-/// covers the respawn never reaching a swap at all (spawn/gateway failure).
+/// covers the respawn never reaching a swap at all (a spawn failure).
 pub(crate) fn resume_worker_died(
     exited: bool,
     resume_dead: bool,
@@ -3546,8 +3546,8 @@ pub fn run(
                 // up — final frame under a scrim, play glyph in the middle — so the VM is
                 // one click from coming back. A close/stop-triggered suspend still quits:
                 // the user asked the window to go away. So does a `limina suspend`: its caller
-                // expects the VM gone, and a parked supervisor would keep the run lock, the
-                // NAT gateway and its SSH port, and turn the next suspend of the disk away.
+                // expects the VM gone, and a parked supervisor would keep the run lock and the
+                // SSH port, and turn the next suspend of the disk away.
                 if should_park_on_suspend(
                     CLOSE_REQUESTED.with(|c| c.get()),
                     crate::supervisor::stop_requested(),
@@ -4566,7 +4566,7 @@ mod tests {
             "a stop-requested suspend must still quit"
         );
         // `limina suspend` asked from outside: nobody is at the window to click play, and a
-        // parked supervisor keeps the run lock, the gateway and the SSH port.
+        // parked supervisor keeps the run lock and the SSH port.
         assert!(
             !should_park_on_suspend(false, false, true, true),
             "a CLI suspend must quit, not park"
@@ -4634,7 +4634,7 @@ mod tests {
         );
         assert!(
             resume_worker_died(false, true, 3, 3),
-            "a respawn that never reached a swap (spawn/gateway failure) is a death"
+            "a respawn that never reached a swap (a spawn failure) is a death"
         );
     }
 

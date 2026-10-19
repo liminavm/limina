@@ -21,12 +21,12 @@ use limina_launch::connect::{Connector, Endpoint};
 
 use crate::supervisor::{self, WorkerSpec};
 use crate::window;
-use crate::{control, gateway};
+use crate::{control, forward};
 
 /// Everything a windowed session needs to boot and supervise its worker: the worker binary and
 /// its base args (*without* the windowed fd flags — those are added per spawn, with fresh fd
-/// numbers), the display geometry, and the supervisor-owned resources the session drives (NAT
-/// gateway, control plane, resize socket, keymap policy). Groups what used to be
+/// numbers), the display geometry, and the supervisor-owned resources the session drives (SSH
+/// forward, control plane, resize socket, keymap policy). Groups what used to be
 /// `run_windowed`'s nine positional arguments.
 pub struct SessionConfig {
     pub vmm_bin: PathBuf,
@@ -37,9 +37,8 @@ pub struct SessionConfig {
     pub grace: Duration,
     pub width: u32,
     pub height: u32,
-    pub gateway: Option<gateway::Gateway>,
     /// The guest's SSH forward, whichever NIC holds it.
-    pub ssh: Option<gateway::SshForward>,
+    pub ssh: Option<forward::SshForward>,
     pub control: Option<control::ControlPlane>,
     pub resize_socket: Option<Endpoint>,
     pub remap: limina_input::keymap::KeyRemap,
@@ -309,7 +308,6 @@ impl WindowedSession {
             grace,
             width,
             height,
-            gateway,
             ssh,
             control,
             resize_socket,
@@ -414,13 +412,11 @@ impl WindowedSession {
         let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
 
         // Monitor the worker on a background thread. A guest *reboot* (distinct exit code)
-        // relaunches the worker — recycle gvproxy, spawn a fresh worker, swap its fds into
+        // relaunches the worker — spawn a fresh worker, swap its fds into
         // `conn`, start a new reader — keeping the SAME NSWindow open. A *suspend* exit
         // parks: the thread waits for the window's play click and respawns the same way
         // (the pending snapshot makes the spawn a restore). Any other exit (power-off,
         // error, Ctrl-C, or a boot loop) marks the worker gone so the window loop quits.
-        // The gateway handle lives in this thread (it owns gvproxy's restart) for the
-        // VM's life.
         let monitor_shared = shared.clone();
         let monitor_conn = conn.clone();
         let monitor_control = control.clone();
@@ -495,19 +491,6 @@ impl WindowedSession {
                     } else {
                         break;
                     }
-                }
-                // Recycle gvproxy (single-connection vfkit socket) before the fresh worker dials it.
-                if let Some(gw) = &gateway
-                    && let Err(e) = gw.restart()
-                {
-                    log::error!(
-                        "could not restart the NAT gateway for the reboot: {e:#}; stopping"
-                    );
-                    window::mark_worker_exited(&monitor_shared);
-                    if resuming {
-                        window::mark_resume_dead(&monitor_shared);
-                    }
-                    break;
                 }
                 // Boot the fresh worker at the resolution the window is CURRENTLY driving,
                 // not the original one (see `pack_size`).

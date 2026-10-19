@@ -135,7 +135,7 @@ mod tests {
             }
         };
         until(None);
-        runtime_ctl::set_forward(Some(crate::gateway::SshForward::for_tests(2299)));
+        runtime_ctl::set_forward(Some(crate::forward::SshForward::for_tests(2299)));
         until(Some(2299));
 
         retain(&[]);

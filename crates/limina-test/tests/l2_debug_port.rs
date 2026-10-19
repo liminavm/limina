@@ -67,7 +67,7 @@ fn a_stock_guest_reads_the_host_build_from_the_debug_port() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
 
     // --- Oracle 1: the port reached a guest with nothing of ours installed ---
     let ls = guest

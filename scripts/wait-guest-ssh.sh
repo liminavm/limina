@@ -11,7 +11,7 @@
 # where the supervisor prints `guest SSH forward ready: ssh -p N <user>@127.0.0.1`,
 # NOT the boot script's own stdout. This script waits for the port (from that line, or
 # from the running supervisor when BOOT_PID is given — see below), then for an SSH
-# banner (gvproxy listens on the forward immediately, long before it can dial the
+# banner (the forward listens immediately, long before it can reach the
 # guest), and THEN for a login that actually succeeds. Only then does it print the
 # port on stdout. Nonzero exit + diagnostics on stderr on timeout.
 #

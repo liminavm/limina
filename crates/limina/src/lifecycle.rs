@@ -6,8 +6,8 @@
 //!
 //! **Detach.** A run started in the foreground keeps whatever it was started with: its stdout and
 //! stderr, and its session. Every process of the run inherits those descriptors — the
-//! supervisor, the gvproxy gateway and its reaper, and the worker, whose stdio launchd is handed
-//! by `supervisor::launch_worker` — so an `ssh host 'limina --disk …'` keeps the ssh session open
+//! supervisor, the worker, whose stdio launchd is handed by `supervisor::launch_worker`, and the
+//! worker's limina-netd — so an `ssh host 'limina --disk …'` keeps the ssh session open
 //! for the VM's whole life: sshd ends a session only once every holder of its output pipes has
 //! closed them. `--detach` re-executes the same command line minus the flag as a child that
 //! leads its own session ([`launch`]): no controlling terminal, nothing but the log file on

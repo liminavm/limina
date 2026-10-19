@@ -77,7 +77,7 @@ fn a_slow_decode_leaves_the_control_thread_free() {
         .expect("coexist GPU did not come up (degraded to software-2D?)");
     guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     let have_driver = guest
         .ssh_exec(&format!("test -e {GUEST_VA_DRIVER} && echo yes || echo no"))
         .expect("ssh to the guest failed");

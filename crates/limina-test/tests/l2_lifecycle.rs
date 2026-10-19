@@ -14,7 +14,7 @@
 //!
 //! Phase 2 boots it again, wedges the guest with a kernel panic, and checks that an ordinary
 //! `limina stop` does not kill it and that `limina stop --force` ends every process of the run —
-//! supervisor, worker and its launcher, gvproxy and its reaper — without writing a suspend
+//! supervisor, worker and its launcher, and the worker's limina-netd — without writing a suspend
 //! snapshot.
 
 use std::io::Read;
@@ -196,7 +196,7 @@ impl Run {
                     // Something of the run still holds the pipe: name it before failing.
                     let _ = child.kill();
                     let holders = Command::new("lsof")
-                        .args(["-a", "-d", "0,1,2", "-c", "limina", "-c", "gvproxy"])
+                        .args(["-a", "-d", "0,1,2", "-c", "limina"])
                         .output()
                         .map(|o| text(&o.stdout))
                         .unwrap_or_default();
@@ -311,8 +311,8 @@ impl Run {
         limina_test::worker_pid_of(self.pid, &self.vmm).expect("the run's worker")
     }
 
-    /// Every process of the run: supervisor, worker and its launchd launcher, gvproxy, and the
-    /// gvproxy reaper.
+    /// Every process of the run: supervisor, worker and its launchd launcher, and the worker's
+    /// limina-netd.
     fn processes(&self) -> Vec<(&'static str, libc::pid_t)> {
         let mut all = vec![("supervisor", self.pid)];
         let worker = self.worker();
@@ -320,21 +320,18 @@ impl Run {
         if let Some(launcher) = limina_test::parent_pid(worker).filter(|&p| p != self.pid) {
             all.push(("worker launcher", launcher));
         }
-        for child in limina_test::child_pids(self.pid) {
+        for child in limina_test::child_pids(worker) {
             let argv = limina_test::proc_argv(child).unwrap_or_default();
-            if argv.iter().any(|a| a == "__reap-gateway") {
-                all.push(("gvproxy reaper", child));
-            } else if argv
-                .iter()
-                .any(|a| a.contains(&format!("limina-gvproxy-{}.sock", self.pid)))
+            if argv
+                .first()
+                .is_some_and(|exe| exe.ends_with("/limina-netd"))
             {
-                all.push(("gvproxy", child));
+                all.push(("limina-netd", child));
             }
         }
         assert!(
-            all.iter().any(|(n, _)| *n == "gvproxy")
-                && all.iter().any(|(n, _)| *n == "gvproxy reaper"),
-            "a --net run has a gvproxy and its reaper: {all:?}"
+            all.iter().any(|(n, _)| *n == "limina-netd"),
+            "a --net run has a limina-netd: {all:?}"
         );
         all
     }
