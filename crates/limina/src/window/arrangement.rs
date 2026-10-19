@@ -536,6 +536,37 @@ impl Desktop {
             .map(|(_, r)| *r);
         home.map_or(cand, |r| r.clamp(cand))
     }
+
+    /// The integers a device position goes on the wire as: rounded, but never off the monitor
+    /// it is on (`prefer` keeps a position on a seam, as in [`Self::locate`]).
+    ///
+    /// **Rounding can step off a monitor.** Its edges fall between integers, and the guest maps
+    /// a value back as `v · desktop / (abs_max + 1)` (libinput, then mutter) — not quite the
+    /// `/ abs_max` these rects are in. A built-in's top 127 logical pixels down a 1728-pixel
+    /// box is 2408.24 here; 2408 maps back to 126.98, in the dead space above it, where the
+    /// guest moved the pointer to the middle of its primary display (dogfood, 2026-10-19). So
+    /// each axis is held to the integers the guest's own rule puts on `[edge, far edge)`.
+    pub(crate) fn wire(&self, p: (f64, f64), prefer: usize, abs_max: f64) -> (i32, i32) {
+        let rounded = (p.0.round(), p.1.round());
+        let Some(r) = self
+            .rects
+            .iter()
+            .filter(|(_, r)| r.holds(p))
+            .min_by_key(|(s, _)| *s != prefer)
+            .map(|(_, r)| *r)
+        else {
+            return (rounded.0 as i32, rounded.1 as i32);
+        };
+        let k = (abs_max + 1.0) / abs_max;
+        let inside = |v: f64, lo: f64, hi: f64| {
+            let (lo, hi) = ((lo * k).ceil(), (hi * k).ceil() - 1.0);
+            v.clamp(lo, hi.max(lo)).clamp(0.0, abs_max)
+        };
+        (
+            inside(rounded.0, r.x0, r.x1) as i32,
+            inside(rounded.1, r.y0, r.y1) as i32,
+        )
+    }
 }
 
 /// The guest's reported desktop in device-range units, or `None` when it has not reported —
@@ -654,6 +685,61 @@ mod tests {
     const BENQ: u64 = 0xB;
     const BUILT_IN: u64 = 0x1;
     const STUDIO: u64 = 0x5;
+
+    /// A position on a monitor's edge goes on the wire as a value the guest maps onto that
+    /// monitor. Its top, 127 logical pixels down a 1728-pixel box, is 2408.24 in the range;
+    /// rounded, 2408 maps back to 126.98 — the dead space above it, where the guest moved the
+    /// pointer to the middle of its primary display (dogfood, 2026-10-19).
+    #[test]
+    fn a_monitors_own_edges_go_on_the_wire_inside_it() {
+        let d = layout_in_range(
+            &[
+                (
+                    0,
+                    GuestRect {
+                        x: 0,
+                        y: 0,
+                        w: 3072,
+                        h: 1728,
+                    },
+                ),
+                (
+                    1,
+                    GuestRect {
+                        x: 3072,
+                        y: 127,
+                        w: 2048,
+                        h: 1328,
+                    },
+                ),
+            ],
+            32767.0,
+        )
+        .expect("a desktop");
+        let own = d.rect_of(1).expect("the built-in");
+        // The guest maps a value as libinput and mutter do: `v · desktop / 32768`.
+        let back = |v: i32, desktop: f64| f64::from(v) * desktop / 32768.0;
+        for p in [
+            (own.x0, own.y0),
+            (own.x1, own.y0),
+            (own.x0, own.y1),
+            (own.x1, own.y1),
+            ((own.x0 + own.x1) / 2.0, own.y0),
+        ] {
+            let (x, y) = d.wire(p, 1, 32767.0);
+            let (gx, gy) = (back(x, 5120.0), back(y, 1728.0));
+            assert!(
+                (3072.0..5120.0).contains(&gx) && (127.0..1455.0).contains(&gy),
+                "{p:?} went out as ({x},{y}), which the guest puts at ({gx:.2},{gy:.2})"
+            );
+        }
+        // Inside, the wire is plain rounding.
+        let mid = ((own.x0 + own.x1) / 2.0 + 0.4, (own.y0 + own.y1) / 2.0 - 0.4);
+        assert_eq!(
+            d.wire(mid, 1, 32767.0),
+            (mid.0.round() as i32, mid.1.round() as i32)
+        );
+    }
 
     #[test]
     fn a_single_panel_sits_at_the_origin() {
