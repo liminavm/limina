@@ -26,15 +26,18 @@ use std::time::{Duration, Instant};
 
 use limina_test::{Guest, GuestConfig, ssh_exec_at, vmnet_lease};
 
-/// Locally administered, and unlikely to hold a stale lease from another run's guest.
+/// A random locally administered MAC that holds no lease yet: bootpd keeps old leases, and a
+/// stale one would end the lease wait before this guest had booted.
 fn test_mac() -> String {
-    let pid = std::process::id();
-    format!(
-        "5a:76:6d:{:02x}:{:02x}:{:02x}",
-        (pid >> 16) as u8,
-        (pid >> 8) as u8,
-        pid as u8
-    )
+    loop {
+        let mut b = [0u8; 3];
+        // SAFETY: arc4random_buf fills exactly the buffer it is given.
+        unsafe { libc::arc4random_buf(b.as_mut_ptr().cast(), b.len()) };
+        let mac = format!("5a:76:6d:{:02x}:{:02x}:{:02x}", b[0], b[1], b[2]);
+        if vmnet_lease(&mac).is_none() {
+            return mac;
+        }
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -95,7 +98,7 @@ fn fedora_on_vmnet_shared_leases_reaches_the_internet_and_moves_bulk_intact() {
     eprintln!("guest leased {host}");
 
     // A lease names the address; the session proves the guest holds it.
-    let deadline = Instant::now() + Duration::from_secs(90);
+    let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         match ssh_exec_at(&host, "true", None, Duration::from_secs(30)) {
             Ok(_) => break,

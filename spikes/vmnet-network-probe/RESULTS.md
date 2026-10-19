@@ -72,6 +72,8 @@ it non-root under `gtimeout`. `MINIGUEST_TRACE=1` prints every frame the respond
   platform binaries. Whether a Developer ID app gets through after the user grants Local Network
   access is not measured. vmnet itself is unaffected (it is not a socket); this matters to any
   limina process that dials a guest directly, such as an SSH readiness probe.
+  A platform binary that one of ours spawns gets through: the `net_vmnet` test (ad-hoc) runs
+  `/usr/bin/ssh` to a vmnet guest and it connects (macOS 27.0.1, 2026-10-19).
 - The host-only lease handed out DNS `100.100.100.100`, i.e. the host's resolver at the time
   (Tailscale's): bootpd passes the host's DNS through.
 
