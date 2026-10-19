@@ -14,6 +14,7 @@
 mod dns;
 mod forward;
 mod poller;
+mod sandbox;
 mod stack;
 mod tcp;
 mod udp;
@@ -278,6 +279,8 @@ fn serve(sock: OwnedFd, ctl: Option<OwnedFd>) -> io::Result<()> {
         forwards: forward::Forwards::new(ctl, &poller)?,
         poller,
     };
+    // Everything netd will ever hold that is not a socket it makes, it holds now.
+    sandbox::enter()?;
     let mut frame = vec![0u8; MAX_FRAME];
     let mut events = Vec::new();
     log::info!("limina-netd: serving the guest's link");

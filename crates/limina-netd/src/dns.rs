@@ -489,11 +489,11 @@ impl Resolver {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A query as a stub resolver sends it, optionally with EDNS.
-    fn query_msg(name: &[&[u8]], qtype: u16, edns: Option<u16>) -> Vec<u8> {
+    pub(crate) fn query_msg(name: &[&[u8]], qtype: u16, edns: Option<u16>) -> Vec<u8> {
         let mut m = vec![
             0xab,
             0xcd,
