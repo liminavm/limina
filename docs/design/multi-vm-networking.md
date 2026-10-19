@@ -254,42 +254,63 @@ which Network, which mode, uplink tracking (§3.4), VPN detection and the switch
   the boot path with a timeout.
 
 **Host → guest.** A process that dials a guest's vmnet address is subject to Local Network
-privacy (NECP): our ad-hoc binaries are dropped with `EHOSTUNREACH`, while Apple's platform
-binaries (`/usr/bin/nc`, `/usr/bin/ssh`) get through, also when one of our binaries spawns them.
-Whether a Developer ID app passes after the user grants Local Network access is unmeasured.
+privacy (NECP): until the user answers its Local Network prompt every signature is dropped with
+`EHOSTUNREACH`, and a binary signed with a real identity and the hardened runtime gets through once
+allowed, from a shell and as a launchd job alike, while Apple's platform binaries (`/usr/bin/nc`,
+`/usr/bin/ssh`) pass without asking (`spikes/vmnet-necp-probe/RESULTS.md`). A grant belongs to the
+code identity that asked, so ad-hoc builds would need a click per build and a headless run none at
+all. limina's own way in, the SSH forward, therefore never dials the guest's vmnet address (§3.5).
 
 ### 3.4 Uplink tracking
 
 A shared network NATs out of one uplink, chosen when it is created (vmnet's default: the route-table
 default; `vmnet_network_configuration_set_external_interface` to choose). No call changes a live
-network's uplink. The worker therefore watches the host's route (routing-socket `RTM_GET`, or
-SystemConfiguration's `State:/Network/Global/IPv4` `PrimaryInterface` — the two agreed on every
-change the spike saw; it polled both once a second, while the product would subscribe to change
-notifications, which is untested) and on a change stops the interface, releases the network,
-and rebuilds both on the new uplink with the same MAC. Measured: 0.30–0.35 s, same guest address,
-next-check detection. The guest sees a link reset; open connections drop. When the new uplink is
-one vmnet cannot serve (§4), the worker switches to netd instead (§3.5).
+network's uplink. The worker therefore follows the host's routes (`crates/limina-vmm/src/krun/
+uplink.rs`): a routing socket wakes it on any change, and once the burst settles it asks the kernel
+(`RTM_GET`) for two routes — the way out (the route to an Internet address) and the route to vmnet's
+subnet (to the address after the host's own on it, which vmnet reports at start; the host's own is a
+local `/32` on `lo0` that says nothing). When the way out moves to another interface the worker
+starts a fresh interface on it with the same MAC and moves the NIC onto it as on a switch (§3.5);
+vmnet keys leases on the MAC, so the guest keeps its address (the spike measured 0.30–0.35 s per
+rebuild). Open connections drop. When the routes say vmnet cannot serve (§4), the NIC moves to netd
+instead.
 
 ### 3.5 Switching between vmnet and netd
 
-**Automatic, in the worker, under one virtio device and one MAC.** The NIC's backend is limina's
-switching backend (§3.2), which owns libkrun's vmnet backend and the netd backend and swaps which
-one the virtqueues talk to:
+**Automatic, in the worker, under one virtio device and one MAC** (`limina --net-auto`;
+`crates/limina-vmm/src/krun/switch.rs`). The NIC's backend is limina's switching backend, which
+holds a running netd always and a vmnet interface while the NIC is on vmnet, and sends the guest's
+frames to the side it is on. libkrun's net worker watches both sides' descriptors through its
+backend's extra descriptors. Moves run on a controller thread of their own: vmnet's start and stop
+each take up to seconds, which the net worker's thread never waits on, and a retired interface is
+handed back to be stopped there.
 
-- **To netd** when vmnet cannot serve: the interface fails to start (privilege, `SERVICE_BUSY`, a
-  start or create that does not answer within its timeout), the vmnet subnet's route no longer
-  points at the VM's bridge (the Tailscale local-access hijack, §4), or the uplink is a tunnel
-  interface (under which forwarded UDP was lost, §4).
-- **Back to vmnet** when the condition has cleared and stayed clear for a hold-off, so a flapping
-  VPN does not flap the guest.
+- **To netd** when vmnet cannot serve: the interface does not start (privilege, `SERVICE_BUSY`, a
+  start that does not answer within 10 s), vmnet's subnet is routed through something other than
+  its bridge (a VPN client's route for it, §4), or the way out is a tunnel (under which forwarded
+  UDP was lost, §4). A NIC whose way out is already a tunnel at boot starts on netd.
+- **Back to vmnet** once the routes have stayed clear for 10 s, so a flapping VPN does not flap the
+  guest; each start of vmnet that fails doubles the wait, up to 5 min. While on netd there is no
+  bridge to compare against, so only a route of `/8` or narrower counts as a claim on the subnet:
+  the default route and a VPN's split halves of it do not.
+- **On request:** `limina net-switch <vm> vmnet|netd`, behind the `net-switch` harness lever (off by
+  default), moves the NIC as a VPN would; a move to netd holds until a move back.
 
-The guest has to notice that its subnet changed, so the worker drops the link for a moment: virtio-
-net's link status (`VIRTIO_NET_F_STATUS` and a config-change interrupt, which libkrun's net device
-does not offer yet) takes the carrier away and back, and the guest's DHCP client takes a lease on
-the new side. A stock NetworkManager does this on its own; open connections drop, as on an uplink
-rebuild. Every switch is logged and shown in the UI with its reason. Port forwards follow the
-backend: on netd the SSH forward is a netd listening socket; on vmnet the guest is reached at its
-own address.
+The guest has to notice that its subnet changed, so a move drops the carrier (virtio-net link
+status: `VIRTIO_NET_F_STATUS` and a config-change interrupt, through libkrun's `NetLink`) and raises
+it again after a second, and the guest's DHCP client asks the new side for a lease. Fedora 44's
+NetworkManager does so whether the carrier was gone for 100 ms, 1 s or 5 s, and holds the new lease
+1.5–1.9 s after the move began, HTTPS answering within half a second of it; the second leaves room
+for clients that wait out a short flicker. Open connections drop, as on an uplink rebuild. Every
+move is logged with its reason.
+
+**The SSH forward is netd's on both sides.** On vmnet the guest's own frames go to vmnet, except
+those for netd's subnet, which go to netd: netd carries each forwarded connection into the guest
+from its gateway's address (`192.168.127.1`), the guest answers through its default route, and the
+worker hands the answer to netd. The worker tells netd where the guest is (its vmnet address and
+MAC, learnt from the guest's own frames) until the guest takes netd's lease. So `127.0.0.1:<port>`
+works the same on either side, for every build, without the Local Network prompt a direct dial of
+the guest's vmnet address needs (§3.3).
 
 ## 4. Host VPNs and other software
 
@@ -313,6 +334,12 @@ Desktop, Lima, Podman and UTM keep a user-mode path largely for VPN users.
 host's own socket traffic and goes wherever the VPN sends it. If vmnet cannot start at all, the VM
 comes up on netd: vmnet never gates the floor.
 
+Measured 2026-10-19 on macOS 27.0.1 with a `--net-auto` guest and a Tailscale exit node: the exit
+node took vmnet's `/24` with local network access on (through `utun8`) and with it off (through
+`en0`); each time the NIC moved to netd 0.3 s after the route changed, the guest leased
+`192.168.127.2` and reached HTTPS with the host's public address, and with the exit node off the
+NIC came back to vmnet 10 s after the routes cleared, on its old address.
+
 ## 5. Two-tier mapping
 
 The tiers are about the *guest*, and both backends serve a stock guest: an unmodified Fedora runs
@@ -334,12 +361,14 @@ Each phase ships on its own and is tested against the shipped binaries (`crates/
   hook, limina-vmm's netd backend and `--net-netd`. The net tests (lease, outbound DNS, SSH forward
   and its runtime move, per-VM MAC, two VMs in parallel, pings) run on netd with its own log as the
   oracle, and `net_netd` adds netd's restart after a kill and the guest's own NTP and HTTP traffic.
-- **Phase 4 — vmnet shared by default, with the switch.** Uplink tracking (§3.4), the switch and
-  link flap (§3.5), libkrun's link status. *RED:* a VM boots on vmnet by default; a forced
-  trigger (a test lever) moves a running guest to netd, which leases and reaches the Internet, and
-  back; a vmnet start that fails leaves the VM on netd.
-- **Phase 5 — retire gvproxy.** `gateway.rs`'s gvproxy half, its bundling, its watchdog and reaper,
-  its docs.
+- **Phase 4 — vmnet with the switch (done).** Uplink tracking (§3.4), the switch and link flap
+  (§3.5), libkrun's link status and gathered descriptors, the SSH forward through netd on both
+  sides, `--net-auto`. `net_auto` boots a guest on vmnet, moves it to netd through the lever (it
+  leases and reaches the Internet, SSH throughout) and back, with no move it did not ask for; a
+  vmnet that will not start leaves the VM on netd.
+- **Phase 5 — retire gvproxy; vmnet with the switch by default.** `--net` becomes `--net-auto`;
+  `gateway.rs`'s gvproxy half, its bundling, its watchdog and reaper, its docs go. *RED:* the net
+  tests pass on the default NIC.
 - **Phase 6 — `Network` model, per-VM MACs, vmnet network objects.** `limina net` CLI; one network
   object per Network with reservations; forwards per VM. *RED:* two VMs on two Networks, mutually
   invisible; two VMs on one Network ping each other.
@@ -362,7 +391,11 @@ large-MTU workaround, and netd's TCP is passt-style translation rather than a fu
   worker, the ring and a guest, many connections at once, and UDP are not measured yet, nor what
   the offloads (§3.2) would buy.
 - **The tunnel trigger:** UDP loss was measured under one client; switching on any tunnel uplink is
-  the conservative rule, and other clients (WireGuard, Cisco, Zscaler) may need finer ones.
+  the conservative rule, and other clients (WireGuard, Cisco, Zscaler) may need finer ones. Under
+  Tailscale the subnet rule fired first both times, so the tunnel rule has not yet been seen to
+  fire on its own.
+- **An uplink change on vmnet:** the rebuild onto a new way out (Wi-Fi to Ethernet) is built but
+  not yet exercised with the switch.
 - **Cross-process network objects:** `vmnet_network_copy_serialization` across workers is the basis
   of Phase 6 and is not yet exercised.
 - **Forwarded UDP under an exit node:** where it is lost (pf NAT on `utun`, or the VPN client) is
