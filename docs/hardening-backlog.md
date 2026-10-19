@@ -1495,6 +1495,24 @@ boots the video corpora and fluster goldens were recorded from — re-verify or 
 pick a delay for the PNG encoder. After the flip: fluster verdicts and replay-corpus scores unchanged,
 and the frame oracle reaching the parked path with no knob set.
 
+### `seated_gpu_workload_survives_restore_unchanged` intermittently loses the extension rings on restore
+`l2_desktop_restore_landmarks.rs` fails with `gpu restore: extension rings: GPU host did not reply`
+(libkrun `virtio/gpu/worker.rs`, the `ext.restore_rings` arm), then `staged snapshot replay failed;
+guest session will restart`. Seen in two full-suite runs on different branches (2026-10-18 and
+2026-10-19, identical lines); the test passed alone straight after. Open: what the rings wait on
+when the host does not reply, whether the reply deadline is sized for a loaded host or the reply is
+really lost, and a vehicle that reproduces it (loop the test under suite-like load with the VM held
+on failure).
+
+### `the_guest_vblank_falls_on_the_host_grid` has single vblanks far off the grid under load
+`l2_host_vblank.rs` allows 50 µs (1200 ticks) of phase error on each of 30 vblanks; failing runs have
+one outlier while the rest sit at 50–550 ticks: 1732 ticks (2026-10-18) and 3751 ticks (2026-10-19,
+next to a 404013/396739 spacing pair, i.e. one late wake that the next one caught up). Both were
+under a full suite; the test passed alone straight after. Open: whether the outlier is guest
+scheduling (the wake latencies the test prints reach 2.6 ms), the host vsync source, or the push
+path — and then whether the oracle should tolerate a bounded number of late wakes or the late wake
+is a real defect.
+
 ### Watch `l1_real_session_helper_bridges_clipboard_via_mock_mutter` for a second failure
 Seen once (2026-08-04): the mock log reached `CLAIMED_NAME / CREATE_SESSION / START / ENABLE_CLIPBOARD`, but
 `PASTED sess-host-to-guest-42` never arrived (`l1_session_helper.rs`). Treated as a flake by decision,
