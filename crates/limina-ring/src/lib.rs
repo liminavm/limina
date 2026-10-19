@@ -6,8 +6,10 @@
 //! producer that would wrap writes a [`TAG_PAD`] record over the remainder first.
 //!
 //! One side [`format`]s the region; the producer and the consumer then attach to it, in either
-//! order and possibly from different processes. Each checks the protocol number the region was
-//! formatted with, which is the user's: this crate carries no protocol of its own.
+//! order and possibly from different processes. The producer attaches to an untouched ring and may
+//! publish before the consumer arrives, which then starts at the first record. Each checks the
+//! protocol number the region was formatted with, which is the user's: this crate carries no
+//! protocol of its own.
 //!
 //! The consumer trusts nothing in shared memory. It keeps its own `head`, takes the data size from
 //! its own attach call rather than the control block, and reads each record's header once into
@@ -136,8 +138,8 @@ pub unsafe fn format(region: NonNull<u8>, data_size: u32, protocol: u32) -> Resu
     Ok(())
 }
 
-/// Checks the control block at `region` and returns it. Plain reads of words the other side may
-/// have written; a torn value only fails the check.
+/// Checks the control block at `region` and returns it, with what its producer has published.
+/// Plain reads of words the other side may have written; a torn value only fails the check.
 ///
 /// # Safety
 /// As for [`format`], minus the attachment rule.
@@ -145,7 +147,7 @@ unsafe fn checked(
     region: NonNull<u8>,
     data_size: u32,
     protocol: u32,
-) -> Result<NonNull<Control>, Error> {
+) -> Result<(NonNull<Control>, u64), Error> {
     if !valid_data_size(data_size) {
         return Err(Error::BadSize);
     }
@@ -159,11 +161,10 @@ unsafe fn checked(
             core::ptr::read_volatile(&c.protocol),
         )
     };
-    if magic != MAGIC || proto != protocol || c.tail.load(Ordering::Acquire) != 0 {
-        // A ring is attached to before anything is pushed into it.
+    if magic != MAGIC || proto != protocol {
         return Err(Error::Corrupt);
     }
-    Ok(ctrl)
+    Ok((ctrl, c.tail.load(Ordering::Acquire)))
 }
 
 /// The writing end.
@@ -191,7 +192,11 @@ impl Producer {
         protocol: u32,
     ) -> Result<Self, Error> {
         // SAFETY: by the caller's contract.
-        let ctrl = unsafe { checked(region, data_size, protocol) }?;
+        let (ctrl, tail) = unsafe { checked(region, data_size, protocol) }?;
+        if tail != 0 {
+            // Another producer has been here.
+            return Err(Error::Corrupt);
+        }
         Ok(Self {
             ctrl,
             // SAFETY: DATA_OFFSET is inside the region.
@@ -376,7 +381,11 @@ impl Consumer {
         protocol: u32,
     ) -> Result<Self, Error> {
         // SAFETY: by the caller's contract.
-        let ctrl = unsafe { checked(region, data_size, protocol) }?;
+        let (ctrl, tail) = unsafe { checked(region, data_size, protocol) }?;
+        // Nothing has been consumed, so the producer cannot have published more than a ring.
+        if tail > data_size as u64 || !tail.is_multiple_of(RECORD_ALIGN as u64) {
+            return Err(Error::Corrupt);
+        }
         // SAFETY: valid, by the same contract.
         let c = unsafe { ctrl.as_ref() };
         c.head.store(0, Ordering::Relaxed);
@@ -665,6 +674,24 @@ mod tests {
             Some(Error::BadSize)
         );
         assert_eq!(unsafe { format(r, 2048, PROTO) }, Err(Error::BadSize));
+    }
+
+    #[test]
+    fn a_consumer_attaching_late_finds_what_was_published() {
+        let r = region();
+        unsafe { format(r, SIZE, PROTO) }.unwrap();
+        let mut p = unsafe { Producer::attach(r, SIZE, PROTO) }.unwrap();
+        p.push(4, &[b"dhcp"]).unwrap();
+        p.publish();
+        assert_eq!(
+            unsafe { Producer::attach(r, SIZE, PROTO) }.err(),
+            Some(Error::Corrupt),
+            "a second producer"
+        );
+        let mut c = unsafe { Consumer::attach(r, SIZE, PROTO) }.unwrap();
+        let mut buf = [0u8; 8];
+        assert_eq!(c.read_into(&mut buf).unwrap(), Some((4, 4)));
+        assert_eq!(&buf[..4], b"dhcp");
     }
 
     #[test]
