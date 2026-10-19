@@ -74,6 +74,9 @@ pub struct Stack {
     link: Link,
     /// The guest's MAC, once it has spoken.
     guest_mac: Option<EthernetAddress>,
+    /// Where netd's frames for the guest go: its lease, unless the worker says the guest is
+    /// elsewhere ([`Stack::set_guest`]).
+    guest_ip: Ipv4Address,
     /// The IPv4 identification of the next datagram netd sends, which fragments share.
     ident: u16,
 }
@@ -81,6 +84,7 @@ pub struct Stack {
 impl Stack {
     pub fn new(link: Link) -> Self {
         Self {
+            guest_ip: link.guest,
             link,
             guest_mac: None,
             ident: 0,
@@ -95,6 +99,16 @@ impl Stack {
     /// carry a forwarded connection to.
     pub fn guest_known(&self) -> bool {
         self.guest_mac.is_some()
+    }
+
+    /// The guest is at `ip` with `mac`, on the worker's word: a guest on vmnet has vmnet's
+    /// address, and netd reaches it there with the forwards. Taking netd's lease brings it back.
+    pub fn set_guest(&mut self, mac: EthernetAddress, ip: Ipv4Address) {
+        if self.guest_mac != Some(mac) || self.guest_ip != ip {
+            log::info!("the guest is at {ip} ({mac})");
+        }
+        self.guest_mac = Some(mac);
+        self.guest_ip = ip;
     }
 
     /// Handles one frame from the guest. Frames netd answers on the link (ARP, DHCP) go to
@@ -127,7 +141,7 @@ impl Stack {
         out: &mut dyn FnMut(&[u8]),
     ) {
         let dst_mac = self.guest_mac.unwrap_or(EthernetAddress::BROADCAST);
-        let dst = SocketAddrV4::new(self.link.guest, guest_port);
+        let dst = SocketAddrV4::new(self.guest_ip, guest_port);
         self.udp_frames(dst_mac, src, dst, payload, out);
     }
 
@@ -155,7 +169,7 @@ impl Stack {
         let mut packet = Ipv4Packet::new_unchecked(frame.payload_mut());
         Ipv4Repr {
             src_addr: *remote.ip(),
-            dst_addr: self.link.guest,
+            dst_addr: self.guest_ip,
             next_header: IpProtocol::Tcp,
             payload_len: tcp_len,
             hop_limit: 64,
@@ -164,7 +178,7 @@ impl Stack {
         let mut tcp = TcpPacket::new_unchecked(&mut packet.payload_mut()[..tcp_len]);
         let (src, dst) = (
             IpAddress::from(*remote.ip()),
-            IpAddress::from(self.link.guest),
+            IpAddress::from(self.guest_ip),
         );
         header.emit(&mut tcp, &src, &dst, &ChecksumCapabilities::ignored());
         let mut at = 0;
@@ -363,6 +377,7 @@ impl Stack {
                 .0
                 .map(|b| format!("{b:02x}"));
             log::info!("DHCP: leased {} to {}", self.link.guest, mac.join(":"));
+            self.guest_ip = self.link.guest;
         }
         let mut msg = vec![0u8; repr.buffer_len()];
         repr.emit(&mut DhcpPacket::new_unchecked(&mut msg[..]))
@@ -393,7 +408,7 @@ impl Stack {
             &ChecksumCapabilities::default(),
         );
         let dst_mac = self.guest_mac.unwrap_or(EthernetAddress::BROADCAST);
-        let guest = self.link.guest;
+        let guest = self.guest_ip;
         self.ip_frames(dst_mac, src, guest, IpProtocol::Icmp, &msg, out)
     }
 
@@ -775,6 +790,33 @@ mod tests {
             dhcp_answer(&ack[0]),
             (GUEST_MAC, link.guest, DhcpMessageType::Ack, link.guest)
         );
+    }
+
+    /// A guest on vmnet is where the worker says; once it takes netd's lease, it is at the lease.
+    #[test]
+    fn frames_go_where_the_worker_says_the_guest_is_until_it_leases() {
+        let mut stack = Stack::new(Link::default());
+        let link = Link::default();
+        let elsewhere = Ipv4Address::new(192, 168, 64, 7);
+        let mac = EthernetAddress([0x5a, 0, 0, 0, 0, 9]);
+        stack.set_guest(mac, elsewhere);
+        assert!(stack.guest_known());
+
+        let src = SocketAddrV4::new(link.gateway, 53);
+        let dst_of = |stack: &mut Stack| {
+            let mut out = Vec::new();
+            stack.udp_to_guest(src, 4000, b"x", &mut |f| out.push(f.to_vec()));
+            let eth = EthernetFrame::new_checked(&out[0][VNET_HDR_LEN..]).unwrap();
+            let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
+            (eth.dst_addr(), ip.dst_addr())
+        };
+        assert_eq!(dst_of(&mut stack), (mac, elsewhere));
+
+        answers(
+            &mut stack,
+            &dhcp_from_guest(DhcpMessageType::Request, Some(link.guest)),
+        );
+        assert_eq!(dst_of(&mut stack).1, link.guest, "the lease brings it home");
     }
 
     #[test]

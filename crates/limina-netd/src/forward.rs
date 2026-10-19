@@ -42,8 +42,12 @@ impl Forwards {
         self.by_fd.contains_key(&fd)
     }
 
-    /// Applies what the worker sent on the control pair.
-    pub fn control(&mut self, poller: &Poller) -> io::Result<()> {
+    /// Applies what the worker sent on the control pair; where the guest is goes to `guest`.
+    pub fn control(
+        &mut self,
+        poller: &Poller,
+        guest: &mut dyn FnMut([u8; 6], [u8; 4]),
+    ) -> io::Result<()> {
         let Some(ctl) = &self.ctl else { return Ok(()) };
         while let Some((msg, fd)) = recv_control(ctl.as_fd())? {
             match (msg, fd) {
@@ -64,6 +68,7 @@ impl Forwards {
                     self.by_fd.retain(|_, f| f.id != id);
                     log::info!("forward {id}: closed");
                 }
+                (Control::Guest { mac, ip }, _) => guest(mac, ip),
                 (Control::Listen { .. }, None) => unreachable!("refused by recv_control"),
             }
         }

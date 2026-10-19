@@ -32,7 +32,7 @@ pub const CHANNEL_FD: i32 = 3;
 pub const CONTROL_FD: i32 = 4;
 
 /// The ring protocol number both ends check, and the setup message's magic.
-pub const PROTOCOL: u32 = u32::from_le_bytes(*b"NTD1");
+pub const PROTOCOL: u32 = u32::from_le_bytes(*b"NTD2");
 /// A record holding one frame, `virtio_net_hdr` first.
 pub const TAG_FRAME: u32 = 1;
 /// The `virtio_net_hdr_v1` in front of every frame.
@@ -356,20 +356,33 @@ pub enum Control {
     Listen { id: u32, guest_port: u16 },
     /// Stop accepting on forward `id`; its connections carry on.
     Close { id: u32 },
+    /// The guest is at `ip`, with `mac`: what netd's frames go to until the guest takes netd's
+    /// lease. The worker says so when the guest's address is not netd's to give (a NIC on vmnet,
+    /// where netd carries only the forwards).
+    Guest { mac: [u8; 6], ip: [u8; 4] },
 }
 
 impl Control {
-    const LEN: usize = 8;
+    const LEN: usize = 12;
 
     fn encode(&self) -> [u8; Self::LEN] {
-        let (op, id, port) = match *self {
-            Control::Listen { id, guest_port } => (1u8, id, guest_port),
-            Control::Close { id } => (2, id, 0),
-        };
         let mut b = [0u8; Self::LEN];
-        b[0] = op;
-        b[2..4].copy_from_slice(&port.to_le_bytes());
-        b[4..8].copy_from_slice(&id.to_le_bytes());
+        match *self {
+            Control::Listen { id, guest_port } => {
+                b[0] = 1;
+                b[2..4].copy_from_slice(&guest_port.to_le_bytes());
+                b[4..8].copy_from_slice(&id.to_le_bytes());
+            }
+            Control::Close { id } => {
+                b[0] = 2;
+                b[4..8].copy_from_slice(&id.to_le_bytes());
+            }
+            Control::Guest { mac, ip } => {
+                b[0] = 3;
+                b[2..8].copy_from_slice(&mac);
+                b[8..12].copy_from_slice(&ip);
+            }
+        }
         b
     }
 
@@ -383,6 +396,10 @@ impl Control {
                 guest_port: port,
             }),
             2 => Some(Control::Close { id }),
+            3 => Some(Control::Guest {
+                mac: b[2..8].try_into().unwrap(),
+                ip: b[8..12].try_into().unwrap(),
+            }),
             _ => None,
         }
     }
@@ -630,6 +647,13 @@ mod tests {
         let (msg, fd) = recv_control(netd.as_fd()).unwrap().unwrap();
         assert_eq!(msg, Control::Close { id: 7 });
         assert!(fd.is_none());
+
+        let guest = Control::Guest {
+            mac: [0x5a, 1, 2, 3, 4, 5],
+            ip: [192, 168, 64, 7],
+        };
+        send_control(worker.as_fd(), guest, None).unwrap();
+        assert_eq!(recv_control(netd.as_fd()).unwrap().unwrap().0, guest);
     }
 
     #[test]

@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 
 use limina_netd_wire::{CHANNEL_FD, CONTROL_FD, MAX_FRAME, NetdEnd, TAG_FRAME, drain, ring};
 use limina_ring::Producer;
+use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
 use crate::poller::{Event, Filter, Poller};
 use crate::stack::{Ingress, Link, Stack};
@@ -230,7 +231,10 @@ impl Netd {
     fn event(&mut self, ev: &Event, out: &mut ToGuest<'_>) -> io::Result<()> {
         let fd = ev.fd;
         if self.forwards.is_control(fd) {
-            self.forwards.control(&self.poller)?;
+            let stack = &mut self.stack;
+            self.forwards.control(&self.poller, &mut |mac, ip| {
+                stack.set_guest(EthernetAddress(mac), Ipv4Address::from(ip));
+            })?;
         } else if self.forwards.is_listener(fd) {
             let (stack, tcp) = (&self.stack, &mut self.tcp);
             self.forwards.accept(fd, &mut |guest_port, sock| {
