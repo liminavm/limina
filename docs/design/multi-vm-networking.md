@@ -109,8 +109,11 @@ A NAT NIC has two backends behind one virtio device: vmnet (§3.3) while it serv
 terminates the guest's traffic and re-originates it on ordinary host sockets, so to macOS it is an
 app making connections: it follows the host's routing and DNS, VPN tunnels included, needs no
 entitlement, and leaves no host network state. A separate process because it parses untrusted
-traffic from both sides: a crash costs the VM its network, not the VM, and a `sandbox_init` profile
-can hold it to sockets with no file access. It runs from boot so that a switch (§3.5) is immediate.
+traffic from both sides: a crash costs the VM its network, not the VM, and once it holds its
+descriptors it enters a `sandbox_init` profile that allows making and using sockets and nothing
+else, bar the metadata of the `/var` symlink on the way to mDNSResponder's socket
+(`crates/limina-netd/src/sandbox.rs`, each allowance found necessary by removing it). It runs from
+boot so that a switch (§3.5) is immediate.
 
 **The worker spawns its netd, and nothing else can reach it.** The channel is one Unix stream
 socketpair: the worker keeps one end and hands netd the other as an inherited descriptor
@@ -143,39 +146,57 @@ already serves the Metal transport through libkrun's `GpuExtension`. limina-vmm 
 netd backend over the rings, and the switching backend of §3.5 that wraps vmnet and netd; neither
 the ring nor the switch policy enters the fork.
 
-**Offloads.** Guest TSO segments arrive whole and are just payload to netd, which never
-re-segments them. Towards the guest, netd builds 64 KiB frames with a GSO header and marks them
-checksum-valid (it built them), so the guest's MTU stays 1500 and the large-MTU workaround gvproxy
-needs goes away.
+**Offloads.** netd negotiates checksum offload only: the guest's frames stay within its 1500-byte
+MTU, and netd's segments towards it are MSS-sized with full checksums. Accepting the guest's TSO
+segments whole, and building 64 KiB frames with a GSO header towards it, would cut the per-frame
+work on both sides and are the next step for throughput (§8).
 
 **TCP: passt-style translation, no TCP stack of its own.** Each guest connection maps onto one host
-socket, and netd keeps the guest's view consistent by translating sequence numbers; the host's TCP
-does the congestion control, retransmission and windowing towards the far end:
+socket, and netd speaks just enough TCP on the guest's side to carry the bytes; the host's TCP
+does the congestion control, retransmission and windowing towards the far end
+(`crates/limina-netd/src/tcp.rs`):
 
-- *Guest → host:* the payload of a guest segment is written to the host socket, never more than the
-  room the socket's write event reports (a non-blocking write larger than the free space mostly
-  fails with `EAGAIN` rather than writing short). netd ACKs the guest as the peer ACKs, read from
-  `TCP_CONNECTION_INFO`'s `tcpi_snd_sbbytes`; the guest's own retransmission covers the rest.
-- *Host → guest:* **read-and-retain.** netd reads the socket once into a per-connection buffer the
-  size of the guest's window, sends from it to the guest as large segments, and frees it as the
-  guest ACKs, resending from it when the guest's ACKs stall. passt peeks the receive queue instead
-  and keeps nothing; macOS has no `SO_PEEK_OFF`, so every peek re-copies what is in flight, which
-  made it CPU-bound at 26–29 Gbit/s at two to three times the CPU per byte, while read-and-retain
-  costs what reading straight into the guest frame costs and, unlike that, can resend
-  (`spikes/netd-tcp-translate/RESULTS.md`).
-- *Connection life:* guest SYN → non-blocking `connect()`; the host socket's FIN and RST map onto
-  the guest's, and the reverse.
+- *Guest → host:* netd acknowledges the guest's bytes as they land in a 256 KiB per-connection
+  buffer, advertises its free space as the window (scaled when the guest offers scaling), and
+  writes it to the host socket in pieces no larger than the room the socket's write event reports
+  (a non-blocking write larger than the free space mostly fails with `EAGAIN` rather than writing
+  short). A window the guest had all but run out of is reopened with an unprompted ACK.
+- *Host → guest:* **read-and-retain.** netd reads the socket into a 256 KiB per-connection buffer,
+  sends from it within the guest's window, and frees it as the guest ACKs; a full buffer stops the
+  reads, and the host's flow control takes over. passt peeks the receive queue instead and keeps
+  nothing; macOS has no `SO_PEEK_OFF`, so every peek re-copies what is in flight, which made it
+  CPU-bound at 26–29 Gbit/s at two to three times the CPU per byte, while read-and-retain costs what
+  reading straight into the guest frame costs and, unlike that, can resend
+  (`spikes/netd-tcp-translate/RESULTS.md`). Recovery is go-back-N on a 200 ms timeout doubling to
+  5 s (ten without progress reset the connection), one resend per third duplicate ACK, and NewReno
+  partial-ACK resends. On the real link netd never loses a segment: one the guest's ring has no
+  room for is not counted as sent and goes a millisecond later.
+- *Connection life:* guest SYN → non-blocking `connect()`, and the SYN-ACK only once it completes
+  (a refusal, an unroutable destination or the gateway itself is reset; an unanswered connect is
+  left to the guest's SYN retries); FIN and RST map onto each other both ways.
 - *Events:* kqueue's event data carries the readable bytes and the writable room, so the data path
-  needs no `getsockopt` but the ACK count.
+  needs no `getsockopt`. Both filters are level-triggered, so host sockets are armed one-shot.
 
 **The rest of the stack:**
 
-- **ARP and DHCP** answered locally, a stable address per MAC.
-- **DNS** answered at the gateway through the host's resolver, so a VPN's split DNS applies.
-- **UDP** as a flow table onto connected host sockets, with idle timeouts.
-- **ICMP echo** through macOS's unprivileged ICMP sockets (`SOCK_DGRAM`, `IPPROTO_ICMP`).
-- **Port forwards** (the SSH forward among them) as host listening sockets that open connections
-  into the guest; the runtime forward API moves with them.
+- **ARP and DHCP** answered locally: the guest gets `192.168.127.2`, gvproxy's address, whatever
+  its MAC, so a guest moving between the two sees the same network.
+- **DNS** answered at the gateway through the host's resolver (`DNSServiceQueryRecord`), so a
+  VPN's split DNS applies. With `ReturnIntermediates | Timeout` an answer is one batch of records,
+  CNAMEs first; a missing name and an empty answer are indistinguishable and both become NOERROR
+  with no records (`spikes/netd-dns-probe/RESULTS.md`).
+- **UDP** as a flow table onto connected host sockets, a minute's idle timeout, replies fragmented
+  to the guest's MTU. The guest reaches routable addresses only: not the host's loopback,
+  broadcast, multicast or its own subnet.
+- **ICMP echo** through one unprivileged ICMP socket (`SOCK_DGRAM`, `IPPROTO_ICMP`). Every such
+  socket receives every echo reply on the host, so each guest flow goes out under an identifier of
+  netd's and only matching replies come back (`spikes/netd-icmp-probe/RESULTS.md`); pings of the
+  gateway are answered on the link.
+- **Port forwards** (the SSH forward among them): the worker binds each listening socket and hands
+  netd a copy over a second socketpair (descriptor 4), and again to each netd that replaces one, so
+  the port is the VM's for its whole life and netd never binds one. netd opens each accepted
+  connection into the guest from the gateway's address. The supervisor moves a forward through the
+  worker's network control link, as it moves gvproxy's through its services API.
 - **IPv6** later.
 
 **Enhanced tier.** A custom guest NIC driver writes frames straight into a guest-visible arena and
@@ -309,9 +330,10 @@ Each phase ships on its own and is tested against the shipped binaries (`crates/
   (`spikes/netd-tcp-translate/`) chose read-and-retain over peeking and settled the socket
   bookkeeping (§3.2); `limina-ring` is the generic core of the Metal transport's ring, which keeps
   its own until it is moved onto the core (`docs/hardening-backlog.md`).
-- **Phase 3 — `limina-netd` with gvproxy's feature set.** netd, libkrun's external-backend hook,
-  limina-vmm's netd backend, and an explicit flag to select it. *RED:* the existing net tests (lease, SSH forward, per-VM MAC, two
-  VMs in parallel) pass on netd; their oracles move off gvproxy's packet log.
+- **Phase 3 — `limina-netd` with gvproxy's feature set (done).** netd, libkrun's external-backend
+  hook, limina-vmm's netd backend and `--net-netd`. The net tests (lease, outbound DNS, SSH forward
+  and its runtime move, per-VM MAC, two VMs in parallel, pings) run on netd with its own log as the
+  oracle, and `net_netd` adds netd's restart after a kill and the guest's own NTP and HTTP traffic.
 - **Phase 4 — vmnet shared by default, with the switch.** Uplink tracking (§3.4), the switch and
   link flap (§3.5), libkrun's link status. *RED:* a VM boots on vmnet by default; a forced
   trigger (a test lever) moves a running guest to netd, which leases and reaches the Internet, and
@@ -337,7 +359,8 @@ large-MTU workaround, and netd's TCP is passt-style translation rather than a fu
 ## 8. Open questions
 
 - **netd end to end:** the TCP spike measured netd's share on loopback alone; throughput through the
-  worker, the ring and a guest, many connections at once, and UDP are measured once netd exists.
+  worker, the ring and a guest, many connections at once, and UDP are not measured yet, nor what
+  the offloads (§3.2) would buy.
 - **The tunnel trigger:** UDP loss was measured under one client; switching on any tunnel uplink is
   the conservative rule, and other clients (WireGuard, Cisco, Zscaler) may need finer ones.
 - **Cross-process network objects:** `vmnet_network_copy_serialization` across workers is the basis
