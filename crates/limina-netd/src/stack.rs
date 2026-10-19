@@ -1,5 +1,6 @@
-//! The guest's link as netd sees it: ARP for the gateway and DHCP answered here, UDP and TCP
-//! handed up for netd to re-originate, and the guest-bound frames built.
+//! The guest's link as netd sees it: ARP for the gateway, DHCP and pings of the gateway answered
+//! here, UDP, TCP and other pings handed up for netd to re-originate, and the guest-bound frames
+//! built.
 //!
 //! Frames come in and go out with their 12-byte `virtio_net_hdr` in front. Checksums in the
 //! guest's frames are not checked: with checksum offload they are partial, and the guest is the
@@ -11,8 +12,9 @@ use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
     ArpOperation, ArpPacket, ArpRepr, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, DhcpMessageType,
     DhcpOption, DhcpPacket, DhcpRepr, ETHERNET_HEADER_LEN, EthernetAddress, EthernetFrame,
-    EthernetProtocol, EthernetRepr, IPV4_HEADER_LEN, IpAddress, IpProtocol, Ipv4Address,
-    Ipv4Packet, Ipv4Repr, TcpPacket, TcpRepr, UDP_HEADER_LEN, UdpPacket, UdpRepr,
+    EthernetProtocol, EthernetRepr, IPV4_HEADER_LEN, Icmpv4Packet, Icmpv4Repr, IpAddress,
+    IpProtocol, Ipv4Address, Ipv4Packet, Ipv4Repr, TcpPacket, TcpRepr, UDP_HEADER_LEN, UdpPacket,
+    UdpRepr,
 };
 
 use limina_netd_wire::VNET_HDR_LEN;
@@ -51,6 +53,13 @@ pub enum Ingress<'a> {
         guest_port: u16,
         dst: SocketAddrV4,
         payload: &'a [u8],
+    },
+    /// An ICMP echo request to somewhere past the gateway.
+    Echo {
+        dst: Ipv4Address,
+        ident: u16,
+        seq: u16,
+        data: &'a [u8],
     },
     Tcp {
         guest_port: u16,
@@ -223,6 +232,31 @@ impl Stack {
         let payload: &'a [u8] = &payload[packet.header_len() as usize..][..ip.payload_len];
         match ip.next_header {
             IpProtocol::Udp => {}
+            IpProtocol::Icmp => {
+                let icmp = Icmpv4Packet::new_checked(payload).ok()?;
+                let Icmpv4Repr::EchoRequest {
+                    ident,
+                    seq_no,
+                    data,
+                } = Icmpv4Repr::parse(&icmp, &ignore).ok()?
+                else {
+                    return None;
+                };
+                if ip.dst_addr == self.link.gateway {
+                    let gateway = self.link.gateway;
+                    self.echo_reply(gateway, ident, seq_no, data, &mut |f| {
+                        reply(f);
+                        true
+                    });
+                    return None;
+                }
+                return Some(Ingress::Echo {
+                    dst: ip.dst_addr,
+                    ident,
+                    seq: seq_no,
+                    data,
+                });
+            }
             IpProtocol::Tcp => {
                 let tcp = TcpPacket::new_checked(payload).ok()?;
                 // SYN with FIN or RST, and port 0, do not parse: dropped.
@@ -338,6 +372,31 @@ impl Stack {
         self.udp_frames(dst_mac, src, dst, &msg, reply);
     }
 
+    /// An ICMP echo reply from `src` to the guest, framed (and fragmented to the MTU). Whether
+    /// `out` took every frame.
+    pub fn echo_reply(
+        &mut self,
+        src: Ipv4Address,
+        ident: u16,
+        seq_no: u16,
+        data: &[u8],
+        out: &mut dyn FnMut(&[u8]) -> bool,
+    ) -> bool {
+        let repr = Icmpv4Repr::EchoReply {
+            ident,
+            seq_no,
+            data,
+        };
+        let mut msg = vec![0u8; repr.buffer_len()];
+        repr.emit(
+            &mut Icmpv4Packet::new_unchecked(&mut msg[..]),
+            &ChecksumCapabilities::default(),
+        );
+        let dst_mac = self.guest_mac.unwrap_or(EthernetAddress::BROADCAST);
+        let guest = self.link.guest;
+        self.ip_frames(dst_mac, src, guest, IpProtocol::Icmp, &msg, out)
+    }
+
     /// A UDP datagram from `src` to `dst` on the guest's link, in as many frames as the MTU
     /// takes.
     fn udp_frames(
@@ -362,6 +421,30 @@ impl Stack {
             |p| p.copy_from_slice(payload),
             &caps,
         );
+        self.ip_frames(
+            dst_mac,
+            *src.ip(),
+            *dst.ip(),
+            IpProtocol::Udp,
+            &datagram,
+            &mut |f| {
+                out(f);
+                true
+            },
+        );
+    }
+
+    /// An IPv4 datagram carrying `datagram` from `src` to `dst` on the guest's link, in as many
+    /// frames as the MTU takes. Whether `out` took every frame.
+    fn ip_frames(
+        &mut self,
+        dst_mac: EthernetAddress,
+        src: Ipv4Address,
+        dst: Ipv4Address,
+        protocol: IpProtocol,
+        datagram: &[u8],
+        out: &mut dyn FnMut(&[u8]) -> bool,
+    ) -> bool {
         let ident = self.ident;
         self.ident = self.ident.wrapping_add(1);
         // Fragments carry multiples of 8 bytes, all but the last.
@@ -380,9 +463,9 @@ impl Stack {
             .emit(&mut frame);
             let mut packet = Ipv4Packet::new_unchecked(frame.payload_mut());
             Ipv4Repr {
-                src_addr: *src.ip(),
-                dst_addr: *dst.ip(),
-                next_header: IpProtocol::Udp,
+                src_addr: src,
+                dst_addr: dst,
+                next_header: protocol,
                 payload_len: len,
                 hop_limit: 64,
             }
@@ -393,10 +476,12 @@ impl Stack {
             packet.set_frag_offset(offset as u16);
             packet.fill_checksum();
             packet.payload_mut()[..len].copy_from_slice(&datagram[offset..offset + len]);
-            out(&buf);
+            if !out(&buf) {
+                return false;
+            }
             offset += len;
             if !more {
-                break;
+                return true;
             }
         }
     }
@@ -533,6 +618,73 @@ mod tests {
                 &caps,
             );
         })
+    }
+
+    /// A guest's ping of `dst`, as its stack would frame it.
+    fn ping_from_guest(dst: Ipv4Address, ident: u16, data: &[u8]) -> Vec<u8> {
+        let link = Link::default();
+        let icmp = Icmpv4Repr::EchoRequest {
+            ident,
+            seq_no: 3,
+            data,
+        };
+        let eth = EthernetRepr {
+            src_addr: GUEST_MAC,
+            dst_addr: link.gateway_mac,
+            ethertype: EthernetProtocol::Ipv4,
+        };
+        from_guest(eth, IPV4_HEADER_LEN + icmp.buffer_len(), |p| {
+            let caps = ChecksumCapabilities::default();
+            let mut packet = Ipv4Packet::new_unchecked(p);
+            Ipv4Repr {
+                src_addr: link.guest,
+                dst_addr: dst,
+                next_header: IpProtocol::Icmp,
+                payload_len: icmp.buffer_len(),
+                hop_limit: 64,
+            }
+            .emit(&mut packet, &caps);
+            icmp.emit(
+                &mut Icmpv4Packet::new_unchecked(packet.payload_mut()),
+                &caps,
+            );
+        })
+    }
+
+    #[test]
+    fn the_gateway_answers_pings_and_hands_up_the_rest() {
+        let link = Link::default();
+        let mut stack = Stack::new(link.clone());
+        let mut out = Vec::new();
+        let ping = ping_from_guest(link.gateway, 9, b"hi");
+        let ingress = stack.handle(&ping, &mut |f| out.push(f.to_vec()));
+        assert_eq!(ingress, None);
+        assert_eq!(out.len(), 1);
+        let eth = EthernetFrame::new_checked(&out[0][VNET_HDR_LEN..]).unwrap();
+        let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
+        assert!(ip.verify_checksum());
+        assert_eq!((ip.src_addr(), ip.dst_addr()), (link.gateway, link.guest));
+        let icmp = Icmpv4Packet::new_checked(ip.payload()).unwrap();
+        assert_eq!(
+            Icmpv4Repr::parse(&icmp, &ChecksumCapabilities::default()).unwrap(),
+            Icmpv4Repr::EchoReply {
+                ident: 9,
+                seq_no: 3,
+                data: b"hi"
+            }
+        );
+
+        let far = Ipv4Address::new(1, 1, 1, 1);
+        let frame = ping_from_guest(far, 9, b"hi");
+        assert_eq!(
+            stack.handle(&frame, &mut |_| panic!("not answered on the link")),
+            Some(Ingress::Echo {
+                dst: far,
+                ident: 9,
+                seq: 3,
+                data: b"hi"
+            })
+        );
     }
 
     #[test]

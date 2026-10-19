@@ -317,3 +317,34 @@ fn the_ssh_forward_moves_while_the_vm_runs_on_netd() {
         .expect("supervisor did not stop");
     assert!(!outcome.forced, "teardown had to be forced");
 }
+
+/// Pings from the guest: the gateway answers its own, and one past it goes out from netd's
+/// unprivileged ICMP socket and comes back.
+#[test]
+fn the_guest_pings_the_gateway_and_beyond_on_netd() {
+    if !limina_test::require_hvf_or_skip("the_guest_pings_the_gateway_and_beyond_on_netd") {
+        return;
+    }
+    let cfg = Nic::Netd.config().with_ssh_target_check();
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    Nic::Netd
+        .wait_for_lease(&mut guest, Duration::from_secs(150))
+        .expect("guest never obtained its DHCP lease");
+    guest
+        .wait_for_ssh(Duration::from_secs(60))
+        .expect("guest SSH not reachable through the forward");
+    for dst in ["192.168.127.1", "1.1.1.1"] {
+        let out = guest
+            .ssh_exec(&format!("ping -c 2 -W 5 {dst}"))
+            .unwrap_or_else(|e| panic!("pinging {dst}: {e}"));
+        eprintln!("{out}");
+        assert!(
+            out.contains(" 0% packet loss"),
+            "pings of {dst} were lost:\n{out}"
+        );
+    }
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "teardown had to be forced");
+}

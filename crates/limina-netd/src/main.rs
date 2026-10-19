@@ -7,12 +7,13 @@
 //! in: no path, no port, no name.
 //!
 //! One thread and one kqueue: the channel's doorbell and every host socket (UDP flows, DNS
-//! questions, TCP connections) wake the same loop, which drains the guest's ring, answers on the
-//! link what the link answers (ARP, DHCP, DNS at the gateway), re-originates the rest on host
-//! sockets, and frames what comes back for the guest.
+//! questions, TCP connections, the ICMP socket) wake the same loop, which drains the guest's ring,
+//! answers on the link what the link answers (ARP, DHCP, DNS and pings at the gateway),
+//! re-originates the rest on host sockets, and frames what comes back for the guest.
 
 mod dns;
 mod forward;
+mod icmp;
 mod poller;
 mod sandbox;
 mod stack;
@@ -36,7 +37,7 @@ const DNS_PORT: u16 = 53;
 /// netd, and a TCP segment left over waits on this rather than on a retransmission timeout.
 const RING_FULL_RETRY: Duration = Duration::from_millis(1);
 /// The descriptors netd needs at most: every TCP connection, UDP flow and DNS question at once,
-/// and a margin.
+/// and a margin (which covers the one ICMP socket).
 const FDS_WANTED: u64 = (tcp::MAX_CONNS + udp::MAX_FLOWS + dns::MAX_PENDING + 64) as u64;
 
 fn main() -> ExitCode {
@@ -126,6 +127,7 @@ struct Netd {
     udp: udp::UdpNat,
     dns: dns::Resolver,
     tcp: tcp::TcpNat,
+    icmp: icmp::IcmpNat,
     forwards: forward::Forwards,
     poller: Poller,
 }
@@ -163,6 +165,19 @@ impl Netd {
                     allowed,
                     tcp_emit!(self.stack, out),
                 );
+            }
+            Some(Ingress::Echo {
+                dst,
+                ident,
+                seq,
+                data,
+            }) => {
+                if !routable(dst, self.stack.link()) {
+                    return;
+                }
+                if let Err(e) = self.icmp.send(dst, ident, seq, data, &self.poller) {
+                    log::debug!("ICMP → {dst}: {e}");
+                }
             }
             None => {}
         }
@@ -226,6 +241,13 @@ impl Netd {
             });
         } else if self.tcp.owns(fd) {
             self.tcp.event(ev, tcp_emit!(self.stack, out));
+        } else if self.icmp.owns(fd) {
+            let stack = &mut self.stack;
+            self.icmp.recv(&mut |src, ident, seq, data| {
+                if !stack.echo_reply(src, ident, seq, data, &mut |f| out.push(f)) {
+                    log::debug!("ICMP ← {src}: the guest's ring is full");
+                }
+            });
         } else if ev.filter != Filter::Read {
         } else if self.udp.owns(fd) {
             let stack = &mut self.stack;
@@ -244,6 +266,7 @@ impl Netd {
 
     fn expire(&mut self, now: Instant, out: &mut ToGuest<'_>) {
         self.udp.expire(now);
+        self.icmp.expire(now);
         for a in self.dns.expire(now) {
             self.dns_answer(a, out);
         }
@@ -258,6 +281,7 @@ impl Netd {
     fn next_deadline(&self) -> Option<Instant> {
         [
             self.udp.next_deadline(),
+            self.icmp.next_deadline(),
             self.dns.next_deadline(),
             self.tcp.next_deadline(),
         ]
@@ -276,6 +300,7 @@ fn serve(sock: OwnedFd, ctl: Option<OwnedFd>) -> io::Result<()> {
         udp: udp::UdpNat::default(),
         dns: dns::Resolver::default(),
         tcp: tcp::TcpNat::default(),
+        icmp: icmp::IcmpNat::default(),
         forwards: forward::Forwards::new(ctl, &poller)?,
         poller,
     };
