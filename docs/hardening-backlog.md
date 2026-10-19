@@ -278,6 +278,18 @@ Owed: the rest of PSCI 1.x (`SYSTEM_RESET2`, `CPU_FREEZE`, `CPU_SUSPEND` idle st
 `PSCI_FEATURES` answer set), SMCCC/`ARCH_FEATURES`, PPTT/topology, and anything else a guest
 probes — decide offer or decline for each and record it.
 
+### Cardea preserves x18 with entry shims instead of never using it
+x18 is the AArch64 platform register: Linux keeps its shadow call stack there and checks that every
+EFI runtime call returns it unchanged (`[Firmware Bug]: register x18 corrupted by EFI …`). Rust on
+`aarch64-unknown-none` allocates x18 like any other register, and so does the precompiled `core`.
+Cardea's runtime services table therefore points at naked entries that save x18 around each
+service (`firmware/src/runtime.rs`, `mod entry`); boot services carry no such guard, which is fine
+while no boot-time caller relies on x18. Reserving the register outright needs the nightly-only
+`-Zfixed-x18` (`-Ctarget-feature=+reserve-x18` is deprecated in its favour) plus a `core` rebuilt
+with it (`-Zbuild-std`, also unstable). Fix shape, once both are stable: build with x18 reserved,
+check the disassembly has no x18 use, and drop the entry shims. The hostile loader's
+`runtime_services_keep_x18` case stays as the witness.
+
 ---
 
 ### A full host disk reaches the guest as an I/O error, and its file system goes read-only
