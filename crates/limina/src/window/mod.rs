@@ -72,7 +72,7 @@ mod present;
 mod seams;
 pub(crate) mod still;
 mod trackpad;
-mod vsync;
+pub(crate) mod vsync;
 mod wake_policy;
 mod warp;
 mod windows;

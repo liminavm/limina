@@ -132,8 +132,10 @@ fn process_cpu_time(pid: libc::pid_t) -> Option<Duration> {
     if rc != 0 {
         return None;
     }
+    // The times are in Mach absolute-time ticks, not nanoseconds: 125/3 ns each on Apple silicon.
+    let ticks = info.ri_user_time.saturating_add(info.ri_system_time);
     Some(Duration::from_nanos(
-        info.ri_user_time.saturating_add(info.ri_system_time),
+        crate::window::vsync::Timebase::host().ns_from_ticks(ticks),
     ))
 }
 
@@ -444,6 +446,24 @@ impl VcpuPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The worker's CPU time is what lets the host grow the guest before the guest says so; read
+    /// in the wrong unit it came out 41.7x low on Apple silicon and the host signal never fired.
+    #[test]
+    fn process_cpu_time_measures_the_cpu_a_process_burned() {
+        let pid = std::process::id() as libc::pid_t;
+        let before = process_cpu_time(pid).unwrap();
+        let start = Instant::now();
+        let mut x = 0u64;
+        while start.elapsed() < Duration::from_millis(300) {
+            x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7));
+        }
+        let burned = process_cpu_time(pid).unwrap() - before;
+        assert!(
+            burned >= Duration::from_millis(200) && burned < Duration::from_secs(2),
+            "300 ms of spinning read as {burned:?}"
+        );
+    }
 
     /// A current agent on a guest doing nothing: one task runnable (itself, reading `/proc`),
     /// no CPU burned, nobody waiting.
