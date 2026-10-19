@@ -1,6 +1,6 @@
 # Multi-VM & Bridged Networking for limina
 
-Status: **proposal; the default is decided** · Host: macOS 26+ (Apple Silicon) · Audience: limina
+Status: **the default is built (Phases 1–5); networks as objects, bridged and the arena NIC to come** · Host: macOS 26+ (Apple Silicon) · Audience: limina
 maintainer
 
 Every networking feature here runs without root or a restricted Apple entitlement. **A VM's NIC is
@@ -8,14 +8,13 @@ on vmnet shared mode by default** (Apple's `vmnet.framework`, driven from the wo
 native libkrun backend with the unrestricted `com.apple.security.virtualization` entitlement).
 **When vmnet cannot serve — it fails to start, or a host VPN breaks its NAT — the NIC moves
 automatically to `limina-netd`**, a per-VM user-mode NAT process of our own that talks to the
-worker through shared-memory rings. `limina-netd` replaces gvproxy, which limina ships today and
-retires once `limina-netd` covers what it does.
+worker through shared-memory rings.
 
 Measured evidence: `spikes/vmnet-network-probe/RESULTS.md` (vmnet privilege, leases, network
 objects, VPN behaviour) and `spikes/net-bench/RESULTS.md` (gvproxy and vmnet throughput and CPU).
-Background: `docs/research/07-networking.md`. Code: `crates/limina/src/gateway.rs` (gvproxy
-lifecycle), `crates/limina-vmm/src/krun/mod.rs` (`net_device`), libkrun's
-`src/devices/src/virtio/net/vmnet.rs`.
+Background: `docs/research/07-networking.md`. Code: `crates/limina-vmm/src/krun/mod.rs`
+(`net_device`), `switch.rs` and `uplink.rs` beside it, `crates/limina-netd`,
+`crates/limina/src/forward.rs` (the SSH forward), libkrun's `src/devices/src/virtio/net/vmnet.rs`.
 
 ## 1. Goals
 
@@ -29,18 +28,11 @@ lifecycle), `crates/limina-vmm/src/krun/mod.rs` (`net_device`), libkrun's
 
 ## 2. What exists and what is measured
 
-**gvproxy (shipped, `gateway.rs`, to be retired).** One gvproxy per VM, listening on a vfkit-style
-unixgram socket keyed on the supervisor pid; the worker attaches virtio-net to it (`UnixgramPath`,
-vfkit framing, `NET_FLAG_CSUM_VALID`). DHCP leases the guest `192.168.127.2`; the host SSH forward
-auto-allocates from 2222 up and moves at runtime through gvproxy's `forwarder/expose`/`unexpose`
-API; MTU 65520 (`GVPROXY_MTU`) and a raised `GOGC` are the measured throughput settings. A watchdog
-respawns a gvproxy that dies under a running VM. Orphans are covered three ways: clean-exit
-teardown, an EOF death-pact watcher (`limina __reap-gateway`), and a startup sweep of pid-files
-keyed on dead supervisors. Everything here that gvproxy provides, `limina-netd` must provide before
-gvproxy goes (§3.2).
+**gvproxy (retired in Phase 5)** is the baseline the measurements below compare against: a Go
+user-mode NAT per VM (gvisor-tap-vsock), on a vfkit-style unixgram socket, at an MTU of 65520.
 
-**vmnet (experimental, `--net-vmnet shared|host|bridged:<if>`).** libkrun's vmnet backend
-(`NetDevice::new_vmnet`) starts the interface in the worker with the virtio-net header passed
+**vmnet (`--net-vmnet shared|host|bridged:<if>` alone, or under the switch with `--net`).**
+libkrun's vmnet backend (`NetDevice::new_vmnet`) starts the interface in the worker with the virtio-net header passed
 through both ways, TSO when the guest takes TSO4 and TSO6, batched reads, and the guest's own MAC.
 The L2 test `net_vmnet` boots a stock guest on shared mode and checks its lease, DNS, HTTPS and a
 64 MiB SHA-256 copy each way. Bridged over Wi-Fi was checked by hand. Measured on a quiet M1, macOS
@@ -97,8 +89,9 @@ NicAttachment {                   // one per VM virtio-net device
 Each reference becomes one virtio-net device; libkrun's API takes N NICs, each with its own
 backend and MAC. The per-VM MAC already exists: `vm.toml` stores one derived from the VM uuid
 (`vmlib/schema.rs` `mac_for_uuid`). Every vmnet guest of a mode shares a segment, so the fixed vfkit
-MAC gvproxy relied on cannot be the default there; without a MAC the supervisor picks a random
-locally administered one.
+MAC cannot be the default there: a flat `--net` run that names none takes one derived from its boot
+disk's path, so it keeps its lease from boot to boot (vmnet's DHCP server holds a lease for a day,
+and the pool is one /24 for the whole host).
 
 A NAT NIC has two backends behind one virtio device: vmnet (§3.3) while it serves, `limina-netd`
 (§3.2) when it does not, switched by the worker (§3.5).
@@ -179,8 +172,8 @@ does the congestion control, retransmission and windowing towards the far end
 
 **The rest of the stack:**
 
-- **ARP and DHCP** answered locally: the guest gets `192.168.127.2`, gvproxy's address, whatever
-  its MAC, so a guest moving between the two sees the same network.
+- **ARP and DHCP** answered locally: the guest gets `192.168.127.2`, whatever its MAC (the vfkit
+  addressing: the gateway at `.1`).
 - **DNS** answered at the gateway through the host's resolver (`DNSServiceQueryRecord`), so a
   VPN's split DNS applies. With `ReturnIntermediates | Timeout` an answer is one batch of records,
   CNAMEs first; a missing name and an empty answer are indistinguishable and both become NOERROR
@@ -196,7 +189,8 @@ does the congestion control, retransmission and windowing towards the far end
   netd a copy over a second socketpair (descriptor 4), and again to each netd that replaces one, so
   the port is the VM's for its whole life and netd never binds one. netd opens each accepted
   connection into the guest from the gateway's address. The supervisor moves a forward through the
-  worker's network control link, as it moves gvproxy's through its services API.
+  worker's network control link, and every worker spawned after (a reboot, reset or resume) binds
+  the moved port.
 - **IPv6** later.
 
 **Enhanced tier.** A custom guest NIC driver writes frames straight into a guest-visible arena and
@@ -207,8 +201,7 @@ netd sees only that arena, never guest RAM at large. Further out, socket-level o
 with its limits around listening and raw sockets). Both are additive: the stock guest's virtio-net
 path is the floor.
 
-**Multi-VM.** One netd per VM gives each fallen-back VM its own island, the same isolation gvproxy
-gives today. VMs that must see each other do so on a vmnet Network (§3.3); a VM that has fallen back
+**Multi-VM.** One netd per VM gives each fallen-back VM its own island. VMs that must see each other do so on a vmnet Network (§3.3); a VM that has fallen back
 to netd loses its Network peers until it moves back.
 
 ### 3.3 vmnet in the worker
@@ -277,7 +270,7 @@ instead.
 
 ### 3.5 Switching between vmnet and netd
 
-**Automatic, in the worker, under one virtio device and one MAC** (`limina --net-auto`;
+**Automatic, in the worker, under one virtio device and one MAC** (`limina --net`;
 `crates/limina-vmm/src/krun/switch.rs`). The NIC's backend is limina's switching backend, which
 holds a running netd always and a vmnet interface while the NIC is on vmnet, and sends the guest's
 frames to the side it is on. libkrun's net worker watches both sides' descriptors through its
@@ -334,7 +327,7 @@ Desktop, Lima, Podman and UTM keep a user-mode path largely for VPN users.
 host's own socket traffic and goes wherever the VPN sends it. If vmnet cannot start at all, the VM
 comes up on netd: vmnet never gates the floor.
 
-Measured 2026-10-19 on macOS 27.0.1 with a `--net-auto` guest and a Tailscale exit node: the exit
+Measured 2026-10-19 on macOS 27.0.1 with a guest on the switching NIC and a Tailscale exit node: the exit
 node took vmnet's `/24` with local network access on (through `utun8`) and with it off (through
 `en0`); each time the NIC moved to netd 0.3 s after the route changed, the guest leased
 `192.168.127.2` and reached HTTPS with the host's public address, and with the exit node off the
@@ -363,12 +356,14 @@ Each phase ships on its own and is tested against the shipped binaries (`crates/
   oracle, and `net_netd` adds netd's restart after a kill and the guest's own NTP and HTTP traffic.
 - **Phase 4 — vmnet with the switch (done).** Uplink tracking (§3.4), the switch and link flap
   (§3.5), libkrun's link status and gathered descriptors, the SSH forward through netd on both
-  sides, `--net-auto`. `net_auto` boots a guest on vmnet, moves it to netd through the lever (it
+  sides. `net_auto` boots a guest on vmnet, moves it to netd through the lever (it
   leases and reaches the Internet, SSH throughout) and back, with no move it did not ask for; a
   vmnet that will not start leaves the VM on netd.
-- **Phase 5 — retire gvproxy; vmnet with the switch by default.** `--net` becomes `--net-auto`;
-  `gateway.rs`'s gvproxy half, its bundling, its watchdog and reaper, its docs go. *RED:* the net
-  tests pass on the default NIC.
+- **Phase 5 — vmnet with the switch by default; gvproxy retired (done).** `--net` is the switching
+  NIC, for flat runs and managed VMs alike; gvproxy's supervisor half, its bundling, watchdog and
+  reaper are gone. The net tests run on the default NIC (vmnet's lease for the guest's MAC, a name
+  resolved in the guest, SSH through the forward, two VMs at once, a custom MAC) and on netd alone;
+  a forward moved at runtime outlives a reset.
 - **Phase 6 — `Network` model, per-VM MACs, vmnet network objects.** `limina net` CLI; one network
   object per Network with reservations; forwards per VM. *RED:* two VMs on two Networks, mutually
   invisible; two VMs on one Network ping each other.

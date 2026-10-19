@@ -53,7 +53,7 @@ Decision-oriented design docs — the founding one plus one per major feature
 - [M10 multiple disks](design/m10-multiple-disks.md) — shipped.
 - [Firmware and ACPI](design/firmware-and-acpi.md) — our own Rust UEFI firmware replacing
   edk2, and ACPI instead of a device tree for the guest; phase 0 (ACPI on edk2) in progress.
-- [Multi-VM networking](design/multi-vm-networking.md) — proposal; vmnet shared by default, a per-VM `limina-netd` as the VPN-proof fallback, gvproxy retired.
+- [Multi-VM networking](design/multi-vm-networking.md) — vmnet shared by default, a per-VM `limina-netd` as the VPN-proof fallback; networks as objects and bridged still to come.
 - [VM definitions & persistence](design/vm-definitions.md) — the per-VM config model;
   Phase 1 + the control-center UI shipped (`.liminavm` bundles, `limina create/start/
   ls/stop/rm`, bare `limina` opens the VM library window).

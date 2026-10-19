@@ -89,7 +89,6 @@ Stat-only: cheap enough to run across the whole library on the center's 1 s refr
 | `boot.firmware`, when configured, exists | Blocker | **never checked** |
 | firmware resolvable when not configured | Blocker | `resolve_windowed_firmware` |
 | GOP firmware absent, krunkit `silent.fd` present | **Warning** | `main.rs:1227` |
-| `[[network]]` present → gvproxy binary exists and is executable | Blocker | resolution only |
 | bundle on an unmounted volume / dangling symlink | Blocker | `vm-definitions.md` §8.4 |
 | `run/lock` exists but is unreadable | Blocker | reads as `Stopped`, §3.4 |
 
@@ -130,8 +129,8 @@ and a second guess would only add noise.
 ### 3.4 Ordering
 
 `cmd_start` (`main.rs:702-713`) takes the run flock at `:709` — after config translation, but
-before any resource validation, all of which lives inside `run_vm`. Two consequences: disk,
-firmware and gvproxy failures all occur with the lock held, and a config that fails to
+before any resource validation, all of which lives inside `run_vm`. Two consequences: disk
+and firmware failures all occur with the lock held, and a config that fails to
 translate errors out before the "already running" message can ever be reached. Pre-flight runs
 **before `runtime::acquire`**, which settles both.
 

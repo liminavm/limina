@@ -9,22 +9,20 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
 
 - macOS on Apple Silicon (developed on macOS 26.5, M1 Max, 16 KiB host pages).
 - Rust (stable), full Xcode + command-line tools (codesign, otool).
-- Homebrew: `molten-vk vulkan-loader gvproxy libusb cmake meson ninja llvm
+- Homebrew: `molten-vk vulkan-loader libusb cmake meson ninja llvm
   spirv-llvm-translator spirv-tools bison`. The keg-only ones (`llvm`, `bison`, and `expat`
   where it exists) are what the host Mesa build needs on `PATH` / `PKG_CONFIG_PATH`;
   `scripts/build-host-mesa.sh` puts them there for you but cannot install them.
   **Not `libclc`** — it is version-coupled to the Mesa rev and pinned in
   `third_party/manifest.toml` instead, fetched and digest-checked by the build (step 1.5).
-- **The `libkrun/krun` Homebrew tap**, for `gvproxy` and `libkrunfw` — neither is in
-  homebrew-core, and current Homebrew **refuses to load a tap until you trust it**:
+- **The `libkrun/krun` Homebrew tap**, for `libkrunfw` — it is not in homebrew-core, and current
+  Homebrew **refuses to load a tap until you trust it**:
 
   ```sh
-  brew tap libkrun/krun && brew trust libkrun/krun && brew install gvproxy libkrunfw
+  brew tap libkrun/krun && brew trust libkrun/krun && brew install libkrunfw
   ```
 
-  `gvproxy` is not optional for the suite: every test that needs guest networking dies at
-  `starting the gvproxy NAT gateway` before the VM boots (that is ~36 of them), and
-  `scripts/build-app.sh` vendors the binary into the bundle. `libkrunfw` is how
+  `libkrunfw` is how
   `scripts/build-test-guest.sh` gets an L1 kernel when no custom one exists, but that kernel has
   no xHCI or EDID, so `scripts/test-boot.sh` refuses to run on it unless
   `LIMINA_TEST_STOCK_KERNEL=1`.
@@ -259,8 +257,8 @@ default 1280x800): it has no window, but `limina debug <vm> capture still|start|
 windowed run, with records marked `headless` (`docs/graphics.md` §8). It is off by default and is
 chosen at launch; a run started without it refuses every capture and says so.
 
-A flat run in the foreground holds its terminal: every process of the run — the supervisor,
-gvproxy and its reaper, and the worker, whose stdio the supervisor hands launchd — inherits the
+A flat run in the foreground holds its terminal: every process of the run — the supervisor, the
+worker, whose stdio the supervisor hands launchd, and the worker's limina-netd — inherits the
 launching shell's stdout and stderr, so `ssh host 'limina --disk …'` stays open for the VM's whole
 life (sshd ends a session only once every holder of its output pipes has closed them).
 `nohup` does not help there, as it redirects only a terminal; under `ssh -t`, a `nohup limina …
@@ -279,9 +277,9 @@ canonicalized, so any spelling of the same file finds the run and nothing else d
 only if a supervisor answers there. `stop` is the stop ladder of a SIGTERM to the supervisor (guest agent, power
 button, stock guest agent); it never kills, and reports a guest still running after `--timeout`
 (default 60 s) with a non-zero exit. `stop --force` is the second signal: the supervisor SIGKILLs
-the worker, tears down gvproxy and its sockets, and exits, without writing a suspend snapshot.
+the worker, which takes its limina-netd with it, and exits, without writing a suspend snapshot.
 `reset` SIGKILLs the worker and cold-boots a fresh one through the path a guest's own `reboot`
-takes, so the supervisor, its window, the NAT gateway and the SSH port all stay; it answers once
+takes, so the supervisor, its window and the SSH port all stay (the forward where it was last moved); it answers once
 the fresh worker runs. There is no orderly reset: the orderly one is the guest's own `reboot`
 (`ssh … sudo reboot`), which relaunches the same way, and `reset` is for the guest that cannot be
 asked. A reset is dropped (and says so) when a stop or a suspend is already under way. Back-to-back

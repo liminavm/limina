@@ -31,8 +31,7 @@ serves a 7B LLM through omlx at the speed it runs on macOS.
   the whole process down (hvf `VcpuExit::Shutdown` → run-loop exit → exit eventfd), so the AppKit
   supervisor runs the VMM in a child and drives it over vsock + the shutdown eventfd.
   **Reboot = relaunch the child:** `SYSTEM_RESET` exits with `FC_EXIT_CODE_REBOOT` (125) and the
-  supervisor relaunches the worker (recycling gvproxy, whose vfkit socket is single-connection)
-  under a boot-loop cap. Guard: `reboot::guest_reboot_relaunches_the_worker`.
+  supervisor relaunches the worker under a boot-loop cap. Guard: `reboot::guest_reboot_relaunches_the_worker`.
 - **Codesigning is a hard gate.** The worker must carry `com.apple.security.hypervisor`
   (`crates/limina-vmm/hvf-entitlements.plist`), else `hv_vm_create` fails.
   vmnet (bridged/shared) needs only the unrestricted `com.apple.security.virtualization` on
@@ -207,24 +206,22 @@ in `docs/input-and-windows.md` and M15.
 
 ## Milestone 3 — Networking (NAT, then bridged)
 
-**Established:** `limina --net` supervises a gvproxy gateway (`-listen-vfkit unixgram://<absolute
-path>`) and attaches virtio-net via `krun_add_net_unixgram` (vfkit mode, `NET_COMPAT_FEATURES`);
-no libkrun patch. The guest must reach userspace for NetworkManager to DHCP, so net tests boot a
-writable COW clone. **Inbound SSH needs no forwarding config:** the well-known vfkit MAC
-`5a:94:ef:e4:0c:ee` gets the static `.2` lease and gvproxy's built-in `127.0.0.1:<port> → .2:22`
-forward; the host port auto-allocates from 2222 (or `--ssh-port`) and the supervisor logs the
-command. `krun_set_port_map` is TSI-only. Runbook: `docs/images.md` §SSH access; multi-VM design:
-`docs/design/multi-vm-networking.md`.
+**Established:** `limina --net` puts the guest's virtio-net on vmnet shared, started by the worker
+through libkrun's native vmnet backend (the worker's `com.apple.security.virtualization`
+entitlement, no root), and moves it to a per-VM `limina-netd` user-mode NAT and back when vmnet
+cannot serve: it will not start, a VPN takes its subnet's route, or the way out is a tunnel
+(`docs/design/multi-vm-networking.md` §3.5). The guest must reach userspace for NetworkManager to
+DHCP, so net tests boot a writable COW clone. **Inbound SSH needs no forwarding config:** the
+worker binds `127.0.0.1:<port>` and netd carries it to the guest's port 22 on either side; the
+host port auto-allocates from 2222 (or `--ssh-port`) and the supervisor logs the command.
+`--net-netd` and `--net-vmnet shared|host|bridged:<if>` pin one side. Runbook: `docs/images.md`
+§SSH access.
 
 **Owed:**
-- **vmnet shared by default, `limina-netd` as the fallback, gvproxy retired**
-  (`docs/design/multi-vm-networking.md` §6 Phases 2–5). The native libkrun vmnet backend exists
-  (`--net-vmnet shared|host|bridged:<if>`, experimental) and measured 2.3–2.5× gvproxy's throughput
-  at about a third of the CPU per byte; next is the shared ring crate and the passt-style TCP
-  translation spike for `limina-netd`.
-- **Net worker reconnect on HANG_UP**, so a gvproxy restart doesn't disable the NIC for the VM's life.
-- **Offload tuning:** evaluate `GUEST_TSO6|HOST_TSO6` once verified non-corrupting; mind the macOS
-  datagram limit against large GSO frames.
+- **Networks as objects, bridged as a feature, the arena NIC** (`docs/design/multi-vm-networking.md`
+  §6 Phases 6–8).
+- **Offloads:** the NIC offers TSO both ways for IPv4 and IPv6; only IPv4 bulk is digest-checked
+  (`net::bulk_crosses_the_forward_intact_both_ways_on_netd`).
 - **Ergonomic SSH** (GNOME Boxes prior art, `docs/research/prior-art-gnome-boxes.md`): (A) inject the
   host public key as an SMBIOS type-11 OEM string
   (`io.systemd.credential.binary:ssh.ephemeral-authorized_keys-all=<base64>`), which stock systemd

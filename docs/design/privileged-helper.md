@@ -68,8 +68,8 @@ privileged binary. The one known client:
   never runs guest-facing data-plane logic it doesn't have to.
 - **No-orphan death-pact** (same guarantee as the net helpers, `multi-vm-networking.md` §4): the
   helper must never outlive the VM(s)/resources it serves — EOF-on-control-socket death-pact +
-  startup sweep of dead-owner leftovers, reusing the gvproxy-reaping pattern already in
-  `crates/limina/src/gateway.rs`.
+  startup sweep of dead-owner leftovers, the same shape as the worker's `limina-netd` child
+  (exits on EOF of its socketpair).
 - **Per-request authorization, validated host-side.** The helper re-validates every request (e.g. the
   device id is one the user actually selected via `--usb`) rather than trusting the caller blindly,
   so a compromised unprivileged process can't ask it to capture arbitrary devices.
@@ -88,7 +88,7 @@ privileged binary. The one known client:
 
 ## Scope / non-goals
 
-- **Unprivileged-first is unchanged.** Networking (gvproxy NAT and vmnet alike) and the entire
+- **Unprivileged-first is unchanged.** Networking (vmnet and the `limina-netd` NAT alike) and the entire
   current feature set need **no** helper. A user who never asks to pass through an Apple-claimed
   USB device without AccessoryAccess never spawns it.
 - This doc is the *architecture*; the concrete protocol (message types, the fd-passing handshake) is
@@ -102,5 +102,6 @@ privileged binary. The one known client:
 - `m7-usb-passthrough.md` §Phase 4 — the first client (USB capture); the `LibusbBackend` + the 3b
   pipeline it plugs into are already built.
 - `multi-vm-networking.md` §4 — the no-orphan lifecycle this reuses.
-- `crates/limina/src/gateway.rs` — the existing orphan-reaping/death-pact pattern to lift.
+- `crates/limina-netd/` — the worker-owned child that exits with its parent: the death-pact
+  pattern to lift.
 - Roadmap §M7 — tracked there as deferred.

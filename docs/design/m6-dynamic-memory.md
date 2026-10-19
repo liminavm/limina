@@ -394,8 +394,8 @@ Rust API, no C ABI). All edits in `crates/`.
 - Add `--memory <min..max>` (e.g. `2G..12G`); parse to `min_mib`/`max_mib`.
 - Push to the worker: `--ram-mib=<max>` (existing arg, `main.rs:180-181`),
   `--memory-min=<min>`, `--memory-max=<max>`, and an auto-allocated
-  `--balloon-control-socket=<path>` (same arg-push pattern as `--net-gvproxy`,
-  `main.rs:343-360`). Keep `--ram-mib`-only as the static fallback (no balloon).
+  `--balloon-control-socket=<path>` (same arg-push pattern as the worker's other
+  per-VM args). Keep `--ram-mib`-only as the static fallback (no balloon).
 - Expose the socket path to the harness/policy (so `Guest::set_balloon_target` and Step 4's
   policy can reach it).
 

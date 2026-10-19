@@ -67,7 +67,7 @@ repo? Read [`docs/dev-onboarding.md`](docs/dev-onboarding.md).
 - macOS 26.5, Apple M1 Max, 32 GB RAM, arm64, **16 KiB host pages**
 - Rust 1.88, full Xcode 26.4 / Apple clang 21
 - Homebrew provides the VM stack (libkrun, krunkit, libkrunfw, virglrenderer,
-  molten-vk, vulkan-loader, gvproxy, libusb, qemu, cmake/meson/ninja) — though the
+  molten-vk, vulkan-loader, libusb, qemu, cmake/meson/ninja) — though the
   shipping app links our own patched builds, not Homebrew's.
 
 ## License

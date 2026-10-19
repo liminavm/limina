@@ -32,7 +32,7 @@ Host baseline: macOS 26.5, Apple M1 Max, 32 GB, arm64, 16 KiB host pages, Rust 1
 | D2 | **Vendor libkrun + libkrunfw + virglrenderer under `third_party/` and build our own**, applying a maintained patch series. The Homebrew 1.17.4 bottle lacks 1.18 APIs (overlay files, multiport console, vhost-user, `disable_implicit_init`) and we must patch anyway (balloon control, USB kernel, reclaim, runtime resize). | We can't ship features that need patches against a binary dylib. | [01][04] |
 | D2.1 | **Consume libkrun through its internal Rust crates (`krun-vmm`/`krun-devices`/`krun-polly`/`krun-utils`/`krun-hvf`), NOT the C ABI.** `limina-vmm` builds a `VmResources`, calls `vmm::builder::build_microvm`, and runs its own `EventManager` loop — no `krun-sys`, no FFI. **Spike-validated** (`spikes/m1-boot-internal`): boots Fedora-43 to systemd userspace via pure Rust, at parity with the C-ABI spike. | Compile-time type safety (typed config structs/enums instead of `u32`-over-FFI; display/input become native Rust traits, not `#[repr(C)]` vtables); full control of the run loop and direct device/memory access. Cost: we reimplement libkrun's `ctx_cfg → VmResources` orchestration (becomes our policy, in `limina-vmm`) and track internal-API drift on rebase — judged acceptable since we own the fork and our usage is concentrated. | [01], `spikes/m1-boot-internal` |
 | D3 | **Run the VMM in a dedicated child process** ("vmm worker"), not in-process with the Cocoa UI. Even though we now own the event loop (D2.1), the guest-shutdown path still calls `libc::exit()` and tears the process down. | Verified chain: guest PSCI SYSTEM_OFF/RESET → `VcpuExit::Shutdown` → `exit_evt` → `Vmm::process` → **`Vmm::stop` → `libc::exit`** — and that exit lives **inside the `krun-vmm` crate** (`src/vmm/src/lib.rs:361`), not the C entrypoint, so it bites the internal-API path too. A GUI must not die when the guest powers off. In-process control is possible later but requires a deliberate patch to `Vmm::stop`/the exit `Subscriber` — not on the critical path. | [01][02], `spikes/m1-boot-internal` |
-| D4 | **The limina host executable carries the `com.apple.security.hypervisor` entitlement** (ad-hoc signable). Specifically, the *vmm worker* binary that calls `hv_vm_create`. Default networking is **gvproxy user-mode NAT** to avoid the Apple-gated `com.apple.vm.networking`. | Without the entitlement `hv_vm_create` → `Error::VmCreate`. Entitlement must be on the executable, not the dylib. | [02][07] |
+| D4 | **The limina host executable carries the `com.apple.security.hypervisor` entitlement** (ad-hoc signable). Specifically, the *vmm worker* binary that calls `hv_vm_create`. Default networking is **vmnet shared** started in the worker (`com.apple.security.virtualization`, no root), moving to a per-VM user-mode NAT (`limina-netd`) when vmnet cannot serve — no Apple-gated `com.apple.vm.networking`. | Without the entitlement `hv_vm_create` → `Error::VmCreate`. Entitlement must be on the executable, not the dylib. | [02][07] |
 | D5 | **Milestone-1 boot path: EFI firmware + `krun_add_disk`** of `Fedora-Workstation-43.raw` (60 GiB MBR image w/ EFI partition). Fallback: `krun_add_disk` + `krun_set_root_disk_remount`. | The distro boots its own kernel/drivers; avoids depending on libkrunfw's minimal kernel for a desktop guest. | [01][03] |
 | D6 | **Display: native NSWindow + CAMetalLayer presenter implementing libkrun's display backend in native Rust** (`VmResources.display_backend: DisplayBackend`; methods `configure_scanout`/`disable_scanout`/`alloc_frame`/`present_frame`). Per D2.1 we implement the Rust backend type directly — **not** the C `#[repr(C)]` `krun_display_backend` vtable. No GTK/SDL in the product. | The backend works; `alloc_frame` hands back a shared-storage `MTLBuffer.contents()` so on M1 UMA there is one copy total. Implementing in Rust drops the vtable-ABI footgun entirely. | [03][09] |
 | D7 | **Input: native Rust backends via `VmResources.input_backends`** (config + event-provider), macOS UI thread → ring + readable fd → libkrun input worker. Per D2.1 these are the Rust backend types, not the C `#[repr(C)]` `InputConfigBackend`/`InputEventProviderBackend` structs. Guest owns the keyboard layout; host owns the `kVK_*`→`KEY_*` table and Command/Option swap. | The `_fd`/passthrough path is Linux-host only. Translation needs no libkrun patch; the Rust path removes the worst documented ABI footgun. | [04] |
@@ -59,7 +59,7 @@ limina is **two processes** plus the guest:
   │  • control-plane thread (liminad)         │    - gpu worker thread          │
   │    - vsock AF_UNIX <-> agent            │    - input worker thread        │
   │  • supervisor thread                    │    - virtio-net worker thread   │
-  │    - spawns/monitors limina-vmm & gvproxy │    - virtiofs/vsock/balloon...  │
+  │    - spawns/monitors limina-vmm           │    - virtiofs/vsock/balloon...  │
   └───────────────┬──────────────────────┘  └──────────────┬───────────────┘
                   │   AF_UNIX sockets / shared mem / pipes   │
                   └──────────────────────────────────────────┘
@@ -107,8 +107,8 @@ orderly shutdown signal) as the forcing fallback.
 - **present thread** (`CVDisplayLink`/`MTKView`): drives vsync-aligned `present`.
 - **liminad control thread**: owns the AF_UNIX endpoint bridged to the guest vsock control
   port; runs the clipboard bridge (NSPasteboard changeCount polling), heartbeat, agent RPC.
-- **supervisor thread**: spawns and monitors `limina-vmm` and `gvproxy`; restarts the net path
-  on backend HANG_UP (libkrun's net worker permanently disables the NIC otherwise). [07]
+- **supervisor thread**: spawns and monitors `limina-vmm`; the worker owns the NIC backend (vmnet,
+  or its `limina-netd` child) and the SSH forward. [07]
 
 ### 2.4 Cross-process plumbing
 
@@ -227,8 +227,8 @@ Conventions:
 
 > **As-built deltas (2026-07-01).** This section is the founding plan; the shipped layout
 > differs in named places — trust the workspace over this tree:
-> - No `limina-net` crate: gvproxy lifecycle lives in the supervisor as
->   `crates/limina/src/gateway.rs`. No host `limina-config` crate yet: the worker's own
+> - No `limina-net` crate: the NAT is `crates/limina-netd`, spawned by the worker; the supervisor
+>   side is the SSH-forward port in `crates/limina/src/forward.rs`. No host `limina-config` crate yet: the worker's own
 >   vocabulary is `crates/limina-vmm/src/config.rs`; the per-VM persistent config is designed
 >   in `design/vm-definitions.md`.
 > - No `liminad` module: the control plane is `crates/limina/src/control.rs` (+
@@ -264,7 +264,7 @@ limina/                      (workspace root: Cargo.toml)
 │  │
 │  ├─ limina/                the UI/control BINARY (front-end; user-facing app)
 │  │                       - app/      NSApplication, menus, prefs, fullscreen, window mgmt
-│  │                       - supervisor/  spawn+monitor limina-vmm & gvproxy; net restart
+│  │                       - supervisor/  spawn+monitor limina-vmm; SSH forward port
 │  │                       - liminad/    vsock-bridged control plane + clipboard bridge
 │  │                       - (display/input live here too once model (A) zero-copy lands)
 │  │
@@ -275,7 +275,7 @@ limina/                      (workspace root: Cargo.toml)
 │  ├─ limina-proto/          control-plane wire types: FrameHeader + CBOR message enums
 │  │                       (shared by liminad host side and the guest agent)
 │  ├─ limina-config/         VM config schema (serde), resolution/validation, paths
-│  └─ limina-net/            gvproxy lifecycle, unixgram wiring, port-map/forward config
+│  └─ limina-net/            NIC backend wiring (vmnet / limina-netd), port-forward config
 │
 └─ agent/
    └─ limina-agent/          GUEST binary (aarch64-linux): vsock client, clipboard,
@@ -307,17 +307,17 @@ limina/                      (workspace root: Cargo.toml)
   Command/Option swap and custom keybindings are table edits. Window-only NSView events
   first; `CGEventTap` (Accessibility/TCC) behind a toggle to capture system combos. Provider
   emits explicit `SYN_REPORT`. [04]
-- **`limina-net`** — spawns/wires gvproxy via `krun_add_net_unixunixgram(path, -1, mac,
-  features, NET_FLAG_VFKIT)` (the new API, not krunkit's legacy `set_gvproxy_path`). Offloads
-  start at `NET_COMPAT_FEATURES` (IPv4). Remember `krun_set_port_map` is TSI-only and EINVALs
-  once a net device is added — port-forwarding for virtio-net goes through gvproxy's REST.
-  [07]
+- **`limina-net`** — wires the guest's virtio-net to libkrun's native vmnet backend (shared
+  mode), moving it to the worker-spawned `limina-netd` over shared-memory rings when vmnet cannot
+  serve. Offloads start at `NET_COMPAT_FEATURES` (IPv4). Remember `krun_set_port_map` is TSI-only
+  and EINVALs once a net device is added — the SSH forward is bound by the worker and carried
+  into the guest by `limina-netd`. [07]
 - **`liminad`** (in `limina`) — owns the AF_UNIX endpoint bridged to the guest vsock control
   port; runs clipboard bridge (NSPasteboard changeCount polling + MIME↔UTI + promised data
   provider), heartbeat, and agent RPC dispatch. [05][10]
 - **`limina-config`** — serde schema + resolution (see §7).
-- **`supervisor`** (in `limina`) — process lifecycle for `limina-vmm` and `gvproxy`; restarts the
-  net path on HANG_UP; surfaces guest power-off. [07]
+- **`supervisor`** (in `limina`) — process lifecycle for `limina-vmm`; picks the SSH forward port;
+  surfaces guest power-off. [07]
 
 ### 4.2 The guest agent (`limina-agent`)
 
@@ -375,7 +375,7 @@ limina UI
        2. vmr.set_firmware_config(FirmwareConfig{ path: <EFI fw> })     # Payload::Firmware [01]
        3. vmr.add_block_device(BlockDeviceConfig{ ImageType::Raw, .. }) # EFI boots distro kernel [05]
        4. vmr.set_vsock_device(VsockDeviceConfig{ LIMINA_CTRL_PORT, .. }) # control plane [10]
-       5. vmr.add_network_interface(... gvproxy ... VFKIT)             # NAT [07]
+       5. vmr.add_network_interface(... vmnet shared / limina-netd ...)    # NAT [07]
        6. vmr.set_gpu_virgl_flags(VENUS|...); vmr.displays.push(..)     # GPU + scanout [03]
        7. vmr.display_backend = Some(DisplayBackend(<CAMetalLayer>))    # native Rust [09]
        8. vmr.input_backends.push(kbd); (abs tablet); (rel mouse)       # native Rust [04]
@@ -419,8 +419,8 @@ capture_system_combos = false      # CGEventTap toggle (needs Accessibility) [04
 [input.keybindings]                 # custom kVK_* -> KEY_* overrides
 
 [network]
-mode        = "nat"                 # nat (gvproxy default) | bridged (vmnet, opt-in) [07]
-[[network.port_forward]]            # gvproxy REST forwards (NAT mode)
+mode        = "nat"                 # nat (vmnet shared default, netd fallback) | bridged (opt-in) [07]
+[[network.port_forward]]            # host port forwards (NAT mode)
 host = 2222
 guest = 22
 
@@ -451,7 +451,7 @@ located EFI firmware; `memory.max_mib` is the libkrun `ram_mib` and the balloon 
 | **Custom keybindings + Cmd/Option swap** | `limina-input` keymap table; `limina-config` | no patch | [04] |
 | **Clipboard sharing** | `liminad` (host NSPasteboard) ⇄ `limina-agent` (Wayland data-control) over vsock | no transport patch | [05][10] |
 | **USB passthrough** | libkrunfw kernel rebuild (USB) + native virtio-usb / USB-IP transport + `krun_add_usb*`; host capture by rung: AccessoryAccess (macOS 27), libusb, root helper | **kernel rebuild + new device patch**; v1 = libusb-claimable devices only | [06] |
-| **NAT networking** | `limina-net` + gvproxy (`unixgram`+VFKIT) | no patch (gvproxy is external) | [07] |
+| **NAT networking** | vmnet shared in the worker; `limina-netd` (user-mode NAT) fallback | libkrun vmnet backend | [07] |
 | **Bridged networking** | worker-held vmnet (BRIDGED) | `com.apple.security.virtualization` (unrestricted) on the worker; macOS 26+; opt-in | [07] |
 | **Low memory overhead** | static `krun_set_vm_config` + demand paging; `MADV_FREE_REUSABLE` reclaim | reclaim patch | [08] |
 | **Dynamic memory (min..max ballooning)** | `limina` balloon policy (PSI) + patched libkrun balloon + `limina-agent` reporter | **patch** (inflate/deflate, public API, 16 KiB align) | [08][10] |
@@ -504,7 +504,8 @@ located EFI firmware; `memory.max_mib` is the libkrun `ram_mib` and the balloon 
 ```
 
 Without the entitlement on `limina-vmm`, `hv_vm_create` returns `Error::VmCreate`. Default
-networking (gvproxy) needs **no** entitlement and **no** root. USB passthrough needs no root
+networking (vmnet shared in the worker; `com.apple.security.virtualization`, no root) needs no
+root, and its `limina-netd` fallback needs no entitlement. USB passthrough needs no root
 on macOS 27 with the managed `com.apple.developer.accessory-access.usb` entitlement
 (AccessoryAccess: consent in the app, device opened by the worker). Free-to-claim devices need
 only the USB permission grant on any host; Apple-claimed devices without AccessoryAccess need root
@@ -525,7 +526,7 @@ This doc's job is the *architecture* those milestones build on. The mapping at a
 |---|---|
 | **M1** boot to serial console | child-process `limina-vmm` (§2), EFI+disk boot flow (§6), codesign (§9), internal-API integration (§5, D2.1) |
 | **M2** display + input | display model B in-worker window (§2.4), `limina-display`/`limina-input` (§4.1), vsock control plane (D8) |
-| **M3** networking | `limina-net` + gvproxy supervision (§4.1), net-worker HANG_UP patch (§3.4) |
+| **M3** networking | vmnet backend + `limina-netd` fallback (§4.1), net-worker HANG_UP patch (§3.4) |
 | **M4** 3D + zero-copy scanout | virgl flags (§3.2), virglrenderer Apple-blob build, `SET_SCANOUT_BLOB` patch + display model A migration (§2.4) |
 | **M5** clipboard + virtiofs + agent | `liminad` bridge (§4.1), `limina-agent` (§4.2), virtiofs-overlay delivery |
 | **M6** dynamic memory | balloon patch series (§3.4 D9), PSI policy host-side, page-size menu |
@@ -543,7 +544,7 @@ These gate or reshape decisions above; track in issues:
 4. Display model A vs B long-term: IOSurface ⇄ virglrenderer/MoltenVK interop feasibility before committing to zero-copy export. [03][09]
 5. **RESOLVED** (`spikes/balloon-madvise`): `MADV_FREE_REUSABLE` drops `phys_footprint` on the live `hv_vm_map`'d region with no unmap; `MADV_DONTNEED` returns nothing. Dynamic memory is feasible on macOS/HVF. [08]
 6. 4 KiB-guest vs 16 KiB-host (both boot paths are 4 KiB, verified): how much does stock Fedora reporting actually return under host-side coalescing (menu option a), and is a 16 KiB guest kernel (option b) / a host-page-aware reporting patch (option c) worth it? [08] §1.2
-7. gvproxy speaks the `VFKT` dgram handshake `unixgram.rs` sends; outbound DHCP+curl works. [07]
+7. Outbound DHCP+curl works on vmnet shared and on `limina-netd`. [07]
 8. GNOME/Mutter Fedora 43 implements `wlr/ext-data-control` so an unfocused agent can read/set the clipboard. (clipboard #1 blocker) [05]
 9. Native virtio-snd spike: card enumerates in guest and plays a tone via a CoreAudio AudioUnit; latency vs Parallels. [11]
 10. libkrunfw kernel rebuild with USB still boots within memory/boot constraints; vhci_hcd accepts an AF_VSOCK fd or needs a userspace bridge. [06]
@@ -569,8 +570,8 @@ These gate or reshape decisions above; track in issues:
 - vsock IPC ports (`unix_ipc_port_map`) coexist with TSI; guest connects out to host CID 2.
   [05][10]
 - No USB anywhere; libkrunfw kernel has USB fully disabled in every profile. [06]
-- Two net architectures (TSI default; virtio-net via unixstream/unixgram/tap); `unixgram`+
-  `NET_FLAG_VFKIT` for gvproxy; `set_port_map` is TSI-only. [07]
+- Two net architectures (TSI default; virtio-net via unixstream/unixgram/tap and our native
+  vmnet backend); `set_port_map` is TSI-only. [07]
 - Balloon attached unconditionally; only free-page-reporting wired; `num_pages`/`actual`
   never set; reclaim is Linux `MADV_DONTNEED`. No public balloon API. [08][10]
 - vhost-user path is `cfg(linux)` + memfd-dependent → audio must be a native virtio-snd

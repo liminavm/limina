@@ -316,8 +316,8 @@ extension) and virglrenderer ≥ `0cc513fd` (verbatim modifier passthrough), i.e
 fabricated table to fall back on, the WSI takes the untested prime-blit path. Update the app before
 (or with) the guest mesa.
 
-A payload moves over gvproxy at ~90 MB/s — 440 MB lands in under 5 s. Copying it into a guest is
-never the slow part of a delivery.
+Copying a payload into a guest is never the slow part of a delivery: 440 MB took under 5 s over
+the slowest NAT limina has had.
 
 ### Clipboard, as shipped
 
@@ -744,20 +744,22 @@ procedure above). The `limina-build` container image below is unrelated and stil
 
 ## SSH access
 
-Boot with `--net` (a supervised gvproxy user-mode NAT, no root) and SSH into the guest. The
-supervisor logs the **exact command** at startup — read the port from it, don't assume 2222:
+Boot with `--net` (vmnet shared with a user-mode NAT to fall back on, no root) and SSH into the
+guest. The supervisor logs the **exact command** at startup — read the port from it, don't assume
+2222:
 
 ```
 guest SSH forward ready: ssh -p N <user>@127.0.0.1
 ```
 
-gvproxy forwards `127.0.0.1:<PORT> → guest:22` (the well-known MAC gives the guest the static `.2`
-lease — see `docs/research/07-networking.md`). The host `<PORT>` **auto-allocates from 2222 upward**
+The worker forwards `127.0.0.1:<PORT> → guest:22` through limina-netd, whichever side the NIC is on
+(`docs/design/multi-vm-networking.md` §3.5). The host `<PORT>` **auto-allocates from 2222 upward**
 (the first free loopback port), so it's 2222 for a lone VM but 2223+ when 2222 is already taken. Pin
-it with `--ssh-port <1024-65535>` (requires `--net`; errors if the port is busy). Run **two or more
-VMs at once** by leaving `--ssh-port` off on each (each grabs the next free port — read each VM's own
-startup log) or by pinning distinct ports. `--net-log <file>` captures gvproxy's `-debug` packet log
-(the host-side network oracle: DHCP/DNS/NAT).
+it with `--ssh-port <1024-65535>` (requires `--net` or `--net-netd`; errors if the port is busy). Run
+**two or more VMs at once** by leaving `--ssh-port` off on each (each grabs the next free port — read
+each VM's own startup log) or by pinning distinct ports. The worker log is the host-side network
+oracle: `network: …` lines say which side the NIC is on and why, and with
+`RUST_LOG=warn,limina_netd=info` netd logs its leases and DNS answers.
 
 Wait for the SSH banner (~10–15s post-boot), then (substitute the logged port for `<PORT>`):
 ```bash

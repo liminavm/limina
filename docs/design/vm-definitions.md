@@ -49,7 +49,7 @@ Fedora.liminavm/
 ├─ snapshots/           # M9: one subdir per named snapshot (RAM+device state + disk refs)
 │  └─ 2026-07-01-pre-upgrade/
 ├─ nvram/               # EFI variable store, when we grow one
-└─ logs/                # supervisor + worker + gvproxy logs for the last N runs
+└─ logs/                # supervisor + worker + netd logs for the last N runs
 ```
 
 - **Default library location:** `~/Library/Application Support/Limina/VMs/` (macOS-native;
