@@ -5,36 +5,44 @@
 //! takes the shared rings from it and serves the guest's link until the worker goes away, which
 //! it sees as EOF. It has no other way in: no path, no port, no name.
 //!
-//! One thread and one kqueue: the channel's doorbell, every UDP flow's socket and every DNS
-//! question's socket wake the same loop, which drains the guest's ring, answers on the link what
-//! the link answers (ARP, DHCP, DNS at the gateway), re-originates the rest on host sockets, and
-//! frames what comes back for the guest.
+//! One thread and one kqueue: the channel's doorbell and every host socket (UDP flows, DNS
+//! questions, TCP connections) wake the same loop, which drains the guest's ring, answers on the
+//! link what the link answers (ARP, DHCP, DNS at the gateway), re-originates the rest on host
+//! sockets, and frames what comes back for the guest.
 
 mod dns;
 mod poller;
 mod stack;
+mod tcp;
 mod udp;
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::process::ExitCode;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use limina_netd_wire::{MAX_FRAME, NetdEnd, TAG_FRAME, drain, ring};
 use limina_ring::Producer;
 
-use crate::poller::Poller;
+use crate::poller::{Event, Filter, Poller};
 use crate::stack::{Ingress, Link, Stack};
 
 /// The descriptor the worker hands over.
 const CHANNEL_FD: i32 = 3;
 const DNS_PORT: u16 = 53;
+/// How soon netd tries again after the guest's ring filled: the worker drains it without telling
+/// netd, and a TCP segment left over waits on this rather than on a retransmission timeout.
+const RING_FULL_RETRY: Duration = Duration::from_millis(1);
+/// The descriptors netd needs at most: every TCP connection, UDP flow and DNS question at once,
+/// and a margin.
+const FDS_WANTED: u64 = (tcp::MAX_CONNS + udp::MAX_FLOWS + dns::MAX_PENDING + 64) as u64;
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
         .format_timestamp_millis()
         .init();
+    raise_fd_limit();
     // SAFETY: descriptor 3 is the worker's handover, and nothing else in this process owns it.
     let sock = unsafe { OwnedFd::from_raw_fd(CHANNEL_FD) };
     match serve(sock) {
@@ -43,6 +51,39 @@ fn main() -> ExitCode {
             log::error!("limina-netd: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// netd inherits the worker's descriptor limit, which for a launchd job is 256: a browser's worth
+/// of connections would fail with EMFILE. Raise it to what netd can use, as far as the hard limit
+/// allows.
+fn raise_fd_limit() {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: output into a local.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        return;
+    }
+    if lim.rlim_cur >= FDS_WANTED {
+        return;
+    }
+    let want = FDS_WANTED.min(lim.rlim_max);
+    let new = libc::rlimit {
+        rlim_cur: want,
+        rlim_max: lim.rlim_max,
+    };
+    // SAFETY: input from a local.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &new) } != 0 || want < FDS_WANTED {
+        log::warn!(
+            "limina-netd: descriptor limit {} (wanted {FDS_WANTED}); connections may fail under load",
+            if want < FDS_WANTED {
+                want
+            } else {
+                lim.rlim_cur
+            }
+        );
     }
 }
 
@@ -61,14 +102,18 @@ fn routable(dst: Ipv4Addr, link: &Link) -> bool {
 struct ToGuest<'a> {
     ring: &'a mut Producer,
     pushed: bool,
+    /// A frame found the ring full this pass.
+    full: bool,
 }
 
 impl ToGuest<'_> {
-    /// A full ring drops the frame; the guest's protocols retry.
-    fn push(&mut self, frame: &[u8]) {
-        if self.ring.push(TAG_FRAME, &[frame]).is_ok() {
-            self.pushed = true;
-        }
+    /// Whether the ring took the frame. A dropped datagram is the guest's protocols' to retry; a
+    /// TCP segment is netd's, and goes again on the next pass.
+    fn push(&mut self, frame: &[u8]) -> bool {
+        let ok = self.ring.push(TAG_FRAME, &[frame]).is_ok();
+        self.pushed |= ok;
+        self.full |= !ok;
+        ok
     }
 }
 
@@ -76,20 +121,55 @@ struct Netd {
     stack: Stack,
     udp: udp::UdpNat,
     dns: dns::Resolver,
+    tcp: tcp::TcpNat,
     poller: Poller,
+}
+
+/// The TCP translator's way to the guest: through the stack's framing into the ring.
+macro_rules! tcp_emit {
+    ($stack:expr, $out:expr) => {
+        &mut |remote, header, payload| {
+            $stack.tcp_to_guest(remote, header, payload, &mut |f| $out.push(f))
+        }
+    };
 }
 
 impl Netd {
     /// One frame from the guest.
     fn guest_frame(&mut self, frame: &[u8], out: &mut ToGuest<'_>) {
-        let Some(Ingress::Udp {
-            guest_port,
-            dst,
-            payload,
-        }) = self.stack.handle(frame, &mut |f| out.push(f))
-        else {
-            return;
-        };
+        let ingress = self.stack.handle(frame, &mut |f| {
+            out.push(f);
+        });
+        match ingress {
+            Some(Ingress::Udp {
+                guest_port,
+                dst,
+                payload,
+            }) => self.udp_out(guest_port, dst, payload, out),
+            Some(Ingress::Tcp {
+                guest_port,
+                remote,
+                segment,
+            }) => {
+                let allowed = routable(*remote.ip(), self.stack.link());
+                self.tcp.segment(
+                    (guest_port, remote),
+                    &segment,
+                    allowed,
+                    tcp_emit!(self.stack, out),
+                );
+            }
+            None => {}
+        }
+    }
+
+    fn udp_out(
+        &mut self,
+        guest_port: u16,
+        dst: SocketAddrV4,
+        payload: &[u8],
+        out: &mut ToGuest<'_>,
+    ) {
         let gateway = self.stack.link().gateway;
         if *dst.ip() == gateway {
             if dst.port() == DNS_PORT {
@@ -121,16 +201,23 @@ impl Netd {
 
     fn dns_answer(&mut self, (guest_port, msg): dns::Answer, out: &mut ToGuest<'_>) {
         let src = SocketAddrV4::new(self.stack.link().gateway, DNS_PORT);
-        self.stack
-            .udp_to_guest(src, guest_port, &msg, &mut |f| out.push(f));
+        self.stack.udp_to_guest(src, guest_port, &msg, &mut |f| {
+            out.push(f);
+        });
     }
 
-    /// A host socket became readable.
-    fn readable(&mut self, fd: RawFd, out: &mut ToGuest<'_>) {
-        if self.udp.owns(fd) {
+    /// A host socket's event.
+    fn event(&mut self, ev: &Event, out: &mut ToGuest<'_>) {
+        let fd = ev.fd;
+        if self.tcp.owns(fd) {
+            self.tcp.event(ev, tcp_emit!(self.stack, out));
+        } else if ev.filter != Filter::Read {
+        } else if self.udp.owns(fd) {
             let stack = &mut self.stack;
             self.udp.recv(fd, &mut |src, guest_port, data| {
-                stack.udp_to_guest(src, guest_port, data, &mut |f| out.push(f))
+                stack.udp_to_guest(src, guest_port, data, &mut |f| {
+                    out.push(f);
+                })
             });
         } else if self.dns.owns(fd)
             && let Some(a) = self.dns.process(fd)
@@ -144,13 +231,23 @@ impl Netd {
         for a in self.dns.expire(now) {
             self.dns_answer(a, out);
         }
+        self.tcp.expire(now, tcp_emit!(self.stack, out));
+    }
+
+    /// What the TCP connections owe the guest.
+    fn flush(&mut self, out: &mut ToGuest<'_>) {
+        self.tcp.flush(&self.poller, tcp_emit!(self.stack, out));
     }
 
     fn next_deadline(&self) -> Option<Instant> {
-        [self.udp.next_deadline(), self.dns.next_deadline()]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.udp.next_deadline(),
+            self.dns.next_deadline(),
+            self.tcp.next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 }
 
@@ -162,10 +259,11 @@ fn serve(sock: OwnedFd) -> io::Result<()> {
         stack: Stack::new(Link::default()),
         udp: udp::UdpNat::default(),
         dns: dns::Resolver::default(),
+        tcp: tcp::TcpNat::default(),
         poller,
     };
     let mut frame = vec![0u8; MAX_FRAME];
-    let mut ready = Vec::new();
+    let mut events = Vec::new();
     log::info!("limina-netd: serving the guest's link");
     loop {
         if drain(end.sock.as_fd())? {
@@ -175,7 +273,12 @@ fn serve(sock: OwnedFd) -> io::Result<()> {
         let mut out = ToGuest {
             ring: &mut end.to_guest,
             pushed: false,
+            full: false,
         };
+        for ev in &events {
+            netd.event(ev, &mut out);
+        }
+        netd.expire(Instant::now(), &mut out);
         while let Some((tag, len)) = end
             .from_guest
             .read_into(&mut frame)
@@ -185,25 +288,25 @@ fn serve(sock: OwnedFd) -> io::Result<()> {
                 netd.guest_frame(&frame[..len], &mut out);
             }
         }
+        netd.flush(&mut out);
+        let full = out.full;
+        if out.pushed && end.to_guest.publish() {
+            ring(end.sock.as_fd());
+        }
 
         // Sleep only when the guest ring is parked; otherwise just collect what is ready.
         let parked = end.from_guest.park();
-        let timeout = if parked {
+        let timeout = if full {
+            Some(RING_FULL_RETRY)
+        } else if parked {
             netd.next_deadline()
                 .map(|d| d.saturating_duration_since(Instant::now()))
         } else {
-            Some(std::time::Duration::ZERO)
+            Some(Duration::ZERO)
         };
-        netd.poller.wait(timeout, &mut ready)?;
+        netd.poller.wait(timeout, &mut events)?;
         if parked {
             end.from_guest.unpark();
-        }
-        for &fd in &ready {
-            netd.readable(fd, &mut out);
-        }
-        netd.expire(Instant::now(), &mut out);
-        if out.pushed && end.to_guest.publish() {
-            ring(end.sock.as_fd());
         }
     }
 }

@@ -1,5 +1,5 @@
-//! The guest's link as netd sees it: ARP for the gateway and DHCP answered here, UDP handed up
-//! for netd to re-originate, and the guest-bound frames built.
+//! The guest's link as netd sees it: ARP for the gateway and DHCP answered here, UDP and TCP
+//! handed up for netd to re-originate, and the guest-bound frames built.
 //!
 //! Frames come in and go out with their 12-byte `virtio_net_hdr` in front. Checksums in the
 //! guest's frames are not checked: with checksum offload they are partial, and the guest is the
@@ -12,7 +12,7 @@ use smoltcp::wire::{
     ArpOperation, ArpPacket, ArpRepr, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, DhcpMessageType,
     DhcpOption, DhcpPacket, DhcpRepr, ETHERNET_HEADER_LEN, EthernetAddress, EthernetFrame,
     EthernetProtocol, EthernetRepr, IPV4_HEADER_LEN, IpAddress, IpProtocol, Ipv4Address,
-    Ipv4Packet, Ipv4Repr, UDP_HEADER_LEN, UdpPacket, UdpRepr,
+    Ipv4Packet, Ipv4Repr, TcpPacket, TcpRepr, UDP_HEADER_LEN, UdpPacket, UdpRepr,
 };
 
 use limina_netd_wire::VNET_HDR_LEN;
@@ -51,6 +51,12 @@ pub enum Ingress<'a> {
         guest_port: u16,
         dst: SocketAddrV4,
         payload: &'a [u8],
+    },
+    Tcp {
+        guest_port: u16,
+        /// The far end, as the guest addresses it.
+        remote: SocketAddrV4,
+        segment: TcpRepr<'a>,
     },
 }
 
@@ -110,6 +116,51 @@ impl Stack {
         self.udp_frames(dst_mac, src, dst, payload, out);
     }
 
+    /// A TCP segment from `remote` to the guest: `header` (whose own payload is left empty, and
+    /// whose destination port is the guest's) followed by `payload`, in pieces. Whether `out` took
+    /// the frame.
+    pub fn tcp_to_guest(
+        &mut self,
+        remote: SocketAddrV4,
+        header: &TcpRepr<'_>,
+        payload: &[&[u8]],
+        out: &mut dyn FnMut(&[u8]) -> bool,
+    ) -> bool {
+        debug_assert!(header.payload.is_empty());
+        let data_len: usize = payload.iter().map(|p| p.len()).sum();
+        let tcp_len = header.header_len() + data_len;
+        let mut buf = frame_buf(IPV4_HEADER_LEN + tcp_len);
+        let mut frame = EthernetFrame::new_unchecked(&mut buf[VNET_HDR_LEN..]);
+        EthernetRepr {
+            src_addr: self.link.gateway_mac,
+            dst_addr: self.guest_mac.unwrap_or(EthernetAddress::BROADCAST),
+            ethertype: EthernetProtocol::Ipv4,
+        }
+        .emit(&mut frame);
+        let mut packet = Ipv4Packet::new_unchecked(frame.payload_mut());
+        Ipv4Repr {
+            src_addr: *remote.ip(),
+            dst_addr: self.link.guest,
+            next_header: IpProtocol::Tcp,
+            payload_len: tcp_len,
+            hop_limit: 64,
+        }
+        .emit(&mut packet, &ChecksumCapabilities::default());
+        let mut tcp = TcpPacket::new_unchecked(&mut packet.payload_mut()[..tcp_len]);
+        let (src, dst) = (
+            IpAddress::from(*remote.ip()),
+            IpAddress::from(self.link.guest),
+        );
+        header.emit(&mut tcp, &src, &dst, &ChecksumCapabilities::ignored());
+        let mut at = 0;
+        for p in payload {
+            tcp.payload_mut()[at..at + p.len()].copy_from_slice(p);
+            at += p.len();
+        }
+        tcp.fill_checksum(&src, &dst);
+        out(&buf)
+    }
+
     fn arp(&self, payload: &[u8], reply: &mut dyn FnMut(&[u8])) {
         let Ok(packet) = ArpPacket::new_checked(payload) else {
             return;
@@ -163,10 +214,22 @@ impl Stack {
             return None;
         }
         let ip = Ipv4Repr::parse(&packet, &ignore).ok()?;
-        if ip.next_header != IpProtocol::Udp {
-            return None;
-        }
         let payload: &'a [u8] = &payload[packet.header_len() as usize..][..ip.payload_len];
+        match ip.next_header {
+            IpProtocol::Udp => {}
+            IpProtocol::Tcp => {
+                let tcp = TcpPacket::new_checked(payload).ok()?;
+                // SYN with FIN or RST, and port 0, do not parse: dropped.
+                let segment =
+                    TcpRepr::parse(&tcp, &ip.src_addr.into(), &ip.dst_addr.into(), &ignore).ok()?;
+                return Some(Ingress::Tcp {
+                    guest_port: segment.src_port,
+                    remote: SocketAddrV4::new(ip.dst_addr, segment.dst_port),
+                    segment,
+                });
+            }
+            _ => return None,
+        }
         let udp_packet = UdpPacket::new_checked(payload).ok()?;
         let udp = UdpRepr::parse(
             &udp_packet,

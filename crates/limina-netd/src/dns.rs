@@ -20,7 +20,7 @@ use crate::poller::Poller;
 /// How long a question may wait for the host's resolver before netd gives up on it (SERVFAIL).
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most questions in flight; beyond it new ones fail at once.
-const MAX_PENDING: usize = 256;
+pub const MAX_PENDING: usize = 256;
 /// The UDP payload size netd advertises in EDNS, and the most it answers with.
 const EDNS_SIZE: u16 = 1232;
 
@@ -622,7 +622,7 @@ mod tests {
             poller
                 .wait(Some(Duration::from_millis(500)), &mut fds)
                 .unwrap();
-            if let Some(a) = fds.iter().find_map(|&fd| resolver.process(fd)) {
+            if let Some(a) = fds.iter().find_map(|e| resolver.process(e.fd)) {
                 break a;
             }
         };

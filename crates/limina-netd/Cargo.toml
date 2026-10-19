@@ -18,3 +18,7 @@ env_logger       = { workspace = true }
 # (for the Ethernet and ARP types) drags in smoltcp's socket layer, which refuses to build without
 # one socket kind, so `socket-raw` is there only to satisfy it.
 smoltcp = { version = "0.14.0", default-features = false, features = ["std", "medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-raw"] }
+
+[dev-dependencies]
+# A real TCP peer for the translator's tests: smoltcp's own stack, as the guest.
+smoltcp = { version = "0.14.0", default-features = false, features = ["std", "medium-ethernet", "proto-ipv4", "socket-tcp"] }

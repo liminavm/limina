@@ -9,10 +9,11 @@
 //! handshake: it logs a lease only on the guest's REQUEST, so the line proves the whole exchange
 //! crossed the rings both ways and the guest's DHCP client took the offer.
 //!
-//! Past the link, the guest's own chronyd is the traffic: at boot it resolves the NTP pool through
-//! the gateway's DNS (answered by the host's resolver) and asks the servers it gets over UDP, so
-//! netd's account of an answered question with records, and of a reply from port 123, proves both
-//! paths out to the Internet and back to the guest.
+//! Past the link, the guest's own boot is the traffic. chronyd resolves the NTP pool through the
+//! gateway's DNS (answered by the host's resolver) and asks the servers it gets over UDP, and
+//! NetworkManager's connectivity check makes an HTTP request: netd's account of an answered
+//! question with records, of a reply from port 123, and of a port-80 connection from connect to
+//! close proves DNS, UDP and TCP out to the Internet and back to the guest.
 //!
 //! It also holds netd to its lifecycle: killed, it is replaced by the worker without the VM
 //! noticing more than a dropped link, and no netd outlives the VM.
@@ -53,9 +54,9 @@ fn wait_until(timeout: Duration, mut f: impl FnMut() -> bool) -> bool {
 }
 
 #[test]
-fn fedora_on_netd_leases_resolves_reaches_ntp_and_netd_is_replaced_when_killed() {
+fn fedora_on_netd_resolves_and_reaches_out_and_netd_is_replaced_when_killed() {
     if !limina_test::require_hvf_or_skip(
-        "fedora_on_netd_leases_resolves_reaches_ntp_and_netd_is_replaced_when_killed",
+        "fedora_on_netd_resolves_and_reaches_out_and_netd_is_replaced_when_killed",
     ) {
         return;
     }
@@ -97,6 +98,20 @@ fn fedora_on_netd_leases_resolves_reaches_ntp_and_netd_is_replaced_when_killed()
         guest.supervisor_log()
     );
 
+    // NetworkManager's connectivity check: an HTTP request at link-up, which netd carries from
+    // its connect to both sides' close.
+    let http = |log: &str, what: &str| {
+        log.lines()
+            .any(|l| l.contains("TCP") && l.contains(":80") && l.contains(what))
+    };
+    assert!(
+        wait_until(Duration::from_secs(120), || {
+            let log = guest.supervisor_log();
+            http(&log, "connected") && http(&log, "closed")
+        }),
+        "no HTTP connection carried from connect to close; supervisor log:\n{}",
+        guest.supervisor_log()
+    );
     let first = *netd_pids(&guest.supervisor_log())
         .first()
         .expect("the worker logged no netd start");

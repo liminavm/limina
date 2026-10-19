@@ -12,7 +12,7 @@ use crate::poller::Poller;
 /// How long a flow lives without a datagram either way.
 const IDLE: Duration = Duration::from_secs(60);
 /// The most flows at once; the stalest goes to make room.
-const MAX_FLOWS: usize = 1024;
+pub const MAX_FLOWS: usize = 1024;
 
 type Key = (u16, SocketAddrV4);
 
@@ -151,9 +151,11 @@ mod tests {
     use super::*;
 
     fn wait_readable(poller: &Poller) -> Vec<RawFd> {
-        let mut fds = Vec::new();
-        poller.wait(Some(Duration::from_secs(5)), &mut fds).unwrap();
-        fds
+        let mut events = Vec::new();
+        poller
+            .wait(Some(Duration::from_secs(5)), &mut events)
+            .unwrap();
+        events.iter().map(|e| e.fd).collect()
     }
 
     #[test]
