@@ -11,7 +11,7 @@ ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$ROOT"
 LOG="${LIMINA_LOG:-/tmp/virtiofs-16k-share-worker.log}"
 WORK="${LIMINA_DISK:?set LIMINA_DISK to the scratch .raw}"
-FW="${LIMINA_FIRMWARE:-target/krun-efi/KRUN_EFI.gop.fd}"
+FW="${LIMINA_FIRMWARE:-target/firmware/efi.fd}"
 [ -f "$FW" ] || { echo "GOP firmware not found at $FW"; exit 1; }
 ICD=$(ls /Volumes/mesa-cs/build-kk/src/kosmickrisp/vulkan/kosmickrisp_mesa_devenv_icd.*.json 2>/dev/null | head -1)
 [ -n "$ICD" ] || { echo "no KosmicKrisp ICD under /Volumes/mesa-cs/build-kk"; exit 1; }

@@ -324,7 +324,7 @@ fn qcow2_data_disk_reads_writes_and_survives_reboot() {
 /// the separate visual proof in `spikes/m10-iso-boot/`.
 ///
 /// SKIPs when HVF is unavailable or the large gitignored ISO / GOP firmware is absent (like the
-/// other image-gated L2s); set `LIMINA_TEST_ISO` / `LIMINA_GOP_FIRMWARE` to point elsewhere.
+/// other image-gated L2s); set `LIMINA_TEST_ISO` / `LIMINA_FIRMWARE` to point elsewhere.
 #[test]
 fn boots_efi_iso_to_bootloader() {
     if !limina_test::require_hvf_or_skip("boots_efi_iso_to_bootloader") {

@@ -47,29 +47,43 @@ pub mod renderer;
 /// (the #14 "cold-boot wedge" was exactly that), which is why it is no longer the default.
 const KRUNKIT_FALLBACK_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
 
-/// Stable location of OUR GOP-capable EDK2 firmware (built by `scripts/build-krun-efi.sh`,
-/// carries VirtioGpuDxe). Overridable with `LIMINA_GOP_FIRMWARE`. Unlike the silent firmware,
-/// firmware → GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
-const DEFAULT_GOP_FIRMWARE: &str = "target/krun-efi/KRUN_EFI.gop.fd";
+/// Stable location of OUR firmware (built by `scripts/build-krun-efi.sh`, carries
+/// VirtioGpuDxe). Overridable with `LIMINA_FIRMWARE`. Unlike the silent firmware, firmware →
+/// GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
+const DEFAULT_FIRMWARE: &str = "target/firmware/efi.fd";
 
 /// The firmware every EFI-boot test uses: `LIMINA_FIRMWARE` if set, else OUR OWN RELEASE
-/// build ([`DEFAULT_GOP_FIRMWARE`] — what limina actually ships; RELEASE degrades gracefully
+/// build ([`DEFAULT_FIRMWARE`] — what limina actually ships; RELEASE degrades gracefully
 /// where the DEBUG krunkit blob dead-loops), else the krunkit blob with a loud warning (a
 /// fresh clone before the first `scripts/build-krun-efi.sh` run).
 fn default_firmware() -> PathBuf {
     if let Ok(fw) = std::env::var("LIMINA_FIRMWARE") {
         return PathBuf::from(fw);
     }
-    let ours = repo_root().join(DEFAULT_GOP_FIRMWARE);
+    let ours = repo_root().join(DEFAULT_FIRMWARE);
     if ours.exists() {
         return ours;
     }
     eprintln!(
-        "WARNING: {DEFAULT_GOP_FIRMWARE} not built — falling back to the krunkit DEBUG \
+        "WARNING: {DEFAULT_FIRMWARE} not built — falling back to the krunkit DEBUG \
          firmware at {KRUNKIT_FALLBACK_FIRMWARE} (ASSERTs dead-loop silently there; run \
          scripts/build-krun-efi.sh for the real default)"
     );
     PathBuf::from(KRUNKIT_FALLBACK_FIRMWARE)
+}
+
+/// The firmware for tests that need ours, never the krunkit fallback: `LIMINA_FIRMWARE` if set,
+/// else [`DEFAULT_FIRMWARE`]. An error (the test should SKIP) when it is not there.
+fn built_firmware() -> Result<PathBuf> {
+    let firmware = std::env::var("LIMINA_FIRMWARE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| repo_root().join(DEFAULT_FIRMWARE));
+    anyhow::ensure!(
+        firmware.exists(),
+        "firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` (or set \
+         LIMINA_FIRMWARE)"
+    );
+    Ok(firmware)
 }
 
 /// The launchd label prefix of the worker jobs a supervisor starts; the supervisor's pid and a
@@ -770,18 +784,11 @@ impl GuestConfig {
     /// kernel rendered into the window, read via [`Guest::wait_for_capture`]). `with_net` forces
     /// a writable COW clone, so the shared image is never mutated and the guest can complete boot.
     ///
-    /// Overrides: `LIMINA_GOP_FIRMWARE` (default `target/krun-efi/KRUN_EFI.gop.fd`), plus the usual
+    /// Overrides: `LIMINA_FIRMWARE` (default [`DEFAULT_FIRMWARE`]), plus the usual
     /// `LIMINA_TEST_DISK`/`LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
     /// GOP firmware is missing — build it with `scripts/build-krun-efi.sh`.
     pub fn fedora_gop_from_env() -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
         let mut cfg = GuestConfig::fedora_from_env()?;
         if let Boot::Firmware { firmware: f, .. } = &mut cfg.boot {
             *f = firmware;
@@ -797,18 +804,11 @@ impl GuestConfig {
     /// guest agent / SSH** — pure firmware self-discovery; the test watches the firmware/GRUB
     /// **console** ([`Guest::wait_for`]) for the bootloader-reached signal.
     ///
-    /// Overrides: `LIMINA_TEST_ISO` (default repo-root [`DEFAULT_TEST_ISO`]), `LIMINA_GOP_FIRMWARE`
-    /// (default [`DEFAULT_GOP_FIRMWARE`]). Returns an error (the test should SKIP) if the GOP firmware
+    /// Overrides: `LIMINA_TEST_ISO` (default repo-root [`DEFAULT_TEST_ISO`]), `LIMINA_FIRMWARE`
+    /// (default [`DEFAULT_FIRMWARE`]). Returns an error (the test should SKIP) if the GOP firmware
     /// or the ISO is missing — both are gitignored & large.
     pub fn iso_boot_from_env() -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
         let iso = std::env::var("LIMINA_TEST_ISO")
             .map(PathBuf::from)
             .unwrap_or_else(|_| repo_root().join(DEFAULT_TEST_ISO));
@@ -864,18 +864,11 @@ impl GuestConfig {
     /// [`with_virgl_host_gl`](GuestConfig::with_virgl_host_gl) + [`with_net`](GuestConfig::with_net).
     ///
     /// Overrides: `LIMINA_TEST_DISK_BASELINE` (default = this release's `stock.test`),
-    /// `LIMINA_GOP_FIRMWARE` (default `target/krun-efi/KRUN_EFI.gop.fd`), plus the usual
+    /// `LIMINA_FIRMWARE` (default [`DEFAULT_FIRMWARE`]), plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
     /// or the baseline disk is missing.
     pub fn baseline_fedora_from_env() -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
         let disk = match std::env::var("LIMINA_TEST_DISK_BASELINE") {
             Ok(p) => PathBuf::from(p),
             Err(_) => fedora_image("stock.test"),
@@ -1075,7 +1068,7 @@ impl GuestConfig {
     /// No display is attached by default; a venus test adds `with_coexist_display`, and
     /// [`Guest::boot`] then wires KosmicKrisp automatically — see [`kosmickrisp_icd`]; a
     /// venus-requiring test should still SKIP up front when KK is absent (so it doesn't silently
-    /// run on the software-2D fallback). Overrides: `LIMINA_GOP_FIRMWARE`, `LIMINA_TEST_DISK_ENH`,
+    /// run on the software-2D fallback). Overrides: `LIMINA_FIRMWARE`, `LIMINA_TEST_DISK_ENH`,
     /// plus the usual `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
     /// GOP firmware or the enhanced disk is missing; it does not need any test kernel.
     ///
@@ -1102,14 +1095,7 @@ impl GuestConfig {
 
     /// The seated EFI boot of [`GuestConfig::seated_efi_fedora_from_env`] on a given disk.
     fn seated_efi_fedora_from_env_with_disk(disk: PathBuf) -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
         let mut cfg = GuestConfig::fedora_from_env()?;
         cfg.boot = Boot::Firmware {
             firmware,
@@ -1164,7 +1150,7 @@ impl GuestConfig {
     /// the guest's **own installed kernel**, booted through the GOP firmware, meets a stock
     /// virtio-gpu plane. See `docs/images.md` §KNOWN DRIFT.
     ///
-    /// Overrides: `LIMINA_TEST_DISK_SYNOIK`, `LIMINA_GOP_FIRMWARE`, plus the usual
+    /// Overrides: `LIMINA_TEST_DISK_SYNOIK`, `LIMINA_FIRMWARE`, plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
     /// or the synoik image is missing — it is a machine-local golden, see `docs/images.md`.
     pub fn seated_efi_synoik_from_env() -> Result<GuestConfig> {
@@ -1191,7 +1177,7 @@ impl GuestConfig {
     ///
     /// Pinned to the F44 family (`Fedora-Workstation-44.enhanced.kde.raw`) for the same reason as
     /// [`GuestConfig::seated_efi_synoik_from_env`]: the image exists for one release only.
-    /// Overrides: `LIMINA_TEST_DISK_KDE`, `LIMINA_GOP_FIRMWARE`, plus the usual
+    /// Overrides: `LIMINA_TEST_DISK_KDE`, `LIMINA_FIRMWARE`, plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
     /// or the KDE image is missing — it is a machine-local golden, see `docs/images.md`.
     pub fn seated_efi_kde_from_env() -> Result<GuestConfig> {

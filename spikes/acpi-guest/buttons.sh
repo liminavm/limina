@@ -15,7 +15,7 @@
 # MODE picks /sys/power/mem_sleep (default s2idle). Only s2idle tests the ACPI wake line: in deep
 # (PSCI SYSTEM_SUSPEND) the VMM itself resumes the guest on the wake eventfd.
 # Boots the disk in place, headless (clone it first: cp -c). Run from a worktree with a built
-# tree and target/krun-efi/KRUN_EFI.gop.fd.
+# tree and target/firmware/efi.fd.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 DISK="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; shift
@@ -25,7 +25,7 @@ MODE="${MODE:-s2idle}"
 say() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 RUST_LOG=warn,limina=info,krun_devices=debug target/debug/limina \
-    --firmware target/krun-efi/KRUN_EFI.gop.fd --disk "$DISK" --cpus 2 --ram-mib 2048 --net \
+    --firmware target/firmware/efi.fd --disk "$DISK" --cpus 2 --ram-mib 2048 --net \
     --acpi --discard-suspend "$@" > "$LOG" 2>&1 < /dev/null &
 LP=$!
 say "limina pid=$LP, log $LOG"

@@ -63,7 +63,7 @@ right tool — not treat upstream as immutable:
   krunkit's blob is built from), pinned by `[edk2]` in `third_party/manifest.toml` but **not
   vendored** — `scripts/build-krun-efi.sh` clones the pinned rev inside its container build
   volume and builds with zero build-time patching (`patches/edk2/` is a tombstone). Output:
-  `target/krun-efi/KRUN_EFI.gop.fd` (RELEASE + GOP + typeable ConIn), which is also the **test
+  `target/firmware/efi.fd` (RELEASE + GOP + typeable ConIn), which is also the **test
   suite's default firmware** — krunkit's `KRUN_EFI.silent.fd` is a DEBUG build whose live
   ASSERTs end in `CpuDeadLoop` and remains only a loud last-resort
   fallback (`LIMINA_FIRMWARE` overrides).

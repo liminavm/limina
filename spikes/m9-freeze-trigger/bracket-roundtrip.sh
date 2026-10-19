@@ -23,7 +23,7 @@ say "cloning stock F44..."; cp -c Fedora-Workstation-44.accessible.raw "$DISK" |
 ### PHASE 1 — bracket suspend via ONE SIGTSTP to the worker
 say "PHASE1: boot + SIGTSTP bracket (button->quiesce-poll->snapshot->126)"
 RUST_LOG=limina_vmm=info,krun_vmm=info caffeinate -dimsu "$REPO/target/debug/limina" \
-  --firmware "$REPO/target/krun-efi/KRUN_EFI.gop.fd" \
+  --firmware "$REPO/target/firmware/efi.fd" \
   --disk "$DISK" --cpus 2 --ram-mib 1024 --net --ssh-port "$PORT" --snapshot-file "$SNAP" > "$B1" 2>&1 &
 LP1=$!; say "limina#1 pid=$LP1"
 up=0; for i in $(seq 1 60); do ssh_up && { up=1; say "SSH up ~$((i*4))s"; break; }; sleep 4; done
@@ -42,7 +42,7 @@ say "=== bracket worker log ==="; grep -iE 'bracket:|quiesced|holdout' "$B1" | t
 ### PHASE 2 — restore
 say "PHASE2: restore into a fresh worker (--restore)"
 RUST_LOG=limina_vmm=info caffeinate -dimsu "$REPO/target/debug/limina" \
-  --firmware "$REPO/target/krun-efi/KRUN_EFI.gop.fd" \
+  --firmware "$REPO/target/firmware/efi.fd" \
   --disk "$DISK" --cpus 2 --ram-mib 1024 --net --ssh-port "$PORT" --restore "$SNAP" > "$B2" 2>&1 &
 LP2=$!; say "limina#2 pid=$LP2 (restoring)"
 back=0; for i in $(seq 1 40); do sleep 3; ssh_up && { back=1; say "SSH BACK after restore (~$((i*3))s)"; break; }; done

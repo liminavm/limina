@@ -12,7 +12,7 @@ set -uo pipefail
 REPO=~/Projects/limina
 JOB="${CLAUDE_JOB_DIR:-~/.claude/jobs/916f2b3c}"
 LOG="$JOB/tmp/managed-rt.log"; DISK="$JOB/tmp/managed-rt.raw"; LIB="$JOB/tmp/managed-lib"
-FW="$REPO/target/krun-efi/KRUN_EFI.gop.fd"
+FW="$REPO/target/firmware/efi.fd"
 PORT=2233
 LIMINA="$REPO/target/debug/limina"
 BUNDLE="$LIB/mrt.liminavm"

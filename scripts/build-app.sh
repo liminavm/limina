@@ -55,7 +55,7 @@ DLOPEN_ROOTS=(
   "$ZINK/libEGL.dylib"
   "$ZINK/libGLESv2.dylib"
 )
-GOP_FD="$ROOT/target/krun-efi/KRUN_EFI.gop.fd"
+GOP_FD="$ROOT/target/firmware/efi.fd"
 # gvproxy (user-mode NAT for `--net`); vendored into the bundle so networking works on a
 # Homebrew-less Mac. Override the source with LIMINA_GVPROXY_BIN; defaults to Homebrew's.
 GVPROXY="${LIMINA_GVPROXY_BIN:-/opt/homebrew/bin/gvproxy}"
@@ -311,7 +311,7 @@ cat > "$RES/vulkan/kosmickrisp_icd.json" <<'JSON'
 JSON
 
 # ---- GOP firmware (existing bundle-resolution pattern) ---------------------------
-cp "$GOP_FD" "$RES/KRUN_EFI.gop.fd"
+cp "$GOP_FD" "$RES/efi.fd"
 
 # ---- app icon (source + prep tool in assets/icon/) --------------------------------
 cp "$ROOT/assets/icon/Limina.icns" "$RES/Limina.icns"

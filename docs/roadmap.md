@@ -195,8 +195,8 @@ in `docs/input-and-windows.md` and M15.
   graphics console is the lever for pre-kernel stages. Our `KRUN_EFI` (`liminavm/edk2`, built by
   `scripts/build-krun-efi.sh`) adds `VirtioGpuDxe` and puts the virtio-mmio GOP on ConOut; libkrun
   snaps a ready-but-unsized queue to `max_size` and joins the firmware-era GPU worker on reset. The
-  RELEASE GOP build is the windowed default (`resolve_windowed_firmware`: `$LIMINA_GOP_FIRMWARE` →
-  the bundle's copy → `target/krun-efi/` → krunkit's silent `.fd` with a warning) and ships in the app.
+  RELEASE GOP build is the windowed default (`resolve_windowed_firmware`: `$LIMINA_FIRMWARE` →
+  the bundle's copy → `target/firmware/` → krunkit's silent `.fd` with a warning) and ships in the app.
 - Image prep (`scripts/prepare-efi-image.sh`, `scripts/provision/make-accessible.sh`) adds
   `console=ttyAMA0` for the serial oracle and clears a stale `/.autorelabel`.
 - **Floor guards:** `boot::fedora_stock_image_efi_boots_to_userspace` (firmware → GRUB → kernel →

@@ -719,7 +719,7 @@ Boot the baseline (bare `limina` — the default coexist device advertises venus
 comes up in software regardless; pass `--gpu-software-2d` to force the clean software path with no
 venus probing):
 ```bash
-target/debug/limina --window --firmware target/krun-efi/KRUN_EFI.gop.fd \
+target/debug/limina --window --firmware target/firmware/efi.fd \
   --disk Fedora-Workstation-44.accessible.raw --cpus 4 --ram-mib 6144 --net
 ```
 
@@ -780,7 +780,7 @@ credentials, and its `ssh.authorized_keys.root` credential becomes `/root/.ssh/a
 at boot. So a host key can be handed to root without touching the image:
 
 ```bash
-limina --firmware target/krun-efi/KRUN_EFI.gop.fd --disk <clone.raw> --net \
+limina --firmware target/firmware/efi.fd --disk <clone.raw> --net \
   --smbios-oem-string "io.systemd.credential:ssh.authorized_keys.root=$(cat ~/.ssh/id_ed25519.pub)"
 ssh -p <PORT> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@127.0.0.1
 ```

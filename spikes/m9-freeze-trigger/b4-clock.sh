@@ -24,7 +24,7 @@ cp -c Fedora-Workstation-44.accessible.raw "$DISK" || { say "clone failed"; exit
 
 say "booting headless (keeping host awake via caffeinate)..."
 caffeinate -dimsu "$REPO/target/debug/limina" \
-  --firmware "$REPO/target/krun-efi/KRUN_EFI.gop.fd" \
+  --firmware "$REPO/target/firmware/efi.fd" \
   --disk "$DISK" --cpus 2 --ram-mib 4096 --net > "$BOOTLOG" 2>&1 &
 LIMINA_PID=$!
 say "limina pid=$LIMINA_PID"

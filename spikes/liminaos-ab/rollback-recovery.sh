@@ -49,12 +49,12 @@ WORK=${WORK:-/tmp/rollback-run}
 for cand in "$(dirname "$0")/../../target/Limina.app" /Applications/Limina.app; do
   if [ -x "$cand/Contents/MacOS/limina" ]; then
     LIM=${LIM:-$cand/Contents/MacOS/limina}
-    FW=${FW:-$cand/Contents/Resources/KRUN_EFI.gop.fd}
+    FW=${FW:-$cand/Contents/Resources/efi.fd}
     break
   fi
 done
 LIM=${LIM:-$(dirname "$0")/../../target/debug/limina}
-FW=${FW:-$(dirname "$0")/../../target/krun-efi/KRUN_EFI.gop.fd}
+FW=${FW:-$(dirname "$0")/../../target/firmware/efi.fd}
 VERIFY=${VERIFY:-$(dirname "$0")/../liminaos-slot-health/verify-slot.py}
 PASS='liminatest123'
 HASH='$6$liminatest$NN7NsF0PG3XGXCYSCcQIq8pkgxS0XSgo0VEsu4Q2Ce5SNwlUK38GCvj6Tvl18UUhzysPkCBiucCGDebgPmHUU1'

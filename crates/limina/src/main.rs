@@ -1874,11 +1874,11 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                     .ok()
                     .and_then(|p| p.parent().map(Path::to_path_buf))
                     .unwrap_or_else(|| PathBuf::from("."));
-                let env_override = std::env::var_os("LIMINA_GOP_FIRMWARE").map(PathBuf::from);
+                let env_override = std::env::var_os("LIMINA_FIRMWARE").map(PathBuf::from);
                 let (path, is_gop) =
                     resolve_windowed_firmware(&exe_dir, env_override, |p| p.exists()).context(
                         "no --firmware given and no default firmware found; pass --firmware or \
-                         build the GOP firmware with `GOP=1 scripts/build-krun-efi.sh`",
+                         build the GOP firmware with `scripts/build-krun-efi.sh`",
                     )?;
                 if is_gop {
                     log::info!(
@@ -1889,7 +1889,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                     log::warn!(
                         "windowed boot: GOP firmware not found; using silent firmware {} \
                          (serial-only boot console — build the GOP firmware with \
-                         `GOP=1 scripts/build-krun-efi.sh` for a graphical boot console)",
+                         `scripts/build-krun-efi.sh` for a graphical boot console)",
                         path.display()
                     );
                 }
@@ -2544,10 +2544,10 @@ fn resolve_vmm_bin(flag: Option<PathBuf>) -> Result<PathBuf> {
 const SILENT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
 
 /// Candidate GOP-firmware locations for a windowed boot, in priority order:
-///   1. `env_override` (`$LIMINA_GOP_FIRMWARE`) — explicit operator choice;
+///   1. `env_override` (`$LIMINA_FIRMWARE`) — explicit operator choice;
 ///   2. the app bundle's Resources (`limina.app/Contents/MacOS/limina` → `../Resources/…`)
 ///      — the productized location once we bundle the firmware;
-///   3. the in-repo dev build artifact (`target/<profile>/limina` → `../krun-efi/…`),
+///   3. the in-repo dev build artifact (`target/<profile>/limina` → `../firmware/…`),
 ///      produced by `scripts/build-krun-efi.sh`.
 ///
 /// Pure (no I/O) so the ordering is unit-testable; existence is checked by the caller.
@@ -2556,8 +2556,8 @@ fn windowed_firmware_candidates(exe_dir: &Path, env_override: Option<PathBuf>) -
     if let Some(p) = env_override {
         v.push(p);
     }
-    v.push(exe_dir.join("../Resources/KRUN_EFI.gop.fd"));
-    v.push(exe_dir.join("../krun-efi/KRUN_EFI.gop.fd"));
+    v.push(exe_dir.join("../Resources/efi.fd"));
+    v.push(exe_dir.join("../firmware/efi.fd"));
     v
 }
 
@@ -2585,7 +2585,7 @@ fn resolve_windowed_firmware(
 pub(crate) fn resolve_windowed_firmware_for_preflight() -> Option<(PathBuf, bool)> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?.to_path_buf();
-    let env_override = std::env::var_os("LIMINA_GOP_FIRMWARE").map(PathBuf::from);
+    let env_override = std::env::var_os("LIMINA_FIRMWARE").map(PathBuf::from);
     resolve_windowed_firmware(&exe_dir, env_override, |p| p.exists())
 }
 
@@ -3266,18 +3266,18 @@ mod tests {
         let exe = Path::new("/app/Contents/MacOS");
         let c = windowed_firmware_candidates(exe, Some(PathBuf::from("/custom/fw.fd")));
         assert_eq!(c[0], PathBuf::from("/custom/fw.fd"));
-        assert_eq!(c[1], exe.join("../Resources/KRUN_EFI.gop.fd"));
-        assert_eq!(c[2], exe.join("../krun-efi/KRUN_EFI.gop.fd"));
+        assert_eq!(c[1], exe.join("../Resources/efi.fd"));
+        assert_eq!(c[2], exe.join("../firmware/efi.fd"));
         // Without an env override the bundle path leads.
         let c = windowed_firmware_candidates(exe, None);
-        assert_eq!(c[0], exe.join("../Resources/KRUN_EFI.gop.fd"));
+        assert_eq!(c[0], exe.join("../Resources/efi.fd"));
         assert_eq!(c.len(), 2);
     }
 
     #[test]
     fn resolves_dev_gop_artifact_when_present() {
         let exe = Path::new("/repo/target/debug");
-        let dev = exe.join("../krun-efi/KRUN_EFI.gop.fd");
+        let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [dev.clone()].into_iter().collect();
         let (p, is_gop) =
             resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
@@ -3288,8 +3288,8 @@ mod tests {
     #[test]
     fn bundled_gop_wins_over_dev_artifact() {
         let exe = Path::new("/app/Contents/MacOS");
-        let bundle = exe.join("../Resources/KRUN_EFI.gop.fd");
-        let dev = exe.join("../krun-efi/KRUN_EFI.gop.fd");
+        let bundle = exe.join("../Resources/efi.fd");
+        let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [bundle.clone(), dev].into_iter().collect();
         let (p, _) =
             resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
@@ -3300,7 +3300,7 @@ mod tests {
     fn env_override_wins_over_everything() {
         let exe = Path::new("/repo/target/debug");
         let custom = PathBuf::from("/custom/fw.fd");
-        let dev = exe.join("../krun-efi/KRUN_EFI.gop.fd");
+        let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [custom.clone(), dev].into_iter().collect();
         let (p, is_gop) =
             resolve_windowed_firmware(exe, Some(custom.clone()), |q| present.contains(q))

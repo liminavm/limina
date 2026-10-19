@@ -94,7 +94,7 @@ license = "BSD-2-Clause-Patent"
 # pinned revision's License.txt is kept here. Refresh it when the [edk2] pin moves.
 files = ["assets/third-party/edk2-License.txt"]
 pin = "edk2"
-claims = ["KRUN_EFI.gop.fd"]
+claims = ["efi.fd"]
 
 [[component]]
 name = "The Rust Standard Library"

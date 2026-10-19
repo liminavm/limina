@@ -31,7 +31,7 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
 - The **test kernels**, `scripts/build-test-kernel.sh` (or `cp -c` the `Image*` files from
   another checkout's `target/test-guest/kernel/`). The suite needs `Image`; the L2 venus and
   multi-display tests also want the `Image-16k` / `Image-16k-71` siblings and silently SKIP
-  without them. The suite likewise refuses a `target/krun-efi/KRUN_EFI.gop.fd` that
+  without them. The suite likewise refuses a `target/firmware/efi.fd` that
   `scripts/build-krun-efi.sh` did not record as built at the `[edk2]` pin. Note the fork's patch series is
   based on `v7.1.8`, so it cannot apply to the script's default `KVER=v6.12` — build those
   two with `PATCHES_OPTIONAL=1` (they are plain vehicles that do not need it) and the
@@ -124,11 +124,11 @@ In a worktree the forks are **worktrees of the main checkout's clones**, detache
 objects are shared, so unpushed commits are already there, and each has its own HEAD. The
 test images, the trace fixtures, the Python venv and the Mesa sparse image are shared as
 symlinks (the harness clones images before booting them); `target/test-guest`,
-`target/krun-efi` and the trap probe are APFS clones **of main's copies, when main has them**.
+`target/firmware` and the trap probe are APFS clones **of main's copies, when main has them**.
 Work happens in worktrees, so main's `target/` is usually absent: `new` then ends with a
 `MISSING <output> — <what needs it>: <how to make it>` line per gap. **Read those lines before
 you need the output** — the firmware is what `cargo xtask app` and the suite fail on. The quick
-fix is `cp -c` from a sibling worktree, after checking that its `KRUN_EFI.gop.fd.rev` is the
+fix is `cp -c` from a sibling worktree, after checking that its `efi.fd.rev` is the
 `[edk2]` pin. `target/` is the worktree's own — the first build is a full one, and `rm` reaps
 it. The suite stays one-at-a-time per host whichever worktree starts it.
 
@@ -301,7 +301,7 @@ Everything that has to be built *on Linux* runs in one container image —
 use). There is no second image and no second toolchain:
 
 ```sh
-cargo xtask firmware               # target/krun-efi/KRUN_EFI.gop.fd — the suite's default firmware
+cargo xtask firmware               # target/firmware/efi.fd — the suite's default firmware
 cargo xtask enhanced               # 16k kernel + venus mesa RPMs + agents + install-ready payload
 cargo xtask enhanced kernel        # just one component
 ```
@@ -323,7 +323,7 @@ cargo xtask test -- --test venus       # one binary (forwarded to the test run)
 
 `test` (= `scripts/test-boot.sh`, `LIMINA_HVF_TESTS=1`) builds, codesigns, link-checks,
 builds the L1 guest + trap probe, and runs the boot tests against real HVF. Its default
-firmware is step 4's `target/krun-efi/KRUN_EFI.gop.fd` (`LIMINA_FIRMWARE` overrides). **This is the
+firmware is step 4's `target/firmware/efi.fd` (`LIMINA_FIRMWARE` overrides). **This is the
 "did I break boot" command** — a plain `cargo test` deliberately *skips* the HVF tests
 (no codesign/sandbox), so green there means almost nothing for boot behavior. It needs
 sandbox-disabled execution (it hits `hv_vm_*`).

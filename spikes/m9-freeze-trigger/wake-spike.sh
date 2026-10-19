@@ -24,7 +24,7 @@ cd "$REPO"
 say "cloning..."; cp -c Fedora-Workstation-44.accessible.raw "$DISK" || { say "clone failed"; exit 1; }
 say "booting stock F44 EFI (RUST_LOG gpio debug) on $PORT..."
 RUST_LOG=krun_devices=debug caffeinate -dimsu "$REPO/target/debug/limina" \
-  --firmware "$REPO/target/krun-efi/KRUN_EFI.gop.fd" \
+  --firmware "$REPO/target/firmware/efi.fd" \
   --disk "$DISK" --cpus 2 --ram-mib 2048 --net --ssh-port "$PORT" > "$BOOTLOG" 2>&1 &
 LP=$!; say "limina pid=$LP"
 up=0; for i in $(seq 1 60); do ssh_up && { up=1; say "SSH up ~$((i*4))s"; break; }; sleep 4; done

@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 ISO=${ISO:-Fedora-Server-netinst-aarch64-43-1.6.iso}
-FW=${FW:-target/krun-efi/KRUN_EFI.gop.debug.fd}
+FW=${FW:-target/firmware/efi.debug.fd}
 OUT=spikes/m10-iso-boot
 SERIAL=$OUT/serial.log
 PNG=$OUT/grub.png

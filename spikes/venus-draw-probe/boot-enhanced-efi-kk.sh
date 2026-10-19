@@ -31,7 +31,7 @@ WORK="${LIMINA_DISK:?set LIMINA_DISK to the enhanced .raw}"
 # nothing repoints it when that one exits, so read the per-disk path directly when it matters.
 WELL_KNOWN=/tmp/enhanced-efi-kk-worker.log
 LOG="${LIMINA_BOOT_LOG:-/tmp/limina-worker-$(basename "${WORK%.raw}").log}"
-FW="${LIMINA_FIRMWARE:-target/krun-efi/KRUN_EFI.gop.fd}"
+FW="${LIMINA_FIRMWARE:-target/firmware/efi.fd}"
 [ -f "$FW" ] || { echo "GOP firmware not found at $FW (build with GOP=1 scripts/build-krun-efi.sh)"; exit 1; }
 # LIMINA_KK_ICD pins a specific KosmicKrisp ICD json instead of the devenv build — use it to boot
 # against the KK that a packaged limina.app actually ships, so a "works here, fails on the dogfood

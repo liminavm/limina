@@ -15,7 +15,7 @@ shift 3
 port=${PORT:-2391}
 case $cmd in
 boot)
-    out=$(target/debug/limina --firmware target/krun-efi/KRUN_EFI.gop.fd --disk "$disk" --net \
+    out=$(target/debug/limina --firmware target/firmware/efi.fd --disk "$disk" --net \
         --ssh-port "$port" --cpus 4 --ram-mib 6144 --detach --log "$log" "$@" </dev/null)
     echo "$out"
     pid=$(echo "$out" | sed -n 's/.*detached pid=\([0-9]*\).*/\1/p')

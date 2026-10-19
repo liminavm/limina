@@ -12,7 +12,7 @@
 #
 # Usage: scripts/run-fedora-window.sh [debug|release]
 #   Env: LIMINA_FEDORA_REL (43|44, default 43), LIMINA_FEDORA_IMAGE (default Fedora-Workstation-<REL>.accessible.raw),
-#        LIMINA_FIRMWARE (default: our GOP firmware target/krun-efi/KRUN_EFI.gop.fd if built —
+#        LIMINA_FIRMWARE (default: our GOP firmware target/firmware/efi.fd if built —
 #                       so EFI/GRUB also render in the window — else krunkit's silent .fd),
 #        LIMINA_FEDORA_RAM_MIB (default 6144), LIMINA_FEDORA_CPUS (default 4),
 #        LIMINA_DISPLAY_SIZE (default 1280x800).
@@ -34,7 +34,7 @@ else
 fi
 # Prefer our GOP firmware (VirtioGpuDxe + ConOut patch) so EFI/GRUB render in the window too;
 # fall back to krunkit's silent .fd (serial-only firmware) if it hasn't been built yet.
-GOP_FIRMWARE="target/krun-efi/KRUN_EFI.gop.fd"
+GOP_FIRMWARE="target/firmware/efi.fd"
 if [ -n "${LIMINA_FIRMWARE:-}" ]; then
     FIRMWARE="$LIMINA_FIRMWARE"
 elif [ -f "$GOP_FIRMWARE" ]; then

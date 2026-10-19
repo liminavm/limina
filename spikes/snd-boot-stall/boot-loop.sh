@@ -19,7 +19,7 @@ shift 2 || shift $#
 mkdir -p "$out"
 
 image="$root/Fedora-Workstation-44.stock.test.raw"
-firmware="$root/target/krun-efi/KRUN_EFI.gop.fd"
+firmware="$root/target/firmware/efi.fd"
 
 for n in $(seq 1 "$iterations"); do
     dir="$out/boot-$n"

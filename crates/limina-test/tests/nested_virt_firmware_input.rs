@@ -21,7 +21,7 @@
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`. Overrides: `LIMINA_TEST_ISO`
 //! (any EFI-bootable aarch64 installer ISO whose GRUB prints its menu on serial),
-//! `LIMINA_GOP_FIRMWARE`.
+//! `LIMINA_FIRMWARE`.
 
 use std::time::{Duration, Instant};
 

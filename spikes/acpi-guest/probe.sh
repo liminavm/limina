@@ -9,7 +9,7 @@
 #   e.g. spikes/acpi-guest/probe.sh acpi-stock.raw 'ls /dev/tpm*' --acpi --tpm
 # Pass --acpi yourself, so the same probe runs on the device-tree machine for comparison. Boots
 # the disk in place (clone it first: cp -c). Run from a worktree with a built tree and
-# target/krun-efi/KRUN_EFI.gop.fd.
+# target/firmware/efi.fd.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 DISK="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
@@ -19,7 +19,7 @@ LOG="${LOG:-/tmp/limina-acpi-probe.log}"
 : > "$LOG"
 
 RUST_LOG=warn,limina=info,krun_devices=info target/debug/limina \
-    --firmware target/krun-efi/KRUN_EFI.gop.fd --disk "$DISK" --cpus 2 --ram-mib 2048 --net \
+    --firmware target/firmware/efi.fd --disk "$DISK" --cpus 2 --ram-mib 2048 --net \
     --discard-suspend "$@" > "$LOG" 2>&1 < /dev/null &
 LP=$!
 echo "limina pid=$LP, log $LOG"

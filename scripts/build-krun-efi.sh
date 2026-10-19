@@ -54,10 +54,10 @@ EDK2_REV="${EDK2_REV:-$MANIFEST_REV}"
 TARGET="${TARGET:-RELEASE}"
 JOBS="${JOBS:-8}"
 MEM="${MEM:-8g}"
-OUT="target/krun-efi"                     # gitignored (under target/)
+OUT="target/firmware"                     # gitignored (under target/)
 mkdir -p "$OUT"
 
-if [ "$TARGET" = "DEBUG" ]; then OUT_NAME="KRUN_EFI.gop.debug.fd"; else OUT_NAME="KRUN_EFI.gop.fd"; fi
+if [ "$TARGET" = "DEBUG" ]; then OUT_NAME="efi.debug.fd"; else OUT_NAME="efi.fd"; fi
 
 command -v container >/dev/null || { echo "Apple 'container' not installed" >&2; exit 1; }
 

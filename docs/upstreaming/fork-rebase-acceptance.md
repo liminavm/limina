@@ -194,7 +194,7 @@ Remove what the round created:
 - the `accept-*.raw` clones;
 - the drivers container volume (`container volume delete <own-volume>`).
 
-If the edk2 pin moved, copy the new `target/krun-efi/KRUN_EFI.gop.fd` and its `.rev` into the
+If the edk2 pin moved, copy the new `target/firmware/efi.fd` and its `.rev` into the
 main checkout. Otherwise main's next suite refuses to run with the stale firmware.
 
 The shared Mesa trees that other sessions build from (`/Volumes/mesa-cs/mesa-guest`,
