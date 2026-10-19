@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# One profiled transfer over the gvproxy NAT path. See RESULTS.md for the setup.
-# Usage: netbench.sh <tag> <worker-pid> <gvproxy-pid> iperf [extra iperf3 client args, e.g. -R]
-#        netbench.sh <tag> <worker-pid> <gvproxy-pid> ssh-g2h|ssh-h2g
-# Env: OUT (output dir, default .), SSH_PORT (default 2222), SSH_USER (default claude),
-#      SECS (iperf duration, default 30), SSH_BYTES (ssh transfer size, default 8 GiB).
-#   iperf: guest iperf3 -c 192.168.127.254 -> virtio-net -> libkrun -> unixgram -> gvproxy
-#          netstack -> host 127.0.0.1:5201 (host iperf3 -s)
-#   ssh:   host ssh -> 127.0.0.1:$SSH_PORT -> gvproxy forward -> guest sshd; the payload is
-#          /dev/zero through cat on both ends, so the cipher and the path are what is measured.
+# One profiled transfer over the guest's NIC. See RESULTS.md for the setup.
+# Usage: netbench.sh <tag> <worker-pid> <gvproxy-pid|-> iperf [extra iperf3 client args, e.g. -R]
+#        netbench.sh <tag> <worker-pid> <gvproxy-pid|-> ssh-g2h|ssh-h2g
+# Env: OUT (output dir, default .), SSH_HOST (default 127.0.0.1), SSH_PORT (default 2222),
+#      SSH_USER (default claude), IPERF_HOST (default 192.168.127.254), SECS (iperf duration,
+#      default 30), SSH_BYTES (ssh transfer size, default 8 GiB).
+#   gvproxy (the defaults):
+#     iperf: guest iperf3 -c 192.168.127.254 -> virtio-net -> libkrun -> unixgram -> gvproxy
+#            netstack -> host 127.0.0.1:5201 (host iperf3 -s)
+#     ssh:   host ssh -> 127.0.0.1:$SSH_PORT -> gvproxy forward -> guest sshd; the payload is
+#            /dev/zero through cat on both ends, so the cipher and the path are what is measured.
+#   vmnet (gvproxy pid `-`, SSH_HOST=<guest address> SSH_PORT=22 IPERF_HOST=<bridge address>):
+#     the same transfers straight between the host and the guest's address on vmnet's bridge.
+#     Apple's /usr/bin/ssh, since Local Network policy drops our own binaries' connects there.
 set -euo pipefail
 TAG=$1; W=$2; G=$3; MODE=$4; shift 4
 OUT=${OUT:-.}
@@ -16,7 +21,8 @@ SSH_BYTES=${SSH_BYTES:-8589934592}
 HERE=$(cd "$(dirname "$0")" && pwd)
 OPTS=(-p "${SSH_PORT:-2222}" -o BatchMode=yes -o StrictHostKeyChecking=no
       -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
-SSH=(ssh "${OPTS[@]}" "${SSH_USER:-claude}@127.0.0.1")
+SSH=(/usr/bin/ssh "${OPTS[@]}" "${SSH_USER:-claude}@${SSH_HOST:-127.0.0.1}")
+IPERF_HOST=${IPERF_HOST:-192.168.127.254}
 
 counters() {
   # Net interrupts, then eth0 rx packets/bytes and tx packets/bytes. The guest names the device
@@ -42,12 +48,14 @@ EOF
 profile() {
   sleep 6
   echo "under load (worker %cpu, gvproxy %cpu):"
-  for _ in 1 2 3; do echo "  $(ps -o %cpu= -p "$W") $(ps -o %cpu= -p "$G")"; sleep 1; done
+  for _ in 1 2 3; do
+    echo "  $(ps -o %cpu= -p "$W") $([ "$G" = - ] && echo - || ps -o %cpu= -p "$G")"; sleep 1
+  done
   ps -M -p "$W" > "$OUT/threads-$TAG.txt"
   "${SSH[@]}" -n "top -b -n 1 -o %CPU | head -n 20" > "$OUT/guest-top-$TAG.txt" 2>&1
   sample "$W" 8 -file "$OUT/worker-$TAG.sample" > /dev/null 2>&1 &
   local s=$!
-  sample "$G" 8 -file "$OUT/gvproxy-$TAG.sample" > /dev/null 2>&1
+  [ "$G" = - ] || sample "$G" 8 -file "$OUT/gvproxy-$TAG.sample" > /dev/null 2>&1
   wait "$s"
 }
 
@@ -55,7 +63,7 @@ C0=$(counters)
 case "$MODE" in
   iperf)
     "${SSH[@]}" -n "pkill -x iperf3; true"
-    "${SSH[@]}" -n "iperf3 -c 192.168.127.254 -p 5201 -t $SECS -J $*" > "$OUT/iperf-$TAG.json" 2>&1 &
+    "${SSH[@]}" -n "iperf3 -c $IPERF_HOST -p 5201 -t $SECS -J $*" > "$OUT/iperf-$TAG.json" 2>&1 &
     P=$!
     profile
     wait "$P"

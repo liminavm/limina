@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TCP request/response latency through the NAT path: the cost side of interrupt coalescing.
 
-Host:  rr.py serve [port]            -- echo server on 127.0.0.1 (default 5202)
+Host:  rr.py serve [port] [addr]     -- echo server on addr (default 127.0.0.1:5202)
 Guest: rr.py client <host> [port] [n] -- n one-byte round trips (default 10000), prints p50/p90/p99
 
 The guest reaches the host's loopback as 192.168.127.254 through gvproxy. The reply leg is the
@@ -12,10 +12,10 @@ import sys
 import time
 
 
-def serve(port):
+def serve(port, addr):
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("127.0.0.1", port))
+    s.bind((addr, port))
     s.listen(4)
     while True:
         c, _ = s.accept()
@@ -49,7 +49,8 @@ def client(host, port, n):
 
 if __name__ == "__main__":
     if sys.argv[1] == "serve":
-        serve(int(sys.argv[2]) if len(sys.argv) > 2 else 5202)
+        serve(int(sys.argv[2]) if len(sys.argv) > 2 else 5202,
+              sys.argv[3] if len(sys.argv) > 3 else "127.0.0.1")
     else:
         client(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 5202,
                int(sys.argv[4]) if len(sys.argv) > 4 else 10000)

@@ -209,12 +209,12 @@ Each phase ships on its own and is tested against the shipped binaries (`crates/
 - **Phase 0 — fd-backend migration.** The existing gvproxy NIC moves from `UnixgramPath` to a
   supervisor-created socketpair (`UnixgramFd`, vfkit on). *RED:* the stock guest still DHCPs and
   SSHes.
-- **Phase 1 — native vmnet backend, then the measurement.** The libkrun vmnet backend of §3.3 on
-  the fork's `limina` branch; worker entitlement; `--net-vmnet shared|bridged` (experimental).
-  *RED:* a stock guest leases and reaches the Internet in shared and bridged mode. Once it works,
-  run `spikes/net-bench/netbench.sh` against the same guest on both backends: iperf and ssh both
-  directions, worker CPU, kernel time, gvproxy CPU and footprint, idle cost, small-packet latency.
-  Bridged too. **Closes §7.**
+- **Phase 1 — native vmnet backend, then the measurement (done).** The libkrun vmnet backend of
+  §3.3 (`NetDevice::new_vmnet`); the worker's `com.apple.security.virtualization`;
+  `limina --net-vmnet shared|host|bridged:<if>` (experimental). The L2 test `net_vmnet` boots a
+  stock guest on shared mode, finds its lease in `/var/db/dhcpd_leases`, and over
+  `/usr/bin/ssh` checks DNS, HTTPS and a 64 MiB SHA-256 copy each way. Bridged was checked by
+  hand over Wi-Fi. The backend comparison is in `spikes/net-bench/RESULTS.md` and §7.
 - **Phase 2 — `Network` model + per-VM MACs + dynamic forwards.** `limina net` CLI; per-VM MAC to
   the worker; forwards per VM. *RED:* two VMs on two Networks, distinct SSH ports, mutually
   invisible.
@@ -242,9 +242,20 @@ Each phase ships on its own and is tested against the shipped binaries (`crates/
   or UDP under a common Tailscale configuration, and other clients fail in other ways), needs no
   entitlement or Local Network grant, and leaves no host network state behind.
 
-What Phase 1 must measure to decide: throughput both directions (iperf and ssh) against the
-net-bench gvproxy table; total CPU per Gbit/s including kernel time and gvproxy; memory (gvproxy's
-footprint vs vmnet's kernel side); idle cost with a quiet guest; latency. The VPN findings stand
+What Phase 1 measured (same stock guest on each backend, quiet M1 host, macOS 27.0.1;
+`spikes/net-bench/RESULTS.md` §vmnet against gvproxy):
+
+- **Throughput:** iperf guest → host 35 Gbit/s on vmnet against 13–15 on gvproxy, host → guest
+  16–17 against 7.2–7.5. ssh is cipher-bound at ~1.6–1.75 Gbit/s on both.
+- **Host CPU per Gbit/s:** about a third on vmnet (6.6% against 23–35% guest → host, 14% against
+  50% host → guest), worker and gvproxy together; the kernel's NAT work outside the worker is in
+  neither column.
+- **Latency:** p50 90 against 120 µs, p99 154 against 165 µs, but vmnet showed 2–5 ms outliers.
+- **Idle:** the same with a quiet guest. **Memory:** gvproxy adds ~94 MiB RSS per VM.
+- **Open:** one vmnet host → guest run had 2067 retransmits (its twin had 3).
+
+On performance vmnet wins clearly. What still argues for gvproxy is §4: it is immune to host VPNs,
+needs no Local Network grant, and leaves no host network state behind. The VPN findings stand
 either way: whichever is the default, the other is the fallback, and §4's detection is required
 whenever a VM is on vmnet NAT.
 
