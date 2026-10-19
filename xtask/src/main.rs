@@ -684,11 +684,11 @@ fn with_venv_mesa(repo: &Path, cmd: &mut Command) {
 
 fn cargo_build_binaries(repo: &Path, release: bool) -> Result<()> {
     eprintln!(
-        "==> building limina + limina-vmm + limina-gpu-host ({})",
+        "==> building limina + limina-vmm + limina-gpu-host + limina-netd ({})",
         profile_name(release)
     );
-    // The worker starts limina-gpu-host from its own directory when the native-context transport
-    // is on, so a build that leaves it out runs whatever GPU host the last build left behind.
+    // The worker starts limina-gpu-host (native-context transport) and limina-netd (a NIC on it)
+    // from its own directory, so a build that leaves either out runs whatever the last build left.
     let mut c = Command::new("cargo");
     c.current_dir(repo).args([
         "build",
@@ -698,6 +698,8 @@ fn cargo_build_binaries(repo: &Path, release: bool) -> Result<()> {
         "limina-vmm",
         "-p",
         "limina-gpu-host",
+        "-p",
+        "limina-netd",
     ]);
     with_venv_mesa(repo, &mut c);
     if release {
@@ -721,7 +723,7 @@ fn build(release: bool) -> Result<()> {
     cargo_build_binaries(&repo, release)?;
     sign_worker(&repo, release)?;
     eprintln!(
-        "==> build complete: target/{}/{{limina,limina-vmm,limina-gpu-host}} (worker signed)",
+        "==> build complete: target/{}/{{limina,limina-vmm,limina-gpu-host,limina-netd}} (worker signed)",
         profile_name(release)
     );
     Ok(())
@@ -824,7 +826,7 @@ fn bundle(release: bool, open: bool) -> Result<()> {
         std::fs::remove_dir_all(&app).with_context(|| format!("rm {app:?}"))?;
     }
     std::fs::create_dir_all(&macos).with_context(|| format!("mkdir {macos:?}"))?;
-    for bin in ["limina", "limina-vmm", "limina-gpu-host"] {
+    for bin in ["limina", "limina-vmm", "limina-gpu-host", "limina-netd"] {
         std::fs::copy(profile_dir.join(bin), macos.join(bin))
             .with_context(|| format!("copy {bin} into the bundle"))?;
     }
@@ -844,6 +846,9 @@ fn bundle(release: bool, open: bool) -> Result<()> {
     run(Command::new("codesign")
         .args(["-s", "-", "--force"])
         .arg(macos.join("limina-gpu-host")))?;
+    run(Command::new("codesign")
+        .args(["-s", "-", "--force"])
+        .arg(macos.join("limina-netd")))?;
     run(Command::new("codesign")
         .args(["-s", "-", "--force"])
         .arg(macos.join("limina")))?;

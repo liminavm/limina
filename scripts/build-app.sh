@@ -204,13 +204,13 @@ TS=(--timestamp)
 HARDEN=(${TS[@]+"${TS[@]}"} --options runtime)
 [ "$SIGN_ID" = "-" ] && HARDEN=()
 
-echo "==> building limina + limina-vmm + limina-gpu-host ($PROFILE)"
+echo "==> building limina + limina-vmm + limina-gpu-host + limina-netd ($PROFILE)"
 # Stamp the bundle with the moment it was cut (the About menu shows it). Without this the
 # date would be whenever crates/limina/build.rs last happened to rerun, which on an
 # incremental tree can be days stale; the env var is a rerun-if-env-changed input, so a
 # new value re-bakes it.
 export LIMINA_BUILD_STAMP="$(date -u '+%Y-%m-%d %H:%M UTC')"
-cargo build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -p limina -p limina-vmm -p limina-gpu-host
+cargo build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -p limina -p limina-vmm -p limina-gpu-host -p limina-netd
 
 echo "==> assembling $APP"
 rm -rf "$APP"
@@ -219,6 +219,8 @@ cp "$ROOT/target/$PROFILE/limina" "$MACOS/limina"
 cp "$ROOT/target/$PROFILE/limina-vmm" "$MACOS/limina-vmm"
 # The worker starts the native-context transport's GPU host from its own directory.
 cp "$ROOT/target/$PROFILE/limina-gpu-host" "$MACOS/limina-gpu-host"
+# ...and the user-mode NAT for a NIC on limina-netd.
+cp "$ROOT/target/$PROFILE/limina-netd" "$MACOS/limina-netd"
 # gvproxy alongside the binaries (Contents/MacOS/gvproxy); gateway.rs resolves it bundle-relative.
 cp "$GVPROXY" "$MACOS/gvproxy"
 chmod u+w "$MACOS/gvproxy"
@@ -435,6 +437,7 @@ else
 fi
 codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/gvproxy"
 codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina-gpu-host"
+codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina-netd"
 codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina"
 # Seal the app (outer) LAST, after the nested worker is in its final form, with the same
 # team-pinned DR so the app grant (Accessibility, etc.) also survives rebuilds/cert reissue.

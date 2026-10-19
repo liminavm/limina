@@ -14,6 +14,7 @@ mod battery;
 mod console;
 mod display_update;
 mod metal_ext;
+mod netd;
 
 use std::sync::Arc;
 
@@ -77,6 +78,10 @@ const NET_VMNET_FEATURES: u32 = NET_FEATURE_CSUM
     | NET_FEATURE_GUEST_TSO6
     | NET_FEATURE_HOST_TSO4
     | NET_FEATURE_HOST_TSO6;
+
+/// virtio-net offload features for a NIC on limina-netd: checksums only, until netd takes and
+/// builds segmentation-offloaded frames.
+const NET_NETD_FEATURES: u32 = NET_FEATURE_CSUM | NET_FEATURE_GUEST_CSUM;
 
 /// `vmnet_mode_t` values from `<vmnet/vmnet.h>`, as `NetDevice::new_vmnet` takes them.
 const VMNET_HOST_MODE: u32 = 1000;
@@ -686,10 +691,10 @@ fn vsock_device(vsock: &VsockSpec) -> Result<VsockDevice> {
     Ok(device.timesync(false))
 }
 
-/// Attach the guest's NIC. Either backend connects lazily, when the guest activates the device
+/// Attach the guest's NIC. Every backend connects lazily, when the guest activates the device
 /// during boot: a vfkit-style UNIX datagram connection to a gvproxy gateway (and the `VFKT`
-/// handshake), which the supervisor guarantees is listening by then, or a vmnet interface
-/// libkrun starts in this process.
+/// handshake), which the supervisor guarantees is listening by then, a vmnet interface libkrun
+/// starts in this process, or a limina-netd this process spawns.
 fn net_device(net: &NetSpec) -> Result<NetDevice> {
     let mac = net.mac.unwrap_or(NET_GUEST_MAC);
     match &net.backend {
@@ -716,6 +721,19 @@ fn net_device(net: &NetSpec) -> Result<NetDevice> {
             };
             NetDevice::new_vmnet("eth0", mode, bridged, &mac, NET_VMNET_FEATURES)
                 .map_err(|e| anyhow!("virtio-net (vmnet): {e:?}"))
+        }
+        NetBackend::Netd => {
+            let exe = netd::netd_exe().context("locating limina-netd")?;
+            anyhow::ensure!(exe.exists(), "limina-netd is not at {}", exe.display());
+            // netd sets each frame's header itself, so the device's checksum flag has no say.
+            NetDevice::new_external(
+                "eth0",
+                netd::backend(exe),
+                &mac,
+                NET_NETD_FEATURES,
+                NetFlags::empty(),
+            )
+            .map_err(|e| anyhow!("virtio-net (limina-netd): {e:?}"))
         }
     }
 }

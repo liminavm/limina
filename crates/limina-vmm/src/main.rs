@@ -346,13 +346,18 @@ struct Cli {
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
-    #[arg(long, conflicts_with = "net_vmnet")]
+    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd"])]
     net_gvproxy: Option<PathBuf>,
 
     /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
     /// `host` (host-only) or `bridged:<interface>`. Experimental (networking design Phase 1).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "net_netd")]
     net_vmnet: Option<VmnetMode>,
+
+    /// Attach a user-mode NAT NIC (`eth0`) on a `limina-netd` this worker spawns from its own
+    /// directory. Experimental (networking design Phase 3).
+    #[arg(long)]
+    net_netd: bool,
 
     /// Guest MAC for the NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
     /// The supervisor keeps gvproxy's static .2 lease in sync with this.
@@ -816,11 +821,12 @@ fn main() -> Result<()> {
     };
 
     let net_mac = cli.net_mac.as_deref().map(parse_mac).transpose()?;
-    let net_backend = match (cli.net_gvproxy, cli.net_vmnet) {
-        (Some(socket), None) => Some(NetBackend::Gvproxy(socket)),
-        (None, Some(mode)) => Some(NetBackend::Vmnet(mode)),
-        (None, None) => None,
-        (Some(_), Some(_)) => unreachable!("clap rejects --net-gvproxy with --net-vmnet"),
+    let net_backend = match (cli.net_gvproxy, cli.net_vmnet, cli.net_netd) {
+        (Some(socket), None, false) => Some(NetBackend::Gvproxy(socket)),
+        (None, Some(mode), false) => Some(NetBackend::Vmnet(mode)),
+        (None, None, true) => Some(NetBackend::Netd),
+        (None, None, false) => None,
+        _ => unreachable!("clap rejects more than one of the --net-* backends"),
     };
     let net = net_backend.map(|backend| NetSpec {
         backend,

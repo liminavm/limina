@@ -175,6 +175,9 @@ pub enum NetBackend {
     /// (`docs/design/multi-vm-networking.md` §3.3). Needs the worker's
     /// `com.apple.security.virtualization` entitlement.
     Vmnet(VmnetMode),
+    /// User-mode NAT through a `limina-netd` the worker spawns and talks to over shared rings
+    /// (`docs/design/multi-vm-networking.md` §3.2). Needs no entitlement. Experimental.
+    Netd,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

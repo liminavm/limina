@@ -110,9 +110,17 @@ terminates the guest's traffic and re-originates it on ordinary host sockets, so
 app making connections: it follows the host's routing and DNS, VPN tunnels included, needs no
 entitlement, and leaves no host network state. A separate process because it parses untrusted
 traffic from both sides: a crash costs the VM its network, not the VM, and a `sandbox_init` profile
-can hold it to sockets with no file access. The supervisor starts it with the VM and ties it to the
-VM's life the way gvproxy is tied today (goal (c)); it runs from boot so that a switch (§3.5) is
-immediate.
+can hold it to sockets with no file access. It runs from boot so that a switch (§3.5) is immediate.
+
+**The worker spawns its netd, and nothing else can reach it.** The channel is one Unix stream
+socketpair: the worker keeps one end and hands netd the other as an inherited descriptor
+(`limina_netd_wire`), so there is no path or name another process could open and nothing on disk
+a crash could leave behind. The worker creates the shared memory as a POSIX shared-memory object
+under a random name it unlinks straight after creating it, before sizing it, and sends the
+descriptor over the socket. EOF on the socket is the peer's death: netd exits when the worker
+goes (goal (c), with no reaper), and the worker starts a fresh netd on a fresh channel when netd
+goes, through libkrun's reconnect path, so a netd crash costs open connections, not the VM's
+network. The guest keeps its address across the restart, since netd leases its one address.
 
 **Data path: two rings and two doorbells, no socket hop.** The worker keeps processing the guest's
 virtqueues and hands frames to `limina-netd` through two single-producer/single-consumer rings in
@@ -120,14 +128,14 @@ one shared memory entry: TX (worker → netd) and RX (netd → worker), each fra
 `virtio_net_hdr` in front. The rings are `limina-ring` (`crates/limina-ring`): variable-length
 records, a doorbell needed only when the consumer has parked, and the publish-then-recheck park
 handshake of the Metal transport's command ring (`crates/limina-gpu-wire/src/ring.rs`), so neither
-side makes a system call per frame under a steady stream. The memory is a Mach memory entry
-(`mach_make_memory_entry_64`) handed over in a Mach reply, as for the Metal transport
-(`spikes/replayer-ipc/`). The doorbell has to wake netd's kqueue loop, which also waits on its
-sockets, so it is a kqueue-visible object (a Mach port under `EVFILT_MACHPORT`, or a pipe) rather
-than the Metal transport's semaphore; it fires only on a park, so a system call per wake is cheap.
-Each consumer trusts nothing the other side wrote: lengths are checked against what was published
-before a byte is copied. One copy each way (guest buffer ↔ ring), against the unixgram path's two
-plus a system call per frame.
+side makes a system call per frame under a steady stream. The doorbell is a byte on the
+socketpair, which both netd's kqueue loop and libkrun's net worker wait on with everything else;
+it is written only when the peer has parked, so a system call per wake is cheap. Each consumer
+trusts nothing the other side wrote: lengths are checked against what was published before a
+byte is copied. Through libkrun's `NetBackend`, a frame is copied twice in the worker (guest
+memory ↔ the net worker's frame buffer ↔ ring) and never by the kernel, against the unixgram
+path's two kernel copies plus a system call per frame; reaching guest memory from the ring
+directly would save one more and needs a wider libkrun interface.
 
 **The worker's half lives in limina, not in libkrun.** libkrun's delta is a hook: its
 `NetBackend` trait exported and an external backend a `NetDevice` can take, the way limina-vmm
