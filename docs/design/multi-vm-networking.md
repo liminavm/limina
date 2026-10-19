@@ -117,14 +117,23 @@ immediate.
 **Data path: two rings and two doorbells, no socket hop.** The worker keeps processing the guest's
 virtqueues and hands frames to `limina-netd` through two single-producer/single-consumer rings in
 one shared memory entry: TX (worker → netd) and RX (netd → worker), each frame with its
-`virtio_net_hdr` in front. The pattern is the Metal transport's (`crates/limina-gpu-wire/src/ring.rs`,
-`spikes/replayer-ipc/`): a Mach memory entry (`mach_make_memory_entry_64`) and Mach semaphores
-handed over in Mach replies, a doorbell each way (~3 µs measured), and the publish-then-recheck
-park handshake, so neither side makes a system call per frame under a steady stream. The ring code
-moves out of `limina-gpu-wire` into a crate both use; the frame layout is netd's own. One copy each
-way (guest buffer ↔ ring), against the unixgram path's two plus a system call per frame. On the
-worker side this is a libkrun net backend over a mapped ring and two semaphores, on the fork's
-`limina` branch beside the vmnet backend.
+`virtio_net_hdr` in front. The rings are `limina-ring` (`crates/limina-ring`): variable-length
+records, a doorbell needed only when the consumer has parked, and the publish-then-recheck park
+handshake of the Metal transport's command ring (`crates/limina-gpu-wire/src/ring.rs`), so neither
+side makes a system call per frame under a steady stream. The memory is a Mach memory entry
+(`mach_make_memory_entry_64`) handed over in a Mach reply, as for the Metal transport
+(`spikes/replayer-ipc/`). The doorbell has to wake netd's kqueue loop, which also waits on its
+sockets, so it is a kqueue-visible object (a Mach port under `EVFILT_MACHPORT`, or a pipe) rather
+than the Metal transport's semaphore; it fires only on a park, so a system call per wake is cheap.
+Each consumer trusts nothing the other side wrote: lengths are checked against what was published
+before a byte is copied. One copy each way (guest buffer ↔ ring), against the unixgram path's two
+plus a system call per frame.
+
+**The worker's half lives in limina, not in libkrun.** libkrun's delta is a hook: its
+`NetBackend` trait exported and an external backend a `NetDevice` can take, the way limina-vmm
+already serves the Metal transport through libkrun's `GpuExtension`. limina-vmm implements the
+netd backend over the rings, and the switching backend of §3.5 that wraps vmnet and netd; neither
+the ring nor the switch policy enters the fork.
 
 **Offloads.** Guest TSO segments arrive whole and are just payload to netd, which never
 re-segments them. Towards the guest, netd builds 64 KiB frames with a GSO header and marks them
@@ -234,8 +243,9 @@ one vmnet cannot serve (§4), the worker switches to netd instead (§3.5).
 
 ### 3.5 Switching between vmnet and netd
 
-**Automatic, in the worker, under one virtio device and one MAC.** The worker owns both backends of
-the NIC and swaps which one the virtqueues talk to:
+**Automatic, in the worker, under one virtio device and one MAC.** The NIC's backend is limina's
+switching backend (§3.2), which owns libkrun's vmnet backend and the netd backend and swaps which
+one the virtqueues talk to:
 
 - **To netd** when vmnet cannot serve: the interface fails to start (privilege, `SERVICE_BUSY`, a
   start or create that does not answer within its timeout), the vmnet subnet's route no longer
@@ -287,12 +297,12 @@ niceties (reporting the guest's address, hostnames). None is required.
 Each phase ships on its own and is tested against the shipped binaries (`crates/limina-test`).
 
 - **Phase 1 — native vmnet backend, then the measurement (done).** §2.
-- **Phase 2 — the TCP translation spike (done) and the ring crate.** The spike
+- **Phase 2 — the TCP translation spike and the ring crate (done).** The spike
   (`spikes/netd-tcp-translate/`) chose read-and-retain over peeking and settled the socket
-  bookkeeping (§3.2). The ring moves out of `limina-gpu-wire` into a crate the Metal transport and
-  netd share, its tests with it.
-- **Phase 3 — `limina-netd` with gvproxy's feature set.** netd, the libkrun ring backend, and an
-  explicit flag to select it. *RED:* the existing net tests (lease, SSH forward, per-VM MAC, two
+  bookkeeping (§3.2); `limina-ring` is the generic core of the Metal transport's ring, which keeps
+  its own until it is moved onto the core (`docs/hardening-backlog.md`).
+- **Phase 3 — `limina-netd` with gvproxy's feature set.** netd, libkrun's external-backend hook,
+  limina-vmm's netd backend, and an explicit flag to select it. *RED:* the existing net tests (lease, SSH forward, per-VM MAC, two
   VMs in parallel) pass on netd; their oracles move off gvproxy's packet log.
 - **Phase 4 — vmnet shared by default, with the switch.** Uplink tracking (§3.4), the switch and
   link flap (§3.5), libkrun's link status. *RED:* a VM boots on vmnet by default; a forced

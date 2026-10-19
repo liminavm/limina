@@ -1151,6 +1151,15 @@ the `GpuExtension` trait. `exec.rs` mixes about 41 `unsafe` blocks into its hand
 marks the Metal setters unsafe; a thin typed wrapper, like virglrs's `vulkan.rs`, would separate the
 validator from the FFI.
 
+### The command ring has its own copy of `limina-ring`'s handshake
+
+`limina-ring` (`crates/limina-ring`) is the protocol-free core of `limina-gpu-wire`'s command ring:
+the control block's single-writer lines, the park/publish/recheck handshake, the position checks.
+The Metal transport keeps its own copy, because its framing, `completed`/`error` fields and
+`VERSION` are frozen by the generated C header and the guest driver. Moving it onto the core is a
+layout-preserving refactor (the `c_header` test fails on any offset drift), for a quiet moment in
+the transport; until then a fix to either handshake belongs in both.
+
 ## Video
 
 ### AV1 has no host decoder on M1/M2, so AV1 playback there never counts as video

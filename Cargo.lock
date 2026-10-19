@@ -1374,6 +1374,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "limina-ring"
+version = "0.1.0"
+
+[[package]]
 name = "limina-surfaceport"
 version = "0.1.0"
 dependencies = [
