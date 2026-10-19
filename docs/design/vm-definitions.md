@@ -4,11 +4,11 @@
 > + `src/center/`; L2 guard `crates/limina-test/tests/vmdef.rs`): `.liminavm` bundles with
 > `vm.toml` v1, `limina create/start/ls/stop/rm`, flag overrides, run-lock + pidfile, and the
 > AppKit control center (bare `limina` / double-clicked limina.app) with import (clonefile),
-> configure (cpus/memory/ssh port), start/stop/reset/delete. Two as-built deltas from the
+> configure (cpus/memory/network/ssh port), start/stop/reset/delete. Two as-built deltas from the
 > sketch below: the running-VM flock lives on a stable `run/lock` sentinel, NOT `vm.toml`
 > (atomic tmp+rename saves would swap the inode out from under the lock), and `vm.toml`
 > gained a `[boot] firmware` key (headless starts need one). The MAC is allocated + stored
-> but not yet plumbed to the worker. Snapshots (M9), bridged modes, and `limina snapshot/
+> and is the NIC's, so the VM keeps its DHCP leases. Snapshots (M9) and `limina snapshot/
 > restore` remain future phases.
 >
 > Originally PROPOSED 2026-07-01 because three in-flight designs
@@ -96,7 +96,8 @@ ro    = false
 path = "Fedora-Workstation-netinst.iso"
 
 [[network]]                     # multi-vm-networking §3.1's Network object, per-VM slice
-mode     = "nat"                # nat | (later) shared | bridged | host
+mode     = "nat"                # nat (vmnet shared, limina-netd fallback) | bridged
+# uplink = "en0"                # bridged: the host interface it joins (no SSH forward)
 mac      = "5a:94:ef:e4:0c:ee"  # allocated at create; stable across runs
 ssh_port = 0                    # 0 = auto-allocate from 2222 (prints the resolved port)
 # [[network.forward]] host = 8080, guest = 80   # (later) dynamic REST forwards

@@ -457,7 +457,8 @@ directly observed.
   the worker moves it to a per-VM `limina-netd` user-mode NAT and back when vmnet cannot serve (a VPN
   takes its route, or it will not start) — every move is a `network: …` line with its reason
   (`docs/design/multi-vm-networking.md` §3.5). The supervisor logs the exact SSH command — `guest
-  SSH forward ready: ssh -p N <user>@127.0.0.1`. The host port **auto-allocates from 2222 up** (so 2+
+  SSH forward ready: ssh -p N <user>@127.0.0.1`. A bridged VM (`--net-vmnet bridged:<if>`, or
+  `vm.toml`) has no forward: `limina address <vm>` names the address the LAN leased it. The host port **auto-allocates from 2222 up** (so 2+
   VMs run concurrently without colliding); pin it with `--ssh-port <1024-65535>`. Read N from the log
   — don't assume 2222; the line lands in the WORKER log the boot vehicle names
   (`/tmp/limina-worker-<disk>.log`), not the boot script's stdout.

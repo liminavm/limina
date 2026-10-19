@@ -214,12 +214,14 @@ cannot serve: it will not start, a VPN takes its subnet's route, or the way out 
 DHCP, so net tests boot a writable COW clone. **Inbound SSH needs no forwarding config:** the
 worker binds `127.0.0.1:<port>` and netd carries it to the guest's port 22 on either side; the
 host port auto-allocates from 2222 (or `--ssh-port`) and the supervisor logs the command.
-`--net-netd` and `--net-vmnet shared|host|bridged:<if>` pin one side. Runbook: `docs/images.md`
-§SSH access.
+`--net-netd` and `--net-vmnet shared|host|bridged:<if>` pin one side. A managed VM can instead be
+bridged onto a host interface (`vm.toml` or the Configure sheet); it has no forward, and
+`limina address` and the control center name the address the LAN leased it. Runbook:
+`docs/images.md` §SSH access.
 
 **Owed:**
-- **Networks as objects, bridged as a feature, the arena NIC** (`docs/design/multi-vm-networking.md`
-  §6 Phases 6–8).
+- **Networks as objects and the arena NIC** (`docs/design/multi-vm-networking.md` §6 Phases 6
+  and 8); bridging over Ethernet is not yet exercised.
 - **Offloads:** the NIC offers TSO both ways for IPv4 and IPv6; only IPv4 bulk is digest-checked
   (`net::bulk_crosses_the_forward_intact_both_ways_on_netd`).
 - **Ergonomic SSH** (GNOME Boxes prior art, `docs/research/prior-art-gnome-boxes.md`): (A) inject the

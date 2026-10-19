@@ -1,6 +1,6 @@
 # Multi-VM & Bridged Networking for limina
 
-Status: **the default is built (Phases 1–5); networks as objects, bridged and the arena NIC to come** · Host: macOS 26+ (Apple Silicon) · Audience: limina
+Status: **the default and bridged are built (Phases 1–5, 7); networks as objects and the arena NIC to come** · Host: macOS 26+ (Apple Silicon) · Audience: limina
 maintainer
 
 Every networking feature here runs without root or a restricted Apple entitlement. **A VM's NIC is
@@ -13,8 +13,9 @@ worker through shared-memory rings.
 Measured evidence: `spikes/vmnet-network-probe/RESULTS.md` (vmnet privilege, leases, network
 objects, VPN behaviour) and `spikes/net-bench/RESULTS.md` (gvproxy and vmnet throughput and CPU).
 Background: `docs/research/07-networking.md`. Code: `crates/limina-vmm/src/krun/mod.rs`
-(`net_device`), `switch.rs` and `uplink.rs` beside it, `crates/limina-netd`,
-`crates/limina/src/forward.rs` (the SSH forward), libkrun's `src/devices/src/virtio/net/vmnet.rs`.
+(`net_device`), `switch.rs`, `uplink.rs` and `lease.rs` beside it, `crates/limina-netd`,
+`crates/limina/src/forward.rs` (the SSH forward), `crates/limina/src/uplinks.rs` (the interfaces a
+NIC can be bridged onto), libkrun's `src/devices/src/virtio/net/vmnet.rs`.
 
 ## 1. Goals
 
@@ -32,10 +33,12 @@ Background: `docs/research/07-networking.md`. Code: `crates/limina-vmm/src/krun/
 user-mode NAT per VM (gvisor-tap-vsock), on a vfkit-style unixgram socket, at an MTU of 65520.
 
 **vmnet (`--net-vmnet shared|host|bridged:<if>` alone, or under the switch with `--net`).**
-libkrun's vmnet backend (`NetDevice::new_vmnet`) starts the interface in the worker with the virtio-net header passed
-through both ways, TSO when the guest takes TSO4 and TSO6, batched reads, and the guest's own MAC.
-The L2 test `net_vmnet` boots a stock guest on shared mode and checks its lease, DNS, HTTPS and a
-64 MiB SHA-256 copy each way. Bridged over Wi-Fi was checked by hand. Measured on a quiet M1, macOS
+libkrun's vmnet backend (`Vmnet`, which the worker builds through libkrun's external-backend hook
+so it can read the guest's lease, §3.3) starts the interface in the worker with the virtio-net
+header passed through both ways, TSO when the guest takes TSO4 and TSO6, batched reads, and the
+guest's own MAC. The L2 test `net_vmnet` boots a stock guest on shared mode and checks its lease,
+DNS, HTTPS and a 64 MiB SHA-256 copy each way; `net_bridged` boots one bridged onto the host's
+uplink, flat and managed, and reaches it at the LAN address the supervisor reports. Measured on a quiet M1, macOS
 27.0.1, the same stock Fedora guest on each backend (`spikes/net-bench/RESULTS.md`):
 
 | | gvproxy | vmnet shared |
@@ -56,6 +59,8 @@ What the vmnet spike established (macOS 26.6.2 unless noted; `spikes/vmnet-netwo
 | Shared (Apple NAT) | DHCP lease in ~50 ms, router, DNS proxy, Internet |
 | Host-only | Lease, host reachable, no router by design |
 | Bridged over Wi-Fi | A real LAN lease from the LAN's DHCP server, Internet through the LAN router (also on 27.0.1) |
+| Bridged onto a missing interface | No error: `vmnet_start_interface` never answers, and the worker's 10 s wait ends the start (27.0.1) |
+| Bridgeable interfaces | `vmnet_copy_shared_interface_list` answers an unentitled process; on a Wi-Fi-only laptop it lists `en0` alone, not the Thunderbolt ports (27.0.1) |
 | virtio-header + TSO mode | Max packet 65550, and every frame carries a 12-byte `virtio_net_hdr`; a read needs room for both (27.0.1) |
 | Own MAC | Honoured by network objects and by classic mode (27.0.1) |
 | Network-object API (macOS 26) | DHCP reservations honoured; two interfaces on one network see each other; a second network is isolated at L2 and L3; NAT works |
@@ -225,10 +230,17 @@ which Network, which mode, uplink tracking (§3.4), VPN detection and the switch
   `vmnet_network_create_with_serialization`). DHCP reservations
   (`vmnet_network_configuration_add_dhcp_reservation`) give each VM's MAC a stable address; a
   separate network per Network gives isolation. Cross-process serialization is not yet measured.
-- **Bridged:** `VMNET_BRIDGED_MODE` with `vmnet_shared_interface_name_key`; the UI lists
-  `vmnet_copy_shared_interface_list`. A bridged guest's traffic goes to the LAN without entering the
-  host's routing, so a host VPN neither breaks it nor carries it; the UI says so. Bridged is an
-  explicit choice, never a fallback.
+- **Bridged:** `VMNET_BRIDGED_MODE` with `vmnet_shared_interface_name_key`, chosen per VM in
+  `vm.toml` (`mode = "bridged"`, `uplink = "en0"`) or the Configure sheet, whose Network popup
+  lists `vmnet_copy_shared_interface_list` under System Settings' names. A bridged guest's traffic
+  goes to the LAN without entering the host's routing, so a host VPN neither breaks it nor carries
+  it; the sheet says so. Bridged is an explicit choice, never a fallback. It has no SSH forward:
+  the LAN's DHCP server leases the address, so the worker reads the acknowledgement on its way to
+  the guest (`krun::lease`, on every NIC) and reports it over the NIC's control link; the
+  supervisor publishes it on its runtime socket (`address`), where the control center and
+  `limina address` read it, and prints it to the VM log. A NIC that will not start is reported the
+  same way, with the reason. Pre-flight refuses an uplink the host does not have, since vmnet's
+  start never answers for one.
 
 **API facts the code must respect:**
 
@@ -367,9 +379,13 @@ Each phase ships on its own and is tested against the shipped binaries (`crates/
 - **Phase 6 — `Network` model, per-VM MACs, vmnet network objects.** `limina net` CLI; one network
   object per Network with reservations; forwards per VM. *RED:* two VMs on two Networks, mutually
   invisible; two VMs on one Network ping each other.
-- **Phase 7 — bridged as a product feature.** Interface picker, `NOT_AUTHORIZED`/`SERVICE_BUSY`
-  surfaced. *RED:* the guest takes a LAN lease and is reachable from another LAN host over Wi-Fi
-  and Ethernet.
+- **Phase 7 — bridged as a product feature (done).** `vm.toml`'s bridged mode and uplink, the
+  Configure sheet's Network popup, the worker learning the guest's address from its DHCP
+  acknowledgement and the supervisor reporting it (`limina address`, the control center row),
+  pre-flight's uplink checks, and vmnet's start failures named by status. `net_bridged` covers a
+  flat and a managed VM bridged onto the host's Wi-Fi and the two ways an uplink can be missing;
+  with `LIMINA_LAN_PEER` set, another machine on the LAN opens the guest's SSH port too (passed
+  over Wi-Fi on both ends). Bridging over Ethernet is not yet exercised.
 - **Phase 8 — enhanced-tier arena NIC.** The guest driver and netd reading the arena (§3.2).
 
 ## 7. Decision: vmnet shared by default, `limina-netd` as the fallback

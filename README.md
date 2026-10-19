@@ -13,7 +13,7 @@ The target feature set — see [Status](#status) for what's already shipped:
 - Customizable key bindings + keyboard-layout remapping (e.g. swap Command/Option)
 - Clipboard sharing and host-folder sharing (virtiofs)
 - USB device passthrough
-- NAT networking (bridged deferred)
+- NAT and bridged networking
 - Low host+guest memory overhead and dynamic memory (a `min..max` range the VM
   takes/returns via ballooning)
 

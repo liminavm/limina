@@ -20,6 +20,10 @@
 //! `vm.toml`'s `[[network]]` (`mode = "bridged"`, `uplink`), and reached the same way; one whose
 //! uplink the host does not have is refused at start, before anything boots.
 //!
+//! With `LIMINA_LAN_PEER=<ssh destination>` (another machine on the same LAN, which BatchMode
+//! ssh reaches), the flat test also has that machine open the guest's SSH port at its address:
+//! the guest is a peer on the LAN, not just reachable from its own host.
+//!
 //! Skipped on a host whose way out is not a physical interface (a VPN tunnel, or no network): a
 //! bridged guest goes around the host's routing, so there is nothing to bridge onto then.
 //!
@@ -157,6 +161,20 @@ fn a_bridged_guest_leases_from_the_lan_and_the_supervisor_names_its_address() {
         .trim()
         .to_string()
     };
+    if let Ok(peer) = std::env::var("LIMINA_LAN_PEER") {
+        // Apple's nc on a Mac peer, which Local Network privacy lets through.
+        let out = Command::new("/usr/bin/ssh")
+            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", &peer])
+            .arg(format!("/usr/bin/nc -z -w 10 {host} 22"))
+            .output()
+            .expect("running ssh to the LAN peer");
+        assert!(
+            out.status.success(),
+            "{peer} could not reach the guest's SSH at {host}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        eprintln!("{peer} reached the guest's SSH at {host}");
+    }
     let own = run("ip -4 -o addr show scope global");
     assert!(
         own.contains(&format!("inet {host}/")),
