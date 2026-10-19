@@ -153,22 +153,52 @@ pub enum DisplaySink {
     },
 }
 
-/// A user-mode NAT network interface (M3) backed by a **gvproxy** gateway over a
-/// vfkit-style UNIX *datagram* socket. gvproxy provides DHCP, DNS and the NAT to the
-/// host network entirely in userspace — no root, no entitlement.
-///
-/// The gateway process is spawned and supervised by the limina supervisor (it must be
-/// listening on `gvproxy_socket` before the guest's virtio-net activates); the worker
-/// just connects libkrun's virtio-net backend to that socket (sending the `VFKT` magic).
-/// Presented to the guest as `eth0`.
+/// The guest's network interface, presented as `eth0`.
 #[derive(Debug, Clone)]
 pub struct NetSpec {
-    /// Path to gvproxy's vfkit unixgram socket (`gvproxy -listen-vfkit unixgram://<path>`).
-    pub gvproxy_socket: PathBuf,
+    pub backend: NetBackend,
     /// Guest MAC for the NIC. `None` = the well-known vfkit MAC (gvproxy's default static
     /// .2 lease); managed VMs pass their persistent per-VM MAC (the supervisor then rebinds
     /// gvproxy's lease to match).
     pub mac: Option<[u8; 6]>,
+}
+
+#[derive(Debug, Clone)]
+pub enum NetBackend {
+    /// User-mode NAT (M3) through a **gvproxy** gateway over a vfkit-style UNIX *datagram*
+    /// socket, its path here (`gvproxy -listen-vfkit unixgram://<path>`). gvproxy provides
+    /// DHCP, DNS and the NAT entirely in userspace — no root, no entitlement. The supervisor
+    /// spawns it and guarantees it is listening before the guest's virtio-net activates; the
+    /// worker just connects libkrun's backend to it (sending the `VFKT` magic).
+    Gvproxy(PathBuf),
+    /// A vmnet interface the worker starts itself, through libkrun's vmnet backend
+    /// (`docs/design/multi-vm-networking.md` §3.3). Needs the worker's
+    /// `com.apple.security.virtualization` entitlement.
+    Vmnet(VmnetMode),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VmnetMode {
+    Shared,
+    Host,
+    /// Bridged onto this host interface.
+    Bridged(String),
+}
+
+impl std::str::FromStr for VmnetMode {
+    type Err = anyhow::Error;
+
+    /// `shared`, `host`, or `bridged:<interface>`.
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        match s.split_once(':') {
+            None if s == "shared" => Ok(Self::Shared),
+            None if s == "host" => Ok(Self::Host),
+            Some(("bridged", ifname)) if !ifname.is_empty() => {
+                Ok(Self::Bridged(ifname.to_string()))
+            }
+            _ => anyhow::bail!("expected shared, host or bridged:<interface>, got {s:?}"),
+        }
+    }
 }
 
 /// virtio-input devices attached to the guest (M2). A keyboard, an absolute pointer, and —

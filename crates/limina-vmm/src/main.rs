@@ -40,7 +40,7 @@ use limina_launch::connect::ListenAt;
 
 use crate::config::{
     BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec,
-    NetSpec, VirtioConsoleSpec, VmSpec, VsockSpec,
+    NetBackend, NetSpec, VirtioConsoleSpec, VmSpec, VmnetMode, VsockSpec,
 };
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
@@ -346,12 +346,17 @@ struct Cli {
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "net_vmnet")]
     net_gvproxy: Option<PathBuf>,
 
-    /// Guest MAC for the NAT NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
+    /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
+    /// `host` (host-only) or `bridged:<interface>`. Experimental (networking design Phase 1).
+    #[arg(long)]
+    net_vmnet: Option<VmnetMode>,
+
+    /// Guest MAC for the NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
     /// The supervisor keeps gvproxy's static .2 lease in sync with this.
-    #[arg(long, requires = "net_gvproxy")]
+    #[arg(long)]
     net_mac: Option<String>,
 
     /// fd of the keyboard event socket (supervisor→worker). Enables the virtio-keyboard.
@@ -811,8 +816,14 @@ fn main() -> Result<()> {
     };
 
     let net_mac = cli.net_mac.as_deref().map(parse_mac).transpose()?;
-    let net = cli.net_gvproxy.map(|gvproxy_socket| NetSpec {
-        gvproxy_socket,
+    let net_backend = match (cli.net_gvproxy, cli.net_vmnet) {
+        (Some(socket), None) => Some(NetBackend::Gvproxy(socket)),
+        (None, Some(mode)) => Some(NetBackend::Vmnet(mode)),
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("clap rejects --net-gvproxy with --net-vmnet"),
+    };
+    let net = net_backend.map(|backend| NetSpec {
+        backend,
         mac: net_mac,
     });
 

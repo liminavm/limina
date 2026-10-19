@@ -54,6 +54,13 @@ it non-root under `gtimeout`. `MINIGUEST_TRACE=1` prints every frame the respond
   address.** `192.168.211.1/24` works; `192.168.211.0/24` is accepted with `VMNET_SUCCESS` and the
   interface start then fails with a bare `VMNET_FAILURE` (1001). `vmnet_network_get_ipv4_subnet`
   likewise reports the gateway (`192.168.65.1`).
+- **With the virtio header on, `vmnet_read` needs buffers of `max_packet` plus the 12-byte
+  header.** `vmnet_max_packet_size_key` reports 65550 and leaves the header out; a 65550- or
+  65561-byte buffer is refused with `VMNET_INVALID_ARGUMENT` (1003) whatever the packet count,
+  65562 and up is accepted (measured 2026-10-19 on macOS 27.0.1; `MINIGUEST_RXBUF` /
+  `MINIGUEST_RXCNT` set the buffer size and packets per read).
+- **Classic mode keeps our own MAC too** (`lease shared --vhdr --own-mac`, measured 2026-10-19 on
+  macOS 27.0.1): lease in 0.09 s, NAT to 1.1.1.1, as with a network object.
 - **A pinned subnet is exclusive:** a second `vmnet_network_create` for a subnet a live network
   holds fails with 1001 until the first one is gone.
 - **NECP drops host connects to a guest from our own binaries.** A `connect()` to the guest's

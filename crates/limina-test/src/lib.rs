@@ -151,6 +151,65 @@ pub fn ssh_exec_on(port: u16, remote_cmd: &str, timeout: Duration) -> Result<Str
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// The address macOS's DHCP server (bootpd) leased to the guest NIC with MAC `mac` on a vmnet
+/// shared or host network, from `/var/db/dhcpd_leases`. bootpd writes each octet without its
+/// leading zero (`2:c:4c:…`), so octets are compared as numbers.
+pub fn vmnet_lease(mac: &str) -> Option<std::net::Ipv4Addr> {
+    let octets = |s: &str| -> Option<Vec<u8>> {
+        s.split(':')
+            .map(|o| u8::from_str_radix(o, 16).ok())
+            .collect()
+    };
+    let want = octets(mac)?;
+    let leases = std::fs::read_to_string("/var/db/dhcpd_leases").ok()?;
+    leases.split('}').find_map(|entry| {
+        let field = |key: &str| {
+            entry
+                .lines()
+                .find_map(|l| l.trim().strip_prefix(key)?.strip_prefix('='))
+        };
+        let hw = field("hw_address")?.split_once(',')?.1;
+        (octets(hw)? == want).then(|| field("ip_address")?.parse().ok())?
+    })
+}
+
+/// Run `remote_cmd` as the test images' `claude` user on the guest's own address `host`, port 22,
+/// returning its stdout: the vmnet path, where no gvproxy forward exists. With `stdin`, that file
+/// is fed to the remote command. Apple's `/usr/bin/ssh` by full path: macOS's Local Network
+/// policy drops connections to a vmnet guest from ad-hoc binaries (the test binary among them)
+/// and lets platform binaries through (`spikes/vmnet-network-probe/RESULTS.md`).
+pub fn ssh_exec_at(
+    host: &str,
+    remote_cmd: &str,
+    stdin: Option<&Path>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let login = format!("claude@{host}");
+    let mut cmd = match stdin {
+        // run_capped gives the child a null stdin, so a shell does the redirect.
+        Some(path) => {
+            let mut sh = Command::new("/bin/sh");
+            sh.args(["-c", "f=$1; shift; exec /usr/bin/ssh \"$@\" < \"$f\"", "sh"]);
+            sh.arg(path);
+            sh
+        }
+        None => Command::new("/usr/bin/ssh"),
+    };
+    cmd.args(SSH_SHARED_OPTS);
+    cmd.args(["-o", "ConnectTimeout=10"]);
+    cmd.args([login.as_str(), remote_cmd]);
+    let out = run_capped(cmd, timeout)
+        .with_context(|| format!("ssh `{remote_cmd}` to the guest ({host})"))?;
+    if !out.status.success() {
+        bail!(
+            "ssh `{remote_cmd}` to {host} failed ({}):\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(out.stdout)
+}
+
 /// [`Guest::wait_for_ssh`] for a VM the harness did not spawn itself: wait until a real session
 /// can be established on host port `port`. `supervisor_alive` is polled between tries, and a
 /// `false` ends the wait at once.

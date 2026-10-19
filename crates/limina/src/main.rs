@@ -449,8 +449,16 @@ struct Cli {
     /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
     /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
     /// internet automatically (e.g. for SSH).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "net_vmnet")]
     net: bool,
+
+    /// Attach a NIC on a vmnet interface instead of the gvproxy NAT: `shared` (NAT through
+    /// macOS), `host` (host-only) or `bridged:<interface>` (e.g. `bridged:en0`, a real LAN
+    /// lease). The worker starts the interface itself; no gateway process runs. The guest's
+    /// address is in `/var/db/dhcpd_leases` (shared/host) and only Apple's own tools reach
+    /// it from the host until Local Network access is sorted out. Experimental.
+    #[arg(long, value_name = "MODE", value_parser = parse_vmnet_mode)]
+    net_vmnet: Option<String>,
 
     /// Capture the gvproxy gateway's `-debug` packet log to this file (DHCP/DNS/NAT — the
     /// host-side network oracle). Requires --net; without it gvproxy logs quietly.
@@ -467,7 +475,7 @@ struct Cli {
     /// Guest MAC address for the NAT NIC (aa:bb:cc:dd:ee:ff). Managed VMs pass their persistent
     /// per-VM MAC from vm.toml; when omitted, the well-known vfkit MAC is used. The gateway's
     /// static .2 lease is rebound to this MAC so DHCP and the SSH forward keep working.
-    #[arg(long, requires = "net", value_parser = parse_mac_arg)]
+    #[arg(long, value_parser = parse_mac_arg)]
     net_mac: Option<String>,
 
     /// Seconds to wait for an orderly guest power-off before force-killing.
@@ -1646,6 +1654,7 @@ fn cli_from_definition(
         no_fido: !cfg.hardware.fido,
         on_host_sleep: Some(cfg.power.on_host_sleep.as_flag().to_string()),
         net,
+        net_vmnet: None,
         net_log: None,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
         ssh_port,
@@ -2186,6 +2195,20 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     } else {
         None
     };
+    anyhow::ensure!(
+        cli.net_mac.is_none() || cli.net || cli.net_vmnet.is_some(),
+        "--net-mac needs a NIC: pass --net or --net-vmnet"
+    );
+    if let Some(mode) = &cli.net_vmnet {
+        // Every vmnet guest of a mode shares one segment, so the fixed vfkit MAC that gives
+        // gvproxy's islands their static lease would collide between two VMs here.
+        let mac = cli.net_mac.clone().unwrap_or_else(random_local_mac);
+        println!("vmnet {mode} NIC, guest MAC {mac}");
+        args.push("--net-vmnet".into());
+        args.push(mode.clone());
+        args.push("--net-mac".into());
+        args.push(mac);
+    }
 
     // The scanout pool belongs to the DEVICE, so it is pushed here — above the windowed branch,
     // which returns, and above the capture branch. It has been placed inside each of those in
@@ -2601,6 +2624,29 @@ fn fingerprint_vm_label(window_title: Option<&str>) -> String {
     window_title
         .map(str::to_owned)
         .unwrap_or_else(|| "your VM".to_string())
+}
+
+/// clap value-parser for `--net-vmnet`: `shared`, `host` or `bridged:<interface>`.
+fn parse_vmnet_mode(s: &str) -> Result<String, String> {
+    match s.split_once(':') {
+        None if s == "shared" || s == "host" => Ok(s.to_string()),
+        Some(("bridged", ifname)) if !ifname.is_empty() => Ok(s.to_string()),
+        _ => Err(format!(
+            "expected shared, host or bridged:<interface>, got {s:?}"
+        )),
+    }
+}
+
+/// A random locally-administered unicast MAC, `aa:bb:cc:dd:ee:ff`.
+fn random_local_mac() -> String {
+    let mut b = [0u8; 6];
+    // SAFETY: arc4random_buf fills exactly the buffer it is given.
+    unsafe { libc::arc4random_buf(b.as_mut_ptr().cast(), b.len()) };
+    b[0] = (b[0] & 0xfc) | 0x02;
+    b.iter()
+        .map(|o| format!("{o:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// clap value-parser for `--net-mac`: validate + normalize `aa:bb:cc:dd:ee:ff` to lowercase.

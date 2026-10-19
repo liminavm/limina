@@ -1028,6 +1028,7 @@ version = "0.1.0-2.0.0-dev"
 dependencies = [
  "acpi_tables",
  "bitflags 1.3.2",
+ "block2",
  "caps",
  "crossbeam-channel",
  "getrandom 0.4.3",

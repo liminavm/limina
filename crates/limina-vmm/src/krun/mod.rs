@@ -40,8 +40,8 @@ use vmm::vmm_config::machine_config::VmConfig;
 
 use self::display_update::{display_update_from, timing_grid_from};
 use crate::config::{
-    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, NetSpec,
-    VmSpec, VsockSpec,
+    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, NetBackend,
+    NetSpec, VmSpec, VmnetMode, VsockSpec,
 };
 
 /// Standard libkrun guest CID.
@@ -54,8 +54,10 @@ const GUEST_CID: u32 = 3;
 const NET_FEATURE_CSUM: u32 = 1 << 0;
 const NET_FEATURE_GUEST_CSUM: u32 = 1 << 1;
 const NET_FEATURE_GUEST_TSO4: u32 = 1 << 7;
+const NET_FEATURE_GUEST_TSO6: u32 = 1 << 8;
 const NET_FEATURE_GUEST_UFO: u32 = 1 << 10;
 const NET_FEATURE_HOST_TSO4: u32 = 1 << 11;
+const NET_FEATURE_HOST_TSO6: u32 = 1 << 12;
 const NET_FEATURE_HOST_UFO: u32 = 1 << 14;
 
 /// virtio-net offload features for the gvproxy NAT NIC (IPv4-only baseline).
@@ -65,6 +67,21 @@ const NET_COMPAT_FEATURES: u32 = NET_FEATURE_CSUM
     | NET_FEATURE_GUEST_UFO
     | NET_FEATURE_HOST_TSO4
     | NET_FEATURE_HOST_UFO;
+
+/// virtio-net offload features for a vmnet NIC: checksum and TCP segmentation both ways, IPv6
+/// included, since vmnet's one TSO switch covers both directions and both families. No UFO:
+/// vmnet does not take it.
+const NET_VMNET_FEATURES: u32 = NET_FEATURE_CSUM
+    | NET_FEATURE_GUEST_CSUM
+    | NET_FEATURE_GUEST_TSO4
+    | NET_FEATURE_GUEST_TSO6
+    | NET_FEATURE_HOST_TSO4
+    | NET_FEATURE_HOST_TSO6;
+
+/// `vmnet_mode_t` values from `<vmnet/vmnet.h>`, as `NetDevice::new_vmnet` takes them.
+const VMNET_HOST_MODE: u32 = 1000;
+const VMNET_SHARED_MODE: u32 = 1001;
+const VMNET_BRIDGED_MODE: u32 = 1002;
 
 /// Guest MAC for the NAT NIC: the well-known vfkit/krunkit MAC. gvproxy's default config
 /// has a *static* DHCP lease binding this MAC to `192.168.127.2` and a built-in port-forward
@@ -669,27 +686,38 @@ fn vsock_device(vsock: &VsockSpec) -> Result<VsockDevice> {
     Ok(device.timesync(false))
 }
 
-/// Attach the user-mode NAT NIC: a virtio-net device whose backend is a vfkit-style UNIX
-/// datagram connection to a gvproxy gateway. The connection (and the `VFKT` handshake) is
-/// established lazily when the guest activates the device during boot, so gvproxy only needs
-/// to be listening on the socket by then — the supervisor guarantees that ordering.
-///
+/// Attach the guest's NIC. Either backend connects lazily, when the guest activates the device
+/// during boot: a vfkit-style UNIX datagram connection to a gvproxy gateway (and the `VFKT`
+/// handshake), which the supervisor guarantees is listening by then, or a vmnet interface
+/// libkrun starts in this process.
 fn net_device(net: &NetSpec) -> Result<NetDevice> {
-    let path = net.gvproxy_socket.to_str().with_context(|| {
-        format!(
-            "gvproxy socket path is not valid UTF-8: {:?}",
-            net.gvproxy_socket
-        )
-    })?;
-    NetDevice::new_unixgram_path(
-        "eth0",
-        path,
-        &net.mac.unwrap_or(NET_GUEST_MAC),
-        NET_COMPAT_FEATURES,
-        // gvproxy builds every frame in its own gVisor stack, so the guest can skip re-summing.
-        NetFlags::VFKIT | NetFlags::CSUM_VALID,
-    )
-    .map_err(|e| anyhow!("virtio-net (gvproxy): {e:?}"))
+    let mac = net.mac.unwrap_or(NET_GUEST_MAC);
+    match &net.backend {
+        NetBackend::Gvproxy(socket) => {
+            let path = socket
+                .to_str()
+                .with_context(|| format!("gvproxy socket path is not valid UTF-8: {socket:?}"))?;
+            NetDevice::new_unixgram_path(
+                "eth0",
+                path,
+                &mac,
+                NET_COMPAT_FEATURES,
+                // gvproxy builds every frame in its own gVisor stack, so the guest can skip
+                // re-summing.
+                NetFlags::VFKIT | NetFlags::CSUM_VALID,
+            )
+            .map_err(|e| anyhow!("virtio-net (gvproxy): {e:?}"))
+        }
+        NetBackend::Vmnet(mode) => {
+            let (mode, bridged) = match mode {
+                VmnetMode::Shared => (VMNET_SHARED_MODE, ""),
+                VmnetMode::Host => (VMNET_HOST_MODE, ""),
+                VmnetMode::Bridged(ifname) => (VMNET_BRIDGED_MODE, ifname.as_str()),
+            };
+            NetDevice::new_vmnet("eth0", mode, bridged, &mac, NET_VMNET_FEATURES)
+                .map_err(|e| anyhow!("virtio-net (vmnet): {e:?}"))
+        }
+    }
 }
 
 /// Detect the disk image format by its magic, so a user needn't tag `--disk foo.qcow2` (M10

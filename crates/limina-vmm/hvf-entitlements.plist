@@ -4,6 +4,10 @@
 <dict>
 	<key>com.apple.security.hypervisor</key>
 	<true/>
+	<!-- vmnet (the net-vmnet NIC): unrestricted, and what lets a non-root process start a
+	     vmnet interface in any mode (spikes/vmnet-network-probe/RESULTS.md). -->
+	<key>com.apple.security.virtualization</key>
+	<true/>
 	<!-- virgl/vrend on zink-on-KK: epoxy and zink dlopen libEGL/libGLESv2/libvulkan by bare
 	     soname, and Mesa's dri loader is a third-party dylib. Hardened runtime strips DYLD_*
 	     and enforces library validation, which breaks both. These let the dev/test worker
