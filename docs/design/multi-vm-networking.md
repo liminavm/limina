@@ -132,21 +132,24 @@ checksum-valid (it built them), so the guest's MTU stays 1500 and the large-MTU 
 needs goes away.
 
 **TCP: passt-style translation, no TCP stack of its own.** Each guest connection maps onto one host
-socket, and netd keeps the guest's view consistent by translating sequence numbers rather than
-buffering:
+socket, and netd keeps the guest's view consistent by translating sequence numbers; the host's TCP
+does the congestion control, retransmission and windowing towards the far end:
 
-- *Guest → host:* the payload of a guest segment is written to the host socket, and netd ACKs the
-  guest only for what the socket accepted; the guest's own retransmission covers the rest.
-- *Host → guest:* netd peeks the socket's receive queue (`MSG_PEEK`), sends the data to the guest as
-  large segments, and consumes it from the socket only when the guest ACKs it; the guest's window
-  bounds what is in flight.
+- *Guest → host:* the payload of a guest segment is written to the host socket, never more than the
+  room the socket's write event reports (a non-blocking write larger than the free space mostly
+  fails with `EAGAIN` rather than writing short). netd ACKs the guest as the peer ACKs, read from
+  `TCP_CONNECTION_INFO`'s `tcpi_snd_sbbytes`; the guest's own retransmission covers the rest.
+- *Host → guest:* **read-and-retain.** netd reads the socket once into a per-connection buffer the
+  size of the guest's window, sends from it to the guest as large segments, and frees it as the
+  guest ACKs, resending from it when the guest's ACKs stall. passt peeks the receive queue instead
+  and keeps nothing; macOS has no `SO_PEEK_OFF`, so every peek re-copies what is in flight, which
+  made it CPU-bound at 26–29 Gbit/s at two to three times the CPU per byte, while read-and-retain
+  costs what reading straight into the guest frame costs and, unlike that, can resend
+  (`spikes/netd-tcp-translate/RESULTS.md`).
 - *Connection life:* guest SYN → non-blocking `connect()`; the host socket's FIN and RST map onto
   the guest's, and the reverse.
-
-This is what makes passt fast on Linux, and two of its Linux props are missing on macOS: there is no
-`SO_PEEK_OFF`, so a peek always starts at the head of the receive queue and re-reads what is
-already in flight, and the unacknowledged byte count comes from `TCP_CONNECTION_INFO` rather than
-`SIOCOUTQ`/`TCP_INFO`. How much that costs is the first thing to measure (§6, Phase 2).
+- *Events:* kqueue's event data carries the readable bytes and the writable room, so the data path
+  needs no `getsockopt` but the ACK count.
 
 **The rest of the stack:**
 
@@ -284,11 +287,10 @@ niceties (reporting the guest's address, hostnames). None is required.
 Each phase ships on its own and is tested against the shipped binaries (`crates/limina-test`).
 
 - **Phase 1 — native vmnet backend, then the measurement (done).** §2.
-- **Phase 2 — the ring crate and the TCP translation spike.** The ring moves out of
-  `limina-gpu-wire` into a crate the Metal transport and netd share, its tests with it. A spike
-  measures passt-style translation on macOS before netd is built around it: the cost of peeking
-  without `SO_PEEK_OFF`, `TCP_CONNECTION_INFO` as the unacked count, and throughput and CPU through
-  a real guest against the §2 table.
+- **Phase 2 — the TCP translation spike (done) and the ring crate.** The spike
+  (`spikes/netd-tcp-translate/`) chose read-and-retain over peeking and settled the socket
+  bookkeeping (§3.2). The ring moves out of `limina-gpu-wire` into a crate the Metal transport and
+  netd share, its tests with it.
 - **Phase 3 — `limina-netd` with gvproxy's feature set.** netd, the libkrun ring backend, and an
   explicit flag to select it. *RED:* the existing net tests (lease, SSH forward, per-VM MAC, two
   VMs in parallel) pass on netd; their oracles move off gvproxy's packet log.
@@ -316,8 +318,8 @@ large-MTU workaround, and netd's TCP is passt-style translation rather than a fu
 
 ## 8. Open questions
 
-- **passt on macOS:** what peeking without `SO_PEEK_OFF` costs at high throughput, and whether
-  `TCP_CONNECTION_INFO` gives the unacked count the translation needs (Phase 2).
+- **netd end to end:** the TCP spike measured netd's share on loopback alone; throughput through the
+  worker, the ring and a guest, many connections at once, and UDP are measured once netd exists.
 - **The tunnel trigger:** UDP loss was measured under one client; switching on any tunnel uplink is
   the conservative rule, and other clients (WireGuard, Cisco, Zscaler) may need finer ones.
 - **Cross-process network objects:** `vmnet_network_copy_serialization` across workers is the basis
