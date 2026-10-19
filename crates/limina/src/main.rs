@@ -324,10 +324,12 @@ struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
     efi_vars: Option<PathBuf>,
 
-    /// Describe the machine to the OS with ACPI instead of a device tree — forwarded to the
-    /// worker. EFI boot only (docs/design/firmware-and-acpi.md).
-    #[arg(long, conflicts_with = "kernel")]
-    acpi: bool,
+    /// How the machine is described to the OS: `acpi` (the default for a firmware boot) or
+    /// `device-tree` (what a `--kernel` boot always gets, since an OS finds ACPI only through the
+    /// firmware). A resumed guest keeps the machine it was suspended on, whatever this says. A
+    /// managed VM takes it from `hardware.machine` (docs/design/firmware-and-acpi.md).
+    #[arg(long, value_enum)]
+    machine: Option<vmlib::schema::Machine>,
 
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
@@ -1650,7 +1652,7 @@ fn cli_from_definition(
         tpm: cfg.hardware.tpm,
         tpm_state: cfg.hardware.tpm.then(|| bundle.tpm_state()),
         efi_vars: Some(bundle.efi_vars()),
-        acpi: false,
+        machine: Some(cfg.hardware.machine),
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1798,6 +1800,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // anything below reads cli.snapshot_file.
     default_arm_flat_suspend(&mut cli)?;
     let cli = cli;
+    // Resolved before the windowed path below moves fields out of `cli`.
+    let machine = machine(&cli)?;
     // Resolve modifier normalization up front (default ON; --no-normalize-modifiers opts out) before any
     // field of `cli` is moved out below, so the windowed path can use it freely. It is applied to
     // the PHYSICAL key, so it needs macOS's own Modifier Keys configuration to read past — that is
@@ -1973,9 +1977,6 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         if let Some(vars) = vars {
             args.push("--efi-vars".into());
             args.push(path_arg(&vars)?);
-        }
-        if cli.acpi {
-            args.push("--acpi".into());
         }
     }
     if let Some(rootfs) = &cli.rootfs {
@@ -2437,6 +2438,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             ipa_granule: cli.ipa_granule,
             nested_virt: cli.nested_virt,
             gpu_metal: cli.gpu_metal,
+            machine,
             on_window_close: cli.on_window_close,
             // The restore splash lives beside the snapshot (`splash_beside`).
             splash_save_path: cli
@@ -2490,6 +2492,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         suspend_state_file: cli.suspend_state_file.clone(),
         nested_virt: cli.nested_virt,
         gpu_metal: cli.gpu_metal,
+        machine,
         links,
     };
 
@@ -2510,6 +2513,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 ipa_granule: Some(cli.ipa_granule),
                 nested_virt: Some(supervisor::spawned_nested_virt()),
                 gpu_metal: Some(supervisor::spawned_gpu_metal()),
+                machine: Some(crate::supervisor::spawned_machine()),
             };
             match vmlib::state::set_suspended(state_file, Some(sus)) {
                 Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
@@ -2610,6 +2614,21 @@ fn resolve_vmm_bin(flag: Option<PathBuf>) -> Result<PathBuf> {
         "limina-vmm not found next to {exe:?}; pass --vmm-bin or set LIMINA_VMM_BIN"
     );
     Ok(sibling)
+}
+
+/// The machine a cold boot describes: `--machine`, else ACPI for a firmware boot and a device
+/// tree for a `--kernel` one, which cannot have ACPI (the OS finds it only through the firmware).
+fn machine(cli: &Cli) -> Result<vmlib::schema::Machine> {
+    use vmlib::schema::Machine;
+    match (cli.machine, cli.kernel.is_some()) {
+        (Some(Machine::Acpi), true) => anyhow::bail!(
+            "--machine acpi needs a firmware boot: an OS finds ACPI only through the firmware, \
+             and --kernel boots without one"
+        ),
+        (Some(m), _) => Ok(m),
+        (None, true) => Ok(Machine::DeviceTree),
+        (None, false) => Ok(Machine::Acpi),
+    }
 }
 
 /// Candidate firmware locations for a windowed boot, in priority order:
@@ -3252,6 +3271,7 @@ mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             }),
         )
         .unwrap();

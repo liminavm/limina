@@ -602,6 +602,7 @@ mod tests {
                     ipa_granule: g,
                     nested_virt: None,
                     gpu_metal: None,
+                    machine: None,
                 }),
             )
             .unwrap()

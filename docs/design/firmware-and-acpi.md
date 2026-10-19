@@ -1,7 +1,8 @@
 # Our own firmware, and ACPI for the guest
 
 Status: the firmware is Cardea (`github.com/liminavm/cardea`, vendored at `third_party/cardea`),
-and edk2 is retired. The ACPI machine works on it behind `--acpi`.
+and edk2 is retired. ACPI is the default machine (`hardware.machine`, `--machine`); the device-tree
+machine remains a per-VM choice and is what a `--kernel` boot always gets.
 
 ## Decision
 
@@ -170,8 +171,9 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
 1. **ACPI parity and stock wins** on edk2. Done: power, sleep and wake buttons; the TPM; the SBS
    battery; the Limina logo on the guest's boot splash (Plymouth's `bgrt` theme, Fedora's
    default, draws the firmware's BGRT image; `spikes/acpi-guest/plymouth-limina.png`). Open: CPPC
-   and efficiency classes (see the table), `rtc-efi` wakeup time. Then ACPI becomes the default
-   and the device-tree machine remains only for `--kernel`/L1.
+   and efficiency classes (see the table), `rtc-efi` wakeup time. ACPI is the default; the
+   device-tree machine stays selectable per VM (the control center's Machine popup) and is what
+   `--kernel`/L1 boots get. A suspended guest resumes on the machine it was saved on.
 2. **Rust firmware, device-tree machine — done.** Cardea passes the whole suite on the device-tree
    machine, Fedora and Debian LUKS and the TPM tests included.
 3. **Rust firmware, ACPI machine; edk2 retired — done.** A stock F44 guest boots Cardea on ACPI

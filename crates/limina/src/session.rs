@@ -83,6 +83,8 @@ pub struct SessionConfig {
     pub nested_virt: bool,
     /// Whether a cold boot offers the Metal transport ([`supervisor::WorkerSpec::gpu_metal`]).
     pub gpu_metal: bool,
+    /// The machine a cold boot describes ([`supervisor::WorkerSpec::machine`]).
+    pub machine: crate::vmlib::schema::Machine,
     /// Window-close policy (M9.4). Only meaningful when suspend is armed (both paths above
     /// set); resolved to Shutdown otherwise — see [`WindowedSession::start`].
     pub on_window_close: crate::vmlib::schema::WindowCloseAction,
@@ -142,6 +144,8 @@ struct WorkerBase {
     nested_virt: bool,
     /// See [`supervisor::WorkerSpec::gpu_metal`].
     gpu_metal: bool,
+    /// See [`supervisor::WorkerSpec::machine`].
+    machine: crate::vmlib::schema::Machine,
 }
 
 /// Spawn a worker in `--display-window` mode and wire fresh scanout/input/ack socketpairs to
@@ -228,6 +232,7 @@ fn spawn_windowed_worker(
         links: base.links.clone(),
         nested_virt: base.nested_virt,
         gpu_metal: base.gpu_metal,
+        machine: base.machine,
     };
     let spawned = supervisor::spawn_worker(
         &spec,
@@ -325,6 +330,7 @@ impl WindowedSession {
             ipa_granule,
             nested_virt,
             gpu_metal,
+            machine,
             on_window_close,
             splash_save_path,
             restoring,
@@ -340,6 +346,7 @@ impl WindowedSession {
             links,
             nested_virt,
             gpu_metal,
+            machine,
         };
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
@@ -449,6 +456,7 @@ impl WindowedSession {
                                 ipa_granule: Some(ipa_granule),
                                 nested_virt: Some(crate::supervisor::spawned_nested_virt()),
                                 gpu_metal: Some(crate::supervisor::spawned_gpu_metal()),
+                                machine: Some(crate::supervisor::spawned_machine()),
                             };
                             match crate::vmlib::state::set_suspended(state_file, Some(sus)) {
                                 Ok(()) => {

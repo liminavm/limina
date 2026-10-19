@@ -579,6 +579,7 @@ pub(crate) mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             }),
         )
         .unwrap();

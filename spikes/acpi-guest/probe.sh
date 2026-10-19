@@ -6,8 +6,8 @@
 # each device docs/design/firmware-and-acpi.md describes under ACPI.
 #
 # Usage: spikes/acpi-guest/probe.sh <disk.raw> '<guest command>' [limina args...]
-#   e.g. spikes/acpi-guest/probe.sh acpi-stock.raw 'ls /dev/tpm*' --acpi --tpm
-# Pass --acpi yourself, so the same probe runs on the device-tree machine for comparison. Boots
+#   e.g. spikes/acpi-guest/probe.sh acpi-stock.raw 'ls /dev/tpm*' --tpm
+# The machine is ACPI unless you pass --machine device-tree, for comparison. Boots
 # the disk in place (clone it first: cp -c). Run from a worktree with a built tree and
 # target/firmware/efi.fd.
 set -uo pipefail

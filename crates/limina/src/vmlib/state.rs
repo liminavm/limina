@@ -146,6 +146,11 @@ pub struct Suspended {
     /// record written before it was kept, when no managed VM offered the transport.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_metal: Option<bool>,
+    /// The machine the guest was saved on. Its kernel took ACPI or a device tree at boot and keeps
+    /// what it took, so the resume follows this, whatever `hardware.machine` says now. `None` in
+    /// a record written before it was kept, when every managed VM ran on a device tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<super::schema::Machine>,
 }
 
 /// Load the state file. Missing, unreadable, or corrupt → `None` (state is
@@ -416,6 +421,7 @@ mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             }),
         )
         .unwrap();
@@ -428,6 +434,7 @@ mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             })
         );
         // Clear it — window still preserved.
@@ -599,6 +606,7 @@ mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             }),
         )
         .unwrap();
@@ -617,6 +625,7 @@ mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             }),
             "suspend record survives a window save"
         );
@@ -638,6 +647,7 @@ mod tests {
             ipa_granule: Some(IpaGranule::FourK),
             nested_virt: None,
             gpu_metal: None,
+            machine: None,
         };
         set_suspended(&path, Some(rec.clone())).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();

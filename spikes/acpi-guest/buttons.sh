@@ -26,7 +26,7 @@ say() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 RUST_LOG=warn,limina=info,krun_devices=debug target/debug/limina \
     --firmware target/firmware/efi.fd --disk "$DISK" --cpus 2 --ram-mib 2048 --net \
-    --acpi --discard-suspend "$@" > "$LOG" 2>&1 < /dev/null &
+    --machine acpi --discard-suspend "$@" > "$LOG" 2>&1 < /dev/null &
 LP=$!
 say "limina pid=$LP, log $LOG"
 port=$(gtimeout --foreground 300 scripts/wait-guest-ssh.sh "$LOG" 240 "$LP") || { say "no boot"; kill -9 "$LP"; exit 1; }

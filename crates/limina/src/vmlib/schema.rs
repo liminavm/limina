@@ -159,6 +159,11 @@ pub struct Hardware {
     /// change applies from the next full boot. See `--nested-virt`.
     #[serde(default)]
     pub nested_virt: bool,
+    /// How the machine is described to the guest's OS (see [`Machine`]; default ACPI). A
+    /// suspended session resumes on the machine it was saved with, so a change applies from the
+    /// next full boot. See `--machine`.
+    #[serde(default)]
+    pub machine: Machine,
 }
 
 fn default_true() -> bool {
@@ -212,6 +217,7 @@ impl Default for Hardware {
             balloon_deflate_on_oom: false,
             ipa_granule: IpaGranule::default(),
             nested_virt: false,
+            machine: Machine::default(),
         }
     }
 }
@@ -634,6 +640,34 @@ impl IpaGranule {
     }
 }
 
+/// How the machine is described to the guest's OS (docs/design/firmware-and-acpi.md): arm64
+/// Linux takes ACPI or a device tree, never both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+pub enum Machine {
+    /// ACPI tables, which the VMM generates and the firmware installs. The default: a stock
+    /// guest gets the power and sleep buttons, the TPM and the battery through them.
+    #[default]
+    #[serde(rename = "acpi")]
+    #[value(name = "acpi")]
+    Acpi,
+    /// A device tree. What a direct `--kernel` boot always gets, since an OS finds ACPI only
+    /// through the firmware. Keeps the PL031 RTC and `qemu,virtual-cpufreq`, which the ACPI
+    /// machine does not describe yet.
+    #[serde(rename = "device-tree")]
+    #[value(name = "device-tree")]
+    DeviceTree,
+}
+
+impl Machine {
+    /// How the control center names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Machine::Acpi => "ACPI",
+            Machine::DeviceTree => "Device tree",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputCfg {
@@ -957,6 +991,20 @@ mod tests {
         assert!(h.nested_virt);
         let back = toml::to_string(&h).unwrap();
         assert!(back.contains("nested_virt = true"), "{back}");
+    }
+
+    /// The machine is ACPI unless a definition asks for a device tree, including every vm.toml
+    /// written before the key existed.
+    #[test]
+    fn machine_defaults_to_acpi_and_round_trips() {
+        let h: Hardware = toml::from_str("").unwrap();
+        assert_eq!(h.machine, Machine::Acpi);
+        assert_eq!(Hardware::default().machine, Machine::Acpi);
+        let h: Hardware = toml::from_str("machine = \"device-tree\"").unwrap();
+        assert_eq!(h.machine, Machine::DeviceTree);
+        let back = toml::to_string(&h).unwrap();
+        assert!(back.contains("machine = \"device-tree\""), "{back}");
+        assert!(toml::from_str::<Hardware>("machine = \"pci\"").is_err());
     }
 
     /// The Metal transport is off unless a definition turns it on, including every vm.toml

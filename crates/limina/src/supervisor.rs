@@ -34,6 +34,8 @@ use anyhow::{Context, Result};
 use limina_launch::connect::Connector;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 
+use crate::vmlib::schema::Machine;
+
 /// Worker process exit code meaning "the guest rebooted" (PSCI `SYSTEM_RESET`) — mirrors
 /// libkrun's `FC_EXIT_CODE_REBOOT` (a clean power-off exits 0). Kept in sync by hand: limina
 /// spawns the worker as a subprocess and reads only its exit status, so it can't import the
@@ -89,6 +91,7 @@ pub fn keep_refused_snapshot(snapshot: &std::path::Path, state_file: Option<&std
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             });
         if let Err(e) = crate::vmlib::state::set_suspended(state, Some(sus)) {
             log::error!("re-recording the suspended state failed: {e}");
@@ -326,6 +329,9 @@ pub struct WorkerSpec {
     /// Offer a cold-booted guest the Metal-level GPU transport (`--gpu-metal`). Decided per spawn
     /// like [`Self::nested_virt`] ([`gpu_metal_for_spawn`]).
     pub gpu_metal: bool,
+    /// The machine a cold-booted guest is described with (`--acpi` for ACPI). Decided per spawn
+    /// like [`Self::nested_virt`] ([`machine_for_spawn`]).
+    pub machine: Machine,
     /// Worker listeners reached over a link instead of a path (`limina_launch::connect`), as
     /// `(worker flag, connector)`. Every spawn arms a fresh link for each and passes its end as
     /// `<flag> <fd>`, so a relaunched worker is reachable through the same connector.
@@ -368,6 +374,36 @@ static SPAWNED_GPU_METAL: AtomicBool = AtomicBool::new(false);
 /// record a suspend writes.
 pub fn spawned_gpu_metal() -> bool {
     SPAWNED_GPU_METAL.load(Ordering::SeqCst)
+}
+
+/// The machine the worker last spawned describes to its guest, which a suspend of it must record.
+static SPAWNED_ACPI: AtomicBool = AtomicBool::new(false);
+
+/// The machine the running worker describes to its guest, for the `[suspended]` record a suspend
+/// writes.
+pub fn spawned_machine() -> Machine {
+    if SPAWNED_ACPI.load(Ordering::SeqCst) {
+        Machine::Acpi
+    } else {
+        Machine::DeviceTree
+    }
+}
+
+/// The machine this spawn describes. As with EL2 ([`nested_virt_for_spawn`]), a resume takes what
+/// the snapshot was saved with: the guest's kernel chose ACPI or the device tree when it booted
+/// and keeps that choice. A managed record that does not say predates the setting, when every
+/// managed VM ran on a device tree; a flat run has no record and resumes with what it was
+/// started with.
+fn machine_for_spawn(
+    configured: Machine,
+    resumed: bool,
+    record: Option<&crate::vmlib::state::Suspended>,
+) -> Machine {
+    match (resumed, record) {
+        (false, _) => configured,
+        (true, Some(rec)) => rec.machine.unwrap_or(Machine::DeviceTree),
+        (true, None) => configured,
+    }
 }
 
 /// Whether this spawn offers the Metal transport. As with EL2 ([`nested_virt_for_spawn`]), a
@@ -699,6 +735,17 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         args.push("--nested-virt".into());
     }
     SPAWNED_NESTED_VIRT.store(nested_virt, Ordering::SeqCst);
+    let machine = machine_for_spawn(spec.machine, resumed, record.as_ref());
+    if machine != spec.machine {
+        log::info!(
+            "resuming on the {} machine, as the guest was suspended",
+            machine.label()
+        );
+    }
+    if machine == Machine::Acpi {
+        args.push("--acpi".into());
+    }
+    SPAWNED_ACPI.store(machine == Machine::Acpi, Ordering::SeqCst);
     let gpu_metal = gpu_metal_for_spawn(spec.gpu_metal, resumed, record.as_ref());
     if gpu_metal != spec.gpu_metal {
         log::info!(
@@ -1146,6 +1193,7 @@ pub fn run(
             links: spec.links.clone(),
             nested_virt: spec.nested_virt,
             gpu_metal: spec.gpu_metal,
+            machine: spec.machine,
         };
         let spawned = spawn_worker(&this_spawn, &inherit)?;
         if let Some(pipes) = pipes {
@@ -1241,6 +1289,7 @@ mod tests {
             ipa_granule: None,
             nested_virt: None,
             gpu_metal,
+            machine: None,
         };
         assert!(gpu_metal_for_spawn(true, false, Some(&rec(Some(false)))));
         assert!(!gpu_metal_for_spawn(true, true, Some(&rec(None))));
@@ -1256,6 +1305,7 @@ mod tests {
             ipa_granule: None,
             nested_virt,
             gpu_metal: None,
+            machine: None,
         };
         assert!(nested_virt_for_spawn(true, false, None));
         assert!(!nested_virt_for_spawn(false, false, Some(&rec(Some(true)))));
@@ -1264,6 +1314,36 @@ mod tests {
         assert!(nested_virt_for_spawn(false, true, Some(&rec(Some(true)))));
         assert!(nested_virt_for_spawn(true, true, None));
         assert!(!nested_virt_for_spawn(false, true, None));
+    }
+
+    /// A cold boot takes the configured machine; a resume takes the one it was saved on, and a
+    /// record from before the machine was kept means a device tree.
+    #[test]
+    fn a_resume_keeps_the_machine_it_was_saved_on() {
+        use Machine::{Acpi, DeviceTree};
+        let rec = |machine| crate::vmlib::state::Suspended {
+            snapshot: "/vm/run/snapshot.bin".into(),
+            ipa_granule: None,
+            nested_virt: None,
+            gpu_metal: None,
+            machine,
+        };
+        assert_eq!(machine_for_spawn(Acpi, false, None), Acpi);
+        assert_eq!(
+            machine_for_spawn(Acpi, false, Some(&rec(Some(DeviceTree)))),
+            Acpi
+        );
+        assert_eq!(machine_for_spawn(Acpi, true, Some(&rec(None))), DeviceTree);
+        assert_eq!(
+            machine_for_spawn(Acpi, true, Some(&rec(Some(DeviceTree)))),
+            DeviceTree
+        );
+        assert_eq!(
+            machine_for_spawn(DeviceTree, true, Some(&rec(Some(Acpi)))),
+            Acpi
+        );
+        assert_eq!(machine_for_spawn(Acpi, true, None), Acpi);
+        assert_eq!(machine_for_spawn(DeviceTree, true, None), DeviceTree);
     }
 
     /// The stop ladder's rungs must stay in order: agent, then power button, then the stock
@@ -1331,6 +1411,7 @@ mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             }),
         )
         .unwrap();
@@ -1397,6 +1478,7 @@ mod tests {
             ipa_granule: Some(crate::vmlib::schema::IpaGranule::FourK),
             nested_virt: None,
             gpu_metal: None,
+            machine: None,
         };
         crate::vmlib::state::set_suspended(&state, Some(rec.clone())).unwrap();
         take_pending_resume(&snap, Some(&state)).expect("a pending resume");
@@ -1421,6 +1503,7 @@ mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             }),
         )
         .unwrap();
