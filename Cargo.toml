@@ -62,6 +62,8 @@ limina-proto       = { path = "crates/limina-proto" }
 limina-gpu-wire    = { path = "crates/limina-gpu-wire" }
 # The SPSC record ring in shared memory under limina-netd's data path (see the crate docs).
 limina-ring        = { path = "crates/limina-ring" }
+# The worker<->limina-netd channel, shared so neither depends on the other.
+limina-netd-wire   = { path = "crates/limina-netd-wire" }
 limina-gpu-host    = { path = "crates/limina-gpu-host" }
 limina-surfaceport = { path = "crates/limina-surfaceport" }
 # The renderer, which rutabaga already builds from this path; named here only so the worker can
