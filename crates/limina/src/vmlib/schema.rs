@@ -164,6 +164,12 @@ pub struct Hardware {
     /// next full boot. See `--machine`.
     #[serde(default)]
     pub machine: Machine,
+    /// On the ACPI machine, name the serial port as the OS's console (default false). The guest
+    /// then takes it as its only console: kernel and initramfs output, an early prompt included,
+    /// go to the serial line instead of the display, so this is for debugging. The device-tree
+    /// machine always names it. See `--serial-console`.
+    #[serde(default)]
+    pub serial_console: bool,
 }
 
 fn default_true() -> bool {
@@ -218,6 +224,7 @@ impl Default for Hardware {
             ipa_granule: IpaGranule::default(),
             nested_virt: false,
             machine: Machine::default(),
+            serial_console: false,
         }
     }
 }
@@ -1005,6 +1012,17 @@ mod tests {
         let back = toml::to_string(&h).unwrap();
         assert!(back.contains("machine = \"device-tree\""), "{back}");
         assert!(toml::from_str::<Hardware>("machine = \"pci\"").is_err());
+    }
+
+    /// The ACPI serial console is off unless a definition asks for it.
+    #[test]
+    fn serial_console_defaults_off_and_round_trips() {
+        let h: Hardware = toml::from_str("").unwrap();
+        assert!(!h.serial_console);
+        let h: Hardware = toml::from_str("serial_console = true").unwrap();
+        assert!(h.serial_console);
+        let back = toml::to_string(&h).unwrap();
+        assert!(back.contains("serial_console = true"), "{back}");
     }
 
     /// The Metal transport is off unless a definition turns it on, including every vm.toml

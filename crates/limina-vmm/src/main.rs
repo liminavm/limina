@@ -314,6 +314,13 @@ struct Cli {
     #[arg(long, conflicts_with = "kernel")]
     acpi: bool,
 
+    /// With `--acpi`, name the serial port in an SPCR table: the OS takes it as its preferred,
+    /// and only, console, so kernel and initramfs output reach the serial line but leave the
+    /// display. A debugging aid. Ignored on the device-tree machine, whose `stdout-path` always
+    /// names the serial port.
+    #[arg(long)]
+    acpi_spcr: bool,
+
     /// Inherited link (`limina_launch::connect`) for the stock-tier FIDO USB gadget (M14 Stage
     /// C). The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
     /// CTAPHID frames over a connection on this link to the supervisor's authenticator
@@ -908,6 +915,7 @@ fn main() -> Result<()> {
         tpm_state: cli.tpm_state.clone(),
         efi_vars: cli.efi_vars.clone(),
         acpi: cli.acpi,
+        acpi_spcr: cli.acpi_spcr,
         fido_socket: cli.fido_fd.map(ListenAt::Link),
         moc_socket: cli.moc_fd.map(ListenAt::Link),
         free_page_reporting: cli.balloon_free_page_reporting,

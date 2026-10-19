@@ -331,6 +331,13 @@ struct Cli {
     #[arg(long, value_enum)]
     machine: Option<vmlib::schema::Machine>,
 
+    /// On the ACPI machine, name the serial port as the OS's console — forwarded to the worker
+    /// (`--acpi-spcr`). The guest takes it as its only console, so kernel and initramfs output
+    /// go to the serial line instead of the display: a debugging aid. The device-tree machine
+    /// always names it. A managed VM takes it from `hardware.serial_console`.
+    #[arg(long)]
+    serial_console: bool,
+
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
     /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
@@ -1653,6 +1660,7 @@ fn cli_from_definition(
         tpm_state: cfg.hardware.tpm.then(|| bundle.tpm_state()),
         efi_vars: Some(bundle.efi_vars()),
         machine: Some(cfg.hardware.machine),
+        serial_console: cfg.hardware.serial_console,
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1977,6 +1985,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         if let Some(vars) = vars {
             args.push("--efi-vars".into());
             args.push(path_arg(&vars)?);
+        }
+        // The worker reads it only on the ACPI machine, which is decided per spawn.
+        if cli.serial_console {
+            args.push("--acpi-spcr".into());
         }
     }
     if let Some(rootfs) = &cli.rootfs {
