@@ -1,0 +1,53 @@
+From 8a500661abbe234a0b0d1016aee571cf07ef2bb1 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Mon, 19 Oct 2026 07:55:52 -0300
+Subject: [PATCH 1/4] zink: keep the renderpass atom dirty while the renderpass
+ starts
+
+zink_draw_atoms() clears each atom's bit before it runs the atom, so
+ZINK_ATOM_RENDERPASS is clean while zink_batch_rp() runs. Starting a
+renderpass can draw: an emulated multisampled-render-to-texture
+attachment is populated by a u_blitter replicate blit from
+begin_rendering(). That nested draw is outside any renderpass and sees
+the atom clean, so it does not start one of its own. Debug builds abort
+on the validate_atoms() assertion that pairs the two; release builds
+record the replicate draw outside a renderpass.
+
+Mark the atom dirty for the duration of zink_batch_rp(), and afterwards
+leave it dirty only if the renderpass layout changed again during the
+call. A dead swapchain keeps it dirty as before.
+
+Fixes: 769b356b5b6 ("zink: emit the draw synchronization and the renderpass as atoms")
+Assisted-by: Claude Code
+Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+---
+ src/gallium/drivers/zink/zink_draw.cpp | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/gallium/drivers/zink/zink_draw.cpp b/src/gallium/drivers/zink/zink_draw.cpp
+index 29be4a5d723..c2b733c4774 100644
+--- a/src/gallium/drivers/zink/zink_draw.cpp
++++ b/src/gallium/drivers/zink/zink_draw.cpp
+@@ -901,14 +901,18 @@ zink_draw_atoms(struct zink_context *ctx,
+             }
+             break;
+          case ZINK_ATOM_RENDERPASS:
++            /* starting the renderpass can draw (attachment shadows), and that draw has to start
++             * a renderpass of its own: keep the atom dirty until this one has started
++             */
++            zink_mark_atom_dirty(ctx, ZINK_ATOM_RENDERPASS);
+             zink_batch_rp(ctx);
+             /* check dead swapchain */
+             if (unlikely(!ctx->in_rp)) {
+-               zink_mark_atom_dirty(ctx, ZINK_ATOM_RENDERPASS);
+                if (VBS == ZINK_VBS_UNOWNED)
+                   zink_mark_atom_dirty(ctx, ZINK_ATOM_VERTEX_BUFFERS);
+                return;
+             }
++            zink_set_atom_dirty(ctx, ZINK_ATOM_RENDERPASS, ctx->rp_layout_changed);
+             if (BATCH_CHANGED) {
+                zink_update_descriptor_refs(ctx, false);
+                /* starting the renderpass can draw, and that draw has emitted its own state */
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,7 +1,7 @@
-From b7f8d17680db560689a095c172d0187d9b122328 Mon Sep 17 00:00:00 2001
+From 009bd698a72693d1a0db3b464596b075c0d69104 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Thu, 13 Aug 2026 16:19:33 -0300
-Subject: [PATCH 1/3] zink: don't recurse forever populating a shadow
+Subject: [PATCH 2/4] zink: don't recurse forever populating a shadow
  attachment
 
 zink_render_attachment_shadow() replicate-blits a texture into its

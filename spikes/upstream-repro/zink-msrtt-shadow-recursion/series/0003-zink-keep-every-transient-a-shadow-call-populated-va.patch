@@ -1,7 +1,7 @@
-From 7a6d5c6cf64369e6094febd4c4833142cb006ed4 Mon Sep 17 00:00:00 2001
+From e30d0f774f3e8ee335fadd38145859ad6e8a65b2 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Fri, 16 Oct 2026 16:58:58 -0300
-Subject: [PATCH 2/3] zink: keep every transient a shadow call populated valid
+Subject: [PATCH 3/4] zink: keep every transient a shadow call populated valid
 
 zink_render_attachment_shadow() replicate-blits each attachment in its
 mask into its transient and marks that transient valid. Each blit goes

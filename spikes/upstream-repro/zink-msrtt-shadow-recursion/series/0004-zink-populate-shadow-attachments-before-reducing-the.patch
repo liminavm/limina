@@ -1,7 +1,7 @@
-From e12c40e5f57c817c347faf39eb3dfed46cdc4d13 Mon Sep 17 00:00:00 2001
+From 723e69750c709336f6cbb5fbef2f46aa27db9b3c Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Fri, 16 Oct 2026 16:58:58 -0300
-Subject: [PATCH 3/3] zink: populate shadow attachments before reducing the fb
+Subject: [PATCH 4/4] zink: populate shadow attachments before reducing the fb
  to flush clears
 
 When it is not blitting, zink_flush_clears() reduces ctx->fb_state to the
