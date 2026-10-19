@@ -6,8 +6,8 @@
 //! These drive the real `limina` supervisor → `limina-vmm` worker → libkrun/HVF chain. Three tiers:
 //!
 //! - [`fedora_stock_image_boots_to_bootloader`] — disk **read-only** (never mutated), asserts
-//!   the guest reaches its **bootloader** (EDK2 firmware banner + GRUB's `Booting` line) on the
-//!   silent firmware's serial console: limina boots the firmware, the firmware reads the
+//!   the guest reaches its **bootloader** (the firmware's banner + GRUB's `Booting` line) on the
+//!   firmware's serial console: limina boots the firmware, the firmware reads the
 //!   virtio-blk disk, finds the ESP, and runs the distro bootloader. The images carry a zero GRUB
 //!   timeout, so the menu is never drawn; the entry GRUB announces as it boots is the marker.
 //! - [`fedora_stock_image_efi_boots_to_userspace`] — silent firmware, writable COW clone; asserts
@@ -48,7 +48,7 @@ fn fedora_stock_image_boots_to_bootloader() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     // Firmware comes up first — this alone proves limina created the VM and the guest is
-    // executing on HVF with our serial wired as the EDK2 console.
+    // executing on HVF with our serial wired as the firmware's console.
     guest
         .wait_for("UEFI firmware", Duration::from_secs(30))
         .expect("guest did not reach EFI firmware");

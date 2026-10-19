@@ -41,46 +41,19 @@ pub mod landmarks;
 pub mod metal;
 pub mod renderer;
 
-/// Last-resort fallback firmware: the krunkit-shipped blob (an EDK2 `.fd`), the same one the
-/// M1 boot spikes used. It is a **DEBUG_GCC5 build with live ASSERTs that end in
-/// `CpuDeadLoop`** — an ASSERT anywhere in it wedges the guest at 100% CPU with no output
-/// (the #14 "cold-boot wedge" was exactly that), which is why it is no longer the default.
-const KRUNKIT_FALLBACK_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
-
-/// Stable location of OUR firmware (built by `scripts/build-krun-efi.sh`, carries
-/// VirtioGpuDxe). Overridable with `LIMINA_FIRMWARE`. Unlike the silent firmware, firmware →
-/// GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
+/// Stable location of the firmware, Cardea (built by `scripts/build-firmware.sh`), which is what
+/// limina ships. Overridable with `LIMINA_FIRMWARE`.
 const DEFAULT_FIRMWARE: &str = "target/firmware/efi.fd";
 
-/// The firmware every EFI-boot test uses: `LIMINA_FIRMWARE` if set, else OUR OWN RELEASE
-/// build ([`DEFAULT_FIRMWARE`] — what limina actually ships; RELEASE degrades gracefully
-/// where the DEBUG krunkit blob dead-loops), else the krunkit blob with a loud warning (a
-/// fresh clone before the first `scripts/build-krun-efi.sh` run).
-fn default_firmware() -> PathBuf {
-    if let Ok(fw) = std::env::var("LIMINA_FIRMWARE") {
-        return PathBuf::from(fw);
-    }
-    let ours = repo_root().join(DEFAULT_FIRMWARE);
-    if ours.exists() {
-        return ours;
-    }
-    eprintln!(
-        "WARNING: {DEFAULT_FIRMWARE} not built — falling back to the krunkit DEBUG \
-         firmware at {KRUNKIT_FALLBACK_FIRMWARE} (ASSERTs dead-loop silently there; run \
-         scripts/build-krun-efi.sh for the real default)"
-    );
-    PathBuf::from(KRUNKIT_FALLBACK_FIRMWARE)
-}
-
-/// The firmware for tests that need ours, never the krunkit fallback: `LIMINA_FIRMWARE` if set,
-/// else [`DEFAULT_FIRMWARE`]. An error (the test should SKIP) when it is not there.
+/// The firmware every EFI-boot test uses: `LIMINA_FIRMWARE` if set, else [`DEFAULT_FIRMWARE`].
+/// An error (the test should SKIP) when it is not there.
 fn built_firmware() -> Result<PathBuf> {
     let firmware = std::env::var("LIMINA_FIRMWARE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| repo_root().join(DEFAULT_FIRMWARE));
     anyhow::ensure!(
         firmware.exists(),
-        "firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` (or set \
+        "firmware not found at {firmware:?}; build it with `scripts/build-firmware.sh` (or set \
          LIMINA_FIRMWARE)"
     );
     Ok(firmware)
@@ -801,11 +774,7 @@ impl GuestConfig {
     /// Overrides: `LIMINA_BIN`, `LIMINA_VMM_BIN`, `LIMINA_FIRMWARE`, `LIMINA_TEST_DISK`,
     /// `LIMINA_TEST_SHUTDOWN_GRACE` (seconds).
     pub fn fedora_from_env() -> Result<GuestConfig> {
-        let firmware = default_firmware();
-        anyhow::ensure!(
-            firmware.exists(),
-            "firmware not found at {firmware:?} (set LIMINA_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
 
         let disk = match std::env::var("LIMINA_TEST_DISK") {
             Ok(p) => PathBuf::from(p),
@@ -879,7 +848,7 @@ impl GuestConfig {
     ///
     /// Overrides: `LIMINA_FIRMWARE` (default [`DEFAULT_FIRMWARE`]), plus the usual
     /// `LIMINA_TEST_DISK`/`LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
-    /// GOP firmware is missing — build it with `scripts/build-krun-efi.sh`.
+    /// firmware is missing — build it with `scripts/build-firmware.sh`.
     pub fn fedora_gop_from_env() -> Result<GuestConfig> {
         let firmware = built_firmware()?;
         let mut cfg = GuestConfig::fedora_from_env()?;

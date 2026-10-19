@@ -30,7 +30,7 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
   another checkout's `target/test-guest/kernel/`). The suite needs `Image`; the L2 venus and
   multi-display tests also want the `Image-16k` / `Image-16k-71` siblings and silently SKIP
   without them. The suite likewise refuses a `target/firmware/efi.fd` that
-  `scripts/build-krun-efi.sh` did not record as built at the `[edk2]` pin. Note the fork's patch series is
+  `scripts/build-firmware.sh` did not record as built at the `[cardea]` pin. Note the fork's patch series is
   based on `v7.1.8`, so it cannot apply to the script's default `KVER=v6.12` — build those
   two with `PATCHES_OPTIONAL=1` (they are plain vehicles that do not need it) and the
   `Image-16k-71` one at `KVER=v7.1.8`, where it applies cleanly:
@@ -76,9 +76,9 @@ no patch series to apply — lets virglrs vendor its own dependencies (the C vir
 it generates tables from, and the venus-protocol), and creates `third_party/venv-mesa`.
 Idempotent; safe to re-run, and the way to repair a `third_party/` tree you deleted.
 
-> The native deps (the host **KK/zink Mesa**, the **GOP KRUN_EFI** firmware, the guest
-> **16 KiB kernel / Mesa / agent** RPMs) are heavier, container/`meson`-driven builds that
-> stay as their own scripts — `vendor` only materializes source trees. See
+> The native deps (the host **KK/zink Mesa**, the guest **16 KiB kernel / Mesa / agent** RPMs)
+> are heavier, container/`meson`-driven builds that stay as their own scripts, and the
+> firmware is `cargo xtask firmware` — `vendor` only materializes source trees. See
 > `docs/codebases.md` for which script builds what.
 
 ### Local overrides: pins before pushes
@@ -99,8 +99,9 @@ checkout = "~/src/virglrs"            # build this tree as it stands, whatever i
 (firmware, kernel) mount the repository read-only for it. `checkout` builds a tree as it
 stands; for a `third_party/` dependency `vendor` makes it a symlink, and refuses to replace a
 real tree. **"As it stands" differs by build:** the cargo path deps and the host Mesa compile
-the working tree, uncommitted edits included, but the firmware and kernel containers fetch the
-tree's HEAD *commit* — commit an edk2 or kernel change before building it, or it does not ship.
+the working tree, uncommitted edits included, and so does the firmware build (whose `efi.fd.rev`
+then says `(modified)`), but the kernel container fetches the tree's HEAD *commit* — commit a
+kernel change before building it, or it does not ship.
 A misspelt dependency or key is an error, not a silent no-op.
 
 `cargo xtask pins` shows each pin, the tree standing in for it, and whether its remote has
@@ -126,8 +127,7 @@ symlinks (the harness clones images before booting them); `target/test-guest`,
 Work happens in worktrees, so main's `target/` is usually absent: `new` then ends with a
 `MISSING <output> — <what needs it>: <how to make it>` line per gap. **Read those lines before
 you need the output** — the firmware is what `cargo xtask app` and the suite fail on. The quick
-fix is `cp -c` from a sibling worktree, after checking that its `efi.fd.rev` is the
-`[edk2]` pin. `target/` is the worktree's own — the first build is a full one, and `rm` reaps
+fix is `cargo xtask firmware`, a native build that takes seconds. `target/` is the worktree's own — the first build is a full one, and `rm` reaps
 it. The suite stays one-at-a-time per host whichever worktree starts it.
 
 ## 1.5. Host Mesa (once per machine)

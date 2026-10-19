@@ -29,10 +29,11 @@
 //!   `build`  — build `limina` + `limina-vmm` and codesign the worker (hypervisor entitlement).
 //!              The inner-loop "make a runnable worker" step.
 //!
+//!   `firmware` — Cardea, the UEFI firmware the EFI boot path, the app and the test suite use
+//!              (wraps `scripts/build-firmware.sh`; a native build).
+//!
 //! Linux-side builds — all of them in the ONE `limina-build` container image
 //! (`scripts/build-image.sh`, Fedora 44 by default, `FEDORA_REL` to move it):
-//!   `firmware` — the GOP `KRUN_EFI` the EFI boot path and the test suite default to
-//!              (wraps `scripts/build-krun-efi.sh`).
 //!   `enhanced` — the enhanced-tier guest RPMs + payload: 16 KiB kernel, venus mesa, agents
 //!              (wraps `scripts/build-enhanced-rpms.sh`, which runs the very same
 //!              `scripts/provision/f44/*` a booted guest runs).
@@ -126,7 +127,7 @@ enum Cmd {
         #[arg(long)]
         release: bool,
     },
-    /// Build the GOP KRUN_EFI firmware (the EFI boot path's, and the test suite's, default).
+    /// Build Cardea, the UEFI firmware (the EFI boot path's, the app's and the test suite's).
     Firmware,
     /// Write the third-party notices About → Licenses shows (`app` does this into the bundle).
     Notices {
@@ -259,7 +260,7 @@ fn main() -> Result<()> {
         },
         Cmd::Mesa { what } => mesa(what.as_deref()),
         Cmd::Build { release } => build(release),
-        Cmd::Firmware => bash_script(&repo_root(), "scripts/build-krun-efi.sh", &[] as &[&str]),
+        Cmd::Firmware => bash_script(&repo_root(), "scripts/build-firmware.sh", &[] as &[&str]),
         Cmd::Notices { out } => run(Command::new("python3")
             .current_dir(repo_root())
             .arg("scripts/gen-third-party-notices.py")
@@ -332,8 +333,7 @@ fn setup() -> Result<()> {
 ///
 /// Every dep is fork-model now (github.com/liminavm): clone our fork and check out the rev
 /// pinned in `third_party/manifest.toml` — the fork's `limina` branch IS the delta, no patch
-/// series. (edk2 is fork-model too but not vendored here: `scripts/build-krun-efi.sh` clones
-/// its pinned rev inside its own container build volume.)
+/// series.
 ///
 /// `third_party/manifest.local.toml` changes where a fork comes from (`src/manifest.rs`). And in
 /// a linked limina worktree, a fork that is absent becomes a worktree of the main checkout's
@@ -404,6 +404,10 @@ fn vendor(root: &Path, heavy: bool) -> Result<()> {
     // janus: the TPM 2.0 engine libkrun's TIS device runs, consumed as a path dependency of
     // krun-devices. Ours outright, like virglrs: its `main` branch is the whole thing.
     vendor_fork(root, &manifest, "janus", main.as_deref())?;
+
+    // cardea: the guest's UEFI firmware, ours outright. `scripts/build-firmware.sh` builds this
+    // tree into target/firmware/.
+    vendor_fork(root, &manifest, "cardea", main.as_deref())?;
 
     // mlx: MLX with its Metal backend on Linux guests (milestone 18). Only spikes/mlx-linux reads
     // it.

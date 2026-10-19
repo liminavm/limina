@@ -83,7 +83,6 @@ pub enum Code {
     UplinkNotBridgeable,
     FirmwareMissing,
     FirmwareUnresolvable,
-    FirmwareDebugFallback,
     SuspendedGranuleCoarser,
 }
 
@@ -541,24 +540,12 @@ fn check_firmware(bundle: &VmBundle, cfg: &VmConfig, out: &mut Vec<Finding>) {
         );
         return;
     }
-    match crate::resolve_windowed_firmware_for_preflight() {
-        None => out.push(Finding::blocker(
+    if crate::resolve_windowed_firmware_for_preflight().is_none() {
+        out.push(Finding::blocker(
             Code::FirmwareUnresolvable,
             "boot.firmware",
             "no EFI firmware could be found for a windowed boot",
-        )),
-        Some((path, false)) => out.push(
-            Finding::warning(
-                Code::FirmwareDebugFallback,
-                path.display().to_string(),
-                format!(
-                    "falling back to krunkit's DEBUG firmware at {}",
-                    path.display()
-                ),
-            )
-            .with_remedy("its live ASSERTs can wedge a cold boot; build the GOP firmware"),
-        ),
-        Some((_, true)) => {}
+        ));
     }
 }
 

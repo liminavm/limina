@@ -236,7 +236,7 @@ pub struct InputSpec {
 /// How the guest boots.
 #[derive(Debug, Clone)]
 pub enum BootSource {
-    /// EFI firmware blob (EDK2 `.fd`) loaded into guest RAM; the guest's own
+    /// EFI firmware image (Cardea's `efi.fd`) loaded into guest RAM; the guest's own
     /// bootloader/kernel then boots off a disk's ESP. The stock-baseline path.
     Firmware(PathBuf),
     /// Direct kernel boot — the fast L1 path and the custom-kernel tier.

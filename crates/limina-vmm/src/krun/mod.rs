@@ -175,7 +175,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     }
 
     match &spec.boot {
-        // EFI boot: load the EDK2 firmware blob; the guest boots its own kernel off the
+        // EFI boot: load the firmware image; the guest boots its own kernel off the
         // disk's ESP (Payload::Firmware). No bundled kernel, no root_disk_remount.
         BootSource::Firmware(path) => {
             vmr.set_firmware_config(FirmwareConfig { path: path.clone() });

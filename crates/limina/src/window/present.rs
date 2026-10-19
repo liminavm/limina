@@ -899,8 +899,8 @@ pub(super) fn deliver_line<S: Clone>(
         }
         Some("guestdriver") => {
             // The guest's OS driver took the device over from boot firmware. Until this
-            // arrives, slot 0 is the only scanout anything paints (EDK2's GOP driver
-            // programs head 0 and no other), so display arrangement waits for it.
+            // arrives, slot 0 is the only scanout anything paints (the firmware's GOP
+            // programs scanout 0 and no other), so display arrangement waits for it.
             log::info!("window: <- {line}");
             s.guest_driver_ready = true;
             wake = true;

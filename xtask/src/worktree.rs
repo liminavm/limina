@@ -36,8 +36,7 @@ const CLONED_OUTPUTS: &[(&str, &str)] = &[
     ),
     (
         "target/firmware",
-        "`cargo xtask app` and the suite need it: scripts/build-krun-efi.sh, or `cp -c` the \
-         directory from a worktree whose efi.fd.rev is the [edk2] pin",
+        "`cargo xtask app` and the suite need it: scripts/build-firmware.sh",
     ),
     (
         "target/hvf-trap-probe",

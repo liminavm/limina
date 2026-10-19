@@ -7,9 +7,8 @@
 //! virtual timer. A firmware that drives it gets no timer interrupts, so no UEFI timer event ever
 //! fires, and every console input driver (virtio keyboard, USB keyboard, serial terminal) polls
 //! from one: the firmware and GRUB ignore every key while GRUB's countdown, which reads the
-//! counter, still boots. The fix is the edk2 fork's `ArmGenericTimerVirtPhyCounterLib` (the
-//! physical timer at EL2); `spikes/nested-virt-probe/RESULTS.md`, *Timer interrupts at EL2*,
-//! has the measurements.
+//! counter, still boots. The firmware therefore drives the physical timer at EL2;
+//! `spikes/nested-virt-probe/RESULTS.md`, *Timer interrupts at EL2*, has the measurements.
 //!
 //! The vehicle is an installer ISO, whose GRUB shows its menu on the serial console: once the
 //! menu is up, `c` over serial must open GRUB's command line (`grub>`). Serial stands in for

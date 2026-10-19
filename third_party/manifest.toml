@@ -6,8 +6,6 @@
 # (tag-before-rebase: every rev ever pinned here must stay reachable).
 # Patch-audit status lives in docs/upstreaming/ledger/.
 #
-# Every dep is on the fork model now (edk2 was the last holdout, migrated 2026-08-06).
-#
 # `heavy = true` means `cargo xtask vendor` SKIPS the clone by default — the tree is huge and
 # this host never builds it (the kernel builds in a Linux container / build guest, which
 # fetches the pinned rev itself). Materialize one on demand with `cargo xtask vendor --heavy`.
@@ -33,19 +31,12 @@ branch = "limina"
 rev = "e2f5be432539bca70d6a38da166ef93039a6fa21"
 base = "dc1a18ada58cb5d15db5333a12bf2f0cbf64ac15"
 
-# The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
-# delta as commits (TerminalPcdProducerLib build fix, the VirtioSerialDxe TPL fix, PL031
-# DT status=okay, the vendored VirtioKeyboardDxe, and the GOP/ConIn enablement) on slp's
-# krun-support base — build-krun-efi.sh no longer patches anything at build time. NOT
-# vendored by `cargo xtask vendor`: the build clones the pinned rev inside its own
-# container volume (scripts/build-krun-efi.sh reads `rev` from this entry). A local
-# third_party/edk2 checkout is optional (fork surgery only).
-[edk2]
-repo = "https://github.com/liminavm/edk2.git"
-upstream = "https://github.com/slp/edk2.git"
-branch = "limina"
-rev = "fb88968998e04e2687e8ede5cc55ec27b14ee5ce"
-base = "13e8adac8a83141b51375c799996946082e1eb43"
+# Cardea: the guest's UEFI firmware, ours outright (Rust, MIT), docs/design/firmware-and-acpi.md.
+# Vendored like any tree; scripts/build-firmware.sh builds it natively into target/firmware/.
+[cardea]
+repo = "https://github.com/liminavm/cardea.git"
+branch = "main"
+rev = "33fdab5bc151c1316ba02b95e97765f7f8476444"
 
 [imago]
 repo = "https://github.com/liminavm/imago.git"

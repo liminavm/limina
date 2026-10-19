@@ -113,7 +113,7 @@ is for looking, not for gating.
 |---|---|
 | `LIMINA_HVF_TESTS` | unset → boot tests skip; set `1` to run them |
 | `LIMINA_BIN` / `LIMINA_VMM_BIN` | the binaries next to the test in `target/<profile>/` |
-| `LIMINA_FIRMWARE` | `/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd` (L2) |
+| `LIMINA_FIRMWARE` | `target/firmware/efi.fd`, built by `scripts/build-firmware.sh` (L2) |
 | `LIMINA_TEST_DISK` | `Fedora-Workstation-43.raw` at the repo root (L2) |
 | `LIMINA_TEST_KERNEL` / `LIMINA_TEST_ROOTFS` | `target/test-guest/{Image,rootfs}` (L1) |
 | `LIMINA_TEST_KERNEL_16K` | `target/test-guest/kernel/Image-16k` (the `enhanced_fedora_from_env` L2 boots: the 16k test kernel on the stock image; every other L2 EFI-boots an image's own kernel) |

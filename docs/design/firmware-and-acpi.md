@@ -1,13 +1,12 @@
 # Our own firmware, and ACPI for the guest
 
-Status: accepted direction. Phase 0 (ACPI on the edk2 fork) works behind `--acpi`; the Rust
-firmware is not started.
+Status: the firmware is Cardea (`github.com/liminavm/cardea`, vendored at `third_party/cardea`),
+and edk2 is retired. The ACPI machine works on it behind `--acpi`.
 
 ## Decision
 
 1. **Replace edk2 with a firmware we write in Rust**, including the UEFI implementation stock
-   bootloaders need. edk2 (`liminavm/edk2`, `ArmVirtKrun`) stays until the Rust firmware passes
-   the stock floor.
+   bootloaders need: Cardea, its own repository under `liminavm`, MIT-licensed.
 2. **Describe the machine to the guest with ACPI instead of a device tree.** The VMM generates the
    tables from the same `VmResources` it builds the device tree from; the firmware only installs
    them.
@@ -173,17 +172,18 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
    default, draws the firmware's BGRT image; `spikes/acpi-guest/plymouth-limina.png`). Open: CPPC
    and efficiency classes (see the table), `rtc-efi` wakeup time. Then ACPI becomes the default
    and the device-tree machine remains only for `--kernel`/L1.
-2. **Rust firmware, device-tree machine**: parity with `KRUN_EFI.gop.fd` on the floor tests
-   (`boot::fedora_stock_image_efi_boots_to_userspace`, `..._renders_to_gop`), Debian LUKS, the TPM
-   tests.
-3. **Rust firmware, ACPI machine; edk2 retired.** Variable-store migration ships here.
+2. **Rust firmware, device-tree machine — done.** Cardea passes the whole suite on the device-tree
+   machine, Fedora and Debian LUKS and the TPM tests included.
+3. **Rust firmware, ACPI machine; edk2 retired — done.** A stock F44 guest boots Cardea on ACPI
+   with every device of phase 1 bound and powers off through the ACPI power button. No
+   variable-store migration: Cardea's store is bit-compatible with edk2's emulated-NV layout
+   (`third_party/cardea/crates/varstore`), so existing VMs keep their variables.
 4. **Owned-firmware features**: host boot policy, multi-head EDID-aware GOP, the boot-time budget,
    kernel loading for `--kernel`/L1 (ACPI everywhere), Secure Boot.
 
 ## Open questions
 
-- Where the firmware lives: an in-tree `firmware/` workspace built by `cargo xtask` (proposed), or
-  its own repository under `liminavm`.
-- Its license, which needs the same counsel review as the rest of the tree before a release tag.
+- Cardea's license (MIT) and the licenses of the crates it links (`fdt` is MPL-2.0), which need
+  the same counsel review as the rest of the tree before a release tag.
 - CPPC's frequency invariance: counters the guest reads every tick cost a trap each on MMIO. A
   firmware-mediated (FFH) or counter-free design has to be measured before choosing.

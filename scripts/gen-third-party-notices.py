@@ -11,6 +11,7 @@ Two sources, one file:
   - assets/third-party/components.toml, hand-maintained: the bundled libraries, the
     firmware and the Rust standard library, each with the licence file it ships under.
   - `cargo metadata`: every crate `limina`, `limina-vmm`, `limina-gpu-host` or `limina-netd` links for aarch64-apple-darwin,
+    and every crate the firmware (Cardea, third_party/cardea) links for aarch64-unknown-none,
     following normal dependencies only (build and dev dependencies are not shipped, and
     neither is a proc-macro crate). Workspace members are ours and left out; the forks under
     third_party/ (libkrun, rutabaga, virglrs, imago) are third-party and stay in.
@@ -41,8 +42,11 @@ import tomllib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPONENTS = os.path.join(REPO, "assets/third-party/components.toml")
-ROOTS = ("limina", "limina-vmm", "limina-gpu-host", "limina-netd")
-TARGET = "aarch64-apple-darwin"
+# The workspaces whose builds the bundle ships: directory, root packages, target.
+WORKSPACES = (
+    (REPO, ("limina", "limina-vmm", "limina-gpu-host", "limina-netd"), "aarch64-apple-darwin"),
+    (os.path.join(REPO, "third_party/cardea"), ("cardea",), "aarch64-unknown-none"),
+)
 # Bundle files that are ours, so no component claims them.
 FIRST_PARTY = {"limina", "limina-vmm", "limina-gpu-host", "limina-netd", "liblimina_sep.dylib"}
 LICENCE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
@@ -117,10 +121,18 @@ def load_components():
 
 
 def shipped_crates():
+    crates = {}
+    for directory, roots, target in WORKSPACES:
+        for p in workspace_crates(directory, roots, target):
+            crates[(p["name"], p["version"])] = p
+    return [crates[k] for k in sorted(crates)]
+
+
+def workspace_crates(directory, roots, target):
     meta = json.loads(
         subprocess.run(
-            ["cargo", "metadata", "--format-version", "1", "--filter-platform", TARGET, "--locked"],
-            cwd=REPO,
+            ["cargo", "metadata", "--format-version", "1", "--filter-platform", target, "--locked"],
+            cwd=directory,
             check=True,
             capture_output=True,
             text=True,
@@ -129,9 +141,9 @@ def shipped_crates():
     packages = {p["id"]: p for p in meta["packages"]}
     nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
     members = set(meta["workspace_members"])
-    stack = [i for i in members if packages[i]["name"] in ROOTS]
-    if len(stack) != len(ROOTS):
-        sys.exit(f"gen-third-party-notices: expected workspace members {ROOTS}")
+    stack = [i for i in members if packages[i]["name"] in roots]
+    if len(stack) != len(roots):
+        sys.exit(f"gen-third-party-notices: expected workspace members {roots} in {directory}")
     seen = set()
     while stack:
         i = stack.pop()
@@ -145,8 +157,7 @@ def shipped_crates():
     def proc_macro(p):
         return all("proc-macro" in t["kind"] for t in p["targets"])
 
-    crates = [packages[i] for i in seen if i not in members and not proc_macro(packages[i])]
-    return sorted(crates, key=lambda p: (p["name"], p["version"]))
+    return [packages[i] for i in seen if i not in members and not proc_macro(packages[i])]
 
 
 def licence_files(directory):

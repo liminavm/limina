@@ -514,7 +514,7 @@ fn managed_vm_suspends_and_resumes() {
     // guest — no limina-agent, NTP stopped above — must resume with a correct CLOCK_REALTIME
     // purely via the kernel's s2idle thaw re-reading the RTC and injecting the slept duration.
     // The RTC is honest because libkrun 0088 anchors the PL031 to host CLOCK_REALTIME (served
-    // to this guest through EDK2's rtc-efi runtime service); the restore rebuilds it at the
+    // to this guest through the firmware's rtc-efi runtime service); the restore rebuilds it at the
     // current host time. A regression here strands resumed guests behind by the suspend gap.
     let guest_now: f64 = ssh_exec(PORT, "date +%s.%N")
         .expect("reading the guest wallclock over SSH")

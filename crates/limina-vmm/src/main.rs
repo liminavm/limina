@@ -48,7 +48,7 @@ use crate::config::{
 #[derive(Parser, Debug)]
 #[command(name = "limina-vmm", about, version)]
 struct Cli {
-    /// EFI firmware blob (EDK2 .fd) to load into guest RAM. The stock-baseline boot
+    /// EFI firmware image (Cardea's efi.fd) to load into guest RAM. The stock-baseline boot
     /// path; mutually exclusive with --kernel.
     #[arg(long, conflicts_with = "kernel", required_unless_present = "kernel")]
     firmware: Option<PathBuf>,

@@ -58,15 +58,15 @@ right tool — not treat upstream as immutable:
     visible; images, trace fixtures, venv and the Mesa image are shared; `target/` is per
     worktree. **Act on its closing `MISSING` lines at once** (main usually has no `target/` to
     clone the firmware and test guest from) — not when `cargo xtask app` or the suite trips on them.
-- **edk2 (the KRUN_EFI boot firmware)** — **fork model**:
-  `github.com/liminavm/edk2` (`limina` branch; base is `slp/edk2@krun-support`, the tree
-  krunkit's blob is built from), pinned by `[edk2]` in `third_party/manifest.toml` but **not
-  vendored** — `scripts/build-krun-efi.sh` clones the pinned rev inside its container build
-  volume and builds with zero build-time patching (`patches/edk2/` is a tombstone). Output:
-  `target/firmware/efi.fd` (RELEASE + GOP + typeable ConIn), which is also the **test
-  suite's default firmware** — krunkit's `KRUN_EFI.silent.fd` is a DEBUG build whose live
-  ASSERTs end in `CpuDeadLoop` and remains only a loud last-resort
-  fallback (`LIMINA_FIRMWARE` overrides).
+- **Cardea (the guest's UEFI firmware)** — ours outright: a Rust UEFI implementation
+  (`github.com/liminavm/cardea`, MIT), pinned by `[cardea]` in `third_party/manifest.toml` and
+  vendored at `third_party/cardea`. `scripts/build-firmware.sh` (`cargo xtask firmware`) builds it
+  natively into `target/firmware/efi.fd` with limina's logo (`assets/firmware/logo.bmp`);
+  `DEBUG=1` writes `efi.debug.fd`, which logs on the serial line. That one image is what EFI boots,
+  the app and the suite use (`LIMINA_FIRMWARE` overrides; there is no fallback firmware), and its
+  `efi.fd.rev` must match the pin or `test-boot.sh` and `build-app.sh` refuse it. Cardea carries its
+  own working rules in its `CLAUDE.md` (the hostile loader, the sabotage sweep, fallible
+  allocation). The plan behind it: `docs/design/firmware-and-acpi.md`.
 - **imago** (libkrun's virtio-blk storage backend, a crates.io dep) — **fork model** (the pilot):
   `third_party/imago` is a clone of `github.com/liminavm/imago` (`limina` branch, default; upstream
   is gitlab.com/hreitz/imago), pinned by `third_party/manifest.toml` and overridden via
@@ -397,7 +397,7 @@ directly observed.
   **`cargo xtask run --disk <enhanced.raw>`** is the one-command form — it builds+signs the worker,
   mounts `/Volumes/mesa-cs`, then hands off to `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`
   (`LIMINA_DISK=<enhanced.raw> …` directly is the same thing). It boots the guest's
-  **own installed kernel** through our GOP firmware → GRUB → BLS entry, **enforcing** (never stamps
+  **own installed kernel** through our firmware → GRUB → BLS entry, **enforcing** (never stamps
   `/.autorelabel`), coexist venus (3D + software-2D) on KosmicKrisp, `--window --net`. This tests the
   image exactly as it really runs. venus and EFI boot have worked for a long time — **reach for this
   first.** `--no-net`/`--cpus`/`--ram-mib` and trailing `-- <extra limina flags>` map to the script's

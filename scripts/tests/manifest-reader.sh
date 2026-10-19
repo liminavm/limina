@@ -98,8 +98,8 @@ check "absent local file: no override"      "" "$(pin_override libkrun source)"
 LIMINA_MANIFEST="$REPO/third_party/manifest.toml"
 check "real manifest: mesa-guest tree"      /Volumes/mesa-cs/mesa-guest "$(pin mesa-guest tree)"
 check "real manifest: linux is heavy"       true "$(pin linux heavy)"
-[ -n "$(pin edk2 rev)" ] && check "real manifest: edk2 rev present" 1 1 \
-    || check "real manifest: edk2 rev present" nonempty ""
+[ -n "$(pin cardea rev)" ] && check "real manifest: cardea rev present" 1 1 \
+    || check "real manifest: cardea rev present" nonempty ""
 
 echo
 echo "manifest reader tests: $pass passed, $fail failed"

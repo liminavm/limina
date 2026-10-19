@@ -25,9 +25,9 @@
 //!
 //! ## Firmware paints slot 0, and only slot 0
 //!
-//! EDK2's virtio-gpu GOP driver hardcodes head 0 (`OvmfPkg/VirtioGpuDxe/Gop.c`) — it takes its
-//! *resolution* from the first enabled scanout but always renders into head 0. So while firmware
-//! and GRUB are drawing, slot 0 must be the connected one no matter which panel the window is on.
+//! The firmware's virtio-gpu GOP draws on scanout 0 only (Cardea's `firmware/src/virtio/gpu.rs`).
+//! So while firmware and GRUB are drawing, slot 0 must be the connected one no matter which panel
+//! the window is on.
 //! Only once the guest's OS driver takes over (its first `GET_EDID`, which firmware never sends —
 //! see `guest_driver_ready` on the display backend) does the pool become ours to arrange.
 //!

@@ -407,9 +407,9 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
 
     /// The guest's OS driver has taken the device over from boot firmware.
     ///
-    /// It matters because the two drivers do not agree about scanouts. EDK2's virtio-gpu GOP
-    /// driver programs head 0 and nothing else (`OvmfPkg/VirtioGpuDxe/Gop.c`), so slot 0 must be
-    /// the connected one for as long as firmware is drawing — GRUB included. Linux enumerates
+    /// It matters because the two drivers do not agree about scanouts. The firmware's virtio-gpu
+    /// GOP programs scanout 0 and nothing else (Cardea's `firmware/src/virtio/gpu.rs`), so slot 0
+    /// must be the connected one for as long as firmware is drawing — GRUB included. Linux enumerates
     /// every scanout and follows connector hotplug, so from here the supervisor is free to give
     /// each host panel its own slot. Anything that arranges displays has to wait for this line.
     fn guest_driver_ready(&mut self) -> Result<(), DisplayBackendError> {
@@ -448,8 +448,8 @@ impl DisplayBackendBasicFramebuffer for WindowBackend {
             .take()
             .ok_or(DisplayBackendError::InvalidScanoutId)?;
 
-        // Only swizzle the damaged region into the BGRA canvas. EDK2's GOP flushes one glyph
-        // cell (~8×19 px) per present; swizzling the whole 1280×800 frame each time made the
+        // Only swizzle the damaged region into the BGRA canvas. The firmware's GOP flushes small
+        // damaged rectangles, often one glyph cell, per present; swizzling the whole 1280×800 frame each time made the
         // firmware/GRUB console crawl (thousands of full-frame transforms). `staging` always
         // holds the full current frame, so swizzling just the rect keeps the canvas correct
         // while touching ~150 px instead of ~1M. The first present after (re)configure must

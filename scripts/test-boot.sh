@@ -23,7 +23,7 @@ PROFILE="${1:-debug}"
 . scripts/lib/manifest.sh
 # shellcheck source=scripts/lib/test-artifacts.sh
 . scripts/lib/test-artifacts.sh
-test_artifacts_check "$(pwd)" "$(pin_build_rev edk2)" || exit 1
+test_artifacts_check "$(pwd)" "$(pin_build_rev cardea)" || exit 1
 
 # This script runs `cargo build`/`cargo test` itself rather than going through
 # `cargo xtask build`, so it needs the same two things that command arranges, or the compile

@@ -35,7 +35,7 @@ cargo build -p limina -p limina-vmm
 crates/limina-vmm/sign.sh debug          # the worker must be signed; the supervisor need not be
 
 ./target/debug/limina \
-  --firmware /opt/homebrew/Cellar/krunkit/<ver>/share/krunkit/KRUN_EFI.silent.fd \
+  --firmware target/firmware/efi.fd \
   --disk /path/to/Fedora-Workstation-43.raw \
   --console /tmp/console.log           # tail -f to watch the boot
 # Ctrl-C (or `kill -TERM <limina pid>`) → graceful request, then forced after the grace period.

@@ -6,7 +6,7 @@
 #
 # Bundles the entire host venus/GL dylib closure into Contents/Frameworks, relocated
 # to @rpath so it resolves relative to the app (no /Volumes/mesa-cs, no third_party
-# prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the GOP
+# prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the
 # firmware, writes Info.plist, codesigns inside-out (hardened runtime + secure timestamp) with an
 # Apple Development identity from
 # the keychain (keeps TCC grants stable across redeploys; ad-hoc only by explicit
@@ -54,7 +54,7 @@ DLOPEN_ROOTS=(
   "$ZINK/libEGL.dylib"
   "$ZINK/libGLESv2.dylib"
 )
-GOP_FD="$ROOT/target/firmware/efi.fd"
+FIRMWARE="$ROOT/target/firmware/efi.fd"
 
 # KK/zink live on a case-sensitive sparse image whose mount macOS drops on reboot.
 . "$ROOT/scripts/ensure-mesa-cs.sh"
@@ -70,9 +70,21 @@ if [ "${#ZINK_GALLIUM[@]}" -ne 1 ] || [ ! -e "${ZINK_GALLIUM[0]}" ]; then
 fi
 DLOPEN_ROOTS+=("${ZINK_GALLIUM[0]}")
 
-for f in "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD"; do
-  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, or build the GOP firmware)" >&2; exit 1; }
+for f in "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$FIRMWARE"; do
+  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, or the firmware with scripts/build-firmware.sh)" >&2; exit 1; }
 done
+
+# The firmware is built only when asked for, so target/ can hold one from another Cardea
+# revision, or an edk2 build from before Cardea. Its recorded revision must be the pin's; a
+# build of the pin with local changes says "(modified)" and ships, like a dirty tree does.
+# shellcheck source=scripts/lib/manifest.sh
+. "$ROOT/scripts/lib/manifest.sh"
+FIRMWARE_REV="$(cat "$FIRMWARE.rev" 2>/dev/null || true)"
+if [ "${FIRMWARE_REV%% *}" != "$(pin_build_rev cardea)" ]; then
+  echo "target/firmware/efi.fd was built from ${FIRMWARE_REV:-an unrecorded rev}, not the Cardea pin" \
+       "$(pin_build_rev cardea): rebuild it with scripts/build-firmware.sh" >&2
+  exit 1
+fi
 
 # ---- KK provenance tripwire (2026-07-29): a bundle silently shipped whatever ------
 #      dylib sat in build-kk — once with a day of uncommitted instrumentation,
@@ -305,8 +317,8 @@ cat > "$RES/vulkan/kosmickrisp_icd.json" <<'JSON'
 }
 JSON
 
-# ---- GOP firmware (existing bundle-resolution pattern) ---------------------------
-cp "$GOP_FD" "$RES/efi.fd"
+# ---- firmware (Cardea) -----------------------------------------------------------
+cp "$FIRMWARE" "$RES/efi.fd"
 
 # ---- app icon (source + prep tool in assets/icon/) --------------------------------
 cp "$ROOT/assets/icon/Limina.icns" "$RES/Limina.icns"

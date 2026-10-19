@@ -13,16 +13,14 @@
 //! what a tree *should* be on, and the two have disagreed repeatedly in practice — the reason
 //! `scripts/park-bundle.sh` reads `git rev-parse HEAD` in every tree and never the manifest.
 //! About does the same: `build.rs` asks each tree that this build actually consumes, and only
-//! a dependency with no tree to ask falls back to the pin: edk2, whose firmware
-//! `scripts/build-krun-efi.sh` builds by cloning that very rev inside a container, so there
-//! the pin is what shipped.
+//! a tree that is not there to ask (an unmounted volume) falls back to the pin.
 //!
 //! A row is a name and a revision and nothing more. Which branch a checkout sat on, and
 //! whether a revision was observed or pinned, are vocabulary of how limina is built; the
 //! person reading this dialog is filing a bug, and the hash is what answers them.
 //!
 //! The list is scoped to what this binary and its bundle carry: libkrun, virglrs and imago are
-//! compiled in, KosmicKrisp ships as dylibs and edk2 as the firmware. The guest's own kernel
+//! compiled in, KosmicKrisp ships as dylibs and Cardea as the firmware. The guest's own kernel
 //! and mesa are whatever was last delivered into a guest image — nothing to do with this build
 //! — so they are not here; `docs/images.md` is where the guest side is recorded.
 //!
@@ -277,7 +275,7 @@ mod tests {
         let names: Vec<&str> = info.deps.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(
             names,
-            ["libkrun", "virglrs", "imago", "kosmickrisp", "edk2"],
+            ["libkrun", "virglrs", "imago", "kosmickrisp", "cardea"],
             "the host stack, in build.rs's order"
         );
         for dep in &info.deps {

@@ -61,10 +61,10 @@ struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
 
-    /// EFI firmware blob (EDK2 .fd) to load into guest RAM. The stock-baseline boot
-    /// path; mutually exclusive with --kernel. Optional under --window: windowed boots
-    /// default to the GOP firmware so EFI/GRUB/early-kernel render in the window (see
-    /// `resolve_windowed_firmware`). A headless boot still needs --firmware or --kernel.
+    /// EFI firmware image to load into guest RAM. The stock-baseline boot path; mutually
+    /// exclusive with --kernel. Optional under --window: windowed boots default to the bundled
+    /// or built firmware, Cardea's `efi.fd` (see `resolve_windowed_firmware`). A headless boot
+    /// still needs --firmware or --kernel.
     #[arg(long, conflicts_with = "kernel")]
     firmware: Option<PathBuf>,
 
@@ -1937,24 +1937,12 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                     .and_then(|p| p.parent().map(Path::to_path_buf))
                     .unwrap_or_else(|| PathBuf::from("."));
                 let env_override = std::env::var_os("LIMINA_FIRMWARE").map(PathBuf::from);
-                let (path, is_gop) =
-                    resolve_windowed_firmware(&exe_dir, env_override, |p| p.exists()).context(
+                let path = resolve_windowed_firmware(&exe_dir, env_override, |p| p.exists())
+                    .context(
                         "no --firmware given and no default firmware found; pass --firmware or \
-                         build the GOP firmware with `scripts/build-krun-efi.sh`",
+                         build the firmware with `scripts/build-firmware.sh`",
                     )?;
-                if is_gop {
-                    log::info!(
-                        "windowed boot: using GOP firmware {} (EFI/GRUB render in the window)",
-                        path.display()
-                    );
-                } else {
-                    log::warn!(
-                        "windowed boot: GOP firmware not found; using silent firmware {} \
-                         (serial-only boot console — build the GOP firmware with \
-                         `scripts/build-krun-efi.sh` for a graphical boot console)",
-                        path.display()
-                    );
-                }
+                log::info!("windowed boot: using firmware {}", path.display());
                 path
             }
         };
@@ -2624,17 +2612,12 @@ fn resolve_vmm_bin(flag: Option<PathBuf>) -> Result<PathBuf> {
     Ok(sibling)
 }
 
-/// krunkit's serial-only EDK2 blob — the degraded fallback when no GOP firmware is found.
-/// A guest booted on it still works; only the pre-DRM boot console (firmware/GRUB/early
-/// kernel) is invisible in the window (it goes to serial instead).
-const SILENT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
-
-/// Candidate GOP-firmware locations for a windowed boot, in priority order:
+/// Candidate firmware locations for a windowed boot, in priority order:
 ///   1. `env_override` (`$LIMINA_FIRMWARE`) — explicit operator choice;
 ///   2. the app bundle's Resources (`limina.app/Contents/MacOS/limina` → `../Resources/…`)
 ///      — the productized location once we bundle the firmware;
 ///   3. the in-repo dev build artifact (`target/<profile>/limina` → `../firmware/…`),
-///      produced by `scripts/build-krun-efi.sh`.
+///      produced by `scripts/build-firmware.sh`.
 ///
 /// Pure (no I/O) so the ordering is unit-testable; existence is checked by the caller.
 fn windowed_firmware_candidates(exe_dir: &Path, env_override: Option<PathBuf>) -> Vec<PathBuf> {
@@ -2647,28 +2630,23 @@ fn windowed_firmware_candidates(exe_dir: &Path, env_override: Option<PathBuf>) -
     v
 }
 
-/// Resolve the firmware for a windowed boot when the user gave no explicit `--firmware`.
-/// Prefers the GOP (graphical) firmware so the full boot renders in the window; degrades
-/// to the silent firmware if none is found. Returns `(path, is_gop)`, or `None` if not
-/// even the silent firmware exists. `exists` is injected so the selection is unit-testable.
+/// Resolve the firmware for a windowed boot when the user gave no explicit `--firmware`: the
+/// first candidate that exists, or `None`. `exists` is injected so the selection is
+/// unit-testable.
 fn resolve_windowed_firmware(
     exe_dir: &Path,
     env_override: Option<PathBuf>,
     exists: impl Fn(&Path) -> bool,
-) -> Option<(PathBuf, bool)> {
-    for p in windowed_firmware_candidates(exe_dir, env_override) {
-        if exists(&p) {
-            return Some((p, true));
-        }
-    }
-    let silent = PathBuf::from(SILENT_FIRMWARE);
-    exists(&silent).then_some((silent, false))
+) -> Option<PathBuf> {
+    windowed_firmware_candidates(exe_dir, env_override)
+        .into_iter()
+        .find(|p| exists(p))
 }
 
 /// The windowed-boot firmware limina would actually pick right now, for pre-flight. Same
 /// resolution the start path uses (`resolve_windowed_firmware`), with the real environment
 /// and executable location filled in.
-pub(crate) fn resolve_windowed_firmware_for_preflight() -> Option<(PathBuf, bool)> {
+pub(crate) fn resolve_windowed_firmware_for_preflight() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?.to_path_buf();
     let env_override = std::env::var_os("LIMINA_FIRMWARE").map(PathBuf::from);
@@ -3403,10 +3381,8 @@ mod tests {
         let exe = Path::new("/repo/target/debug");
         let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [dev.clone()].into_iter().collect();
-        let (p, is_gop) =
-            resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
+        let p = resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
         assert_eq!(p, dev);
-        assert!(is_gop, "the GOP artifact must be reported as GOP");
     }
 
     #[test]
@@ -3415,8 +3391,7 @@ mod tests {
         let bundle = exe.join("../Resources/efi.fd");
         let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [bundle.clone(), dev].into_iter().collect();
-        let (p, _) =
-            resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
+        let p = resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
         assert_eq!(p, bundle);
     }
 
@@ -3426,22 +3401,9 @@ mod tests {
         let custom = PathBuf::from("/custom/fw.fd");
         let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [custom.clone(), dev].into_iter().collect();
-        let (p, is_gop) =
-            resolve_windowed_firmware(exe, Some(custom.clone()), |q| present.contains(q))
-                .expect("resolves");
+        let p = resolve_windowed_firmware(exe, Some(custom.clone()), |q| present.contains(q))
+            .expect("resolves");
         assert_eq!(p, custom);
-        assert!(is_gop);
-    }
-
-    #[test]
-    fn falls_back_to_silent_when_no_gop_present() {
-        let exe = Path::new("/repo/target/debug");
-        let silent = PathBuf::from(SILENT_FIRMWARE);
-        let present: HashSet<PathBuf> = [silent.clone()].into_iter().collect();
-        let (p, is_gop) =
-            resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
-        assert_eq!(p, silent);
-        assert!(!is_gop, "the silent firmware must be reported as non-GOP");
     }
 
     #[test]
