@@ -30,7 +30,7 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "9c0f1d29cd9a7deeda2e595ea7c85539ad43bc2d"
+rev = "7875903497ebb85362bf977265e865e352d84cd4"
 base = "dc1a18ada58cb5d15db5333a12bf2f0cbf64ac15"
 
 # The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole

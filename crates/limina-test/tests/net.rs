@@ -348,3 +348,83 @@ fn the_guest_pings_the_gateway_and_beyond_on_netd() {
         .expect("supervisor did not stop");
     assert!(!outcome.forced, "teardown had to be forced");
 }
+
+/// The SHA-256 of a file, as hex.
+fn sha256_file(path: &std::path::Path) -> String {
+    let out = std::process::Command::new("/usr/bin/shasum")
+        .args(["-a", "256"])
+        .arg(path)
+        .output()
+        .expect("running shasum");
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Bulk both ways through the SSH forward on netd: what the guest sends goes out as segments
+/// far larger than the MSS (TSO), which netd takes whole.
+#[test]
+fn bulk_crosses_the_forward_intact_both_ways_on_netd() {
+    if !limina_test::require_hvf_or_skip("bulk_crosses_the_forward_intact_both_ways_on_netd") {
+        return;
+    }
+    let cfg = Nic::Netd.config().with_ssh_target_check();
+    let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
+    Nic::Netd
+        .wait_for_lease(&mut guest, Duration::from_secs(150))
+        .expect("guest never obtained its DHCP lease");
+    guest
+        .wait_for_ssh(Duration::from_secs(60))
+        .expect("guest SSH not reachable through the forward");
+
+    // Host → guest.
+    let dir = guest.scratch_dir().join("bulk");
+    std::fs::create_dir_all(&dir).unwrap();
+    let up = dir.join("up");
+    let mut blob = vec![0u8; 32 << 20];
+    // SAFETY: arc4random_buf fills exactly the buffer it is given.
+    unsafe { libc::arc4random_buf(blob.as_mut_ptr().cast(), blob.len()) };
+    std::fs::write(&up, &blob).unwrap();
+    if let Err(e) = guest.scp_to_guest(&up, "/tmp/up") {
+        panic!(
+            "copying 32 MiB to the guest: {e:#}\nsupervisor log:\n{}",
+            guest.supervisor_log()
+        );
+    }
+    let arrived = guest
+        .ssh_exec("sha256sum /tmp/up | cut -d' ' -f1")
+        .expect("hashing the upload");
+    assert_eq!(
+        arrived.trim(),
+        sha256_file(&up),
+        "the upload arrived corrupted"
+    );
+
+    // Guest → host.
+    let digest = guest
+        .ssh_exec(
+            "head -c 33554432 /dev/urandom > /tmp/down && sha256sum /tmp/down | cut -d' ' -f1",
+        )
+        .expect("making the download");
+    let back = dir.join("back");
+    if let Err(e) = guest.scp_from_guest("/tmp/down", &back) {
+        panic!(
+            "copying 32 MiB from the guest: {e:#}\nsupervisor log:\n{}",
+            guest.supervisor_log()
+        );
+    }
+    let fetched = back.join("down");
+    assert_eq!(std::fs::metadata(&fetched).unwrap().len(), 32 << 20);
+    assert_eq!(
+        sha256_file(&fetched),
+        digest.trim(),
+        "the download arrived corrupted"
+    );
+
+    let outcome = guest
+        .shutdown(Duration::from_secs(20))
+        .expect("supervisor did not stop");
+    assert!(!outcome.forced, "teardown had to be forced");
+}

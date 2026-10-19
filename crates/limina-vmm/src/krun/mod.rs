@@ -79,9 +79,10 @@ const NET_VMNET_FEATURES: u32 = NET_FEATURE_CSUM
     | NET_FEATURE_HOST_TSO4
     | NET_FEATURE_HOST_TSO6;
 
-/// virtio-net offload features for a NIC on limina-netd: checksums only, until netd takes and
-/// builds segmentation-offloaded frames.
-const NET_NETD_FEATURES: u32 = NET_FEATURE_CSUM | NET_FEATURE_GUEST_CSUM;
+/// virtio-net offload features for a NIC on limina-netd: vmnet's, so a NIC can move between the
+/// two. netd takes the guest's large segments whole and never sends any of its own, which a guest
+/// that takes them does not mind.
+const NET_NETD_FEATURES: u32 = NET_VMNET_FEATURES;
 
 /// `vmnet_mode_t` values from `<vmnet/vmnet.h>`, as `NetDevice::new_vmnet` takes them.
 const VMNET_HOST_MODE: u32 = 1000;

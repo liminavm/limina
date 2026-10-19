@@ -1065,6 +1065,8 @@ mod tests {
         /// Which of the frames netd sends the guest (counting from 1) are lost on the way.
         lose: fn(usize) -> bool,
         sent: usize,
+        /// The last frame the guest sent.
+        last: Option<Vec<u8>>,
     }
 
     impl Guest {
@@ -1091,6 +1093,7 @@ mod tests {
                 poller: Poller::new().unwrap(),
                 lose: |_| false,
                 sent: 0,
+                last: None,
             }
         }
 
@@ -1122,6 +1125,7 @@ mod tests {
                 poller,
                 lose,
                 sent,
+                last,
                 ..
             } = self;
             // The frames netd makes, minus the ones the test loses on purpose.
@@ -1139,6 +1143,9 @@ mod tests {
                 };
             }
             let frames: Vec<Vec<u8>> = std::mem::take(&mut wire.to_netd).into();
+            if let Some(f) = frames.last() {
+                *last = Some(f.clone());
+            }
             for frame in &frames {
                 let mut replies = Vec::new();
                 let ingress = stack.handle(frame, &mut |f| replies.push(f.to_vec()));
@@ -1322,6 +1329,95 @@ mod tests {
         g.until("netd to forget the connection", |g| {
             g.tcp.conns.keys().all(|k| k.0 != 22)
         });
+    }
+
+    /// A guest with segmentation offload hands over one segment far larger than the MSS, with a
+    /// GSO header and a partial checksum, and netd takes it whole.
+    #[test]
+    fn an_offloaded_segment_reaches_the_host_whole() {
+        use smoltcp::phy::ChecksumCapabilities;
+        use smoltcp::wire::{
+            EthernetFrame, EthernetProtocol, EthernetRepr, IpAddress, IpProtocol, Ipv4Packet,
+            Ipv4Repr, TcpControl, TcpPacket,
+        };
+
+        let (listener, port) = listener();
+        let mut g = Guest::new();
+        let h = g.connect(port);
+        g.until("the connection", |g| g.socket(h).may_send());
+        let (mut host, _) = listener.accept().unwrap();
+
+        // Where the guest's stream stands: its last frame is the ACK of netd's SYN-ACK.
+        let last = g.last.clone().unwrap();
+        let eth = EthernetFrame::new_checked(&last[VNET_HDR_LEN..]).unwrap();
+        let (guest_mac, gateway_mac) = (eth.src_addr(), eth.dst_addr());
+        let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
+        let (src, dst) = (ip.src_addr(), ip.dst_addr());
+        let ack = TcpPacket::new_checked(ip.payload()).unwrap();
+        let (seq, ack_number, src_port) = (ack.seq_number(), ack.ack_number(), ack.src_port());
+
+        let data = pattern(60_000, 7);
+        let header = TcpRepr {
+            src_port,
+            dst_port: port,
+            control: TcpControl::Psh,
+            seq_number: seq,
+            ack_number: Some(ack_number),
+            window_len: 65535,
+            window_scale: None,
+            max_seg_size: None,
+            sack_permitted: false,
+            sack_ranges: [None; 3],
+            timestamp: None,
+            payload: &data,
+        };
+        let ip_repr = Ipv4Repr {
+            src_addr: src,
+            dst_addr: dst,
+            next_header: IpProtocol::Tcp,
+            payload_len: header.buffer_len(),
+            hop_limit: 64,
+        };
+        let mut frame = vec![0u8; VNET_HDR_LEN + 14 + 20 + header.buffer_len()];
+        // virtio_net_hdr: NEEDS_CSUM, GSO TCPv4, header length, segment size, checksum start
+        // and offset.
+        frame[0] = 1;
+        frame[1] = 1;
+        frame[2..4].copy_from_slice(&54u16.to_le_bytes());
+        frame[4..6].copy_from_slice(&1448u16.to_le_bytes());
+        frame[6..8].copy_from_slice(&34u16.to_le_bytes());
+        frame[8..10].copy_from_slice(&16u16.to_le_bytes());
+        let mut eth = EthernetFrame::new_unchecked(&mut frame[VNET_HDR_LEN..]);
+        EthernetRepr {
+            src_addr: guest_mac,
+            dst_addr: gateway_mac,
+            ethertype: EthernetProtocol::Ipv4,
+        }
+        .emit(&mut eth);
+        let mut packet = Ipv4Packet::new_unchecked(eth.payload_mut());
+        ip_repr.emit(&mut packet, &ChecksumCapabilities::default());
+        // The checksum stays partial, as the guest leaves it for the device.
+        header.emit(
+            &mut TcpPacket::new_unchecked(packet.payload_mut()),
+            &IpAddress::from(src),
+            &IpAddress::from(dst),
+            &ChecksumCapabilities::ignored(),
+        );
+        g.wire.to_netd.push_back(frame);
+
+        host.set_nonblocking(true).unwrap();
+        let mut got = Vec::new();
+        g.until("the segment's bytes", |_| {
+            let mut buf = [0u8; 65536];
+            loop {
+                match host.read(&mut buf) {
+                    Ok(n) if n > 0 => got.extend_from_slice(&buf[..n]),
+                    _ => break,
+                }
+            }
+            got.len() >= data.len()
+        });
+        assert!(got == data, "the segment arrived intact");
     }
 
     #[test]
