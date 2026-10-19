@@ -161,8 +161,8 @@ both ways). One clone booted on each backend in turn, nothing else changed.
 Vehicle: a spare M1 Mac mini (8 cores, 16 GB, macOS 27.0.1), quiet but for an idle 8-vCPU VM.
 Guest: stock Fedora 44 (kernel `6.19.10-300.fc44`, the piglit base image) with `iperf3` added, 4
 vCPUs, 4 GiB, EFI + venus headless, `LIMINA_WORKER_LAUNCH=spawn`. Release `limina`/`limina-vmm`
-at libkrun `88777301` (the vmnet backend). gvproxy 0.8.8 at limina's default `-mtu 65520`;
-vmnet shared mode, TSO on, the guest at MTU 1500 (vmnet's DHCP gives no MTU), the host's
+with libkrun's vmnet backend as at `a2c00554`, less its skip of malformed packets (no worker
+logged one). gvproxy 0.8.8 at limina's default `-mtu 65520`; vmnet shared mode, TSO on, the guest at MTU 1500 (vmnet's DHCP gives no MTU), the host's
 `bridge100` at 1500. Host iperf3 3.x (Homebrew) on `127.0.0.1` for gvproxy and on the bridge
 address for vmnet. `/usr/bin/ssh` both times, default cipher. Measured 2026-10-19.
 
