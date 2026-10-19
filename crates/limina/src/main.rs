@@ -36,6 +36,7 @@ mod runtime_ctl;
 mod sep;
 mod session;
 mod supervisor;
+mod uplinks;
 mod vcpu_policy;
 mod vdagent;
 mod venus_env;
@@ -1160,6 +1161,7 @@ fn cmd_ls() -> Result<()> {
             Ok(cfg) => {
                 let mem = cfg.hardware.memory.0.clone();
                 let ssh = match cfg.networks.first() {
+                    Some(n) if n.mode == vmlib::schema::NetMode::Bridged => "bridged".to_string(),
                     Some(n) if n.ssh_port != 0 => n.ssh_port.to_string(),
                     Some(_) => "auto".to_string(),
                     None => "-".to_string(),
@@ -1558,7 +1560,7 @@ fn cli_from_definition(
     bundle: &vmlib::bundle::VmBundle,
     ov: &StartOverrides,
 ) -> Result<Cli> {
-    use vmlib::schema::{GpuMode, Memory, memory_to_cli};
+    use vmlib::schema::{GpuMode, Memory, NetMode, memory_to_cli};
 
     let (ram_mib, memory) = match &ov.memory {
         Some(s) => memory_to_cli(&Memory::parse(s).context("--memory")?)?,
@@ -1586,15 +1588,23 @@ fn cli_from_definition(
         });
     }
 
-    let net = !cfg.networks.is_empty();
+    let nic = cfg.networks.first();
+    let net = nic.is_some_and(|n| n.mode == NetMode::Nat);
+    let bridged = match nic {
+        Some(n) if n.mode == NetMode::Bridged => Some(
+            n.uplink
+                .clone()
+                .context("a bridged [[network]] needs the host interface it joins (uplink)")?,
+        ),
+        _ => None,
+    };
     let ssh_port = ov.ssh_port.or_else(|| {
-        cfg.networks
-            .first()
+        nic.filter(|n| n.mode == NetMode::Nat)
             .and_then(|n| (n.ssh_port != 0).then_some(n.ssh_port))
     });
     anyhow::ensure!(
         net || ssh_port.is_none(),
-        "--ssh-port needs a [[network]] in the definition"
+        "--ssh-port needs a NAT [[network]] in the definition (a bridged one has no SSH forward)"
     );
 
     // M9.2 managed-VM suspend wiring. Always arm suspend by giving the worker a snapshot path (the
@@ -1698,7 +1708,7 @@ fn cli_from_definition(
         no_fido: !cfg.hardware.fido,
         on_host_sleep: Some(cfg.power.on_host_sleep.as_flag().to_string()),
         net,
-        net_vmnet: None,
+        net_vmnet: bridged.map(|ifname| format!("bridged:{ifname}")),
         net_netd: false,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
         ssh_port,
@@ -3622,6 +3632,7 @@ mod tests {
                 mode: NetMode::Nat,
                 mac: "5a:00:00:00:00:01".into(),
                 ssh_port: 2299,
+                uplink: None,
             }],
             shares: vec![ShareEntry {
                 name: Some("Projects".into()),
@@ -3833,6 +3844,7 @@ mod tests {
                 mode: NetMode::Nat,
                 mac: "m".into(),
                 ssh_port: 0,
+                uplink: None,
             }],
             shares: vec![],
             boot: BootCfg::default(),

@@ -129,6 +129,7 @@ pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
                 mode: NetMode::Nat,
                 mac: mac_for_uuid(&uuid),
                 ssh_port: opts.ssh_port,
+                uplink: None,
             }],
             shares: vec![],
             boot: Default::default(),

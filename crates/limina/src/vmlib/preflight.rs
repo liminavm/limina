@@ -34,7 +34,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::vmlib::{bundle::VmBundle, runtime, schema::VmConfig};
+use crate::vmlib::{
+    bundle::VmBundle,
+    runtime,
+    schema::{NetMode, NetworkEntry, VmConfig},
+};
 
 /// How much work a caller is willing to pay for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +78,9 @@ pub enum Code {
     MemoryUnparsable,
     SshPortTooLow,
     SshPortInUse,
+    UplinkUnnamed,
+    UplinkMissing,
+    UplinkNotBridgeable,
     FirmwareMissing,
     FirmwareUnresolvable,
     FirmwareDebugFallback,
@@ -442,6 +449,10 @@ fn check_network(cfg: &VmConfig, depth: Depth, out: &mut Vec<Finding>) {
     let Some(net) = cfg.networks.first() else {
         return;
     };
+    if net.mode == NetMode::Bridged {
+        check_uplink(net, depth, out);
+        return;
+    }
     if net.ssh_port != 0 && net.ssh_port < crate::forward::SSH_PORT_MIN {
         out.push(Finding::blocker(
             Code::SshPortTooLow,
@@ -460,6 +471,48 @@ fn check_network(cfg: &VmConfig, depth: Depth, out: &mut Vec<Finding>) {
             "network.ssh_port",
             format!("host port {} is already in use", net.ssh_port),
         ));
+    }
+}
+
+/// A bridged NIC's interface. Missing is a blocker even at `Cheap` (one `if_nametoindex`): vmnet
+/// does not refuse an interface it does not have, its start just never answers, so the guest
+/// would come up with no network and no reason given.
+fn check_uplink(net: &NetworkEntry, depth: Depth, out: &mut Vec<Finding>) {
+    let Some(ifname) = net.uplink.as_deref() else {
+        out.push(
+            Finding::blocker(
+                Code::UplinkUnnamed,
+                "network.uplink",
+                "a bridged network needs the host interface to join",
+            )
+            .with_remedy("pick one in Configure…, or set network.uplink (e.g. \"en0\")"),
+        );
+        return;
+    };
+    if !crate::uplinks::exists(ifname) {
+        out.push(
+            Finding::blocker(
+                Code::UplinkMissing,
+                "network.uplink",
+                format!("this Mac has no network interface {ifname} to bridge onto"),
+            )
+            .with_remedy("connect it, or pick another interface in Configure…"),
+        );
+        return;
+    }
+    if depth == Depth::Full
+        && !crate::uplinks::bridgeable()
+            .iter()
+            .any(|u| u.ifname == ifname)
+    {
+        out.push(
+            Finding::blocker(
+                Code::UplinkNotBridgeable,
+                "network.uplink",
+                format!("macOS does not offer {ifname} for bridging"),
+            )
+            .with_remedy("pick another interface in Configure…"),
+        );
     }
 }
 
@@ -638,6 +691,34 @@ mod tests {
         // The absolute path, not the "disks/root.raw" the config spells.
         assert!(msg.contains(disk.to_str().unwrap()), "{msg}");
         assert!(msg.contains(":create=SIZE"), "{msg}");
+
+        unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    /// vmnet never refuses a missing interface, its start just hangs, so a bridged VM whose
+    /// uplink is gone has to be stopped here or it comes up with no network and no reason.
+    #[test]
+    fn a_bridged_nic_needs_an_uplink_the_host_has() {
+        let _g = env_lock();
+        let (lib, bundle, mut cfg) = startable("pf-bridged");
+        cfg.networks[0].mode = NetMode::Bridged;
+        let blockers = |cfg: &VmConfig, depth| config_blockers(&check(&bundle, cfg, depth));
+
+        assert_eq!(blockers(&cfg, Depth::Cheap), [Code::UplinkUnnamed]);
+        cfg.networks[0].uplink = Some("en99".into());
+        assert_eq!(blockers(&cfg, Depth::Cheap), [Code::UplinkMissing]);
+        // An interface the host has but vmnet does not bridge onto: only the full check asks.
+        cfg.networks[0].uplink = Some("lo0".into());
+        assert!(blockers(&cfg, Depth::Cheap).is_empty());
+        assert_eq!(blockers(&cfg, Depth::Full), [Code::UplinkNotBridgeable]);
+        if let Some(u) = crate::uplinks::bridgeable().first() {
+            cfg.networks[0].uplink = Some(u.ifname.clone());
+            assert!(blockers(&cfg, Depth::Full).is_empty());
+        }
+        // The NAT port it keeps for later is no concern of a bridged NIC.
+        cfg.networks[0].ssh_port = 80;
+        assert!(!codes(&check(&bundle, &cfg, Depth::Cheap)).contains(&Code::SshPortTooLow));
 
         unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();

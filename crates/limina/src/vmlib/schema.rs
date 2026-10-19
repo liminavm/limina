@@ -274,21 +274,30 @@ pub struct CdromEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetMode {
+    /// NAT through the host (`--net`): vmnet shared, moving to limina-netd when vmnet cannot
+    /// serve. The guest is reached through the SSH forward.
     #[default]
     Nat,
+    /// On the LAN through the host interface `uplink`, with a lease from the LAN's DHCP server.
+    /// No SSH forward: the guest is reached at its own address, which `limina address` and the
+    /// control center name.
+    Bridged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkEntry {
     #[serde(default)]
     pub mode: NetMode,
-    /// Allocated at create (locally-administered, derived from the uuid) and stored so
-    /// per-VM identity survives restarts. Not yet plumbed to the worker — persisted
-    /// first per the multi-vm-networking design.
+    /// Allocated at create (locally-administered, derived from the uuid) and stored so the VM
+    /// keeps its DHCP lease, on vmnet's pool and on a LAN's, from run to run.
     pub mac: String,
-    /// Host port for the inbound SSH forward; 0 = auto-allocate from 2222 up.
+    /// Host port for the inbound SSH forward; 0 = auto-allocate from 2222 up. NAT only: a bridged
+    /// NIC keeps it, unused, for when the VM goes back to NAT.
     #[serde(default)]
     pub ssh_port: u16,
+    /// The host interface a bridged NIC joins (`en0`). Bridged only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uplink: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -846,6 +855,7 @@ mod tests {
                 mode: NetMode::Nat,
                 mac: mac_for_uuid("x"),
                 ssh_port: 0,
+                uplink: None,
             }],
             shares: vec![],
             boot: BootCfg::default(),
@@ -877,6 +887,20 @@ mod tests {
         // The absolute spelling of the same intent loads.
         cfg.shares[0].path = "/tmp/harmless/docs".into();
         cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn a_bridged_network_round_trips_and_a_nat_one_names_no_uplink() {
+        let mut cfg = minimal();
+        let nat = toml::to_string_pretty(&cfg).unwrap();
+        assert!(!nat.contains("uplink"), "{nat}");
+        cfg.networks[0].mode = NetMode::Bridged;
+        cfg.networks[0].uplink = Some("en0".into());
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        assert!(text.contains("mode = \"bridged\""), "{text}");
+        let back: VmConfig = toml::from_str(&text).unwrap();
+        assert_eq!(back.networks[0].mode, NetMode::Bridged);
+        assert_eq!(back.networks[0].uplink.as_deref(), Some("en0"));
     }
 
     #[test]
