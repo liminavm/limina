@@ -32,6 +32,8 @@ use limina_netd_wire::{
 };
 use limina_ring::PushError;
 
+use super::switch::{Side, SwitchControl};
+
 struct Forward {
     id: u32,
     host: SocketAddrV4,
@@ -45,6 +47,8 @@ struct Table {
     forwards: Vec<Forward>,
     /// The running netd's control pair.
     ctl: Option<OwnedFd>,
+    /// Where the guest is, when netd is not the one that leased it its address.
+    guest: Option<([u8; 6], [u8; 4])>,
 }
 
 /// The NIC's port forwards, shared between the backend (which hands them to each netd it
@@ -106,7 +110,21 @@ impl Forwards {
         Ok(())
     }
 
-    /// Hands every forward to a freshly started netd on its control pair.
+    /// Tells netd the guest is at `ip` with `mac`, when that changes: on vmnet the guest's
+    /// address is vmnet's, and netd carries the forwards to it there.
+    pub fn tell_guest(&self, mac: [u8; 6], ip: [u8; 4]) {
+        let mut t = self.table();
+        if t.guest == Some((mac, ip)) {
+            return;
+        }
+        t.guest = Some((mac, ip));
+        if let Some(ctl) = &t.ctl {
+            let _ = send_control(ctl.as_fd(), Control::Guest { mac, ip }, None);
+        }
+    }
+
+    /// Hands every forward, and where the guest is, to a freshly started netd on its control
+    /// pair.
     fn attach(&self, ctl: OwnedFd) {
         let mut t = self.table();
         for f in &t.forwards {
@@ -118,20 +136,28 @@ impl Forwards {
                 log::warn!("virtio-net: handing netd the forward of {}: {e}", f.host);
             }
         }
+        if let Some((mac, ip)) = t.guest {
+            let _ = send_control(ctl.as_fd(), Control::Guest { mac, ip }, None);
+        }
         t.ctl = Some(ctl);
     }
 }
 
 /// Serves the NIC's control link: one thread, one request line at a time, answered `ok` or
-/// `error: …`.
-pub fn serve_control(at: ListenAt, forwards: Arc<Forwards>) -> anyhow::Result<()> {
+/// `error: …`. A NIC that switches sides takes `switch vmnet|netd` too, answered once the move is
+/// under way.
+pub fn serve_control(
+    at: ListenAt,
+    forwards: Arc<Forwards>,
+    switch: Option<Arc<SwitchControl>>,
+) -> anyhow::Result<()> {
     let listener = at.listen()?;
     std::thread::Builder::new()
         .name("net-control".into())
         .spawn(move || {
             for stream in listener.incoming() {
                 match stream {
-                    Ok(s) => serve_client(s, &forwards),
+                    Ok(s) => serve_client(s, &forwards, switch.as_deref()),
                     Err(e) => log::error!("net-control: accept failed: {e}"),
                 }
             }
@@ -139,13 +165,13 @@ pub fn serve_control(at: ListenAt, forwards: Arc<Forwards>) -> anyhow::Result<()
     Ok(())
 }
 
-fn serve_client(stream: UnixStream, forwards: &Forwards) {
+fn serve_client(stream: UnixStream, forwards: &Forwards, switch: Option<&SwitchControl>) {
     let Ok(mut out) = stream.try_clone() else {
         return;
     };
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { break };
-        let reply = match answer(&line, forwards) {
+        let reply = match answer(&line, forwards, switch) {
             Ok(()) => "ok\n".to_string(),
             Err(e) => format!("error: {e}\n"),
         };
@@ -155,7 +181,7 @@ fn serve_client(stream: UnixStream, forwards: &Forwards) {
     }
 }
 
-fn answer(line: &str, forwards: &Forwards) -> Result<(), String> {
+fn answer(line: &str, forwards: &Forwards, switch: Option<&SwitchControl>) -> Result<(), String> {
     let words: Vec<&str> = line.split_whitespace().collect();
     let host = |s: &str| {
         s.parse::<SocketAddrV4>()
@@ -169,8 +195,14 @@ fn answer(line: &str, forwards: &Forwards) -> Result<(), String> {
             forwards.add(host(h)?, guest).map_err(|e| e.to_string())
         }
         ["unforward", h] => forwards.remove(host(h)?).map_err(|e| e.to_string()),
+        ["switch", side] => {
+            let switch = switch.ok_or("this NIC does not switch sides")?;
+            switch.request(side.parse::<Side>()?, "asked to");
+            Ok(())
+        }
         _ => Err(format!(
-            "unknown request {line:?} (have: forward HOST_IP:PORT GUEST_PORT, unforward HOST_IP:PORT)"
+            "unknown request {line:?} (have: forward HOST_IP:PORT GUEST_PORT, unforward \
+             HOST_IP:PORT, switch vmnet|netd)"
         )),
     }
 }
@@ -191,7 +223,7 @@ pub fn backend(exe: PathBuf, forwards: Arc<Forwards>) -> ExternalBackend {
 }
 
 /// One running netd and this worker's end of its channel.
-struct Netd {
+pub struct Netd {
     exe: PathBuf,
     forwards: Arc<Forwards>,
     /// `None` once it has been killed and reaped: a reaped pid may already name someone else.
@@ -200,7 +232,7 @@ struct Netd {
 }
 
 impl Netd {
-    fn start(exe: &Path, forwards: &Arc<Forwards>) -> io::Result<Self> {
+    pub fn start(exe: &Path, forwards: &Arc<Forwards>) -> io::Result<Self> {
         let (ours, theirs) = socketpair()?;
         let (ctl_ours, ctl_theirs) = control_socketpair()?;
         // The region goes out before netd exists; the socket holds the setup message for it, as

@@ -449,7 +449,7 @@ struct Cli {
     /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
     /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
     /// internet automatically (e.g. for SSH).
-    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd"])]
+    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd", "net_auto"])]
     net: bool,
 
     /// Attach a NIC on a vmnet interface instead of the gvproxy NAT: `shared` (NAT through
@@ -457,14 +457,20 @@ struct Cli {
     /// lease). The worker starts the interface itself; no gateway process runs. The guest's
     /// address is in `/var/db/dhcpd_leases` (shared/host) and only Apple's own tools reach
     /// it from the host until Local Network access is sorted out. Experimental.
-    #[arg(long, value_name = "MODE", value_parser = parse_vmnet_mode, conflicts_with = "net_netd")]
+    #[arg(long, value_name = "MODE", value_parser = parse_vmnet_mode, conflicts_with_all = ["net_netd", "net_auto"])]
     net_vmnet: Option<String>,
 
     /// Attach a user-mode NAT NIC on limina-netd instead of gvproxy: the worker spawns netd
     /// itself and talks to it over shared memory. It leases the guest an address; forwarding
     /// traffic is still being built. Experimental.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "net_auto")]
     net_netd: bool,
+
+    /// Attach a NIC on vmnet shared that moves to limina-netd when vmnet cannot serve (it will
+    /// not start, or a VPN takes its route) and back when it can. The SSH forward works the same
+    /// on either side. Experimental.
+    #[arg(long)]
+    net_auto: bool,
 
     /// Capture the gvproxy gateway's `-debug` packet log to this file (DHCP/DNS/NAT — the
     /// host-side network oracle). Requires --net; without it gvproxy logs quietly.
@@ -597,6 +603,10 @@ enum Cmd {
     /// Print a running VM's SSH forward port, or move it to another host port. A move lasts
     /// until the VM exits; the port in its definition is the one the next start uses.
     SshPort(SshPortArgs),
+    /// Move a running VM's `--net-auto` NIC to vmnet or limina-netd, as a VPN taking vmnet's
+    /// route would. Off by default: the VM refuses until its net-switch lever is on
+    /// (LIMINA_NET_SWITCH=1, the Debug menu, or `limina debug <vm> lever net-switch on`).
+    NetSwitch(NetSwitchArgs),
     /// Inject keyboard and pointer events into a running VM's virtio-input devices — the real
     /// device path the guest's seat sees, with no window or focus involved. Off by default: the
     /// VM refuses until its input-inject lever is on (LIMINA_INPUT_INJECT=1, the Debug menu, or
@@ -618,6 +628,15 @@ struct InputArgs {
     /// per line, over one connection — what a script that holds a key across verbs needs.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     verb: Vec<String>,
+}
+
+#[derive(clap::Args, Debug)]
+struct NetSwitchArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
+    /// `vmnet` or `netd`.
+    side: runtime_ctl::NetSide,
 }
 
 #[derive(clap::Args, Debug)]
@@ -960,6 +979,15 @@ fn main() -> Result<()> {
         Some(Cmd::Rm(args)) => cmd_rm(args),
         Some(Cmd::Debug(args)) => cmd_debug(args),
         Some(Cmd::SshPort(args)) => cmd_ssh_port(args),
+        Some(Cmd::NetSwitch(args)) => {
+            let pid = debug_target_pid(&args.vm)?;
+            runtime_ctl::request(pid, runtime_ctl::Request::NetSwitch(args.side))?;
+            println!(
+                "{}: moving the NIC; the VM log says when it is done",
+                args.vm
+            );
+            Ok(())
+        }
         Some(Cmd::Input(args)) if inject::is_keys(&args.verb) => {
             // The client's own answer: no VM to find, no lever to ask.
             for l in inject::key_list() {
@@ -1662,6 +1690,7 @@ fn cli_from_definition(
         net,
         net_vmnet: None,
         net_netd: false,
+        net_auto: false,
         net_log: None,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
         ssh_port,
@@ -2202,16 +2231,26 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         None
     };
     anyhow::ensure!(
-        cli.net_mac.is_none() || cli.net || cli.net_vmnet.is_some() || cli.net_netd,
-        "--net-mac needs a NIC: pass --net, --net-vmnet or --net-netd"
+        cli.net_mac.is_none() || cli.net || cli.net_vmnet.is_some() || cli.net_netd || cli.net_auto,
+        "--net-mac needs a NIC: pass --net, --net-vmnet, --net-netd or --net-auto"
     );
     let mut ssh_forward = gateway.as_ref().map(|g| g.forward());
-    if cli.net_netd {
-        println!("limina-netd NIC");
-        args.push("--net-netd".into());
-        if let Some(mac) = &cli.net_mac {
+    if cli.net_netd || cli.net_auto {
+        if cli.net_auto {
+            // On vmnet every guest of the host shares one segment, so the fixed vfkit MAC that
+            // gives netd's islands their lease would collide between two VMs there.
+            let mac = cli.net_mac.clone().unwrap_or_else(random_local_mac);
+            println!("vmnet NIC with limina-netd to fall back on, guest MAC {mac}");
+            args.push("--net-auto".into());
             args.push("--net-mac".into());
-            args.push(mac.clone());
+            args.push(mac);
+        } else {
+            println!("limina-netd NIC");
+            args.push("--net-netd".into());
+            if let Some(mac) = &cli.net_mac {
+                args.push("--net-mac".into());
+                args.push(mac.clone());
+            }
         }
         // The worker binds the SSH forward (netd carries its connections), so it is up by the
         // time the guest is; the port is checked here so a taken one fails before the boot.
@@ -2226,6 +2265,9 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--net-forward".into());
         args.push(format!("127.0.0.1:{port}:22"));
         let link = worker_link(&mut links, "--net-control-fd");
+        if cli.net_auto {
+            runtime_ctl::set_net_control(Some(link.clone()));
+        }
         ssh_forward = Some(gateway::SshForward::on_worker(port, link));
         println!("guest SSH forward ready: ssh -p {port} <user>@127.0.0.1");
     }

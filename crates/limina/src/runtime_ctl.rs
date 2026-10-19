@@ -41,6 +41,11 @@
 //! request). Stopping a VM needs no lever and no socket: it is a signal to the supervisor, which
 //! any process of the same user can already send (`limina stop`).
 //!
+//! `net-switch vmnet|netd` moves a `--net-auto` NIC to that side (`limina net-switch`). It is
+//! answered once the worker has taken the request; the move itself takes seconds and the VM log
+//! says when it is done. It is refused unless the VM's `net-switch` lever is on
+//! (`debug_ctl::NET_SWITCH`, off by default, read per request).
+//!
 //! Like the debug socket it is reachable by any process of the same user. Moving the SSH forward
 //! binds a different loopback port on the host; the guest and its network are untouched.
 
@@ -54,6 +59,7 @@ use anyhow::{Context, Result};
 use limina_debug::wire;
 
 use crate::gateway::SshForward;
+use limina_launch::connect::Endpoint;
 
 /// How long a client waits for an answer. A move asks gvproxy, which answers in milliseconds.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -63,6 +69,9 @@ const PUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The NAT gateway's SSH forward, once `run_vm` has started one.
 static FORWARD: Mutex<Option<SshForward>> = Mutex::new(None);
+
+/// The worker's network control link, on a NIC that switches sides.
+static NET_CONTROL: Mutex<Option<Endpoint>> = Mutex::new(None);
 
 /// The window is parked on a suspended guest (no worker until the play click).
 static PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -91,6 +100,36 @@ pub enum Request {
     SshPort(u16),
     /// Kill the worker and cold-boot a fresh one (`lifecycle-control` lever).
     Reset,
+    /// Move a `--net-auto` NIC to this side (`net-switch` lever).
+    NetSwitch(NetSide),
+}
+
+/// A side a `--net-auto` NIC can be on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetSide {
+    Vmnet,
+    Netd,
+}
+
+impl NetSide {
+    fn word(self) -> &'static str {
+        match self {
+            NetSide::Vmnet => "vmnet",
+            NetSide::Netd => "netd",
+        }
+    }
+}
+
+impl std::str::FromStr for NetSide {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "vmnet" => Ok(NetSide::Vmnet),
+            "netd" => Ok(NetSide::Netd),
+            _ => Err(format!("{s:?} is not a side (vmnet or netd)")),
+        }
+    }
 }
 
 impl Request {
@@ -100,6 +139,9 @@ impl Request {
             Some("info") => Request::Info,
             Some("watch") => Request::Watch,
             Some("reset") => Request::Reset,
+            Some("net-switch") => {
+                Request::NetSwitch(words.next().ok_or("net-switch needs a side")?.parse()?)
+            }
             Some("ssh-port") => {
                 let port = words.next().ok_or("ssh-port needs a port")?;
                 Request::SshPort(
@@ -122,6 +164,7 @@ impl Request {
             Request::Watch => "watch".into(),
             Request::SshPort(p) => format!("ssh-port {p}"),
             Request::Reset => "reset".into(),
+            Request::NetSwitch(side) => format!("net-switch {}", side.word()),
         }
     }
 }
@@ -183,6 +226,32 @@ pub fn socket_path(pid: u32) -> PathBuf {
 pub fn set_forward(forward: Option<SshForward>) {
     *lock(&FORWARD) = forward;
     push();
+}
+
+/// Publish the worker's network control link, on a NIC that switches sides.
+pub fn set_net_control(link: Option<Endpoint>) {
+    *lock(&NET_CONTROL) = link;
+}
+
+/// The answer to `net-switch` while the `net-switch` lever is off.
+pub fn net_switch_refusal() -> String {
+    format!(
+        "network switching is off for this VM; to allow `limina net-switch`, {}",
+        crate::debug_ctl::how_to_enable(&crate::debug_ctl::NET_SWITCH)
+    )
+}
+
+/// Hand a move to the worker, which carries it out on its own time.
+fn net_switch(side: NetSide) -> Result<Vec<String>, String> {
+    if !crate::debug_ctl::NET_SWITCH.on() {
+        return Err(net_switch_refusal());
+    }
+    let link = lock(&NET_CONTROL)
+        .clone()
+        .ok_or("this VM's NIC does not switch sides (it needs --net-auto)")?;
+    crate::gateway::worker_request(&link, &format!("switch {}", side.word()))
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(report())
 }
 
 /// Publish the run's boot disk (canonical), reported as `disk <path>` after the state lines. It
@@ -253,6 +322,7 @@ fn reset() -> Result<Vec<String>, String> {
 fn handle(req: Request) -> Result<Vec<String>, String> {
     match req {
         Request::Reset => reset(),
+        Request::NetSwitch(side) => net_switch(side),
         Request::Info | Request::Watch => Ok(report()),
         Request::SshPort(port) => {
             let forward = lock(&FORWARD)

@@ -703,6 +703,9 @@ pub struct GuestConfig {
     /// is no gateway log then: netd's own log lines land in the supervisor's. Set via
     /// [`with_net_netd`](GuestConfig::with_net_netd).
     pub net_netd: bool,
+    /// Put it on vmnet shared with netd to fall back on (`--net-auto`), the SSH forward through
+    /// netd on either side. Set via [`with_net_auto`](GuestConfig::with_net_auto).
+    pub net_auto: bool,
     /// Per-VM host port for gvproxy's inbound SSH forward (`--ssh-port`). `None` → the supervisor
     /// default ([`DEFAULT_SSH_PORT`], 2222). Give two concurrent VMs distinct ports so they don't
     /// collide on the host port — what lets more than one run in parallel. Set via
@@ -805,6 +808,7 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
+            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -904,6 +908,7 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
+            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -990,6 +995,7 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
+            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1034,6 +1040,7 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
+            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1104,6 +1111,7 @@ impl GuestConfig {
             net: false,
             ssh_port: None,
             net_netd: false,
+            net_auto: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1284,6 +1292,14 @@ impl GuestConfig {
     pub fn with_net_netd(mut self) -> GuestConfig {
         self.net = true;
         self.net_netd = true;
+        self
+    }
+
+    /// Like [`with_net`](GuestConfig::with_net) but on vmnet with limina-netd to fall back on
+    /// (`--net-auto`), with the same SSH forward on its pre-allocated port.
+    pub fn with_net_auto(mut self) -> GuestConfig {
+        self.net = true;
+        self.net_auto = true;
         self
     }
 
@@ -2284,7 +2300,9 @@ impl Guest {
         // is silent on serial after GRUB, so the guest console can't witness DHCP/DNS).
         let gateway_log = if cfg.net {
             let log = scratch.join("gvproxy.log");
-            if cfg.net_netd {
+            if cfg.net_auto {
+                cmd.arg("--net-auto");
+            } else if cfg.net_netd {
                 cmd.arg("--net-netd");
             } else {
                 cmd.arg("--net").arg("--net-log").arg(&log);
@@ -2309,7 +2327,7 @@ impl Guest {
             if let Some(mac) = &cfg.net_mac {
                 cmd.arg("--net-mac").arg(mac);
             }
-            (!cfg.net_netd).then_some(log)
+            (!cfg.net_netd && !cfg.net_auto).then_some(log)
         } else {
             None
         };

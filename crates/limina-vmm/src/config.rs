@@ -179,6 +179,9 @@ pub enum NetBackend {
     /// User-mode NAT through a `limina-netd` the worker spawns and talks to over shared rings
     /// (`docs/design/multi-vm-networking.md` §3.2). Needs no entitlement. Experimental.
     Netd(NetdSpec),
+    /// vmnet shared, moving to netd when vmnet cannot serve and back when it can
+    /// (`docs/design/multi-vm-networking.md` §3.5). The forwards are netd's on either side.
+    Auto(NetdSpec),
 }
 
 /// What a NIC on netd is set up with.

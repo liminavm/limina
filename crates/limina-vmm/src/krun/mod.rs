@@ -15,6 +15,8 @@ mod console;
 mod display_update;
 mod metal_ext;
 mod netd;
+mod switch;
+mod uplink;
 
 use std::sync::Arc;
 
@@ -23,6 +25,7 @@ use crossbeam_channel::unbounded;
 use devices::display::{DisplayInfo, DisplayInfoEdid, EdidIdentity, EdidParams};
 use devices::virtio::block::{DiskFormat, SyncMode};
 use devices::virtio::gpu::timing::TimingPage;
+use devices::virtio::net::vmnet::{VmnetConfig, VmnetMode as KrunVmnetMode};
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use krun_lib::api::device_builders::{
     BalloonDevice, BlockDevice, DisplayBackend, FsDevice, GpuDevice, I2cBatteryDevice, InputDevice,
@@ -726,14 +729,9 @@ fn net_device(net: &NetSpec) -> Result<NetDevice> {
         NetBackend::Netd(spec) => {
             let exe = netd::netd_exe().context("locating limina-netd")?;
             anyhow::ensure!(exe.exists(), "limina-netd is not at {}", exe.display());
-            let forwards = Arc::new(netd::Forwards::default());
-            for &(host, guest_port) in &spec.forwards {
-                forwards
-                    .add(host, guest_port)
-                    .with_context(|| format!("forwarding {host} to guest port {guest_port}"))?;
-            }
+            let forwards = netd_forwards(spec)?;
             if let Some(at) = spec.control.clone() {
-                netd::serve_control(at, forwards.clone())
+                netd::serve_control(at, forwards.clone(), None)
                     .context("listening for network control")?;
             }
             // netd sets each frame's header itself, so the device's checksum flag has no say.
@@ -746,7 +744,43 @@ fn net_device(net: &NetSpec) -> Result<NetDevice> {
             )
             .map_err(|e| anyhow!("virtio-net (limina-netd): {e:?}"))
         }
+        NetBackend::Auto(spec) => {
+            let exe = netd::netd_exe().context("locating limina-netd")?;
+            anyhow::ensure!(exe.exists(), "limina-netd is not at {}", exe.display());
+            let forwards = netd_forwards(spec)?;
+            let control = switch::SwitchControl::new(VmnetConfig {
+                mode: KrunVmnetMode::Shared,
+                bridged_interface: None,
+            })
+            .context("starting the network switch")?;
+            if let Some(at) = spec.control.clone() {
+                netd::serve_control(at, forwards.clone(), Some(control.clone()))
+                    .context("listening for network control")?;
+            }
+            // vmnet and netd each set their frames' headers, so the device's flag has no say.
+            let device = NetDevice::new_external(
+                "eth0",
+                switch::backend(exe, forwards, control.clone()),
+                &mac,
+                NET_VMNET_FEATURES,
+                NetFlags::empty(),
+            )
+            .map_err(|e| anyhow!("virtio-net (vmnet with limina-netd): {e:?}"))?;
+            control.set_link(device.link());
+            Ok(device)
+        }
     }
+}
+
+/// A netd NIC's forwards, each bound now so a taken port fails before the boot.
+fn netd_forwards(spec: &crate::config::NetdSpec) -> Result<Arc<netd::Forwards>> {
+    let forwards = Arc::new(netd::Forwards::default());
+    for &(host, guest_port) in &spec.forwards {
+        forwards
+            .add(host, guest_port)
+            .with_context(|| format!("forwarding {host} to guest port {guest_port}"))?;
+    }
+    Ok(forwards)
 }
 
 /// Detect the disk image format by its magic, so a user needn't tag `--disk foo.qcow2` (M10

@@ -350,7 +350,7 @@ impl SshForward {
 }
 
 /// One request on a worker's network control link, answered `ok` or `error: …`.
-fn worker_request(link: &Endpoint, request: &str) -> Result<()> {
+pub(crate) fn worker_request(link: &Endpoint, request: &str) -> Result<()> {
     use std::io::{BufRead, BufReader};
     let stream = link
         .connect()

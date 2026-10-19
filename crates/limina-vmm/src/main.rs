@@ -347,27 +347,33 @@ struct Cli {
     /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
     /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
     /// before the guest activates the device.
-    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd"])]
+    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd", "net_auto"])]
     net_gvproxy: Option<PathBuf>,
 
     /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
     /// `host` (host-only) or `bridged:<interface>`. Experimental (networking design Phase 1).
-    #[arg(long, conflicts_with = "net_netd")]
+    #[arg(long, conflicts_with_all = ["net_netd", "net_auto"])]
     net_vmnet: Option<VmnetMode>,
 
     /// Attach a user-mode NAT NIC (`eth0`) on a `limina-netd` this worker spawns from its own
     /// directory. Experimental (networking design Phase 3).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "net_auto")]
     net_netd: bool,
 
-    /// A port forward on the netd NIC, `HOST_IP:HOST_PORT:GUEST_PORT` (TCP): this worker binds
-    /// the host side and netd carries each connection to the guest's port. Repeatable.
-    #[arg(long, value_name = "HOST_IP:HOST_PORT:GUEST_PORT", value_parser = parse_forward, requires = "net_netd")]
+    /// Attach a NIC (`eth0`) on vmnet shared that moves to a `limina-netd` this worker spawns
+    /// when vmnet cannot serve, and back. Experimental (networking design Phase 4).
+    #[arg(long)]
+    net_auto: bool,
+
+    /// A port forward on a netd or auto NIC, `HOST_IP:HOST_PORT:GUEST_PORT` (TCP): this worker
+    /// binds the host side and netd carries each connection to the guest's port. Repeatable.
+    #[arg(long, value_name = "HOST_IP:HOST_PORT:GUEST_PORT", value_parser = parse_forward)]
     net_forward: Vec<(SocketAddrV4, u16)>,
 
-    /// The netd NIC's control link (an inherited link the supervisor connects over): newline
-    /// `forward HOST_IP:HOST_PORT GUEST_PORT` and `unforward HOST_IP:HOST_PORT` commands.
-    #[arg(long, requires = "net_netd")]
+    /// A netd or auto NIC's control link (an inherited link the supervisor connects over):
+    /// newline `forward HOST_IP:HOST_PORT GUEST_PORT`, `unforward HOST_IP:HOST_PORT` and, on an
+    /// auto NIC, `switch vmnet|netd` commands.
+    #[arg(long)]
     net_control_fd: Option<i32>,
 
     /// Guest MAC for the NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
@@ -846,14 +852,22 @@ fn main() -> Result<()> {
     };
 
     let net_mac = cli.net_mac.as_deref().map(parse_mac).transpose()?;
-    let net_backend = match (cli.net_gvproxy, cli.net_vmnet, cli.net_netd) {
-        (Some(socket), None, false) => Some(NetBackend::Gvproxy(socket)),
-        (None, Some(mode), false) => Some(NetBackend::Vmnet(mode)),
-        (None, None, true) => Some(NetBackend::Netd(NetdSpec {
-            forwards: cli.net_forward,
-            control: cli.net_control_fd.map(ListenAt::Link),
-        })),
-        (None, None, false) => None,
+    anyhow::ensure!(
+        cli.net_netd
+            || cli.net_auto
+            || (cli.net_forward.is_empty() && cli.net_control_fd.is_none()),
+        "--net-forward and --net-control-fd need --net-netd or --net-auto"
+    );
+    let netd_spec = NetdSpec {
+        forwards: cli.net_forward,
+        control: cli.net_control_fd.map(ListenAt::Link),
+    };
+    let net_backend = match (cli.net_gvproxy, cli.net_vmnet, cli.net_netd, cli.net_auto) {
+        (Some(socket), None, false, false) => Some(NetBackend::Gvproxy(socket)),
+        (None, Some(mode), false, false) => Some(NetBackend::Vmnet(mode)),
+        (None, None, true, false) => Some(NetBackend::Netd(netd_spec)),
+        (None, None, false, true) => Some(NetBackend::Auto(netd_spec)),
+        (None, None, false, false) => None,
         _ => unreachable!("clap rejects more than one of the --net-* backends"),
     };
     let net = net_backend.map(|backend| NetSpec {
