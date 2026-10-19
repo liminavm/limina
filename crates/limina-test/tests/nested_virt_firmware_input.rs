@@ -59,8 +59,13 @@ fn nested_virt_grub_takes_keys() {
     let cfg = cfg.with_serial_input().with_supervisor_arg("--nested-virt");
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor on the ISO");
+    // GRUB's own help line, not its title: Fedora's GRUB titles the menu "GRUB version 2.12"
+    // where Debian's says "GNU GRUB".
     guest
-        .wait_for("GNU GRUB", Duration::from_secs(90))
+        .wait_for(
+            "Press enter to boot the selected OS",
+            Duration::from_secs(90),
+        )
         .expect("the firmware did not reach the ISO's GRUB menu");
 
     // Keep pressing `c` until GRUB opens its command line. A firmware without timer events never
