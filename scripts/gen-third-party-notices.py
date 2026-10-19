@@ -41,10 +41,10 @@ import tomllib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPONENTS = os.path.join(REPO, "assets/third-party/components.toml")
-ROOTS = ("limina", "limina-vmm", "limina-gpu-host")
+ROOTS = ("limina", "limina-vmm", "limina-gpu-host", "limina-netd")
 TARGET = "aarch64-apple-darwin"
 # Bundle files that are ours, so no component claims them.
-FIRST_PARTY = {"limina", "limina-vmm", "limina-gpu-host", "liblimina_sep.dylib"}
+FIRST_PARTY = {"limina", "limina-vmm", "limina-gpu-host", "limina-netd", "liblimina_sep.dylib"}
 LICENCE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
 # For a crate with no licence file: which option of an OR expression to reproduce, and where
 # its standard text lives. MIT first — its text carries the copyright line the others lack.
