@@ -9,6 +9,11 @@
 //! handshake: it logs a lease only on the guest's REQUEST, so the line proves the whole exchange
 //! crossed the rings both ways and the guest's DHCP client took the offer.
 //!
+//! Past the link, the guest's own chronyd is the traffic: at boot it resolves the NTP pool through
+//! the gateway's DNS (answered by the host's resolver) and asks the servers it gets over UDP, so
+//! netd's account of an answered question with records, and of a reply from port 123, proves both
+//! paths out to the Internet and back to the guest.
+//!
 //! It also holds netd to its lifecycle: killed, it is replaced by the worker without the VM
 //! noticing more than a dropped link, and no netd outlives the VM.
 //!
@@ -48,15 +53,18 @@ fn wait_until(timeout: Duration, mut f: impl FnMut() -> bool) -> bool {
 }
 
 #[test]
-fn fedora_on_netd_leases_and_netd_is_replaced_when_killed() {
-    if !limina_test::require_hvf_or_skip("fedora_on_netd_leases_and_netd_is_replaced_when_killed") {
+fn fedora_on_netd_leases_resolves_reaches_ntp_and_netd_is_replaced_when_killed() {
+    if !limina_test::require_hvf_or_skip(
+        "fedora_on_netd_leases_resolves_reaches_ntp_and_netd_is_replaced_when_killed",
+    ) {
         return;
     }
 
     let cfg = GuestConfig::fedora_from_env()
         .expect("resolving guest config")
         .with_supervisor_log()
-        .with_supervisor_arg("--net-netd");
+        .with_supervisor_arg("--net-netd")
+        .with_env("RUST_LOG", "info,limina_netd=debug");
     eprintln!("booting Fedora on a limina-netd NIC");
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
@@ -64,6 +72,30 @@ fn fedora_on_netd_leases_and_netd_is_replaced_when_killed() {
     guest
         .wait_for_supervisor_log("DHCP: leased 192.168.127.2", Duration::from_secs(180))
         .unwrap_or_else(|e| panic!("the guest never leased from limina-netd: {e:#}"));
+
+    // The NTP pool, resolved and asked.
+    let resolved = |log: &str| {
+        log.lines().any(|l| {
+            l.contains("DNS: answered")
+                && !l.contains("rcode 0 and 0 records")
+                && l.contains("rcode 0")
+        })
+    };
+    assert!(
+        wait_until(Duration::from_secs(120), || resolved(
+            &guest.supervisor_log()
+        )),
+        "no DNS question answered with records; supervisor log:\n{}",
+        guest.supervisor_log()
+    );
+    assert!(
+        wait_until(Duration::from_secs(120), || guest
+            .supervisor_log()
+            .lines()
+            .any(|l| l.contains(":123 answered the guest's port"))),
+        "no NTP reply reached the guest; supervisor log:\n{}",
+        guest.supervisor_log()
+    );
 
     let first = *netd_pids(&guest.supervisor_log())
         .first()

@@ -1,8 +1,11 @@
-//! What netd answers on the guest's link itself: ARP for the gateway, and DHCP.
+//! The guest's link as netd sees it: ARP for the gateway and DHCP answered here, UDP handed up
+//! for netd to re-originate, and the guest-bound frames built.
 //!
 //! Frames come in and go out with their 12-byte `virtio_net_hdr` in front. Checksums in the
 //! guest's frames are not checked: with checksum offload they are partial, and the guest is the
 //! only sender on the link. netd's own frames carry full checksums.
+
+use std::net::SocketAddrV4;
 
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
@@ -38,11 +41,26 @@ impl Default for Link {
     }
 }
 
+/// The guest's MTU: DHCP sets none, so the guest's default.
+const MTU: usize = 1500;
+
+/// What the guest sent that netd has to take further than its link.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Ingress<'a> {
+    Udp {
+        guest_port: u16,
+        dst: SocketAddrV4,
+        payload: &'a [u8],
+    },
+}
+
 /// The netd side of the guest's link.
 pub struct Stack {
     link: Link,
     /// The guest's MAC, once it has spoken.
     guest_mac: Option<EthernetAddress>,
+    /// The IPv4 identification of the next datagram netd sends, which fragments share.
+    ident: u16,
 }
 
 impl Stack {
@@ -50,26 +68,46 @@ impl Stack {
         Self {
             link,
             guest_mac: None,
+            ident: 0,
         }
     }
 
-    /// Handles one frame from the guest; every frame netd answers with is handed to `reply`.
-    pub fn handle(&mut self, frame: &[u8], reply: &mut dyn FnMut(&[u8])) {
-        let Some(eth) = frame
-            .get(VNET_HDR_LEN..)
-            .and_then(|f| EthernetFrame::new_checked(f).ok())
-        else {
-            return;
-        };
-        let Ok(repr) = EthernetRepr::parse(&eth) else {
-            return;
-        };
+    pub fn link(&self) -> &Link {
+        &self.link
+    }
+
+    /// Handles one frame from the guest. Frames netd answers on the link (ARP, DHCP) go to
+    /// `reply`; what has to leave the link comes back.
+    pub fn handle<'a>(
+        &mut self,
+        frame: &'a [u8],
+        reply: &mut dyn FnMut(&[u8]),
+    ) -> Option<Ingress<'a>> {
+        let eth = EthernetFrame::new_checked(frame.get(VNET_HDR_LEN..)?).ok()?;
+        let repr = EthernetRepr::parse(&eth).ok()?;
         self.guest_mac.get_or_insert(repr.src_addr);
         match repr.ethertype {
-            EthernetProtocol::Arp => self.arp(eth.payload(), reply),
+            EthernetProtocol::Arp => {
+                self.arp(eth.payload(), reply);
+                None
+            }
             EthernetProtocol::Ipv4 => self.ipv4(repr.src_addr, eth.payload(), reply),
-            _ => {}
+            _ => None,
         }
+    }
+
+    /// A UDP datagram from `src` to the guest's `guest_port`, framed (and fragmented to the MTU)
+    /// for the guest; each frame goes to `out`.
+    pub fn udp_to_guest(
+        &mut self,
+        src: SocketAddrV4,
+        guest_port: u16,
+        payload: &[u8],
+        out: &mut dyn FnMut(&[u8]),
+    ) {
+        let dst_mac = self.guest_mac.unwrap_or(EthernetAddress::BROADCAST);
+        let dst = SocketAddrV4::new(self.link.guest, guest_port);
+        self.udp_frames(dst_mac, src, dst, payload, out);
     }
 
     fn arp(&self, payload: &[u8], reply: &mut dyn FnMut(&[u8])) {
@@ -110,34 +148,46 @@ impl Stack {
         reply(&buf);
     }
 
-    fn ipv4(&self, src_mac: EthernetAddress, payload: &[u8], reply: &mut dyn FnMut(&[u8])) {
+    fn ipv4<'a>(
+        &mut self,
+        src_mac: EthernetAddress,
+        payload: &'a [u8],
+        reply: &mut dyn FnMut(&[u8]),
+    ) -> Option<Ingress<'a>> {
         let ignore = ChecksumCapabilities::ignored();
-        let Ok(packet) = Ipv4Packet::new_checked(payload) else {
-            return;
-        };
-        let Ok(ip) = Ipv4Repr::parse(&packet, &ignore) else {
-            return;
-        };
-        if ip.next_header != IpProtocol::Udp {
-            return;
+        let packet = Ipv4Packet::new_checked(payload).ok()?;
+        // The guest fragments only what exceeds its MTU, which nothing it sends through a NAT
+        // should; reassembly is not worth carrying for it.
+        if packet.more_frags() || packet.frag_offset() != 0 {
+            log::debug!("dropping an IPv4 fragment from the guest");
+            return None;
         }
-        let Ok(udp_packet) = UdpPacket::new_checked(packet.payload()) else {
-            return;
-        };
-        let Ok(udp) = UdpRepr::parse(
+        let ip = Ipv4Repr::parse(&packet, &ignore).ok()?;
+        if ip.next_header != IpProtocol::Udp {
+            return None;
+        }
+        let payload: &'a [u8] = &payload[packet.header_len() as usize..][..ip.payload_len];
+        let udp_packet = UdpPacket::new_checked(payload).ok()?;
+        let udp = UdpRepr::parse(
             &udp_packet,
             &ip.src_addr.into(),
             &ip.dst_addr.into(),
             &ignore,
-        ) else {
-            return;
-        };
+        )
+        .ok()?;
         if udp.dst_port == DHCP_SERVER_PORT {
-            self.dhcp(src_mac, udp_packet.payload(), reply);
+            self.dhcp(src_mac, &payload[UDP_HEADER_LEN..], reply);
+            return None;
         }
+        let data_len = (udp_packet.len() as usize).checked_sub(UDP_HEADER_LEN)?;
+        Some(Ingress::Udp {
+            guest_port: udp.src_port,
+            dst: SocketAddrV4::new(ip.dst_addr, udp.dst_port),
+            payload: payload.get(UDP_HEADER_LEN..UDP_HEADER_LEN + data_len)?,
+        })
     }
 
-    fn dhcp(&self, src_mac: EthernetAddress, payload: &[u8], reply: &mut dyn FnMut(&[u8])) {
+    fn dhcp(&mut self, src_mac: EthernetAddress, payload: &[u8], reply: &mut dyn FnMut(&[u8])) {
         let Ok(packet) = DhcpPacket::new_checked(payload) else {
             return;
         };
@@ -211,59 +261,75 @@ impl Stack {
                 request.client_hardware_address
             );
         }
-        reply(&self.udp_frame(
-            dst_mac,
-            dst_ip,
-            DHCP_SERVER_PORT,
-            DHCP_CLIENT_PORT,
-            |p| {
-                let mut packet = DhcpPacket::new_unchecked(p);
-                repr.emit(&mut packet).expect("sized by buffer_len");
-            },
-            repr.buffer_len(),
-        ))
+        let mut msg = vec![0u8; repr.buffer_len()];
+        repr.emit(&mut DhcpPacket::new_unchecked(&mut msg[..]))
+            .expect("sized by buffer_len");
+        let src = SocketAddrV4::new(self.link.gateway, DHCP_SERVER_PORT);
+        let dst = SocketAddrV4::new(dst_ip, DHCP_CLIENT_PORT);
+        self.udp_frames(dst_mac, src, dst, &msg, reply);
     }
 
-    /// A UDP datagram from the gateway, framed for the guest.
-    fn udp_frame(
-        &self,
+    /// A UDP datagram from `src` to `dst` on the guest's link, in as many frames as the MTU
+    /// takes.
+    fn udp_frames(
+        &mut self,
         dst_mac: EthernetAddress,
-        dst_ip: Ipv4Address,
-        src_port: u16,
-        dst_port: u16,
-        payload: impl FnOnce(&mut [u8]),
-        payload_len: usize,
-    ) -> Vec<u8> {
-        let udp_len = UDP_HEADER_LEN + payload_len;
-        let mut buf = frame_buf(IPV4_HEADER_LEN + udp_len);
+        src: SocketAddrV4,
+        dst: SocketAddrV4,
+        payload: &[u8],
+        out: &mut dyn FnMut(&[u8]),
+    ) {
         let caps = ChecksumCapabilities::default();
-        let mut frame = EthernetFrame::new_unchecked(&mut buf[VNET_HDR_LEN..]);
-        EthernetRepr {
-            src_addr: self.link.gateway_mac,
-            dst_addr: dst_mac,
-            ethertype: EthernetProtocol::Ipv4,
+        let mut datagram = vec![0u8; UDP_HEADER_LEN + payload.len()];
+        UdpRepr {
+            src_port: src.port(),
+            dst_port: dst.port(),
         }
-        .emit(&mut frame);
-        let ip = Ipv4Repr {
-            src_addr: self.link.gateway,
-            dst_addr: dst_ip,
-            next_header: IpProtocol::Udp,
-            payload_len: udp_len,
-            hop_limit: 64,
-        };
-        let mut packet = Ipv4Packet::new_unchecked(frame.payload_mut());
-        ip.emit(&mut packet, &caps);
-        let src: IpAddress = self.link.gateway.into();
-        let dst: IpAddress = dst_ip.into();
-        UdpRepr { src_port, dst_port }.emit(
-            &mut UdpPacket::new_unchecked(packet.payload_mut()),
-            &src,
-            &dst,
-            payload_len,
-            payload,
+        .emit(
+            &mut UdpPacket::new_unchecked(&mut datagram[..]),
+            &IpAddress::from(*src.ip()),
+            &IpAddress::from(*dst.ip()),
+            payload.len(),
+            |p| p.copy_from_slice(payload),
             &caps,
         );
-        buf
+        let ident = self.ident;
+        self.ident = self.ident.wrapping_add(1);
+        // Fragments carry multiples of 8 bytes, all but the last.
+        let per_frame = (MTU - IPV4_HEADER_LEN) & !7;
+        let mut offset = 0;
+        loop {
+            let len = (datagram.len() - offset).min(per_frame);
+            let more = offset + len < datagram.len();
+            let mut buf = frame_buf(IPV4_HEADER_LEN + len);
+            let mut frame = EthernetFrame::new_unchecked(&mut buf[VNET_HDR_LEN..]);
+            EthernetRepr {
+                src_addr: self.link.gateway_mac,
+                dst_addr: dst_mac,
+                ethertype: EthernetProtocol::Ipv4,
+            }
+            .emit(&mut frame);
+            let mut packet = Ipv4Packet::new_unchecked(frame.payload_mut());
+            Ipv4Repr {
+                src_addr: *src.ip(),
+                dst_addr: *dst.ip(),
+                next_header: IpProtocol::Udp,
+                payload_len: len,
+                hop_limit: 64,
+            }
+            .emit(&mut packet, &ChecksumCapabilities::ignored());
+            packet.set_ident(ident);
+            packet.set_dont_frag(!more && offset == 0);
+            packet.set_more_frags(more);
+            packet.set_frag_offset(offset as u16);
+            packet.fill_checksum();
+            packet.payload_mut()[..len].copy_from_slice(&datagram[offset..offset + len]);
+            out(&buf);
+            offset += len;
+            if !more {
+                break;
+            }
+        }
     }
 }
 
@@ -361,8 +427,110 @@ mod tests {
 
     fn answers(stack: &mut Stack, frame: &[u8]) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        stack.handle(frame, &mut |f| out.push(f.to_vec()));
+        let _ = stack.handle(frame, &mut |f| out.push(f.to_vec()));
         out
+    }
+
+    /// A UDP datagram from the guest's `port` to `dst`, as its driver would frame it.
+    fn udp_from_guest(port: u16, dst: SocketAddrV4, payload: &[u8]) -> Vec<u8> {
+        let link = Link::default();
+        let udp_len = UDP_HEADER_LEN + payload.len();
+        let eth = EthernetRepr {
+            src_addr: GUEST_MAC,
+            dst_addr: link.gateway_mac,
+            ethertype: EthernetProtocol::Ipv4,
+        };
+        from_guest(eth, IPV4_HEADER_LEN + udp_len, |p| {
+            let caps = ChecksumCapabilities::default();
+            let mut packet = Ipv4Packet::new_unchecked(p);
+            Ipv4Repr {
+                src_addr: link.guest,
+                dst_addr: *dst.ip(),
+                next_header: IpProtocol::Udp,
+                payload_len: udp_len,
+                hop_limit: 64,
+            }
+            .emit(&mut packet, &caps);
+            UdpRepr {
+                src_port: port,
+                dst_port: dst.port(),
+            }
+            .emit(
+                &mut UdpPacket::new_unchecked(packet.payload_mut()),
+                &IpAddress::from(link.guest),
+                &IpAddress::from(*dst.ip()),
+                payload.len(),
+                |d| d.copy_from_slice(payload),
+                &caps,
+            );
+        })
+    }
+
+    #[test]
+    fn a_guest_datagram_is_handed_up_with_its_port_and_destination() {
+        let mut stack = Stack::new(Link::default());
+        let dst = SocketAddrV4::new(Ipv4Address::new(1, 1, 1, 1), 53);
+        let frame = udp_from_guest(41000, dst, b"query");
+        let ingress = stack.handle(&frame, &mut |_| panic!("nothing is answered on the link"));
+        assert_eq!(
+            ingress,
+            Some(Ingress::Udp {
+                guest_port: 41000,
+                dst,
+                payload: b"query"
+            })
+        );
+
+        let mut fragment = frame.clone();
+        let ip = VNET_HDR_LEN + ETHERNET_HEADER_LEN;
+        fragment[ip + 6] |= 0x20; // more fragments
+        assert_eq!(stack.handle(&fragment, &mut |_| {}), None);
+    }
+
+    /// A reply larger than the MTU goes to the guest in fragments that reassemble to the datagram,
+    /// each with a valid header checksum, and the UDP checksum valid over the whole.
+    #[test]
+    fn a_large_reply_is_fragmented_to_the_mtu() {
+        let link = Link::default();
+        let mut stack = Stack::new(link.clone());
+        let _ = stack.handle(
+            &udp_from_guest(
+                41000,
+                SocketAddrV4::new(Ipv4Address::new(9, 9, 9, 9), 53),
+                b"q",
+            ),
+            &mut |_| {},
+        );
+        let src = SocketAddrV4::new(Ipv4Address::new(9, 9, 9, 9), 53);
+        let payload: Vec<u8> = (0..4000u32).map(|i| i as u8).collect();
+        let mut frames = Vec::new();
+        stack.udp_to_guest(src, 41000, &payload, &mut |f| frames.push(f.to_vec()));
+        assert_eq!(frames.len(), 3);
+
+        let caps = ChecksumCapabilities::default();
+        let mut datagram = Vec::new();
+        let mut ident = None;
+        for (i, f) in frames.iter().enumerate() {
+            assert!(f.len() - VNET_HDR_LEN - ETHERNET_HEADER_LEN <= MTU);
+            let eth = EthernetFrame::new_checked(&f[VNET_HDR_LEN..]).unwrap();
+            assert_eq!(eth.dst_addr(), GUEST_MAC);
+            let packet = Ipv4Packet::new_checked(eth.payload()).unwrap();
+            assert!(packet.verify_checksum(), "fragment {i}'s header checksum");
+            assert_eq!(packet.frag_offset() as usize, datagram.len());
+            assert_eq!(packet.more_frags(), i + 1 < frames.len());
+            assert_eq!(*ident.get_or_insert(packet.ident()), packet.ident());
+            datagram.extend_from_slice(packet.payload());
+        }
+        let udp = UdpPacket::new_checked(&datagram[..]).unwrap();
+        UdpRepr::parse(
+            &udp,
+            &IpAddress::from(*src.ip()),
+            &IpAddress::from(link.guest),
+            &caps,
+        )
+        .expect("the UDP checksum over the reassembled datagram");
+        assert_eq!(udp.dst_port(), 41000);
+        assert_eq!(udp.payload(), &payload[..]);
     }
 
     #[test]
