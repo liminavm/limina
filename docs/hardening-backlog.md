@@ -934,6 +934,31 @@ the host Mesa fork (vrend's sync thread waits on those fences from another, shar
 is the case Mesa's single-context guard exists for), and persistent host pipeline caches (they
 shorten the first stall per host but leave the structure).
 
+### Metal's own shader cache is unmanaged and unexplained
+Below Mesa's disk cache, which limina now places and caps per VM (`--gpu-shader-cache`), macOS keeps
+a per-user Metal cache under `$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal/` (here two
+directories, `16777235_530` and `32024`, each holding `functions*.{data,list}`). limina neither
+places, sizes nor clears it, and nothing here says what it keys on. It matters: with Mesa's cache
+empty, Loupe's About dialog on a host whose Metal cache already held the GLSL path's pipelines
+stalled the worker 263–267 ms. The first three boots on vrend's SPIR-V path, which produces
+different MSL, stalled 3.6 s, 0.56 s and 0.43 s, nearly all in fences, before settling at 197–200 ms
+(measured 2026-10-20, `spikes/vrend-spirv-gles/RESULTS.md`). So a host that has never run a
+workload pays a Metal compile that no test here measures, and every "cold" number taken so far is
+cold for Mesa only.
+
+Open questions:
+- What the cache keys on: MSL source, pipeline descriptor, GPU, OS build, or the process's
+  identity (the worker binary, its signature, its bundle id).
+- Its size cap and eviction, and whether a macOS or Xcode update empties it.
+- Whether KosmicKrisp's `VkPipelineCache` maps onto `MTLBinaryArchive`, or could. An archive limina
+  owns could be placed per VM, like the Mesa cache.
+- What an App Store sandbox changes about the cache's location.
+
+Next: read Apple's documentation on `MTLBinaryArchive` and the shader cache, and inspect the cache
+directories while a worker compiles. Measure a truly cold boot by pointing the cache somewhere empty,
+if anything allows that (an environment variable, a different user, or a sandboxed container). Then
+decide whether limina manages it as it does Mesa's, pre-warms it, or only documents it.
+
 ### Texture uploads on virgl create a staging resource thousands of times per run
 The same runs show 7–8k `RESOURCE_CREATE` per 15 s on the canvas thread, about 100 of them over
 1 ms, mostly `virgl_staging_alloc` ← `virgl_resource_transfer_map` ← `st_texture_image_map` on the
