@@ -1,7 +1,13 @@
 # vrend shaders as SPIR-V, not GLSL text
 
-**Status:** in progress. The corpus is widened and `Layout` holds every number the GLSL prints;
-the numbers only SPIR-V needs and the emitter are next.
+**Status:** in progress, behind `VIRGLRS_SPIRV=1`. The emitter writes vertex and fragment shaders
+with constants, generic varyings, the ALU opcodes, structured control flow and 2D/3D/cube/array
+sampling — 115 of the 151 captured blocks — and a program whose two stages both have a module links
+from SPIR-V, falling back to GLSL when the host refuses it. Measured 2026-10-20 on zink-KosmicKrisp
+with the GLES patch, Mesa's cache disabled, three replays a mode: a program build (translation,
+compile and link) costs 1.34 ms against 2.01 ms from GLSL on `vrend-webgl` (−33%) and 1.39 ms
+against 2.02 ms on `vrend` (−31%), and submit time per command falls 12% and 15%; the scores are
+unchanged. The About dialog in a VM is the measurement still owed before the default changes.
 
 ## Problem
 
