@@ -399,6 +399,11 @@ evidence about our present path.
   kernels and two mesa versions this way. The installer's multi-kernel guard would have refused it
   loudly, but nothing stopped it from being *built*. Both scripts now collect by exact NEVR and
   clean `$OUT`.
+- **GRUB prints `bli.c:set_loader_device_part_uuid:123:unable to determine partition UUID of boot
+  device` on every Fedora boot, on any firmware.** Fedora's aarch64 images carry an MBR (DOS)
+  partition table, and GRUB's `bli` module, which publishes `LoaderDevicePartUUID` for systemd,
+  reads only GPT entries: it fails with "not a GPT partition table" and reports it under the
+  generic message. Harmless; the cost is that systemd's GPT auto-discovery has no boot partition.
 - **The accessible-derived images ship `org.gnome.shell disable-user-extensions=true`** (origin
   unknown, not our provisioning). On such guests any extension-based tier is blocked. Consider
   clearing it in `make-accessible.sh` at the next respin.
