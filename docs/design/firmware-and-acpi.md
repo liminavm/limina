@@ -192,5 +192,7 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
 
 ## Open questions
 
-- Cardea's license (MIT) and the licenses of the crates it links (`fdt` is MPL-2.0), which need
-  the same counsel review as the rest of the tree before a release tag.
+- Cardea's license (MIT) and the licenses of the crates it links, which need the same counsel
+  review as the rest of the tree before a release tag. Every one is MIT or Apache-2.0 (`r-efi`
+  adds LGPL-2.1 as a third option) except `subtle`, BSD-3-Clause, whose notice a binary
+  distribution must carry.
