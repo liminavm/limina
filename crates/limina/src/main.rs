@@ -331,12 +331,14 @@ struct Cli {
     #[arg(long, value_enum)]
     machine: Option<vmlib::schema::Machine>,
 
-    /// On the ACPI machine, name the serial port as the OS's console — forwarded to the worker
-    /// (`--acpi-spcr`). The guest takes it as its only console, so kernel and initramfs output
-    /// go to the serial line instead of the display: a debugging aid. The device-tree machine
-    /// always names it. A managed VM takes it from `hardware.serial_console`.
-    #[arg(long)]
-    serial_console: bool,
+    /// On the ACPI machine, whether the guest runs a console on the serial line: `off` (the
+    /// default), `both` (the firmware adds `console=` arguments to a Linux kernel's command line,
+    /// keeping the display's console and splash; forwarded as `--extra-bootargs`) or `only` (an
+    /// SPCR table makes the serial line the only console; forwarded as `--acpi-spcr`). The
+    /// device-tree machine always names the serial port. A managed VM takes it from
+    /// `hardware.serial_console`.
+    #[arg(long, value_enum, default_value_t)]
+    serial_console: vmlib::schema::SerialConsole,
 
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
@@ -1986,9 +1988,14 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             args.push("--efi-vars".into());
             args.push(path_arg(&vars)?);
         }
-        // The worker reads it only on the ACPI machine, which is decided per spawn.
-        if cli.serial_console {
-            args.push("--acpi-spcr".into());
+        // The worker reads these only on the ACPI machine, which is decided per spawn.
+        match cli.serial_console {
+            vmlib::schema::SerialConsole::Off => {}
+            vmlib::schema::SerialConsole::Both => {
+                args.push("--extra-bootargs".into());
+                args.push(vmlib::schema::SerialConsole::BOTH_BOOTARGS.into());
+            }
+            vmlib::schema::SerialConsole::Only => args.push("--acpi-spcr".into()),
         }
     }
     if let Some(rootfs) = &cli.rootfs {

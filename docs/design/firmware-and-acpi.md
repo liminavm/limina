@@ -74,8 +74,16 @@ Parked snapshots do not survive it (restore refuses a machine whose devices chan
 (`drivers/acpi/platform_profile.c`) but a provider driver must still register, and stock arm64
 has none. It stays agent-driven or an enhanced-tier driver.
 
-SPCR is for headless VMs only: it makes the kernel use the UART as a console, which forces Plymouth
-into details mode. Windowed VMs get no SPCR.
+No ACPI table gives a guest a console on both the display and the serial line, as the device
+tree's `stdout-path` does: an SPCR is parsed in `setup_arch`, before the display's console
+registers, so it becomes the preferred console and the display's is never enabled (printk's
+`register_console` enables a default only while no console is preferred). So the ACPI machine's
+serial console is a setting, `hardware.serial_console` / `--serial-console`, off by default:
+`both` hands the firmware `console=ttyAMA0 console=tty0 plymouth.ignore-serial-consoles` in
+`/chosen/libkrun,extra-bootargs`, which Cardea appends to a Linux kernel's load options at
+`StartImage` (the display stays `/dev/console` and keeps the splash; the serial line gets the
+kernel's console and a getty); `only` writes an SPCR, for a guest whose display is no use. Off,
+the serial line carries only the firmware's and the loader's output.
 
 ### From ACPI — enhanced tier
 
@@ -90,7 +98,7 @@ Driver bindings verified against kernel source.
 |---|---|---|
 | `/cpus` nodes | MADT GICC per vCPU **plus** an `ACPI0007` processor device per vCPU (`_UID` = the GICC's processor UID) and a PPTT | without the processor devices Linux registers no CPU devices: topology/cacheinfo WARN, lscpu shows 0 sockets, qemu-ga's vCPU calls abort |
 | virtio-mmio `virtio,mmio` | `LNRO0005` | mechanical |
-| PL011 `arm,pl011` | `ARMH0011` | mechanical; SPCR only when headless |
+| PL011 `arm,pl011` | `ARMH0011` | done; a console on it only on request (`serial_console`, above) |
 | xHCI `generic-xhci` + `dma-coherent` | `PNP0D10` + `_CCA` | mechanical |
 | PL031 `rtc-pl031` | **no ACPI ID** — the guest keeps only `rtc-efi` (its `rtc0` on both machines; the device tree adds the PL031 as `rtc1`) | firmware runtime `GetTime`/`SetTime` and `Get/SetWakeupTime`; host-sleep sleeptime injection rides `rtc-efi` already |
 | `gpio-keys` power/sleep/restart/wake | **no ACPI table** in `gpio_keys.c` | **done**: the PL061 (`ARMH0061`) with an `_AEI` listing lines 3, 4 and 6 as GpioInt events; `_E03`/`_E04` notify `PNP0C0C`/`PNP0C0E` (0x80), line 6 is `ExclusiveAndWake` and `_E06` notifies the sleep button with 0x02. The same eventfds drive it, so the M9.2 wake works in s2idle (the guest's own wake IRQ) and deep. KEY_RESTART has no ACPI button. Check: `spikes/acpi-guest/buttons.sh` |

@@ -164,12 +164,11 @@ pub struct Hardware {
     /// next full boot. See `--machine`.
     #[serde(default)]
     pub machine: Machine,
-    /// On the ACPI machine, name the serial port as the OS's console (default false). The guest
-    /// then takes it as its only console: kernel and initramfs output, an early prompt included,
-    /// go to the serial line instead of the display, so this is for debugging. The device-tree
-    /// machine always names it. See `--serial-console`.
+    /// Whether a guest on the ACPI machine runs a console on the serial line (default `off`; see
+    /// [`SerialConsole`]). The device-tree machine always names the serial port. See
+    /// `--serial-console`.
     #[serde(default)]
-    pub serial_console: bool,
+    pub serial_console: SerialConsole,
 }
 
 fn default_true() -> bool {
@@ -224,7 +223,7 @@ impl Default for Hardware {
             ipa_granule: IpaGranule::default(),
             nested_virt: false,
             machine: Machine::default(),
-            serial_console: false,
+            serial_console: SerialConsole::Off,
         }
     }
 }
@@ -647,6 +646,35 @@ impl IpaGranule {
     }
 }
 
+/// Whether a guest on the ACPI machine runs a console on the serial line, for debugging one that
+/// does not come up. The firmware's and the loader's output reach the serial line whatever this
+/// says; the kernel's log and a serial login need the guest's own console there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+pub enum SerialConsole {
+    /// The display is the guest's only console.
+    #[default]
+    #[serde(rename = "off")]
+    #[value(name = "off")]
+    Off,
+    /// The display and the serial line: the firmware adds `console=` arguments to a Linux
+    /// kernel's command line, keeping the display as `/dev/console` and the boot splash.
+    #[serde(rename = "both")]
+    #[value(name = "both")]
+    Both,
+    /// The serial line only, named in an SPCR table: kernel and initramfs output, an early prompt
+    /// included, leave the display.
+    #[serde(rename = "only")]
+    #[value(name = "only")]
+    Only,
+}
+
+impl SerialConsole {
+    /// What the firmware adds to a Linux kernel's command line for [`SerialConsole::Both`]. The
+    /// last `console=` becomes `/dev/console`, so the display keeps it; Plymouth gives up its
+    /// splash for any serial console unless told to ignore them.
+    pub const BOTH_BOOTARGS: &str = "console=ttyAMA0 console=tty0 plymouth.ignore-serial-consoles";
+}
+
 /// How the machine is described to the guest's OS (docs/design/firmware-and-acpi.md): arm64
 /// Linux takes ACPI or a device tree, never both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
@@ -1018,11 +1046,17 @@ mod tests {
     #[test]
     fn serial_console_defaults_off_and_round_trips() {
         let h: Hardware = toml::from_str("").unwrap();
-        assert!(!h.serial_console);
-        let h: Hardware = toml::from_str("serial_console = true").unwrap();
-        assert!(h.serial_console);
-        let back = toml::to_string(&h).unwrap();
-        assert!(back.contains("serial_console = true"), "{back}");
+        assert_eq!(h.serial_console, SerialConsole::Off);
+        for (text, want) in [("both", SerialConsole::Both), ("only", SerialConsole::Only)] {
+            let h: Hardware = toml::from_str(&format!("serial_console = \"{text}\"")).unwrap();
+            assert_eq!(h.serial_console, want);
+            let back = toml::to_string(&h).unwrap();
+            assert!(
+                back.contains(&format!("serial_console = \"{text}\"")),
+                "{back}"
+            );
+        }
+        assert!(toml::from_str::<Hardware>("serial_console = true").is_err());
     }
 
     /// The Metal transport is off unless a definition turns it on, including every vm.toml

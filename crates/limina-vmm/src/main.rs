@@ -321,6 +321,11 @@ struct Cli {
     #[arg(long)]
     acpi_spcr: bool,
 
+    /// With `--acpi`, arguments the firmware adds to a Linux kernel's command line as it starts
+    /// it. **EFI boot only**: a `--kernel` boot takes its command line whole.
+    #[arg(long, value_name = "ARGS", conflicts_with = "kernel")]
+    extra_bootargs: Option<String>,
+
     /// Inherited link (`limina_launch::connect`) for the stock-tier FIDO USB gadget (M14 Stage
     /// C). The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
     /// CTAPHID frames over a connection on this link to the supervisor's authenticator
@@ -916,6 +921,7 @@ fn main() -> Result<()> {
         efi_vars: cli.efi_vars.clone(),
         acpi: cli.acpi,
         acpi_spcr: cli.acpi_spcr,
+        extra_bootargs: cli.extra_bootargs.clone(),
         fido_socket: cli.fido_fd.map(ListenAt::Link),
         moc_socket: cli.moc_fd.map(ListenAt::Link),
         free_page_reporting: cli.balloon_free_page_reporting,

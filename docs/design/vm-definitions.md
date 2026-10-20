@@ -84,6 +84,10 @@ input  = false       # virtio keyboard/pointer/mouse/touchpad on a HEADLESS run 
                      # `limina input` (= --input; a window always has them). Changes the
                      # device set: a suspend resumes only with the same value (the worker
                      # refuses the other and keeps the snapshot). `start --input` = one run.
+machine = "acpi"     # acpi|device-tree: how the OS learns the machine (firmware-and-acpi.md)
+serial_console = "off" # ACPI machine: off|both|only. both = the firmware adds console= args
+                     # to a Linux kernel's command line (serial login + kernel log, display
+                     # and splash kept); only = an SPCR, the serial line becomes the only console
 
 [[disk]]                        # ordered — attach order IS device order (M10)
 path  = "disks/root.raw"        # relative = inside the bundle

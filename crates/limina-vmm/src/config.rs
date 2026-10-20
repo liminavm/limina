@@ -331,6 +331,8 @@ pub struct VmSpec {
     pub acpi: bool,
     /// Name the serial port in an ACPI SPCR, making it the OS's only console. See `--acpi-spcr`.
     pub acpi_spcr: bool,
+    /// What the firmware adds to a Linux kernel's command line. See `--extra-bootargs`.
+    pub extra_bootargs: Option<String>,
     /// Where the stock-tier FIDO USB gadget (M14 Stage C) takes the supervisor's connection. When
     /// set (and `usb` is true) the worker cold-plugs a HID report-pipe gadget with the FIDO
     /// identity and bridges its CTAPHID frames to the supervisor's authenticator over it.
