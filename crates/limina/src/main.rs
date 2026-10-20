@@ -1911,7 +1911,9 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // CpuPressure over the same control plane and answers with how many vCPUs to keep online.
     // `new` returns None whenever the mode is disabled or the VM has no vCPUs to spare, and that
     // None is what withholds the `vcpu` capability — so the guest never reports either.
-    let vcpu_policy = vcpu_policy::VcpuPolicy::new(cli.cpus, cli.cpu_reclaim);
+    let little = if cli.cpufreq { cli.little_vcpus } else { 0 };
+    let vcpu_policy = vcpu_policy::VcpuPolicy::new(cli.cpus, cli.cpu_reclaim)
+        .map(|p| p.with_little_vcpus(little));
 
     // Forward the VM options to the worker's CLI.
     let mut args: Vec<String> = vec![

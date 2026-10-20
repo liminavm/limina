@@ -672,7 +672,8 @@ impl ControlPlane {
         let Ok(vcpus) = qga.get_vcpus() else {
             return true; // never read the state, so we never offlined anything through it
         };
-        let plan = crate::qga::vcpu::plan(&vcpus, want_online);
+        // A grow to every vCPU: the order is moot.
+        let plan = crate::qga::vcpu::plan(&vcpus, want_online, |_| 0);
         if plan.is_empty() {
             return true;
         }
@@ -910,7 +911,7 @@ impl Inner {
             self.qga_vcpu_failures.store(0, Ordering::Relaxed);
             return;
         };
-        let plan = crate::qga::vcpu::plan(&vcpus, target.online);
+        let plan = crate::qga::vcpu::plan(&vcpus, target.online, |id| policy.capacity(id));
         if plan.is_empty() {
             return;
         }

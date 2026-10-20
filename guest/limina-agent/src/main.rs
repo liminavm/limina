@@ -477,7 +477,15 @@ fn apply_cpu_target(t: CpuTarget) {
         return;
     };
     let present = std::fs::read_to_string(format!("{CPU_SYSFS}/present")).unwrap_or_default();
-    for (cpu, up) in limina_proto::plan_cpu_transitions(&online, &present, t.online) {
+    // Linux's own view of each CPU's capacity, present for offline CPUs too; a kernel without it
+    // reads as a uniform machine.
+    let capacity = |cpu: u32| {
+        std::fs::read_to_string(format!("{CPU_SYSFS}/cpu{cpu}/cpu_capacity"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    for (cpu, up) in limina_proto::plan_cpu_transitions(&online, &present, t.online, capacity) {
         let path = format!("{CPU_SYSFS}/cpu{cpu}/online");
         let want = if up { "1" } else { "0" };
         match std::fs::write(&path, want) {

@@ -205,6 +205,9 @@ struct State {
 pub struct VcpuPolicy {
     /// The VM's boot vCPU count: the maximum, and what a grow always jumps to.
     max: u32,
+    /// How many of the vCPUs, the last ones, are little (`--little-vcpus`): the planners offline
+    /// them last ([`VcpuPolicy::capacity`]).
+    little: u32,
     /// The fewest vCPUs to leave online, derived from the current reclaim mode. Settable at
     /// runtime ([`VcpuPolicy::set_reclaim`]) because the guest's power profile chooses it:
     /// `power-saver` tightens the floor, and leaving it is what restores the whole machine.
@@ -239,6 +242,7 @@ impl VcpuPolicy {
         log::info!("dynamic vCPUs: {floor}..{max} online (reclaim {mode:?}, dwell {dwell:?})");
         Some(VcpuPolicy {
             max,
+            little: 0,
             floor: AtomicU32::new(floor),
             dwell,
             worker_pid: Mutex::new(None),
@@ -247,6 +251,17 @@ impl VcpuPolicy {
                 last_host: None,
             }),
         })
+    }
+
+    /// Mark the last `little` vCPUs as little, as the worker's cpufreq device describes them.
+    pub fn with_little_vcpus(mut self, little: u32) -> Self {
+        self.little = little.min(self.max);
+        self
+    }
+
+    /// A vCPU's capacity as the offline planners rank it: 0 for a little vCPU, 1 for a big one.
+    pub fn capacity(&self, id: u32) -> u32 {
+        u32::from(id < self.max - self.little)
     }
 
     /// The fewest vCPUs this policy will currently leave online.
