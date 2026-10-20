@@ -145,6 +145,13 @@ int main(int argc, char **argv)
     glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     glUseProgram(prog);
+    // consts[1] = (1,1,1,1): location 0 is the array's first element, so element 1 is location 1.
+    const GLuint ones[4] = {1, 1, 1, 1};
+    glUniform4uiv(1, 1, ones);
+    if (glGetError() != GL_NO_ERROR) {
+        printf("FAIL: glUniform4uiv by location\n");
+        return 1;
+    }
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     unsigned char inside[4], outside[4];

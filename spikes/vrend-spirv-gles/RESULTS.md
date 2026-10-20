@@ -22,4 +22,8 @@ The patch (branch `limina-kk-spirv-gles` in the Mesa fork, local):
 `ctx->Extensions.ARB_gl_spirv`, not the API. The SPIR-V link path (`gl_nir_link_spirv`) linked an
 ES program with a uniform block at an explicit binding without complaint; the audit for
 desktop-only assumptions continues with real vrend shaders (transform feedback, dual-source
-blending, samplers, the default uniform block), which this program does not exercise.
+blending, samplers, atomic counters), which this program does not exercise.
+
+A default-block `uvec4[2]` at an explicit `Location`, set with `glUniform4uiv` by location — the way
+vrend feeds its constants (`{p}const0`) — also works in the patched GLES path: unset, it would read
+zero and turn the triangle black.
