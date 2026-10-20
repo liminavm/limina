@@ -2045,6 +2045,16 @@ impl Executor {
             .device
             .newTextureWithDescriptor_iosurface_plane(&desc, &surface.0, 0)
             .ok_or(Error::BadValue)?;
+        log::debug!(
+            "surface: texture {} over resource {} is IOSurface {} ({}x{} of {}x{})",
+            c.handle,
+            c.surface,
+            surface.id(),
+            d.width,
+            d.height,
+            surface.width(),
+            surface.height()
+        );
         self.residency
             .addAllocation(ProtocolObject::<dyn MTLAllocation>::from_ref(&*t));
         self.residency.commit();

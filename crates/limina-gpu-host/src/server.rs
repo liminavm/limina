@@ -489,8 +489,22 @@ impl Server {
         };
         let mut surfaces = ctx.surfaces.lock().unwrap_or_else(|e| e.into_inner());
         if surfaces.contains_key(&r.surface) {
+            log::debug!(
+                "surface: context {} resource {} already bound, IOSurface {} refused",
+                r.ctx,
+                r.surface,
+                surface.id()
+            );
             return ipc::ERR_EXISTS;
         }
+        log::debug!(
+            "surface: context {} binds resource {} to IOSurface {} ({}x{})",
+            r.ctx,
+            r.surface,
+            surface.id(),
+            surface.width(),
+            surface.height()
+        );
         surfaces.insert(r.surface, surface);
         ipc::OK
     }
@@ -504,6 +518,12 @@ impl Server {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&r.surface);
+        log::debug!(
+            "surface: context {} releases resource {} (IOSurface {:?})",
+            r.ctx,
+            r.surface,
+            removed.as_ref().map(metal::Surface::id)
+        );
         if removed.is_some() {
             ipc::OK
         } else {

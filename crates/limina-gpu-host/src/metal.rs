@@ -82,6 +82,12 @@ impl Surface {
     pub fn bytes_per_element(&self) -> u64 {
         self.0.bytes_per_element() as u64
     }
+
+    /// The system-wide id, for logs only: it names the surface to a reader of the log, not to a
+    /// process, which can look a non-global surface up by it only from its owner.
+    pub fn id(&self) -> u32 {
+        self.0.id()
+    }
 }
 
 pub fn system_device() -> Option<Retained<Device>> {
