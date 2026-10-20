@@ -686,7 +686,9 @@ pub enum Machine {
     #[value(name = "acpi")]
     Acpi,
     /// A device tree. What a direct `--kernel` boot always gets, since an OS finds ACPI only
-    /// through the firmware. Keeps the PL031 RTC, which the ACPI machine does not describe.
+    /// through the firmware. Keeps the PL031 RTC, which the ACPI machine does not describe, and
+    /// `qemu,virtual-cpufreq` on a uniform machine, where ACPI describes CPPC only when some vCPUs
+    /// are little.
     #[serde(rename = "device-tree")]
     #[value(name = "device-tree")]
     DeviceTree,
