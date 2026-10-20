@@ -60,6 +60,19 @@ inline and stays byte-identical; the SPIR-V emitter decorates with it. `Layout` 
 number"; whether an interface carries a number at all stays each emitter's decision, since GLSL
 leaves most of them to the linker's name matching and a SPIR-V module cannot.
 
+**Varyings between stages** use the separable numbering for every SPIR-V program, separable or not:
+generics at `31 - sid`, patches at `sid`, and a generic the next stage expects but this one does not
+write (the padding `emit_match_interfaces` adds) at `31 - sid` like a declared one — not at the
+C's `location = sid`, which `Layout::padding_location` keeps for the GLSL alone. A program is
+SPIR-V or GLSL whole (§5), so the SPIR-V numbering only has to agree with itself. Location 31 links
+on both flavours: on desktop GL the 128 separable stages of the desktop piglit replay all linked,
+and the spike passes a varying at location 31 through SPIR-V in the patched GLES context. The
+semantics GLSL matches only by name — `COLOR`, `BCOLOR`, `TEXCOORD`, `FOG` between stages — have no
+place in that numbering, and a program using one goes to GLSL under §5. Counted 2026-10-20 over the
+keyed fixtures: no real capture's shaders use one (only the synthetic flatshade corpus, 3 vertex and
+3 fragment shaders); in piglit about 6% of programs do, nearly all a legacy vertex `COLOR` output.
+A numbering for them waits until a real workload shows it matters.
+
 ### 2. Bindings by number on the SPIR-V path
 
 vrend links by name today — about a dozen lookup sites in `src/vrend/context/draw.rs`
@@ -72,9 +85,12 @@ GLSL path counts them through the stages at link (`rebind_ubo_and_sampler_locs`,
 from where the previous stage's ended, then the `VirglBlock`), and one shader variant links into
 several programs, so no binding baked into its SPIR-V can follow that count. A SPIR-V program uses
 **fixed per-stage slots** instead: block `i` of stage `s` at binding `16·s + i`, and the `VirglBlock`
-at one binding all stages share. Measured 2026-10-20 on zink-KK, both flavours:
+at one binding all stages share. Block indices run from 1 (index 0 is the plain constant array,
+`const0`), so they fit 16 a stage; a stage naming a block past 15, more than the guest is offered
+though the translator takes up to 31, goes to GLSL under §5. Measured 2026-10-20 on zink-KK, both flavours:
 `GL_MAX_UNIFORM_BUFFER_BINDINGS` 114, 15 blocks a stage; vrend offers the guest 15 a stage
-(`caps.rs`), so the five graphics stages take 80 bindings and the `VirglBlock` one more. The draw
+(`caps.rs`), so the five graphics stages take 80 bindings and the `VirglBlock` one more, at 80.
+The spike binds a block at 80 through SPIR-V in the patched GLES context. The draw
 path binds a SPIR-V program's buffers at those slots instead of the running count.
 
 Default-block uniforms (the constant array, samplers, the shadow-sampler mask and add, the

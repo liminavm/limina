@@ -136,7 +136,7 @@ int main(int argc, char **argv)
     glGenBuffers(1, &ubo);
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
     glBufferData(GL_UNIFORM_BUFFER, sizeof color, color, GL_STATIC_DRAW);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 80, ubo);
 
     GLuint vao;
     glGenVertexArrays(1, &vao);

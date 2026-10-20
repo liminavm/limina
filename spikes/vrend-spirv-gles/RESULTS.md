@@ -27,3 +27,10 @@ blending, samplers, atomic counters), which this program does not exercise.
 A default-block `uvec4[2]` at an explicit `Location`, set with `glUniform4uiv` by location — the way
 vrend feeds its constants (`{p}const0`) — also works in the patched GLES path: unset, it would read
 zero and turn the triangle black.
+
+The probe's interfaces sit at the ends of the numbering vrend's SPIR-V will use: the varying
+between the stages at location 31, the top of the range a separable stage's generics count down
+from, and the uniform block at binding 80, the shared `VirglBlock` slot past the five graphics
+stages' fixed 16 each (`docs/design/vrend-spirv.md` §2). Both work in the patched GLES path
+(measured 2026-10-20, same host and Mesa): triangle 0 255 0 255, background 255 0 0 255. A
+varying that did not arrive would read zero and turn the triangle black.
