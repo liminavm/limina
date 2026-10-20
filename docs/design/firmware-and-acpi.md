@@ -63,7 +63,7 @@ Parked snapshots do not survive it (restore refuses a machine whose devices chan
 |---|---|---|
 | Graceful shutdown with no agent | `PNP0C0C` power button signalled through the PL061's ACPI GPIO events (done; a stopped Fedora 44 guest powers off in 1-3 s) | the `gpio-keys` power button, which keeps this working on the device-tree machine |
 | TPM on Debian | ACPI `TPM2` table + CRB (`tpm_crb`, built into both distros' kernels) | the 90 s per-boot wait on a TIS device Debian has no driver for |
-| EAS energy model on a stock kernel | MADT GICC efficiency classes + `_CPC`: `cppc_cpufreq` registers an energy model from them (`populate_efficiency_class`), `topology_init_cpu_capacity_cppc()` sets capacities | the DKMS energy-model module the roadmap calls EAS's last gate; `qemu,virtual-cpufreq` |
+| EAS energy model on a stock kernel | MADT GICC efficiency classes + `_CPC` (done, below): `cppc_cpufreq` registers an energy model from them (`populate_efficiency_class`), `topology_init_cpu_capacity_cppc()` sets capacities | the DKMS energy-model module the roadmap calls EAS's last gate; `qemu,virtual-cpufreq` |
 | Native battery and AC | `PNP0C0A` + `ACPI0003` with AML over a small MMIO register block | virtio-i2c SBS battery (and stock `i2c-virtio`'s switch-root panic) |
 | Thermal pressure | ACPI thermal zones | nothing today |
 | Boot logo through to the desktop | BGRT (already built by `BootGraphicsResourceTableDxe`) | the blank middle of Plymouth's `bgrt` theme |
@@ -102,8 +102,7 @@ Driver bindings verified against kernel source.
 | xHCI `generic-xhci` + `dma-coherent` | `PNP0D10` + `_CCA` | mechanical |
 | PL031 `rtc-pl031` | **no ACPI ID** — the guest keeps only `rtc-efi` (its `rtc0` on both machines; the device tree adds the PL031 as `rtc1`) | firmware runtime `GetTime`/`SetTime` and `Get/SetWakeupTime`; host-sleep sleeptime injection rides `rtc-efi` already |
 | `gpio-keys` power/sleep/restart/wake | **no ACPI table** in `gpio_keys.c` | **done**: the PL061 (`ARMH0061`) with an `_AEI` listing lines 3, 4 and 6 as GpioInt events; `_E03`/`_E04` notify `PNP0C0C`/`PNP0C0E` (0x80), line 6 is `ExclusiveAndWake` and `_E06` notifies the sleep button with 0x02. The same eventfds drive it, so the M9.2 wake works in s2idle (the guest's own wake IRQ) and deep. KEY_RESTART has no ACPI button. Check: `spikes/acpi-guest/buttons.sh` |
-| `qemu,virtual-cpufreq` | **device-tree only** | open: `cppc_cpufreq` with `_CPC` per processor device. A banded VM loses EAS packing under ACPI until this lands |
-| `capacity-dmips-mhz` + `cpu-map` | `_CPC` highest performance (`topology_init_cpu_capacity_cppc`) + GICC efficiency classes | open, with the row above: the energy model registers only when efficiency classes differ, and CPPC frequency invariance reads delivered/reference counters every tick, a trap per tick per vCPU on MMIO registers |
+| `qemu,virtual-cpufreq` + `capacity-dmips-mhz` | `_CPC` revision 3 per processor device + MADT GICC efficiency classes, emitted only when some vCPUs are little | **done**: highest = nominal = the vCPU's capacity, lowest = lowest nonlinear at the ladder's bottom step; desired, delivered and reference are SystemMemory registers in the vCPU's window of the cpufreq device (reference counts wall-clock ns, delivered falls behind it by the share desired stood below highest). `\_SB._OSC` must grant CPC, CPCv2 and flexible address space, or arm64 rejects SystemMemory registers; registers declare their real width, since Linux masks a read with `GENMASK(bit_width - 1, 0)`. No `_PSD`: Linux writes only a domain's leader under SW_ANY, so each vCPU is its own policy. A stock F44 guest gets `cppc_cpufreq`, the capacities and an energy-model perf domain per vCPU, and so EAS. Linux turns EAS off once the online CPUs are all one capacity, which is why hotplug offlines big vCPUs first. The counters cost −0.34 % of a fully busy guest on Linux 7.2+ and −0.88 % on 6.19 (`spikes/acpi-cppc-cost/RESULTS.md`); FFH is out, since HVF exposes no AMU and an FFH entry without one makes Linux reject the whole `_CPC` |
 | TIS TPM `tcg,tpm-tis-mmio` | `MSFT0101` + a TPM2 table, start method 6 | **done**: no interrupt in `_CRS` (tpm_tis polls, as on the device tree); `tpm_tis` refuses `MSFT0101` without the TPM2 table. CRB stays optional |
 | virtio-i2c SBS battery | an I2C client of the virtio-i2c adapter | **done**: `BAT0` inside the adapter's `LNRO0005` device, `I2cSerialBusV2` at 0x0b naming it, `PRP0001` + `_DSD` compatible `sbs,sbs-battery`. Needs the transport to activate virtio-i2c before DRIVER_OK (below) |
 | (no PMU node) | GICC performance interrupt 0 | none: HVF exposes no PMU on either machine; the kernel's per-CPU "No ACPI PMU IRQ" notice is the only difference |
@@ -178,8 +177,8 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
    the device-tree machine unchanged.
 1. **ACPI parity and stock wins** on edk2. Done: power, sleep and wake buttons; the TPM; the SBS
    battery; the Limina logo on the guest's boot splash (Plymouth's `bgrt` theme, Fedora's
-   default, draws the firmware's BGRT image; `spikes/acpi-guest/plymouth-limina.png`). Open: CPPC
-   and efficiency classes (see the table), `rtc-efi` wakeup time. ACPI is the default; the
+   default, draws the firmware's BGRT image; `spikes/acpi-guest/plymouth-limina.png`); CPPC and
+   efficiency classes (see the table). Open: `rtc-efi` wakeup time. ACPI is the default; the
    device-tree machine stays selectable per VM (the control center's Machine popup) and is what
    `--kernel`/L1 boots get. A suspended guest resumes on the machine it was saved on.
 2. **Rust firmware, device-tree machine — done.** Cardea passes the whole suite on the device-tree
@@ -195,10 +194,3 @@ the new firmware, so `BootOrder`, boot entries and MOK state carry over (no extr
 
 - Cardea's license (MIT) and the licenses of the crates it links (`fdt` is MPL-2.0), which need
   the same counsel review as the rest of the tree before a release tag.
-- CPPC's layout. Measured (`spikes/acpi-cppc-cost/RESULTS.md`): SystemMemory feedback counters
-  cost −0.34 % of a fully busy guest on Linux 7.2+ and −0.88 % on 6.19, whose irq_work/kthread
-  machinery is −0.66 % of that for any non-PCC layout; FFH is out, since HVF exposes no AMU and an
-  FFH entry without one makes Linux reject the whole `_CPC`. Still to choose: real CPPC FIE on
-  MMIO counters, or `_CPC` for capacities only with `qemu,virtual-cpufreq` keeping DVFS — which
-  needs the guest to bind virtual-cpufreq before `cppc_cpufreq`, both being modules F44 loads
-  automatically.
