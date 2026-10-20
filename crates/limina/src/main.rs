@@ -368,6 +368,12 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     gpu_cache_key: Option<PathBuf>,
 
+    /// Keep the host shader cache — what the worker's Mesa compiles for this guest — in DIR,
+    /// forwarded to the worker. A managed VM keeps its own under `~/Library/Caches/Limina`;
+    /// without this flag a VM shares that directory's `shader-cache/adhoc`.
+    #[arg(long, value_name = "DIR")]
+    gpu_shader_cache: Option<PathBuf>,
+
     /// Stage-2 translation granule for the VM (macOS 26+). `4k` (the default) is what lets a
     /// 4 KiB-page guest map its virtio-gpu host-visible blobs at all (spikes/hv-ipa-granule/);
     /// `16k` matches the Apple silicon host page size and is a few percent faster for a guest
@@ -1702,6 +1708,7 @@ fn cli_from_definition(
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         gpu_cache_key: Some(bundle.pipeline_cache_key()),
+        gpu_shader_cache: vmlib::bundle::shader_cache_dir(&cfg.identity.uuid),
         ipa_granule: cfg.hardware.ipa_granule,
         // A definition that asks for it on a Mac that cannot do it boots without it, like any
         // other host capability the guest is offered only where it exists.
@@ -2138,6 +2145,12 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--gpu-cache-key".into());
         args.push(path_arg(key)?);
     }
+    let shader_cache = cli
+        .gpu_shader_cache
+        .clone()
+        .unwrap_or_else(vmlib::bundle::adhoc_shader_cache_dir);
+    args.push("--gpu-shader-cache".into());
+    args.push(path_arg(&shader_cache)?);
     args.push("--ipa-granule".into());
     args.push(cli.ipa_granule.flag().into());
     if cli.no_battery {
@@ -3610,7 +3623,7 @@ mod tests {
             config_version: CONFIG_VERSION,
             identity: Identity {
                 name: Some("Workstation".into()),
-                uuid: "u".into(),
+                uuid: "3f2c1e9a-0000-4000-8000-000000000001".into(),
                 created: "t".into(),
             },
             hardware: Hardware {
@@ -3705,6 +3718,12 @@ mod tests {
             )),
             "a managed VM keeps one pipeline-cache key, in its bundle"
         );
+        assert_eq!(
+            cli.gpu_shader_cache,
+            vmlib::bundle::shader_cache_dir("3f2c1e9a-0000-4000-8000-000000000001"),
+            "a managed VM keeps its own host shader cache, keyed by its uuid"
+        );
+        assert!(cli.gpu_shader_cache.is_some());
         assert_eq!(
             cli.ipa_granule,
             vmlib::schema::IpaGranule::FourK,

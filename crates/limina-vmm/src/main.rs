@@ -23,6 +23,7 @@ mod power;
 mod quiesce;
 mod restart;
 mod scanout_copier;
+mod shader_cache;
 mod shutdown;
 mod snapshot;
 mod surface_publisher;
@@ -233,6 +234,12 @@ struct Cli {
     /// runs without one.
     #[arg(long, value_name = "FILE")]
     gpu_cache_key: Option<PathBuf>,
+
+    /// Keep Mesa's disk cache — the host side of every guest shader compile — in DIR, made when
+    /// absent and capped at 1 GiB. Without it Mesa uses its host-wide default, which every Mesa
+    /// process shares. A DIR that cannot be made leaves the default in place.
+    #[arg(long, value_name = "DIR")]
+    gpu_shader_cache: Option<PathBuf>,
 
     /// UNIX-socket path for runtime balloon control (M6). The worker binds a listener here and
     /// applies newline-delimited `target <bytes>` commands to the live virtio-balloon (replying to
@@ -717,6 +724,23 @@ fn main() -> Result<()> {
                 default_gpu_mem_budget_mib(cli.ram_mib).to_string(),
             )
         };
+    }
+
+    // Mesa reads these when the renderer first loads it, which is after every thread below has
+    // started, so they are set here or not at all.
+    if let Some(dir) = &cli.gpu_shader_cache {
+        match std::fs::create_dir_all(dir) {
+            Ok(()) => {
+                for (k, v) in shader_cache::env(dir, |k| std::env::var_os(k).is_some()) {
+                    // SAFETY: still on main() with no thread spawned, so nothing can be in `getenv`.
+                    unsafe { std::env::set_var(k, v) };
+                }
+            }
+            Err(e) => log::warn!(
+                "virtio-gpu: shader cache {} unusable, Mesa keeps its default: {e}",
+                dir.display()
+            ),
+        }
     }
 
     // clap guarantees exactly one of --firmware / --kernel is present.

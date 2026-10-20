@@ -177,6 +177,33 @@ pub fn app_support_dir() -> PathBuf {
     home.join("Library/Application Support/Limina")
 }
 
+/// `~/Library/Caches/Limina`: what limina can always rebuild, kept out of the VM library so a
+/// backup or a copied bundle does not carry it. `$LIMINA_CACHE_DIR` overrides it (tests).
+pub fn cache_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("LIMINA_CACHE_DIR") {
+        return PathBuf::from(dir);
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    home.join("Library/Caches/Limina")
+}
+
+/// The host shader cache of the managed VM with this uuid: what the worker's Mesa compiled for
+/// this guest, kept per VM so one guest's shaders never evict another's.
+///
+/// `None` for a uuid that is not one: it comes from a user-editable `vm.toml`, and a path built
+/// from `../x` would name a directory outside the cache.
+pub fn shader_cache_dir(uuid: &str) -> Option<PathBuf> {
+    let is_uuid = !uuid.is_empty() && uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    is_uuid.then(|| cache_dir().join("shader-cache").join(uuid))
+}
+
+/// The host shader cache every VM started from a bare disk shares, having no identity to key one.
+pub fn adhoc_shader_cache_dir() -> PathBuf {
+    cache_dir().join("shader-cache").join("adhoc")
+}
+
 /// The host-wide settings file (`docs/design/vm-definitions.md` §8.1). `$LIMINA_CONFIG`
 /// overrides its location (tests).
 pub fn config_path() -> PathBuf {
@@ -439,6 +466,37 @@ pub(crate) mod tests {
             }
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn shader_caches_live_under_the_cache_dir_keyed_by_uuid() {
+        let _g = env_lock();
+        let saved = std::env::var_os("LIMINA_CACHE_DIR");
+        unsafe { std::env::set_var("LIMINA_CACHE_DIR", "/c") };
+
+        assert_eq!(
+            shader_cache_dir("3f2c1e9a-0000-4000-8000-000000000001"),
+            Some(PathBuf::from(
+                "/c/shader-cache/3f2c1e9a-0000-4000-8000-000000000001"
+            ))
+        );
+        assert_eq!(
+            adhoc_shader_cache_dir(),
+            PathBuf::from("/c/shader-cache/adhoc")
+        );
+        assert_eq!(
+            shader_cache_dir("../../etc"),
+            None,
+            "a uuid names no path outside the cache"
+        );
+        assert_eq!(shader_cache_dir(""), None);
+
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("LIMINA_CACHE_DIR", v),
+                None => std::env::remove_var("LIMINA_CACHE_DIR"),
+            }
+        }
     }
 
     /// Only `/Volumes/<name>` paths are judged, by their volume root.

@@ -52,12 +52,16 @@ fn virgl_readback_does_not_wedge_the_gpu() {
         return;
     }
 
+    // A cache root of the test's own, so the shader-cache check below sees only this boot.
+    let caches = std::env::temp_dir().join(format!("limina-virgl-caches-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&caches);
     let cfg = match GuestConfig::baseline_fedora_from_env() {
         Ok(cfg) => cfg
             .with_coexist_display(1280, 800)
             .with_virgl_host_gl()
             .with_net()
-            .with_supervisor_log(),
+            .with_supervisor_log()
+            .with_env("LIMINA_CACHE_DIR", &caches.display().to_string()),
         Err(e) => {
             eprintln!("SKIPPED virgl_readback_does_not_wedge_the_gpu: {e}");
             return;
@@ -144,8 +148,33 @@ fn virgl_readback_does_not_wedge_the_gpu() {
     );
     eprintln!("post-readback GL still responsive: {}", second.trim());
 
+    // The host compiles vrend's shaders into the VM's own Mesa disk cache, not the host-wide
+    // default every Mesa process shares: a bare-disk VM gets the shared ad-hoc one.
+    let adhoc = caches.join("shader-cache/adhoc");
+    let entries = walk_files(&adhoc);
+    assert!(
+        entries > 0,
+        "no Mesa cache files under {} after a virgl session: the worker's Mesa is not using \
+         the VM's shader cache",
+        adhoc.display()
+    );
+    eprintln!("shader cache: {entries} files under {}", adhoc.display());
+
     let outcome = guest
         .shutdown(Duration::from_secs(15))
         .expect("shutting down the guest");
     eprintln!("teardown outcome: {outcome:?}");
+    let _ = std::fs::remove_dir_all(&caches);
+}
+
+fn walk_files(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| {
+            let p = e.path();
+            if p.is_dir() { walk_files(&p) } else { 1 }
+        })
+        .sum()
 }
