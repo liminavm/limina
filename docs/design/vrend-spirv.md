@@ -25,7 +25,14 @@ already makes repeats cheap; this is about the first time a guest shows a shader
 ## Approach
 
 vrend hands the host **SPIR-V** through `glShaderBinary(GL_SHADER_BINARY_FORMAT_SPIR_V)` and
-`glSpecializeShader`, so Mesa goes `spirv_to_nir` → `gl_nir_link_spirv` and never parses text.
+`glSpecializeShader`, so Mesa goes `spirv_to_nir` → `gl_nir_link_spirv` and never parses text. Both
+host flavours take it: the desktop one (`HostGl::Desktop`, GL 4.6 on zink) through `ARB_gl_spirv` as
+it stands, the GLES one through the carried Mesa patch in §4.
+
+What it removes is the GLSL front end only: a SPIR-V program still goes NIR → MSL → Metal pipeline
+on KosmicKrisp. Cold, the sampled About dialog spent ~3.6k samples in the front end against ~0.9k in
+zink, KosmicKrisp and Metal, and warm those fences still cost ~140 ms; that remainder is not this
+design's to remove.
 
 ### 1. TGSI stays the IR; a `Layout` pass gives every interface a number (virglrs)
 
@@ -40,9 +47,14 @@ avoided.
 The extraction is narrower: a `Layout` pass over the declarations and the `Key` that assigns every
 interface its location or binding — inputs and outputs, the constant array, UBOs, samplers, images,
 SSBOs, atomic counters, transform feedback, fragment outputs including dual-source. It numbers them
-the way the renderer derives them from the masks today, and picks one scheme for separable
-programs, whose generics the C numbers two ways (`31 - sid` in the generic declarations,
-`location = i` in `emit_match_interfaces`). The GLSL emitter reads `Layout` where it now computes
+the way the renderer derives them from the masks today. For separable programs it keeps the C's
+numbering as it is — `31 - sid` for declared generics, `location = i` for the padding outputs
+`emit_match_interfaces` adds, which can collide — so the GLSL stays byte-identical and SPIR-V gets
+the same numbers. The collision is fixed in its own commit once an `arb_separate_shader_objects`
+case reproduces a failure from it, not normalised inside `Layout`.
+
+`Layout` is a function of the linked program, not of one stage: the expected masks and matched
+interfaces come from the neighbouring stages through the `Key`. The GLSL emitter reads `Layout` where it now computes
 inline and stays byte-identical; the SPIR-V emitter decorates with it.
 
 ### 2. Bindings by number on the SPIR-V path
@@ -82,7 +94,8 @@ is small and contained to dispatch and the SPIR-V link path.
 ### 5. Detection and fallback
 
 virglrs probes at init whether the host takes a trivial SPIR-V program in its GLES context, and
-uses the SPIR-V emitter only then. Everywhere else — a host Mesa without the patch, the Linux port —
+uses the SPIR-V emitter only then. A program is SPIR-V or GLSL as a whole, never mixed per stage:
+GLSL stages match by name and SPIR-V stages only by location. Everywhere else — a host Mesa without the patch, the Linux port —
 the GLSL emitter stays the path, unchanged. A SPIR-V program that fails to link falls back to the
 GLSL emitter for that program and logs it once per shape, so a gap in the SPIR-V backend degrades
 to today's behaviour, never to a missing draw.
@@ -100,10 +113,17 @@ working; its entries change format once, when the emitter switches.
   or indirect addressing. It is widened from the C leg's own output before `Layout` lands, so the
   byte-identical gate covers what `Layout` touches.
 - **GLSL unchanged:** the widened corpus stays byte-identical through `Layout`.
+- **Corpus sources.** The pinned real-guest captures (WebGL2, GNOME overview, composite, shm) are
+  run through the shader log first; GS, tessellation, SSBOs, atomics, separable programs and
+  indirect addressing come from a piglit slice recorded on the **Rust** leg with `virglrs/trace`,
+  since the guest emits different TGSI against limina's caps than against the C's.
+- **The key in the log.** The Rust shader log line carries the `Key`, so a SPIR-V divergence can be
+  traced to the key fields that selected the variant; the C's log has no key.
 - **SPIR-V valid:** every corpus shader's SPIR-V passes `spirv-val` (targeting the environment
   `spirv_to_nir` accepts) in the harness.
-- **Same pixels:** the replay harness renders its traces through both emitters and compares the
-  frames.
+- **Same pixels:** there is no C to compare SPIR-V against, so the oracle is the replay scored with
+  SPIR-V forced and with GLSL forced, both matching the pinned score; every feature the corpus adds
+  needs a draw the score reads back. piglit with SPIR-V on and off is the boot-level oracle.
 - **The point of it:** the About-dialog measurement above, cold cache, against today's 133 ms
   program build; and the full suite.
 
