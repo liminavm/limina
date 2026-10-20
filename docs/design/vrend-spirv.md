@@ -27,27 +27,44 @@ already makes repeats cheap; this is about the first time a guest shows a shader
 vrend hands the host **SPIR-V** through `glShaderBinary(GL_SHADER_BINARY_FORMAT_SPIR_V)` and
 `glSpecializeShader`, so Mesa goes `spirv_to_nir` → `gl_nir_link_spirv` and never parses text.
 
-### 1. One translator, two emitters (virglrs)
+### 1. TGSI stays the IR; a `Layout` pass gives every interface a number (virglrs)
 
-The translator (`src/vrend/shader/`, ~9.6k lines) is a byte-for-byte port of the C's string
-emitter: every decision about a shader is made while writing GLSL text, so there is no layer a
-second output could share. It first gains the typed intermediate form its module doc already
-names as a later change: TGSI → IR → GLSL, with the GLSL held byte-identical to today's against
-the shader corpus (`harness/replay/fixtures/vrend-shaders.txt`). The SPIR-V emitter is then a
-second backend off the same IR, so the semantic decisions — declarations, the sampler, UBO and
-attribute mapping, the workarounds — are made once.
+virglrs already parses TGSI into typed instructions, operands and declarations with per-opcode
+operand types (`src/vrend/tgsi/`), so a second IR between it and GLSL would add nothing the
+SPIR-V emitter needs. What is entangled in the translator (`src/vrend/shader/`, ~9.6k lines, a
+byte-for-byte port of the C's string emitter) is its analysis state, not its input: a ~100-field
+context, requirement bits set while text is written, a header emitted after the body from state
+the body mutated. Rewriting that behind a new IR while holding 9.6k lines byte-identical is
+avoided.
 
-### 2. Bindings by number, not by name
+The extraction is narrower: a `Layout` pass over the declarations and the `Key` that assigns every
+interface its location or binding — inputs and outputs, the constant array, UBOs, samplers, images,
+SSBOs, atomic counters, transform feedback, fragment outputs including dual-source. It numbers them
+the way the renderer derives them from the masks today, and picks one scheme for separable
+programs, whose generics the C numbers two ways (`31 - sid` in the generic declarations,
+`location = i` in `emit_match_interfaces`). The GLSL emitter reads `Layout` where it now computes
+inline and stays byte-identical; the SPIR-V emitter decorates with it.
 
-vrend links today by name: `glGetUniformLocation`, `glGetUniformBlockIndex`,
-`glGetAttribLocation`, `glBindAttribLocation`, `glTransformFeedbackVaryings`,
-`glBindFragDataLocationIndexed`. GL's SPIR-V path has no names to look up; every interface is
-decorated explicitly (`Location`, `Binding`, `Index` for dual-source blending,
-`XfbBuffer`/`Offset`/`XfbStride` for transform feedback). The IR assigns those numbers, both
-emitters use them, and the draw-side binding code reads them from the IR instead of asking GL.
-The GLSL emitter keeps its names, so its output stays byte-identical.
+### 2. Bindings by number on the SPIR-V path
 
-### 3. SPIR-V in a GLES context (host Mesa, `limina-kk`)
+vrend links by name today — about a dozen lookup sites in `src/vrend/context/draw.rs`
+(`glGetUniformLocation`, `glGetUniformBlockIndex`, `glBindAttribLocation`,
+`glTransformFeedbackVaryings`, `glBindFragDataLocationIndexed`, …), with UBO and sampler numbers
+assigned at link time in mask order across stages. The GLSL path keeps those lookups. A SPIR-V
+program is bound by `Layout`'s numbers instead, which are the same numbers, so the draw path differs
+only in where it reads them.
+
+### 3. The SPIR-V emitter's scope
+
+Opcode lowering from typed TGSI is mechanical. The cost is the behaviour vrend layers on top from
+the `Key` and the stage, mostly in the prologue (`src/vrend/shader/glsl/inst.rs`, first
+instruction) and the epilogue emitted at `END`/`RET` (`src/vrend/shader/glsl/exit.rs`): colour
+selection, clip-distance loads and moves, the Y flip, the fog fix-up, logic-op emulation, sRGB
+encoding, all-colour-buffer writes, stream-output moves, synthesised missing inputs and dummy
+outputs, the 2D-array sampler lowering, GLES texture-LOD emulation. The emitter grows through that
+list; whatever it does not cover yet falls back to GLSL per program (§5).
+
+### 4. SPIR-V in a GLES context (host Mesa, `limina-kk`)
 
 vrend drives a GLES 3.1 context, and `GL_ARB_gl_spirv` is desktop-only in the Khronos registry.
 Our host Mesa accepts SPIR-V in GLES too:
@@ -62,7 +79,7 @@ Our host Mesa accepts SPIR-V in GLES too:
 This defines GLES behaviour no Khronos spec does, so it is a carried patch, not an upstream one. It
 is small and contained to dispatch and the SPIR-V link path.
 
-### 4. Detection and fallback
+### 5. Detection and fallback
 
 virglrs probes at init whether the host takes a trivial SPIR-V program in its GLES context, and
 uses the SPIR-V emitter only then. Everywhere else — a host Mesa without the patch, the Linux port —
@@ -70,15 +87,19 @@ the GLSL emitter stays the path, unchanged. A SPIR-V program that fails to link 
 GLSL emitter for that program and logs it once per shape, so a gap in the SPIR-V backend degrades
 to today's behaviour, never to a missing draw.
 
-### 5. Caching
+### 6. Caching
 
 Mesa's disk cache keys GL SPIR-V programs as it does GLSL ones, so the per-VM shader cache keeps
 working; its entries change format once, when the emitter switches.
 
 ## Verification
 
-- **GLSL unchanged:** the corpus stays byte-identical through the IR refactor; that is the gate for
-  step 1, landed on its own before any SPIR-V.
+- **A corpus worth the name first.** The recorded corpus
+  (`harness/replay/fixtures/vrend-shaders*.txt`) holds 33 VS/FS blocks over ~22 opcodes with plain
+  constants and no recorded key: no UBOs, images, SSBOs, atomics, transform feedback, GS/TCS/TES/CS
+  or indirect addressing. It is widened from the C leg's own output before `Layout` lands, so the
+  byte-identical gate covers what `Layout` touches.
+- **GLSL unchanged:** the widened corpus stays byte-identical through `Layout`.
 - **SPIR-V valid:** every corpus shader's SPIR-V passes `spirv-val` (targeting the environment
   `spirv_to_nir` accepts) in the harness.
 - **Same pixels:** the replay harness renders its traces through both emitters and compares the
@@ -88,9 +109,12 @@ working; its entries change format once, when the emitter switches.
 
 ## Order
 
-1. Spike the Mesa patch with a hand-written SPIR-V program in a GLES context, to prove the host path
-   before anything depends on it.
-2. virglrs: the typed IR, GLSL byte-identical.
-3. virglrs: explicit bindings in the IR and the draw path, still emitting GLSL.
-4. virglrs: the SPIR-V emitter, the probe and the per-program fallback.
+1. Spike the Mesa patch with a hand-written SPIR-V program in a GLES context (done:
+   `spikes/vrend-spirv-gles/`; UBOs at explicit bindings and a default-block uniform set by location
+   both work).
+2. virglrs: widen the corpus from the C leg (GS/TCS/TES, UBOs, images, SSBOs, atomics, transform
+   feedback, key-dependent output).
+3. virglrs: the `Layout` pass, GLSL byte-identical against the widened corpus.
+4. virglrs: the SPIR-V emitter over TGSI, `Layout` and `Key`, the probe and the per-program
+   fallback, growing through the scope list.
 5. Measure; then make SPIR-V the default where the probe passes.
