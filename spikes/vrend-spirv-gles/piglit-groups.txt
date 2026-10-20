@@ -1,0 +1,15 @@
+# <group>\t<piglit -t regex>: the feature slices recorded for vrend's shader corpus, one trace
+# dump each. Selected for what the pinned captures lack (GS/TCS/TES, SSBOs, atomics, texture
+# buffers, stream-out, separable programs) plus UBO and indirect-addressing execution tests.
+ubo	arb_uniform_buffer_object@execution
+ssbo	arb_shader_storage_buffer_object@execution
+atomics	arb_shader_atomic_counters
+images	arb_shader_image_load_store@execution
+compute	arb_compute_shader@execution
+gs	glsl-1.50@execution@geometry
+tess	arb_tessellation_shader@execution@(?!built-in-functions|tes-input|tcs-input|compatibility)
+sso	arb_separate_shader_objects
+xfb	ext_transform_feedback
+texbuf	arb_texture_buffer_object
+indirect	glsl-1.10@execution@variable-indexing
+gs-indirect	glsl-1.50@execution@variable-indexing@gs

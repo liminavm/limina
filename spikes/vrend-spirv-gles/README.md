@@ -16,3 +16,8 @@ prefix, so the shared host build stays untouched:
     spikes/vrend-spirv-gles/run.sh /Volumes/mesa-cs/zink-kk-spirv-prefix
 
 Results: `RESULTS.md`.
+
+`record-piglit.sh <disk> <out-dir>` records the shader corpus the SPIR-V emitter is checked
+against: it boots a piglit guest on a worker built with `virglrs/trace`, runs each feature slice
+of `piglit-groups.txt` (the features the pinned virglrs captures lack) and keeps one vrend trace
+dump per slice.
