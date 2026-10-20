@@ -1,6 +1,11 @@
 # vrend shaders as SPIR-V, not GLSL text
 
-**Status:** in progress, behind `VIRGLRS_SPIRV=1`. The emitter writes vertex and fragment shaders
+**Status:** parked, not carried. A SPIR-V-linked program never reaches Mesa's GL program cache
+(`src/compiler/glsl/shader_cache.cpp` skips SPIR-V programs), so on this path the per-VM shader
+cache (`--gpu-shader-cache`) stays empty and every boot compiles cold. The implementation is kept
+in virglrs tag `main-pre-stall-revert-2026-10-20` (behind `VIRGLRS_SPIRV=1`, with a default-on tip)
+and §4's patch in Mesa tag `limina-kk-pre-stall-revert-2026-10-20`; neither is pinned. A restart
+has to bring its own cache for linked programs. When parked, the emitter wrote vertex and fragment shaders
 with constants (indexed too), uniform buffers, generic varyings, `gl_FragCoord`, the vertex and
 instance ids, the ALU opcodes, loops and selections, and 2D/3D/cube/array sampling — 141 of the 151
 captured blocks — and a program whose two stages both have a module links
@@ -10,8 +15,7 @@ compile and link) costs 1.34 ms against 2.01 ms from GLSL on `vrend-webgl` (−3
 against 2.02 ms on `vrend` (−31%), and submit time per command falls 12% and 15%; the scores are
 unchanged. Those timings predate uniform buffers, loops and indexed constants, so they cover fewer
 programs than the path now takes. Every replay corpus and piglit's uniform-buffer trace score the
-same with the switch on and off. The About dialog in a VM is the measurement still owed before the
-default changes.
+same with the switch on and off.
 
 ## Problem
 
