@@ -1,6 +1,7 @@
 # vrend shaders as SPIR-V, not GLSL text
 
-**Status:** proposal, not implemented.
+**Status:** in progress. The corpus is widened and `Layout` holds every number the GLSL prints;
+the numbers only SPIR-V needs and the emitter are next.
 
 ## Problem
 
@@ -44,7 +45,7 @@ context, requirement bits set while text is written, a header emitted after the 
 the body mutated. Rewriting that behind a new IR while holding 9.6k lines byte-identical is
 avoided.
 
-The extraction is narrower: a `Layout` pass over the declarations and the `Key` that assigns every
+The extraction is narrower: a `Layout` (`src/vrend/shader/layout.rs`) over the declarations and the `Key` that assigns every
 interface its location or binding — inputs and outputs, the constant array, UBOs, samplers, images,
 SSBOs, atomic counters, transform feedback, fragment outputs including dual-source. It numbers them
 the way the renderer derives them from the masks today. For separable programs it keeps the C's
@@ -55,16 +56,31 @@ case reproduces a failure from it, not normalised inside `Layout`.
 
 `Layout` is a function of the linked program, not of one stage: the expected masks and matched
 interfaces come from the neighbouring stages through the `Key`. The GLSL emitter reads `Layout` where it now computes
-inline and stays byte-identical; the SPIR-V emitter decorates with it.
+inline and stays byte-identical; the SPIR-V emitter decorates with it. `Layout` answers "at what
+number"; whether an interface carries a number at all stays each emitter's decision, since GLSL
+leaves most of them to the linker's name matching and a SPIR-V module cannot.
 
 ### 2. Bindings by number on the SPIR-V path
 
 vrend links by name today — about a dozen lookup sites in `src/vrend/context/draw.rs`
 (`glGetUniformLocation`, `glGetUniformBlockIndex`, `glBindAttribLocation`,
-`glTransformFeedbackVaryings`, `glBindFragDataLocationIndexed`, …), with UBO and sampler numbers
-assigned at link time in mask order across stages. The GLSL path keeps those lookups. A SPIR-V
-program is bound by `Layout`'s numbers instead, which are the same numbers, so the draw path differs
-only in where it reads them.
+`glTransformFeedbackVaryings`, `glBindFragDataLocationIndexed`, …). The GLSL path keeps those
+lookups. A SPIR-V program has no names to look up, so it is bound by `Layout`'s numbers.
+
+Most of those numbers are per stage and carry over as they are. Uniform-block bindings do not: the
+GLSL path counts them through the stages at link (`rebind_ubo_and_sampler_locs`, each stage's blocks
+from where the previous stage's ended, then the `VirglBlock`), and one shader variant links into
+several programs, so no binding baked into its SPIR-V can follow that count. A SPIR-V program uses
+**fixed per-stage slots** instead: block `i` of stage `s` at binding `16·s + i`, and the `VirglBlock`
+at one binding all stages share. Measured 2026-10-20 on zink-KK, both flavours:
+`GL_MAX_UNIFORM_BUFFER_BINDINGS` 114, 15 blocks a stage; vrend offers the guest 15 a stage
+(`caps.rs`), so the five graphics stages take 80 bindings and the `VirglBlock` one more. The draw
+path binds a SPIR-V program's buffers at those slots instead of the running count.
+
+Default-block uniforms (the constant array, samplers, the shadow-sampler mask and add, the
+texture-level uniform) keep their dynamic assignment — `glUniform*` at a location, as today — so
+they need only a fixed location per uniform; the spike set one by location in a GLES context, and
+`GL_MAX_UNIFORM_LOCATIONS` is 81,820.
 
 ### 3. The SPIR-V emitter's scope
 
@@ -112,13 +128,18 @@ working; its entries change format once, when the emitter switches.
   constants and no recorded key: no UBOs, images, SSBOs, atomics, transform feedback, GS/TCS/TES/CS
   or indirect addressing. It is widened from the C leg's own output before `Layout` lands, so the
   byte-identical gate covers what `Layout` touches.
-- **GLSL unchanged:** the widened corpus stays byte-identical through `Layout`.
+- **GLSL unchanged:** the widened corpus stays byte-identical through `Layout`. The C goldens are
+  GLES only on this host — the C leg crashes initialising under desktop GL on zink-KK — so desktop
+  GLSL, separable stages' locations included, is pinned by a fixture of the Rust leg's own output
+  (`vrend-shaders-desktop-rs.txt`): a guard against change, not a check of correctness.
 - **Corpus sources.** The pinned real-guest captures (WebGL2, GNOME overview, composite, shm) are
   run through the shader log first; GS, tessellation, SSBOs, atomics, separable programs and
   indirect addressing come from a piglit slice recorded on the **Rust** leg with `virglrs/trace`,
   since the guest emits different TGSI against limina's caps than against the C's.
-- **The key in the log.** The Rust shader log line carries the `Key`, so a SPIR-V divergence can be
-  traced to the key fields that selected the variant; the C's log has no key.
+- **The key in the log.** The Rust shader-exact log carries every input of a translation — host
+  config, `Key`, stream output, local memory (`shader::keytext`) — and the fixtures carry them, so
+  each block is translated under what produced it and a SPIR-V divergence can be traced to the key
+  fields that selected the variant; the C's log has no key.
 - **SPIR-V valid:** every corpus shader's SPIR-V passes `spirv-val` (targeting the environment
   `spirv_to_nir` accepts) in the harness.
 - **Same pixels:** there is no C to compare SPIR-V against, so the oracle is the replay scored with
@@ -133,8 +154,12 @@ working; its entries change format once, when the emitter switches.
    `spikes/vrend-spirv-gles/`; UBOs at explicit bindings and a default-block uniform set by location
    both work).
 2. virglrs: widen the corpus from the C leg (GS/TCS/TES, UBOs, images, SSBOs, atomics, transform
-   feedback, key-dependent output).
-3. virglrs: the `Layout` pass, GLSL byte-identical against the widened corpus.
+   feedback, key-dependent output). (done: 151 capture blocks, 1,935 piglit blocks, all with their
+   recorded inputs; no atomic counter, since KosmicKrisp offers no atomic-counter buffers.)
+3. virglrs: the `Layout` pass, GLSL byte-identical against the widened corpus (done for every
+   number the GLSL prints); then the numbers only SPIR-V needs: the fixed uniform-block slots,
+   default-block uniform locations, attribute and fragment-output locations, varying locations for
+   non-separable stages, transform feedback.
 4. virglrs: the SPIR-V emitter over TGSI, `Layout` and `Key`, the probe and the per-program
    fallback, growing through the scope list.
 5. Measure; then make SPIR-V the default where the probe passes.
