@@ -913,6 +913,27 @@ virglrs resource create or destroy that blocks, or the worker's own scheduling. 
 `LIMINA_GPU_TRACE` and the worker log at the matching timestamp; the
 `vkWaitRingSeqnoMESA` entry below is one candidate for the queue head.
 
+### vrend's cold shader and pipeline compiles run on the virtio-gpu worker thread
+A vrend context drawing something new freezes the whole virtio-gpu device for as long as the
+compiles take: other contexts' flushes, presents and the cursor queue all wait. Measured 2026-10-20
+on the synoik image with Flathub Loupe 51 (its GL extension has no venus, so GTK's GL renderer runs
+on virgl), with `LIMINA_WAKE_PROBE=1`: startup drains of 589, 999 and 1211 ms, of which 579, 995 and
+1180 ms were fence handling, and single `SUBMIT_3D`s of 189 and 388 ms. Opening a dialog with new
+shaders did the same. A worker `sample` places the fence time in `Vrend::fence_global` →
+`take_fence` → `glFenceSync`. Mesa flushes that without `PIPE_FLUSH_ASYNC` (`syncobj.c`: deferred
+only with a single context), so `tc_flush` syncs the threaded context and runs the queued zink draws
+inline, including `zink_create_gfx_pipeline` compiling on KosmicKrisp, which has no
+graphics-pipeline-library path to defer them. The `SUBMIT_3D` outliers are the front of the same
+chain: TGSI→GLSL translation and program linking in `select_linked_program`. The cost varies from
+boot to boot with what is already compiled. The canvas-ioctl stalls above are probably the same
+class.
+
+Fix shape (decided): move vrend off the virtio-gpu worker thread, so a compile holds only its own
+context's fences and never the queue. Two smaller levers were set aside: an async fence flush in
+the host Mesa fork (vrend's sync thread waits on those fences from another, shared context, which
+is the case Mesa's single-context guard exists for), and persistent host pipeline caches (they
+shorten the first stall per host but leave the structure).
+
 ### Texture uploads on virgl create a staging resource thousands of times per run
 The same runs show 7–8k `RESOURCE_CREATE` per 15 s on the canvas thread, about 100 of them over
 1 ms, mostly `virgl_staging_alloc` ← `virgl_resource_transfer_map` ← `st_texture_image_map` on the
