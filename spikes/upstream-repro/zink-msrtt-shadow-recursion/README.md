@@ -141,10 +141,33 @@ across the `glFlush` and stays there for the draw; with the series the shadow ru
 identical results test for test, pass 1091, fail 21, crash 26, skip 231, warn 10. Against `main`
 `92b45bd0f2e` the one difference, `ext_texture_array/fbo-depth-array stencil-clear`,
 stalled main's run once and passes 3/3 on every build alone. The sRGB and texture-view groups are
-there because format-view shadowing runs the patched function. piglit's only MSRTT test,
-`ext_multisampled_render_to_texture-clear_color_and_depth`, is in no profile; run alone
-(`-auto -fbo`, which surfaceless EGL needs) it passes 3/3 on main and +0002, since its one
-unscissored clear on a fresh framebuffer never needs a replicate blit.
+there because format-view shadowing runs the patched function. That run's piglit predates the
+`ext_multisampled_render_to_texture`/`…texture2` conformance tests (piglit `61bc1006c`,
+`c51282639`); its one MSRTT test, `clear_color_and_depth`, run alone (`-auto -fbo`, which
+surfaceless EGL needs) passes 3/3 on main and +0002, since its one unscissored clear on a fresh
+framebuffer never needs a replicate blit.
+
+## Suite test
+
+The `zs` mode as a piglit test (`docs/upstreaming/patch-diligence.md` §7):
+`ext_multisampled_render_to_texture2-depth-texture-partial-clear`, branch
+`msrtt2-depth-partial-clear` on `gitlab.freedesktop.org/kov/piglit` (`44714bf80`, on piglit
+`cff83ebb6`). It checks only the cleared quadrant, since the spec discards a multisampled depth
+texture's contents. 2026-10-21, zink on venus in the rig guest, debug builds, `-auto -fbo`:
+
+| Mesa | result |
+|---|---|
+| `main` `99476694236` | abort on `validate_atoms`, 3/3 |
+| `main` `7d6e9088821` | abort, 3/3 |
+| `99476694236` + 0001 alone (the !45485 commit) | pass, 5/5 |
+| `7d6e9088821` + all four | pass, 3/3 |
+
+On lavapipe the test skips: lavapipe has `VK_EXT_multisampled_render_to_single_sampled`, and zink
+on it exposes no `GL_EXT_multisampled_render_to_texture2`. Of Mesa's zink CI drivers anv and nvk
+lack MSRTSS (lavapipe, radv and turnip advertise it). `zink-anv-tgl` runs piglit `quick_gl` on a
+`debugoptimized` build, which keeps asserts, so it can fail the test once Mesa CI's piglit pin
+moves past it. Not checked: whether CI's piglit build has the GLES tests, and what the nvk jobs
+run.
 
 ## Alternatives
 
@@ -174,7 +197,8 @@ the tree is the one measured as "+all four". `upstream/zink-msrtt-shadow` keeps 
 carries `0002`–`0004`; at 26.2.5 it has no atom loop and needs no `0001`.
 
 - 0001 `Fixes: 769b356b5b6` ("zink: emit the draw synchronization and the renderpass as atoms");
-  main only, so no `Cc: mesa-stable`.
+  main only, so no `Cc: mesa-stable`. Sent alone as mesa!45485, reworded by the submitter; the
+  maintainer asked for a piglit test before review, which is the suite test above.
 
 - 0002 `Fixes: 82add9f2e99` ("zink: avoid recursion during msrtss blits from flushing clears"):
   that commit added the clear save/restore around the replicate blit but left the shadowed

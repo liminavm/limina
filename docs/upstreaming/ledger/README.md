@@ -15,7 +15,8 @@ and the `limina-upstreaming-triage` memory pre-date this ledger and seed its jud
 columns; where they disagree with a fresh check, the fresh check wins.
 
 A patch picked to send then gets the per-patch pass in `../patch-diligence.md`: reproducer,
-regressing commit, prior art, focused alternatives, discriminating tests, packaging.
+regressing commit, prior art, focused alternatives, discriminating tests, a test in the
+component's own suite, packaging.
 
 ## Columns
 
@@ -29,6 +30,7 @@ regressing commit, prior art, focused alternatives, discriminating tests, packag
 | `checked` | upstream SHA + date the `need` verdict was made against (a verdict without its SHA is unfalsifiable) |
 | `issue` | URL / `none-yet` / `n/a` (not upstreamable) |
 | `mr` | URL / `none-yet` / `blocked-on-disclosure` |
+| `test` | the suite test that goes with the MR (`../patch-diligence.md` §7): `<suite>: <branch or MR>` / `none-fits` (no suite can express the bug: say why) / `to-decide` / `n/a` (not being sent). A series file gains this column when its first patch is picked to send |
 | `sec` | `no` / `yes:<class>` (guest-triggerable host memory-safety, info leak, …) |
 | `fold` | `standalone` / `fold-into:<subject>` / `strip-diag-first` |
 | `tier` | `host` / `guest-stock` / `guest-enhanced` (enhanced → justification section below the table) |

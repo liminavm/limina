@@ -7,7 +7,8 @@ teardown from an unloaded driver", `spikes/upstream-repro/venus-tls-destructor/`
 worked example; the steps generalise.
 
 The output is a reproducer README holding the evidence and the points the MR description
-needs, a standalone branch whose tree is exactly what was tested, and an updated ledger row.
+needs, a standalone branch whose tree is exactly what was tested, a test in the component's own
+test suite where one can express the bug (§7), and an updated ledger row.
 Filing stays with the user: agents never post, and Mesa's AI policy wants the commit message,
 code comments and MR text in the submitter's own words (`ledger/mesa.md`).
 
@@ -158,7 +159,46 @@ written as a rule; a rule that applies to every patch also becomes a lens.
 - List the cases no run covers in the README: races, `exit()` from a worker, platforms we
   cannot build.
 
-## 7. Verify platform claims in the source
+## 7. Turn the reproducer into a test in the project's suite
+
+The reproducer convinces us. The maintainer wants a test in the suite they run: CI keeps running
+it, and it stops the bug from coming back. Mesa !45485 waited on a piglit test before review. So
+the reproducer's deciding mode becomes a test in the component's suite, as its own commit and its
+own MR in that project, and the fix MR references it (`mesa/piglit!N` from Mesa, `mesa/mesa!N`
+back).
+
+| component | suite | notes |
+|---|---|---|
+| Mesa GL / GLES drivers (zink, virgl, llvmpipe, …) | piglit, `mesa/piglit` | Mesa CI pins piglit and moves the pin with "Uprev Piglit" commits (`.gitlab-ci/container/build-piglit.sh`), so a new test runs in Mesa CI only after the next uprev |
+| Mesa Vulkan drivers (venus, KosmicKrisp, …) | Vulkan CTS (dEQP-VK), `KhronosGroup/VK-GL-CTS` | GitHub PRs for non-members, a Khronos CLA, and an AI clause of its own (its `CONTRIBUTING.md`). Mesa CI runs dEQP-VK on venus (`src/virtio/ci/deqp-venus.toml`) |
+| virglrenderer | its `tests/` | check-based unit tests over the command stream (`test_virgl_cmd.c`, `test_virgl_resource.c`, `test_virgl_fence.c`, …) and a fuzzer |
+| guest kernel, virtio-gpu | IGT, `drm/igt-gpu-tools` | `tests/drm_virtgpu.c`. Other kernel code: kselftest or KUnit |
+| libkrun | its `tests/` | end-to-end: a host runner configures libkrun through the public API and runs a case in the guest (`tests/test_cases/`) |
+| imago | `#[test]`s in the crate | |
+
+Some bugs no suite can express: a driver unloaded under a live thread, a host refusing a request,
+a teardown order. Say so in the fix MR; the standalone reproducer stays the evidence.
+
+- **The same evidence as §6**: it fails on the unfixed base and passes with the fix, several
+  runs each, on the reproducer's rig, with the SHAs in the reproducer README. Build the fix
+  alone, not only the series it sits in: the test should name the bug the MR fixes.
+- **Find where it can fail.** List the CI jobs that would run the test and whether their driver
+  reaches the buggy path. The MSRTT test fails only where zink emulates
+  `VK_EXT_multisampled_render_to_single_sampled`: on anv and nvk, which lack it, not on lavapipe,
+  radv or turnip, which have it (lavapipe skips the test). When no CI job can fail it, the MR says
+  so.
+- **Say whether the failure needs asserts.** Mesa CI builds `debugoptimized`, which keeps them
+  (`b_ndebug=if-release`). A release build can show another symptom or none, and the MR should
+  give both.
+- **Check only what the spec defines.** A multisampled depth texture's contents are discarded,
+  so the MSRTT test checks the cleared quadrant and not the depth elsewhere, which the reproducer
+  had relied on.
+- **Write it in the suite's idiom.** Its header comment and commit message say what is tested, in
+  spec terms; the driver and the bug belong in the fix MR. Reuse the suite's helpers, and copy
+  its recent authors' message style and trailers. In piglit both `Generated-by: LLM` and
+  `Assisted-by:` are in use, `Signed-off-by` is optional, and marge-bot adds `Part-of:`.
+
+## 8. Verify platform claims in the source
 
 - Enumerate every OS and libc the component builds for. Read the component's own
   `DETECT_OS_*` branches and meson conditions; venus has Windows branches but builds no
@@ -170,7 +210,7 @@ written as a rule; a rule that applies to every patch also becomes a lens.
 - Follow the project's conventions for build-time detection (`cc.has_function` →
   `-DHAVE_…` in Mesa's root `meson.build`).
 
-## 8. Package it
+## 9. Package it
 
 - Tag before rewriting any branch the series lives on. Replace the series commit in place and
   check that the old and new tips differ only by the fix (`git diff --stat`).
@@ -181,7 +221,7 @@ written as a rule; a rule that applies to every patch also becomes a lens.
 - Reproducer README: setup, command, a dated results table per build and mode, uncovered
   cases, prior art to cite, and the points the MR description must make (no drafted prose:
   the submitter writes it).
-- Ledger row: upstream subject, `Fixes:`, the one-line verdict.
+- Ledger row: upstream subject, `Fixes:`, the one-line verdict, and the `test` column (§7).
 - Re-check `main` right before sending: fetch, rerun the reproducer if the touched files
   moved, and search the tracker again. Verdicts on active code go stale in weeks.
 - Re-check the security class (`ledger/README.md`, phase 3). A guest-triggerable host
