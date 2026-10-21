@@ -2,10 +2,9 @@
 
 Status: design agreed with the synoik side. Built: Cardea's first frame, logo placement and quiet
 boot; on the host, the pre-paint, the power-off fade, kept secondaries and the serial console
-CLI, and the per-VM logo. Not built: the boot-menu action, the window's Console view and the
-boot-details shortcut. Owner of the
-firmware half: Cardea (`third_party/cardea`); of the guest half: synoik (`docs/fork/boot-splash.md`
-in the synoik repo).
+CLI, the per-VM logo, and `--boot-menu` (the firmware opens revealed). Not built: the window's
+Console view and the boot-details shortcut. Owner of the firmware half: Cardea
+(`third_party/cardea`); of the guest half: synoik (`docs/fork/boot-splash.md` in the synoik repo).
 
 ## Goal
 
@@ -74,10 +73,19 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
    graphical GRUB menu), which is left as it is. GRUB polls the keyboard every few microseconds
    while its menu counts down, so the 500 ms run fires on any menu; with `GRUB_TIMEOUT=0` it does
    not read keys and stays quiet.
-5. **Getting to the menu.** The host's "show boot menu on next start" action (part of the host
-   boot policy in `firmware-and-acpi.md`) starts the firmware revealed and, for loaders that
-   hide their menu, presses the loader's key for it: sets `LoaderConfigTimeoutOneShot` for
-   systemd-boot, holds Esc/Shift in ConIn for GRUB's hidden menu (to verify per distro).
+5. **Getting to the menu.** `limina start --boot-menu` (and the flat `--boot-menu`) asks for it
+   for one boot: the first worker of the run passes `libkrun,boot-menu` on `/chosen`, a reboot,
+   a reset or a resume does not. Cardea then opens revealed, draws no logo and publishes no BGRT,
+   and the window skips its pre-paint. That shows a menu a loader displays anyway, a prompt or
+   an error. Getting a loader to display a menu it hides is per loader:
+   - **Fedora's GRUB** has no window for a firmware-held key on an image whose menu is hidden
+     with `timeout=0` (the F44 test image: `timeout_style=menu`, `timeout=0`, which skips the
+     keypress check). Fedora's lever is the `menu_show_once` grubenv flag, writable only from
+     inside the guest (a limina-agent action, not built). A default install hides the menu
+     with a one-second hidden timeout after a successful boot, where Esc does work; nothing
+     presses it yet.
+   - **systemd-boot** reads `LoaderConfigTimeoutOneShot`; no test image boots systemd-boot, so
+     setting it is not built.
 
 ## Host (limina)
 
@@ -129,6 +137,7 @@ behind one shortcut.
   only.
 
 ## Open
+
 
 - **The firmware → kernel window.** The guest kernel scans out a zeroed buffer before any splash
   draws: measured 2026-10-21 on a synoik image (Cardea 6ee3439, kernel 7.1.13-limina16k), ~515 ms

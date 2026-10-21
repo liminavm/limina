@@ -75,6 +75,12 @@ struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
     boot_logo: Option<PathBuf>,
 
+    /// Open on the firmware's console and show the loader's boot menu, for this boot only: a
+    /// reboot goes back to the quiet boot. Nothing is shown if the start resumes a suspended
+    /// guest.
+    #[arg(long, conflicts_with = "kernel")]
+    boot_menu: bool,
+
     /// Raw aarch64 kernel Image for direct kernel boot (the fast L1 path).
     #[arg(long)]
     kernel: Option<PathBuf>,
@@ -865,6 +871,9 @@ struct StartOverrides {
     /// Throw away a pending suspended session and boot fresh.
     #[arg(long)]
     discard_suspend: bool,
+    /// Open on the firmware's console and show the loader's boot menu, for this boot only.
+    #[arg(long)]
+    boot_menu: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1790,6 +1799,7 @@ fn cli_from_definition(
         // the state.toml to persist `[suspended]` into on a 126 exit.
         snapshot_file: Some(snapshot_bin),
         discard_suspend: ov.discard_suspend,
+        boot_menu: ov.boot_menu,
         suspend_state_file: Some(state_toml),
         on_window_close: cfg.display.on_window_close,
         virtio_console: None,
@@ -2045,6 +2055,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         .as_deref()
         .map(window::bootlogo::load)
         .transpose()?;
+    supervisor::BOOT_MENU.store(cli.boot_menu, std::sync::atomic::Ordering::SeqCst);
     // Boot source. clap guarantees firmware and kernel don't both appear; we resolve the
     // rest: an explicit --firmware is honored, and a windowed boot with neither given
     // defaults to the GOP firmware so EFI/GRUB/early-kernel render in the window (M2.5
@@ -2600,6 +2611,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             restoring: cli.snapshot_file.as_ref().is_some_and(|p| p.exists()),
             // Checked as the firmware will check it (`bootlogo::load`) before any start.
             boot_logo: boot_logo.clone(),
+            // The firmware opens on its console: no logo to pre-paint.
+            boot_menu: cli.boot_menu,
             // Show its splash until the first frame.
             restore_splash: cli
                 .snapshot_file

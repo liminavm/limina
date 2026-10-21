@@ -213,6 +213,11 @@ pub fn suspend_requested_externally() -> bool {
     SUSPEND_FROM_SIGNAL.load(Ordering::SeqCst)
 }
 
+/// The next worker that runs the firmware asks it for the boot menu (`--boot-menu`). One boot
+/// only: the first spawn takes it whether or not that boot gets far, so a reboot, a reset or a
+/// failed start never inherits it, and a resume, which runs no firmware, drops it.
+pub static BOOT_MENU: AtomicBool = AtomicBool::new(false);
+
 /// Set by [`request_reset`]; observed by [`monitor`], which kills the worker and reports the exit
 /// as a guest reboot, so the relaunch loop that already handles a guest's own `reboot` (the
 /// headless [`run`] and the windowed session alike) cold-boots a fresh worker behind the same
@@ -732,6 +737,13 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         args.push("--restore".into());
         args.push(pending.into_os_string());
         resumed = true;
+    }
+    if BOOT_MENU.swap(false, Ordering::SeqCst) {
+        if resumed {
+            log::info!("no boot menu: this start resumes a suspended guest, so no firmware runs");
+        } else {
+            args.push("--boot-menu".into());
+        }
     }
     let record = if spec.suspend_state_file.is_some() {
         lock_consumed().clone()

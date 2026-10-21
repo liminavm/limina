@@ -147,6 +147,8 @@ pub struct WindowOptions {
     pub restore_splash: Option<PathBuf>,
     /// The VM's own boot logo, checked as the firmware checks it; `None` is the built-in one.
     pub boot_logo: Option<Vec<u8>>,
+    /// This start opens on the firmware's console (`--boot-menu`): no logo is pre-painted.
+    pub boot_menu: bool,
     /// The parked window's resume channel (task #18): a menu/CLI suspend keeps the window
     /// open with a play glyph, and the click sends here — the session's monitor thread,
     /// parked in recv(), respawns the worker (which restores from the pending snapshot).
@@ -2180,6 +2182,7 @@ pub fn run(
         restoring,
         restore_splash,
         boot_logo: vm_logo,
+        boot_menu,
         resume_worker,
         menu_ctx,
         hidpi,
@@ -3368,8 +3371,7 @@ pub fn run(
     // A cold boot opens on black and the firmware's logo, as the firmware's first frame will
     // show them; it comes down with the guest's first presented frame.
     let boot_logo: RefCell<Option<bootlogo::BootLogo>> = RefCell::new(
-        restore_splash
-            .is_none()
+        (restore_splash.is_none() && !boot_menu)
             .then(|| {
                 bootlogo::BootLogo::install(
                     &layer,
