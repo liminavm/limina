@@ -1,3 +1,4 @@
+<!-- ledger-check: dep=mlx base=b6642e604843776705b57b1eaecb6f57e519b793 -->
 # mlx — patch-audit ledger
 
 2 patches on `UPSTREAM_BASE` = `ml-explore/mlx` `main` `b6642e6`. Schema: `README.md`. Rows are
