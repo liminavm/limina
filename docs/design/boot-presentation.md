@@ -105,7 +105,8 @@ behind one shortcut.
 - **Guest details view (synoik).** What the OS prints after the splash starts: the kernel log from
   `/dev/kmsg` (under `quiet` kernel text reaches nowhere else) and `/dev/console` writes, as
   plymouth two-step's details view reads them; after the handover the unprivileged system
-  compositor reads kmsg and the journal instead. Not built: synoik-splash has no details mode yet.
+  compositor reads the journal instead (Fedora sets `kernel.dmesg_restrict = 1`, so kmsg is
+  closed to it). Not built: synoik-splash has no details mode yet.
   Stock images get plymouth's own (Esc).
 - **The "boot details" shortcut (host).** Before the guest's first own frame, it opens the host
   Console. After it, the host injects a dedicated details key on its virtual keyboard, which
