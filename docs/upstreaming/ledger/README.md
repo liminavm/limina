@@ -37,6 +37,25 @@ component's own suite, packaging.
 | `disp` | `upstream-now` / `upstream-after-cleanup` / `carry` (limina/macOS-specific) / `drop` |
 | `notes` | free text, keep short; long findings go in a section below the table |
 
+## Keeping it current
+
+A ledger is current when it has a row for every commit on its fork's pinned branch.
+`cargo xtask ledger` (`scripts/patch-audit/check-ledger.sh`) checks that: for each file that opens
+with a `<!-- ledger-check: dep=… -->` marker, it lists `base..rev` from the manifest pin and reports
+each commit that no table row names. A row names a commit by its subject cell, the second column,
+verbatim (`\|` stands for `|`). A row that covers several commits, or whose commit was reworded,
+names the others with an alias anywhere in the row, `<!-- also: <subject> -->`; grep for `also:`
+to find them all. A subject that appears only in prose does not count. `--skeleton` prints the
+missing commits as rows, with subject, files and DIAG flag filled and the judgment left empty. The marker can also
+name another manifest (virglrenderer is pinned by virglrs), a base the manifest does not record,
+and the paths that count (virglrenderer's branch also carries the Rust rewrite).
+
+Bring the ledger along whenever a pin moves (`../fork-rebase-acceptance.md`, step 6). The
+pre-push hook warns when a pushed pin bump leaves rows missing. It does not refuse the push,
+because the check needs every fork's tree deep enough to hold its base. Nothing else reads the
+ledger, so a pin bump that adds no rows, or leaves a rebased file citing SHAs that no longer
+exist, goes unnoticed until someone audits by hand.
+
 ## Phases
 
 - **Phase 0 — mechanical skeleton** (`build-ledger.py`): subjects, files, DIAG flags.
