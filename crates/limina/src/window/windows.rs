@@ -724,11 +724,11 @@ struct SecondaryWindow {
     /// (`true`) or the borderless above-menu-bar cover window (`false`). Decided per
     /// transition by [`native_space_ok`]; meaningless while not covering.
     native_space: bool,
-    /// The "Suspending…" veil, while a suspend bracket is in flight ([`GuestWindows::veil`]).
-    /// The primary has always had one; without it here a second panel simply stops updating
-    /// for the seconds the snapshot takes, with nothing to say why. Only this flavor can ever
-    /// reach a secondary: parked and resuming both happen after the park has closed them.
-    suspend_overlay: Option<super::overlay::Overlay>,
+    /// The veil this window wears with the primary's ([`GuestWindows::veil`]): "Suspending…"
+    /// while a suspend bracket is in flight (without it a second panel simply stops updating for
+    /// the seconds the snapshot takes, with nothing to say why), and the parked and resuming
+    /// faces when a VM using every display keeps its windows across the suspend.
+    veil: Option<(Veil, super::overlay::Overlay)>,
     /// The housing band the current style owes back to the window background, in points:
     /// nonzero only for a borderless cover under `notch = avoid`. A native Space's content
     /// view is already the safe area, and a floating window has no band. Stored at restyle so
@@ -1081,37 +1081,49 @@ impl GuestWindows {
         self.secondaries.clear();
     }
 
-    /// Wear (or drop) the suspend veil on every secondary, mirroring the primary's.
+    /// Wear `veil` on every secondary, mirroring the primary's overlay.
     ///
     /// A suspend freezes every panel, not just the one the primary is on, and the snapshot save
-    /// takes seconds — long enough for a still second display to read as a hang. Driven from the
-    /// tick's overlay block so the two go up and come down together, including when the bracket
-    /// is abandoned and the VM keeps running.
-    pub(crate) fn veil(&mut self, on: bool) {
+    /// takes seconds — long enough for a still second display to read as a hang. A VM using
+    /// every display then keeps them parked with the primary, and a click on any of them
+    /// resumes. Driven from the tick's overlay block so they go up and come down together,
+    /// including when the bracket is abandoned and the VM keeps running.
+    pub(crate) fn veil(&mut self, veil: Veil) {
         for w in self.secondaries.values_mut() {
-            match (on, w.suspend_overlay.is_some()) {
-                (true, false) => {
-                    w.suspend_overlay = Some(super::overlay::Overlay::suspend(
-                        &w.core.layer,
-                        &w.core.view,
-                    ));
-                }
-                (false, true) => {
-                    if let Some(o) = w.suspend_overlay.take() {
-                        o.remove();
-                    }
-                }
+            let current = w.veil.as_ref().map(|(v, _)| *v);
+            if current == Some(veil) {
                 // Up and staying up: re-fit, exactly as the primary's does, so a resize or a
                 // restyle under the veil does not leave it the wrong size.
-                (true, true) => {
-                    if let Some(o) = w.suspend_overlay.as_ref() {
-                        o.fit(&w.core.view);
-                    }
+                if let Some((_, o)) = w.veil.as_ref() {
+                    o.fit(&w.core.view);
                 }
-                (false, false) => {}
+                continue;
             }
+            if current.is_none() && veil == Veil::Off {
+                continue;
+            }
+            if let Some((_, o)) = w.veil.take() {
+                o.remove();
+            }
+            let (layer, view) = (&w.core.layer, &w.core.view);
+            let overlay = match veil {
+                Veil::Off => continue,
+                Veil::Suspending => super::overlay::Overlay::suspend(layer, view),
+                Veil::Parked => super::overlay::Overlay::parked(layer, view),
+                Veil::Resuming => super::overlay::Overlay::resuming(layer, view, None),
+            };
+            w.veil = Some((veil, overlay));
         }
     }
+}
+
+/// What the secondary windows wear over their last frame, following the primary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Veil {
+    Off,
+    Suspending,
+    Parked,
+    Resuming,
 }
 
 /// Closing and forgetting is [`Drop`]'s job, so it cannot be forgotten.
@@ -1266,7 +1278,7 @@ impl SecondaryWindow {
 
         SecondaryWindow {
             core,
-            suspend_overlay: None,
+            veil: None,
             last_gen: 0,
             geom: (width, height),
             panel,

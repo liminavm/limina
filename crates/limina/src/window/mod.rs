@@ -3290,11 +3290,23 @@ pub fn run(
             // follow, present — primary first, one collection (`windows::GuestWindows`).
             let slot_panels: std::collections::HashMap<usize, u64> = {
                 let table = display_table.borrow();
-                table
+                let mut map: std::collections::HashMap<usize, u64> = table
                     .connected_slots()
                     .into_iter()
                     .filter_map(|s| table.panel_of(s).map(|p| (s as usize, p)))
-                    .collect()
+                    .collect();
+                // Rebooting with every display in use: firmware connects head 0 alone, and the
+                // other windows wait on their last frame for the guest to light them again.
+                if table.phase() == displays::Phase::Firmware
+                    && FULLSCREEN_ALL_DISPLAYS.with(|f| f.get())
+                    && window.styleMask().contains(NSWindowStyleMask::FullScreen)
+                {
+                    let attached: Vec<u64> = panel_names.borrow().iter().map(|(k, _)| *k).collect();
+                    for (s, p) in table.awaited(&attached) {
+                        map.entry(s as usize).or_insert(p);
+                    }
+                }
+                map
             };
             guest_windows.borrow_mut().apply(
                 &shared,
@@ -3584,12 +3596,14 @@ pub fn run(
                     {
                         ov.replace(overlay::Overlay::parked(&host_layer, &content));
                     }
-                    // The other displays' windows go with it. This path returns before the
-                    // frame-apply closure runs, so nothing else would ever take them down —
-                    // and while covering they are borderless and above the menu bar, which
-                    // means a panel frozen on its last frame with no way to dismiss it. They
-                    // come back on resume, when the restored worker presents again.
-                    timer_windows.borrow_mut().close_secondaries();
+                    // A VM using every display keeps the other windows, parked with this one
+                    // (a click on any resumes): closing them only to reopen each on resume is
+                    // the churn the boot presentation removes. Otherwise they go with it — this
+                    // path returns before the frame-apply closure runs, so nothing else would
+                    // take them down — and come back when the restored worker presents.
+                    if !FULLSCREEN_ALL_DISPLAYS.with(|f| f.get()) {
+                        timer_windows.borrow_mut().close_secondaries();
+                    }
                     window.setTitle(&NSString::from_str(&format!("{title} — Suspended")));
                     log::info!("VM suspended; window parked (click to resume)");
                     return;
@@ -3739,10 +3753,15 @@ pub fn run(
             {
                 ov.replace(overlay::Overlay::suspend(&host_layer, &content));
             }
-            // The other panels freeze with this one, so they say so with it. Only the suspend
-            // flavor reaches them: by the time the window is parked or resuming, the park has
-            // closed every secondary.
-            timer_windows.borrow_mut().veil(live && suspending);
+            // The other panels freeze with this one, so they say so with it; a VM using every
+            // display keeps them parked with it, too.
+            let veil = match PARK_STATE.with(|p| p.get()) {
+                ParkPhase::Parked => windows::Veil::Parked,
+                ParkPhase::Resuming => windows::Veil::Resuming,
+                ParkPhase::Live if suspending => windows::Veil::Suspending,
+                ParkPhase::Live => windows::Veil::Off,
+            };
+            timer_windows.borrow_mut().veil(veil);
         }
 
         // Release keys held when the window loses key focus (e.g. the user hit Cmd-Tab): the local
@@ -4325,7 +4344,16 @@ pub fn run(
             if ev.r#type() == NSEventType::LeftMouseDown {
                 let p = input::event_point_in_view(ev, &monitor_view);
                 let b = monitor_view.bounds();
-                if p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height {
+                let in_main = p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height;
+                // A parked secondary (a VM using every display) is all play button too. The main
+                // window is a guest window as well, but only its content resumes: its title bar
+                // still drags.
+                let main = monitor_view.window();
+                let in_other = ev.window(mtm).is_some_and(|w| {
+                    main.as_ref().is_none_or(|m| !std::ptr::eq(&**m, &*w))
+                        && windows::slot_of_window(&w).is_some()
+                });
+                if in_main || in_other {
                     RESUME_REQUESTED.with(|r| r.set(true));
                     return std::ptr::null_mut(); // the click was the play button, not input
                 }

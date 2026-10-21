@@ -423,6 +423,21 @@ impl DisplayTable {
         }
     }
 
+    /// The slots the OS phase lights for a VM using every display, each with its panel, read
+    /// without assigning or connecting anything. Across a guest reboot only slot 0 is connected
+    /// (firmware paints no other head), and these are the displays the guest is about to bring
+    /// back: their windows stay up on their last frame rather than closing and reopening around
+    /// the boot.
+    pub(crate) fn awaited(&self, attached: &[u64]) -> Vec<(u32, u64)> {
+        attached
+            .iter()
+            .filter_map(|&panel| {
+                let slot = self.find(panel)?;
+                self.slots[slot as usize].enabled.then_some((slot, panel))
+            })
+            .collect()
+    }
+
     /// The assignment, for persistence: `(panel_key, slot)` pairs. A VM that remembers this
     /// gives a panel the same connector across restarts, which is the whole point of keying on
     /// the panel in the first place.
@@ -1182,6 +1197,23 @@ mod tests {
         assert_eq!(t.phase(), Phase::Firmware);
         assert_eq!(t.connected_slots(), vec![0], "firmware paints head 0 only");
         assert_eq!(t.assignment(), before, "the panels did not move");
+        // Every display is awaited back, so none of their windows close for the boot.
+        assert_eq!(
+            t.awaited(&[BUILT_IN, STUDIO]),
+            vec![(0, BUILT_IN), (1, STUDIO)]
+        );
+        assert_eq!(
+            t.awaited(&[BUILT_IN]),
+            vec![(0, BUILT_IN)],
+            "a detached panel is not coming back"
+        );
+        t.set_enabled(STUDIO, false);
+        assert_eq!(
+            t.awaited(&[BUILT_IN, STUDIO]),
+            vec![(0, BUILT_IN)],
+            "nor is one the user switched off"
+        );
+        t.set_enabled(STUDIO, true);
 
         // And once the rebooted guest's driver is up, the same panels light the same slots —
         // slot 0 included. Its connector never went down, but the device it is on is new and
