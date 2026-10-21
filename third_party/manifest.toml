@@ -36,7 +36,7 @@ base = "dc1a18ada58cb5d15db5333a12bf2f0cbf64ac15"
 [cardea]
 repo = "https://github.com/liminavm/cardea.git"
 branch = "main"
-rev = "6ee34396129b7c94d39534432e2e55efe800a818"
+rev = "c712c61a19f04223d8d4201ebe5e1da9277f498c"
 
 [imago]
 repo = "https://github.com/liminavm/imago.git"
