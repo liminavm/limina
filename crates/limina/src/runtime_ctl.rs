@@ -539,7 +539,13 @@ pub(crate) fn serve_client(stream: UnixStream) {
             continue;
         }
         if line.trim() == CONSOLE {
-            if out.write_all(answer(Ok(vec![])).as_bytes()).is_err() {
+            let refused = crate::serial_console::refusal().map(str::to_string);
+            let failed = refused.is_some();
+            if out
+                .write_all(answer(refused.map_or(Ok(vec![]), Err)).as_bytes())
+                .is_err()
+                || failed
+            {
                 return;
             }
             // The client sends nothing until it has read the `ok`, so the reader holds no

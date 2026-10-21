@@ -37,16 +37,27 @@ const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// The recent output, the attached clients, and the current worker's line for input.
 struct Line {
+    /// Whether this supervisor holds the line at all: not when the command line wired it
+    /// itself (`--console`, `--console-pty`).
+    held: bool,
     backlog: VecDeque<u8>,
     clients: Vec<UnixStream>,
     input: Option<UnixStream>,
 }
 
 static LINE: Mutex<Line> = Mutex::new(Line {
+    held: false,
     backlog: VecDeque::new(),
     clients: Vec::new(),
     input: None,
 });
+
+/// Why a `console` request cannot be served, if it cannot.
+pub fn refusal() -> Option<&'static str> {
+    (!line().held).then_some(
+        "this VM's serial line goes where its command line said (--console or --console-pty)",
+    )
+}
 
 fn line() -> std::sync::MutexGuard<'static, Line> {
     LINE.lock().unwrap_or_else(|p| p.into_inner())
@@ -63,10 +74,14 @@ fn remember(backlog: &mut VecDeque<u8>, bytes: &[u8], cap: usize) {
 /// thread reads until the worker exits.
 pub fn serve(host: OwnedFd, log: Option<PathBuf>) {
     let host = UnixStream::from(host);
-    match host.try_clone() {
-        Ok(input) => line().input = Some(input),
+    let input = host.try_clone();
+    let mut l = line();
+    l.held = true;
+    match input {
+        Ok(input) => l.input = Some(input),
         Err(e) => log::warn!("serial console: no input to the guest this boot: {e}"),
     }
+    drop(l);
     let spawned = std::thread::Builder::new()
         .name("serial-console".into())
         .spawn(move || pump(host, log));
