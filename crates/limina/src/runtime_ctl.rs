@@ -53,6 +53,11 @@
 //! says when it is done. It is refused unless the VM's `net-switch` lever is on
 //! (`debug_ctl::NET_SWITCH`, off by default, read per request).
 //!
+//! `console` turns the connection into the guest's serial line, raw bytes both ways, for as long
+//! as the client stays (`crate::serial_console`; `limina console` is its client): the recent
+//! output, then everything as it arrives, across reboots. Watching is free; typing reaches the
+//! guest only while the VM's `console-input` lever is on (`debug_ctl::CONSOLE_INPUT`).
+//!
 //! Like the debug socket it is reachable by any process of the same user. Moving the SSH forward
 //! binds a different loopback port on the host; the guest and its network are untouched.
 
@@ -533,6 +538,15 @@ pub(crate) fn serve_client(stream: UnixStream) {
             }
             continue;
         }
+        if line.trim() == CONSOLE {
+            if out.write_all(answer(Ok(vec![])).as_bytes()).is_err() {
+                return;
+            }
+            // The client sends nothing until it has read the `ok`, so the reader holds no
+            // buffered byte of its typing: the line is the connection's from here.
+            crate::serial_console::attach(out);
+            return;
+        }
         let req = Request::parse(&line);
         if req == Ok(Request::Watch) {
             // Answer and register under the lock the pushes take, so no change slips between
@@ -585,6 +599,30 @@ pub fn cleanup() {
 // ---------------------------------------------------------------------------
 // Clients: the control center and `limina ssh-port`.
 // ---------------------------------------------------------------------------
+
+/// The request that turns a connection into the serial line.
+const CONSOLE: &str = "console";
+
+/// Attach to the VM's serial line: the stream, past the `ok`, carries raw bytes both ways.
+pub fn console(pid: u32) -> Result<UnixStream> {
+    let stream = connect(pid)?;
+    (&stream).write_all(format!("{CONSOLE}\n").as_bytes())?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut first = String::new();
+    reader.read_line(&mut first)?;
+    let first = first.trim_end();
+    if first != wire::OK {
+        anyhow::bail!(
+            "{}",
+            first
+                .strip_prefix("err ")
+                .unwrap_or("the supervisor has no console (an older build?)")
+        );
+    }
+    stream.set_read_timeout(None)?;
+    stream.set_write_timeout(None)?;
+    Ok(stream)
+}
 
 fn connect(pid: u32) -> Result<UnixStream> {
     connect_at(&socket_path(pid))

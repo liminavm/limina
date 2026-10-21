@@ -39,6 +39,9 @@ pub enum ConsoleSpec {
     /// Allocate a pseudo-terminal and wire the guest serial to it, for an interactive
     /// console. The slave device path is printed at startup (attach with `screen <path>`).
     Pty,
+    /// A socket the supervisor holds the other end of, both directions: the guest's serial
+    /// line as `limina console` and the per-boot console log see it.
+    Fd(i32),
 }
 
 /// A virtio-console (`hvc0`) wired bidirectionally — a robust interactive data console.

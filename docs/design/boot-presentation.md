@@ -1,7 +1,9 @@
 # Boot presentation: one picture from power-on to the desktop and back
 
 Status: design agreed with the synoik side. Built: Cardea's first frame, logo placement and quiet
-boot. Not built: the per-VM logo, the boot-menu action, and everything on the host. Owner of the
+boot; on the host, the pre-paint, the power-off fade, kept secondaries and the serial console
+CLI. Not built: the per-VM logo, the boot-menu action, the window's Console view and the
+boot-details shortcut. Owner of the
 firmware half: Cardea (`third_party/cardea`); of the guest half: synoik (`docs/fork/boot-splash.md`
 in the synoik repo).
 
@@ -38,13 +40,13 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
 
 | Stage | On screen | Built |
 |---|---|---|
-| Window opens, worker starting | black + the logo, pre-painted by the host by the firmware's rule from the same BMP | no: black today |
+| Window opens, worker starting | black + the logo, pre-painted by the host by the firmware's rule from the same BMP | yes (`window/bootlogo.rs`) |
 | Firmware init | the first presented frame is black + logo at 38.2% | yes |
 | Bootloader (GRUB, sd-boot) | quiet boot: the logo stays, text goes to serial (below) | yes |
 | ExitBootServices → `virtio_gpu` | the host holds the last firmware frame (Blt-only GOP, so no efifb/simpledrm; the device reset sends no `scanoutgone`) | yes; the guest's own black flip is in §Open |
 | Splash → desktop | plymouth bgrt / synoik-splash → compositor | yes |
-| Reboot | held frame → firmware's black + logo → next splash: one splash with a brief spinner pause | yes on the main window; secondaries close today (§Host 4) |
-| Power-off | hold the final frame, fade the window out (~200 ms), exit | no: the window vanishes at once |
+| Reboot | held frame → firmware's black + logo → next splash: one splash with a brief spinner pause | yes; all-displays secondaries are kept (§Host 4) |
+| Power-off | hold the final frame, fade the window out (~200 ms), exit | yes |
 
 ## Firmware (Cardea)
 
@@ -83,9 +85,8 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
    (`window/mod.rs`, the exited-worker arm that calls `std::process::exit`).
 4. **All displays.** When the VM uses all displays, the secondary windows follow the main
    window's lifecycle: kept across reboot and suspend (parked under the same scrim, resumed by the
-   same click), closed only at power-off, with the fade. Today they close on every worker exit
-   (`window/windows.rs`, `close_secondaries` on `exited`) and on a parked suspend, then reopen when
-   the guest re-announces its connectors. The firmware paints head 0 only, so a kept secondary
+   same click), closed only at power-off, with the fade. Without all displays, secondaries still close on a parked suspend
+   and reopen when the guest re-announces its connectors. The firmware paints head 0 only, so a kept secondary
    shows its held frame (synoik's splash lights every connector) until the guest's splash
    repaints it. A restore must not cycle connectors, so kept windows rebind to the same slots, and
    the suspend splash is saved per display, not only for the main one.
@@ -97,10 +98,12 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
 Quiet boot moves text off the glass; it does not throw it away. Two views show it, one per side,
 behind one shortcut.
 
-- **Host console (limina).** The worker always keeps the PL011 stream: a bounded ring, plus a log
-  per boot in the VM's directory, so a VM that did not boot leaves its evidence behind. A Console
-  view (a terminal emulator with input) opens from the menu, and `limina console <vm>` attaches
-  from Terminal. It sees what only the host can: firmware, loader, a guest whose display never
+- **Host console (limina).** The supervisor holds the PL011 line across every worker
+  (`crates/limina/src/serial_console.rs`): a 64 KiB backlog, plus `logs/console.log` per boot in a
+  managed VM's bundle, so a VM that did not boot leaves its evidence behind. `limina console <vm>`
+  attaches from Terminal and stays attached across reboots; typing reaches the guest only while
+  the VM's `console-input` lever is on. Built: the line, the log, the CLI. Not built: a Console
+  view in the window (a terminal emulator with input, from the menu). It sees what only the host can: firmware, loader, a guest whose display never
   comes up, panics, the end of shutdown, and the kernel and systemd text whenever the guest's
   console is on `ttyAMA0` (synoik images; `serial_console = both`). With input it is also the
   recovery UI: synoik guests put their emergency and rescue shells on the serial console, since

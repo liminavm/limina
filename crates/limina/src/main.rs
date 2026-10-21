@@ -34,6 +34,7 @@ mod power_profile;
 mod qga;
 mod runtime_ctl;
 mod sep;
+mod serial_console;
 mod session;
 mod supervisor;
 mod uplinks;
@@ -615,6 +616,20 @@ enum Cmd {
     /// VM refuses until its input-inject lever is on (LIMINA_INPUT_INJECT=1, the Debug menu, or
     /// `limina debug <vm> lever input-inject on`).
     Input(InputArgs),
+    /// Attach to a running VM's serial line (the firmware's and loaders' text, and the guest's
+    /// serial console when it has one): its recent output, then everything as it arrives,
+    /// across reboots. Ctrl-] detaches. Typing reaches the guest only while the VM's
+    /// console-input lever is on (LIMINA_CONSOLE_INPUT=1, the Debug menu, or
+    /// `limina debug <vm> lever console-input on`). Every boot is also logged to the VM's
+    /// logs/console.log.
+    Console(ConsoleArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct ConsoleArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -983,6 +998,7 @@ fn main() -> Result<()> {
         Some(Cmd::Debug(args)) => cmd_debug(args),
         Some(Cmd::SshPort(args)) => cmd_ssh_port(args),
         Some(Cmd::Address(args)) => cmd_address(args),
+        Some(Cmd::Console(args)) => cmd_console(args),
         Some(Cmd::NetSwitch(args)) => {
             let pid = debug_target_pid(&args.vm)?;
             runtime_ctl::request(pid, runtime_ctl::Request::NetSwitch(args.side))?;
@@ -1497,6 +1513,96 @@ fn cmd_ssh_port(args: SshPortArgs) -> Result<()> {
         None => anyhow::bail!("{} has no SSH forward (no NAT network)", args.vm),
     }
     Ok(())
+}
+
+/// Ctrl-]: what `limina console` takes as "detach" rather than a byte for the guest, as telnet
+/// and virsh do.
+const CONSOLE_DETACH: u8 = 0x1d;
+
+/// `limina console`: the VM's serial line on this terminal, raw, until Ctrl-] or the VM exits.
+fn cmd_console(args: ConsoleArgs) -> Result<()> {
+    use std::io::{Read, Write};
+    let pid = debug_target_pid(&args.vm)?;
+    let stream = runtime_ctl::console(pid)?;
+    eprintln!(
+        "limina: attached to {}'s serial line; Ctrl-] detaches\r",
+        args.vm
+    );
+    let _raw = RawTerminal::enter();
+    let mut from_vm = stream.try_clone()?;
+    std::thread::spawn(move || {
+        let mut out = std::io::stdout();
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = from_vm.read(&mut buf) {
+            if n == 0 || out.write_all(&buf[..n]).and_then(|()| out.flush()).is_err() {
+                break;
+            }
+        }
+        // The VM is gone (powered off, or its supervisor quit): so is the console.
+        drop(RawTerminal::restore_saved());
+        eprintln!("\r\nlimina: the VM's serial line closed");
+        std::process::exit(0);
+    });
+    let mut to_vm = stream;
+    let mut stdin = std::io::stdin();
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = stdin.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        let typed = &buf[..n];
+        let end = typed.iter().position(|&b| b == CONSOLE_DETACH);
+        to_vm.write_all(&typed[..end.unwrap_or(n)])?;
+        if end.is_some() {
+            break;
+        }
+    }
+    drop(_raw);
+    eprintln!("\r\nlimina: detached");
+    Ok(())
+}
+
+/// The terminal in raw mode for as long as this lives, so every key reaches the guest as typed
+/// (Ctrl-C included); a terminal that is not a tty is left alone.
+struct RawTerminal(Option<libc::termios>);
+
+static SAVED_TERMIOS: std::sync::Mutex<Option<libc::termios>> = std::sync::Mutex::new(None);
+
+impl RawTerminal {
+    fn enter() -> RawTerminal {
+        // SAFETY: tcgetattr/tcsetattr on stdin with a termios we own; failures leave it as is.
+        unsafe {
+            let mut t: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(libc::STDIN_FILENO, &mut t) != 0 {
+                return RawTerminal(None);
+            }
+            *SAVED_TERMIOS.lock().unwrap_or_else(|p| p.into_inner()) = Some(t);
+            let saved = t;
+            libc::cfmakeraw(&mut t);
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t);
+            RawTerminal(Some(saved))
+        }
+    }
+
+    /// The saved settings, for the reader thread's exit, which never runs `Drop`.
+    fn restore_saved() -> RawTerminal {
+        RawTerminal(
+            SAVED_TERMIOS
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take(),
+        )
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        if let Some(t) = self.0.take() {
+            // SAFETY: restoring the settings tcgetattr gave us.
+            unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t) };
+        }
+    }
 }
 
 /// `limina address`: ask the VM's supervisor which address its guest holds.

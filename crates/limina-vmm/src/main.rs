@@ -127,6 +127,12 @@ struct Cli {
     #[arg(long, conflicts_with_all = ["console", "console_input"])]
     console_pty: bool,
 
+    /// fd of the guest's serial line, held by the supervisor across reboots (logged per boot,
+    /// watched by `limina console`). Same shape as --spice-fd; --console and --console-pty
+    /// wire the line themselves instead.
+    #[arg(long, conflicts_with_all = ["console", "console_input", "console_pty"])]
+    serial_fd: Option<i32>,
+
     /// Capture the guest virtio-console (`hvc0`) output to this file. Pair with
     /// `console=hvc0` on the cmdline to make hvc0 the guest's interactive `/dev/console`
     /// (the robust bidirectional path; PL011 stays the firmware/early-boot console).
@@ -894,6 +900,8 @@ fn main() -> Result<()> {
         vsock,
         console: if cli.console_pty {
             Some(ConsoleSpec::Pty)
+        } else if let Some(fd) = cli.serial_fd {
+            Some(ConsoleSpec::Fd(fd))
         } else {
             cli.console.map(|output| ConsoleSpec::File {
                 output,

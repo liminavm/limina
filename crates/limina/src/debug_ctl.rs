@@ -108,6 +108,14 @@ pub static NET_SWITCH: Lever = Lever::new(
     "harness: let `limina net-switch` move the NIC between vmnet and limina-netd",
 );
 
+/// Harness access: what `limina console` types reaches the guest's serial line
+/// (`serial_console`). Off, the console only watches: the line can be a root rescue shell.
+pub static CONSOLE_INPUT: Lever = Lever::new(
+    "console-input",
+    "LIMINA_CONSOLE_INPUT",
+    "harness: let `limina console` type into the guest's serial line (rescue shells included)",
+);
+
 /// Every lever this process has, in the order the menu and `status` list them.
 pub static LEVERS: &[&Lever] = &[
     &EDGE_TRACE,
@@ -123,6 +131,7 @@ pub static LEVERS: &[&Lever] = &[
     &LIFECYCLE_CONTROL,
     &NO_THROTTLE,
     &NET_SWITCH,
+    &CONSOLE_INPUT,
 ];
 
 /// The levers that grant a harness access rather than print a trace. The menu lists them under
@@ -133,6 +142,7 @@ pub fn is_access(l: &Lever) -> bool {
         || std::ptr::eq(l, &LIFECYCLE_CONTROL)
         || std::ptr::eq(l, &NO_THROTTLE)
         || std::ptr::eq(l, &NET_SWITCH)
+        || std::ptr::eq(l, &CONSOLE_INPUT)
 }
 
 /// How to turn a lever on, for a refusal to quote: its variable, the Debug menu, the CLI.
@@ -439,7 +449,13 @@ mod tests {
     #[test]
     fn the_access_levers_are_off_by_default_and_say_how_to_turn_them_on() {
         let _serial = lock(&ACCESS_LEVER_TESTS);
-        for l in [&INPUT_INJECT, &DEBUG_PORT, &LIFECYCLE_CONTROL, &NO_THROTTLE] {
+        for l in [
+            &INPUT_INJECT,
+            &DEBUG_PORT,
+            &LIFECYCLE_CONTROL,
+            &NO_THROTTLE,
+            &CONSOLE_INPUT,
+        ] {
             assert!(
                 std::env::var_os(l.env()).is_none(),
                 "unset {} to run the unit tests",
@@ -471,6 +487,10 @@ mod tests {
         assert_eq!(
             (NO_THROTTLE.name(), NO_THROTTLE.env()),
             ("no-throttle", "LIMINA_NO_THROTTLE")
+        );
+        assert_eq!(
+            (CONSOLE_INPUT.name(), CONSOLE_INPUT.env()),
+            ("console-input", "LIMINA_CONSOLE_INPUT")
         );
         let lines = status();
         for want in [
