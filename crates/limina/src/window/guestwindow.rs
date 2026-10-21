@@ -321,6 +321,16 @@ impl GuestWindow {
         super::still::note(self.key(), tag, id, src);
     }
 
+    /// Put another window's frame on this one's layer: no ack, since the frame is not this
+    /// window's slot's and its own present acked it, and not recorded as this window's frame,
+    /// so the slot's next present replaces what it last showed of its own.
+    pub(crate) fn mirror(&self, src: &CFRetained<IOSurfaceRef>) {
+        present::set_layer_surface(&self.layer, src, None);
+        if self.overlay.is_active() {
+            present::set_layer_surface(&self.overlay.strip_layer(), src, None);
+        }
+    }
+
     /// This window's identity for the still capture's table: its `NSWindow`'s address, stable
     /// for as long as the window lives.
     pub(crate) fn key(&self) -> usize {

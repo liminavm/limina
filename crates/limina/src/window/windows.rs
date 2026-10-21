@@ -182,12 +182,13 @@ struct SlotSnapshot {
 enum Fate {
     /// No window, and nothing to open one for.
     Idle,
-    /// Open a window for this slot, on the panel the table gave it.
+    /// Open a window for this slot, on the panel the table gave it. With no mode on the slot
+    /// yet, it mirrors the primary until the guest drives it.
     Open,
     /// The window stays, and shows the slot's frame.
     Show,
     /// The window stays — holding its panel, its style and its fullscreen — but the slot has
-    /// nothing to present.
+    /// nothing to present, so it mirrors the primary.
     Dark,
 }
 
@@ -205,8 +206,12 @@ fn slot_fate(open: bool, paneled: bool, live: bool) -> Fate {
         (true, false) => Fate::Dark,
         // A slot whose connector is on its way down still has geometry until `scanoutgone`
         // lands, and a window opened in that gap would flash up for the settle and immediately
-        // close. So: a panel AND a mode, or nothing.
-        (false, true) if paneled => Fate::Open,
+        // close. So: a panel, or nothing.
+        //
+        // A panel with no mode yet opens too, mirroring the primary: the guest drives a second
+        // display only once its own driver is up, and a panel left bare until then looks like
+        // one the VM does not use.
+        (false, _) if paneled => Fate::Open,
         (false, _) => Fate::Idle,
     }
 }
@@ -727,8 +732,12 @@ struct SecondaryWindow {
     core: super::guestwindow::GuestWindow,
     /// Last applied `generation`, so an unchanged slot costs nothing per tick.
     last_gen: u64,
-    /// Last applied guest geometry, so the window is resized only on a real modeset.
+    /// Last applied guest geometry, so the window is resized only on a real modeset. While the
+    /// window mirrors the primary, the primary's, so the refit letterboxes the mirrored frame.
     geom: (u32, u32),
+    /// The primary frame on the layer while this slot has nothing of its own to show
+    /// ([`Self::mirror`]), so a tick with no new primary frame writes nothing.
+    mirrored: Option<(usize, u64)>,
     /// The host panel this window belongs to, so a restyle can find its screen again. Mutable
     /// because a slot can be recycled to a different panel under a window that stays open.
     panel: Option<u64>,
@@ -905,6 +914,17 @@ impl GuestWindows {
             self.primary.present(snap, surface_map, ack_tx, mode);
         }
 
+        // What a secondary with nothing of its own shows: the primary's frame, keyed by the
+        // surface and the primary's flip count, since a firmware re-flushes one surface.
+        let primary_frame = self.primary.core.last_surface().map(|surface| {
+            let frames = slots
+                .iter()
+                .find(|s| s.slot == primary)
+                .map_or(0, |s| s.frames);
+            (surface, frames)
+        });
+        let primary_geom = self.primary.geom.get();
+
         // The worker is gone: nothing will present here again. The windows keep their last
         // frame while the power-off fade runs and go with the process; a parked suspend closes
         // them itself.
@@ -973,6 +993,7 @@ impl GuestWindows {
                 continue;
             }
             if fate == Fate::Open {
+                let (width, height) = if live { (width, height) } else { primary_geom };
                 let window =
                     SecondaryWindow::open(slot, panels.get(&slot).copied(), width, height, mtm);
                 self.secondaries.insert(slot, window);
@@ -1006,19 +1027,23 @@ impl GuestWindows {
             // answer to all of them.
             entry.refit(mode);
             entry.core.finish_copy(ack_tx);
+            if !live {
+                // The ring the guest disabled is gone, and its ids are free to be reused for
+                // something unrelated — so nothing cached may outlive it.
+                if entry.last_gen != generation {
+                    entry.last_gen = generation;
+                    entry.core.clear_frame_cache();
+                }
+                entry.mirror(primary_frame.as_ref(), primary_geom, mode);
+                continue;
+            }
+            // The guest drives the slot again. The mirror stays on the layer until the slot's
+            // own first frame replaces it, as the last frame used to across a modeset.
+            entry.mirrored = None;
             if entry.last_gen == generation {
                 continue;
             }
             entry.last_gen = generation;
-            if fate == Fate::Dark {
-                // The ring the guest just disabled is gone, and its ids are free to be reused
-                // for something unrelated — so nothing cached may outlive it. The layer keeps
-                // the last frame until the new mode's first present replaces it, which is what
-                // a monitor does across a mode change and what the primary has always done
-                // across the same churn.
-                entry.core.clear_frame_cache();
-                continue;
-            }
 
             if entry.geom != (width, height) {
                 entry.geom = (width, height);
@@ -1301,6 +1326,7 @@ impl SecondaryWindow {
             veil: None,
             last_gen: 0,
             geom: (width, height),
+            mirrored: None,
             panel,
             covering: false,
             native_space: false,
@@ -1468,6 +1494,29 @@ impl SecondaryWindow {
         }
     }
 
+    /// Show the primary's frame while this slot has nothing of its own: a guest restarting, a
+    /// modeset gap, or a slot the guest has not driven yet. Without it the window froze on the
+    /// slot's last frame (a boot splash's spinner, mid-turn) for as long as the slot was dark.
+    fn mirror(
+        &mut self,
+        primary: Option<&(CFRetained<IOSurfaceRef>, u64)>,
+        primary_geom: (u32, u32),
+        mode: DisplayResolution,
+    ) {
+        let Some((surface, frames)) = primary else {
+            return;
+        };
+        if primary_geom != (0, 0) && self.geom != primary_geom {
+            self.geom = primary_geom;
+            self.refit(mode);
+        }
+        let key = (&**surface as *const IOSurfaceRef as usize, *frames);
+        if self.mirrored != Some(key) {
+            self.mirrored = Some(key);
+            self.core.mirror(surface);
+        }
+    }
+
     /// Drive this window's `extend` strip from the tick, the way the primary's is driven.
     ///
     /// [`super::ExtendOverlay::reconcile`]'s own gates carry over unchanged: it wants the
@@ -1568,10 +1617,17 @@ mod tests {
         assert_eq!(slot_fate(false, false, true), Fate::Idle);
     }
 
-    /// Nothing to show and nothing to show it in: a slot that has never come up.
+    /// A panel whose slot the guest does not drive yet (the firmware, the early boot) gets its
+    /// window at once, mirroring the primary, rather than waiting for the guest's driver.
     #[test]
-    fn a_dark_slot_with_no_window_opens_nothing() {
-        assert_eq!(slot_fate(false, true, false), Fate::Idle);
+    fn a_paneled_slot_with_no_mode_opens_a_mirror() {
+        assert_eq!(slot_fate(false, true, false), Fate::Open);
+    }
+
+    /// Nothing to show and no panel to show it on.
+    #[test]
+    fn a_slot_with_no_mode_and_no_panel_opens_nothing() {
+        assert_eq!(slot_fate(false, false, false), Fate::Idle);
     }
 
     #[test]
