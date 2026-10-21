@@ -42,6 +42,7 @@ use objc2_quartz_core::{CALayer, CATransaction};
 pub(crate) mod absfit;
 mod ack_gate;
 pub(crate) mod arrangement;
+mod bootlogo;
 mod button_pace;
 mod capture_tap;
 mod copy;
@@ -3361,6 +3362,14 @@ pub fn run(
             .borrow_mut()
             .replace(overlay::Overlay::restore(&layer, &view, splash));
     }
+    // A cold boot opens on black and the firmware's logo, as the firmware's first frame will
+    // show them; it comes down with the guest's first presented frame.
+    let boot_logo: RefCell<Option<bootlogo::BootLogo>> = RefCell::new(
+        restore_splash
+            .is_none()
+            .then(|| bootlogo::BootLogo::install(&layer, &view, bootlogo::LOGO))
+            .flatten(),
+    );
 
     // Clone a window handle for the input monitor's fullscreen shortcut BEFORE the timer block
     // below moves `window` in.
@@ -3705,6 +3714,17 @@ pub fn run(
                     );
                 }
             }
+        }
+
+        // The pre-paint stays until the guest presents, and follows the window until then.
+        if frames > 0 {
+            if let Some(b) = boot_logo.borrow_mut().take() {
+                b.remove();
+            }
+        } else if let Some(b) = boot_logo.borrow().as_ref()
+            && let Some(content) = window.contentView()
+        {
+            b.fit(&content);
         }
 
         // M9.4 overlay lifecycle: the restore splash comes down on the first presented frame;
