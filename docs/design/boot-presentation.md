@@ -109,7 +109,8 @@ behind one shortcut.
   closed to it). Not built: synoik-splash has no details mode yet.
   Stock images get plymouth's own (Esc).
 - **The "boot details" shortcut (host).** Before the guest's first own frame, it opens the host
-  Console. After it, the host injects a dedicated details key on its virtual keyboard, which
+  Console. After it, the host injects the details key, `KEY_INFO` (0x166, xkb `XF86Info`), on its
+  virtual keyboard, which
   synoik-splash and the synoik compositor swallow in every state and turn into the details view.
   The host never injects Esc: it cannot tell a splash from a session, and an Esc closes a user's
   dialog. Stock plymouth images do not know the key, so there the shortcut is the host Console
@@ -132,8 +133,8 @@ behind one shortcut.
   line for ~1.2 s. The shutdown side was clean: the compositor's last frame stayed until the
   firmware's first flush. A power-off on the same image ended on the splash, still for ~216 ms
   until the worker exited, and then the window vanished.
-- **Which key is the details key** (`KEY_INFO`, or a limina vendor key), and whether the synoik
-  compositor opens the same log over a greeter or session or ignores the key there.
+- Whether the synoik compositor opens the same log over a greeter or session; until decided it
+  ignores the details key there.
 - **Retina.** The firmware runs at the window's physical pixels and draws the logo 1:1, and the
   splashes draw at scale 1, so they match but the logo is small on a Retina host. Agreed form:
   the BGRT image is what is on glass. The firmware draws a 2x logo at backing scale 2 and
