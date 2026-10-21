@@ -1385,6 +1385,15 @@ fn restore_hotplug(restore_inplace: &Cell<bool>) -> hostdisplay::HotplugPolicy {
     hostdisplay::HotplugPolicy::from_env()
 }
 
+/// How long a powered-off VM's windows take to fade out.
+const POWER_OFF_FADE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The windows' opacity `elapsed` into the power-off fade, or `None` once it is over and the
+/// process may exit. Pure policy for the render timer's exited arm.
+pub(crate) fn power_off_alpha(elapsed: std::time::Duration) -> Option<f64> {
+    (elapsed < POWER_OFF_FADE).then(|| 1.0 - elapsed.as_secs_f64() / POWER_OFF_FADE.as_secs_f64())
+}
+
 pub(crate) fn resume_first_frame(worker_epoch: u64, epoch_at_click: u64, frames: u64) -> bool {
     worker_epoch > epoch_at_click && frames > 0
 }
@@ -3317,6 +3326,8 @@ pub fn run(
     // close-triggered suspend was requested (bounds the wait before falling back).
     let close_choice: Cell<Option<crate::vmlib::schema::WindowCloseAction>> = Cell::new(None);
     let suspend_close_at: Cell<Option<std::time::Instant>> = Cell::new(None);
+    // When the guest powered off: the windows fade out from then ([`power_off_alpha`]).
+    let power_off_at: Cell<Option<std::time::Instant>> = Cell::new(None);
 
     // M9.4: intercept window closes so the close policy runs with the window still up
     // (see WindowCloseInterceptor). The Retained binding must outlive the run loop —
@@ -3583,6 +3594,16 @@ pub fn run(
                     log::info!("VM suspended; window parked (click to resume)");
                     return;
                 }
+            }
+            // Powered off: the guest's last frame (its shutdown splash) fades out rather than
+            // vanishing, the end of the one picture boot started (docs/design/boot-presentation.md).
+            let now = std::time::Instant::now();
+            let since = *power_off_at.get().get_or_insert(now);
+            power_off_at.set(Some(since));
+            if let Some(alpha) = power_off_alpha(now.saturating_duration_since(since)) {
+                window.setAlphaValue(alpha);
+                timer_windows.borrow().set_alpha(alpha);
+                return;
             }
             save_state_final(timer_state_path.as_deref(), &window);
             kill_worker_group(timer_conn.pid());
@@ -4395,6 +4416,16 @@ fn any_window_visible(primary: &NSWindow) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_powered_off_window_fades_out_then_lets_the_process_exit() {
+        use std::time::Duration;
+        assert_eq!(super::power_off_alpha(Duration::ZERO), Some(1.0));
+        let mid = super::power_off_alpha(Duration::from_millis(100)).unwrap();
+        assert!((mid - 0.5).abs() < 1e-9, "{mid}");
+        assert!(super::power_off_alpha(Duration::from_millis(199)).unwrap() > 0.0);
+        assert_eq!(super::power_off_alpha(Duration::from_millis(200)), None);
+        assert_eq!(super::power_off_alpha(Duration::from_secs(5)), None);
+    }
 
     /// Cross-BATCH order is as load-bearing as in-batch order: a migration cycle's settle
     /// (CONNECTOR_DOWN_SETTLE) parks its batch mid-flight, and a batch spawned for a later

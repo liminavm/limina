@@ -885,11 +885,10 @@ impl GuestWindows {
             self.primary.present(snap, surface_map, ack_tx, mode);
         }
 
-        // The worker is gone: nothing will ever say `scanoutgone` for these, and a window left
-        // up would sit frozen on its last frame. This also covers a guest reboot, where the
-        // fresh worker re-announces whatever connectors the guest brings back.
+        // The worker is gone: nothing will present here again. The windows keep their last
+        // frame while the power-off fade runs and go with the process; a parked suspend closes
+        // them itself.
         if exited {
-            self.close_secondaries();
             return;
         }
         // The primary window moved onto this slot (a panel handover). Its picture belongs in
@@ -1066,6 +1065,13 @@ impl GuestWindows {
             }
         }
         watched
+    }
+
+    /// Set every secondary window's opacity, following the primary's power-off fade.
+    pub(crate) fn set_alpha(&self, alpha: f64) {
+        for w in self.secondaries.values() {
+            w.core.window.setAlphaValue(alpha);
+        }
     }
 
     /// Close every secondary window. The primary is never this collection's to close: on
