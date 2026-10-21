@@ -321,6 +321,12 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     vmr.tpm = spec.tpm;
     vmr.tpm_state = spec.tpm_state.clone();
     vmr.efi_vars = spec.efi_vars.clone();
+    vmr.boot_menu = spec.boot_menu;
+    if let Some(path) = &spec.boot_logo {
+        vmr.boot_logo = Some(
+            std::fs::read(path).with_context(|| format!("reading boot logo {}", path.display()))?,
+        );
+    }
     vmr.acpi_enabled = spec.acpi;
     vmr.acpi_spcr = spec.acpi_spcr;
     // Like the SPCR, for the ACPI machine: the device tree's `stdout-path` already gives a
@@ -1430,6 +1436,8 @@ mod tests {
             tpm: false,
             tpm_state: None,
             efi_vars: None,
+            boot_logo: None,
+            boot_menu: false,
             acpi: false,
             acpi_spcr: false,
             extra_bootargs: None,

@@ -33,8 +33,9 @@ use objc2_app_kit::{
     NSBackingStoreType, NSScreen, NSTrackingArea, NSTrackingAreaOptions, NSWindow,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
+use objc2_core_foundation::CFRetained;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-use objc2_io_surface::IOSurfaceLookup;
+use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
 
 use super::present::{AckMsg, MAX_SCANOUTS, Shared, SurfaceMap};
 use crate::vmlib::schema::DisplayResolution;
@@ -181,12 +182,13 @@ struct SlotSnapshot {
 enum Fate {
     /// No window, and nothing to open one for.
     Idle,
-    /// Open a window for this slot, on the panel the table gave it.
+    /// Open a window for this slot, on the panel the table gave it. With no mode on the slot
+    /// yet, it mirrors the primary until the guest drives it.
     Open,
     /// The window stays, and shows the slot's frame.
     Show,
     /// The window stays — holding its panel, its style and its fullscreen — but the slot has
-    /// nothing to present.
+    /// nothing to present, so it mirrors the primary.
     Dark,
 }
 
@@ -204,8 +206,12 @@ fn slot_fate(open: bool, paneled: bool, live: bool) -> Fate {
         (true, false) => Fate::Dark,
         // A slot whose connector is on its way down still has geometry until `scanoutgone`
         // lands, and a window opened in that gap would flash up for the settle and immediately
-        // close. So: a panel AND a mode, or nothing.
-        (false, true) if paneled => Fate::Open,
+        // close. So: a panel, or nothing.
+        //
+        // A panel with no mode yet opens too, mirroring the primary: the guest drives a second
+        // display only once its own driver is up, and a panel left bare until then looks like
+        // one the VM does not use.
+        (false, _) if paneled => Fate::Open,
         (false, _) => Fate::Idle,
     }
 }
@@ -282,12 +288,32 @@ pub(crate) struct PrimaryDisplay {
     /// because it still reads like a current frame.
     capture_interval: std::time::Duration,
     last_capture: Cell<Option<std::time::Instant>>,
+    /// The newest frame presented too soon after the last dump, written once the interval has
+    /// passed ([`GuestWindows::capture_trailing`]): a burst that ends in stillness (a firmware
+    /// clearing its screen and printing one line) must not leave the file on its first frame.
+    capture_pending: RefCell<Option<(CFRetained<IOSurfaceRef>, u32)>>,
     /// Diagnostic: ids to ALSO dump by global lookup each tick (`LIMINA_CAPTURE_IDS` — see
     /// `diag::capture_ids_from_env` for the format and why).
     capture_ids: Vec<u32>,
 }
 
 impl PrimaryDisplay {
+    /// Write the pending capture frame if the interval since the last dump has passed.
+    fn capture_due(&self) {
+        let Some(path) = &self.capture_path else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let due = self
+            .last_capture
+            .get()
+            .is_none_or(|t| now.duration_since(t) >= self.capture_interval);
+        if due && let Some((surface, id)) = self.capture_pending.take() {
+            self.last_capture.set(Some(now));
+            super::diag::capture_iosurface_async(&surface, id, path);
+        }
+    }
+
     pub(crate) fn new(
         core: Rc<super::guestwindow::GuestWindow>,
         slot: Rc<Cell<u32>>,
@@ -321,6 +347,7 @@ impl PrimaryDisplay {
             capture_path: std::env::var("LIMINA_WINDOW_CAPTURE").ok(),
             capture_interval: super::diag::capture_interval_from_env(),
             last_capture: Cell::new(None),
+            capture_pending: RefCell::new(None),
             capture_ids: super::diag::capture_ids_from_env(),
         }
     }
@@ -677,16 +704,9 @@ impl PrimaryDisplay {
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
         // long-running headless check ends with a recent frame, not just early boot.
         self.applies.set(self.applies.get() + 1);
-        if let Some(path) = &self.capture_path {
-            let now = std::time::Instant::now();
-            let due = self
-                .last_capture
-                .get()
-                .is_none_or(|t| now.duration_since(t) >= self.capture_interval);
-            if due {
-                self.last_capture.set(Some(now));
-                super::diag::capture_iosurface_async(surface, id, path);
-            }
+        if self.capture_path.is_some() {
+            self.capture_pending.replace(Some((surface.clone(), id)));
+            self.capture_due();
         }
         // Targeted per-id sweep — look each requested global id up fresh (no cache) and
         // dump it, so we can read the venus blob surface directly even when it isn't the
@@ -712,8 +732,12 @@ struct SecondaryWindow {
     core: super::guestwindow::GuestWindow,
     /// Last applied `generation`, so an unchanged slot costs nothing per tick.
     last_gen: u64,
-    /// Last applied guest geometry, so the window is resized only on a real modeset.
+    /// Last applied guest geometry, so the window is resized only on a real modeset. While the
+    /// window mirrors the primary, the primary's, so the refit letterboxes the mirrored frame.
     geom: (u32, u32),
+    /// The primary frame on the layer while this slot has nothing of its own to show
+    /// ([`Self::mirror`]), so a tick with no new primary frame writes nothing.
+    mirrored: Option<(usize, u64)>,
     /// The host panel this window belongs to, so a restyle can find its screen again. Mutable
     /// because a slot can be recycled to a different panel under a window that stays open.
     panel: Option<u64>,
@@ -724,11 +748,11 @@ struct SecondaryWindow {
     /// (`true`) or the borderless above-menu-bar cover window (`false`). Decided per
     /// transition by [`native_space_ok`]; meaningless while not covering.
     native_space: bool,
-    /// The "Suspending…" veil, while a suspend bracket is in flight ([`GuestWindows::veil`]).
-    /// The primary has always had one; without it here a second panel simply stops updating
-    /// for the seconds the snapshot takes, with nothing to say why. Only this flavor can ever
-    /// reach a secondary: parked and resuming both happen after the park has closed them.
-    suspend_overlay: Option<super::overlay::Overlay>,
+    /// The veil this window wears with the primary's ([`GuestWindows::veil`]): "Suspending…"
+    /// while a suspend bracket is in flight (without it a second panel simply stops updating for
+    /// the seconds the snapshot takes, with nothing to say why), and the parked and resuming
+    /// faces when a VM using every display keeps its windows across the suspend.
+    veil: Option<(Veil, super::overlay::Overlay)>,
     /// The housing band the current style owes back to the window background, in points:
     /// nonzero only for a borderless cover under `notch = avoid`. A native Space's content
     /// view is already the safe area, and a floating window has no band. Stored at restyle so
@@ -804,6 +828,11 @@ impl GuestWindows {
             out.extend(w.core.poll_vsync(slot, now));
         }
         out
+    }
+
+    /// Write the newest frame the capture skipped, once its interval has passed.
+    pub(crate) fn capture_trailing(&self) {
+        self.primary.capture_due();
     }
 
     /// A fresh worker has the device: every window states its grid again.
@@ -885,11 +914,21 @@ impl GuestWindows {
             self.primary.present(snap, surface_map, ack_tx, mode);
         }
 
-        // The worker is gone: nothing will ever say `scanoutgone` for these, and a window left
-        // up would sit frozen on its last frame. This also covers a guest reboot, where the
-        // fresh worker re-announces whatever connectors the guest brings back.
+        // What a secondary with nothing of its own shows: the primary's frame, keyed by the
+        // surface and the primary's flip count, since a firmware re-flushes one surface.
+        let primary_frame = self.primary.core.last_surface().map(|surface| {
+            let frames = slots
+                .iter()
+                .find(|s| s.slot == primary)
+                .map_or(0, |s| s.frames);
+            (surface, frames)
+        });
+        let primary_geom = self.primary.geom.get();
+
+        // The worker is gone: nothing will present here again. The windows keep their last
+        // frame while the power-off fade runs and go with the process; a parked suspend closes
+        // them itself.
         if exited {
-            self.close_secondaries();
             return;
         }
         // The primary window moved onto this slot (a panel handover). Its picture belongs in
@@ -954,6 +993,7 @@ impl GuestWindows {
                 continue;
             }
             if fate == Fate::Open {
+                let (width, height) = if live { (width, height) } else { primary_geom };
                 let window =
                     SecondaryWindow::open(slot, panels.get(&slot).copied(), width, height, mtm);
                 self.secondaries.insert(slot, window);
@@ -987,19 +1027,23 @@ impl GuestWindows {
             // answer to all of them.
             entry.refit(mode);
             entry.core.finish_copy(ack_tx);
+            if !live {
+                // The ring the guest disabled is gone, and its ids are free to be reused for
+                // something unrelated — so nothing cached may outlive it.
+                if entry.last_gen != generation {
+                    entry.last_gen = generation;
+                    entry.core.clear_frame_cache();
+                }
+                entry.mirror(primary_frame.as_ref(), primary_geom, mode);
+                continue;
+            }
+            // The guest drives the slot again. The mirror stays on the layer until the slot's
+            // own first frame replaces it, as the last frame used to across a modeset.
+            entry.mirrored = None;
             if entry.last_gen == generation {
                 continue;
             }
             entry.last_gen = generation;
-            if fate == Fate::Dark {
-                // The ring the guest just disabled is gone, and its ids are free to be reused
-                // for something unrelated — so nothing cached may outlive it. The layer keeps
-                // the last frame until the new mode's first present replaces it, which is what
-                // a monitor does across a mode change and what the primary has always done
-                // across the same churn.
-                entry.core.clear_frame_cache();
-                continue;
-            }
 
             if entry.geom != (width, height) {
                 entry.geom = (width, height);
@@ -1068,6 +1112,13 @@ impl GuestWindows {
         watched
     }
 
+    /// Set every secondary window's opacity, following the primary's power-off fade.
+    pub(crate) fn set_alpha(&self, alpha: f64) {
+        for w in self.secondaries.values() {
+            w.core.window.setAlphaValue(alpha);
+        }
+    }
+
     /// Close every secondary window. The primary is never this collection's to close: on
     /// worker exit it stays up (the park machinery draws its curtain), and at teardown
     /// `run()` owns it.
@@ -1075,37 +1126,49 @@ impl GuestWindows {
         self.secondaries.clear();
     }
 
-    /// Wear (or drop) the suspend veil on every secondary, mirroring the primary's.
+    /// Wear `veil` on every secondary, mirroring the primary's overlay.
     ///
     /// A suspend freezes every panel, not just the one the primary is on, and the snapshot save
-    /// takes seconds — long enough for a still second display to read as a hang. Driven from the
-    /// tick's overlay block so the two go up and come down together, including when the bracket
-    /// is abandoned and the VM keeps running.
-    pub(crate) fn veil(&mut self, on: bool) {
+    /// takes seconds — long enough for a still second display to read as a hang. A VM using
+    /// every display then keeps them parked with the primary, and a click on any of them
+    /// resumes. Driven from the tick's overlay block so they go up and come down together,
+    /// including when the bracket is abandoned and the VM keeps running.
+    pub(crate) fn veil(&mut self, veil: Veil) {
         for w in self.secondaries.values_mut() {
-            match (on, w.suspend_overlay.is_some()) {
-                (true, false) => {
-                    w.suspend_overlay = Some(super::overlay::Overlay::suspend(
-                        &w.core.layer,
-                        &w.core.view,
-                    ));
-                }
-                (false, true) => {
-                    if let Some(o) = w.suspend_overlay.take() {
-                        o.remove();
-                    }
-                }
+            let current = w.veil.as_ref().map(|(v, _)| *v);
+            if current == Some(veil) {
                 // Up and staying up: re-fit, exactly as the primary's does, so a resize or a
                 // restyle under the veil does not leave it the wrong size.
-                (true, true) => {
-                    if let Some(o) = w.suspend_overlay.as_ref() {
-                        o.fit(&w.core.view);
-                    }
+                if let Some((_, o)) = w.veil.as_ref() {
+                    o.fit(&w.core.view);
                 }
-                (false, false) => {}
+                continue;
             }
+            if current.is_none() && veil == Veil::Off {
+                continue;
+            }
+            if let Some((_, o)) = w.veil.take() {
+                o.remove();
+            }
+            let (layer, view) = (&w.core.layer, &w.core.view);
+            let overlay = match veil {
+                Veil::Off => continue,
+                Veil::Suspending => super::overlay::Overlay::suspend(layer, view),
+                Veil::Parked => super::overlay::Overlay::parked(layer, view),
+                Veil::Resuming => super::overlay::Overlay::resuming(layer, view, None),
+            };
+            w.veil = Some((veil, overlay));
         }
     }
+}
+
+/// What the secondary windows wear over their last frame, following the primary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Veil {
+    Off,
+    Suspending,
+    Parked,
+    Resuming,
 }
 
 /// Closing and forgetting is [`Drop`]'s job, so it cannot be forgotten.
@@ -1260,9 +1323,10 @@ impl SecondaryWindow {
 
         SecondaryWindow {
             core,
-            suspend_overlay: None,
+            veil: None,
             last_gen: 0,
             geom: (width, height),
+            mirrored: None,
             panel,
             covering: false,
             native_space: false,
@@ -1430,6 +1494,29 @@ impl SecondaryWindow {
         }
     }
 
+    /// Show the primary's frame while this slot has nothing of its own: a guest restarting, a
+    /// modeset gap, or a slot the guest has not driven yet. Without it the window froze on the
+    /// slot's last frame (a boot splash's spinner, mid-turn) for as long as the slot was dark.
+    fn mirror(
+        &mut self,
+        primary: Option<&(CFRetained<IOSurfaceRef>, u64)>,
+        primary_geom: (u32, u32),
+        mode: DisplayResolution,
+    ) {
+        let Some((surface, frames)) = primary else {
+            return;
+        };
+        if primary_geom != (0, 0) && self.geom != primary_geom {
+            self.geom = primary_geom;
+            self.refit(mode);
+        }
+        let key = (&**surface as *const IOSurfaceRef as usize, *frames);
+        if self.mirrored != Some(key) {
+            self.mirrored = Some(key);
+            self.core.mirror(surface);
+        }
+    }
+
     /// Drive this window's `extend` strip from the tick, the way the primary's is driven.
     ///
     /// [`super::ExtendOverlay::reconcile`]'s own gates carry over unchanged: it wants the
@@ -1530,10 +1617,17 @@ mod tests {
         assert_eq!(slot_fate(false, false, true), Fate::Idle);
     }
 
-    /// Nothing to show and nothing to show it in: a slot that has never come up.
+    /// A panel whose slot the guest does not drive yet (the firmware, the early boot) gets its
+    /// window at once, mirroring the primary, rather than waiting for the guest's driver.
     #[test]
-    fn a_dark_slot_with_no_window_opens_nothing() {
-        assert_eq!(slot_fate(false, true, false), Fate::Idle);
+    fn a_paneled_slot_with_no_mode_opens_a_mirror() {
+        assert_eq!(slot_fate(false, true, false), Fate::Open);
+    }
+
+    /// Nothing to show and no panel to show it on.
+    #[test]
+    fn a_slot_with_no_mode_and_no_panel_opens_nothing() {
+        assert_eq!(slot_fate(false, false, false), Fate::Idle);
     }
 
     #[test]

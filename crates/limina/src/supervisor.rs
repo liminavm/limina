@@ -213,6 +213,11 @@ pub fn suspend_requested_externally() -> bool {
     SUSPEND_FROM_SIGNAL.load(Ordering::SeqCst)
 }
 
+/// The next worker that runs the firmware asks it for the boot menu (`--boot-menu`). One boot
+/// only: the first spawn takes it whether or not that boot gets far, so a reboot, a reset or a
+/// failed start never inherits it, and a resume, which runs no firmware, drops it.
+pub static BOOT_MENU: AtomicBool = AtomicBool::new(false);
+
 /// Set by [`request_reset`]; observed by [`monitor`], which kills the worker and reports the exit
 /// as a guest reboot, so the relaunch loop that already handles a guest's own `reboot` (the
 /// headless [`run`] and the windowed session alike) cold-boots a fresh worker behind the same
@@ -700,6 +705,20 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     let (debug_host, debug_worker) = socketpair(libc::SOCK_STREAM)?;
     args.push("--debug-port-fd".into());
     args.push(debug_worker.as_raw_fd().to_string().into());
+    // The guest's serial line, unless the command line wired it itself (`--console`,
+    // `--console-pty`): held here across every worker, logged per boot, and watched by
+    // `limina console` (`crate::serial_console`).
+    let serial = if args
+        .iter()
+        .any(|a| a.to_str().is_some_and(|a| a.starts_with("--console")))
+    {
+        None
+    } else {
+        let (host, worker) = socketpair(libc::SOCK_STREAM)?;
+        args.push("--serial-fd".into());
+        args.push(worker.as_raw_fd().to_string().into());
+        Some((host, worker))
+    };
     let mut link_ends = Vec::with_capacity(spec.links.len());
     for (flag, connector) in &spec.links {
         let end = connector
@@ -718,6 +737,13 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
         args.push("--restore".into());
         args.push(pending.into_os_string());
         resumed = true;
+    }
+    if BOOT_MENU.swap(false, Ordering::SeqCst) {
+        if resumed {
+            log::info!("no boot menu: this start resumes a suspended guest, so no firmware runs");
+        } else {
+            args.push("--boot-menu".into());
+        }
     }
     let record = if spec.suspend_state_file.is_some() {
         lock_consumed().clone()
@@ -797,6 +823,9 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     fds.push(spice_worker.as_raw_fd());
     fds.push(qga_worker.as_raw_fd());
     fds.push(debug_worker.as_raw_fd());
+    if let Some((_, worker)) = &serial {
+        fds.push(worker.as_raw_fd());
+    }
     fds.extend(link_ends.iter().map(|end| end.as_raw_fd()));
 
     let mut launched = None;
@@ -854,6 +883,20 @@ pub fn spawn_worker(spec: &WorkerSpec, inherit_fds: &[i32]) -> Result<Spawned> {
     drop(qga_worker);
     drop(debug_worker);
     drop(link_ends);
+    if let Some((host, worker)) = serial {
+        drop(worker);
+        let log = spec
+            .suspend_state_file
+            .as_deref()
+            .and_then(|st| st.parent())
+            .map(|bundle| bundle.join("logs"))
+            .filter(|logs| logs.is_dir())
+            .map(|logs| logs.join("console.log"));
+        if let Some(path) = &log {
+            crate::vmlib::logrot::rotate(path, crate::vmlib::logrot::GENERATIONS);
+        }
+        crate::serial_console::serve(host, log);
+    }
     WORKER_PID.store(child.id() as i32, Ordering::Release);
     crate::debug_port::serve(
         debug_host,

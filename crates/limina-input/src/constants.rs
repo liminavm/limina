@@ -196,6 +196,9 @@ pub const KEY_F19: u16 = 189;
 pub const KEY_NEXTSONG: u16 = 163;
 pub const KEY_PLAYPAUSE: u16 = 164;
 pub const KEY_PREVIOUSSONG: u16 = 165;
+// No Mac key sends it: the host injects it as the "boot details" key, which synoik's splash
+// and compositor own end to end (docs/design/boot-presentation.md §Seeing the boot).
+pub const KEY_INFO: u16 = 358;
 
 /// The full set of keys the virtual keyboard advertises in its EV_KEY capability bitmap.
 /// (Anything `macos_keycode_to_linux` or `nx_key_to_linux` can emit must be in here, or the
@@ -316,4 +319,5 @@ pub const SUPPORTED_KEYBOARD_KEYS: &[u16] = &[
     KEY_NEXTSONG,
     KEY_PLAYPAUSE,
     KEY_PREVIOUSSONG,
+    KEY_INFO,
 ];

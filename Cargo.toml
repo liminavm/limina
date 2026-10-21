@@ -69,6 +69,9 @@ limina-surfaceport = { path = "crates/limina-surfaceport" }
 # The renderer, which rutabaga already builds from this path; named here only so the worker can
 # install the publisher its surfaces are handed to.
 virglrs            = { path = "third_party/virglrs" }
+# The firmware's BMP decoder and logo placement, so the window pre-paints a VM's boot logo
+# exactly as Cardea will draw it, and refuses one Cardea would not draw.
+cardea-gfx         = { path = "third_party/cardea/crates/gfx" }
 
 # --- shared third-party ---
 anyhow            = "1"

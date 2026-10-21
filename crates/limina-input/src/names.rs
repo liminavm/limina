@@ -135,6 +135,7 @@ pub const KEY_NAMES: &[(&str, u16)] = named![
     KEY_NEXTSONG,
     KEY_PLAYPAUSE,
     KEY_PREVIOUSSONG,
+    KEY_INFO,
 ];
 
 /// The pointer buttons, by kernel name.
@@ -368,6 +369,9 @@ mod tests {
         assert_eq!(key("KEY_LEFTCTRL"), Ok(KEY_LEFTCTRL));
         assert_eq!(key("leftctrl"), Ok(KEY_LEFTCTRL));
         assert_eq!(key("key_f2"), Ok(KEY_F2));
+        // The boot details key: no Mac key sends it, so a script is the only way to type it.
+        assert_eq!(key("info"), Ok(KEY_INFO));
+        assert_eq!(key("0x166"), Ok(KEY_INFO));
         assert_eq!(key("a"), Ok(KEY_A));
         assert_eq!(key("30"), Ok(KEY_A));
         assert_eq!(key("0x1e"), Ok(KEY_A));

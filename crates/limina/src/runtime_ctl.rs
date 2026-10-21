@@ -53,10 +53,15 @@
 //! says when it is done. It is refused unless the VM's `net-switch` lever is on
 //! (`debug_ctl::NET_SWITCH`, off by default, read per request).
 //!
+//! `console` turns the connection into the guest's serial line, raw bytes both ways, for as long
+//! as the client stays (`crate::serial_console`; `limina console` is its client): the recent
+//! output, then everything as it arrives, across reboots. Watching is free; typing reaches the
+//! guest only while the VM's `console-input` lever is on (`debug_ctl::CONSOLE_INPUT`).
+//!
 //! Like the debug socket it is reachable by any process of the same user. Moving the SSH forward
 //! binds a different loopback port on the host; the guest and its network are untouched.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Ipv4Addr;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -533,6 +538,21 @@ pub(crate) fn serve_client(stream: UnixStream) {
             }
             continue;
         }
+        if line.trim() == CONSOLE {
+            let refused = crate::serial_console::refusal().map(str::to_string);
+            let failed = refused.is_some();
+            if out
+                .write_all(answer(refused.map_or(Ok(vec![]), Err)).as_bytes())
+                .is_err()
+                || failed
+            {
+                return;
+            }
+            // The client sends nothing until it has read the `ok`, so the reader holds no
+            // buffered byte of its typing: the line is the connection's from here.
+            crate::serial_console::attach(out);
+            return;
+        }
         let req = Request::parse(&line);
         if req == Ok(Request::Watch) {
             // Answer and register under the lock the pushes take, so no change slips between
@@ -585,6 +605,44 @@ pub fn cleanup() {
 // ---------------------------------------------------------------------------
 // Clients: the control center and `limina ssh-port`.
 // ---------------------------------------------------------------------------
+
+/// The request that turns a connection into the serial line.
+const CONSOLE: &str = "console";
+
+/// Attach to the VM's serial line: the stream, past the `ok`, carries raw bytes both ways.
+pub fn console(pid: u32) -> Result<UnixStream> {
+    console_on(connect(pid)?)
+}
+
+fn console_on(stream: UnixStream) -> Result<UnixStream> {
+    (&stream).write_all(format!("{CONSOLE}\n").as_bytes())?;
+    // One byte at a time: the backlog follows the answer at once, and a buffered reader would
+    // take it along with the answer and drop it.
+    let mut first = Vec::new();
+    let mut byte = [0u8; 1];
+    while first.len() < 4096 {
+        if (&stream).read(&mut byte)? == 0 {
+            anyhow::bail!("the supervisor closed the connection");
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        first.push(byte[0]);
+    }
+    let first = String::from_utf8_lossy(&first);
+    let first = first.trim_end();
+    if first != wire::OK {
+        anyhow::bail!(
+            "{}",
+            first
+                .strip_prefix("err ")
+                .unwrap_or("the supervisor has no console (an older build?)")
+        );
+    }
+    stream.set_read_timeout(None)?;
+    stream.set_write_timeout(None)?;
+    Ok(stream)
+}
 
 fn connect(pid: u32) -> Result<UnixStream> {
     connect_at(&socket_path(pid))
@@ -713,6 +771,24 @@ pub(crate) mod tests {
 
     /// The tests that publish a forward, which is process-global.
     pub(crate) static FORWARD_TESTS: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn the_console_backlog_sent_with_the_answer_reaches_the_client() {
+        let (client, server) = UnixStream::pair().unwrap();
+        let t = std::thread::spawn(move || {
+            let mut asked = [0u8; 8];
+            (&server).read_exact(&mut asked).unwrap();
+            assert_eq!(&asked, b"console\n");
+            // The answer and the backlog in one write, as a busy supervisor's may arrive.
+            (&server).write_all(b"ok\nCardea UEFI firmware\n").unwrap();
+            server
+        });
+        let mut line = console_on(client).unwrap();
+        let _server = t.join().unwrap();
+        let mut got = [0u8; 21];
+        line.read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"Cardea UEFI firmware\n");
+    }
 
     #[test]
     fn requests_round_trip() {

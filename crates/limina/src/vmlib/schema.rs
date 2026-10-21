@@ -166,8 +166,9 @@ pub struct Hardware {
     pub machine: Machine,
     /// Whether a guest on the ACPI machine runs a console on the serial line (default `off`; see
     /// [`SerialConsole`]). The device-tree machine always names the serial port. See
-    /// `--serial-console`.
-    #[serde(default)]
+    /// `--serial-console`. A definition from when this was a bool still loads
+    /// ([`serial_console_or_bool`]).
+    #[serde(default, deserialize_with = "serial_console_or_bool")]
     pub serial_console: SerialConsole,
 }
 
@@ -330,6 +331,10 @@ pub struct ShareEntry {
 pub struct BootCfg {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firmware: Option<PathBuf>,
+    /// The VM's own boot logo: a BMP the firmware draws in place of its own, and the window
+    /// shows before the firmware's first frame (relative paths are the bundle's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -666,6 +671,24 @@ pub enum SerialConsole {
     #[serde(rename = "only")]
     #[value(name = "only")]
     Only,
+}
+
+/// [`SerialConsole`], or the bool it replaced: `false` was off, `true` the serial line as the
+/// only console.
+fn serial_console_or_bool<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<SerialConsole, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        Mode(SerialConsole),
+        Bool(bool),
+    }
+    Ok(match Either::deserialize(d)? {
+        Either::Mode(m) => m,
+        Either::Bool(false) => SerialConsole::Off,
+        Either::Bool(true) => SerialConsole::Only,
+    })
 }
 
 impl SerialConsole {
@@ -1057,7 +1080,20 @@ mod tests {
                 "{back}"
             );
         }
-        assert!(toml::from_str::<Hardware>("serial_console = true").is_err());
+    }
+
+    /// A definition written while the key was a bool still loads: `false` is off, and `true`
+    /// meant the serial line as the only console. It is written back in the new form.
+    #[test]
+    fn a_serial_console_bool_from_an_older_definition_still_loads() {
+        for (text, want) in [("false", SerialConsole::Off), ("true", SerialConsole::Only)] {
+            let h: Hardware = toml::from_str(&format!("serial_console = {text}")).unwrap();
+            assert_eq!(h.serial_console, want);
+        }
+        let h: Hardware = toml::from_str("serial_console = false").unwrap();
+        let back = toml::to_string(&h).unwrap();
+        assert!(back.contains("serial_console = \"off\""), "{back}");
+        assert!(toml::from_str::<Hardware>("serial_console = \"sometimes\"").is_err());
     }
 
     /// The Metal transport is off unless a definition turns it on, including every vm.toml

@@ -128,6 +128,12 @@ struct Cli {
     #[arg(long, conflicts_with_all = ["console", "console_input"])]
     console_pty: bool,
 
+    /// fd of the guest's serial line, held by the supervisor across reboots (logged per boot,
+    /// watched by `limina console`). Same shape as --spice-fd; --console and --console-pty
+    /// wire the line themselves instead.
+    #[arg(long, conflicts_with_all = ["console", "console_input", "console_pty"])]
+    serial_fd: Option<i32>,
+
     /// Capture the guest virtio-console (`hvc0`) output to this file. Pair with
     /// `console=hvc0` on the cmdline to make hvc0 the guest's interactive `/dev/console`
     /// (the robust bidirectional path; PL011 stays the firmware/early-boot console).
@@ -313,6 +319,17 @@ struct Cli {
     /// variables live in RAM and every boot starts with none.
     #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
     efi_vars: Option<PathBuf>,
+
+    /// A BMP the firmware shows as its boot logo in place of its own, handed over in libkrun's
+    /// boot-logo window (at most 4 MiB). **EFI boot only.** The firmware draws the built-in logo
+    /// if it cannot draw this one.
+    #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
+    boot_logo: Option<PathBuf>,
+
+    /// Ask the firmware to open on its console and show the loader's boot menu, this boot only.
+    /// **EFI boot only.**
+    #[arg(long, conflicts_with = "kernel")]
+    boot_menu: bool,
 
     /// Describe the machine to the OS with ACPI tables instead of a device tree: libkrun writes
     /// them, and the firmware installs them and withholds the tree (docs/design/
@@ -918,6 +935,8 @@ fn main() -> Result<()> {
         vsock,
         console: if cli.console_pty {
             Some(ConsoleSpec::Pty)
+        } else if let Some(fd) = cli.serial_fd {
+            Some(ConsoleSpec::Fd(fd))
         } else {
             cli.console.map(|output| ConsoleSpec::File {
                 output,
@@ -943,6 +962,8 @@ fn main() -> Result<()> {
         tpm: cli.tpm || cli.tpm_state.is_some(),
         tpm_state: cli.tpm_state.clone(),
         efi_vars: cli.efi_vars.clone(),
+        boot_logo: cli.boot_logo.clone(),
+        boot_menu: cli.boot_menu,
         acpi: cli.acpi,
         acpi_spcr: cli.acpi_spcr,
         extra_bootargs: cli.extra_bootargs.clone(),

@@ -34,6 +34,7 @@ mod power_profile;
 mod qga;
 mod runtime_ctl;
 mod sep;
+mod serial_console;
 mod session;
 mod supervisor;
 mod uplinks;
@@ -67,6 +68,18 @@ struct Cli {
     /// still needs --firmware or --kernel.
     #[arg(long, conflicts_with = "kernel")]
     firmware: Option<PathBuf>,
+
+    /// A BMP the firmware shows as its boot logo in place of its own, and the window shows
+    /// before the firmware's first frame: uncompressed, 8 (palettised), 24 or 32 bits per pixel,
+    /// at most 4 MiB. A managed VM takes it from `boot.logo`.
+    #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
+    boot_logo: Option<PathBuf>,
+
+    /// Open on the firmware's console and show the loader's boot menu, for this boot only: a
+    /// reboot goes back to the quiet boot. Nothing is shown if the start resumes a suspended
+    /// guest.
+    #[arg(long, conflicts_with = "kernel")]
+    boot_menu: bool,
 
     /// Raw aarch64 kernel Image for direct kernel boot (the fast L1 path).
     #[arg(long)]
@@ -621,6 +634,20 @@ enum Cmd {
     /// VM refuses until its input-inject lever is on (LIMINA_INPUT_INJECT=1, the Debug menu, or
     /// `limina debug <vm> lever input-inject on`).
     Input(InputArgs),
+    /// Attach to a running VM's serial line (the firmware's and loaders' text, and the guest's
+    /// serial console when it has one): its recent output, then everything as it arrives,
+    /// across reboots. Ctrl-] detaches. Typing reaches the guest only while the VM's
+    /// console-input lever is on (LIMINA_CONSOLE_INPUT=1, the Debug menu, or
+    /// `limina debug <vm> lever console-input on`). Every boot is also logged to the VM's
+    /// logs/console.log.
+    Console(ConsoleArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct ConsoleArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -850,6 +877,9 @@ struct StartOverrides {
     /// Throw away a pending suspended session and boot fresh.
     #[arg(long)]
     discard_suspend: bool,
+    /// Open on the firmware's console and show the loader's boot menu, for this boot only.
+    #[arg(long)]
+    boot_menu: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -989,6 +1019,7 @@ fn main() -> Result<()> {
         Some(Cmd::Debug(args)) => cmd_debug(args),
         Some(Cmd::SshPort(args)) => cmd_ssh_port(args),
         Some(Cmd::Address(args)) => cmd_address(args),
+        Some(Cmd::Console(args)) => cmd_console(args),
         Some(Cmd::NetSwitch(args)) => {
             let pid = debug_target_pid(&args.vm)?;
             runtime_ctl::request(pid, runtime_ctl::Request::NetSwitch(args.side))?;
@@ -1505,6 +1536,99 @@ fn cmd_ssh_port(args: SshPortArgs) -> Result<()> {
     Ok(())
 }
 
+/// Ctrl-]: what `limina console` takes as "detach" rather than a byte for the guest, as telnet
+/// and virsh do.
+const CONSOLE_DETACH: u8 = 0x1d;
+
+/// `limina console`: the VM's serial line on this terminal, raw, until Ctrl-] or the VM exits.
+fn cmd_console(args: ConsoleArgs) -> Result<()> {
+    use std::io::{Read, Write};
+    let pid = debug_target_pid(&args.vm)?;
+    let stream = runtime_ctl::console(pid)?;
+    eprintln!(
+        "limina: attached to {}'s serial line; Ctrl-] detaches\r",
+        args.vm
+    );
+    let _raw = RawTerminal::enter();
+    let mut from_vm = stream.try_clone()?;
+    let output = std::thread::spawn(move || {
+        let mut out = std::io::stdout();
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = from_vm.read(&mut buf) {
+            if n == 0 || out.write_all(&buf[..n]).and_then(|()| out.flush()).is_err() {
+                break;
+            }
+        }
+        // The VM is gone (powered off, or its supervisor quit): so is the console.
+        drop(RawTerminal::restore_saved());
+        eprintln!("\r\nlimina: the VM's serial line closed");
+        std::process::exit(0);
+    });
+    let mut to_vm = stream;
+    let mut stdin = std::io::stdin();
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = stdin.read(&mut buf)?;
+        if n == 0 {
+            // Input ended (a script, `< /dev/null`): the output still runs, as ssh's does,
+            // until the VM's line closes.
+            let _ = output.join();
+            return Ok(());
+        }
+        let typed = &buf[..n];
+        let end = typed.iter().position(|&b| b == CONSOLE_DETACH);
+        to_vm.write_all(&typed[..end.unwrap_or(n)])?;
+        if end.is_some() {
+            break;
+        }
+    }
+    drop(_raw);
+    eprintln!("\r\nlimina: detached");
+    Ok(())
+}
+
+/// The terminal in raw mode for as long as this lives, so every key reaches the guest as typed
+/// (Ctrl-C included); a terminal that is not a tty is left alone.
+struct RawTerminal(Option<libc::termios>);
+
+static SAVED_TERMIOS: std::sync::Mutex<Option<libc::termios>> = std::sync::Mutex::new(None);
+
+impl RawTerminal {
+    fn enter() -> RawTerminal {
+        // SAFETY: tcgetattr/tcsetattr on stdin with a termios we own; failures leave it as is.
+        unsafe {
+            let mut t: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(libc::STDIN_FILENO, &mut t) != 0 {
+                return RawTerminal(None);
+            }
+            *SAVED_TERMIOS.lock().unwrap_or_else(|p| p.into_inner()) = Some(t);
+            let saved = t;
+            libc::cfmakeraw(&mut t);
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t);
+            RawTerminal(Some(saved))
+        }
+    }
+
+    /// The saved settings, for the reader thread's exit, which never runs `Drop`.
+    fn restore_saved() -> RawTerminal {
+        RawTerminal(
+            SAVED_TERMIOS
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take(),
+        )
+    }
+}
+
+impl Drop for RawTerminal {
+    fn drop(&mut self) {
+        if let Some(t) = self.0.take() {
+            // SAFETY: restoring the settings tcgetattr gave us.
+            unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t) };
+        }
+    }
+}
+
 /// `limina address`: ask the VM's supervisor which address its guest holds.
 fn cmd_address(args: AddressArgs) -> Result<()> {
     let pid = debug_target_pid(&args.vm)?;
@@ -1647,6 +1771,7 @@ fn cli_from_definition(
     Ok(Cli {
         cmd: None,
         firmware,
+        boot_logo: cfg.boot.logo.as_ref().map(|f| bundle.resolve_path(f)),
         kernel: None,
         initramfs: None,
         cmdline: None,
@@ -1680,6 +1805,7 @@ fn cli_from_definition(
         // the state.toml to persist `[suspended]` into on a 126 exit.
         snapshot_file: Some(snapshot_bin),
         discard_suspend: ov.discard_suspend,
+        boot_menu: ov.boot_menu,
         suspend_state_file: Some(state_toml),
         on_window_close: cfg.display.on_window_close,
         virtio_console: None,
@@ -1929,6 +2055,14 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         "--ram-mib".into(),
         ram_mib.to_string(),
     ];
+    // A logo the firmware would refuse is refused here, before anything starts: the window
+    // pre-paints it, and a firmware that drew its own logo instead would undo that.
+    let boot_logo = cli
+        .boot_logo
+        .as_deref()
+        .map(window::bootlogo::load)
+        .transpose()?;
+    supervisor::BOOT_MENU.store(cli.boot_menu, std::sync::atomic::Ordering::SeqCst);
     // Boot source. clap guarantees firmware and kernel don't both appear; we resolve the
     // rest: an explicit --firmware is honored, and a windowed boot with neither given
     // defaults to the GOP firmware so EFI/GRUB/early-kernel render in the window (M2.5
@@ -1971,6 +2105,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         };
         args.push("--firmware".into());
         args.push(path_arg(&firmware)?);
+        if let Some(logo) = &cli.boot_logo {
+            args.push("--boot-logo".into());
+            args.push(path_arg(logo)?);
+        }
         // SMBIOS lives on the firmware path only, so forward inside this arm — clap's
         // `conflicts_with = "kernel"` already rejects the other combination up front.
         for oem in &cli.smbios_oem_string {
@@ -2484,6 +2622,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             // additionally conditioned on the splash FILE existing: a restore with no splash
             // is still a restore, and the display path has to know.
             restoring: cli.snapshot_file.as_ref().is_some_and(|p| p.exists()),
+            // Checked as the firmware will check it (`bootlogo::load`) before any start.
+            boot_logo: boot_logo.clone(),
+            // The firmware opens on its console: no logo to pre-paint.
+            boot_menu: cli.boot_menu,
             // Show its splash until the first frame.
             restore_splash: cli
                 .snapshot_file
@@ -3657,6 +3799,7 @@ mod tests {
             }],
             boot: BootCfg {
                 firmware: Some("fw/KRUN_EFI.fd".into()),
+                logo: None,
             },
             display: DisplayCfg {
                 window: false,

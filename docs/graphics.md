@@ -426,11 +426,18 @@ switched-off panel cycles.
 and reconfigures it for every ordinary modeset — simpledrm → plymouth → gdm on the way up, and
 again at every session handover — and the host sees the identical `scanoutgone` either way, so the
 message cannot tell "between modes" from "gone". A slot with no geometry therefore keeps its
-window: it holds its panel, its style and its fullscreen, and shows its last frame until the new
-mode's first present replaces it, exactly as a monitor does across a mode change. Only the slot
-table takes a window down (`windows::slot_fate`, unit-tested). Closing on the dark slot instead
-cost a fullscreen secondary its Space at every logout, and the re-entry meant to give it back is
-a `toggleFullScreen` that does not always land.
+window: it holds its panel, its style and its fullscreen. Only the slot table takes a window down
+(`windows::slot_fate`, unit-tested). Closing on the dark slot instead cost a fullscreen secondary
+its Space at every logout, and the re-entry meant to give it back is a `toggleFullScreen` that
+does not always land.
+
+**A secondary with nothing of its own mirrors the primary.** The table opens a window for each
+panel it gives a slot, whether or not the guest drives that slot yet, and while the slot has no
+mode the window shows the primary's current frame, letterboxed, with no ack (`SecondaryWindow::mirror`):
+the firmware and the early boot drive only the first display, and a restarting guest disables
+them all. Keeping the slot's own last frame instead froze the window on whatever the guest last
+drew there, a boot splash's spinner mid-turn, for as long as the slot stayed dark. The slot's
+first present after a modeset replaces the mirror.
 
 Not done yet:
 

@@ -42,6 +42,7 @@ use objc2_quartz_core::{CALayer, CATransaction};
 pub(crate) mod absfit;
 mod ack_gate;
 pub(crate) mod arrangement;
+pub(crate) mod bootlogo;
 mod button_pace;
 mod capture_tap;
 mod copy;
@@ -144,6 +145,10 @@ pub struct WindowOptions {
     /// A splash to show from window creation until the first presented frame — set when
     /// this boot restores from a snapshot and the splash file exists.
     pub restore_splash: Option<PathBuf>,
+    /// The VM's own boot logo, checked as the firmware checks it; `None` is the built-in one.
+    pub boot_logo: Option<Vec<u8>>,
+    /// This start opens on the firmware's console (`--boot-menu`): no logo is pre-painted.
+    pub boot_menu: bool,
     /// The parked window's resume channel (task #18): a menu/CLI suspend keeps the window
     /// open with a play glyph, and the click sends here — the session's monitor thread,
     /// parked in recv(), respawns the worker (which restores from the pending snapshot).
@@ -1385,6 +1390,15 @@ fn restore_hotplug(restore_inplace: &Cell<bool>) -> hostdisplay::HotplugPolicy {
     hostdisplay::HotplugPolicy::from_env()
 }
 
+/// How long a powered-off VM's windows take to fade out.
+const POWER_OFF_FADE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The windows' opacity `elapsed` into the power-off fade, or `None` once it is over and the
+/// process may exit. Pure policy for the render timer's exited arm.
+pub(crate) fn power_off_alpha(elapsed: std::time::Duration) -> Option<f64> {
+    (elapsed < POWER_OFF_FADE).then(|| 1.0 - elapsed.as_secs_f64() / POWER_OFF_FADE.as_secs_f64())
+}
+
 pub(crate) fn resume_first_frame(worker_epoch: u64, epoch_at_click: u64, frames: u64) -> bool {
     worker_epoch > epoch_at_click && frames > 0
 }
@@ -2167,6 +2181,8 @@ pub fn run(
         splash_save_path,
         restoring,
         restore_splash,
+        boot_logo: vm_logo,
+        boot_menu,
         resume_worker,
         menu_ctx,
         hidpi,
@@ -3281,11 +3297,23 @@ pub fn run(
             // follow, present — primary first, one collection (`windows::GuestWindows`).
             let slot_panels: std::collections::HashMap<usize, u64> = {
                 let table = display_table.borrow();
-                table
+                let mut map: std::collections::HashMap<usize, u64> = table
                     .connected_slots()
                     .into_iter()
                     .filter_map(|s| table.panel_of(s).map(|p| (s as usize, p)))
-                    .collect()
+                    .collect();
+                // Rebooting with every display in use: firmware connects head 0 alone, and the
+                // other windows wait on their last frame for the guest to light them again.
+                if table.phase() == displays::Phase::Firmware
+                    && FULLSCREEN_ALL_DISPLAYS.with(|f| f.get())
+                    && window.styleMask().contains(NSWindowStyleMask::FullScreen)
+                {
+                    let attached: Vec<u64> = panel_names.borrow().iter().map(|(k, _)| *k).collect();
+                    for (s, p) in table.awaited(&attached) {
+                        map.entry(s as usize).or_insert(p);
+                    }
+                }
+                map
             };
             guest_windows.borrow_mut().apply(
                 &shared,
@@ -3317,6 +3345,8 @@ pub fn run(
     // close-triggered suspend was requested (bounds the wait before falling back).
     let close_choice: Cell<Option<crate::vmlib::schema::WindowCloseAction>> = Cell::new(None);
     let suspend_close_at: Cell<Option<std::time::Instant>> = Cell::new(None);
+    // When the guest powered off: the windows fade out from then ([`power_off_alpha`]).
+    let power_off_at: Cell<Option<std::time::Instant>> = Cell::new(None);
 
     // M9.4: intercept window closes so the close policy runs with the window still up
     // (see WindowCloseInterceptor). The Retained binding must outlive the run loop —
@@ -3338,6 +3368,19 @@ pub fn run(
             .borrow_mut()
             .replace(overlay::Overlay::restore(&layer, &view, splash));
     }
+    // A cold boot opens on black and the firmware's logo, as the firmware's first frame will
+    // show them; it comes down with the guest's first presented frame.
+    let boot_logo: RefCell<Option<bootlogo::BootLogo>> = RefCell::new(
+        (restore_splash.is_none() && !boot_menu)
+            .then(|| {
+                bootlogo::BootLogo::install(
+                    &layer,
+                    &view,
+                    vm_logo.as_deref().unwrap_or(bootlogo::LOGO),
+                )
+            })
+            .flatten(),
+    );
 
     // Clone a window handle for the input monitor's fullscreen shortcut BEFORE the timer block
     // below moves `window` in.
@@ -3400,6 +3443,7 @@ pub fn run(
                 send_display_commands(sock, vsyncs);
             }
         }
+        timer_windows.borrow().capture_trailing();
         host_sampler
             .borrow_mut()
             .tick(&window, timer_primary_slot.get() as usize, &timer_app);
@@ -3573,16 +3617,28 @@ pub fn run(
                     {
                         ov.replace(overlay::Overlay::parked(&host_layer, &content));
                     }
-                    // The other displays' windows go with it. This path returns before the
-                    // frame-apply closure runs, so nothing else would ever take them down —
-                    // and while covering they are borderless and above the menu bar, which
-                    // means a panel frozen on its last frame with no way to dismiss it. They
-                    // come back on resume, when the restored worker presents again.
-                    timer_windows.borrow_mut().close_secondaries();
+                    // A VM using every display keeps the other windows, parked with this one
+                    // (a click on any resumes): closing them only to reopen each on resume is
+                    // the churn the boot presentation removes. Otherwise they go with it — this
+                    // path returns before the frame-apply closure runs, so nothing else would
+                    // take them down — and come back when the restored worker presents.
+                    if !FULLSCREEN_ALL_DISPLAYS.with(|f| f.get()) {
+                        timer_windows.borrow_mut().close_secondaries();
+                    }
                     window.setTitle(&NSString::from_str(&format!("{title} — Suspended")));
                     log::info!("VM suspended; window parked (click to resume)");
                     return;
                 }
+            }
+            // Powered off: the guest's last frame (its shutdown splash) fades out rather than
+            // vanishing, the end of the one picture boot started (docs/design/boot-presentation.md).
+            let now = std::time::Instant::now();
+            let since = *power_off_at.get().get_or_insert(now);
+            power_off_at.set(Some(since));
+            if let Some(alpha) = power_off_alpha(now.saturating_duration_since(since)) {
+                window.setAlphaValue(alpha);
+                timer_windows.borrow().set_alpha(alpha);
+                return;
             }
             save_state_final(timer_state_path.as_deref(), &window);
             kill_worker_group(timer_conn.pid());
@@ -3672,6 +3728,17 @@ pub fn run(
             }
         }
 
+        // The pre-paint stays until the guest presents, and follows the window until then.
+        if frames > 0 {
+            if let Some(b) = boot_logo.borrow_mut().take() {
+                b.remove();
+            }
+        } else if let Some(b) = boot_logo.borrow().as_ref()
+            && let Some(content) = window.contentView()
+        {
+            b.fit(&content);
+        }
+
         // M9.4 overlay lifecycle: the restore splash comes down on the first presented frame;
         // the suspend dim appears when a suspend request is observed (close-triggered or
         // `limina suspend`) and comes down if the bracket is abandoned (timeout → the VM keeps
@@ -3718,10 +3785,15 @@ pub fn run(
             {
                 ov.replace(overlay::Overlay::suspend(&host_layer, &content));
             }
-            // The other panels freeze with this one, so they say so with it. Only the suspend
-            // flavor reaches them: by the time the window is parked or resuming, the park has
-            // closed every secondary.
-            timer_windows.borrow_mut().veil(live && suspending);
+            // The other panels freeze with this one, so they say so with it; a VM using every
+            // display keeps them parked with it, too.
+            let veil = match PARK_STATE.with(|p| p.get()) {
+                ParkPhase::Parked => windows::Veil::Parked,
+                ParkPhase::Resuming => windows::Veil::Resuming,
+                ParkPhase::Live if suspending => windows::Veil::Suspending,
+                ParkPhase::Live => windows::Veil::Off,
+            };
+            timer_windows.borrow_mut().veil(veil);
         }
 
         // Release keys held when the window loses key focus (e.g. the user hit Cmd-Tab): the local
@@ -4304,7 +4376,16 @@ pub fn run(
             if ev.r#type() == NSEventType::LeftMouseDown {
                 let p = input::event_point_in_view(ev, &monitor_view);
                 let b = monitor_view.bounds();
-                if p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height {
+                let in_main = p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height;
+                // A parked secondary (a VM using every display) is all play button too. The main
+                // window is a guest window as well, but only its content resumes: its title bar
+                // still drags.
+                let main = monitor_view.window();
+                let in_other = ev.window(mtm).is_some_and(|w| {
+                    main.as_ref().is_none_or(|m| !std::ptr::eq(&**m, &*w))
+                        && windows::slot_of_window(&w).is_some()
+                });
+                if in_main || in_other {
                     RESUME_REQUESTED.with(|r| r.set(true));
                     return std::ptr::null_mut(); // the click was the play button, not input
                 }
@@ -4395,6 +4476,16 @@ fn any_window_visible(primary: &NSWindow) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_powered_off_window_fades_out_then_lets_the_process_exit() {
+        use std::time::Duration;
+        assert_eq!(super::power_off_alpha(Duration::ZERO), Some(1.0));
+        let mid = super::power_off_alpha(Duration::from_millis(100)).unwrap();
+        assert!((mid - 0.5).abs() < 1e-9, "{mid}");
+        assert!(super::power_off_alpha(Duration::from_millis(199)).unwrap() > 0.0);
+        assert_eq!(super::power_off_alpha(Duration::from_millis(200)), None);
+        assert_eq!(super::power_off_alpha(Duration::from_secs(5)), None);
+    }
 
     /// Cross-BATCH order is as load-bearing as in-batch order: a migration cycle's settle
     /// (CONNECTOR_DOWN_SETTLE) parks its batch mid-flight, and a batch spawned for a later

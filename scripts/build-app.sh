@@ -461,10 +461,22 @@ trap - EXIT
 # built unconditionally so the deployable artifact and its container never drift apart,
 # and signed too (Gatekeeper evaluates the container the user actually double-clicks, and
 # notarization staples its ticket to the image).
+#
+# It opens as the usual install window: the app beside an Applications link, to drag one onto
+# the other. The window's size and the icons' places are Finder's `.DS_Store`, laid out once in
+# Finder and kept as `assets/dmg/DS_Store` (it names the icons by file name and holds no path),
+# so a build needs no Finder scripting.
 DMG="$ROOT/target/Limina.dmg"
+STAGE="$ROOT/target/dmg-stage"
 echo "==> packaging $DMG"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+cp -cR "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+cp "$ROOT/assets/dmg/DS_Store" "$STAGE/.DS_Store"
 rm -f "$DMG"
-hdiutil create -volname Limina -srcfolder "$APP" -format UDZO -fs HFS+ -ov -quiet "$DMG"
+hdiutil create -volname Limina -srcfolder "$STAGE" -format UDZO -fs HFS+ -ov -quiet "$DMG"
+rm -rf "$STAGE"
 if [ "$SIGN_ID" != "-" ]; then
   codesign -s "$SIGN_ID" ${TS[@]+"${TS[@]}"} --force "$DMG"
 fi

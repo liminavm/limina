@@ -52,6 +52,7 @@ pub fn attach(vmr: &mut VmResources, console: &ConsoleSpec) -> Result<()> {
             (input_fd, output_fd)
         }
         ConsoleSpec::Pty => open_pty()?,
+        ConsoleSpec::Fd(fd) => socket_line(*fd)?,
     };
 
     vmr.serial_consoles.push(SerialConsoleConfig {
@@ -223,6 +224,34 @@ impl Ports {
             .build()
             .map(Some)
             .map_err(|e| anyhow!("virtio-console: {e:?}"))
+    }
+}
+
+/// The supervisor's serial socket as `(input_fd, output_fd)`. Non-blocking, as the pty's master
+/// is: the guest writes serial bytes from a vCPU thread, and a supervisor that falls behind must
+/// cost bytes, never a stalled vCPU.
+fn socket_line(fd: RawFd) -> Result<(RawFd, RawFd)> {
+    // SAFETY: fcntl and dup on an fd the supervisor handed this process for its whole life.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) != 0 {
+            return Err(std::io::Error::last_os_error()).context("set serial socket O_NONBLOCK");
+        }
+        // Room for a burst (a kernel log on a serial console) while the supervisor catches up.
+        let size: libc::c_int = 256 * 1024;
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &size as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+        // Two fds for the one socket, as for the pty: the builder owns each separately.
+        let output = libc::dup(fd);
+        if output < 0 {
+            return Err(std::io::Error::last_os_error()).context("dup serial socket");
+        }
+        Ok((fd, output))
     }
 }
 
