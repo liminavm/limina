@@ -42,7 +42,7 @@ use objc2_quartz_core::{CALayer, CATransaction};
 pub(crate) mod absfit;
 mod ack_gate;
 pub(crate) mod arrangement;
-mod bootlogo;
+pub(crate) mod bootlogo;
 mod button_pace;
 mod capture_tap;
 mod copy;
@@ -145,6 +145,8 @@ pub struct WindowOptions {
     /// A splash to show from window creation until the first presented frame — set when
     /// this boot restores from a snapshot and the splash file exists.
     pub restore_splash: Option<PathBuf>,
+    /// The VM's own boot logo, checked as the firmware checks it; `None` is the built-in one.
+    pub boot_logo: Option<Vec<u8>>,
     /// The parked window's resume channel (task #18): a menu/CLI suspend keeps the window
     /// open with a play glyph, and the click sends here — the session's monitor thread,
     /// parked in recv(), respawns the worker (which restores from the pending snapshot).
@@ -2177,6 +2179,7 @@ pub fn run(
         splash_save_path,
         restoring,
         restore_splash,
+        boot_logo: vm_logo,
         resume_worker,
         menu_ctx,
         hidpi,
@@ -3367,7 +3370,13 @@ pub fn run(
     let boot_logo: RefCell<Option<bootlogo::BootLogo>> = RefCell::new(
         restore_splash
             .is_none()
-            .then(|| bootlogo::BootLogo::install(&layer, &view, bootlogo::LOGO))
+            .then(|| {
+                bootlogo::BootLogo::install(
+                    &layer,
+                    &view,
+                    vm_logo.as_deref().unwrap_or(bootlogo::LOGO),
+                )
+            })
             .flatten(),
     );
 

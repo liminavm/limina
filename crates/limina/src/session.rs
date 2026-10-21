@@ -97,6 +97,8 @@ pub struct SessionConfig {
     /// opens, so the display path must not treat its first handover as a cold plug.
     pub restoring: bool,
     pub restore_splash: Option<PathBuf>,
+    /// The VM's own boot logo, checked; `None` is the firmware's built-in one.
+    pub boot_logo: Option<Vec<u8>>,
 }
 
 /// Pack/unpack a `(width, height)` for the [`AtomicU64`] the window and the reboot-relaunch
@@ -298,6 +300,7 @@ pub struct WindowedSession {
     splash_save_path: Option<PathBuf>,
     restoring: bool,
     restore_splash: Option<PathBuf>,
+    boot_logo: Option<Vec<u8>>,
     resume_worker: std::sync::mpsc::Sender<()>,
     menu_ctx: window::MenuCtx,
 }
@@ -335,6 +338,7 @@ impl WindowedSession {
             splash_save_path,
             restoring,
             restore_splash,
+            boot_logo,
             hidpi,
             notch,
             edge_resistance,
@@ -596,6 +600,7 @@ impl WindowedSession {
             splash_save_path,
             restoring,
             restore_splash,
+            boot_logo,
             resume_worker: resume_tx,
             menu_ctx,
         })
@@ -634,6 +639,7 @@ impl WindowedSession {
                 splash_save_path: self.splash_save_path,
                 restoring: self.restoring,
                 restore_splash: self.restore_splash,
+                boot_logo: self.boot_logo,
                 resume_worker: Some(self.resume_worker),
                 menu_ctx: self.menu_ctx,
             },

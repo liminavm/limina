@@ -330,6 +330,10 @@ pub struct ShareEntry {
 pub struct BootCfg {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firmware: Option<PathBuf>,
+    /// The VM's own boot logo: a BMP the firmware draws in place of its own, and the window
+    /// shows before the firmware's first frame (relative paths are the bundle's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

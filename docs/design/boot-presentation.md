@@ -2,7 +2,7 @@
 
 Status: design agreed with the synoik side. Built: Cardea's first frame, logo placement and quiet
 boot; on the host, the pre-paint, the power-off fade, kept secondaries and the serial console
-CLI. Not built: the per-VM logo, the boot-menu action, the window's Console view and the
+CLI, and the per-VM logo. Not built: the boot-menu action, the window's Console view and the
 boot-details shortcut. Owner of the
 firmware half: Cardea (`third_party/cardea`); of the guest half: synoik (`docs/fork/boot-splash.md`
 in the synoik repo).
@@ -54,9 +54,12 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
    (`Coalescer::hold`) and the quiet console draws nothing, so the first flush carries the logo.
 2. **Logo at 38.2%,** x centred (`cardea_gfx::logo_position`); the BGRT carries the drawn
    position. A GOP SetMode while quiet redraws the logo on the cleared screen.
-3. **Per-VM logo.** The embedded logo is the default; a VM may supply its own BMP, which the VMM
-   hands to the firmware (a `/chosen` property next to `libkrun,extra-bootargs`, size-capped and
-   parsed by the hostile BMP reader). The host's pre-paint uses the same file.
+3. **Per-VM logo.** The embedded logo is the default; a VM may supply its own BMP (`boot.logo` in
+   `vm.toml`, `--boot-logo`), at most 4 MiB. libkrun writes it into a window at
+   `BOOT_LOGO_START` named by a `libkrun,boot-logo` node; Cardea copies it out, parses the copy
+   and draws and publishes it, or its own logo if the parser refuses. The host checks the file
+   with Cardea's own parser (`cardea_gfx`) before the VM starts and pre-paints from Cardea's
+   decode of it, so window and firmware agree to the pixel.
 4. **Quiet boot.** While quiet, ConOut text and clears go to serial (every byte: the L2 tests key on
    GRUB's "Booting" line) and the display keeps the logo. The display switches to the text console,
    once and for good, when:

@@ -330,6 +330,8 @@ pub struct VmSpec {
     pub tpm_state: Option<PathBuf>,
     /// The file the firmware's UEFI variables live in; `None` keeps them in RAM. See `--efi-vars`.
     pub efi_vars: Option<PathBuf>,
+    /// A BMP the firmware shows as its boot logo in place of its own (firmware boots only).
+    pub boot_logo: Option<PathBuf>,
     /// Describe the machine to the OS with ACPI instead of a device tree. See `--acpi`.
     pub acpi: bool,
     /// Name the serial port in an ACPI SPCR, making it the OS's only console. See `--acpi-spcr`.

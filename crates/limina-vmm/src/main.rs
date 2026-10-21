@@ -313,6 +313,12 @@ struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
     efi_vars: Option<PathBuf>,
 
+    /// A BMP the firmware shows as its boot logo in place of its own, handed over in libkrun's
+    /// boot-logo window (at most 4 MiB). **EFI boot only.** The firmware draws the built-in logo
+    /// if it cannot draw this one.
+    #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
+    boot_logo: Option<PathBuf>,
+
     /// Describe the machine to the OS with ACPI tables instead of a device tree: libkrun writes
     /// them, and the firmware installs them and withholds the tree (docs/design/
     /// firmware-and-acpi.md). **EFI boot only**, since an arm64 OS finds ACPI only through a
@@ -927,6 +933,7 @@ fn main() -> Result<()> {
         tpm: cli.tpm || cli.tpm_state.is_some(),
         tpm_state: cli.tpm_state.clone(),
         efi_vars: cli.efi_vars.clone(),
+        boot_logo: cli.boot_logo.clone(),
         acpi: cli.acpi,
         acpi_spcr: cli.acpi_spcr,
         extra_bootargs: cli.extra_bootargs.clone(),

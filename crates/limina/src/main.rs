@@ -69,6 +69,12 @@ struct Cli {
     #[arg(long, conflicts_with = "kernel")]
     firmware: Option<PathBuf>,
 
+    /// A BMP the firmware shows as its boot logo in place of its own, and the window shows
+    /// before the firmware's first frame: uncompressed, 8 (palettised), 24 or 32 bits per pixel,
+    /// at most 4 MiB. A managed VM takes it from `boot.logo`.
+    #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
+    boot_logo: Option<PathBuf>,
+
     /// Raw aarch64 kernel Image for direct kernel boot (the fast L1 path).
     #[arg(long)]
     kernel: Option<PathBuf>,
@@ -1747,6 +1753,7 @@ fn cli_from_definition(
     Ok(Cli {
         cmd: None,
         firmware,
+        boot_logo: cfg.boot.logo.as_ref().map(|f| bundle.resolve_path(f)),
         kernel: None,
         initramfs: None,
         cmdline: None,
@@ -2028,6 +2035,13 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         "--ram-mib".into(),
         ram_mib.to_string(),
     ];
+    // A logo the firmware would refuse is refused here, before anything starts: the window
+    // pre-paints it, and a firmware that drew its own logo instead would undo that.
+    let boot_logo = cli
+        .boot_logo
+        .as_deref()
+        .map(window::bootlogo::load)
+        .transpose()?;
     // Boot source. clap guarantees firmware and kernel don't both appear; we resolve the
     // rest: an explicit --firmware is honored, and a windowed boot with neither given
     // defaults to the GOP firmware so EFI/GRUB/early-kernel render in the window (M2.5
@@ -2070,6 +2084,10 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         };
         args.push("--firmware".into());
         args.push(path_arg(&firmware)?);
+        if let Some(logo) = &cli.boot_logo {
+            args.push("--boot-logo".into());
+            args.push(path_arg(logo)?);
+        }
         // SMBIOS lives on the firmware path only, so forward inside this arm — clap's
         // `conflicts_with = "kernel"` already rejects the other combination up front.
         for oem in &cli.smbios_oem_string {
@@ -2577,6 +2595,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             // additionally conditioned on the splash FILE existing: a restore with no splash
             // is still a restore, and the display path has to know.
             restoring: cli.snapshot_file.as_ref().is_some_and(|p| p.exists()),
+            // Checked as the firmware will check it (`bootlogo::load`) before any start.
+            boot_logo: boot_logo.clone(),
             // Show its splash until the first frame.
             restore_splash: cli
                 .snapshot_file
@@ -3750,6 +3770,7 @@ mod tests {
             }],
             boot: BootCfg {
                 firmware: Some("fw/KRUN_EFI.fd".into()),
+                logo: None,
             },
             display: DisplayCfg {
                 window: false,
