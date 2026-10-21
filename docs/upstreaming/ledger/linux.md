@@ -1,7 +1,8 @@
+<!-- ledger-check: dep=linux -->
 # linux — patch-audit ledger
 
 **Fork model since 2026-08-03.** There is no `patches/linux/` series any more: our kernel changes
-are commits on **`github.com/liminavm/linux`** branch **`limina`**, base **`v7.1.8`**, pinned in
+are commits on **`github.com/liminavm/linux`** branch **`limina`**, base **`v7.1.13`**, pinned in
 `third_party/manifest.toml`. The fork's parent is **`gregkh/linux`** (the stable-tree mirror) —
 `torvalds/linux` has no stable point-release tags. Regenerate the series as a build artifact with
 `scripts/export-linux-patches.sh` (`git format-patch base..rev`).
@@ -11,8 +12,8 @@ and drift on re-export.
 
 | ord | subject | files | diag | need | checked | issue | mr | sec | fold | tier | disp | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0001 | drm/virtio: expose per-scanout rects as suggested connector offsets | `drivers/gpu/drm/virtio/virtgpu_display.c`, `virtgpu_vq.c`, `virtgpu_drv.h` |  | **needed** — no driver reads the rect position; qxl is the only precedent | `v7.1.8` `virtgpu_display.c` (read 2026-08-23: still size-only, no suggested_x/y, no `hotplug_mode_update`) | none-yet | none-yet | no | standalone | guest-enhanced | **upstream-now** | the guest half of the host→guest arrangement relay; mutter gates the offsets on `hotplug_mode_update`, so the two halves must go together |
-| 0002 | drm/virtio: type and attach PRIME-imported dmabufs | `drivers/gpu/drm/virtio/virtgpu_prime.c` |  | **needed** — `bo->blob_mem` is still unset on the import path and `virtgpu_dma_buf_funcs` still carries only `.free` | `v7.1.8` `virtgpu_prime.c` (read 2026-08-23) | none-yet | none-yet | no | standalone | guest-enhanced (the bug hits any guest whose glupload picks the DirectDmabuf uploader; 16 KiB pages are what make that the default here) | **upstream-now** | a plain driver bug with a self-contained fix and a measured symptom — the cleanest upstream candidate we carry; see the finding below |
+| 0001 | drm/virtio: expose per-scanout rects as suggested connector offsets | `drivers/gpu/drm/virtio/virtgpu_display.c`, `virtgpu_vq.c`, `virtgpu_drv.h` |  | **needed** — no driver reads the rect position; qxl is the only precedent | `v7.1.13` `virtgpu_display.c` (read 2026-10-16: still size-only, no suggested_x/y, no `hotplug_mode_update`) | none-yet | none-yet | no | standalone | guest-enhanced | **upstream-now** | the guest half of the host→guest arrangement relay; mutter gates the offsets on `hotplug_mode_update`, so the two halves must go together |
+| 0002 | drm/virtio: type and attach PRIME-imported dmabufs | `drivers/gpu/drm/virtio/virtgpu_prime.c` |  | **needed** — `bo->blob_mem` is still unset on the import path and `virtgpu_dma_buf_funcs` still carries only `.free` | `v7.1.13` `virtgpu_prime.c` (read 2026-10-16: still sets only `params.blob_mem`; dma-buf funcs carry no `.open`/`.close`) | none-yet | none-yet | no | standalone | guest-enhanced (the bug hits any guest whose glupload picks the DirectDmabuf uploader; 16 KiB pages are what make that the default here) | **upstream-now** | a plain driver bug with a self-contained fix and a measured symptom — the cleanest upstream candidate we carry; see the finding below |
 
 ## Left the series
 

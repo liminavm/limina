@@ -53,7 +53,7 @@ if ! git -C "$TREE" cat-file -e "${REV}^{commit}" 2>/dev/null; then
     fi
 fi
 
-# The base is an UPSTREAM tag (v7.1.8), and a GitHub fork does not receive tags pushed upstream
+# The base is an UPSTREAM tag (v7.1.13), and a GitHub fork does not receive tags pushed upstream
 # after it was created — so `git fetch origin --tags` on our fork will never produce it. Fetch
 # it from the upstream the manifest names. Without this the check below fails on every fresh
 # clone, and says the wrong thing when it does.

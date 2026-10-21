@@ -1,14 +1,30 @@
+<!-- ledger-check: dep=mesa-guest -->
 # mesa (guest) — patch-audit ledger
 
-The `limina-guest` series (`third_party/manifest.toml [mesa-guest]`, base `mesa-26.2.3`), 20
-patches. Schema + protocol: `README.md`. Rows are keyed by the `limina-guest` SUBJECT; ordinals
-follow `patches/mesa-guest/` and drift on re-export.
+The `limina-guest` series (`third_party/manifest.toml [mesa-guest]`, pin `4ea3613b090`, base
+`mesa-26.2.5` = `ddaf85e3534` "VERSION: bump for 26.2.5"), 21 patches since the 2026-10-14
+rebase (previously base `mesa-26.2.3`, 20 patches; pre-rebase tag `pre-rebase-guest-2026-10-14`).
+`patches/mesa-guest/` matches `base..rev` (same 21 subjects, same order, same patch-ids; checked
+2026-10-16). Schema + protocol: `README.md`.
 
-**Checked against upstream `main` b39d173ca93 (2026-10-05).** The upstreamable subset lives as
-branch `upstream/guest-2026-10` in `/Volumes/mesa-cs/mesa-upstream` (local; not pushed anywhere),
-rewritten to upstream form: Mesa-style message, verified `Fixes:`, `Cc: mesa-stable` where a release
-carries the bug, `Signed-off-by`, no limina content. Three subjects were reworded there; the
-upstream subject is in the notes. Every verdict below rests on a reproducer run on an upstream
+**The subject is the key; the `ord` column is the pre-rebase numbering.** The rebase retired row
+0004 into the base, so from 0004 onward the ordinals are off by one: rows 0005–0020 are export
+0004–0019 today, and the two commits added since (export 0020 and 0021) are under *Unaudited
+commits* at the end. Match a row to `patches/mesa-guest/` by subject, never by number.
+
+**Checked against upstream `main` b39d173ca93 (2026-10-05)**, except where a row's `checked`
+column names a later SHA; not re-checked after the 26.2.5 rebase. The upstreamable subset lives as
+branch `upstream/guest-2026-10`, pushed to `liminavm/mesa` at `f8a85712230` (2026-10-16 audit:
+the earlier "local; not pushed anywhere" no longer holds), rewritten to upstream form: Mesa-style
+message, verified `Fixes:`, `Cc: mesa-stable` where a release carries the bug, `Signed-off-by`, no
+limina content. Three subjects were reworded there; the upstream subject is in the notes. Its 11
+commits on `b39d173ca93`, oldest first: `5e812ddb0c0` stub-instance fallback (0003),
+`fba49ab23b7` TLS teardown (0004, merged), `5e046a2502f` zink shadow recursion (0007),
+`fc7366ac84c` blob_mem (0009, held), `14084ecd72d` three-plane 4:2:0 (0011), `5bed42b1b2b` EGL
+fd export (0016), `128d6465c8c` vl/compositor matrix (0017), `d75519078ac` zink lost-wakeup
+(0018), `c42a1c7eb77` venus SYNC_FD (0019, Yiwei Zhang's fix), `685704f8781` dmabuf size (0012),
+`f8a85712230` vl/compositor sampler swizzle (not in the series). The PBO-wait fix (0020) is on
+its own branch, `upstream/virgl-pbo-wait` (`224228b878c`). Every verdict below rests on a reproducer run on an upstream
 stack — stock QEMU + virglrenderer 1.3.0 or plain zink on anv — never on limina:
 `spikes/upstream-repro/<dir>/` holds the program, the before/after table and the MR draft.
 
@@ -17,7 +33,7 @@ stack — stock QEMU + virglrenderer 1.3.0 or plain zink on anv — never on lim
 | 0001 | venus/wsi: linear-modifier fallback + 16F swapchain block for virtio-gpu presents | `vn_wsi.c`, `wsi_common.h`, `wsi_common_wayland.c` |  | needed | b39d173ca93 | n/a | n/a | n/a | no | standalone | guest-enhanced | carry | works around our scanout path; not a clean send (common-WSI knobs) |
 | 0002 | venus/wsi: drop the 16-bit-unorm wayland swapchain format | `wsi_common_wayland.c` |  | needed | b39d173ca93 | n/a | n/a | n/a | no | standalone | guest-enhanced | carry | unconditional deletion in common code; the upstreamable shape is host-capability format filtering |
 | 0003 | venus: degrade to the stub instance when ring setup fails post-connect | `vn_instance.c` |  | needed | b39d173ca93 | none-yet | none-yet | none-fits (the host must fail ring setup) | no | standalone | guest-enhanced (stock-tier purpose) | **upstream-now** | upstream subject "venus: fall back to the stub instance when ring setup fails". Repro: QEMU `hostmem=64K` → main loses lavapipe too (`vkCreateInstance` OOM), fix keeps llvmpipe. `4cf0989083d` removes the 16k-host trigger only on 7.2+ kernels. `venus-stub-instance/` |
-| 0004 | venus: don't run a thread's TLS teardown from an unloaded driver | `vn_common.c` |  | needed | 5d4c4bd553a | n/a | !44986 | n/a | no | standalone | guest-enhanced | **merged** | backport of upstream `935c4ec39a3` (`cherry-pick -x`), which replaced our ICD-pin shape; `Fixes: d17ddcc8477`, `Cc: mesa-stable`, not yet on `staging/26.2` (checked 2026-10-08). Drop once the base carries it. An `atexit()` handler, which glibc runs at `dlclose`, marks the key invalid, frees the calling thread's TLS and deletes the tss key; other threads still holding venus TLS leak a few dozen bytes, a narrow race with a thread exiting during the last `vkDestroyInstance` remains, and unloading is unchanged. Plain-Vulkan repro: main SIGSEGV 3/3, fix clean 3/3 and the driver still unloads, and Vulkan teardown from an exit handler that runs after venus's (a C++ global's destructor) works; the `__cxa_thread_atexit_impl` hook closes the race but delays unloading, and an `RTLD_NODELETE` pin never unloads. `venus-tls-destructor/` |
+| 0004 | venus: don't run a thread's TLS teardown from an unloaded driver | `vn_common.c` |  | needed | 5d4c4bd553a | n/a | !44986 | n/a | no | standalone | guest-enhanced | **merged** | **RETIRED into the base** (2026-10-16 audit): `mesa-26.2.5` carries it as `133e1af39ce` (cherry-pick of upstream `935c4ec39a3`, MR !44986), so the 2026-10-14 rebase dropped it from `limina-guest`; the row is kept for the record. Was: backport of upstream `935c4ec39a3` (`cherry-pick -x`), which replaced our ICD-pin shape; `Fixes: d17ddcc8477`, `Cc: mesa-stable`, not yet on `staging/26.2` (checked 2026-10-08). Drop once the base carries it. An `atexit()` handler, which glibc runs at `dlclose`, marks the key invalid, frees the calling thread's TLS and deletes the tss key; other threads still holding venus TLS leak a few dozen bytes, a narrow race with a thread exiting during the last `vkDestroyInstance` remains, and unloading is unchanged. Plain-Vulkan repro: main SIGSEGV 3/3, fix clean 3/3 and the driver still unloads, and Vulkan teardown from an exit handler that runs after venus's (a C++ global's destructor) works; the `__cxa_thread_atexit_impl` hook closes the race but delays unloading, and an `RTLD_NODELETE` pin never unloads. `venus-tls-destructor/` |
 | 0005 | venus: surface ring loss as VK_ERROR_DEVICE_LOST instead of abort() | `vn_common.c`, `vn_ring.c`, +4 |  | needed | b39d173ca93 | none-yet | none-yet | to-decide | no | standalone | guest-enhanced | **RFC first** | conflicts on main (`vn_ring.c`). Upstream aborts on ring FATAL by design; `VN_DEBUG=no_abort` covers watchdog/iteration aborts only. Policy change → issue/RFC first; draft issue text in `venus-ring-loss/` (reproducer: one refused `vkGetMemoryFdPropertiesKHR` aborts the process) |
 | 0006 | venus: allocate dma-buf import memory synchronously | `vn_device_memory.c` |  | needed | b39d173ca93 | n/a | n/a | n/a | no | standalone | guest-enhanced | carry (blocked) | upstream vkr fails a refused import as a CS error, not a VkResult: sync only moves the abort (main: silent success; patch: abort). Sendable once vkr returns `VK_ERROR_INVALID_EXTERNAL_HANDLE`. `venus-dmabuf-import/` |
 | 0007 | zink: don't recurse forever populating a shadow attachment (+ three more, one MR) | `zink_render_pass.c`, `zink_context.c`, `zink_draw.cpp` |  | needed | 7d6e9088821 | none-yet | !45485 (the first of the four) | piglit: `kov/piglit` `msrtt2-depth-partial-clear`, for !45485; fails on main, passes with the MR commit alone | no | standalone series of 4 | guest-enhanced + host zink-on-KK | **upstream-now** | Branch `zink-msrtt-shadow` on `kov/mesa` (4 commits on `7d6e9088821`; the last three also on `limina-guest`): first, keep the renderpass atom dirty while `zink_batch_rp()` runs, so the shadow's nested draw starts a renderpass (`Fixes: 769b356b5b6`, main only; release main gives `VUID-vkCmdDraw-renderpass`, debug aborts on `validate_atoms`); then the recursion fix (`Fixes: 82add9f2e99`); keep every transient a multi-attachment shadow populated valid (`Fixes: 635f0c5f4fe`); populate shadows before `zink_flush_clears()` reduces the fb, the `glFlush` route the recursion fix makes reachable. Plain zink on anv (no MSRTSS): main SIGSEGV in all seven modes but `zs`; the recursion fix alone leaves `mrt`/`mrt3` stale; those three correct 5/5 in every mode; piglit fbo/clear/sRGB/multisample/texture-view groups identical to the recursion fix alone (all on `92b45bd0f2e`). On `7d6e9088821` all four are correct 5/5 in every mode and piglit matches main test for test. Found by the fix-alternatives step. `zink-msrtt-shadow-recursion/` |
@@ -40,8 +56,9 @@ stack — stock QEMU + virglrenderer 1.3.0 or plain zink on anv — never on lim
 One MR per row, in this order — deterministic reproducers first: 0004 (merged), 0019 (the maintainer's fix), 0007, 0016, 0018,
 0003, 0012, the sampler-swizzle fix below, 0011, 0017, 0020. 0009 waits for its Mesa +
 virglrenderer follow-up pair. Ring loss (0005) goes as an issue first. Filing is the user's; the MR and issue drafts are
-in each `spikes/upstream-repro/` README, and every commit is on `upstream/guest-2026-10`
-(`liminavm/mesa`).
+in each `spikes/upstream-repro/` README. Every commit except 0020 is on `upstream/guest-2026-10`
+(`liminavm/mesa`); 0020 is on `upstream/virgl-pbo-wait`. Ordinals here are the row numbers
+above (pre-rebase), not today's export numbers; 0004 is already merged and in the base.
 
 **Mesa's AI policy governs every send** (`docs/submittingpatches.rst`, "Expectations on
 contributors"; the text rule since MR !43990, 2026-08-25):
@@ -87,3 +104,15 @@ software-decode fallback, a lost Vulkan instance), none prevents boot. **(c)** H
 alternatives exist only for 0006/0008 (renderer behaviour) — both are carries precisely because the
 fix belongs in the renderer upstream. **(d)** Each upstream-now row retires when the Fedora base
 carries it; the stock tier then absorbs the fix.
+
+## Unaudited commits (skeleton, 2026-10-16)
+
+Added to `limina-guest` by the 2026-10-14 rebase (export 0020 and 0021). Generated by
+`scripts/patch-audit/check-ledger.sh --skeleton mesa`; the last column is a first guess, not
+researched against upstream.
+
+<!-- mesa: 2 untracked of 21 in mesa-26.2.5..4ea3613b0903 -->
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `8fbf3c85ebb` | zink: do not use implicit sync on kosmickrisp | `src/gallium/drivers/zink/zink_screen.c` |  | **drop on base bump** — cherry-pick of upstream `e9a87f80b2d` (MR !44048, Vandomas); retire when the stable base carries it, checked by reading the code, not by SHA ancestry. sec: no |
+| `4ea3613b090` | venus: match the X server's DRM device by its node, not only by PCI | `src/virtio/vulkan/vn_wsi.c` |  | **upstream-now candidate** — `wsi_device_matches_drm_fd` compares PCI bus info only, so any non-PCI virtio-gpu (virtio-mmio on arm64 VMMs) takes the X11 prime-blit path; needs an upstream-stack repro and a message in the submitter's own words. sec: no |
