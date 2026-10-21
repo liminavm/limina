@@ -1,7 +1,9 @@
 # Boot presentation: one picture from power-on to the desktop and back
 
-Status: design agreed with the synoik side; not built. Owner of the firmware half: Cardea
-(`third_party/cardea`); of the guest half: synoik (`docs/fork/boot-splash.md` in the synoik repo).
+Status: design agreed with the synoik side. Built: Cardea's first frame, logo placement and quiet
+boot. Not built: the per-VM logo, the boot-menu action, and everything on the host. Owner of the
+firmware half: Cardea (`third_party/cardea`); of the guest half: synoik (`docs/fork/boot-splash.md`
+in the synoik repo).
 
 ## Goal
 
@@ -34,22 +36,22 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
 
 ## Stage by stage
 
-| Stage | Today | Design |
+| Stage | On screen | Built |
 |---|---|---|
-| Window opens, worker starting | black | the host pre-paints black + the logo by the firmware's rule, from the same BMP |
-| Firmware init | a black flush, a clear, then the logo (centred) | the first presented frame is already black + logo at 38.2% |
-| Bootloader (GRUB, sd-boot) | ConOut text on glass; GRUB's clear wipes the logo; `bli` prints an error on every Fedora boot | quiet boot: text to serial only, the logo stays (below) |
-| ExitBootServices → `virtio_gpu` | host holds the last firmware frame (Blt-only GOP, no efifb/simpledrm; the device reset sends no `scanoutgone`) | unchanged; any zeroed-buffer flip by the guest is to be measured and fixed guest-side |
-| Splash → desktop | plymouth bgrt / synoik-splash → compositor | unchanged |
-| Reboot | host holds the guest's last frame across the worker swap; firmware then flashes black | held frame → firmware's black + logo → next splash: one splash with a brief spinner pause |
-| Power-off | window and process vanish at once | hold the final frame, fade the window out (~200 ms), exit |
+| Window opens, worker starting | black + the logo, pre-painted by the host by the firmware's rule from the same BMP | no: black today |
+| Firmware init | the first presented frame is black + logo at 38.2% | yes |
+| Bootloader (GRUB, sd-boot) | quiet boot: the logo stays, text goes to serial (below) | yes |
+| ExitBootServices → `virtio_gpu` | the host holds the last firmware frame (Blt-only GOP, so no efifb/simpledrm; the device reset sends no `scanoutgone`) | yes; the guest's own black flip is in §Open |
+| Splash → desktop | plymouth bgrt / synoik-splash → compositor | yes |
+| Reboot | held frame → firmware's black + logo → next splash: one splash with a brief spinner pause | yes on the main window; secondaries close today (§Host 4) |
+| Power-off | hold the final frame, fade the window out (~200 ms), exit | no: the window vanishes at once |
 
 ## Firmware (Cardea)
 
-1. **First frame = black + logo.** Draw the logo before the first flush: today `Gpu::set_mode`
-   flushes the zeroed buffer and `gfxcon::attach` clears again before `logo::show` draws, which is
-   the black flash between the held frame and the logo on every reboot.
-2. **Logo at 38.2%,** x centred; the BGRT carries the drawn position.
+1. **First frame = black + logo.** `Gpu::set_mode` holds the cleared screen
+   (`Coalescer::hold`) and the quiet console draws nothing, so the first flush carries the logo.
+2. **Logo at 38.2%,** x centred (`cardea_gfx::logo_position`); the BGRT carries the drawn
+   position. A GOP SetMode while quiet redraws the logo on the cleared screen.
 3. **Per-VM logo.** The embedded logo is the default; a VM may supply its own BMP, which the VMM
    hands to the firmware (a `/chosen` property next to `libkrun,extra-bootargs`, size-capped and
    parsed by the hostile BMP reader). The host's pre-paint uses the same file.
@@ -62,8 +64,11 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
      over virtio-blk) does not read ConIn and is never revealed;
    - Cardea's own "no bootable device" path runs;
    - the host asked for the boot menu (below).
-   On reveal the console is repainted from the text Cardea has kept since the last clear, so a
-   prompt already printed is not lost.
+   On reveal the console is repainted from the text Cardea has kept (`cardea_gfx::TextGrid`), so
+   a prompt already printed is not lost, unless a loader has drawn its own screen through Blt (a
+   graphical GRUB menu), which is left as it is. GRUB polls the keyboard every few microseconds
+   while its menu counts down, so the 500 ms run fires on any menu; with `GRUB_TIMEOUT=0` it does
+   not read keys and stays quiet.
 5. **Getting to the menu.** The host's "show boot menu on next start" action (part of the host
    boot policy in `firmware-and-acpi.md`) starts the firmware revealed and, for loaders that
    hide their menu, presses the loader's key for it: sets `LoaderConfigTimeoutOneShot` for
@@ -110,8 +115,9 @@ behind one shortcut.
   Stock images get plymouth's own (Esc).
 - **The "boot details" shortcut (host).** Before the guest's first own frame, it opens the host
   Console. After it, the host injects the details key, `KEY_INFO` (0x166, xkb `XF86Info`), on its
-  virtual keyboard, which
-  synoik-splash and the synoik compositor swallow in every state and turn into the details view.
+  virtual keyboard, which synoik-splash and the synoik compositor swallow in every state and turn
+  into the details view. The keyboard must declare `KEY_INFO` in its `EV_KEY` capability bitmap,
+  or the kernel's input core drops the event before evdev.
   The host never injects Esc: it cannot tell a splash from a session, and an Esc closes a user's
   dialog. Stock plymouth images do not know the key, so there the shortcut is the host Console
   only.
