@@ -152,6 +152,10 @@ downgrades to DROP; 0012 downgrades to a benign compat/enablement delta tied to 
 **No patch in any series is blocked-on-disclosure.** (virgl's one guest-OOB, 0025, is likewise not
 disclosure-blocked.)
 
+KosmicKrisp is exempt from the disclosure rule altogether (user decision, 2026-10-21): its fixes
+are public on `liminavm/mesa`, and no VMM outside limina runs it on a guest's behalf. The
+`sec: yes` rows the 2026-10-16 audit added to `kosmickrisp.md` can therefore go to public MRs.
+
 ## Cross-cutting blockers before ANY freedesktop MR
 
 1. **`gkvm`/`GKVM_` naming** in virgl subjects, comments, and env vars (0003–0008, 0011, 0012, 0015,
