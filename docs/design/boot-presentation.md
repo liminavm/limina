@@ -92,9 +92,10 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
 - **The firmware → kernel window.** The guest kernel scans out a zeroed buffer before any splash
   draws: measured 2026-10-21 on a synoik image (Cardea 6ee3439, kernel 7.1.13-limina16k), ~515 ms
   of black on the kernel's own resource ahead of synoik-splash's first frame, almost certainly the
-  DRM fbdev client's initial modeset (it happens with fbcon kept off the card). It is fixed
-  guest-side, not by the host dropping black frames (a guest that really draws black would sit on
-  the logo): synoik images drop the fbdev client, since synoik-splash probes the connector itself;
+  DRM fbdev client's initial modeset (it happens with fbcon kept off the card;
+  `drm_kms_helper.fbdev_emulation=0` removed it on the same image). It is fixed guest-side, not by
+  the host dropping black frames (a guest that really draws black would sit on the logo): synoik
+  images drop the fbdev client, since synoik-splash probes the connectors itself;
   for the enhanced kernel, a fbdev client that defers its modeset until fbcon binds is the
   upstreamable fix. Stock images keep the black gap (degraded, not broken).
 
@@ -103,8 +104,9 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
   line for ~1.2 s. The shutdown side was clean: the compositor's last frame stayed until the
   firmware's first flush.
 - **Retina.** The firmware runs at the window's physical pixels and draws the logo 1:1, and the
-  splashes draw at scale 1, so they match but the logo is small on a Retina host. The intended
-  answer: the firmware draws a 2x logo at backing scale 2 and publishes *that* image and its
-  offsets in the BGRT, so the guest's placement rule reproduces it 1:1.
+  splashes draw at scale 1, so they match but the logo is small on a Retina host. Agreed form:
+  the BGRT image is what is on glass. The firmware draws a 2x logo at backing scale 2 and
+  publishes that image and its offsets, and a splash treats the BGRT image as device pixels,
+  never scaling it by the output scale (plymouth two-step does; synoik will not).
 - **A Cardea-native loader** (BLS Type #1 entries, UKIs, `kernel-install`/grubby compatible) is a
   separate later project; with quiet boot it buys boot time and robustness, not looks.
