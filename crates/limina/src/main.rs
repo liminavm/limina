@@ -1536,7 +1536,7 @@ fn cmd_console(args: ConsoleArgs) -> Result<()> {
     );
     let _raw = RawTerminal::enter();
     let mut from_vm = stream.try_clone()?;
-    std::thread::spawn(move || {
+    let output = std::thread::spawn(move || {
         let mut out = std::io::stdout();
         let mut buf = [0u8; 4096];
         while let Ok(n) = from_vm.read(&mut buf) {
@@ -1555,7 +1555,10 @@ fn cmd_console(args: ConsoleArgs) -> Result<()> {
     loop {
         let n = stdin.read(&mut buf)?;
         if n == 0 {
-            break;
+            // Input ended (a script, `< /dev/null`): the output still runs, as ssh's does,
+            // until the VM's line closes.
+            let _ = output.join();
+            return Ok(());
         }
         let typed = &buf[..n];
         let end = typed.iter().position(|&b| b == CONSOLE_DETACH);
