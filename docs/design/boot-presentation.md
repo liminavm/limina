@@ -147,7 +147,9 @@ behind one shortcut.
   the host dropping black frames (a guest that really draws black would sit on the logo): synoik
   images drop the fbdev client, since synoik-splash probes the connectors itself;
   for the enhanced kernel, a fbdev client that defers its modeset until fbcon binds is the
-  upstreamable fix. Stock images keep the black gap (degraded, not broken).
+  upstreamable fix. Stock images keep the black gap (degraded, not broken): on a plymouth image
+  `drm_kms_helper.fbdev_emulation=0` stops the splash animating (seen on F44 with the `bgrt`
+  theme), so dropping the client is for synoik-splash images only.
 
   The same reboot measured the firmware gaps this design closes: two all-black Cardea frames
   (~70 ms) before the logo, the logo on glass for ~17 ms, then GRUB's clear and its "Booting …"
