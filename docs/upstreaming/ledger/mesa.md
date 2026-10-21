@@ -1,21 +1,20 @@
 <!-- ledger-check: dep=mesa-guest -->
 # mesa (guest) — patch-audit ledger
 
-The `limina-guest` series (`third_party/manifest.toml [mesa-guest]`, pin `4ea3613b090`, base
-`mesa-26.2.5` = `ddaf85e3534` "VERSION: bump for 26.2.5"), 21 patches since the 2026-10-14
-rebase (previously base `mesa-26.2.3`, 20 patches; pre-rebase tag `pre-rebase-guest-2026-10-14`).
-`patches/mesa-guest/` matches `base..rev` (same 21 subjects, same order, same patch-ids; checked
-2026-10-16). Schema + protocol: `README.md`.
+The `limina-guest` series (`third_party/manifest.toml [mesa-guest]`, pin `0642e0178ce`, base
+`mesa-26.2.5` = `ddaf85e3534` "VERSION: bump for 26.2.5"), 23 patches; pre-rebase tag
+`pre-rebase-guest-2026-10-14`.
+`patches/mesa-guest/` matches `base..rev` (same 23 subjects in the same order; checked
+2026-10-21). Schema + protocol: `README.md`.
 
 **The subject is the key; the `ord` column is the pre-rebase numbering.** The rebase retired row
 0004 into the base, so from 0004 onward the ordinals are off by one: rows 0005–0020 are export
-0004–0019 today, and the two commits added since (export 0020 and 0021) are under *Unaudited
-commits* at the end. Match a row to `patches/mesa-guest/` by subject, never by number.
+0004–0019 today, and the commits added since (export 0020–0023) are under *Unaudited commits*
+at the end. Match a row to `patches/mesa-guest/` by subject, never by number.
 
 **Checked against upstream `main` b39d173ca93 (2026-10-05)**, except where a row's `checked`
 column names a later SHA; not re-checked after the 26.2.5 rebase. The upstreamable subset lives as
-branch `upstream/guest-2026-10`, pushed to `liminavm/mesa` at `f8a85712230` (2026-10-16 audit:
-the earlier "local; not pushed anywhere" no longer holds), rewritten to upstream form: Mesa-style
+branch `upstream/guest-2026-10`, pushed to `liminavm/mesa` at `f8a85712230`, rewritten to upstream form: Mesa-style
 message, verified `Fixes:`, `Cc: mesa-stable` where a release carries the bug, `Signed-off-by`, no
 limina content. Three subjects were reworded there; the upstream subject is in the notes. Its 11
 commits on `b39d173ca93`, oldest first: `5e812ddb0c0` stub-instance fallback (0003),
@@ -36,7 +35,7 @@ stack — stock QEMU + virglrenderer 1.3.0 or plain zink on anv — never on lim
 | 0004 | venus: don't run a thread's TLS teardown from an unloaded driver | `vn_common.c` |  | needed | 5d4c4bd553a | n/a | !44986 | n/a | no | standalone | guest-enhanced | **merged** | **RETIRED into the base** (2026-10-16 audit): `mesa-26.2.5` carries it as `133e1af39ce` (cherry-pick of upstream `935c4ec39a3`, MR !44986), so the 2026-10-14 rebase dropped it from `limina-guest`; the row is kept for the record. Was: backport of upstream `935c4ec39a3` (`cherry-pick -x`), which replaced our ICD-pin shape; `Fixes: d17ddcc8477`, `Cc: mesa-stable`, not yet on `staging/26.2` (checked 2026-10-08). Drop once the base carries it. An `atexit()` handler, which glibc runs at `dlclose`, marks the key invalid, frees the calling thread's TLS and deletes the tss key; other threads still holding venus TLS leak a few dozen bytes, a narrow race with a thread exiting during the last `vkDestroyInstance` remains, and unloading is unchanged. Plain-Vulkan repro: main SIGSEGV 3/3, fix clean 3/3 and the driver still unloads, and Vulkan teardown from an exit handler that runs after venus's (a C++ global's destructor) works; the `__cxa_thread_atexit_impl` hook closes the race but delays unloading, and an `RTLD_NODELETE` pin never unloads. `venus-tls-destructor/` |
 | 0005 | venus: surface ring loss as VK_ERROR_DEVICE_LOST instead of abort() | `vn_common.c`, `vn_ring.c`, +4 |  | needed | b39d173ca93 | none-yet | none-yet | to-decide | no | standalone | guest-enhanced | **RFC first** | conflicts on main (`vn_ring.c`). Upstream aborts on ring FATAL by design; `VN_DEBUG=no_abort` covers watchdog/iteration aborts only. Policy change → issue/RFC first; draft issue text in `venus-ring-loss/` (reproducer: one refused `vkGetMemoryFdPropertiesKHR` aborts the process) |
 | 0006 | venus: allocate dma-buf import memory synchronously | `vn_device_memory.c` |  | needed | b39d173ca93 | n/a | n/a | n/a | no | standalone | guest-enhanced | carry (blocked) | upstream vkr fails a refused import as a CS error, not a VkResult: sync only moves the abort (main: silent success; patch: abort). Sendable once vkr returns `VK_ERROR_INVALID_EXTERNAL_HANDLE`. `venus-dmabuf-import/` |
-| 0007 | zink: don't recurse forever populating a shadow attachment (+ three more, one MR) | `zink_render_pass.c`, `zink_context.c`, `zink_draw.cpp` |  | needed | 7d6e9088821 | none-yet | !45485 (the first of the four) | piglit: `kov/piglit` `msrtt2-depth-partial-clear`, for !45485; fails on main, passes with the MR commit alone | no | standalone series of 4 | guest-enhanced + host zink-on-KK | **upstream-now** | Branch `zink-msrtt-shadow` on `kov/mesa` (4 commits on `7d6e9088821`; the last three also on `limina-guest`): first, keep the renderpass atom dirty while `zink_batch_rp()` runs, so the shadow's nested draw starts a renderpass (`Fixes: 769b356b5b6`, main only; release main gives `VUID-vkCmdDraw-renderpass`, debug aborts on `validate_atoms`); then the recursion fix (`Fixes: 82add9f2e99`); keep every transient a multi-attachment shadow populated valid (`Fixes: 635f0c5f4fe`); populate shadows before `zink_flush_clears()` reduces the fb, the `glFlush` route the recursion fix makes reachable. Plain zink on anv (no MSRTSS): main SIGSEGV in all seven modes but `zs`; the recursion fix alone leaves `mrt`/`mrt3` stale; those three correct 5/5 in every mode; piglit fbo/clear/sRGB/multisample/texture-view groups identical to the recursion fix alone (all on `92b45bd0f2e`). On `7d6e9088821` all four are correct 5/5 in every mode and piglit matches main test for test. Found by the fix-alternatives step. `zink-msrtt-shadow-recursion/` |
+| 0007 | zink: don't recurse forever populating a shadow attachment (+ three more, one MR) <!-- also: zink: don't recurse forever populating a shadow attachment --> | `zink_render_pass.c`, `zink_context.c`, `zink_draw.cpp` |  | needed | 7d6e9088821 | none-yet | !45485 (the first of the four) | piglit: `kov/piglit` `msrtt2-depth-partial-clear`, for !45485; fails on main, passes with the MR commit alone | no | standalone series of 4 | guest-enhanced + host zink-on-KK | **upstream-now** | Branch `zink-msrtt-shadow` on `kov/mesa` (4 commits on `7d6e9088821`; the last three also on `limina-guest`): first, keep the renderpass atom dirty while `zink_batch_rp()` runs, so the shadow's nested draw starts a renderpass (`Fixes: 769b356b5b6`, main only; release main gives `VUID-vkCmdDraw-renderpass`, debug aborts on `validate_atoms`); then the recursion fix (`Fixes: 82add9f2e99`); keep every transient a multi-attachment shadow populated valid (`Fixes: 635f0c5f4fe`); populate shadows before `zink_flush_clears()` reduces the fb, the `glFlush` route the recursion fix makes reachable. Plain zink on anv (no MSRTSS): main SIGSEGV in all seven modes but `zs`; the recursion fix alone leaves `mrt`/`mrt3` stale; those three correct 5/5 in every mode; piglit fbo/clear/sRGB/multisample/texture-view groups identical to the recursion fix alone (all on `92b45bd0f2e`). On `7d6e9088821` all four are correct 5/5 in every mode and piglit matches main test for test. Found by the fix-alternatives step. `zink-msrtt-shadow-recursion/` |
 | 0008 | virgl: settle a CPU write into a shared resource before unmap returns | `virgl_texture.c` |  | not reproducible upstream | b39d173ca93 | n/a | n/a | n/a | no | standalone | guest-enhanced | carry | needs a venus consumer of a virgl resource, which upstream vkr cannot import; GL-to-GL is 0/20 stale on main. `virgl-shared-unmap/` |
 | 0009 | virgl: report blob_mem for a resource that was already imported | `virgl_drm_winsys.c` |  | needed | b39d173ca93 | none-yet | none-yet | to-decide | no | standalone | guest-enhanced | **held for the pair** | `Fixes: 87383e3163d`. Protocol-level repro: main sends no SET_TYPE, fix does; the image still fails on stock vrend. Sent only together with (a) Mesa: SET_TYPE carries the composite format (NV12), not plane 0's lowered R8, and (b) virglrenderer: `vrend_renderer_pipe_resource_set_type` builds per-plane `aux_plane_egl_image`s for a multi-plane import, as the GBM-allocated path does — until the image renders end to end on stock QEMU. `virgl-blob-mem-cache-hit/` |
 | 0010 | virgl: let planar YUV formats be looked up in the sampler bitmask | `virgl_screen.c` |  | needed | b39d173ca93 | n/a | n/a | n/a | no | standalone | guest-enhanced | carry | pays off only against a host advertising composite formats; goes with the video protocol work (0013–0015) |
@@ -116,3 +115,14 @@ researched against upstream.
 |---|---|---|---|---|
 | `8fbf3c85ebb` | zink: do not use implicit sync on kosmickrisp | `src/gallium/drivers/zink/zink_screen.c` |  | **drop on base bump** — cherry-pick of upstream `e9a87f80b2d` (MR !44048, Vandomas); retire when the stable base carries it, checked by reading the code, not by SHA ancestry. sec: no |
 | `4ea3613b090` | venus: match the X server's DRM device by its node, not only by PCI | `src/virtio/vulkan/vn_wsi.c` |  | **upstream-now candidate** — `wsi_device_matches_drm_fd` compares PCI bus info only, so any non-PCI virtio-gpu (virtio-mmio on arm64 VMMs) takes the X11 prime-blit path; needs an upstream-stack repro and a message in the submitter's own words. sec: no |
+
+## Unaudited commits (skeleton, 2026-10-21)
+
+Added by the 2026-10-16 pin (`4ea3613b090..0642e0178ce`, a fast-forward; export 0022 and
+0023). With row 0007's recursion fix they are the three commits of the follow-up MR after !45485. Generated by
+`scripts/patch-audit/check-ledger.sh --skeleton mesa`; the last column is a first guess.
+
+| commit | subject | files | diag | first guess (unresearched) |
+|---|---|---|---|---|
+| `00afb627793` | zink: keep every transient a shadow call populated valid | `src/gallium/drivers/zink/zink_render_pass.c` |  | **upstream-now** — in the follow-up MR after !45485, with row 0007's recursion fix and `0642e0178ce`. `Fixes: 635f0c5f4fe`, Cc: mesa-stable. Commit message must be the author’s own words before posting (Mesa AI policy). sec: no |
+| `0642e0178ce` | zink: populate shadow attachments before reducing the fb to flush clears | `src/gallium/drivers/zink/zink_context.c` |  | **upstream-now** — in the follow-up MR after !45485, with row 0007's recursion fix and `00afb627793`; goes to stable with them. Same note on the commit message. sec: no |

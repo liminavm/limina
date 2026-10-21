@@ -12,7 +12,7 @@ docs-only.
 
 ## Scope
 
-As of 2026-10-16: commits on each pinned fork branch, every one of which now has a ledger row.
+As of 2026-10-21: commits on each pinned fork branch, every one of which now has a ledger row.
 Rows added on 2026-10-16 are phase-0 skeletons (unresearched first guesses), so the per-patch
 verdicts below cover only the series' state at the 2026-08-03 audit. `cargo xtask ledger`
 re-derives the commit counts.
@@ -21,14 +21,14 @@ re-derives the commit counts.
 |---|---|---|---|
 | linux | 2 | `v7.1.13` (`gregkh/linux` stable mirror) | lore.kernel.org |
 | kosmickrisp (host KK, `limina-kk`) | 131 | mesa main `d44453ce` | gitlab.fd.o (Anubis) |
-| kosmickrisp-guest (`metal-native-context`) | 8 | `limina-kk` pin `059715d2` | gitlab.fd.o (Anubis) |
-| mesa (guest venus, `limina-guest`) | 21 | `mesa-26.2.5` | gitlab.fd.o (Anubis) |
+| kosmickrisp-guest (`metal-native-context`) | 9 | `limina-kk` pin `059715d2` | gitlab.fd.o (Anubis) |
+| mesa (guest venus, `limina-guest`) | 23 | `mesa-26.2.5` | gitlab.fd.o (Anubis) |
 | imago | 1 | `6258f51` | gitlab.com |
 | mutter | RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer (C; pinned by virglrs) | 181 C-tree (616 with the Rust rewrite) | upstream main `aafa9bd2` | gitlab.fd.o (Anubis) |
-| libkrun | 318 | `dc1a18ad` | github.com/libkrun/libkrun |
+| libkrun | 341 | `dc1a18ad` | github.com/libkrun/libkrun |
 | mlx | 2 | `ml-explore/mlx` main `b6642e6` | github.com/ml-explore/mlx |
-| **total** | **664** | | |
+| **total** | **690** | | |
 
 **Superseded since 2026-08-03 (verified 2026-10-16; per-series detail in each file):**
 
