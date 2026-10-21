@@ -15,7 +15,7 @@ SRC="${MESA_SRC:-/Volumes/mesa-cs/mesa}"
 BUILD="${MESA_BUILD:-/Volumes/mesa-cs/build-zink-kk}"
 PREFIX="${MESA_PREFIX:-/Volumes/mesa-cs/zink-kk-prefix}"
 
-[ -d "$SRC/.git" ] || { echo "KK mesa source missing at $SRC (mount mesa-cs.sparseimage)" >&2; exit 1; }
+[ -e "$SRC/.git" ] || { echo "KK mesa source missing at $SRC (mount mesa-cs.sparseimage)" >&2; exit 1; }
 
 # mako (Mesa codegen) from the repo venv; meson/ninja/glslang from homebrew.
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"

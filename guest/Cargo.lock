@@ -452,10 +452,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "limina-gpu-client"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "limina-gpu-wire",
+]
+
+[[package]]
 name = "limina-gpu-smoke"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "limina-gpu-client",
  "limina-gpu-wire",
 ]
 

@@ -359,7 +359,7 @@ fn synoik_desktop_survives_snapshot_restore() {
     eprintln!("EFI-booting the synoik enhanced image (snapshot-armed)");
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     g1.wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
 
     // The compositor has to be serving before anything else means anything. A synoik guest can
     // be perfectly reachable over ssh with no compositor at all — that is the whole shape of
@@ -554,6 +554,10 @@ fn synoik_desktop_survives_snapshot_restore() {
         });
     // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
     if let Err(e) = g2.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
         cleanup();
         panic!("{e:#}");
     }

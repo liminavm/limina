@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use block2::RcBlock;
+use dispatch2::DispatchData;
 use limina_gpu_wire::cmd::{self, BufRef, Command, Feedback, REPLY_DONE, Reply, op};
 use limina_gpu_wire::ring::{Consumer, Error, RingControl};
 use objc2::rc::Retained;
@@ -25,10 +26,11 @@ use objc2_metal::{
     MTL4Compiler, MTL4CompilerDescriptor, MTL4ComputeCommandEncoder, MTL4ComputePipelineDescriptor,
     MTL4CounterHeap, MTL4CounterHeapDescriptor, MTL4CounterHeapType, MTL4FunctionDescriptor,
     MTL4LibraryDescriptor, MTL4LibraryFunctionDescriptor, MTL4RenderCommandEncoder,
-    MTL4RenderPassDescriptor, MTL4RenderPipelineDescriptor, MTL4TimestampGranularity,
-    MTL4VisibilityOptions, MTLAllocation, MTLBlitOption, MTLBuffer, MTLClearColor,
-    MTLCompareFunction, MTLCompileOptions, MTLComputePipelineState, MTLCullMode, MTLDepthClipMode,
-    MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice, MTLEvent, MTLFence, MTLGPUFamily,
+    MTL4RenderPassDescriptor, MTL4RenderPipelineDescriptor, MTL4SpecializedFunctionDescriptor,
+    MTL4TimestampGranularity, MTL4VisibilityOptions, MTLAllocation, MTLBlitOption, MTLBuffer,
+    MTLClearColor, MTLCompareFunction, MTLCompileOptions, MTLComputePipelineState, MTLCullMode,
+    MTLDataType, MTLDepthClipMode, MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice,
+    MTLEvent, MTLFence, MTLFunction, MTLFunctionConstantValues, MTLGPUFamily,
     MTLHazardTrackingMode, MTLHeap, MTLIndexType, MTLLanguageVersion, MTLLibrary, MTLLoadAction,
     MTLMathFloatingPointFunctions, MTLMathMode, MTLMultisampleDepthResolveFilter,
     MTLMultisampleStencilResolveFilter, MTLOrigin, MTLPixelFormat, MTLPrimitiveTopologyClass,
@@ -131,6 +133,8 @@ enum Object {
     SharedEvent(Po<dyn MTLSharedEvent>, Option<Mirror>),
     /// A timestamp counter heap and its entry count.
     CounterHeap(Po<dyn MTL4CounterHeap>, u32),
+    /// A command queue, and the `u64` its commits' seqnos are published to.
+    Queue(Po<dyn MTL4CommandQueue>, Mirror),
 }
 
 /// Destroyed objects, held until the GPU can no longer be using them.
@@ -440,14 +444,69 @@ fn check(ok: bool) -> R {
     if ok { Ok(()) } else { Err(Error::BadValue) }
 }
 
+/// Bytes of a scalar `MTLDataType` a function constant may take, or `None` for any other type.
+fn constant_size(data_type: u32) -> Option<u64> {
+    Some(match MTLDataType(data_type as usize) {
+        MTLDataType::Bool | MTLDataType::Char | MTLDataType::UChar => 1,
+        MTLDataType::Short | MTLDataType::UShort | MTLDataType::Half | MTLDataType::BFloat => 2,
+        MTLDataType::Int | MTLDataType::UInt | MTLDataType::Float => 4,
+        MTLDataType::Long | MTLDataType::ULong => 8,
+        _ => return None,
+    })
+}
+
+/// Function `name` of `lib`, specialised with `consts`. Metal asserts, ending the process, on a
+/// pipeline whose function it cannot resolve, so the function, and a value of the declared type
+/// for every constant it requires, are checked here first.
 fn function(
     lib: &Po<dyn MTLLibrary>,
     name: &[u8],
+    consts: &[cmd::FunctionConstant],
 ) -> Result<Retained<MTL4FunctionDescriptor>, Error> {
+    let name = text(name)?;
+    let values = MTLFunctionConstantValues::new();
+    for k in consts {
+        let size = constant_size(k.data_type).ok_or(Error::BadValue)?;
+        check(
+            k.index <= u16::MAX as u32
+                && (size == 8 || k.value >> (8 * size) == 0)
+                && (MTLDataType(k.data_type as usize) != MTLDataType::Bool || k.value <= 1),
+        )?;
+        let bytes = k.value.to_le_bytes();
+        // SAFETY: `bytes` holds the `size` bytes, little-endian like the host, that Metal copies
+        // for a scalar of this type, and the index is within Metal's 16-bit constant space.
+        unsafe {
+            values.setConstantValue_type_atIndex(
+                NonNull::from(&bytes).cast(),
+                MTLDataType(k.data_type as usize),
+                k.index as usize,
+            )
+        };
+    }
+    let declared = lib
+        .newFunctionWithName(&name)
+        .ok_or(Error::PipelineCreate)?
+        .functionConstantsDictionary()
+        .allValues();
+    for d in declared.iter() {
+        match consts.iter().rfind(|k| k.index as usize == d.index()) {
+            Some(k) if MTLDataType(k.data_type as usize) != d.r#type() => {
+                return Err(Error::PipelineCreate);
+            }
+            None if d.required() => return Err(Error::PipelineCreate),
+            _ => {}
+        }
+    }
     let f = MTL4LibraryFunctionDescriptor::new();
-    f.setName(Some(&*text(name)?));
+    f.setName(Some(&name));
     f.setLibrary(Some(lib));
-    Ok(Retained::into_super(f))
+    if consts.is_empty() {
+        return Ok(Retained::into_super(f));
+    }
+    let s = MTL4SpecializedFunctionDescriptor::new();
+    s.setFunctionDescriptor(Some(&Retained::into_super(f)));
+    s.setConstantValues(Some(&values));
+    Ok(Retained::into_super(s))
 }
 
 fn resource_id(id: MTLResourceID) -> u64 {
@@ -545,12 +604,14 @@ fn is_create(op: u16) -> bool {
             | op::CREATE_TEXTURE_VIEW
             | op::CREATE_SAMPLER
             | op::CREATE_LIBRARY
+            | op::CREATE_LIBRARY_DATA
             | op::CREATE_RENDER_PIPELINE
             | op::CREATE_COMPUTE_PIPELINE
             | op::CREATE_DEPTH_STENCIL
             | op::CREATE_ARGUMENT_TABLE
             | op::CREATE_SYNC
             | op::CREATE_COUNTER_HEAP
+            | op::CREATE_QUEUE
     )
 }
 
@@ -1116,6 +1177,13 @@ impl Executor {
                 let (src, _) = take(rest, c.source_len)?;
                 (c.handle, Some(c.reply), self.create_library(&c, src))
             }
+            op::CREATE_LIBRARY_DATA => {
+                let (c, rest) = arg::<cmd::CreateLibraryData>(p)?;
+                check(c.data.is_none())?;
+                let len = u32::try_from(c.data_len).map_err(|_| Error::BadValue)?;
+                let (data, _) = take(rest, len)?;
+                (c.handle, Some(c.reply), self.create_library_data(&c, data))
+            }
             op::CREATE_RENDER_PIPELINE => {
                 let (c, rest) = arg::<cmd::CreateRenderPipeline>(p)?;
                 let (v, rest) = take(rest, c.vertex_name_len)?;
@@ -1128,11 +1196,15 @@ impl Executor {
             }
             op::CREATE_COMPUTE_PIPELINE => {
                 let (c, rest) = arg::<cmd::CreateComputePipeline>(p)?;
+                let (consts, rest) =
+                    cmd::decode_array::<cmd::FunctionConstant>(rest, c.constant_count as usize)
+                        .ok_or(Error::BadPayload)?;
+                let consts: Vec<_> = consts.collect();
                 let (name, _) = take(rest, c.name_len)?;
                 (
                     c.handle,
                     Some(c.reply),
-                    self.create_compute_pipeline(&c, name),
+                    self.create_compute_pipeline(&c, &consts, name),
                 )
             }
             op::CREATE_DEPTH_STENCIL => {
@@ -1154,6 +1226,10 @@ impl Executor {
                     Some(c.reply),
                     self.create_counter_heap(c.handle, c.count),
                 )
+            }
+            op::CREATE_QUEUE => {
+                let c = arg::<cmd::CreateQueue>(p)?.0;
+                (c.handle, None, self.create_queue(&c))
             }
             _ => return Err(Error::UnknownOp),
         })
@@ -1202,6 +1278,35 @@ impl Executor {
             Object::ArgumentTable(t, c.max_buffer_bind_count, addrs),
             [0; 6],
         ))
+    }
+
+    fn create_queue(&mut self, c: &cmd::CreateQueue) -> Result<(Object, [u64; 6]), Error> {
+        self.new_handle(c.handle)?;
+        let (arena, _) = self.host(c.completed, 8, 8)?;
+        // The guest kernel's fences are completed by limina-vmm, which sees only the ring's arena.
+        check(Arc::ptr_eq(&arena, &self.ring_arena))?;
+        let q = self
+            .device
+            .newMTL4CommandQueue()
+            .ok_or(Error::OutOfMemory)?;
+        q.addResidencySet(&self.residency);
+        let m = Mirror {
+            arena,
+            offset: c.completed.offset,
+        };
+        Ok((Object::Queue(q, m), [0; 6]))
+    }
+
+    /// Queue `h` (`0`, the context's own) and where its completed seqnos go (`None`, the ring's
+    /// control block).
+    fn queue(&self, h: u32) -> Result<(Po<dyn MTL4CommandQueue>, Option<Mirror>), Error> {
+        if h == 0 {
+            return Ok((self.queue.clone(), None));
+        }
+        match self.objects.get(&h) {
+            Some(Object::Queue(q, m)) => Ok((q.clone(), Some(m.clone()))),
+            _ => Err(Error::BadHandle),
+        }
     }
 
     fn new_handle(&self, h: u32) -> R {
@@ -1314,6 +1419,14 @@ impl Executor {
 
     fn exec(&mut self, opcode: u16, p: &[u8]) -> R {
         match opcode {
+            op::CREATE_LIBRARY_DATA if !arg::<cmd::CreateLibraryData>(p)?.0.data.is_none() => {
+                // Filed with its bytes inline, so the record replays without the arena.
+                let c = arg::<cmd::CreateLibraryData>(p)?.0;
+                match self.library_data_inline(&c) {
+                    Ok(inline) => self.exec(opcode, &inline),
+                    Err(e) => self.answer(c.reply, Err(e)),
+                }
+            }
             opcode if is_create(opcode) => {
                 let (handle, reply, made) = self.make(opcode, p)?;
                 let r = self.file(handle, opcode, p, &named(opcode, p)?, made);
@@ -1782,7 +1895,7 @@ impl Executor {
             op::COMMIT => {
                 self.objects.close_window();
                 let c = arg::<cmd::Commit>(p)?.0;
-                self.commit(c.seqno, c.feedback)
+                self.commit(c.seqno, c.queue, c.feedback)
             }
             op::QUEUE_EVENT => self.queue_event(&arg(p)?.0),
             _ => Err(Error::UnknownOp),
@@ -1932,6 +2045,16 @@ impl Executor {
             .device
             .newTextureWithDescriptor_iosurface_plane(&desc, &surface.0, 0)
             .ok_or(Error::BadValue)?;
+        log::debug!(
+            "surface: texture {} over resource {} is IOSurface {} ({}x{} of {}x{})",
+            c.handle,
+            c.surface,
+            surface.id(),
+            d.width,
+            d.height,
+            surface.width(),
+            surface.height()
+        );
         self.residency
             .addAllocation(ProtocolObject::<dyn MTLAllocation>::from_ref(&*t));
         self.residency.commit();
@@ -2065,6 +2188,41 @@ impl Executor {
         }
     }
 
+    /// `c` with the bytes it names in an arena following it instead.
+    fn library_data_inline(&self, c: &cmd::CreateLibraryData) -> Result<Vec<u8>, Error> {
+        check(c.data_len != 0 && c.data_len <= cmd::MAX_LIBRARY_DATA)?;
+        let (_a, src) = self.host(c.data, c.data_len, 1)?;
+        let head = cmd::CreateLibraryData {
+            data: BufRef::NONE,
+            ..*c
+        };
+        let mut out = Vec::with_capacity(size_of_val(&head) + c.data_len as usize);
+        out.extend_from_slice(cmd::bytes_of(&head));
+        // SAFETY: `data_len` bytes inside the arena, checked by `host`; the guest may be writing
+        // them, which makes the library it gets wrong, not this copy unsound.
+        out.extend_from_slice(unsafe { std::slice::from_raw_parts(src, c.data_len as usize) });
+        Ok(out)
+    }
+
+    fn create_library_data(
+        &mut self,
+        c: &cmd::CreateLibraryData,
+        data: &[u8],
+    ) -> Result<(Object, [u64; 6]), Error> {
+        self.new_handle(c.handle)?;
+        check(!data.is_empty() && data.len() as u64 <= cmd::MAX_LIBRARY_DATA)?;
+        match self
+            .device
+            .newLibraryWithData_error(&DispatchData::from_bytes(data))
+        {
+            Ok(l) => Ok((Object::Library(l), [0; 6])),
+            Err(e) => {
+                log::warn!("metallib load failed: {}", e.localizedDescription());
+                Err(Error::ShaderCompile)
+            }
+        }
+    }
+
     fn create_render_pipeline(
         &mut self,
         c: &cmd::CreateRenderPipeline,
@@ -2084,11 +2242,13 @@ impl Executor {
         desc.setVertexFunctionDescriptor(Some(&*function(
             self.library(c.vertex_library)?,
             vertex,
+            &[],
         )?));
         if c.fragment_library != 0 {
             desc.setFragmentFunctionDescriptor(Some(&*function(
                 self.library(c.fragment_library)?,
                 fragment,
+                &[],
             )?));
         }
         for (i, &fmt) in c.color_formats.iter().enumerate() {
@@ -2125,12 +2285,17 @@ impl Executor {
     fn create_compute_pipeline(
         &mut self,
         c: &cmd::CreateComputePipeline,
+        consts: &[cmd::FunctionConstant],
         name: &[u8],
     ) -> Result<(Object, [u64; 6]), Error> {
         self.new_handle(c.handle)?;
         check(c.max_total_threads <= 1024)?;
         let desc = MTL4ComputePipelineDescriptor::new();
-        desc.setComputeFunctionDescriptor(Some(&*function(self.library(c.library)?, name)?));
+        desc.setComputeFunctionDescriptor(Some(&*function(
+            self.library(c.library)?,
+            name,
+            consts,
+        )?));
         if c.max_total_threads != 0 {
             desc.setMaxTotalThreadsPerThreadgroup(c.max_total_threads as usize);
         }
@@ -2336,6 +2501,7 @@ impl Executor {
             v.minorVersion as u32,
             v.patchVersion as u32,
         ];
+        info.features = cmd::feature::LIBRARY_DATA | cmd::feature::FUNCTION_CONSTANTS;
         let (_a, p) = self.host(dst, size_of::<cmd::DeviceInfo>() as u64, 8)?;
         // SAFETY: in the arena, aligned and in bounds.
         unsafe { p.cast::<cmd::DeviceInfo>().write(info) };
@@ -2580,16 +2746,28 @@ impl Executor {
         if !self.ended.is_empty() {
             return Err(Error::BadState);
         }
+        let (queue, _) = self.queue(c.queue)?;
         let event: &ProtocolObject<dyn MTLEvent> = match self.objects.get(&c.event) {
             Some(Object::Event(e, _)) => e,
             Some(Object::SharedEvent(e, _)) => ProtocolObject::from_ref(&**e),
             _ => return Err(Error::BadHandle),
         };
+        log::debug!(
+            "queue {} {} event {} value {} (signaled value now {:?})",
+            c.queue,
+            if c.wait != 0 { "waits for" } else { "signals" },
+            c.event,
+            c.value,
+            match self.objects.get(&c.event) {
+                Some(Object::SharedEvent(e, _)) => Some(e.signaledValue()),
+                _ => None,
+            }
+        );
         if c.wait != 0 {
-            self.queue.waitForEvent_value(event, c.value);
+            queue.waitForEvent_value(event, c.value);
             return Ok(());
         }
-        self.queue.signalEvent_value(event, c.value);
+        queue.signalEvent_value(event, c.value);
         self.objects.note_signal(c.event, c.value);
         if let Some(Object::SharedEvent(e, Some(m))) = self.objects.get(&c.event) {
             let m = m.clone();
@@ -2606,10 +2784,11 @@ impl Executor {
         Ok(())
     }
 
-    fn commit(&mut self, seqno: u64, feedback: BufRef) -> R {
+    fn commit(&mut self, seqno: u64, queue: u32, feedback: BufRef) -> R {
         if !matches!(self.enc, Encoder::None) || self.open.is_some() || seqno <= self.last_seqno {
             return Err(Error::BadState);
         }
+        let (queue, published) = self.queue(queue)?;
         let fb = if feedback.is_none() {
             None
         } else {
@@ -2622,6 +2801,11 @@ impl Executor {
             cb.endCommandBuffer();
             self.ended.push((cb, alloc));
         }
+        log::debug!(
+            "commit {seqno} on queue {}: {} command buffers",
+            if published.is_some() { "own" } else { "0" },
+            self.ended.len()
+        );
         self.last_seqno = seqno;
         self.commits += 1;
         let generation = self.commits;
@@ -2661,7 +2845,10 @@ impl Executor {
             }
             lock(&pool).append(&mut lock(&allocs));
             lock(&in_flight).remove(&generation);
-            c.complete(seqno);
+            match &published {
+                Some(m) => m.raise(seqno),
+                None => c.complete(seqno),
+            }
         });
         let options = MTL4CommitOptions::new();
         // SAFETY: Metal copies the block.
@@ -2670,11 +2857,7 @@ impl Executor {
             cbs.iter().map(|cb| NonNull::from(&**cb)).collect();
         // SAFETY: live, ended command buffers.
         unsafe {
-            self.queue.commit_count_options(
-                NonNull::from(&mut ptrs[..]).cast(),
-                ptrs.len(),
-                &options,
-            )
+            queue.commit_count_options(NonNull::from(&mut ptrs[..]).cast(), ptrs.len(), &options)
         };
         self.reap();
         Ok(())

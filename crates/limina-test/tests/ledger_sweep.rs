@@ -72,7 +72,7 @@ fn settle_sweep_debits_the_task_ledger_and_leaves_the_guest_unharmed() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // Build the both-touched population: the guest writes a blob (guest-touch) and fsync

@@ -53,7 +53,7 @@ stating plainly because both are easy to get wrong:
 What a MAS build would actually require, sorted by who has to say yes:
 
 **(a) Plumbing — ours to do, no permission needed.**
-- Sign supervisor `app-sandbox` + `hypervisor`; worker and `gvproxy` `app-sandbox` + `inherit`.
+- Sign supervisor `app-sandbox` + `hypervisor`; worker and `limina-netd` `app-sandbox` + `inherit`.
 - Drop `com.apple.security.cs.disable-library-validation` and
   `com.apple.security.cs.allow-dyld-environment-variables`. MAS re-signs the whole bundle under
   one Team ID and `build-app.sh` already vendors the venus/GL closure at `@rpath` with a
@@ -61,7 +61,7 @@ What a MAS build would actually require, sorted by who has to say yes:
   assumption §3 flags, and it has never been tested on a non-ad-hoc build.
 - **Security-scoped bookmarks** for every disk image, `--cdrom` and virtiofs `--share` path,
   persisted in the VM definition; `.liminavm` bundles default into the app container.
-- `com.apple.security.network.client` + `.server` (gvproxy user-mode NAT survives),
+- `com.apple.security.network.client` + `.server` (the `limina-netd` user-mode NAT survives),
   `com.apple.security.device.audio-input` for the mic.
 - **Kill the global `IOSurfaceLookup` fallback.** `limina-surfaceport` already hands scanouts
   over by Mach port, which is the sandbox-clean form; `present.rs` and `guestwindow.rs` still

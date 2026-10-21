@@ -26,7 +26,7 @@ snapshots.
 Two user-visible features, one machinery:
 
 1. **Suspend / resume** — Parallels-parity "Suspend": freeze the guest to a file in a second or two,
-   **tear the worker process down** (reclaim host RAM, the GPU/Metal/IOSurface graph, gvproxy), and a
+   **tear the worker process down** (reclaim host RAM, the GPU/Metal/IOSurface graph, the NIC's vmnet interface and `limina-netd`), and a
    later "Resume" that restores the same desktop with a correct wall clock and working 3D.
 2. **Full VM snapshots** — snapshot a *running* VM to a named file, then **restore / clone / branch /
    roll back** later. This is the strategic multiplier: a marquee Parallels/VMware feature category
@@ -95,7 +95,7 @@ guest, or it should be read as the *small-guest* case — see §M9.4.
 | **virtio device state** | A versioned device-state schema (CBOR; magic + semver; fail-closed on mismatch — Firecracker's "no cross-version migration" pragmatism; QEMU-subsection-style optionality since the two tiers present different device sets). Serialize each device's `Queue`/`MmioTransport`/features/config. |
 | **`CLOCK_MONOTONIC`** | Set `CNTVOFF_EL2` via `hv_vcpu_set_vtimer_offset` on restore → continuous (default for a desktop; the Firecracker "resumed on another day" policy choice, made explicitly). |
 | **`CLOCK_REALTIME` (wall clock)** | libkrun **has a PL031 RTC** (`third_party/libkrun/src/devices/src/legacy/rtc_pl031.rs`) — it's just `Instant`-anchored (`:75,91`), not wall-clock-anchored; the fix is already scoped in [[limina-guest-clock]]. With the freeze bracket (`m9-freeze-trigger.md`) the guest's own `timekeeping_resume()` re-reads that RTC on wake → `CLOCK_REALTIME` restored for free, **no port-123 consumer needed** on the enhanced tier. libkrun's port-123 timesync (`timesync.rs`, `TSYNC_PORT = 123`, "long nap" path) remains as a fallback but has no guest consumer today. Stock tier degrades to NTP: honest bound — Fedora chrony's default `makestep 1.0 3` only steps in the first 3 post-boot updates, so after a multi-hour suspend the stock wall clock **slews** (≤~83 ms/s) and is wrong for hours; add a one-shot step on the stock resume path (§M9.4). |
-| **Networking / gvproxy** | gvproxy relaunched (existing reboot path); guest NM re-DHCPs against the static `.2` lease; in-flight TCP lost (acceptable lid-close semantics). |
+| **Networking** | The new worker brings the NIC up on vmnet (or `limina-netd`) and rebinds the SSH forward port; guest NM re-DHCPs (vmnet keys leases on the MAC; netd always hands out `.2`); in-flight TCP lost (acceptable lid-close semantics). |
 | **16 KiB-host / 4 KiB-guest pages** | RAM dump is host-page-agnostic (`hv_vm_map`'d host memory); restore re-maps the same IPAs. **Skip the 8 GiB GPU SHM window** (re-pointed at renderer memory) and optionally balloon-inflated pages. A snapshot restores into a worker configured **identically** (RAM size especially — `num_physpages`-equivalent). |
 | **Stale host-visible blob mappings across restore** | At snapshot the guest holds live PTEs into the 8 GiB SHM window (`arch/src/aarch64/mod.rs:62`) for mapped blobs; on the fresh worker those IPAs are **unmapped until venus replay re-issues each `MAP_BLOB`** → a guest touch before then faults on a non-MMIO IPA (unrecoverable vCPU error today). Offsets are guest-chosen, so the device-state schema must **record the mapped-blob set (resource id, offset, size)** and the restore path must **re-establish (or placeholder-map) them before vCPUs run**, not after userspace thaws. rutabaga's own snapshot contract ("the VMM must re-attach backing and re-map memory after restore") is upstream confirmation this bookkeeping is mandatory. The freeze bracket (`m9-freeze-trigger.md`) narrows the window but does not remove it. |
 | **Uniqueness / entropy** | Only a hazard if a snapshot is *cloned* (the full-snapshot feature). Ship a cheap VMGenID-style reseed notification; Linux ≥5.18 reseeds its kernel PRNG. |
@@ -528,7 +528,7 @@ The spine exists — this is why it's tractable:
 - **Surface-port receiver outlives workers** (`crates/limina/src/window.rs`); the new worker republishes
   the IOSurface over the existing port (runtime display-resize already exercises this).
 - **Control plane is reconnect-tolerant**; agents re-`HELLO`; resume needs ~no new control-plane work.
-- **gvproxy recycle** (`crates/limina/src/gateway.rs`) is the existing reboot path; **port-123 timesync**
+- **NIC re-bring-up** (a fresh worker binds the SSH forward from `crates/limina/src/forward.rs`'s port) is the existing reboot path; **port-123 timesync**
   already fires on long-sleep.
 - **`limina-proto`** (`crates/limina-proto/src/lib.rs`, `enum Message`): add `Snapshot`/`Restore`/`TimeSet`
   + a GPU-quiesce request. **M6 lesson:** a new variant breaks both guest binaries' matches — update together.
@@ -602,7 +602,7 @@ service) or a **mid-flight** one (raw stock path) — a materially different sch
 libkrun: the versioned device-state schema (serialize each virtio device — **shaped by spike F**: quiesced
 vs mid-flight queues); **the mapped-blob set** (resource id/offset/size, re-established before vCPUs run —
 §3); in-kernel GIC snapshot (the userspace `GicV3` fallback is **not needed** per spike #2); reopen host
-resources on restore (block/fs fds, net unixgram → fresh gvproxy, vsock re-handshake). **Fold in the
+resources on restore (block/fs fds, net backend → fresh vmnet/netd in the new worker, vsock re-handshake). **Fold in the
 virtio freeze/thaw hardening** spike #1 surfaced (`update virtio queue in invalid state 0x8f`, net wedged
 after thaw) — it's **on-path** the moment Option 1's bracket runs the guest's freeze callbacks.
 **Done test:** a full-device no-GPU guest snapshots and restores; virtio-block survives, agent re-HELLOs;
@@ -658,7 +658,7 @@ parked-fence hang, pixel-verified (`iosdump` + human).
 Named snapshots (save / restore / **clone** / roll back / delete); VMGenID reseed on clone; one-click
 Suspend; capability probe; ~~stock wall-clock one-shot step on resume~~ **VERIFIED ALREADY CLOSED
 2026-07-20, no new code needed**: libkrun 0088 (PL031 anchored to host `CLOCK_REALTIME`; the restore's
-fresh worker rebuilds it at current host time) flows through EDK2's `rtc-efi` runtime service — the
+fresh worker rebuilds it at current host time) flows through the firmware's `GetTime` runtime service (Cardea reads the PL031) — the
 guest's hctosys device — and the stock kernel's own s2idle-thaw sleeptime injection does the step.
 Measured on an F44 stock guest (own 6.19.10 kernel via EFI, chronyd stopped, no limina components):
 guest−host delta **+0.058 s** after a 122 s suspend gap, same as the boot baseline (a broken path
@@ -819,7 +819,7 @@ original; window survives; host RAM freed while suspended.
 **Verified (incl. spike #3, 2026-06-28):** HVF has no dirty-page log → stop-the-world dump; guest RAM is
 VMM-owned `hv_vm_map`'d host memory + an 8 GiB GPU SHM window to skip; pause/register-get-set/GIC-state are
 unwired in libkrun today; true GPU serialization is unprecedented for virgl/venus and infeasible on Metal;
-Parallels/VMware both do guest-backed re-init; the reuse spine (relaunch, fd-swap, surface-port, gvproxy,
+Parallels/VMware both do guest-backed re-init; the reuse spine (relaunch, fd-swap, surface-port, NIC re-bring-up,
 port-123) exists. **And:** the host worker robustly survives virtio_gpu device resets; the clean path
 cold-rebuilds the desktop; a **running guest session does NOT survive abrupt GPU-device loss** (so the
 guest-side resubmit work is *required*, not optional); `reset()` keeps the renderer alive across a reset by

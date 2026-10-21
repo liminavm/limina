@@ -1,0 +1,24 @@
+# limina-netd — the per-VM user-mode NAT the worker spawns when a NIC is not on vmnet
+# (docs/design/multi-vm-networking.md §3.2). It terminates the guest's traffic and re-originates it
+# on host sockets, so the host's routing, DNS and VPNs apply to it as to any app.
+[package]
+name = "limina-netd"
+description = "limina's per-VM user-mode NAT: guest frames in shared rings, host sockets out"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+limina-netd-wire = { workspace = true }
+limina-ring      = { workspace = true }
+libc             = { workspace = true }
+log              = { workspace = true }
+env_logger       = { workspace = true }
+# Packet parsing and emitting only (`wire`); netd has no TCP stack of its own. `medium-ethernet`
+# (for the Ethernet and ARP types) drags in smoltcp's socket layer, which refuses to build without
+# one socket kind, so `socket-raw` is there only to satisfy it.
+smoltcp = { version = "0.14.0", default-features = false, features = ["std", "medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-raw"] }
+
+[dev-dependencies]
+# A real TCP peer for the translator's tests: smoltcp's own stack, as the guest.
+smoltcp = { version = "0.14.0", default-features = false, features = ["std", "medium-ethernet", "proto-ipv4", "socket-tcp"] }

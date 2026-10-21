@@ -35,7 +35,7 @@ export RUST_LOG="${RUST_LOG:-info}"
 echo "==> booting stock F44 (coexist GPU: venus + vrend/virgl on zink-on-KK), headless+NAT"
 echo "    KK ICD: $KK_ICD"
 exec target/debug/limina \
-  --firmware target/krun-efi/KRUN_EFI.gop.fd \
+  --firmware target/firmware/efi.fd \
   --disk "$DISK" \
   --display-capture /tmp/virgl-f44-cap.png \
   --net --cpus 4 --ram-mib 6144

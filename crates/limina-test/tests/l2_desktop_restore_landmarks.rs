@@ -311,7 +311,7 @@ fn seated_gpu_workload_survives_restore_unchanged() {
     eprintln!("booting the seated desktop (snapshot-armed)");
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     g1.wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .expect("gnome-shell never appeared — the seated session didn't come up");
 
@@ -781,6 +781,10 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         cleanup();
         panic!("{e:#}");
     }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
+        cleanup();
+        panic!("{e:#}");
+    }
 
     let boot_id_after = ssh_retry(&g2, "cat /proc/sys/kernel/random/boot_id");
     if boot_id_after != boot_id {
@@ -862,11 +866,12 @@ fn seated_gpu_workload_survives_restore_unchanged() {
         // Name where the landmarks moved: a displaced window clusters, a blanked desktop
         // spreads everywhere. The rows tell those apart at a glance.
         eprintln!("moved cells by grid row: {:?}", by_row(&moved));
-        // The display table's own account of what the restored device answered.
+        // The display table's own account of what the restored device answered, and the GPU
+        // host's (`restore: ...`) of any arena it could not place.
         let log = g2.supervisor_log();
         for line in log
             .lines()
-            .filter(|l| l.contains("display") || l.contains("gpu restore:"))
+            .filter(|l| l.contains("display") || l.contains("restore:"))
             .rev()
             .take(20)
             .collect::<Vec<_>>()

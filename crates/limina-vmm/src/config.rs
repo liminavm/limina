@@ -8,6 +8,7 @@
 //! and handed to this worker. Keeping it separate from `VmResources` is what lets the
 //! facade absorb libkrun-internal API churn in one place (decision D2.1).
 
+use std::net::SocketAddrV4;
 use std::path::PathBuf;
 
 use limina_input::touchpad::TouchpadGeometry;
@@ -153,22 +154,62 @@ pub enum DisplaySink {
     },
 }
 
-/// A user-mode NAT network interface (M3) backed by a **gvproxy** gateway over a
-/// vfkit-style UNIX *datagram* socket. gvproxy provides DHCP, DNS and the NAT to the
-/// host network entirely in userspace — no root, no entitlement.
-///
-/// The gateway process is spawned and supervised by the limina supervisor (it must be
-/// listening on `gvproxy_socket` before the guest's virtio-net activates); the worker
-/// just connects libkrun's virtio-net backend to that socket (sending the `VFKT` magic).
-/// Presented to the guest as `eth0`.
+/// The guest's network interface, presented as `eth0`.
 #[derive(Debug, Clone)]
 pub struct NetSpec {
-    /// Path to gvproxy's vfkit unixgram socket (`gvproxy -listen-vfkit unixgram://<path>`).
-    pub gvproxy_socket: PathBuf,
-    /// Guest MAC for the NIC. `None` = the well-known vfkit MAC (gvproxy's default static
-    /// .2 lease); managed VMs pass their persistent per-VM MAC (the supervisor then rebinds
-    /// gvproxy's lease to match).
+    pub backend: NetBackend,
+    /// Guest MAC for the NIC. `None` = the well-known vfkit MAC; the supervisor names one for
+    /// every NIC that can reach vmnet.
     pub mac: Option<[u8; 6]>,
+    /// Where the supervisor connects to watch the guest's address and, on netd or auto, to add
+    /// and remove forwards and move the NIC while the VM runs.
+    pub control: Option<ListenAt>,
+}
+
+#[derive(Debug, Clone)]
+pub enum NetBackend {
+    /// A vmnet interface the worker starts itself, through libkrun's vmnet backend
+    /// (`docs/design/multi-vm-networking.md` §3.3). Needs the worker's
+    /// `com.apple.security.virtualization` entitlement.
+    Vmnet(VmnetMode),
+    /// User-mode NAT through a `limina-netd` the worker spawns and talks to over shared rings
+    /// (`docs/design/multi-vm-networking.md` §3.2). Needs no entitlement.
+    Netd(NetdSpec),
+    /// vmnet shared, moving to netd when vmnet cannot serve and back when it can
+    /// (`docs/design/multi-vm-networking.md` §3.5): the default NIC. The forwards are netd's on
+    /// either side.
+    Auto(NetdSpec),
+}
+
+/// What a NIC on netd is set up with.
+#[derive(Debug, Clone, Default)]
+pub struct NetdSpec {
+    /// Port forwards from the start: host address → guest TCP port.
+    pub forwards: Vec<(SocketAddrV4, u16)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VmnetMode {
+    Shared,
+    Host,
+    /// Bridged onto this host interface.
+    Bridged(String),
+}
+
+impl std::str::FromStr for VmnetMode {
+    type Err = anyhow::Error;
+
+    /// `shared`, `host`, or `bridged:<interface>`.
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        match s.split_once(':') {
+            None if s == "shared" => Ok(Self::Shared),
+            None if s == "host" => Ok(Self::Host),
+            Some(("bridged", ifname)) if !ifname.is_empty() => {
+                Ok(Self::Bridged(ifname.to_string()))
+            }
+            _ => anyhow::bail!("expected shared, host or bridged:<interface>, got {s:?}"),
+        }
+    }
 }
 
 /// virtio-input devices attached to the guest (M2). A keyboard, an absolute pointer, and —
@@ -195,7 +236,7 @@ pub struct InputSpec {
 /// How the guest boots.
 #[derive(Debug, Clone)]
 pub enum BootSource {
-    /// EFI firmware blob (EDK2 `.fd`) loaded into guest RAM; the guest's own
+    /// EFI firmware image (Cardea's `efi.fd`) loaded into guest RAM; the guest's own
     /// bootloader/kernel then boots off a disk's ESP. The stock-baseline path.
     Firmware(PathBuf),
     /// Direct kernel boot — the fast L1 path and the custom-kernel tier.
@@ -286,6 +327,12 @@ pub struct VmSpec {
     pub tpm_state: Option<PathBuf>,
     /// The file the firmware's UEFI variables live in; `None` keeps them in RAM. See `--efi-vars`.
     pub efi_vars: Option<PathBuf>,
+    /// Describe the machine to the OS with ACPI instead of a device tree. See `--acpi`.
+    pub acpi: bool,
+    /// Name the serial port in an ACPI SPCR, making it the OS's only console. See `--acpi-spcr`.
+    pub acpi_spcr: bool,
+    /// What the firmware adds to a Linux kernel's command line. See `--extra-bootargs`.
+    pub extra_bootargs: Option<String>,
     /// Where the stock-tier FIDO USB gadget (M14 Stage C) takes the supervisor's connection. When
     /// set (and `usb` is true) the worker cold-plugs a HID report-pipe gadget with the FIDO
     /// identity and bridges its CTAPHID frames to the supervisor's authenticator over it.

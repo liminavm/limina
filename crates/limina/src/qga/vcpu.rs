@@ -25,36 +25,43 @@ use super::client::Vcpu;
 /// - Only processors the guest marked `can_offline` are ever taken away. On Linux cpu0 reports
 ///   `can-offline: false`, so this subsumes the "never cpu0" rule rather than restating it — and
 ///   it also respects a guest that has pinned some other CPU for its own reasons.
-/// - Offline the **highest**-numbered first and re-online the **lowest**-numbered first, so the
-///   online set stays a low, dense prefix instead of drifting into holes.
+/// - CPUs go and come back in the enhanced tier's order ([`limina_proto::shrink_order`],
+///   [`limina_proto::grow_order`]): by `capacity`, which QGA does not report and the host knows
+///   from the topology it gave the guest, then by number.
 /// - An empty reading yields no plan: not knowing the current state is never a reason to write.
-pub fn plan(vcpus: &[Vcpu], target: u32) -> Vec<(u32, bool)> {
+pub fn plan(vcpus: &[Vcpu], target: u32, capacity: impl Fn(u32) -> u32) -> Vec<(u32, bool)> {
     if vcpus.is_empty() {
         return Vec::new();
     }
-    let mut sorted: Vec<&Vcpu> = vcpus.iter().collect();
-    sorted.sort_by_key(|v| v.logical_id);
-    let online_now = sorted.iter().filter(|v| v.online).count();
+    let online_now = vcpus.iter().filter(|v| v.online).count();
     let target = target.max(1) as usize;
     let mut plan = Vec::new();
     if online_now > target {
-        for v in sorted.iter().rev() {
-            if online_now - plan.len() <= target {
-                break;
-            }
-            if v.online && v.can_offline {
-                plan.push((v.logical_id, false));
-            }
-        }
+        let mut leaving: Vec<u32> = vcpus
+            .iter()
+            .filter(|v| v.online && v.can_offline)
+            .map(|v| v.logical_id)
+            .collect();
+        leaving.sort_by_key(|&id| limina_proto::shrink_order(id, capacity(id)));
+        plan.extend(
+            leaving
+                .into_iter()
+                .take(online_now - target)
+                .map(|id| (id, false)),
+        );
     } else if online_now < target {
-        for v in sorted.iter() {
-            if online_now + plan.len() >= target {
-                break;
-            }
-            if !v.online {
-                plan.push((v.logical_id, true));
-            }
-        }
+        let mut coming: Vec<u32> = vcpus
+            .iter()
+            .filter(|v| !v.online)
+            .map(|v| v.logical_id)
+            .collect();
+        coming.sort_by_key(|&id| limina_proto::grow_order(id, capacity(id)));
+        plan.extend(
+            coming
+                .into_iter()
+                .take(target - online_now)
+                .map(|id| (id, true)),
+        );
     }
     plan
 }
@@ -62,6 +69,10 @@ pub fn plan(vcpus: &[Vcpu], target: u32) -> Vec<(u32, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn uniform(_: u32) -> u32 {
+        0
+    }
 
     fn cpus(n: u32, online: u32) -> Vec<Vcpu> {
         (0..n)
@@ -77,7 +88,7 @@ mod tests {
     #[test]
     fn shrinking_takes_the_highest_offlinable_cpus() {
         assert_eq!(
-            plan(&cpus(10, 10), 4),
+            plan(&cpus(10, 10), 4, uniform),
             vec![
                 (9, false),
                 (8, false),
@@ -96,31 +107,38 @@ mod tests {
         let mut v = cpus(4, 4);
         v[3].can_offline = false;
         assert_eq!(
-            plan(&v, 2),
+            plan(&v, 2, uniform),
             vec![(2, false), (1, false)],
             "cpu3 is pinned, so the plan must reach past it rather than ask"
         );
         // And cpu0 is never a candidate at all, however low the target.
-        assert_eq!(plan(&cpus(2, 2), 0), vec![(1, false)]);
+        assert_eq!(plan(&cpus(2, 2), 0, uniform), vec![(1, false)]);
         let only_cpu0 = vec![Vcpu {
             logical_id: 0,
             online: true,
             can_offline: false,
         }];
-        assert!(plan(&only_cpu0, 1).is_empty());
+        assert!(plan(&only_cpu0, 1, uniform).is_empty());
     }
 
     #[test]
     fn growing_refills_the_lowest_offline_cpus() {
-        assert_eq!(plan(&cpus(10, 2), 4), vec![(2, true), (3, true)]);
+        assert_eq!(plan(&cpus(10, 2), 4, uniform), vec![(2, true), (3, true)]);
         // Capped by what the guest actually has.
-        assert_eq!(plan(&cpus(2, 1), 8), vec![(1, true)]);
+        assert_eq!(plan(&cpus(2, 1), 8, uniform), vec![(1, true)]);
+    }
+
+    /// Little vCPUs (the last two of four) stay online longest, as in the enhanced tier.
+    #[test]
+    fn little_vcpus_are_offlined_last() {
+        let cap = |id: u32| u32::from(id < 2);
+        assert_eq!(plan(&cpus(4, 4), 2, cap), vec![(1, false), (3, false)]);
     }
 
     #[test]
     fn a_plan_that_changes_nothing_is_empty() {
-        assert!(plan(&cpus(10, 4), 4).is_empty());
-        assert!(plan(&[], 2).is_empty(), "no reading, no write");
+        assert!(plan(&cpus(10, 4), 4, uniform).is_empty());
+        assert!(plan(&[], 2, uniform).is_empty(), "no reading, no write");
     }
 
     /// The guest is free to report its processors in any order; the plan must not depend on it.
@@ -128,6 +146,6 @@ mod tests {
     fn the_reported_order_does_not_matter() {
         let mut shuffled = cpus(4, 4);
         shuffled.reverse();
-        assert_eq!(plan(&shuffled, 2), vec![(3, false), (2, false)]);
+        assert_eq!(plan(&shuffled, 2, uniform), vec![(3, false), (2, false)]);
     }
 }

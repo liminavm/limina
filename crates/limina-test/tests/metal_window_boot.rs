@@ -57,7 +57,9 @@ fn metal_guest_in_a_window_reaches_its_desktop() {
         .expect("gnome-shell never appeared: gdm is stuck behind the console");
 
     // Plymouth hands the display to gdm and quits; a wedged guest leaves it blocked in the
-    // kernel on the fb-helper lock, and nothing else in uninterruptible sleep for long.
+    // kernel on the fb-helper lock, and nothing else in uninterruptible sleep for long. A task
+    // passing through D (gnome-shell faulting in pages as the desktop starts, on either machine)
+    // is not a wedge, so only a task blocked in every one of five samples a second apart counts.
     guest
         .ssh_poll(
             "! systemctl is-active -q plymouth-quit-wait.service",
@@ -65,7 +67,10 @@ fn metal_guest_in_a_window_reaches_its_desktop() {
         )
         .expect("plymouth never quit");
     let blocked = guest
-        .ssh_exec("ps -eo stat=,comm= | awk '$1 ~ /^D/ {print $2}'")
+        .ssh_exec(
+            "for i in 1 2 3 4 5; do ps -eo pid=,stat=,comm= | awk '$2 ~ /^D/ {print $1, $3}'; \
+             sleep 1; done | sort | uniq -c | awk '$1 == 5 {print $3}'",
+        )
         .expect("ssh died");
     assert!(
         blocked.trim().is_empty(),

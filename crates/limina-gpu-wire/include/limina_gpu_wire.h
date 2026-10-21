@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define LMN_WIRE_VERSION 4u
+#define LMN_WIRE_VERSION 5u
 
 /* Ring (crates/limina-gpu-wire/src/ring.rs). */
 #define LMN_RING_MAGIC 0x52474d4cu
@@ -71,11 +71,13 @@
 #define LMN_OP_CREATE_TEXTURE_VIEW 0x0101u
 #define LMN_OP_CREATE_SAMPLER 0x0102u
 #define LMN_OP_CREATE_LIBRARY 0x0103u
+#define LMN_OP_CREATE_LIBRARY_DATA 0x010bu
 #define LMN_OP_CREATE_RENDER_PIPELINE 0x0104u
 #define LMN_OP_CREATE_COMPUTE_PIPELINE 0x0105u
 #define LMN_OP_CREATE_DEPTH_STENCIL 0x0106u
 #define LMN_OP_CREATE_ARGUMENT_TABLE 0x0107u
 #define LMN_OP_CREATE_SYNC 0x0108u
+#define LMN_OP_CREATE_QUEUE 0x010cu
 #define LMN_OP_CREATE_COUNTER_HEAP 0x010au
 #define LMN_OP_DESTROY 0x01ffu
 #define LMN_OP_SET_ADDRESSES 0x0180u
@@ -176,7 +178,7 @@ struct lmn_device_info {
    uint32_t sparse_tile_bytes;
    uint32_t heap_buffer_align;
    uint32_t os_version[3];
-   uint32_t _pad;
+   uint32_t features;
 };
 _Static_assert(sizeof(struct lmn_device_info) == 152, "lmn_device_info size");
 _Static_assert(offsetof(struct lmn_device_info, version) == 0, "lmn_device_info.version");
@@ -194,7 +196,7 @@ _Static_assert(offsetof(struct lmn_device_info, timestamp_frequency) == 120, "lm
 _Static_assert(offsetof(struct lmn_device_info, sparse_tile_bytes) == 128, "lmn_device_info.sparse_tile_bytes");
 _Static_assert(offsetof(struct lmn_device_info, heap_buffer_align) == 132, "lmn_device_info.heap_buffer_align");
 _Static_assert(offsetof(struct lmn_device_info, os_version) == 136, "lmn_device_info.os_version");
-_Static_assert(offsetof(struct lmn_device_info, _pad) == 148, "lmn_device_info._pad");
+_Static_assert(offsetof(struct lmn_device_info, features) == 148, "lmn_device_info.features");
 
 /* The fields of an `MTLTextureDescriptor` the guest chooses. */
 struct lmn_texture_desc {
@@ -355,6 +357,24 @@ _Static_assert(offsetof(struct lmn_create_library, math_fp_functions) == 16, "lm
 _Static_assert(offsetof(struct lmn_create_library, _pad) == 20, "lmn_create_library._pad");
 _Static_assert(offsetof(struct lmn_create_library, reply) == 24, "lmn_create_library.reply");
 
+/* A library from a compiled `.metallib` (`newLibraryWithData:`), `data_len` bytes of at */
+/* most `MAX_LIBRARY_DATA`: at `data` in an arena, or, with `data` none, following the */
+/* command. The host keeps the bytes in the object's record, so a restore needs no arena. */
+/* Only for a host with `feature::LIBRARY_DATA`. */
+struct lmn_create_library_data {
+   uint32_t handle;
+   uint32_t _pad;
+   uint64_t data_len;
+   struct lmn_buf_ref data;
+   struct lmn_buf_ref reply;
+};
+_Static_assert(sizeof(struct lmn_create_library_data) == 48, "lmn_create_library_data size");
+_Static_assert(offsetof(struct lmn_create_library_data, handle) == 0, "lmn_create_library_data.handle");
+_Static_assert(offsetof(struct lmn_create_library_data, _pad) == 4, "lmn_create_library_data._pad");
+_Static_assert(offsetof(struct lmn_create_library_data, data_len) == 8, "lmn_create_library_data.data_len");
+_Static_assert(offsetof(struct lmn_create_library_data, data) == 16, "lmn_create_library_data.data");
+_Static_assert(offsetof(struct lmn_create_library_data, reply) == 32, "lmn_create_library_data.reply");
+
 /* An `MTL4RenderPipelineDescriptor`; the vertex function's name follows, then the */
 /* fragment's (absent when `fragment_library` is `0`). */
 struct lmn_create_render_pipeline {
@@ -385,12 +405,14 @@ _Static_assert(offsetof(struct lmn_create_render_pipeline, _pad) == 36, "lmn_cre
 _Static_assert(offsetof(struct lmn_create_render_pipeline, color_formats) == 40, "lmn_create_render_pipeline.color_formats");
 _Static_assert(offsetof(struct lmn_create_render_pipeline, reply) == 72, "lmn_create_render_pipeline.reply");
 
-/* An `MTL4ComputePipelineDescriptor`; the function's name follows. */
+/* An `MTL4ComputePipelineDescriptor`; `constant_count` [`FunctionConstant`]s follow, then */
+/* the function's name. With constants, the function is an `MTL4SpecializedFunctionDescriptor` */
+/* over the library's; only for a host with `feature::FUNCTION_CONSTANTS`. */
 struct lmn_create_compute_pipeline {
    uint32_t handle;
    uint32_t library;
    uint32_t name_len;
-   uint32_t _pad;
+   uint32_t constant_count;
    uint64_t max_total_threads;
    struct lmn_buf_ref reply;
 };
@@ -398,9 +420,22 @@ _Static_assert(sizeof(struct lmn_create_compute_pipeline) == 40, "lmn_create_com
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, handle) == 0, "lmn_create_compute_pipeline.handle");
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, library) == 4, "lmn_create_compute_pipeline.library");
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, name_len) == 8, "lmn_create_compute_pipeline.name_len");
-_Static_assert(offsetof(struct lmn_create_compute_pipeline, _pad) == 12, "lmn_create_compute_pipeline._pad");
+_Static_assert(offsetof(struct lmn_create_compute_pipeline, constant_count) == 12, "lmn_create_compute_pipeline.constant_count");
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, max_total_threads) == 16, "lmn_create_compute_pipeline.max_total_threads");
 _Static_assert(offsetof(struct lmn_create_compute_pipeline, reply) == 24, "lmn_create_compute_pipeline.reply");
+
+/* One `setConstantValue:type:atIndex:`. `data_type` is a scalar `MTLDataType` (bool, char, */
+/* short, int, long, their unsigned forms, half, bfloat or float); the value sits in the low */
+/* bytes of `value`, little-endian, and the bytes above it are zero. */
+struct lmn_function_constant {
+   uint32_t index;
+   uint32_t data_type;
+   uint64_t value;
+};
+_Static_assert(sizeof(struct lmn_function_constant) == 16, "lmn_function_constant size");
+_Static_assert(offsetof(struct lmn_function_constant, index) == 0, "lmn_function_constant.index");
+_Static_assert(offsetof(struct lmn_function_constant, data_type) == 4, "lmn_function_constant.data_type");
+_Static_assert(offsetof(struct lmn_function_constant, value) == 8, "lmn_function_constant.value");
 
 /* An `MTLStencilDescriptor`, with `MTLStencilOperation` and `MTLCompareFunction` values. */
 struct lmn_stencil_desc {
@@ -463,6 +498,19 @@ _Static_assert(offsetof(struct lmn_sync_object, handle) == 0, "lmn_sync_object.h
 _Static_assert(offsetof(struct lmn_sync_object, kind) == 4, "lmn_sync_object.kind");
 _Static_assert(offsetof(struct lmn_sync_object, initial) == 8, "lmn_sync_object.initial");
 _Static_assert(offsetof(struct lmn_sync_object, mirror) == 16, "lmn_sync_object.mirror");
+
+/* An `MTL4CommandQueue`, which the context's residency set is added to. The host stores the */
+/* highest finished seqno of its commits to the `u64` at `completed`, in the ring's arena and */
+/* 8-aligned, which is how the guest and the guest kernel's fences learn of them. */
+struct lmn_create_queue {
+   uint32_t handle;
+   uint32_t _pad;
+   struct lmn_buf_ref completed;
+};
+_Static_assert(sizeof(struct lmn_create_queue) == 24, "lmn_create_queue size");
+_Static_assert(offsetof(struct lmn_create_queue, handle) == 0, "lmn_create_queue.handle");
+_Static_assert(offsetof(struct lmn_create_queue, _pad) == 4, "lmn_create_queue._pad");
+_Static_assert(offsetof(struct lmn_create_queue, completed) == 8, "lmn_create_queue.completed");
 
 /* An `MTL4CounterHeap` of `count` timestamp entries (`MTL4CounterHeapTypeTimestamp`). */
 struct lmn_create_counter_heap {
@@ -988,28 +1036,37 @@ _Static_assert(offsetof(struct lmn_draw_indirect, index_address) == 16, "lmn_dra
 _Static_assert(offsetof(struct lmn_draw_indirect, index_length) == 24, "lmn_draw_indirect.index_length");
 _Static_assert(offsetof(struct lmn_draw_indirect, indirect) == 32, "lmn_draw_indirect.indirect");
 
-/* Submits the command buffers ended since the last commit, in one `commit:count:options:`. */
-/* The host fills `feedback` (arena `0` for none) and then publishes `seqno`. Seqnos must */
-/* increase. A commit with nothing to submit commits an empty command buffer. */
+/* Submits the command buffers ended since the last commit to `queue` (`0`, the context's */
+/* own), in one `commit:count:options:`. The host fills `feedback` (arena `0` for none) and */
+/* then publishes `seqno` as the queue's completed value. Seqnos must increase across the */
+/* context. A commit with nothing to submit commits an empty command buffer. */
 struct lmn_commit {
    uint64_t seqno;
+   uint32_t queue;
+   uint32_t _pad;
    struct lmn_buf_ref feedback;
 };
-_Static_assert(sizeof(struct lmn_commit) == 24, "lmn_commit size");
+_Static_assert(sizeof(struct lmn_commit) == 32, "lmn_commit size");
 _Static_assert(offsetof(struct lmn_commit, seqno) == 0, "lmn_commit.seqno");
-_Static_assert(offsetof(struct lmn_commit, feedback) == 8, "lmn_commit.feedback");
+_Static_assert(offsetof(struct lmn_commit, queue) == 8, "lmn_commit.queue");
+_Static_assert(offsetof(struct lmn_commit, _pad) == 12, "lmn_commit._pad");
+_Static_assert(offsetof(struct lmn_commit, feedback) == 16, "lmn_commit.feedback");
 
-/* `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on the queue, between */
-/* commits: no command buffer may be ended and not yet committed. A signal of a shared event */
-/* also updates its mirror once the value is reached. */
+/* `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on `queue`, between commits: */
+/* no command buffer may be ended and not yet committed. A signal of a shared event also */
+/* updates its mirror once the value is reached. */
 struct lmn_queue_event {
    uint32_t event;
    uint32_t wait;
    uint64_t value;
+   uint32_t queue;
+   uint32_t _pad;
 };
-_Static_assert(sizeof(struct lmn_queue_event) == 16, "lmn_queue_event size");
+_Static_assert(sizeof(struct lmn_queue_event) == 24, "lmn_queue_event size");
 _Static_assert(offsetof(struct lmn_queue_event, event) == 0, "lmn_queue_event.event");
 _Static_assert(offsetof(struct lmn_queue_event, wait) == 4, "lmn_queue_event.wait");
 _Static_assert(offsetof(struct lmn_queue_event, value) == 8, "lmn_queue_event.value");
+_Static_assert(offsetof(struct lmn_queue_event, queue) == 16, "lmn_queue_event.queue");
+_Static_assert(offsetof(struct lmn_queue_event, _pad) == 20, "lmn_queue_event._pad");
 
 #endif /* LIMINA_GPU_WIRE_H */

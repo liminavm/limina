@@ -64,6 +64,8 @@
  * keeps in flight, far below the queue's size.
  */
 #define LIMINA_MAX_PENDING_FENCES		64
+/* Virtio ring indices a file's fences use: the most VIRTGPU_CONTEXT_PARAM_NUM_RINGS allows. */
+#define LIMINA_FENCE_RINGS		64
 
 #define VIRTIO_GPU_CMD_LIMINA_CTX_CREATE	0x4c00
 #define VIRTIO_GPU_CMD_LIMINA_CTX_DESTROY	0x4c01
@@ -184,9 +186,17 @@ struct limina_arena {
 struct virtio_gpu_limina_file {
 	struct mutex lock;
 	bool created;
-	/* dma-fence context of this file's fences: they signal in order, and apart from every
-	 * other context's. */
+	/* The first of this file's LIMINA_FENCE_RINGS dma-fence contexts, one per virtio ring
+	 * index. Both upstream's fence driver and the host signal a ring's fences in order, earlier
+	 * ones along with a later one, and queues complete independently: so each completed value a
+	 * fence waits on gets a ring of its own, ring 0 being the ring's own completed value. */
 	u64 fence_ctx;
+	/* The completed_at of ring index i + 1. */
+	u32 fence_slots[LIMINA_FENCE_RINGS - 1];
+	unsigned int nfence_slots;
+	/* The ring's arena, once attached. */
+	bool ring_attached;
+	u32 ring_arena;
 	u32 doorbell;
 	struct list_head arenas;
 	/* Fences not yet known signaled, at most LIMINA_MAX_PENDING_FENCES. */
@@ -596,7 +606,7 @@ static struct virtio_gpu_limina_file *limina_file(struct virtio_gpu_device *vgde
 		if (lf) {
 			mutex_init(&lf->lock);
 			INIT_LIST_HEAD(&lf->arenas);
-			lf->fence_ctx = dma_fence_context_alloc(1);
+			lf->fence_ctx = dma_fence_context_alloc(LIMINA_FENCE_RINGS);
 			vfpriv->limina = lf;
 		}
 	}
@@ -820,6 +830,10 @@ int virtio_gpu_limina_ring_attach_ioctl(struct drm_device *dev, void *data,
 	cmd.offset = cpu_to_le64(args->offset);
 	ret = limina_call(vgdev, &cmd, sizeof(cmd), &resp, sizeof(resp),
 			  VIRTIO_GPU_RESP_OK_NODATA);
+	if (!ret) {
+		lf->ring_attached = true;
+		lf->ring_arena = args->arena_id;
+	}
 out:
 	mutex_unlock(&lf->lock);
 	return ret;
@@ -1075,6 +1089,81 @@ int virtio_gpu_limina_surface_import_ioctl(struct drm_device *dev, void *data,
 	return 0;
 }
 
+/*
+ * Where a fence on `completed_at` waits: its virtio ring index and, when the module can read the
+ * value itself, its physical address (0 otherwise). Call with lf->lock held.
+ */
+static int limina_fence_target(struct virtio_gpu_device *vgdev, struct virtio_gpu_limina_file *lf,
+			       u32 completed_at, u32 *ring_idx, phys_addr_t *phys)
+{
+	struct limina_arena *a;
+	unsigned int i;
+
+	*ring_idx = 0;
+	*phys = 0;
+	if (!completed_at)
+		return 0;
+	if (!lf->ring_attached || completed_at % 8)
+		return -EINVAL;
+	a = limina_find(lf, lf->ring_arena);
+	if (!a || completed_at > a->size - 8)
+		return -EINVAL;
+	for (i = 0; i < lf->nfence_slots && lf->fence_slots[i] != completed_at; i++)
+		;
+	if (i == lf->nfence_slots) {
+		if (i == ARRAY_SIZE(lf->fence_slots))
+			return -ENOSPC;
+		lf->fence_slots[lf->nfence_slots++] = completed_at;
+	}
+	*ring_idx = i + 1;
+	if (!a->shared)
+		*phys = vgdev->limina_arenas.addr + a->shm_offset + completed_at;
+	return 0;
+}
+
+/* Whether the u64 at `phys`, which the host stores to, has reached `seqno`. */
+static bool limina_reached(phys_addr_t phys, u64 seqno)
+{
+	u64 *v;
+	bool reached;
+
+	if (!phys)
+		return false;
+	/* Write-back, as userspace maps the same pages: a mismatched alias is unsafe on arm64. */
+	v = memremap(phys, sizeof(*v), MEMREMAP_WB);
+	if (!v)
+		return false;
+	reached = smp_load_acquire(v) >= seqno;
+	memunmap(v);
+	return reached;
+}
+
+/* A fence whose value is already reached: nothing to send, nothing to track. */
+static int limina_fence_reached(struct drm_virtgpu_limina_fence *args,
+				struct virtio_gpu_object_array *objs)
+{
+	struct sync_file *sync_file;
+	int fd;
+
+	if (objs) {
+		virtio_gpu_array_unlock_resv(objs);
+		virtio_gpu_array_put_free(objs);
+	}
+	if (!(args->flags & VIRTGPU_LIMINA_FENCE_FD))
+		return 0;
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0)
+		return fd;
+	sync_file = sync_file_create(dma_fence_get_stub());
+	if (!sync_file) {
+		put_unused_fd(fd);
+		return -ENOMEM;
+	}
+	fd_install(fd, sync_file->file);
+	args->fence_fd = fd;
+	return 0;
+}
+
 int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
 	struct virtio_gpu_device *vgdev = dev->dev_private;
@@ -1084,22 +1173,29 @@ int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data, struct drm
 	struct virtio_gpu_limina_file *lf;
 	struct virtio_gpu_fence *fence;
 	struct sync_file *sync_file;
+	phys_addr_t phys;
+	u32 ring_idx;
 	int fd = -1;
-	bool created, tracked;
+	bool created, tracked, reached;
 	int ret;
 
 	if (!vgdev->has_limina)
 		return -ENODEV;
-	if (args->flags & ~VIRTGPU_LIMINA_FENCE_FD || args->pad)
+	if (args->flags & ~VIRTGPU_LIMINA_FENCE_FD)
 		return -EINVAL;
 	lf = limina_file(vgdev, file);
 	if (!lf)
 		return -ENOMEM;
 	mutex_lock(&lf->lock);
 	created = lf->created;
+	ret = limina_fence_target(vgdev, lf, args->completed_at, &ring_idx, &phys);
+	/* Under the lock, so the arena is not destroyed under the read. */
+	reached = !ret && limina_reached(phys, args->seqno);
 	mutex_unlock(&lf->lock);
 	if (!created)
 		return -ENOENT;
+	if (ret)
+		return ret;
 
 	if (args->num_handles) {
 		u32 *handles = vmemdup_array_user(u64_to_user_ptr(args->handles),
@@ -1117,7 +1213,9 @@ int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data, struct drm
 			return ret;
 		}
 	}
-	fence = virtio_gpu_fence_alloc(vgdev, lf->fence_ctx, 0);
+	if (reached)
+		return limina_fence_reached(args, objs);
+	fence = virtio_gpu_fence_alloc(vgdev, lf->fence_ctx, ring_idx);
 	if (!fence) {
 		ret = -ENOMEM;
 		goto err_objs;
@@ -1140,7 +1238,8 @@ int virtio_gpu_limina_fence_ioctl(struct drm_device *dev, void *data, struct drm
 		}
 	}
 	/* From here the command owns `objs`, and the reservations get unlocked with the fence in. */
-	ret = virtio_gpu_cmd_limina_fence(vgdev, vfpriv->ctx_id, args->seqno, objs, fence);
+	ret = virtio_gpu_cmd_limina_fence(vgdev, vfpriv->ctx_id, args->seqno, args->completed_at,
+					  objs, fence);
 	if (ret) {
 		mutex_lock(&lf->lock);
 		limina_fence_untrack(lf, &fence->f);

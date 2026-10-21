@@ -1,0 +1,121 @@
+######## b0-v4 21:41:03
+[21:41:04] wire-v5 b0-v4: arm v4 (Fedora-Workstation-44.metal.test.bak-pre-metal.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun 9dc32a05; limina e62ea94a; macOS 27.0.1
+[21:41:04] enhanced boot
+[21:42:03] display pinned on transport: verify OK: Virtual-1 1280x800@59.949 scale=1.0
+SETTLED up=206s load=0.13
+final: up=206s load=0.13 0.17 0.08
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[21:45:20] arm v4: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp 	deviceName         = llvmpipe (LLVM 22.1.8, 128 bits) 	driverName         = llvmpipe     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.3.0-devel (git-41353793c9) [    1.389921] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 4 4 /opt/limina/4/lib/libvulkan_kosmickrisp.so 
+[21:45:28] firefox profile: pref written: /home/claude/.config/mozilla/firefox/1f1ce7qa.default-release/user.js 
+[21:46:50] aquarium r1 exit=0 
+[21:48:11] aquarium r2 exit=0 
+[21:49:53] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+gl-replay-metal,50.8911
+gl-replay-llvmpipe,738.096
+vk-replay-metal-headless,686.566511
+glmark2-wayland-metal,3387
+[21:52:05] vkmark run 1: 4272 
+[21:54:15] vkmark run 2: 4275 
+[21:56:25] vkmark run 3: 4286 
+[21:56:35] worker-enh: 0 poisoned-context lines
+[21:56:35] point b0-v4 done; read perf/wire-v5-2026-10-17/evidence/b0-v4/aquarium-r*/*-fps.png
+######## a0-v5 21:56:35
+[21:56:36] wire-v5 a0-v5: arm v5 (Fedora-Workstation-44.metal.test.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun ce663d74; limina 9a2e5558; macOS 27.0.1
+[21:56:36] enhanced boot
+[21:57:31] display pinned on transport: verify OK: Virtual-1 1280x800@59.949 scale=1.0
+SETTLED up=205s load=0.03
+final: up=205s load=0.03 0.10 0.05
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[22:00:47] arm v5: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp 	deviceName         = llvmpipe (LLVM 22.1.8, 128 bits) 	driverName         = llvmpipe     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.3.0-devel (git-340ed84bf1) [    1.401801] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 5 5 /opt/limina/5/lib/libvulkan_kosmickrisp.so 
+[22:00:56] firefox profile: pref written: /home/claude/.config/mozilla/firefox/mhk9fp9y.default-release/user.js 
+[22:02:17] aquarium r1 exit=0 
+[22:03:37] aquarium r2 exit=0 
+[22:05:18] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+gl-replay-metal,51.3148
+gl-replay-llvmpipe,735.24
+vk-replay-metal-headless,2107.706433
+glmark2-wayland-metal,3370
+[22:07:29] vkmark run 1: 4270 
+[22:09:40] vkmark run 2: 4274 
+[22:11:50] vkmark run 3: 4264 
+[22:12:00] worker-enh: 0 poisoned-context lines
+[22:12:00] point a0-v5 done; read perf/wire-v5-2026-10-17/evidence/a0-v5/aquarium-r*/*-fps.png
+######## b1-v4 22:12:00
+[22:12:00] wire-v5 b1-v4: arm v4 (Fedora-Workstation-44.metal.test.bak-pre-metal.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun 9dc32a05; limina e62ea94a; macOS 27.0.1
+[22:12:00] enhanced boot
+[22:12:54] display pinned on transport: verify OK: Virtual-1 1280x800@59.949 scale=1.0
+SETTLED up=205s load=0.16
+final: up=205s load=0.16 0.29 0.14
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[22:16:11] arm v4: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp 	deviceName         = llvmpipe (LLVM 22.1.8, 128 bits) 	driverName         = llvmpipe     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.3.0-devel (git-41353793c9) [    1.392902] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 4 4 /opt/limina/4/lib/libvulkan_kosmickrisp.so 
+[22:16:20] firefox profile: pref written: /home/claude/.config/mozilla/firefox/e81aod59.default-release/user.js 
+[22:17:40] aquarium r1 exit=0 
+[22:19:01] aquarium r2 exit=0 
+[22:20:42] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+gl-replay-metal,51.0442
+gl-replay-llvmpipe,739.622
+vk-replay-metal-headless,2093.339387
+glmark2-wayland-metal,3349
+[22:22:52] vkmark run 1: 4299 
+[22:25:03] vkmark run 2: 4266 
+[22:27:13] vkmark run 3: 4279 
+[22:27:23] worker-enh: 0 poisoned-context lines
+[22:27:23] point b1-v4 done; read perf/wire-v5-2026-10-17/evidence/b1-v4/aquarium-r*/*-fps.png
+######## a1-v5 22:27:23
+[22:27:23] wire-v5 a1-v5: arm v5 (Fedora-Workstation-44.metal.test.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun ce663d74; limina 9a2e5558; macOS 27.0.1
+[22:27:23] enhanced boot
+[22:28:18] display pinned on transport: verify OK: Virtual-1 1280x800@59.949 scale=1.0
+SETTLED up=206s load=0.08
+final: up=206s load=0.08 0.13 0.06
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[22:31:35] arm v5: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp 	deviceName         = llvmpipe (LLVM 22.1.8, 128 bits) 	driverName         = llvmpipe     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.3.0-devel (git-340ed84bf1) [    1.400336] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 5 5 /opt/limina/5/lib/libvulkan_kosmickrisp.so 
+[22:31:43] firefox profile: pref written: /home/claude/.config/mozilla/firefox/iop6guh1.default-release/user.js 
+[22:33:04] aquarium r1 exit=0 
+[22:34:25] aquarium r2 exit=0 
+[22:36:06] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+gl-replay-metal,51.2913
+gl-replay-llvmpipe,730.031
+vk-replay-metal-headless,2122.193234
+glmark2-wayland-metal,3403
+[22:38:16] vkmark run 1: 4233 
+[22:40:26] vkmark run 2: 4411 
+[22:42:37] vkmark run 3: 4551 
+[22:42:46] worker-enh: 0 poisoned-context lines
+[22:42:46] point a1-v5 done; read perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r*/*-fps.png
+######## b2-v4 22:42:46
+[22:42:47] wire-v5 b2-v4: arm v4 (Fedora-Workstation-44.metal.test.bak-pre-metal.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun 9dc32a05; limina e62ea94a; macOS 27.0.1
+[22:42:47] enhanced boot
+[22:43:42] display pinned on transport: verify OK: Virtual-1 1280x800@59.949 scale=1.0
+SETTLED up=206s load=0.13
+final: up=206s load=0.13 0.14 0.06
+6.19.10-300.fc44.aarch64
+mesa-dri-drivers-26.1.8-1.fc44.aarch64
+mesa-vulkan-drivers-26.1.8-1.fc44.aarch64
+[22:46:58] arm v4: 	deviceName         = Apple M1 Max 	driverName         = KosmicKrisp 	deviceName         = llvmpipe (LLVM 22.1.8, 128 bits) 	driverName         = llvmpipe     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))     GL_VERSION:     OpenGL ES 3.2 Mesa 26.3.0-devel (git-41353793c9) [    1.376959] [drm] limina extension: arenas 0x380400000+0x400000000, doorbells 0x380000000+0x400000 4 4 /opt/limina/4/lib/libvulkan_kosmickrisp.so 
+[22:47:07] firefox profile: pref written: /home/claude/.config/mozilla/firefox/reb2gl8b.default-release/user.js 
+[22:48:26] aquarium r1 exit=0 
+[22:49:47] aquarium r2 exit=0 
+[22:51:28] perf-ledger run 1 exit=0 
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+gl-replay-metal,51
+gl-replay-llvmpipe,739.94
+vk-replay-metal-headless,2146.148231
+glmark2-wayland-metal,3389
+[22:53:38] vkmark run 1: 4266 
+[22:55:49] vkmark run 2: 4281 
+[22:57:59] vkmark run 3: 4278 
+[22:58:09] worker-enh: 0 poisoned-context lines
+[22:58:09] point b2-v4 done; read perf/wire-v5-2026-10-17/evidence/b2-v4/aquarium-r*/*-fps.png
+######## legs done 22:58:09

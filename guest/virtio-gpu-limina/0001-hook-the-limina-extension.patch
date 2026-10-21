@@ -59,7 +59,7 @@ index 9af740b..6b543a6 100644
  static const struct drm_driver driver = {
  	/*
 diff --git a/drivers/gpu/drm/virtio/virtgpu_drv.h b/drivers/gpu/drm/virtio/virtgpu_drv.h
-index 29b6795..050d477 100644
+index 29b6795..c8c6d0c 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_drv.h
 +++ b/drivers/gpu/drm/virtio/virtgpu_drv.h
 @@ -42,6 +42,8 @@
@@ -153,7 +153,7 @@ index 29b6795..050d477 100644
 +int virtio_gpu_cmd_limina(struct virtio_gpu_device *vgdev,
 +			  struct virtio_gpu_limina_call *call);
 +int virtio_gpu_cmd_limina_fence(struct virtio_gpu_device *vgdev, u32 ctx_id, u64 seqno,
-+				struct virtio_gpu_object_array *objs,
++				u32 completed_at, struct virtio_gpu_object_array *objs,
 +				struct virtio_gpu_fence *fence);
  void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
  				    uint32_t id);
@@ -261,10 +261,10 @@ index 6523524..1c73d78 100644
  						     vgdev->fence_drv.context,
  						     0);
 diff --git a/drivers/gpu/drm/virtio/virtgpu_vq.c b/drivers/gpu/drm/virtio/virtgpu_vq.c
-index 10f721d..369e93a 100644
+index 10f721d..49aec9e 100644
 --- a/drivers/gpu/drm/virtio/virtgpu_vq.c
 +++ b/drivers/gpu/drm/virtio/virtgpu_vq.c
-@@ -1109,6 +1109,73 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
+@@ -1109,6 +1109,76 @@ void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
  	virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
  }
  
@@ -309,17 +309,19 @@ index 10f721d..369e93a 100644
 +}
 +
 +/*
-+ * Sends a limina FENCE: the host answers it once the context's ring has completed `seqno`, which
-+ * signals `fence`. The reservations of `objs`, if any, must be locked; they get the fence and are
-+ * unlocked here.
++ * Sends a limina FENCE: the host answers it once the u64 at `completed_at` in the context's ring
++ * arena (0: the ring's own completed value) reaches `seqno`, which signals `fence`. The
++ * reservations of `objs`, if any, must be locked; they get the fence and are unlocked here.
 + */
 +int virtio_gpu_cmd_limina_fence(struct virtio_gpu_device *vgdev, u32 ctx_id, u64 seqno,
-+				struct virtio_gpu_object_array *objs,
++				u32 completed_at, struct virtio_gpu_object_array *objs,
 +				struct virtio_gpu_fence *fence)
 +{
 +	struct {
 +		struct virtio_gpu_ctrl_hdr hdr;
 +		__le64 seqno;
++		__le32 completed_at;
++		__le32 padding;
 +	} *cmd_p;
 +	struct virtio_gpu_vbuffer *vbuf;
 +	int ret;
@@ -329,6 +331,7 @@ index 10f721d..369e93a 100644
 +	cmd_p->hdr.type = cpu_to_le32(0x4c06);
 +	cmd_p->hdr.ctx_id = cpu_to_le32(ctx_id);
 +	cmd_p->seqno = cpu_to_le64(seqno);
++	cmd_p->completed_at = cpu_to_le32(completed_at);
 +	vbuf->objs = objs;
 +	ret = virtio_gpu_queue_fenced_ctrl_buffer(vgdev, vbuf, fence);
 +	virtio_gpu_notify(vgdev);

@@ -1,0 +1,25 @@
+# limina-metal: Apple's metal-cpp, unmodified, on Linux over limina's Metal-level transport. A
+# static library: the guest links it into the C++ program with clang.
+[package]
+name = "limina-metal-shim"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[lib]
+name = "limina_metal"
+crate-type = ["staticlib"]
+
+[dependencies]
+libc = "0.2"
+limina-gpu-client = { path = "../../../guest/limina-gpu-client" }
+limina-gpu-wire = { path = "../../../crates/limina-gpu-wire" }
+
+[profile.release]
+panic = "abort"
+debug = 1
+
+[profile.dev]
+panic = "abort"
+
+[workspace]

@@ -1,0 +1,13 @@
+# limina-netd-wire — the channel between the worker and its limina-netd: the shared region with
+# its two rings, the setup message, and the doorbell. Shared by limina-vmm and limina-netd so
+# neither depends on the other.
+[package]
+name = "limina-netd-wire"
+description = "The worker<->limina-netd channel: shared rings, setup message and doorbell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc        = { workspace = true }
+limina-ring = { workspace = true }

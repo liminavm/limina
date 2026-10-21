@@ -152,11 +152,27 @@ static int tx(nic *n, const uint8_t *frame, size_t len) {
 
 // Read one frame into f (header stripped); returns its length, 0 if none is pending.
 static size_t rx(nic *n, uint8_t *f) {
-    uint8_t b[BUF];
-    struct iovec iov = {b, sizeof b};
-    struct vmpktdesc pd = {.vm_pkt_size = sizeof b, .vm_pkt_iov = &iov, .vm_pkt_iovcnt = 1};
-    int count = 1;
-    if (vmnet_read(n->ifc, &pd, &count) != VMNET_SUCCESS || count != 1) return 0;
+    // MINIGUEST_RXBUF / MINIGUEST_RXCNT: the per-packet buffer size and packets per read.
+    static uint8_t bufs[64][BUF];
+    static size_t rxbuf, rxcnt;
+    if (!rxbuf) {
+        const char *e = getenv("MINIGUEST_RXBUF");
+        rxbuf = e ? (size_t)atol(e) : BUF;
+        e = getenv("MINIGUEST_RXCNT");
+        rxcnt = e ? (size_t)atol(e) : 1;
+    }
+    struct iovec iovs[64];
+    struct vmpktdesc pds[64];
+    for (size_t i = 0; i < rxcnt; i++) {
+        iovs[i] = (struct iovec){bufs[i], rxbuf};
+        pds[i] = (struct vmpktdesc){.vm_pkt_size = rxbuf, .vm_pkt_iov = &iovs[i], .vm_pkt_iovcnt = 1};
+    }
+    int count = (int)rxcnt;
+    vmnet_return_t st = vmnet_read(n->ifc, pds, &count);
+    if (st != VMNET_SUCCESS) { printf("[%s] vmnet_read status=%d\n", n->name, st); return 0; }
+    if (count < 1) return 0;
+    uint8_t *b = bufs[0];
+    struct vmpktdesc pd = pds[0];
     size_t off = n->vhdr ? 12 : 0;
     if (pd.vm_pkt_size < off + 14) return 0;
     if (off)
@@ -522,7 +538,7 @@ static int check(nic *n, const char *route) {
 
 // ---- modes ------------------------------------------------------------------------------------
 
-static int lease(const char *mode_s, const char *ifname, int vhdr, int hold) {
+static int lease(const char *mode_s, const char *ifname, int vhdr, int hold, int own_mac) {
     uint64_t mode = !strcmp(mode_s, "shared") ? VMNET_SHARED_MODE
                     : !strcmp(mode_s, "host") ? VMNET_HOST_MODE
                                               : VMNET_BRIDGED_MODE;
@@ -534,8 +550,8 @@ static int lease(const char *mode_s, const char *ifname, int vhdr, int hold) {
         printf("\n");
         if (!ifname) ifname = ifs && xpc_array_get_count(ifs) ? xpc_array_get_string(ifs, 0) : NULL;
     }
-    nic n = {.name = mode_s, .vhdr = vhdr};
-    if (start(&n, NULL, mode, mode == VMNET_BRIDGED_MODE ? ifname : NULL, 0)) return 1;
+    nic n = {.name = mode_s, .vhdr = vhdr, .mac = {0x5a, 0x94, 0xef, 0x11, 0x22, 0x33}};
+    if (start(&n, NULL, mode, mode == VMNET_BRIDGED_MODE ? ifname : NULL, own_mac)) return 1;
     if (mode == VMNET_BRIDGED_MODE) printf("[%s] bridged on %s\n", n.name, ifname);
     int rc = 1;
     if (dhcp(&n)) goto out;
@@ -847,14 +863,15 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("uid=%d\n", getuid());
     if (argc >= 3 && !strcmp(argv[1], "lease")) {
-        int vhdr = 0, hold = 0;
+        int vhdr = 0, hold = 0, own_mac = 0;
         const char *ifname = NULL;
         for (int i = 3; i < argc; i++) {
             if (!strcmp(argv[i], "--vhdr")) vhdr = 1;
+            else if (!strcmp(argv[i], "--own-mac")) own_mac = 1;
             else if (!strcmp(argv[i], "--hold") && i + 1 < argc) hold = atoi(argv[++i]);
             else ifname = argv[i];
         }
-        return lease(argv[2], ifname, vhdr, hold);
+        return lease(argv[2], ifname, vhdr, hold, own_mac);
     }
     if (argc == 2 && !strcmp(argv[1], "netobj")) return netobj();
     if (argc == 5 && !strcmp(argv[1], "ext") && !strcmp(argv[3], "--hold")) return ext_mode(argv[2], atoi(argv[4]));

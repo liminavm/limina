@@ -20,7 +20,7 @@ mod control;
 mod debug_ctl;
 mod debug_port;
 mod fido;
-mod gateway;
+mod forward;
 mod host_state;
 // macOS's own Modifier Keys configuration, which positional normalization must read past.
 mod hostmods;
@@ -36,6 +36,7 @@ mod runtime_ctl;
 mod sep;
 mod session;
 mod supervisor;
+mod uplinks;
 mod vcpu_policy;
 mod vdagent;
 mod venus_env;
@@ -60,10 +61,10 @@ struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
 
-    /// EFI firmware blob (EDK2 .fd) to load into guest RAM. The stock-baseline boot
-    /// path; mutually exclusive with --kernel. Optional under --window: windowed boots
-    /// default to the GOP firmware so EFI/GRUB/early-kernel render in the window (see
-    /// `resolve_windowed_firmware`). A headless boot still needs --firmware or --kernel.
+    /// EFI firmware image to load into guest RAM. The stock-baseline boot path; mutually
+    /// exclusive with --kernel. Optional under --window: windowed boots default to the bundled
+    /// or built firmware, Cardea's `efi.fd` (see `resolve_windowed_firmware`). A headless boot
+    /// still needs --firmware or --kernel.
     #[arg(long, conflicts_with = "kernel")]
     firmware: Option<PathBuf>,
 
@@ -323,6 +324,22 @@ struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
     efi_vars: Option<PathBuf>,
 
+    /// How the machine is described to the OS: `acpi` (the default for a firmware boot) or
+    /// `device-tree` (what a `--kernel` boot always gets, since an OS finds ACPI only through the
+    /// firmware). A resumed guest keeps the machine it was suspended on, whatever this says. A
+    /// managed VM takes it from `hardware.machine` (docs/design/firmware-and-acpi.md).
+    #[arg(long, value_enum)]
+    machine: Option<vmlib::schema::Machine>,
+
+    /// On the ACPI machine, whether the guest runs a console on the serial line: `off` (the
+    /// default), `both` (the firmware adds `console=` arguments to a Linux kernel's command line,
+    /// keeping the display's console and splash; forwarded as `--extra-bootargs`) or `only` (an
+    /// SPCR table makes the serial line the only console; forwarded as `--acpi-spcr`). The
+    /// device-tree machine always names the serial port. A managed VM takes it from
+    /// `hardware.serial_console`.
+    #[arg(long, value_enum, default_value_t)]
+    serial_console: vmlib::schema::SerialConsole,
+
     /// Advertise `VIRTIO_BALLOON_F_REPORTING` (FRQ fast-reclaim) to the guest — forwarded to the
     /// worker. OFF by default: a stock Linux guest that negotiates page reporting crashes on
     /// suspend-to-idle (upstream `virtballoon_freeze` frees the reporting virtqueue while its
@@ -350,6 +367,12 @@ struct Cli {
     /// bundle's `pipeline-cache.key`.
     #[arg(long, value_name = "FILE")]
     gpu_cache_key: Option<PathBuf>,
+
+    /// Keep the host shader cache — what the worker's Mesa compiles for this guest — in DIR,
+    /// forwarded to the worker. A managed VM keeps its own under `~/Library/Caches/Limina`;
+    /// without this flag a VM shares that directory's `shader-cache/adhoc`.
+    #[arg(long, value_name = "DIR")]
+    gpu_shader_cache: Option<PathBuf>,
 
     /// Stage-2 translation granule for the VM (macOS 26+). `4k` (the default) is what lets a
     /// 4 KiB-page guest map its virtio-gpu host-visible blobs at all (spikes/hv-ipa-granule/);
@@ -441,28 +464,36 @@ struct Cli {
     #[arg(long, value_parser = ["s2idle", "ignore"])]
     on_host_sleep: Option<String>,
 
-    /// Attach a user-mode NAT NIC: spawn and supervise a gvproxy gateway (DHCP/DNS/NAT,
-    /// no root) and connect the guest's virtio-net to it. The guest gets an IP and outbound
-    /// internet automatically (e.g. for SSH).
-    #[arg(long)]
+    /// Attach a NIC with outbound networking and an SSH forward: on vmnet shared (NAT through
+    /// macOS), moving to a user-mode NAT (limina-netd) when vmnet cannot serve — it will not
+    /// start, or a VPN takes its route — and back when it can. The guest takes its address by
+    /// DHCP on either side, and the SSH forward works the same on both.
+    #[arg(long, conflicts_with_all = ["net_vmnet", "net_netd"])]
     net: bool,
 
-    /// Capture the gvproxy gateway's `-debug` packet log to this file (DHCP/DNS/NAT — the
-    /// host-side network oracle). Requires --net; without it gvproxy logs quietly.
-    #[arg(long, requires = "net")]
-    net_log: Option<PathBuf>,
+    /// Attach a NIC on a vmnet interface alone: `shared` (NAT through macOS), `host`
+    /// (host-only) or `bridged:<interface>` (e.g. `bridged:en0`, a lease from the LAN). No SSH
+    /// forward: `limina address` names the guest's address, and only Apple's own tools reach it
+    /// from the host without a Local Network grant.
+    #[arg(long, value_name = "MODE", value_parser = parse_vmnet_mode, conflicts_with = "net_netd")]
+    net_vmnet: Option<String>,
 
-    /// Host port for inbound SSH to the guest (gvproxy's built-in `127.0.0.1:<port> → guest:22`
-    /// forward). When omitted, the first free port from 2222 up is auto-allocated, so two or more
-    /// VMs run in parallel without colliding — the resolved port is logged at startup. Pass an
-    /// explicit value to pin it (errors if that port is busy). Requires --net; must be 1024–65535.
-    #[arg(long, requires = "net")]
+    /// Attach a NIC on limina-netd alone, the user-mode NAT `--net` falls back on: the worker
+    /// spawns netd itself and talks to it over shared memory.
+    #[arg(long)]
+    net_netd: bool,
+
+    /// Host port for inbound SSH to the guest (`127.0.0.1:<port> → guest:22`). When omitted, the
+    /// first free port from 2222 up is auto-allocated, so two or more VMs run in parallel without
+    /// colliding — the resolved port is logged at startup. Pass an explicit value to pin it
+    /// (errors if that port is busy). Needs --net or --net-netd; must be 1024–65535.
+    #[arg(long)]
     ssh_port: Option<u16>,
 
-    /// Guest MAC address for the NAT NIC (aa:bb:cc:dd:ee:ff). Managed VMs pass their persistent
-    /// per-VM MAC from vm.toml; when omitted, the well-known vfkit MAC is used. The gateway's
-    /// static .2 lease is rebound to this MAC so DHCP and the SSH forward keep working.
-    #[arg(long, requires = "net", value_parser = parse_mac_arg)]
+    /// Guest MAC address for the NIC (aa:bb:cc:dd:ee:ff). Managed VMs pass their persistent
+    /// per-VM MAC from vm.toml; when omitted, `--net` derives one from the boot disk's path, so a
+    /// VM keeps its vmnet lease from boot to boot.
+    #[arg(long, value_parser = parse_mac_arg)]
     net_mac: Option<String>,
 
     /// Seconds to wait for an orderly guest power-off before force-killing.
@@ -578,6 +609,13 @@ enum Cmd {
     /// Print a running VM's SSH forward port, or move it to another host port. A move lasts
     /// until the VM exits; the port in its definition is the one the next start uses.
     SshPort(SshPortArgs),
+    /// Print the address a running VM's guest holds on its NIC, as its DHCP acknowledgement gave
+    /// it: the way to reach a bridged guest, whose address the LAN hands out.
+    Address(AddressArgs),
+    /// Move a running VM's `--net-auto` NIC to vmnet or limina-netd, as a VPN taking vmnet's
+    /// route would. Off by default: the VM refuses until its net-switch lever is on
+    /// (LIMINA_NET_SWITCH=1, the Debug menu, or `limina debug <vm> lever net-switch on`).
+    NetSwitch(NetSwitchArgs),
     /// Inject keyboard and pointer events into a running VM's virtio-input devices — the real
     /// device path the guest's seat sees, with no window or focus involved. Off by default: the
     /// VM refuses until its input-inject lever is on (LIMINA_INPUT_INJECT=1, the Debug menu, or
@@ -602,12 +640,28 @@ struct InputArgs {
 }
 
 #[derive(clap::Args, Debug)]
+struct NetSwitchArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
+    /// `vmnet` or `netd`.
+    side: runtime_ctl::NetSide,
+}
+
+#[derive(clap::Args, Debug)]
 struct SshPortArgs {
     /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
     /// supervisor pid.
     vm: String,
     /// The host port to move the forward to; omitted, the current one is printed.
     port: Option<u16>,
+}
+
+#[derive(clap::Args, Debug)]
+struct AddressArgs {
+    /// VM name, .liminavm bundle path, the boot-disk path of a flat `--disk` run, or a
+    /// supervisor pid.
+    vm: String,
 }
 
 #[derive(clap::Args, Debug)]
@@ -884,7 +938,7 @@ impl Cli {
 /// context create fails EMFILE, guest venus init dies and gnome-shell aborts at login
 /// (observed with the worker idling just 6 fds from the ceiling). Terminal launches
 /// inherit a high shell limit, which is why dev runs never hit it. Called first thing in
-/// main so every child (center → `limina start` → limina-vmm + gvproxy) inherits the
+/// main so every child (center → `limina start` → limina-vmm → limina-netd) inherits the
 /// raised limit; the worker also raises its own. macOS rejects an unbounded setrlimit
 /// (rlim_max reads RLIM_INFINITY but the kernel caps at kern.maxfilesperproc), so clamp
 /// to OPEN_MAX (10240), which is always accepted and plenty for any session.
@@ -915,13 +969,6 @@ fn main() -> Result<()> {
     // (see `limina_paniclog`). `supervisor::install_panic_kill_hook` chains on top of this later.
     limina_paniclog::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
 
-    // Death-pact reaper mode (hidden, spawned by the gateway alongside gvproxy). Handled BEFORE
-    // clap/logging/AppKit so it stays a tiny process that only watches a pipe and reaps gvproxy
-    // when this supervisor dies. See gateway::spawn_death_pact_watcher / run_reaper.
-    if std::env::args().nth(1).as_deref() == Some(gateway::REAP_GATEWAY_ARG) {
-        gateway::run_reaper();
-    }
-
     // Default to warn-and-up so a production run is quiet; RUST_LOG overrides it (RUST_LOG=info
     // restores the lifecycle log), and a running VM can change it (`limina debug`, the Debug
     // menu). User-facing output (e.g. the SSH-forward hint below) is printed directly, not via
@@ -941,6 +988,16 @@ fn main() -> Result<()> {
         Some(Cmd::Rm(args)) => cmd_rm(args),
         Some(Cmd::Debug(args)) => cmd_debug(args),
         Some(Cmd::SshPort(args)) => cmd_ssh_port(args),
+        Some(Cmd::Address(args)) => cmd_address(args),
+        Some(Cmd::NetSwitch(args)) => {
+            let pid = debug_target_pid(&args.vm)?;
+            runtime_ctl::request(pid, runtime_ctl::Request::NetSwitch(args.side))?;
+            println!(
+                "{}: moving the NIC; the VM log says when it is done",
+                args.vm
+            );
+            Ok(())
+        }
         Some(Cmd::Input(args)) if inject::is_keys(&args.verb) => {
             // The client's own answer: no VM to find, no lever to ask.
             for l in inject::key_list() {
@@ -1121,6 +1178,7 @@ fn cmd_ls() -> Result<()> {
             Ok(cfg) => {
                 let mem = cfg.hardware.memory.0.clone();
                 let ssh = match cfg.networks.first() {
+                    Some(n) if n.mode == vmlib::schema::NetMode::Bridged => "bridged".to_string(),
                     Some(n) if n.ssh_port != 0 => n.ssh_port.to_string(),
                     Some(_) => "auto".to_string(),
                     None => "-".to_string(),
@@ -1447,6 +1505,24 @@ fn cmd_ssh_port(args: SshPortArgs) -> Result<()> {
     Ok(())
 }
 
+/// `limina address`: ask the VM's supervisor which address its guest holds.
+fn cmd_address(args: AddressArgs) -> Result<()> {
+    let pid = debug_target_pid(&args.vm)?;
+    match runtime_ctl::request(pid, runtime_ctl::Request::Info)?.address {
+        runtime_ctl::GuestAddress::At(ip) => println!("{ip}"),
+        runtime_ctl::GuestAddress::None => {
+            anyhow::bail!(
+                "{} has no address yet (no NIC, or no DHCP lease yet)",
+                args.vm
+            )
+        }
+        runtime_ctl::GuestAddress::Failed(why) => {
+            anyhow::bail!("{}'s network did not start: {why}", args.vm)
+        }
+    }
+    Ok(())
+}
+
 /// The supervisor pid `limina debug` means: a managed VM first (the existing contract for every
 /// verb), then a flat run's boot disk, then a bare pid.
 fn debug_target_pid(vm: &str) -> Result<u32> {
@@ -1501,7 +1577,7 @@ fn cli_from_definition(
     bundle: &vmlib::bundle::VmBundle,
     ov: &StartOverrides,
 ) -> Result<Cli> {
-    use vmlib::schema::{GpuMode, Memory, memory_to_cli};
+    use vmlib::schema::{GpuMode, Memory, NetMode, memory_to_cli};
 
     let (ram_mib, memory) = match &ov.memory {
         Some(s) => memory_to_cli(&Memory::parse(s).context("--memory")?)?,
@@ -1529,15 +1605,23 @@ fn cli_from_definition(
         });
     }
 
-    let net = !cfg.networks.is_empty();
+    let nic = cfg.networks.first();
+    let net = nic.is_some_and(|n| n.mode == NetMode::Nat);
+    let bridged = match nic {
+        Some(n) if n.mode == NetMode::Bridged => Some(
+            n.uplink
+                .clone()
+                .context("a bridged [[network]] needs the host interface it joins (uplink)")?,
+        ),
+        _ => None,
+    };
     let ssh_port = ov.ssh_port.or_else(|| {
-        cfg.networks
-            .first()
+        nic.filter(|n| n.mode == NetMode::Nat)
             .and_then(|n| (n.ssh_port != 0).then_some(n.ssh_port))
     });
     anyhow::ensure!(
         net || ssh_port.is_none(),
-        "--ssh-port needs a [[network]] in the definition"
+        "--ssh-port needs a NAT [[network]] in the definition (a bridged one has no SSH forward)"
     );
 
     // M9.2 managed-VM suspend wiring. Always arm suspend by giving the worker a snapshot path (the
@@ -1583,6 +1667,8 @@ fn cli_from_definition(
         tpm: cfg.hardware.tpm,
         tpm_state: cfg.hardware.tpm.then(|| bundle.tpm_state()),
         efi_vars: Some(bundle.efi_vars()),
+        machine: Some(cfg.hardware.machine),
+        serial_console: cfg.hardware.serial_console,
         ram_mib,
         vsock_port: None,
         vsock_socket: None,
@@ -1622,6 +1708,7 @@ fn cli_from_definition(
         reclaim: ov.reclaim.unwrap_or(cfg.hardware.reclaim),
         gpu_software_2d: cfg.display.gpu == GpuMode::Software2d,
         gpu_cache_key: Some(bundle.pipeline_cache_key()),
+        gpu_shader_cache: vmlib::bundle::shader_cache_dir(&cfg.identity.uuid),
         ipa_granule: cfg.hardware.ipa_granule,
         // A definition that asks for it on a Mac that cannot do it boots without it, like any
         // other host capability the guest is offered only where it exists.
@@ -1640,7 +1727,8 @@ fn cli_from_definition(
         no_fido: !cfg.hardware.fido,
         on_host_sleep: Some(cfg.power.on_host_sleep.as_flag().to_string()),
         net,
-        net_log: None,
+        net_vmnet: bridged.map(|ifname| format!("bridged:{ifname}")),
+        net_netd: false,
         net_mac: cfg.networks.first().map(|n| n.mac.clone()),
         ssh_port,
         shutdown_grace_secs: ov.shutdown_grace_secs.unwrap_or(20),
@@ -1672,7 +1760,6 @@ fn cli_from_definition(
 /// tail of [`run_vm`] plus six in the windowed AppKit timer), all via `process::exit`, so a
 /// teardown step added to only six of them is the natural bug. Each callee is idempotent.
 fn exit_cleanup() {
-    gateway::cleanup();
     control::cleanup();
     debug_ctl::cleanup();
     runtime_ctl::cleanup();
@@ -1730,6 +1817,8 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // anything below reads cli.snapshot_file.
     default_arm_flat_suspend(&mut cli)?;
     let cli = cli;
+    // Resolved before the windowed path below moves fields out of `cli`.
+    let machine = machine(&cli)?;
     // Resolve modifier normalization up front (default ON; --no-normalize-modifiers opts out) before any
     // field of `cli` is moved out below, so the windowed path can use it freely. It is applied to
     // the PHYSICAL key, so it needs macOS's own Modifier Keys configuration to read past — that is
@@ -1829,7 +1918,9 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     // CpuPressure over the same control plane and answers with how many vCPUs to keep online.
     // `new` returns None whenever the mode is disabled or the VM has no vCPUs to spare, and that
     // None is what withholds the `vcpu` capability — so the guest never reports either.
-    let vcpu_policy = vcpu_policy::VcpuPolicy::new(cli.cpus, cli.cpu_reclaim);
+    let little = if cli.cpufreq { cli.little_vcpus } else { 0 };
+    let vcpu_policy = vcpu_policy::VcpuPolicy::new(cli.cpus, cli.cpu_reclaim)
+        .map(|p| p.with_little_vcpus(little));
 
     // Forward the VM options to the worker's CLI.
     let mut args: Vec<String> = vec![
@@ -1868,25 +1959,13 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                     .ok()
                     .and_then(|p| p.parent().map(Path::to_path_buf))
                     .unwrap_or_else(|| PathBuf::from("."));
-                let env_override = std::env::var_os("LIMINA_GOP_FIRMWARE").map(PathBuf::from);
-                let (path, is_gop) =
-                    resolve_windowed_firmware(&exe_dir, env_override, |p| p.exists()).context(
+                let env_override = std::env::var_os("LIMINA_FIRMWARE").map(PathBuf::from);
+                let path = resolve_windowed_firmware(&exe_dir, env_override, |p| p.exists())
+                    .context(
                         "no --firmware given and no default firmware found; pass --firmware or \
-                         build the GOP firmware with `GOP=1 scripts/build-krun-efi.sh`",
+                         build the firmware with `scripts/build-firmware.sh`",
                     )?;
-                if is_gop {
-                    log::info!(
-                        "windowed boot: using GOP firmware {} (EFI/GRUB render in the window)",
-                        path.display()
-                    );
-                } else {
-                    log::warn!(
-                        "windowed boot: GOP firmware not found; using silent firmware {} \
-                         (serial-only boot console — build the GOP firmware with \
-                         `GOP=1 scripts/build-krun-efi.sh` for a graphical boot console)",
-                        path.display()
-                    );
-                }
+                log::info!("windowed boot: using firmware {}", path.display());
                 path
             }
         };
@@ -1917,6 +1996,15 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         if let Some(vars) = vars {
             args.push("--efi-vars".into());
             args.push(path_arg(&vars)?);
+        }
+        // The worker reads these only on the ACPI machine, which is decided per spawn.
+        match cli.serial_console {
+            vmlib::schema::SerialConsole::Off => {}
+            vmlib::schema::SerialConsole::Both => {
+                args.push("--extra-bootargs".into());
+                args.push(vmlib::schema::SerialConsole::BOTH_BOOTARGS.into());
+            }
+            vmlib::schema::SerialConsole::Only => args.push("--acpi-spcr".into()),
         }
     }
     if let Some(rootfs) = &cli.rootfs {
@@ -2057,6 +2145,12 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--gpu-cache-key".into());
         args.push(path_arg(key)?);
     }
+    let shader_cache = cli
+        .gpu_shader_cache
+        .clone()
+        .unwrap_or_else(vmlib::bundle::adhoc_shader_cache_dir);
+    args.push("--gpu-shader-cache".into());
+    args.push(path_arg(&shader_cache)?);
     args.push("--ipa-granule".into());
     args.push(cli.ipa_granule.flag().into());
     if cli.no_battery {
@@ -2145,38 +2239,65 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         args.push("--balloon-deflate-on-oom".into());
     }
 
-    // User-mode NAT: spawn + supervise a gvproxy gateway and connect the guest NIC to it.
-    // Kept alive for the VM's lifetime; cleaned up on both exit paths (Drop here, the global
-    // gateway::cleanup() in the windowed timer's process::exit).
-    let gateway = if cli.net {
-        // Validate only an *explicit* port; omitting --ssh-port auto-allocates a free one (so two
-        // VMs can run in parallel without the user hand-picking non-colliding ports).
+    anyhow::ensure!(
+        cli.net_mac.is_none() || cli.net || cli.net_vmnet.is_some() || cli.net_netd,
+        "--net-mac needs a NIC: pass --net, --net-vmnet or --net-netd"
+    );
+    anyhow::ensure!(
+        cli.ssh_port.is_none() || cli.net || cli.net_netd,
+        "--ssh-port needs a NIC with a forward: pass --net or --net-netd"
+    );
+    let mut ssh_forward = None;
+    if cli.net || cli.net_netd {
+        if cli.net {
+            // On vmnet every guest of the host shares one segment and one pool of leases, so a VM
+            // needs a MAC of its own, and the same one at every boot.
+            let mac = cli.net_mac.clone().unwrap_or_else(|| disk_mac(&cli.disk));
+            println!("vmnet NIC with limina-netd to fall back on, guest MAC {mac}");
+            args.push("--net-auto".into());
+            args.push("--net-mac".into());
+            args.push(mac);
+        } else {
+            println!("limina-netd NIC");
+            args.push("--net-netd".into());
+            if let Some(mac) = &cli.net_mac {
+                args.push("--net-mac".into());
+                args.push(mac.clone());
+            }
+        }
+        // The worker binds the SSH forward (netd carries its connections), so it is up by the
+        // time the guest is; the port is checked here so a taken one fails before the boot.
         if let Some(p) = cli.ssh_port {
             anyhow::ensure!(
-                p >= gateway::SSH_PORT_MIN,
-                "--ssh-port must be between {} and 65535 (gvproxy's range), got {p}",
-                gateway::SSH_PORT_MIN
+                p >= forward::SSH_PORT_MIN,
+                "--ssh-port must be between {} and 65535, got {p}",
+                forward::SSH_PORT_MIN
             );
         }
-        let gw = gateway::start(cli.net_log.as_deref(), cli.ssh_port, cli.net_mac.as_deref())
-            .context("starting the gvproxy NAT gateway")?;
-        // Surface the resolved port — with auto-allocation the user can't know it in advance.
-        // User-facing output: print directly so it shows at the default warn level.
-        println!(
-            "guest SSH forward ready: ssh -p {} <user>@127.0.0.1",
-            gw.ssh_port()
-        );
-        runtime_ctl::set_forward(Some(gw.forward()));
-        args.push("--net-gvproxy".into());
-        args.push(path_arg(gw.socket_path())?);
-        if let Some(mac) = &cli.net_mac {
-            args.push("--net-mac".into());
-            args.push(mac.clone());
+        let port = forward::allocate_ssh_port(cli.ssh_port)?;
+        args.push("--net-forward".into());
+        args.push(format!("127.0.0.1:{port}:22"));
+        let link = worker_link(&mut links, "--net-control-fd");
+        if cli.net {
+            runtime_ctl::set_net_control(Some(link.clone()));
         }
-        Some(gw)
-    } else {
-        None
-    };
+        runtime_ctl::follow_address(link.clone());
+        ssh_forward = Some(forward::SshForward::on_worker(port, link));
+        println!("guest SSH forward ready: ssh -p {port} <user>@127.0.0.1");
+    }
+    runtime_ctl::set_forward(ssh_forward.clone());
+    if let Some(mode) = &cli.net_vmnet {
+        // Every vmnet guest of a mode shares one segment, and a bridged one the LAN's, so the
+        // fixed vfkit MAC would collide between two VMs here; and each DHCP server keeps a lease
+        // per MAC, so the MAC stays the same from boot to boot.
+        let mac = cli.net_mac.clone().unwrap_or_else(|| disk_mac(&cli.disk));
+        println!("vmnet {mode} NIC, guest MAC {mac}");
+        args.push("--net-vmnet".into());
+        args.push(mode.clone());
+        args.push("--net-mac".into());
+        args.push(mac);
+        runtime_ctl::follow_address(worker_link(&mut links, "--net-control-fd"));
+    }
 
     // The scanout pool belongs to the DEVICE, so it is pushed here — above the windowed branch,
     // which returns, and above the capture branch. It has been placed inside each of those in
@@ -2334,7 +2455,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             grace,
             width,
             height,
-            gateway,
+            ssh: ssh_forward,
             control,
             resize_socket,
             remap,
@@ -2351,6 +2472,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
             ipa_granule: cli.ipa_granule,
             nested_virt: cli.nested_virt,
             gpu_metal: cli.gpu_metal,
+            machine,
             on_window_close: cli.on_window_close,
             // The restore splash lives beside the snapshot (`splash_beside`).
             splash_save_path: cli
@@ -2404,13 +2526,13 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         suspend_state_file: cli.suspend_state_file.clone(),
         nested_virt: cli.nested_virt,
         gpu_metal: cli.gpu_metal,
+        machine,
         links,
     };
 
     let code = supervisor::run(
         &spec,
         control.as_ref(),
-        gateway.as_ref(),
         cli.input,
         headless_display.as_ref(),
     )?;
@@ -2425,6 +2547,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
                 ipa_granule: Some(cli.ipa_granule),
                 nested_virt: Some(supervisor::spawned_nested_virt()),
                 gpu_metal: Some(supervisor::spawned_gpu_metal()),
+                machine: Some(crate::supervisor::spawned_machine()),
             };
             match vmlib::state::set_suspended(state_file, Some(sus)) {
                 Ok(()) => log::info!("VM suspended; snapshot at {}", snapshot.display()),
@@ -2451,9 +2574,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
     if let Some(snapshot) = &cli.snapshot_file {
         let _ = std::fs::remove_file(snapshot.with_extension("bin.consumed"));
     }
-    // Explicit: process::exit skips destructors, so tear the gateway + control socket
-    // down before exiting.
-    drop(gateway);
+    // Explicit: process::exit skips destructors, so tear the control socket down before exiting.
     exit_cleanup();
     std::process::exit(code);
 }
@@ -2529,17 +2650,27 @@ fn resolve_vmm_bin(flag: Option<PathBuf>) -> Result<PathBuf> {
     Ok(sibling)
 }
 
-/// krunkit's serial-only EDK2 blob — the degraded fallback when no GOP firmware is found.
-/// A guest booted on it still works; only the pre-DRM boot console (firmware/GRUB/early
-/// kernel) is invisible in the window (it goes to serial instead).
-const SILENT_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
+/// The machine a cold boot describes: `--machine`, else ACPI for a firmware boot and a device
+/// tree for a `--kernel` one, which cannot have ACPI (the OS finds it only through the firmware).
+fn machine(cli: &Cli) -> Result<vmlib::schema::Machine> {
+    use vmlib::schema::Machine;
+    match (cli.machine, cli.kernel.is_some()) {
+        (Some(Machine::Acpi), true) => anyhow::bail!(
+            "--machine acpi needs a firmware boot: an OS finds ACPI only through the firmware, \
+             and --kernel boots without one"
+        ),
+        (Some(m), _) => Ok(m),
+        (None, true) => Ok(Machine::DeviceTree),
+        (None, false) => Ok(Machine::Acpi),
+    }
+}
 
-/// Candidate GOP-firmware locations for a windowed boot, in priority order:
-///   1. `env_override` (`$LIMINA_GOP_FIRMWARE`) — explicit operator choice;
+/// Candidate firmware locations for a windowed boot, in priority order:
+///   1. `env_override` (`$LIMINA_FIRMWARE`) — explicit operator choice;
 ///   2. the app bundle's Resources (`limina.app/Contents/MacOS/limina` → `../Resources/…`)
 ///      — the productized location once we bundle the firmware;
-///   3. the in-repo dev build artifact (`target/<profile>/limina` → `../krun-efi/…`),
-///      produced by `scripts/build-krun-efi.sh`.
+///   3. the in-repo dev build artifact (`target/<profile>/limina` → `../firmware/…`),
+///      produced by `scripts/build-firmware.sh`.
 ///
 /// Pure (no I/O) so the ordering is unit-testable; existence is checked by the caller.
 fn windowed_firmware_candidates(exe_dir: &Path, env_override: Option<PathBuf>) -> Vec<PathBuf> {
@@ -2547,36 +2678,31 @@ fn windowed_firmware_candidates(exe_dir: &Path, env_override: Option<PathBuf>) -
     if let Some(p) = env_override {
         v.push(p);
     }
-    v.push(exe_dir.join("../Resources/KRUN_EFI.gop.fd"));
-    v.push(exe_dir.join("../krun-efi/KRUN_EFI.gop.fd"));
+    v.push(exe_dir.join("../Resources/efi.fd"));
+    v.push(exe_dir.join("../firmware/efi.fd"));
     v
 }
 
-/// Resolve the firmware for a windowed boot when the user gave no explicit `--firmware`.
-/// Prefers the GOP (graphical) firmware so the full boot renders in the window; degrades
-/// to the silent firmware if none is found. Returns `(path, is_gop)`, or `None` if not
-/// even the silent firmware exists. `exists` is injected so the selection is unit-testable.
+/// Resolve the firmware for a windowed boot when the user gave no explicit `--firmware`: the
+/// first candidate that exists, or `None`. `exists` is injected so the selection is
+/// unit-testable.
 fn resolve_windowed_firmware(
     exe_dir: &Path,
     env_override: Option<PathBuf>,
     exists: impl Fn(&Path) -> bool,
-) -> Option<(PathBuf, bool)> {
-    for p in windowed_firmware_candidates(exe_dir, env_override) {
-        if exists(&p) {
-            return Some((p, true));
-        }
-    }
-    let silent = PathBuf::from(SILENT_FIRMWARE);
-    exists(&silent).then_some((silent, false))
+) -> Option<PathBuf> {
+    windowed_firmware_candidates(exe_dir, env_override)
+        .into_iter()
+        .find(|p| exists(p))
 }
 
 /// The windowed-boot firmware limina would actually pick right now, for pre-flight. Same
 /// resolution the start path uses (`resolve_windowed_firmware`), with the real environment
 /// and executable location filled in.
-pub(crate) fn resolve_windowed_firmware_for_preflight() -> Option<(PathBuf, bool)> {
+pub(crate) fn resolve_windowed_firmware_for_preflight() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?.to_path_buf();
-    let env_override = std::env::var_os("LIMINA_GOP_FIRMWARE").map(PathBuf::from);
+    let env_override = std::env::var_os("LIMINA_FIRMWARE").map(PathBuf::from);
     resolve_windowed_firmware(&exe_dir, env_override, |p| p.exists())
 }
 
@@ -2592,6 +2718,44 @@ fn fingerprint_vm_label(window_title: Option<&str>) -> String {
     window_title
         .map(str::to_owned)
         .unwrap_or_else(|| "your VM".to_string())
+}
+
+/// clap value-parser for `--net-vmnet`: `shared`, `host` or `bridged:<interface>`.
+fn parse_vmnet_mode(s: &str) -> Result<String, String> {
+    match s.split_once(':') {
+        None if s == "shared" || s == "host" => Ok(s.to_string()),
+        Some(("bridged", ifname)) if !ifname.is_empty() => Ok(s.to_string()),
+        _ => Err(format!(
+            "expected shared, host or bridged:<interface>, got {s:?}"
+        )),
+    }
+}
+
+/// A random locally-administered unicast MAC, `aa:bb:cc:dd:ee:ff`.
+/// The MAC a `--net` VM that names none takes: one derived from its boot disk's path, so it
+/// keeps its vmnet lease from boot to boot and two disks never share one. With no disk, a random
+/// one.
+fn disk_mac(disks: &[String]) -> String {
+    match disks.first() {
+        Some(disk) => {
+            let path = std::fs::canonicalize(disk)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| disk.clone());
+            vmlib::schema::mac_for_uuid(&path)
+        }
+        None => random_local_mac(),
+    }
+}
+
+fn random_local_mac() -> String {
+    let mut b = [0u8; 6];
+    // SAFETY: arc4random_buf fills exactly the buffer it is given.
+    unsafe { libc::arc4random_buf(b.as_mut_ptr().cast(), b.len()) };
+    b[0] = (b[0] & 0xfc) | 0x02;
+    b.iter()
+        .map(|o| format!("{o:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// clap value-parser for `--net-mac`: validate + normalize `aa:bb:cc:dd:ee:ff` to lowercase.
@@ -3141,6 +3305,7 @@ mod tests {
                 ipa_granule: None,
                 nested_virt: None,
                 gpu_metal: None,
+                machine: None,
             }),
         )
         .unwrap();
@@ -3257,33 +3422,30 @@ mod tests {
         let exe = Path::new("/app/Contents/MacOS");
         let c = windowed_firmware_candidates(exe, Some(PathBuf::from("/custom/fw.fd")));
         assert_eq!(c[0], PathBuf::from("/custom/fw.fd"));
-        assert_eq!(c[1], exe.join("../Resources/KRUN_EFI.gop.fd"));
-        assert_eq!(c[2], exe.join("../krun-efi/KRUN_EFI.gop.fd"));
+        assert_eq!(c[1], exe.join("../Resources/efi.fd"));
+        assert_eq!(c[2], exe.join("../firmware/efi.fd"));
         // Without an env override the bundle path leads.
         let c = windowed_firmware_candidates(exe, None);
-        assert_eq!(c[0], exe.join("../Resources/KRUN_EFI.gop.fd"));
+        assert_eq!(c[0], exe.join("../Resources/efi.fd"));
         assert_eq!(c.len(), 2);
     }
 
     #[test]
     fn resolves_dev_gop_artifact_when_present() {
         let exe = Path::new("/repo/target/debug");
-        let dev = exe.join("../krun-efi/KRUN_EFI.gop.fd");
+        let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [dev.clone()].into_iter().collect();
-        let (p, is_gop) =
-            resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
+        let p = resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
         assert_eq!(p, dev);
-        assert!(is_gop, "the GOP artifact must be reported as GOP");
     }
 
     #[test]
     fn bundled_gop_wins_over_dev_artifact() {
         let exe = Path::new("/app/Contents/MacOS");
-        let bundle = exe.join("../Resources/KRUN_EFI.gop.fd");
-        let dev = exe.join("../krun-efi/KRUN_EFI.gop.fd");
+        let bundle = exe.join("../Resources/efi.fd");
+        let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [bundle.clone(), dev].into_iter().collect();
-        let (p, _) =
-            resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
+        let p = resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
         assert_eq!(p, bundle);
     }
 
@@ -3291,24 +3453,11 @@ mod tests {
     fn env_override_wins_over_everything() {
         let exe = Path::new("/repo/target/debug");
         let custom = PathBuf::from("/custom/fw.fd");
-        let dev = exe.join("../krun-efi/KRUN_EFI.gop.fd");
+        let dev = exe.join("../firmware/efi.fd");
         let present: HashSet<PathBuf> = [custom.clone(), dev].into_iter().collect();
-        let (p, is_gop) =
-            resolve_windowed_firmware(exe, Some(custom.clone()), |q| present.contains(q))
-                .expect("resolves");
+        let p = resolve_windowed_firmware(exe, Some(custom.clone()), |q| present.contains(q))
+            .expect("resolves");
         assert_eq!(p, custom);
-        assert!(is_gop);
-    }
-
-    #[test]
-    fn falls_back_to_silent_when_no_gop_present() {
-        let exe = Path::new("/repo/target/debug");
-        let silent = PathBuf::from(SILENT_FIRMWARE);
-        let present: HashSet<PathBuf> = [silent.clone()].into_iter().collect();
-        let (p, is_gop) =
-            resolve_windowed_firmware(exe, None, |q| present.contains(q)).expect("resolves");
-        assert_eq!(p, silent);
-        assert!(!is_gop, "the silent firmware must be reported as non-GOP");
     }
 
     #[test]
@@ -3474,7 +3623,7 @@ mod tests {
             config_version: CONFIG_VERSION,
             identity: Identity {
                 name: Some("Workstation".into()),
-                uuid: "u".into(),
+                uuid: "3f2c1e9a-0000-4000-8000-000000000001".into(),
                 created: "t".into(),
             },
             hardware: Hardware {
@@ -3499,6 +3648,7 @@ mod tests {
                 mode: NetMode::Nat,
                 mac: "5a:00:00:00:00:01".into(),
                 ssh_port: 2299,
+                uplink: None,
             }],
             shares: vec![ShareEntry {
                 name: Some("Projects".into()),
@@ -3555,7 +3705,7 @@ mod tests {
         assert_eq!(
             cli.net_mac.as_deref(),
             Some("5a:00:00:00:00:01"),
-            "the persistent per-VM MAC reaches the worker + gateway"
+            "the persistent per-VM MAC reaches the worker"
         );
         assert!(!cli.window);
         assert!(cli.gpu_software_2d);
@@ -3568,6 +3718,12 @@ mod tests {
             )),
             "a managed VM keeps one pipeline-cache key, in its bundle"
         );
+        assert_eq!(
+            cli.gpu_shader_cache,
+            vmlib::bundle::shader_cache_dir("3f2c1e9a-0000-4000-8000-000000000001"),
+            "a managed VM keeps its own host shader cache, keyed by its uuid"
+        );
+        assert!(cli.gpu_shader_cache.is_some());
         assert_eq!(
             cli.ipa_granule,
             vmlib::schema::IpaGranule::FourK,
@@ -3710,6 +3866,7 @@ mod tests {
                 mode: NetMode::Nat,
                 mac: "m".into(),
                 ssh_port: 0,
+                uplink: None,
             }],
             shares: vec![],
             boot: BootCfg::default(),

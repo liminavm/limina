@@ -7,7 +7,7 @@ keyboard), `docs/input-and-windows.md` (the input stack as a whole).
 ## 1. The gap
 
 Between `ExitBootServices` and the moment the guest kernel binds `virtio_input`, the guest has
-**no keyboard**. The firmware's keyboard is the firmware's own (`VirtioKeyboardDxe`, ConIn), and
+**no keyboard**. The firmware's keyboard is the firmware's own (the virtio-input driver in `third_party/cardea/firmware/src/virtio/input.rs`, ConIn), and
 it is explicitly torn down on the way out; Linux's is `virtio_input`. Anything that prompts from
 the initramfs — a LUKS passphrase, the dracut or systemd emergency shell, a fsck confirmation —
 therefore cannot be answered.
@@ -47,13 +47,12 @@ The controller is already present in every VM: `--usb` is on by default (`crates
 ## 3. The handoff is self-correcting
 
 The virtio-input device is activated exactly when the guest driver reaches DRIVER_OK. The
-firmware resets it on its way out — `VirtioKeyboardExitBoot()` calls
-`SetDeviceStatus(Dev->VirtIo, 0)` (`OvmfPkg/VirtioKeyboardDxe/VirtioKeyboard.c:1185-1202`) —
-which, with the libkrun reset→`Inactive` fix, yields an unconditional timeline:
+firmware resets it on its way out, at ExitBootServices
+(`third_party/cardea/firmware/src/virtio/input.rs:4-7`), which, with the libkrun reset→`Inactive` fix, yields an unconditional timeline:
 
 | phase                          | virtio keyboard          | keys carried by |
 |--------------------------------|--------------------------|-----------------|
-| firmware / GRUB                | Activated (VirtioKeyboardDxe) | virtio     |
+| firmware / GRUB                | Activated (firmware driver) | virtio     |
 | ExitBootServices → initramfs   | **Inactive** (reset at exit-boot) | **USB gadget** |
 | after pivot, `virtio_input` binds | Activated             | virtio          |
 | reboot / kexec                 | reset → Inactive         | USB gadget      |
@@ -102,11 +101,12 @@ and the gadget's own FIFO is perishable for the same reason.
 
 ## 5. Load-bearing rules
 
-- **`bInterfaceSubClass` / `bInterfaceProtocol` stay 0/0.** EDK2's `UsbKbDxe` binds only
-  boot-protocol keyboards, so 0/0 keeps the gadget invisible to the firmware. Linux's
-  `hid-generic` binds on class 3 regardless. This is not a shortcut: EFI ConIn aggregates every
-  keyboard it finds, so a boot-protocol gadget alongside `VirtioKeyboardDxe` makes **every
-  keystroke at GRUB arrive twice**. Boot-protocol and VirtioKeyboardDxe are mutually exclusive —
+- **`bInterfaceSubClass` / `bInterfaceProtocol` stay 0/0.** Cardea has no USB stack, so the
+  gadget is invisible to the firmware whatever it declares. Linux's `hid-generic` binds on class 3
+  regardless. The rule stays: a firmware with a boot-protocol keyboard driver (edk2's `UsbKbDxe`
+  binds only boot-protocol keyboards) aggregates every keyboard it finds into ConIn, so a
+  boot-protocol gadget alongside the firmware's virtio keyboard would make **every keystroke at
+  GRUB arrive twice**. Boot-protocol and the firmware's virtio keyboard are mutually exclusive —
   see §7.
 - **On the USB→virtio flip, emit one all-released report on the USB side, before forwarding the
   event that triggered the flip.** Otherwise a key held across the moment the driver bound stays
@@ -146,17 +146,15 @@ The USB gadget is the floor for the pre-driver window and nothing more.
   virtio-input is kept either way; moving only the keyboard off it buys nothing.
 - **It is the half we own end-to-end.** The USB path runs through the guest's `hid-generic`.
 
-## 7. Why `VirtioKeyboardDxe` stays
+## 7. Why the firmware's virtio keyboard stays
 
-Reaching the gadget from the firmware would mean adding `XhciDxe`, `UsbBusDxe`, `UsbKbDxe` and —
-because `XhciDxe` is a `PciIo` driver while our controller is a DT `generic-xhci` platform
-device — `NonDiscoverablePciDeviceDxe` plus a registration DXE, to a platform
-(`ArmVirtPkg/ArmVirtKrun.dsc`) that carries **no USB stack at all** today. That is four drivers
-and a shim on a boot-critical path, replacing one vendored driver already validated at the GRUB
-menu (`ArmVirtKrun.dsc:336`, `ArmVirtKrun.fdf:163`).
+Reaching the gadget from the firmware would mean writing an xHCI host driver, a USB bus layer
+and a HID keyboard driver for Cardea, which carries **no USB stack at all** today. That is a
+whole USB stack on a boot-critical path, replacing one small driver already validated at the GRUB
+menu (`third_party/cardea/firmware/src/virtio/input.rs`).
 
 Revisit only if the firmware needs the USB stack for an independent reason (pre-boot FIDO, USB
-boot media). At that point dropping `VirtioKeyboardDxe` is nearly free — and, per §5, becomes
+boot media). At that point dropping the virtio keyboard driver is nearly free — and, per §5, becomes
 mandatory the moment the gadget declares boot protocol.
 
 ## 8. Verification

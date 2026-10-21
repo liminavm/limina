@@ -16,7 +16,7 @@
 #   checkout = "<path>"   use this working tree as the dependency, as it stands: its HEAD is what
 #                         gets built, whatever the pin says. For iterating before a bump exists.
 #                         Builds that compile the tree in place (cargo path deps, host Mesa) see
-#                         uncommitted edits too; the container builds (edk2, kernel) fetch the
+#                         uncommitted edits too; the container builds (the kernel) fetch the
 #                         HEAD commit, so an uncommitted change there is NOT built.
 # Paths may start with `~/` or be relative to the limina checkout.
 #

@@ -10,7 +10,7 @@
 //! What this pins:
 //! - the s2idle round-trip itself on the same worker (libkrun 0072 sticky queue re-arm:
 //!   the thaw's bus-fallback re-negotiation lands on re-armed rings, same boot_id, SSH
-//!   returns through the same gvproxy);
+//!   returns through the same forward);
 //! - the **stock wallclock benefit that motivates host-sleep s2idle**: the kernel's thaw
 //!   re-reads the (libkrun 0088 host-anchored) RTC and injects the slept duration, so the
 //!   guest comes back with a correct CLOCK_REALTIME after a real gap — chronyd stopped,
@@ -432,7 +432,7 @@ fn venus_session_survives_inplace_s2idle() {
 
     // Neither battery nor audio is part of what this test measures; drop them so the s2idle
     // quiesce has the smallest device set to freeze (same as the snapshot gate test). No MAC
-    // pinning needed: the worker and gvproxy never die here.
+    // pinning needed: the worker and its NIC never die here.
     let cfg = base_cfg
         .with_supervisor_arg("--no-snd")
         .with_supervisor_arg("--no-battery")

@@ -116,6 +116,7 @@ impl Guest {
             cmd::Commit {
                 seqno: self.seqno,
                 feedback,
+                ..Default::default()
             },
             &[],
         );
@@ -552,9 +553,14 @@ kernel void readtb(constant Args& a [[buffer(0)]], uint tid [[thread_position_in
 
 /// Writes `0xC0FFEE00 + i` into `n` words at GPU address `dst` with the poke kernel.
 fn poke(g: &mut Guest, dst: u64, n: u32) {
+    create_library(g, 1, MSL, BufRef::NONE);
+    run_poke(g, dst, n);
+}
+
+/// Library 1's `poke` writing `n` words at GPU address `dst`.
+fn run_poke(g: &mut Guest, dst: u64, n: u32) {
     const PTRS: u64 = 3 * MIB;
     g.write(PTRS, &dst.to_le_bytes());
-    create_library(g, 1, MSL, BufRef::NONE);
     let reply = g.reply_slot(RECORDS);
     g.push(
         cmd::CreateComputePipeline {
@@ -653,6 +659,8 @@ fn the_device_answers_queries() {
     assert!(info.heap_buffer_align.is_power_of_two());
     assert!(info.max_threads_per_threadgroup[0] >= 256);
     assert!(info.os_version[0] >= 26, "{:?}", info.os_version);
+    assert_ne!(info.features & cmd::feature::LIBRARY_DATA, 0);
+    assert_ne!(info.features & cmd::feature::FUNCTION_CONSTANTS, 0);
 
     let reply = g.reply_slot(RECORDS);
     g.push(
@@ -693,6 +701,344 @@ fn a_failed_create_with_a_reply_keeps_the_context() {
     g.commit_and_wait().expect("still alive");
 }
 
+/// Metal asserts on a pipeline descriptor whose function it cannot find, which would end the GPU
+/// host and every context of the VM; the host must answer it as a failed create instead.
+#[test]
+fn a_pipeline_naming_a_function_the_library_lacks_fails_its_reply() {
+    let mut g = start();
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"nope"],
+    );
+    assert_eq!(
+        g.reply(RECORDS).status,
+        ring::Error::PipelineCreate as u32,
+        "compute"
+    );
+    let mut colors = [0u32; cmd::MAX_COLOR_ATTACHMENTS];
+    colors[0] = RGBA8_UNORM;
+    for (vs, fs) in [(b"no", b"fs"), (b"vs", b"no")] {
+        let reply = g.reply_slot(RECORDS);
+        g.push(
+            cmd::CreateRenderPipeline {
+                handle: 2,
+                vertex_library: 1,
+                fragment_library: 1,
+                vertex_name_len: 2,
+                fragment_name_len: 2,
+                color_formats: colors,
+                raster_sample_count: 1,
+                rasterization_enabled: 1,
+                reply,
+                ..Default::default()
+            },
+            &[vs, fs],
+        );
+        assert_eq!(
+            g.reply(RECORDS).status,
+            ring::Error::PipelineCreate as u32,
+            "render {}, {}",
+            std::str::from_utf8(vs).unwrap(),
+            std::str::from_utf8(fs).unwrap()
+        );
+    }
+    let base = g.arena.gpu_base;
+    run_poke(&mut g, base + 32 * MIB, 64);
+}
+
+/// `src` compiled to a `.metallib` by Xcode's Metal toolchain
+/// (`xcodebuild -downloadComponent MetalToolchain` installs it).
+fn metallib(name: &str, src: &str) -> Vec<u8> {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let metal = dir.join(format!("{name}.metal"));
+    let lib = dir.join(format!("{name}.metallib"));
+    std::fs::write(&metal, src).expect("write MSL");
+    let out = std::process::Command::new("xcrun")
+        .args(["-sdk", "macosx", "metal", "-o"])
+        .arg(&lib)
+        .arg(&metal)
+        .output()
+        .expect("xcrun");
+    assert!(
+        out.status.success(),
+        "metal: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::read(lib).expect("read metallib")
+}
+
+/// Where the tests below stage a library's bytes in the guest's arena.
+const LIB_DATA: u64 = 16 * MIB;
+
+fn create_library_data(g: &mut Guest, handle: u32, data: &[u8], reply: BufRef) {
+    g.write(LIB_DATA, data);
+    g.push(
+        cmd::CreateLibraryData {
+            handle,
+            data_len: data.len() as u64,
+            data: BufRef::new(1, LIB_DATA),
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+}
+
+#[test]
+fn a_kernel_from_a_metallib_writes_through_an_address_the_guest_computed() {
+    let mut g = start();
+    let other = g.host.create_arena(1, 2, MIB).expect("second arena");
+    let reply = g.reply_slot(RECORDS + 1024);
+    create_library_data(&mut g, 1, &metallib("poke", MSL), reply);
+    assert_eq!(g.reply(RECORDS + 1024).status, 0);
+    run_poke(&mut g, other.gpu_base, 256);
+    // SAFETY: inside the second arena's mapping; the GPU has finished.
+    let words = unsafe { std::slice::from_raw_parts(other.mapping.as_ptr().cast::<u32>(), 256) };
+    for (i, &w) in words.iter().enumerate() {
+        assert_eq!(w, 0xC0FFEE00 + i as u32, "word {i}");
+    }
+}
+
+#[test]
+fn a_metallib_that_does_not_load_fails_its_reply_and_keeps_the_context() {
+    let mut g = start();
+    let reply = g.reply_slot(RECORDS);
+    create_library_data(&mut g, 1, b"MTLB not really a library", reply);
+    assert_eq!(g.reply(RECORDS).status, ring::Error::ShaderCompile as u32);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateLibraryData {
+            handle: 1,
+            data_len: cmd::MAX_LIBRARY_DATA + 1,
+            data: BufRef::new(1, 0),
+            reply,
+            ..Default::default()
+        },
+        &[],
+    );
+    assert_eq!(g.reply(RECORDS).status, ring::Error::BadValue as u32);
+    create_library_data(&mut g, 1, &metallib("poke", MSL), BufRef::NONE);
+    g.commit_and_wait().expect("still alive");
+}
+
+/// The library's record holds its bytes: a restore needs nothing from the arena it came from.
+#[test]
+fn a_metallib_library_restores_without_its_staging() {
+    const DST: u64 = 32 * MIB;
+    let mut g = start();
+    create_library_data(&mut g, 1, &metallib("poke", MSL), BufRef::NONE);
+    g.commit_and_wait().expect("library");
+    g.write(LIB_DATA, &[0; 4096]);
+    let mut g = restore_into_fresh(g);
+    let base = g.arena.gpu_base;
+    run_poke(&mut g, base + DST, 64);
+    let words = g.bytes(DST, 64 * 4);
+    assert_eq!(words[63 * 4..], (0xC0FFEE00u32 + 63).to_le_bytes());
+}
+
+const SPEC_MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+constant bool NEGATE [[function_constant(0)]];
+constant int K [[function_constant(1)]];
+constant ushort STEP [[function_constant(2)]];
+
+kernel void spec(device int* dst [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    dst[tid] = (NEGATE ? -K : K) + int(tid) * int(STEP);
+}
+"#;
+
+/// `MTLDataType` values.
+const DATA_BOOL: u32 = 53;
+const DATA_INT: u32 = 29;
+const DATA_USHORT: u32 = 41;
+
+fn constants(negate: bool, k: i32, step: u16) -> [cmd::FunctionConstant; 3] {
+    [
+        (0, DATA_BOOL, negate as u64),
+        (1, DATA_INT, k as u32 as u64),
+        (2, DATA_USHORT, step as u64),
+    ]
+    .map(|(index, data_type, value)| cmd::FunctionConstant {
+        index,
+        data_type,
+        value,
+    })
+}
+
+/// Pipeline `handle` for `spec` from `library`, specialised with `consts`.
+fn spec_pipeline(
+    g: &mut Guest,
+    handle: u32,
+    library: u32,
+    consts: &[cmd::FunctionConstant],
+    reply: BufRef,
+) {
+    g.push(
+        cmd::CreateComputePipeline {
+            handle,
+            library,
+            name_len: 4,
+            constant_count: consts.len() as u32,
+            reply,
+            ..Default::default()
+        },
+        &[cmd::bytes_of_slice(consts), b"spec"],
+    );
+}
+
+/// `spec` from pipeline `pipeline` over `n` ints at arena offset `dst`, bound through table
+/// `table`.
+fn run_spec(g: &mut Guest, pipeline: u32, table_handle: u32, dst: u64, n: u32) -> Vec<i32> {
+    let base = g.arena.gpu_base;
+    table(g, table_handle, &[(0, base + dst)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    g.push(
+        cmd::SetComputePipeline {
+            handle: pipeline,
+            _pad: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::SetArgumentTable {
+            table: table_handle,
+            stages: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [n / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.commit_and_wait().expect("dispatch");
+    g.bytes(dst, n as usize * 4)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&w| i32::from_le_bytes(w))
+        .collect()
+}
+
+fn spec_want(negate: bool, k: i32, step: u16, n: u32) -> Vec<i32> {
+    (0..n as i32)
+        .map(|i| (if negate { -k } else { k }) + i * step as i32)
+        .collect()
+}
+
+/// MLX's kernels take their variants as function constants: one function, a pipeline per set of
+/// values, from MSL source and from a `.metallib` alike.
+#[test]
+fn function_constants_specialise_one_function_into_several_pipelines() {
+    let mut g = start();
+    let reply = g.reply_slot(RECORDS);
+    create_library(&mut g, 1, SPEC_MSL, BufRef::NONE);
+    create_library_data(&mut g, 2, &metallib("spec", SPEC_MSL), reply);
+    assert_eq!(g.reply(RECORDS).status, 0);
+    for (handle, library, (negate, k, step)) in [
+        (3, 1, (false, 7, 1)),
+        (4, 1, (true, 40, 3)),
+        (5, 2, (true, -5, 65535)),
+    ] {
+        let reply = g.reply_slot(RECORDS);
+        spec_pipeline(&mut g, handle, library, &constants(negate, k, step), reply);
+        let r = g.reply(RECORDS);
+        assert_eq!(r.status, 0, "pipeline {handle}");
+        let got = run_spec(&mut g, handle, 10 + handle, 32 * MIB, 128);
+        assert_eq!(got, spec_want(negate, k, step, 128), "pipeline {handle}");
+    }
+}
+
+#[test]
+fn a_constant_metal_cannot_take_fails_its_reply_and_keeps_the_context() {
+    let mut g = start();
+    create_library(&mut g, 1, SPEC_MSL, BufRef::NONE);
+    let good = constants(false, 1, 1);
+    let with = |i: usize, data_type: u32, value: u64| {
+        let mut c = good;
+        c[i] = cmd::FunctionConstant {
+            data_type,
+            value,
+            ..c[i]
+        };
+        c
+    };
+    let cases: [(&str, Vec<cmd::FunctionConstant>, ring::Error); 6] = [
+        (
+            "not a scalar type",
+            with(1, 999, 1).to_vec(),
+            ring::Error::BadValue,
+        ),
+        (
+            "a bool of 2",
+            with(0, DATA_BOOL, 2).to_vec(),
+            ring::Error::BadValue,
+        ),
+        (
+            "an int with bits above it",
+            with(1, DATA_INT, 1 << 32).to_vec(),
+            ring::Error::BadValue,
+        ),
+        (
+            "an index past Metal's range",
+            vec![cmd::FunctionConstant {
+                index: 1 << 16,
+                ..good[0]
+            }],
+            ring::Error::BadValue,
+        ),
+        (
+            "no constants for a function that needs them",
+            vec![],
+            ring::Error::PipelineCreate,
+        ),
+        (
+            "one constant missing",
+            good[..2].to_vec(),
+            ring::Error::PipelineCreate,
+        ),
+    ];
+    for (what, consts, want) in cases {
+        let reply = g.reply_slot(RECORDS);
+        spec_pipeline(&mut g, 2, 1, &consts, reply);
+        assert_eq!(g.reply(RECORDS).status, want as u32, "{what}");
+    }
+    spec_pipeline(&mut g, 2, 1, &good, BufRef::NONE);
+    assert_eq!(
+        run_spec(&mut g, 2, 3, 32 * MIB, 64),
+        spec_want(false, 1, 1, 64)
+    );
+}
+
+/// The constants travel in the pipeline's record, so a restore rebuilds the same specialisation.
+#[test]
+fn a_specialised_pipeline_restores() {
+    let mut g = start();
+    create_library(&mut g, 1, SPEC_MSL, BufRef::NONE);
+    spec_pipeline(&mut g, 2, 1, &constants(true, 9, 2), BufRef::NONE);
+    g.commit_and_wait().expect("pipeline");
+    let mut g = restore_into_fresh(g);
+    assert_eq!(
+        run_spec(&mut g, 2, 3, 32 * MIB, 64),
+        spec_want(true, 9, 2, 64)
+    );
+}
+
 #[test]
 fn a_shared_event_signal_reaches_its_mirror() {
     let mut g = start();
@@ -715,6 +1061,7 @@ fn a_shared_event_signal_reaches_its_mirror() {
             event: 1,
             wait: 0,
             value: 7,
+            ..Default::default()
         },
         &[],
     );
@@ -735,6 +1082,321 @@ fn a_shared_event_signal_reaches_its_mirror() {
     );
     g.commit_and_wait().expect("set");
     assert_eq!(mirror.load(Ordering::Acquire), 9);
+}
+
+/// Commits, without waiting, a command buffer that pokes `N` words at `dst` through table `table`,
+/// whose pointer lives at `ptrs`.
+fn commit_poke(g: &mut Guest, table_handle: u32, ptrs: u64, dst: u64) {
+    commit_poke_on(g, 0, table_handle, ptrs, dst);
+}
+
+/// [`commit_poke`] on `queue`.
+fn commit_poke_on(g: &mut Guest, queue: u32, table_handle: u32, ptrs: u64, dst: u64) {
+    const N: u32 = 256;
+    g.write(ptrs, &(g.arena.gpu_base + dst).to_le_bytes());
+    let base = g.arena.gpu_base;
+    table(g, table_handle, &[(0, base + ptrs)]);
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    g.push(cmd::BeginCompute {}, &[]);
+    barrier(g, STAGE_DISPATCH | STAGE_BLIT, STAGE_DISPATCH | STAGE_BLIT);
+    g.push(cmd::SetComputePipeline { handle: 2, _pad: 0 }, &[]);
+    g.push(
+        cmd::SetArgumentTable {
+            table: table_handle,
+            stages: 0,
+        },
+        &[],
+    );
+    g.push(
+        cmd::DispatchThreadgroups {
+            groups: [N / 64, 1, 1],
+            threads_per_group: [64, 1, 1],
+        },
+        &[],
+    );
+    g.push(cmd::EndEncoding {}, &[]);
+    commit_nowait_on(g, queue);
+}
+
+fn commit_nowait(g: &mut Guest) {
+    commit_nowait_on(g, 0);
+}
+
+fn commit_nowait_on(g: &mut Guest, queue: u32) {
+    g.push(cmd::EndCommandBuffer {}, &[]);
+    g.seqno += 1;
+    g.push(
+        cmd::Commit {
+            seqno: g.seqno,
+            queue,
+            feedback: BufRef::NONE,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.kick();
+}
+
+/// The poke library and pipeline 2, and shared event `event` with its mirror at `mirror`.
+fn poke_setup(g: &mut Guest) {
+    create_library(g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    g.reply(RECORDS);
+}
+
+fn shared_event(g: &mut Guest, handle: u32, mirror: u64) {
+    g.push(
+        cmd::SyncObject {
+            handle,
+            kind: cmd::sync_kind::SHARED_EVENT,
+            initial: 0,
+            mirror: BufRef::new(1, mirror),
+        },
+        &[],
+    );
+}
+
+/// A queue whose completed value the host stores at `slot` in the ring's arena.
+fn create_queue(g: &mut Guest, handle: u32, slot: u64) {
+    g.push(
+        cmd::CreateQueue {
+            handle,
+            completed: BufRef::new(1, slot),
+            ..Default::default()
+        },
+        &[],
+    );
+}
+
+fn slot(g: &Guest, at: u64) -> u64 {
+    // SAFETY: an aligned u64 in the mapping, written by the host.
+    unsafe { &*g.ptr(at, 8).cast::<AtomicU64>() }.load(Ordering::Acquire)
+}
+
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(10), "{what}");
+        std::thread::sleep(Duration::from_micros(100));
+    }
+}
+
+/// Two queues complete on their own: queue 0 waits for an event only the CPU sets, and the work
+/// committed after it on queue 5 runs and completes meanwhile, its completed value reaching its
+/// seqno while queue 0's stays behind.
+#[test]
+fn a_second_queue_completes_while_the_first_waits() {
+    let mut g = start();
+    const A: u64 = 4 * MIB;
+    const B: u64 = 5 * MIB;
+    const MIRROR: u64 = RECORDS + 512;
+    const SLOT: u64 = RECORDS + 1024;
+    poke_setup(&mut g);
+    shared_event(&mut g, 9, MIRROR);
+    create_queue(&mut g, 5, SLOT);
+    g.commit_and_wait().expect("setup");
+    let before = g.seqno;
+
+    g.push(
+        cmd::QueueEvent {
+            event: 9,
+            wait: 1,
+            value: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    commit_poke_on(&mut g, 0, 3, 3 * MIB, A);
+    let a = g.seqno;
+    commit_poke_on(&mut g, 5, 4, 3 * MIB + 8, B);
+    let b = g.seqno;
+    wait_until("queue 5's commit did not complete", || slot(&g, SLOT) >= b);
+    assert_eq!(poked(&g, B), 256, "queue 5's work");
+    assert_eq!(poked(&g, A), 0, "queue 0's work ran before its wait");
+    assert_eq!(
+        g.ring.completed(),
+        before,
+        "queue 0 completed past its wait"
+    );
+
+    g.push(
+        cmd::SetSharedEvent {
+            handle: 9,
+            _pad: 0,
+            value: 1,
+        },
+        &[],
+    );
+    g.kick();
+    wait_until("queue 0's commit did not complete", || {
+        g.ring.completed() >= a
+    });
+    assert_eq!(poked(&g, A), 256);
+    assert!(g.ring.error().is_none());
+}
+
+/// A wait on one queue committed before the signal it waits for on another: as in Metal, the
+/// second queue's signal releases the first.
+#[test]
+fn a_wait_committed_before_its_signal_on_another_queue_completes() {
+    let mut g = start();
+    const A: u64 = 4 * MIB;
+    const B: u64 = 5 * MIB;
+    const SLOT: u64 = RECORDS + 1024;
+    poke_setup(&mut g);
+    shared_event(&mut g, 9, RECORDS + 512);
+    create_queue(&mut g, 5, SLOT);
+    g.commit_and_wait().expect("setup");
+
+    g.push(
+        cmd::QueueEvent {
+            event: 9,
+            wait: 1,
+            value: 1,
+            queue: 5,
+            ..Default::default()
+        },
+        &[],
+    );
+    commit_poke_on(&mut g, 5, 4, 3 * MIB + 8, B);
+    let b = g.seqno;
+    commit_poke_on(&mut g, 0, 3, 3 * MIB, A);
+    g.push(
+        cmd::QueueEvent {
+            event: 9,
+            wait: 0,
+            value: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("queue 0");
+    wait_until("queue 5's commit did not complete", || slot(&g, SLOT) >= b);
+    assert_eq!((poked(&g, A), poked(&g, B)), (256, 256));
+}
+
+/// A queue is an object like any other: it survives an export and a restore into a fresh GPU host
+/// and runs work there, and a commit to a queue that does not exist loses the context.
+#[test]
+fn a_queue_is_restored_and_an_unknown_one_loses_the_context() {
+    let mut g = start();
+    const SLOT: u64 = RECORDS + 1024;
+    poke_setup(&mut g);
+    create_queue(&mut g, 5, SLOT);
+    g.commit_and_wait().expect("setup");
+    let mut g = restore_into_fresh(g);
+    commit_poke_on(&mut g, 5, 4, 3 * MIB + 8, 5 * MIB);
+    let b = g.seqno;
+    wait_until("the restored queue's commit did not complete", || {
+        slot(&g, SLOT) >= b
+    });
+    assert_eq!(poked(&g, 5 * MIB), 256);
+
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    commit_nowait_on(&mut g, 77);
+    wait_until("no error for an unknown queue", || g.ring.error().is_some());
+    assert_eq!(
+        g.ring.error().map(|(code, _)| code),
+        Some(ring::Error::BadHandle as u32)
+    );
+}
+
+fn poked(g: &Guest, dst: u64) -> usize {
+    (0..256u32)
+        .filter(|&i| g.bytes(dst + i as u64 * 4, 4) == (0xC0FFEE00 + i).to_le_bytes())
+        .count()
+}
+
+/// A queue wait holds the work committed after it, as limina-metal sends it when it splits a
+/// command buffer around `encodeWaitForEvent:value:`: an empty commit, the wait, a commit with
+/// work, then another command buffer's work and an event signal. Nothing after the wait runs, and
+/// the second event is not signaled, until the CPU signals the first.
+#[test]
+fn work_committed_after_a_queue_wait_runs_only_once_the_event_is_signaled() {
+    let mut g = start();
+    const A: u64 = 4 * MIB;
+    const B: u64 = 5 * MIB;
+    const MIRROR: u64 = RECORDS + 512;
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    g.reply(RECORDS);
+    for (handle, at) in [(9, MIRROR), (10, MIRROR + 8)] {
+        g.push(
+            cmd::SyncObject {
+                handle,
+                kind: cmd::sync_kind::SHARED_EVENT,
+                initial: 0,
+                mirror: BufRef::new(1, at),
+            },
+            &[],
+        );
+    }
+    g.commit_and_wait().expect("setup");
+
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    commit_nowait(&mut g);
+    g.push(
+        cmd::QueueEvent {
+            event: 9,
+            wait: 1,
+            value: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    commit_poke(&mut g, 3, 3 * MIB, A);
+    commit_poke(&mut g, 4, 3 * MIB + 8, B);
+    g.push(
+        cmd::QueueEvent {
+            event: 10,
+            wait: 0,
+            value: 1,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.push(cmd::BeginCommandBuffer {}, &[]);
+    commit_nowait(&mut g);
+    g.kick();
+    std::thread::sleep(Duration::from_millis(300));
+    // SAFETY: an aligned u64 in the mapping, written by the host.
+    let signaled = unsafe { &*g.ptr(MIRROR + 8, 8).cast::<AtomicU64>() }.load(Ordering::Acquire);
+    let early = (poked(&g, A), poked(&g, B), signaled, g.ring.completed());
+
+    g.push(
+        cmd::SetSharedEvent {
+            handle: 9,
+            _pad: 0,
+            value: 1,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("after the signal");
+    assert_eq!(
+        (early, poked(&g, A), poked(&g, B)),
+        ((0, 0, 0, 2), 256, 256),
+        "(words of A and B, the second event, completed seqno) before the CPU's signal; A and B after"
+    );
 }
 
 #[test]
@@ -860,6 +1522,7 @@ fn destroying_a_context_wedged_on_an_event_answers_at_once() {
                 event: handle,
                 wait: 1,
                 value: 1,
+                ..Default::default()
             },
             &[],
         );
@@ -869,6 +1532,7 @@ fn destroying_a_context_wedged_on_an_event_answers_at_once() {
         cmd::Commit {
             seqno: g.seqno,
             feedback: BufRef::NONE,
+            ..Default::default()
         },
         &[],
     );
@@ -1555,6 +2219,7 @@ fn populate(g: &mut Guest) -> (u64, u64) {
             event: 7,
             wait: 0,
             value: 5,
+            ..Default::default()
         },
         &[],
     );
@@ -1827,6 +2492,7 @@ fn a_context_restored_in_a_fresh_gpu_host_is_the_one_the_guest_knew() {
             event: 7,
             wait: 1,
             value: 5,
+            ..Default::default()
         },
         &[],
     );
@@ -1885,6 +2551,7 @@ fn an_export_that_cannot_drain_loses_the_context() {
             event: 1,
             wait: 1,
             value: 1,
+            ..Default::default()
         },
         &[],
     );
@@ -1893,6 +2560,7 @@ fn an_export_that_cannot_drain_loses_the_context() {
         cmd::Commit {
             seqno: g.seqno,
             feedback: BufRef::NONE,
+            ..Default::default()
         },
         &[],
     );
@@ -1905,4 +2573,115 @@ fn an_export_that_cannot_drain_loses_the_context() {
         Some(13),
         "the ring says why"
     );
+}
+
+/// Measurement: whether objects other than arenas take GPU addresses from the space arenas are
+/// placed in. A 1 MiB arena after each kind of object; a gap other than 0x8000 is space taken.
+/// Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn do_other_objects_take_arena_space() {
+    let mut g = start();
+    let mut id = 100;
+    let mut last = g.host.create_arena(1, id, MIB).expect("arena");
+    let mut step = |g: &mut Guest, what: &str| {
+        id += 1;
+        let a = g.host.create_arena(1, id, MIB).expect("arena");
+        eprintln!(
+            "after {what:<22} arena at {:#x}, gap {:#x}",
+            a.gpu_base,
+            a.gpu_base.wrapping_sub(last.gpu_base + last.mapping.size())
+        );
+        last = a;
+    };
+    step(&mut g, "nothing");
+    create_library(&mut g, 1, MSL, BufRef::NONE);
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "a library");
+    let reply = g.reply_slot(RECORDS);
+    g.push(
+        cmd::CreateComputePipeline {
+            handle: 2,
+            library: 1,
+            name_len: 4,
+            reply,
+            ..Default::default()
+        },
+        &[b"poke"],
+    );
+    assert_eq!(g.reply(RECORDS).status, 0);
+    step(&mut g, "a compute pipeline");
+    churn_texture(&mut g, 3);
+    step(&mut g, "a texture");
+    churn_sampler(&mut g, 5);
+    step(&mut g, "a sampler");
+    let base = g.arena.gpu_base;
+    table(&mut g, 6, &[(0, base + MIB)]);
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "an argument table");
+    g.push(
+        cmd::SyncObject {
+            handle: 7,
+            kind: cmd::sync_kind::EVENT,
+            ..Default::default()
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "an event");
+    g.push(
+        cmd::CreateCounterHeap {
+            handle: 8,
+            count: 2,
+            reply: BufRef::NONE,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "a counter heap");
+    // `run_poke` makes its own pipeline 2 and table 3.
+    for h in [2, 3] {
+        g.push(cmd::Destroy { handle: h, _pad: 0 }, &[]);
+    }
+    run_poke(&mut g, base + 2 * MIB, 64);
+    step(&mut g, "a dispatch");
+    for h in [2, 1, 3, 5, 6, 7, 8] {
+        g.push(cmd::Destroy { handle: h, _pad: 0 }, &[]);
+    }
+    g.commit_and_wait().expect("commit");
+    step(&mut g, "destroying them");
+}
+
+/// A counter heap takes less GPU address space than the smallest arena, so the hole it leaves in
+/// a fresh GPU host below the arena made after it is one no arena can fill.
+#[test]
+fn an_arena_made_after_a_counter_heap_is_restored_at_its_address() {
+    let mut g = start();
+    let before = g.host.create_arena(1, 2, MIB).expect("arena");
+    g.push(
+        cmd::CreateCounterHeap {
+            handle: 8,
+            count: 2,
+            reply: BufRef::NONE,
+        },
+        &[],
+    );
+    g.commit_and_wait().expect("commit");
+    let after = g.host.create_arena(1, 3, MIB).expect("arena");
+    let mut live = vec![
+        (1, g.arena.mapping.size(), g.arena.gpu_base),
+        (2, before.mapping.size(), before.gpu_base),
+        (3, after.mapping.size(), after.gpu_base),
+    ];
+    live.sort_by_key(|&(_, _, base)| base);
+
+    let fresh = GpuHost::spawn(Path::new(env!("CARGO_BIN_EXE_limina-gpu-host"))).expect("spawn");
+    let _bell = fresh.create_context(1).expect("context");
+    let mut kept = Vec::new();
+    for &(id, size, base) in &live {
+        let a = fresh.restore_arena(1, id, size, base).expect("restore");
+        assert_eq!(a.gpu_base, base, "arena {id}");
+        kept.push(a);
+    }
+    fresh.restore_done().expect("done");
 }

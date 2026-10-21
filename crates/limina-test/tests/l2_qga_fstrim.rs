@@ -151,7 +151,7 @@ fn a_periodic_guest_trim_returns_free_blocks_to_the_host_image() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // `with_net` boots a writable COW clone of the shared image; that clone is what the

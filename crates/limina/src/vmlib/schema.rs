@@ -159,6 +159,16 @@ pub struct Hardware {
     /// change applies from the next full boot. See `--nested-virt`.
     #[serde(default)]
     pub nested_virt: bool,
+    /// How the machine is described to the guest's OS (see [`Machine`]; default ACPI). A
+    /// suspended session resumes on the machine it was saved with, so a change applies from the
+    /// next full boot. See `--machine`.
+    #[serde(default)]
+    pub machine: Machine,
+    /// Whether a guest on the ACPI machine runs a console on the serial line (default `off`; see
+    /// [`SerialConsole`]). The device-tree machine always names the serial port. See
+    /// `--serial-console`.
+    #[serde(default)]
+    pub serial_console: SerialConsole,
 }
 
 fn default_true() -> bool {
@@ -212,6 +222,8 @@ impl Default for Hardware {
             balloon_deflate_on_oom: false,
             ipa_granule: IpaGranule::default(),
             nested_virt: false,
+            machine: Machine::default(),
+            serial_console: SerialConsole::Off,
         }
     }
 }
@@ -274,21 +286,30 @@ pub struct CdromEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetMode {
+    /// NAT through the host (`--net`): vmnet shared, moving to limina-netd when vmnet cannot
+    /// serve. The guest is reached through the SSH forward.
     #[default]
     Nat,
+    /// On the LAN through the host interface `uplink`, with a lease from the LAN's DHCP server.
+    /// No SSH forward: the guest is reached at its own address, which `limina address` and the
+    /// control center name.
+    Bridged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkEntry {
     #[serde(default)]
     pub mode: NetMode,
-    /// Allocated at create (locally-administered, derived from the uuid) and stored so
-    /// per-VM identity survives restarts. Not yet plumbed to the worker — persisted
-    /// first per the multi-vm-networking design.
+    /// Allocated at create (locally-administered, derived from the uuid) and stored so the VM
+    /// keeps its DHCP lease, on vmnet's pool and on a LAN's, from run to run.
     pub mac: String,
-    /// Host port for the inbound SSH forward; 0 = auto-allocate from 2222 up.
+    /// Host port for the inbound SSH forward; 0 = auto-allocate from 2222 up. NAT only: a bridged
+    /// NIC keeps it, unused, for when the VM goes back to NAT.
     #[serde(default)]
     pub ssh_port: u16,
+    /// The host interface a bridged NIC joins (`en0`). Bridged only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uplink: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -625,6 +646,64 @@ impl IpaGranule {
     }
 }
 
+/// Whether a guest on the ACPI machine runs a console on the serial line, for debugging one that
+/// does not come up. The firmware's and the loader's output reach the serial line whatever this
+/// says; the kernel's log and a serial login need the guest's own console there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+pub enum SerialConsole {
+    /// The display is the guest's only console.
+    #[default]
+    #[serde(rename = "off")]
+    #[value(name = "off")]
+    Off,
+    /// The display and the serial line: the firmware adds `console=` arguments to a Linux
+    /// kernel's command line, keeping the display as `/dev/console` and the boot splash.
+    #[serde(rename = "both")]
+    #[value(name = "both")]
+    Both,
+    /// The serial line only, named in an SPCR table: kernel and initramfs output, an early prompt
+    /// included, leave the display.
+    #[serde(rename = "only")]
+    #[value(name = "only")]
+    Only,
+}
+
+impl SerialConsole {
+    /// What the firmware adds to a Linux kernel's command line for [`SerialConsole::Both`]. The
+    /// last `console=` becomes `/dev/console`, so the display keeps it; Plymouth gives up its
+    /// splash for any serial console unless told to ignore them.
+    pub const BOTH_BOOTARGS: &str = "console=ttyAMA0 console=tty0 plymouth.ignore-serial-consoles";
+}
+
+/// How the machine is described to the guest's OS (docs/design/firmware-and-acpi.md): arm64
+/// Linux takes ACPI or a device tree, never both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
+pub enum Machine {
+    /// ACPI tables, which the VMM generates and the firmware installs. The default: a stock
+    /// guest gets the power and sleep buttons, the TPM and the battery through them.
+    #[default]
+    #[serde(rename = "acpi")]
+    #[value(name = "acpi")]
+    Acpi,
+    /// A device tree. What a direct `--kernel` boot always gets, since an OS finds ACPI only
+    /// through the firmware. Keeps the PL031 RTC, which the ACPI machine does not describe, and
+    /// `qemu,virtual-cpufreq` on a uniform machine, where ACPI describes CPPC only when some vCPUs
+    /// are little.
+    #[serde(rename = "device-tree")]
+    #[value(name = "device-tree")]
+    DeviceTree,
+}
+
+impl Machine {
+    /// How the control center names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Machine::Acpi => "ACPI",
+            Machine::DeviceTree => "Device tree",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputCfg {
@@ -846,6 +925,7 @@ mod tests {
                 mode: NetMode::Nat,
                 mac: mac_for_uuid("x"),
                 ssh_port: 0,
+                uplink: None,
             }],
             shares: vec![],
             boot: BootCfg::default(),
@@ -877,6 +957,20 @@ mod tests {
         // The absolute spelling of the same intent loads.
         cfg.shares[0].path = "/tmp/harmless/docs".into();
         cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn a_bridged_network_round_trips_and_a_nat_one_names_no_uplink() {
+        let mut cfg = minimal();
+        let nat = toml::to_string_pretty(&cfg).unwrap();
+        assert!(!nat.contains("uplink"), "{nat}");
+        cfg.networks[0].mode = NetMode::Bridged;
+        cfg.networks[0].uplink = Some("en0".into());
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        assert!(text.contains("mode = \"bridged\""), "{text}");
+        let back: VmConfig = toml::from_str(&text).unwrap();
+        assert_eq!(back.networks[0].mode, NetMode::Bridged);
+        assert_eq!(back.networks[0].uplink.as_deref(), Some("en0"));
     }
 
     #[test]
@@ -933,6 +1027,37 @@ mod tests {
         assert!(h.nested_virt);
         let back = toml::to_string(&h).unwrap();
         assert!(back.contains("nested_virt = true"), "{back}");
+    }
+
+    /// The machine is ACPI unless a definition asks for a device tree, including every vm.toml
+    /// written before the key existed.
+    #[test]
+    fn machine_defaults_to_acpi_and_round_trips() {
+        let h: Hardware = toml::from_str("").unwrap();
+        assert_eq!(h.machine, Machine::Acpi);
+        assert_eq!(Hardware::default().machine, Machine::Acpi);
+        let h: Hardware = toml::from_str("machine = \"device-tree\"").unwrap();
+        assert_eq!(h.machine, Machine::DeviceTree);
+        let back = toml::to_string(&h).unwrap();
+        assert!(back.contains("machine = \"device-tree\""), "{back}");
+        assert!(toml::from_str::<Hardware>("machine = \"pci\"").is_err());
+    }
+
+    /// The ACPI serial console is off unless a definition asks for it.
+    #[test]
+    fn serial_console_defaults_off_and_round_trips() {
+        let h: Hardware = toml::from_str("").unwrap();
+        assert_eq!(h.serial_console, SerialConsole::Off);
+        for (text, want) in [("both", SerialConsole::Both), ("only", SerialConsole::Only)] {
+            let h: Hardware = toml::from_str(&format!("serial_console = \"{text}\"")).unwrap();
+            assert_eq!(h.serial_console, want);
+            let back = toml::to_string(&h).unwrap();
+            assert!(
+                back.contains(&format!("serial_console = \"{text}\"")),
+                "{back}"
+            );
+        }
+        assert!(toml::from_str::<Hardware>("serial_console = true").is_err());
     }
 
     /// The Metal transport is off unless a definition turns it on, including every vm.toml

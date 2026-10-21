@@ -46,7 +46,8 @@ pub struct RingControl {
     _r1: [u8; 120],
     /// Bytes consumed. Written by the host.
     pub head: AtomicU64,
-    /// Highest seqno whose commit has finished on the GPU. Written by the host.
+    /// Highest seqno whose commit on the context's own queue (`0`) has finished on the GPU.
+    /// Written by the host; other queues' values are in the slots their `CreateQueue` named.
     pub completed: AtomicU64,
     /// [`STATE_RUNNING`] or [`STATE_PARKED`]. Written by the host.
     pub state: AtomicU32,
@@ -61,8 +62,8 @@ const _: () = assert!(size_of::<RingControl>() == 384);
 const _: () = assert!(size_of::<RingControl>() <= DATA_OFFSET);
 
 impl RingControl {
-    /// Records a finished seqno. Seqnos retire in order on one ring, but completion handlers may
-    /// run on any thread, so this keeps the maximum.
+    /// Records a finished seqno of queue `0`. Its commits retire in order, but completion handlers
+    /// may run on any thread, so this keeps the maximum.
     pub fn complete(&self, seqno: u64) {
         self.completed.fetch_max(seqno, Ordering::Release);
     }

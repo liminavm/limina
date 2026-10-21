@@ -82,6 +82,12 @@ impl Surface {
     pub fn bytes_per_element(&self) -> u64 {
         self.0.bytes_per_element() as u64
     }
+
+    /// The system-wide id, for logs only: it names the surface to a reader of the log, not to a
+    /// process, which can look a non-global surface up by it only from its owner.
+    pub fn id(&self) -> u32 {
+        self.0.id()
+    }
 }
 
 pub fn system_device() -> Option<Retained<Device>> {
@@ -230,3 +236,54 @@ pub fn valid_texture_type(t: u32) -> bool {
 /// `MTLTextureUsage` bits the GPU host passes through: ShaderRead, ShaderWrite, RenderTarget,
 /// PixelFormatView, ShaderAtomic.
 pub const TEXTURE_USAGE_MASK: u32 = 0x37;
+
+#[cfg(test)]
+mod tests {
+    use objc2_metal::{MTL4CounterHeapDescriptor, MTL4CounterHeapType};
+
+    use super::*;
+
+    const MIB: u64 = 1 << 20;
+
+    /// Measurement: the address space objects of each kind take from the arena region, from the
+    /// gap between the arenas either side. 0 is none; an arena takes its size plus 0x8000. Run
+    /// with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn footprints_of_small_objects() {
+        let device = system_device().expect("device");
+        let footprint = |make: &dyn Fn() -> Box<dyn std::any::Any>| {
+            let a = Arena::new(&device, MIB).unwrap();
+            let x = make();
+            let b = Arena::new(&device, MIB).unwrap();
+            let f = b.gpu_base.wrapping_sub(a.gpu_base + a.size + 0x8000);
+            drop((a, x, b));
+            f
+        };
+        for kib in [1u64, 4, 8, 16, 24, 32, 48, 64, 96, 128] {
+            let len = (kib * 1024) as usize;
+            let f = footprint(&|| {
+                Box::new(
+                    device
+                        .newBufferWithLength_options(len, arena_options())
+                        .unwrap(),
+                )
+            });
+            eprintln!("buffer {kib:>4} KiB: {f:#x}");
+        }
+        for kib in [16u64, 32, 48, 64] {
+            let f = footprint(&|| Box::new(Arena::new(&device, kib * 1024).unwrap()));
+            eprintln!("arena  {kib:>4} KiB: {f:#x}");
+        }
+        for count in [1usize, 2, 64, 1024, 4096] {
+            let f = footprint(&|| {
+                let desc = MTL4CounterHeapDescriptor::new();
+                desc.setType(MTL4CounterHeapType::Timestamp);
+                // SAFETY: a positive count.
+                unsafe { desc.setCount(count) };
+                Box::new(device.newCounterHeapWithDescriptor_error(&desc).unwrap())
+            });
+            eprintln!("counter heap {count:>6}: {f:#x}");
+        }
+    }
+}

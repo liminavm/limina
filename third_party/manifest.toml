@@ -6,8 +6,6 @@
 # (tag-before-rebase: every rev ever pinned here must stay reachable).
 # Patch-audit status lives in docs/upstreaming/ledger/.
 #
-# Every dep is on the fork model now (edk2 was the last holdout, migrated 2026-08-06).
-#
 # `heavy = true` means `cargo xtask vendor` SKIPS the clone by default — the tree is huge and
 # this host never builds it (the kernel builds in a Linux container / build guest, which
 # fetches the pinned rev itself). Materialize one on demand with `cargo xtask vendor --heavy`.
@@ -30,22 +28,15 @@
 repo = "https://github.com/liminavm/libkrun.git"
 upstream = "https://github.com/libkrun/libkrun.git"
 branch = "limina"
-rev = "28d988ca041badbecab56980b18ddc2639be799e"
+rev = "a2577a53b6b034deae2fff65bbc693dba00ab5a9"
 base = "dc1a18ada58cb5d15db5333a12bf2f0cbf64ac15"
 
-# The EFI firmware (task #22, migrated 2026-08-06). The `limina` branch carries our whole
-# delta as commits (TerminalPcdProducerLib build fix, the VirtioSerialDxe TPL fix, PL031
-# DT status=okay, the vendored VirtioKeyboardDxe, and the GOP/ConIn enablement) on slp's
-# krun-support base — build-krun-efi.sh no longer patches anything at build time. NOT
-# vendored by `cargo xtask vendor`: the build clones the pinned rev inside its own
-# container volume (scripts/build-krun-efi.sh reads `rev` from this entry). A local
-# third_party/edk2 checkout is optional (fork surgery only).
-[edk2]
-repo = "https://github.com/liminavm/edk2.git"
-upstream = "https://github.com/slp/edk2.git"
-branch = "limina"
-rev = "0a8c9044bc097c72148b5d3ec612e5f806e0723b"
-base = "13e8adac8a83141b51375c799996946082e1eb43"
+# Cardea: the guest's UEFI firmware, ours outright (Rust, MIT), docs/design/firmware-and-acpi.md.
+# Vendored like any tree; scripts/build-firmware.sh builds it natively into target/firmware/.
+[cardea]
+repo = "https://github.com/liminavm/cardea.git"
+branch = "main"
+rev = "6ee34396129b7c94d39534432e2e55efe800a818"
 
 [imago]
 repo = "https://github.com/liminavm/imago.git"
@@ -74,7 +65,7 @@ tree = "/Volumes/mesa-cs/mesa"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "metal-native-context"
-rev = "41353793c95042ea4824c974082bf87a7d66cd85"
+rev = "340ed84bf1ba1c2706dc3279fdcf148f24526309"
 base = "059715d2aa534b74fee59aec6fae316f026d0627"
 tree = "/Volumes/mesa-cs/mesa-metal-guest"
 
@@ -88,7 +79,7 @@ tree = "/Volumes/mesa-cs/mesa-metal-guest"
 repo = "https://github.com/liminavm/mesa.git"
 upstream = "https://gitlab.freedesktop.org/mesa/mesa.git"
 branch = "limina-guest"
-rev = "4ea3613b0903913e55127828ae6fbcd1da1246f7"
+rev = "0642e0178cecf448401b86258b39218d5433d791"
 base = "mesa-26.2.5"
 tree = "/Volumes/mesa-cs/mesa-guest"
 
@@ -102,7 +93,7 @@ tree = "/Volumes/mesa-cs/mesa-guest"
 [virglrs]
 repo = "https://github.com/liminavm/virglrs.git"
 branch = "main"
-rev = "2efa02476928c91e815032ca1836bd27a5dc9605"
+rev = "ed44163161a16167cec0ddc49124cbeb32df7b76"
 
 # janus: the TPM 2.0 engine behind libkrun's TIS device (docs/design/vtpm.md), ours outright and
 # consumed by libkrun's krun-devices as an optional path dependency (`tpm` feature).
@@ -110,6 +101,16 @@ rev = "2efa02476928c91e815032ca1836bd27a5dc9605"
 repo = "https://github.com/liminavm/janus.git"
 branch = "main"
 rev = "3f7721ff32a83f5d9a545f8fc5ad7b6587c4c2bd"
+
+# MLX with its Metal backend built for Linux guests, over limina's GPU transport (milestone 18,
+# spikes/mlx-linux/). The `limina` branch adds one CMake option, MLX_METAL_LIMINA, and leaves
+# Darwin builds as upstream's. Nothing in limina's build reads it: the spike builds the host half
+# (mlx.metallib, the JIT sources) from this tree and the guest half from its archive.
+[mlx]
+repo = "https://github.com/liminavm/mlx.git"
+upstream = "https://github.com/ml-explore/mlx.git"
+branch = "limina"
+rev = "4cb085bae579f1edb6043d3ca8e317ccca6642a4"
 
 # The OpenCL C standard library KosmicKrisp's kernels are compiled against. NOT a source
 # checkout and not merely a configure-time gate: `src/kosmickrisp/libkk/*.cl` (tessellation,

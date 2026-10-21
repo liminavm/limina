@@ -441,7 +441,35 @@ pub(crate) fn range_step(
     abs_max: f64,
     desktop: Option<&super::arrangement::Desktop>,
 ) -> RangeStep {
-    let (ux, uy) = (pos.0 + dx * gain.x, pos.1 + dy * gain.y);
+    held_range_step(
+        pos,
+        dx,
+        dy,
+        gain,
+        abs_max,
+        desktop,
+        &super::seams::Hold::OPEN,
+    )
+}
+
+/// [`range_step`] for a capture slot with seams held ([`super::seams::Hold`]).
+///
+/// **The hold comes before the desktop, never after it.** Held afterwards, a step that crossed
+/// a held seam onto a taller neighbour is pulled back on one axis only and keeps the
+/// neighbour's other coordinate — a point on no monitor, where the guest moved its pointer to
+/// the middle of its primary display (dogfood, 2026-10-19). Held first, the desktop sees the
+/// held candidate and clamps it against the slot's own walls like any other. What the hold
+/// eats is charged to nobody (see [`super::seams`]); what the desktop then eats is a wall.
+pub(crate) fn held_range_step(
+    pos: (f64, f64),
+    dx: f64,
+    dy: f64,
+    gain: RangeGain,
+    abs_max: f64,
+    desktop: Option<&super::arrangement::Desktop>,
+    hold: &super::seams::Hold,
+) -> RangeStep {
+    let (ux, uy) = hold.apply((pos.0 + dx * gain.x, pos.1 + dy * gain.y));
     let (cx, cy) = match desktop {
         Some(d) => d.confine(pos, (ux, uy)),
         None => (ux.clamp(0.0, abs_max), uy.clamp(0.0, abs_max)),
@@ -1005,6 +1033,89 @@ mod tests {
         let s = range_step((10000.0, top + 4.0), 0.0, -10.0, g, 32767.0, None);
         assert_eq!(s.pos, (10000.0, top - 16.0));
         assert_eq!(s.overflow, (0.0, 0.0));
+    }
+
+    /// The dogfood's arrangement on 2026-10-19: the built-in (slot 1) right of the Dell and 127
+    /// logical pixels lower, so the box has dead space above the built-in.
+    fn built_in_below_the_dell() -> super::super::arrangement::Desktop {
+        use super::super::arrangement::GuestRect;
+        super::super::arrangement::layout_in_range(
+            &[
+                (
+                    0,
+                    GuestRect {
+                        x: 0,
+                        y: 0,
+                        w: 3072,
+                        h: 1728,
+                    },
+                ),
+                (
+                    1,
+                    GuestRect {
+                        x: 3072,
+                        y: 127,
+                        w: 2048,
+                        h: 1328,
+                    },
+                ),
+            ],
+            32767.0,
+        )
+        .expect("a desktop")
+    }
+
+    /// A held seam must not hand the step a position on no monitor. Pushing up and left at the
+    /// built-in's top, the step lands on the Dell — legal, the Dell continues upward there —
+    /// and holding only the left seam then pulled x back onto the built-in with the Dell's y:
+    /// a point above the built-in, in dead space, where the guest moved the pointer to the
+    /// middle of its primary display (dogfood, 2026-10-19).
+    #[test]
+    fn a_held_seam_keeps_the_step_on_the_desktop() {
+        use super::super::seams::{Hold, Refusal};
+        let d = built_in_below_the_dell();
+        let own = d.rect_of(1).expect("the built-in");
+        let hold = Hold {
+            share: Some(own),
+            pixels: (2048.0, 1328.0),
+            held: super::super::arrangement::Edges {
+                left: true,
+                ..super::super::arrangement::Edges::NONE
+            },
+            why: [
+                Some(Refusal::Disagree {
+                    range_to: 0,
+                    host_shows: None,
+                }),
+                None,
+                None,
+                None,
+            ],
+        };
+        let g = RangeGain { x: 6.4, y: 11.3 };
+        let s = held_range_step(
+            (own.x0 + 300.0, own.y0),
+            -100.0,
+            -30.0,
+            g,
+            32767.0,
+            Some(&d),
+            &hold,
+        );
+        assert_eq!(
+            d.locate(s.pos, 1).map(|(slot, _)| slot),
+            Some(1),
+            "on the built-in, not above it: {:?}",
+            s.pos
+        );
+        assert_eq!(s.pos, (hold.apply((own.x0, own.y0)).0, own.y0));
+        // The held seam charges nothing; the built-in's top is a wall, and charges the push.
+        assert_eq!(s.overflow.0, 0.0);
+        assert!(
+            (s.overflow.1 - (-30.0)).abs() < 1e-9,
+            "the top charges: {:?}",
+            s.overflow
+        );
     }
 
     /// The gain a reported share gives is the share over the content, and it agrees with the

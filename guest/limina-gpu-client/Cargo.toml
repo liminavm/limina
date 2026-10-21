@@ -1,0 +1,11 @@
+# limina-gpu-client — the guest end of the Metal-level GPU transport: context, doorbell, arenas
+# and command ring over guest/virtio-gpu-limina's DRM ioctls.
+[package]
+name = "limina-gpu-client"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only WITH LicenseRef-limina-exception"
+
+[dependencies]
+libc = "0.2"
+limina-gpu-wire = { path = "../../crates/limina-gpu-wire" }

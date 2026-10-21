@@ -8,4 +8,5 @@ license = "GPL-2.0-only WITH LicenseRef-limina-exception"
 
 [dependencies]
 libc = "0.2"
+limina-gpu-client = { path = "../limina-gpu-client" }
 limina-gpu-wire = { path = "../../crates/limina-gpu-wire" }

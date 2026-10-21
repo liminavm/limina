@@ -27,7 +27,7 @@ re-derives the commit counts.
 | mutter | RETIRED | — | series removed 2026-08-03 (own compositor) |
 | virglrenderer (C; pinned by virglrs) | 181 C-tree (616 with the Rust rewrite) | upstream main `aafa9bd2` | gitlab.fd.o (Anubis) |
 | libkrun | 318 | `dc1a18ad` | github.com/libkrun/libkrun |
-| edk2 | 9 | `slp/edk2` krun-support `13e8adac` | github.com/slp/edk2 |
+| mlx | 2 | `ml-explore/mlx` main `b6642e6` | github.com/ml-explore/mlx |
 | **total** | **671** | | |
 
 At the 2026-08-03 audit the same table read 226 patches: linux 1 on `v7.1.6`, KK 19, guest mesa

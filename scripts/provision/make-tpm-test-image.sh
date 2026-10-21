@@ -21,14 +21,14 @@
 # installs, verifies every package and binary, and powers off. Refuses to overwrite <out>.
 #
 # Env: LIMINA_TEST_DISK (the source, default Fedora-Workstation-44.stock.test.raw),
-# LIMINA_FIRMWARE (default target/krun-efi/KRUN_EFI.gop.fd), LIMINA_SSH_TIMEOUT (default 420),
+# LIMINA_FIRMWARE (default target/firmware/efi.fd), LIMINA_SSH_TIMEOUT (default 420),
 # LIMINA_LOGDIR (default /tmp). Needs `cargo xtask build` first.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 src="${LIMINA_TEST_DISK:-Fedora-Workstation-44.stock.test.raw}"
 out="${1:-Fedora-Workstation-44.tpm.test.raw}"
-firmware="${LIMINA_FIRMWARE:-target/krun-efi/KRUN_EFI.gop.fd}"
+firmware="${LIMINA_FIRMWARE:-target/firmware/efi.fd}"
 logdir="${LIMINA_LOGDIR:-/tmp}"
 ssh_timeout="${LIMINA_SSH_TIMEOUT:-420}"
 ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR

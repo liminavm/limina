@@ -13,7 +13,11 @@
 mod battery;
 mod console;
 mod display_update;
+mod lease;
 mod metal_ext;
+mod netd;
+mod switch;
+mod uplink;
 
 use std::sync::Arc;
 
@@ -22,6 +26,8 @@ use crossbeam_channel::unbounded;
 use devices::display::{DisplayInfo, DisplayInfoEdid, EdidIdentity, EdidParams};
 use devices::virtio::block::{DiskFormat, SyncMode};
 use devices::virtio::gpu::timing::TimingPage;
+use devices::virtio::net::backend::ExternalBackend;
+use devices::virtio::net::vmnet::{Vmnet, VmnetConfig, VmnetMode as KrunVmnetMode};
 use devices::virtio::{BalloonControlHandle, DisplayResizeHandle};
 use krun_lib::api::device_builders::{
     BalloonDevice, BlockDevice, DisplayBackend, FsDevice, GpuDevice, I2cBatteryDevice, InputDevice,
@@ -40,38 +46,40 @@ use vmm::vmm_config::machine_config::VmConfig;
 
 use self::display_update::{display_update_from, timing_grid_from};
 use crate::config::{
-    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, NetSpec,
-    VmSpec, VsockSpec,
+    BootSource, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec, NetBackend,
+    NetSpec, VmSpec, VmnetMode, VsockSpec,
 };
 
 /// Standard libkrun guest CID.
 const GUEST_CID: u32 = 3;
 
 // virtio-net feature bits (mirrors libkrun's C-API `NET_FEATURE_*` so we don't depend on
-// private consts). We request the IPv4 offload set `NET_COMPAT_FEATURES` — the same baseline
-// krunkit uses with gvproxy. TSO6/UFO6 are reachable but left off until verified non-corrupting
-// (see roadmap M3).
+// private consts).
 const NET_FEATURE_CSUM: u32 = 1 << 0;
 const NET_FEATURE_GUEST_CSUM: u32 = 1 << 1;
 const NET_FEATURE_GUEST_TSO4: u32 = 1 << 7;
-const NET_FEATURE_GUEST_UFO: u32 = 1 << 10;
+const NET_FEATURE_GUEST_TSO6: u32 = 1 << 8;
 const NET_FEATURE_HOST_TSO4: u32 = 1 << 11;
-const NET_FEATURE_HOST_UFO: u32 = 1 << 14;
+const NET_FEATURE_HOST_TSO6: u32 = 1 << 12;
 
-/// virtio-net offload features for the gvproxy NAT NIC (IPv4-only baseline).
-const NET_COMPAT_FEATURES: u32 = NET_FEATURE_CSUM
+/// virtio-net offload features for a vmnet NIC: checksum and TCP segmentation both ways, IPv6
+/// included, since vmnet's one TSO switch covers both directions and both families. No UFO:
+/// vmnet does not take it.
+const NET_VMNET_FEATURES: u32 = NET_FEATURE_CSUM
     | NET_FEATURE_GUEST_CSUM
     | NET_FEATURE_GUEST_TSO4
-    | NET_FEATURE_GUEST_UFO
+    | NET_FEATURE_GUEST_TSO6
     | NET_FEATURE_HOST_TSO4
-    | NET_FEATURE_HOST_UFO;
+    | NET_FEATURE_HOST_TSO6;
 
-/// Guest MAC for the NAT NIC: the well-known vfkit/krunkit MAC. gvproxy's default config
-/// has a *static* DHCP lease binding this MAC to `192.168.127.2` and a built-in port-forward
-/// `127.0.0.1:2222 → 192.168.127.2:22`. Using it (rather than an arbitrary locally-administered
-/// MAC, which gets a dynamic .3 lease) makes the guest IP deterministic and gives inbound SSH
-/// (`ssh -p 2222 user@127.0.0.1`) for free — no gvproxy REST forwarding needed. (`5a` =
-/// locally-administered, unicast.)
+/// virtio-net offload features for a NIC on limina-netd: vmnet's, so a NIC can move between the
+/// two. netd takes the guest's large segments whole and never sends any of its own, which a guest
+/// that takes them does not mind.
+const NET_NETD_FEATURES: u32 = NET_VMNET_FEATURES;
+
+/// Guest MAC for a NIC the supervisor names none for: the well-known vfkit/krunkit MAC. netd
+/// leases its one guest address to whichever MAC asks; on vmnet, where every guest of the host
+/// shares a segment, the supervisor always names one. (`5a` = locally administered, unicast.)
 const NET_GUEST_MAC: [u8; 6] = [0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee];
 
 // virglrenderer init flag bits (see docs/graphics.md §2).
@@ -167,7 +175,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     }
 
     match &spec.boot {
-        // EFI boot: load the EDK2 firmware blob; the guest boots its own kernel off the
+        // EFI boot: load the firmware image; the guest boots its own kernel off the
         // disk's ESP (Payload::Firmware). No bundled kernel, no root_disk_remount.
         BootSource::Firmware(path) => {
             vmr.set_firmware_config(FirmwareConfig { path: path.clone() });
@@ -219,7 +227,7 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     let net = spec.net.as_ref().map(net_device).transpose()?;
     if net.is_some() {
         // `KRUN_DHCP=1` drives libkrun's *own* guest init (the L1/krun-guest path). A stock
-        // Fedora guest ignores it and runs DHCP via NetworkManager against gvproxy's built-in
+        // Fedora guest ignores it and runs DHCP via NetworkManager against vmnet's or netd's
         // DHCP server either way.
         let epilog = vmr.kernel_cmdline.epilog.get_or_insert_with(String::new);
         if !epilog.is_empty() {
@@ -313,6 +321,11 @@ pub fn build_resources(spec: &VmSpec) -> Result<(VmResources, Devices)> {
     vmr.tpm = spec.tpm;
     vmr.tpm_state = spec.tpm_state.clone();
     vmr.efi_vars = spec.efi_vars.clone();
+    vmr.acpi_enabled = spec.acpi;
+    vmr.acpi_spcr = spec.acpi_spcr;
+    // Like the SPCR, for the ACPI machine: the device tree's `stdout-path` already gives a
+    // device-tree guest a serial console beside the display.
+    vmr.extra_bootargs = spec.extra_bootargs.clone().filter(|_| spec.acpi);
     // Test hook (not a user feature): with --usb, LIMINA_USB_MOCK selects a cold-plugged
     // mock gadget so a stock guest enumerates a device. `enum` (or the legacy `1`) is the
     // vendor-specific enumeration-only mock; `hid` is the full-speed HID echo gadget that
@@ -668,27 +681,101 @@ fn vsock_device(vsock: &VsockSpec) -> Result<VsockDevice> {
     Ok(device.timesync(false))
 }
 
-/// Attach the user-mode NAT NIC: a virtio-net device whose backend is a vfkit-style UNIX
-/// datagram connection to a gvproxy gateway. The connection (and the `VFKT` handshake) is
-/// established lazily when the guest activates the device during boot, so gvproxy only needs
-/// to be listening on the socket by then — the supervisor guarantees that ordering.
-///
+/// Attach the guest's NIC. Every backend connects lazily, when the guest activates the device
+/// during boot: a vmnet interface started in this process, a limina-netd this process spawns, or
+/// both under the switch. Each is read for the guest's lease on the way ([`lease`]), which the
+/// control link reports to the supervisor.
 fn net_device(net: &NetSpec) -> Result<NetDevice> {
-    let path = net.gvproxy_socket.to_str().with_context(|| {
-        format!(
-            "gvproxy socket path is not valid UTF-8: {:?}",
-            net.gvproxy_socket
-        )
-    })?;
-    NetDevice::new_unixgram_path(
-        "eth0",
-        path,
-        &net.mac.unwrap_or(NET_GUEST_MAC),
-        NET_COMPAT_FEATURES,
-        // gvproxy builds every frame in its own gVisor stack, so the guest can skip re-summing.
-        NetFlags::VFKIT | NetFlags::CSUM_VALID,
-    )
-    .map_err(|e| anyhow!("virtio-net (gvproxy): {e:?}"))
+    let mac = net.mac.unwrap_or(NET_GUEST_MAC);
+    let lease = lease::Lease::new(mac);
+    let serve = |forwards: Option<Arc<netd::Forwards>>, switch| -> Result<()> {
+        if let Some(at) = net.control.clone() {
+            netd::serve_control(at, forwards, switch, lease.clone())
+                .context("listening for network control")?;
+        }
+        Ok(())
+    };
+    match &net.backend {
+        NetBackend::Vmnet(mode) => {
+            let config = VmnetConfig {
+                mode: match mode {
+                    VmnetMode::Shared => KrunVmnetMode::Shared,
+                    VmnetMode::Host => KrunVmnetMode::Host,
+                    VmnetMode::Bridged(_) => KrunVmnetMode::Bridged,
+                },
+                bridged_interface: match mode {
+                    VmnetMode::Bridged(ifname) => Some(ifname.clone()),
+                    _ => None,
+                },
+            };
+            serve(None, None)?;
+            let build: ExternalBackend = Arc::new(move |features| {
+                Vmnet::start(config.clone(), features).map(|v| {
+                    Box::new(v) as Box<dyn devices::virtio::net::backend::NetBackend + Send>
+                })
+            });
+            // vmnet hands over its own header, so the device's checksum flag has no say.
+            NetDevice::new_external(
+                "eth0",
+                lease::observed(build, lease.clone()),
+                &mac,
+                NET_VMNET_FEATURES,
+                NetFlags::empty(),
+            )
+            .map_err(|e| anyhow!("virtio-net (vmnet): {e:?}"))
+        }
+        NetBackend::Netd(spec) => {
+            let exe = netd::netd_exe().context("locating limina-netd")?;
+            anyhow::ensure!(exe.exists(), "limina-netd is not at {}", exe.display());
+            let forwards = netd_forwards(spec)?;
+            serve(Some(forwards.clone()), None)?;
+            // netd sets each frame's header itself, so the device's checksum flag has no say.
+            NetDevice::new_external(
+                "eth0",
+                lease::observed(netd::backend(exe, forwards), lease.clone()),
+                &mac,
+                NET_NETD_FEATURES,
+                NetFlags::empty(),
+            )
+            .map_err(|e| anyhow!("virtio-net (limina-netd): {e:?}"))
+        }
+        NetBackend::Auto(spec) => {
+            let exe = netd::netd_exe().context("locating limina-netd")?;
+            anyhow::ensure!(exe.exists(), "limina-netd is not at {}", exe.display());
+            let forwards = netd_forwards(spec)?;
+            let control = switch::SwitchControl::new(VmnetConfig {
+                mode: KrunVmnetMode::Shared,
+                bridged_interface: None,
+            })
+            .context("starting the network switch")?;
+            serve(Some(forwards.clone()), Some(control.clone()))?;
+            // vmnet and netd each set their frames' headers, so the device's flag has no say.
+            let device = NetDevice::new_external(
+                "eth0",
+                lease::observed(
+                    switch::backend(exe, forwards, control.clone()),
+                    lease.clone(),
+                ),
+                &mac,
+                NET_VMNET_FEATURES,
+                NetFlags::empty(),
+            )
+            .map_err(|e| anyhow!("virtio-net (vmnet with limina-netd): {e:?}"))?;
+            control.set_link(device.link());
+            Ok(device)
+        }
+    }
+}
+
+/// A netd NIC's forwards, each bound now so a taken port fails before the boot.
+fn netd_forwards(spec: &crate::config::NetdSpec) -> Result<Arc<netd::Forwards>> {
+    let forwards = Arc::new(netd::Forwards::default());
+    for &(host, guest_port) in &spec.forwards {
+        forwards
+            .add(host, guest_port)
+            .with_context(|| format!("forwarding {host} to guest port {guest_port}"))?;
+    }
+    Ok(forwards)
 }
 
 /// Detect the disk image format by its magic, so a user needn't tag `--disk foo.qcow2` (M10
@@ -1343,6 +1430,9 @@ mod tests {
             tpm: false,
             tpm_state: None,
             efi_vars: None,
+            acpi: false,
+            acpi_spcr: false,
+            extra_bootargs: None,
             fido_socket: None,
             moc_socket: None,
             free_page_reporting: false,

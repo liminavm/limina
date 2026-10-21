@@ -6,8 +6,8 @@
 //! These drive the real `limina` supervisor → `limina-vmm` worker → libkrun/HVF chain. Three tiers:
 //!
 //! - [`fedora_stock_image_boots_to_bootloader`] — disk **read-only** (never mutated), asserts
-//!   the guest reaches its **bootloader** (EDK2 firmware banner + GRUB's `Booting` line) on the
-//!   silent firmware's serial console: limina boots the firmware, the firmware reads the
+//!   the guest reaches its **bootloader** (the firmware's banner + GRUB's `Booting` line) on the
+//!   firmware's serial console: limina boots the firmware, the firmware reads the
 //!   virtio-blk disk, finds the ESP, and runs the distro bootloader. The images carry a zero GRUB
 //!   timeout, so the menu is never drawn; the entry GRUB announces as it boots is the marker.
 //! - [`fedora_stock_image_efi_boots_to_userspace`] — silent firmware, writable COW clone; asserts
@@ -48,7 +48,7 @@ fn fedora_stock_image_boots_to_bootloader() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     // Firmware comes up first — this alone proves limina created the VM and the guest is
-    // executing on HVF with our serial wired as the EDK2 console.
+    // executing on HVF with our serial wired as the firmware's console.
     guest
         .wait_for("UEFI firmware", Duration::from_secs(30))
         .expect("guest did not reach EFI firmware");
@@ -105,9 +105,12 @@ fn fedora_stock_image_efi_boots_to_userspace() {
 
     // `with_net` makes the harness boot a writable APFS COW clone of the shared image, so the
     // guest can complete boot (Fedora needs a writable root) without mutating `.test`.
+    // The serial getty this test waits for needs the kernel's console on the serial line, which
+    // the ACPI machine gives only when asked: the firmware adds the console arguments.
     let cfg = GuestConfig::fedora_from_env()
         .expect("resolving guest config")
-        .with_net();
+        .with_net()
+        .with_supervisor_arg("--serial-console=both");
     eprintln!(
         "booting Fedora via EFI to userspace ({:?}): {:?}",
         cfg.limina_bin, cfg.boot
@@ -161,12 +164,12 @@ fn fedora_stock_image_efi_boots_to_userspace() {
             .trim()
     );
 
-    // Serial console works on the EFI path: the kernel printed to ttyAMA0 (only possible
-    // because the image carries `console=ttyAMA0`) and systemd spawned a getty whose `login:`
-    // prompt reached the same serial we capture. This is the getty-on-serial guarantee.
+    // Serial console works on the EFI path: the firmware added `console=ttyAMA0` to the
+    // kernel's command line, so systemd spawned a getty whose `login:` prompt reached the same
+    // serial we capture. This is the getty-on-serial guarantee.
     guest
         .wait_for("login:", Duration::from_secs(30))
-        .expect("no getty `login:` on serial — console=ttyAMA0 missing from the GRUB args?");
+        .expect("no getty `login:` on serial — did the firmware add the console arguments?");
 
     let outcome = guest
         .shutdown(Duration::from_secs(20))
@@ -193,8 +196,10 @@ fn fedora_stock_image_efi_renders_to_gop() {
         return;
     }
 
+    // The getty `login:` that ends the sampling needs the kernel's console on the serial line
+    // as well as the display, which the ACPI machine gives only when asked.
     let cfg = match GuestConfig::fedora_gop_from_env() {
-        Ok(cfg) => cfg,
+        Ok(cfg) => cfg.with_supervisor_arg("--serial-console=both"),
         // No GOP firmware on this machine — skip rather than fail (it's a built artifact).
         Err(e) => {
             eprintln!("SKIP fedora_stock_image_efi_renders_to_gop: {e:#}");
@@ -206,7 +211,7 @@ fn fedora_stock_image_efi_renders_to_gop() {
     let guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
 
     // Sample the captured scanout throughout boot and keep the richest frame seen BEFORE
-    // userspace settles — the serial getty `login:` prompt (the image carries console=ttyAMA0,
+    // userspace settles — the serial getty `login:` prompt (the firmware adds console=ttyAMA0,
     // so the kernel + getty reach the same serial we capture via --console). A rich frame in
     // that window can only be the boot console itself (firmware splash / GRUB menu / kernel
     // fbcon), not the GDM greeter that comes up with or after the getty. Real boot content
@@ -238,8 +243,8 @@ fn fedora_stock_image_efi_renders_to_gop() {
     );
     assert!(
         reached_userspace,
-        "guest never reached the serial getty `login:` within 240s — boot stalled, or \
-         console=ttyAMA0 missing from the GRUB args (scripts/prepare-efi-image.sh)?"
+        "guest never reached the serial getty `login:` within 240s — boot stalled, or the \
+         firmware did not add the console arguments?"
     );
     assert!(
         best_colors >= 8 && best_dominance < 0.99,

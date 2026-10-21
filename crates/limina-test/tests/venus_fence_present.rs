@@ -78,7 +78,7 @@ fn fence_present_chain_presents_and_never_wedges() {
 
     let banner = guest
         .wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // The seated session coming up IS the workload: gdm + gnome-shell on zink→venus

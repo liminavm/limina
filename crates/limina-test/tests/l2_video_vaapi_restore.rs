@@ -133,7 +133,7 @@ fn hardware_decode_in_flight_survives_restore() {
         .expect("coexist GPU did not come up (degraded to software-2D?)");
     let banner = g1
         .wait_for_ssh(Duration::from_secs(300))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     let have_driver = ssh_retry(
@@ -269,6 +269,10 @@ fn hardware_decode_in_flight_survives_restore() {
         });
     // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
     if let Err(e) = g2.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
         cleanup();
         panic!("{e:#}");
     }

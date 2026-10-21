@@ -11,7 +11,7 @@ set -uo pipefail
 REPO=~/Projects/limina
 JOB="${CLAUDE_JOB_DIR:-~/.claude/jobs/916f2b3c}"
 SRC="${LIMINA_SRC_IMAGE:-Fedora-Workstation-44.enhanced.test.raw}"
-FW="$REPO/target/krun-efi/KRUN_EFI.gop.fd"
+FW="$REPO/target/firmware/efi.fd"
 LOG="$JOB/tmp/m93-hctl.log"; DISK="$JOB/tmp/m93-hctl.raw"; SNAP="$JOB/tmp/m93-hctl-snap.bin"
 B1="$JOB/tmp/m93-hctl-b1.log"; B2="$JOB/tmp/m93-hctl-b2.log"
 PORT=2247

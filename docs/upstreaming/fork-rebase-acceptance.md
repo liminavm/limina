@@ -13,7 +13,7 @@ branches, their tags and the limina pin commit. It covers nothing else.
 ## 1. Find what is pending
 
 ```sh
-for r in libkrun imago mesa edk2 linux virglrenderer virglrs janus; do
+for r in libkrun imago mesa linux virglrenderer virglrs janus; do
   gh pr list -R liminavm/$r --state open \
     --json number,title,headRefName,baseRefName,updatedAt \
     --jq '.[] | "\(.number) \(.updatedAt) \(.headRefName) -> \(.baseRefName) | \(.title)"'
@@ -101,7 +101,7 @@ Each fork is covered as follows:
 | mesa `limina-kk` (host KK + zink) | `scripts/build-host-mesa.sh both` **in place**, run from the worktree. It moves the shared checkout's `limina-kk` branch to the *worktree's* manifest pin (so bump the pin first, step 3) and builds into the shared `/Volumes/mesa-cs/build-kk` and `zink-kk-prefix`, the only KK the harness loads. Keep it if the suite is clean. If the round is rejected, run the script again from a checkout at the old pin. | every venus/vrend test |
 | mesa `metal-native-context` (guest vendor drivers) | `MESA_TREE=/Volumes/mesa-accept/mesa-mnc VOLUME=<own-volume> scripts/build-gpu-drivers.sh`, then `scripts/package-gpu-drivers.sh` | the metal and enhanced tests, through image clones (below) |
 | mesa `limina-guest` (guest venus RPM) | none: bump the pin and run `scripts/export-mesa-guest-patches.sh` | **not tested.** No RPM build is part of acceptance. |
-| edk2 (when the pin moved, or the suite refuses a stale firmware) | `scripts/build-krun-efi.sh` | every EFI boot |
+| Cardea (when the pin moved, or the suite refuses a stale firmware) | `scripts/build-firmware.sh` (`cargo xtask firmware`) | every EFI boot |
 
 Deliver the vendor drivers into **clones**, never the shared images:
 
@@ -205,7 +205,7 @@ Remove what the round created:
 - the `accept-*.raw` clones;
 - the drivers container volume (`container volume delete <own-volume>`).
 
-If the edk2 pin moved, copy the new `target/krun-efi/KRUN_EFI.gop.fd` and its `.rev` into the
+If the Cardea pin moved, rebuild with `cargo xtask firmware`, then copy the new `target/firmware/efi.fd` and its `.rev` into the
 main checkout. Otherwise main's next suite refuses to run with the stale firmware.
 
 The shared Mesa trees that other sessions build from (`/Volumes/mesa-cs/mesa-guest`,

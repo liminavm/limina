@@ -58,15 +58,15 @@ right tool — not treat upstream as immutable:
     visible; images, trace fixtures, venv and the Mesa image are shared; `target/` is per
     worktree. **Act on its closing `MISSING` lines at once** (main usually has no `target/` to
     clone the firmware and test guest from) — not when `cargo xtask app` or the suite trips on them.
-- **edk2 (the KRUN_EFI boot firmware)** — **fork model**:
-  `github.com/liminavm/edk2` (`limina` branch; base is `slp/edk2@krun-support`, the tree
-  krunkit's blob is built from), pinned by `[edk2]` in `third_party/manifest.toml` but **not
-  vendored** — `scripts/build-krun-efi.sh` clones the pinned rev inside its container build
-  volume and builds with zero build-time patching (`patches/edk2/` is a tombstone). Output:
-  `target/krun-efi/KRUN_EFI.gop.fd` (RELEASE + GOP + typeable ConIn), which is also the **test
-  suite's default firmware** — krunkit's `KRUN_EFI.silent.fd` is a DEBUG build whose live
-  ASSERTs end in `CpuDeadLoop` and remains only a loud last-resort
-  fallback (`LIMINA_FIRMWARE` overrides).
+- **Cardea (the guest's UEFI firmware)** — ours outright: a Rust UEFI implementation
+  (`github.com/liminavm/cardea`, MIT), pinned by `[cardea]` in `third_party/manifest.toml` and
+  vendored at `third_party/cardea`. `scripts/build-firmware.sh` (`cargo xtask firmware`) builds it
+  natively into `target/firmware/efi.fd` with limina's logo (`assets/firmware/logo.bmp`);
+  `DEBUG=1` writes `efi.debug.fd`, which logs on the serial line. That one image is what EFI boots,
+  the app and the suite use (`LIMINA_FIRMWARE` overrides; there is no fallback firmware), and its
+  `efi.fd.rev` must match the pin or `test-boot.sh` and `build-app.sh` refuse it. Cardea carries its
+  own working rules in its `CLAUDE.md` (the hostile loader, the sabotage sweep, fallible
+  allocation). The plan behind it: `docs/design/firmware-and-acpi.md`.
 - **imago** (libkrun's virtio-blk storage backend, a crates.io dep) — **fork model** (the pilot):
   `third_party/imago` is a clone of `github.com/liminavm/imago` (`limina` branch, default; upstream
   is gitlab.com/hreitz/imago), pinned by `third_party/manifest.toml` and overridden via
@@ -386,7 +386,7 @@ directly observed.
 
 - Host: Apple M1 Max, 32 GB, arm64, **16 KiB host pages**. Measured 2026-09-22: macOS 26.6.2,
   Xcode 27.0 / clang 21, Rust 1.98 — check `sw_vers`/`rustc --version` rather than trusting this. Homebrew already has the whole VM stack
-  (libkrun, krunkit, libkrunfw, virglrenderer, molten-vk, vulkan-loader, gvproxy,
+  (libkrun, krunkit, libkrunfw, virglrenderer, molten-vk, vulkan-loader,
   libusb, qemu, cmake/meson/ninja).
 - Anything touching `hv_vm_*` must be codesigned with `com.apple.security.hypervisor` (see
   `spikes/balloon-madvise/hv.entitlements`). Agent harnesses that sandbox shell commands
@@ -397,7 +397,7 @@ directly observed.
   **`cargo xtask run --disk <enhanced.raw>`** is the one-command form — it builds+signs the worker,
   mounts `/Volumes/mesa-cs`, then hands off to `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh`
   (`LIMINA_DISK=<enhanced.raw> …` directly is the same thing). It boots the guest's
-  **own installed kernel** through our GOP firmware → GRUB → BLS entry, **enforcing** (never stamps
+  **own installed kernel** through our firmware → GRUB → BLS entry, **enforcing** (never stamps
   `/.autorelabel`), coexist venus (3D + software-2D) on KosmicKrisp, `--window --net`. This tests the
   image exactly as it really runs. venus and EFI boot have worked for a long time — **reach for this
   first.** `--no-net`/`--cpus`/`--ram-mib` and trailing `-- <extra limina flags>` map to the script's
@@ -453,12 +453,15 @@ directly observed.
   `docs/claude-code.md`). For a *time-sensitive* test (e.g. catching the ~5s GRUB countdown in a windowed boot), ask **before**
   launching the run, not after — so they're positioned and reading the instruction when the brief
   window arrives.
-- **Run a VM with networking + SSH:** `limina --net` spawns a supervised gvproxy user-mode NAT (no
-  root) and the supervisor logs the exact SSH command — `guest SSH forward ready: ssh -p N <user>@127.0.0.1`.
-  The host port **auto-allocates from 2222 up** (so 2+ VMs run concurrently without colliding); pin it
-  with `--ssh-port <1024-65535>`, and capture gvproxy's packet log (the host-side net oracle) with
-  `--net-log <file>`. Read N from the log — don't assume 2222; the line lands in the WORKER log the boot
-  vehicle names (`/tmp/limina-worker-<disk>.log`), not the boot script's stdout.
+- **Run a VM with networking + SSH:** `limina --net` puts the guest on vmnet shared (no root), and
+  the worker moves it to a per-VM `limina-netd` user-mode NAT and back when vmnet cannot serve (a VPN
+  takes its route, or it will not start) — every move is a `network: …` line with its reason
+  (`docs/design/multi-vm-networking.md` §3.5). The supervisor logs the exact SSH command — `guest
+  SSH forward ready: ssh -p N <user>@127.0.0.1`. A bridged VM (`--net-vmnet bridged:<if>`, or
+  `vm.toml`) has no forward: `limina address <vm>` names the address the LAN leased it. The host port **auto-allocates from 2222 up** (so 2+
+  VMs run concurrently without colliding); pin it with `--ssh-port <1024-65535>`. Read N from the log
+  — don't assume 2222; the line lands in the WORKER log the boot vehicle names
+  (`/tmp/limina-worker-<disk>.log`), not the boot script's stdout.
   **THE one way to wait for a networked boot — for ANY purpose — is
   `port=$(scripts/wait-guest-ssh.sh <worker-log> [timeout] [boot-pid])`.** This applies whether you framed
   the wait as "waiting for ssh", "waiting for the window", or "is it booted yet": a guest that

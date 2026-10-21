@@ -32,6 +32,15 @@ may not land; for those the human is the oracle.
 For a command the user must run themselves in the session, suggest `! <command>` in the
 prompt; the output lands in the conversation.
 
+## Independent fix alternatives
+
+`scripts/patch-audit/fix-alternatives.workflow.js` runs the proposers, judge and skeptics of
+`docs/upstreaming/patch-diligence.md` §5 as a Workflow (seven agents). Pass it as `scriptPath`
+with `args` `{brief, tree, sha, history?, ours: [{name, diff}]}`; its header describes each
+field. The brief and the tree are what keep the proposers blind, so build them first. Our diff
+reaches only the judge and the skeptics, as inline text. Run it only when the user asks for
+it.
+
 ## Temporary files
 
 Use the session scratchpad the harness names in its system prompt, never `/tmp`. Anything

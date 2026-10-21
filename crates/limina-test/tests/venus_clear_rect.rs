@@ -66,7 +66,7 @@ fn empty_clear_rect_does_not_abort_the_worker() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(180))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // Stage the vehicle + its ctypes plumbing (dependency-free: python3 + libvulkan).

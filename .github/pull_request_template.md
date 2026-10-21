@@ -39,7 +39,7 @@ macOS versions or hardware, and the fallback or rollback path.
 ## Forked stack changes
 
 <!--
-If this changes libkrun, imago, virglrenderer, Mesa, Linux, edk2, or another fork-model input,
+If this changes libkrun, imago, virglrenderer, Mesa, Linux, or another fork-model input,
 link the fork commit and identify the `third_party/manifest.toml` pin. Explain whether the change
 is upstreamable. Delete this section when no forked dependency changes.
 -->

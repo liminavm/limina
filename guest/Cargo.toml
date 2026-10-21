@@ -12,6 +12,7 @@
 #  - limina-mock-mutter: TEST-ONLY scripted stand-in for mutter's RemoteDesktop API, so
 #    the L1 guest can integration-test the real limina-agent-session without GNOME.
 #  - limina-gpu-smoke: first light for the Metal-level GPU transport (guest/virtio-gpu-limina).
+#  - limina-gpu-client: that transport's guest end (context, arenas, ring), shared by its programs.
 [workspace]
 resolver = "2"
 members = [
@@ -20,6 +21,7 @@ members = [
     "limina-agent-session",
     "limina-mock-mutter",
     "limina-gpu-smoke",
+    "limina-gpu-client",
 ]
 
 # Tiny, panic-free static binaries: abort (never unwind), optimize for size.

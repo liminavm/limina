@@ -15,7 +15,7 @@ two CLIs (`crates/limina` and `crates/limina-vmm`), which hardcode `--disk: Opti
 a global `--read-only`. So Phase 1 is mostly a CLI + arg-plumbing change.
 
 But two things that *look* free are not, and the critique surfaced them as load-bearing:
-**(a)** *which disk boots* is a firmware (EDK2 BDS) decision that attach order does **not**
+**(a)** *which disk boots* is a firmware (boot manager) decision that attach order does **not**
 control; **(b)** a multi-disk VM interacts badly with M9 snapshots —
 adding a disk renumbers the MMIO/IRQ of the *trailing* vsock+net devices, so the disk set must
 be identity-stable for snapshot/restore, and nothing today enforces or even records that.
@@ -73,17 +73,18 @@ SCSI/ATAPI CD-ROM device model (unnecessary — §5.1); **online disk grow/resiz
    construction, **stable across reboot only**. Keep `disks[0].id == "root"` so any pre-M10
    single-disk snapshot stays restorable.
 5. **Boot-device selection is the only genuinely hard part, and attach order does not solve it.**
-   The firmware (stock EDK2 BDS) auto-enumerates *every* ESP it finds; limina supplies **no**
-   `BootOrder` and **no** persisted NVRAM/varstore. So with **two or more bootable disks** (the
+   The firmware (Cardea's boot manager) tries `BootNext`, then `BootOrder`, then the default loader
+   (`\EFI\BOOT\BOOTAA64.EFI`) on each file system in discovery order, and creates no `Boot####`
+   entries; variables persist in the VM's `efi.vars`, and limina writes none. So with **two or more bootable disks** (the
    rescue pairing, a second OS, a migrated disk that carries its own ESP, or an installer ISO)
    the guest **may boot the wrong disk's bootloader** — before any `root=` is consulted. Levers:
    - **(5a-i)** Attach only one bootable medium at a time (e.g. the ISO alone for an install;
      the target is a data disk the installer writes). Zero firmware work — **Phase 3**.
    - **(5a-ii)** Interactive firmware/GRUB menu pick — now viable because the GOP firmware has a
-     working keyboard at the menu (the EFI ConIn / VirtioKeyboardDxe work just shipped) —
-     **Phase 3**.
-   - **(5b)** Host-controlled `BootOrder` via a baked EFI varstore — net-new EDK2 work, **deferred
-     Phase 3b**; the only path to deterministic unattended multi-bootable-disk boots.
+     working keyboard at the GRUB menu (the firmware's virtio-input driver) — **Phase 3**.
+   - **(5b)** Host-controlled `BootOrder`: host-side only, no firmware work — write
+     `Boot####`/`BootOrder`/`BootNext` into the VM's `efi.vars` file (the store libkrun maps via
+     `--efi-vars`; a managed VM keeps it in the bundle), **deferred Phase 3b**; the only path to deterministic unattended multi-bootable-disk boots.
 6. **Phase 1 is CLI-only, but multi-disk + M9 snapshots need a disk manifest that nobody owns
    yet** (§6.2). Until that lands, **named snapshot/restore of a multi-disk VM is gated/blocked**
    — taking it on Phase 1's transient argv risks a silent mis-restore.
@@ -170,18 +171,19 @@ host fd + the advertised `VIRTIO_BLK_F_RO`; a guest write fails at the host sysc
 — a compliant guest honors the feature bit). **Mounting an ISO read-only is Phase 1.**
 
 ### 5.2 Booting/installing FROM an ISO — the boot-order problem (Phase 3)
-limina supplies **no** EFI `BootOrder` and **no** persisted NVRAM/varstore; boot-device choice is
-stock EDK2 BDS auto-enumeration (`EfiBootManagerConnectAll`), re-run from scratch each boot
-(`build-krun-efi.sh` only patches console/GOP/keyboard/TPL — no boot-order patch). **Attach order
+limina supplies **no** EFI `BootOrder`; boot-device choice is Cardea's boot manager (`BootNext`,
+then `BootOrder`, then the default loader on each file system in discovery order), run afresh each
+boot against the variables in the VM's `efi.vars`. **Attach order
 does not map to boot priority**, so with two+ bootable disks the firmware may launch the wrong
 ESP. To install from an ISO:
 
 - The ISO must be EFI-bootable (hybrid/El-Torito with `EFI/BOOT/BOOTAA64.EFI`).
 - **(5a-i, Phase 3)** Attach only the ISO as the bootable medium; the install target is a data
-  disk. No firmware change. Confirm BDS reliably boots a sole EFI ISO before promising installs.
+  disk. No firmware change. Confirm the boot manager reliably boots a sole EFI ISO before promising installs.
 - **(5a-ii, Phase 3)** Interactive firmware/GRUB menu pick — relies on the shipped keyboard-at-GRUB.
-- **(5b, deferred)** Bake an EFI varstore + write `BootOrder`/`BootXXXX` so the host can say "boot
-  the ISO first, once." Net-new EDK2 work; the only deterministic unattended-install path.
+- **(5b, deferred)** Write `BootOrder`/`Boot####`/`BootNext` into the VM's `efi.vars` so the host
+  can say "boot the ISO first, once." Host-side only, no firmware work; the only deterministic
+  unattended-install path.
 
 ## 6. Lifecycle: reboot, snapshot, hotplug (load-bearing)
 
@@ -253,7 +255,7 @@ capability (large, speculative) — out of scope.
 | Root stays put with extra disks | ✅ `root=UUID=` (dracut + BLS) | ✅ `root=UUID=` (dracut + BLS — RPM kernel boots like stock) |
 | Read-only / ISO mount | ✅ RO virtio-blk | same |
 | Stable `/dev/disk/by-id` serial | inode-derived (opaque, not clone-stable) | `block_id` serial via the libkrun patch (§4.3) — additive |
-| Boot the *right* disk (2+ bootable) | ⚠️ BDS auto-enumerates; no host control until §5b | same |
+| Boot the *right* disk (2+ bootable) | ⚠️ the boot manager walks file systems in discovery order; no host control until §5b | same |
 | Auto-mount data disks | manual (`fstab`/Files) | optional `limina-agent` convenience later |
 
 The `block_id`→serial patch is a libkrun *mechanism* patch (carried in `patches/libkrun/`); it
@@ -313,7 +315,7 @@ libkrun." Multiple disks themselves need **no** patch.
   - `limina --disk fedora.raw --disk new.raw:create=50G` → creates+attaches a blank 50 GB disk
     (guest then partitions/`mkfs`es it).
   - `limina --disk rescue.raw --disk broken.raw:ro` → rescue boots; target attached read-only.
-    (⚠️ if `broken.raw` is bootable, BDS may pick *it* — see §5.2; attach it `:ro` and prefer the
+    (⚠️ if `broken.raw` is bootable, the firmware may pick *it* — see §5.2; attach it `:ro` and prefer the
     sole-bootable-medium lever.)
   - `limina --disk fedora.raw --cdrom Fedora.iso` → ISO mountable read-only inside the guest.
   - Install: `limina --cdrom installer.iso --disk target.raw:create=40G` + sole-ISO / menu-pick.
@@ -450,7 +452,9 @@ the as-built note).
   `arch/src/aarch64/layout.rs:75-78`.
 - Lifecycle/reboot/snapshot: `patches/libkrun/0023-*.patch`, `crates/limina/src/supervisor.rs:29-33,57-75`,
   `docs/design/m9-suspend-resume.md:79-80,270-271,286-290`.
-- ISO/boot-order/firmware: `scripts/build-krun-efi.sh:111-243`, `scripts/prepare-efi-image.sh:77-79,90-93`.
+- ISO/boot-order/firmware: `third_party/cardea/crates/bootmgr/src/lib.rs`,
+  `third_party/cardea/crates/partition/src/el_torito.rs`, `third_party/cardea/firmware/src/bds.rs`,
+  `scripts/prepare-efi-image.sh:77-79,90-93`.
 - Enhanced PRODUCT boots BLS `root=UUID=` (NOT no-initramfs): `scripts/provision/f44/build-kernel-rpm.sh:83,141-142,152-155`,
   `scripts/build-kernel-rpm.sh:5-12,36-37,158-162`, `scripts/provision/install-enhanced.sh:18-20,172,209-215,240-242,246-249,368-451`,
   `spikes/venus-draw-probe/boot-enhanced-efi-kk.sh:46-49`, `docs/images.md:60`, `docs/roadmap.md` §M4–M5.
@@ -465,5 +469,5 @@ the as-built note).
 ## Cross-references
 - `docs/design/m9-suspend-resume.md` — snapshot/restore + clone (disk-set identity, attach-block-last, CoW).
 - `docs/roadmap.md` M10 — the milestone entry this design fills in.
-- The EFI ConIn / VirtioKeyboardDxe work (keyboard at GRUB) — enables the interactive ISO boot-pick lever (§5.2).
+- The firmware's virtio-input keyboard driver (keyboard at GRUB) — enables the interactive ISO boot-pick lever (§5.2).
 - Task #5 (migrated-guest root-mount) — the live instance of the positional-`/dev/vda` fragility §4.2 fixes.

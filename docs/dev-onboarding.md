@@ -9,30 +9,28 @@ so when you need a knob a command doesn't expose, reach for the script it wraps.
 
 - macOS on Apple Silicon (developed on macOS 26.5, M1 Max, 16 KiB host pages).
 - Rust (stable), full Xcode + command-line tools (codesign, otool).
-- Homebrew: `molten-vk vulkan-loader gvproxy libusb cmake meson ninja llvm
+- Homebrew: `molten-vk vulkan-loader libusb cmake meson ninja llvm
   spirv-llvm-translator spirv-tools bison`. The keg-only ones (`llvm`, `bison`, and `expat`
   where it exists) are what the host Mesa build needs on `PATH` / `PKG_CONFIG_PATH`;
   `scripts/build-host-mesa.sh` puts them there for you but cannot install them.
   **Not `libclc`** — it is version-coupled to the Mesa rev and pinned in
   `third_party/manifest.toml` instead, fetched and digest-checked by the build (step 1.5).
-- **The `libkrun/krun` Homebrew tap**, for `gvproxy` and `libkrunfw` — neither is in
-  homebrew-core, and current Homebrew **refuses to load a tap until you trust it**:
+- **The `libkrun/krun` Homebrew tap**, for `libkrunfw` — it is not in homebrew-core, and current
+  Homebrew **refuses to load a tap until you trust it**:
 
   ```sh
-  brew tap libkrun/krun && brew trust libkrun/krun && brew install gvproxy libkrunfw
+  brew tap libkrun/krun && brew trust libkrun/krun && brew install libkrunfw
   ```
 
-  `gvproxy` is not optional for the suite: every test that needs guest networking dies at
-  `starting the gvproxy NAT gateway` before the VM boots (that is ~36 of them), and
-  `scripts/build-app.sh` vendors the binary into the bundle. `libkrunfw` is how
+  `libkrunfw` is how
   `scripts/build-test-guest.sh` gets an L1 kernel when no custom one exists, but that kernel has
   no xHCI or EDID, so `scripts/test-boot.sh` refuses to run on it unless
   `LIMINA_TEST_STOCK_KERNEL=1`.
 - The **test kernels**, `scripts/build-test-kernel.sh` (or `cp -c` the `Image*` files from
   another checkout's `target/test-guest/kernel/`). The suite needs `Image`; the L2 venus and
   multi-display tests also want the `Image-16k` / `Image-16k-71` siblings and silently SKIP
-  without them. The suite likewise refuses a `target/krun-efi/KRUN_EFI.gop.fd` that
-  `scripts/build-krun-efi.sh` did not record as built at the `[edk2]` pin. Note the fork's patch series is
+  without them. The suite likewise refuses a `target/firmware/efi.fd` that
+  `scripts/build-firmware.sh` did not record as built at the `[cardea]` pin. Note the fork's patch series is
   based on `v7.1.8`, so it cannot apply to the script's default `KVER=v6.12` — build those
   two with `PATCHES_OPTIONAL=1` (they are plain vehicles that do not need it) and the
   `Image-16k-71` one at `KVER=v7.1.8`, where it applies cleanly:
@@ -78,9 +76,9 @@ no patch series to apply — lets virglrs vendor its own dependencies (the C vir
 it generates tables from, and the venus-protocol), and creates `third_party/venv-mesa`.
 Idempotent; safe to re-run, and the way to repair a `third_party/` tree you deleted.
 
-> The native deps (the host **KK/zink Mesa**, the **GOP KRUN_EFI** firmware, the guest
-> **16 KiB kernel / Mesa / agent** RPMs) are heavier, container/`meson`-driven builds that
-> stay as their own scripts — `vendor` only materializes source trees. See
+> The native deps (the host **KK/zink Mesa**, the guest **16 KiB kernel / Mesa / agent** RPMs)
+> are heavier, container/`meson`-driven builds that stay as their own scripts, and the
+> firmware is `cargo xtask firmware` — `vendor` only materializes source trees. See
 > `docs/codebases.md` for which script builds what.
 
 ### Local overrides: pins before pushes
@@ -101,8 +99,9 @@ checkout = "~/src/virglrs"            # build this tree as it stands, whatever i
 (firmware, kernel) mount the repository read-only for it. `checkout` builds a tree as it
 stands; for a `third_party/` dependency `vendor` makes it a symlink, and refuses to replace a
 real tree. **"As it stands" differs by build:** the cargo path deps and the host Mesa compile
-the working tree, uncommitted edits included, but the firmware and kernel containers fetch the
-tree's HEAD *commit* — commit an edk2 or kernel change before building it, or it does not ship.
+the working tree, uncommitted edits included, and so does the firmware build (whose `efi.fd.rev`
+then says `(modified)`), but the kernel container fetches the tree's HEAD *commit* — commit a
+kernel change before building it, or it does not ship.
 A misspelt dependency or key is an error, not a silent no-op.
 
 `cargo xtask pins` shows each pin, the tree standing in for it, and whether its remote has
@@ -124,12 +123,11 @@ In a worktree the forks are **worktrees of the main checkout's clones**, detache
 objects are shared, so unpushed commits are already there, and each has its own HEAD. The
 test images, the trace fixtures, the Python venv and the Mesa sparse image are shared as
 symlinks (the harness clones images before booting them); `target/test-guest`,
-`target/krun-efi` and the trap probe are APFS clones **of main's copies, when main has them**.
+`target/firmware` and the trap probe are APFS clones **of main's copies, when main has them**.
 Work happens in worktrees, so main's `target/` is usually absent: `new` then ends with a
 `MISSING <output> — <what needs it>: <how to make it>` line per gap. **Read those lines before
 you need the output** — the firmware is what `cargo xtask app` and the suite fail on. The quick
-fix is `cp -c` from a sibling worktree, after checking that its `KRUN_EFI.gop.fd.rev` is the
-`[edk2]` pin. `target/` is the worktree's own — the first build is a full one, and `rm` reaps
+fix is `cargo xtask firmware`, a native build that takes seconds. `target/` is the worktree's own — the first build is a full one, and `rm` reaps
 it. The suite stays one-at-a-time per host whichever worktree starts it.
 
 ## 1.5. Host Mesa (once per machine)
@@ -259,8 +257,8 @@ default 1280x800): it has no window, but `limina debug <vm> capture still|start|
 windowed run, with records marked `headless` (`docs/graphics.md` §8). It is off by default and is
 chosen at launch; a run started without it refuses every capture and says so.
 
-A flat run in the foreground holds its terminal: every process of the run — the supervisor,
-gvproxy and its reaper, and the worker, whose stdio the supervisor hands launchd — inherits the
+A flat run in the foreground holds its terminal: every process of the run — the supervisor, the
+worker, whose stdio the supervisor hands launchd, and the worker's limina-netd — inherits the
 launching shell's stdout and stderr, so `ssh host 'limina --disk …'` stays open for the VM's whole
 life (sshd ends a session only once every holder of its output pipes has closed them).
 `nohup` does not help there, as it redirects only a terminal; under `ssh -t`, a `nohup limina …
@@ -279,9 +277,9 @@ canonicalized, so any spelling of the same file finds the run and nothing else d
 only if a supervisor answers there. `stop` is the stop ladder of a SIGTERM to the supervisor (guest agent, power
 button, stock guest agent); it never kills, and reports a guest still running after `--timeout`
 (default 60 s) with a non-zero exit. `stop --force` is the second signal: the supervisor SIGKILLs
-the worker, tears down gvproxy and its sockets, and exits, without writing a suspend snapshot.
+the worker, which takes its limina-netd with it, and exits, without writing a suspend snapshot.
 `reset` SIGKILLs the worker and cold-boots a fresh one through the path a guest's own `reboot`
-takes, so the supervisor, its window, the NAT gateway and the SSH port all stay; it answers once
+takes, so the supervisor, its window and the SSH port all stay (the forward where it was last moved); it answers once
 the fresh worker runs. There is no orderly reset: the orderly one is the guest's own `reboot`
 (`ssh … sudo reboot`), which relaunches the same way, and `reset` is for the guest that cannot be
 asked. A reset is dropped (and says so) when a stop or a suspend is already under way. Back-to-back
@@ -301,7 +299,7 @@ Everything that has to be built *on Linux* runs in one container image —
 use). There is no second image and no second toolchain:
 
 ```sh
-cargo xtask firmware               # target/krun-efi/KRUN_EFI.gop.fd — the suite's default firmware
+cargo xtask firmware               # target/firmware/efi.fd — the suite's default firmware
 cargo xtask enhanced               # 16k kernel + venus mesa RPMs + agents + install-ready payload
 cargo xtask enhanced kernel        # just one component
 ```
@@ -323,7 +321,7 @@ cargo xtask test -- --test venus       # one binary (forwarded to the test run)
 
 `test` (= `scripts/test-boot.sh`, `LIMINA_HVF_TESTS=1`) builds, codesigns, link-checks,
 builds the L1 guest + trap probe, and runs the boot tests against real HVF. Its default
-firmware is step 4's `target/krun-efi/KRUN_EFI.gop.fd` (`LIMINA_FIRMWARE` overrides). **This is the
+firmware is step 4's `target/firmware/efi.fd` (`LIMINA_FIRMWARE` overrides). **This is the
 "did I break boot" command** — a plain `cargo test` deliberately *skips* the HVF tests
 (no codesign/sandbox), so green there means almost nothing for boot behavior. It needs
 sandbox-disabled execution (it hits `hv_vm_*`).

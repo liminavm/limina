@@ -11,7 +11,7 @@
 #         LIMINA_AB_CPUS   vcpus                 (default 6)
 #         LIMINA_AB_OUT    output dir            (default $CLAUDE_JOB_DIR/tmp or /tmp)
 # Prereqs: worker already built+signed (crates/limina-vmm/sign.sh) and linking the intended
-#          virgl-prefix; /Volumes/mesa-cs mounted; firmware at target/krun-efi/KRUN_EFI.gop.fd.
+#          virgl-prefix; /Volumes/mesa-cs mounted; firmware at target/firmware/efi.fd.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 

@@ -1,0 +1,16 @@
+=== metal / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 23131d09ae00472696ed125cbfd03452
+  settling 35s…
+capture unusable (UnidentifiedImageError); retry
+  capture attempt 1 unusable, retrying…
+perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-25000-fps.png: 1200x520 (from perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-25000.png 1280x800 box 0,0,300,130) bright_frac=0.1077
+  wrote perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-25000.png and perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-25000-fps.png
+=== metal / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 0f35bf97e9b941e4b7d54ea58e43f153
+  settling 35s…
+perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-30000-fps.png: 1200x520 (from perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0611
+  wrote perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-30000.png and perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-25000-fps.png
+perf/wire-v5-2026-10-17/evidence/ea0-v5/aquarium-r2/metal-30000-fps.png

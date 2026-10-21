@@ -7,6 +7,7 @@
 //! snapshots and only rebuilds the row views when something actually changed.
 
 use super::live;
+use crate::runtime_ctl::{GuestAddress, Info};
 use crate::vmlib::{bundle, preflight, runtime, schema};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,9 +22,12 @@ pub struct VmRow {
     pub summary: String,
     /// "root.raw (40 GB) · data.raw (ro)" — the disks/cdroms line ("" = none).
     pub disks: String,
-    /// The SSH command ("ssh -p 4444 127.0.0.1") when running with networking, or
-    /// the configured port ("port 4444" / "auto") when stopped. None = no network.
+    /// The SSH command when it is knowable — through the forward ("ssh -p 4444 127.0.0.1") on
+    /// NAT, at the guest's own address ("ssh 192.168.13.77") bridged — or what stands in for it
+    /// until then. None = no network.
     pub ssh: Option<String>,
+    /// The NIC has an SSH forward to move (NAT); a bridged one has none.
+    pub forward: bool,
     /// vm.toml failed to load/validate: show the row (with the error) but offer no
     /// lifecycle actions except Delete.
     pub broken: bool,
@@ -54,18 +58,18 @@ pub fn snapshot() -> Vec<VmRow> {
                 runtime::VmStatus::Running { pid } => (true, pid),
                 runtime::VmStatus::Stopped => (false, 0),
             };
-            let live_port = if running {
-                live::info(pid).and_then(|i| i.ssh_port)
-            } else {
-                None
-            };
+            let live = if running { live::info(pid) } else { None };
             let suspended = !running && b.snapshot_bin().exists();
             match b.load() {
                 Ok(cfg) => VmRow {
                     name: b.display_name(&cfg),
                     summary: summarize(&cfg),
                     disks: disks_line(&b, &cfg),
-                    ssh: ssh_line(&cfg, running, live_port),
+                    ssh: ssh_line(&cfg, running, live.as_ref()),
+                    forward: cfg
+                        .networks
+                        .first()
+                        .is_some_and(|n| n.mode == schema::NetMode::Nat),
                     blocked: (!running).then(|| blocking_reason(&b, &cfg)).flatten(),
                     running,
                     pid,
@@ -78,6 +82,7 @@ pub fn snapshot() -> Vec<VmRow> {
                     summary: format!("broken: {e:#}"),
                     disks: String::new(),
                     ssh: None,
+                    forward: false,
                     blocked: Some(format!("{e:#}")),
                     running,
                     pid,
@@ -198,13 +203,24 @@ fn disks_line(bundle: &bundle::VmBundle, cfg: &schema::VmConfig) -> String {
 }
 
 /// The SSH line — the actual copyable command whenever the port is knowable.
-/// For a running VM the truth is what its supervisor reports (`live_port`: the port
+/// For a running VM the truth is what its supervisor reports (`live`: the port
 /// auto-allocates from 2222 when not pinned, and can move while it runs), falling
 /// back to the pinned port until the first report. A stopped VM with a pinned port
 /// shows the same command (it's what to use after Start); auto-port + stopped is
-/// the one unknowable case.
-fn ssh_line(cfg: &schema::VmConfig, running: bool, live_port: Option<u16>) -> Option<String> {
+/// the one unknowable case. A bridged VM is reached at its own address, which only
+/// its supervisor knows, once the LAN's DHCP server has given it one.
+fn ssh_line(cfg: &schema::VmConfig, running: bool, live: Option<&Info>) -> Option<String> {
     let net = cfg.networks.first()?;
+    if net.mode == schema::NetMode::Bridged {
+        let on = net.uplink.as_deref().unwrap_or("?");
+        return Some(match live.map(|i| &i.address) {
+            _ if !running => format!("bridged on {on}"),
+            Some(GuestAddress::At(ip)) => format!("ssh {ip}"),
+            Some(GuestAddress::Failed(why)) => format!("network failed: {why}"),
+            _ => format!("bridged on {on}: waiting for an address"),
+        });
+    }
+    let live_port = live.and_then(|i| i.ssh_port);
     let pinned = (net.ssh_port != 0).then_some(net.ssh_port);
     let port = if running {
         live_port.or(pinned)
@@ -335,12 +351,9 @@ mod tests {
         opts.disk = Some(src);
         let bundle = create(&opts, &lib).unwrap();
 
-        // The row reports the first blocker, and whether this host has gvproxy or a built
-        // GOP firmware is not what this test is about: satisfy both with stand-ins so the
-        // only thing that can block is the definition itself.
-        let gvproxy = lib.join("gvproxy");
-        std::fs::write(&gvproxy, b"").unwrap();
-        unsafe { std::env::set_var("LIMINA_GVPROXY_BIN", &gvproxy) };
+        // The row reports the first blocker, and whether this host has a built GOP firmware
+        // is not what this test is about: satisfy it with a stand-in so the only thing that
+        // can block is the definition itself.
         let firmware = lib.join("firmware.fd");
         std::fs::write(&firmware, b"").unwrap();
         let mut cfg = bundle.load().unwrap();
@@ -361,7 +374,6 @@ mod tests {
             .expect("the row must say why Start is unavailable");
         assert!(why.contains("not found"), "{why}");
 
-        unsafe { std::env::remove_var("LIMINA_GVPROXY_BIN") };
         unsafe { std::env::remove_var("LIMINA_VM_LIBRARY") };
         std::fs::remove_dir_all(&lib).ok();
     }
@@ -390,6 +402,49 @@ mod tests {
         std::fs::remove_dir_all(&lib).ok();
     }
 
+    fn port(p: u16) -> Info {
+        Info {
+            ssh_port: Some(p),
+            ..Info::default()
+        }
+    }
+
+    #[test]
+    fn a_bridged_vm_is_reached_at_the_address_its_supervisor_reports() {
+        let _guard = crate::vmlib::bundle::tests::env_lock();
+        let lib = crate::vmlib::bundle::tests::scratch_library("bridgedline");
+        let opts = crate::vmlib::bundle::tests::basic_opts("Lan");
+        let mut cfg = create(&opts, &lib).unwrap().load().unwrap();
+        std::fs::remove_dir_all(&lib).ok();
+        cfg.networks[0].mode = schema::NetMode::Bridged;
+        cfg.networks[0].uplink = Some("en0".into());
+
+        assert_eq!(
+            ssh_line(&cfg, false, None).as_deref(),
+            Some("bridged on en0")
+        );
+        assert_eq!(
+            ssh_line(&cfg, true, None).as_deref(),
+            Some("bridged on en0: waiting for an address")
+        );
+        let at = Info {
+            address: GuestAddress::At("192.168.13.77".parse().unwrap()),
+            ..Info::default()
+        };
+        assert_eq!(
+            ssh_line(&cfg, true, Some(&at)).as_deref(),
+            Some("ssh 192.168.13.77")
+        );
+        let failed = Info {
+            address: GuestAddress::Failed("vmnet_start_interface did not answer".into()),
+            ..Info::default()
+        };
+        assert_eq!(
+            ssh_line(&cfg, true, Some(&failed)).as_deref(),
+            Some("network failed: vmnet_start_interface did not answer")
+        );
+    }
+
     #[test]
     fn ssh_line_prefers_the_supervisors_port_when_running() {
         let _guard = crate::vmlib::bundle::tests::env_lock();
@@ -410,7 +465,7 @@ mod tests {
         );
         // Running: the supervisor's port wins.
         assert_eq!(
-            ssh_line(&cfg, true, Some(2223)).as_deref(),
+            ssh_line(&cfg, true, Some(&port(2223))).as_deref(),
             Some("ssh -p 2223 127.0.0.1")
         );
 
@@ -426,7 +481,7 @@ mod tests {
             Some("ssh -p 2299 127.0.0.1")
         );
         assert_eq!(
-            ssh_line(&pinned, true, Some(2300)).as_deref(),
+            ssh_line(&pinned, true, Some(&port(2300))).as_deref(),
             Some("ssh -p 2300 127.0.0.1")
         );
 

@@ -5,7 +5,7 @@
 //! arguments (double-clicking limina.app) or via `limina center`.
 //!
 //! Architecture: the center is a launcher, not a host. Each running VM is its own
-//! child `limina start <bundle>` supervisor process (the per-process gvproxy/control
+//! child `limina start <bundle>` supervisor process (the per-process forward/control
 //! globals, the one-NSWindow-per-process design and the `process::exit` teardown all
 //! assume one VM per process). Children are spawned detached and **survive the
 //! center quitting**; state is re-derived from each bundle's `run/lock` flock +

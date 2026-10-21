@@ -35,6 +35,9 @@ limina-debug = { workspace = true }
 # The Metal-level GPU transport's GPU host process, which the worker starts and drives.
 limina-gpu-wire = { workspace = true }
 limina-gpu-host = { workspace = true }
+# The user-mode NAT the worker spawns for a NIC on limina-netd, and the rings it shares with it.
+limina-netd-wire = { workspace = true }
+limina-ring = { workspace = true }
 
 anyhow            = { workspace = true }
 clap              = { workspace = true }

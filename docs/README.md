@@ -51,7 +51,9 @@ Decision-oriented design docs — the founding one plus one per major feature
   capture rides the [privileged helper](design/privileged-helper.md) (deferred).
 - [M9 suspend/resume + VM snapshots](design/m9-suspend-resume.md) — designed, not started.
 - [M10 multiple disks](design/m10-multiple-disks.md) — shipped.
-- [Multi-VM networking](design/multi-vm-networking.md) — proposal; default NAT backend open pending measurements.
+- [Firmware and ACPI](design/firmware-and-acpi.md) — Cardea, our Rust UEFI firmware, and ACPI
+  for the guest (the default machine).
+- [Multi-VM networking](design/multi-vm-networking.md) — vmnet shared by default, a per-VM `limina-netd` as the VPN-proof fallback, bridged onto a host interface per VM; networks as objects still to come.
 - [VM definitions & persistence](design/vm-definitions.md) — the per-VM config model;
   Phase 1 + the control-center UI shipped (`.liminavm` bundles, `limina create/start/
   ls/stop/rm`, bare `limina` opens the VM library window).

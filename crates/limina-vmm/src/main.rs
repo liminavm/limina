@@ -23,6 +23,7 @@ mod power;
 mod quiesce;
 mod restart;
 mod scanout_copier;
+mod shader_cache;
 mod shutdown;
 mod snapshot;
 mod surface_publisher;
@@ -31,6 +32,7 @@ mod usb_kbd;
 mod video_state;
 mod wake;
 
+use std::net::SocketAddrV4;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -40,14 +42,14 @@ use limina_launch::connect::ListenAt;
 
 use crate::config::{
     BootSource, ConsoleSpec, DiskSpec, DisplaySink, DisplaySpec, FsShare, InputSpec, KernelSpec,
-    NetSpec, VirtioConsoleSpec, VmSpec, VsockSpec,
+    NetBackend, NetSpec, NetdSpec, VirtioConsoleSpec, VmSpec, VmnetMode, VsockSpec,
 };
 
 /// Boot a Linux guest on libkrun + Hypervisor.framework.
 #[derive(Parser, Debug)]
 #[command(name = "limina-vmm", about, version)]
 struct Cli {
-    /// EFI firmware blob (EDK2 .fd) to load into guest RAM. The stock-baseline boot
+    /// EFI firmware image (Cardea's efi.fd) to load into guest RAM. The stock-baseline boot
     /// path; mutually exclusive with --kernel.
     #[arg(long, conflicts_with = "kernel", required_unless_present = "kernel")]
     firmware: Option<PathBuf>,
@@ -233,6 +235,12 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     gpu_cache_key: Option<PathBuf>,
 
+    /// Keep Mesa's disk cache — the host side of every guest shader compile — in DIR, made when
+    /// absent and capped at 1 GiB. Without it Mesa uses its host-wide default, which every Mesa
+    /// process shares. A DIR that cannot be made leaves the default in place.
+    #[arg(long, value_name = "DIR")]
+    gpu_shader_cache: Option<PathBuf>,
+
     /// UNIX-socket path for runtime balloon control (M6). The worker binds a listener here and
     /// applies newline-delimited `target <bytes>` commands to the live virtio-balloon (replying to
     /// `stats` with `actual=<bytes> reclaimed=<bytes>`). For the test harness and other tools; the
@@ -306,6 +314,25 @@ struct Cli {
     #[arg(long, value_name = "FILE", conflicts_with = "kernel")]
     efi_vars: Option<PathBuf>,
 
+    /// Describe the machine to the OS with ACPI tables instead of a device tree: libkrun writes
+    /// them, and the firmware installs them and withholds the tree (docs/design/
+    /// firmware-and-acpi.md). **EFI boot only**, since an arm64 OS finds ACPI only through a
+    /// firmware.
+    #[arg(long, conflicts_with = "kernel")]
+    acpi: bool,
+
+    /// With `--acpi`, name the serial port in an SPCR table: the OS takes it as its preferred,
+    /// and only, console, so kernel and initramfs output reach the serial line but leave the
+    /// display. A debugging aid. Ignored on the device-tree machine, whose `stdout-path` always
+    /// names the serial port.
+    #[arg(long)]
+    acpi_spcr: bool,
+
+    /// With `--acpi`, arguments the firmware adds to a Linux kernel's command line as it starts
+    /// it. **EFI boot only**: a `--kernel` boot takes its command line whole.
+    #[arg(long, value_name = "ARGS", conflicts_with = "kernel")]
+    extra_bootargs: Option<String>,
+
     /// Inherited link (`limina_launch::connect`) for the stock-tier FIDO USB gadget (M14 Stage
     /// C). The worker cold-plugs a HID report-pipe gadget with the FIDO identity and shuttles
     /// CTAPHID frames over a connection on this link to the supervisor's authenticator
@@ -336,15 +363,35 @@ struct Cli {
     #[arg(long)]
     balloon_deflate_on_oom: bool,
 
-    /// Attach a user-mode NAT NIC (`eth0`) connected to a gvproxy gateway listening on
-    /// this vfkit unixgram socket. The supervisor spawns gvproxy and guarantees it is up
-    /// before the guest activates the device.
-    #[arg(long)]
-    net_gvproxy: Option<PathBuf>,
+    /// Attach a NIC (`eth0`) on a vmnet interface this worker starts: `shared` (NAT),
+    /// `host` (host-only) or `bridged:<interface>` (the LAN, through that host interface).
+    #[arg(long, conflicts_with_all = ["net_netd", "net_auto"])]
+    net_vmnet: Option<VmnetMode>,
 
-    /// Guest MAC for the NAT NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
-    /// The supervisor keeps gvproxy's static .2 lease in sync with this.
-    #[arg(long, requires = "net_gvproxy")]
+    /// Attach a user-mode NAT NIC (`eth0`) on a `limina-netd` this worker spawns from its own
+    /// directory.
+    #[arg(long, conflicts_with = "net_auto")]
+    net_netd: bool,
+
+    /// Attach a NIC (`eth0`) on vmnet shared that moves to a `limina-netd` this worker spawns
+    /// when vmnet cannot serve, and back: the supervisor's `--net`.
+    #[arg(long)]
+    net_auto: bool,
+
+    /// A port forward on a netd or auto NIC, `HOST_IP:HOST_PORT:GUEST_PORT` (TCP): this worker
+    /// binds the host side and netd carries each connection to the guest's port. Repeatable.
+    #[arg(long, value_name = "HOST_IP:HOST_PORT:GUEST_PORT", value_parser = parse_forward)]
+    net_forward: Vec<(SocketAddrV4, u16)>,
+
+    /// The NIC's control link (an inherited link the supervisor connects over): newline `watch`
+    /// (the guest's address, then each change) on any NIC, `forward HOST_IP:HOST_PORT
+    /// GUEST_PORT` and `unforward HOST_IP:HOST_PORT` on a netd or auto NIC, and `switch
+    /// vmnet|netd` on an auto NIC.
+    #[arg(long)]
+    net_control_fd: Option<i32>,
+
+    /// Guest MAC for the NIC (aa:bb:cc:dd:ee:ff). Default: the well-known vfkit MAC.
+    #[arg(long)]
     net_mac: Option<String>,
 
     /// fd of the keyboard event socket (supervisor→worker). Enables the virtio-keyboard.
@@ -395,6 +442,20 @@ struct Cli {
 
 /// Parse a `WIDTHxHEIGHT` display mode string into `(width, height)`.
 /// A listener's place from its path flag or its link flag (clap keeps them exclusive).
+/// A `--net-forward`: `HOST_IP:HOST_PORT:GUEST_PORT`.
+fn parse_forward(s: &str) -> Result<(SocketAddrV4, u16)> {
+    let (host, guest) = s
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("a forward is HOST_IP:HOST_PORT:GUEST_PORT, got {s:?}"))?;
+    let host: SocketAddrV4 = host
+        .parse()
+        .map_err(|e| anyhow::anyhow!("forward host side {host:?}: {e}"))?;
+    let guest: u16 = guest
+        .parse()
+        .map_err(|e| anyhow::anyhow!("forward guest port {guest:?}: {e}"))?;
+    Ok((host, guest))
+}
+
 fn listen_at(path: Option<PathBuf>, link: Option<i32>) -> Option<ListenAt> {
     path.map(ListenAt::Path).or(link.map(ListenAt::Link))
 }
@@ -665,6 +726,23 @@ fn main() -> Result<()> {
         };
     }
 
+    // Mesa reads these when the renderer first loads it, which is after every thread below has
+    // started, so they are set here or not at all.
+    if let Some(dir) = &cli.gpu_shader_cache {
+        match std::fs::create_dir_all(dir) {
+            Ok(()) => {
+                for (k, v) in shader_cache::env(dir, |k| std::env::var_os(k).is_some()) {
+                    // SAFETY: still on main() with no thread spawned, so nothing can be in `getenv`.
+                    unsafe { std::env::set_var(k, v) };
+                }
+            }
+            Err(e) => log::warn!(
+                "virtio-gpu: shader cache {} unusable, Mesa keeps its default: {e}",
+                dir.display()
+            ),
+        }
+    }
+
     // clap guarantees exactly one of --firmware / --kernel is present.
     let boot = match cli.kernel {
         Some(image) => BootSource::Kernel(KernelSpec {
@@ -804,9 +882,28 @@ fn main() -> Result<()> {
     };
 
     let net_mac = cli.net_mac.as_deref().map(parse_mac).transpose()?;
-    let net = cli.net_gvproxy.map(|gvproxy_socket| NetSpec {
-        gvproxy_socket,
+    anyhow::ensure!(
+        cli.net_netd || cli.net_auto || cli.net_forward.is_empty(),
+        "--net-forward needs --net-netd or --net-auto"
+    );
+    anyhow::ensure!(
+        cli.net_netd || cli.net_auto || cli.net_vmnet.is_some() || cli.net_control_fd.is_none(),
+        "--net-control-fd needs a NIC"
+    );
+    let netd_spec = NetdSpec {
+        forwards: cli.net_forward,
+    };
+    let net_backend = match (cli.net_vmnet, cli.net_netd, cli.net_auto) {
+        (Some(mode), false, false) => Some(NetBackend::Vmnet(mode)),
+        (None, true, false) => Some(NetBackend::Netd(netd_spec)),
+        (None, false, true) => Some(NetBackend::Auto(netd_spec)),
+        (None, false, false) => None,
+        _ => unreachable!("clap rejects more than one of the --net-* backends"),
+    };
+    let net = net_backend.map(|backend| NetSpec {
+        backend,
         mac: net_mac,
+        control: cli.net_control_fd.map(ListenAt::Link),
     });
 
     let spec = VmSpec {
@@ -846,6 +943,9 @@ fn main() -> Result<()> {
         tpm: cli.tpm || cli.tpm_state.is_some(),
         tpm_state: cli.tpm_state.clone(),
         efi_vars: cli.efi_vars.clone(),
+        acpi: cli.acpi,
+        acpi_spcr: cli.acpi_spcr,
+        extra_bootargs: cli.extra_bootargs.clone(),
         fido_socket: cli.fido_fd.map(ListenAt::Link),
         moc_socket: cli.moc_fd.map(ListenAt::Link),
         free_page_reporting: cli.balloon_free_page_reporting,

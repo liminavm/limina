@@ -85,22 +85,21 @@ The per-tick fit recompute then re-fits the scanout with no bars. No feedback lo
 window resizes push zero modesets, and the guest re-push is keyed off the *screen* size, not the
 window size, so the reshape can't re-trigger a push.
 
-## Firmware / GRUB run at a modest resolution (upscaled), not the full screen
+## Firmware / GRUB run at the host's size
 
-On the EFI path in host mode the guest boots at the screen size (e.g. 2560×1440), so **the
-firmware console and GRUB** would draw a small, fixed-size menu centered in that huge
-framebuffer, padding the rest with black — a "letterbox" *inside the guest scanout* that the
-compositor cannot upscale (it can't tell the menu from GRUB's own black pixels). Root cause:
-`OvmfPkg/VirtioGpuDxe`'s `GopInitialize` overwrites the modest `PcdVideoHorizontalResolution|1280`
-/ `…VerticalResolution|800` the `.dsc` sets with the host's native display-info size whenever
-`PcdVideoResolutionSource == 0`. The fix (`scripts/build-krun-efi.sh`) pins
-`gUefiOvmfPkgTokenSpaceGuid.PcdVideoResolutionSource|1` — the same sentinel OvmfPkg's Setup uses
-when the user picks a resolution — so the driver leaves the modest 1280×800 alone. Firmware/GRUB
-then render at 1280×800 and the host aspect-fits/**upscales** them to fill the window; the guest
-**kernel** is unaffected (virtio-gpu-drm queries display-info directly and still modesets to the
-full screen for a crisp desktop). Host-side and tier-agnostic — stock and enhanced both benefit.
-Verified by the scanout-geometry timeline (firmware/GRUB `640×480 → 1280×800`, kernel
-`→ 2560×1440`) plus a human eyeball on the enlarged menu.
+The firmware (Cardea) takes the host's display-info size as its GOP mode 0, falling back to
+1280×800 when the host reports none (`third_party/cardea/firmware/src/virtio/gpu.rs`,
+`display_size`), so the firmware console and GRUB draw at the screen size, e.g. 2560×1440, with
+text at its native size and a GRUB theme image filling the screen. The guest kernel modesets to
+the same size, so the window shows one resolution from the first frame to the desktop and never
+upscales. The cost is small text in the firmware and GRUB menus on a large screen.
+
+A loader that prints through the firmware console draws a cell per call (GRUB does), and every
+virtio-gpu flush costs the host a frame, so the firmware coalesces them: drawing reaches the host
+at most once a frame while the loader keeps drawing, and whatever is pending is shown as soon as
+the loader waits or reads (cardea-gfx's `Coalescer`). Measured on the F44 disk at 2560×1440: 36
+flushes and 6.4 s from firmware start to kernel, GRUB's countdown included, against 28,519
+flushes and 43 s with a flush per call.
 
 ## Push triggers (why they differ per mode)
 

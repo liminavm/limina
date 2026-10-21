@@ -129,6 +129,7 @@ pub fn create(opts: &CreateOpts, dest_dir: &Path) -> Result<VmBundle> {
                 mode: NetMode::Nat,
                 mac: mac_for_uuid(&uuid),
                 ssh_port: opts.ssh_port,
+                uplink: None,
             }],
             shares: vec![],
             boot: Default::default(),
@@ -216,8 +217,20 @@ pub fn remove(bundle: &VmBundle) -> Result<()> {
         "VM {} is running; stop it before deleting",
         bundle.dir_name()
     );
+    // Read before the bundle goes: its vm.toml is the only place the uuid naming the cache lives.
+    let shader_cache = bundle
+        .load()
+        .ok()
+        .and_then(|cfg| super::bundle::shader_cache_dir(&cfg.identity.uuid));
     std::fs::remove_dir_all(&bundle.path)
         .with_context(|| format!("deleting {}", bundle.path.display()))?;
+    // A cache left behind is only disk space, so failing to remove it does not fail the delete.
+    if let Some(dir) = shader_cache
+        && let Err(e) = std::fs::remove_dir_all(&dir)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!("deleting the shader cache {}: {e}", dir.display());
+    }
     Ok(())
 }
 
@@ -274,6 +287,38 @@ mod tests {
         assert!(!bundle.path.exists());
         assert!(src.exists(), "source image must survive");
 
+        std::fs::remove_dir_all(&lib).ok();
+    }
+
+    #[test]
+    fn remove_deletes_the_vms_shader_cache_and_no_other() {
+        let _g = crate::vmlib::bundle::tests::env_lock();
+        let lib = scratch_library("shadercache");
+        let saved = std::env::var_os("LIMINA_CACHE_DIR");
+        unsafe { std::env::set_var("LIMINA_CACHE_DIR", lib.join("caches")) };
+
+        let bundle = create(&basic_opts("cached"), &lib).unwrap();
+        let uuid = bundle.load().unwrap().identity.uuid;
+        let ours = crate::vmlib::bundle::shader_cache_dir(&uuid).unwrap();
+        let adhoc = crate::vmlib::bundle::adhoc_shader_cache_dir();
+        for dir in [&ours, &adhoc] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("index"), b"x").unwrap();
+        }
+
+        remove(&bundle).unwrap();
+        assert!(!ours.exists(), "the deleted VM's shader cache goes with it");
+        assert!(
+            adhoc.join("index").exists(),
+            "the shared ad-hoc cache stays"
+        );
+
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("LIMINA_CACHE_DIR", v),
+                None => std::env::remove_var("LIMINA_CACHE_DIR"),
+            }
+        }
         std::fs::remove_dir_all(&lib).ok();
     }
 

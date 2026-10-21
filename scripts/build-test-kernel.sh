@@ -89,7 +89,7 @@ CONFIG_INPUT_EVDEV=y
 CONFIG_VIRTIO_INPUT=y
 # Enhanced tier (tier-2 venus): boot a real distro root off the virtio-blk disk without an
 # initramfs — needs the root fs + net drivers built in. btrfs is Fedora's root fs (subvol=root
-# on vda3); virtio-net carries gvproxy NAT/SSH. (Harmless for the minimal L1 guest.)
+# on vda3); virtio-net carries the NAT and SSH. (Harmless for the minimal L1 guest.)
 CONFIG_BTRFS_FS=y
 CONFIG_VIRTIO_NET=y
 # systemd-sysext (enhanced-tier mesa delivery): a directory extension under

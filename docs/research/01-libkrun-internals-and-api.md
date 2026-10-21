@@ -199,7 +199,7 @@ krunkit is the headless vfkit-compatible front-end that builds a libkrun ctx (di
 2. ~~**EFI firmware on macOS arm64**~~ — **RESOLVED** (`spikes/m1-boot`): no brew dylib bundles it and
    none is linked; `krun_set_firmware` reads a flat EDK2 `.fd` blob into guest RAM. Reuse krunkit's
    `share/krunkit/KRUN_EFI.silent.fd`. Building EDK2 ourselves is optional (non-silent / ConIn-wired
-   firmware for interactive serial).
+   firmware for interactive serial). (limina now builds its own firmware, Cardea: docs/design/firmware-and-acpi.md)
 3. **libkrunfw kernel `.config` audit** — virtio-gpu DRM / virtio-input / virtio-balloon / fbcon present? Determines if B works without kernel patching.
 4. **Balloon control patch** — read `balloon/device.rs` + `event_handler.rs` fully; design a host-driven inflate/deflate API + guest pressure reporting; prototype min..max.
 5. **In-process vs child-process VMM** — measure whether patching out `libc::exit` (replace with EventManager break) is clean enough to host the VMM in-process, or commit to the child-process IPC model.

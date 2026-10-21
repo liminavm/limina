@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 
@@ -57,12 +57,30 @@ impl Ring {
         // mapping, which `arena` keeps alive. The guest writes only the producer's fields.
         unsafe { &*((self.arena.mapping.addr() as usize + self.offset) as *const RingControl) }
     }
+
+    /// The completed value of the queue whose slot is at `at` in the ring's arena (`0`, the
+    /// ring's own), or `None` if `at` is not an aligned `u64` inside it.
+    fn completed(&self, at: u32) -> Option<u64> {
+        if at == 0 {
+            return Some(self.control().completed.load(Ordering::Acquire));
+        }
+        let at = at as usize;
+        if !at.is_multiple_of(8) || at + 8 > self.arena.mapping.size() as usize {
+            return None;
+        }
+        // SAFETY: an aligned u64 inside the mapping, which `arena` keeps alive; the GPU host
+        // stores to it.
+        let word = unsafe { &*((self.arena.mapping.addr() as usize + at) as *const AtomicU64) };
+        Some(word.load(Ordering::Acquire))
+    }
 }
 
 /// Fences waiting for their seqno, and the rings they wait on.
 #[derive(Default)]
 struct Fences {
-    pending: Mutex<Vec<(u32, u64, Signal)>>,
+    /// Context, seqno, where in the ring's arena the completed value is (`0`, the ring's own),
+    /// and what to call.
+    pending: Mutex<Vec<(u32, u64, u32, Signal)>>,
     wake: Condvar,
     rings: Mutex<HashMap<u32, Ring>>,
     /// The GPU host exited: nothing will complete any more.
@@ -101,19 +119,20 @@ impl Fences {
             }
             let mut done = Vec::new();
             if self.gone.load(Ordering::Acquire) {
-                done.extend(pending.drain(..).map(|(_, _, signal)| signal));
+                done.extend(pending.drain(..).map(|(_, _, _, signal)| signal));
             } else {
                 let rings = self.rings.lock().unwrap_or_else(|e| e.into_inner());
                 let mut i = 0;
                 while i < pending.len() {
-                    let (ctx, seqno, _) = pending[i];
+                    let (ctx, seqno, at, _) = pending[i];
+                    // A slot outside the arena is answered rather than read: the guest's module
+                    // checks it, so only a broken guest names one.
                     let answered = rings.get(&ctx).is_none_or(|r| {
-                        let c = r.control();
-                        c.completed.load(Ordering::Acquire) >= seqno
-                            || c.error.load(Ordering::Acquire) != 0
+                        r.completed(at).is_none_or(|done| done >= seqno)
+                            || r.control().error.load(Ordering::Acquire) != 0
                     });
                     if answered {
-                        done.push(pending.swap_remove(i).2);
+                        done.push(pending.swap_remove(i).3);
                     } else {
                         i += 1;
                     }
@@ -194,6 +213,8 @@ impl GpuExtension for GpuHostExtension {
     }
 
     fn create_arena(&self, ctx: u32, arena: u32, size: u64) -> Result<ExtArena, String> {
+        // A restore makes an orphaned arena it could not put back at its address this way.
+        self.hold_orphans_for(ctx)?;
         let a = self
             .host
             .create_arena(ctx, arena, size)
@@ -247,12 +268,12 @@ impl GpuExtension for GpuHostExtension {
         Ok(())
     }
 
-    fn fence(&self, ctx: u32, seqno: u64, signal: Signal) {
+    fn fence(&self, ctx: u32, seqno: u64, completed_at: u32, signal: Signal) {
         self.fences
             .pending
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((ctx, seqno, signal));
+            .push((ctx, seqno, completed_at, signal));
         self.fences.wake.notify_one();
     }
 
@@ -327,18 +348,7 @@ impl GpuExtension for GpuHostExtension {
         size: u64,
         gpu_base: u64,
     ) -> Result<ExtArena, String> {
-        if ctx == ORPHANS {
-            let mut holding = self
-                .holding_orphans
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if !*holding {
-                self.host
-                    .create_context(ORPHANS)
-                    .map_err(|e| e.to_string())?;
-                *holding = true;
-            }
-        }
+        self.hold_orphans_for(ctx)?;
         let a = self
             .host
             .restore_arena(ctx, arena, size, gpu_base)
@@ -429,6 +439,26 @@ impl GpuExtension for GpuHostExtension {
         {
             b.ring();
         }
+    }
+}
+
+impl GpuHostExtension {
+    /// Arenas of [`ORPHANS`] go in a context of their own in the GPU host, made by the first.
+    fn hold_orphans_for(&self, ctx: u32) -> Result<(), String> {
+        if ctx != ORPHANS {
+            return Ok(());
+        }
+        let mut holding = self
+            .holding_orphans
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !*holding {
+            self.host
+                .create_context(ORPHANS)
+                .map_err(|e| e.to_string())?;
+            *holding = true;
+        }
+        Ok(())
     }
 }
 
@@ -526,6 +556,7 @@ mod tests {
             fences.pending.lock().unwrap().push((
                 1,
                 seqno,
+                0,
                 Box::new(move || tx.send(seqno).expect("the test waits for this")),
             ));
         }
@@ -557,10 +588,51 @@ mod tests {
         fences.pending.lock().unwrap().push((
             1,
             3,
+            0,
             Box::new(move || tx.send(()).expect("the test waits for this")),
         ));
         fences.wake.notify_one();
         rx.recv_timeout(Duration::from_secs(1))
             .expect("a fence after the host died was left waiting");
+    }
+
+    /// A fence on another queue's completed value waits for that value, not the ring's own, and
+    /// one whose value lies outside the ring's arena is answered at once rather than read.
+    #[test]
+    fn a_fence_waits_on_its_queues_completed_value() {
+        const SLOT: u32 = 4096;
+        let fences = Arc::new(Fences::default());
+        fences.rings.lock().unwrap().insert(1, ring());
+        let watched = fences.clone();
+        std::thread::spawn(move || watched.watch());
+        let (tx, rx) = mpsc::channel();
+        for (name, at) in [("queue", SLOT), ("outside", !7)] {
+            let tx = tx.clone();
+            fences.pending.lock().unwrap().push((
+                1,
+                5,
+                at,
+                Box::new(move || tx.send(name).expect("the test waits for this")),
+            ));
+        }
+        fences.wake.notify_one();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).ok(),
+            Some("outside")
+        );
+
+        let rings = fences.rings.lock().unwrap();
+        let r = &rings[&1];
+        r.control().completed.store(9, Ordering::Release);
+        // SAFETY: an aligned u64 inside the ring's mapping.
+        let slot =
+            unsafe { &*((r.arena.mapping.addr() as usize + SLOT as usize) as *const AtomicU64) };
+        drop(rings);
+        assert!(
+            rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "answered by the ring's own completed value"
+        );
+        slot.store(5, Ordering::Release);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(1)).ok(), Some("queue"));
     }
 }

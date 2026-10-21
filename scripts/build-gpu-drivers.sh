@@ -45,6 +45,9 @@ container run --rm --cpus "${JOBS:-8}" --memory 12g \
   --mount "type=bind,source=$ROOT/guest/gpu-drivers/layer,target=/layer,readonly" \
   -v "$VOLUME:/build" -v "$OUT:/out" "$IMAGE" bash -euo pipefail -c "
 [ '${RECONFIGURE:-0}' = 1 ] && rm -rf /build/vendor
+# A tree configured for another wire version installs under its prefix.
+[ \"\$(cat /build/vendor.prefix 2>/dev/null)\" = '$PREFIX' ] || rm -rf /build/vendor
+echo '$PREFIX' > /build/vendor.prefix
 if [ ! -f /build/vendor/build.ninja ]; then
   meson setup /build/vendor /src --prefix=$PREFIX --libdir=lib \
     -Dlimina-vendor=true \

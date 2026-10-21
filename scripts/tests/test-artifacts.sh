@@ -12,7 +12,7 @@
 set -uo pipefail
 # shellcheck disable=SC2046
 unset $(git rev-parse --local-env-vars 2>/dev/null)
-unset LIMINA_FIRMWARE LIMINA_GOP_FIRMWARE LIMINA_TEST_STOCK_KERNEL
+unset LIMINA_FIRMWARE LIMINA_TEST_STOCK_KERNEL
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=scripts/lib/test-artifacts.sh
@@ -27,10 +27,11 @@ expect() { # <pass|refuse> <name> [VAR=value...]: run the check on $TMP/root, in
   if ([ $# -eq 0 ] || export "$@"; test_artifacts_check "$TMP/root" "$PIN") 2>"$TMP/err"; then got=pass; else got=refuse; fi
   if [ "$got" = "$want" ]; then echo "ok   $name"; else echo "FAIL $name: wanted $want, got $got"; cat "$TMP/err"; fails=$((fails + 1)); fi
 }
-fresh() { rm -rf "$TMP/root"; mkdir -p "$TMP/root/target/test-guest/kernel" "$TMP/root/target/krun-efi"; }
+fresh() { rm -rf "$TMP/root"; mkdir -p "$TMP/root/target/test-guest/kernel" "$TMP/root/target/firmware"; }
 kernel() { : > "$TMP/root/target/test-guest/kernel/Image"; }
-fd() { : > "$TMP/root/target/krun-efi/KRUN_EFI.gop.fd"; }
-stamp() { echo "$1" > "$TMP/root/target/krun-efi/KRUN_EFI.gop.fd.rev"; }
+fd() { : > "$TMP/root/target/firmware/efi.fd"; }
+stamp() { echo "$1" > "$TMP/root/target/firmware/efi.fd.rev"; }
+old_fd() { mkdir -p "$TMP/root/target/krun-efi"; : > "$TMP/root/target/krun-efi/KRUN_EFI.gop.fd"; }
 
 fresh; kernel; fd; stamp "$PIN"
 expect pass "custom kernel and firmware built at the pin"
@@ -42,7 +43,6 @@ expect pass "no custom test kernel, stock kernel asked for" LIMINA_TEST_STOCK_KE
 fresh; kernel; fd
 expect refuse "firmware with no recorded rev"
 expect pass "firmware with no recorded rev, firmware named" LIMINA_FIRMWARE=/elsewhere.fd
-expect pass "firmware with no recorded rev, GOP firmware named" LIMINA_GOP_FIRMWARE=/elsewhere.fd
 
 fresh; kernel; fd; stamp 056015b20795bab0fa0f266fbc2759f0
 expect refuse "firmware built at another rev"
@@ -50,7 +50,14 @@ expect refuse "firmware built at another rev"
 fresh; kernel
 expect pass "no firmware at all (the tests' own fallback says so)"
 
-fresh; kernel; fd; stamp "$PIN"; : > "$TMP/root/target/krun-efi/KRUN_EFI.gop.fd.rev"
+fresh; kernel; fd; stamp "$PIN"; : > "$TMP/root/target/firmware/efi.fd.rev"
 expect refuse "an empty recorded rev"
+
+fresh; kernel; old_fd
+expect refuse "firmware only at its old path"
+expect pass "firmware only at its old path, firmware named" LIMINA_FIRMWARE=/elsewhere.fd
+
+fresh; kernel; fd; stamp "$PIN"; old_fd
+expect pass "firmware at the new path, a leftover at the old one"
 
 [ "$fails" -eq 0 ] && echo "test-artifacts: all cases pass" || { echo "test-artifacts: $fails case(s) FAILED"; exit 1; }

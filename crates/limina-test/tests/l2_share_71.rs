@@ -79,7 +79,7 @@ fn share_mounts_and_round_trips_on_71_kernel() {
     // Full Fedora userspace boot (firmware → GRUB → systemd → NM → sshd) takes a while.
     let banner = guest
         .wait_for_ssh(Duration::from_secs(180))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // Prove the premise this guard rests on: the guest kernel is actually ≥7.1 (the version that

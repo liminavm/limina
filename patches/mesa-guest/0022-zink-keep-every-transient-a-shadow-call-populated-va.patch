@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+Date: Fri, 16 Oct 2026 16:58:58 -0300
+Subject: [PATCH 22/23] zink: keep every transient a shadow call populated
+ valid
+
+zink_render_attachment_shadow() replicate-blits each attachment in its
+mask into its transient and marks that transient valid. Each blit goes
+through u_blitter, which rebinds the framebuffer; unbind_fb_surface()
+then marks the transient of every MSRTT attachment of the real
+framebuffer invalid, including the ones this call has just populated.
+With two or more attachments in the mask, only the last one ended the
+call valid, although nothing renders to the others between their blit
+and the end of the loop.
+
+Mark every transient the call populated valid once the loop is done.
+
+Fixes: 635f0c5f4fe ("zink: delete transient attachments instead of leaking them")
+Cc: mesa-stable
+Assisted-by: Claude Code
+Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
+---
+ src/gallium/drivers/zink/zink_render_pass.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/gallium/drivers/zink/zink_render_pass.c b/src/gallium/drivers/zink/zink_render_pass.c
+index 0489dba2c76..dc4fe8622d0 100644
+--- a/src/gallium/drivers/zink/zink_render_pass.c
++++ b/src/gallium/drivers/zink/zink_render_pass.c
+@@ -187,6 +187,8 @@ zink_render_attachment_shadow(struct zink_context *ctx, uint32_t attachment_shad
+    assert(attachment_shadow_mask);
+ 
+    bool blitting = ctx->blitting;
++   struct zink_resource *populated[PIPE_MAX_COLOR_BUFS + 1];
++   uint32_t populated_mask = 0;
+    u_foreach_bit(i, attachment_shadow_mask) {
+       zink_create_transient_surface(ctx, &ctx->fb_state.cbufs[i], ctx->fb_state.cbufs[i].nr_samples);
+       struct pipe_resource *src = ctx->fb_state.cbufs[i].texture;
+@@ -248,8 +250,14 @@ zink_render_attachment_shadow(struct zink_context *ctx, uint32_t attachment_shad
+       }
+       ctx->blitting = blitting;
+       pipe_sampler_view_reference(&src_view, NULL);
+-      transient->valid = true;
++      populated[i] = transient;
++      populated_mask |= BITFIELD_BIT(i);
+    }
++   /* each blit rebinds the fb, which marks the transients populated before it invalid,
++    * but nothing has rendered to them since
++    */
++   u_foreach_bit(i, populated_mask)
++      populated[i]->valid = true;
+ }
+ 
+ void

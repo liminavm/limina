@@ -41,35 +41,22 @@ pub mod landmarks;
 pub mod metal;
 pub mod renderer;
 
-/// Last-resort fallback firmware: the krunkit-shipped blob (an EDK2 `.fd`), the same one the
-/// M1 boot spikes used. It is a **DEBUG_GCC5 build with live ASSERTs that end in
-/// `CpuDeadLoop`** — an ASSERT anywhere in it wedges the guest at 100% CPU with no output
-/// (the #14 "cold-boot wedge" was exactly that), which is why it is no longer the default.
-const KRUNKIT_FALLBACK_FIRMWARE: &str = "/opt/homebrew/share/krunkit/KRUN_EFI.silent.fd";
+/// Stable location of the firmware, Cardea (built by `scripts/build-firmware.sh`), which is what
+/// limina ships. Overridable with `LIMINA_FIRMWARE`.
+const DEFAULT_FIRMWARE: &str = "target/firmware/efi.fd";
 
-/// Stable location of OUR GOP-capable EDK2 firmware (built by `scripts/build-krun-efi.sh`,
-/// carries VirtioGpuDxe). Overridable with `LIMINA_GOP_FIRMWARE`. Unlike the silent firmware,
-/// firmware → GRUB → kernel all render to the virtio-gpu scanout — the windowed boot console.
-const DEFAULT_GOP_FIRMWARE: &str = "target/krun-efi/KRUN_EFI.gop.fd";
-
-/// The firmware every EFI-boot test uses: `LIMINA_FIRMWARE` if set, else OUR OWN RELEASE
-/// build ([`DEFAULT_GOP_FIRMWARE`] — what limina actually ships; RELEASE degrades gracefully
-/// where the DEBUG krunkit blob dead-loops), else the krunkit blob with a loud warning (a
-/// fresh clone before the first `scripts/build-krun-efi.sh` run).
-fn default_firmware() -> PathBuf {
-    if let Ok(fw) = std::env::var("LIMINA_FIRMWARE") {
-        return PathBuf::from(fw);
-    }
-    let ours = repo_root().join(DEFAULT_GOP_FIRMWARE);
-    if ours.exists() {
-        return ours;
-    }
-    eprintln!(
-        "WARNING: {DEFAULT_GOP_FIRMWARE} not built — falling back to the krunkit DEBUG \
-         firmware at {KRUNKIT_FALLBACK_FIRMWARE} (ASSERTs dead-loop silently there; run \
-         scripts/build-krun-efi.sh for the real default)"
+/// The firmware every EFI-boot test uses: `LIMINA_FIRMWARE` if set, else [`DEFAULT_FIRMWARE`].
+/// An error (the test should SKIP) when it is not there.
+fn built_firmware() -> Result<PathBuf> {
+    let firmware = std::env::var("LIMINA_FIRMWARE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| repo_root().join(DEFAULT_FIRMWARE));
+    anyhow::ensure!(
+        firmware.exists(),
+        "firmware not found at {firmware:?}; build it with `scripts/build-firmware.sh` (or set \
+         LIMINA_FIRMWARE)"
     );
-    PathBuf::from(KRUNKIT_FALLBACK_FIRMWARE)
+    Ok(firmware)
 }
 
 /// The launchd label prefix of the worker jobs a supervisor starts; the supervisor's pid and a
@@ -135,6 +122,95 @@ pub fn ssh_exec_on(port: u16, remote_cmd: &str, timeout: Duration) -> Result<Str
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+std::thread_local! {
+    /// How many VMs this test thread has given a MAC.
+    static MACS_GIVEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// The MAC the harness gives a test's VM on the default NIC. On vmnet a MAC holds a lease from
+/// one pool the whole host shares, for a day, so a fresh MAC per boot would drain it within a
+/// suite run or two. This one is derived from the test's name (its thread's) and how many VMs the
+/// test has booted before: each test keeps its own leases run after run, and two VMs of one test
+/// never share one. A thread with no name (one a test spawned) gets a random MAC.
+pub fn test_mac() -> String {
+    let given = MACS_GIVEN.with(|n| n.replace(n.get() + 1));
+    let mut b = [0u8; 6];
+    match std::thread::current().name() {
+        Some(name) => {
+            // FNV-1a 64, folded onto the 6 bytes.
+            let mut h: u64 = 0xcbf29ce484222325;
+            for byte in format!("{name}#{given}").bytes() {
+                h ^= u64::from(byte);
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            b.copy_from_slice(&h.to_be_bytes()[2..]);
+        }
+        // SAFETY: arc4random_buf fills exactly the buffer it is given.
+        None => unsafe { libc::arc4random_buf(b.as_mut_ptr().cast(), b.len()) },
+    }
+    b[0] = (b[0] & 0xfc) | 0x02; // unicast, locally administered
+    b.map(|o| format!("{o:02x}")).join(":")
+}
+
+/// The address macOS's DHCP server (bootpd) leased to the guest NIC with MAC `mac` on a vmnet
+/// shared or host network, from `/var/db/dhcpd_leases`. bootpd writes each octet without its
+/// leading zero (`2:c:4c:…`), so octets are compared as numbers.
+pub fn vmnet_lease(mac: &str) -> Option<std::net::Ipv4Addr> {
+    let octets = |s: &str| -> Option<Vec<u8>> {
+        s.split(':')
+            .map(|o| u8::from_str_radix(o, 16).ok())
+            .collect()
+    };
+    let want = octets(mac)?;
+    let leases = std::fs::read_to_string("/var/db/dhcpd_leases").ok()?;
+    leases.split('}').find_map(|entry| {
+        let field = |key: &str| {
+            entry
+                .lines()
+                .find_map(|l| l.trim().strip_prefix(key)?.strip_prefix('='))
+        };
+        let hw = field("hw_address")?.split_once(',')?.1;
+        (octets(hw)? == want).then(|| field("ip_address")?.parse().ok())?
+    })
+}
+
+/// Run `remote_cmd` as the test images' `claude` user on the guest's own address `host`, port 22,
+/// returning its stdout: the `--net-vmnet` path, which has no SSH forward. With `stdin`, that file
+/// is fed to the remote command. Apple's `/usr/bin/ssh` by full path: macOS's Local Network
+/// policy drops connections to a vmnet guest from ad-hoc binaries (the test binary among them)
+/// and lets platform binaries through (`spikes/vmnet-network-probe/RESULTS.md`).
+pub fn ssh_exec_at(
+    host: &str,
+    remote_cmd: &str,
+    stdin: Option<&Path>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let login = format!("claude@{host}");
+    let mut cmd = match stdin {
+        // run_capped gives the child a null stdin, so a shell does the redirect.
+        Some(path) => {
+            let mut sh = Command::new("/bin/sh");
+            sh.args(["-c", "f=$1; shift; exec /usr/bin/ssh \"$@\" < \"$f\"", "sh"]);
+            sh.arg(path);
+            sh
+        }
+        None => Command::new("/usr/bin/ssh"),
+    };
+    cmd.args(SSH_SHARED_OPTS);
+    cmd.args(["-o", "ConnectTimeout=10"]);
+    cmd.args([login.as_str(), remote_cmd]);
+    let out = run_capped(cmd, timeout)
+        .with_context(|| format!("ssh `{remote_cmd}` to the guest ({host})"))?;
+    if !out.status.success() {
+        bail!(
+            "ssh `{remote_cmd}` to {host} failed ({}):\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(out.stdout)
 }
 
 /// [`Guest::wait_for_ssh`] for a VM the harness did not spawn itself: wait until a real session
@@ -259,8 +335,8 @@ fn fedora_image(role: &str) -> PathBuf {
     repo_root().join(format!("Fedora-Workstation-{}.{role}.raw", fedora_rel()))
 }
 
-/// Loopback host gvproxy binds its inbound SSH forward on (`<host>:<ssh_port> → 192.168.127.2:22`;
-/// with the well-known vfkit MAC the guest gets the static `.2` lease, so this reaches its sshd).
+/// Loopback host the worker binds the inbound SSH forward on (`<host>:<ssh_port>` → the guest's
+/// port 22, carried by limina-netd).
 const FORWARDED_SSH_HOST: &str = "127.0.0.1";
 
 /// The SSH options every harness invocation shares — `ssh` and `scp` alike. Key auth as the
@@ -289,7 +365,7 @@ const SSH_SHARED_OPTS: [&str; 8] = [
     "-o",
     "LogLevel=INFO",
 ];
-/// gvproxy's default inbound SSH-forward host port; per-VM overridable via `--ssh-port` so several
+/// The supervisor's default inbound SSH-forward host port; per-VM overridable via `--ssh-port` so several
 /// VMs can run in parallel without colliding (see [`GuestConfig::with_ssh_port`]).
 const DEFAULT_SSH_PORT: u16 = 2222;
 
@@ -297,7 +373,7 @@ const DEFAULT_SSH_PORT: u16 = 2222;
 /// test instead of stalling the whole suite (a zink lost-wakeup deadlock once froze
 /// eglretrace mid-`venus_replay` and the un-capped ssh blocked `test-boot.sh` for 100
 /// minutes — spikes/venus-replay-zink-hang-2026-07-12/). Generous on purpose: the longest
-/// legitimate steps (the ~1 GiB trace-fixture upload through gvproxy, a full llvmpipe
+/// legitimate steps (the ~1 GiB trace-fixture upload through the forward, a full llvmpipe
 /// reference replay) finish in a few minutes. Steps that truly need more pass their own
 /// deadline via [`Guest::ssh_exec_timeout`].
 pub const SSH_CMD_TIMEOUT: Duration = Duration::from_secs(900);
@@ -623,18 +699,21 @@ pub struct GuestConfig {
     /// Which device an interactive console is wired through (only meaningful when
     /// `console_input` is set).
     pub console_channel: ConsoleChannel,
-    /// Attach a user-mode NAT NIC (the supervisor spawns + supervises a gvproxy gateway and
-    /// captures its `-debug` packet log — the host-side network oracle). See [`Guest::wait_for_gateway_log`].
+    /// Attach the default NIC (`--net`): vmnet shared, with limina-netd to fall back on and the
+    /// SSH forward through netd on either side. Its log lines land in the supervisor's.
     pub net: bool,
-    /// Per-VM host port for gvproxy's inbound SSH forward (`--ssh-port`). `None` → the supervisor
+    /// Put that NIC on a `limina-netd` alone (`--net-netd`). Set via
+    /// [`with_net_netd`](GuestConfig::with_net_netd).
+    pub net_netd: bool,
+    /// Per-VM host port for the inbound SSH forward (`--ssh-port`). `None` → the supervisor
     /// default ([`DEFAULT_SSH_PORT`], 2222). Give two concurrent VMs distinct ports so they don't
     /// collide on the host port — what lets more than one run in parallel. Set via
     /// [`with_ssh_port`](GuestConfig::with_ssh_port) (which also implies `net`).
     pub ssh_port: Option<u16>,
-    /// Custom guest MAC for the NAT NIC (`--net-mac`). `None` → the well-known vfkit MAC.
-    /// With a custom MAC the supervisor generates a gvproxy config rebinding the static .2
-    /// lease, so this exercises the managed-VM (per-VM MAC) network path. Set via
-    /// [`with_net_mac`](GuestConfig::with_net_mac) (which also implies `net`).
+    /// Custom guest MAC for the NIC (`--net-mac`), as a managed VM passes its persistent one.
+    /// `None` → on the default NIC, one derived from the test's name ([`test_mac`]); on netd,
+    /// the worker's well-known vfkit MAC. Set via [`with_net_mac`](GuestConfig::with_net_mac)
+    /// (which also implies `net`).
     pub net_mac: Option<String>,
     /// Capture the supervisor's own stderr (its log) to a scratch file instead of letting
     /// it flow to the test's stderr — for asserting on supervisor-side events (e.g. the
@@ -695,11 +774,7 @@ impl GuestConfig {
     /// Overrides: `LIMINA_BIN`, `LIMINA_VMM_BIN`, `LIMINA_FIRMWARE`, `LIMINA_TEST_DISK`,
     /// `LIMINA_TEST_SHUTDOWN_GRACE` (seconds).
     pub fn fedora_from_env() -> Result<GuestConfig> {
-        let firmware = default_firmware();
-        anyhow::ensure!(
-            firmware.exists(),
-            "firmware not found at {firmware:?} (set LIMINA_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
 
         let disk = match std::env::var("LIMINA_TEST_DISK") {
             Ok(p) => PathBuf::from(p),
@@ -727,6 +802,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -770,18 +846,11 @@ impl GuestConfig {
     /// kernel rendered into the window, read via [`Guest::wait_for_capture`]). `with_net` forces
     /// a writable COW clone, so the shared image is never mutated and the guest can complete boot.
     ///
-    /// Overrides: `LIMINA_GOP_FIRMWARE` (default `target/krun-efi/KRUN_EFI.gop.fd`), plus the usual
+    /// Overrides: `LIMINA_FIRMWARE` (default [`DEFAULT_FIRMWARE`]), plus the usual
     /// `LIMINA_TEST_DISK`/`LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
-    /// GOP firmware is missing — build it with `scripts/build-krun-efi.sh`.
+    /// firmware is missing — build it with `scripts/build-firmware.sh`.
     pub fn fedora_gop_from_env() -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
         let mut cfg = GuestConfig::fedora_from_env()?;
         if let Boot::Firmware { firmware: f, .. } = &mut cfg.boot {
             *f = firmware;
@@ -797,18 +866,11 @@ impl GuestConfig {
     /// guest agent / SSH** — pure firmware self-discovery; the test watches the firmware/GRUB
     /// **console** ([`Guest::wait_for`]) for the bootloader-reached signal.
     ///
-    /// Overrides: `LIMINA_TEST_ISO` (default repo-root [`DEFAULT_TEST_ISO`]), `LIMINA_GOP_FIRMWARE`
-    /// (default [`DEFAULT_GOP_FIRMWARE`]). Returns an error (the test should SKIP) if the GOP firmware
+    /// Overrides: `LIMINA_TEST_ISO` (default repo-root [`DEFAULT_TEST_ISO`]), `LIMINA_FIRMWARE`
+    /// (default [`DEFAULT_FIRMWARE`]). Returns an error (the test should SKIP) if the GOP firmware
     /// or the ISO is missing — both are gitignored & large.
     pub fn iso_boot_from_env() -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
         let iso = std::env::var("LIMINA_TEST_ISO")
             .map(PathBuf::from)
             .unwrap_or_else(|_| repo_root().join(DEFAULT_TEST_ISO));
@@ -839,6 +901,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -864,18 +927,11 @@ impl GuestConfig {
     /// [`with_virgl_host_gl`](GuestConfig::with_virgl_host_gl) + [`with_net`](GuestConfig::with_net).
     ///
     /// Overrides: `LIMINA_TEST_DISK_BASELINE` (default = this release's `stock.test`),
-    /// `LIMINA_GOP_FIRMWARE` (default `target/krun-efi/KRUN_EFI.gop.fd`), plus the usual
+    /// `LIMINA_FIRMWARE` (default [`DEFAULT_FIRMWARE`]), plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
     /// or the baseline disk is missing.
     pub fn baseline_fedora_from_env() -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
         let disk = match std::env::var("LIMINA_TEST_DISK_BASELINE") {
             Ok(p) => PathBuf::from(p),
             Err(_) => fedora_image("stock.test"),
@@ -931,6 +987,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -974,6 +1031,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1043,6 +1101,7 @@ impl GuestConfig {
             console_channel: ConsoleChannel::Virtio,
             net: false,
             ssh_port: None,
+            net_netd: false,
             net_mac: None,
             supervisor_log: false,
             control_socket: false,
@@ -1075,7 +1134,7 @@ impl GuestConfig {
     /// No display is attached by default; a venus test adds `with_coexist_display`, and
     /// [`Guest::boot`] then wires KosmicKrisp automatically — see [`kosmickrisp_icd`]; a
     /// venus-requiring test should still SKIP up front when KK is absent (so it doesn't silently
-    /// run on the software-2D fallback). Overrides: `LIMINA_GOP_FIRMWARE`, `LIMINA_TEST_DISK_ENH`,
+    /// run on the software-2D fallback). Overrides: `LIMINA_FIRMWARE`, `LIMINA_TEST_DISK_ENH`,
     /// plus the usual `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the
     /// GOP firmware or the enhanced disk is missing; it does not need any test kernel.
     ///
@@ -1102,14 +1161,7 @@ impl GuestConfig {
 
     /// The seated EFI boot of [`GuestConfig::seated_efi_fedora_from_env`] on a given disk.
     fn seated_efi_fedora_from_env_with_disk(disk: PathBuf) -> Result<GuestConfig> {
-        let firmware = std::env::var("LIMINA_GOP_FIRMWARE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| repo_root().join(DEFAULT_GOP_FIRMWARE));
-        anyhow::ensure!(
-            firmware.exists(),
-            "GOP firmware not found at {firmware:?}; build it with `scripts/build-krun-efi.sh` \
-             (or set LIMINA_GOP_FIRMWARE)"
-        );
+        let firmware = built_firmware()?;
         let mut cfg = GuestConfig::fedora_from_env()?;
         cfg.boot = Boot::Firmware {
             firmware,
@@ -1164,7 +1216,7 @@ impl GuestConfig {
     /// the guest's **own installed kernel**, booted through the GOP firmware, meets a stock
     /// virtio-gpu plane. See `docs/images.md` §KNOWN DRIFT.
     ///
-    /// Overrides: `LIMINA_TEST_DISK_SYNOIK`, `LIMINA_GOP_FIRMWARE`, plus the usual
+    /// Overrides: `LIMINA_TEST_DISK_SYNOIK`, `LIMINA_FIRMWARE`, plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
     /// or the synoik image is missing — it is a machine-local golden, see `docs/images.md`.
     pub fn seated_efi_synoik_from_env() -> Result<GuestConfig> {
@@ -1191,7 +1243,7 @@ impl GuestConfig {
     ///
     /// Pinned to the F44 family (`Fedora-Workstation-44.enhanced.kde.raw`) for the same reason as
     /// [`GuestConfig::seated_efi_synoik_from_env`]: the image exists for one release only.
-    /// Overrides: `LIMINA_TEST_DISK_KDE`, `LIMINA_GOP_FIRMWARE`, plus the usual
+    /// Overrides: `LIMINA_TEST_DISK_KDE`, `LIMINA_FIRMWARE`, plus the usual
     /// `LIMINA_BIN`/`LIMINA_VMM_BIN`. Returns an error (the test should SKIP) if the GOP firmware
     /// or the KDE image is missing — it is a machine-local golden, see `docs/images.md`.
     pub fn seated_efi_kde_from_env() -> Result<GuestConfig> {
@@ -1212,20 +1264,28 @@ impl GuestConfig {
         Ok(cfg)
     }
 
-    /// Attach a user-mode NAT NIC. The supervisor spawns a gvproxy gateway and captures its
-    /// `-debug` log; assert on it via [`Guest::wait_for_gateway_log`] (DHCP lease, outbound).
     /// Append a verbatim extra flag to the `limina` supervisor command line.
     pub fn with_supervisor_arg(mut self, arg: &str) -> GuestConfig {
         self.extra_supervisor_args.push(arg.to_string());
         self
     }
 
+    /// Attach the default NIC (`--net`): vmnet shared with limina-netd to fall back on, and the
+    /// SSH forward on a pre-allocated port.
     pub fn with_net(mut self) -> GuestConfig {
         self.net = true;
         self
     }
 
-    /// Like [`with_net`](GuestConfig::with_net) but pin gvproxy's inbound SSH forward to a specific
+    /// Like [`with_net`](GuestConfig::with_net) but on `limina-netd` alone (`--net-netd`), with the
+    /// same SSH forward on its pre-allocated port.
+    pub fn with_net_netd(mut self) -> GuestConfig {
+        self.net = true;
+        self.net_netd = true;
+        self
+    }
+
+    /// Like [`with_net`](GuestConfig::with_net) but pin the inbound SSH forward to a specific
     /// host `port` (`--ssh-port`) instead of the default 2222. Give two concurrent VMs distinct
     /// ports so they can run in parallel without colliding on the host port;
     /// [`Guest::wait_for_ssh`]/[`Guest::ssh_exec`] then target that VM's own port.
@@ -1236,8 +1296,7 @@ impl GuestConfig {
     }
 
     /// Like [`with_net`](GuestConfig::with_net) but give the guest NIC a custom MAC
-    /// (`--net-mac`) — the managed-VM path where the supervisor rebinds gvproxy's static
-    /// .2 lease to the VM's persistent MAC via a generated config file.
+    /// (`--net-mac`) — the managed-VM path, which passes the VM's persistent MAC.
     pub fn with_net_mac(mut self, mac: &str) -> GuestConfig {
         self.net = true;
         self.net_mac = Some(mac.to_string());
@@ -1673,9 +1732,9 @@ pub struct Guest {
     balloon_socket: Option<PathBuf>,
     /// Write handle to the guest console input FIFO, if an interactive console was enabled.
     console_in: Option<fs::File>,
-    /// Path to the gvproxy gateway's `-debug` log (inside `scratch`), if net was enabled.
-    gateway_log: Option<PathBuf>,
-    /// Host port of gvproxy's inbound `127.0.0.1:<port> → guest:22` forward (the `--ssh-port`
+    /// The guest NIC's MAC as the harness passed it (`--net-mac`), if it named one.
+    net_mac: Option<String>,
+    /// Host port of the inbound `127.0.0.1:<port> → guest:22` forward (the `--ssh-port`
     /// the supervisor was launched with; default [`DEFAULT_SSH_PORT`]). Distinct per VM lets
     /// several run in parallel; [`Guest::wait_for_ssh`]/[`Guest::ssh_exec`] target it.
     ssh_port: u16,
@@ -2217,12 +2276,10 @@ impl Guest {
             None => (None, None),
         };
 
-        // Networking: ask the supervisor to bring up the gvproxy NAT gateway and capture its
-        // -debug packet log into the scratch dir (the host-side network oracle — stock Fedora
-        // is silent on serial after GRUB, so the guest console can't witness DHCP/DNS).
-        let gateway_log = if cfg.net {
-            let log = scratch.join("gvproxy.log");
-            cmd.arg("--net").arg("--net-log").arg(&log);
+        // Networking: the supervisor's NIC, with its SSH forward.
+        let mut net_mac = None;
+        if cfg.net {
+            cmd.arg(if cfg.net_netd { "--net-netd" } else { "--net" });
             // Per-VM SSH-forward port — ALWAYS passed explicitly. When the flag is absent the
             // supervisor AUTO-ALLOCATES from 2222 up, so with another VM holding 2222 the forward
             // silently lands elsewhere while a harness that assumes 2222 ssh'es into the BYSTANDER
@@ -2239,14 +2296,16 @@ impl Guest {
             };
             allocated_ssh_port = Some(port);
             cmd.arg("--ssh-port").arg(port.to_string());
-            // Per-VM guest MAC → the supervisor's gvproxy-config (static-lease rebind) path.
-            if let Some(mac) = &cfg.net_mac {
+            // On vmnet the MAC is the guest's identity in one pool of leases the whole host shares,
+            // for a day: a test's own name gives it the same lease every run.
+            net_mac = cfg
+                .net_mac
+                .clone()
+                .or_else(|| (!cfg.net_netd).then(test_mac));
+            if let Some(mac) = &net_mac {
                 cmd.arg("--net-mac").arg(mac);
             }
-            Some(log)
-        } else {
-            None
-        };
+        }
 
         // Control socket at a known path, so the test can join the supervisor-owned
         // plane as a peer (see connect_control).
@@ -2331,7 +2390,7 @@ impl Guest {
             resize_socket,
             balloon_socket,
             console_in,
-            gateway_log,
+            net_mac,
             ssh_port: allocated_ssh_port.unwrap_or(DEFAULT_SSH_PORT),
             supervisor_log,
             stdout_log,
@@ -2704,15 +2763,6 @@ impl Guest {
         }
     }
 
-    /// Current gvproxy gateway `-debug` log text (lossy UTF-8; empty if no net / nothing yet).
-    pub fn gateway_log(&self) -> String {
-        self.gateway_log
-            .as_ref()
-            .and_then(|p| fs::read(p).ok())
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default()
-    }
-
     /// Current captured supervisor log text (lossy UTF-8; empty if not captured / nothing
     /// yet). Requires [`GuestConfig::with_supervisor_log`].
     pub fn supervisor_log(&self) -> String {
@@ -2946,36 +2996,10 @@ impl Guest {
         self.debug_port("identity")
     }
 
-    /// Block until `needle` appears in the gvproxy gateway log, or `timeout` elapses, or the
-    /// supervisor exits early. The gateway log is the host-side network oracle (DHCP, DNS,
-    /// NAT packets). Requires [`GuestConfig::with_net`].
-    pub fn wait_for_gateway_log(&mut self, needle: &str, timeout: Duration) -> Result<()> {
-        anyhow::ensure!(
-            self.gateway_log.is_some(),
-            "no gateway log (use GuestConfig::with_net)"
-        );
-        let deadline = Instant::now() + timeout;
-        loop {
-            let log = self.gateway_log();
-            if log.contains(needle) {
-                return Ok(());
-            }
-            if let Some(status) = self.child.try_wait().context("polling supervisor")? {
-                bail!(
-                    "supervisor exited ({status}) before the gateway log showed {needle:?}.\n\
-                     --- gateway log tail ---\n{}",
-                    tail(&log, 20)
-                );
-            }
-            if Instant::now() >= deadline {
-                bail!(
-                    "timed out after {timeout:?} waiting for {needle:?} in the gateway log.\n\
-                     --- gateway log tail ---\n{}",
-                    tail(&log, 20)
-                );
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
+    /// The guest NIC's MAC, as the harness gave it to the supervisor (`None` on a netd NIC that
+    /// named none, which takes the worker's well-known one).
+    pub fn net_mac(&self) -> Option<&str> {
+        self.net_mac.as_deref()
     }
 
     /// The host port of this VM's SSH forward (`127.0.0.1:<port> → guest:22`) — the explicit
@@ -2984,11 +3008,11 @@ impl Guest {
         self.ssh_port
     }
 
-    /// Block until the guest's SSH is **usable** — not merely answering — through gvproxy's
+    /// Block until the guest's SSH is **usable** — not merely answering — through the
     /// inbound port-forward (`127.0.0.1:<ssh_port> → guest:22`, this VM's
     /// [`GuestConfig::with_ssh_port`] or 2222). Returns the banner it saw
     /// (e.g. `SSH-2.0-OpenSSH_10.0`), so it still reads as proof of the inbound NAT path
-    /// end to end (host → gvproxy forward → guest sshd) — what makes
+    /// end to end (host → the forward → guest sshd) — what makes
     /// `ssh -p 2222 user@127.0.0.1` work. Requires [`GuestConfig::with_net`].
     ///
     /// **The banner is not readiness**, which is what this used to assume. sshd sends it the
@@ -3075,8 +3099,8 @@ impl Guest {
         let forward = format!("{FORWARDED_SSH_HOST}:{port}");
         let addr: std::net::SocketAddr = forward.parse().expect("valid forward addr");
 
-        // Stage 1 — a banner. gvproxy accepts on the forward immediately and only yields a
-        // banner once it can dial the guest, so an empty/short read means "not yet".
+        // Stage 1 — a banner. The forward accepts immediately and only yields a banner once it
+        // can reach the guest, so an empty/short read means "not yet".
         let banner = loop {
             if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
                 stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
@@ -3144,7 +3168,7 @@ impl Guest {
         }
     }
 
-    /// Run `remote_cmd` in the guest over SSH (through gvproxy's `127.0.0.1:<ssh_port> → guest:22`
+    /// Run `remote_cmd` in the guest over SSH (through the `127.0.0.1:<ssh_port> → guest:22`
     /// forward, this VM's [`GuestConfig::with_ssh_port`] or 2222) and return its stdout. Logs in as
     /// the in-image `claude` user via the host's default key (passwordless — see memory
     /// `limina-fedora-access`); host-key checks are disabled (the per-VM forward reuses
@@ -3209,6 +3233,22 @@ impl Guest {
         }
     }
 
+    /// Fail if this restore lost anything of the GPU's: see [`restore_losses`]. Call it once the
+    /// restored guest answers. The lines are printed here because the scratch dir goes with the
+    /// `Guest`.
+    pub fn assert_restore_lost_nothing(&self) -> Result<()> {
+        let log = self.supervisor_log();
+        let lost = restore_losses(&log);
+        if lost.is_empty() {
+            return Ok(());
+        }
+        bail!(
+            "the restore lost GPU state ({} line(s)):\n{}",
+            lost.len(),
+            lost.join("\n")
+        )
+    }
+
     /// Fail if the guest kernel logged a GPU error since it last suspended. Call it after a
     /// restore, once SSH answers.
     ///
@@ -3251,8 +3291,8 @@ impl Guest {
     /// [`vmm_bin`](GuestConfig::vmm_bin). The supervisor normally has launchd start it, through a
     /// `limina-vmm --launcher <job label>` whose label carries the supervisor's pid, so the worker
     /// is that launcher's child. When the launchd path is unavailable (or `LIMINA_WORKER_LAUNCH=
-    /// spawn`) it is the supervisor's own child. With `--net` the supervisor also has gvproxy and
-    /// a reaper child, so both matches go by the executable path, not the first child.
+    /// spawn`) it is the supervisor's own child, among others, so both matches go by the
+    /// executable path, not the first child.
     pub fn worker_pid(&self) -> Result<libc::pid_t> {
         worker_pid_of(self.pid, &self.vmm_bin)
     }
@@ -3737,7 +3777,7 @@ impl Guest {
         // Overran. An ordinary stop never kills the guest — the supervisor asks and then waits
         // — so a guest that ignores every rung is still running here, by design. Escalate the
         // way a user would: a SECOND SIGTERM is the force path, and the supervisor then tears
-        // its own worker and gateway down cleanly instead of being killed out from under them.
+        // its own worker down cleanly instead of being killed out from under it.
         unsafe {
             libc::kill(self.pid, libc::SIGTERM);
         }
@@ -3761,7 +3801,6 @@ impl Guest {
         // A worker the supervisor launched in the moment between the look and the kill is still
         // under a launcher whose job label names this run.
         self.kill_stray_workers();
-        self.kill_stray_gateway();
         let status = self
             .child
             .wait()
@@ -3782,19 +3821,6 @@ impl Guest {
     /// the forced path.
     fn kill_stray_workers(&self) {
         kill_run_workers(self.pid, &self.vmm_bin);
-    }
-
-    /// Best-effort: SIGKILL this supervisor's gvproxy on the forced path. After we SIGKILL the
-    /// supervisor it can't run its own gateway teardown, so its gvproxy would be orphaned (the
-    /// next `limina --net` would sweep it, but don't leave a stray after a test run). Targeted by
-    /// the supervisor pid embedded in gvproxy's socket name (`limina-gvproxy-<pid>.sock`, see
-    /// limina/src/gateway.rs), so it can't touch a concurrently-running VM's gateway.
-    fn kill_stray_gateway(&self) {
-        let _ = Command::new("pkill")
-            .args(["-9", "-f", &format!("limina-gvproxy-{}.sock", self.pid)])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
     }
 }
 
@@ -4203,6 +4229,26 @@ pub fn ring_stalls(log: &str) -> Vec<&str> {
         .collect()
 }
 
+/// What a restore did not bring back, from a restoring worker's supervisor log: every error the
+/// GPU restore logged (a refused arena, a context restored lost, a dropped or failed replay), and
+/// every account the GPU host gave of a value it could not reproduce (its `restore:` lines, which
+/// it logs only when something is lost).
+///
+/// A restore can lose a context and still look right: the rest of the device comes back, and a
+/// still desktop shows the lost client's last frame. So a test that restores GPU state asserts
+/// this is empty rather than leaving it to the pixels. The worker's
+/// `gpu restore: extension: N contexts, ... back` line says the extension was restored at all.
+pub fn restore_losses(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter(|l| {
+            (l.contains("ERROR") && l.contains("gpu restore:"))
+                || (l.contains("limina_gpu_host") && l.contains("] restore:"))
+                || l.contains("staged snapshot replay failed")
+                || l.contains("replay dropped")
+        })
+        .collect()
+}
+
 /// The GPU errors in a guest's `journalctl -k -p err -o short-monotonic` output that were logged
 /// at or after the last line of `suspends` (the same format, filtered to `PM: suspend entry`), so
 /// a resumed guest is judged on what happened since it went to sleep and not on its boot. With no
@@ -4346,9 +4392,9 @@ mod teardown_tests {
         // pid -> (parent, exe, argv)
         let table: Vec<(libc::pid_t, libc::pid_t, &Path, Vec<String>)> = vec![
             (100, 50, other, vec!["limina".into()]),
-            // This supervisor's own child worker (the spawn path) and its gvproxy.
+            // This supervisor's own child worker (the spawn path) and another child of it.
             (101, 100, vmm, vec!["limina-vmm".into(), "--cpus".into()]),
-            (102, 100, other, vec!["gvproxy".into()]),
+            (102, 100, other, vec!["limina".into()]),
             // This run's launcher (a child of launchd) and the worker under it.
             (
                 200,
@@ -4508,6 +4554,32 @@ mod teardown_tests {
             other_supervisor_alive,
             "the forced teardown killed another run's supervisor"
         );
+    }
+}
+
+#[cfg(test)]
+mod restore_losses_tests {
+    use super::restore_losses;
+
+    #[test]
+    fn a_refused_arena_and_a_lost_context_are_losses() {
+        // The first two lines are the failed run's, verbatim; the third its GPU host's account.
+        let log = "\
+[2026-10-16T22:29:15.368506Z INFO  limina_vmm::krun] display-resize: listening at \"/tmp/r.sock\"\n\
+[2026-10-16T22:29:15.862151Z ERROR krun_devices::virtio::gpu::worker] gpu restore: extension: GPU host refused arena: status 5\n\
+[2026-10-16T23:56:53.122616Z WARN  limina_gpu_host::server] restore: arena 3 of context 1 wanted at 0x1504180000, the space offers 0x1504178000\n\
+[2026-10-17T00:00:00.000000Z ERROR krun_devices::virtio::gpu::ext] gpu restore: extension: context 3 restored lost: an arena of its is not at its address\n";
+        assert_eq!(restore_losses(log).len(), 3);
+    }
+
+    #[test]
+    fn a_whole_restore_is_not_a_loss() {
+        let log = "\
+[2026-10-17T00:11:30.896181Z INFO  limina_gpu_host::server] GPU host up on Apple M1 Max\n\
+[2026-10-17T00:11:35.418061Z INFO  krun::vmm::builder] restore: read + validated the snapshot head (1099 MiB file) in 4.5s\n\
+[2026-10-17T00:11:39.000000Z INFO  krun_devices::virtio::gpu::worker] gpu restore: extension: 2 contexts, 9 arenas, 3 surfaces back\n\
+[2026-10-17T00:11:39.000000Z WARN  krun_devices::virtio::gpu::worker] gpu restore: surface 50: rows not written; blank until redrawn\n";
+        assert!(restore_losses(log).is_empty());
     }
 }
 
@@ -4768,5 +4840,28 @@ mod frame_tests {
             !a.dominant_within([0, 0, 0], [10, 255, 236], 0.5),
             "red out of range"
         );
+    }
+}
+
+#[cfg(test)]
+mod mac_tests {
+    use super::*;
+
+    /// A test's VMs get the same MACs every run, distinct from each other, locally administered.
+    #[test]
+    fn a_tests_vms_keep_their_macs_from_run_to_run() {
+        let run = || {
+            std::thread::Builder::new()
+                .name("net::some_test".into())
+                .spawn(|| (test_mac(), test_mac()))
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        let (first, second) = run();
+        assert_eq!(run(), (first.clone(), second.clone()));
+        assert_ne!(first, second);
+        let octet = u8::from_str_radix(&first[..2], 16).unwrap();
+        assert_eq!(octet & 0x03, 0x02, "{first}");
     }
 }

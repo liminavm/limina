@@ -6,9 +6,8 @@
 #
 # Bundles the entire host venus/GL dylib closure into Contents/Frameworks, relocated
 # to @rpath so it resolves relative to the app (no /Volumes/mesa-cs, no third_party
-# prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the GOP
-# firmware and the gvproxy NAT helper (so `--net` works on a Mac without Homebrew),
-# writes Info.plist, codesigns inside-out (hardened runtime + secure timestamp) with an
+# prefixes, no Homebrew). Generates a relative-path KosmicKrisp ICD, copies the
+# firmware, writes Info.plist, codesigns inside-out (hardened runtime + secure timestamp) with an
 # Apple Development identity from
 # the keychain (keeps TCC grants stable across redeploys; ad-hoc only by explicit
 # opt-in — LIMINA_SIGN_IDENTITY="-" or LIMINA_ALLOW_ADHOC=1 — otherwise abort). The
@@ -55,10 +54,7 @@ DLOPEN_ROOTS=(
   "$ZINK/libEGL.dylib"
   "$ZINK/libGLESv2.dylib"
 )
-GOP_FD="$ROOT/target/krun-efi/KRUN_EFI.gop.fd"
-# gvproxy (user-mode NAT for `--net`); vendored into the bundle so networking works on a
-# Homebrew-less Mac. Override the source with LIMINA_GVPROXY_BIN; defaults to Homebrew's.
-GVPROXY="${LIMINA_GVPROXY_BIN:-/opt/homebrew/bin/gvproxy}"
+FIRMWARE="$ROOT/target/firmware/efi.fd"
 
 # KK/zink live on a case-sensitive sparse image whose mount macOS drops on reboot.
 . "$ROOT/scripts/ensure-mesa-cs.sh"
@@ -74,9 +70,21 @@ if [ "${#ZINK_GALLIUM[@]}" -ne 1 ] || [ ! -e "${ZINK_GALLIUM[0]}" ]; then
 fi
 DLOPEN_ROOTS+=("${ZINK_GALLIUM[0]}")
 
-for f in "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$GOP_FD" "$GVPROXY"; do
-  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, build the GOP firmware, or 'brew install gvproxy' / set LIMINA_GVPROXY_BIN)" >&2; exit 1; }
+for f in "$KK_DRIVER" "${DLOPEN_ROOTS[@]}" "$FIRMWARE"; do
+  [ -e "$f" ] || { echo "MISSING required input: $f" >&2; echo "(build KK/zink on the mesa-cs volume, or the firmware with scripts/build-firmware.sh)" >&2; exit 1; }
 done
+
+# The firmware is built only when asked for, so target/ can hold one from another Cardea
+# revision, or an edk2 build from before Cardea. Its recorded revision must be the pin's; a
+# build of the pin with local changes says "(modified)" and ships, like a dirty tree does.
+# shellcheck source=scripts/lib/manifest.sh
+. "$ROOT/scripts/lib/manifest.sh"
+FIRMWARE_REV="$(cat "$FIRMWARE.rev" 2>/dev/null || true)"
+if [ "${FIRMWARE_REV%% *}" != "$(pin_build_rev cardea)" ]; then
+  echo "target/firmware/efi.fd was built from ${FIRMWARE_REV:-an unrecorded rev}, not the Cardea pin" \
+       "$(pin_build_rev cardea): rebuild it with scripts/build-firmware.sh" >&2
+  exit 1
+fi
 
 # ---- KK provenance tripwire (2026-07-29): a bundle silently shipped whatever ------
 #      dylib sat in build-kk — once with a day of uncommitted instrumentation,
@@ -204,13 +212,13 @@ TS=(--timestamp)
 HARDEN=(${TS[@]+"${TS[@]}"} --options runtime)
 [ "$SIGN_ID" = "-" ] && HARDEN=()
 
-echo "==> building limina + limina-vmm + limina-gpu-host ($PROFILE)"
+echo "==> building limina + limina-vmm + limina-gpu-host + limina-netd ($PROFILE)"
 # Stamp the bundle with the moment it was cut (the About menu shows it). Without this the
 # date would be whenever crates/limina/build.rs last happened to rerun, which on an
 # incremental tree can be days stale; the env var is a rerun-if-env-changed input, so a
 # new value re-bakes it.
 export LIMINA_BUILD_STAMP="$(date -u '+%Y-%m-%d %H:%M UTC')"
-cargo build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -p limina -p limina-vmm -p limina-gpu-host
+cargo build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -p limina -p limina-vmm -p limina-gpu-host -p limina-netd
 
 echo "==> assembling $APP"
 rm -rf "$APP"
@@ -219,9 +227,8 @@ cp "$ROOT/target/$PROFILE/limina" "$MACOS/limina"
 cp "$ROOT/target/$PROFILE/limina-vmm" "$MACOS/limina-vmm"
 # The worker starts the native-context transport's GPU host from its own directory.
 cp "$ROOT/target/$PROFILE/limina-gpu-host" "$MACOS/limina-gpu-host"
-# gvproxy alongside the binaries (Contents/MacOS/gvproxy); gateway.rs resolves it bundle-relative.
-cp "$GVPROXY" "$MACOS/gvproxy"
-chmod u+w "$MACOS/gvproxy"
+# ...and the user-mode NAT its NIC falls back on.
+cp "$ROOT/target/$PROFILE/limina-netd" "$MACOS/limina-netd"
 
 # ---- recursive dylib bundler -----------------------------------------------------
 # Copy a dylib into Frameworks, set its id to @rpath/<leaf>, then for every non-system
@@ -310,8 +317,8 @@ cat > "$RES/vulkan/kosmickrisp_icd.json" <<'JSON'
 }
 JSON
 
-# ---- GOP firmware (existing bundle-resolution pattern) ---------------------------
-cp "$GOP_FD" "$RES/KRUN_EFI.gop.fd"
+# ---- firmware (Cardea) -----------------------------------------------------------
+cp "$FIRMWARE" "$RES/efi.fd"
 
 # ---- app icon (source + prep tool in assets/icon/) --------------------------------
 cp "$ROOT/assets/icon/Limina.icns" "$RES/Limina.icns"
@@ -433,8 +440,8 @@ else
   codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force \
     --entitlements "$ROOT/crates/limina-vmm/hvf-entitlements.plist" "$MACOS/limina-vmm"
 fi
-codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/gvproxy"
 codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina-gpu-host"
+codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina-netd"
 codesign -s "$SIGN_ID" ${HARDEN[@]+"${HARDEN[@]}"} --force "$MACOS/limina"
 # Seal the app (outer) LAST, after the nested worker is in its final form, with the same
 # team-pinned DR so the app grant (Accessibility, etc.) also survives rebuilds/cert reissue.

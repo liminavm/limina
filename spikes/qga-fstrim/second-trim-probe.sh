@@ -57,7 +57,7 @@ cp -c "$SRC" "$DISK"
 
 echo "==> booting"
 target/debug/limina \
-    --firmware target/krun-efi/KRUN_EFI.gop.fd \
+    --firmware target/firmware/efi.fd \
     --disk "$DISK" --net \
     > "$BOOT_LOG" 2>&1 &
 BOOT_PID=$!

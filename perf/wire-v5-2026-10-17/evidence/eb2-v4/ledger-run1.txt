@@ -1,0 +1,8 @@
+verify OK: Virtual-1 1280x800@59.949 scale=1.0
+RENDERER:     GL_RENDERER:    zink Vulkan 1.4(Apple M1 Max (MESA_KOSMICKRISP))
+PROVENANCE: kernel=7.1.13-limina16k.2 pagesize=16384 mesa=26.2.3-6.limina.fc44 vnperf=<unset> vcpus=4 ram=3940MiB display=Virtual-1: 1280x800@59.949 scale=1.0 supported_scales=[1.0, 1.25, 1.3333]
+appended to perf/wire-v5-2026-10-17/ledger.csv:
+2026-10-18,16e15048,gl-replay-metal,fps,51.0414,wire-v5 eb2-v4: arm v4 (Fedora-Workstation-44.enhanced.test.bak-pre-metal.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun 9dc32a05; limina e62ea94a; macOS 27.0.1; run 1/1 
+2026-10-18,16e15048,gl-replay-llvmpipe,fps,747.972,wire-v5 eb2-v4: arm v4 (Fedora-Workstation-44.enhanced.test.bak-pre-metal.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun 9dc32a05; limina e62ea94a; macOS 27.0.1; run 1/1 
+2026-10-18,16e15048,vk-replay-metal-headless,fps,2074.825124,wire-v5 eb2-v4: arm v4 (Fedora-Workstation-44.enhanced.test.bak-pre-metal.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun 9dc32a05; limina e62ea94a; macOS 27.0.1; run 1/1 
+2026-10-18,16e15048,glmark2-wayland-metal,score,3598,wire-v5 eb2-v4: arm v4 (Fedora-Workstation-44.enhanced.test.bak-pre-metal.raw); host mesa 059715d2aa5; virglrs 2efa024 + libkrun 9dc32a05; limina e62ea94a; macOS 27.0.1; run 1/1 

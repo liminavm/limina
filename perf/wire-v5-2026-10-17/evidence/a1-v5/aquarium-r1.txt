@@ -1,0 +1,14 @@
+=== metal / numFish=25000 ===
+Running as unit: ff-bench.service; invocation ID: 81c2108efba1456f938bd03ab335f1a8
+  settling 35s…
+perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-25000-fps.png: 1200x520 (from perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-25000.png 1280x800 box 0,0,300,130) bright_frac=0.0854
+  wrote perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-25000.png and perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-25000-fps.png
+=== metal / numFish=30000 ===
+Running as unit: ff-bench.service; invocation ID: 3e40521d23434b0d9766585926615caf
+  settling 35s…
+perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-30000-fps.png: 1200x520 (from perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-30000.png 1280x800 box 0,0,300,130) bright_frac=0.0683
+  wrote perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-30000.png and perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-30000-fps.png
+
+READ these crops to get the fps numbers:
+perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-25000-fps.png
+perf/wire-v5-2026-10-17/evidence/a1-v5/aquarium-r1/metal-30000-fps.png

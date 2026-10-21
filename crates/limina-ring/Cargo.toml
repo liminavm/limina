@@ -1,0 +1,14 @@
+# limina-ring — a single-producer, single-consumer record ring in shared memory, with the
+# park/publish handshake that lets a doorbell fire only when the consumer sleeps.
+#
+# Carries no protocol: users pick the record tags, the protocol number checked at attach, and the
+# doorbell. limina-netd and the worker's netd backend use it; `no_std` and dependency-free so a
+# guest driver can take it as is.
+[package]
+name = "limina-ring"
+description = "Single-producer, single-consumer record ring in shared memory with a doorbell handshake"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

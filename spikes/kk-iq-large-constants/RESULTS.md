@@ -64,6 +64,17 @@ Geometric mean over 60 shapes: 1.58x; over n=1..8 alone, 1.28x. test-backend-ops
 CPU in all 18646 cases. Llama-3.2-1B prompt processing (llama-bench pp512): Q4_0 445 → 1543 t/s,
 IQ4_XS 435 → 1482, IQ3_M 421 → 1358 (CPU Q4_0: 636). Token generation is unchanged.
 
+The regressions under the budget are not all unrolling. iq1_m at n=3 and 4 is as slow with a budget
+of 0, and the cause is the hint itself: `nir_opt_loop`, later in KosmicKrisp's optimisation loop,
+peels a loop carrying `nir_loop_control_unroll` an iteration at a time when its exit condition
+folds, and clearing the hint of a loop over the budget stops that. Giving the hint back to the kept
+loops recovers iq1_m but brings back mul_mm's 4x (its kept loops get peeled with their inner loops
+already unrolled); giving it back only below a size limit is a wash against the shipped rule
+(geometric mean 0.99-1.00 over 84 shapes at n=1..8): a limit of 1024 makes iq1_m n=3/4 2x faster
+and iq1_s n=3..8 1.6-3.4x slower. Whether unrolling a loop pays depends on what Apple's compiler
+does with the registers, which NIR's cost estimate does not see; no size rule tried separates the
+cases.
+
 ## What is left
 
 IQ4_XS token generation (n=1) stays at 431 µs per product against q4_0's 190, and below the CPU
@@ -73,3 +84,23 @@ KosmicKrisp's code generation: KosmicKrisp compiles with Metal's fast math, so t
 NIR splits are fused again. ggml's q8_1 integer-dot path (MMVQ) needs
 `integerDotProduct4x8BitPackedSignedAccelerated`, which KosmicKrisp does not advertise, so
 `GGML_VK_DISABLE_MMVQ` changes nothing here.
+
+Advertising it is a one-line change, and wrong to make. Metal has no packed 8-bit dot product, so
+NIR lowers each one to four extracts, multiplies and adds. ggml then uses its q8_1 integer kernels
+everywhere: MMVQ for n up to 8 and `mul_mmq` above. Measured 2026-10-16, same shapes, µs per run:
+
+| kernel        | float path | integer dot |
+| ------------- | ---------: | ----------: |
+| iq4_xs n=1    |        432 |         303 |
+| iq4_xs n=8    |       6060 |        1442 |
+| q8_0 n=2      |        753 |         453 |
+| q4_0 n=1      |        203 |         240 |
+| iq1_s n=4     |        795 |        3066 |
+| q4_0 n=512    |      17026 |       59969 |
+| iq3_s n=512   |      20208 |      289168 |
+
+Geometric mean 0.77x over 75 shapes (n=1 0.88x, n=512 0.36x). `mul_mmq` also returns NaN in 20
+of 2272 MUL_MAT cases (n=9 to 16; q4_0, q4_1, q5_0, q5_1, q8_0, mxfp4), a KosmicKrisp miscompile
+still to find. What the integer path offers is IQ4_XS and q8_0 at small batches. Taking only that
+part would need a per-type MMVQ rule for Apple in ggml (`ggml_vk_should_use_mmvq`), the fixed
+`mul_mmq` kept off, and a driver that advertises the feature without making ggml prefer it.

@@ -13,7 +13,7 @@
  * scissored clear, draw.
  *
  * Build: cc -o zink-msrtt-recursion zink-msrtt-recursion.c -lEGL -lGLESv2
- * Run:   MESA_LOADER_DRIVER_OVERRIDE=zink ./zink-msrtt-recursion [color|zs]
+ * Run:   MESA_LOADER_DRIVER_OVERRIDE=zink ./zink-msrtt-recursion [mode]
  *        on a Vulkan driver without VK_EXT_multisampled_render_to_single_sampled
  *        (e.g. anv, KosmicKrisp, or venus on either).
  *
@@ -26,6 +26,28 @@
  *   the lower-left quadrant and draws green at depth 0.75 with GL_LESS.
  *   Pixels: green where the clear landed, pass 1's blue wherever the
  *   replicated depth 0.5 survived.
+ * flush: as color, with a glFlush between the scissored clear and the draw.
+ *   Same pixels as color.
+ * rebind: as color, binding the other FBO and back between the scissored
+ *   clear and the draw, so the framebuffer change applies the pending clear
+ *   through zink_flush_clears. Same pixels as color.
+ * mrt: two MSRTT colour attachments, both blue after pass 1; the scissored
+ *   clear is on COLOR0 only, then glFlush, then green is drawn into both.
+ *   Before pass 3, COLOR1's texture is overwritten with yellow by
+ *   glTexSubImage2D, which only a replicate blit can carry into its
+ *   transient. COLOR0 reads as color does; COLOR1 must read yellow wherever
+ *   the draw did not reach, including under COLOR0's cleared quadrant (a
+ *   stale transient would read pass 1's blue there).
+ * mrt-rebind: mrt with rebind's FBO round trip in place of the glFlush.
+ * mrt3: three MSRTT colour attachments; the scissored clear is on COLOR0 and
+ *   COLOR1, the yellow upload on COLOR2, then glFlush and draw. COLOR0 and
+ *   COLOR1 read as color does, COLOR2 as mrt's COLOR1.
+ * fbfetch: mrt, but the scissored clear is on COLOR1 only and pass 3 uses a
+ *   GL_EXT_shader_framebuffer_fetch shader that adds green to COLOR0, bound
+ *   before the clear and the glFlush. COLOR0 has no pending clear, so the
+ *   flush's renderpass leaves it out. COLOR0 must read blue, cyan, blue and
+ *   COLOR1 red, green, yellow. Not yet run on any driver: the expected
+ *   pixels are unvalidated.
  *
  * Unfixed: "Caught recursion" from u_blitter, then SIGSEGV (stack overflow).
  * Fixed:   prints the pixels and "ok", exit 0.
@@ -73,7 +95,13 @@ int main(int argc, char **argv)
 {
    const char *mode = argc > 1 ? argv[1] : "color";
    const int zs = !strcmp(mode, "zs");
-   if (!zs && strcmp(mode, "color")) die("mode: color|zs");
+   const int fbfetch = !strcmp(mode, "fbfetch");
+   const int mrt3 = !strcmp(mode, "mrt3");
+   const int mrt = fbfetch || !strncmp(mode, "mrt", 3);
+   const int rebind = !strcmp(mode, "rebind") || !strcmp(mode, "mrt-rebind");
+   const int flush = fbfetch || mrt3 || rebind || !strcmp(mode, "mrt") || !strcmp(mode, "flush");
+   if (!zs && !flush && strcmp(mode, "color"))
+      die("mode: color|zs|flush|rebind|mrt|mrt-rebind|mrt3|fbfetch");
 
    PFNEGLGETPLATFORMDISPLAYEXTPROC get_display =
       (void *)eglGetProcAddress("eglGetPlatformDisplayEXT");
@@ -103,12 +131,36 @@ int main(int argc, char **argv)
       "#version 300 es\n"
       "precision mediump float;\n"
       "uniform vec4 color;\n"
-      "out vec4 o;\n"
-      "void main() { o = color; }\n"));
+      "layout(location = 0) out vec4 o;\n"
+      "layout(location = 1) out vec4 o1;\n"
+      "layout(location = 2) out vec4 o2;\n"
+      "void main() { o = color; o1 = color; o2 = color; }\n"));
    glLinkProgram(prog);
    glUseProgram(prog);
    GLint color = glGetUniformLocation(prog, "color");
    GLint z = glGetUniformLocation(prog, "z");
+
+   /* fbfetch: pass 3 adds green to what COLOR0 already holds */
+   GLuint prog2 = 0;
+   if (fbfetch) {
+      if (!strstr((const char *)glGetString(GL_EXTENSIONS), "GL_EXT_shader_framebuffer_fetch"))
+         die("no GL_EXT_shader_framebuffer_fetch");
+      prog2 = glCreateProgram();
+      glAttachShader(prog2, shader(GL_VERTEX_SHADER,
+         "#version 300 es\n"
+         "void main() {\n"
+         "  vec2 p = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 4.0 - 1.0;\n"
+         "  gl_Position = vec4(p, 0.0, 1.0);\n"
+         "}\n"));
+      glAttachShader(prog2, shader(GL_FRAGMENT_SHADER,
+         "#version 300 es\n"
+         "#extension GL_EXT_shader_framebuffer_fetch : require\n"
+         "precision mediump float;\n"
+         "layout(location = 0) inout vec4 o;\n"
+         "layout(location = 1) out vec4 o1;\n"
+         "void main() { o = o + vec4(0.0, 1.0, 0.0, 0.0); o1 = vec4(0.0, 1.0, 0.0, 1.0); }\n"));
+      glLinkProgram(prog2);
+   }
 
    GLuint fbo[2];
    glGenFramebuffers(2, fbo);
@@ -117,6 +169,18 @@ int main(int argc, char **argv)
    if (zs)
       fb_tex_ms(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
                 texture(GL_DEPTH_COMPONENT24), 0, 4);
+   /* the last colour attachment gets the yellow upload */
+   const int nr_cbufs = mrt3 ? 3 : mrt ? 2 : 1;
+   GLuint tex1 = 0;
+   if (mrt) {
+      static const GLenum bufs[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1,
+                                      GL_COLOR_ATTACHMENT2 };
+      tex1 = texture(GL_RGBA8);
+      if (mrt3)
+         fb_tex_ms(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, texture(GL_RGBA8), 0, 4);
+      fb_tex_ms(GL_FRAMEBUFFER, bufs[nr_cbufs - 1], GL_TEXTURE_2D, tex1, 0, 4);
+      glDrawBuffers(nr_cbufs, bufs);
+   }
    complete();
    glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
@@ -144,8 +208,20 @@ int main(int argc, char **argv)
    glClear(GL_COLOR_BUFFER_BIT);
    glDrawArrays(GL_TRIANGLES, 0, 3);
 
+   /* in mrt modes, give the last attachment's texture new contents (yellow) behind the
+    * transient's back: only a replicate blit can bring them into it */
+   if (mrt) {
+      static GLubyte yellow[W * H * 4];
+      for (int i = 0; i < W * H; i++)
+         memcpy(&yellow[i * 4], (GLubyte[4]){ 255, 255, 0, 255 }, 4);
+      glBindTexture(GL_TEXTURE_2D, tex1);
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, yellow);
+   }
+
    /* 3. back to MSRTT, partial clear, draw */
    glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+   if (fbfetch)
+      glUseProgram(prog2);
    glEnable(GL_SCISSOR_TEST);
    glScissor(0, 0, W / 2, H / 2);
    if (zs) {
@@ -155,25 +231,62 @@ int main(int argc, char **argv)
       glDisable(GL_SCISSOR_TEST);
       glUniform1f(z, 0.5f); /* depth 0.75: passes only where the clear landed */
    } else {
-      glClearColor(1, 0, 0, 1);
-      glClear(GL_COLOR_BUFFER_BIT);
+      if (mrt) {
+         static const GLfloat red[4] = { 1, 0, 0, 1 };
+         glClearBufferfv(GL_COLOR, fbfetch ? 1 : 0, red);
+         if (mrt3)
+            glClearBufferfv(GL_COLOR, 1, red);
+      } else {
+         glClearColor(1, 0, 0, 1);
+         glClear(GL_COLOR_BUFFER_BIT);
+      }
+      if (rebind) {
+         glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+         glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+         fprintf(stderr, "flushed\n");
+      } else if (flush) {
+         glFlush();
+         fprintf(stderr, "flushed\n");
+      }
       glScissor(W / 2, H / 2, W / 2, H / 2);
+      if (mrt) {
+         /* reach the upper-right quadrant through the viewport, not the
+          * scissor, so the renderpass covers the whole framebuffer */
+         glDisable(GL_SCISSOR_TEST);
+         glViewport(W / 2, H / 2, W / 2, H / 2);
+      }
    }
    glUniform4f(color, 0, 1, 0, 1);
    glDrawArrays(GL_TRIANGLES, 0, 3);
    glDisable(GL_SCISSOR_TEST);
    glDisable(GL_DEPTH_TEST);
+   glViewport(0, 0, W, H);
 
    static const int at[3][2] = { { 4, 4 }, { W - 4, H - 4 }, { W - 4, 4 } };
    static const GLubyte want_color[3][3] = { { 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 } };
    static const GLubyte want_zs[3][3] = { { 0, 255, 0 }, { 0, 0, 255 }, { 0, 0, 255 } };
-   const GLubyte (*want)[3] = zs ? want_zs : want_color;
+   static const GLubyte want_color1[3][3] = { { 255, 255, 0 }, { 0, 255, 0 }, { 255, 255, 0 } };
+   static const GLubyte want_fbfetch[3][3] = { { 0, 0, 255 }, { 0, 255, 255 }, { 0, 0, 255 } };
+   static const GLubyte want_fbfetch1[3][3] = { { 255, 0, 0 }, { 0, 255, 0 }, { 255, 255, 0 } };
+   const GLubyte (*want)[3] = zs ? want_zs : fbfetch ? want_fbfetch : want_color;
+   const GLubyte (*want1)[3] = fbfetch ? want_fbfetch1 : want_color1;
    int ok = 1;
    for (int i = 0; i < 3; i++) {
       GLubyte px[4];
       glReadPixels(at[i][0], at[i][1], 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
       printf("pixel %d: %u %u %u %u\n", i, px[0], px[1], px[2], px[3]);
       ok &= px[0] == want[i][0] && px[1] == want[i][1] && px[2] == want[i][2];
+   }
+   for (int b = 1; b < nr_cbufs; b++) {
+      /* COLOR1 of mrt3 is cleared and not uploaded, so it reads as COLOR0 */
+      const GLubyte (*w)[3] = b < nr_cbufs - 1 ? want_color : want1;
+      glReadBuffer(GL_COLOR_ATTACHMENT0 + b);
+      for (int i = 0; i < 3; i++) {
+         GLubyte px[4];
+         glReadPixels(at[i][0], at[i][1], 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+         printf("color%d pixel %d: %u %u %u %u\n", b, i, px[0], px[1], px[2], px[3]);
+         ok &= px[0] == w[i][0] && px[1] == w[i][1] && px[2] == w[i][2];
+      }
    }
    printf("%s\n", ok ? "ok" : "WRONG PIXELS");
 

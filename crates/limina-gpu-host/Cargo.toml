@@ -18,7 +18,16 @@ log = { workspace = true }
 env_logger = { workspace = true }
 objc2 = "0.6"
 block2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSError", "NSRange", "NSProcessInfo"] }
+dispatch2 = "0.3.1"
+objc2-foundation = { version = "0.3", features = [
+    "NSArray",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
+    "NSProcessInfo",
+    "NSRange",
+    "NSString",
+] }
 objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
 objc2-io-surface = { version = "0.3", features = ["IOSurfaceRef", "IOSurfaceTypes", "libc"] }
 objc2-core-foundation = { version = "0.3", features = [

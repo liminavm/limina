@@ -1,0 +1,80 @@
+PROVENANCE kernel=6.19.10-300.fc44.aarch64 pagesize=4096 vcpus=8 ram=15940MiB wire=5 limina-metal.a=8929eaf9af44fe8b
+MANIFEST built 2026-10-18T15:02:24Z on 6.19.10-300.fc44.aarch64, Python 3.14.8
+MANIFEST mlx 4cb085bae579f1edb6043d3ca8e317ccca6642a4
+MANIFEST llama.cpp b42b7e6d3059503dd4bed6ca5dcf342bb6379f67, shaderc v2026.1 2026-01-23spirv-tools v2026.1 2026-02-03glslang 301b4ede53d59b68bf55f95bb26412d9233c8187
+load 0.29 0.08 0.02
+== 12:45:23 metal-bench run 1/3
+DEVICE Apple M1 Max (limina)
+two-queue: spin of 8388608 steps, 241 ms alone
+ROW metal-commit-rtt us_median 275.8 run=1
+ROW metal-commit-rtt us_p90 363.7 run=1
+ROW metal-dispatch-rate per_s 1950239 run=1
+ROW metal-cb-rate per_s 40597 run=1
+ROW metal-copy-bandwidth GB_s 307.9 run=1
+ROW metal-two-queue ratio 1.00 run=1
+== 12:45:25 metal-bench run 2/3
+DEVICE Apple M1 Max (limina)
+two-queue: spin of 8388608 steps, 241 ms alone
+ROW metal-commit-rtt us_median 274.0 run=2
+ROW metal-commit-rtt us_p90 318.8 run=2
+ROW metal-dispatch-rate per_s 1939209 run=2
+ROW metal-cb-rate per_s 42280 run=2
+ROW metal-copy-bandwidth GB_s 310.8 run=2
+ROW metal-two-queue ratio 1.00 run=2
+== 12:45:28 metal-bench run 3/3
+DEVICE Apple M1 Max (limina)
+two-queue: spin of 8388608 steps, 241 ms alone
+ROW metal-commit-rtt us_median 273.1 run=3
+ROW metal-commit-rtt us_p90 315.4 run=3
+ROW metal-dispatch-rate per_s 1916614 run=3
+ROW metal-cb-rate per_s 41833 run=3
+ROW metal-copy-bandwidth GB_s 309.0 run=3
+ROW metal-two-queue ratio 1.00 run=3
+== 12:45:30 mlx matmul
+DEVICE Apple M1 Max (limina) applegpu_g13s
+ROW mlx-matmul-f32-2048 ms 2.277
+ROW mlx-matmul-f32-2048 tflops 7.54
+ROW mlx-matmul-f16-4096 ms 14.740
+ROW mlx-matmul-f16-4096 tflops 9.32
+== 12:45:35 mlx-lm qwen0.5b
+DEVICE Apple M1 Max (limina) applegpu_g13s
+prompt tokens 733
+run 0: prompt 5920 tok/s, generation 285.8 tok/s, peak 0.88 GB
+run 1: prompt 8782 tok/s, generation 307.1 tok/s, peak 0.88 GB
+run 2: prompt 8814 tok/s, generation 306.4 tok/s, peak 0.88 GB
+run 3: prompt 8736 tok/s, generation 305.7 tok/s, peak 0.88 GB
+run 4: prompt 8773 tok/s, generation 306.3 tok/s, peak 0.88 GB
+run 5: prompt 8824 tok/s, generation 306.3 tok/s, peak 0.88 GB
+run 6: prompt 8136 tok/s, generation 306.3 tok/s, peak 0.88 GB
+TEXT 07d2730896650758 'As I walked through the old city, the streets were lined with cobblestone street'
+ROW mlx-lm-qwen0.5b prompt_tok_s 8773.3
+ROW mlx-lm-qwen0.5b gen_tok_s 306.3
+== 12:45:40 mlx-lm qwen7b
+DEVICE Apple M1 Max (limina) applegpu_g13s
+prompt tokens 733
+run 0: prompt 522 tok/s, generation 71.6 tok/s, peak 4.89 GB
+run 1: prompt 330 tok/s, generation 51.3 tok/s, peak 4.89 GB
+run 2: prompt 337 tok/s, generation 52.4 tok/s, peak 4.89 GB
+run 3: prompt 342 tok/s, generation 52.8 tok/s, peak 4.89 GB
+run 4: prompt 340 tok/s, generation 52.7 tok/s, peak 4.89 GB
+run 5: prompt 339 tok/s, generation 52.1 tok/s, peak 4.89 GB
+run 6: prompt 338 tok/s, generation 52.2 tok/s, peak 4.89 GB
+TEXT 66f6cf0055ac084d 'The sun was beginning to set as I set out on my walk through the old city, the c'
+ROW mlx-lm-qwen7b prompt_tok_s 339.1
+ROW mlx-lm-qwen7b gen_tok_s 52.4
+== 12:46:15 llama.cpp on /etc/vulkan/icd.d/limina-5.json
+== 12:46:15 llama-bench qwen0.5b
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = Apple M1 Max (KosmicKrisp) | uma: 1 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 32 | shared memory: 32768 | int dot: 0 | matrix cores: none
+ROW llama-bench-qwen0.5b pp512_tok_s 3028.68
+ROW llama-bench-qwen0.5b pp512_stddev 2.78
+ROW llama-bench-qwen0.5b tg128_tok_s 168.03
+ROW llama-bench-qwen0.5b tg128_stddev 1.98
+== 12:46:21 llama-bench qwen7b
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = Apple M1 Max (KosmicKrisp) | uma: 1 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 32 | shared memory: 32768 | int dot: 0 | matrix cores: none
+ROW llama-bench-qwen7b pp512_tok_s 227.98
+ROW llama-bench-qwen7b pp512_stddev 22.86
+ROW llama-bench-qwen7b tg128_tok_s 25.15
+ROW llama-bench-qwen7b tg128_stddev 1.11
+== 12:47:05 done

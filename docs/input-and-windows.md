@@ -57,7 +57,7 @@ release barrier),
   Screens When Fullscreen" (off by default, persisted per VM beside the per-panel switches)
   is what turns fullscreen into `FullscreenAll`; without it, fullscreen occupies exactly the
   window's own panel, like any window. The decision is `displays::presentation_for`.
-- **Firmware paints slot 0 and only slot 0.** EDK2's virtio-gpu GOP driver hardcodes head 0, so
+- **Firmware paints slot 0 and only slot 0.** Cardea's virtio-gpu GOP driver uses scanout 0 only, so
   until the guest's own driver takes over, slot 0 must be the connected one whatever panel the
   window is on.
 - The **primary window** is the one that owns the keyboard, the menu, and the app's lifecycle. It is
@@ -196,7 +196,14 @@ gone. `arrangement::Desktop::confine` holds the step on the desktop — a candid
 a monitor is taken as it is (that is how a seam is crossed), and one that lands nowhere is
 clamped against the rect the *previous position* occupied, never the capture slot's, which the
 echo leaves a step behind after a crossing. Every clamp is then at a wall by construction, so the
-clamped-off motion is honest edge pressure and needs no filter (`fit::range_step`). The gain
+clamped-off motion is honest edge pressure and needs no filter (`fit::range_step`). **A held
+seam (`window/seams.rs`) applies to the candidate before the desktop confines it**
+(`fit::held_range_step`): held afterwards, a step that crossed onto a taller neighbour came back
+on one axis only and kept the neighbour's other coordinate — a point on no monitor, which the
+guest answers by moving its pointer to the middle of the primary display. **The wire value is
+inset too** (`Desktop::wire`): the guest maps a value back as `v · desktop / 32768`, so a
+monitor's edge rounded to the nearest integer can land a fraction of a pixel off it; each axis
+is held to the integers that rule puts on the monitor the position is on. The gain
 comes from the same geometry — the slot's share of the range over its share of the window
 (`fit::range_gain_of_share`) — falling back to a row-of-scanouts estimate (`fit::range_gain`)
 only where the guest has reported no layout. The guest crosses

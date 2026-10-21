@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Tue, 13 Oct 2026 17:32:34 -0300
-Subject: [PATCH 21/21] venus: match the X server's DRM device by its node, not
+Subject: [PATCH 21/23] venus: match the X server's DRM device by its node, not
  only by PCI
 
 wsi_device_matches_drm_fd compares PCI bus info and nothing else, so a

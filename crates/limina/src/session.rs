@@ -21,12 +21,12 @@ use limina_launch::connect::{Connector, Endpoint};
 
 use crate::supervisor::{self, WorkerSpec};
 use crate::window;
-use crate::{control, gateway};
+use crate::{control, forward};
 
 /// Everything a windowed session needs to boot and supervise its worker: the worker binary and
 /// its base args (*without* the windowed fd flags — those are added per spawn, with fresh fd
-/// numbers), the display geometry, and the supervisor-owned resources the session drives (NAT
-/// gateway, control plane, resize socket, keymap policy). Groups what used to be
+/// numbers), the display geometry, and the supervisor-owned resources the session drives (SSH
+/// forward, control plane, resize socket, keymap policy). Groups what used to be
 /// `run_windowed`'s nine positional arguments.
 pub struct SessionConfig {
     pub vmm_bin: PathBuf,
@@ -37,7 +37,8 @@ pub struct SessionConfig {
     pub grace: Duration,
     pub width: u32,
     pub height: u32,
-    pub gateway: Option<gateway::Gateway>,
+    /// The guest's SSH forward, whichever NIC holds it.
+    pub ssh: Option<forward::SshForward>,
     pub control: Option<control::ControlPlane>,
     pub resize_socket: Option<Endpoint>,
     pub remap: limina_input::keymap::KeyRemap,
@@ -82,6 +83,8 @@ pub struct SessionConfig {
     pub nested_virt: bool,
     /// Whether a cold boot offers the Metal transport ([`supervisor::WorkerSpec::gpu_metal`]).
     pub gpu_metal: bool,
+    /// The machine a cold boot describes ([`supervisor::WorkerSpec::machine`]).
+    pub machine: crate::vmlib::schema::Machine,
     /// Window-close policy (M9.4). Only meaningful when suspend is armed (both paths above
     /// set); resolved to Shutdown otherwise — see [`WindowedSession::start`].
     pub on_window_close: crate::vmlib::schema::WindowCloseAction,
@@ -141,6 +144,8 @@ struct WorkerBase {
     nested_virt: bool,
     /// See [`supervisor::WorkerSpec::gpu_metal`].
     gpu_metal: bool,
+    /// See [`supervisor::WorkerSpec::machine`].
+    machine: crate::vmlib::schema::Machine,
 }
 
 /// Spawn a worker in `--display-window` mode and wire fresh scanout/input/ack socketpairs to
@@ -227,6 +232,7 @@ fn spawn_windowed_worker(
         links: base.links.clone(),
         nested_virt: base.nested_virt,
         gpu_metal: base.gpu_metal,
+        machine: base.machine,
     };
     let spawned = supervisor::spawn_worker(
         &spec,
@@ -307,7 +313,7 @@ impl WindowedSession {
             grace,
             width,
             height,
-            gateway,
+            ssh,
             control,
             resize_socket,
             remap,
@@ -324,6 +330,7 @@ impl WindowedSession {
             ipa_granule,
             nested_virt,
             gpu_metal,
+            machine,
             on_window_close,
             splash_save_path,
             restoring,
@@ -339,6 +346,7 @@ impl WindowedSession {
             links,
             nested_virt,
             gpu_metal,
+            machine,
         };
 
         // Close-to-suspend needs somewhere to persist the suspend and a snapshot path for the
@@ -359,7 +367,7 @@ impl WindowedSession {
                 .as_ref()
                 .and_then(|p| p.parent())
                 .map(|p| p.to_path_buf()),
-            ssh: gateway.as_ref().map(|g| g.forward()),
+            ssh,
         };
 
         // The resolution the guest is currently driven to — written by the window on every
@@ -411,13 +419,11 @@ impl WindowedSession {
         let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
 
         // Monitor the worker on a background thread. A guest *reboot* (distinct exit code)
-        // relaunches the worker — recycle gvproxy, spawn a fresh worker, swap its fds into
+        // relaunches the worker — spawn a fresh worker, swap its fds into
         // `conn`, start a new reader — keeping the SAME NSWindow open. A *suspend* exit
         // parks: the thread waits for the window's play click and respawns the same way
         // (the pending snapshot makes the spawn a restore). Any other exit (power-off,
         // error, Ctrl-C, or a boot loop) marks the worker gone so the window loop quits.
-        // The gateway handle lives in this thread (it owns gvproxy's restart) for the
-        // VM's life.
         let monitor_shared = shared.clone();
         let monitor_conn = conn.clone();
         let monitor_control = control.clone();
@@ -450,6 +456,7 @@ impl WindowedSession {
                                 ipa_granule: Some(ipa_granule),
                                 nested_virt: Some(crate::supervisor::spawned_nested_virt()),
                                 gpu_metal: Some(crate::supervisor::spawned_gpu_metal()),
+                                machine: Some(crate::supervisor::spawned_machine()),
                             };
                             match crate::vmlib::state::set_suspended(state_file, Some(sus)) {
                                 Ok(()) => {
@@ -492,19 +499,6 @@ impl WindowedSession {
                     } else {
                         break;
                     }
-                }
-                // Recycle gvproxy (single-connection vfkit socket) before the fresh worker dials it.
-                if let Some(gw) = &gateway
-                    && let Err(e) = gw.restart()
-                {
-                    log::error!(
-                        "could not restart the NAT gateway for the reboot: {e:#}; stopping"
-                    );
-                    window::mark_worker_exited(&monitor_shared);
-                    if resuming {
-                        window::mark_resume_dead(&monitor_shared);
-                    }
-                    break;
                 }
                 // Boot the fresh worker at the resolution the window is CURRENTLY driving,
                 // not the original one (see `pack_size`).

@@ -14,7 +14,9 @@ clipboard, M12.5's QEMU-guest-agent steps 1–4, M14 biometrics, the emulated xH
 wave 1. Open: the rest of M15, M13, M17, the M12 file-transfer half. Deferred by decision: M3
 bridged networking (worker-held vmnet, no privilege needed) and M7 real-device USB capture
 (AccessoryAccess on macOS 27, root helper below). M16
-(LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) is booked.
+(LiminaOS) is the moonshot. M18 (Metal compute in the guest, for MLX) runs MLX itself: built for Linux with its Metal backend,
+it runs on the host GPU from a guest, passes 297 of the 298 cases in MLX's C++ test suite, and
+serves a 7B LLM through omlx at the speed it runs on macOS.
 
 ---
 
@@ -29,8 +31,7 @@ bridged networking (worker-held vmnet, no privilege needed) and M7 real-device U
   the whole process down (hvf `VcpuExit::Shutdown` → run-loop exit → exit eventfd), so the AppKit
   supervisor runs the VMM in a child and drives it over vsock + the shutdown eventfd.
   **Reboot = relaunch the child:** `SYSTEM_RESET` exits with `FC_EXIT_CODE_REBOOT` (125) and the
-  supervisor relaunches the worker (recycling gvproxy, whose vfkit socket is single-connection)
-  under a boot-loop cap. Guard: `reboot::guest_reboot_relaunches_the_worker`.
+  supervisor relaunches the worker under a boot-loop cap. Guard: `reboot::guest_reboot_relaunches_the_worker`.
 - **Codesigning is a hard gate.** The worker must carry `com.apple.security.hypervisor`
   (`crates/limina-vmm/hvf-entitlements.plist`), else `hv_vm_create` fails.
   vmnet (bridged/shared) needs only the unrestricted `com.apple.security.virtualization` on
@@ -138,16 +139,17 @@ aborts (a malformed command tripping an assert in a host library kills the VMM).
 
 ## Milestone 1 — Boot a stock Fedora image to a serial console
 
-`limina --firmware <KRUN_EFI.fd> --disk <fedora.raw> --console <file>` boots the stock distro via
+`limina --firmware <efi.fd> --disk <fedora.raw> --console <file>` boots the stock distro via
 EFI to userspace. Load-bearing facts:
-- **Firmware is a flat EDK2 `.fd`** read into guest RAM (`Payload::Firmware`), not a linked library.
-  Ours is built by `scripts/build-krun-efi.sh` (M2.5).
+- **Firmware is Cardea's flat image** read into guest RAM (`Payload::Firmware`), not a linked
+  library. It is built by `scripts/build-firmware.sh` (`cargo xtask firmware`).
 - The distro's own initramfs mounts root (FAT ESP / ext4 `/boot` / btrfs `subvol=root` on `vda`).
 - **Console:** `disable_implicit_console = true` + a `SerialConsoleConfig` (input fd must be
   kqueue-pollable); libkrun's PL011 is at `0x0a001000`
   (`earlycon=pl011,mmio32,0x0a001000 console=ttyAMA0,115200`). When no console is requested, limina
-  still attaches an output-dropped PL011 — a consoleless FDT makes EDK2's serial library fail its
-  constructor.
+  still attaches an output-dropped PL011: Cardea tolerates a missing serial port, but a guest
+  booted with no PL011 at all wedges intermittently in early boot
+  (`crates/limina-vmm/src/krun/console.rs`).
 - **Supervision:** the supervisor spawns the signed worker in its own process group and forwards
   graceful shutdown up the stop ladder; it never kills on a timer (M12.5).
 - A stock EFI Fedora guest does not honour the GPIO power button, so graceful power-off needs
@@ -190,11 +192,11 @@ in `docs/input-and-windows.md` and M15.
   `--console-pty` gives a human an interactive firmware/GRUB/kernel console. Automated guest access
   is SSH; the serial getty is the human debug shell.
 - **On the EFI path GRUB owns the cmdline** (EFI LoadOptions override FDT bootargs), so a firmware
-  graphics console is the lever for pre-kernel stages. Our `KRUN_EFI` (`liminavm/edk2`, built by
-  `scripts/build-krun-efi.sh`) adds `VirtioGpuDxe` and puts the virtio-mmio GOP on ConOut; libkrun
-  snaps a ready-but-unsized queue to `max_size` and joins the firmware-era GPU worker on reset. The
-  RELEASE GOP build is the windowed default (`resolve_windowed_firmware`: `$LIMINA_GOP_FIRMWARE` →
-  the bundle's copy → `target/krun-efi/` → krunkit's silent `.fd` with a warning) and ships in the app.
+  graphics console is the lever for pre-kernel stages. Cardea's virtio-gpu GOP is on ConOut
+  (`scripts/build-firmware.sh`); libkrun snaps a ready-but-unsized queue to `max_size` and joins the firmware-era GPU worker on reset. The
+  RELEASE GOP build is the windowed default (`resolve_windowed_firmware`: `$LIMINA_FIRMWARE` →
+  the bundle's `Resources/efi.fd` → `target/firmware/efi.fd` next to the binary; no krunkit
+  fallback) and ships in the app.
 - Image prep (`scripts/prepare-efi-image.sh`, `scripts/provision/make-accessible.sh`) adds
   `console=ttyAMA0` for the serial oracle and clears a stale `/.autorelabel`.
 - **Floor guards:** `boot::fedora_stock_image_efi_boots_to_userspace` (firmware → GRUB → kernel →
@@ -205,24 +207,24 @@ in `docs/input-and-windows.md` and M15.
 
 ## Milestone 3 — Networking (NAT, then bridged)
 
-**Established:** `limina --net` supervises a gvproxy gateway (`-listen-vfkit unixgram://<absolute
-path>`) and attaches virtio-net via `krun_add_net_unixgram` (vfkit mode, `NET_COMPAT_FEATURES`);
-no libkrun patch. The guest must reach userspace for NetworkManager to DHCP, so net tests boot a
-writable COW clone. **Inbound SSH needs no forwarding config:** the well-known vfkit MAC
-`5a:94:ef:e4:0c:ee` gets the static `.2` lease and gvproxy's built-in `127.0.0.1:<port> → .2:22`
-forward; the host port auto-allocates from 2222 (or `--ssh-port`) and the supervisor logs the
-command. `krun_set_port_map` is TSI-only. Runbook: `docs/images.md` §SSH access; multi-VM design:
-`docs/design/multi-vm-networking.md`.
+**Established:** `limina --net` puts the guest's virtio-net on vmnet shared, started by the worker
+through libkrun's native vmnet backend (the worker's `com.apple.security.virtualization`
+entitlement, no root), and moves it to a per-VM `limina-netd` user-mode NAT and back when vmnet
+cannot serve: it will not start, a VPN takes its subnet's route, or the way out is a tunnel
+(`docs/design/multi-vm-networking.md` §3.5). The guest must reach userspace for NetworkManager to
+DHCP, so net tests boot a writable COW clone. **Inbound SSH needs no forwarding config:** the
+worker binds `127.0.0.1:<port>` and netd carries it to the guest's port 22 on either side; the
+host port auto-allocates from 2222 (or `--ssh-port`) and the supervisor logs the command.
+`--net-netd` and `--net-vmnet shared|host|bridged:<if>` pin one side. A managed VM can instead be
+bridged onto a host interface (`vm.toml` or the Configure sheet); it has no forward, and
+`limina address` and the control center name the address the LAN leased it. Runbook:
+`docs/images.md` §SSH access.
 
 **Owed:**
-- **vmnet (bridged, and Apple NAT / host-only):** the worker holds the vmnet interface — no root,
-  no restricted entitlement; a spike guest takes a real LAN lease over Wi-Fi `en0`
-  (`spikes/vmnet-network-probe/`). Next: a native vmnet backend in libkrun, then the
-  throughput/efficiency measurement that settles whether gvproxy or vmnet shared is the default NAT
-  (`docs/design/multi-vm-networking.md` §6 Phase 1, §7).
-- **Net worker reconnect on HANG_UP**, so a gvproxy restart doesn't disable the NIC for the VM's life.
-- **Offload tuning:** evaluate `GUEST_TSO6|HOST_TSO6` once verified non-corrupting; mind the macOS
-  datagram limit against large GSO frames.
+- **Networks as objects and the arena NIC** (`docs/design/multi-vm-networking.md` §6 Phases 6
+  and 8); bridging over Ethernet is not yet exercised.
+- **Offloads:** the NIC offers TSO both ways for IPv4 and IPv6; only IPv4 bulk is digest-checked
+  (`net::bulk_crosses_the_forward_intact_both_ways_on_netd`).
 - **Ergonomic SSH** (GNOME Boxes prior art, `docs/research/prior-art-gnome-boxes.md`): (A) inject the
   host public key as an SMBIOS type-11 OEM string
   (`io.systemd.credential.binary:ssh.ephemeral-authorized_keys-all=<base64>`), which stock systemd
@@ -592,7 +594,8 @@ from `root=/dev/vda3` to PARTUUID.
 `cargo xtask <cmd>` (`xtask/src/main.rs`; `--help` lists it) is the one-command surface over the
 tested scripts, which stay the source of truth: `setup`, `vendor`, `build`, `sign`, `test`, `run`,
 `app`, `bundle`. CLAUDE.md describes each; onboarding is `docs/dev-onboarding.md`. The heavy
-container builds (guest mesa, KRUN_EFI, kernels, the build image) stay scripts.
+container builds (guest mesa, kernels, the build image) stay scripts; the firmware builds natively
+(`cargo xtask firmware`).
 
 **Owed:** notarized distribution (Developer ID; `docs/design/distribution.md`); folding `bundle` into
 `app` (`docs/hardening-backlog.md`).
@@ -968,16 +971,15 @@ compositor animates.
 
 ### Boot chain — every stage ours, no pivots
 
-**KRUN_EFI → systemd-boot → UKI (kernel + tiny initrd + cmdline) → verity `/usr` → systemd →
+**firmware → systemd-boot → UKI (kernel + tiny initrd + cmdline) → verity `/usr` → systemd →
 system compositor.**
 
 **This chain is proven on real KRUN_EFI**, booting to a login prompt in ~10s on our own 16 KiB
 kernel, through verity `/usr` and switch-root. systemd-boot loads from
 `ESP:/EFI/BOOT/BOOTAA64.EFI` (the removable path). Two properties worth stating because they are
-easy to assume otherwise: **KRUN_EFI's ESP is writable**, so systemd-boot's boot-count rename
-reaches the disk; and the firmware falls through to PXE **with no error message at all** when it
-cannot read the ESP, so a silent boot failure means "firmware could not read the ESP", not "no
-bootloader".
+easy to assume otherwise: **the firmware's ESP is writable**, so systemd-boot's boot-count rename
+reaches the disk; and a firmware that cannot read the ESP boots nothing and prints "no bootable
+device found", so that message means "firmware could not read the ESP", not "no bootloader".
 
 - **No simpledrm, no framebuffer inheritance:** in a VM, virtio-gpu exists from cycle zero —
   build it in, turn `CONFIG_SYSFB_SIMPLEFB` off, and `/dev/dri/card0` is there before PID 1
@@ -1164,8 +1166,9 @@ occupy `gnome-build-meta`'s position, junction fdsdk and override elements rathe
   EFI-boot only, since libkrun writes SMBIOS only on the firmware path — and it needs
   `CONFIG_DMI_SYSFS=y` in the guest kernel (see §Boot chain), without which the credential is
   delivered but unreadable.
-- **Crypto tier waits on the vTPM; verity kept.** KRUN_EFI has no SecureBoot and libkrun has no
-  TPM yet, so LUKS2-sealed-to-TPM2 and PCR measurement have no substrate today. We take dm-verity +
+- **Crypto tier waits on the vTPM; verity kept.** Cardea has no SecureBoot keys enrolled; the TPM 2.0
+  (a libkrun TIS device, with Cardea's TCG2 event log) is the substrate for LUKS2-sealed-to-TPM2
+  and PCR measurement. We take dm-verity +
   signed images (integrity, rollback protection, measurable objects); confidentiality stays at the
   host layer (FileVault/APFS), which was already this section's position. **The partition layout
   must be designed so the crypto tier can be added without a re-layout.** The substrate is
@@ -1264,7 +1267,7 @@ on the Fedora enhanced tier before LiminaOS is usable.
 system compositor, host-splash→guest cross-fade is seamless, login/logout are animated with no
 mode switch or black frame, the session runs with zero /dev/dri-master or /dev/input access, and
 a system-compositor restart mid-session is invisible to the seated session.
-**Done test (distro phase):** a LiminaOS image boots KRUN_EFI → systemd-boot → UKI → verity `/usr`
+**Done test (distro phase):** a LiminaOS image boots the firmware → systemd-boot → UKI → verity `/usr`
 → compositor, with no simpledrm and no VTs; sysupdate applies an A/B update and a forced-bad slot
 auto-rolls back via boot counting **with both slots populated and the bless side live** (the
 single-slot case retries forever by design, so it does not test rollback); Flatpak, toolbox, and a
@@ -1324,7 +1327,7 @@ The standing rule for all of it: spike the gating unknown before building on it.
 
 ## Milestone 18 — Metal compute in the guest (MLX)
 
-**Booked, not started.** For: GPU-accelerated machine learning in the guest through MLX, Apple's ML
+**Started: the spike runs** (`spikes/metal-compute-mlx/RESULTS.md`). For: GPU-accelerated machine learning in the guest through MLX, Apple's ML
 framework. MLX's GPU backend is written against `metal-cpp`; on Linux it has only CUDA and CPU
 backends today. A Linux build of MLX with its Metal backend, over limina's Metal-level transport,
 would run on the host GPU without porting MLX. Apple hosts only; enhanced tier, additive.
@@ -1337,16 +1340,29 @@ classes over that encoder is a second client of the same wire, not a new transpo
 way the vendor drivers do, under `/opt/limina/<wire>/`
 (`docs/design/metal-transport-delivery.md` §1).
 
-**What it needs:**
-- **A `metal-cpp` implementation over the wire.** Compute only: device, buffers, compute pipelines,
-  command queues and buffers, compute encoders, events and fences. No drawables and no window
-  integration.
-- **Shader libraries as shipped.** MLX loads a prebuilt `.metallib`, so the wire needs an op that
-  hands a library binary to the host's loader, beside today's MSL source.
-- **The coverage MLX actually uses.** Measure it against what the wire carries (KosmicKrisp's
-  subset) before building; anything missing is new host surface, so it goes through the same
-  validation as the rest of the transport (`docs/hardening-backlog.md` §Metal transport).
+**Done:** `CREATE_LIBRARY_DATA` hands a `.metallib` to the host's loader, behind
+`feature::LIBRARY_DATA` rather than a wire version change, and a guest program over
+`guest/limina-gpu-client` runs a kernel from one with every element right. Function constants
+ride on `CREATE_COMPUTE_PIPELINE` behind `feature::FUNCTION_CONSTANTS`, the way MLX specialises its
+matmul, attention, quantized and convolution kernels. The spike's RESULTS maps everything MLX's
+Metal backend calls onto the wire: it is all compute, and what is left is guest-side work, apart
+from linked functions for user-written custom kernels. A second spike
+(`spikes/metal-cpp-shim/RESULTS.md`) runs a program built against Apple's metal-cpp, unmodified,
+in the guest: limina-metal supplies `objc_msgSend` and the other runtime entry points metal-cpp
+calls, a blocks runtime, and Metal's compute classes over the transport. A third
+(`spikes/mlx-linux/RESULTS.md`) builds MLX for Linux with its Metal backend against limina-metal,
+from a fork, `liminavm/mlx`, with two small commits under one CMake option. The `mlx.metallib` and JIT sources are
+built on the host from the same commit. limina-metal carves buffers out of pooled arenas. In the
+guest, MLX's C++ test suite passes 297 of its 298 cases (the last needs zero-copy user buffers), 12 ops plus a custom kernel compiled from MSL match MLX's CPU backend, a 2048³ matmul runs at
+up to 6.9 TFLOP/s, and MLX's regression examples converge. MLX's Python package builds in the
+guest from the same fork, and `mlx-lm` runs a 4-bit Qwen2.5-0.5B on the GPU at about 200 tok/s,
+its float32 logits matching MLX's CPU backend at every prompt position. omlx serves a 4-bit
+Qwen2.5-7B from the guest over its OpenAI API at about 73 tok/s, as fast as omlx on macOS itself,
+and its greedy output is byte-identical to the host's. Each `MTLCommandQueue` has a host queue
+of its own (wire VERSION 5, `docs/design/metal-transport-queues.md`), so MLX's streams run side
+by side and wait on each other's events as on Metal.
 
-**First step, a spike:** a guest program that creates a device, fills a shared buffer, builds a
-compute pipeline from a `.metallib` and dispatches it, over the existing wire, with the result
-checked in the guest. Then MLX's Metal backend built for Linux against our `libMetal`.
+**What it still needs:**
+- **limina-metal, out of the spike**, and an arena window (16 GiB per VM today, shared by every
+  context) that fits the models people run.
+- **Larger models**, past what the arena window holds, and omlx's custom kernels.

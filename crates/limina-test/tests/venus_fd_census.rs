@@ -96,7 +96,7 @@ fn cross_context_attach_leaves_worker_fd_census_flat() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     let banner = guest
         .wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
 
     // Let the seated session finish coming up before the baseline census: gnome-shell on

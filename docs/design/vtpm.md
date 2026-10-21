@@ -1,8 +1,8 @@
 # vTPM: a TPM 2.0 device backed by our own Rust TPM
 
 Status: **design agreed, P0 done** (`spikes/vtpm-p0/RESULTS.md`), P1 next · Scope: a new TPM 2.0 engine crate (ours outright, like
-virglrs), a TIS device in the libkrun fork, TPM2 support in the edk2 fork's `ArmVirtKrun`
-platform, and the limina-side state file and VM setting.
+virglrs), a TIS device in the libkrun fork, TPM2 support in Cardea
+(`third_party/cardea/crates/tpm`, `firmware/src/tcg.rs`), and the limina-side state file and VM setting.
 
 ## What it buys, and what it does not
 
@@ -84,11 +84,11 @@ guest tpm_tis driver ──MMIO──▶ libkrun TIS device ──▶ Backend tr
   consumes virglrs, pinned by `third_party/manifest.toml`. It knows nothing about TIS, libkrun or
   files: bytes in, bytes out, plus an explicit state value the caller persists. Randomness and
   time are injected, so a test can replay a command stream deterministically.
-- **Firmware.** `ArmVirtKrun` builds with ArmVirtQemu's `TPM2_ENABLE` configuration, on by
-  default: PlatformPeiLib finds the `tcg,tpm-tis-mmio` node, and Tcg2Pei/Tcg2Dxe measure the boot
-  into the SHA-256 bank and hand the event log to Linux. Unlike ArmVirtQemu, it links
-  DxeTpm2MeasureBootLib without Secure Boot, so the images it loads reach PCR 4. A TPM needs
-  persistent UEFI variables (`docs/design/efi-vars.md`): with a TPM present, shim's fallback
+- **Firmware.** Cardea speaks the MMIO TIS interface (no CRB, no SPI), serves
+  `EFI_TCG2_PROTOCOL` and hands the TCG2 event log to Linux (`crates/tpm`, `firmware/src/tcg.rs`).
+  It extends every active bank it can hash (SHA-256 among them): the platform into PCR 0, the
+  boot disk's GPT into PCR 5, the Secure Boot policy into PCR 7, and every image it loads into
+  PCR 4. A TPM needs persistent UEFI variables (`docs/design/efi-vars.md`): with a TPM present, shim's fallback
   resets after recreating the boot entry, and volatile variables make that a loop. A managed VM
   keeps them in the bundle's `efi.vars`. An ad-hoc run with a TPM keeps them in a temporary
   store for as long as its supervisor runs, unless `--efi-vars <file>` names one.
@@ -184,7 +184,7 @@ An entry lands with its witness.
   section above is armed.
 - **P2, the device.** libkrun TIS device, device-tree node, backend trait, limina setting and
   state file. Exit: a stock F44 guest under limina runs every P0 consumer, as L2 tests.
-- **P3, firmware.** `ArmVirtKrun.dsc` TPM2 configuration and the event log. Exit: the event log
+- **P3, firmware.** Cardea's TCG2 measured boot and the event log. Exit: the event log
   replays to the reported PCRs, and a PCR-7-bound LUKS volume unlocks.
 - **P4, snapshot.** TPM state in suspend/resume. Exit: a sealed credential unseals after a
   restore, and a restore across a `Shutdown(STATE)` resumes the session state.

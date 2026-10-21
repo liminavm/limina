@@ -23,7 +23,7 @@ say "cloning stock F44..."; cp -c Fedora-Workstation-44.accessible.raw "$DISK" |
 
 say "boot + suspend + snapshot (observe device_status at quiesce)"
 RUST_LOG=limina_vmm=info,krun_vmm=info caffeinate -dimsu "$REPO/target/debug/limina" \
-  --firmware "$REPO/target/krun-efi/KRUN_EFI.gop.fd" \
+  --firmware "$REPO/target/firmware/efi.fd" \
   --disk "$DISK" --cpus 2 --ram-mib 1024 --net --ssh-port "$PORT" --snapshot-file "$SNAP" > "$BOOT" 2>&1 &
 LP=$!; say "limina pid=$LP"
 up=0; for i in $(seq 1 60); do ssh_up && { up=1; say "SSH up ~$((i*4))s"; break; }; sleep 4; done

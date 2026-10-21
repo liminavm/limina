@@ -132,8 +132,10 @@ fn process_cpu_time(pid: libc::pid_t) -> Option<Duration> {
     if rc != 0 {
         return None;
     }
+    // The times are in Mach absolute-time ticks, not nanoseconds: 125/3 ns each on Apple silicon.
+    let ticks = info.ri_user_time.saturating_add(info.ri_system_time);
     Some(Duration::from_nanos(
-        info.ri_user_time.saturating_add(info.ri_system_time),
+        crate::window::vsync::Timebase::host().ns_from_ticks(ticks),
     ))
 }
 
@@ -203,6 +205,9 @@ struct State {
 pub struct VcpuPolicy {
     /// The VM's boot vCPU count: the maximum, and what a grow always jumps to.
     max: u32,
+    /// How many of the vCPUs, the last ones, are little (`--little-vcpus`): the planners offline
+    /// them last ([`VcpuPolicy::capacity`]).
+    little: u32,
     /// The fewest vCPUs to leave online, derived from the current reclaim mode. Settable at
     /// runtime ([`VcpuPolicy::set_reclaim`]) because the guest's power profile chooses it:
     /// `power-saver` tightens the floor, and leaving it is what restores the whole machine.
@@ -237,6 +242,7 @@ impl VcpuPolicy {
         log::info!("dynamic vCPUs: {floor}..{max} online (reclaim {mode:?}, dwell {dwell:?})");
         Some(VcpuPolicy {
             max,
+            little: 0,
             floor: AtomicU32::new(floor),
             dwell,
             worker_pid: Mutex::new(None),
@@ -245,6 +251,17 @@ impl VcpuPolicy {
                 last_host: None,
             }),
         })
+    }
+
+    /// Mark the last `little` vCPUs as little, as the worker's cpufreq device describes them.
+    pub fn with_little_vcpus(mut self, little: u32) -> Self {
+        self.little = little.min(self.max);
+        self
+    }
+
+    /// A vCPU's capacity as the offline planners rank it: 0 for a little vCPU, 1 for a big one.
+    pub fn capacity(&self, id: u32) -> u32 {
+        u32::from(id < self.max - self.little)
     }
 
     /// The fewest vCPUs this policy will currently leave online.
@@ -444,6 +461,24 @@ impl VcpuPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The worker's CPU time is what lets the host grow the guest before the guest says so; read
+    /// in the wrong unit it came out 41.7x low on Apple silicon and the host signal never fired.
+    #[test]
+    fn process_cpu_time_measures_the_cpu_a_process_burned() {
+        let pid = std::process::id() as libc::pid_t;
+        let before = process_cpu_time(pid).unwrap();
+        let start = Instant::now();
+        let mut x = 0u64;
+        while start.elapsed() < Duration::from_millis(300) {
+            x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7));
+        }
+        let burned = process_cpu_time(pid).unwrap() - before;
+        assert!(
+            burned >= Duration::from_millis(200) && burned < Duration::from_secs(2),
+            "300 ms of spinning read as {burned:?}"
+        );
+    }
 
     /// A current agent on a guest doing nothing: one task runnable (itself, reading `/proc`),
     /// no CPU burned, nobody waiting.

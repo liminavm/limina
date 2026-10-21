@@ -80,10 +80,14 @@ struct drm_virtgpu_limina_arena_import {
 };
 
 /*
- * A fence that signals once this context's ring has completed commit `seqno` (or the context is
- * gone). It is added, as a write, to the reservation of each GEM object in `handles` (implicit
- * sync for whoever reads them as dma-bufs), and with VIRTGPU_LIMINA_FENCE_FD it is returned as a
- * sync_file too. Fences of one context signal in the order they were made.
+ * A fence that signals once the u64 at offset `completed_at` of the ring's arena reaches `seqno`
+ * (or the context is gone): a queue's completed value, or with `completed_at` 0 the ring's own.
+ * A nonzero `completed_at` must be 8-aligned and inside the ring's arena, and a fence whose
+ * value is already reached signals at once. A context can fence at most 63 distinct nonzero
+ * `completed_at`s (ENOSPC after). It is added, as a write, to the reservation of each
+ * GEM object in `handles` (implicit sync for whoever reads them as dma-bufs), and with
+ * VIRTGPU_LIMINA_FENCE_FD it is returned as a sync_file too. Fences on one `completed_at` signal
+ * in the order they were made.
  */
 #define VIRTGPU_LIMINA_FENCE_FD 1
 
@@ -93,7 +97,7 @@ struct drm_virtgpu_limina_fence {
 	__u32 num_handles;
 	__u32 flags;		/* VIRTGPU_LIMINA_FENCE_* */
 	__s32 fence_fd;		/* out, with VIRTGPU_LIMINA_FENCE_FD */
-	__u32 pad;
+	__u32 completed_at;
 };
 
 /*

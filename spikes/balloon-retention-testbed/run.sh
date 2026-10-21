@@ -47,7 +47,7 @@ SSH="ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -p $SS
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUTDIR/driver.log"; }
 [ -x "$GAP/ledger-dump" ] || clang -O2 -o "$GAP/ledger-dump" "$GAP/ledger-dump.c"
 [ -x "$GAP/ballast" ] || clang -O2 -o "$GAP/ballast" "$GAP/ballast.c"
-for f in "$ROOT/target/debug/limina" "$ROOT/target/debug/limina-vmm" "$ROOT/target/krun-efi/KRUN_EFI.gop.fd"; do
+for f in "$ROOT/target/debug/limina" "$ROOT/target/debug/limina-vmm" "$ROOT/target/firmware/efi.fd"; do
     [ -e "$f" ] || { echo "missing $f (cargo xtask build first)" >&2; exit 1; }
 done
 
@@ -80,7 +80,7 @@ fi
 log "booting $DISK (mem $MEM, $CPUS cpus) -> $BOOTLOG"
 BOOT_TS=$(date +%s)
 "$ROOT/target/debug/limina" --vmm-bin "$ROOT/target/debug/limina-vmm" \
-    --firmware "$ROOT/target/krun-efi/KRUN_EFI.gop.fd" --disk "$DISK" \
+    --firmware "$ROOT/target/firmware/efi.fd" --disk "$DISK" \
     --net --ssh-port "$SSH_PORT" --cpus "$CPUS" --memory "$MEM" \
     --balloon-free-page-reporting --balloon-control-socket "$SOCK" \
     ${RECLAIM_ARGS[@]+"${RECLAIM_ARGS[@]}"} \

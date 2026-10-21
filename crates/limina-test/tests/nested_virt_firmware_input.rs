@@ -7,9 +7,8 @@
 //! virtual timer. A firmware that drives it gets no timer interrupts, so no UEFI timer event ever
 //! fires, and every console input driver (virtio keyboard, USB keyboard, serial terminal) polls
 //! from one: the firmware and GRUB ignore every key while GRUB's countdown, which reads the
-//! counter, still boots. The fix is the edk2 fork's `ArmGenericTimerVirtPhyCounterLib` (the
-//! physical timer at EL2); `spikes/nested-virt-probe/RESULTS.md`, *Timer interrupts at EL2*,
-//! has the measurements.
+//! counter, still boots. The firmware therefore drives the physical timer at EL2;
+//! `spikes/nested-virt-probe/RESULTS.md`, *Timer interrupts at EL2*, has the measurements.
 //!
 //! The vehicle is an installer ISO, whose GRUB shows its menu on the serial console: once the
 //! menu is up, `c` over serial must open GRUB's command line (`grub>`). Serial stands in for
@@ -21,7 +20,7 @@
 //!
 //! Gated behind LIMINA_HVF_TESTS; run via `scripts/test-boot.sh`. Overrides: `LIMINA_TEST_ISO`
 //! (any EFI-bootable aarch64 installer ISO whose GRUB prints its menu on serial),
-//! `LIMINA_GOP_FIRMWARE`.
+//! `LIMINA_FIRMWARE`.
 
 use std::time::{Duration, Instant};
 
@@ -59,8 +58,13 @@ fn nested_virt_grub_takes_keys() {
     let cfg = cfg.with_serial_input().with_supervisor_arg("--nested-virt");
 
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor on the ISO");
+    // GRUB's own help line, not its title: Fedora's GRUB titles the menu "GRUB version 2.12"
+    // where Debian's says "GNU GRUB".
     guest
-        .wait_for("GNU GRUB", Duration::from_secs(90))
+        .wait_for(
+            "Press enter to boot the selected OS",
+            Duration::from_secs(90),
+        )
         .expect("the firmware did not reach the ISO's GRUB menu");
 
     // Keep pressing `c` until GRUB opens its command line. A firmware without timer events never

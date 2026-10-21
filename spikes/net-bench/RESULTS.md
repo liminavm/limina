@@ -151,3 +151,48 @@ Setup, measured 2026-09-13:
   RTT p50 went from ~130 to 234 µs on every round trip.
 - **defer 2 / gro 20 µs collapsed mid-run once:** 4.4 Gbit/s with 14 retransmits. Not
   investigated.
+
+## vmnet against gvproxy on the same guest
+
+`ab.sh` runs the whole battery against one booted guest: 30 s of idle CPU, the worker's and
+gvproxy's RSS, two `rr.py` latency runs, then `netbench.sh` twice per leg (iperf both ways, ssh
+both ways). One clone booted on each backend in turn, nothing else changed.
+
+Vehicle: a spare M1 Mac mini (8 cores, 16 GB, macOS 27.0.1), quiet but for an idle 8-vCPU VM.
+Guest: stock Fedora 44 (kernel `6.19.10-300.fc44`, the piglit base image) with `iperf3` added, 4
+vCPUs, 4 GiB, EFI + venus headless, `LIMINA_WORKER_LAUNCH=spawn`. Release `limina`/`limina-vmm`
+with libkrun's vmnet backend as at `a2c00554`, less its skip of malformed packets (no worker
+logged one). gvproxy 0.8.8 at limina's default `-mtu 65520`; vmnet shared mode, TSO on, the guest at MTU 1500 (vmnet's DHCP gives no MTU), the host's
+`bridge100` at 1500. Host iperf3 3.x (Homebrew) on `127.0.0.1` for gvproxy and on the bridge
+address for vmnet. `/usr/bin/ssh` both times, default cipher. Measured 2026-10-19.
+
+| leg | gvproxy | vmnet shared |
+|---|---|---|
+| iperf guest → host | 14.5 / 13.2 Gbit/s; worker 135–252% + gvproxy 205% | **35.4 / 35.1 Gbit/s**; worker 232% |
+| iperf host → guest | 7.5 / 7.2 Gbit/s; worker 165% + gvproxy 196%; 0 retransmits | **16.9 / 16.3 Gbit/s**; worker 236–241%; 3 / 2067 retransmits |
+| ssh guest → host | 1.73 / 1.72 Gbit/s; worker 143% + gvproxy 70% | 1.75 / 1.73 Gbit/s; worker 114–131% |
+| ssh host → guest | 1.59 / 1.59 Gbit/s; worker 152% + gvproxy 91% | 1.55 / 1.55 Gbit/s; worker 168% |
+| host CPU per Gbit/s, iperf g→h / h→g | 23–35% / 49–50% | 6.6% / 14.3–14.5% |
+| RTT p50 / p90 / p99 / max | 120 / 139 / 165 / 238 µs | 90 / 134 / 154 / 1891–5070 µs |
+| idle, quiet guest (CPU s per 30 s) | worker 0.59–0.74, gvproxy 0–0.01 | worker 0.62–0.79 |
+| gvproxy RSS | 94 MiB | — |
+
+- **vmnet moves 2.3–2.5× the bytes at about a third of the host CPU per byte.** The worker's
+  `%cpu` includes its system time, so the `vmnet_read`/`vmnet_write` calls are in it; what is
+  not in any column is the kernel's NAT and bridge work done outside the worker. Guest → host,
+  the guest's iperf ran at 71% of a CPU against 28% on gvproxy: at 35 Gbit/s the guest's own
+  send path is now what is busy.
+- **Guest → host, vmnet keeps the guest's segments whole**: 62 KB per TX packet and 99k net
+  interrupts per run, against gvproxy's 209k/137k. Host → guest arrives in 43 KB packets with
+  1500-byte MTUs on both sides, so vmnet's TSO is coalescing on the way in.
+- **ssh is cipher-bound at 4 vCPUs** (~1.6–1.75 Gbit/s on both); it only shows the ~70–90% of a
+  core gvproxy costs on top.
+- **Idle cost is a wash.** A first 30 s window read 12.9 s for the gvproxy worker; it was the
+  guest still busy after the `dnf install`, not the path. Re-measured on a settled guest
+  (`/proc/stat` at 0.4–0.5% busy), both backends sit at ~0.65 s per 30 s.
+- **Open:** the 2067 retransmits in one host → guest vmnet run (the other had 3), and vmnet's
+  millisecond latency outliers. Not investigated.
+
+Bridged on Wi-Fi (`--net-vmnet bridged:en1`, same guest): vmnet started with TSO on, the guest
+took `192.168.13.246` from the home router with its default route there, fetched HTTPS, and from
+another LAN host (the M1 Max dev Mac) took 64 MiB in each direction with matching SHA-256.

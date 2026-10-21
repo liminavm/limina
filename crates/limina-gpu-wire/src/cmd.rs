@@ -8,10 +8,15 @@
 //!   arena, named by a [`BufRef`] or a GPU address (arena base + offset).
 //! - **Command buffers** are explicit: [`BeginCommandBuffer`] … [`EndCommandBuffer`], with
 //!   encoders opened and closed inside. [`Commit`] submits every command buffer ended since the
-//!   last commit, in order, and later publishes its seqno in
-//!   [`RingControl::completed`](crate::ring::RingControl::completed).
-//! - **Ordering** is what the stream says: queue order across commits, and within a command buffer
-//!   the barriers and fences it encodes, as in Metal 4. The GPU host adds none.
+//!   last commit, in order, to a queue, and later publishes its seqno as that queue's completed
+//!   value.
+//! - **Queues** are [`CreateQueue`] objects, each an `MTL4CommandQueue`; queue `0` is the
+//!   context's own, whose completed value is
+//!   [`RingControl::completed`](crate::ring::RingControl::completed). Seqnos are one increasing
+//!   sequence per context; commits on one queue finish in order, on different queues in any order.
+//! - **Ordering** is what the stream says: queue order across commits on a queue, the events
+//!   between queues, and within a command buffer the barriers and fences it encodes, as in Metal
+//!   4. The GPU host adds none.
 //! - **Answers** come back through memory. A command that needs one carries a `reply`
 //!   [`BufRef`] to a [`Reply`] the host fills and then marks done; a commit carries one to a
 //!   [`Feedback`]. A create with a reply reports failure there and leaves the context alive; the
@@ -181,6 +186,21 @@ pub const MAX_SAMPLE_POSITIONS: usize = 16;
 /// [`Reply::done`] once the host has written the reply.
 pub const REPLY_DONE: u32 = 1;
 
+/// [`DeviceInfo::features`] bits: optional commands a GPU host takes without a [`VERSION`]
+/// change. A guest checks the bit before sending one; a host without it answers `UnknownOp`.
+///
+/// [`VERSION`]: crate::VERSION
+pub mod feature {
+    /// [`CreateLibraryData`](super::CreateLibraryData).
+    pub const LIBRARY_DATA: u32 = 1 << 0;
+    /// [`FunctionConstant`](super::FunctionConstant)s on a
+    /// [`CreateComputePipeline`](super::CreateComputePipeline).
+    pub const FUNCTION_CONSTANTS: u32 = 1 << 1;
+}
+
+/// Most bytes a [`CreateLibraryData`] may hand the host.
+pub const MAX_LIBRARY_DATA: u64 = 256 << 20;
+
 /// [`SyncObject`] kinds.
 pub mod sync_kind {
     pub const FENCE: u32 = 0;
@@ -280,7 +300,8 @@ wire! {
         /// The host's macOS version (`NSProcessInfo.operatingSystemVersion`): Metal's behaviour
         /// changes with it, and KosmicKrisp works around some of it by version.
         os_version: [u32; 3],
-        _pad: u32,
+        /// `feature` bits. Hosts before the first feature wrote 0 here.
+        features: u32,
     }
 
     /// The fields of an `MTLTextureDescriptor` the guest chooses.
@@ -385,6 +406,18 @@ wire! {
         reply: BufRef,
     }
 
+    /// A library from a compiled `.metallib` (`newLibraryWithData:`), `data_len` bytes of at
+    /// most `MAX_LIBRARY_DATA`: at `data` in an arena, or, with `data` none, following the
+    /// command. The host keeps the bytes in the object's record, so a restore needs no arena.
+    /// Only for a host with `feature::LIBRARY_DATA`.
+    struct CreateLibraryData = CREATE_LIBRARY_DATA(0x010b) {
+        handle: u32,
+        _pad: u32,
+        data_len: u64,
+        data: BufRef,
+        reply: BufRef,
+    }
+
     /// An `MTL4RenderPipelineDescriptor`; the vertex function's name follows, then the
     /// fragment's (absent when `fragment_library` is `0`).
     struct CreateRenderPipeline = CREATE_RENDER_PIPELINE(0x0104) {
@@ -404,14 +437,25 @@ wire! {
         reply: BufRef,
     }
 
-    /// An `MTL4ComputePipelineDescriptor`; the function's name follows.
+    /// An `MTL4ComputePipelineDescriptor`; `constant_count` [`FunctionConstant`]s follow, then
+    /// the function's name. With constants, the function is an `MTL4SpecializedFunctionDescriptor`
+    /// over the library's; only for a host with `feature::FUNCTION_CONSTANTS`.
     struct CreateComputePipeline = CREATE_COMPUTE_PIPELINE(0x0105) {
         handle: u32,
         library: u32,
         name_len: u32,
-        _pad: u32,
+        constant_count: u32,
         max_total_threads: u64,
         reply: BufRef,
+    }
+
+    /// One `setConstantValue:type:atIndex:`. `data_type` is a scalar `MTLDataType` (bool, char,
+    /// short, int, long, their unsigned forms, half, bfloat or float); the value sits in the low
+    /// bytes of `value`, little-endian, and the bytes above it are zero.
+    struct FunctionConstant {
+        index: u32,
+        data_type: u32,
+        value: u64,
     }
 
     /// An `MTLStencilDescriptor`, with `MTLStencilOperation` and `MTLCompareFunction` values.
@@ -450,6 +494,15 @@ wire! {
         kind: u32,
         initial: u64,
         mirror: BufRef,
+    }
+
+    /// An `MTL4CommandQueue`, which the context's residency set is added to. The host stores the
+    /// highest finished seqno of its commits to the `u64` at `completed`, in the ring's arena and
+    /// 8-aligned, which is how the guest and the guest kernel's fences learn of them.
+    struct CreateQueue = CREATE_QUEUE(0x010c) {
+        handle: u32,
+        _pad: u32,
+        completed: BufRef,
     }
 
     /// An `MTL4CounterHeap` of `count` timestamp entries (`MTL4CounterHeapTypeTimestamp`).
@@ -793,21 +846,26 @@ wire! {
         indirect: u64,
     }
 
-    /// Submits the command buffers ended since the last commit, in one `commit:count:options:`.
-    /// The host fills `feedback` (arena `0` for none) and then publishes `seqno`. Seqnos must
-    /// increase. A commit with nothing to submit commits an empty command buffer.
+    /// Submits the command buffers ended since the last commit to `queue` (`0`, the context's
+    /// own), in one `commit:count:options:`. The host fills `feedback` (arena `0` for none) and
+    /// then publishes `seqno` as the queue's completed value. Seqnos must increase across the
+    /// context. A commit with nothing to submit commits an empty command buffer.
     struct Commit = COMMIT(0x0300) {
         seqno: u64,
+        queue: u32,
+        _pad: u32,
         feedback: BufRef,
     }
 
-    /// `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on the queue, between
-    /// commits: no command buffer may be ended and not yet committed. A signal of a shared event
-    /// also updates its mirror once the value is reached.
+    /// `signalEvent:value:` (`wait` zero) or `waitForEvent:value:` on `queue`, between commits:
+    /// no command buffer may be ended and not yet committed. A signal of a shared event also
+    /// updates its mirror once the value is reached.
     struct QueueEvent = QUEUE_EVENT(0x0301) {
         event: u32,
         wait: u32,
         value: u64,
+        queue: u32,
+        _pad: u32,
     }
 }
 
@@ -837,6 +895,9 @@ const _: () = {
     assert!(size_of::<RenderAttachment>() == 80);
     assert!(size_of::<BeginRenderPass>() == 40 + 128 + 10 * 80);
     assert!(size_of::<EndEncoding>() == 0);
+    assert!(size_of::<Commit>() == 32);
+    assert!(size_of::<QueueEvent>() == 24);
+    assert!(size_of::<CreateQueue>() == 24);
 };
 
 #[cfg(test)]

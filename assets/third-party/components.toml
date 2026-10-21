@@ -79,22 +79,12 @@ keg = "/opt/homebrew/opt/dav1d"
 claims = ["libdav1d.*.dylib"]
 
 [[component]]
-name = "gvproxy (gvisor-tap-vsock)"
-url = "https://github.com/containers/gvisor-tap-vsock"
-license = "Apache-2.0"
-files = ["/opt/homebrew/opt/gvproxy/LICENSE"]
-keg = "/opt/homebrew/opt/gvproxy"
-claims = ["gvproxy"]
-
-[[component]]
-name = "EDK II (the KRUN_EFI boot firmware)"
-url = "https://github.com/liminavm/edk2"
-license = "BSD-2-Clause-Patent"
-# Not vendored on the build host (build-krun-efi.sh clones it inside a container), so the
-# pinned revision's License.txt is kept here. Refresh it when the [edk2] pin moves.
-files = ["assets/third-party/edk2-License.txt"]
-pin = "edk2"
-claims = ["KRUN_EFI.gop.fd"]
+name = "Cardea (the UEFI boot firmware)"
+url = "https://github.com/liminavm/cardea"
+license = "MIT"
+files = ["third_party/cardea/LICENSE"]
+pin = "cardea"
+claims = ["efi.fd"]
 
 [[component]]
 name = "The Rust Standard Library"

@@ -195,7 +195,7 @@ fi
   echo "- Size: $(du -sh "$LOT/$NAME" | awk '{print $1}')"
   # A checkout override is a tree the manifest does not name at all; say so, with the path,
   # since the table below shows only its HEAD.
-  for dep in libkrun virglrs imago edk2 linux kosmickrisp mesa-guest; do
+  for dep in libkrun virglrs imago cardea linux kosmickrisp mesa-guest; do
     c="$(pin_override "$dep" checkout)"
     [ -n "$c" ] && echo "- **Local checkout override**: $dep built from \`$c\`, not the manifest's tree"
   done
@@ -206,7 +206,7 @@ fi
   # pin_tree: the tree each dependency is on this checkout, overrides included. Neither mesa
   # build lives under third_party/ — anything that walks that directory misses the host renderer
   # and the guest venus mesa entirely.
-  for dep in libkrun virglrs imago edk2 linux kosmickrisp mesa-guest; do
+  for dep in libkrun virglrs imago cardea linux kosmickrisp mesa-guest; do
     describe "$dep" "$(pin_tree "$dep")"
   done
   echo

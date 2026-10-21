@@ -10,6 +10,7 @@
 //! > info
 //! < ssh-port 2223
 //! < parked no
+//! < address 192.168.64.7
 //! < ok
 //! > ssh-port 2300
 //! < ssh-port 2300
@@ -20,7 +21,13 @@
 //! < ssh-port 2301        (pushed whenever it changes, for as long as the client stays)
 //! ```
 //!
-//! `ssh-port none` means the VM has no NAT network, or its gateway is not up yet. `parked yes`
+//! `address` is the address the guest's NIC holds, as the worker learns it from the DHCP
+//! acknowledgement that reaches the guest (`limina-vmm`'s `krun::lease`): `address none` before
+//! one (or without a NIC), `address failed <why>` when the NIC would not start — a bridged NIC on
+//! an interface vmnet will not take, say. It is the one way to reach a bridged guest, whose address
+//! the LAN's DHCP server hands out; `limina address` is its command-line client.
+//!
+//! `ssh-port none` means the VM has no network with a forward, or it is not up yet. `parked yes`
 //! means the guest is suspended and its window is waiting for a play click: the supervisor is
 //! still up, but there is no worker behind it. After `watch`
 //! the connection carries only those pushed lines, so a watcher that also wants to change
@@ -35,16 +42,22 @@
 //! input needs.
 //!
 //! `reset` kills the VM's worker and cold-boots a fresh one behind the same supervisor, window,
-//! gateway and SSH port (`supervisor::request_reset`); `limina reset` is its client. The answer
+//! and SSH port (`supervisor::request_reset`); `limina reset` is its client. The answer
 //! comes once the fresh worker is running (`worker-pid <pid>`). It is refused unless the VM's
 //! `lifecycle-control` lever is on (`debug_ctl::LIFECYCLE_CONTROL`, off by default, read per
 //! request). Stopping a VM needs no lever and no socket: it is a signal to the supervisor, which
 //! any process of the same user can already send (`limina stop`).
 //!
+//! `net-switch vmnet|netd` moves a `--net-auto` NIC to that side (`limina net-switch`). It is
+//! answered once the worker has taken the request; the move itself takes seconds and the VM log
+//! says when it is done. It is refused unless the VM's `net-switch` lever is on
+//! (`debug_ctl::NET_SWITCH`, off by default, read per request).
+//!
 //! Like the debug socket it is reachable by any process of the same user. Moving the SSH forward
 //! binds a different loopback port on the host; the guest and its network are untouched.
 
 use std::io::{BufRead, BufReader, Write};
+use std::net::Ipv4Addr;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -53,19 +66,26 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use limina_debug::wire;
 
-use crate::gateway::SshForward;
+use crate::forward::SshForward;
+use limina_launch::connect::Endpoint;
 
-/// How long a client waits for an answer. A move asks gvproxy, which answers in milliseconds.
+/// How long a client waits for an answer. A move asks the worker, which answers in milliseconds.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a push may block on a watcher that stopped reading before it is dropped.
 const PUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// The NAT gateway's SSH forward, once `run_vm` has started one.
+/// The VM's SSH forward, once `run_vm` has started one.
 static FORWARD: Mutex<Option<SshForward>> = Mutex::new(None);
+
+/// The worker's network control link, on a NIC that switches sides.
+static NET_CONTROL: Mutex<Option<Endpoint>> = Mutex::new(None);
 
 /// The window is parked on a suspended guest (no worker until the play click).
 static PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The address the guest's NIC holds, as the worker last reported it.
+static ADDRESS: Mutex<GuestAddress> = Mutex::new(GuestAddress::None);
 
 /// The run's boot disk, canonicalized: what `limina <verb> <disk>` matches a run by.
 static DISK: Mutex<Option<PathBuf>> = Mutex::new(None);
@@ -91,6 +111,36 @@ pub enum Request {
     SshPort(u16),
     /// Kill the worker and cold-boot a fresh one (`lifecycle-control` lever).
     Reset,
+    /// Move a `--net-auto` NIC to this side (`net-switch` lever).
+    NetSwitch(NetSide),
+}
+
+/// A side a `--net-auto` NIC can be on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetSide {
+    Vmnet,
+    Netd,
+}
+
+impl NetSide {
+    fn word(self) -> &'static str {
+        match self {
+            NetSide::Vmnet => "vmnet",
+            NetSide::Netd => "netd",
+        }
+    }
+}
+
+impl std::str::FromStr for NetSide {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "vmnet" => Ok(NetSide::Vmnet),
+            "netd" => Ok(NetSide::Netd),
+            _ => Err(format!("{s:?} is not a side (vmnet or netd)")),
+        }
+    }
 }
 
 impl Request {
@@ -100,6 +150,9 @@ impl Request {
             Some("info") => Request::Info,
             Some("watch") => Request::Watch,
             Some("reset") => Request::Reset,
+            Some("net-switch") => {
+                Request::NetSwitch(words.next().ok_or("net-switch needs a side")?.parse()?)
+            }
             Some("ssh-port") => {
                 let port = words.next().ok_or("ssh-port needs a port")?;
                 Request::SshPort(
@@ -122,19 +175,52 @@ impl Request {
             Request::Watch => "watch".into(),
             Request::SshPort(p) => format!("ssh-port {p}"),
             Request::Reset => "reset".into(),
+            Request::NetSwitch(side) => format!("net-switch {}", side.word()),
         }
     }
 }
 
+/// The address the guest's NIC holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum GuestAddress {
+    /// No DHCP acknowledgement yet, or no NIC.
+    #[default]
+    None,
+    At(Ipv4Addr),
+    /// The NIC would not start, and why.
+    Failed(String),
+}
+
+impl GuestAddress {
+    /// The value of an `address` line, as the worker and the supervisor both write it.
+    pub fn word(&self) -> String {
+        match self {
+            GuestAddress::None => "none".into(),
+            GuestAddress::At(ip) => ip.to_string(),
+            GuestAddress::Failed(why) => format!("failed {why}"),
+        }
+    }
+
+    pub fn parse(word: &str) -> Self {
+        let word = word.trim();
+        if let Some(why) = word.strip_prefix("failed ") {
+            return GuestAddress::Failed(why.to_string());
+        }
+        word.parse().map_or(GuestAddress::None, GuestAddress::At)
+    }
+}
+
 /// A running VM as its supervisor reports it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Info {
-    /// The host port of the guest's SSH forward; `None` without a NAT network (or before its
-    /// gateway is up).
+    /// The host port of the guest's SSH forward; `None` without a network that has one (or before
+    /// it is up).
     pub ssh_port: Option<u16>,
     /// The guest is suspended and the supervisor's window is parked on it. A supervisor too old
     /// to say reads as not parked.
     pub parked: bool,
+    /// The address the guest's NIC holds. A supervisor too old to say reads as none.
+    pub address: GuestAddress,
 }
 
 impl Info {
@@ -142,16 +228,18 @@ impl Info {
         Info {
             ssh_port: lock(&FORWARD).as_ref().map(SshForward::port),
             parked: PARKED.load(std::sync::atomic::Ordering::SeqCst),
+            address: lock(&ADDRESS).clone(),
         }
     }
 
-    fn to_lines(self) -> Vec<String> {
+    fn to_lines(&self) -> Vec<String> {
         vec![
             match self.ssh_port {
                 Some(p) => format!("ssh-port {p}"),
                 None => "ssh-port none".into(),
             },
             format!("parked {}", if self.parked { "yes" } else { "no" }),
+            format!("address {}", self.address.word()),
         ]
     }
 
@@ -162,6 +250,8 @@ impl Info {
             self.ssh_port = v.trim().parse().ok();
         } else if let Some(v) = line.strip_prefix("parked ") {
             self.parked = v.trim() == "yes";
+        } else if let Some(v) = line.strip_prefix("address ") {
+            self.address = GuestAddress::parse(v);
         }
     }
 
@@ -179,10 +269,92 @@ pub fn socket_path(pid: u32) -> PathBuf {
     std::env::temp_dir().join(format!("limina-vm-{pid}.sock"))
 }
 
-/// Publish the NAT gateway's SSH forward (and tell every watcher).
+/// Publish the VM's SSH forward (and tell every watcher).
 pub fn set_forward(forward: Option<SshForward>) {
     *lock(&FORWARD) = forward;
     push();
+}
+
+/// The host port the SSH forward is on now, if the VM has one.
+pub fn forward_port() -> Option<u16> {
+    lock(&FORWARD).as_ref().map(SshForward::port)
+}
+
+/// Publish the address the guest's NIC holds (and tell every watcher). A change is printed too, as
+/// the SSH forward's port is: the VM log then says it without asking.
+pub fn set_address(address: GuestAddress) {
+    let mut now = lock(&ADDRESS);
+    if *now == address {
+        return;
+    }
+    match &address {
+        GuestAddress::At(ip) => println!("guest address: {ip}"),
+        GuestAddress::Failed(why) => println!("guest network failed: {why}"),
+        GuestAddress::None => {}
+    }
+    *now = address;
+    drop(now);
+    push();
+}
+
+/// How long to wait before asking a worker for its NIC's address again.
+const ADDRESS_RETRY: Duration = Duration::from_millis(500);
+
+/// Follow the address the guest's NIC holds, over the worker's network control link, for the
+/// rest of the run: each worker the supervisor starts behind the link is followed in turn, and the
+/// address is none between them.
+pub fn follow_address(link: Endpoint) {
+    let spawned = std::thread::Builder::new()
+        .name("guest-address".into())
+        .spawn(move || {
+            loop {
+                if let Ok(stream) = link.connect() {
+                    let _ = follow_worker(&stream);
+                    set_address(GuestAddress::None);
+                }
+                std::thread::sleep(ADDRESS_RETRY);
+            }
+        });
+    if let Err(e) = spawned {
+        log::error!("runtime: cannot follow the guest's address: {e}");
+    }
+}
+
+/// Watch one worker's NIC until the worker goes away.
+fn follow_worker(stream: &UnixStream) -> std::io::Result<()> {
+    (&*stream).write_all(b"watch\n")?;
+    for line in BufReader::new(stream).lines() {
+        if let Some(v) = line?.strip_prefix("address ") {
+            set_address(GuestAddress::parse(v));
+        }
+    }
+    Ok(())
+}
+
+/// Publish the worker's network control link, on a NIC that switches sides.
+pub fn set_net_control(link: Option<Endpoint>) {
+    *lock(&NET_CONTROL) = link;
+}
+
+/// The answer to `net-switch` while the `net-switch` lever is off.
+pub fn net_switch_refusal() -> String {
+    format!(
+        "network switching is off for this VM; to allow `limina net-switch`, {}",
+        crate::debug_ctl::how_to_enable(&crate::debug_ctl::NET_SWITCH)
+    )
+}
+
+/// Hand a move to the worker, which carries it out on its own time.
+fn net_switch(side: NetSide) -> Result<Vec<String>, String> {
+    if !crate::debug_ctl::NET_SWITCH.on() {
+        return Err(net_switch_refusal());
+    }
+    let link = lock(&NET_CONTROL)
+        .clone()
+        .ok_or("this VM's NIC does not switch sides (it needs --net-auto)")?;
+    crate::forward::worker_request(&link, &format!("switch {}", side.word()))
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(report())
 }
 
 /// Publish the run's boot disk (canonical), reported as `disk <path>` after the state lines. It
@@ -206,8 +378,8 @@ pub fn set_parked(parked: bool) {
     push();
 }
 
-/// How long a `reset` answer waits for the fresh worker. Its spawn goes through launchd and
-/// recycles gvproxy, which takes about a second.
+/// How long a `reset` answer waits for the fresh worker. Its spawn goes through launchd, which
+/// takes about a second.
 const RESET_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The answer to `reset` while the `lifecycle-control` lever is off.
@@ -253,6 +425,7 @@ fn reset() -> Result<Vec<String>, String> {
 fn handle(req: Request) -> Result<Vec<String>, String> {
     match req {
         Request::Reset => reset(),
+        Request::NetSwitch(side) => net_switch(side),
         Request::Info | Request::Watch => Ok(report()),
         Request::SshPort(port) => {
             let forward = lock(&FORWARD)
@@ -520,15 +693,15 @@ fn watch_stream(stream: UnixStream, mut on_change: impl FnMut(Info)) -> Result<(
         .context("sending the watch")?;
     let lines = wire::read_answer(&mut reader).map_err(|why| anyhow::anyhow!("watch: {why}"))?;
     let mut info = Info::from_lines(lines.iter().map(String::as_str));
-    on_change(info);
+    on_change(info.clone());
     // Pushes come only on change, which may be never.
     stream.set_read_timeout(None)?;
     // A push repeats every line of the report; only the lines that differ are news.
     for line in reader.lines() {
-        let before = info;
+        let before = info.clone();
         info.apply(&line.context("reading the watch")?);
         if info != before {
-            on_change(info);
+            on_change(info.clone());
         }
     }
     Ok(())
@@ -624,10 +797,19 @@ pub(crate) mod tests {
             Info {
                 ssh_port: Some(2223),
                 parked: false,
+                address: GuestAddress::At(Ipv4Addr::new(192, 168, 13, 77)),
             },
             Info {
                 ssh_port: None,
                 parked: true,
+                address: GuestAddress::None,
+            },
+            Info {
+                ssh_port: None,
+                parked: false,
+                address: GuestAddress::Failed(
+                    "vmnet_start_interface failed with VMNET_NOT_AUTHORIZED (1010)".into(),
+                ),
             },
         ] {
             let lines = info.to_lines();
@@ -714,9 +896,9 @@ pub(crate) mod tests {
         };
         wait(None);
 
-        // The gateway coming up is a change: a forward with no gvproxy behind it is enough,
-        // since publishing it asks gvproxy nothing.
-        let forward = crate::gateway::SshForward::for_tests(2299);
+        // The forward coming up is a change: one with no worker behind it is enough, since
+        // publishing it asks the worker nothing.
+        let forward = crate::forward::SshForward::for_tests(2299);
         set_forward(Some(forward));
         wait(Some(2299));
 

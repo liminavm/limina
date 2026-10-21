@@ -552,12 +552,17 @@ pub fn count_cpu_list(s: &str) -> u32 {
 /// Rules, in order of importance:
 /// - **cpu0 is never offlined.** Linux will refuse it on most configurations anyway, and a guest
 ///   that lost cpu0 could not be recovered by anything this side can send.
-/// - Offline the **highest**-numbered CPUs first and re-online the **lowest**-numbered ones
-///   first, so the online set stays a low, dense prefix instead of drifting into holes.
+/// - CPUs go and come back in [`shrink_order`] and [`grow_order`], by `capacity` (the guest's
+///   `cpu_capacity`) and then by number, so the online set stays a low, dense prefix of each kind.
 /// - Only CPUs the guest reports as `present` are ever onlined.
 /// - A target at or beyond what the guest has is not an error; it just yields no writes, or
 ///   whatever writes bring every present CPU back.
-pub fn plan_cpu_transitions(online: &str, present: &str, target: u32) -> Vec<(u32, bool)> {
+pub fn plan_cpu_transitions(
+    online: &str,
+    present: &str,
+    target: u32,
+    capacity: impl Fn(u32) -> u32,
+) -> Vec<(u32, bool)> {
     let online = parse_cpu_list(online);
     let present = parse_cpu_list(present);
     // No reading of the current state means no safe write to make.
@@ -567,28 +572,36 @@ pub fn plan_cpu_transitions(online: &str, present: &str, target: u32) -> Vec<(u3
     let target = target.max(1) as usize;
     let mut plan = Vec::new();
     if online.len() > target {
-        // Shrink: highest-numbered first, cpu0 last standing and never taken.
-        for &id in online.iter().rev() {
-            if online.len() - plan.len() <= target {
-                break;
-            }
-            if id == 0 {
-                continue;
-            }
-            plan.push((id, false));
-        }
+        // Shrink: cpu0 last standing and never taken.
+        let mut leaving: Vec<u32> = online.iter().copied().filter(|&id| id != 0).collect();
+        leaving.sort_by_key(|&id| shrink_order(id, capacity(id)));
+        let excess = online.len() - target;
+        plan.extend(leaving.into_iter().take(excess).map(|id| (id, false)));
     } else if online.len() < target {
-        // Grow: lowest-numbered offline-but-present first.
-        for &id in &present {
-            if online.len() + plan.len() >= target {
-                break;
-            }
-            if !online.contains(&id) {
-                plan.push((id, true));
-            }
-        }
+        let mut coming: Vec<u32> = present
+            .iter()
+            .copied()
+            .filter(|id| !online.contains(id))
+            .collect();
+        coming.sort_by_key(|&id| grow_order(id, capacity(id)));
+        let missing = target - online.len();
+        plan.extend(coming.into_iter().take(missing).map(|id| (id, true)));
     }
     plan
+}
+
+/// The order CPUs are taken offline in: the most capable first, then the highest-numbered. With
+/// little vCPUs that keeps a little one online for as long as anything but cpu0 goes: Linux turns
+/// Energy Aware Scheduling off when the online CPUs are all of one capacity, and a little vCPU is
+/// also the cheaper one for the host to keep. On a uniform machine it is simply highest first.
+pub fn shrink_order(id: u32, capacity: u32) -> (core::cmp::Reverse<u32>, core::cmp::Reverse<u32>) {
+    (core::cmp::Reverse(capacity), core::cmp::Reverse(id))
+}
+
+/// The order CPUs come back in: the most capable first, since a grow is for demand, then the
+/// lowest-numbered.
+pub fn grow_order(id: u32, capacity: u32) -> (core::cmp::Reverse<u32>, u32) {
+    (core::cmp::Reverse(capacity), id)
 }
 
 /// Host → guest: how many vCPUs the host wants online.
@@ -1240,11 +1253,16 @@ mod tests {
         assert_eq!(old.online, 4);
     }
 
+    /// Every CPU of the same capacity.
+    fn uniform(_: u32) -> u32 {
+        1024
+    }
+
     /// The plan never touches cpu0, works from the top down, and stops exactly on target.
     #[test]
     fn shrinking_takes_the_highest_cpus_and_never_cpu0() {
         assert_eq!(
-            plan_cpu_transitions("0-9", "0-9", 4),
+            plan_cpu_transitions("0-9", "0-9", 4, uniform),
             vec![
                 (9, false),
                 (8, false),
@@ -1254,15 +1272,18 @@ mod tests {
                 (4, false)
             ]
         );
-        assert_eq!(plan_cpu_transitions("0-3", "0-9", 3), vec![(3, false)]);
+        assert_eq!(
+            plan_cpu_transitions("0-3", "0-9", 3, uniform),
+            vec![(3, false)]
+        );
         // Down to a single CPU: cpu0 is the one that survives.
         assert_eq!(
-            plan_cpu_transitions("0-2", "0-2", 1),
+            plan_cpu_transitions("0-2", "0-2", 1, uniform),
             vec![(2, false), (1, false)]
         );
         // ...and it can never be asked for less than that, however low the target.
         assert_eq!(
-            plan_cpu_transitions("0-1", "0-1", 0),
+            plan_cpu_transitions("0-1", "0-1", 0, uniform),
             vec![(1, false)],
             "a target of 0 must still leave cpu0 online"
         );
@@ -1272,25 +1293,40 @@ mod tests {
     #[test]
     fn growing_refills_the_lowest_offline_cpus() {
         assert_eq!(
-            plan_cpu_transitions("0,1", "0-9", 4),
+            plan_cpu_transitions("0,1", "0-9", 4, uniform),
             vec![(2, true), (3, true)]
         );
         // A set with a hole in it fills the hole before reaching past it.
-        assert_eq!(plan_cpu_transitions("0,3", "0-9", 3), vec![(1, true)]);
+        assert_eq!(
+            plan_cpu_transitions("0,3", "0-9", 3, uniform),
+            vec![(1, true)]
+        );
         // Only present CPUs are candidates — a target beyond the machine is capped by reality.
         assert_eq!(
-            plan_cpu_transitions("0", "0-1", 8),
+            plan_cpu_transitions("0", "0-1", 8, uniform),
             vec![(1, true)],
             "the guest has no third CPU to offer"
         );
     }
 
+    /// With little vCPUs a shrink takes the big ones first and leaves a little one online, so the
+    /// guest keeps an asymmetric machine (and EAS); a grow brings the big ones back first.
+    #[test]
+    fn little_cpus_stay_online_longest_and_big_ones_come_back_first() {
+        let cap = |id: u32| if id >= 2 { 273 } else { 1024 };
+        assert_eq!(
+            plan_cpu_transitions("0-3", "0-3", 2, cap),
+            vec![(1, false), (3, false)]
+        );
+        assert_eq!(plan_cpu_transitions("0,2", "0-3", 3, cap), vec![(1, true)]);
+    }
+
     #[test]
     fn a_plan_that_changes_nothing_is_empty() {
-        assert!(plan_cpu_transitions("0-3", "0-9", 4).is_empty());
+        assert!(plan_cpu_transitions("0-3", "0-9", 4, uniform).is_empty());
         // An unreadable `online` is not "zero CPUs online" — it is no reading, so no writes.
-        assert!(plan_cpu_transitions("", "0-9", 2).is_empty());
-        assert!(plan_cpu_transitions("garbage", "0-9", 2).is_empty());
+        assert!(plan_cpu_transitions("", "0-9", 2, uniform).is_empty());
+        assert!(plan_cpu_transitions("garbage", "0-9", 2, uniform).is_empty());
     }
 
     #[test]

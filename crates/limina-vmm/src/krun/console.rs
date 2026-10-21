@@ -3,16 +3,15 @@
 
 //! Serial-console wiring for the krun facade.
 //!
-//! On the EFI/firmware path a naive boot is blind (no serial, silent EDK2 firmware),
-//! so we attach our own explicit serial: it becomes the PL011 the firmware uses as
-//! ConOut, so EDK2 + GRUB + (with `console=ttyAMA0` in the guest cmdline) the kernel
-//! are all visible. Verified end-to-end in `spikes/m1-boot` and `spikes/m1-boot-internal`.
+//! On the EFI/firmware path a naive boot is blind (no serial), so we attach our own
+//! explicit serial: it becomes the PL011 the firmware uses as ConOut, so the firmware +
+//! GRUB + (with `console=ttyAMA0` in the guest cmdline) the kernel are all visible. Verified end-to-end in `spikes/m1-boot` and `spikes/m1-boot-internal`.
 //!
 //! Two wirings (see [`ConsoleSpec`]):
 //! - [`ConsoleSpec::File`]: output to a file we control; input optional (`-1` = none).
 //! - [`ConsoleSpec::Pty`]: a pseudo-terminal for an *interactive* console — the guest
 //!   serial is both readable and writable, and the slave path is printed so a human can
-//!   `screen <path>` into EDK2/GRUB and (with a console attached) a login shell.
+//!   `screen <path>` into the firmware/GRUB and (with a console attached) a login shell.
 
 use std::fs::OpenOptions;
 use std::os::fd::BorrowedFd;

@@ -42,7 +42,7 @@ pub fn info(pid: i32) -> Option<Info> {
         return None;
     }
     let start = with_links(|links| match links.get(&pid) {
-        Some(Link::Up(info)) => Some(Some(*info)),
+        Some(Link::Up(info)) => Some(Some(info.clone())),
         Some(_) => Some(None),
         None => {
             links.insert(pid, Link::Connecting);
@@ -135,7 +135,7 @@ mod tests {
             }
         };
         until(None);
-        runtime_ctl::set_forward(Some(crate::gateway::SshForward::for_tests(2299)));
+        runtime_ctl::set_forward(Some(crate::forward::SshForward::for_tests(2299)));
         until(Some(2299));
 
         retain(&[]);

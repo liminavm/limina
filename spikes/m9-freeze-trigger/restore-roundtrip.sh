@@ -21,7 +21,7 @@ say "cloning..."; cp -c Fedora-Workstation-44.accessible.raw "$DISK" || { say "c
 ### PHASE 1 — save
 say "PHASE1: boot + suspend + snapshot"
 RUST_LOG=limina_vmm=info caffeinate -dimsu "$REPO/target/debug/limina" \
-  --firmware "$REPO/target/krun-efi/KRUN_EFI.gop.fd" \
+  --firmware "$REPO/target/firmware/efi.fd" \
   --disk "$DISK" --cpus 2 --ram-mib 1024 --net --ssh-port "$PORT" --snapshot-file "$SNAP" > "$B1" 2>&1 &
 LP1=$!; say "limina#1 pid=$LP1"
 up=0; for i in $(seq 1 60); do ssh_up && { up=1; say "SSH up ~$((i*4))s"; break; }; sleep 4; done
@@ -43,7 +43,7 @@ say "phase1 exit rc=$RC1 (want 126); snapshot: $(ls -la "$SNAP" 2>/dev/null | aw
 ### PHASE 2 — restore
 say "PHASE2: restore into a fresh worker (--restore, same disk, same port)"
 RUST_LOG=limina_vmm=info,krun_devices=info caffeinate -dimsu "$REPO/target/debug/limina" \
-  --firmware "$REPO/target/krun-efi/KRUN_EFI.gop.fd" \
+  --firmware "$REPO/target/firmware/efi.fd" \
   --disk "$DISK" --cpus 2 --ram-mib 1024 --net --ssh-port "$PORT" --restore "$SNAP" > "$B2" 2>&1 &
 LP2=$!; say "limina#2 pid=$LP2 (restoring)"
 # after restore + wake injection, the guest should resume and SSH should return

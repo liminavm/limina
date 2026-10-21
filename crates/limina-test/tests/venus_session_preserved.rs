@@ -174,7 +174,7 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     let banner = g1
         .wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
     g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .expect("gnome-shell never appeared — the seated enhanced session didn't come up");
@@ -408,13 +408,6 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
                 Ok(f) => eprintln!("display capture: {}x{} frame present", f.width, f.height),
                 Err(e) => eprintln!("display capture: none ({e})"),
             }
-            // The host-side net oracle: did the restored guest transmit ANYTHING?
-            let gvlog =
-                std::fs::read_to_string(g2.scratch_dir().join("gvproxy.log")).unwrap_or_default();
-            eprintln!("--- gvproxy log: {} lines, tail ---", gvlog.lines().count());
-            for line in gvlog.lines().rev().take(6).collect::<Vec<_>>().iter().rev() {
-                eprintln!("{}", &line[..line.len().min(200)]);
-            }
             eprintln!("--- restore supervisor log tail ---");
             let slog = g2.supervisor_log();
             for line in slog.lines().rev().take(20).collect::<Vec<_>>().iter().rev() {
@@ -425,6 +418,10 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
         });
     // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
     if let Err(e) = g2.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
+    if let Err(e) = g2.assert_restore_lost_nothing() {
         cleanup();
         panic!("{e:#}");
     }
@@ -625,6 +622,10 @@ fn run(test: &str, config: fn() -> anyhow::Result<GuestConfig>, premise: fn(&Gue
         });
     // Kernel GPU errors never reach the console (`kernel.printk`); read them from the journal.
     if let Err(e) = g3.assert_no_restore_kernel_errors() {
+        cleanup();
+        panic!("{e:#}");
+    }
+    if let Err(e) = g3.assert_restore_lost_nothing() {
         cleanup();
         panic!("{e:#}");
     }

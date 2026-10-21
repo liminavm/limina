@@ -23,7 +23,7 @@ PROFILE="${1:-debug}"
 . scripts/lib/manifest.sh
 # shellcheck source=scripts/lib/test-artifacts.sh
 . scripts/lib/test-artifacts.sh
-test_artifacts_check "$(pwd)" "$(pin_build_rev edk2)" || exit 1
+test_artifacts_check "$(pwd)" "$(pin_build_rev cardea)" || exit 1
 
 # This script runs `cargo build`/`cargo test` itself rather than going through
 # `cargo xtask build`, so it needs the same two things that command arranges, or the compile
@@ -40,9 +40,10 @@ CARGO_PROFILE_FLAG=()
 [ "$PROFILE" = "release" ] && CARGO_PROFILE_FLAG=(--release)
 
 # The worker starts limina-gpu-host from its own directory when a test turns the native-context
-# transport on (LIMINA_GPU_METAL=1), so it has to be as fresh as the worker beside it.
-echo "==> building limina + limina-vmm + limina-gpu-host ($PROFILE)"
-cargo build ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina -p limina-vmm -p limina-gpu-host
+# transport on (LIMINA_GPU_METAL=1), and limina-netd for a NIC on it, so both have to be as fresh
+# as the worker beside them.
+echo "==> building limina + limina-vmm + limina-gpu-host + limina-netd ($PROFILE)"
+cargo build ${CARGO_PROFILE_FLAG[@]+"${CARGO_PROFILE_FLAG[@]}"} -p limina -p limina-vmm -p limina-gpu-host -p limina-netd
 
 echo "==> codesigning the worker (hypervisor entitlement)"
 crates/limina-vmm/sign.sh "$PROFILE"

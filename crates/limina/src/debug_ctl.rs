@@ -100,6 +100,14 @@ pub static NO_THROTTLE: Lever = Lever::new(
     "harness: keep App Nap off the supervisor while hidden or covered (not Game Mode, not sleep)",
 );
 
+/// Harness access: `net-switch` requests on the runtime socket (`limina net-switch`), which move
+/// a `--net-auto` NIC between vmnet and limina-netd. Off, every one is refused.
+pub static NET_SWITCH: Lever = Lever::new(
+    "net-switch",
+    "LIMINA_NET_SWITCH",
+    "harness: let `limina net-switch` move the NIC between vmnet and limina-netd",
+);
+
 /// Every lever this process has, in the order the menu and `status` list them.
 pub static LEVERS: &[&Lever] = &[
     &EDGE_TRACE,
@@ -114,6 +122,7 @@ pub static LEVERS: &[&Lever] = &[
     &DEBUG_PORT,
     &LIFECYCLE_CONTROL,
     &NO_THROTTLE,
+    &NET_SWITCH,
 ];
 
 /// The levers that grant a harness access rather than print a trace. The menu lists them under
@@ -123,6 +132,7 @@ pub fn is_access(l: &Lever) -> bool {
         || std::ptr::eq(l, &DEBUG_PORT)
         || std::ptr::eq(l, &LIFECYCLE_CONTROL)
         || std::ptr::eq(l, &NO_THROTTLE)
+        || std::ptr::eq(l, &NET_SWITCH)
 }
 
 /// How to turn a lever on, for a refusal to quote: its variable, the Debug menu, the CLI.

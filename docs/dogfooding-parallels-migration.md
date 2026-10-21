@@ -132,7 +132,7 @@ qemu-img convert -f parallels \
   -O raw Fedora-Workstation-44.migrated.raw
 
 # Verify GPT + an EF00 ESP (Apple-Silicon Parallels Linux is UEFI/GPT). "MBR only" ⇒ legacy
-# install that limina's EDK2 EFI path won't boot ⇒ fall back to fresh-install + rsync.
+# install that limina's EFI path (Cardea) won't boot ⇒ fall back to fresh-install + rsync.
 gdisk -l Fedora-Workstation-44.migrated.raw
 
 # Transfer, preserving sparseness.
@@ -145,9 +145,9 @@ rsync -avz --sparse --progress Fedora-Workstation-44.migrated.raw <macB>:~/limin
 
 The bundle is host-side self-contained: libkrun is statically linked in; the patched
 virglrenderer + the KosmicKrisp/zink GL closure are vendored at `@rpath`; the GOP firmware is
-in `Resources/`; and (as of the gvproxy fix) `gvproxy` is vendored at `Contents/MacOS/gvproxy`
-so `--net` works without Homebrew. **Rebuild the app** (`scripts/build-app.sh`) on the dev Mac
-to pick up the bundled gvproxy, then copy `target/Limina.app` to Mac B.
+in `Resources/`; and `limina-netd` ships beside `limina-vmm` in `Contents/MacOS/`, so `--net`
+works without Homebrew. **Rebuild the app** (`scripts/build-app.sh`) on the dev Mac, then copy
+`target/Limina.app` to Mac B.
 
 ```bash
 # Transfer the .app with a tool that does NOT set quarantine (scp/rsync/USB/zip). If it ever
@@ -202,7 +202,7 @@ Once the basic tier is a stable daily driver, the enhanced components (16k kerne
 mesa, patched mutter, limina-agent) layer in. Delivery is an **out-of-band, versioned
 `limina-guest-tools` payload** (the RPM sets + `install-enhanced.sh` + the prebuilt
 `limina-agent` + a manifest) pushed into the guest over **virtiofs `--share`** — which needs
-no network and no gvproxy and works on a stock guest with no agent yet.
+no network and works on a stock guest with no agent yet.
 
 **Build the payload once** in a **separate, disposable F44 guest** — *not* the daily driver, since
 the build leaves multi-GB of RPMs, sources and (debug-symbol) artifacts behind. Get the limina repo

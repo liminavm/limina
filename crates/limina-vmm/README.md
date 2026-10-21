@@ -27,7 +27,7 @@ cargo build -p limina-vmm
 crates/limina-vmm/sign.sh debug      # ad-hoc sign with the hypervisor entitlement
 
 ./target/debug/limina-vmm \
-  --firmware /opt/homebrew/Cellar/krunkit/<ver>/share/krunkit/KRUN_EFI.silent.fd \
+  --firmware target/firmware/efi.fd \
   --disk /path/to/Fedora-Workstation-43.raw \
   --cpus 4 --ram-mib 4096 \
   --console /tmp/console.log         # tail -f to watch the boot

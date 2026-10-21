@@ -2600,21 +2600,6 @@ impl InputState {
                 super::fit::range_gain(fit, sizes[slot], row_w, row_h, f64::from(ABS_MAX))
             }
         };
-        let (range, pressure) = match (self.capture_range.get(), gain) {
-            (Some(r), Some(g)) => {
-                let rs = super::fit::range_step(r, dx, dy, g, f64::from(ABS_MAX), desktop.as_ref());
-                (rs.pos, rs.overflow)
-            }
-            // No running position yet (the session's first step), or no mode sizes to scale
-            // by: place the fit position through the mapping, as the uncaptured path does.
-            _ => {
-                let (x, y) = super::absfit::abs_position(slot, u, v, ABS_MAX as i32)?;
-                (
-                    (f64::from(x), f64::from(y)),
-                    super::arrangement::outer_edges_at(slot, u, v).keep(step.overflow),
-                )
-            }
-        };
         // A seam the hand cannot follow is an edge: hold the range inside this slot's own
         // share where the display on the other side is not one the user is looking at, or is
         // not the same display the host panel beside us shows (`super::seams`). What the hold
@@ -2623,21 +2608,46 @@ impl InputState {
         // the absolute device snapped it back. The push is answered in fit space instead, by
         // the grab's own edge release, whose charge this clamp is what lets accumulate: before
         // it, the guest crossed first and `follow_guest_echo` re-homed the fit out from under
-        // the press (2026-08-24).
-        let hold = super::seams::Hold::of(&self.seam_facts(primary_view), slot, range);
+        // the press (2026-08-24). Which seams are held is asked where the unheld step lands;
+        // the hold then applies inside the step (`fit::held_range_step`).
+        let facts = self.seam_facts(primary_view);
+        let max = f64::from(ABS_MAX);
+        let (range, pressure, hold) = match (self.capture_range.get(), gain) {
+            (Some(r), Some(g)) => {
+                let unheld = super::fit::range_step(r, dx, dy, g, max, desktop.as_ref());
+                let hold = super::seams::Hold::of(&facts, slot, unheld.pos);
+                let rs = super::fit::held_range_step(r, dx, dy, g, max, desktop.as_ref(), &hold);
+                (rs.pos, rs.overflow, hold)
+            }
+            // No running position yet (the session's first step), or no mode sizes to scale
+            // by: place the fit position through the mapping, as the uncaptured path does.
+            _ => {
+                let (x, y) = super::absfit::abs_position(slot, u, v, ABS_MAX as i32)?;
+                let at = (f64::from(x), f64::from(y));
+                let hold = super::seams::Hold::of(&facts, slot, at);
+                (
+                    hold.apply(at),
+                    super::arrangement::outer_edges_at(slot, u, v).keep(step.overflow),
+                    hold,
+                )
+            }
+        };
         self.note_seams(super::seams::Holding::of(slot, &hold));
-        let range = hold.apply(range);
         self.capture_range.set(Some(range));
+        let wire = match desktop.as_ref() {
+            Some(d) => d.wire(range, slot, max),
+            None => (range.0.round() as i32, range.1.round() as i32),
+        };
         let injected = crate::inject::pointer_epoch();
         self.in_frame(InputDev::Ptr, || {
-            self.send_ptr(InputEvent::new(EV_ABS, ABS_X, range.0.round() as i32));
-            self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, range.1.round() as i32));
+            self.send_ptr(InputEvent::new(EV_ABS, ABS_X, wire.0));
+            self.send_ptr(InputEvent::new(EV_ABS, ABS_Y, wire.1));
             self.send_ptr(InputEvent::syn());
         });
         self.record_sent(
             slot,
             (u, v),
-            (range.0 / f64::from(ABS_MAX), range.1 / f64::from(ABS_MAX)),
+            (f64::from(wire.0) / max, f64::from(wire.1) / max),
             true,
             injected,
         );

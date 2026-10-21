@@ -176,6 +176,16 @@ redesigning, research how VNC/RDP servers solve capture (a real cursor-freeze AP
 an upstream RD capture). Overlaps the tap-free capture ladder (`docs/input-and-windows.md` §5b),
 which hinges on the same disassociate-freeze question.
 
+### The captured range does not follow a pointer the guest moves on its own
+While captured, `follow_guest_echo` re-bases the fit estimate (`capture_pos`) onto the guest's
+cursor echo, but the position we send (`capture_range`) keeps its running value. When the guest
+moves its pointer itself — mutter putting a pointer that is on no monitor in the middle of the
+primary, or an app warping it — the two disagree (about 1000 px on the dogfood, 2026-10-19) and
+the next absolute send yanks the guest's pointer back to the stale value. Our own sends no
+longer leave the desktop (`fit::held_range_step`, `Desktop::wire`), which removed the cause seen
+there. A general echo→range re-base has to wait out echo lag the way the fit's `EchoGate` does,
+or it drags the pointer back a step behind every crossing; design that before building it.
+
 ### Per-key aux-key settings, and the Accessibility cliff in the UI
 The aux-key buckets in `crates/limina-input/src/auxkey.rs` (`Media`/`Volume` hard-grab only,
 `Brightness`/`Other` host-only) are meant to become per-key runtime settings: shape the config as
@@ -267,6 +277,28 @@ Each declined feature is guest behaviour inherited by default instead of chosen.
 Owed: the rest of PSCI 1.x (`SYSTEM_RESET2`, `CPU_FREEZE`, `CPU_SUSPEND` idle states, the full
 `PSCI_FEATURES` answer set), SMCCC/`ARCH_FEATURES`, PPTT/topology, and anything else a guest
 probes — decide offer or decline for each and record it.
+
+### Cardea preserves x18 with entry shims instead of never using it
+x18 is the AArch64 platform register: Linux keeps its shadow call stack there and checks that every
+EFI runtime call returns it unchanged (`[Firmware Bug]: register x18 corrupted by EFI …`). Rust on
+`aarch64-unknown-none` allocates x18 like any other register, and so does the precompiled `core`.
+Cardea's runtime services table therefore points at naked entries that save x18 around each
+service (`firmware/src/runtime.rs`, `mod entry`); boot services carry no such guard, which is fine
+while no boot-time caller relies on x18. Reserving the register outright needs the nightly-only
+`-Zfixed-x18` (`-Ctarget-feature=+reserve-x18` is deprecated in its favour) plus a `core` rebuilt
+with it (`-Zbuild-std`, also unstable). Fix shape, once both are stable: build with x18 reserved,
+check the disassembly has no x18 use, and drop the entry shims. The hostile loader's
+`runtime_services_keep_x18` case stays as the witness.
+
+### Show the serial line in the window, and read it from the CLI
+Debugging a guest that does not come up (no agent, no network, sometimes no picture) needs what it
+printed, read by a person and by a tool, without a guest change; the agent cannot stand in, being
+unreachable in exactly those cases. The guest half exists: on the ACPI machine
+`serial_console = "both"` has the firmware add `console=` arguments, giving the serial line the
+kernel's console and a getty while the display keeps its own and the splash; the device-tree
+machine always has both. Owed is the host half: record every managed VM's serial line rather than
+only a `--console` run's, read it programmatically (the debug port or the CLI), and let the window
+switch between the display and a terminal view of the serial line, as QEMU's monitor views do.
 
 ---
 
@@ -881,6 +913,61 @@ virglrs resource create or destroy that blocks, or the worker's own scheduling. 
 `LIMINA_GPU_TRACE` and the worker log at the matching timestamp; the
 `vkWaitRingSeqnoMESA` entry below is one candidate for the queue head.
 
+### vrend's cold shader and pipeline compiles run on the virtio-gpu worker thread
+A vrend context drawing something new freezes the whole virtio-gpu device for as long as the
+compiles take: other contexts' flushes, presents and the cursor queue all wait. Measured 2026-10-20
+on the synoik image with Flathub Loupe 51 (its GL extension has no venus, so GTK's GL renderer runs
+on virgl), with `LIMINA_WAKE_PROBE=1`: startup drains of 589, 999 and 1211 ms, of which 579, 995 and
+1180 ms were fence handling, and single `SUBMIT_3D`s of 189 and 388 ms. Opening a dialog with new
+shaders did the same. A worker `sample` places the fence time in `Vrend::fence_global` →
+`take_fence` → `glFenceSync`. Mesa flushes that without `PIPE_FLUSH_ASYNC` (`syncobj.c`: deferred
+only with a single context), so `tc_flush` syncs the threaded context and runs the queued zink draws
+inline, including `zink_create_gfx_pipeline` compiling on KosmicKrisp, which has no
+graphics-pipeline-library path to defer them. The `SUBMIT_3D` outliers are the front of the same
+chain: TGSI→GLSL translation and program linking in `select_linked_program`. The cost varies from
+boot to boot with what is already compiled. The canvas-ioctl stalls above are probably the same
+class.
+
+Fix shape (decided): move vrend off the virtio-gpu worker thread, so a compile holds only its own
+context's fences and never the queue. Two smaller levers were set aside: an async fence flush in
+the host Mesa fork (vrend's sync thread waits on those fences from another, shared context, which
+is the case Mesa's single-context guard exists for), and persistent host pipeline caches (they
+shorten the first stall per host but leave the structure).
+
+Parked, and the fix may pivot. Shortening levers were tried and withdrawn, none carried: SPIR-V
+programs (`docs/design/vrend-spirv.md`), skipping the host's second varying optimisation, the
+threaded context handing a batch to zink's driver thread at the first draw after a new shader, and
+KosmicKrisp compiling a pipeline's two stages on two threads. Together they took Loupe's About
+dialog from about 185 ms to 156 ms, Mesa-cold and Metal-warm, but the SPIR-V path empties the
+per-VM shader cache. The Mesa halves are in tag `limina-kk-pre-stall-revert-2026-10-20`, the
+virglrs half in `main-pre-stall-revert-2026-10-20`, and the wake probe's per-phase drain split in
+libkrun tag `limina-pre-stall-revert-2026-10-20`.
+
+### Metal's own shader cache is unmanaged and unexplained
+Below Mesa's disk cache, which limina now places and caps per VM (`--gpu-shader-cache`), macOS keeps
+a per-user Metal cache under `$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal/` (here two
+directories, `16777235_530` and `32024`, each holding `functions*.{data,list}`). limina neither
+places, sizes nor clears it, and nothing here says what it keys on. It matters: with Mesa's cache
+empty, Loupe's About dialog on a host whose Metal cache already held the GLSL path's pipelines
+stalled the worker 263–267 ms. The first three boots on the parked SPIR-V path
+(`docs/design/vrend-spirv.md`), which produces different MSL, stalled 3.6 s, 0.56 s and 0.43 s,
+nearly all in fences, before settling at 197–200 ms (measured 2026-10-20). So a host that has never run a
+workload pays a Metal compile that no test here measures, and every "cold" number taken so far is
+cold for Mesa only.
+
+Open questions:
+- What the cache keys on: MSL source, pipeline descriptor, GPU, OS build, or the process's
+  identity (the worker binary, its signature, its bundle id).
+- Its size cap and eviction, and whether a macOS or Xcode update empties it.
+- Whether KosmicKrisp's `VkPipelineCache` maps onto `MTLBinaryArchive`, or could. An archive limina
+  owns could be placed per VM, like the Mesa cache.
+- What an App Store sandbox changes about the cache's location.
+
+Next: read Apple's documentation on `MTLBinaryArchive` and the shader cache, and inspect the cache
+directories while a worker compiles. Measure a truly cold boot by pointing the cache somewhere empty,
+if anything allows that (an environment variable, a different user, or a sandboxed container). Then
+decide whether limina manages it as it does Mesa's, pre-warms it, or only documents it.
+
 ### Texture uploads on virgl create a staging resource thousands of times per run
 The same runs show 7–8k `RESOURCE_CREATE` per 15 s on the canvas thread, about 100 of them over
 1 ms, mostly `virgl_staging_alloc` ← `virgl_resource_transfer_map` ← `st_texture_image_map` on the
@@ -1089,6 +1176,14 @@ module checks `pad` only in the FENCE ioctl. Anything an old host ignores can ne
 meaning later. Fix: reject non-zero values now, while no guest sets any, and version the guest
 interface (`docs/design/metal-transport-delivery.md` §1 notes the gap).
 
+### A guest hands Apple's library loader arbitrary bytes
+`CREATE_LIBRARY_DATA` (`crates/limina-gpu-host/src/exec.rs`, `create_library_data`) passes up to
+`MAX_LIBRARY_DATA` (256 MiB) of guest-written bytes to `newLibraryWithData:`, a parser of Apple's
+whose robustness against malformed input nobody here has measured. The bytes are copied out of the
+arena before parsing, so the guest cannot change them mid-parse, and a load failure fails the reply
+only. A crash in the loader takes the GPU host process, and every context of the VM with it. Next:
+fuzz the loader with mutated metallibs in a throwaway process before anything untrusted runs it.
+
 ### Fence order within a file is only a userspace promise
 All of a file's fences share one dma-fence context (`lf->fence_ctx` in
 `guest/virtio-gpu-limina/virtgpu_limina.c`), and the fence event path signals every lower id on a
@@ -1114,9 +1209,10 @@ which ends every context of the VM. Fix: treat both as recoverable, destroying t
 
 ### Restore's dependence on Metal's allocator is measured on one host
 Restore reproduces Metal resource IDs and GPU addresses by relying on allocator behaviour measured on
-an M1 under macOS 26.6 (first fit, `ARENA_GAP` 0x8000, slot reuse within 100 tries). Each value is
-verified, so a macOS change fails safe by losing the context, but nothing says so before users hit
-it. Next: run the `are_host_values_*` tests on every host OS we ship to, as a gate.
+an M1 under macOS 26.6 (first fit, the 32 KiB granule and 16 KiB guard, slot reuse within 100
+tries). Each value is verified, so a macOS change fails safe, but nothing says so before users hit
+it. Next: run the `are_host_values_*` tests and `footprints_of_small_objects` on every host OS we
+ship to, as a gate.
 
 ### Every context of a VM shares one GPU host process
 Cross-context isolation rests on Metal 4 residency sets, which Apple documents as paging control,
@@ -1131,6 +1227,15 @@ and leak when a bind is refused; moving a `SurfacePort` would close that. `Resul
 the `GpuExtension` trait. `exec.rs` mixes about 41 `unsafe` blocks into its handlers because objc2
 marks the Metal setters unsafe; a thin typed wrapper, like virglrs's `vulkan.rs`, would separate the
 validator from the FFI.
+
+### The command ring has its own copy of `limina-ring`'s handshake
+
+`limina-ring` (`crates/limina-ring`) is the protocol-free core of `limina-gpu-wire`'s command ring:
+the control block's single-writer lines, the park/publish/recheck handshake, the position checks.
+The Metal transport keeps its own copy, because its framing, `completed`/`error` fields and
+`VERSION` are frozen by the generated C header and the guest driver. Moving it onto the core is a
+layout-preserving refactor (the `c_header` test fails on any offset drift), for a quiet moment in
+the transport; until then a fix to either handshake belongs in both.
 
 ## Video
 
@@ -1325,16 +1430,17 @@ building on any of them):
   Fedora both build `SPI_BCM2835`, `SPI_OMAP24XX`, `SPI_IMX`, `SPI_SUN6I`, `SPI_MESON_SPICC` and
   `SPI_TEGRA114`; BCM2835's is the simplest register model. TCG's SPI protocol carries the same
   TIS register accesses, so janus and the TIS register file stay as they are; the new parts are
-  the controller (FIFO, chip select, a fixed clock node) and an interface switch: edk2 cannot
-  speak SPI, so the firmware keeps the MMIO TIS for measured boot and must disable that node
-  before the OS sees the tree, or a kernel with both drivers binds two TPM devices to one TPM.
+  the controller (FIFO, chip select, a fixed clock node) and an interface switch: Cardea speaks
+  only the MMIO TIS (no SPI) and passes the device tree through unmodified, so the firmware
+  would keep the MMIO TIS for measured boot and disabling that node before the OS sees the tree
+  would be new Cardea work, or a kernel with both drivers binds two TPM devices to one TPM.
   The one stock-kernel route found; a few days of work and a second OS-facing interface to test.
 - **I2C: not viable.** Debian has no generic `TCG_TIS_I2C`, only `TCG_TIS_I2C_CR50` (expects
   Google's cr50 vendor ID: an impersonation) and `TCG_TIS_I2C_INFINEON` (believed TPM 1.2 parts
   only), and no `I2C_VIRTIO`, so it also needs an emulated I2C controller.
-- **ACPI with a CRB TPM.** Both kernels build `tpm_crb` in, and edk2's Tpm2DeviceLibDTpm speaks
-  CRB, but arm64 Linux takes ACPI or a device tree, never both: the whole platform would have to
-  be described in ACPI. Out of proportion for this.
+- **ACPI with a CRB TPM.** Both kernels build `tpm_crb` in, but Cardea speaks only the MMIO TIS
+  (no CRB), and arm64 Linux takes ACPI or a device tree, never both: the whole platform would have
+  to be described in ACPI. Out of proportion for this.
 
 Until one lands, a TPM on a Debian guest costs 90 s per boot and gives nothing; leave it off.
 
@@ -1466,6 +1572,24 @@ boots the video corpora and fluster goldens were recorded from — re-verify or 
 `LIMINA_FENCE_LATCH_MS` defaults to 35, tuned for CoreAnimation, which headless would cap near 28 fps —
 pick a delay for the PNG encoder. After the flip: fluster verdicts and replay-corpus scores unchanged,
 and the frame oracle reaching the parked path with no knob set.
+
+### `seated_gpu_workload_survives_restore_unchanged` intermittently loses the extension rings on restore
+`l2_desktop_restore_landmarks.rs` fails with `gpu restore: extension rings: GPU host did not reply`
+(libkrun `virtio/gpu/worker.rs`, the `ext.restore_rings` arm), then `staged snapshot replay failed;
+guest session will restart`. Seen in three full-suite runs on different branches (2026-10-18,
+2026-10-19 and 2026-10-20, identical lines); the test passed alone straight after each time. Open: what the rings wait on
+when the host does not reply, whether the reply deadline is sized for a loaded host or the reply is
+really lost, and a vehicle that reproduces it (loop the test under suite-like load with the VM held
+on failure).
+
+### `the_guest_vblank_falls_on_the_host_grid` has single vblanks far off the grid under load
+`l2_host_vblank.rs` allows 50 µs (1200 ticks) of phase error on each of 30 vblanks; failing runs have
+one outlier while the rest sit at 50–550 ticks: 1732 ticks (2026-10-18) and 3751 ticks (2026-10-19,
+next to a 404013/396739 spacing pair, i.e. one late wake that the next one caught up). Both were
+under a full suite; the test passed alone straight after. Open: whether the outlier is guest
+scheduling (the wake latencies the test prints reach 2.6 ms), the host vsync source, or the push
+path — and then whether the oracle should tolerate a bounded number of late wakes or the late wake
+is a real defect.
 
 ### Watch `l1_real_session_helper_bridges_clipboard_via_mock_mutter` for a second failure
 Seen once (2026-08-04): the mock log reached `CLAIMED_NAME / CREATE_SESSION / START / ENABLE_CLIPBOARD`, but

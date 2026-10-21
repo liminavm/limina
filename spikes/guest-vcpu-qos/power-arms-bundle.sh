@@ -32,7 +32,7 @@ for rep in $(seq 1 "$reps"); do
         export LIMINA_VCPU_LATENCY_QOS="$lat"  # empty = off; unset would get the supervisor default (tier 0)
         export RUST_LOG=warn,limina=info,krun=info
         log="$out/$label.worker.log"
-        "$app/Contents/MacOS/limina" --firmware "$app/Contents/Resources/KRUN_EFI.gop.fd" \
+        "$app/Contents/MacOS/limina" --firmware "$app/Contents/Resources/efi.fd" \
             --disk "$disk" --cpus "${LIMINA_CPUS:-8}" --ram-mib 8192 --net \
             --display-capture "$out/$label.png" >"$log" 2>&1 &
         boot=$!

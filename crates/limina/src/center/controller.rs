@@ -44,7 +44,9 @@ use objc2_foundation::{
 
 use super::{model, model::VmRow, spawn};
 use crate::balloon_policy::ReclaimMode;
+use crate::uplinks::Uplink;
 use crate::vmlib;
+use crate::vmlib::schema::{NetMode, NetworkEntry, VmConfig};
 
 /// Window-content margin, shared by the chrome layout and the fit-to-content math.
 const MARGIN: f64 = 16.0;
@@ -92,6 +94,9 @@ pub struct CenterIvars {
     /// The Configure sheet's resolution popup, present only while the (modal)
     /// sheet runs — the Display popup's action toggles its enabled state.
     cfg_resolution_popup: RefCell<Option<Retained<NSPopUpButton>>>,
+    /// The Configure sheet's SSH port field, present only while the sheet runs — the Network
+    /// popup's action enables it for NAT, the one NIC with a forward.
+    cfg_ssh_field: RefCell<Option<Retained<NSTextField>>>,
     /// The currently shown "?" help popover (kept alive while displayed).
     cfg_help_popover: RefCell<Option<Retained<NSPopover>>>,
     /// The bundle whose Configure sheet is running, so that sheet's modal Reset-TPM button
@@ -233,6 +238,16 @@ define_class!(
             }
         }
 
+        // The Configure sheet's Network popup changed: only NAT has an SSH forward, so the
+        // port field is live exactly then.
+        #[unsafe(method(configureNetworkChanged:))]
+        fn configure_network_changed(&self, sender: &NSPopUpButton) {
+            let nat = sender.selectedItem().is_some_and(|i| i.tag() == NAT_TAG);
+            if let Some(field) = self.ivars().cfg_ssh_field.borrow().as_ref() {
+                field.setEnabled(nat);
+            }
+        }
+
         // The Configure sheet's Display popup changed: the Resolution popup only
         // applies to Fixed Size.
         #[unsafe(method(configureDisplayModeChanged:))]
@@ -337,7 +352,7 @@ define_class!(
             };
             let errors = self.ivars().errors.clone();
             let (pid, name) = (row.pid as u32, row.name.clone());
-            // Asks gvproxy, which is quick, but never on the main thread.
+            // Asks the worker, which is quick, but never on the main thread.
             std::thread::spawn(move || {
                 let req = crate::runtime_ctl::Request::SshPort(port);
                 if let Err(e) = crate::runtime_ctl::request(pid, req) {
@@ -380,6 +395,7 @@ impl CenterController {
             chrome_h: std::cell::Cell::new(0.0),
             window: RefCell::new(None),
             cfg_resolution_popup: RefCell::new(None),
+            cfg_ssh_field: RefCell::new(None),
             cfg_help_popover: RefCell::new(None),
             cfg_tpm_bundle: RefCell::new(None),
             cfg_tpm_reset_armed: std::cell::Cell::new(false),
@@ -709,7 +725,7 @@ impl CenterController {
             let ssh_row = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
             ssh_row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
             ssh_row.setAlignment(NSLayoutAttribute::CenterY);
-            if ssh.starts_with("ssh -p") {
+            if ssh.starts_with("ssh ") {
                 let cmd = unsafe {
                     NSButton::buttonWithTitle_target_action(
                         &NSString::from_str(ssh),
@@ -771,7 +787,7 @@ impl CenterController {
                 index,
             );
             actions.addView_inGravity(&reset, NSStackViewGravity::Leading);
-            if row.ssh.is_some() {
+            if row.forward {
                 let ssh = self.icon_button(
                     mtm,
                     "network",
@@ -1205,45 +1221,45 @@ impl CenterController {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel"));
 
-        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 422.0));
+        let accessory = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 322.0, 482.0));
         let name_field = labeled_field(
             mtm,
             &accessory,
-            392.0,
+            452.0,
             "Name:",
             cfg.identity.name.as_deref().unwrap_or_default(),
         );
         name_field.setPlaceholderString(Some(&NSString::from_str(&row.bundle.dir_name())));
         self.row_help(
             &accessory,
-            392.0,
+            452.0,
             &name_field,
             "Shown in the control center and the VM window. Leave empty to use the VM's name.",
         );
         let cpus_field = labeled_field(
             mtm,
             &accessory,
-            362.0,
+            422.0,
             "vCPUs:",
             &cfg.hardware.cpus.to_string(),
         );
         self.row_help(
             &accessory,
-            362.0,
+            422.0,
             &cpus_field,
             "How many virtual CPUs the guest sees.",
         );
         let cpu_reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            332.0,
+            392.0,
             "CPU reclaim:",
             &CPU_RECLAIM_CHOICES,
             cpu_reclaim_index(cfg.hardware.cpu_reclaim),
         );
         self.row_help(
             &accessory,
-            332.0,
+            392.0,
             &cpu_reclaim_popup,
             "Whether idle virtual CPUs are handed back to the Mac while the guest has \
              nothing to run, and taken up again as soon as it has work. Off keeps every \
@@ -1252,10 +1268,10 @@ impl CenterController {
              the smaller number and stay there for its whole run. Light gives back at most \
              half of them; Moderate goes down to two; Aggressive to one.",
         );
-        let mem_field = labeled_field(mtm, &accessory, 302.0, "Memory:", &mem_now);
+        let mem_field = labeled_field(mtm, &accessory, 362.0, "Memory:", &mem_now);
         self.row_help(
             &accessory,
-            302.0,
+            362.0,
             &mem_field,
             "The maximum guest RAM — \"4G\", \"8GiB\", or a bare MiB count. Idle guest \
              memory is returned to the Mac according to Reclaim.",
@@ -1263,14 +1279,14 @@ impl CenterController {
         let reclaim_popup = labeled_popup(
             mtm,
             &accessory,
-            272.0,
+            332.0,
             "Reclaim:",
             &RECLAIM_CHOICES,
             reclaim_index(cfg.hardware.reclaim),
         );
         self.row_help(
             &accessory,
-            272.0,
+            332.0,
             &reclaim_popup,
             "How hard idle guest memory is returned to the Mac. Moderate keeps some \
              guest disk cache unless the Mac is under memory pressure; Light engages \
@@ -1279,14 +1295,14 @@ impl CenterController {
         let granule_popup = labeled_popup(
             mtm,
             &accessory,
-            242.0,
+            302.0,
             "Memory pages:",
             &GRANULE_CHOICES,
             granule_index(cfg.hardware.ipa_granule),
         );
         self.row_help(
             &accessory,
-            242.0,
+            302.0,
             &granule_popup,
             "How finely the Mac maps this VM's memory. 4 KB suits any guest, including a \
              stock Linux distro whose own pages are 4 KB — such a guest gets no hardware \
@@ -1311,7 +1327,7 @@ impl CenterController {
         // Hypervisor.framework cannot give a guest EL2, where the setting does nothing.
         let nested_supported = crate::nested_virt::host_supports();
         let nested_label = NSTextField::labelWithString(&NSString::from_str("Nested VMs:"), mtm);
-        nested_label.setFrame(rect(0.0, 212.0 + 3.0, 84.0, 18.0));
+        nested_label.setFrame(rect(0.0, 272.0 + 3.0, 84.0, 18.0));
         accessory.addSubview(&nested_label);
         // SAFETY: standard checkbox constructor; no target/action (its state is read on Save).
         let nested_checkbox = unsafe {
@@ -1322,7 +1338,7 @@ impl CenterController {
                 mtm,
             )
         };
-        nested_checkbox.setFrame(rect(88.0, 212.0, 200.0, 24.0));
+        nested_checkbox.setFrame(rect(88.0, 272.0, 200.0, 24.0));
         nested_checkbox.setState(if cfg.hardware.nested_virt && nested_supported {
             NSControlStateValueOn
         } else {
@@ -1337,7 +1353,7 @@ impl CenterController {
         accessory.addSubview(&nested_checkbox);
         self.row_help(
             &accessory,
-            212.0,
+            272.0,
             &nested_checkbox,
             "Lets the guest run virtual machines of its own: KVM, and everything built on it — \
              QEMU, libvirt, Kata containers, Android emulators, Firecracker. Needs a Mac with an \
@@ -1348,10 +1364,39 @@ impl CenterController {
              saved; a change applies from the next full start.",
         );
 
+        // The machine type, locked while suspended: the guest's kernel took ACPI or the device tree
+        // when it booted, and a resume follows the snapshot whatever this says.
+        let machine_popup = labeled_popup(
+            mtm,
+            &accessory,
+            242.0,
+            "Machine:",
+            &MACHINE_CHOICES,
+            machine_index(cfg.hardware.machine),
+        );
+        self.row_help(
+            &accessory,
+            242.0,
+            &machine_popup,
+            "How the VM's hardware is described to the guest. ACPI, the default, is what PCs \
+             and Arm servers use: a stock guest gets its power and sleep buttons, the TPM and \
+             the battery through it. Device tree is the older Arm description: it keeps the \
+             guest's second clock (rtc1) and the experimental CPU frequency device, which the \
+             ACPI machine does not describe yet. A suspended VM resumes on the machine it was \
+             saved on; a change applies from the next full start.",
+        );
+        if row.suspended {
+            machine_popup.setEnabled(false);
+            machine_popup.setToolTip(Some(&NSString::from_str(
+                "Locked while the VM is suspended: resume it and shut it down, or discard \
+                 the suspended session, to change the machine type.",
+            )));
+        }
+
         // Security: the vTPM toggle plus a reset. Built inline rather than with labeled_popup so
         // the one row can carry both the Enabled checkbox and the Reset button.
         let tpm_label = NSTextField::labelWithString(&NSString::from_str("TPM 2.0:"), mtm);
-        tpm_label.setFrame(rect(0.0, 182.0 + 3.0, 84.0, 18.0));
+        tpm_label.setFrame(rect(0.0, 212.0 + 3.0, 84.0, 18.0));
         accessory.addSubview(&tpm_label);
         // SAFETY: standard checkbox constructor; no target/action (its state is read on Save).
         let tpm_checkbox = unsafe {
@@ -1362,7 +1407,7 @@ impl CenterController {
                 mtm,
             )
         };
-        tpm_checkbox.setFrame(rect(88.0, 182.0, 92.0, 24.0));
+        tpm_checkbox.setFrame(rect(88.0, 212.0, 92.0, 24.0));
         tpm_checkbox.setState(if cfg.hardware.tpm {
             NSControlStateValueOn
         } else {
@@ -1378,7 +1423,7 @@ impl CenterController {
                 mtm,
             )
         };
-        tpm_reset.setFrame(rect(184.0, 182.0 - 2.0, 108.0, 26.0));
+        tpm_reset.setFrame(rect(184.0, 212.0 - 2.0, 108.0, 26.0));
         // Reset only means something when there is saved state, and never while suspended (the
         // TPM then lives in the snapshot, and the worker refuses to resume a VM without its TPM).
         let tpm_has_state = row.bundle.tpm_state().exists();
@@ -1397,7 +1442,7 @@ impl CenterController {
         accessory.addSubview(&tpm_reset);
         self.row_help(
             &accessory,
-            182.0,
+            212.0,
             &tpm_checkbox,
             "A virtual TPM 2.0 the guest can seal secrets to — disk-encryption keys bound to \
              boot measurements, keys, certificates. Stock Linux binds it with its built-in \
@@ -1407,12 +1452,51 @@ impl CenterController {
              and cannot be undone.",
         );
 
+        let uplinks = crate::uplinks::bridgeable();
+        let nic_choices = nic_choices(cfg.networks.first(), &uplinks);
+        let nic_titles: Vec<String> = nic_choices.iter().map(NicChoice::title).collect();
+        let nic_title_refs: Vec<&str> = nic_titles.iter().map(String::as_str).collect();
+        let network_popup = labeled_popup(
+            mtm,
+            &accessory,
+            182.0,
+            "Network:",
+            &nic_title_refs,
+            nic_index(cfg.networks.first(), &nic_choices),
+        );
+        for (i, choice) in nic_choices.iter().enumerate() {
+            if let Some(item) = network_popup.itemAtIndex(i as isize) {
+                item.setTag(if *choice == NicChoice::Nat {
+                    NAT_TAG
+                } else {
+                    0
+                });
+            }
+        }
+        // SAFETY: standard target/action wiring; self outlives the modal sheet.
+        unsafe {
+            network_popup.setTarget(Some(self.as_ref()));
+            network_popup.setAction(Some(sel!(configureNetworkChanged:)));
+        }
+        self.row_help(
+            &accessory,
+            182.0,
+            &network_popup,
+            "NAT shares this Mac's connection: the guest is reached through the SSH port \
+             below, and moves to Limina's own NAT on its own when a VPN takes macOS's. Bridged \
+             puts the guest on the network of the interface you pick, with an address from \
+             that network's router, as if it were another machine there; it goes around this \
+             Mac's VPN, and the control center shows its address once it has one. Bridging \
+             over Wi-Fi depends on the access point allowing it.",
+        );
+
         let ssh_field = labeled_field(mtm, &accessory, 152.0, "SSH port:", &ssh_now.to_string());
+        ssh_field.setEnabled(cfg.networks.first().is_none_or(|n| n.mode == NetMode::Nat));
         self.row_help(
             &accessory,
             152.0,
             &ssh_field,
-            "The host port forwarded to the guest's SSH. 0 picks a free port \
+            "The host port forwarded to the guest's SSH, with NAT. 0 picks a free port \
              automatically at each start.",
         );
 
@@ -1566,10 +1650,12 @@ impl CenterController {
         // Published so configureDisplayModeChanged: and configureResetTpmClicked: can act while
         // the sheet runs. The reset button records its intent here and only Save carries it out.
         *self.ivars().cfg_resolution_popup.borrow_mut() = Some(resolution_popup.clone());
+        *self.ivars().cfg_ssh_field.borrow_mut() = Some(ssh_field.clone());
         *self.ivars().cfg_tpm_bundle.borrow_mut() = Some(row.bundle.clone());
         self.ivars().cfg_tpm_reset_armed.set(false);
         let response = alert.runModal();
         *self.ivars().cfg_resolution_popup.borrow_mut() = None;
+        *self.ivars().cfg_ssh_field.borrow_mut() = None;
         *self.ivars().cfg_tpm_bundle.borrow_mut() = None;
         let reset_tpm = self.ivars().cfg_tpm_reset_armed.replace(false);
         if response != NSAlertFirstButtonReturn {
@@ -1602,6 +1688,7 @@ impl CenterController {
             cfg.hardware.cpu_reclaim =
                 cpu_reclaim_from_index(cpu_reclaim_popup.indexOfSelectedItem());
             cfg.hardware.ipa_granule = granule_from_index(granule_popup.indexOfSelectedItem());
+            cfg.hardware.machine = machine_from_index(machine_popup.indexOfSelectedItem());
             cfg.hardware.tpm = tpm_checkbox.state() == NSControlStateValueOn;
             if nested_supported {
                 cfg.hardware.nested_virt = nested_checkbox.state() == NSControlStateValueOn;
@@ -1615,15 +1702,11 @@ impl CenterController {
                 resistance_popup.indexOfSelectedItem(),
                 cfg.display.edge_resistance,
             );
-            if let Some(net) = cfg.networks.first_mut() {
-                net.ssh_port = ssh_port;
-            } else if ssh_port != 0 {
-                cfg.networks.push(vmlib::schema::NetworkEntry {
-                    mode: vmlib::schema::NetMode::Nat,
-                    mac: vmlib::schema::mac_for_uuid(&cfg.identity.uuid),
-                    ssh_port,
-                });
-            }
+            let choice = nic_choices
+                .get(network_popup.indexOfSelectedItem().max(0) as usize)
+                .cloned()
+                .unwrap_or(NicChoice::None);
+            apply_nic(&mut cfg, choice, ssh_port);
             Ok(cfg)
         };
         match apply() {
@@ -1802,6 +1885,23 @@ fn granule_from_index(index: isize) -> vmlib::schema::IpaGranule {
     }
 }
 
+/// Popup titles for the machine type, in [`vmlib::schema::Machine`] order.
+const MACHINE_CHOICES: [&str; 2] = ["ACPI", "Device tree"];
+
+fn machine_index(machine: vmlib::schema::Machine) -> isize {
+    match machine {
+        vmlib::schema::Machine::Acpi => 0,
+        vmlib::schema::Machine::DeviceTree => 1,
+    }
+}
+
+fn machine_from_index(index: isize) -> vmlib::schema::Machine {
+    match index {
+        1 => vmlib::schema::Machine::DeviceTree,
+        _ => vmlib::schema::Machine::Acpi,
+    }
+}
+
 /// Popup titles for the camera-housing policy, in `NotchPolicy` order.
 const NOTCH_CHOICES: [&str; 2] = ["Avoid", "Use Full Screen"];
 
@@ -1845,6 +1945,107 @@ fn hold_from_index(index: isize, current: f64) -> f64 {
         .ok()
         .and_then(|i| vmlib::schema::EdgeHold::ALL.get(i).copied())
         .map_or(current, |p| p.seconds())
+}
+
+/// The tag the Network popup's NAT item carries, so its action can tell it apart.
+const NAT_TAG: isize = 1;
+
+/// One item of the Configure sheet's Network popup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NicChoice {
+    None,
+    Nat,
+    /// Bridged onto this interface, shown with this label.
+    Bridged {
+        ifname: String,
+        label: String,
+    },
+    /// Bridged, with no interface named (a hand-edited vm.toml), which pre-flight refuses.
+    BridgedUnset,
+}
+
+impl NicChoice {
+    fn title(&self) -> String {
+        match self {
+            NicChoice::None => "None".into(),
+            NicChoice::Nat => "NAT".into(),
+            NicChoice::Bridged { label, .. } => format!("Bridged: {label}"),
+            NicChoice::BridgedUnset => "Bridged: no interface chosen".into(),
+        }
+    }
+}
+
+/// The Network popup's items: none, NAT, and bridged onto each interface macOS offers — plus the
+/// one the VM is bridged onto now when macOS does not offer it at the moment (an unplugged
+/// adapter), so opening the sheet never changes the choice by itself.
+fn nic_choices(current: Option<&NetworkEntry>, uplinks: &[Uplink]) -> Vec<NicChoice> {
+    let mut choices = vec![NicChoice::None, NicChoice::Nat];
+    choices.extend(uplinks.iter().map(|u| NicChoice::Bridged {
+        ifname: u.ifname.clone(),
+        label: u.label(),
+    }));
+    match current {
+        Some(NetworkEntry {
+            mode: NetMode::Bridged,
+            uplink: Some(ifname),
+            ..
+        }) if !uplinks.iter().any(|u| u.ifname == *ifname) => {
+            choices.push(NicChoice::Bridged {
+                ifname: ifname.clone(),
+                label: format!("{ifname} (not available now)"),
+            });
+        }
+        Some(NetworkEntry {
+            mode: NetMode::Bridged,
+            uplink: None,
+            ..
+        }) => choices.push(NicChoice::BridgedUnset),
+        _ => {}
+    }
+    choices
+}
+
+/// Which of `choices` the VM's NIC is now.
+fn nic_index(current: Option<&NetworkEntry>, choices: &[NicChoice]) -> isize {
+    let index = |want: &NicChoice| choices.iter().position(|c| c == want);
+    let found = match current {
+        None => index(&NicChoice::None),
+        Some(n) if n.mode == NetMode::Nat => index(&NicChoice::Nat),
+        Some(n) => choices.iter().position(|c| match c {
+            NicChoice::Bridged { ifname, .. } => Some(ifname) == n.uplink.as_ref(),
+            NicChoice::BridgedUnset => n.uplink.is_none(),
+            _ => false,
+        }),
+    };
+    found.unwrap_or(1) as isize
+}
+
+/// Set the VM's NIC to `choice`. The MAC stays the VM's own, so its DHCP leases follow it; a NAT
+/// SSH port is kept while bridged, for when the VM goes back to NAT.
+fn apply_nic(cfg: &mut VmConfig, choice: NicChoice, ssh_port: u16) {
+    let (mode, uplink) = match choice {
+        NicChoice::None => {
+            cfg.networks.clear();
+            return;
+        }
+        NicChoice::Nat => (NetMode::Nat, None),
+        NicChoice::Bridged { ifname, .. } => (NetMode::Bridged, Some(ifname)),
+        NicChoice::BridgedUnset => (NetMode::Bridged, None),
+    };
+    if cfg.networks.is_empty() {
+        cfg.networks.push(NetworkEntry {
+            mode,
+            mac: vmlib::schema::mac_for_uuid(&cfg.identity.uuid),
+            ssh_port: 0,
+            uplink: None,
+        });
+    }
+    let net = &mut cfg.networks[0];
+    net.mode = mode;
+    net.uplink = uplink;
+    if mode == NetMode::Nat {
+        net.ssh_port = ssh_port;
+    }
 }
 
 /// Popup titles for the display mode, in a fixed order the index helpers share.
@@ -1984,6 +2185,87 @@ fn labeled_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wifi() -> Vec<Uplink> {
+        vec![Uplink {
+            ifname: "en0".into(),
+            kind: Some("Wi-Fi".into()),
+        }]
+    }
+
+    fn entry(mode: NetMode, uplink: Option<&str>, ssh_port: u16) -> NetworkEntry {
+        NetworkEntry {
+            mode,
+            mac: "5a:94:ef:00:00:01".into(),
+            ssh_port,
+            uplink: uplink.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_network_popup_offers_none_nat_and_each_uplink() {
+        let titles: Vec<String> = nic_choices(None, &wifi())
+            .iter()
+            .map(NicChoice::title)
+            .collect();
+        assert_eq!(titles, ["None", "NAT", "Bridged: Wi-Fi (en0)"]);
+    }
+
+    #[test]
+    fn the_network_popup_opens_on_the_vms_nic_even_when_its_uplink_is_gone() {
+        let choices = nic_choices(None, &wifi());
+        assert_eq!(nic_index(None, &choices), 0);
+        let nat = entry(NetMode::Nat, None, 0);
+        assert_eq!(nic_index(Some(&nat), &choices), 1);
+        let on_wifi = entry(NetMode::Bridged, Some("en0"), 0);
+        assert_eq!(nic_index(Some(&on_wifi), &choices), 2);
+
+        let on_dock = entry(NetMode::Bridged, Some("en7"), 0);
+        let choices = nic_choices(Some(&on_dock), &wifi());
+        let i = nic_index(Some(&on_dock), &choices);
+        assert_eq!(
+            choices[i as usize].title(),
+            "Bridged: en7 (not available now)"
+        );
+
+        // Saving what the sheet opened on keeps it, even a bridged NIC naming no interface.
+        let unset = entry(NetMode::Bridged, None, 0);
+        let choices = nic_choices(Some(&unset), &wifi());
+        let i = nic_index(Some(&unset), &choices);
+        assert_eq!(choices[i as usize], NicChoice::BridgedUnset);
+    }
+
+    #[test]
+    fn bridging_keeps_the_mac_and_the_nat_port_for_later() {
+        let _guard = crate::vmlib::bundle::tests::env_lock();
+        let lib = crate::vmlib::bundle::tests::scratch_library("nicchoice");
+        let opts = crate::vmlib::bundle::tests::basic_opts("Nic");
+        let mut cfg = crate::vmlib::import::create(&opts, &lib)
+            .unwrap()
+            .load()
+            .unwrap();
+        std::fs::remove_dir_all(&lib).ok();
+        cfg.networks = vec![entry(NetMode::Nat, None, 2299)];
+        let wifi = nic_choices(None, &wifi())[2].clone();
+        apply_nic(&mut cfg, wifi, 0);
+        assert_eq!(cfg.networks[0].mode, NetMode::Bridged);
+        assert_eq!(cfg.networks[0].uplink.as_deref(), Some("en0"));
+        assert_eq!(cfg.networks[0].mac, "5a:94:ef:00:00:01");
+        assert_eq!(cfg.networks[0].ssh_port, 2299);
+
+        apply_nic(&mut cfg, NicChoice::Nat, 2300);
+        assert_eq!(cfg.networks[0].mode, NetMode::Nat);
+        assert_eq!(cfg.networks[0].uplink, None);
+        assert_eq!(cfg.networks[0].ssh_port, 2300);
+
+        apply_nic(&mut cfg, NicChoice::None, 0);
+        assert!(cfg.networks.is_empty());
+        apply_nic(&mut cfg, NicChoice::Nat, 0);
+        assert_eq!(
+            cfg.networks[0].mac,
+            vmlib::schema::mac_for_uuid(&cfg.identity.uuid)
+        );
+    }
 
     #[test]
     fn notch_popup_round_trips_both_policies() {

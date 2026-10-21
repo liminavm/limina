@@ -141,7 +141,7 @@ fn metal_transport_client_survives_snapshot_restore() {
     let mut g1 = Guest::boot(&cfg1).expect("spawning the limina supervisor");
     let banner = g1
         .wait_for_ssh(Duration::from_secs(240))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
     eprintln!("guest SSH up: {banner}");
     g1.ssh_poll("pgrep -x gnome-shell >/dev/null", Duration::from_secs(180))
         .unwrap_or_else(|e| panic!("gnome-shell never appeared: {e}"));
@@ -278,15 +278,7 @@ fn metal_transport_client_survives_snapshot_restore() {
 
     // The restore's own report.
     let log = g2.supervisor_log();
-    let failures: Vec<&str> = log
-        .lines()
-        .filter(|l| {
-            l.contains("replay dropped")
-                || l.contains("replay FAILED")
-                || l.contains("staged snapshot replay failed")
-                || l.contains("unparseable extension section")
-        })
-        .collect();
+    let failures = limina_test::restore_losses(&log);
     let complete = log.contains("gpu restore: replay complete");
     let back = log
         .lines()

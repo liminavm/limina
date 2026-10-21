@@ -66,7 +66,7 @@ guest with `rpm -q`. Last verified by `uname -r`, `grubby --default-kernel` and 
 |---|---|---|---|---|---|
 | **F44 stock** (`vanilla`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.0.3-4.fc44` | `50.0-1.fc44` | `50.0` |
 | **F44 stock + freeworld VA** (`accessible`, `stock.test`) | `6.19.10-300.fc44` | 4 KiB | `26.1.8-1.fc44` + `mesa-va-drivers-freeworld-26.1.8-1.fc44` | `50.0-1.fc44` | `50.0` |
-| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; virtio-gpu is limina's DKMS module) | 16 KiB | `26.2.3-6.limina.fc44`, plus the vendor drivers under `/opt/limina/4` (KosmicKrisp `0144c30fc8c`, module `7889c378f3d2`) | `50.1-1.limina.fc44` | `50.0` (stock) |
+| **F44 enhanced** (`enhanced`, `enhanced.test`, `enhanced.synoik`, `enhanced.kde`) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; virtio-gpu is limina's DKMS module) | 16 KiB | `26.2.3-6.limina.fc44`, plus the vendor drivers under `/opt/limina/5` (KosmicKrisp `340ed84bf1b`, module `52f5b04e865d`) | `50.1-1.limina.fc44` | `50.0` (stock) |
 | **F44 dogfood deployment** (the user's dev VM) | `limina-kernel-16k-7.1.13-2` (+ `-devel`; default `7.1.13-limina16k.2`, `7.1.13-1` and `7.1.9-1` kept as fallbacks; virtio-gpu is limina's DKMS module `7889c378f3d2`) | 16 KiB | **stock** `26.2.4-1.fc44`, plus the vendor drivers under `/opt/limina/4` (KosmicKrisp `0144c30fc8c`) | n/a: synoik | n/a: synoik |
 
 Two facts the table cannot show:
@@ -316,8 +316,8 @@ extension) and virglrenderer ≥ `0cc513fd` (verbatim modifier passthrough), i.e
 fabricated table to fall back on, the WSI takes the untested prime-blit path. Update the app before
 (or with) the guest mesa.
 
-A payload moves over gvproxy at ~90 MB/s — 440 MB lands in under 5 s. Copying it into a guest is
-never the slow part of a delivery.
+Copying a payload into a guest is never the slow part of a delivery: 440 MB took under 5 s over
+the slowest NAT limina has had.
 
 ### Clipboard, as shipped
 
@@ -399,6 +399,11 @@ evidence about our present path.
   kernels and two mesa versions this way. The installer's multi-kernel guard would have refused it
   loudly, but nothing stopped it from being *built*. Both scripts now collect by exact NEVR and
   clean `$OUT`.
+- **GRUB prints `bli.c:set_loader_device_part_uuid:123:unable to determine partition UUID of boot
+  device` on every Fedora boot, on any firmware.** Fedora's aarch64 images carry an MBR (DOS)
+  partition table, and GRUB's `bli` module, which publishes `LoaderDevicePartUUID` for systemd,
+  reads only GPT entries: it fails with "not a GPT partition table" and reports it under the
+  generic message. Harmless; the cost is that systemd's GPT auto-discovery has no boot partition.
 - **The accessible-derived images ship `org.gnome.shell disable-user-extensions=true`** (origin
   unknown, not our provisioning). On such guests any extension-based tier is blocked. Consider
   clearing it in `make-accessible.sh` at the next respin.
@@ -615,7 +620,7 @@ cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw
 | `Fedora-Workstation-44.enhanced.raw` | **Enhanced base** — `accessible` + `scripts/provision/f44/` builds (16k kernel `6.19.10-limina16k`, venus mesa `26.1.3-1.limina`, patched mutter `50.1-1.limina` w/ **all 3 patches** incl 0003 clipboard *(historical — mutter left the delivery 2026-07-11 and is stock going forward; see the note above)*, + `limina-agent`) → `install-enhanced.sh`. **✅ FINALIZED 2026-06-29**: seated GNOME, WebGL 5000-fish ~60fps on venus→KK→Metal (5-signal+pixel verified); mutter 0003 rebased to 50.1 (`ext_data_control_manager` live in `libmutter-18`); limina-agent (native gnu) active+connected; relabel-clean; build cruft removed. Kernel kept Fedora-config **with debug symbols** (no strip — ~7 GiB modules, slower boot, by choice). Now also carries the **L2 test tooling** (glmark2 + apitrace/`eglretrace` GL replay + `/opt/gfxreconstruct/bin/gfxrecon-replay` VK replay) — folded into `make-accessible.sh` going forward; the enhanced *delivery* (`install-enhanced.sh`) does **not** ship these, so a migrated daily-driver guest stays clean. **Respun 2026-07-04 to kernel `7.1.2-limina16k` + mesa `26.1.3-3` (dogfood parity — see the respin note above); versions in this row are the 2026-06-29 baseline.** **REBUILT FRESH 2026-07-05** from `accessible` per the procedure above (the prior `enhanced.raw`/`.test.raw` had accumulated bad state — the 16k kernel failed its `/boot/efi` mount and dropped to the rescue BLS entry; a clean clone+install booted `7.1.2-limina16k` with `/boot/efi` mounted, venus seated on the new KK). | ✅ finalized 2026-06-29; respun 2026-07-04; rebuilt 2026-07-05 |
 | `Fedora-Workstation-44.enhanced.test.raw` | **Enhanced-tier L2 image** — frozen CoW snapshot of `enhanced` (`seated_efi_fedora_from_env` for `LIMINA_FEDORA_REL=44`). Refresh: `cp -c Fedora-Workstation-44.enhanced.raw Fedora-Workstation-44.enhanced.test.raw`. **Recloned 2026-07-05 from the fresh rebuild** (see the `enhanced.raw` note). | ✅ **L2 GREEN 7/7 2026-06-29** (venus×3 + replay×3 + reset; replay tooling baked in); recloned 2026-07-05 |
 | `Fedora-Workstation-44.tpm.test.raw` | **vTPM L2 image** — CoW clone of `stock.test` with the TPM consumers installed (tpm2-pkcs11 + tools, clevis, tpm2-openssl, opensc, openssl, ssh-tpm-agent v0.9.0 checksum-pinned), nothing else: no `tss` membership and no TPM state (`tpm_fedora_from_env`, `LIMINA_TEST_DISK_TPM`). Make it with `scripts/provision/make-tpm-test-image.sh`; refresh by deleting it and running that again after `stock.test` changes. | ✅ built 2026-10-07 |
-| `Fedora-Workstation-44.metal.test.raw` | **Native-context transport L2 image** — `stock.test` (stock kernel `6.19.10-300.fc44`, 4 KiB) + limina's vendor GPU drivers as a guest gets them, from `scripts/provision/deliver-metal-transport.sh` (the payload's own installer): the drivers under `/opt/limina/<wire>/`, found through `/etc/glvnd/egl_vendor.d/10_limina-<wire>.json`, `/etc/vulkan/icd.d/limina-<wire>.json` and libgbm's `virtio_gpu_gbm.so`, and the extended virtio-gpu module through DKMS (`/lib/modules/<krel>/extra/`, initramfs rebuilt). Nothing in the environment selects them: booted with the transport, gnome-shell and GL clients run on it and Vulkan clients see KosmicKrisp alone (an implicit layer hides venus's devices); booted without it, the same guest is stock. A client whose `VK_DRIVER_FILES` leaves ours out gets the system's drivers either way. Also carries the perf battery's tooling (`make-accessible.sh`'s glmark2, apitrace and `/opt/gfxreconstruct`, built with `-DGFXRECON_ENABLE_OPENXR=OFF` since gfxreconstruct's OpenXR wants X11 headers the recipe lacks, plus `vkmark`), so both GPU transports are measured on one 4 KiB guest. The worker offers the extension with `--gpu-metal` (a managed VM's `display.metal_transport`) or `LIMINA_GPU_METAL=1`. Refresh the drivers: `scripts/build-gpu-drivers.sh`, `scripts/package-gpu-drivers.sh`, then the delivery, which upgrades in place. | ✅ vendor drivers delivered 2026-10-16 to `metal.test` and the four F44 enhanced images (`enhanced`, `.test`, `.synoik`, `.kde`): payload `115c7f76052a…`, drivers `/opt/limina/4` from `[kosmickrisp-guest]` `41353793c95` (hinted loops unrolled within a budget, IQ lookup grids kept in constant data instead of per-thread scratch, shift counts masked as NIR defines them, Metal's workgroup counts in y and z, descriptor updates that span bindings, a quiet stderr), module `limina-virtio-gpu/310dc8709ecb` (a label from the packaging tree; source identical to `a32b53c4`: series 6.19, 7.1 and 7.2, the timing-page vblank, and on 6.19 the backport of upstream `d1b894c5bbb3` that takes the hotplug off the control queue's dequeue worker). Backups of the previous state: `.bak-pre-unroll.raw` |
+| `Fedora-Workstation-44.metal.test.raw` | **Native-context transport L2 image** — `stock.test` (stock kernel `6.19.10-300.fc44`, 4 KiB) + limina's vendor GPU drivers as a guest gets them, from `scripts/provision/deliver-metal-transport.sh` (the payload's own installer): the drivers under `/opt/limina/<wire>/`, found through `/etc/glvnd/egl_vendor.d/10_limina-<wire>.json`, `/etc/vulkan/icd.d/limina-<wire>.json` and libgbm's `virtio_gpu_gbm.so`, and the extended virtio-gpu module through DKMS (`/lib/modules/<krel>/extra/`, initramfs rebuilt). Nothing in the environment selects them: booted with the transport, gnome-shell and GL clients run on it and Vulkan clients see KosmicKrisp alone (an implicit layer hides venus's devices); booted without it, the same guest is stock. A client whose `VK_DRIVER_FILES` leaves ours out gets the system's drivers either way. Also carries the perf battery's tooling (`make-accessible.sh`'s glmark2, apitrace and `/opt/gfxreconstruct`, built with `-DGFXRECON_ENABLE_OPENXR=OFF` since gfxreconstruct's OpenXR wants X11 headers the recipe lacks, plus `vkmark`), so both GPU transports are measured on one 4 KiB guest. The worker offers the extension with `--gpu-metal` (a managed VM's `display.metal_transport`) or `LIMINA_GPU_METAL=1`. Refresh the drivers: `scripts/build-gpu-drivers.sh`, `scripts/package-gpu-drivers.sh`, then the delivery, which upgrades in place. | ✅ vendor drivers delivered 2026-10-17 to `metal.test` and the four F44 enhanced images (`enhanced`, `.test`, `.synoik`, `.kde`): payload `db831301b2f1…`, drivers `/opt/limina/5` (wire VERSION 5: a host queue per command queue) from `[kosmickrisp-guest]` `340ed84bf1b`, module `limina-virtio-gpu/52f5b04e865d` (series 6.19, 7.1 and 7.2; fences on a queue's completed value, a virtio ring per queue; the timing-page vblank; on 6.19 the backport of upstream `d1b894c5bbb3`). These drivers decline a VERSION 4 host, where the guest runs stock. Verified on a clone of `metal.test`: gnome-shell maps `/opt/limina/5`, Vulkan lists KosmicKrisp, glmark2-es2 runs on zink over it. Backups of the previous state: `.bak-pre-metal.raw` |
 | `Fedora-Workstation-44.enhanced.kde.raw` | **KDE Plasma image** — `enhanced.test` + Plasma 6.7 from the F44 repos, autologin into Plasma, KWin on GL compositing (needs the query fix, see its section). See its section above. | ✅ built 2026-10-03; idle-inhibit paths verified |
 
 **All five F44 images above plus `enhanced.synoik` boot with a zero GRUB menu timeout**
@@ -698,13 +703,12 @@ recording of a guest session is not reproducible.
 
 Every **Linux** build runs in one container image — `scripts/build-image/Containerfile`, built on first
 use by `scripts/build-image.sh` (rebuild with `FORCE=1`). It bakes the union of all build deps
-(rpmbuild, kernel toolchain, meson/ninja + `builddep mesa`/`builddep mutter`, edk2 + nasm/acpica + a
-`-std=gnu17` ccwrap for edk2's K&R BaseTools, gfxreconstruct's cmake/xcb/X11/wayland set), so the
+(rpmbuild, kernel toolchain, meson/ninja + `builddep mesa`/`builddep mutter`, gfxreconstruct's cmake/xcb/X11/wayland set), so the
 per-script `dnf install` is gone and builds start instantly. The Fedora release is the `FEDORA_REL`
 build arg, **44 by default** — it is the enhanced tier's target, so the RPMs link the sonames of the
 release they install onto. Moving the whole toolchain is `FEDORA_REL=45 FORCE=1 scripts/build-image.sh`;
 the tag is spelled once, in `build-image.sh`, and consumers source it for `$LIMINA_BUILD_IMAGE`.
-Consumers: `build-krun-efi`, `build-enhanced-rpms` (which runs `provision/f44/*` — the same scripts a
+Consumers: `build-enhanced-rpms` (which runs `provision/f44/*` — the same scripts a
 booted guest runs), `build-test-kernel`, `build-testcomp`, `build-gfxreconstruct`. The separate F43
 pair (`build-kernel-rpm.sh`, `build-mesa-rpm.sh`) is **gone**: it existed only because this image was
 pinned to Fedora 43 and their `FEDORA_REL` knob merely picked a tag. Each still mounts its own persistent source/cache `container volume` (the image
@@ -719,7 +723,7 @@ Boot the baseline (bare `limina` — the default coexist device advertises venus
 comes up in software regardless; pass `--gpu-software-2d` to force the clean software path with no
 venus probing):
 ```bash
-target/debug/limina --window --firmware target/krun-efi/KRUN_EFI.gop.fd \
+target/debug/limina --window --firmware target/firmware/efi.fd \
   --disk Fedora-Workstation-44.accessible.raw --cpus 4 --ram-mib 6144 --net
 ```
 
@@ -744,20 +748,22 @@ procedure above). The `limina-build` container image below is unrelated and stil
 
 ## SSH access
 
-Boot with `--net` (a supervised gvproxy user-mode NAT, no root) and SSH into the guest. The
-supervisor logs the **exact command** at startup — read the port from it, don't assume 2222:
+Boot with `--net` (vmnet shared with a user-mode NAT to fall back on, no root) and SSH into the
+guest. The supervisor logs the **exact command** at startup — read the port from it, don't assume
+2222:
 
 ```
 guest SSH forward ready: ssh -p N <user>@127.0.0.1
 ```
 
-gvproxy forwards `127.0.0.1:<PORT> → guest:22` (the well-known MAC gives the guest the static `.2`
-lease — see `docs/research/07-networking.md`). The host `<PORT>` **auto-allocates from 2222 upward**
+The worker forwards `127.0.0.1:<PORT> → guest:22` through limina-netd, whichever side the NIC is on
+(`docs/design/multi-vm-networking.md` §3.5). The host `<PORT>` **auto-allocates from 2222 upward**
 (the first free loopback port), so it's 2222 for a lone VM but 2223+ when 2222 is already taken. Pin
-it with `--ssh-port <1024-65535>` (requires `--net`; errors if the port is busy). Run **two or more
-VMs at once** by leaving `--ssh-port` off on each (each grabs the next free port — read each VM's own
-startup log) or by pinning distinct ports. `--net-log <file>` captures gvproxy's `-debug` packet log
-(the host-side network oracle: DHCP/DNS/NAT).
+it with `--ssh-port <1024-65535>` (requires `--net` or `--net-netd`; errors if the port is busy). Run
+**two or more VMs at once** by leaving `--ssh-port` off on each (each grabs the next free port — read
+each VM's own startup log) or by pinning distinct ports. The worker log is the host-side network
+oracle: `network: …` lines say which side the NIC is on and why, and with
+`RUST_LOG=warn,limina_netd=info` netd logs its leases and DNS answers.
 
 Wait for the SSH banner (~10–15s post-boot), then (substitute the logged port for `<PORT>`):
 ```bash
@@ -780,7 +786,7 @@ credentials, and its `ssh.authorized_keys.root` credential becomes `/root/.ssh/a
 at boot. So a host key can be handed to root without touching the image:
 
 ```bash
-limina --firmware target/krun-efi/KRUN_EFI.gop.fd --disk <clone.raw> --net \
+limina --firmware target/firmware/efi.fd --disk <clone.raw> --net \
   --smbios-oem-string "io.systemd.credential:ssh.authorized_keys.root=$(cat ~/.ssh/id_ed25519.pub)"
 ssh -p <PORT> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@127.0.0.1
 ```

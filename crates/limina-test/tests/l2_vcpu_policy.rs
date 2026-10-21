@@ -111,7 +111,7 @@ fn an_idle_guest_sheds_vcpus_and_a_busy_one_gets_them_back() {
     let mut guest = Guest::boot(&cfg).expect("spawning the limina supervisor");
     guest
         .wait_for_ssh(Duration::from_secs(180))
-        .expect("guest sshd never became reachable through gvproxy");
+        .expect("guest sshd never became reachable through the forward");
 
     // Which tier is actually under test? A failure below reads completely differently depending
     // on the answer, so establish it before asserting anything.
