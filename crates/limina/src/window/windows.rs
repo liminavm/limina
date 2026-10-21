@@ -33,8 +33,9 @@ use objc2_app_kit::{
     NSBackingStoreType, NSScreen, NSTrackingArea, NSTrackingAreaOptions, NSWindow,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
+use objc2_core_foundation::CFRetained;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-use objc2_io_surface::IOSurfaceLookup;
+use objc2_io_surface::{IOSurfaceLookup, IOSurfaceRef};
 
 use super::present::{AckMsg, MAX_SCANOUTS, Shared, SurfaceMap};
 use crate::vmlib::schema::DisplayResolution;
@@ -282,12 +283,32 @@ pub(crate) struct PrimaryDisplay {
     /// because it still reads like a current frame.
     capture_interval: std::time::Duration,
     last_capture: Cell<Option<std::time::Instant>>,
+    /// The newest frame presented too soon after the last dump, written once the interval has
+    /// passed ([`GuestWindows::capture_trailing`]): a burst that ends in stillness (a firmware
+    /// clearing its screen and printing one line) must not leave the file on its first frame.
+    capture_pending: RefCell<Option<(CFRetained<IOSurfaceRef>, u32)>>,
     /// Diagnostic: ids to ALSO dump by global lookup each tick (`LIMINA_CAPTURE_IDS` — see
     /// `diag::capture_ids_from_env` for the format and why).
     capture_ids: Vec<u32>,
 }
 
 impl PrimaryDisplay {
+    /// Write the pending capture frame if the interval since the last dump has passed.
+    fn capture_due(&self) {
+        let Some(path) = &self.capture_path else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        let due = self
+            .last_capture
+            .get()
+            .is_none_or(|t| now.duration_since(t) >= self.capture_interval);
+        if due && let Some((surface, id)) = self.capture_pending.take() {
+            self.last_capture.set(Some(now));
+            super::diag::capture_iosurface_async(&surface, id, path);
+        }
+    }
+
     pub(crate) fn new(
         core: Rc<super::guestwindow::GuestWindow>,
         slot: Rc<Cell<u32>>,
@@ -321,6 +342,7 @@ impl PrimaryDisplay {
             capture_path: std::env::var("LIMINA_WINDOW_CAPTURE").ok(),
             capture_interval: super::diag::capture_interval_from_env(),
             last_capture: Cell::new(None),
+            capture_pending: RefCell::new(None),
             capture_ids: super::diag::capture_ids_from_env(),
         }
     }
@@ -677,16 +699,9 @@ impl PrimaryDisplay {
         // Diagnostic capture of the presented scanout. Periodic (overwrite) so a
         // long-running headless check ends with a recent frame, not just early boot.
         self.applies.set(self.applies.get() + 1);
-        if let Some(path) = &self.capture_path {
-            let now = std::time::Instant::now();
-            let due = self
-                .last_capture
-                .get()
-                .is_none_or(|t| now.duration_since(t) >= self.capture_interval);
-            if due {
-                self.last_capture.set(Some(now));
-                super::diag::capture_iosurface_async(surface, id, path);
-            }
+        if self.capture_path.is_some() {
+            self.capture_pending.replace(Some((surface.clone(), id)));
+            self.capture_due();
         }
         // Targeted per-id sweep — look each requested global id up fresh (no cache) and
         // dump it, so we can read the venus blob surface directly even when it isn't the
@@ -804,6 +819,11 @@ impl GuestWindows {
             out.extend(w.core.poll_vsync(slot, now));
         }
         out
+    }
+
+    /// Write the newest frame the capture skipped, once its interval has passed.
+    pub(crate) fn capture_trailing(&self) {
+        self.primary.capture_due();
     }
 
     /// A fresh worker has the device: every window states its grid again.

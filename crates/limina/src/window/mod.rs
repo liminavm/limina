@@ -3443,6 +3443,7 @@ pub fn run(
                 send_display_commands(sock, vsyncs);
             }
         }
+        timer_windows.borrow().capture_trailing();
         host_sampler
             .borrow_mut()
             .tick(&window, timer_primary_slot.get() as usize, &timer_app);
