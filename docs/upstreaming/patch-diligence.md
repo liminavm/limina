@@ -185,7 +185,9 @@ written as a rule; a rule that applies to every patch also becomes a lens.
 - Re-check `main` right before sending: fetch, rerun the reproducer if the touched files
   moved, and search the tracker again. Verdicts on active code go stale in weeks.
 - Re-check the security class (`ledger/README.md`, phase 3). A guest-triggerable host
-  memory-safety bug goes through disclosure, never straight to a public MR.
+  memory-safety bug goes through disclosure, never straight to a public MR. KosmicKrisp is the
+  exception: its fixes are already public and only limina puts it behind a guest
+  (`ledger/README.md`, phase 3).
 - Name the people to ask for review: the author of the regressing commit and the recent
   authors of the touched code (`git log --format=%an -- <files>`), and Mesa's
   root `CODEOWNERS` where it covers the path.

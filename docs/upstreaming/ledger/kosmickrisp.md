@@ -9,6 +9,11 @@ Schema + protocol: `README.md`. The `checked` column of rows 0001–0019 records
 94 commits have only a skeleton row (*Unaudited commits* at the end).
 Rows are keyed by SUBJECT; ordinals are informational and drift on re-export.
 
+**Disclosure: not gated** (user decision, 2026-10-21; `README.md`, phase 3). The `sec: yes`
+rows, the guest-input hardening group under *Unaudited commits* among them, can go to public MRs
+like any other row. Their fixes have been public on `liminavm/mesa` for a while, and only
+limina runs KosmicKrisp on a guest's behalf. `sec` still records the bug class.
+
 > **Fork model since 2026-08-04.** There is no `patches/kosmickrisp/` any more — our delta is the
 > commits on the `limina-kk` branch of `github.com/liminavm/mesa`, pinned by
 > `third_party/manifest.toml`. Read a "patch" here as "the commit with this subject". Unlike the

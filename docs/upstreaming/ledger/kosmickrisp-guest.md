@@ -14,6 +14,9 @@ case-sensitive filesystem): the working tree is `/Volumes/mesa-cs/mesa-metal-gue
 `scripts/provision/deliver-metal-transport.sh`. There is no committed export; builds read the
 tree.
 
+Disclosure is not gated for KosmicKrisp (user decision, 2026-10-21; `README.md`, phase 3); a
+`sec` note here records the bug class only.
+
 No row has been researched against upstream yet; the dispositions are first guesses from the
 commit messages and a read of the diffs (2026-10-16). One spot check: upstream `main`
 `d44453ce07b` (2026-10-14) still prints MSL floats with `"%.*le"`

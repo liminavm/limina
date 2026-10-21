@@ -67,9 +67,16 @@ without a word. None of that was visible from the ledger itself.
   becomes an action item; the audit records gaps, it does not post.
 - **Phase 3 — judgment**: security classification (disclosure logic from
   `limina-upstreaming-triage`: guest-triggerable host memory-safety →
-  `blocked-on-disclosure`, never straight to a public MR); the fold plan (executed as
+  `blocked-on-disclosure`, never straight to a public MR; KosmicKrisp is exempt, see below);
+  the fold plan (executed as
   ONE re-export per series at the end, recording a subject→subject mapping); the
   enhanced-tier rubric.
+
+**KosmicKrisp is not disclosure-gated** (user decision, 2026-10-21). Its fixes have been public on
+`liminavm/mesa` for a while, and no VMM outside limina runs KosmicKrisp on a guest's behalf, so
+the guest-to-host trust boundary those rows describe exists only in limina. A KosmicKrisp row
+keeps its `sec` class, because the class still says what the bug is, and its `mr` column never
+reads `blocked-on-disclosure`. The rule still holds for every other series.
 
 ## Enhanced-tier rubric (question 6)
 
