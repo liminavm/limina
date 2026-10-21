@@ -28,14 +28,16 @@ pub const REPORT_LEN: usize = 8;
 const ROLLOVER: usize = 6;
 
 /// Keys limina's virtual keyboard advertises that have **no** usage on HID page 0x07, and so
-/// cannot type through the USB gadget. They are the media transport keys, which live on the
-/// consumer page (0x0C) and would need a second HID collection to express — deferred, because
-/// nothing in the window this gadget serves (a passphrase, an emergency shell) needs them.
+/// cannot type through the USB gadget. They are the media transport keys and `KEY_INFO`, which
+/// live on the consumer page (0x0C) and would need a second HID collection to express —
+/// deferred, because nothing in the window this gadget serves (a passphrase, an emergency
+/// shell) needs them.
 ///
 /// A key added to `SUPPORTED_KEYBOARD_KEYS` must either gain a usage below or be listed here,
 /// so the choice is made deliberately rather than discovered from a key that silently does
 /// nothing at a LUKS prompt.
-pub const KEYS_WITHOUT_HID_USAGE: &[u16] = &[KEY_NEXTSONG, KEY_PLAYPAUSE, KEY_PREVIOUSSONG];
+pub const KEYS_WITHOUT_HID_USAGE: &[u16] =
+    &[KEY_NEXTSONG, KEY_PLAYPAUSE, KEY_PREVIOUSSONG, KEY_INFO];
 
 /// The modifier bit for a modifier key, matching HID usages 0xE0..=0xE7 in order:
 /// left ctrl/shift/alt/meta then right ctrl/shift/alt/meta.
