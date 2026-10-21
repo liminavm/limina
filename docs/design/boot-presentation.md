@@ -87,6 +87,33 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
 5. **No guest → host signal is needed.** The BGRT and held frames carry the picture; PSCI already
    distinguishes reset from off.
 
+## Seeing the boot
+
+Quiet boot moves text off the glass; it does not throw it away. Two views show it, one per side,
+behind one shortcut.
+
+- **Host console (limina).** The worker always keeps the PL011 stream: a bounded ring, plus a log
+  per boot in the VM's directory, so a VM that did not boot leaves its evidence behind. A Console
+  view (a terminal emulator with input) opens from the menu, and `limina console <vm>` attaches
+  from Terminal. It sees what only the host can: firmware, loader, a guest whose display never
+  comes up, panics, the end of shutdown, and the kernel and systemd text whenever the guest's
+  console is on `ttyAMA0` (synoik images; `serial_console = both`). With input it is also the
+  recovery UI: synoik guests put their emergency and rescue shells on the serial console, since
+  their card has no fbcon. The window offers "Show console" when the firmware or loader phase
+  stalls (Cardea's no-boot path, or no guest frame after N s); a guest wedged after its own first
+  frame is not judged by a timer, only by the menu item.
+- **Guest details view (synoik).** What the OS prints after the splash starts: the kernel log from
+  `/dev/kmsg` (under `quiet` kernel text reaches nowhere else) and `/dev/console` writes, as
+  plymouth two-step's details view reads them; after the handover the unprivileged system
+  compositor reads kmsg and the journal instead. Not built: synoik-splash has no details mode yet.
+  Stock images get plymouth's own (Esc).
+- **The "boot details" shortcut (host).** Before the guest's first own frame, it opens the host
+  Console. After it, the host injects a dedicated details key on its virtual keyboard, which
+  synoik-splash and the synoik compositor swallow in every state and turn into the details view.
+  The host never injects Esc: it cannot tell a splash from a session, and an Esc closes a user's
+  dialog. Stock plymouth images do not know the key, so there the shortcut is the host Console
+  only.
+
 ## Open
 
 - **The firmware → kernel window.** The guest kernel scans out a zeroed buffer before any splash
@@ -102,7 +129,10 @@ position every PC with a BGRT uses, and everyone agrees without re-centring.
   The same reboot measured the firmware gaps this design closes: two all-black Cardea frames
   (~70 ms) before the logo, the logo on glass for ~17 ms, then GRUB's clear and its "Booting …"
   line for ~1.2 s. The shutdown side was clean: the compositor's last frame stayed until the
-  firmware's first flush.
+  firmware's first flush. A power-off on the same image ended on the splash, still for ~216 ms
+  until the worker exited, and then the window vanished.
+- **Which key is the details key** (`KEY_INFO`, or a limina vendor key), and whether the synoik
+  compositor opens the same log over a greeter or session or ignores the key there.
 - **Retina.** The firmware runs at the window's physical pixels and draws the logo 1:1, and the
   splashes draw at scale 1, so they match but the logo is small on a Retina host. Agreed form:
   the BGRT image is what is on glass. The firmware draws a 2x logo at backing scale 2 and
