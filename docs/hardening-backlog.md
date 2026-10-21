@@ -1576,8 +1576,8 @@ and the frame oracle reaching the parked path with no knob set.
 ### `seated_gpu_workload_survives_restore_unchanged` intermittently loses the extension rings on restore
 `l2_desktop_restore_landmarks.rs` fails with `gpu restore: extension rings: GPU host did not reply`
 (libkrun `virtio/gpu/worker.rs`, the `ext.restore_rings` arm), then `staged snapshot replay failed;
-guest session will restart`. Seen in two full-suite runs on different branches (2026-10-18 and
-2026-10-19, identical lines); the test passed alone straight after. Open: what the rings wait on
+guest session will restart`. Seen in three full-suite runs on different branches (2026-10-18,
+2026-10-19 and 2026-10-20, identical lines); the test passed alone straight after each time. Open: what the rings wait on
 when the host does not reply, whether the reply deadline is sized for a loaded host or the reply is
 really lost, and a vehicle that reproduces it (loop the test under suite-like load with the VM held
 on failure).
