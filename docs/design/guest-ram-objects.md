@@ -133,8 +133,9 @@ QEMU's works only on Linux hosts.
 
 A resume takes the layout recorded in its `[suspended]` record, whatever has been learned since.
 A reboot relaunch inside one session takes what has been learned, so it may split where the first
-boot probed. `LIMINA_VIRTIO_MEM=<MiB>` is a test lever, not a mode: a fixed region beside Whole RAM,
-plugged only through the control socket's `mem` command.
+boot probed. `LIMINA_VIRTIO_MEM=split` forces Split on every boot with a range, managed or not; a resume still
+takes its recorded layout. `LIMINA_VIRTIO_MEM=<MiB>` is a test lever, not a mode: a fixed region
+beside Whole RAM, plugged only through the control socket's `mem` command.
 
 Free page reporting is off for every guest (`crates/limina/src/main.rs:357-362`, the stock
 suspend-to-idle crash; the upstream fix 0b45f6927a14 is in v7.2-rc6, Fedora 44 runs 6.19). Where it

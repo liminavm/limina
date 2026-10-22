@@ -311,6 +311,20 @@ pub struct HostSample {
     pub reclaimed: u64,
     /// Worker `phys_footprint` (bytes); 0 if unreadable this tick.
     pub worker_footprint: u64,
+    /// The virtio-mem region, and how much of it is asked for and plugged (bytes; 0 without
+    /// the device).
+    pub mem_region: u64,
+    pub mem_requested: u64,
+    pub mem_plugged: u64,
+}
+
+impl HostSample {
+    /// Memory the guest has given back: the balloon plus the unplugged part of a split boot's
+    /// virtio-mem region. A boot whose region is never plugged (a fixed test region) counts it
+    /// too, so compare points of one layout only.
+    pub fn held(&self) -> u64 {
+        self.actual + self.mem_region.saturating_sub(self.mem_plugged)
+    }
 }
 
 /// Take one host sample now (the scenario's poll loop decides the cadence).
@@ -322,6 +336,9 @@ pub fn sample_host(guest: &Guest) -> Result<HostSample> {
         actual: stats.actual,
         reclaimed: stats.reclaimed,
         worker_footprint: guest.worker_phys_footprint().unwrap_or(0),
+        mem_region: stats.mem_region,
+        mem_requested: stats.mem_requested,
+        mem_plugged: stats.mem_plugged,
     })
 }
 
@@ -377,12 +394,21 @@ impl BenchRun {
 
     /// Like [`BenchRun::write_host_samples`] under an explicit name (multi-point sweeps).
     pub fn write_host_samples_named(&self, file: &str, samples: &[HostSample]) -> Result<()> {
-        let mut csv = String::from("ts_ms,target,actual,reclaimed,worker_footprint\n");
+        let mut csv = String::from(
+            "ts_ms,target,actual,reclaimed,worker_footprint,mem_region,mem_requested,mem_plugged\n",
+        );
         for s in samples {
             let _ = writeln!(
                 csv,
-                "{},{},{},{},{}",
-                s.ts_ms, s.target, s.actual, s.reclaimed, s.worker_footprint
+                "{},{},{},{},{},{},{},{}",
+                s.ts_ms,
+                s.target,
+                s.actual,
+                s.reclaimed,
+                s.worker_footprint,
+                s.mem_region,
+                s.mem_requested,
+                s.mem_plugged
             );
         }
         self.write(file, &csv)

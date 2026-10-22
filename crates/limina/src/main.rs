@@ -2060,6 +2060,7 @@ fn run_vm(mut cli: Cli) -> Result<()> {
         fixed_region_mib: std::env::var("LIMINA_VIRTIO_MEM")
             .ok()
             .and_then(|v| v.parse().ok()),
+        force_split: std::env::var("LIMINA_VIRTIO_MEM").as_deref() == Ok("split"),
         state_file: cli.suspend_state_file.clone(),
         socket: balloon_socket.clone(),
     };

@@ -92,6 +92,9 @@ pub struct MemSpec {
     /// through the control socket's `mem` command. The tests drive the device with it; nothing
     /// is learned and no policy runs it.
     pub fixed_region_mib: Option<u64>,
+    /// `LIMINA_VIRTIO_MEM=split`: every boot with a range splits, managed or not, whatever has been
+    /// learned. A resume still takes the layout it was suspended with.
+    pub force_split: bool,
     /// The managed VM's `state.toml`, which keeps what was learned.
     pub state_file: Option<PathBuf>,
     /// The worker's balloon control socket, which the learner reads.
@@ -103,6 +106,9 @@ impl MemSpec {
     /// `[suspended]` record names, if it names one.
     pub fn layout(&self, resumed_with: Option<Option<MemLayout>>) -> MemLayout {
         let learned = || {
+            if self.force_split {
+                return Some(true);
+            }
             self.state_file
                 .as_deref()
                 .and_then(state::load)
@@ -110,7 +116,7 @@ impl MemSpec {
         };
         pick(
             self.range.filter(|_| self.fixed_region_mib.is_none()),
-            self.state_file.is_some(),
+            self.state_file.is_some() || self.force_split,
             resumed_with,
             learned,
         )
@@ -310,6 +316,7 @@ mod tests {
             reclaim: ReclaimMode::Aggressive,
             owned_blocks,
             fixed_region_mib: None,
+            force_split: false,
             state_file: None,
             socket: None,
         }
@@ -355,6 +362,21 @@ mod tests {
             spec(Some((2048, 8192)), false).worker_args(MemLayout::Whole),
             ["--ram-mib", "8192"]
         );
+    }
+
+    #[test]
+    fn a_forced_split_needs_no_state_but_still_resumes_as_saved() {
+        let s = MemSpec {
+            force_split: true,
+            ..spec(Some((2048, 8192)), true)
+        };
+        assert_eq!(s.layout(None), SPLIT);
+        assert_eq!(s.layout(Some(Some(MemLayout::Whole))), MemLayout::Whole);
+        let tiny = MemSpec {
+            force_split: true,
+            ..spec(Some((1024, 2048)), true)
+        };
+        assert_eq!(tiny.layout(None), MemLayout::Whole);
     }
 
     #[test]
