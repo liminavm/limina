@@ -509,6 +509,19 @@ fn gpu_device(display: &DisplaySpec, disks: &[DiskSpec]) -> GpuDevice {
         // thread exists, and virglrenderer reads the variable once when it fills its caps.
         unsafe { std::env::set_var("VREND_MAX_SAMPLES", "1") };
     }
+    // A guest shader that runs a few tens of milliseconds without yielding is stopped by macOS's
+    // GPU watchdog, and every such stop restarts the host's GPU for every application on it.
+    // KosmicKrisp survives the hang and zink counts it against the guest context that caused it
+    // (spikes/timer-query-hang): a context may cause two, after which it is reset and vrend
+    // refuses it; once the VM has caused four, any further hang resets its context at once. Set
+    // ZINK_HANG_LIMIT / ZINK_HANG_BUDGET yourself to change that.
+    for (var, value) in [("ZINK_HANG_LIMIT", "2"), ("ZINK_HANG_BUDGET", "4")] {
+        if std::env::var_os(var).is_none() {
+            // SAFETY: as for VREND_MAX_SAMPLES above -- before any renderer thread exists, and
+            // zink reads these once when it creates its screen.
+            unsafe { std::env::set_var(var, value) };
+        }
+    }
     log::info!(
         "virtio-gpu virgl_flags = {flags:#x}, software_2d = {software_2d} (coexist = {}), \
          vrend max_samples ceiling = {}",
