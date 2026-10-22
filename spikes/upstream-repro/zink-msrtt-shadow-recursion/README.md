@@ -89,7 +89,7 @@ Host: Fedora 44, Intel Iris Plus G7 (Ice Lake), system anv from Fedora mesa 26.1
 driver; zink from the Mesa under test. "Venus" rows run zink and venus from the Mesa under test in
 the rig's QEMU 10.2 + virglrenderer 1.3.0 guest, on the same host anv. "+0002" is the recursion
 fix alone, "+series" `0002`–`0004` (`86968e1a8f7` on `92b45bd0f2e`, `e12c40e5f57` on
-`af2f67b2b36`), "+0001" the atom fix alone and "+all four" the branch as sent (`723e69750c7`).
+`af2f67b2b36`), "+0001" the atom fix alone and "+all four" the four in the order before the swap (`723e69750c7`).
 "Release" builds add `-Db_ndebug=true`.
 
 | Mesa (zink) | Driver | Modes | Result |
@@ -202,8 +202,9 @@ The other three, same day and rig, the series on `main` `5afc8ebb631` (`series/`
 | + 0003 | pass | pass | fail: COLOR2 blue where yellow is expected |
 | + 0004 | pass | pass | pass |
 
-On zink over lavapipe all four tests skip: lavapipe has `VK_EXT_multisampled_render_to_single_sampled`,
-and zink on it exposes neither MSRTT extension. Of Mesa's zink CI drivers anv and nvk lack MSRTSS
+On zink over lavapipe all four tests skip (+ 0001, 3 runs each). Lavapipe has
+`VK_EXT_multisampled_render_to_single_sampled`, and zink on it exposes no
+`GL_EXT_multisampled_render_to_texture2`, which three of the tests require. Of Mesa's zink CI drivers anv and nvk lack MSRTSS
 (lavapipe, radv and turnip advertise it). Mesa CI builds piglit with the GLES2 and GLES3 tests
 (`.gitlab-ci/container/debian/test-gl.sh`); the `zink-anv-*` jobs run `quick_gl` and the nvk job
 `gpu`, both of which hold all four, so those jobs can fail them once Mesa CI's piglit pin moves past
