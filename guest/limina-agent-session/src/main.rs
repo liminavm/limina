@@ -233,7 +233,7 @@ fn yield_phase(
         // (only the active seat session writes); a send lost to a dead channel is fine — the
         // reconnect below re-seeds from the gate.
         let active = layout_gate::seat_active();
-        if let Some(layout) = gate.poll(layouts.try_iter(), active)
+        if let Some(layout) = gate.poll_seat(layouts.try_iter())
             && let Some(mut h) = host.take()
             && write_message(&mut h, CHANNEL_CONTROL, &Message::DisplayLayout(layout)).is_ok()
         {
@@ -452,7 +452,7 @@ fn claim_phase(
         if let Some(report) = bridge.idle.due(inhibitors, layout_gate::seat_active()) {
             bridge.send(CHANNEL_CONTROL, &report);
         }
-        if let Some(layout) = gate.poll(layouts.try_iter(), layout_gate::seat_active()) {
+        if let Some(layout) = gate.poll_seat(layouts.try_iter()) {
             bridge.handle(Event::Layout(layout));
         }
         match rx.recv_timeout(HEARTBEAT_EVERY) {
