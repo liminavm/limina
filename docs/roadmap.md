@@ -369,8 +369,14 @@ Tests: `balloon.rs` (FRQ reclaim drops `phys_footprint`), `balloon_inflate.rs`, 
 - vm.toml `hardware.memory` is the maximum; managed VMs boot dynamic `1024..MAX` and
   `hardware.reclaim` sets how hard to squeeze.
 
-**Owed:** virtio-mem (absent from libkrun; large) stays deferred; a host-page-aware
-`mm/page_reporting.c` is cheap to carry if the stock-tier coalescing waste proves material.
+**Next: guest RAM as owned memory objects, and virtio-mem** (`docs/design/guest-ram-objects.md`).
+Guest RAM becomes owned, ledger-tagged blocks released by replacing whole objects, the shape of
+Apple's `hv_vm_allocate`, which bills a page once however many times it is mapped. That retires
+the stock tier's 2x footprint and the settle sweep. A virtio-mem device (absent from libkrun and
+every macOS VMM) then manages the elastic `min..max` range in aligned blocks; the balloon stays for
+guests that do not bind it. Both are gated on measurements (its §4): whether HVF's stage-2 mapping
+honours the single billing, the block size's cost at scale, and whether a stock Fedora guest can
+drive virtio-mem.
 
 ### Guest-memory migration — choosing the host memory behind guest pages
 

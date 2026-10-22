@@ -410,6 +410,11 @@ travel with it.
 
 ## Memory
 
+The planned structural fix for most of this section is `docs/design/guest-ram-objects.md`: guest RAM
+built from owned, ledger-tagged memory objects released by replacing whole objects (the shape of
+Apple's `hv_vm_allocate`), plus a virtio-mem device for the elastic range. It is gated on the
+measurements in its §4. The entries below say which of its parts address them.
+
 ### Host anonymous memory outlives a worker that died abnormally, until reboot
 Measured 2026-09-05 on the dev Mac after a day of crash arms: swap grew from ~8 GiB to 68.7 GiB. At rest, with
 no VM running, all processes summed to 10.5 GiB of footprint while the compressor held 12 GiB of RAM
@@ -422,8 +427,15 @@ frees a dead task's anonymous memory unconditionally. Candidates: guest pages ha
 no-copy buffers, driver mappings that outlive the owner, or compressor accounting wrong at this
 scale. **Discriminating arm:** record `vm.swapusage` and `vm_stat`, boot a VM, SIGKILL the worker,
 re-read after the supervisor exits; repeat with SIGABRT and with a clean exit. A difference between
-clean and abnormal exits is ours. Until settled, anyone running repeated crash arms should watch
-`vm_stat` compressor pages and reboot before the segment limit.
+clean and abnormal exits is ours. The full matrix, which also varies the GPU tier and which
+processes survive, is `docs/design/guest-ram-objects.md` §4.2. What is known from xnu: compressor
+slots are freed only when their object dies, when MADV_FREE/REUSABLE kills a non-resident page, on
+decompress, and on recompress over an existing slot; a task's address map is torn down eagerly at
+death, so only a reference to the object itself can keep its memory alive. No outside report
+matches: the closest, ClickHouse #126844, gets its memory back when its process restarts.
+Owned-object guest RAM makes every release an object death but does not stop an outside holder.
+Until settled, anyone running repeated crash arms should watch `vm_stat` compressor pages and
+reboot before the segment limit.
 
 ### The io give-back's `MemAvailable` guard is scaled by the balloon it gates
 `GIVEBACK_AVAIL_CEILING_PCT` (`balloon_policy.rs`, 50) compares `mem_available_kib` against
@@ -455,12 +467,14 @@ shape. Either show on evidence that the free half binds, or remove it and correc
 The `inelastic` verdict fires whenever inflating would dig into page cache, which covers a
 well-ballooned guest near max (the designed terminal state) and a guest whose balloon was emptied
 while the host still bills a large footprint and the balloon cannot refill because everything is
-cache. Measured 2026-08-13: a 1.12 G balloon with the host billing 36.95 G, 24.91 G compressed; it recovered in
-~5 min only because the footprint pushed the host to `warn` and triggered the trickle dig — host alarm
-is a poor trigger. Today the discriminator is `actual_bytes` on the trace row. Give the stranded case
-its own verdict or label (as `AllowanceBand` and `shortfall` were split out). Inelastic runs are not
-downstream of give-backs (0 of 27 long runs had one in the preceding 120 s), and the io give-back's
-MemFree/MemAvailable gate narrows the main path into the stranded state.
+cache. Measured 2026-08-13: a 1.12 G balloon with the host billing 36.95 G, 24.91 G compressed; it
+recovered in ~5 min only because the footprint pushed the host to `warn` and triggered the trickle
+dig — host alarm is a poor trigger. Today the discriminator is `actual_bytes` on the trace row. Give
+the stranded case its own verdict or label (as `AllowanceBand` and `shortfall` were split out).
+Inelastic runs are not downstream of give-backs (0 of 27 long runs had one in the preceding 120 s),
+and the io give-back's MemFree/MemAvailable gate narrows the main path into the stranded state.
+virtio-mem (`docs/design/guest-ram-objects.md` §3) makes the plugged size an exact contract, which
+removes the ambiguity for the range it manages.
 
 ### Cadence settle sweeps keep running at near-zero yield on a settled idle guest
 On an idle dogfood guest overnight (2026-08-14) the cadence sweep ran every ~30 min and debited 44–54 MiB per
@@ -474,18 +488,20 @@ is short.
 The ledger settle sweep's triggers depend on reports from limina-agent, so a stock guest never
 sweeps and keeps the ~2x Activity Monitor inflation (every disk-fed guest page billed twice).
 Degraded, not broken. Possible follow-up: a worker-side fallback timer so agent-less guests also
-settle now and then.
+settle now and then. Owned-object guest RAM (`docs/design/guest-ram-objects.md` §2) would bill these
+pages once on both tiers and retire the sweep, if its §4.1 shows HVF honours the accounting.
 
 ### Post-episode warm-read tax (~1.6x) after a deep balloon dig
 After a deep dig and give-back, a fully recovered guest (cache re-warmed, kswapd idle, io-some <1%,
 no swap) reads its own page cache at ~16 GB/s against ~26 GB/s pristine (192 vs 118 ms/pass on the
-S3 bench vehicle, measured 2026-08-12). Cause unidentified; deflate pacing is ruled out as a lever. Leading hypothesis:
-page-cache folio-order collapse, where scattered 4 KiB inflates fragment the buddy lists and the
-re-warm under duress rebuilds the cache as order-0 folios. Probes: `/proc/buddyinfo` and folio-order
-stats across an episode; in the recovered state `drop_caches` then a calm re-read (back to ~118 means
-build conditions, still ~192 means persistent fragmentation). A real fix probably needs a
-host-page-aware batched-inflate balloon. Low priority: it bites only after a real host-pressure
-episode.
+S3 bench vehicle, measured 2026-08-12). Cause unidentified; deflate pacing is ruled out as a lever.
+Leading hypothesis: page-cache folio-order collapse, where scattered 4 KiB inflates fragment the
+buddy lists and the re-warm under duress rebuilds the cache as order-0 folios. Probes:
+`/proc/buddyinfo` and folio-order stats across an episode; in the recovered state `drop_caches` then
+a calm re-read (back to ~118 means build conditions, still ~192 means persistent fragmentation). A
+real fix probably needs a host-page-aware batched-inflate balloon. Low priority: it bites only after
+a real host-pressure episode. virtio-mem unplug compacts in the guest before it hands memory back
+(`docs/design/guest-ram-objects.md` §3), which is the batched, host-page-aware path this needs.
 
 ---
 
