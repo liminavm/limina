@@ -32,6 +32,10 @@ use crate::vmlib::state;
 const UNIT_MIB: u64 = 128;
 /// A probe's region: one memory block.
 const PROBE_MIB: u64 = UNIT_MIB;
+/// The least RAM a split boot starts with. The guest runs on RAM alone until `virtio_mem` loads,
+/// which for a stock guest is after the initramfs: unlocking a LUKS2 root there takes up to 1 GiB
+/// for argon2id by default, and a 1 GiB guest cannot unlock it.
+const BOOT_FLOOR_MIB: u64 = 2048;
 /// The device's block, and what a requested size is rounded to.
 pub const BLOCK_BYTES: u64 = 2 << 20;
 /// How long a boot may run without the guest binding the device before the learner stops
@@ -49,10 +53,11 @@ pub enum MemLayout {
 }
 
 impl MemLayout {
-    /// RAM at `min_mib`, raised so the region is whole memory blocks; `Whole` when that leaves
-    /// no region.
+    /// RAM at `min_mib`, but at least [`BOOT_FLOOR_MIB`], and raised so the region is whole
+    /// memory blocks; `Whole` when that leaves no region.
     pub fn split(min_mib: u64, max_mib: u64) -> MemLayout {
-        let region_mib = max_mib.saturating_sub(min_mib) / UNIT_MIB * UNIT_MIB;
+        let ram_mib = min_mib.max(BOOT_FLOOR_MIB);
+        let region_mib = max_mib.saturating_sub(ram_mib) / UNIT_MIB * UNIT_MIB;
         if region_mib == 0 {
             MemLayout::Whole
         } else {
@@ -265,6 +270,9 @@ mod tests {
             }
         );
         assert_eq!(MemLayout::split(4000, 4096), MemLayout::Whole);
+        // Early boot runs on RAM alone, so it never starts below the floor.
+        assert_eq!(MemLayout::split(1024, 8192), SPLIT);
+        assert_eq!(MemLayout::split(1024, 2048), MemLayout::Whole);
         assert_eq!(SPLIT.elastic_bytes(), Some(6144 << 20));
         assert_eq!(MemLayout::Probe.elastic_bytes(), None);
     }

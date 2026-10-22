@@ -121,11 +121,13 @@ QEMU's works only on Linux hosts.
 - **Probe.** As Whole, plus a dormant 128 MiB virtio-mem region the guest is never asked to plug.
   A managed VM boots this way until its guest binds the device; the supervisor then writes
   `virtio_mem = true` to `state.toml`. The dormant device still blocks hibernation.
-- **Split.** RAM is `max` minus the region, where the region is `max − min` rounded down to whole
-  memory blocks; the worker asks the guest to plug all of it from boot
+- **Split.** RAM is `max` minus the region, where the region is `max − max(min, 2 GiB)` rounded
+  down to whole memory blocks. The guest runs on RAM alone until `virtio_mem` loads, after the
+  initramfs, and unlocking a LUKS2 root there takes up to 1 GiB for argon2id; a 1 GiB guest cannot
+  unlock it. A VM whose `max` is at most 2 GiB stays Whole; the worker asks the guest to plug all of it from boot
   (`--virtio-mem-requested-mib`). The policy keeps its decisions and sends them as plug sizes:
   reclaim `r` becomes `mem (region − r)`, rounded up to the 2 MiB device block. It holds until the
-  boot-time plug lands (or 120 s pass) and never scrubs. A Split boot runs on `min` until
+  boot-time plug lands (or 120 s pass) and never scrubs. A Split boot runs on its RAM until
   `virtio_mem` loads, and for the whole session if it never does; a boot that runs 300 s without
   binding clears the flag, so the next one probes again.
 

@@ -163,12 +163,12 @@ fn a_managed_vm_learns_virtio_mem_and_splits_its_next_boot() {
         text2.contains("memory: Split"),
         "boot 2 did not split:\n{text2}"
     );
-    // `--memory 4G` floors at 1 GiB, so the region is 3 GiB. The policy may start reclaiming
-    // once the plug settles, so this asks for most of the region, not all of it.
+    // A split boot starts on 2 GiB, so a 4 GiB VM has a 2 GiB region. The policy may start
+    // reclaiming once the plug settles, so this asks for most of the region, not all of it.
     let mut total2 = 0;
     let plugged = wait_until(Duration::from_secs(60), || {
         total2 = mem_total().unwrap_or(0);
-        total2 > (1024 + 1536) * MIB
+        total2 > (2048 + 1024) * MIB
     });
     eprintln!(
         "MemTotal: whole boot {} MiB, split boot {} MiB",
