@@ -142,7 +142,10 @@ report on seat0's `ACTIVE_UID` instead of the user's logind `STATE`, so a seatle
 overwrite the fronted one's layout on the host; a change to the seat between polls re-sends. Kernel,
 mesa, `limina-agent` and the installer identical to r37. Applied to all four F44 enhanced images
 (`.bak-pre-r38.raw` CoW backups), both agent hashes verified, kernel install short-circuited, no
-trial boot owed.) Previous: r37 (2026-10-13: host-side
+trial boot owed. That installer rewrote the Vulkan pin with venus alone, hiding the vendor drivers,
+so each image was then given them again through `scripts/provision/deliver-metal-transport.sh`
+(`.bak-pre-metal-r38.raw` CoW backups; module `52f5b04e865d` verified in the root and initramfs);
+`install-enhanced.sh` now keeps their ICDs in the pin.) Previous: r37 (2026-10-13: host-side
 repack of r36 with mesa `26.2.3-6.limina`, built from Fedora's `mesa-26.2.3-1.fc44` SRPM at
 `limina-guest` `14952457e03`: venus matches the X server's DRM device by its node rather than by PCI
 bus info, so an X11 swapchain on limina's virtio-mmio GPU gets native images instead of a prime
