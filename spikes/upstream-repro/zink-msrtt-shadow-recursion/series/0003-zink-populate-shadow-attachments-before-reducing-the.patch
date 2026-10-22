@@ -1,7 +1,7 @@
-From 723e69750c709336f6cbb5fbef2f46aa27db9b3c Mon Sep 17 00:00:00 2001
+From 63c03c7a69fbb6770c3c096df82119b1773c8274 Mon Sep 17 00:00:00 2001
 From: Gustavo Noronha Silva <gustavo@noronha.dev.br>
 Date: Fri, 16 Oct 2026 16:58:58 -0300
-Subject: [PATCH 4/4] zink: populate shadow attachments before reducing the fb
+Subject: [PATCH 3/4] zink: populate shadow attachments before reducing the fb
  to flush clears
 
 When it is not blitting, zink_flush_clears() reduces ctx->fb_state to the
@@ -20,8 +20,8 @@ Populate the transients the clears need before reducing the framebuffer,
 so the blit rebinds the real one, and the renderpass on the reduced
 framebuffer finds them valid and blits nothing.
 
-Before the previous commits this path recursed instead, so this goes to
-stable together with them.
+Before the recursion fix this path recursed instead, so this goes to
+stable together with it.
 
 Cc: mesa-stable
 Assisted-by: Claude Code
@@ -31,10 +31,10 @@ Signed-off-by: Gustavo Noronha Silva <gustavo@noronha.dev.br>
  1 file changed, 15 insertions(+)
 
 diff --git a/src/gallium/drivers/zink/zink_context.c b/src/gallium/drivers/zink/zink_context.c
-index 727022f8d85..5c0cddeaf10 100644
+index 205d1184985..7a2f42f98b5 100644
 --- a/src/gallium/drivers/zink/zink_context.c
 +++ b/src/gallium/drivers/zink/zink_context.c
-@@ -3773,6 +3773,21 @@ zink_flush_clears(struct zink_context *ctx)
+@@ -3847,6 +3847,21 @@ zink_flush_clears(struct zink_context *ctx)
     bool queries_disabled = ctx->queries_disabled;
     bool has_swapchain = ctx->has_swapchain;
     bool blitting = ctx->blitting;
